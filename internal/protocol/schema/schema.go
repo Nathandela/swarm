@@ -116,12 +116,31 @@ type TerminalSnapshot struct {
 // operation_id (the idempotency identity of the approve op, on the enclosing
 // Control) is separated from interaction_id (the agent interaction being approved).
 // ExpiresAt is daemon-authoritative and omitempty.
+//
+// Documenting it is a PROCEDURAL obligation and not a fenced one, exactly as for
+// JournalRecord.Item: protocol.md documents RemoteCommand and its bodies at the field
+// level in prose rather than as a wire table, and GG-7's drift check
+// (internal/protocol/protocolmd_test.go) reflects Control, SessionView, LaunchReq and
+// TerminalSnapshot only -- so no build fails on a missing row here
+// (interaction-schema.md §1 says so in as many words).
 type ApproveReq struct {
 	Session       string           `json:"session"`
 	AgentInstance AgentInstanceRef `json:"agent_instance"`
 	InteractionID string           `json:"interaction_id"`
 	ContentHash   string           `json:"content_hash"`
 	ExpiresAt     *time.Time       `json:"expires_at,omitempty"`
+	// Decision is the id of the decision the owner chose, in the CLI's OWN vocabulary
+	// (interaction-schema.md §3.5: spike-SB captured Codex offering accept |
+	// acceptWithExecpolicyAmendment | cancel). The card labels its buttons from
+	// decisions[].label and answers with the matching id; the daemon refuses an id the
+	// request never offered.
+	//
+	// It is DELIBERATELY UNSIGNED (IS-LIFE-4). ContentHash is the signed tuple's one
+	// content slot and ADR-007 D7 spends it on the interaction content, which the phone
+	// echoes verbatim (IS-APR-2) and so cannot fold a choice into. The field rides inside
+	// the epoch-sealed frame -- unforgeable by the relay, alterable only by the gateway,
+	// which is the documented D4/D5 owner-uid residual and not a new one.
+	Decision string `json:"decision,omitempty"`
 }
 
 // AgentInstanceRef pins the agent-instance the approval binds to, mapping to the
@@ -184,12 +203,12 @@ type PairingControl struct {
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	// ShortCode is the pair_start reply's human-typeable spelling of the same ceremony
 	// (ADR-007 B140). Additive and omitempty on both sides of the version skew.
-	ShortCode string `json:"short_code,omitempty"`
-	SAS          []string   `json:"sas,omitempty"`
-	DeviceName   string     `json:"device_name,omitempty"`
-	Allow        bool       `json:"allow,omitempty"`
-	DeviceID     string     `json:"device_id,omitempty"`
-	Name         string     `json:"name,omitempty"`
+	ShortCode  string   `json:"short_code,omitempty"`
+	SAS        []string `json:"sas,omitempty"`
+	DeviceName string   `json:"device_name,omitempty"`
+	Allow      bool     `json:"allow,omitempty"`
+	DeviceID   string   `json:"device_id,omitempty"`
+	Name       string   `json:"name,omitempty"`
 	// Failure is why a pair_result enrolled nothing (ADR-007 B71(1)): one code from
 	// protocol.PairFailure's closed vocabulary, empty on success. It is a CODE and never
 	// the daemon's error text -- the pairing path parses attacker-influenced bytes, and

@@ -27,9 +27,10 @@ const InteractionSchemaVersion = 1
 // see. The others (MaxTextBytes, MaxSummaryBytes, MaxPromptLines, MaxSteps, MaxDecisions)
 // all apply to per-kind fields, which reach RecordInteraction as an opaque Fields blob;
 // they belong to the kind-shaping producer upstream, with IS-CAP-1's rune-boundary
-// truncation and the `truncated`/`full_bytes` pair it sets. An item that arrives over this
-// cap therefore had that truncation skipped, which is a producer bug -- see the refusal
-// note on RecordInteraction.
+// truncation and the `truncated`/`full_bytes` pair it sets -- which is skeleton.fitItem, and
+// it clips field-wise until the item fits THIS cap before it ever offers one. An item that
+// arrives over this cap therefore had that truncation skipped, which is a producer bug --
+// see the refusal note on RecordInteraction.
 const MaxItemBytes = 8 << 10
 
 // InteractionItem is the item envelope of interaction-schema.md §2, daemon-side: the shape
@@ -94,6 +95,11 @@ func (it InteractionItem) MarshalJSON() ([]byte, error) {
 // validate enforces the envelope rules of §2 that a producer can get wrong. IS-ENV-3 is
 // all-or-nothing: an item lacking v, item_id or kind is not emitted at all, because a
 // consumer's only recourse is to skip it, and a skipped record still burned a cursor.
+//
+// It is the ONE refusal set of this seam: RecordInteractionRaw -- the entry the shipped
+// producer releases into -- decodes the bytes it was handed and calls this, and the typed
+// RecordInteraction reaches it by delegating there. A second inline copy of three of these
+// five checks is what let the other two never run on a shipped item (review finding R5).
 func (it InteractionItem) validate() error {
 	switch {
 	case it.V == 0:
@@ -139,15 +145,18 @@ func (it InteractionItem) validate() error {
 // ponytail: rate admission is NOT here. ADR-010 §7's one-append-per-window floor and
 // IS-DELTA-2a's per-target ceiling are the producer's queue, upstream of this call; this
 // function is the entry that queue releases into, and it neither merges nor delays.
+//
+// ponytail: this typed form is the item's CONSTRUCTOR, not a second write path -- it stamps
+// the one field a caller may legitimately leave to the daemon and hands the bytes to
+// RecordInteractionRaw, which owns the refusals and the append. The shipped producer serializes
+// its own items (the floor merges bytes, not structs), so nothing in production calls this
+// today; keeping it typed is what stops the next caller from hand-rolling the envelope.
 func (d *Daemon) RecordInteraction(sessionID string, it InteractionItem) error {
 	if it.TS.IsZero() {
 		// The machine instant for THIS record. A producer that captured the event earlier
 		// owns the instant and passes it in; stamping only when unset keeps this from
 		// substituting the append time for a known capture time (PB-APP-11).
 		it.TS = time.Now().UTC()
-	}
-	if err := it.validate(); err != nil {
-		return err
 	}
 	payload, err := json.Marshal(it)
 	if err != nil {
@@ -166,19 +175,20 @@ func (d *Daemon) RecordInteraction(sessionID string, it InteractionItem) error {
 // an InteractionItem only to marshal it again would re-order keys and re-encode values, and
 // would break the byte-exactness the merge deliberately preserves.
 //
-// It applies the same two refusals as the typed form: IS-ENV-3's required envelope fields, and
-// §5's MaxItemBytes. Both are cheap and neither can be assumed of bytes that have been merged.
+// IT IS ALSO WHERE THE ENVELOPE IS VALIDATED, for every caller. It DECODES the bytes into an
+// InteractionItem to read them and appends the ORIGINAL bytes -- decoding to inspect costs the
+// byte-exactness nothing, and it is only re-encoding that would. That is the difference between
+// this and the three-field inline check it replaces, which left §2's required `ts` and its
+// `full_bytes`-only-with-`truncated` pairing enforced solely on a typed entry no producer calls
+// (review finding R5). §5's MaxItemBytes is measured here too, on the bytes as offered: it is
+// the only cap this seam can see, and none of it can be assumed of bytes that have been merged.
 func (d *Daemon) RecordInteractionRaw(sessionID string, item json.RawMessage) error {
-	var env struct {
-		V      int    `json:"v"`
-		ItemID string `json:"item_id"`
-		Kind   string `json:"kind"`
+	var it InteractionItem
+	if err := json.Unmarshal(item, &it); err != nil {
+		return fmt.Errorf("interaction: item does not decode as an item envelope: %w", err)
 	}
-	if err := json.Unmarshal(item, &env); err != nil {
-		return fmt.Errorf("interaction: item is not a JSON object: %w", err)
-	}
-	if env.V == 0 || env.ItemID == "" || env.Kind == "" {
-		return errors.New(`interaction: item is missing "v", "item_id" or "kind" (IS-ENV-3: emit nothing rather than a partial item)`)
+	if err := it.validate(); err != nil {
+		return err
 	}
 	if len(item) > MaxItemBytes {
 		// Refuse rather than clip: the per-field truncation that keeps an item under this

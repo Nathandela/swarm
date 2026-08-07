@@ -84,14 +84,32 @@ type Item struct {
 	// Cursor is the FIRST record's cursor: the item's position in the transcript, which
 	// ordering follows (IS-LAYER-3). Taking the latest record's cursor instead would move a
 	// streaming message to the end of the transcript on every increment.
-	Cursor    uint64
-	Kind      string
-	Status    string
-	TurnID    string
-	TSUnixMs  int64
-	Text      string
-	Truncated bool
-	Detail    bool
+	Cursor uint64
+	// LastCursor is the cursor of the LATEST record folded into this item: the per-item high
+	// water the fold refuses to go behind. IS-LAYER-3 gives items no private sequence number
+	// ("for successive records of one streamed item, cursor order IS delta order"), so a record
+	// that does not advance past it is a replay or a reorder and not a delta -- and folding one
+	// concatenates an increment twice (IS-DELTA-1) and re-collapses the item's fields to older
+	// values. The repair channel PRODUCES those records by design: IS-CAP-4 sizes a reseed's
+	// events half to fit one frame, so it re-delivers whatever the cut includes.
+	//
+	// It is per ITEM and not per stream, which is the one place this cannot copy
+	// SessionCache's single cursor: a repair legitimately re-delivers records the phone MISSED
+	// at cursors BELOW its highest folded one -- that is what the repair is for -- and a
+	// stream-wide high water would reject exactly those.
+	//
+	// It is DURABLE with the item for the reason Resolved is: a guard rebuilt in memory comes
+	// back zero, and the first resync after a process death asks from cursor zero (the journal
+	// read cursor is memory-only), so the reseed answering it re-delivers the very records that
+	// built the restored transcript.
+	LastCursor uint64
+	Kind       string
+	Status     string
+	TurnID     string
+	TSUnixMs   int64
+	Text       string
+	Truncated  bool
+	Detail     bool
 	// Degraded marks an item whose `v` is higher than ItemSchemaVersion: rendered as far as
 	// this build understands it, never dropped and never fatal (IS-COMPAT-4).
 	Degraded bool
@@ -195,18 +213,19 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord) bool {
 	}
 
 	next := Item{
-		SessionID: rec.SessionID,
-		ItemID:    w.ItemID,
-		Cursor:    rec.Cursor,
-		Kind:      w.Kind,
-		Status:    w.Status,
-		TurnID:    w.TurnID,
-		Truncated: w.Truncated,
-		Detail:    w.Detail,
-		Degraded:  w.V > ItemSchemaVersion, // IS-COMPAT-4: render what we understand, mark it
-		Revision:  w.Revision,
-		Text:      w.Text,
-		Body:      append(json.RawMessage(nil), rec.Item...),
+		SessionID:  rec.SessionID,
+		ItemID:     w.ItemID,
+		Cursor:     rec.Cursor,
+		LastCursor: rec.Cursor,
+		Kind:       w.Kind,
+		Status:     w.Status,
+		TurnID:     w.TurnID,
+		Truncated:  w.Truncated,
+		Detail:     w.Detail,
+		Degraded:   w.V > ItemSchemaVersion, // IS-COMPAT-4: render what we understand, mark it
+		Revision:   w.Revision,
+		Text:       w.Text,
+		Body:       append(json.RawMessage(nil), rec.Item...),
 	}
 	if !w.TS.IsZero() {
 		// §2: the machine's instant for THIS record. The wire journal record carries none, so
@@ -217,6 +236,24 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord) bool {
 
 	if i := s.indexOf(rec.SessionID, w.ItemID); i >= 0 {
 		prev := s.items[i]
+		if rec.Cursor <= prev.LastCursor {
+			// A record that does not ADVANCE this item's cursor is a replay or a reorder, not a
+			// delta (IS-LAYER-3), and the repair channel delivers both by design (IS-CAP-4).
+			// Same discipline as SessionCache's "defense in depth behind the transactional
+			// cursor", per item rather than per stream. STRICTLY greater, unlike SessionCache's
+			// tolerance of an equal cursor: that tolerance exists for a roster snapshot, whose
+			// records deliberately share one read cursor across sessions -- two records of one
+			// item at one cursor would be the same record.
+			//
+			// ponytail: the ceiling this leaves is a record MISSED inside one item's own run --
+			// the phone folded 10 and 12, and the repair returns 11. It stays missed: IS-DELTA-1
+			// reconstructs by concatenation in cursor order, and an item keeps a high water
+			// rather than a record of what it absorbed, so there is nowhere to put a late middle
+			// increment. Dropping it beats appending it in the wrong place, and rebuilding the
+			// item from the reseed instead would need the events half to be guaranteed WHOLE,
+			// which IS-CAP-4's cut is exactly the absence of.
+			return false
+		}
 		if terminal(prev.Status) {
 			// IS-ST-1: at most one terminal status per item_id, and no record after it. The
 			// producer owns the rule; a duplicate or reordered record must not be the place

@@ -323,3 +323,641 @@ above). The row was earned by the call, and the fence would notice if the call w
   called because no recorded corpus exists for a CLI that has a shaper. Each producer slice
   supplies its own, and that row should be deleted the day one does (the allowlist is
   bidirectional and will demand it).
+
+---
+
+## 7. Review finding R5 — one validation, on the shipped path
+
+Adversarial review of 79a070d, reported as quality and not fixed there.
+
+### The finding
+
+`InteractionItem.validate` carries FIVE refusals, but the entry the shipped producer releases
+into — `RecordInteractionRaw`, reached from `skeleton.initInteractionsLocked`'s
+`ItemAdmission.Append` closure — re-implemented only THREE of them inline (IS-ENV-3's `v`,
+`item_id`, `kind`). The other two lived on the typed `RecordInteraction`, which **no production
+caller reaches**:
+
+- §2's **required `ts`** — and worse, the typed path could not fire it either, because it
+  *stamps* `ts` before validating it, so that refusal was unreachable from anywhere;
+- §2's **`full_bytes` only alongside `truncated`**.
+
+So ~35 lines of `internal/daemon/interaction.go` were reachable only from tests, and two schema
+rules were enforced on nothing that ships. Ponytail: one path, not two.
+
+### The resolution, and why this branch
+
+The review offered two: wire the typed validation into the shipped raw path, or delete the typed
+form and move its refusals. **The first, and there is now exactly one refusal set.**
+
+`RecordInteractionRaw` **decodes** the offered bytes into an `InteractionItem` to READ them, calls
+`it.validate()`, and appends the **original bytes**. Decoding to inspect costs the byte-exactness
+nothing — only *re-encoding* would, and that is the distinction §5 decision 2 was reaching for.
+IS-APR-2 still holds: an unmerged item is journalled exactly as the producer serialized it.
+
+`RecordInteraction` keeps only what a typed constructor owes — the `ts` default a caller may
+legitimately leave to the daemon — and delegates. It is not a second write path and no longer
+carries a second copy of the rules. **It still has no production caller**, which is honest: the
+shipped producer serializes its own items because the floor merges BYTES, not structs (IS-DELTA-3).
+Keeping it typed is what stops the next caller from hand-rolling the envelope; keeping it
+*validating* is what created this finding, and that half is gone.
+
+**This supersedes §5 decision 2's "it re-applies both refusals".** It applies all five, and it is
+the only place any of them are applied.
+
+Net diff: `internal/daemon/interaction.go`, +23/−14, of which the code change is −8 lines of
+duplicated inline checks and +5 that call the one validation. No production change in
+`internal/skeleton` was needed.
+
+### 7.1 RED — failing first (GG-5)
+
+Two new test files, run before the production edit. The RED is a FAILING ASSERTION, not an
+undefined symbol: the seam existed and shipped an item it should have refused.
+
+```
+$ go test ./internal/daemon/ -run "TestDaemon_RecordInteractionRaw" -count=1 -v
+=== RUN   TestDaemon_RecordInteractionRawRefusesAnItemWithNoTS
+    interaction_r5_test.go:40: RecordInteractionRaw accepted an item with no `ts`; §2 makes it required and the enclosing wire record carries none to substitute (PB-APP-11)
+    interaction_r5_test.go:44: 1 interaction record(s) appended for a `ts`-less item; want none
+--- FAIL: TestDaemon_RecordInteractionRawRefusesAnItemWithNoTS (0.04s)
+=== RUN   TestDaemon_RecordInteractionRawRefusesFullBytesWithoutTruncated
+    interaction_r5_test.go:61: RecordInteractionRaw accepted `full_bytes` on an item that is not `truncated`; §2 carries the two together, and alone it reports a clip that never happened
+    interaction_r5_test.go:65: 1 interaction record(s) appended for an unpaired `full_bytes`; want none
+--- FAIL: TestDaemon_RecordInteractionRawRefusesFullBytesWithoutTruncated (0.03s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	3.616s
+FAIL
+```
+
+The end-to-end half, on the path the producer actually releases through
+(`ItemAdmission.Offer` → `Append` → `RecordInteractionRaw` → journal). It is offered at the floor
+rather than shaped through `captureInteractions` because `shapeItem` always stamps `ts` — which is
+precisely why the refusal behind it had never been exercised, and the floor asserts nothing about
+an item beyond `item_id` and `kind`:
+
+```
+$ go test ./internal/skeleton/ -run "TestInteractionR5" -count=1 -v
+=== RUN   TestInteractionR5_TheShippedReleasePathRefusesAnItemWithNoTS
+    interaction_r5_test.go:29: the append floor released a `ts`-less item into the journal without complaint; §2 makes `ts` required and the wire journal record carries none to substitute (PB-APP-11)
+    interaction_r5_test.go:33: the journal holds 1 interaction record(s) for a `ts`-less item: [map[item_id:01JBQ4Z0X9M6T7NPKV2RQF8SJD kind:agent_message text:hi v:1]]; want none (IS-ENV-3: emit nothing rather than a partial item)
+--- FAIL: TestInteractionR5_TheShippedReleasePathRefusesAnItemWithNoTS (2.13s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.137s
+FAIL
+```
+
+That RED output IS the "before" state of the finding: a `ts`-less item reached the journal, and
+the map printed on the third line is the partial item a phone would have had to date by arrival.
+
+### 7.2 GREEN
+
+The five pre-existing carriage tests pass unchanged — the consolidation neither weakened IS-ENV-3
+nor touched a test to make it pass:
+
+```
+$ go test ./internal/daemon/ -run "TestDaemon_RecordInteraction|TestInteractionItem" -count=1 -race -v
+=== RUN   TestDaemon_RecordInteractionRawRefusesAnItemWithNoTS
+--- PASS: TestDaemon_RecordInteractionRawRefusesAnItemWithNoTS (0.04s)
+=== RUN   TestDaemon_RecordInteractionRawRefusesFullBytesWithoutTruncated
+--- PASS: TestDaemon_RecordInteractionRawRefusesFullBytesWithoutTruncated (0.03s)
+=== RUN   TestDaemon_RecordInteractionAppendsBareInteractionRecord
+--- PASS: TestDaemon_RecordInteractionAppendsBareInteractionRecord (0.04s)
+=== RUN   TestDaemon_RecordInteractionKeepsAProducerSuppliedTS
+--- PASS: TestDaemon_RecordInteractionKeepsAProducerSuppliedTS (0.02s)
+=== RUN   TestDaemon_RecordInteractionEmitsNothingForAnIncompleteEnvelope
+--- PASS: TestDaemon_RecordInteractionEmitsNothingForAnIncompleteEnvelope (0.02s)
+=== RUN   TestDaemon_RecordInteractionRefusesAnItemOverTheByteCap
+--- PASS: TestDaemon_RecordInteractionRefusesAnItemOverTheByteCap (0.02s)
+=== RUN   TestInteractionItem_KindFieldsMayNotCollideWithTheEnvelope
+--- PASS: TestInteractionItem_KindFieldsMayNotCollideWithTheEnvelope (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/daemon	4.747s
+```
+
+```
+$ go test ./internal/skeleton/ -run "TestInteraction" -count=1 -race -v
+--- PASS: TestInteractionCapture_AnAdapterWithoutTheExtensionEmitsNothing (2.49s)
+--- PASS: TestInteractionCapture_AnUnshapeableInteractionEmitsNothing (0.07s)
+--- PASS: TestInteractionCapture_ShapesTheEnvelopeAndTheKindFieldsOntoTheJournal (0.03s)
+--- PASS: TestInteractionCapture_SuccessiveRecordsOfOneRefShareOneItemID (0.41s)
+--- PASS: TestInteractionCapture_TheTurnOpensOnAUserMessageAndClosesOnATerminalAgentMessage (0.41s)
+--- PASS: TestInteractionCapture_AnAuthenticatedHookReachesTheProducer (1.71s)
+--- PASS: TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed (6.70s)
+--- PASS: TestInteractionR5_TheShippedReleasePathRefusesAnItemWithNoTS (0.03s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	14.212s
+```
+
+### 7.3 TEETH — two mutations, each reverted
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | `RecordInteractionRaw` appends the DECODED item (`json.Marshal(it)`) instead of the offered bytes — the one regression this change newly makes possible | FAIL: `interaction_capture_test.go:205: item has no string "summary"` — the §3 kind fields ride in `Fields json:"-"` and vanish on a round trip, so the existing capture test already has teeth against it |
+| 2 | the single `it.validate()` call is removed | FAIL, 4 tests: both new R5 refusals, the skeleton end-to-end one, AND the pre-existing `TestDaemon_RecordInteractionEmitsNothingForAnIncompleteEnvelope` naming all three of `no v` / `no item_id` / `no kind` |
+
+Mutation 2 is the one that matters: it proves the SINGLE validation now carries the three
+IS-ENV-3 refusals the deleted inline copy used to carry, so consolidating did not quietly drop
+them on the way.
+
+### 7.4 Gates
+
+```
+$ go build ./...                                        # clean
+$ go vet ./...                                          # clean
+$ gofmt -l internal/daemon/interaction.go internal/daemon/interaction_r5_test.go internal/skeleton/interaction_r5_test.go   # clean
+$ go test ./internal/daemon/  -count=1 -race            ok   43.534s
+$ go test ./internal/skeleton/ -count=1 -race           ok  187.593s
+$ go test ./internal/protocol/... ./internal/journal/... ./internal/remotegw/... ./internal/adapter/... -count=1   all ok
+$ go test ./internal/verify/ -count=1                   ok    8.629s
+```
+
+The `protocol.md` drift fences are untouched and green, along with the item-carriage fences that
+ride the same file:
+
+```
+$ go test ./internal/protocol/ -run "TestProtocolMD|TestJournalRecordCarries|TestJournalRecordWithout|TestJournalEventControl" -count=1 -v
+--- PASS: TestJournalRecordCarriesTheInteractionItem (0.01s)
+--- PASS: TestJournalRecordWithoutAnItemEncodesUnchanged (0.00s)
+--- PASS: TestJournalEventControlCarriesTheItem (0.00s)
+--- PASS: TestProtocolMDBidi_FieldSetMatchesStructs (0.01s)
+--- PASS: TestProtocolMD_ExistsAndDocumentsEveryField (0.00s)
+--- PASS: TestProtocolMD_DocumentsEveryOp (0.00s)
+ok  	github.com/Nathandela/swarm/internal/protocol	0.695s
+```
+
+B94 is unmoved, as it must be — no exported symbol was added or removed:
+
+```
+$ go test ./internal/verify/ -run TestB94_EveryExportedSymbolIsReachableFromProduction -count=1 -v
+    phaseb_reachability_test.go:310: B94: 540 exported symbols examined, 54 unreachable and all accounted for
+--- PASS: TestB94_EveryExportedSymbolIsReachableFromProduction (3.20s)
+```
+
+`golangci-lint run ./internal/daemon/... ./internal/skeleton/...` reports ZERO findings in
+`interaction.go`, `internal/daemon/interaction_r5_test.go` or
+`internal/skeleton/interaction_r5_test.go`; the packages' pre-existing errcheck/staticcheck
+findings are all in files this change does not touch.
+
+**One honest note on `go test ./... -count=1`:** it reports `FAIL internal/phonecore`
+(`r1_replayfold_test.go`, three tests). That is a *different* review finding (R1) being worked
+concurrently in this same worktree and is RED by design at the moment of this run; it is
+untracked test code plus in-flight edits to `internal/phonecore/{interaction,state}.go`, and this
+slice touches neither. Every other package in the module passes.
+
+### 7.5 What is deliberately still open
+
+- **`daemon.RecordInteraction` still has no production caller.** That is the branch the review
+  preferred, taken knowingly: the typed form is now a 6-line constructor that delegates, its
+  refusals are the shipped path's refusals, and there is no second copy of any rule. If a later
+  slice decides the constructor earns nothing, deleting it is a self-contained change that moves
+  four carriage tests onto `RecordInteractionRaw` — but doing it *here* would have meant rewriting
+  tests that are green, which is the wrong trade for the same end state.
+- **The `ts` refusal is a producer-bug backstop, not a validator.** It cannot tell a *wrong*
+  instant from a right one — only an absent one. Nothing on the machine checks that an item's `ts`
+  is plausible relative to its cursor, and IS-LAYER-3 makes the cursor the ordering authority
+  anyway, so this is a floor, not a clock.
+
+---
+
+## 8. Review finding R4 — the approval lifecycle's back half
+
+Adversarial review of 79a070d. Unlike R5 this was not a quality note: it is §6's own list of
+what A1a did not build, read back as a defect. Three deliverables, all daemon-side.
+
+**This section SUPERSEDES the first three bullets of §6** (IS-LIFE-4, IS-LIFE-2's resolver,
+IS-ST-2's sweep — all three now built). Appended rather than edited in place, on §7's precedent:
+the record of what a slice knew at the time is worth more than a tidy document. §6's remaining
+bullets stand unchanged.
+
+### The finding
+
+A1a ships an `approval_request` to the phone and re-delivers it across a repair. Nothing else
+about the lifecycle exists:
+
+- **IS-LIFE-4 is not built.** The item carries no `agent_instance`, no `content_hash` and no
+  `expires_at` (§3.5), so the phone renders a card it CANNOT ANSWER — IS-APR-2 forbids it
+  computing either value, so a card that arrives without them has nothing to echo. There is
+  also no daemon-side validation, because there was no stored tuple to validate against.
+- **IS-LIFE-2's resolver is not built.** Nothing emits `approval_resolved` on any path, so a
+  card can only be dismissed by a resolution nobody produces — and the phone's IS-LIFE-3
+  retention exemption, which lifts on `Resolved`, therefore never lifts. The card is both
+  unanswerable and unevictable.
+- **IS-ST-2's orphan sweep is not built.** No pass closes `in_progress` items `failed` on
+  instance death, so a transcript keeps a spinning card for an agent that is gone.
+
+### 8.1 What landed, and the decision behind each
+
+**(a) IS-LIFE-4 — the tuple on the item, and the validation.**
+
+`schema.ApproveReq` gains one field, `decision` — "the chosen decision id" IS-LIFE-4 names,
+in the CLI's OWN vocabulary (§3.5: spike-SB captured Codex offering
+`accept | acceptWithExecpolicyAmendment | cancel`). It is deliberately UNSIGNED, and the Go
+doc comment carries IS-LIFE-4's reason verbatim: `ContentHash` is the signed tuple's one
+content slot and D7 spends it on the interaction content, which the phone echoes verbatim and
+so cannot fold a choice into.
+
+**protocol.md's posture is kept exactly as it was.** `ApproveReq` is not a wire table there and
+does not become one: the `approve` row on the `Control` field table already exists and is
+unchanged, `RemoteCommand` and its bodies are documented at the field level in prose in
+`internal/protocol`, and GG-7's drift check reflects `Control`, `SessionView`, `LaunchReq` and
+`TerminalSnapshot` only. interaction-schema.md §1 says so in as many words ("no build can fail
+on a missing `item` or approve row … the obligation is PROCEDURAL, carried by the Go field's
+doc comment"), and that comment is now written. All three drift fences are untouched and green.
+
+The producer stamps §3.5's three daemon-authoritative fields on a pending `approval_request`
+and stores the binding tuple (`skeleton.openApprovalLocked`). `skeleton.approveInteraction` is
+the validation: it checks `machine`, `session`, the agent instance `{shim_pid,
+shim_start_time}`, `interaction_id`, `content_hash`, the echoed `expires_at` and the daemon's
+OWN clock, and finally that the decision id is one the card actually offered — refusing with
+`invalid_field` or `stale_approval` from D10's taxonomy, and applying nothing.
+
+**THE CONTENT HASH'S CANONICALIZATION, which the schema leaves to the daemon and which
+therefore has to be stated here.** `content_hash` is SHA-256 over **the shipped bytes with its
+own slot zeroed**. The item is serialized with a 64-character placeholder in the slot, fitted
+under §5's caps, hashed, and the placeholder replaced with the digest — same width, so the cap
+still holds and nothing is re-serialized. Three properties make it the right form rather than a
+trick: a hash cannot cover itself, so *some* exclusion is forced; the form is re-derivable by
+anyone holding the item (the test does exactly that); and it obeys R2's rule TRUNCATE-THEN-HASH,
+so the bytes hashed are the bytes the card renders and an approve echoed off a truncated card
+still matches. `content_hash` is excluded from the fit ceiling for the same reason the §3
+enums are — half a digest is not a smaller item, it is a permanently unanswerable card.
+
+`approvalTTL = 120 s` is spike-SC's shorter measured CLI hold (Codex's app-server, verified to
+120 s with no timeout or auto-deny; Claude Code's `PermissionRequest` to 300 s). The daemon's
+window must sit INSIDE the CLI's own, or the daemon accepts an approve the CLI stopped waiting
+for. It also leaves ADR-010 §4's own arithmetic intact: 120 − 30 s of push-wake deferral = 90 s,
+still above spike-SC's 60 s one-tap floor. PROPOSED AND UNRATIFIED on §5's terms.
+
+**(b) IS-LIFE-2 — the resolver, five paths, one record shape.**
+
+`resolveApprovalLocked` is the ONE place a resolution is authored. It is a no-op when nothing
+is pending, which is what makes "exactly one" hold under a race between two paths (an expiry
+ticking while a withdrawal arrives resolves once; the loser finds nothing).
+
+| Path | Trigger | `by` |
+|---|---|---|
+| `superseded` | a newer `approval_request` for the same session | `agent` |
+| `cancelled` | a further record for the same CLI request id carrying a TERMINAL status — the CLI withdrawing the prompt, as the capture side sees it | `agent` |
+| `cancelled` | the agent instance died with the request unresolved (the IS-ST-2 sweep) | `agent` |
+| `expired` | the daemon's own window passed — swept on the append floor's existing 125 ms ticker, and re-checked inline on an arriving approve so the ≤ 1-tick gap is not a hole | `daemon` |
+| `answered_locally` | the session's `status.Interaction` LEAVES the waiting state with no remote decision recorded | `owner` |
+| `allowed` | a validated approve | `phone` |
+
+**The target is the SESSION, and that is the schema's model rather than a convenience.**
+IS-LIFE-3 rules out the roster half for re-delivery partly because a roster record "cannot hold
+two pending approvals for one session". So a second request for one session is not a second
+card, it is a supersession — which is exactly what `superseded` names.
+
+**`answered_locally` fires on the TRANSITION, not on the state.** A resolver keyed on "the
+session is not waiting" dismisses a live card the moment the session reports anything at all,
+including the status emit that races the capture. That is the negative control
+`TestApprovalResolved_AnApprovalStillWaitingIsNotResolvedByAnyStatusEmit`, and mutation 3 below
+shows it has teeth.
+
+**(c) IS-ST-2 — the orphan sweep.**
+
+`sweepSessionInteractions` runs from `endSession`, the one hook fired for a shim exit, a lost
+session and a delete alike. It resolves a pending approval first (IS-LIFE-2 is unconditional —
+an unanswerable card that is also unevictable is the worse of the two failures), closes every
+item still `in_progress` with `failed`, and emits the terminal `session_status` AFTER them,
+which is the order IS-ST-2 states.
+
+It emits NOTHING for a session with no open items and no pending approval. The terminal
+`session_status` is emitted here as the marker IS-ST-2 orders the failures against; a
+`session_status` on every session end regardless is IS-SS-1's transcript marker, a different
+rule that no slice has built, and emitting one unconditionally would put a record on the journal
+for every session that ever ran with no transcript at all.
+
+### 8.2 RED — failing first (GG-5)
+
+Written in two files for a reason: the behavioural half runs entirely against production entry
+points that ALREADY EXIST (`captureInteractions`, `emitStatus`, `endSession`) and reads the
+JOURNAL, so each failure names a missing RULE rather than a missing symbol. Had it shared a file
+with the white-box half, the whole package would have failed to build and the behavioural RED
+would have been masked by a compile error.
+
+`internal/skeleton/approval_r4_test.go` — behavioural, run against unchanged production code:
+
+```
+$ go test ./internal/skeleton/ -run 'TestApprovalRequest_|TestApprovalResolved_|TestOrphanSweep_' -count=1
+--- FAIL: TestApprovalRequest_ShipsTheD7BindingTupleAndTheDaemonAuthoritativeExpiry (3.49s)
+    approval_r4_test.go:95: the approval_request carries no `agent_instance` object: map[action:map[path:src/main.rs type:write] decisions:[map[id:accept label:Allow] map[id:cancel label:Deny]] item_id:01KZEFBME94MKK6W231E8AYTJ7 kind:approval_request mode:card status:in_progress summary:write src/main.rs ts:2026-08-07T16:02:05.384991Z v:1]. §3.5 makes it the ADR-007 D7 instance binding {shim_pid, shim_start_time}, and without it an approve cannot be refused for naming a DIFFERENT agent than the one that asked
+--- FAIL: TestApprovalRequest_TheContentHashCoversTheItemAsShipped (0.04s)
+    approval_r4_test.go:156: content_hash = ""; want a 64-character SHA-256 (§3.5)
+--- FAIL: TestApprovalResolved_ANewerRequestSupersedesTheOlderOne (10.03s)
+    approval_r4_test.go:189: no approval_resolved for "01KZEFBMGXARVM7AKDGX0HJ08V" ever reached the journal for s-sup. IS-LIFE-2: EVERY approval_request reaches exactly one approval_resolved -- including when it is cancelled, superseded, expired or answered at the machine -- and that guarantee is the whole of what makes a stale card dismiss on every surface. Items seen: [map[... item_id:01KZEFBMGXARVM7AKDGX0HJ08V kind:approval_request ... summary:first ...] map[... kind:approval_request ... summary:second ...]]
+--- FAIL: TestApprovalResolved_ACLIWithdrawalCancelsTheRequest (10.03s)
+    approval_r4_test.go:214: no approval_resolved for "01KZEFBYADME1YHCFK7AMQMVB2" ever reached the journal for s-cancel. ... Items seen: [map[... status:in_progress ...] map[... status:declined ...]]
+--- FAIL: TestApprovalResolved_TheDesktopAnsweringResolvesLocally (10.04s)
+    approval_r4_test.go:241: no approval_resolved for "01KZEFC8401Q9AQJS36RJ3ZM8D" ever reached the journal for s-local. ...
+--- FAIL: TestOrphanSweep_InstanceDeathClosesEveryOpenItemBeforeTheTerminalSessionStatus (10.41s)
+    approval_r4_test.go:332: the sweep never completed. Want a `failed` record for BOTH open items map[01KZEFCJJJD3W3EGR95KAZZZEP:tool_run 01KZEFCJJT4Y3DPTZEBQV322EC:approval_request], one approval_resolved (IS-LIFE-2 is unconditional -- an unresolved request whose agent is gone still resolves, or the phone's IS-LIFE-3 exemption never lifts), and a terminal session_status LAST (IS-ST-2 orders the failures before it).
+        Journal: [map[... kind:tool_run status:in_progress ...] map[... kind:approval_request status:in_progress ...]]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	45.639s
+```
+
+Six failures, one pass: `TestApprovalResolved_AnApprovalStillWaitingIsNotResolvedByAnyStatusEmit`
+is the negative control and passes vacuously on a system that resolves nothing at all. Its teeth
+are mutation 3.
+
+`internal/skeleton/approval_validate_r4_test.go` — the white-box half. The arriving approve has
+no wire route (`opForAction` refuses one: "approve is not a daemon remote op (D6/D7)"), so the
+entry point IS the seam under test, and it necessarily names symbols this slice adds:
+
+```
+$ go test ./internal/skeleton/ -run 'TestApprove' -count=1
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/approval_validate_r4_test.go:51:3: unknown field Decision in struct literal of type protocol.ApproveReq
+internal/skeleton/approval_validate_r4_test.go:77:18: sk.approveInteraction undefined (type *Daemon has no field or method approveInteraction)
+internal/skeleton/approval_validate_r4_test.go:137:78: r.Decision undefined (type *protocol.ApproveReq has no field or method Decision)
+internal/skeleton/approval_validate_r4_test.go:138:63: r.Decision undefined (type *protocol.ApproveReq has no field or method Decision)
+internal/skeleton/approval_validate_r4_test.go:150:20: sk.approveInteraction undefined (type *Daemon has no field or method approveInteraction)
+internal/skeleton/approval_validate_r4_test.go:185:11: sk.approvals undefined (type *Daemon has no field or method approvals)
+internal/skeleton/approval_validate_r4_test.go:194:18: sk.approveInteraction undefined (type *Daemon has no field or method approveInteraction)
+internal/skeleton/approval_validate_r4_test.go:226:3: unknown field Decision in struct literal of type protocol.ApproveReq
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+```
+
+**`internal/skeleton/approval_e2e_r4_test.go` was authored before the implementation but first
+RUN after it, so its failing-first is evidenced by REMOVING the rule rather than by the original
+order — recorded plainly rather than dressed up.** That is mutation 2 below, and the failure is
+the one the file exists for:
+
+```
+--- FAIL: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (52.35s)
+    approval_e2e_r4_test.go:83: timed out after 45s: the approval_resolved reached the phone's transcript
+```
+
+### 8.3 GREEN
+
+```
+$ go test ./internal/skeleton/ -run 'TestApprovalRequest_|TestApprovalResolved_|TestOrphanSweep_|TestApprove' -count=1 -v
+--- PASS: TestApprovalRequest_ShipsTheD7BindingTupleAndTheDaemonAuthoritativeExpiry (4.15s)
+--- PASS: TestApprovalRequest_TheContentHashCoversTheItemAsShipped (0.03s)
+--- PASS: TestApprovalResolved_ANewerRequestSupersedesTheOlderOne (0.40s)
+--- PASS: TestApprovalResolved_ACLIWithdrawalCancelsTheRequest (0.40s)
+--- PASS: TestApprovalResolved_TheDesktopAnsweringResolvesLocally (0.28s)
+--- PASS: TestApprovalResolved_AnApprovalStillWaitingIsNotResolvedByAnyStatusEmit (0.52s)
+--- PASS: TestOrphanSweep_InstanceDeathClosesEveryOpenItemBeforeTheTerminalSessionStatus (1.30s)
+--- PASS: TestApprove_AValidApproveIsAcceptedAndResolvesTheCard (0.41s)
+--- PASS: TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing (0.68s)
+    --- PASS: .../a_foreign_machine
+    --- PASS: .../an_unknown_interaction
+    --- PASS: .../a_different_agent_instance
+    --- PASS: .../a_rewritten_content_hash
+    --- PASS: .../a_pushed-out_expiry
+    --- PASS: .../a_decision_the_card_never_offered
+    --- PASS: .../no_decision_at_all
+--- PASS: TestApprove_AnApproveAfterTheDaemonWindowIsRefusedEvenWhenEveryFieldMatches (0.43s)
+--- PASS: TestApproveReq_CarriesTheChosenDecisionOnTheWire (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	10.853s
+
+$ go test ./internal/skeleton/ -run TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard -count=1 -v
+--- PASS: TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard (8.08s)
+```
+
+The end-to-end case is the join W4 could not make: the machine's own resolver, through the
+append floor, the journal, a real gateway process, a real relay and the durable phone core, to
+`PendingApprovals` emptying — while the resolved `approval_request` STAYS in the transcript,
+because resolving lifts IS-LIFE-3's retention exemption and does not delete history.
+
+### 8.4 A weak assertion of my own, declared
+
+`TestApprove_AnApproveAfterTheDaemonWindowIsRefusedEvenWhenEveryFieldMatches` **passed under
+mutation 5** (the daemon-clock check removed) in its first form, and the reason is worth
+recording: it wound back only the DAEMON's stored expiry, which made the phone's echoed copy
+disagree — so the approve was refused by the ECHO check and the clock check was never reached.
+The test passed for the wrong reason.
+
+Strengthened to wind the window back on BOTH sides, which is what a card minted 121 s ago and
+tapped now actually looks like: the phone echoes what it received, and what it received is now
+in the past. Re-run against unchanged production code under the same mutation, it fails
+correctly (`an approve past the daemon's own window was accepted`). No pre-existing test was
+touched; this is my own new test being made honest.
+
+A residual race is stated rather than papered over: the 125 ms expiry sweep could in principle
+resolve the approval in the ~microsecond gap between the test's unlock and
+`approveInteraction`'s lock, in which case the refusal comes from the "no approval pending" arm
+instead. The assertions hold either way; only the mutation's ability to be caught would be lost,
+and only on that ~1e-5 of runs.
+
+### 8.5 TEETH — eight mutations, each reverted
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | `openApprovalLocked` no longer supersedes its predecessor | FAIL: `TestApprovalResolved_ANewerRequestSupersedesTheOlderOne` — and its dump shows the tuple now shipping (`agent_instance`, `content_hash`, `expires_at` all present on both cards) |
+| 2 | the CLI-withdrawal arm in `shapeItem` is removed | FAIL, both `TestApprovalResolved_ACLIWithdrawalCancelsTheRequest` AND the end-to-end case (`timed out after 45s: the approval_resolved reached the phone's transcript`) — this is the e2e's failing-first |
+| 3 | `answered_locally` fires on the STATE (`if !awaitingInput(cur)`) rather than the transition | FAIL: the negative control alone — `an approval_resolved landed for a request still waiting: map[by:owner decision:answered_locally …]`. The control isolates exactly the failure it exists for |
+| 4 | the hash is taken over a DIFFERENT canonicalization (slot removed rather than zeroed) | FAIL: `TestApprovalRequest_TheContentHashCoversTheItemAsShipped`, with both digests printed — the canonicalization is pinned exactly, not merely "some hash is present" |
+| 5 | the daemon-clock expiry check is removed, trusting the phone's echoed value | FAIL (after 8.4's strengthening): `an approve past the daemon's own window was accepted` |
+| 6 | the terminal `session_status` is emitted FIRST instead of last | FAIL: `TestOrphanSweep_…` — IS-ST-2's ordering is asserted, not assumed |
+| 7 | the decision-membership check is removed | FAIL, two rows: `a decision the card never offered was ACCEPTED`, and `no decision at all` degrades to `stale_approval` — the second shows the two codes are distinguished, not merely non-empty |
+| 8 | the sweep closes items but resolves no pending approval | FAIL: `TestOrphanSweep_…` — IS-LIFE-2 is unconditional and the sweep is one of its paths, not an exception to it |
+
+### 8.6 Gates
+
+```
+$ go build ./...                                                   # clean
+$ go vet ./...                                                     # clean
+$ gofmt -l internal/skeleton/approval.go internal/skeleton/approval_r4_test.go \
+         internal/skeleton/approval_validate_r4_test.go internal/skeleton/approval_e2e_r4_test.go \
+         internal/skeleton/interaction.go internal/skeleton/serve.go                     # clean
+$ go test ./internal/skeleton/ -count=1 -race                      ok  193.868s
+$ go test ./internal/daemon/ ./internal/remotegw/ ./internal/phonecore/ \
+          ./internal/protocol/... ./internal/verify/ -count=1 -race                       all ok
+$ go test ./... -count=1                                           all ok (no FAIL, module-wide)
+```
+
+The three `protocol.md` drift fences are untouched and green — no `Control` field moved and no
+op was added, which is what keeps `ApproveReq`'s posture as it was:
+
+```
+--- PASS: TestProtocolMDBidi_FieldSetMatchesStructs (0.01s)
+--- PASS: TestProtocolMD_ExistsAndDocumentsEveryField (0.00s)
+--- PASS: TestProtocolMD_DocumentsEveryOp (0.00s)
+```
+
+B94 is unmoved — every symbol this slice adds is unexported, deliberately: an exported
+`ApproveInteraction` with no production entry point would be a new row in the unreachable ledger,
+and the future caller (`coreAPI`) lives in this package anyway.
+
+```
+    phaseb_reachability_test.go:310: B94: 540 exported symbols examined, 54 unreachable and all accounted for
+--- PASS: TestB94_EveryExportedSymbolIsReachableFromProduction (3.54s)
+```
+
+`golangci-lint run internal/skeleton/... internal/protocol/schema/...` reports ZERO findings in
+`approval.go`, the three new test files, `interaction.go` or `schema.go`; the packages'
+pre-existing errcheck/staticcheck findings are all in files this change does not touch.
+`gofmt -l` does flag `internal/protocol/schema/schema.go`, and the misalignment is PRE-EXISTING
+(`PairingControl.ShortCode`, present at HEAD, verified by formatting `git show HEAD:` output).
+It was left alone rather than swept into this diff.
+
+### 8.7 What is deliberately still open — and the one that needs an owner ruling
+
+- **`denied` IS NOT REACHABLE FROM THE PHONE PATH, and this is the finding's one genuine gap.**
+  §3.6's `allowed`/`denied` split needs a NORMALIZED verdict for a decision id drawn from the
+  CLI's OWN vocabulary — §3.5 says so explicitly, and spike-SB captured Codex offering
+  `accept | acceptWithExecpolicyAmendment | cancel`, where the third is a refusal that travels
+  as the same signed `ActionApprove`. `adapter.DecisionChoice` carries `{ID, Label}` and no
+  verdict bit, and `internal/adapter` is outside this task's touch list, so the daemon cannot
+  classify `cancel` as a refusal WITHOUT GUESSING at a CLI's vocabulary — which is exactly the
+  posture IS-TOOL-2 forbids for the same reason. A validated approve therefore resolves as
+  `allowed`. The bit belongs to the slice that APPLIES the decision (ADR-010 §4): it writes the
+  CLI's reply and reads the outcome, and it calls the same resolver with `denied`. **Today the
+  gap is unreachable rather than wrong** — no adapter implements `InteractionSource`, so no card
+  with decisions on it can be tapped — but it is a gap, and closing it is one of: an additive
+  verdict field on `adapter.DecisionChoice`, or a §3.5 amendment saying which side normalizes.
+  **This needs an owner ruling.**
+- **The approve has no wire route.** `opForAction` refuses one ("approve is not a daemon remote
+  op (D6/D7)"), so `approveInteraction` is reachable only from tests today. That is the task's
+  boundary rather than an omission — routing it means a new `Op`, a new `protocol.md` row and a
+  gateway arm, all outside the touch list — but it is what makes the validation live.
+- **Applying the decision is not built**, by the task's own scope: the adapter's
+  `DecisionAction` is never written back to the CLI's pending hook. The lifecycle stops at
+  validated-and-recorded.
+- **`session_status` is emitted ONLY by the orphan sweep.** IS-SS-1's general transcript marker —
+  a `session_status` for every meaningful transition, not merely the terminal one — is a
+  different rule and is not built.
+- **The `cancelled` signal is inferred, not sourced.** A terminal record for the CLI's own
+  request id is what the daemon reads as a withdrawal; an adapter that withdraws a prompt
+  SILENTLY (emitting nothing) leaves the request to expire instead. That is a 120 s stale card,
+  not a permanent one, so it degrades rather than breaks — but a first-class withdrawal signal
+  would be an additive `Interaction` field.
+- **The expiry sweep is per-tick, not per-deadline.** A request expires within one 125 ms window
+  of its deadline. That reuses the append floor's existing ticker rather than adding a timer per
+  approval, and 125 ms against a 120 s window is not a number anybody can observe.
+
+---
+
+# Re-review of R4 and R5 (adversarial, against the closures)
+
+## R5 — verified on the shipped path
+
+The five refusals were driven at `daemon.RecordInteractionRaw` — the entry the floor releases into
+— rather than at the typed constructor:
+
+```
+$ // an item with no ts, offered as bytes
+interaction: item has no "ts" (§2: required, and the wire record carries none to substitute)
+$ // full_bytes without truncated, offered as bytes
+interaction: "full_bytes" is carried only with "truncated" (§2)
+```
+
+Both refusals are real on the shipped path, which is the whole of the finding. **R5's closure
+holds.**
+
+## R4 — the lifecycle, verified path by path
+
+| IS-LIFE-2 path | Driven by | Result |
+|---|---|---|
+| `superseded` | a second request for the session | emits, `by: agent` |
+| `cancelled` | a terminal record for the pending CLI ref; and the orphan sweep | emits, `by: agent` |
+| `expired` | **`sweepExpiredApprovals`, newly covered** (see below) | emits, `by: daemon` |
+| `answered_locally` | the transition OUT of permission/prompt | emits, `by: owner` |
+| `allowed` | a validated approve | emits, `by: phone`, `operation_id` echoed |
+| `denied` | — | unreachable, as R4 disclosed; needs an owner ruling |
+
+The stale-approve matrix was re-driven and one row added that it did not carry (`ShimPID`, where
+the shipped matrix mutates `ShimStartTime` only) plus an approve routed at a different local
+session on the right machine. Both refuse. Expiry against the daemon's own clock refuses even when
+every echoed field matches. The IS-LIFE-3 retention exemption lifting is covered end to end by
+`TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard`, which passes.
+
+### Newly covered — the `expired` arm through the ticker
+
+`sweepExpiredApprovals` had NO test. `approvalTTL` is a bare constant with no clock seam, so the
+shipped 120 s window cannot be waited out, and the inline re-check inside `approveInteraction` is a
+different code path. `expired` is the resolution for the card NOBODY answers — the one case where
+the phone's IS-LIFE-3 exemption would otherwise never lift, leaving the item unanswerable AND
+unevictable. `interaction_rr_test.go`'s
+`TestApprovalResolved_TheDaemonWindowLapsingResolvesACardNobodyAnswered` winds the daemon's own
+stored window back and drives the sweep, then drives it twice more to pin the exactly-one
+guarantee under the ticker's own repetition. It passes against the shipped code — coverage added,
+not a defect found.
+
+### Newly covered — truncate-then-hash where §5's caps actually BIND
+
+R4's hash fence uses a small item, so truncate-then-hash is asserted where nothing truncates; R2's
+maxima cases are ASCII, so IS-CAP-1's rune boundary is asserted where every cut is a byte boundary
+anyway. `TestApprovalRequest_AtTheMaximaTheHashStillNamesTheBytesItShipped` drives both at once —
+an `approval_request` on §5's documented maxima whose 40 prompt lines are 200 FOUR-BYTE runes each
+(32 000 bytes of prompt against an 8 KiB item cap), so the uniform ceiling halves several times and
+every cut lands inside a multi-byte rune. Measured: **7 430 bytes shipped, 128-byte ceiling, 32
+runes per line surviving, no U+FFFD anywhere in the payload, and the digest re-derives exactly**.
+R2's rune-boundary clamp and R4's truncate-then-hash ordering both hold under the one input that
+exercises them together.
+
+## Defect found and fixed — a request superseded by its OWN re-announcement (IS-LIFE-2, IS-LIFE-3)
+
+**What was wrong.** `openApprovalLocked` identified "a second request" by the SESSION alone:
+
+```go
+out := d.resolveApprovalLocked(session, resolveSuperseded, byAgent, "")
+```
+
+A CLI that re-announces its still-pending permission — the same adapter `Ref`, therefore the same
+minted `item_id`, which is exactly what `Ref` is for — made the daemon supersede the very card it
+was re-opening. This is ordinary CLI behaviour, not an exotic input: spike-SB captured Claude
+Code's `Notification` firing beside `PermissionRequest`, and any adapter shaping the outstanding
+permission off a second hook produces it.
+
+**Two rules broke at once.**
+
+- **IS-LIFE-2** ("every `approval_request` SHALL reach EXACTLY ONE `approval_resolved`"): the
+  spurious `superseded` is the request's first resolution, and its real one — allowed, cancelled,
+  expired — is its second.
+- **IS-LIFE-3's retention exemption, on the phone.** `ItemStore.resolveLocked` marks the request
+  `Resolved` off that record, which drops it out of `PendingApprovals()` and lifts the trimming
+  exemption. The owner's card vanishes from the one surface that shows it while the CLI is still
+  blocked and the daemon still holds the request pending — the precise failure the exemption exists
+  to prevent, arrived at from the other direction.
+
+**The fix** (`approval.go`, +8 lines of which 7 are comment): supersede only when the pending
+request is a DIFFERENT item. The binding tuple is still restamped from the newer record, because
+the phone folds the newer record over the older one and therefore echoes the newer hash and expiry
+(IS-APR-2) — so the daemon's stored tuple and the card's rendered one stay the same object.
+
+### RED — verbatim, failing first
+
+```
+$ go test ./internal/skeleton/ -run 'TestApprovalResolved_ARequestIsNotSupersededByItsOwnReAnnouncement' -count=1 -v
+=== RUN   TestApprovalResolved_ARequestIsNotSupersededByItsOwnReAnnouncement
+    approval_rr_test.go:52: the still-pending request 01KZEJGS15A4093SB70KV43H9J was resolved by its OWN re-announcement: map[by:agent decision:superseded interaction_id:01KZEJGS15A4093SB70KV43H9J item_id:01KZEJGS1W1PKDGXZ5T5Q1CT1R kind:approval_resolved ts:2026-08-07T16:57:19.676868Z v:1].
+        A second record for the SAME item_id is the same request, not a second one -- IS-LIFE-3's "one pending approval per session" is what `superseded` names, and superseding an item with itself breaks IS-LIFE-2's exactly-one guarantee AND lifts the phone's IS-LIFE-3 retention exemption for a card the CLI is still blocked on
+--- FAIL: TestApprovalResolved_ARequestIsNotSupersededByItsOwnReAnnouncement (2.81s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.908s
+```
+
+Note the record: `interaction_id` equals the item that is being re-opened.
+
+### GREEN
+
+```
+$ go test ./internal/skeleton/ -run 'TestApprovalResolved_' -count=1 -v
+--- PASS: TestApprovalResolved_ANewerRequestSupersedesTheOlderOne (2.84s)
+--- PASS: TestApprovalResolved_ACLIWithdrawalCancelsTheRequest (0.52s)
+--- PASS: TestApprovalResolved_TheDesktopAnsweringResolvesLocally (0.16s)
+--- PASS: TestApprovalResolved_AnApprovalStillWaitingIsNotResolvedByAnyStatusEmit (0.54s)
+--- PASS: TestApprovalResolved_ARequestIsNotSupersededByItsOwnReAnnouncement (0.64s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	6.290s
+
+$ go test ./internal/skeleton/ -count=1 -race
+ok  	github.com/Nathandela/swarm/internal/skeleton	199.923s
+```
+
+### Teeth — two mutations, each reverted
+
+1. Restoring the unconditional supersede (`ap.itemID != ""`) fails only the new case — the
+   genuine-supersede fence stays green, so the two are distinguishable and the guard is not
+   over-scoped.
+2. Skipping the supersede ALWAYS (`if false`) fails
+   `TestApprovalResolved_ANewerRequestSupersedesTheOlderOne` — so the guard did not quietly delete
+   the rule it narrows.
+
+**R4's closure holds otherwise**, and its four disclosed open points (`denied` unreachable, the
+content-hash canonicalization needing sign-off, no wire route for the approve, `session_status`
+only from the sweep) are all still accurate as written.

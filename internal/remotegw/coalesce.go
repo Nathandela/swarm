@@ -35,6 +35,14 @@ type CoalesceConfig struct {
 // allocation and outbound durability stay one concern (RelaySink) and the rate budget stays
 // another.
 //
+// IT IS THE ONE PLACE THE COMBINED CEILING CAN BE ENFORCED. Every machine->phone append the
+// gateway makes on the journal/terminal stream passes here, and the ceiling is per TARGET
+// across both streams (§6.0, IS-DELTA-2a: "admission SHALL be bounded per target and SHALL
+// govern every kind ... it exempts nobody"). ItemAdmission is a second, upstream floor in a
+// DIFFERENT PROCESS -- the daemon's -- so the two cannot share a budget object; what makes
+// the ceiling hold anyway is that an item release arrives here as a journal record and is
+// charged to the same slot as a snapshot (see debitLocked).
+//
 // The split of duties is deliberate:
 //   - Event and Snapshot are forwarded IMMEDIATELY and are never coalesced or dropped
 //     (R-GW.5: journal records are never lost, and Gateway.deliver still gates its cursor on
@@ -56,10 +64,35 @@ type CoalescingSink struct {
 	window time.Duration
 	now    func() time.Time
 
-	mu    sync.Mutex
-	last  time.Time                             // when the shared slot was last consumed
-	stash map[string]*protocol.TerminalSnapshot // session -> its newest held-back snapshot
-	order []string                              // sessions holding one, oldest-first
+	mu       sync.Mutex
+	nextFree time.Time                             // when the shared slot is next free
+	stash    map[string]*protocol.TerminalSnapshot // session -> its newest held-back snapshot
+	order    []string                              // sessions holding one, oldest-first
+}
+
+// debitLocked charges ONE append to the shared per-target slot and returns nothing: the
+// charge is unconditional, the wait is not. A journal record does not wait (R-GW.5) but it
+// still spends, so the slot's next free instant moves forward from wherever it already was
+// rather than from now -- which is the whole of the fix for the combined ceiling. Spending
+// from `now` on every append (`last = now`) is what let the two streams interleave at 2x: a
+// journal record landing 1 ms after a snapshot released reset the clock the snapshot had just
+// paid for, so each stream saw a free slot every window and the target saw two.
+//
+// A slot in the past means the stream is idle and the next append is admitted at once, so
+// this stays a SPACING FLOOR and never a batching delay (IS-DELTA-2).
+//
+// ponytail: the debt is UNCLAMPED. A burst of journal records pushes the terminal's next
+// release out by one window each, and that is the honest arithmetic rather than a bug to cap:
+// those appends really were spent out of MailboxAppendPerMin, and the terminal is the only
+// stream that can pay them back (R-GW.5 forbids the journal doing it). The debt is bounded in
+// practice by the producer's own floor, which holds the journal side to one release per
+// window machine-wide (ADR-010 §7); the test fence asserts the peek recovers within a handful
+// of idle wakes after a saturated transcript, which is what would break if it were not.
+func (c *CoalescingSink) debitLocked(now time.Time) {
+	if now.After(c.nextFree) {
+		c.nextFree = now
+	}
+	c.nextFree = c.nextFree.Add(c.window)
 }
 
 // NewCoalescingSink returns a sink that forwards to cfg.Inner under the §6.0 append budget.
@@ -94,28 +127,40 @@ func (c *CoalescingSink) SetMachine(machine string) {
 // one-per-request whole-roster repair the phone is blocked on, and holding it would be
 // holding the only thing that clears a stale channel. Its own rate bound is the phone's
 // (§6.0: <= 1 per stream per 5 s), enforced before the frame is ever authored.
+//
+// It is still CHARGED to the shared slot: it is an append on the same target and the same seq
+// stream, and the ceiling counts appends, not streams (IS-DELTA-2a). Charging without waiting
+// is exactly what Event does, for the same reason.
 func (c *CoalescingSink) Reseed(rs protocol.JournalReseed) error {
-	if rr, ok := c.inner.(ReseedSink); ok {
-		return rr.Reseed(rs)
+	rr, ok := c.inner.(ReseedSink)
+	if !ok {
+		return errNoReseedSink
 	}
-	return errNoReseedSink
+	c.mu.Lock()
+	c.debitLocked(c.now())
+	c.mu.Unlock()
+	return rr.Reseed(rs)
 }
 
 // Snapshot forwards the reconnect roster immediately, consuming the shared slot.
 func (c *CoalescingSink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.last = c.now()
+	c.debitLocked(c.now())
 	return c.inner.Snapshot(roster, cursor)
 }
 
 // Event forwards one live journal record immediately, consuming the shared slot. A journal
 // record is never coalesced, deferred or dropped: it is the one stream that must not lose a
 // frame behind a saturating peek.
+//
+// It is also where an interaction item's release lands (ADR-010 §7's floor releases into the
+// daemon's journal, one process upstream), so charging it here is what makes the item stream
+// and the terminal stream share ONE per-target ceiling instead of two (IS-DELTA-2a).
 func (c *CoalescingSink) Event(rec protocol.JournalRecord) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.last = c.now()
+	c.debitLocked(c.now())
 	return c.inner.Event(rec)
 }
 
@@ -152,15 +197,23 @@ func (c *CoalescingSink) Flush() error {
 // first is what keeps the budget COMBINED while the stash is per session: every held session
 // takes its turn at the one slot instead of the loudest peek winning every window. Caller
 // holds c.mu.
+//
+// THE ARBITRATION between the two streams lives in this one condition. The terminal is the
+// stream that YIELDS when both press at once, because the journal cannot: R-GW.5 forbids
+// delaying a record, and ADR-009 (2) already spends the whole budget on the journal ("no
+// snapshot frames are appended to a phone ... the transcript inherits the whole of what the
+// peek used to spend"). Yielding is not loss -- the stash is latest-wins per session, so a
+// held frame is superseded by a newer one and ships on the first idle wake after the
+// transcript goes quiet.
 func (c *CoalescingSink) release(now time.Time) error {
-	if len(c.order) == 0 || now.Sub(c.last) < c.window {
+	if len(c.order) == 0 || now.Before(c.nextFree) {
 		return nil
 	}
 	session := c.order[0]
 	c.order = c.order[1:]
 	snap := c.stash[session]
 	delete(c.stash, session)
-	c.last = now
+	c.debitLocked(now)
 	return c.inner.Terminal(snap.Session, snap.Lines, snap.Cols, snap.Rows)
 }
 

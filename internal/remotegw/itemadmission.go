@@ -76,6 +76,7 @@ type ItemAdmission struct {
 
 	mu      sync.Mutex
 	last    time.Time               // when the shared slot was last consumed
+	uniq    uint64                  // makes an approval_request's key its own, so it never folds
 	pending map[string]*pendingItem // session+item_id -> the item awaiting its slot
 	// order holds those keys in ARRIVAL order. Release scans it for the head of the
 	// highest-priority class, which is oldest-first within the class -- so no session buys
@@ -133,6 +134,20 @@ func (a *ItemAdmission) Offer(session string, item json.RawMessage) error {
 	// The key is session-scoped because §2 scopes item_id to the session ("unique within
 	// the session"): two sessions minting the same id must never fold into each other.
 	key := session + "\x00" + itemID
+	if kind == itemKindApprovalRequest {
+		// IS-DELTA-3 scopes ADR-010 §7's record collapse to `tool_run` and `file_change` and
+		// says every remaining kind "SHALL KEEP ITS OWN RECORD", then says it again for this
+		// one: an approval_request is never merged, only delayed at most one window. So a
+		// second record for one request -- the CLI withdrawing it, or re-announcing it -- takes
+		// its OWN place in the queue instead of folding, which a unique key is the whole of.
+		//
+		// Its bytes are the content the daemon hashed: §3.5's content_hash is SHA-256 over the
+		// item AS SHIPPED with its own slot zeroed, so a field-wise union would re-marshal the
+		// object into bytes the digest no longer names -- and IS-APR-2 forbids the phone
+		// recomputing one, so nothing downstream could correct it.
+		a.uniq++
+		key = fmt.Sprintf("%s\x00#%d", key, a.uniq)
+	}
 	if p, held := a.pending[key]; held {
 		if err := p.fold(item); err != nil {
 			return err

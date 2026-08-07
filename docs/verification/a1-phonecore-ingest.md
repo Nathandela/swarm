@@ -336,3 +336,232 @@ $ golangci-lint run ./internal/phonecore/... ./mobile/...
 6. **No end-to-end test through a real relay+gateway+daemon.** The producer does not exist yet
    (W1 built the adapter contract, W2 the carriage), so the e2e is owed to the slice that
    lands a producer — `internal/skeleton/s19_e2e_test.go` is its shape.
+
+---
+
+## Review closure — R1: the fold had no replay guard (`StateSchemaVersion` 10 → 11)
+
+**Finding (HIGH, confirmed by execution against `79a070d`).** `ItemStore.applyLocked` folded a
+record into an existing item on `item_id` alone, so `next.Text = prev.Text + w.Text` ran for
+EVERY record sharing that id whatever its cursor. A record delivered twice was folded twice: the
+increment concatenated again and the item's fields re-collapsed to that record's values. Nothing
+looked damaged — the transcript still reads as prose.
+
+A re-delivered record is not an anomaly, it is the repair channel working as designed. IS-LAYER-4
+gives items the journal's own repair, and IS-CAP-4 makes a reseed's events half a window the
+DAEMON sizes to fit one frame — cut at a floor the phone does not choose, so overlap with what the
+phone already holds is the normal case.
+
+### Decisions recorded
+
+12. **The guard is a per-ITEM high water, not a per-stream one.** IS-LAYER-3 is the clause the
+    fold was missing: items carry no private sequence number, and "for successive records of one
+    streamed item, cursor order IS delta order" — so a record that does not ADVANCE past what the
+    item already absorbed is not a delta. It cannot be `SessionCache`'s single stream cursor,
+    which is the shape the idiom is borrowed from: a repair legitimately re-delivers records the
+    phone MISSED at cursors BELOW its highest folded one — that is what a repair is for — and a
+    stream-wide high water would reject exactly those. Strictly-greater, unlike `SessionCache`'s
+    tolerance of an equal cursor: that tolerance exists for a roster snapshot, whose records
+    deliberately share one read cursor, and two records of one item at one cursor would be the
+    same record.
+
+13. **The high water is DURABLE with the item** (`Item.LastCursor`), for the argument already
+    written on `Item.Resolved`: a guard rebuilt in memory comes back zero. The restart is not a
+    hypothetical route to a repair, it is the ordinary one — the journal read cursor is
+    memory-only (`SessionCache.restore` seeds no cursor), so the first resync after a process
+    death asks from cursor ZERO (`mobile/app.go`: `unsignedResync(Sessions().Cursor())`) and the
+    reseed answering it re-delivers the tail of the journal, which is precisely the records that
+    built the restored transcript. Every item still `in_progress` at the SIGKILL is doubled; a
+    terminal one was already safe, because IS-ST-1's guard refuses it.
+
+14. **`StateSchemaVersion` 10 → 11, with the v11 byte-literal fixture pinned.** `LastCursor` sits
+    one level deeper than v10's `items` — inside the array inside `content_purgeable` — so
+    neither the top-level tag check nor `sealedTags` can see it, and
+    `TestStateStore_PinnedSealedFixturesStillLoad` is again what catches it. The bump is answered
+    the way v10's was: `fullState()` exercises the new field, the fence fires, the version moves
+    and a literal for it is pinned. Not bumping would leave two builds both stamping `10` while
+    writing different field sets, and the older one silently drops the guard on the next load.
+
+### RED → GREEN
+
+#### Cycle 3 — the guard (`internal/phonecore/r1_replayfold_test.go`)
+
+Test file written first. Verbatim RED, with the fold unchanged from `79a070d` — the symbols all
+exist, so this is a behavioural RED, not a compile-fail one:
+
+```
+$ go test -count=1 -run 'TestR1_' ./internal/phonecore/
+--- FAIL: TestR1_ARepairedRecordIsNotFoldedTwice (0.02s)
+    r1_replayfold_test.go:95: reconstructed text after the repair = "Let me read the Let me read the file."; want "Let me read the file.". The reseed re-delivered records this phone had already folded, and a record whose cursor does not ADVANCE past what the item absorbed is not a delta (IS-LAYER-3: cursor order IS delta order)
+    r1_replayfold_test.go:105: durable transcript after the repair = [{SessionID:m1/s-alpha ItemID:itm-1 Cursor:10 Kind:agent_message Status:completed TurnID:t-1 TSUnixMs:1786096800000 Text:Let me read the Let me read the file. Truncated:false Detail:false Degraded:false Resolved:false Revision:0 Body:[123 34 118 34 58 49 44 34 105 116 101 109 95 105 100 34 58 34 105 116 109 45 49 34 44 34 116 115 34 58 34 50 48 50 54 45 48 56 45 48 55 84 49 48 58 48 48 58 48 48 90 34 44 34 116 117 114 110 95 105 100 34 58 34 116 45 49 34 44 34 107 105 110 100 34 58 34 97 103 101 110 116 95 109 101 115 115 97 103 101 34 44 34 115 116 97 116 117 115 34 58 34 99 111 109 112 108 101 116 101 100 34 44 34 116 101 120 116 34 58 34 102 105 108 101 46 34 125]}]; want the same single item the live store holds -- the repair commits with its watermark (PB-SYNC-3), so a doubled fold is doubled on disk too and no later repair can undo it
+--- FAIL: TestR1_AReorderedRecordBehindTheItemsHighWaterIsRejected (0.00s)
+    r1_replayfold_test.go:126: reconstructed text = "read the Let me "; want "read the " -- a record behind the item's high water is a reorder, and appending it renders the increments out of order
+    r1_replayfold_test.go:131: item TurnID = "t-1"; want t-2 -- the rejected record must not re-collapse the item's FIELDS to its own older values either
+--- FAIL: TestR1_TheFoldHighWaterSurvivesARestart (0.00s)
+    r1_replayfold_test.go:169: reconstructed text after a restart and the repair that follows it = "Let me read the Let me read the file."; want "Let me read the file.". The per-item high water must be durable with the item -- a flag rebuilt in memory comes back clear, which is the same argument Item.Resolved is durable for
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.042s
+FAIL
+```
+
+The three failures are the three shapes of the same defect: a repair that re-delivers what the
+phone holds, a pair that arrives out of cursor order, and the same repair one process death later.
+
+#### Cycle 3b — the TWO shipped fences that fired on the durable field
+
+`Item.LastCursor` and the guard landed, then `fullState()` was given the new coordinate — the
+fixture must exercise every field or the comparison stops covering what was added after it was
+written. The migration rule then fired, twice, in the order it is designed to:
+
+```
+$ go test -count=1 -run 'TestStateStore_PinnedSealedFixturesStillLoad|TestStateSchemaVersion_IsPinnedToTheDurableFieldSet|TestState_EveryResumeCriticalFieldSurvivesARestart' ./internal/phonecore/
+--- FAIL: TestStateStore_PinnedSealedFixturesStillLoad (0.05s)
+    --- FAIL: TestStateStore_PinnedSealedFixturesStillLoad/v10 (0.01s)
+        state_test.go:566: the pinned v10 fixture restored State.Items = []phonecore.Item{phonecore.Item{SessionID:"m1/s1", ItemID:"itm-1", Cursor:0x9, LastCursor:0x0, Kind:"agent_message", Status:"completed", TurnID:"turn-1", TSUnixMs:1753900000000, Text:"on it", Truncated:false, Detail:false, Degraded:false, Resolved:false, Revision:0, Body:json.RawMessage{0x7b, 0x22, 0x76, 0x22, 0x3a, 0x31, 0x2c, 0x22, 0x69, 0x74, 0x65, 0x6d, 0x5f, 0x69, 0x64, 0x22, 0x3a, 0x22, 0x69, 0x74, 0x6d, 0x2d, 0x31, 0x22, 0x2c, 0x22, 0x6b, 0x69, 0x6e, 0x64, 0x22, 0x3a, 0x22, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x22, 0x7d}}}; want []phonecore.Item{phonecore.Item{SessionID:"m1/s1", ItemID:"itm-1", Cursor:0x9, LastCursor:0xb, Kind:"agent_message", Status:"completed", TurnID:"turn-1", TSUnixMs:1753900000000, Text:"on it", Truncated:false, Detail:false, Degraded:false, Resolved:false, Revision:0, Body:json.RawMessage{0x7b, 0x22, 0x76, 0x22, 0x3a, 0x31, 0x2c, 0x22, 0x69, 0x74, 0x65, 0x6d, 0x5f, 0x69, 0x64, 0x22, 0x3a, 0x22, 0x69, 0x74, 0x6d, 0x2d, 0x31, 0x22, 0x2c, 0x22, 0x6b, 0x69, 0x6e, 0x64, 0x22, 0x3a, 0x22, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x22, 0x7d}}}. A coordinate the literal carries and this build no longer reads is a durable field dropped without a schema bump
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.335s
+FAIL
+```
+
+`StateSchemaVersion` then went to 11, and the second fence demanded the literal for it:
+
+```
+$ go test -count=1 -run 'TestStateSchemaVersion_IsPinnedToTheDurableFieldSet|TestStateStore_PinnedSealedFixturesStillLoad' ./internal/phonecore/
+--- FAIL: TestStateSchemaVersion_IsPinnedToTheDurableFieldSet (0.00s)
+    state_test.go:587: StateSchemaVersion is 11 and stateFixtures pins no literal for it (it pins [1 4 5 6 7 8 9 10]). PB-STATE-5's forward-migration path is only mechanical if every shipped version keeps a byte-literal that must go on loading, so raising the version means pinning the blob the new version writes
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.093s
+FAIL
+```
+
+Answered the way v10 was: `stateV11Fixture` generated by writing `fullState()` through the
+fixture's pinned KEK, pinned as a byte literal, added to `stateFixtures`, and the generator
+deleted. The v10 literal is untouched and still loads — `Items` is legitimately absent from it,
+which is the version-aware half of that test doing its job.
+
+#### GREEN
+
+```
+$ go test -count=1 ./internal/phonecore/
+ok  	github.com/Nathandela/swarm/internal/phonecore	8.969s
+
+$ go test -race -count=1 -run 'TestR1_|TestInteraction|TestState' ./internal/phonecore/ -v
+--- PASS: TestInteraction_FoldsIntoTheTranscriptAndNotTheRoster (0.04s)
+--- PASS: TestInteraction_TheJournalReadCursorStillAdvances (0.01s)
+--- PASS: TestInteraction_AgentMessageRecordsConcatenateByItemID (0.00s)
+--- PASS: TestInteraction_NoRecordLandsAfterATerminalStatus (0.00s)
+--- PASS: TestInteraction_UnusableItemsAreSkippedWithoutStalingTheStream (0.00s)
+--- PASS: TestInteraction_ANewerItemSchemaIsDegradedNotDropped (0.00s)
+--- PASS: TestInteraction_PlanUpdateKeepsOnlyTheHighestRevision (0.01s)
+--- PASS: TestInteraction_UnresolvedApprovalSurvivesRetentionTrim (0.22s)
+--- PASS: TestInteraction_ReseedMergesTheTranscriptAndRedeliversUnresolvedApprovals (0.01s)
+--- PASS: TestInteraction_TranscriptSurvivesARestart (0.01s)
+--- PASS: TestInteraction_ThePurgeDestroysTheTranscript (0.00s)
+--- PASS: TestR1_ARepairedRecordIsNotFoldedTwice (0.01s)
+--- PASS: TestR1_AReorderedRecordBehindTheItemsHighWaterIsRejected (0.00s)
+--- PASS: TestR1_TheFoldHighWaterSurvivesARestart (0.01s)
+--- PASS: TestStateStore_PushPreferenceVersionSurvivesARestart (0.04s)
+--- PASS: TestState_EveryResumeCriticalFieldSurvivesARestart (0.09s)
+--- PASS: TestState_DeviceKeysSurviveARestart (0.04s)
+--- PASS: TestState_GrantWatermarkRefusesAReplayedGrantAfterRestart (0.09s)
+--- PASS: TestStateStore_PinnedSealedFixturesStillLoad (0.02s)
+--- PASS: TestStateSchemaVersion_IsPinnedToTheDurableFieldSet (0.00s)
+--- PASS: TestStateStore_PinnedV1FixtureStillLoads (0.00s)
+--- PASS: TestStateStore_UnknownFutureSchemaFailsClosed (0.00s)
+--- PASS: TestStateStore_CorruptFailsClosedButAForeignMachineIsMerelyEmpty (0.00s)
+ok  	github.com/Nathandela/swarm/internal/phonecore	2.820s
+```
+
+#### Gates
+
+```
+$ go build ./...   # clean
+$ go vet ./...     # clean
+$ go test -count=1 ./mobile/ ./android/gate/
+ok  	github.com/Nathandela/swarm/mobile	19.363s
+ok  	github.com/Nathandela/swarm/android/gate	7.433s
+
+$ go test -count=1 ./internal/protocol/... ./internal/verify/
+ok  	github.com/Nathandela/swarm/internal/protocol	14.749s   # the protocol.md drift fences
+ok  	github.com/Nathandela/swarm/internal/protocol/schema	1.000s
+ok  	github.com/Nathandela/swarm/internal/verify	12.513s
+
+$ golangci-lint run ./internal/phonecore/...
+# 3 issues, ALL PRE-EXISTING and none in code this fix wrote or moved:
+#   internal/phonecore/deps_allowlist_test.go:91  errcheck f.Close
+#   internal/phonecore/state.go:1522,1545         errcheck os.Remove / d.Close (persistState, untouched)
+```
+
+The bound surface is unchanged: `LastCursor` is fold bookkeeping, not something a screen renders,
+so `mobile.TranscriptItem` does not carry it and neither the golden nor the coverage fence moved.
+
+### Residual
+
+7. **A record missed INSIDE one item's own run stays missed.** If the phone folded cursors 10 and
+   12 for an item and the repair returns 11, the guard drops it: IS-DELTA-1 reconstructs by
+   concatenation in cursor order, and an item keeps a high water rather than a record of what it
+   absorbed, so there is nowhere to put a late middle increment. Dropping it beats appending it in
+   the wrong place. Rebuilding the item from the reseed instead would need the events half to be
+   guaranteed WHOLE, which IS-CAP-4's cut is exactly the absence of. Carried as a `ponytail:`
+   ceiling on the guard in `interaction.go`.
+
+---
+
+# Re-review of R1 (adversarial, against the closure rather than the finding)
+
+The guard was re-verified BY EXECUTION, not by reading the claim: the three R1 cases were re-run,
+and one further corruption vector was devised and driven.
+
+## The new vector: repair through the LIVE stream, not through a reseed
+
+R1's own restart case repairs through a `journal_reseed`. The vector it does not drive is the
+gateway resuming from its durable PB-GW-8 delivered cursor: a phone that died between applying a
+frame and that frame being acked receives those records again as ordinary `Event` frames at fresh
+mailbox seqs. Nothing on such a frame marks it as a repeat — there is no reseed envelope, no
+watermark, no floor — so the per-item high water is the only thing that can tell a re-send from a
+delta (IS-LAYER-3: "for successive records of one streamed item, cursor order IS delta order").
+
+`internal/phonecore/r1_liveredelivery_test.go`:
+`TestR1_LiveRedeliveryStraddlingARestartIsNotFolded` folds cursors 10 and 11, restarts, then
+re-sends 10 and 11 as live events at seqs 3 and 4 followed by the unseen 12. It PASSES against the
+shipped guard — it is a fence added for coverage, not a red one. (Driven against the pre-fix code
+it would have read `"Let me read the Let me read the file."`, the same doubling R1 names.)
+
+```
+$ go test ./internal/phonecore/ -run 'TestR1_' -count=1 -v
+--- PASS: TestR1_LiveRedeliveryStraddlingARestartIsNotFolded (0.02s)
+--- PASS: TestR1_ARepairedRecordIsNotFoldedTwice (0.00s)
+--- PASS: TestR1_AReorderedRecordBehindTheItemsHighWaterIsRejected (0.00s)
+--- PASS: TestR1_TheFoldHighWaterSurvivesARestart (0.00s)
+ok  	github.com/Nathandela/swarm/internal/phonecore	0.891s
+
+$ go test ./internal/phonecore/ -count=1 -race
+ok  	github.com/Nathandela/swarm/internal/phonecore	29.833s
+```
+
+**R1's closure holds.** The `StateSchemaVersion` 10 → 11 bump is the right call and is confirmed:
+the durable high water is what makes the guard survive the process death Android hands out
+routinely, and the memory-only alternative leaves every `in_progress` item doubled on the first
+repair after each launch.
+
+### Residual 8 — the v10 → v11 UPGRADE window (measured, not fixed)
+
+A blob stamped below 11 loads with every item's `LastCursor` at zero, so on the first launch after
+an upgrade the guard reads zero and the first repair re-folds everything the restored transcript
+was built from. Driven directly (v10 items, then the R1 reseed) the message came back as
+`"Let me read the Let me read the file."` — the finding's own damage, once, per upgraded phone.
+
+It is recorded rather than closed, for two reasons:
+
+- **It is unreachable in the field.** No adapter implements `InteractionSource` anywhere in the
+  tree (`grep -rn 'func (.*) Interactions('` over non-test code returns nothing), so no machine
+  produces an item and no v10 blob shipped in 0.2.8 can carry one. The array is empty.
+- **There is no complete cheap fix.** Seeding `LastCursor` from `Cursor` on restore closes it only
+  for single-record items: the vulnerable class is exactly the multi-record `in_progress` item,
+  and for that one the seed is a lower bound that still re-admits the middle records. The
+  alternatives — dropping pre-v11 items on load and letting IS-DELTA-4's "incomplete from join"
+  rebuild them, or carrying a per-item ledger of absorbed cursors — are both rulings, not
+  one-liners. Neither should be taken on a path that cannot fire.
+
+Closing it becomes worthwhile the moment the first `InteractionSource` adapter lands and BEFORE
+that build ships, not before.

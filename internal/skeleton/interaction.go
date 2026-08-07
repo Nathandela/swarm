@@ -19,6 +19,7 @@ package skeleton
 //	  -> Interactions          the adapter's pure shaping; the daemon supplies nothing to it
 //	  -> Validate              IS-ENV-3: an unshapeable item is emitted NOT AT ALL
 //	  -> shapeItem             §2's envelope: v, the minted ULID item_id, ts, turn_id
+//	  -> fitItem               §5's caps and IS-CAP-1's truncator, then the serialized bytes
 //	  -> ItemAdmission.Offer   ADR-010 §7: one append per window per target, merged not dropped
 //	  -> RecordInteractionRaw  the bare journal record (IS-LAYER-1)
 //
@@ -33,15 +34,39 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/remotegw"
+	"github.com/Nathandela/swarm/internal/status"
+)
+
+// interaction-schema.md §5's PER-FIELD size caps. daemon.MaxItemBytes is the whole-item cap and
+// lives beside the envelope it is measured on; these are the §3 kind fields' caps and live here,
+// with the shaping that writes those fields -- which is exactly where daemon.MaxItemBytes's own
+// comment says they belong.
+//
+// THE NUMBERS ARE PROPOSED AND UNRATIFIED, on the same terms as daemon.MaxItemBytes: §5's own
+// preamble says ADR-009 carries none of them and hands the question back, so nothing has
+// ratified them. What would is a measured slice or an owner ruling written into ADR-009.
+//
+// ponytail: unexported. They are the producer's, no other package shapes a kind field, and an
+// exported constant nothing outside can reach is a new entry in B94's unreachable ledger.
+const (
+	maxTextBytes       = 4 << 10 // `text`, `output_excerpt`, `diff_excerpt`
+	maxSummaryBytes    = 256     // `summary`, each `action` string field, each decisions[].label
+	maxPromptLines     = 40      // `prompt_lines`: 40 lines...
+	maxPromptLineRunes = 200     // ...x 200 RUNES, which is what §5 counts, not bytes
+	maxSteps           = 64      // `plan_update.steps`: 64 steps...
+	maxStepBytes       = 200     // ...x 200 B
+	maxDecisions       = 8       // `decisions`
 )
 
 // hookBodyLimit bounds the hook callback the daemon reads off one connection. Reading it at
@@ -72,6 +97,13 @@ func (d *Daemon) initInteractionsLocked() {
 	if d.turnIDs == nil {
 		d.turnIDs = map[string]string{}
 	}
+	if d.approvals == nil {
+		// The approval lifecycle's state (approval.go), initialized on the same lazy path so a
+		// test Daemon literal need not set any of it.
+		d.approvals = map[string]*pendingApproval{}
+		d.openItems = map[string]map[string]openItem{}
+		d.interacted = map[string]status.Interaction{}
+	}
 	if d.items == nil {
 		// ONE queue for the whole machine, because IS-DELTA-2a's ceiling is per TARGET across
 		// every session and kind: a per-session queue would be N budgets for one phone.
@@ -95,6 +127,10 @@ func (d *Daemon) releaseInteractions(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// IS-LIFE-2's `expired` rides the same tick: expiry is the daemon's own observation
+			// and needs a clock nobody else drives (approval.go). A tick with nothing pending is
+			// a lock and an empty range.
+			d.sweepExpiredApprovals()
 			if err := d.items.Flush(); err != nil {
 				// The backlog is the actionable half: an append that fails once is a hiccup, one
 				// that fails with items piling up behind it is a stalled transcript.
@@ -156,16 +192,15 @@ func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p ada
 			log.Printf("interaction: %s dropped an unshapeable item: %v", p.Event, err)
 			continue
 		}
-		item, err := d.shapeItem(sessionID, in, p)
+		payload, resolved, err := d.shapeItem(sessionID, in, p)
 		if err != nil {
 			log.Printf("interaction: %s could not be shaped: %v", p.Event, err)
 			continue
 		}
-		payload, err := json.Marshal(item)
-		if err != nil {
-			log.Printf("interaction: %s could not be serialized: %v", p.Event, err)
-			continue
-		}
+		// IS-LIFE-2's supersede/cancel resolutions, authored by the shaping that observed them
+		// (approval.go). They are offered FIRST so the older card's dismissal is ordered ahead of
+		// whatever replaced it, and they are not counted: n is what the ADAPTER shaped.
+		d.offerAll(sessionID, resolved)
 		if err := d.items.Offer(sessionID, payload); err != nil {
 			log.Printf("interaction: %s was refused by the append floor: %v", p.Event, err)
 			continue
@@ -175,13 +210,18 @@ func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p ada
 	return n
 }
 
-// shapeItem builds §2's envelope around the adapter's normalized fields. Everything it decides
-// is daemon-authoritative by ADR-010 §3: the schema version, the id, the instant and the turn.
-func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.HookPayload) (daemon.InteractionItem, error) {
-	fields, err := interactionFields(in)
-	if err != nil {
-		return daemon.InteractionItem{}, err
-	}
+// shapeItem builds §2's envelope around the adapter's normalized fields and returns the item
+// SERIALIZED. Everything it decides is daemon-authoritative by ADR-010 §3: the schema version,
+// the id, the instant, the turn -- and the bytes, because §5's caps are measured on the
+// serialization and IS-CAP-1's `truncated`/`full_bytes` pair is decided by it.
+//
+// It also returns any approval_resolved items the shaping OBSERVED (approval.go): a second
+// pending request for the session supersedes the first, and a terminal record for the pending
+// one is the CLI withdrawing it. Both are IS-LIFE-2 paths and both are visible only here, at the
+// moment the item is shaped -- which is why they ride out of this function rather than being
+// discovered by a scan somewhere else.
+func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.HookPayload) (json.RawMessage, []json.RawMessage, error) {
+	fields := interactionFields(in)
 	ts := time.Now().UTC()
 	if p.ReceivedAtMs > 0 {
 		// The CAPTURE instant, not the append instant. Substituting the latter is the PB-APP-11
@@ -192,15 +232,40 @@ func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.H
 	d.itemMu.Lock()
 	defer d.itemMu.Unlock()
 	d.initInteractionsLocked()
-	return daemon.InteractionItem{
+	it := daemon.InteractionItem{
 		V:      daemon.InteractionSchemaVersion,
 		ItemID: d.itemIDLocked(sessionID, in.Ref),
 		TS:     ts,
 		TurnID: d.turnIDLocked(sessionID, in),
 		Kind:   in.Kind,
 		Status: in.Status,
-		Fields: fields,
-	}, nil
+	}
+
+	var resolved []json.RawMessage
+	pending := in.Kind == adapter.KindApprovalRequest && in.Status == adapter.StatusInProgress
+	if pending {
+		resolved = d.openApprovalLocked(sessionID, it, in, fields)
+	} else if in.Kind == adapter.KindApprovalRequest {
+		// A terminal record for the request the daemon is holding: the CLI withdrew the prompt
+		// (IS-LIFE-2's `cancelled`). If some other path already resolved it -- the owner answered
+		// at the machine, the window lapsed -- there is nothing pending and this is a no-op, which
+		// is what keeps "exactly one" true.
+		if ap := d.approvals[sessionID]; ap != nil && ap.itemID == it.ItemID {
+			resolved = d.resolveApprovalLocked(sessionID, resolveCancelled, byAgent, "")
+		}
+	}
+	d.noteItemLocked(sessionID, it)
+
+	payload, err := fitItem(it, fields)
+	if err != nil {
+		return nil, resolved, err
+	}
+	if pending {
+		// After the fit, never before: R2's rule is TRUNCATE, THEN HASH, so the digest names the
+		// bytes the card renders and an approve echoed off a truncated card still matches.
+		payload = d.sealApprovalLocked(sessionID, payload)
+	}
+	return payload, resolved, nil
 }
 
 // itemIDLocked maps the CLI's own id to the item's minted ULID, so successive records of ONE
@@ -261,6 +326,12 @@ func (d *Daemon) forgetInteractions(sessionID string) {
 	d.itemMu.Lock()
 	defer d.itemMu.Unlock()
 	delete(d.turnIDs, sessionID)
+	// The approval lifecycle's state for the session (approval.go). sweepSessionInteractions has
+	// already drained all three; these deletes are what stop a reused local session id inheriting
+	// a stranger's pending card if it ever had not.
+	delete(d.approvals, sessionID)
+	delete(d.openItems, sessionID)
+	delete(d.interacted, sessionID)
 	prefix := sessionID + "\x00"
 	for k := range d.itemIDs {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
@@ -279,9 +350,13 @@ func (d *Daemon) resolveAdapter(agentType string) (adapter.Adapter, bool) {
 	return fn(agentType)
 }
 
-// interactionFields marshals §3's per-kind fields into the flat object that rides beside the
+// interactionFields collects §3's per-kind fields into the flat object that rides beside the
 // envelope. It emits ONLY what the adapter sourced: an absent field means "not applicable to
 // this kind" (§2), and a zero-valued one emitted anyway would read as content.
+//
+// It applies NO cap. Capping is capFields/clipStrings, downstream, because §2's `full_bytes` is
+// "the byte length of the untruncated payload" and the only honest way to know it is to
+// serialize the untruncated item once.
 //
 // ponytail: an approval_request's `agent_instance`, `content_hash` and `expires_at` are
 // deliberately ABSENT. All three are daemon-authoritative D7 binding material whose only
@@ -290,7 +365,14 @@ func (d *Daemon) resolveAdapter(agentType string) (adapter.Adapter, bool) {
 // now with nothing to check it against would be a value nobody can verify. They land with
 // ApproveReq. The `keystrokes` map is absent for the opposite reason: IS-APR-3 FORBIDS it on
 // the item, and the daemon holds it machine-side.
-func interactionFields(in adapter.Interaction) (json.RawMessage, error) {
+//
+// WHEN content_hash DOES LAND, IT IS HASHED OVER THE ITEM AS SHIPPED -- after fitItem, never
+// before. IS-APR-2 makes the phone echo the hash VERBATIM and forbids it computing one, and
+// ADR-007 D7 makes the daemon recompute and reject a mismatch; so a hash taken over the
+// pre-truncation content would name a body no surface holds, the rendered card could never
+// reproduce it, and every approve from a truncated card would be refused as stale. The rule is
+// one-directional and cheap to state: TRUNCATE, THEN HASH.
+func interactionFields(in adapter.Interaction) map[string]any {
 	f := map[string]any{}
 	put := func(k string, v any) {
 		switch t := v.(type) {
@@ -336,7 +418,9 @@ func interactionFields(in adapter.Interaction) (json.RawMessage, error) {
 		}
 		f["decisions"] = decisions
 		if len(in.PromptLines) > 0 {
-			f["prompt_lines"] = in.PromptLines
+			// COPIED, not referenced: capFields and clipStrings clip in place, and the adapter's
+			// own slice is not this producer's to overwrite.
+			f["prompt_lines"] = append([]string(nil), in.PromptLines...)
 		}
 	case adapter.KindPlanUpdate:
 		put("revision", in.Revision)
@@ -346,10 +430,7 @@ func interactionFields(in adapter.Interaction) (json.RawMessage, error) {
 		}
 		f["steps"] = steps
 	}
-	if len(f) == 0 {
-		return nil, nil
-	}
-	return json.Marshal(f)
+	return f
 }
 
 // putAction emits §7's structured tool summary, omitted entirely when the adapter classified
@@ -366,6 +447,225 @@ func putAction(f map[string]any, a adapter.ToolAction) {
 		}
 	}
 	f["action"] = action
+}
+
+// ---- §5's caps and IS-CAP-1's truncator ------------------------------------
+
+// fitItem serializes the item with §3's kind fields flat beside the envelope, under §5's caps.
+//
+// TWO STAGES, because §5's per-field caps are NOT JOINTLY SUFFICIENT. An approval_request
+// sitting exactly on the documented maxima -- 40 prompt lines x 200 runes, a 256 B summary,
+// 256 B action strings, 8 decisions with 256 B labels -- serializes to ~11.7 KiB, half again
+// over the 8 KiB MaxItemBytes. So:
+//
+//  1. capFields applies §5's per-field caps (the table's own numbers, per field).
+//  2. if the item is STILL over daemon.MaxItemBytes, clipStrings lowers ONE ceiling across
+//     every string alike, halving it until the item fits.
+//
+// WHY A UNIFORM CEILING AND NOT A PRIORITY ORDER. Something has to give, and §5 names no order
+// in which fields should give it. A privilege list would be this seam ruling on which half of a
+// card matters -- a judgement for the schema, not for the producer. The uniform ceiling makes
+// the choice no-one's: it cuts the longest strings hardest and leaves short ones untouched, and
+// it needs no per-kind knowledge, so a ninth kind costs it nothing (IS-COMPAT-3).
+//
+// AN ITEM IS NEVER DROPPED FOR SIZE. That is the whole finding: IS-CAP-1 makes an over-cap item
+// TRUNCATED with `truncated`/`full_bytes`, and IS-CAP-2 leaves the body fetchable. The append
+// boundary's own refusal (daemon.RecordInteractionRaw) is left for genuinely malformed items.
+//
+// `full_bytes` is measured on the item as it serialized with NOTHING clipped, which is §2's
+// "byte length of the untruncated payload" -- and is why stage 1 runs after that first marshal
+// rather than inside the field builder.
+func fitItem(it daemon.InteractionItem, fields map[string]any) (json.RawMessage, error) {
+	payload, err := serializeItem(&it, fields)
+	if err != nil {
+		return nil, err
+	}
+	untruncated := len(payload)
+	if !capFields(fields) && untruncated <= daemon.MaxItemBytes {
+		return payload, nil
+	}
+	it.Truncated = true
+	it.FullBytes = untruncated
+	for ceiling := maxTextBytes; ; ceiling /= 2 {
+		if payload, err = serializeItem(&it, fields); err != nil {
+			return nil, err
+		}
+		if len(payload) <= daemon.MaxItemBytes {
+			return payload, nil
+		}
+		if ceiling == 0 {
+			// Unreachable with the shapes above -- at a one-byte ceiling the structural residue
+			// (envelope, 64 step states, 8 decision ids, 40 empty lines) is well under 8 KiB. It
+			// is an error rather than a panic because a later kind could invent a field this
+			// walker does not reach, and a silent oversized item would be refused downstream with
+			// no clue where it came from.
+			return nil, fmt.Errorf("interaction: a %s item of %d bytes will not fit the %d-byte cap "+
+				"even with every string emptied (interaction-schema.md §5)", it.Kind, len(payload), daemon.MaxItemBytes)
+		}
+		clipStrings(fields, ceiling)
+	}
+}
+
+// serializeItem marshals fields into the envelope's flat Fields slot and the whole item after
+// it. Empty fields stay nil so MarshalJSON skips the merge entirely.
+func serializeItem(it *daemon.InteractionItem, fields map[string]any) (json.RawMessage, error) {
+	it.Fields = nil
+	if len(fields) > 0 {
+		f, err := json.Marshal(fields)
+		if err != nil {
+			return nil, err
+		}
+		it.Fields = f
+	}
+	return json.Marshal(*it)
+}
+
+// capFields applies §5's PER-FIELD caps in place and reports whether any of them bound. The keys
+// are §3's own names, which is why this sits beside the builder that writes them.
+func capFields(f map[string]any) bool {
+	clipped := false
+	clip := func(s string, max int) string {
+		out := clampBytes(s, max)
+		clipped = clipped || len(out) != len(s)
+		return out
+	}
+	for _, k := range [...]string{"text", "output_excerpt", "diff_excerpt"} {
+		if s, ok := f[k].(string); ok {
+			f[k] = clip(s, maxTextBytes)
+		}
+	}
+	if s, ok := f["summary"].(string); ok {
+		f["summary"] = clip(s, maxSummaryBytes)
+	}
+	if a, ok := f["action"].(map[string]string); ok {
+		for k, v := range a {
+			a[k] = clip(v, maxSummaryBytes)
+		}
+	}
+	if ds, ok := f["decisions"].([]map[string]string); ok {
+		if len(ds) > maxDecisions {
+			ds, clipped = ds[:maxDecisions], true
+			f["decisions"] = ds
+		}
+		for _, d := range ds {
+			d["label"] = clip(d["label"], maxSummaryBytes)
+		}
+	}
+	if ls, ok := f["prompt_lines"].([]string); ok {
+		if len(ls) > maxPromptLines {
+			ls, clipped = ls[:maxPromptLines], true
+			f["prompt_lines"] = ls
+		}
+		for i, l := range ls {
+			// RUNES, not bytes: §5 caps a prompt line at 200 runes, and a byte cap would halve a
+			// non-ASCII prompt while passing for correct.
+			if out := clampRunes(l, maxPromptLineRunes); len(out) != len(l) {
+				ls[i], clipped = out, true
+			}
+		}
+	}
+	if ss, ok := f["steps"].([]map[string]string); ok {
+		if len(ss) > maxSteps {
+			ss, clipped = ss[:maxSteps], true
+			f["steps"] = ss
+		}
+		for _, s := range ss {
+			s["text"] = clip(s["text"], maxStepBytes)
+		}
+	}
+	return clipped
+}
+
+// itemUnclippedFields are the fields the fit ceiling never touches: §3/§4/§7's CLOSED
+// VOCABULARIES, and the DAEMON-MINTED identifiers and digests of §3.5/§3.6. Each is short and
+// fixed by the schema, so excluding them costs the fit nothing measurable -- and none of them is
+// SMALLER when cut, only invalid: half an enum renders a wrong card (the phone cannot skip it
+// the way IS-COMPAT-1 lets it skip an unknown KIND), half a content_hash makes a card
+// permanently unanswerable (IS-APR-2 forbids the phone repairing it), and half an
+// `interaction_id` resolves nothing.
+//
+// ponytail: the ENUM half is DELIBERATE AND CANNOT FIRE TODAY -- deleting those rows would
+// change no observable behaviour, and the mutation that removes them fails no test (recorded in
+// a1-carriage.md). The ceiling only falls while the item is over 8 KiB, and §5's COUNT caps
+// bound the residue: the widest item is 64 steps, which fits at a 64-byte ceiling (~6.2 KiB
+// measured), and the longest enum here is `in_progress` at 11. It is kept because that headroom
+// is arithmetic over numbers §5 marks PROPOSED AND UNRATIFIED: a ratifying ruling that raises
+// MaxSteps far enough drives the ceiling under 11 and starts shipping `pen` for `pending`,
+// silently. The IDENTIFIER half is NOT speculative: content_hash is 64 characters, which is
+// below the ceilings an over-cap approval_request already reaches (a1-carriage.md measured 128
+// and 64).
+var itemUnclippedFields = map[string]bool{
+	"source": true, "stop_reason": true, "change": true, "mode": true, // top level
+	"type": true, "state": true, // action.type (§7), steps[].state (§3.7)
+	"process": true, "turn": true, "interaction": true, "group": true, // session_status (§3.8)
+	"decision": true, "by": true, // approval_resolved (§3.6)
+	"content_hash": true, "interaction_id": true, "operation_id": true, // the minted ids and the digest
+}
+
+// clipStrings clips every non-enum string in f to ceiling bytes, in place, at a rune boundary.
+// It is generic over the value shapes the builder produces -- string, []string (prompt_lines),
+// map[string]string (action), []map[string]string (decisions, steps) -- so it reaches strings
+// §5's table never names (`tool`, `path`, `truncation_marker`, a decision's `id`) too. Those
+// carry no per-field cap on purpose: §5 does not give them one and IS-TOOL-3 requires the
+// truncation marker VERBATIM, so MaxItemBytes is the only bound they answer to, and this is
+// where it is applied.
+func clipStrings(f map[string]any, ceiling int) {
+	for k, v := range f {
+		if itemUnclippedFields[k] {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			f[k] = clampBytes(t, ceiling)
+		case []string:
+			for i, s := range t {
+				t[i] = clampBytes(s, ceiling)
+			}
+		case map[string]string:
+			clipStringMap(t, ceiling)
+		case []map[string]string:
+			for _, m := range t {
+				clipStringMap(m, ceiling)
+			}
+		}
+	}
+}
+
+func clipStringMap(m map[string]string, ceiling int) {
+	for k, s := range m {
+		if !itemUnclippedFields[k] {
+			m[k] = clampBytes(s, ceiling)
+		}
+	}
+}
+
+// clampBytes truncates s to at most max BYTES, backing up to a UTF-8 rune start so a multi-byte
+// rune is never split (IS-CAP-1: "at a UTF-8 rune boundary, never mid-rune"). A split rune would
+// not merely look wrong -- encoding/json substitutes U+FFFD for it, so the phone would render a
+// replacement character the machine never saw. It is vt.clampBytes's rule, restated rather than
+// imported: the producer has no other reason to link the terminal emulator.
+func clampBytes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	b := max
+	for b > 0 && !utf8.RuneStart(s[b]) {
+		b--
+	}
+	return s[:b]
+}
+
+// clampRunes truncates s to at most max RUNES -- §5 caps `prompt_lines` per line in runes, not
+// bytes. Ranging a string yields rune start offsets, so the cut is on a boundary by construction.
+func clampRunes(s string, max int) string {
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i]
+		}
+		n++
+	}
+	return s
 }
 
 // ---- ids -------------------------------------------------------------------

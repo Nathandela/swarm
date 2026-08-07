@@ -106,7 +106,7 @@ func fullState() State {
 		LastHeardAt:         1753900000000,
 		Disowned:            true,
 		Items: []Item{{
-			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, Kind: KindAgentMessage,
+			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, LastCursor: 11, Kind: KindAgentMessage,
 			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
 			Body: json.RawMessage(`{"v":1,"item_id":"itm-1","kind":"agent_message"}`),
 		}},
@@ -474,6 +474,19 @@ const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaG
 // answerable across exactly this process death.
 const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"2C6fYgxMdR0FSsHa2kAEhULMqUcF2INbdeW1pIKOfJrGjNuJncGnLA+jlzs0PuntYLT4id7Tq37DJOv/","content_key":"JerXaja3mL5C8++9Y5wmtM20c1AkS+kIMa2+HKPmEnsTbaRg632nuVzKcK5TSqwL2ZsuXjMITRj6zEA7","wake_state":"Uiq6/TZjSbmZGbnBRM0wYS9FXs+0rp2EbqpFiReW1TI+fuZ+ARkYTlmZ8MFTTz/k0KOnDh+fMrGpslDJdcXZ/yPtd6gjJ6KLhoA=","content_kept":"JcX6+X/BK2AV0sMJTRWDQF4wDmYHKC2GVY9w5mPxdNz05NwXhtQTpx3Hs3Yugj5rWa6G86Yh5hrtRqMLv5oHDvKe+dj9WBnNYvWA188ZynvQBTCF/tB0zkg9ujqnCWGti/oSJzuf3aRdprkfhtDASLzWG3Jv8ijhpvX3KapdBZRSzQ7kl1xfOH6RlzRarvdVoFdU3L1RVsf2c6qbRb9+sJPkQI5sqL0ocVLJUAgCME6ROGbK60BKuorf/uthatwBYLy2PUuFKySbqVhbvZw67qgxwuHiCNDtzn7eJWyLt/KrdZJLmUtsYsfHDpQu9FHh21nr0OwndpY9Vet26BuitvTsxq+z3aRluH/4hP9GAW7Tn9KPwLDFY67/HqzQLSP3q5vwZF9jnZu3B4zl6KekIG6rZnr+QQIKZnDqrvYed1c+JV6U0AceTmrOjmTmc7/4B2krKuZkIIcWaIhNo1M66pWDcZplibMhK/RfRaSrL/aA1O88A2EKymOGI95BP/vWIE1Nj8t/64UwDbeRbNXUI9vpPccD","content_purgeable":"ys6PsB5ElnAWY1pkkmJ0QqUvT9jmzWvAfLZxTzJ25/7hhOq6UfjU8PzzkimDgu7ge5oaG3KdSpZCjAnfLmyxPDBmlxjIda6J9dIpeMYdfzD4RTehg59n4C4vxGB7TN8I/QeRxsMMmqIUg6Npzq1HA5Ks3cjXQMPH+kRZIJN2TGHW+EOjlMQqsrnW99ZgePBQPAmcbU96y9Je8XTDzEpceUjqb6s+S08ucjQCwc0Z1D3C8r7VSUE0ZeiR+GcaglFTVFNI6JX1WSyhJ6tIX7QRnFcqaL3rFxJOctDNlBQ2HGSAMZnuuBX5+2o2BNL2NOUIe9Q4xxHFoAEYBHR0R/SDjZXo+ZNhTiopyEK2OmQ7+8U6J1pfheUJq66mA9x4cQXev0LGeF2vf52lDT8nBJDbBYq7lpJ9D2p/724lNCiHoa5Nf4QKrf7NEP6UywgLOSk4joSf0i6NoKPPKijSXrPROW6vBHpPzwiDoRzJZEY15DpfrED4oq97GO4ooTGJnPmMcNyuqpQltAMUcyL442gD107qO83kewYtM6t2KeQbUV19XidU6oR6g2Os1oaGHrEFzIZG8gdIp+cRtyAeINYoBi4E5EWtmWje7N3BcjYqEJd3J/lnroVYuC+Z4We2ozIzRcqqHCWyegtcgaxr/+d+GXOvQO0xOeZkWCfrVzOh1YAoFvHdE67LR46tPZSstDBXMssGb6pALprvi+s0sFn3HeHcXUunLCeUQKiBkk8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
+// stateV11Fixture is the PINNED v11 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v11 adds Item.LastCursor, the transcript fold's per-item high water
+// (interaction.go), which sits one level deeper than v10's items -- inside the array inside
+// content_purgeable -- so neither the top-level tag check nor the sealed-tag list above can see
+// it, and this literal is again the only thing that can.
+//
+// A build one version back drops the high water and comes back with items whose guard reads zero,
+// so the first repair after that launch re-folds records the phone had already folded: each
+// increment concatenated twice (IS-DELTA-1) and the item's fields re-collapsed to older values.
+// The damage is silent by construction -- the transcript still reads as prose -- and it is
+// durable, because the repair commits with its own watermark (PB-SYNC-3).
+const stateV11Fixture = `{"schema_version":11,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"kfaTGTMAkprMneg4RrpkqIJrPodNByqKuo4FQRLtK0cdkuwelKjkOjbt0awpiVyoeljCq81BbP/A1efn","content_key":"2gnAiHxlHN4vvnKdycOa78SZ/OixHVjVrRW67CEF1ExDf68S5JklcMmWhAmVPIarJBbzUJ6mDUaxsOhV","wake_state":"ojWKnXYsvywMO9En8CU8kr80Zjm9EJFC63ChmFNE+JRxqEVTXU8dloeGd6g6yWDFOTq6UfalEAX10efxIkzvLbxi24aS/4qSj+4=","content_kept":"idiF4l0hHVuWgjVou7cJ0tSHJOUnRz9QQYr6cySvLBmhkgIWAfd5FyMw+9Wgqb9pBfSOmlgegQS7V9MRHkb2EznSd4n/hH+a4n0EDA8GNmcosnz992vY5zHWXz6dglIf6KNQepiOtSBmAZbtNkYLLAjkJMqhs+Dwx4cZ8TIrNIvfeeQkV5uQhlXq5dznzH/9NrB9xsEg7WMtVUgyFlOg1ybrDiyAn6D0MS0bye+BSiP/pdird1gpDQaCuULpHZ3ZTBh4W5/oIAzyQihuzkMP085gHodWambO/noPRjwA7N65Z2FIetdnMHHQRIX8zvlbISxokLEWrrmblStKrru8gn7XH9aULSgzkmoZCrOpC/AXSX0JK+AOcn6vgckwCaPD9jeUxuCIhTUFFWjGIFreIv751Fmjl+ybT2RpRnFkojIEaCsJZkdnkrJbbsgcyU94kFI3Tt4OzBCjsNp4k8zHJwBlt7cOBPvgMVsn0umBiLTsyhJMb9OQxBMExVBVD1J38K+lYrQ9kPcbDAjM853Hb6aQM/dA","content_purgeable":"JbU9CuBdRdWvtWObYWcI30ZSpJc9folF/xHFgyxBWBPwGIgkvKjIbps3dgP0Xv4L4PkqES+LNoCYPp4OcXrZo6yKPixLCe2X4xYlnduuSL6tnR3b8gB6BxZsEEH6ANm0Tprz2Y4+u8w09dNbtyijCqly3mrFk6A1T2MlAwZV8EVxjAJEI0hrOjJie03lZ8nAqe+GwuqddvdDU/YwYiLek/mk3R7YqFw3I7qZ7g0e6e+jlYYRAIVaeILLlvNgB9Ck/DOcd1MiOb1RQMsK5daMroJY5oWLwbY5TyBK8oS02tEQCVp9CVV2JEulAW9KIO5VL+S0LfsoK8D1GIkAGtuN+fJAIBn5UYXxVIU24x0pih6OTMieQ+npovSmkT3ONewcOHuTvd8ag7h442kp0ON1vrCcDSB/b/YNn7i72wcRiKKzxsfQE2HVDW7ukgIkXJoeyxIQ7pPlojYvCRSoiPVjniK7hUmwYxTDLpB3VrEQnrzzc/AOR93t5L1qr/UGrB5ZOCvdlx0nc7+UoQfgnr2xgBJgMUq8doH6QNgNsU5nLl+oh8yW9VV6TrUUsvQEisfhUgblGRiZBPL0SShzC0rT61LGhCWtcZZdHbLgYym02eu4ICx0TpJMAeb894y4Y4ThqoKka/1L2iXWmu51+MZl/g5hr3XqCycCFr/mot4cj4GEFaMlSktftBXEs1sLhufOnytuRhS1tI+7Qtb2hgCOqyAI1a0UxbNiKs0a8+1Hdc4E8vvEeule0XNXVhUs","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -483,6 +496,7 @@ var stateFixtures = map[int]string{
 	8:  stateV8Fixture,
 	9:  stateV9Fixture,
 	10: stateV10Fixture,
+	11: stateV11Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

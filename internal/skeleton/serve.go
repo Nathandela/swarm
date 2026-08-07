@@ -127,10 +127,19 @@ type Daemon struct {
 	// holds each session's open turn (IS-ENV-1); both are cleared by endSession. adapterFor
 	// resolves an agent type to its adapter -- registry.New in production, overridable in
 	// tests, the sampleFn/captureFn precedent above.
+	//
+	// The APPROVAL LIFECYCLE's state rides the same mutex (approval.go): approvals holds each
+	// session's ONE unresolved approval_request and its ADR-007 D7 binding tuple (IS-LIFE-4),
+	// openItems every item journalled `in_progress` and not yet closed (IS-ST-2's sweep), and
+	// interacted the last status.Interaction seen per session -- the TRANSITION out of it is
+	// IS-LIFE-2's answered_locally signal. All three are cleared by endSession.
 	itemMu     sync.Mutex
 	items      *remotegw.ItemAdmission
 	itemIDs    map[string]string
 	turnIDs    map[string]string
+	approvals  map[string]*pendingApproval
+	openItems  map[string]map[string]openItem
+	interacted map[string]status.Interaction
 	adapterFor func(agentType string) (adapter.Adapter, bool)
 
 	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
@@ -354,6 +363,10 @@ func (d *Daemon) registryAdapter(agentType string) (adapter.Adapter, bool) {
 // nil-guarded because the engine is constructed before the coreAPI exists; no emit
 // fires in that window.
 func (d *Daemon) emitStatus(id string, s status.Status) {
+	// IS-LIFE-2's answered_locally: a session LEAVING the waiting interaction state with an
+	// approval still pending is the owner having answered it at the machine, and the transition
+	// is the only observation the daemon gets (approval.go).
+	d.noteInteractionStatus(id, s.Interaction)
 	if d.api != nil {
 		d.api.emitStatus(id, s)
 	}
@@ -378,6 +391,11 @@ func (d *Daemon) endSession(id string) {
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
+	// IS-ST-2 / IS-LIFE-2: the agent instance is gone, so every item still `in_progress` is
+	// closed `failed` before the session's terminal session_status, and a pending approval still
+	// reaches its one resolution (approval.go). It runs BEFORE forgetInteractions, which drops
+	// the state it sweeps.
+	d.sweepSessionInteractions(id)
 	// The interaction fold keys and the open turn name a CLI that is gone (interaction.go).
 	d.forgetInteractions(id)
 }

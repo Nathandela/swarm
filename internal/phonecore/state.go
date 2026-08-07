@@ -111,7 +111,15 @@ import (
 // It does NOT bump journal.SchemaVersion or the item's own `v`, which IS-COMPAT-3 forbids. Those
 // two are the WIRE's versions; this one stamps a file only this build writes and only this build
 // reads.
-const StateSchemaVersion = 10
+//
+// v11 adds Item.LastCursor, the per-item fold high water (interaction.go). It sits one level
+// deeper again -- inside the items array inside content_purgeable -- and the bump is required for
+// the reason every one above it was, with the failure landing on the TRANSCRIPT's contents rather
+// than its presence: a build one version back drops the high water, so the first repair after that
+// launch folds records the phone had already folded, concatenating each increment twice
+// (IS-DELTA-1) and re-collapsing the item's fields to older values. What the user then reads is
+// prose, and wrong, with nothing on any surface marked damaged.
+const StateSchemaVersion = 11
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"

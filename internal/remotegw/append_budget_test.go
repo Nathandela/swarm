@@ -955,3 +955,178 @@ func TestItemAdmission_SustainedTranscriptStaysUnderAppendBudget(t *testing.T) {
 			"takes the HEAD of the queue, so it never waits behind a backlog of prose (IS-DELTA-3)", waited, DefaultAppendWindow)
 	}
 }
+
+// --- R3: ONE ceiling per target, shared by item releases AND snapshot releases ---------
+//
+// FAILING-FIRST (TDD RED, GG-5) for review finding R3.
+//
+// THE DEFECT. The two admissions above are INDEPENDENT and each one spends the WHOLE budget.
+// ItemAdmission releases up to one item per DefaultAppendWindow (8/s); CoalescingSink admits
+// terminal snapshots at one per DefaultAppendWindow (8/s); and an item release BECOMES a
+// journal record, which the sink forwards IMMEDIATELY and never coalesces (R-GW.5). Two 8/s
+// admissions against ONE target is 16/s worst case, against a relay that caps that target at
+// MailboxAppendPerMin=600 (10/s) on a tumbling minute. The overrun is not merely late: a
+// quota-refused append burns an outbound seq (PB-GW-7) and the manufactured gap stales
+// journal AND terminal alike (PB-SYNC-1).
+//
+// §6.0 binds the two TOGETHER -- "<= 8 appends/s sustained across journal AND terminal
+// combined (they share one sink and one target)" -- and IS-DELTA-2a is the governing rule:
+// "admission SHALL be bounded per target and SHALL govern every kind ... IS-DELTA-3 orders
+// the queue; it exempts nobody from it."
+//
+// THE ARBITRATION this test pins, and where it comes from. A journal record may not be
+// delayed at the sink (R-GW.5), so under simultaneous pressure the TERMINAL is the stream
+// that yields -- which is also the direction ADR-009 (2) already committed to: "no snapshot
+// frames are appended to a phone ... the machine->phone append budget in (7) is spent by the
+// journal alone", and (7): "with no snapshot appends, the transcript inherits the whole of
+// what the peek used to spend". Yielding is not loss: the stash is latest-wins per session,
+// so the peek ships its newest grid the moment the transcript goes quiet -- asserted below,
+// because "the terminal yields" must not decay into "the terminal is dead".
+func TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling(t *testing.T) {
+	clk := newVClock()
+	start := clk.Now()
+	key := budgetTestKey()
+	app := &quotaAppender{now: clk.Now, perMin: relay.DefaultConfig().Quotas.MailboxAppendPerMin}
+	inner := NewRelaySink(RelayConfig{
+		Appender:    app,
+		Target:      "phone-routing-id",
+		EpochID:     7,
+		Key:         key,
+		SenderKeyID: [8]byte{9, 10, 11, 12, 13, 14, 15, 16},
+		Now:         clk.Now,
+	})
+	sink := NewCoalescingSink(CoalesceConfig{Inner: inner, Window: DefaultAppendWindow, Now: clk.Now})
+
+	var (
+		cursor       uint64
+		itemReleases int
+		offerErrs    int
+		terminalErrs int
+	)
+	adm := NewItemAdmission(ItemAdmissionConfig{
+		Window: DefaultAppendWindow,
+		Now:    clk.Now,
+		Append: func(session string, item json.RawMessage) error {
+			cursor++
+			itemReleases++
+			// R-GW.5: an item release IS an append the instant the floor lets it go. The
+			// gateway forwards a journal record immediately and may not coalesce it.
+			return sink.Event(protocol.JournalRecord{Cursor: cursor, SessionID: session, Type: "interaction", Item: item})
+		},
+	})
+
+	// SIMULTANEOUS PRESSURE on one target: a live peek at the real 16 ms render debounce
+	// (~62 snapshots/s) and a transcript streaming prose at the same rate. 150 s crosses the
+	// relay's tumbling minute boundary twice.
+	const run = 150 * time.Second
+	for frame := 0; clk.Now().Sub(start) < run; frame++ {
+		if err := sink.Terminal("m/s1", []string{fmt.Sprintf("frame %d", frame)}, 80, 24); err != nil {
+			terminalErrs++
+		}
+		item := itemJSON(t, "am1", "agent_message", map[string]any{"text": fmt.Sprintf("%d ", frame), "status": "in_progress"})
+		if err := adm.Offer("m/s1", item); err != nil {
+			offerErrs++ // the RELEASE's error surfaces here; being queued is never one
+		}
+		clk.Advance(renderDebounceRate)
+	}
+	elapsed := clk.Now().Sub(start)
+	duringStorm, refused := app.snapshotState()
+
+	// (a) THE COMBINED CEILING. Both streams pressing at once must not buy two budgets.
+	budget := int(elapsed/DefaultAppendWindow) + 2
+	if got := len(duringStorm); got > budget {
+		t.Errorf("%d appends over %s = %.1f/s against ONE target with a transcript and a peek pressing simultaneously, over the "+
+			"§6.0 ceiling of %d (<= 8/s COMBINED across journal and terminal): the item floor and the terminal coalescer are two "+
+			"INDEPENDENT %s admissions, i.e. 2x the ceiling -- admission is bounded PER TARGET and exempts nobody (IS-DELTA-2a)",
+			got, elapsed, float64(got)/elapsed.Seconds(), budget, DefaultAppendWindow)
+	}
+
+	// (b) NO QUOTA REFUSAL. 16/s against MailboxAppendPerMin=600 (10/s) exhausts the tumbling
+	// window in ~37 s and is refused for the rest of every minute after that.
+	if refused != 0 || offerErrs != 0 || terminalErrs != 0 {
+		t.Errorf("the relay refused %d of %d appends (%d item offers and %d snapshots saw the error) over %s: two independent "+
+			"admissions against one MailboxAppendPerMin=%d target overrun it (PB-GW-7)",
+			refused, refused+len(duringStorm), offerErrs, terminalErrs, elapsed, app.perMin)
+	}
+
+	// The transcript goes quiet, and the peek renders one last grid. Idle wakes (RunTerminal
+	// calls Flush on every one) must ship it: the shared ceiling THROTTLES the live tail, it
+	// does not silence it permanently, and the debt a saturated transcript ran up must be
+	// bounded by the ceiling itself rather than accumulate without limit.
+	const finalGrid = "the last grid"
+	if err := sink.Terminal("m/s1", []string{finalGrid}, 80, 24); err != nil {
+		t.Fatalf("final terminal frame: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		clk.Advance(DefaultAppendWindow)
+		if err := sink.Flush(); err != nil {
+			t.Fatalf("idle-wake flush %d: %v", i, err)
+		}
+	}
+	stored, _ := app.snapshotState()
+
+	// (c) Replay everything the relay accepted into the phone's REAL receiver: a burned seq
+	// shows up here as a Gap, which PB-SYNC-1 charges to journal and terminal alike.
+	phone := crypto.NewMailboxReceiver()
+	var gaps int
+	journalSeen := map[uint64]int{}
+	lastGrid := ""
+	for i, raw := range stored {
+		env, err := crypto.ParseEnvelope(raw)
+		if err != nil {
+			t.Fatalf("append %d does not parse: %v", i, err)
+		}
+		res, err := phone.Accept(key, env)
+		if err != nil {
+			t.Fatalf("the phone rejected append %d (seq %d): %v", i, env.Header.Seq, err)
+		}
+		if res.Gap {
+			gaps++
+		}
+		var kind outboundFrame
+		if err := json.Unmarshal(res.Plaintext, &kind); err != nil {
+			t.Fatalf("append %d plaintext is not decodable: %v", i, err)
+		}
+		if kind.Kind == "terminal_snapshot" {
+			var snap protocol.TerminalSnapshot
+			if err := json.Unmarshal(res.Plaintext, &snap); err != nil {
+				t.Fatalf("append %d does not decode as a terminal snapshot: %v", i, err)
+			}
+			if len(snap.Lines) > 0 {
+				lastGrid = snap.Lines[0]
+			}
+			continue
+		}
+		var f outboundItemFrame
+		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
+			t.Fatalf("append %d plaintext is not decodable: %v", i, err)
+		}
+		if f.Type != "interaction" {
+			t.Fatalf("append %d carries type %q, want interaction", i, f.Type)
+		}
+		journalSeen[f.Cursor]++
+	}
+	if gaps != 0 {
+		t.Errorf("the phone saw %d GAPS with no relay failure: a refused append burns an outbound seq and the gap stales journal "+
+			"AND terminal (PB-GW-7, PB-SYNC-1)", gaps)
+	}
+
+	// (d) THE JOURNAL IS NEVER THE STREAM THAT YIELDS. Every item the floor released reached
+	// the phone exactly once: the shared ceiling may not be paid for by delaying or dropping a
+	// journal record (R-GW.5).
+	for c := uint64(1); c <= uint64(itemReleases); c++ {
+		if n := journalSeen[c]; n != 1 {
+			t.Fatalf("interaction record cursor=%d reached the phone %d times, want exactly 1 (%d of %d releases arrived): a "+
+				"journal record is never coalesced, deferred or dropped (R-GW.5)", c, n, len(journalSeen), itemReleases)
+		}
+	}
+
+	// (e) THE PEEK YIELDS, IT DOES NOT DIE. Latest-wins means a yielded frame is superseded,
+	// never lost, so the newest grid must arrive once the transcript stops competing for the
+	// slot (PB-APP-4).
+	if lastGrid != finalGrid {
+		t.Errorf("the newest grid the phone would show is %q, want %q: under the shared ceiling the terminal yields to the journal "+
+			"(R-GW.5, ADR-009 (2)), but a yielded snapshot is superseded, not lost -- it must ship on the first idle wake after the "+
+			"transcript goes quiet", lastGrid, finalGrid)
+	}
+}

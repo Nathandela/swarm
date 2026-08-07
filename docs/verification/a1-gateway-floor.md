@@ -355,3 +355,277 @@ ok  	github.com/Nathandela/swarm/internal/remotegw	11.867s
 
 The whole PB-PUSH-0/3/5/8/10 fence is green beside it (`-run 'TestADR010|TestPBPUSH'`), so
 the re-check did not move any existing wake's behaviour: it fires only on the deferred path.
+
+---
+
+## Review addendum 2 — R3: the combined ceiling was doubled
+
+Found by the adversarial review of `79a070d`. **The defect**: this workpackage added a second
+admission point without connecting it to the first. `ItemAdmission` releases up to one item
+per `DefaultAppendWindow` (8/s); `CoalescingSink` admits terminal snapshots at one per
+`DefaultAppendWindow` (8/s); and an item release *becomes* a journal record, which the sink
+forwards immediately and never coalesces (R-GW.5). Two independent 8/s admissions against
+**one** target is 16/s, against a relay that caps that target at `MailboxAppendPerMin: 600`
+(10/s) on a tumbling minute. The overrun is not merely late: a quota-refused append burns an
+outbound seq (PB-GW-7) and the manufactured gap stales journal **and** terminal (PB-SYNC-1).
+IS-DELTA-2a names exactly this and exempts nobody — *"admission SHALL be bounded per target
+and SHALL govern every kind … IS-DELTA-3 orders the queue; it exempts nobody from it."*
+
+Measured at RED against the relay's real quota model: **2344 appends offered over 150 s
+(15.6/s), 676 of them refused, 2 gaps at the phone, and 338 of 1172 interaction records lost
+to the refusals.**
+
+### Where the shared budget had to live, and why it is not one object
+
+`ItemAdmission` runs in the **daemon** process (`skeleton.Daemon.initInteractionsLocked`
+releases into `daemon.RecordInteractionRaw`); `CoalescingSink` runs in the **gateway sidecar**
+(`cmd/swarm-remote` → `remotegw.NewService`, which reaches the daemon over
+`cfg.DaemonSocket`). They cannot share a budget *object*: there is a process boundary between
+them, and threading a budget across it would be a new IPC for a rate counter.
+
+They can and now do share a **slot**, because every machine→phone append on the
+journal/terminal stream passes through exactly one place — `CoalescingSink`. An item release
+arrives there as `Event`, so charging `Event` to the same slot a snapshot release consumes is
+what makes the two streams share one per-target ceiling. Nothing needed threading through
+construction, so `internal/skeleton` was not touched.
+
+### The fix (`internal/remotegw/coalesce.go`, +5 behavioural lines)
+
+`c.last` (when the slot was last consumed) becomes `c.nextFree` (when the slot is next free),
+and every append goes through one `debitLocked`:
+
+```go
+func (c *CoalescingSink) debitLocked(now time.Time) {
+	if now.After(c.nextFree) {
+		c.nextFree = now
+	}
+	c.nextFree = c.nextFree.Add(c.window)
+}
+```
+
+The charge is unconditional; the **wait** is not. `Event`, `Snapshot` and `Reseed` still
+forward immediately (R-GW.5) and debit; `release` (the terminal path) both waits for the slot
+and debits. Spending from `now` on every append is precisely what let the two streams
+interleave at 2x — a journal record landing 1 ms after a snapshot released reset the clock the
+snapshot had just paid for, so each stream saw a free slot every window and the target saw
+two. A slot in the past means the stream is idle, so this stays IS-DELTA-2's **spacing floor**
+and never becomes a batching delay.
+
+### The arbitration, decided and cited
+
+**The terminal is the stream that yields; the journal never waits.** This is forced, not
+preferred: R-GW.5 forbids delaying or dropping a journal record at the gateway, so at a
+saturated ceiling the only stream that *can* yield is the one that may be coalesced. It is
+also the direction the ADRs already committed to — ADR-009 (2): *"no snapshot frames are
+appended to a phone … the machine→phone append budget in (7) is spent by the journal alone"*,
+and (7): *"with no snapshot appends, the transcript inherits the whole of what the peek used
+to spend"* (interaction-schema.md §6 repeats it). The peek survives on the transition slice's
+terms only, which is what the terminal well being deleted at the end of slice I1 means.
+
+**Yielding is not dying**, and the fence says so: the stash is latest-wins per session, so a
+held frame is superseded rather than lost and ships on the first idle wake after the
+transcript goes quiet. `ItemAdmission`'s own priority rules are untouched — `approval_request`
+still heads the queue and still waits at most one window, pinned by the two existing tests
+that measure it.
+
+**The debt is unclamped, deliberately** (ponytail comment on `debitLocked`). A burst of
+journal records pushes the terminal's next release out one window each, and that is honest
+arithmetic rather than a bug to cap: those appends really were spent out of
+`MailboxAppendPerMin`, and the terminal is the only stream that can pay them back. What bounds
+it in practice is the producer's floor holding the journal side to one release per window
+machine-wide; assertion (e) below is what would break if that stopped being true.
+
+### What is still NOT counted (disclosed, out of R3's scope)
+
+- **Command replies** append straight to the relay from `lease_confirm.go:93`
+  (`Mailbox.MailboxAppend(ctx, ReplyTarget, env)`), bypassing the sink. They are
+  phone-command-driven (one per command), not a sustained producer.
+- **`RelaySink.Replay()`** at service start (`service.go:319`) re-appends the outbox's pending
+  entries directly. One-shot per restart.
+- **`RelaySink.Reconcile()`** rides *inside* `Snapshot` (`relaysink.go:172`), so one debited
+  `Snapshot` can be two relay appends. Per reconnect, not per window.
+
+Each is a distinct seam with its own rate story; folding them in would widen this fix past the
+finding and past the packages it names.
+
+### RED — verbatim, failing first (GG-5)
+
+```
+$ go test ./internal/remotegw/ -run 'TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling' -count=1 -v
+=== RUN   TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling
+    append_budget_test.go:1038: 1668 appends over 2m30s = 11.1/s against ONE target with a transcript and a peek pressing simultaneously, over the §6.0 ceiling of 1202 (<= 8/s COMBINED across journal and terminal): the item floor and the terminal coalescer are two INDEPENDENT 125ms admissions, i.e. 2x the ceiling -- admission is bounded PER TARGET and exempts nobody (IS-DELTA-2a)
+    append_budget_test.go:1047: the relay refused 676 of 2344 appends (338 item offers and 338 snapshots saw the error) over 2m30s: two independent admissions against one MailboxAppendPerMin=600 target overrun it (PB-GW-7)
+    append_budget_test.go:1110: the phone saw 2 GAPS with no relay failure: a refused append burns an outbound seq and the gap stales journal AND terminal (PB-GW-7, PB-SYNC-1)
+    append_budget_test.go:1119: interaction record cursor=301 reached the phone 0 times, want exactly 1 (834 of 1172 releases arrived): a journal record is never coalesced, deferred or dropped (R-GW.5)
+--- FAIL: TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling (0.18s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.306s
+FAIL
+```
+
+### What the new case measures
+
+`TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling` is added **beside** the peek case
+and the transcript case, reusing their machinery (`vclock`, `quotaAppender` modelling the
+relay's real tumbling-minute `MailboxAppendPerMin`, a real `RelaySink`, a real
+`CoalescingSink`, the phone's real `crypto.MailboxReceiver`). It runs both producers against
+**one target simultaneously** for 150 s of virtual time at the real 16 ms render debounce — a
+live peek at ~62 snapshots/s and a transcript streaming prose through `ItemAdmission` into
+`sink.Event` — and asserts:
+
+- **(a)** combined appends ≤ `elapsed/DefaultAppendWindow + 2` (the §6.0 ceiling, IS-DELTA-2a);
+- **(b)** zero quota refusals, zero errors surfaced to either producer;
+- **(c)** zero gaps when the accepted stream is replayed into the phone's receiver;
+- **(d)** every item the floor released reached the phone **exactly once** — the ceiling is
+  never paid for by delaying or dropping a journal record (R-GW.5);
+- **(e)** the peek's newest grid ships on an idle wake once the transcript goes quiet — the
+  terminal yields, it does not die (PB-APP-4).
+
+Measured at GREEN: **1200 appends over 150 s = 8.0/s**, against 2344 offered.
+
+### Teeth — mutation runs (anti-vacuity)
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | `debitLocked` spends from `now` (`c.nextFree = now.Add(c.window)`) — the pre-fix two-budget behaviour | new case FAILS with all four RED assertions, byte-identical to the RED above |
+| 2 | `Event` forwards without debiting (the journal is uncharged) | new case FAILS **and** the pre-existing `TestRelaySink_SustainedPeekStaysUnderAppendBudget` FAILS (`1321 appends over 2m30s = 8.8/s`) — the charge on `Event` was load-bearing before this fix and still is |
+| 3 | `Event` debits **twice** (debt accrues faster than it repays) | (a)–(d) stay green and only **(e)** fires: `the newest grid the phone would show is "frame 0", want "the last grid"` — the anti-starvation assertion isolates exactly the failure it exists for |
+
+All three were reverted; the diff above is the final state.
+
+### GREEN
+
+```
+$ go test ./internal/remotegw/ -run 'TestAppendBudget|TestItemAdmission|TestRelaySink_SustainedPeek|TestCoalescingSink|TestGatewayRunTerminal' -count=1 -race -v
+--- PASS: TestRelaySink_SustainedPeekStaysUnderAppendBudget (0.10s)
+--- PASS: TestGatewayRunTerminal_CoalescedPeekShowsLatestGrid (0.27s)
+--- PASS: TestItemAdmission_IsASpacingFloorNotABatchingDelay (0.00s)
+--- PASS: TestItemAdmission_AgentMessageMergesByTextConcatenation (0.00s)
+--- PASS: TestItemAdmission_NeverConcatenatesAcrossItemIDsOrKinds (0.00s)
+--- PASS: TestItemAdmission_ToolRunOpenAndCloseCollapseToOneRecord (0.00s)
+--- PASS: TestItemAdmission_ApprovalRequestHeadsTheQueueAndIsNeverMerged (0.00s)
+--- PASS: TestItemAdmission_CeilingIsPerTargetAcrossSessionsAndKinds (0.16s)
+--- PASS: TestItemAdmission_SustainedTranscriptStaysUnderAppendBudget (2.79s)
+--- PASS: TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling (0.81s)
+--- PASS: TestCoalescingSink_StashIsPerSession (0.00s)
+--- PASS: TestCoalescingSink_TeardownBlankSurvivesConcurrentSession (0.00s)
+--- PASS: TestCoalescingSink_MultiSessionStaysUnderCombinedBudget (0.03s)
+--- PASS: TestGatewayRunTerminal_BlanksPhoneOnDaemonEnd (0.00s)
+--- PASS: TestGatewayRunTerminal_SubscribesAndForwards (0.13s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remotegw	6.481s
+```
+
+Note the three pre-existing budget fences above — the sustained peek, the multi-session
+combined budget and the coalesced-grid case — pass **unmodified**. With terminal traffic
+alone, `nextFree` and the old `last + window` are the same condition, which is why keying the
+budget off accrued debt changed no single-stream behaviour.
+
+### Gates
+
+`go build ./...` and `go vet ./...` clean. `gofmt -l` clean on both touched files
+(`terminal_watcher.go`'s pre-existing formatting hit is untouched and unrelated).
+`go test -count=1 -race`: `internal/remotegw` ok 27.0s, `internal/skeleton` ok 189.6s,
+`cmd/swarm-remote` ok 34.5s, `internal/protocol` ok 18.9s, `internal/protocol/schema` ok 2.2s,
+`internal/verify` ok 40.2s, `internal/phonesim` ok 3.6s. The protocol.md drift fences
+(`TestProtocolMD_ExistsAndDocumentsEveryField`, `TestProtocolMD_DocumentsEveryOp`,
+`TestProtocolMDBidi_FieldSetMatchesStructs`) are untouched and green — no wire field or op
+moved. `golangci-lint run internal/remotegw/...` reports nothing in either touched file (its
+two hits in `append_budget_test.go` are at lines 333/339, inside the pre-existing peek case).
+No exported symbol was added or removed, so B94's reachability ledger is unmoved. No existing
+test was modified.
+
+---
+
+# Re-review of R3, and one defect found in the append floor while doing it
+
+## R3's closure holds — re-measured with a THIRD stream pressing
+
+R3's own fence drives items and terminal snapshots at once. The re-review added the stream it does
+not: a roster `Snapshot` once a second, on the same target, alongside a peek at the 16 ms render
+debounce and a transcript streaming prose at the same rate, for 150 s of virtual time across two
+tumbling relay minutes (scratch harness, not kept — it is the R3 fence with one `sink.Snapshot`
+call added to the loop).
+
+```
+1173 appends over 2m30s = 7.82/s (refused=0 snapErr=0 offerErr=0 termErr=0)
+```
+
+7.82/s against §6.0's 8/s combined ceiling, with ZERO refusals against `MailboxAppendPerMin: 600`.
+The slot arithmetic in `debitLocked` holds when a third producer joins, which is the property that
+matters: the charge is unconditional and per APPEND, so a new stream costs the target a slot
+rather than buying itself a budget.
+
+## Defect found — an `approval_request` IS collapsed by the floor (IS-DELTA-3)
+
+Pre-existing at 79a070d, in `internal/remotegw/itemadmission.go`, and not introduced by any of the
+five remediations — but R4 is what made it bite, because R4 put a real `content_hash` on the item.
+
+**What was wrong.** `pendingItem.fold` applies ADR-010 §7's record collapse to EVERY kind that is
+not `agent_message`. IS-DELTA-3 scopes that collapse to two kinds and says so twice:
+
+> `tool_run` and `file_change` are subject instead to ADR-010 §7's **record collapse** ... **Every
+> remaining kind SHALL keep its own record** ... *Never merged* and *never delayed* are different
+> guarantees, and only the first is compatible with the ceiling: an `approval_request` waits at
+> most one window, at the front.
+
+So two records of ONE `approval_request` landing inside one window — the CLI withdrawing its
+prompt, or re-announcing it — were re-marshalled into one object by a field-wise union.
+
+**Why it matters now.** §3.5's `content_hash` is SHA-256 over the item AS SHIPPED with its own slot
+zeroed, and `daemon.RecordInteractionRaw`'s own contract states the premise the digest rests on:
+"it forwards an UNMERGED item byte-exact — which is what keeps an approval_request's bytes the
+bytes the daemon hashed (IS-APR-2)". A union falsifies that premise: the shipped card carries a
+digest that does not name it, nothing holding the item can re-derive the hash, and IS-APR-2 forbids
+the phone recomputing one. Measured end to end through the shipped producer, a merged card came out
+carrying `9e356aa0…` while SHA-256 over its own bytes is `00ab14b8…`.
+
+The existing fence states the rule in as many words — `TestItemAdmission_ApprovalRequestHeadsThe`
+`QueueAndIsNeverMerged`: "an approval_request is NEVER merged — its bytes are the content the
+daemon hashed (IS-APR-2)" — but only ever offers the item ONCE, so `fold` is never reached from it.
+
+**The fix** (`itemadmission.go`, +12 lines of which 9 are comment): an `approval_request`'s queue
+key gets a unique suffix, so a second record for one request takes its OWN place in the queue
+instead of folding. Nothing else changes — it still heads the queue by class, still waits at most
+one window, still counts against the per-target ceiling. Scoping it to the one kind rather than to
+IS-DELTA-3's literal reading (which would also stop collapsing `plan_update`, `session_status` and
+`approval_resolved`) is deliberate: those three collapse harmlessly under later-wins and cost the
+ceiling nothing, and widening the rule is a schema reading, not a bug fix.
+
+### RED — verbatim, failing first
+
+```
+$ go test ./internal/remotegw/ -run 'TestItemAdmission_TwoRecordsOfOneApprovalRequestAreNeverCollapsed' -count=1 -v
+=== RUN   TestItemAdmission_TwoRecordsOfOneApprovalRequestAreNeverCollapsed
+    itemadmission_rr_test.go:60: the floor released 1 approval_request record(s) for two offered; want 2. IS-DELTA-3 scopes record collapse to tool_run and file_change and says every remaining kind KEEPS ITS OWN RECORD, and again for this one: an approval_request is never merged, only delayed at most one window. Released: [{"content_hash":"beef","decisions":[{"id":"accept","label":"Allow"}],"expires_at":"2026-08-07T12:02:00Z","item_id":"ap1","kind":"approval_request","mode":"card","status":"declined","summary":"Bash: rm -rf build","ts":"2026-08-07T12:00:00Z","v":1}]
+--- FAIL: TestItemAdmission_TwoRecordsOfOneApprovalRequestAreNeverCollapsed (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	0.934s
+```
+
+Note what the released record is: the withdrawal's `status:"declined"` sitting on top of the
+pending request's `content_hash`, `expires_at` and `decisions`. One card, two records' worth of
+state, and a digest naming neither.
+
+### GREEN
+
+```
+$ go test ./internal/remotegw/ -run 'TestItemAdmission_TwoRecordsOfOneApprovalRequestAreNeverCollapsed' -count=1 -v
+--- PASS: TestItemAdmission_TwoRecordsOfOneApprovalRequestAreNeverCollapsed (0.01s)
+ok  	github.com/Nathandela/swarm/internal/remotegw	0.855s
+
+$ go test ./internal/remotegw/ -count=1 -race
+ok  	github.com/Nathandela/swarm/internal/remotegw	35.753s
+```
+
+Every pre-existing budget and admission fence passes unmodified, including
+`TestItemAdmission_ApprovalRequestHeadsTheQueueAndIsNeverMerged` (which now tests what it says) and
+the three ceiling fences (an approval that takes two slots instead of one is still charged, so the
+per-target arithmetic is unchanged).
+
+### Teeth — one mutation, reverted
+
+Widening the unique key to EVERY kind (`if kind != ""`) fails
+`TestItemAdmission_AgentMessageMergesByTextConcatenation` and
+`TestItemAdmission_ToolRunOpenAndCloseCollapseToOneRecord` — which is what proves the scoping is
+load-bearing rather than a blanket disabling of the collapse.
