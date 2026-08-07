@@ -67,16 +67,16 @@ up in the history.
 - Website: https://github.com/Nathandela/swarm
 - Privacy policy: https://github.com/Nathandela/swarm/blob/main/docs/legal/privacy-policy.md
 
-## Graphics still needed — NOT written, and blocking
+## Graphics — all present
 
-Play requires all of these before a listing can be saved. None exists yet.
+Play requires all of these before a listing can be saved.
 
 | Asset | Spec | Status |
 |---|---|---|
-| App icon | 512 x 512 PNG, 32-bit | **Blocked on the icon decision** — six candidates in `docs/design/icon-candidates/`, none chosen |
-| Feature graphic | 1024 x 500 PNG or JPEG | Not made. Can be generated from the chosen icon on the product ground |
-| Phone screenshots | 2 to 8, min 320 px, 16:9 or 9:16 | Not taken. Needs the app on a device or emulator |
+| App icon | 512 x 512 PNG, 32-bit | Done — Solid Wedge (the owner's chosen mark, commit 72c844e), `docs/ops/play-assets/play-store-icon-512.png` |
+| Feature graphic | 1024 x 500 PNG or JPEG | Done — Solid Wedge on the product ground, `docs/ops/play-assets/play-feature-graphic-1024x500.png` |
+| Phone screenshots | 2 to 8, min 320 px, 16:9 or 9:16 | Emulator set exists (`docs/design/store-assets/screenshots/`: pairing, scanner, first run, plus 7in/10in tablet). Paired-app screenshots (session list, machines, activity) tracked as agents-tracker-h4yg |
 
-The screenshots are worth taking by hand on the real handset rather than generating: the pairing
-screen and the session list are the two that say what this app is, and a screenshot of an empty
-inbox says nothing.
+The paired-app screenshots are worth taking by hand on the real handset rather than generating:
+the pairing screen and the session list are the two that say what this app is, and a screenshot
+of an empty inbox says nothing.
