@@ -30,10 +30,10 @@ class TriageInboxTest {
     /**
      * All four Groups, each its own section, in a fixed order.
      *
-     * The ORDER is part of the requirement rather than decoration: this is a triage screen, and
-     * the group a user must act on has to be the one they see without scrolling. needs_input is
-     * the agent blocked ON THEM; working is the one group that needs nothing (push deliberately
-     * ignores it -- internal/remotegw/push.go isWakeWorthy) and belongs last.
+     * The ORDER is part of the requirement rather than decoration, and matches the recorded
+     * design mock (docs/research/remote-control-mock.html:328-335): needs_input first because it
+     * blocks on the user, working second so live activity is visible without scrolling, completed
+     * last.
      */
     @Test
     fun `every group is its own section in triage order`() {
@@ -48,7 +48,7 @@ class TriageInboxTest {
         )
 
         assertEquals(
-            listOf("needs_input", "ready_for_review", "completed", "working"),
+            listOf("needs_input", "working", "ready_for_review", "completed"),
             inbox.sections.map { it.group },
         )
         assertEquals(4, inbox.sections.size)

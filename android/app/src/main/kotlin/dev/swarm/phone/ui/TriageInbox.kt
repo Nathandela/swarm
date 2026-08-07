@@ -92,13 +92,13 @@ data class TriageInbox(
     companion object {
 
         /**
-         * THE ORDER IS PART OF THE REQUIREMENT, not decoration. This is a triage screen, so the
-         * group a user must act on has to be the one they see without scrolling: needs_input is
-         * the agent blocked ON THEM, and working is the one group that needs nothing -- push
-         * deliberately ignores it (internal/remotegw/push.go isWakeWorthy) -- so it goes last.
+         * THE ORDER IS PART OF THE REQUIREMENT, not decoration, and it is the recorded design
+         * mock's (docs/research/remote-control-mock.html:328-335): needs -> work -> ready -> done.
+         * needs_input is first because it blocks on the user; working is second so live activity
+         * is visible without scrolling; completed is last.
          */
         val TRIAGE_ORDER: List<String> =
-            listOf("needs_input", "ready_for_review", "completed", "working")
+            listOf("needs_input", "working", "ready_for_review", "completed")
 
         /**
          * @throws IllegalStateException on a group outside [TRIAGE_ORDER]. Loud, following the

@@ -20,9 +20,8 @@ import org.junit.Test
  * this project has repeatedly ended up with strings no test can reach.
  *
  * THE ORDER IS [TriageInbox.TRIAGE_ORDER]'S AND NOT THIS FILE'S. Inventory C1 draws the artifact's
- * sections as `Needs you / Working / Ready for review / Done`; the model declares
- * `needs_input, ready_for_review, completed, working` and its KDoc argues why -- working is the one
- * Group that needs nothing from the user, so it goes last on a triage surface. The recorded copy is
+ * sections as `Needs you / Working / Ready for review / Done`, and the model declares
+ * `needs_input, working, ready_for_review, completed` to match. The recorded copy is
  * the artifact's; the ORDER is the model's, and every assertion below reads it from the model
  * rather than restating it, so a change of mind there fails here rather than silently disagreeing.
  *

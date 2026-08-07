@@ -18,10 +18,10 @@ import dev.swarm.phone.ui.TriageInbox
  * hierarchy makes the mapping untestable while proving nothing about the view.
  *
  * THE ORDER IS [TriageInbox.TRIAGE_ORDER]'S. Inventory C1 draws the artifact's sections as
- * `Needs you / Working / Ready for review / Done`; the model declares needs_input,
- * ready_for_review, completed, working and argues for it -- working is the one Group that needs
- * nothing from the user, so on a triage surface it goes last. The recorded copy is the artifact's;
- * the order is the product's, and this file reads it rather than restating it.
+ * `Needs you / Working / Ready for review / Done`, and the model declares needs_input, working,
+ * ready_for_review, completed to match: needs_input first because it blocks on the user, working
+ * second so live activity is visible without scrolling, completed last. The recorded copy is the
+ * artifact's; the order is the product's, and this file reads it rather than restating it.
  */
 data class InboxScreen(
     /** `.pnav .big`. Inventory C1.1. */
