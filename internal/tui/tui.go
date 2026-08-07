@@ -40,6 +40,10 @@ type Client interface {
 	// returns an error, which the caller banners (skew-safe).
 	Rename(id, name string) error
 	Subscribe() (<-chan protocol.Event, error)
+	// SendInput types into a session through the owner-tier send_input op — the SAME
+	// path `swarm send` uses, so the TUI handoff trigger and the CLI verb are one code
+	// path (ADR-010 A2/D3).
+	SendInput(id string, req protocol.SendInputReq) error
 }
 
 // AgentInfo describes one detected agent CLI for the launch-form picker: whether
@@ -448,6 +452,15 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case handoffDoneMsg:
+		// A refused injection (no such session, a daemon that predates send_input) is
+		// surfaced rather than silently swallowed; a success is a no-op here — the text
+		// is now sitting in the session's prompt for the human to complete.
+		if msg.err != nil {
+			return m, m.general.setBanner("handoff failed: " + msg.err.Error())
+		}
+		return m, nil
+
 	case renameDoneMsg:
 		// A rename failed (an older daemon's skew refusal, or a rejected id): surface
 		// it on the banner rather than silently swallowing it. On success, update the
@@ -568,7 +581,7 @@ func (m rootModel) generalStatus() string {
 	}
 	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
 	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
-	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   ctrl+x kill   esc quit"
+	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   h handoff   ctrl+x kill   esc quit"
 }
 
 // DaemonRestarter restarts the daemon and returns a freshly-connected client to the

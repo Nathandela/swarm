@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|send|peek|version]
+const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|send|peek|agents|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
@@ -75,6 +75,8 @@ const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|send|peek|vers
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
   swarm peek       print a session's current screen <session> [--lines N]
+  swarm agents     install the /swarm-handoff and /swarm-delegate slash commands
+                   into each CLI's convention (agents install [--dry-run])
   swarm version    print the build version
 `
 
@@ -117,6 +119,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
 	case "peek":
 		return dispatchAgentVerb(runPeek, args[1:], nil, stdout, stderr)
+	case "agents":
+		// Direct dispatch, NOT dispatchAgentVerb: installing the slash-command files
+		// writes local files only and must work with no daemon to dial.
+		return runAgents(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:
