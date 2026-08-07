@@ -18,10 +18,13 @@ package gate
 //	PhoneSurface.kt:743                        const val PADDING = 24   (raw px, not dp)
 //
 // WHERE THE EXPECTED NUMBERS COME FROM. Not from here. The ten scale steps are the decision and
-// are named in the requirement, so they are named here; everything they are checked AGAINST --
-// the frame constants, the four radii, the drift ledger, the dot's degeneracy -- is computed at
-// test time from docs/research/remote-control-design-directions.html and
-// internal/design/tokens.json by s22b_designsource_test.go. See that file for why.
+// are named in the requirement, so they are named here; everything they are checked AGAINST is
+// computed at test time by s22b_designsource_test.go. The drift ledger reads the phone-kit block
+// of docs/research/obsidian-maquette.html, which ADR-009 D2 makes the normative design source;
+// the four radii read internal/design/tokens.json, which transcribes the same maquette; the three
+// frame constants and the dot's degeneracy still read the older directions artifact, for the two
+// reasons set out at s22bMaquetteRelPath -- neither is a skin value and the maquette states
+// neither.
 
 import (
 	"fmt"
@@ -46,29 +49,40 @@ import (
 // is decoration and loses nothing), so it is recorded here where a reviewer can disagree with
 // it, and what the gate COMPUTES is the drift each assignment costs.
 //
-// TWO STEPS ABSORB NOTHING IN THIS ARTIFACT, and that is deliberate rather than an oversight --
-// it was also found by this gate rather than assumed. swarm_space_6 exists for the mock's badge
-// padding and swarm_space_24 for its pairing-scaffold padding (inventory F2); Substrate itself
-// declares neither. swarm_space_24 is additionally the step PB-DS-1's own ledger routes the
-// mock's 26px through, so it is the one step the requirement names that this artifact cannot
-// justify on its own. Deleting either would leave the scale unable to express a value the
-// screens still to be built need. The empty Absorbs list is asserted in both directions, so
-// "unused" cannot quietly become "unjustified".
+// EVERY STEP NOW ABSORBS SOMETHING, which is new and is the maquette's doing. Against the
+// Substrate artifact this table read
+//
+//	{"swarm_space_6", 6, nil},
+//	{"swarm_space_24", 24, nil},
+//
+// with the recorded reason that those two steps existed only for screens not yet built --
+// swarm_space_6 for the mock's badge padding, swarm_space_24 for its pairing scaffold, neither
+// declared by Substrate itself. The Obsidian maquette draws all of those screens and spends both:
+// 6px on the badge, the chip gap, the field label and the stale notice; 24px on the nav, the
+// drill header, the tab bar's bottom inset and the empty state. The scale is now justified by the
+// design end to end rather than by an argument about the future, and the "absorbs nothing" case
+// is asserted below in both directions so it cannot come back unnoticed.
+//
+// THE THIRD ENTRY THAT MOVED IS A TIE, and ties are why this is a table. 3px joins swarm_space_2
+// rather than swarm_space_4: it is `.arow .ab { margin-top }`, the gap between an activity row's
+// timestamp and its body, and the two other sub-label gaps in the maquette
+// (`.trow .lbl .l2` and `.mrow .m1 .s`) are both 2px. Absorbing down makes the three consistent;
+// absorbing up would leave one of them alone at 4dp for no reason a reader could name.
 var s22bScale = []struct {
 	Name    string
 	Dp      float64
 	Absorbs []float64
 }{
-	{"swarm_space_2", 2, []float64{2}},
+	{"swarm_space_2", 2, []float64{2, 3}},
 	{"swarm_space_4", 4, []float64{4, 5}},
-	{"swarm_space_6", 6, nil},
+	{"swarm_space_6", 6, []float64{6}},
 	{"swarm_space_8", 8, []float64{7, 8, 9}},
 	{"swarm_space_10", 10, []float64{10, 11}},
 	{"swarm_space_12", 12, []float64{12, 13}},
 	{"swarm_space_14", 14, []float64{14, 15}},
 	{"swarm_space_16", 16, []float64{16}},
 	{"swarm_space_18", 18, []float64{18}},
-	{"swarm_space_24", 24, nil},
+	{"swarm_space_24", 24, []float64{24}},
 }
 
 // The three frame constants, each with the CSS fact it must equal. `.pscreen`'s padding is the
@@ -111,8 +125,8 @@ var s22bSpacingProps = map[string]bool{
 	"gap": true, "row-gap": true, "column-gap": true,
 }
 
-// s22bDesignSpacings returns every non-zero spacing literal the shared Substrate CSS declares,
-// value -> the selectors that declare it.
+// s22bDesignSpacings returns every non-zero spacing literal the maquette's phone-kit CSS
+// declares, value -> the selectors that declare it. ADR-009 D2: the maquette is the design.
 //
 // The frame constants are excluded, and they are excluded BY THE SAME TABLE that asserts them
 // rather than by a second list of numbers: `.pscreen { padding: 54px 0 76px }` is a spacing
@@ -302,36 +316,44 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	}
 
 	// The other direction: a step that claims to absorb a literal the design does not declare is
-	// a decision recorded against nothing.
+	// a decision recorded against nothing. This is the assertion that keeps "every step is
+	// justified" honest -- an Absorbs entry for a value the maquette stopped drawing fails here.
 	for _, step := range s22bScale {
 		for _, v := range step.Absorbs {
 			if _, ok := spacings[v]; !ok {
-				t.Errorf("PB-DS-1: %q claims to absorb %gpx, which the Substrate artifact does "+
+				t.Errorf("PB-DS-1: %q claims to absorb %gpx, which the Obsidian maquette does "+
 					"not declare as a spacing value", step.Name, v)
 			}
 		}
 	}
 
-	// The exact ledger the requirement states, minus the one value that is not in this artifact.
-	// PB-DS-1 says "seven of sixteen values move, six by 1dp and one by 2dp (26->24)"; 26px is a
-	// MOCK-only literal (the pairing CTA's horizontal padding in remote-control-mock.html), so
-	// six movers is what the Substrate artifact alone can show. Stating that here is the
-	// difference between a reconciled count and a count nobody checked.
-	const wantMovers = 6
+	// The ledger, against the maquette. This assertion previously read
+	//
+	//	const wantMovers = 6
+	//	"The requirement's ledger is six 1dp movers here plus 26->24, which lives in the
+	//	 mock rather than in this artifact."
+	//
+	// -- six, because PB-DS-1's own ledger said "seven of sixteen values move, six by 1dp and one
+	// by 2dp (26->24)" and the 26px lived only in a mock the gate did not read. The maquette is a
+	// complete design rather than four candidate skins plus a mock, so the seventh mover is no
+	// longer somewhere else: it declares 3px, and the count and the requirement's ledger agree
+	// without a footnote for the first time. The 2dp mover is gone -- nothing in the maquette
+	// drifts further than 1dp -- so seven movers, all of them by one.
+	const wantMovers = 7
 	if len(movers) != wantMovers {
-		t.Errorf("PB-DS-1: %d of %d Substrate spacing values move onto the scale, want %d.\n"+
+		t.Errorf("PB-DS-1: %d of %d maquette spacing values move onto the scale, want %d.\n"+
 			"\tmoved: %s\n"+
-			"The requirement's ledger is six 1dp movers here plus 26->24, which lives in the "+
-			"mock rather than in this artifact.",
+			"PB-DS-1's ledger is seven movers; a different count means the design moved and "+
+			"nobody re-took the decision.",
 			len(movers), len(values), wantMovers, strings.Join(movers, ", "))
 	}
 	if worst > 1 {
-		t.Errorf("PB-DS-1: the worst drift over the Substrate artifact is %gdp, want at most 1dp. "+
-			"That bound is the reason the 4dp grid was rejected; if it does not hold, the "+
-			"decision was made on a number nobody computed.\n\tmoved: %s",
+		t.Errorf("PB-DS-1: the worst drift over the maquette is %gdp, want at most 1dp. That "+
+			"bound is the reason the 4dp grid was rejected; if it does not hold, the decision "+
+			"was made on a number nobody computed.\n\tmoved: %s",
 			worst, strings.Join(movers, ", "))
 	}
-	t.Logf("PB-DS-1 drift ledger over %d distinct Substrate spacing values, worst %gdp:\n\t%s",
+	t.Logf("PB-DS-1 drift ledger over %d distinct maquette spacing values, worst %gdp:\n\t%s",
 		len(values), worst, strings.Join(movers, "\n\t"))
 }
 
@@ -364,11 +386,14 @@ func TestPBDS1_TheAbsorptionLedgerCanActuallyFail(t *testing.T) {
 			"construction and the 1dp bound asserts nothing")
 	}
 	// A value the scale does NOT absorb must report absent rather than resolving to something.
-	// 30px is `.ptime { left }` -- excluded from the scan by property, and 6dp from any step.
+	// 30px is 6dp from any step and the maquette does declare it -- `.markrow { gap }`, the
+	// spacing between the icon tiles in the mark gallery. It is excluded by the block boundary
+	// rather than by the property filter, which is exactly the boundary worth testing: gallery
+	// furniture is not the app, and a scale that swallowed a 30px gap would be a scale sized by
+	// the page the design was reviewed on.
 	if step, ok := absorbedBy[30]; ok {
-		t.Errorf("the ledger absorbs 30px into %gdp; it is a status-bar clock position, not a "+
-			"gap, and a scale that swallows it is one that will be used to place things "+
-			"absolutely", step)
+		t.Errorf("the ledger absorbs 30px into %gdp; it is the mark gallery's own gap, not a gap "+
+			"in the app, and a scale that swallows it has been sized by the review page", step)
 	}
 	// And the drift arithmetic itself.
 	if d := math.Abs(7 - absorbedBy[7]); d != 1 {
