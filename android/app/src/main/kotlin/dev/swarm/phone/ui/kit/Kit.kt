@@ -333,6 +333,26 @@ internal object KitMetrics {
     /** origin: --p-card-fx alpha */
     const val KEY_LIGHT_ALPHA = 0.10f
 
+    /**
+     * The PROMOTED slab's key light: `--p-lit-fx` is `inset 0 1px 0 rgba(246,243,236,0.22)`.
+     *
+     * A SECOND ALPHA AND NOT A MULTIPLE OF THE FIRST. `0.22` is not `0.10` scaled by anything
+     * meaningful, and writing it as one would make the promoted edge move whenever the resting one
+     * did -- which is the opposite of what ADR-009 D4 asks for, since the whole statement is that
+     * the two surfaces catch DIFFERENT amounts of the same light. `--p-lit-fx` is its own token
+     * for that reason, and this is its alpha.
+     *
+     * THE RGB IS NOT HERE, exactly as [CTA_BLOOM_ALPHA]'s is not: `rgba(246,243,236, ...)` is
+     * `--p-ink` to the digit, so the promoted edge is the linen resource at this alpha rather than
+     * a second place the ink is written down. Both surfaces resolve it from `swarm_text_primary`.
+     *
+     * `effect` in tokens.json, so PB-TOK-6's converters produce no `<color>` and no `<dimen>` for
+     * it -- the position every one of these constants is in, and the reason this object exists.
+     *
+     * origin: --p-lit-fx alpha
+     */
+    const val LIT_KEY_LIGHT_ALPHA = 0.22f
+
     /** origin: --p-workbar stop */
     const val WORKBAR_FADE_STOP = 0.85f
 

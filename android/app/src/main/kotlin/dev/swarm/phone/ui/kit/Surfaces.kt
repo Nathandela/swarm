@@ -201,10 +201,34 @@ internal class TopRule(val fill: Int, val rule: Int, val rulePx: Float) : Drawab
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
 
-/** `.prow`, and `.prow.attention` when the row is the one blocked on the user. */
+/**
+ * `.prow`, and `.slab.lit` -- ADR-009 D4's promoted slab -- when the row is the one blocked on the
+ * user.
+ *
+ * **PROMOTION IS TWO CHANGES AT ONCE AND EITHER ALONE IS THE WRONG DRAWING.** The maquette says
+ * `.slab.lit { background: var(--p-elev); box-shadow: var(--p-lit-fx) }`: the slab comes forward
+ * one ladder step AND catches more of the one light source. Taking the stronger edge on the card
+ * fill draws a card with a bright line on it; taking the elevated fill with the resting edge draws
+ * a toast. Together they are the single statement D4 makes -- the same light, on material that has
+ * come forward -- which is why they are one boolean here rather than two parameters a caller could
+ * spend separately.
+ *
+ * ELEVATION IS STILL A LIGHTER SURFACE AND NEVER A SHADOW, so this is the ladder doing the work
+ * that `View.elevation` would be the obvious and forbidden implementation of. The file comment
+ * above says why; nothing about that changes because a second surface now uses the step.
+ *
+ * THE RAIL AND THE WARMED BORDER SURVIVE UNTOUCHED. ADR-009's amendment to PB-DS-5 adds the lit
+ * key-light as a NEW effect -- "Two effects are added, not substituted" -- so the two Substrate
+ * mechanisms that already said "this row needs you" keep saying it. The maquette's own `.slab.lit`
+ * draws neither; that is a divergence between the drawing and the requirement, and O3's scope is
+ * the material, so the requirement wins here and the drawing is left for a decision that names it.
+ */
 internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface = surface(
     SurfaceSpec(
-        fill = Kit.colour(context, R.color.swarm_surface_card),
+        fill = Kit.colour(
+            context,
+            if (attention) R.color.swarm_surface_elevated else R.color.swarm_surface_card,
+        ),
         stroke = if (attention) {
             Kit.attentionBorder(context)
         } else {
@@ -225,7 +249,13 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
         // Kotlin appearance suite reads this colour out of the token rather than trusting it.
         keyLight = ColorMix.withAlpha(
             Kit.colour(context, R.color.swarm_text_primary),
-            KitMetrics.KEY_LIGHT_ALPHA,
+            // THE ONLY DIFFERENCE BETWEEN THE TWO EFFECTS IS THE ALPHA, which is why one
+            // expression serves both: `--p-card-fx` and `--p-lit-fx` are the same linen, at the
+            // same 1 dp, on the same edge, and they differ by how much of the light the surface
+            // catches. Two separate constructions here would be two chances to warm one and not
+            // the other -- and a promoted slab lit by a white edge over a warm ladder is the cool
+            // contamination the direction exists to remove, visible on device and invisible here.
+            if (attention) KitMetrics.LIT_KEY_LIGHT_ALPHA else KitMetrics.KEY_LIGHT_ALPHA,
         ),
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
         rail = if (attention) Kit.colour(context, R.color.swarm_state_attention) else null,
