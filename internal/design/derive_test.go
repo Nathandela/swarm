@@ -100,13 +100,19 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 		{"deny-fill", "#21D96A62"},
 		{"needs-input-dot-glow", "#B3C9A876"},
 		{"working-dot-glow", "#8C6FA7A4"},
-		// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row. Substrate
-		// draws no toggle; docs/design/substrate-components.md row 4 specifies one and states its
-		// off track as `--p-ink3` at 40%, quoting the resolved value `#6662666D`. So what is
-		// recorded here is the DERIVATION TABLE's number rather than a rendering of the HTML, and
-		// the assertion is the same either way: the blend this package computes has to equal the
-		// value the authority states, or a consumer would have to transcribe one of them.
-		{"toggle-track-off", "#66746B5D"},
+		// THE FIFTH ROW IS GONE, AND IT IS NOT A VALUE MIGRATION THIS TIME. It read
+		//
+		//	// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row.
+		//	// Substrate draws no toggle; docs/design/substrate-components.md row 4 specifies
+		//	// one and states its off track as `--p-ink3` at 40% ...
+		//	{"toggle-track-off", "#66746B5D"},
+		//
+		// `docs/research/obsidian-maquette.html` draws `.tog`, and it gives the off track
+		// `background: var(--p-elev)` inside `border: 1px solid var(--p-hair)`. Two tokens, no
+		// blend. The derivation was retired with its only consumer (`Kit.toggleTrackOff`), so what
+		// is left in this table is again exactly the four color-mix() calls the artifact's own CSS
+		// makes -- which is what the field name `artifact` says, for the first time since row 4
+		// was let in.
 	}
 
 	byName := map[string]Derivation{}

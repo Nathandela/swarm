@@ -208,12 +208,18 @@ func (d Derivation) Resolve(tokens map[string]string) (RGBA, error) {
 
 // Derivations is every colour this product computes with color-mix rather than declares.
 //
-// SCOPE, AND IT IS NO LONGER ONE SOURCE. The first four are the ones the artifact's own CSS
-// declares. The fifth, `toggle-track-off`, is the first whose authority is
-// docs/design/substrate-components.md instead -- Substrate draws no toggle, so row 4 is the whole
-// specification for one. That is this paragraph's own invitation being taken rather than the rule
-// being widened: it used to say the mock-derived values "belong in this table the moment a
-// Substrate spec exists for them", and row 4 is that spec.
+// SCOPE: the four the artifact's own CSS declares, and nothing else today.
+//
+// THERE WAS A FIFTH AND ADR-009 RETIRED IT. `toggle-track-off` -- `--p-ink3` at 40% over
+// transparent -- was the only entry whose authority was docs/design/substrate-components.md
+// instead, added under this comment's own invitation ("mock-derived values belong in this table
+// the moment a Substrate spec exists for them") because Substrate drew no toggle and row 4 was the
+// whole specification for one. `docs/research/obsidian-maquette.html` draws the toggle, and it
+// gives the off track `--p-elev` inside a `--p-hair` border: two tokens and no blend. A derivation
+// whose only consumer has stopped consuming it is a colour nothing can get wrong, and keeping it
+// would leave the next reader looking for the component that spends it.
+//
+// The invitation stands. A row here is still what lets a specified-but-undrawn blend in.
 //
 // WHAT IS STILL OUTSIDE. Requirements section 6.13 also names a destructive-outline and an
 // approval-card tint; those are read off the RETIRED iOS mock and have no derivation-table row of
@@ -241,22 +247,6 @@ func Derivations() []Derivation {
 			Percent: 70,
 			Over:    Transparent,
 			Site:    ".pdot.att box-shadow 0 0 9px -- the NeedsInput status dot's halo",
-		},
-		{
-			Name:    "toggle-track-off",
-			Base:    "--p-ink3",
-			Percent: 40,
-			Over:    Transparent,
-			Site: ".toggle track, off state -- derivation row 4. THE FIRST ENTRY HERE THAT SUBSTRATE " +
-				"DID NOT DRAW. The four above are color-mix() calls the artifact's own CSS makes; " +
-				"row 4 derives this one, and this table's header says such entries belong here the " +
-				"moment a spec exists for them. It is added rather than typed into the component " +
-				"because the alternatives all fail honestly: the doc-metric grammar reads " +
-				"`field <number>` and the only match for \"at 40%\" cites a preposition, the toggle " +
-				"is not in tokens.json, and PB-TOK-7 forbids resolving --p-ink3 at 40% into a " +
-				"literal resource. The toggle is also the component the artifact's own " +
-				"prefers-reduced-motion list omits, so it now sits in two documents' blind spots " +
-				"and is the better for being named in both.",
 		},
 		{
 			Name:    "working-dot-glow",

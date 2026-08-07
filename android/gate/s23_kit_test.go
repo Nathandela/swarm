@@ -1758,6 +1758,24 @@ var s23MetricConst = regexp.MustCompile(
 // s23MetricCSSOrigin is `origin: .pdot { width }` -- a declaration in the shared block.
 var s23MetricCSSOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(\S.*?)\s*\{\s*([a-z-]+)\s*\}\s*(?:\*/)?\s*$`)
 
+// s23MetricMaquetteOrigin is `origin: maquette .tog { width }` -- a declaration in the OBSIDIAN
+// MAQUETTE's phone-kit block, which ADR-009 D2 makes the normative design source.
+//
+// **IT IS A SEPARATE FORM AND NOT A FALLBACK, and that is the same ruling KitOrigin.maquetteColour
+// makes one lane over.** A reader that looked in the shared block and then in the maquette would
+// answer `.prow { border }` from the artifact that happens to have it and silently stop being
+// about the design that is normative -- and the two sources use different selector names for the
+// same component (`.prow` vs `.slab`), so the fallback would succeed rather than fail. Naming the
+// source in the annotation makes each constant say which authority it answers to, and a constant
+// whose selector moved between the two fails loudly instead of quietly changing authorities.
+//
+// WHY BOTH FORMS SURVIVE, rather than moving every metric to the maquette at once: the older
+// artifact still carries the three frame constants, the type ladder and the four tab glyphs, for
+// the reasons s22bMaquetteRelPath sets out. This is the split that file already records, made
+// readable from a KDoc.
+var s23MetricMaquetteOrigin = regexp.MustCompile(
+	`^(?:\s|\*|/)*origin:\s*maquette\s+(\S.*?)\s*\{\s*([a-z-]+)\s*\}\s*(?:\*/)?\s*$`)
+
 // s23MetricDerivationOrigin is `origin: derivation attention-row-border` -- a share whose
 // authority is internal/design's derivation table rather than a declaration in the design source.
 //
@@ -1868,6 +1886,14 @@ func s23ScanMetrics(src string) []s23Metric {
 			pending = s23Metric{Kind: "token", First: m[1], Second: m[2]}
 			continue
 		}
+		// BEFORE the plain CSS form, because `origin: maquette .tog { width }` also matches it --
+		// with the selector read as "maquette .tog", which the shared block does not declare, so
+		// the constant would fail on a selector nobody wrote rather than resolve against the
+		// design that is normative.
+		if m := s23MetricMaquetteOrigin.FindStringSubmatch(line); m != nil {
+			pending = s23Metric{Kind: "maquette", First: m[1], Second: m[2]}
+			continue
+		}
 		if m := s23MetricCSSOrigin.FindStringSubmatch(line); m != nil {
 			pending = s23Metric{Kind: "css", First: m[1], Second: m[2]}
 			continue
@@ -1918,7 +1944,12 @@ func s23ScanAlignmentFault(src string) string {
 //
 // @return the disagreement, or "" when the constant is the design's own number. The caller adds
 // the file and line, so this reads as one sentence about the value.
-func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]string, doc string) string {
+func s23CheckMetric(
+	m s23Metric,
+	css, maquette map[string]s22bCSSRule,
+	tokens map[string]string,
+	doc string,
+) string {
 	got, err := strconv.ParseFloat(m.Raw, 64)
 	if err != nil {
 		return fmt.Sprintf("%s = %sf is not a number", m.Name, m.Raw)
@@ -1932,6 +1963,18 @@ func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]s
 		if want != got {
 			return fmt.Sprintf("%s = %g, but the design's `%s { %s }` is %g. The design's px is "+
 				"Android dp at 1:1, so this is a transcription error and nothing else.",
+				m.Name, got, m.First, m.Second, want)
+		}
+	case "maquette":
+		want, err := s23MaquetteMetric(maquette, m.First, m.Second)
+		if err != nil {
+			return fmt.Sprintf("%s cites the maquette's `%s { %s }`: %v",
+				m.Name, m.First, m.Second, err)
+		}
+		if want != got {
+			return fmt.Sprintf("%s = %g, but the maquette's `%s { %s }` is %g. ADR-009 D2 makes "+
+				"that file the design; its px is Android dp at 1:1, so this is a transcription "+
+				"error and nothing else.",
 				m.Name, got, m.First, m.Second, want)
 		}
 	case "token":
@@ -2024,6 +2067,7 @@ func s23CheckMetric(m s23Metric, css map[string]s22bCSSRule, tokens map[string]s
 func TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber(t *testing.T) {
 	sources := s23KitSources(t)
 	css := s22bSharedCSS(t)
+	maquette := s22bMaquetteKitCSS(t)
 	tokens := s22bTokenValues(t)
 
 	owned := s23OwnedFiles()
@@ -2053,7 +2097,7 @@ func TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber(t *testing.T) {
 		}
 		for _, m := range s23ScanMetrics(src) {
 			checked++
-			if fault := s23CheckMetric(m, css, tokens, doc); fault != "" {
+			if fault := s23CheckMetric(m, css, maquette, tokens, doc); fault != "" {
 				t.Errorf("PB-DS-7: %s:%d: %s", file, m.Line, fault)
 			}
 		}
@@ -2075,6 +2119,21 @@ func s23CSSMetric(css map[string]s22bCSSRule, selector, property string) (float6
 	if !ok {
 		return 0, fmt.Errorf("the shared block declares no such rule")
 	}
+	return s23RuleMetric(rule, property)
+}
+
+// s23MaquetteMetric is [s23CSSMetric] against ADR-009 D2's normative source. Same reader, and the
+// message names the other file, so a constant that cites the wrong source says which one it looked
+// in rather than reporting an absence a reader has to locate.
+func s23MaquetteMetric(maquette map[string]s22bCSSRule, selector, property string) (float64, error) {
+	rule, ok := maquette[selector]
+	if !ok {
+		return 0, fmt.Errorf("the maquette's phone-kit block declares no such rule")
+	}
+	return s23RuleMetric(rule, property)
+}
+
+func s23RuleMetric(rule s22bCSSRule, property string) (float64, error) {
 	value, ok := rule.Decls[property]
 	if !ok {
 		return 0, fmt.Errorf("the rule declares no %s", property)
@@ -3569,13 +3628,14 @@ func TestPBDS7_TheMetricJoinCanActuallyFail(t *testing.T) {
 // assertion calls -- rather than through a copy of them.
 func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	css := s22bSharedCSS(t)
+	maquette := s22bMaquetteKitCSS(t)
 	tokens := s22bTokenValues(t)
 	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
 
 	check := func(src string) []string {
 		var faults []string
 		for _, m := range s23ScanMetrics(src) {
-			if fault := s23CheckMetric(m, css, tokens, doc); fault != "" {
+			if fault := s23CheckMetric(m, css, maquette, tokens, doc); fault != "" {
 				faults = append(faults, fault)
 			}
 		}
@@ -3615,7 +3675,7 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 										missed = append(missed, spelling)
 										continue
 									}
-									if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
+									if fault := s23CheckMetric(found[0], css, maquette, tokens, doc); fault == "" {
 										missed = append(missed, spelling+"   [seen, but passes with NO origin]")
 									}
 								}
@@ -3676,7 +3736,7 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	if found := s23ScanMetrics(stolen); len(found) != 1 || found[0].Name != "NEXT_DP" {
 		t.Errorf("PB-DS-7: the metric scan reads %v out of a wrapped declaration followed by a "+
 			"plain one; it should see exactly NEXT_DP, and the wrapped one is the cross-checks'", found)
-	} else if fault := s23CheckMetric(found[0], css, tokens, doc); fault == "" {
+	} else if fault := s23CheckMetric(found[0], css, maquette, tokens, doc); fault == "" {
 		t.Error("PB-DS-7: a constant declared after an UNMATCHED wrapped declaration inherits that " +
 			"declaration's `origin:` line and passes on it. `.pdot { width }` is 7, so NEXT_DP = 7f " +
 			"is green against an authority that names the status dot's diameter and was never " +
@@ -3720,6 +3780,38 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	if faults := check("/** derived: " + s23ComponentsDoc + " #3 Badge { no-such-field } */\n    const val X = 16f"); len(faults) == 0 {
 		t.Error("PB-DS-7: a constant citing a field row 3 does not state passes, so a renamed " +
 			"cell would leave the value checked against nothing")
+	}
+
+	// 4. `origin: maquette <selector> { property }` resolves against ADR-009 D2's normative
+	//    source, and it is a SEPARATE authority from the shared block rather than a fallback.
+	//
+	//    THE THIRD PROBE IS THE ONE THAT MATTERS. Without the maquette form being matched first,
+	//    `origin: maquette .tog { width }` still matches the plain CSS pattern -- with the
+	//    selector read as the literal string "maquette .tog" -- and the constant fails on a
+	//    selector nobody wrote. With a FALLBACK instead of two forms, a constant citing `.prow`
+	//    would resolve against whichever file happened to declare it, and the two sources name
+	//    the same component differently (`.prow` in the artifact, `.slab` in the maquette), so
+	//    the wrong answer would be a pass rather than an error.
+	tog := "/** origin: maquette .tog { width } */\n    const val TOGGLE_TRACK_WIDTH_DP = "
+	if faults := check(tog + "40f"); len(faults) != 0 {
+		t.Errorf("PB-DS-7: a constant annotated `origin: maquette .tog { width }` and equal to "+
+			"the 40px the maquette declares is reported as a fault: %v", faults)
+	}
+	if faults := check(tog + "46f"); len(faults) == 0 {
+		t.Error("PB-DS-7: TOGGLE_TRACK_WIDTH_DP passes at 46f against a maquette that draws a " +
+			"40px track. 46 is Substrate's number, which is exactly the value this annotation " +
+			"exists to stop being inherited through a skin change.")
+	}
+	if faults := check("/** origin: maquette .no-such-rule { width } */\n    const val X = 40f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a constant citing a rule the maquette does not draw passes. Either the " +
+			"maquette form is not matched at all (so the plain CSS pattern read the selector as " +
+			"`maquette .no-such-rule` and this is passing by accident), or one source is falling " +
+			"back to the other.")
+	}
+	if faults := check("/** origin: maquette .pscreen { padding } */\n    const val X = 54f"); len(faults) == 0 {
+		t.Error("PB-DS-7: a constant citing `.pscreen { padding }` as the MAQUETTE's passes at " +
+			"54. That rule is the older artifact's -- the maquette states none of the three frame " +
+			"constants -- so this is the fallback the two forms exist to prevent.")
 	}
 }
 

@@ -541,7 +541,32 @@ func TestPBDS1_NoRawPixelPaddingSurvives(t *testing.T) {
 	// insets is the passing case, so the check is for a NUMERIC LITERAL argument specifically.
 	call := regexp.MustCompile(`set(?:Padding|Margins)\s*\(([^)]*)\)`)
 	literalArg := regexp.MustCompile(`(?:^|,)\s*-?\d+\s*(?:,|$)`)
-	constant := regexp.MustCompile(`(?m)^\s*(?:private\s+)?const\s+val\s+([A-Z_]*(?:PADDING|MARGIN|INSET|GAP)[A-Z_]*)\s*(?::\s*Int\s*)?=\s*-?\d+`)
+	// THE TRAILING GUARD IS NEW AND IT NARROWS THIS TO WHAT THE REQUIREMENT NAMES: an INTEGER.
+	// The pattern used to end `=\s*-?\d+`, which matched the `3` of `3f` -- so
+	//
+	//	/** origin: maquette .tog i { top } */
+	//	const val TOGGLE_INSET_DP = 3f
+	//
+	// was reported as "a bare number ... in PIXELS", which it is not: it is a Float in dp,
+	// annotated with the maquette declaration it transcribes, and recomputed from that declaration
+	// by TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber. The defect this test deletes by name is
+	// `const val PADDING = 24`, a Kotlin Int, and an Int is the only form that can be pixels: dp
+	// enters this codebase as a Float through Kit.dp / Kit.dpPx and as a `<dimen>` resource.
+	// Widening beyond that meant every correctly-declared dp constant whose NAME happened to
+	// contain one of the four words was a violation, which is a fence that fails on the right
+	// answer -- and the one whose next reader switches it off.
+	//
+	// THE LITERAL IS CAPTURED AND CLASSIFIED IN GO rather than excluded by the pattern, because
+	// RE2 has no lookahead: `(?!...)` does not compile here, and the alternatives (enumerating the
+	// characters that may FOLLOW a literal) get the boundary wrong at end of file.
+	constantDecl := regexp.MustCompile(
+		`(?m)^\s*(?:private\s+)?const\s+val\s+([A-Z_]*(?:PADDING|MARGIN|INSET|GAP)[A-Z_]*)\s*(?::\s*Int\s*)?=\s*(-?[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?[fFdD]?)`)
+	// A Kotlin Float or Double: a decimal point, an exponent, or an f/F/d/D suffix. Anything else
+	// the pattern captured is an Int, which is the only form that can be pixels.
+	isInteger := func(literal string) bool {
+		return !strings.ContainsAny(literal, ".eEfFdD")
+	}
+	constant := s22bIntegerDimension{decl: constantDecl, isInteger: isInteger}
 
 	found := 0
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -550,12 +575,12 @@ func TestPBDS1_NoRawPixelPaddingSurvives(t *testing.T) {
 		}
 		found++
 		src := kotlinCodeOnly(readFileOrFail(t, path, "PB-DS-1"))
-		for _, m := range constant.FindAllStringSubmatch(src, -1) {
+		for _, name := range constant.FindNames(src) {
 			t.Errorf("PB-DS-1: %s declares `const val %s` as a bare number. A layout dimension "+
 				"written as an Int is in PIXELS, and pixels are not a unit any design states: "+
 				"the constant this replaces rendered at 8dp on a 3x handset and at 24dp on a "+
 				"1x one. Every spacing value comes from res/values/dimens.xml.",
-				mustRel(t, path), m[1])
+				mustRel(t, path), name)
 		}
 		for _, m := range call.FindAllStringSubmatch(src, -1) {
 			if literalArg.MatchString(m[1]) {
@@ -577,9 +602,34 @@ func TestPBDS1_NoRawPixelPaddingSurvives(t *testing.T) {
 	// The scan must be able to see the thing it is looking for. Without this, a regexp that
 	// stopped matching -- or a kotlinCodeOnly that swallowed the file -- would report a clean
 	// tree, which is indistinguishable from a clean tree.
-	if !constant.MatchString("    const val PADDING = 24\n") {
+	if !constant.Matches("    const val PADDING = 24\n") {
 		t.Fatal("the constant scan does not match the exact declaration PB-DS-1 names, so a " +
 			"clean report above means nothing")
+	}
+	// Both halves of the Int/Float split, because the guard that narrowed this pattern is exactly
+	// the kind of change that can be over-applied into matching nothing.
+	for _, pixels := range []string{
+		"    const val SCREEN_PADDING: Int = 24\n",
+		"    private const val ROW_GAP = 8\n",
+		"    const val TOP_INSET = -4\n",
+	} {
+		if !constant.Matches(pixels) {
+			t.Fatalf("the constant scan does not match %q, which is a layout dimension declared "+
+				"as a Kotlin Int -- the exact form PB-DS-1 deletes", strings.TrimSpace(pixels))
+		}
+	}
+	for _, dp := range []string{
+		"    const val TOGGLE_INSET_DP = 3f\n",
+		"    const val CARD_GAP_DP = 8.5f\n",
+		"    const val TOP_MARGIN_DP = 12.0\n",
+	} {
+		if constant.Matches(dp) {
+			t.Fatalf("the constant scan reads %q as a raw-pixel constant. It is a Float in dp, "+
+				"which is how every metric in `KitMetrics` is declared, and it is checked against "+
+				"its design origin by TestPBDS7_EveryKitMetricIsTheDesignsOwnNumber. A fence that "+
+				"fails on the correct declaration is one the next reader switches off.",
+				strings.TrimSpace(dp))
+		}
 	}
 	if !literalArg.MatchString("24, 24, 24, 24") {
 		t.Fatal("the literal-argument scan does not match `setPadding(24, 24, 24, 24)`")
@@ -719,6 +769,32 @@ func TestPBDS4_TheDotRadiusTokenIsNotTranscribedAsARadius(t *testing.T) {
 		}
 	}
 }
+
+// s22bIntegerDimension is the raw-pixel recogniser: a `const val <...PADDING|MARGIN|INSET|GAP...>`
+// whose literal is a Kotlin Int.
+//
+// It is a small type rather than two loose values so that the scan and its own controls go through
+// ONE implementation. The controls below assert both directions -- that `= 24` is caught and that
+// `= 3f` is not -- and a control that called the regexp directly would be asserting a pattern the
+// scan no longer uses on its own.
+type s22bIntegerDimension struct {
+	decl      *regexp.Regexp
+	isInteger func(literal string) bool
+}
+
+// FindNames returns the names of every integer-literal dimension constant in src.
+func (d s22bIntegerDimension) FindNames(src string) []string {
+	var out []string
+	for _, m := range d.decl.FindAllStringSubmatch(src, -1) {
+		if d.isInteger(m[2]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// Matches is FindNames as a predicate, for the controls.
+func (d s22bIntegerDimension) Matches(src string) bool { return len(d.FindNames(src)) > 0 }
 
 func uniqueSorted(in []string) []string {
 	seen := map[string]bool{}
