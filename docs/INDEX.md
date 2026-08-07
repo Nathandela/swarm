@@ -16,6 +16,7 @@
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)
 - [Implementation goals](specifications/implementation-goals.md) — per-epic exit criteria, global goals, orchestration protocol (post audit-002)
 - [System invariants](invariants/system-invariants.md) — 12 safety + 3 liveness properties, each test-bound
+- [Interaction schema](specifications/interaction-schema.md) — normative interaction-item payload: eight kinds, delta semantics, approval lifecycle (Draft, binds on ADR-009 acceptance)
 
 ## Design reference
 - [UI preview](design/ui-preview.html) — **canonical visual reference** (TUI): interactive screen mockups (keyboard-drivable), flow, architecture, lifecycle, test strategy. Live copy: https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
@@ -28,6 +29,9 @@
 - [ADR-003](adr/ADR-003-persistence-schema.md) — per-session metadata as source of truth
 - [ADR-004](adr/ADR-004-security-baseline.md) — v1 security baseline
 - [ADR-005](adr/ADR-005-vt-emulator-library.md) — VT emulator library (charmbracelet/x/vt)
+- [ADR-009](adr/ADR-009-structured-chat-interaction.md) — the phone surface is a structured chat transcript, the terminal grid is retired
+- [ADR-010](adr/ADR-010-adapter-structured-capture.md) — structured interaction capture as an optional, additive adapter-contract extension
+- [ADR-011](adr/ADR-011-multi-device-epochs.md) — multi-device epochs: per-device sender ids, inbound keys, seq spaces
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
