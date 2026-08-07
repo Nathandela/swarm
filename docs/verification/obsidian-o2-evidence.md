@@ -49,10 +49,35 @@ invisible while it held:
 | `go vet ./...` | green |
 | `golangci-lint run` | green, no new findings |
 | `go test ./...` | green **except** `TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor` (section 4) |
-| `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, 0 failures, 124 result XML files per variant |
+| `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, **0 failures and 0 errors**, 124 result XML files per variant, counted out of the JUnit XML rather than read off an exit code |
 
 Zero screen-code changes. Nothing under `ui/screens` was touched; the two `ui/kit` edits are
 `origin:`-annotated theme metrics. The app renders warm by value flow alone.
+
+**Three things about running these gates that cost an hour and are written down so they do not
+cost it twice.**
+
+1. **The recorded serialization guard does not terminate here.** The rule is one Gradle build at a
+   time, waited on with `while pgrep -x java`. An *idle* Gradle daemon is also a java process —
+   one had been resident 80 minutes at 0% CPU with no children — so that loop waits forever on a
+   process that is not a build. Wait on `gradlew` or `GradleWorkerMain` instead, which are the
+   things that mean a build is actually in progress.
+2. **A subagent shell here has neither `JAVA_HOME` nor `ANDROID_HOME`.** Without them the wrapper
+   reports "Unable to locate a Java Runtime", then "SDK location not found". They are
+   `/usr/local/Cellar/openjdk@21/21.0.12/libexec/openjdk.jdk/Contents/Home` and
+   `/usr/local/share/android-commandlinetools`. Setting the env vars avoids writing a
+   `local.properties` into the worktree.
+3. **`./gradlew … | tail` exits 0 when Gradle exits 1.** Both failures above arrived wearing a
+   success code. This is exactly why the house rule counts result XML instead, and the counts in
+   the table are that count. Gradle reported `testDebugUnitTest`/`testReleaseUnitTest` UP-TO-DATE
+   on the final run, which is the stronger statement rather than a weaker one: it hashed the task
+   inputs against the current tree and found the existing results are the results *for this tree*.
+
+**Go test flakes under load, in packages this phase never touched.** Running the suite alongside a
+Gradle build produced failures in `cmd/swarm`, `internal/remote/relay`, `internal/shim` and
+`mobile/conformance` — a *different* set each time, and every one of them passes on its own
+(`-count=3` for the last two). They are timing-sensitive tests losing a race for CPU, not
+regressions; recorded here rather than left for the next reader to rediscover as a mystery.
 
 ## 3. The contrast gate, ADR-009 D8.1
 
