@@ -3,8 +3,10 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.JournalRow
 import dev.swarm.phone.ui.MachineFreshness
 import dev.swarm.phone.ui.MachinePane
+import dev.swarm.phone.ui.kit.PresenceMark
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -110,12 +112,32 @@ class MachinesPanelTest {
      */
     @Test
     fun `only the relay's own online reads as reachable`() {
-        assertTrue(panel(presence = "online").machine.online)
-        assertFalse(panel(presence = "offline").machine.online)
-        assertFalse(
-            "`unknown` reads as reachable. The relay having no record is not the machine being " +
-                "up, and this is the state a relay returns after restarting itself",
-            panel(presence = "unknown").machine.online,
+        // This assertion used to read
+        //
+        //	assertTrue(panel(presence = "online").machine.online)
+        //	assertFalse(panel(presence = "offline").machine.online)
+        //	assertFalse("`unknown` reads as reachable. ...",
+        //	    panel(presence = "unknown").machine.online)
+        //
+        // over a `machine.online: Boolean`, and its reasoning above ("row 11 gives the dot two
+        // colours") was true of the Substrate artifact and is false of the Obsidian maquette,
+        // which draws `.pdot.unknown` as a hollow ring. So the model now carries the relay's
+        // third word instead of collapsing it, and what this test protects is unchanged and
+        // sharper: exactly one of the three words may reach the reachable mark.
+        assertEquals(PresenceMark.ONLINE, panel(presence = "online").machine.mark)
+        assertEquals(PresenceMark.OFFLINE, panel(presence = "offline").machine.mark)
+        assertEquals(
+            "`unknown` does not reach the screen as its own mark. The relay having no record is " +
+                "neither the machine being up nor the machine being asleep, and this is the " +
+                "state a relay returns after restarting itself",
+            PresenceMark.UNKNOWN,
+            panel(presence = "unknown").machine.mark,
+        )
+        assertNotEquals(
+            "a word the relay has never sent reaches the screen as reachable. Anything this " +
+                "phone cannot recognise is the absence of a record, which is `unknown`",
+            PresenceMark.ONLINE,
+            panel(presence = "").machine.mark,
         )
     }
 

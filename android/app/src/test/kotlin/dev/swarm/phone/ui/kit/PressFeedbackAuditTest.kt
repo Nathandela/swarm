@@ -78,7 +78,7 @@ class PressFeedbackAuditTest {
             lit = false, promoted = false,
         ),
         "settingsRow" to settingsRow(context, "Notifications"),
-        "machineRow" to machineRow(context, "nathans-mbp", "online", online = true),
+        "machineRow" to machineRow(context, "nathans-mbp", "online", mark = PresenceMark.ONLINE),
     ).mapValues { (_, view) -> view.apply { setOnClickListener { } } }
 
     /** One ACTION_DOWN at the view's own origin, as the platform delivers it. */

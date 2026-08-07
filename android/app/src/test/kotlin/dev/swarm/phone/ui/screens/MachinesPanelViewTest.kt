@@ -210,8 +210,11 @@ class MachinesPanelViewTest {
      */
     @Test
     fun `the machine's mark is the presence dot and no status dot is on this screen`() {
-        listOf(true, false).forEach { online ->
-            val root = view(panel(presence = if (online) "online" else "offline"))
+        // Was `listOf(true, false)` over the model's old `online: Boolean`. All three of the
+        // relay's words are walked now, because the maquette draws three `.pdot` states and the
+        // third one reaches this screen through `MachinesPanelScreen.of`.
+        listOf("online", "offline", "unknown").forEach { presence ->
+            val root = view(panel(presence = presence))
             assertEquals(1, root.allTagged(KitTag.PRESENCE_DOT).size)
             assertNull(
                 "a `.pdot` is on the machines screen. The status dot takes a `status.Group`, a " +
