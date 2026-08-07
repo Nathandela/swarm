@@ -326,6 +326,19 @@ constraint; at 1.16% of a debug APK dominated by an 11.8 MB native library, it i
    legibility. If it fails on device the **token lightens** — the ladder rule, D3 — and the floor
    does not move.
 
+   **THIS AMENDMENT IS AN OWNER QUESTION AND IS MARKED OPEN.** It was written by the session that
+   built the gate, against an ADR whose status line reads "Accepted (owner decision)", and two of
+   the floors it sets are below the rungs the table above quotes. The ceiling argument stands on
+   its own and needs nothing from the owner: |Lc| on `#c9a876` cannot exceed 59.73 for any ink, so
+   the original Lc 75 was unsatisfiable by construction for the CTA label. That argument does
+   **not** extend to `--p-ink2`, `--p-ink3` or `--p-err`, whose floors were set at what this
+   palette happens to measure — so the gate can catch a regression from today's values and cannot
+   catch a legibility failure, because after the calibration no pair fails. That is a defensible
+   position and it is a **quality-bar decision the owner signed and only the owner can lower**.
+   The O7 device glance pass is the empirical input it should be decided on. Until then this
+   amendment is in force (a permanently red gate teaches red-blindness, which is the alternative
+   this rejected) and it is recorded as unadjudicated rather than as settled.
+
    **Obsidian improves the hierarchy inks over Substrate** and the gate now records it as a
    requirement rather than a coincidence: ink2 goes −41.8 → −49.6 and ink3 −22.8 → −25.5, so the
    45 floor *fails the shipped Substrate palette* and passes Obsidian. The gate is therefore
