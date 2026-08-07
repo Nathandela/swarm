@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "cli": "claude-code",
+  "version": "2.1.224",
+  "scenario": "askuser-wait",
+  "pty_capture": "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OzI0Nm0v4oCmL3NjcmF0Y2hwYWQvc3Bpa2Utc2Qvd29yaxtbNTRHG1sybRtbMzg7NTsyMTVt4pSCG1sxMDBHG1syMm3ilIIbWzM5bQ0NChtbMzg7NTsyMTVt4pWw4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pWvG1szOW0NDQoNDQoNDQobWzM4OzU7MjQ0beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0K4p2vwqAbWzJtVHJ5G1s3RyJob3cbWzEyR2RvZXMbWzE3RzxmaWxlcGF0aD4bWzI4R3dvcms/IhtbMjJtDQ0KG1szODs1OzI0NG3ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbM0cbWzM4OzU7MjQ2beKPuBtbNUdtYW51YWwbWzEyR21vZGUbWzE3R29uG1syMEfCtxtbMjJHPxtbMjRHZm9yG1syOEdzaG9ydGN1dHMbWzM4R8K3G1s0MEfihpAbWzQyR2ZvchtbNDZHYWdlbnRzG1szOW0NDQobWzJDG1szQRtbPzI1aBtbPzI1bBtbMkQbWzNCDRtbMkMbWzNBG1tLDRtbNDFDG1syQhtbMzg7NTsyNDZtMyBhZ2VudHMbWzM5bRtbSw0NChtbMkMbWzNBG1s/MjVoG1s+MHEbW2MbWz8yNWwbWzJEG1szQg0bWzFDG1s1QRtbMzg7NTsyMjBt4pqgG1s0RzMgTUNQIHNlcnZlcnMgbmVlZCBhdXRoZW50aWNhdGlvbhtbMzg7NTsyNDZtIMK3IHJ1biAvbWNwDRtbMUIbWzM5bRtbSw0bWzFCG1szODs1OzI0NG3ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIANG1sxQhtbMzlt4p2vwqAbW0sNG1sxQhtbMzg7NTsyNDRt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQobWzNHG1szODs1OzI0Nm3ij7gbWzVHbWFudWFsG1sxMkdtb2RlG1sxN0dvbhtbMjBHwrcbWzIyRz8bWzI0R2ZvchtbMjhHc2hvcnRjdXRzG1szOEfCtxtbNDBH4oaQG1s0MkczG1s0NEdhZ2VudHMbWzM5bQ0NChtbMkMbWzNBG1s/MjVoGyhCDxtbPzI1bBtbMkQbWzNCDRtbMkMbWzNBVXNlG1s3R3RoZRtbMTFHQXNrVXNlclF1ZXN0aW9uG1syN0d0b29sG1szMkd0bxtbMzVHYXNrG1szOUdtZRtbNDJHd2hldGhlchtbNTBHSRtbNTJHcHJlZmVyG1s1OUdyZWQbWzYzR29yG1s2NkdibHVlLhtbNzJHRG8bWzc1R25vdGhpbmcbWzgzR2Vsc2UuDRtbMThDG1syQhtbSw0NChtbODdDG1szQRtbPzI1aBsoQg8bXTA74qCCIENsYXVkZSBDb2RlBxtbPzI1bBtbODdEG1szQg0bWzRBG1s0ODs1OzIzN20bWzM4OzU7MjM5beKdryAbWzM4OzU7MjMxbVVzZSB0aGUgQXNrVXNlclF1ZXN0aW9uIHRvb2wgdG8gYXNrIG1lIHdoZXRoZXIgSSBwcmVmZXIgcmVkIG9yIGJsdWUuIERvIG5vdGhpbmcgZWxzZS4bWzM5bSAgICAgICAgICAgICANG1sxQhtbNDltG1tLDRtbMUIbWzM4OzU7MjE1beKcohtbMzltIBtbMzg7NTsyMjJtRBtbMzg7NTsyMTVtb29kbGluZ+KApiAbWzM5bRtbSw0bWzJDG1sxQhtbSw0NChtbMzg7NTsyNDRt4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSAG1szOW0NDQobWzM4OzU7MjQ2beKdr8KgG1szOW0NDQobWzM4OzU7MjQ0beKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgBtbMzltDQ0KG1szRxtbMzg7NTsyNDZt4o+4G1s1R21hbnVhbBtbMTJHbW9kZRtbMTdHb24bWzIwR8K3G1syMkdlc2MbWzI2R3RvG1syOUdpbnRlcnJ1cHQbWzM5R8K3G1s0MUfihpAbWzQzRzMbWzQ1R2FnZW50cxtbMzltDQ0KG1syQxtbM0EbWz8yNWgbWz8yNWwbWzJEG1szQg0bWzZBG1szODs1OzIxNW3CtxtbM0dEG1szOW0NDQoNCg0KDQoNCg0KG1syQxtbM0EbWz8yNWgbWz8yNWwbWzJEG1szQg0bWzZBG1szODs1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",
+  "hook_payloads": [
+    {
+      "event": "SessionStart",
+      "raw": {
+        "session_id": "4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-claude-501--Users-Nathan-Code-swarm-5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e-scratchpad-spike-sd-work/4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1.jsonl",
+        "cwd": "/private/tmp/claude-501/-Users-Nathan-Code-swarm/5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e/scratchpad/spike-sd/work",
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "received_at_ms": 1786102781432
+    },
+    {
+      "event": "UserPromptSubmit",
+      "raw": {
+        "session_id": "4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-claude-501--Users-Nathan-Code-swarm-5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e-scratchpad-spike-sd-work/4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1.jsonl",
+        "cwd": "/private/tmp/claude-501/-Users-Nathan-Code-swarm/5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e/scratchpad/spike-sd/work",
+        "prompt_id": "73fda683-df85-433f-9487-c19cbd2e200d",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Use the AskUserQuestion tool to ask me whether I prefer red or blue. Do nothing else."
+      },
+      "received_at_ms": 1786102797820
+    },
+    {
+      "event": "PreToolUse",
+      "raw": {
+        "session_id": "4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-claude-501--Users-Nathan-Code-swarm-5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e-scratchpad-spike-sd-work/4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1.jsonl",
+        "cwd": "/private/tmp/claude-501/-Users-Nathan-Code-swarm/5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e/scratchpad/spike-sd/work",
+        "prompt_id": "73fda683-df85-433f-9487-c19cbd2e200d",
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Do you prefer red or blue?",
+              "header": "Color preference",
+              "options": [
+                {
+                  "label": "Red",
+                  "description": "I prefer red"
+                },
+                {
+                  "label": "Blue",
+                  "description": "I prefer blue"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        },
+        "tool_use_id": "toolu_01PehnKNqnUJDVUvTXCCFgW8"
+      },
+      "received_at_ms": 1786102801232
+    },
+    {
+      "event": "PermissionRequest",
+      "raw": {
+        "session_id": "4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-claude-501--Users-Nathan-Code-swarm-5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e-scratchpad-spike-sd-work/4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1.jsonl",
+        "cwd": "/private/tmp/claude-501/-Users-Nathan-Code-swarm/5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e/scratchpad/spike-sd/work",
+        "prompt_id": "73fda683-df85-433f-9487-c19cbd2e200d",
+        "permission_mode": "default",
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "AskUserQuestion",
+        "tool_input": {
+          "questions": [
+            {
+              "question": "Do you prefer red or blue?",
+              "header": "Color preference",
+              "options": [
+                {
+                  "label": "Red",
+                  "description": "I prefer red"
+                },
+                {
+                  "label": "Blue",
+                  "description": "I prefer blue"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        }
+      },
+      "received_at_ms": 1786102801481
+    },
+    {
+      "event": "Notification",
+      "raw": {
+        "session_id": "4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-claude-501--Users-Nathan-Code-swarm-5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e-scratchpad-spike-sd-work/4f5ea0a5-9e40-4b9c-9f71-a92e437bbfc1.jsonl",
+        "cwd": "/private/tmp/claude-501/-Users-Nathan-Code-swarm/5437fbf0-583c-4a61-a7b6-fa3e8ba2d03e/scratchpad/spike-sd/work",
+        "prompt_id": "73fda683-df85-433f-9487-c19cbd2e200d",
+        "hook_event_name": "Notification",
+        "message": "Claude needs your permission",
+        "notification_type": "permission_prompt"
+      },
+      "received_at_ms": 1786102807759
+    }
+  ]
+}
