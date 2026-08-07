@@ -62,7 +62,7 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 	case "devices":
 		return runRemoteDevices(args[1:], stdout, stderr)
 	case "revoke":
-		return runRemoteRevoke(args[1:], stdout, stderr)
+		return runRemoteRevoke(args[1:], os.Stdin, stdout, stderr)
 	case "regrant":
 		return runRemoteRegrant(args[1:], stdout, stderr)
 	case "pair":
@@ -461,8 +461,9 @@ func validateRelayPin(relayURL, pin string) error {
 }
 
 // remoteRevokeUsage is `swarm remote revoke`'s usage message, printed to stderr
-// (and matched by TestRemoteRevoke_RequiresOneArg's "usage" substring check) when
-// the device-id arg is missing or extra args are given.
+// when 2+ positional args are given (matched by TestRemoteRevoke_RequiresOneArg's
+// "too many args" case). The 0-arg case no longer lands here — see
+// runRemoteRevokeInteractive in remote_picker.go.
 const remoteRevokeUsage = `usage: swarm remote revoke <device-id>
 `
 
@@ -536,11 +537,38 @@ func runRemoteSetControl(enabled bool, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runRemoteRevoke is the `swarm remote revoke <device-id>` verb: it requires
-// exactly one positional arg (the device id) and refuses with a usage error
-// (nonzero exit, no dial attempt) otherwise. With exactly one arg it dials the
-// daemon, revokes the device, purges the state the revocation orphans on BOTH
-// sides, and prints a confirmation naming the step that finishes the recovery.
+// runRemoteRevoke is the `swarm remote revoke` verb. With exactly one positional
+// arg (the device id) it is the explicit path: dial, revoke, done — UNCHANGED by
+// agents-tracker-7lkv, byte for byte. With zero args it is the interactive picker
+// entry (runRemoteRevokeInteractive, remote_picker.go): a caller who does not want
+// to type a 64-char hex id gets an arrow-key list instead, gated on stdin/stdout
+// both being a terminal. Two or more args is a usage error (nonzero exit, no dial
+// attempt), same as before.
+func runRemoteRevoke(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return runRemoteRevokeInteractive(stdin, stdout, stderr)
+	}
+	if len(args) != 1 {
+		fmt.Fprint(stderr, remoteRevokeUsage)
+		return 2
+	}
+	deviceID := args[0]
+
+	client, err := dialClient([]string{protocol.CapPairing})
+	if err != nil {
+		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		return 1
+	}
+	defer client.Close()
+
+	return performRevoke(client, deviceID, stdout, stderr)
+}
+
+// performRevoke is the shared body of both revoke paths — the explicit-id verb
+// above and the interactive picker's post-confirm step (remote_picker.go) — from a
+// DIALED client and a CHOSEN device id onward: revoke, purge the state the
+// revocation orphans on both sides, and print the confirmation naming the step that
+// finishes the recovery.
 //
 // THE ORDER IS LOAD-BEARING (PB-STATE-10, ADR-007 B22):
 //
@@ -557,20 +585,7 @@ func runRemoteSetControl(enabled bool, stdout, stderr io.Writer) int {
 // failing the command would tell the owner the revoke did not happen when it did,
 // and leave them no forward step. This is stopGatewayIfQuiescent's rule, for the
 // same reason.
-func runRemoteRevoke(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprint(stderr, remoteRevokeUsage)
-		return 2
-	}
-	deviceID := args[0]
-
-	client, err := dialClient([]string{protocol.CapPairing})
-	if err != nil {
-		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
-		return 1
-	}
-	defer client.Close()
-
+func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.Writer) int {
 	stateDir := remoteStateDir()
 	routingID := deviceRoutingID(stateDir, deviceID)
 

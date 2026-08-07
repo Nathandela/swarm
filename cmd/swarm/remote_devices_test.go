@@ -66,18 +66,28 @@ func shortStateDir(t *testing.T) string {
 }
 
 // TestRemoteRevoke_RequiresOneArg pins `swarm remote revoke`'s arg-parsing contract:
-// zero or two-plus positional args is a usage error (nonzero exit), and NEVER dials a
-// daemon to get there (no SWARM_DAEMON_* env is set in this test).
+// two-plus positional args is a usage error (nonzero exit), and NEVER dials a
+// daemon to get there (no SWARM_DAEMON_* env is set in this test). The 0-arg case
+// no longer belongs to this contract — see the "no device id, no tty" subtest below.
 func TestRemoteRevoke_RequiresOneArg(t *testing.T) {
-	t.Run("no device id", func(t *testing.T) {
+	t.Run("no device id, no tty", func(t *testing.T) {
+		// Bare `swarm remote revoke` (0 args) is agents-tracker-7lkv's interactive
+		// picker entry point, gated on stdin/stdout both being a terminal. Under `go
+		// test` neither is (the same assumption TestDispatch's "no args, no tty" case
+		// in main_test.go relies on), so this exercises the refusal: exit 2, a
+		// pointer to BOTH the explicit-id command and the devices listing, and — the
+		// TTY check runs before any dial — still no SWARM_DAEMON_* env needed here.
 		var stdout, stderr bytes.Buffer
 		exit := runRemote([]string{"revoke"}, &stdout, &stderr)
-		if exit == 0 {
-			t.Fatal("runRemote([revoke]) exit = 0, want nonzero")
+		if exit != 2 {
+			t.Fatalf("runRemote([revoke]) exit = %d, want 2", exit)
 		}
-		combined := strings.ToLower(stdout.String() + stderr.String())
-		if !strings.Contains(combined, "usage") {
-			t.Errorf("runRemote([revoke]) output = %q, want a usage substring", combined)
+		combined := stdout.String() + stderr.String()
+		if !strings.Contains(combined, "swarm remote revoke <device-id>") {
+			t.Errorf("runRemote([revoke]) output = %q, want a pointer to the explicit-id command", combined)
+		}
+		if !strings.Contains(combined, "swarm remote devices") {
+			t.Errorf("runRemote([revoke]) output = %q, want a pointer to `swarm remote devices`", combined)
 		}
 	})
 
