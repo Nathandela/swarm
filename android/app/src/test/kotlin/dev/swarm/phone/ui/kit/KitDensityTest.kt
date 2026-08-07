@@ -145,7 +145,7 @@ class KitDensityTest {
     /** Every scale step a kit component spends, resolved the way the platform resolves it. */
     @Test
     fun `the components spend the whole pixels the platform would`() {
-        val row = sessionRow(context, "quanthome/api", "claude", "Wants to run something", "working")
+        val row = sessionRow(context, "quanthome/api", "claude", "Wants to run something", "working", lit = false)
         val chips = chipRow(context)
         val label = sectionLabel(context, "Needs you")
         val header = navHeader(context, "Inbox", "3 LIVE")
@@ -247,6 +247,6 @@ class KitDensityTest {
     }
 
     private fun row(group: String) = sessionRow(
-        context, "quanthome/api", "claude", "Wants to run something", group,
+        context, "quanthome/api", "claude", "Wants to run something", group, lit = false,
     )
 }

@@ -161,6 +161,7 @@ fun triageInboxView(
                             agent = row.agent,
                             need = row.need,
                             group = row.group,
+                            lit = row.lit,
                             stateDescription = row.stateDescription,
                         ).apply {
                             tag = InboxTag.ROW
