@@ -368,6 +368,48 @@ object TriageInboxScreen {
     private val IN_FLIGHT: Set<String> = setOf("needs_input", "working")
 
     /**
+     * The sessions whose Group BECAME [BLOCKED] between [previous] and [next] -- ADR-009 D5's
+     * sweep, as a question about two screens.
+     *
+     * **A PROMOTION IS A TRANSITION AND `lit` IS A STATE.** `lit` is true for as long as a session
+     * waits; this is true for the one draw in which it started waiting. Deriving one from the
+     * other would sweep every waiting row on every redraw -- [InboxRow.lit] is recomputed on every
+     * journal event -- which is the ambient field-register motion D5 bans in the same paragraph
+     * that permits this one.
+     *
+     * **IT COMPARES SCREENS AND NOT ROSTERS**, which is what makes "in front of the user" true
+     * rather than approximately true. What the phone core reports and what the user was looking at
+     * are different things: a session filtered out by the scope chips is not on this viewport, and
+     * a screen being drawn for the first time has nothing to have transitioned from. Both cases
+     * fall out of comparing the drawn screens rather than the wire's rosters, and both are the
+     * correct answer -- a sweep is an announcement, and there is nobody to announce to.
+     *
+     * A SESSION THAT FIRST APPEARS ALREADY BLOCKED DOES NOT SWEEP. It arrived already waiting; the
+     * lit slab says so, and the sweep is reserved for the change. This is the case that decides
+     * whether this function is a transition or a state, and it is why [previous] is nullable
+     * rather than defaulted to an empty screen.
+     *
+     * EVERY TRANSITION IS NAMED, not only the first. One journal event can promote two sessions,
+     * and choosing which of them MOVES is Motion's rule (newest wins, one per viewport) -- a model
+     * that reported one would make that rule unfalsifiable and would silently drop a promotion the
+     * day the rule changed.
+     *
+     * @param previous the screen the user was looking at, or null on the first draw.
+     */
+    fun promotions(previous: InboxScreen?, next: InboxScreen): Set<String> {
+        if (previous == null) return emptySet()
+        val before = previous.sections.asSequence()
+            .flatMap { it.rows.asSequence() }
+            .associate { it.id to it.group }
+        return next.sections.asSequence()
+            .flatMap { it.rows.asSequence() }
+            .filter { it.group == BLOCKED }
+            .filter { before[it.id]?.let { was -> was != BLOCKED } == true }
+            .map { it.id }
+            .toSet()
+    }
+
+    /**
      * The Group blocked on the human: what the tab badge counts, and the row ADR-009 D4 promotes.
      *
      * IT NAMES A STATE AND NOT A COMPONENT, which is why one constant carries both uses. The badge

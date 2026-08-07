@@ -98,9 +98,16 @@ class MotionTest {
     }
 
     @Before
-    fun startFromUnreducedMotion() {
+    fun startFromUnreducedMotionAndAnEmptySweepSlot() {
         // A prior test's setAnimatorScale(0f) must not leak into this one.
         setAnimatorScale(1f)
+        // Nor may a prior test's sweep. [Motion.inFlightSweep] is a singleton by design -- it IS
+        // the one-per-viewport rule -- and under Robolectric's paused looper an animator that was
+        // started never advances, so it would still be holding the slot in the next test. Ended
+        // rather than nulled, which is the same instant completion a superseding sweep performs:
+        // the field is private to Motion for exactly the reason that a test must not be able to
+        // put it in a state the app cannot reach.
+        Motion.inFlightSweep?.end()
     }
 
     // ------------------------------------------------------------------

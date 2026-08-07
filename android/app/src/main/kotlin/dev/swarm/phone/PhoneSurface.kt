@@ -1532,6 +1532,11 @@ class PhoneSurface(
         // out of a session lands here with the list's data unchanged, so without it the early
         // return fires and the drill-down stays on screen over a tab that thinks it popped.
         if (screen == inboxDrawn && detailDrawn == null && contentShows == Destination.INBOX) return
+        // ADR-009 D5's sweep, computed BEFORE the previous screen is forgotten. [inboxDrawn] is
+        // "what the inbox last drew", which is exactly the state a promotion is a transition from
+        // -- not what the phone core last reported. A session the user has never seen has not
+        // transitioned in front of them, and neither has one this scope was hiding.
+        val promoted = screen?.let { TriageInboxScreen.promotions(inboxDrawn, it) }.orEmpty()
         inboxDrawn = screen
         detailDrawn = null
         hostContent(
@@ -1542,6 +1547,7 @@ class PhoneSurface(
                     screen = screen,
                     onSelectSession = ::selectSession,
                     onSelectScope = ::selectScope,
+                    promoted = promoted,
                     below = unrecomposedControls,
                 )
             },

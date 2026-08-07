@@ -356,7 +356,12 @@ func TestD82_EachConstraintCanActuallyFail(t *testing.T) {
 		{"a sweep that loops", strings.Replace(body, "repeatCount = 0", "repeatCount = ValueAnimator.INFINITE", 1)},
 		{"a sweep with no repeat decision", strings.Replace(body, "repeatCount = 0", "", 1)},
 		{"a superseded sweep that is cancelled", strings.Replace(body, "?.end()", "?.cancel()", 1)},
-		{"a sweep that records nothing", strings.Replace(body, o4SweepHolder+" = ", "unused = ", 1)},
+		// ReplaceAll, NOT Replace, and the difference is a finding about the gate rather than a
+		// detail. The body assigns the holder TWICE -- once to claim the slot, once to release it
+		// when the sweep ends -- and the release comes first in source order, so perturbing only
+		// the first occurrence leaves the claim intact and the gate is right to pass it. What
+		// "records nothing" means is a sweep that never enters the holder at all.
+		{"a sweep that records nothing", strings.ReplaceAll(body, o4SweepHolder+" = ", "unused = ")},
 		{"a sweep that never asks about reduced motion", strings.Replace(body, "isReducedMotion", "isSomethingElse", 1)},
 		{"a sweep that asks after it has already built the streak", o4MoveReducedCheckLast(body)},
 	} {

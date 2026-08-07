@@ -40,6 +40,18 @@ import dev.swarm.phone.R
  *  default makes it optional at every call site and it goes unpopulated at whichever one nobody
  *  revisited -- and a row that quietly defaulted to `false` renders exactly what a correct resting
  *  row renders, so the two are not ambiguous on screen, they are identical.
+ * @param promoted ADR-009 D5's moment: this session's Group BECAME NeedsInput since the last draw,
+ *  so the row plays the specular sweep once as it appears.
+ *
+ *  **IT IS A TRANSITION AND [lit] IS A STATE**, which is the whole difference between the two
+ *  flags and the reason there are two. `lit` is true for as long as a session waits; `promoted` is
+ *  true for the one draw in which it started waiting. A component that derived the second from the
+ *  first would sweep every waiting row on every redraw -- the ambient field-register motion D5
+ *  bans in the same paragraph that permits this one, arrived at by forgetting a comparison. Who
+ *  transitioned is `TriageInboxScreen.promotions`, which is the only place that can know: it
+ *  compares the screen against the one the user was actually looking at.
+ *
+ *  IT HAS NO DEFAULT, for [lit]'s reason exactly.
  */
 fun sessionRow(
     context: Context,
@@ -48,6 +60,7 @@ fun sessionRow(
     need: CharSequence,
     group: String,
     lit: Boolean,
+    promoted: Boolean,
     stateDescription: CharSequence? = null,
 ): View {
     val gap = Kit.dimenPx(context, R.dimen.swarm_space_8)
@@ -133,6 +146,11 @@ fun sessionRow(
         },
     )
     if (group == "working") row.addView(workingBar(context))
+    // THE ONE CALL SITE THE SWEEP HAS, and it is here rather than in the screen because a screen
+    // composes components and passes data (PB-DS-6). The rule that at most one of these plays per
+    // viewport lives in Motion, so a list that builds two promoted rows in one pass gets one
+    // sweep -- the newest -- without this component knowing anything about the other row.
+    if (promoted) Motion.specularSweep(context, row)
     return row
 }
 

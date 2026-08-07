@@ -4,25 +4,39 @@ import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.provider.Settings
 import android.view.View
 import android.view.animation.Interpolator
 import androidx.core.view.animation.PathInterpolatorCompat
+import kotlin.math.roundToInt
+import kotlin.math.tan
 
 /**
- * PB-DS-8 -- "Motion: Substrate is static, and the exceptions are named."
+ * PB-DS-8, AS AMENDED BY ADR-009 D5 -- "the exceptions are named", and there are four of them.
  *
- * ADR-007 B134 decision 3, executed. `docs/research/remote-control-design-directions.html`
- * declares no `@keyframes`, no `transition` and no `animation` anywhere -- its working
- * affordance is the STATIC dot glow plus the STATIC workbar gradient, and its own rule is
- * "nothing glows unless it is alive". `remote-control-mock.html`'s `pulse 1.6s` dot is
- * inherited from the pre-skin iOS palette and is a conflict with that rule, not a
- * specification: this object does not implement it, and must not grow a way to.
+ * ADR-007 B134 decision 3, executed, and then amended once. The design source declares no
+ * `@keyframes`, no `transition` and no `animation` anywhere -- its working affordance is the
+ * STATIC dot glow plus the STATIC workbar gradient, and its own rule is "nothing glows unless it
+ * is alive". `remote-control-mock.html`'s `pulse 1.6s` dot is inherited from the pre-skin iOS
+ * palette and is a conflict with that rule, not a specification: this object does not implement
+ * it, and must not grow a way to.
  *
- * ONLY THREE THINGS MOVE, and this is the exhaustive list:
+ * ONLY FOUR THINGS MOVE, and this is the exhaustive list:
  *   - the bottom sheet: `translateY` 100% -> 0
  *   - the push banner: `translateY` -(its own height + its top inset) -> 0
  *   - the streaming caret: a liveness signal reporting text is still arriving, not decoration
+ *   - the specular sweep: ADR-009 D5's one new named exception -- a highlight that travels a
+ *     promoted slab's top edge ONCE, at the moment that session's Group became NeedsInput.
+ *     Substrate's own rule "nothing glows unless it is alive" extends to "nothing sweeps unless
+ *     it just started asking"; D8.2 gates its four constraints, and [specularSweep] carries them.
  *
  * The first two share [NAV_DURATION_MS] (300ms) and [EASE]
  * (`cubic-bezier(0.22, 1, 0.36, 1)`, ADR-009 D5's curve). The caret is a discrete two-state
@@ -296,4 +310,211 @@ object Motion {
         if (!reduced) animator.addUpdateListener { caret.alpha = caretAlphaAt(it.animatedFraction) }
         return animator
     }
+
+    // ------------------------------------------------------------------
+    // The specular sweep -- ADR-009 D5's one new named exception.
+    //
+    // EVERY NUMBER BELOW IS THE DESIGN'S, AND android/gate/o4_sweep_test.go RECOMPUTES ALL EIGHT:
+    // the duration and the colour out of `--p-sweep-fx` (typed `effect`, so it has no TSV row and
+    // no `res/values` converter -- tokens.json is the only place it exists, which is exactly why a
+    // constant derived from it needs a gate), and the geometry out of the maquette's own
+    // `.slab.lit.sweep::after` and `@keyframes sweep`. s23_kit_test.go deliberately does not read
+    // this file (s23MotionFile records the split), so that gate is where the join lives.
+    // ------------------------------------------------------------------
+
+    /** origin: --p-sweep-fx ms */
+    const val SWEEP_DURATION_MS = 500L
+
+    /** origin: --p-sweep-fx alpha */
+    const val SWEEP_PEAK_ALPHA = 0.30f
+
+    /** origin: .slab.lit.sweep::after { transform } */
+    const val SWEEP_SKEW_DEG = -25f
+
+    /** origin: .slab.lit.sweep::after { width } -- the streak's width, as a share of the slab's. */
+    const val SWEEP_BAND_SHARE = 0.45f
+
+    /** origin: .slab.lit.sweep::after { height } */
+    const val SWEEP_HEIGHT_DP = 1.5f
+
+    /** origin: .slab.lit.sweep::after { left } -- where the streak starts, off the leading edge. */
+    const val SWEEP_FROM_SHARE = -0.60f
+
+    /** origin: @keyframes sweep -- the far side, past the trailing edge. */
+    const val SWEEP_TO_SHARE = 1.15f
+
+    /**
+     * The streak's own light, `rgba(255, 252, 244, 0.30)`.
+     *
+     * IT IS NOT `--p-ink` AND NOT `Color.WHITE`, AND THE DIFFERENCE IS THE POINT. The key light is
+     * the linen the ink is (`--p-card-fx`'s RGB is `--p-ink`, which is why `cardSurface` reaches
+     * for `R.color.swarm_text_primary`); this is a SPECULAR highlight -- the light source itself
+     * catching an edge, brighter than anything the surface is painted in. It exists only inside
+     * `--p-sweep-fx`, which is why it is three named channels here rather than an `R.color`: an
+     * `effect` token has no converter, and inventing a 20th colour resource for it would break the
+     * count-pinned join (ADR-009 D3).
+     *
+     * origin: --p-sweep-fx colour
+     */
+    private const val SWEEP_TINT_R = 255
+
+    /** origin: --p-sweep-fx colour */
+    private const val SWEEP_TINT_G = 252
+
+    /** origin: --p-sweep-fx colour */
+    private const val SWEEP_TINT_B = 244
+
+    /**
+     * The sweep now playing, or null.
+     *
+     * THIS FIELD IS THE "AT MOST ONE PER VIEWPORT" RULE. D5 states it as a constraint, and a
+     * constraint with no mechanism is a comment: motion on near-black is amplified ~80:1, and one
+     * journal event promoting two sessions is the normal case rather than the exotic one. Newest
+     * wins, and the one it supersedes COMPLETES instantly.
+     *
+     * READ-ONLY OUTSIDE THIS OBJECT, and internal rather than private so the test suite can ask
+     * what is in flight. It is the only observable a runtime test has for a rule about an effect
+     * that leaves no trace: a sweep that has played is gone.
+     */
+    internal var inFlightSweep: Animator? = null
+        private set
+
+    /**
+     * The streak's leading edge at [fraction], as a share of the slab's own width.
+     *
+     * A PURE FUNCTION for [caretAlphaAt]'s reason: the travel is testable without driving an
+     * animator's update machinery, and the drawable that spends it is private to this file.
+     */
+    fun sweepOffsetAt(fraction: Float): Float =
+        SWEEP_FROM_SHARE + (SWEEP_TO_SHARE - SWEEP_FROM_SHARE) * fraction
+
+    /**
+     * Fire the sweep across [slab]'s top edge, once, now -- or return null under reduced motion.
+     *
+     * IT STARTS THE ANIMATOR ITSELF, unlike every other builder in this file, and that difference
+     * is deliberate. The sheet and the banner are transitions a caller SEQUENCES (it decides when
+     * the sheet enters and what happens after); this is a signal fired at a moment that has
+     * already happened. A caller that had to remember to `start()` it would be a caller that can
+     * forget, and the returned animator would then sit in [inFlightSweep] suppressing the next
+     * real sweep while animating nothing.
+     *
+     * REDUCED MOTION COLLAPSES IT TO NOTHING, WHICH IS NOT THE SAME AS TO ZERO. The other builders
+     * return a 0ms animator, because the sheet still has to arrive; there is nothing for a sweep
+     * to arrive at, so nothing is built and nothing is attached. A zero-duration [ValueAnimator]
+     * still delivers one update at fraction 1.0, and the streak's own listener would paint a
+     * full-alpha final frame from it -- the exact defect the caret shipped once.
+     *
+     * THE STREAK IS AN OVERLAY DRAWABLE, not a child view and not a foreground. A child would
+     * change the slab's layout for 500ms; a foreground would silently replace the focus ring
+     * PB-DS-12 puts there (`Kit.focusable`). An overlay draws over the view's own content, takes
+     * no touch, participates in no layout, and detaches when the animator ends.
+     *
+     * @param slab the promoted row. Its width is read on every frame rather than at construction:
+     *  the row is built before it is measured, so a bound captured here would be zero.
+     */
+    fun specularSweep(context: Context, slab: View): Animator? {
+        if (isReducedMotion(context)) return null
+        // NEWEST WINS, AND THE OLD ONE COMPLETES. `end()` runs the listeners; `cancel()` skips
+        // them, which would leave a half-drawn streak attached to a row nobody is looking at.
+        inFlightSweep?.end()
+
+        val streak = SpecularStreak(Kit.dp(context, SWEEP_HEIGHT_DP))
+        slab.overlay.add(streak)
+
+        val animator = ValueAnimator.ofFloat(0f, 1f)
+        animator.duration = SWEEP_DURATION_MS
+        // ONE-SHOT, STATED. The platform's default is 0 as well, and a default is not a decision
+        // anyone recorded -- `repeatCount = ValueAnimator.INFINITE` is one line away in this same
+        // file, on the caret, which is the animation this one must never become.
+        animator.repeatCount = 0
+        animator.interpolator = EASE
+        animator.addUpdateListener {
+            streak.travelTo(sweepOffsetAt(it.animatedFraction), slab.width, slab.height)
+        }
+        animator.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) = Unit
+            override fun onAnimationEnd(animation: Animator) {
+                slab.overlay.remove(streak)
+                // Only if it is still THIS one: a superseded sweep ends after its successor has
+                // already claimed the slot, and clearing it there would leave the live sweep
+                // unsupersedable.
+                if (inFlightSweep === animation) inFlightSweep = null
+            }
+            override fun onAnimationCancel(animation: Animator) = Unit
+            override fun onAnimationRepeat(animation: Animator) = Unit
+        })
+        inFlightSweep = animator
+        animator.start()
+        return animator
+    }
+
+    /**
+     * The streak itself: a skewed band of light at the slab's top edge.
+     *
+     * IT IS HERE AND NOT IN Surfaces.kt, where the kit's other drawables live, because it exists
+     * only while an animator is driving it -- there is no static "sweep" a component could paint,
+     * and D8.2 fences the whole effect to this one file precisely so its four constraints cannot
+     * be routed around. A drawable in the surfaces file would be exactly that route.
+     *
+     * The gradient is transparent -> tint -> transparent across the band, which is the maquette's
+     * own `linear-gradient(90deg, transparent, rgba(255,252,244,0.30), transparent)`.
+     */
+    private class SpecularStreak(private val heightPx: Float) : Drawable() {
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var leadingShare = Motion.SWEEP_FROM_SHARE
+
+        /** Place the streak for one frame. Bounds come from the slab because it may not have been
+         * measured when the sweep was fired. */
+        fun travelTo(share: Float, slabWidthPx: Int, slabHeightPx: Int) {
+            leadingShare = share
+            setBounds(0, 0, slabWidthPx, slabHeightPx)
+            invalidateSelf()
+        }
+
+        override fun draw(canvas: Canvas) {
+            val width = bounds.width().toFloat()
+            if (width <= 0f) return
+            val left = bounds.left + leadingShare * width
+            val band = Motion.SWEEP_BAND_SHARE * width
+            paint.shader = LinearGradient(
+                left,
+                0f,
+                left + band,
+                0f,
+                intArrayOf(Color.TRANSPARENT, Motion.tint, Color.TRANSPARENT),
+                null,
+                Shader.TileMode.CLAMP,
+            )
+            val save = canvas.save()
+            canvas.skew(Motion.SWEEP_SKEW_TAN, 0f)
+            canvas.drawRect(left, bounds.top.toFloat(), left + band, bounds.top + heightPx, paint)
+            canvas.restoreToCount(save)
+        }
+
+        override fun setAlpha(alpha: Int) {
+            paint.alpha = alpha
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            paint.colorFilter = colorFilter
+        }
+
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
+    /** The peak of the streak's gradient: the token's colour at the token's alpha. */
+    private val tint: Int
+        get() = Color.argb(
+            (SWEEP_PEAK_ALPHA * ALPHA_FULL).roundToInt(),
+            SWEEP_TINT_R,
+            SWEEP_TINT_G,
+            SWEEP_TINT_B,
+        )
+
+    /** CSS `skewX(-25deg)` as the horizontal shear a [Canvas] takes. Computed, not transcribed. */
+    private val SWEEP_SKEW_TAN: Float = tan(Math.toRadians(SWEEP_SKEW_DEG.toDouble())).toFloat()
+
+    /** An 8-bit alpha channel's full value -- the unit conversion, not a design number. */
+    private const val ALPHA_FULL = 255f
 }
