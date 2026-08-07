@@ -427,6 +427,7 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 		Env:           os.Environ(), // so the daemon can resolve the agent binary on PATH
 		Cols:          cols,
 		Rows:          rows,
+		Worktree:      lm.worktree,
 	}
 	cmd := m.enterGeneral()
 	return m, tea.Batch(launchCmd(m.client, req), cmd)
