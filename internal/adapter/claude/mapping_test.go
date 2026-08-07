@@ -70,6 +70,69 @@ func TestHookMapping_DrivesStatusViaSignalSources(t *testing.T) {
 	}
 }
 
+// TestSubagentBracket_StartIsActivity_StopIsTurnNeutral — agents-tracker-c7i4
+// (spike-SE F1/F2): SubagentStart and SubagentStop bracket every background child.
+//
+// SubagentStart is the only hook that says a child BEGAN, so it maps turn=active.
+// SubagentStop says a child ENDED, which is never evidence the session is working
+// — that mapping was the agents-tracker-707 race source — so it declares NO turn
+// at all: an empty descriptor turn, which the engine's deriveDims drops, leaving
+// the turn exactly as it found it.
+func TestSubagentBracket_StartIsActivity_StopIsTurnNeutral(t *testing.T) {
+	byEvent := map[string]map[string]string{}
+	for _, s := range New().SignalSources() {
+		if s.Kind == "hook" {
+			byEvent[s.Descriptor["event"]] = s.Descriptor
+		}
+	}
+
+	start, ok := byEvent["SubagentStart"]
+	if !ok {
+		t.Fatalf("SignalSources declares no SubagentStart hook; a background child's START is unobservable")
+	}
+	if start["turn"] != string(status.TurnActive) || start["interaction"] != string(status.InteractionNone) {
+		t.Errorf("SubagentStart maps turn=%q interaction=%q; want active/none", start["turn"], start["interaction"])
+	}
+
+	stop, ok := byEvent["SubagentStop"]
+	if !ok {
+		t.Fatalf("SignalSources declares no SubagentStop hook")
+	}
+	if stop["turn"] != "" {
+		t.Errorf("SubagentStop maps turn=%q; want the empty (turn-neutral) mapping", stop["turn"])
+	}
+
+	// The behavior that empty mapping buys, through the real engine: a running turn
+	// stays running, and — the 707 case — a settled idle stays settled.
+	for _, seed := range []struct {
+		name  string
+		event string
+		want  status.Turn
+	}{
+		{"a running turn", "PreToolUse", status.TurnActive},
+		{"a settled turn", "Stop", status.TurnIdle},
+	} {
+		t.Run(seed.name+" survives SubagentStop", func(t *testing.T) {
+			var got status.Status
+			eng := engine.New(engine.Config{
+				StalenessThreshold: 0,
+				Emit:               func(_ string, s status.Status) { got = s },
+			})
+			eng.RegisterSession("s1", "tok", 0, New().SignalSources())
+			for i, ev := range []string{seed.event, "SubagentStop"} {
+				if err := eng.HandleCallback(engine.Callback{
+					SessionID: "s1", Token: "tok", Sequence: uint64(i + 1), Event: ev,
+				}); err != nil {
+					t.Fatalf("HandleCallback(%s): %v", ev, err)
+				}
+			}
+			if got.Turn != seed.want {
+				t.Errorf("%s then SubagentStop left turn=%q; want %q (SubagentStop names no turn)", seed.event, got.Turn, seed.want)
+			}
+		})
+	}
+}
+
 // deriveViaEngine registers a fresh session with sources and posts a single
 // authenticated callback (sequence 1) for event+payload, returning the status the
 // engine derived and emitted. A fresh engine per call keeps the anti-replay
