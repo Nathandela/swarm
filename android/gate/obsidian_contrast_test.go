@@ -598,6 +598,82 @@ func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
 // the SAME code path the assertions use rather than a re-typed copy of it.
 func apcaFails(lc, floor float64) bool { return math.Abs(lc) < floor }
 
+// TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette is the assertion that tells the two
+// failure modes apart, and without it this file misdirects every fix it demands.
+//
+// The gate's whole remedy sentence is "if a pair fails, the TOKEN moves" (ADR-009 D3: the ladder
+// is the declared tunable). That sentence is only true when the floor is REACHABLE on that
+// surface -- when SOME ink value would clear it. A surface has a contrast ceiling: the best any
+// ink can do on it. On a near-black ground the ceiling is enormous, so a failing ink really is an
+// ink that must move. On a MID-LUMINANCE fill the ceiling is low, and a floor above it is a
+// requirement no token in the file can satisfy -- at which point "move the token" sends the next
+// reader on a search with no answer in it, forever.
+//
+// So the ceiling is computed, and a floor above its own ceiling is reported as a defect in the
+// FLOOR rather than in the palette. This does not lower anything: the floors are untouched and
+// every pair is still judged against them.
+func TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette(t *testing.T) {
+	black := srgb{0, 0, 0}
+	white := srgb{255, 255, 255}
+
+	// The ceiling of the two extreme grounds is the two published anchors, unsigned: on white the
+	// best possible ink is black, on black it is white. If the ceiling function disagreed with
+	// apcaLc here it would be measuring something else.
+	if got := apcaCeiling(white); math.Abs(got-106.04) > 0.05 {
+		t.Errorf("apcaCeiling(white) = %.2f, want 106.04 -- the best ink on white is black, and "+
+			"apcaLc(black on white) is the published anchor", got)
+	}
+	if got := apcaCeiling(black); math.Abs(got-107.88) > 0.05 {
+		t.Errorf("apcaCeiling(black) = %.2f, want 107.88 -- the best ink on black is white", got)
+	}
+
+	// THE SHORTCUT MUST BE THE ANSWER. apcaCeiling only tries the two achromatic corners, on the
+	// argument that APCA's Y is monotone increasing in every channel, so the extremes of Ytxt are
+	// pure black and pure white and the largest |Lc| is at one of them. That argument is checked
+	// rather than believed: an exhaustive sweep of the achromatic axis over a mid-luminance fill
+	// must not beat the corner answer.
+	champagne := srgb{0xc9, 0xa8, 0x76}
+	ceiling := apcaCeiling(champagne)
+	for i := 0; i <= 255; i++ {
+		grey := srgb{float64(i), float64(i), float64(i)}
+		if lc := math.Abs(apcaLc(grey, champagne)); lc > ceiling+0.005 {
+			t.Fatalf("apcaCeiling(#c9a876) = %.2f but grey #%02x beats it at |Lc| %.2f, so the "+
+				"two-corner shortcut is not the maximum and every unreachability verdict below "+
+				"is a verdict about the wrong number", ceiling, i, lc)
+		}
+	}
+
+	// AND THE FINDING THIS TEST EXISTS FOR. --p-hero is #c9a876, a mid-luminance champagne, and it
+	// is the ground under --p-hero-ink for the CTA label, the selected chip and the toggle knob.
+	// Its ceiling is below the body floor, so NO value of --p-hero-ink clears that pair -- not the
+	// Obsidian one, not the Substrate one, not one nobody has drawn yet. The pair's redness is
+	// therefore a statement about ADR-009 D8.1's two-rung model, not about a token.
+	if ceiling >= apcaBodyFloor {
+		t.Errorf("apcaCeiling(--p-hero #c9a876) = %.2f, at or above the body floor of %.0f. If that "+
+			"is true the champagne pairs are fixable by moving --p-hero-ink and the escalation "+
+			"recorded in docs/verification/obsidian-o2-evidence.md is wrong.", ceiling, apcaBodyFloor)
+	}
+
+	// A near-black ground must NOT be reported unreachable, or the diagnostic would excuse every
+	// ink in the skin instead of the two it applies to.
+	for _, surface := range []struct {
+		Token string
+		Value srgb
+	}{
+		{"--p-bg", srgb{0x0e, 0x0b, 0x08}},
+		{"--p-card", srgb{0x17, 0x13, 0x10}},
+		{"--p-elev", srgb{0x1f, 0x1a, 0x13}},
+		{"--p-well", srgb{0x09, 0x07, 0x05}},
+	} {
+		if c := apcaCeiling(surface.Value); c < apcaBodyFloor {
+			t.Errorf("apcaCeiling(%s) = %.2f, below the body floor of %.0f. The ladder's own rungs "+
+				"must stay reachable: an ink that fails on one of them is an ink that has to move, "+
+				"and a diagnostic that called that unreachable would forgive the whole palette.",
+				surface.Token, c, apcaBodyFloor)
+		}
+	}
+}
+
 // polarityOf names which way round a measured pair actually is.
 func polarityOf(lc float64) string {
 	if lc < 0 {
