@@ -166,6 +166,26 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // cites `.prow`, `.pdot` and `.workbar` for its geometry. The Go gate makes the same split and
     // records the three reasons at s22bMaquetteRelPath.
     from(rootProject.layout.projectDirectory.dir("..").file("docs/research/obsidian-maquette.html"))
+    // ADR-009 D5 (O4): the MOTION REGISTER, which is a decision and not a drawing.
+    //
+    // WHY A THIRD KIND OF SOURCE. The maquette above draws the app at token fidelity and states
+    // the sweep's geometry in CSS -- but a maquette is a still picture of a moving thing: it
+    // cannot state the entrance duration, the navigation duration, the 4 dp travel ceiling or the
+    // 120 ms press-response bound, and the one animation it does declare it declares LOOPED AT 6s
+    // "for display only" (its own comment) rather than at the 500 ms the register names. Those six
+    // numbers exist in exactly one place, D5's table, and until this line nothing in the
+    // repository could read it -- so `NAV_DURATION_MS = 300L` would have been a literal
+    // transcribed from a decision, compared against itself, which is the defect the mock was
+    // staged to end for Substrate's five.
+    //
+    // It is the ADR ITSELF and not a paraphrase of it into a components doc, because D5 IS the
+    // decision of record: `docs/design/substrate-components.md` states derivations for a skin this
+    // one supersedes, and adding an Obsidian row to it would be a second copy of the table that
+    // decided the matter.
+    from(
+        rootProject.layout.projectDirectory.dir("..")
+            .file("docs/adr/ADR-009-obsidian-visual-direction.md"),
+    )
     into(policyTestResourceDir)
 }
 
