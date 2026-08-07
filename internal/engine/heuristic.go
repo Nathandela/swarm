@@ -154,13 +154,28 @@ const escToInterrupt = "esc to interrupt"
 // wait. When the hint is visible, Codex is waiting on the user's decision.
 const codexApprovalHint = "Press enter to confirm or esc to cancel"
 
-// claudeApprovalHint is the standing help line of Claude's modal approval dialog
-// ("Do you want to proceed?" with its numbered options). The dialog's selected
-// option renders "❯ 1. Yes" — the same U+276F the idle composer uses — so without
-// this marker the frame reads as a settled composer and the session shows
-// ready_for_review while it is blocked on the human (live capture:
-// docs/verification/fixtures/spike-sc/c2-interactive-check).
-const claudeApprovalHint = "Esc to cancel · Tab to amend"
+// claudeDialogHints are the standing rows of Claude's modal dialogs, each from a
+// live capture. Every one of these dialogs spells its selected option with the
+// composer glyph ("❯ 1. Yes", "❯ 1. Red") — the same U+276F the idle composer
+// uses — so without its marker the frame reads as a settled composer and the
+// session shows ready_for_review while it is blocked on the human.
+//
+//   - the tool-approval dialog's help line ("Do you want to proceed?" with its
+//     numbered options), docs/verification/fixtures/spike-sc/c2-interactive-check;
+//   - the AskUserQuestion dialog's help row (spike-SD F3, fixtures/spike-sd/
+//     askuser-wait.json), whose full row ends "· Esc to cancel"; the prefix
+//     anchored here is the part that names the dialog's own navigation;
+//   - the plan-approval dialog's feedback affordance (spike-SD F4,
+//     fixtures/spike-sd/plan-wait.json), which stands under the numbered options
+//     of "Claude has written up a plan ... Would you like to proceed?".
+//
+// The middle dots are U+00B7 and the arrows U+2191/U+2193, byte-exact from the
+// captures.
+var claudeDialogHints = []string{
+	"Esc to cancel · Tab to amend",
+	"Enter to select · ↑/↓ to navigate",
+	"shift+tab to approve",
+}
 
 // evaluateGridSig reads snap under the named per-adapter grid signature, returning
 // (turn, interaction, conclusive). A conclusive read (active or idle) is applied
@@ -201,18 +216,20 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	return status.TurnUnknown, status.InteractionUnknown, false
 }
 
-// evaluateClaudeGrid reads Claude's real screen (dqh). The approval dialog is
-// checked FIRST: it is modal, and its selected option is spelled with the composer
-// glyph, so any later check would misread it. Then a busy marker is active; a
-// composer prompt anywhere in the bottom region with no busy marker is idle — it
-// does not require the cursor on the composer row, since Claude's idle footer
-// ("Brewed for Ns") renders below the composer box; else inconclusive.
+// evaluateClaudeGrid reads Claude's real screen (dqh). The modal dialogs are
+// checked FIRST: each is modal, and each spells its selected option with the
+// composer glyph, so any later check would misread them. Then a busy marker is
+// active; a composer prompt anywhere in the bottom region with no busy marker is
+// idle — it does not require the cursor on the composer row, since Claude's idle
+// footer ("Brewed for Ns") renders below the composer box; else inconclusive.
 func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if snap == nil {
 		return status.TurnUnknown, status.InteractionUnknown, false
 	}
-	if regionContains(snap, claudeApprovalHint) {
-		return status.TurnIdle, status.InteractionPermission, true
+	for _, hint := range claudeDialogHints {
+		if regionContains(snap, hint) {
+			return status.TurnIdle, status.InteractionPermission, true
+		}
 	}
 	if hasBusyMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
@@ -244,19 +261,29 @@ func hasBusyMarker(snap *vt.Snap) bool {
 	return false
 }
 
-// busyHintOnRow reports whether row carries the busy hint the way a live status
-// line renders it: inside a parenthesis group that both opens and closes on that
-// same row — "• Working (1s • esc to interrupt)", "Baking… (12s · esc to
-// interrupt)". Every frame in the corpus that shows the hint has this shape
+// busyHintOnRow reports whether row carries the busy hint in one of the two
+// shapes a live status line renders it in.
+//
+// The first is a parenthesis group that both opens and closes on that same row —
+// "• Working (1s • esc to interrupt)", "Baking… (12s · esc to interrupt)" — the
+// shape of every codex frame in the corpus
 // (docs/verification/fixtures/spike-sa/codex-*), including the two-group row
 // "• Starting MCP servers (2/4): codex_apps, context7 (0s • esc to interrupt)",
 // where the earlier group must not be mistaken for the enclosing one.
+//
+// The second is a FIELD of a dot-separated status bar, which is how live claude
+// 2.1.224 prints it: "⏸ manual mode on · esc to interrupt · ← 3 agents"
+// (docs/verification/spike-SD.md F1, fixtures/spike-sd/busy-stream.json). Version
+// note: 2.1.214 did not print the phrase at all, so this shape is new evidence,
+// not a correction of the first.
 //
 // The bare substring is NOT enough: a session whose scrolled OUTPUT carries the
 // phrase — an agent editing this very file, a quoted doc, a pasted transcript —
 // then read WORKING while sitting idle at its composer, and stuck there, since
 // the grid tap that would correct it kept re-reading the same prose
-// (agents-tracker-fji).
+// (agents-tracker-fji). Prose quoting a WHOLE status row verbatim, separators and
+// all, still fools both shapes; that residual case is accepted, as it was for the
+// parenthesized one.
 func busyHintOnRow(row string) bool {
 	for off := 0; ; {
 		i := strings.Index(row[off:], escToInterrupt)
@@ -265,11 +292,22 @@ func busyHintOnRow(row string) bool {
 		}
 		i += off
 		end := i + len(escToInterrupt)
-		if enclosedInParens(row, i, end) {
+		if enclosedInParens(row, i, end) || abutsDotSeparator(row, i, end) {
 			return true
 		}
 		off = end
 	}
+}
+
+// statusBarSeparator is the field separator of claude's bottom status bar:
+// U+00B7 MIDDLE DOT with one ASCII space on each side (byte-exact from
+// fixtures/spike-sd/busy-stream.json).
+const statusBarSeparator = " · "
+
+// abutsDotSeparator reports whether row[start:end] is a FIELD of a dot-separated
+// status bar — a separator immediately before it, or immediately after it.
+func abutsDotSeparator(row string, start, end int) bool {
+	return strings.HasSuffix(row[:start], statusBarSeparator) || strings.HasPrefix(row[end:], statusBarSeparator)
 }
 
 // enclosedInParens reports whether row[start:end] sits inside a "(...)" group
