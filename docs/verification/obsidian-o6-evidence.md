@@ -231,3 +231,92 @@ Stated plainly, because a partial recorded as complete is worse than a partial.
    Recorded in `Motion.predictiveBack`'s own KDoc, at the call it would go in.
 6. **No screenshot diff.** Same reason as items 1 and 2, and the sheet is the only item of the
    three that would appear in one at all.
+
+---
+
+## 7. Independent re-verification (fix pass, same day)
+
+A second session re-ran every gate from scratch against the pushed tree rather than trusting
+section 2, on the principle that a green reported by the party that made the change is a claim and
+not a measurement. **Every number in section 2 and section 3 reproduced.** What follows is what
+the re-run adds.
+
+### 7.1 The gates, re-run
+
+```
+$ go build ./...                                   clean
+$ go vet ./...                                     clean
+$ go test ./...                                    all packages ok (no line outside `ok` / `no test files`)
+$ golangci-lint run                                no output
+$ (cd android/gate && go test ./...)               ok  github.com/Nathandela/swarm/android/gate  6.864s
+$ (cd android && ./gradlew --no-daemon test)       BUILD SUCCESSFUL in 7m 19s
+```
+
+The Android suite, counted from the XML rather than from the exit code, and with a staleness check
+so that a file left over from the previous run could not be counted as this run's:
+
+| | testDebugUnitTest | testReleaseUnitTest |
+|---|---|---|
+| testsuite XML files | 130 | 130 |
+| tests | 1044 | 1044 |
+| failures / errors / skipped | 0 / 0 / 0 | 0 / 0 / 0 |
+| files older than this run | 0 | 0 |
+
+Both variants are counted because `./gradlew test` runs both and section 3 counted one — the same
+suite, compiled twice, and the release variant is the one a release build would actually ship.
+
+**Section 2's flake did not reproduce.** `TestFirstPaintGate_RealDaemon_FiftySessions_P95` passed
+in the whole-tree run, with no Gradle build competing for the machine. That is consistent with what
+section 2 said about it (a wall-clock budget measured under load) and is recorded here because a
+flake nobody re-checks is indistinguishable from an intermittent defect.
+
+### 7.2 What the re-run needed that nothing wrote down
+
+The Gradle line in section 2 does not run in a clean shell, and this cost a build to find out.
+Neither toolchain is on `PATH` on this machine and neither is discoverable from the repository:
+
+```
+JAVA_HOME=/usr/local/Cellar/openjdk@21/21.0.12/libexec/openjdk.jdk/Contents/Home
+ANDROID_HOME=/usr/local/share/android-commandlinetools
+```
+
+There is no `android/local.properties` and no `/Library/Java/JavaVirtualMachines` entry, so a
+session that assumes either fails at `:app:testDebugUnitTest` with "SDK location not found" — which
+reads like a broken checkout and is a missing environment variable. Recorded here rather than
+written into a file, because `local.properties` is machine-local by design and this is the only
+place the fact is durable.
+
+### 7.3 The one defect the re-verification found
+
+`Motion.predictiveBackScale`'s KDoc linked `[PREDICTIVE_BACK_MARGIN_DP]`, a constant deleted by
+this phase's own third correction (section 4). The link resolved to nothing. Fixed in
+`Point the margin's KDoc at the function, not at the constant that was deleted`; the two other
+occurrences of that name — `predictiveBackMarginPx`'s KDoc and
+`android/gate/o6_predictiveback_test.go` — are prose about the constant's history and are correct
+as they stand.
+
+### 7.4 The deferrals in section 6, re-examined rather than re-copied
+
+Each was checked against the source before being carried forward, because a deferral inherited
+without checking is how a gap outlives the reason for it.
+
+- **`SHEET_SETTLE`, `COMPLETED`, `SCROLL_TICK` remain unwired, and the events remain absent.**
+  `Motion.bottomSheetEnter` and `Motion.pushBannerEnter` are kit recipes with no production caller
+  — `grep` finds them in `MotionTest` and nowhere else — so there is no sheet-open animation end
+  and no foreground push banner to hang a signal on. `TriageInboxScreen.promotions` still computes
+  transitions into `needs_input` only. `phoneScaffoldView` still reports no scroll detents.
+- **`NEEDS_YOU`'s call site is the only one available.** Push arrives at
+  `SwarmMessagingService.onMessageReceived`, which raises a system notification and touches no
+  view; there is no foreground banner path. `drawInbox`'s promotion set is the app's one
+  "something just started asking you" event, and it does not re-fire per draw — `promotions` is a
+  transition against `inboxDrawn`, which is what the early-return equality check preserves.
+- **Predictive back covers the one drill-down there is.** The terminal peek is `peekHost`, a panel
+  inside the Inbox tab's own column, not a destination with a back state — so "session detail,
+  terminal peek" resolves to one screen in this app, and `detail` is it.
+- **Back handling was not destabilised by the manifest opt-in.** `enableOnBackInvokedCallback`
+  makes the platform stop dispatching to `Activity.onBackPressed`; nothing in this app overrides
+  it, and the two `AlertDialog`s handle their own dismissal. Checked by `grep` over all production
+  Kotlin, because this is the failure the opt-in is known for.
+
+**What is still not established is what section 6 says is not established.** No hand-feel pass, no
+device pass on the preview, no screenshot diff. Those need a handset and belong to O7.
