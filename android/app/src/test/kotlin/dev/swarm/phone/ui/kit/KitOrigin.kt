@@ -249,6 +249,21 @@ object KitOrigin {
         return Color.argb((a * 255f).roundToInt(), r.toInt(), g.toInt(), b.toInt())
     }
 
+    /**
+     * A token whose whole value is a bare fraction -- `--p-grain` is `"0.04"` and nothing else.
+     *
+     * IT IS NOT [rgbaToken] AND NOT [percentInToken], which is worth a line because the three look
+     * interchangeable. Those read a number OUT of a larger value: an alpha inside an `rgba()`, a
+     * stop inside a gradient. This token has no larger value to read it out of, which is exactly
+     * why `tokens.json` types it `effect` and why PB-TOK-6's converters produce nothing for it.
+     */
+    fun fractionToken(name: String): Float {
+        val raw = requireNotNull(DesignScale.token(name)) { "the origin declares no $name" }
+        return requireNotNull(raw.trim().toFloatOrNull()) {
+            "$name = \"$raw\" is not a bare fraction, so it is not the kind of token this reads"
+        }
+    }
+
     /** A fraction stated as a percentage inside a token value -- `--p-workbar`'s fade stop. */
     fun percentInToken(name: String): Float {
         val raw = requireNotNull(DesignScale.token(name)) { "the origin declares no $name" }
