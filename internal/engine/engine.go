@@ -151,6 +151,7 @@ type session struct {
 
 	lastTypedAt  time.Time // when the last typed signal applied (precedence freshness)
 	lastSignalAt time.Time // when any signal (typed or output) was last observed (staleness)
+	lastStopAt   time.Time // when the last idle-setting Stop applied (the turn boundary, see postStopGrace)
 }
 
 // New builds an Engine from cfg, defaulting the injectable effects so a partial
@@ -267,6 +268,13 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return nil
 	}
+	now := e.now()
+	if dims = withoutPostStopReactivation(s, cb.Event, dims, now); len(dims) == 0 {
+		// A post-Stop straggler naming nothing but the turn it may not reopen:
+		// accept as a benign no-op, like an unmapped event.
+		e.mu.Unlock()
+		return nil
+	}
 	next, advanced, err := applyTyped(s, cb.Sequence, dims)
 	if err != nil {
 		e.mu.Unlock()
@@ -278,9 +286,11 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return fmt.Errorf("engine: callback sequence %d is stale or replayed for every named dimension", cb.Sequence)
 	}
-	now := e.now()
 	s.lastTypedAt = now
 	s.lastSignalAt = now
+	if cb.Event == stopEvent && next.Turn == status.TurnIdle {
+		s.lastStopAt = now // arm the turn boundary (postStopGrace)
+	}
 	changed := commit(s, next)
 	e.mu.Unlock()
 
@@ -526,6 +536,65 @@ func applyTyped(s *session, seq uint64, payload map[string]string) (next status.
 		advanced = true
 	}
 	return next, advanced, nil
+}
+
+// Stop is a TURN BOUNDARY, not merely another sequence-numbered write. Typed
+// signals are ordered by sequence, and a sequence carries no causal order: it is
+// handed out by racing `swarm hook` processes contending on a flock
+// (internal/hookclient.nextSequence). A SubagentStop, or the PostToolUse of a
+// tool that finished around the same instant, can therefore take a HIGHER
+// sequence than the Stop that closed the turn and flip the settled idle back to
+// active — permanently, since no further hook is coming to correct it and the
+// grid tap only governs once the typed signal goes stale (agents-tracker-707).
+const (
+	stopEvent = "Stop"
+
+	// postStopGrace is how long an idle-setting Stop outranks a trailing-edge
+	// active hook. The corpus carries no measured Stop->straggler distribution, so
+	// this is a BOUND rather than a fitted value: L1/ADR-008 contracts the whole
+	// hook-to-rendered-TUI path at <=1s, so a hook racing the same turn boundary
+	// lands well inside 2s, while a background task that genuinely finishes later
+	// still reads active. It is deliberately an order of magnitude below
+	// StalenessThreshold (30s in production): this is a tie-break at the boundary,
+	// not a second staleness rule.
+	postStopGrace = 2 * time.Second
+)
+
+// trailingEdgeEvents are the hooks whose turn=active means "work that was
+// already running has ENDED", so they can never legitimately start a turn.
+// UserPromptSubmit and PreToolUse are deliberately absent: they report work
+// STARTING, so they are a genuine new turn and must always win.
+//
+// These are Claude Code's hook names (internal/adapter/claude), the one place the
+// otherwise CLI-agnostic engine core knows an event by name. The eventual home
+// for the classification is an adapter descriptor key alongside
+// descKeySubtypeField — an adapter-side change this fix does not reach into.
+var trailingEdgeEvents = map[string]bool{
+	"PostToolUse":  true,
+	"SubagentStop": true,
+}
+
+// withoutPostStopReactivation drops the turn dimension of a trailing-edge hook
+// that would reopen a turn a Stop closed less than postStopGrace ago; every other
+// callback is returned unchanged. Only the TURN is withheld — the hook is still a
+// real signal and its other dimensions, freshness and staleness effects stand. It
+// never mutates dims (deriveDims may return the caller's own payload map), and
+// withholding a dimension also leaves that dimension's high-water where it was,
+// so a later signal is never locked out. Caller holds e.mu.
+func withoutPostStopReactivation(s *session, event string, dims map[string]string, now time.Time) map[string]string {
+	if !trailingEdgeEvents[event] || dims[PayloadKeyTurn] != string(status.TurnActive) {
+		return dims
+	}
+	if s.lastStopAt.IsZero() || now.Sub(s.lastStopAt) >= postStopGrace {
+		return dims
+	}
+	kept := make(map[string]string, len(dims))
+	for k, v := range dims {
+		if k != PayloadKeyTurn {
+			kept[k] = v
+		}
+	}
+	return kept
 }
 
 // deriveDims normalizes a callback's event + raw payload into the status
