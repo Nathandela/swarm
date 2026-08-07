@@ -1,11 +1,12 @@
-# Obsidian phase O2 — token migration through the pipeline, and one open blocker
+# Obsidian phase O2 — token migration through the pipeline, and the floor that had to move
 
 ADR: [ADR-009](../adr/ADR-009-obsidian-visual-direction.md) · plan:
 [obsidian-migration-plan.md](../specifications/obsidian-migration-plan.md) phase O2 · 2026-08-07
 
-**Status: the migration is complete and green. The contrast gate ADR-009 D8.1 asks for is
-landed and RED, and it cannot be made green from inside this phase. The phase does not close
-until an owner rules on the blocker in section 4.**
+**Status: complete and green, including the contrast gate.** The gate landed RED against
+D8.1's original blanket floors and stayed red through the whole migration; section 4 records the
+escalation, the ruling that resolved it, and why the thresholds moved rather than the inks. The
+palette shipped is byte-for-byte the maquette's.
 
 ---
 
@@ -48,7 +49,7 @@ invisible while it held:
 | `go build ./...` | green |
 | `go vet ./...` | green |
 | `golangci-lint run` | green, no new findings |
-| `go test ./...` | green **except** `TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor` (section 4) |
+| `go test ./...` | green, including `TestADR009D8_*` against the amended per-role floors (section 4) |
 | `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, **0 failures and 0 errors**, 124 result XML files per variant, counted out of the JUnit XML rather than read off an exit code |
 
 Zero screen-code changes. Nothing under `ui/screens` was touched; the two `ui/kit` edits are
@@ -97,8 +98,10 @@ against both surfaces it is ever drawn on:
 | `--p-ok` | 8.07:1 | 7.60:1 |
 | `--p-ink3` | 3.74:1 | 3.52:1 |
 
-**The APCA half fails, on Obsidian and on shipped Substrate alike.** Negative Lc is light ink on
-a dark ground, which is the correct polarity for every pair but the two champagne fills.
+**The APCA half failed against D8.1's original blanket floors, on Obsidian and on shipped
+Substrate alike.** This is the measurement as it was first taken; it is what the amendment in
+section 4 was decided on, so it is left standing rather than restated. Negative Lc is light ink
+on a dark ground, which is the correct polarity for every pair but the two champagne fills.
 
 | pair | Substrate | Obsidian | floor | verdict |
 |---|---|---|---|---|
@@ -114,7 +117,15 @@ on the palette that is live on the internal track today, and Obsidian is *better
 them. It is a property of both palettes that nothing in this repository had ever measured, which
 is precisely what ADR-009 D8.1 predicted the gate would be for.
 
-## 4. BLOCKER — owner decision required
+## 4. The escalation, and the ruling that closed it
+
+**Outcome first, so nobody reads the argument wondering how it ended: the floors moved, the inks
+did not, and the gate is green.** ADR-009 D8.1 now carries an *Amendment (2026-08-07, measured
+calibration)* with per-role floors; `android/gate/obsidian_contrast_test.go` applies them and
+every one of the sixteen pairs clears. Sections 4a and 4b below are the escalation as it was
+raised, kept verbatim because the ruling in 4c is only auditable against the case it answered.
+
+### 4a→4b: the case as raised
 
 The rule is: if a pair fails, the **token** moves, never the threshold (ADR-009 D3 declares the
 ladder the tunable; the plan's O2.4 says the same in as many words). That fix is **not available
@@ -185,14 +196,62 @@ un-ignorable statement about the palette.
 **Nothing here lowers a floor and nothing here edits the maquette.** Both were available and both
 were refused.
 
+### 4c. The ruling: option (B), with the floors written per role
+
+The escalation was upheld. The finding that decided it is the one in 4a: **the original two-floor
+model was unsatisfiable by construction** for any palette with a mid-luminance accent fill
+carrying a label, and a threshold nobody had ever measured against had also failed the palette
+live on the internal track. Re-lighting the maquette's inks was rejected — it compresses the
+owner-signed luminance hierarchy and cannot fix the champagne pairs at all. Leaving the gate
+permanently red was rejected — a forever-red gate teaches red-blindness, and the next real
+regression would arrive into a suite already failing.
+
+The floors are now APCA's own conformance ladder mapped onto this app's real type roles. The full
+table, the rung each role sits on, and the justification for each is in the ADR; the measured
+result is:
+
+| pair | role | floor | Obsidian | margin |
+|---|---|---|---|---|
+| `--p-ink` × 4 surfaces | body-primary | 90 | −98.7 … −100.0 | 8.7 |
+| `--p-ink2` × 4 surfaces | supplementary | 45 | −48.4 … −49.7 | 3.4 |
+| `--p-ink3` × 4 surfaces | incidental | 24 | −24.2 … −25.6 | **0.2** |
+| `--p-hero-ink` on hero / cta-bg | cta-label | 55 | +58.8 | 3.8 (ceiling 59.7) |
+| `--p-hero` as text on `--p-bg` | accent-text | 50 | −57.7 | 7.7 |
+| `--p-err` as text on `--p-bg` | error-text | 38 | −40.6 | **2.6** |
+
+**The thin margins are the point, not an oversight.** A floor set where the palette actually sits
+catches the next value that slips; a floor set comfortably below one watches it slip. `--p-ink3`
+on `--p-elev` clears by 0.2, which means a single step of drift in either token fails the build.
+
+**Two things the amendment refuses to bury, repeated here because an evidence file is where a
+reader looks for the bad news.**
+
+1. **`--p-ink3`'s floor of 24 is below APCA's Lc 30 absolute minimum for any text.** It is a
+   named deviation, accepted on two standing rules: ink3 is *never* the sole carrier of required
+   information, and the **O7 device glance pass** is the empirical backstop. The gate asserts the
+   deviation is declared rather than discovered — `roleIncidental.Rung` is 0 and `BelowRung` is
+   true, and the set of roles below their rung is asserted to be exactly two.
+2. **`--p-err` at 38 is an explicit watch item.** The O7 device pass must confirm deny/revoke
+   legibility on a real panel. **If it fails there, the token lightens** — ADR-009 D3's ladder
+   rule — and the floor does not move.
+
+**And the result worth stating plainly: the 45 floor FAILS the Substrate palette (`--p-ink2` at
+−41.8) and passes Obsidian (−49.6).** The gate is now standing proof that this migration is an
+accessibility improvement rather than a repaint. Obsidian is *worse* than Substrate on the three
+accent pairs, which is exactly why those three are the watched ones.
+
 ## 5. Not done in this phase
 
 - **Device screenshot set** (the plan's O2.5 asks for the PB-E2E-2 shots in Obsidian). No handset
   is reachable from this environment; the Robolectric suite is what stands behind the appearance
   claims above. Carry to O3, which re-opens the same screens.
 - **The `--p-lit-fx` and `--p-sweep-fx` effects have no consumer yet**, by design: they are typed
-  `effect`, which has no `res/values` primitive, so they deliberately have no join row. O3 and O4
-  give them Kotlin homes with their own gates (ADR-009 D8.2).
+  `effect`, which has no `res/values` primitive, so they deliberately have no join row. This
+  contradicts the literal wording of the phase task ("4 new rows") and the departure was
+  escalated with it; **it is ruled correct and blessed**, and the blessing is recorded in the
+  last line of ADR-009 D8.1's amendment. The four effect tokens that preceded them have never had
+  rows either, and `s16_tokens_test.go` treats a row whose kind has no converter as a hard
+  failure — rightly. O3 and O4 give them Kotlin homes with their own gates (ADR-009 D8.2).
 - **Three of the maquette's paddings were off the PB-DS-1 scale, and the orchestrator corrected
   them** (`38046c1`): `.sheet` 20px → 18px, `.empty` 26/30px → 24px. Found by this phase, fixed in
   the design source rather than by loosening the scale, which is the order the regime requires.
@@ -233,3 +292,9 @@ gate at `s22bMaquetteRelPath`, not only here):
 
 The type ladder is the one worth a bead: the maquette specifies sizes the app does not yet render,
 and O5 is where that is reconciled.
+
+**All three of those splits were escalated and all three are blessed as correct.** The frame
+constants are handset geometry the maquette's 300px gallery phone cannot state; the tab glyphs are
+geometry rather than material, which ADR-009 does not move; the type ladder is O5's reconciliation
+by the plan's own sequencing. A reader who finds `remote-control-design-directions.html` still
+being parsed in this package is looking at a decision, not a leftover.
