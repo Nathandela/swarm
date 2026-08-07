@@ -351,13 +351,25 @@ func TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor(t *testing.T) {
 		report = append(report, fmt.Sprintf("%-13s on %-11s  Lc %7.1f  (%s floor %.0f)  %s",
 			p.Ink, p.Surface, lc, p.Role, floor, p.Where))
 		if apcaFails(lc, floor) {
+			// WHICH FIX THIS FAILURE ACTUALLY ADMITS. "Move the token" is the remedy only where
+			// the floor is reachable on this surface; above the surface's ceiling no ink value
+			// exists that would clear it, and the redness is a statement about the floor.
+			remedy := "The floor does not move. ADR-009 D3 declares the ladder the tunable and " +
+				"the direction fixed: if a pair fails, the TOKEN moves (and the maquette is then " +
+				"wrong too, which is an owner decision, not an edit)."
+			if ceiling := apcaCeiling(surface); ceiling < floor {
+				remedy = fmt.Sprintf("NO INK CLEARS THIS FLOOR ON THIS SURFACE. The best any "+
+					"colour can do on %s is |Lc| %.1f, below the %s floor of %.0f, so moving %s "+
+					"cannot fix it and neither could any value nobody has drawn yet. What is "+
+					"failing here is ADR-009 D8.1's two-rung model over a mid-luminance fill, "+
+					"not the palette. This one is an owner decision on the ADR; see "+
+					"docs/verification/obsidian-o2-evidence.md.",
+					p.Surface, ceiling, p.Role, floor, p.Ink)
+			}
 			t.Errorf("ADR-009 D8.1: %s on %s is Lc %.1f, and the %s floor is %.0f.\n"+
-				"\t%s = %s, %s = %s -- %s\n"+
-				"The floor does not move. ADR-009 D3 declares the ladder the tunable and the "+
-				"direction fixed: if a pair fails, the TOKEN moves (and the maquette is then "+
-				"wrong too, which is an owner decision, not an edit).",
+				"\t%s = %s, %s = %s -- %s\n%s",
 				p.Ink, p.Surface, lc, p.Role, floor,
-				p.Ink, joined[p.Ink], p.Surface, joined[p.Surface], p.Where)
+				p.Ink, joined[p.Ink], p.Surface, joined[p.Surface], p.Where, remedy)
 		}
 		// Polarity, asserted against the DECLARATION rather than assumed. Every ladder pair is
 		// light ink on a dark ground and its Lc is negative; the two champagne fills are the
@@ -597,6 +609,21 @@ func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
 // apcaFails is the one comparison the gate makes, extracted so the negative control can exercise
 // the SAME code path the assertions use rather than a re-typed copy of it.
 func apcaFails(lc, floor float64) bool { return math.Abs(lc) < floor }
+
+// apcaCeiling is the largest |Lc| ANY ink can reach on a surface: the surface's contrast ceiling.
+//
+// Only the two achromatic corners are tried. apcaY is a positively weighted sum of per-channel
+// powers, so it is monotone increasing in every channel: over the sRGB cube, Ytxt is smallest at
+// pure black and largest at pure white, and |Lc| grows with the distance between Ytxt and the
+// fixed Ybg in both polarity branches. The extreme is therefore at one of those two corners. The
+// argument is not taken on faith -- TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette sweeps
+// the whole grey axis over a mid-luminance fill and requires the corner answer to win.
+func apcaCeiling(surface srgb) float64 {
+	return math.Max(
+		math.Abs(apcaLc(srgb{0, 0, 0}, surface)),
+		math.Abs(apcaLc(srgb{255, 255, 255}, surface)),
+	)
+}
 
 // TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette is the assertion that tells the two
 // failure modes apart, and without it this file misdirects every fix it demands.
