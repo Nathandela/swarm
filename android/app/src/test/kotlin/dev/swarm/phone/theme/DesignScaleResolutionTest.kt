@@ -207,8 +207,20 @@ class DesignScaleResolutionTest {
      */
     @Test
     fun `the design parse can distinguish two values`() {
-        assertEquals("--p-card-r is 9px in the origin", 9f, DesignScale.tokenPx("--p-card-r"), 0f)
-        assertEquals("--p-sheet-r is 14px", 14f, DesignScale.tokenPx("--p-sheet-r"), 0f)
+        // AUTHORIZED VALUE MIGRATION, ADR-009 O2. These are KNOWN ANSWERS -- numbers typed
+        // independently of the reader so that a reader returning a constant is contradicted --
+        // and ADR-009 D3 moved the answers. What they said before:
+        //
+        //     assertEquals("--p-card-r is 9px in the origin", 9f, ...tokenPx("--p-card-r"), 0f)
+        //     assertEquals("--p-sheet-r is 14px", 14f, ...tokenPx("--p-sheet-r"), 0f)
+        //     assertEquals("`.pnav .big` resolves --p-display-wt", 650, nav.weight)
+        //     assertEquals("`.pnav .big` resolves --p-display-tr", -0.025f, nav.trackingEm, 1e-6f)
+        //
+        // They are NOT rewritten to read the value they check -- that would be the reader
+        // certifying itself, which is the exact defect this test exists to catch. The sizes below
+        // (27px, 9.5px) are unchanged, because ADR-009 moves material and not the type scale.
+        assertEquals("--p-card-r is 14px in the origin", 14f, DesignScale.tokenPx("--p-card-r"), 0f)
+        assertEquals("--p-sheet-r is 18px", 18f, DesignScale.tokenPx("--p-sheet-r"), 0f)
         assertNotEquals(
             "the token reader returns the same number for two different tokens, so every " +
                 "radius assertion above is vacuous",
@@ -220,8 +232,8 @@ class DesignScaleResolutionTest {
         val tab = TypeScale.designSpec(".ptabs div")
         assertEquals("`.pnav .big` is 27px in the design", 27f, nav.sizePx, 0f)
         assertEquals("`.ptabs div` is 9.5px", 9.5f, tab.sizePx, 0f)
-        assertEquals("`.pnav .big` resolves --p-display-wt", 650, nav.weight)
-        assertEquals("`.pnav .big` resolves --p-display-tr", -0.025f, nav.trackingEm, 1e-6f)
+        assertEquals("`.pnav .big` resolves --p-display-wt", 500, nav.weight)
+        assertEquals("`.pnav .big` resolves --p-display-tr", -0.015f, nav.trackingEm, 1e-6f)
         assertNotEquals(
             "the CSS parse returns the same family for a sans rule and a mono rule",
             TypeScale.designSpec(".prow .pj").androidFamily,

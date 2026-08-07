@@ -225,9 +225,19 @@ class KitFoundationTest {
                 ),
             ),
         )
+        // AUTHORIZED VALUE MIGRATION, ADR-009 O2. This is a KNOWN ANSWER, typed independently of
+        // the reader so that a key light which had quietly become opaque is contradicted by a
+        // number rather than by itself. What it said before:
+        //
+        //     (0.045f * 255f).toInt(),
+        //
+        // ADR-009 D3 strengthens and warms the key-light to
+        // `inset 0 1px 0 rgba(246,243,236,0.10)`: one light source, top edge, linen-toned. The
+        // assertion's point is unchanged and is still worth making at 0.10 -- an alpha this low
+        // is exactly the one a missing alpha turns into 255 without anything else noticing.
         assertEquals(
-            "the key light is a translucent white, not the opaque one a missing alpha produces",
-            (0.045f * 255f).toInt(),
+            "the key light is a translucent linen, not the opaque one a missing alpha produces",
+            (0.10f * 255f).toInt(),
             Color.alpha(highlight.colour),
         )
     }
