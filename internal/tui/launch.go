@@ -28,6 +28,10 @@ type launchModel struct {
 	prompt   string
 	worktree bool
 
+	dirCands  []string // candidate basenames for the typed cwd prefix, ReadDir (sorted) order
+	dirGhost  string   // completion remainder rendered after the cursor
+	dirParent string   // typed-form parent prefix incl trailing "/", never tilde-expanded
+
 	apiKeyInEnv bool // ANTHROPIC_API_KEY present in the client env (auth indicator)
 
 	focus  int    // field focus index (see field-index helpers below)
@@ -201,6 +205,7 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case lm.isDir():
 			lm.cwd = dropLast(lm.cwd)
 			lm.errMsg = ""
+			lm.refreshDirCompletion()
 		case lm.isName():
 			lm.name = dropLast(lm.name)
 		case lm.isPrompt():
@@ -212,9 +217,17 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case k.Code == tea.KeyLeft:
-		lm.cycleField(false)
+		if lm.isDir() {
+			lm.cycleDirCompletion(false)
+		} else {
+			lm.cycleField(false)
+		}
 	case k.Code == tea.KeyRight:
-		lm.cycleField(true)
+		if lm.isDir() {
+			lm.cycleDirCompletion(true)
+		} else {
+			lm.cycleField(true)
+		}
 	case k.Text != "":
 		switch {
 		case lm.isWorktree() && k.Text == " ":
@@ -224,6 +237,7 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case lm.isDir():
 			lm.cwd += k.Text
 			lm.errMsg = ""
+			lm.refreshDirCompletion()
 		case lm.isName():
 			lm.name += k.Text
 		case lm.isPrompt():
@@ -265,6 +279,7 @@ func (m *launchModel) paste(s string) {
 	case m.isDir():
 		m.cwd += s
 		m.errMsg = ""
+		m.refreshDirCompletion()
 	case m.isName():
 		m.name += s
 	case m.isPrompt():
@@ -273,6 +288,28 @@ func (m *launchModel) paste(s string) {
 		if si, ok := m.focusedOptionOfType("string"); ok {
 			m.options[m.optSpecs[si].Key] += s
 		}
+	}
+}
+
+// cycleDirCompletion drives the directory field's arrows: Right on a non-empty
+// ghost accepts it (drill-down, recomputing one level down); otherwise, with more
+// than one candidate, the arrows cycle the typed text through the candidates' full
+// paths without re-reading the directory, so the menu stays anchored to the prefix
+// that produced it. Left never accepts a ghost — only Right does.
+func (m *launchModel) cycleDirCompletion(forward bool) {
+	if forward && m.dirGhost != "" {
+		m.cwd += m.dirGhost
+		m.errMsg = ""
+		m.refreshDirCompletion()
+		return
+	}
+	if len(m.dirCands) > 1 {
+		fullPaths := make([]string, len(m.dirCands))
+		for i, c := range m.dirCands {
+			fullPaths[i] = m.dirParent + c
+		}
+		m.cwd = cycleValue(fullPaths, m.cwd, forward)
+		m.errMsg = ""
 	}
 }
 
@@ -451,6 +488,62 @@ func dropLast(s string) string {
 	return string(r[:len(r)-1])
 }
 
+// refreshDirCompletion recomputes dirCands/dirGhost/dirParent from the current cwd
+// text. It reads the typed parent directory (tilde-expanded for the ReadDir call
+// only — dirParent itself keeps the typed form) and lists its subdirectories that
+// match the typed base name. Called after every edit of cwd while the directory
+// field is focused; never at form open, so a fresh form touches no filesystem.
+func (m *launchModel) refreshDirCompletion() {
+	i := strings.LastIndex(m.cwd, "/")
+	if i < 0 {
+		m.dirCands, m.dirGhost, m.dirParent = nil, "", ""
+		return
+	}
+	m.dirParent = m.cwd[:i+1]
+	base := m.cwd[i+1:]
+
+	// ponytail: symlinked directories are skipped by e.IsDir() (it reflects the
+	// symlink itself, not its target); resolving via os.Stat is left for if
+	// symlinked repos matter.
+	entries, err := os.ReadDir(expandTilde(m.dirParent))
+	if err != nil {
+		m.dirCands, m.dirGhost, m.dirParent = nil, "", ""
+		return
+	}
+	m.dirCands = nil
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || !strings.HasPrefix(name, base) {
+			continue
+		}
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(base, ".") {
+			continue
+		}
+		m.dirCands = append(m.dirCands, name)
+	}
+
+	switch len(m.dirCands) {
+	case 0:
+		m.dirGhost = ""
+	case 1:
+		m.dirGhost = m.dirCands[0][len(base):] + "/"
+	default:
+		m.dirGhost = longestCommonPrefix(m.dirCands)[len(base):]
+	}
+}
+
+// longestCommonPrefix returns the longest string prefix shared by every entry in
+// ss (ss is non-empty).
+func longestCommonPrefix(ss []string) string {
+	prefix := ss[0]
+	for _, s := range ss[1:] {
+		for !strings.HasPrefix(s, prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	return prefix
+}
+
 // ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
@@ -472,6 +565,13 @@ func (m launchModel) view() string {
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
 	b.WriteString(m.fieldLine("directory", m.dirValue(), m.isDir()))
+	if m.isDir() && len(m.dirCands) > 1 {
+		row := strings.Join(m.dirCands, "  ")
+		if m.width > 2+launchLabelW {
+			row = clampCells(row, m.width-(2+launchLabelW))
+		}
+		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
+	}
 	b.WriteString(m.fieldLine("name", m.nameValue(), m.isName()))
 	b.WriteString(m.fieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
@@ -499,6 +599,9 @@ func (m launchModel) view() string {
 // toggle with Space. The tab/enter/esc tail is constant across fields.
 func (m launchModel) hint() string {
 	const tail = " · tab/↑↓ next · enter launch · esc cancel"
+	if m.isDir() && (m.dirGhost != "" || len(m.dirCands) > 1) {
+		return "arrows complete" + tail
+	}
 	if m.isAgent() || m.isChoiceFocused() {
 		return "arrows change" + tail
 	}
@@ -563,9 +666,15 @@ func padLabel(label string) string {
 }
 
 func (m launchModel) dirValue() string {
-	v := m.cwd
-	if m.isDir() {
-		v += "█" // cursor on the focused text field
+	if !m.isDir() {
+		return m.cwd
+	}
+	v := m.cwd + "█" // cursor on the focused text field
+	if m.dirGhost != "" {
+		// An empty ghost must render as nothing, not as an empty-content styled span
+		// (lipgloss.Render("") still emits open/close SGR codes), so the style_hoist
+		// golden for the no-completion case stays byte-identical.
+		v += styleDim.Render(m.dirGhost)
 	}
 	return v
 }
