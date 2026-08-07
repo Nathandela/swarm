@@ -56,7 +56,35 @@ sits on, and it changes if the component is moved.
 These are the decisions the artifacts could not make. Each is argued here and then appears as a row
 in §3.
 
-### 1.1 The focus ring: `--p-ink`, 2 dp, 2 dp offset
+### 1.1 The focus ring: `--p-hero`, 2 dp, 2 dp offset
+
+> **AMENDED 2026-08-07, ADR-009 D3.** The ring resolves to **2 dp `--p-hero` champagne**, and the
+> Substrate argument below is kept as the record of how it got there rather than deleted.
+>
+> **What changed is the premise and not the reasoning.** The paragraph below removes `--p-hero`
+> because "hero is the fill of `.chip.on` and the ink of `.ptabs .on`, so a hero ring around an
+> unselected chip would say the opposite of what is true" — hero meant SELECTED, and only that.
+> In Obsidian the accent means **you**: needs-you, CTA, focus, live counter, brand, unified
+> deliberately (ADR-009 D3, Consequences). A ring that says "you are here" is the fifth thing the
+> one accent says, not a sixth meaning bolted onto a fill colour. The rejection had a reason and
+> the reason is gone.
+>
+> **The neutrals swap sides.** `--p-ink` and `--p-ink2` are now the rejected pair, for the reason
+> §1.1 already gives against `--p-ink2` and which Obsidian extends to `--p-ink`: a ring in the
+> body ink over a warm ladder whose hairline is `--p-hair` reads as a heavier border, not as
+> focus. The four status tokens stay rejected — they mean state — with the one caveat ADR-009 D6
+> records: `--p-att` value-aliases `--p-hero`, so the ring and the NeedsInput indicator resolve to
+> the same bytes today. That is the ALIAS being visible, not the ring meaning a status; the two
+> keep separate rows in `android/design-tokens.tsv` precisely so a future skin can break it.
+>
+> **The measured contrast**, computed over Obsidian's ladder: `--p-hero` `#c9a876` is **8.74:1**
+> on `--p-bg`, **8.22:1** on `--p-card` and **7.69:1** on `--p-elev` — every one of them well
+> above the 3:1 WCAG floor ADR-009 D8.1 holds non-text indicators to, and the ring is one.
+>
+> **The residual inverts and shrinks.** Substrate's white ring sat against the hero-filled CTA at
+> 1.88:1; a champagne ring against a champagne fill is 1:1 and would vanish outright. The
+> `space_2` offset is what saves it, exactly as the paragraph below says it saved the white one:
+> the ring is read against the surface the button sits on, never against the button.
 
 The artifact's `:focus-visible` uses `#e2a33b`. That is the *documentation page's* chrome accent —
 the colour of its own tab buttons and rail headings — and it is not a product token at all. It leaked
@@ -231,7 +259,7 @@ its prose but omits from the list.
 | 20 | Screen scaffold | `.pscreen` / `.screen` | `--p-bg` | none | none | padding top `screen_top` (or the real inset), bottom `screen_bottom` (or inset + `tabbar_height`); vertical scroll | none | Scrollbars off (`android:scrollbars="none"`, matching `scrollbar-width: none`). API 31+ overscroll is the stretch effect, which is acceptable; the pre-31 glow would not be, and `minSdk 33` retires it. The grain overlay (row 21) sits above it, non-interactive |
 | 21 | Grain overlay | `.grain` | **exception: the noise raster is an asset, not a colour.** `feTurbulence` output is implementation-defined, so it is pre-rendered once at 140x140 and checked in (PB-DS-5) | none | none | 140x140 tile, full-bleed | none | `--p-grain` 0.05 alpha under `BlendMode.SOFT_LIGHT` (unconditional at `minSdk 33`). Applied over every surface **except the QR tile** (row 6). Non-interactive |
 | 22 | Read-only note | `.ro-note` | none | none | none | margin `space_10` top x `space_18` sides (mock 10/20); centred | `Body.Secondary` / `--p-ink2` | **`[Take control]` becomes a standalone tertiary button below the note, not an inline span**: an inline span cannot carry a 48 dp target (PB-DS-12), and the mock's inline button was painted in the retired doc-chrome accent. It takes `.a2-more` unchanged — `--p-card`, 1 dp `--p-hair`, `--p-btn-r` 9, `Label.Button` / `--p-ink`, padding `space_12`, min 48 |
-| 23 | Focus ring | `:focus-visible` | `--p-ink` (`#FFF7F8F8`) — 18.73 / 17.91 / 17.19:1 on `--p-bg` / `--p-card` / `--p-elev` | 2 dp stroke | focused component's radius + 2 | offset `space_2` | none | Applies to every focusable (PB-DS-12). Rejected: `--p-hero` (reads selected; collides with `.chip.on` and `.ptabs .on`), all four status tokens (they mean state), `--p-ink2` (reads as a border), `#e2a33b` (documentation chrome, not a product token). Argued in §1.1 |
+| 23 | Focus ring | `:focus-visible` | `--p-hero` (`#FFC9A876`) — 8.74 / 8.22 / 7.69:1 on `--p-bg` / `--p-card` / `--p-elev` | 2 dp stroke | focused component's radius + 2 | offset `space_2` | none | Applies to every focusable (PB-DS-12). *(AMENDED 2026-08-07, ADR-009 D3: champagne, not linen. The Substrate cell read `--p-ink` (`#FFF7F8F8`) and rejected `--p-hero` on the ground that hero meant SELECTED; in Obsidian the accent means "you" and focus is one of the five things it says, so the rejection's premise is gone.)* Rejected: `--p-ink` and `--p-ink2` (neutrals — a ring in either reads as a heavier hairline over the warm ladder), all four status tokens (they mean state; `--p-att` value-aliases `--p-hero` by ADR-009 D6 and that is the alias showing, not the ring meaning a status). Argued in §1.1 |
 | 24 | Disabled / stale CTA | `.sheet.stale .a-ok` | fill `--p-hair` (`#FF23252A`); ink `--p-ink3` (`#FF62666D`) — 2.66:1, below the UI floor by intent | none | `--p-btn-r` 9 | padding `space_12` | `Label.Button` / `--p-ink3` | **`--p-cta-fx` removed** — nothing glows unless it is alive. Not clickable, not focusable, so WCAG 1.4.3's inactive-control exemption applies. Paired with the stale note: `Body.Secondary` / `--p-att`, centred, `space_10` above. Argued in §1.3 |
 | 25 | Scrim | `.scrim` | `--p-bg` at 70% (`#B308090A`; over `--p-card` -> `#FF0A0B0C`; `--p-ink` text behind it -> `#FF505151`) | none | none | full-bleed, below the sheet and above everything else | none | No blur — Substrate's only blur is the one pinned to `--p-tabbg`. Tap dismisses. For screen readers the *sheet* exposes the dismiss action; the scrim is not a focusable target. Argued in §1.2 |
 
