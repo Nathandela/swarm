@@ -249,6 +249,53 @@ class TriageInboxViewTest {
         )
     }
 
+    /**
+     * ADR-009 D4's promoted slab reaches the screen, and it reaches it FROM THE MODEL.
+     *
+     * THE STATE IS THE REAL RESOLVER'S, WHICH IS THE WHOLE POINT OF ASSERTING IT HERE. `KitFoundationTest`
+     * already asks whether `cardSurface(attention = true)` paints the maquette's `.slab.lit`; what
+     * only a screen can get wrong is WHICH row gets it, and a test that hand-fed `lit = true` to
+     * one row and asserted it came out promoted would be certifying that the renderer reads its
+     * argument. So the rows go in as the wire describes them, through `TriageInbox.from` and
+     * `TriageInboxScreen.of`, and the expectation for each drawn row is read off the model's own
+     * answer rather than off the Group string this file typed.
+     *
+     * BOTH SURFACES ARE READ FROM THE MAQUETTE. `.slab` and `.slab.lit` are two rules in ADR-009
+     * D2's normative source; naming `--p-card` and `--p-elev` here would be this suite agreeing
+     * with the kit about a design neither of them read.
+     */
+    @Test
+    fun `the row the model marks promoted is the one drawn on the lit slab`() {
+        val sessions = TriageInbox.TRIAGE_ORDER.map { group -> row("mbp/$group", group) }
+        val model = screen(sessions).sections.flatMap { it.rows }
+        val drawn = view(sessions).allTagged(InboxTag.ROW)
+
+        assertEquals(
+            "the screen drew a different number of rows from the number the model holds, so the " +
+                "pairing below is comparing a row against some other row's answer",
+            model.size,
+            drawn.size,
+        )
+        val claims = model.zip(drawn).map { (row, view) ->
+            Claim(
+                "the ${row.group} row's slab",
+                if (row.lit) {
+                    KitOrigin.maquetteColour(".slab.lit", "background")
+                } else {
+                    KitOrigin.maquetteColour(".slab", "background")
+                },
+                (view.background as SubstrateSurface).spec.fill,
+            )
+        }
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+
+        // AND THE MODEL MUST ANSWER BOTH WAYS OVER THIS ROSTER, or every claim above holds over
+        // one expectation repeated -- a model that promoted nothing, or everything, would satisfy
+        // each equality while drawing an inbox with no promotion in it at all.
+        assertTrue("the model promoted no row at all", model.any { it.lit })
+        assertTrue("the model promoted every row", model.any { !it.lit })
+    }
+
     @Test
     fun `only a working row carries the workbar`() {
         val root = view(TriageInbox.TRIAGE_ORDER.map { group -> row("mbp/$group", group) })

@@ -59,6 +59,66 @@ class TriageInboxScreenTest {
         selectedSession = selected,
     )
 
+    // ---- promotion --------------------------------------------------------
+
+    /**
+     * ADR-009 D4's promoted slab, as a fact this MODEL names rather than one the kit rediscovers.
+     *
+     * WHY IT IS THE SCREEN'S AND NOT THE COMPONENT'S. Which Group is the one blocked on the human
+     * is a product decision, and this file already makes it twice -- [TriageInboxScreen] counts the
+     * tab badge from `needs_input` and excludes it from nothing else. The kit made it a third time,
+     * as `group == "needs_input"` inside `sessionRow`, and a third copy of a decision is how the
+     * three come to disagree: a skin that promoted `ready_for_review` would move the slab and leave
+     * the badge counting the other Group, with every test green because each was asked for exactly
+     * what it drew.
+     *
+     * IT IS ALSO WHAT ADR-009 D5 WILL FIRE THE SWEEP FROM. The specular sweep runs once "at the
+     * moment a session's Group becomes NeedsInput" -- that is this fact, changing -- so naming it
+     * here is what stops O4 deriving the same Group a fourth time.
+     *
+     * THE STATE IS BUILT BY THE REAL RESOLVER AND NEVER HAND-FED, which is the recorded qx9m
+     * lesson: a suite that constructed an `InboxRow` with `lit = true` and asserted it rendered
+     * promoted would certify that the renderer reads its argument. What is interesting is the
+     * MAPPING, so the rows go in as the wire describes them and come out through
+     * `TriageInbox.from` and `TriageInboxScreen.of`.
+     */
+    @Test
+    fun `the promoted row is the model's own fact and it is the Group the badge counts`() {
+        val screen = screenOf(TriageInbox.TRIAGE_ORDER.map { group -> row("mbp/$group", group) })
+
+        assertEquals(
+            "the screen promotes a different set of Groups from the one it counts on the badge, " +
+                "so the lit slab and the tab badge are answering to two different decisions",
+            listOf("needs_input"),
+            screen.sections.flatMap { it.rows }.filter { it.lit }.map { it.group },
+        )
+        assertEquals(
+            "the badge counts a number of sessions other than the one promoted row",
+            screen.sections.flatMap { it.rows }.count { it.lit },
+            screen.tabs.sumOf { it.badgeCount },
+        )
+    }
+
+    /**
+     * Promotion follows the SESSION and not the section's position, which is the failure mode a
+     * per-section flag would have.
+     */
+    @Test
+    fun `promotion is per row, so a Group with several sessions promotes all of them`() {
+        val screen = screenOf(
+            listOf(
+                row("mbp/one", "needs_input"),
+                row("mbp/two", "needs_input"),
+                row("mbp/three", "working"),
+            ),
+        )
+
+        assertEquals(
+            listOf(true, true, false),
+            screen.sections.flatMap { it.rows }.map { it.lit },
+        )
+    }
+
     // ---- sections ---------------------------------------------------------
 
     @Test
