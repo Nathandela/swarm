@@ -48,7 +48,7 @@ invisible while it held:
 | `go build ./...` | green |
 | `go vet ./...` | green |
 | `golangci-lint run` | green, no new findings |
-| `go test ./...` | green **except** `TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor` |
+| `go test ./...` | green **except** `TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor` (section 4) |
 | `./gradlew --no-daemon test` | **green** — 970 debug + 970 release, 0 failures, 124 result XML files per variant |
 
 Zero screen-code changes. Nothing under `ui/screens` was touched; the two `ui/kit` edits are
@@ -101,20 +101,57 @@ from inside this phase**, and the reason is structural rather than a matter of n
   phase is forbidden to do.
 
 So the token cannot move without the maquette moving, and the maquette is an owner artifact.
-Three ways out, in the order they preserve the ADR's intent:
 
-**(A) Re-light the maquette's inks, then re-transcribe.** The honest fix. `--p-ink2` needs to
-reach roughly Lc 75 against `#0e0b08` and `--p-ink3` roughly Lc 60; both need to travel a long
-way up the ladder, which is a visible design change to a signed artifact and therefore the
-owner's call, not this phase's. Note that it would also compress the ink hierarchy the direction
-depends on — a secondary ink at Lc 75 sits close to a primary at Lc 100.
+### 4a. Two of the twelve are not the palette at all — the floor is unreachable
 
-**(B) Amend ADR-009 D8.1 with per-ROLE floors keyed to the app's actual type scale.** The
-current text assigns floors to sizes, and this gate assigns roles to *ink tokens*, which is an
-approximation: `--p-ink3` carries `Label.Section` at 10.5sp and `Mono.Agent` at 10sp — small
-text, not large — so calling it "large-only" is generous to it rather than strict. An amendment
-would state which pairs are body, which are large, and which are deliberately below both with
-the reason recorded. It buys an owner's signature for the thresholds instead of a subagent's.
+A later pass measured the thing the first one assumed: a surface has a **contrast ceiling**, the
+largest `|Lc|` any ink can reach on it, and `apcaCeiling` in the gate computes it.
+
+```
+apcaCeiling(--p-hero #c9a876) = 59.7          body floor 75
+```
+
+The best ink that can exist on the champagne fill is pure black at `Lc 59.7`; pure white gives
+`-49.1`. So `--p-hero-ink` on `--p-hero` and on `--p-cta-bg` fail the body floor for **every value
+`--p-hero-ink` could ever take** — Obsidian's `#1a1206` at 58.8, Substrate's `#06150c` at 64.6, and
+every colour nobody has drawn. They miss even the *large* floor of 60, by 0.3. Any surface whose
+own luminance sits in the middle has a low ceiling; that is a property of APCA, not of this skin.
+
+Two consequences, and the second is the one that matters:
+
+1. **"Move the token" is not a remedy for those two pairs.** Option (A) below cannot fix them.
+   The gate now says so in its own failure text rather than repeating the generic advice, so the
+   next reader is not sent on a search with no answer in it.
+2. **ADR-009 D8.1's two-rung model is what is failing there.** A design system with an accent fill
+   that carries a label cannot satisfy a flat Lc 75 for it, ever. That is a defect in the ADR's
+   text, and it is an owner's line to change.
+
+The other ten failures are unaffected: their grounds are near-black, their ceilings are 106–108,
+and an ink that fails on one of them really is an ink that has to move.
+
+### 4b. The ways out
+
+Three, in the order they preserve the ADR's intent:
+
+**(A) Re-light the maquette's inks, then re-transcribe.** The honest fix for the ten pairs it can
+reach. Against `#0e0b08` a neutral ink first clears Lc 60 at `#b2b2b2`, Lc 75 at `#cccccc` and
+Lc 90 at `#e4e4e4`; `--p-ink2` is `#a69d8e` and `--p-ink3` is `#746b5d`, so both travel a long way
+up the ladder. That is a visible design change to a signed artifact and therefore the owner's
+call, not this phase's, and it would compress the ink hierarchy the direction depends on — a
+secondary ink at Lc 75 sits close to a primary at Lc 100. **It does nothing for the two champagne
+pairs** (section 4a).
+
+**(B) Amend ADR-009 D8.1 with APCA's own conformance ladder instead of two rungs.** The current
+text assigns floors to sizes and this gate assigns roles to *ink tokens*, which is an
+approximation: `--p-ink3` carries `Label.Section` at 10.5sp and `Mono.Agent` at 10sp — small text,
+not large — so calling it "large-only" is generous to it rather than strict. APCA itself states
+more rungs than two: Lc 90 preferred for body prose, 75 minimum for body, 60 for content text and
+headlines, 45 for large-and-bold and for non-content text (button labels, placeholders, spot-read
+metadata), 30 absolute. Under that ladder the champagne CTA label at 59.7 clears a 45 floor as a
+large, bold, non-prose role and stops being an unsatisfiable requirement, while `--p-ink2` at 49.6
+and `--p-ink3` at 25.5 still fail — so the gate stays honest and stays red on the inks that carry
+prose. This is the only option that addresses section 4a, and it buys an owner's signature for the
+thresholds instead of a subagent's.
 
 **(C) Close O2 with the gate red.** What this evidence file currently records. The migration is
 complete and every other gate is green; the contrast gate stands as a permanent, quantified,
@@ -131,9 +168,43 @@ were refused.
 - **The `--p-lit-fx` and `--p-sweep-fx` effects have no consumer yet**, by design: they are typed
   `effect`, which has no `res/values` primitive, so they deliberately have no join row. O3 and O4
   give them Kotlin homes with their own gates (ADR-009 D8.2).
-- **The `s22b` layout readers still parse the Substrate directions HTML** for spacing and type
-  CSS, while token *values* come from the maquette. Retargeting them is not a rename: the
-  maquette's kit CSS declares 20px, 26px and 30px spacings, which PB-DS-1's ten-step scale cannot
-  absorb inside its own 1dp drift bound. That is a second, smaller finding of the same kind as
-  section 4 — the maquette's prose says it lays out on the PB-DS-1 scale and in three places it
-  does not — and it is recorded here rather than resolved by loosening the scale.
+- **Three of the maquette's paddings were off the PB-DS-1 scale, and the orchestrator corrected
+  them** (`38046c1`): `.sheet` 20px → 18px, `.empty` 26/30px → 24px. Found by this phase, fixed in
+  the design source rather than by loosening the scale, which is the order the regime requires.
+
+## 6. The spacing readers now read the maquette; two things deliberately still do not
+
+With the maquette on the scale, `TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale` was retargeted
+at it (RED first, then the table and the ledger rewritten quoting what they replaced). The
+outcome is a stronger record than Substrate could give:
+
+| | Substrate artifact | Obsidian maquette |
+|---|---|---|
+| distinct spacing values | 14 | 17 |
+| movers | 6, plus a 7th (26→24) that lived in an artifact the gate never read | **7, all by 1dp** |
+| worst drift | 1dp | 1dp |
+| steps absorbing nothing | `swarm_space_6`, `swarm_space_24` — justified only by screens not yet built | **none** |
+
+Both promissory steps are now spent by a design that exists: 6px on the badge, the chip gap, the
+field label and the stale notice; 24px on the nav, the drill header, the tab bar's bottom inset
+and the empty state. The one new literal, 3px, is an equidistant tie and is recorded as one — it
+is the activity row's body gap and the maquette's two other sub-label gaps are both 2px, so it
+joins them.
+
+The reader also gained an **at-rule strip and a nesting assertion**, because it needed one. The
+rule regexp is flat; fed the maquette's `@keyframes sweep { 0% { … } }` in the middle of the kit
+block it matched the inner block and walked out of phase, silently attributing `.empty { padding }`
+to a value three rules away. That is how the first reading of this block reported spacings the file
+does not contain. At-rules are now removed whole and residual nesting is a hard failure.
+
+**Three readers stay on the older directions artifact, each for a stated reason** (recorded in the
+gate at `s22bMaquetteRelPath`, not only here):
+
+| reader | why the maquette cannot serve it |
+|---|---|
+| the three frame constants (54/76/74) | handset geometry, not skin values — ADR-009 D1 keeps them by name. The maquette draws a 300px gallery phone with no OS chrome and no fixed-height bar, so it states none of the three. |
+| the type ladder (PB-DS-2, 19 styles) | the maquette's sizes are a redraw (nav title 22px against 27px). Re-pointing type.xml's origins moves nineteen font sizes; ADR-009 D3 changes weight and tracking and **no size**, and the plan gives O5 the verification of the styles against the maquette. A type-scale change inside a token migration is the defect this regime exists to prevent. |
+| the four tab glyphs (PB-DS-6) | the maquette's tab bar is four labels and draws no `<svg>`. ADR-009 moves material, not geometry; the paths are unchanged. |
+
+The type ladder is the one worth a bead: the maquette specifies sizes the app does not yet render,
+and O5 is where that is reconciled.

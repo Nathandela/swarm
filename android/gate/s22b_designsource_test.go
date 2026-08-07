@@ -60,6 +60,9 @@ const (
 //     the migration plan gives O5 the visual verification of the styles against the maquette. A
 //     type-scale change smuggled inside a token migration is the defect this whole regime exists
 //     to prevent, so it is not made here.
+//   - THE FOUR TAB GLYPHS (tabbar_test.go). The maquette's tab bar is four labels; it draws no
+//     `<svg>` for them. ADR-009 moves material and not geometry, so the paths are unchanged and
+//     the artifact that states them is still the one that states them.
 //
 // The spacing values themselves confirm the maquette is dp-equivalent rather than a scaled
 // drawing: it declares 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,24 against Substrate's
