@@ -59,6 +59,19 @@ type fakeClient struct {
 	launchName string // canonical name the daemon returns on the launch reply ("" = older daemon)
 	launchErr  error  // when set, Launch returns it (B1 error-surfacing tests)
 	renameErr  error  // when set, Rename returns it (skew-refusal banner tests)
+
+	// sentInput records every SendInput call (ADR-010 Phase 4 D3/A2 TUI trigger),
+	// in order. sendInputErr, when set, is what SendInput returns (error-surfacing
+	// tests); it never blocks the call from being recorded first.
+	sentInput    []sendInputCall
+	sendInputErr error
+}
+
+// sendInputCall records one Client.SendInput invocation so a test can assert what
+// the TUI injected, into which session.
+type sendInputCall struct {
+	id  string
+	req protocol.SendInputReq
 }
 
 // renameCall records one Client.Rename so a test can assert what the TUI committed.
@@ -119,6 +132,13 @@ func (f *fakeClient) Rename(id, name string) error {
 
 func (f *fakeClient) Subscribe() (<-chan protocol.Event, error) { return f.events, nil }
 
+func (f *fakeClient) SendInput(id string, req protocol.SendInputReq) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sentInput = append(f.sentInput, sendInputCall{id: id, req: req})
+	return f.sendInputErr
+}
+
 // emit pushes a status-change event onto the subscribe stream (drives V-2/V-5).
 func (f *fakeClient) emit(e protocol.Event) { f.events <- e }
 
@@ -144,6 +164,12 @@ func (f *fakeClient) renamedCalls() []renameCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]renameCall(nil), f.renamed...)
+}
+
+func (f *fakeClient) sendInputCalls() []sendInputCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sendInputCall(nil), f.sentInput...)
 }
 
 // ---------------------------------------------------------------------------

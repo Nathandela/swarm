@@ -33,6 +33,7 @@ type Client struct {
 	mu       sync.Mutex
 	eventsCh chan Event
 	att      *Attachment
+	peekCh   chan TerminalSnapshot // terminal_snapshot PUSHES, never the request respCh
 
 	pairMu  sync.Mutex      // one pairing in flight per client (mirrors the daemon host)
 	pairing *PairingSession // the in-flight pairing, routing pair_pending/pair_result pushes
@@ -138,6 +139,78 @@ func (c *Client) Launch(req LaunchReq) (id, name string, err error) {
 		return "", "", errors.New("protocol: launch reply carried no session")
 	}
 	return resp.Session.ID, resp.Session.Name, nil
+}
+
+// SendInput writes ONE steering message into a session (ADR-010 A2): either req.Text
+// (submitted with a trailing CR when req.Submit) or the single named key req.Key, never
+// both. The daemon applies the r3p submit-boundary framing and its gap; the caller just
+// names the message. It takes no lease and never supersedes an attached controller. An
+// older daemon that predates the op, a remote-tier socket, a malformed request or a
+// session that cannot receive input all come back as a Go error rather than a silent
+// success.
+func (c *Client) SendInput(id string, req SendInputReq) error {
+	r := req
+	resp, err := c.request(Control{Op: OpSendInput, EndpointID: c.endpointID, SessionID: id, SendInput: &r})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+// TerminalSnapshot returns the session's CURRENT screen, server-rendered and sanitized
+// (ADR-010 A3 — the owner-tier peek). The daemon's render loop pushes the session's grid
+// before any new output, so a peek of an idle session returns at once instead of waiting
+// for the session to print something.
+//
+// The peek is a server PUSH stream (like event), not a request response: the daemon keeps
+// rendering after this call returns. The channel is registered BEFORE terminal_subscribe is
+// sent and every snapshot is routed to it by dispatchControl, so a later push can never be
+// answered as some other request's reply.
+//
+// A PREVIOUS peek on this client is the hazard, and TWO things answer it. The earlier peek
+// keeps rendering until the daemon cancels it, so (1) this call waits on a FRESH channel —
+// a reused one can already hold the previous session's screen, which would be returned here
+// as if it were this session's, silently and with no error — and (2) a snapshot is accepted
+// only when it is FOR the session that was asked for, so a frame still in flight from the
+// previous peek is discarded rather than answered with. The daemon stamps the LOCAL session
+// id on the render (server.go's renderer emits r.Session; the gateway namespaces at egress).
+func (c *Client) TerminalSnapshot(id string) (*TerminalSnapshot, error) {
+	ch := make(chan TerminalSnapshot, 1)
+	c.mu.Lock()
+	c.peekCh = ch
+	c.mu.Unlock()
+
+	// The daemon refuses a non-namespaced id outright, so the fallback below never governs a
+	// successful peek; it just keeps the match total.
+	want := id
+	if _, local, ok := ParseID(id); ok {
+		want = local
+	}
+
+	resp, err := c.request(Control{Op: OpTerminalSubscribe, EndpointID: c.endpointID, SessionID: id})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Op == OpError {
+		return nil, errors.New(resp.Error)
+	}
+	deadline := time.After(clientTimeout)
+	for {
+		select {
+		case snap := <-ch:
+			if snap.Session != want {
+				continue // a leftover render from the peek this one superseded
+			}
+			return &snap, nil
+		case <-c.done:
+			return nil, errors.New("protocol: connection closed during peek")
+		case <-deadline:
+			return nil, errors.New("protocol: no terminal snapshot from the daemon")
+		}
+	}
 }
 
 // Kill terminates a session.
@@ -551,6 +624,21 @@ func (c *Client) dispatchControl(ctrl Control) {
 		c.mu.Unlock()
 		if att != nil {
 			att.closeFrames()
+		}
+	case OpTerminalSnapshot:
+		// A peek is a server PUSH stream: the daemon renders on its own schedule and keeps
+		// pushing after the one-shot TerminalSnapshot returned. Route it to the peek channel
+		// and NEVER the request respCh, or a later request would be answered with a stale
+		// screen. The send is non-blocking: a one-shot caller reads one snapshot, so the
+		// pushes behind it are dropped rather than backing the read loop up.
+		c.mu.Lock()
+		ch := c.peekCh
+		c.mu.Unlock()
+		if ch != nil && ctrl.Terminal != nil {
+			select {
+			case ch <- *ctrl.Terminal:
+			default:
+			}
 		}
 	case OpPairPending:
 		// The daemon-hosted pairing PUSHES the SAS gate. Route it to the in-flight

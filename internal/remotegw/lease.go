@@ -22,15 +22,9 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/submitframe"
 	"github.com/Nathandela/swarm/internal/wire"
 )
-
-// submitGap is the minimum spacing between a keystroke frame and the submit that follows
-// it, at the PTY. It is spike S-A's measured value (docs/verification/spike-SA.md finding
-// #1): the harness that made a real Claude Code submit reliably wrote the text, slept
-// 150 ms, then wrote the CR. Nothing establishes that less is enough, so this is the number
-// the fix owes rather than one tuned for latency.
-const submitGap = 150 * time.Millisecond
 
 var (
 	// errLeaseDead reports that the lease died (OpDetach or conn close) before it was
@@ -51,7 +45,7 @@ type LeaseConn struct {
 	operationID string // the phone's take_control operation id, so a severance is attributable
 
 	wmu      sync.Mutex // serializes writes on the conn (take_control, data_in, resize)
-	lastText time.Time  // guarded by wmu: when the last NON-submit keystroke frame left (submitGap)
+	lastText time.Time  // guarded by wmu: when the last NON-submit frame left (submitframe.Gap)
 
 	mu         sync.Mutex
 	gen        uint64 // captured OpLease generation (0 until granted)
@@ -192,7 +186,8 @@ func (lc *LeaseConn) refusalReason() string {
 // forwards it to the session's shim only while the control gate is open (the four-clause
 // gate bound to this connection's lease); it is fire-and-forget (no reply).
 //
-// A SUBMIT-ONLY FRAME IS HELD OFF THE TEXT BEFORE IT by submitGap (bead agents-tracker-r3p).
+// A SUBMIT-ONLY FRAME IS HELD OFF THE TEXT BEFORE IT by submitframe.Gap (bead
+// agents-tracker-r3p).
 // The phone already refuses to put text and its submit in one frame, and spaces its own
 // frames by a 125 ms window, but neither survives the relay: it is store-and-forward, and
 // the inbound wait returns a BATCH that processBatch walks serially, so two frames appended
@@ -228,18 +223,18 @@ func (lc *LeaseConn) refusalReason() string {
 // clearing only after the key came up. Keying on the last TEXT write removes the mismatch
 // instead, and costs the submit that actually needs the gap nothing.
 //
-// COST, and the whole of it: up to submitGap on a submit that closely follows text -- once per
-// prompt, not once per keystroke. wmu is NOT the mechanism and is not contended: every writer
-// on a LeaseConn (take_control from Leases.Begin, data_in and resize from Leases.Input) is the
-// inbound loop's own goroutine. That serial loop is the cost. Whatever shares the batch behind
+// COST, and the whole of it: up to submitframe.Gap on a submit that closely follows text --
+// once per prompt, not once per keystroke. wmu is NOT the mechanism and is not contended:
+// every writer on a LeaseConn (take_control from Leases.Begin, data_in and resize from
+// Leases.Input) is the inbound loop's own goroutine. That serial loop is the cost. Whatever shares the batch behind
 // a sleeping submit waits with it -- another session's keystrokes, a resize the user's screen
 // is waiting on, or a kill/take_control -- all bounded by the same 150 ms, none of it a hang.
 // §6.0's 150 ms p50 budget is a keystroke-echo budget and is not on this path.
 func (lc *LeaseConn) WriteDataIn(b []byte) error {
 	lc.wmu.Lock()
 	defer lc.wmu.Unlock()
-	if isSubmitOnly(b) {
-		if wait := submitGap - time.Since(lc.lastText); !lc.lastText.IsZero() && wait > 0 {
+	if submitframe.IsSubmitOnly(b) {
+		if wait := submitframe.Gap - time.Since(lc.lastText); !lc.lastText.IsZero() && wait > 0 {
 			time.Sleep(wait)
 		}
 		return wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
@@ -247,21 +242,6 @@ func (lc *LeaseConn) WriteDataIn(b []byte) error {
 	err := wire.WriteFrame(lc.dc.conn, wire.TDataIn, b)
 	lc.lastText = time.Now()
 	return err
-}
-
-// isSubmitOnly reports whether b is nothing but bytes a CLI reads as "run what I typed".
-// The phone's coalescer emits such a run as its own frame (phonecore.frameLen), so this is
-// the whole class of frames the gap applies to -- and an empty frame is not one of them.
-func isSubmitOnly(b []byte) bool {
-	if len(b) == 0 {
-		return false
-	}
-	for _, c := range b {
-		if c != '\r' && c != '\n' {
-			return false
-		}
-	}
-	return true
 }
 
 // WriteResize writes an OpResize control on the lease connection. On the remote tier the

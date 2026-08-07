@@ -33,6 +33,14 @@ github.com/Nathandela/swarm/internal/phonecore
 github.com/Nathandela/swarm/internal/protocol/schema
 github.com/Nathandela/swarm/internal/status
 
+# --- the shared submit-boundary framing rule (ADR-010 Amendment 1 A2)
+# The coalescer's own frameLen/isSubmit, extracted verbatim so the daemon-side send_input
+# writer applies ONE copy of the r3p rule instead of a second that could drift. What ships
+# to the handset is what already shipped: a stdlib-only leaf of two predicates, a run
+# length and a duration constant. It imports nothing but time, so it adds no closure of
+# its own -- that is the reason the extraction is a package rather than a shared file.
+github.com/Nathandela/swarm/internal/submitframe
+
 # --- crypto: sealing, Noise, epoch keys, SAS
 github.com/Nathandela/swarm/internal/remote/crypto
 github.com/Nathandela/swarm/internal/remote/device

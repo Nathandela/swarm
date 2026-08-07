@@ -50,6 +50,8 @@ type Meta struct {
 	ConversationID string            `json:"conversation_id"`
 	ExitCode       *int              `json:"exit_code"`
 	ResumedFrom    string            `json:"resumed_from"`
+	SpawnedFrom    string            `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
+	SpawnIntent    string            `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
 }
 
 // Store is a session store rooted at a single state directory. The root and

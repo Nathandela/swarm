@@ -157,6 +157,7 @@ func (b *blockingClient) Kill(string) error                                 { re
 func (b *blockingClient) Delete(string) error                               { return nil }
 func (b *blockingClient) Rename(string, string) error                       { return nil }
 func (b *blockingClient) Subscribe() (<-chan protocol.Event, error)         { return nil, nil }
+func (b *blockingClient) SendInput(string, protocol.SendInputReq) error     { return nil }
 
 // E8 (bounded-dial carry-forward) — New must bound its eager List so a hung daemon
 // cannot stall the first paint. New returns promptly with an (empty) usable board.

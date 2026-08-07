@@ -81,6 +81,24 @@ type Control struct {
 	RemoteControl  *bool           `json:"remote_control,omitempty"`   // remote_set_control: the DESIRED remote-control master state (true=on, false=manual off). Pointer so false is transmittable and a zero Control emits no key (A4)
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
+
+	SendInput *SendInputReq `json:"send_input,omitempty"` // owner-tier one-shot steering message, carried on send_input (ADR-010 A2)
+}
+
+// SendInputReq is one owner-tier steering message (ADR-010 Amendment 1 A2), carried in
+// Control.send_input on a send_input op against Control.session_id. EXACTLY ONE MODE per
+// request: Key names a single key from the closed vocabulary, or Text is the message,
+// submitted with a trailing CR when Submit. Both set, neither set, an unknown key, or text
+// past the server's bound are refused invalid_field with nothing written.
+//
+// The daemon -- not the caller and not the shim -- applies the r3p submit-boundary
+// discipline to Text (internal/submitframe): a PTY write is never a mixture of text and
+// the CR that runs it. All three fields are omitempty, so a control that carries no
+// send_input serializes byte-identically to the pre-ADR-010 shape.
+type SendInputReq struct {
+	Text   string `json:"text,omitempty"`
+	Submit bool   `json:"submit,omitempty"`
+	Key    string `json:"key,omitempty"`
 }
 
 // TerminalSnapshot is one server-rendered, sanitized terminal snapshot (A7 renderer
@@ -127,6 +145,11 @@ type SessionView struct {
 	LastActivity time.Time     `json:"last_activity"`
 	CreatedAt    time.Time     `json:"created_at"`
 	Summary      string        `json:"summary"` // V-4 one-line last-output summary
+	// SpawnedFrom / SpawnIntent expose the session's lineage (ADR-010 D4) so the
+	// roster can show where a session came from. Both are omitempty: an ordinary
+	// session's row serializes exactly as it did before the fields existed.
+	SpawnedFrom string `json:"spawned_from,omitempty"`
+	SpawnIntent string `json:"spawn_intent,omitempty"`
 }
 
 // DeviceView is one paired-device row (R-DEV.1), carried on the device_list
@@ -192,4 +215,19 @@ type LaunchReq struct {
 	// which registers worktree.Create/Remove gated on this flag; the protocol layer
 	// only transports it.
 	Worktree bool `json:"worktree,omitempty"`
+	// SpawnedFrom, when non-empty, is the LOCAL id of the session that requested this
+	// launch (ADR-010 D4), mirroring the ResumedFrom pattern: a daemon-launched session
+	// is no process-group descendant of its spawner (S-4), so lineage must be explicit
+	// metadata. SpawnIntent tags the link and is one of SpawnIntentHandoff or
+	// SpawnIntentDelegate, valid only alongside a SpawnedFrom. Both omitempty: an
+	// un-lineaged launch is byte-identical to the pre-lineage shape.
+	SpawnedFrom string `json:"spawned_from,omitempty"`
+	SpawnIntent string `json:"spawn_intent,omitempty"`
 }
+
+// The closed spawn-intent vocabulary (ADR-010 D2/D4): the two flavors of spawn share
+// their mechanics and differ only in recorded intent.
+const (
+	SpawnIntentHandoff  = "handoff"
+	SpawnIntentDelegate = "delegate"
+)

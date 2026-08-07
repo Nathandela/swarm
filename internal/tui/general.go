@@ -294,6 +294,22 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editID = s.ID
 			m.general.editBuf = s.Name
 		}
+	case k.Text == "h":
+		// Inject the /swarm-handoff slash command into the selected session (ADR-010
+		// D3), UNSUBMITTED: the human completes the target CLI/model and presses Enter
+		// inside the session. The gate is the session being at a prompt — anything
+		// mid-turn is told so rather than having input silently queued behind its work.
+		if s, ok := m.general.selected(); ok {
+			if !atPrompt(s.Group) {
+				// The refusal is immediate and returns NO command: the board's own
+				// repaint tick (repaintInterval) already re-emits the frame often
+				// enough to clear the banner at its expiry, so this path does not
+				// arm a second, longer timer behind a keystroke that did nothing.
+				m.general.setBanner(handoffBusyBanner)
+				return m, nil
+			}
+			return m, handoffCmd(m.client, s.ID)
+		}
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
 		// so a concurrent status event cannot shift a different row under it.
@@ -394,6 +410,32 @@ type killDoneMsg struct {
 
 func killCmd(c Client, id string) tea.Cmd {
 	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
+}
+
+// handoffText is the slash-command text the trigger types into the session — the
+// trailing space leaves the cursor where the human types the target CLI (ADR-010 D3).
+const handoffText = "/swarm-handoff "
+
+// handoffBusyBanner is the refusal shown when the selected session is mid-turn: D3
+// requires the TUI to surface that rather than queue the injection.
+const handoffBusyBanner = "session is busy — try when it is at a prompt"
+
+// atPrompt reports whether a session is waiting on a human, the only state that can
+// receive an injected slash command.
+func atPrompt(g status.Group) bool {
+	return g == status.GroupNeedsInput || g == status.GroupReadyForReview
+}
+
+// handoffDoneMsg carries the injection's outcome so a daemon refusal is bannered rather
+// than silently discarded (the killDoneMsg precedent).
+type handoffDoneMsg struct{ err error }
+
+// handoffCmd types the slash command into the session WITHOUT submitting it, over the
+// same owner-tier send_input op `swarm send` uses (A2).
+func handoffCmd(c Client, id string) tea.Cmd {
+	return func() tea.Msg {
+		return handoffDoneMsg{err: c.SendInput(id, protocol.SendInputReq{Text: handoffText})}
+	}
 }
 
 // renameDoneMsg carries a rename's outcome so a failure (including an older daemon's
@@ -574,12 +616,16 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	// Two identity columns (field test 4): the session NAME (bold, editable) then the
 	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
 	// so padRight always leaves a separating space (no jamming, width discipline).
+	tail := padRight(compactElapsed(elapsedOf(s)), colElapsed) + s.Summary
+	if badge := lineageBadge(s, m.sessions); badge != "" {
+		tail += " " + badge
+	}
 	fields := icon + " " +
 		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
 		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		gs.Render(padRight(statusToken(g), colStatus)) +
-		styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+s.Summary)
+		styleDim.Render(tail)
 
 	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
 	// selected row, so a mid-confirm regroup/removal cannot paint the prompt onto a
@@ -615,6 +661,53 @@ func confirmPrompt(s protocol.SessionView) string {
 		return "kill? y/n"
 	}
 	return "delete? y/n"
+}
+
+// lineageBadge is the row's spawn-lineage decoration (ADR-010 D4): where a spawned
+// session came from, and whether it spawned any session currently on the roster.
+// Both are derived from the roster slice the model already holds — no extra state
+// and no extra RPC. SpawnedFrom carries the parent's LOCAL id, so the match is
+// against the local half of each row's namespaced id.
+func lineageBadge(s protocol.SessionView, sessions []protocol.SessionView) string {
+	var badge string
+	if s.SpawnedFrom != "" {
+		badge = "from " + lineageLabel(s.SpawnedFrom, sessions)
+	}
+	local := localID(s.ID)
+	children := 0
+	for _, o := range sessions {
+		if o.SpawnedFrom == local {
+			children++
+		}
+	}
+	if children > 0 {
+		if badge != "" {
+			badge += " "
+		}
+		badge += "spawned " + itoa(children)
+	}
+	return badge
+}
+
+// lineageLabel names a parent session: its display label while it is still on the
+// roster, else the raw local id — the source session stays alive only until the user
+// closes it (D4), and a child must still say where it came from afterwards.
+func lineageLabel(parent string, sessions []protocol.SessionView) string {
+	for _, s := range sessions {
+		if localID(s.ID) == parent && s.Name != "" {
+			return s.Name
+		}
+	}
+	return parent
+}
+
+// localID is the local half of a namespaced row id, or the id itself when it is not
+// namespaced.
+func localID(id string) string {
+	if _, local, ok := protocol.ParseID(id); ok {
+		return local
+	}
+	return id
 }
 
 // elapsedOf is the time since the session was last active.

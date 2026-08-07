@@ -92,6 +92,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `gate_token`       | string            | `take_control`: one-shot gate token bound into the device signature via `content_hash` and made single-use (A5-c) |
 | `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
+| `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -99,7 +100,9 @@ uses none of them serializes byte-identically to the pre-remote shape. The neste
 `ApproveReq` (approval), `JournalRecord` (journal event), `DeviceView` (paired
 device), `PolicyView` (launch policy), and `PairingControl` (pairing payload)
 shapes are documented at the field level in `internal/protocol` and are not
-repeated as wire tables here.
+repeated as wire tables here. `send_input` (ADR-010 A2) is the one **owner-tier**
+addition in that block and follows the same rule: `omitempty`, and its `SendInputReq`
+payload is described in its op section below rather than as a second wire table.
 
 ## The `SessionView` message
 
@@ -120,6 +123,8 @@ alongside the group.
 | `last_activity` | time            | timestamp of the session's last activity                      |
 | `created_at`    | time            | session creation timestamp                                    |
 | `summary`       | string          | V-4 one-line last-output summary                              |
+| `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
+| `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 
 ## The `LaunchReq` message
 
@@ -141,6 +146,8 @@ and unrelated secrets are dropped.
 | `rows`           | int                 | initial terminal rows                                      |
 | `initial_prompt` | string              | optional initial prompt text                               |
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
+| `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
+| `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 
 ## The `TerminalSnapshot` message
 
@@ -325,10 +332,21 @@ tier has no unsigned `attach` and instead requires a signed `take_control`.
 
 ### `terminal_subscribe` / `terminal_snapshot`
 
-Remote-tier terminal peek (A7 renderer slice B), mirroring the
+Terminal peek (A7 renderer slice B), mirroring the
 `journal_subscribe`/`journal_event` streaming pair. Unlike `take_control`, the peek
 is **read-only** and works BEFORE any control session exists (no lease, no signed
 op).
+
+**Authorization is per tier** (ADR-010 A3). A **remote-tier** peek keeps its full
+gate: the remote-control kill switch (checked at subscribe time, on every render tick
+and before every emission — `swarm remote off` blanks an established peek), plus the
+negotiated `remote-gateway` capability. An **owner-tier** connection on the main
+socket needs neither: ADR-004's v1 trust model already grants any same-user process on
+that socket full daemon power, and the switch is the remote tier's master override, so
+it must never blank the owner's own view of the owner's own machine. This is a
+relaxation of authorization ONLY — the render path, the read-only tap and the
+sanitization are identical on both tiers, and a backend that implements no terminal tap
+still refuses on both.
 
 - **`terminal_subscribe`** requests the server-rendered terminal snapshot stream for
   a `session_id`. The daemon renders that session's VT grid off a persistent
@@ -339,6 +357,56 @@ op).
   rendered at. The VT emulator and the raw hostile PTY bytes stay off the
   network-facing sidecar — only this sanitized text crosses the daemon → gateway
   socket.
+
+### `send_input`
+
+**Owner-tier only** one-shot steering write (ADR-010 Amendment 1 A2), behind
+`swarm send`. The daemon writes ONE message into `session_id`'s shim through the same
+input funnel every lease write uses. It never takes, bumps or supersedes the attach
+lease — that is why it is a distinct op rather than a local control session, which
+would kick an attached human off mid-keystroke. It is **refused `not_authorized` on the
+remote tier**, before the session is resolved and before any authorization is consulted
+(mirroring `attach`): the remote tier keeps its own signed `take_control` lane.
+
+The `send_input` payload (`SendInputReq`) carries `text`, `submit` and `key`, and names
+**exactly one mode** per request:
+
+- **text mode** — `text` is the message. With `submit` (the default of `swarm send`) the
+  daemon appends the CR that runs it; `--no-submit` leaves the text sitting in the
+  session's input box. `text` is capped at 4096 bytes, the bound the input path already
+  imposes on a single PTY write.
+- **key mode** — `key` is ONE name from the closed vocabulary `enter` (CR), `esc`
+  (`0x1b`), `ctrl-c` (`0x03`), `tab` (`0x09`), `up` (`ESC [ A`) and `down` (`ESC [ B`).
+  An unknown name is refused, never guessed at.
+
+Both set, neither set, an unknown key, or over-long text are refused `invalid_field`
+with nothing written. A session that is not running is refused with a plain error
+carrying **no** `error_code`: the closed code vocabulary has no fit for "the target
+cannot receive input", and nothing is written either way.
+
+**Framing and the gap are the daemon's job** (`internal/submitframe`, bead
+`agents-tracker-r3p`). A text message is at most TWO PTY writes: the text verbatim in
+one write — embedded newlines are content, which the CLI's paste heuristic renders as a
+multi-line draft — then, with `submit`, the CR that runs it in a write of its own, so a
+PTY write never mixes the message with the byte that submits it (which Claude Code's TUI
+reads as an unsubmitted paste). ~150 ms must elapse between those two writes, and the
+**daemon sleeps it** while holding the session's input serialization: the shim must
+never sleep, because its PTY writer lock is shared with the VT emulator's DSR/CPR reply
+pump. A message sleeps at most once, so that hold is bounded by the gap plus two writes
+however long or newline-heavy the text is.
+
+That serialization is held across both frames, so the message is atomic against
+**owner-tier** lease input — a concurrent owner-tier controller's keystrokes land wholly
+before the message or wholly after it, never between the text and its CR (invariant S2).
+The scope is deliberate: the owner-tier and remote-tier servers are distinct values with
+distinct per-session serializations over one shared tap, so a remote `take_control`
+controller CAN interleave. That is accepted for the personal single-owner model — a
+remote take-control is the human deliberately grabbing the session (ADR-010 A2).
+
+If the CR write fails after the text has landed, the refusal says so distinctly ("text
+delivered, submit not sent"): the message is half-delivered, and `swarm peek` plus
+`swarm send --key enter` recovers it. A bare refusal would be indistinguishable from one
+that wrote nothing.
 
 ### `detach`
 

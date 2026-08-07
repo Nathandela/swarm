@@ -137,6 +137,11 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// SpawnedFrom, when non-empty, is the LOCAL id of the session that spawned this
+	// one (ADR-010 D4), and SpawnIntent is "handoff" or "delegate". The daemon only
+	// stamps them into meta — exactly as it does ResumedFrom.
+	SpawnedFrom string
+	SpawnIntent string
 	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
 	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
 	// session — the replay reuses the reserved session and spawns nothing. Local

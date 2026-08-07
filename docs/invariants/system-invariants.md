@@ -8,7 +8,7 @@
 
 **S1 — SURVIVAL**: While a session's process is running, no daemon termination event ends the agent. *Assert*: `kill -9` the daemon → every agent PID still alive; restarted daemon lists and reconnects the same sessions. [D-2, D-3, D-5, ADR-001]
 
-**S2 — SINGLE-CONTROLLER**: At most one client holds a current-generation attach lease per session; the shim applies input/resize only under the current generation. *Assert*: two concurrent attaches → applied input from a stale generation == 0. [P-5]
+**S2 — SINGLE-CONTROLLER**: At most one client holds a current-generation attach lease per session; the shim applies input/resize only under the current generation. The daemon itself may additionally perform serialized one-shot message writes (`send_input`, ADR-010 Amendment 1 A2), which take no lease and supersede no controller: it is a sanctioned writer class, and the shim still has exactly one input connection — the daemon — through which every write serializes. Such a message is atomic against **owner-tier** lease input; the remote tier is a distinct server value with its own per-session serialization, so a remote `take_control` controller may interleave (accepted: a remote take-control is the human deliberately grabbing the session). *Assert*: two concurrent attaches → applied input from a stale generation == 0; a `send_input` message's frames are adjacent in the shim's write sequence under continuous concurrent owner-tier lease input. [P-5, ADR-010 A2]
 
 **S3 — IDENTITY-SAFETY**: Signals are sent and shims adopted only on (PID, process-start-time) match; mismatch → `lost`, never a signal. *Assert*: PID-reuse fixture → zero signals sent. [D-4]
 

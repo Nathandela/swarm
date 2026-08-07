@@ -1,0 +1,53 @@
+# {{.Invocation}}
+
+Continue this work in a NEW swarm session — a fresh agent, on any installed CLI — with
+continuity of context. Three steps: author a {{.Intent}}, spawn the session from
+it, then observe the session you started.
+
+## 1. Author the {{.Intent}}
+
+Write it to a temp file (`mktemp /tmp/swarm-{{.Slug}}-XXXXXX`), never into the repo.
+Cover, in this order:
+
+- **Goal** — what the new session is being asked to accomplish.
+- **State** — what is done, what is in flight, what is known broken.
+- **Decisions** — the choices already made and why, so they are not relitigated.
+- **Next steps** — the concrete first actions, most specific first.
+- **Pointers, never payloads** — this session's id `$SWARM_SESSION_ID`, the path to this
+  CLI's own transcript file, the git branch and working-tree state (`git status --short`,
+  `git log --oneline -5`), and the issue ids in play.
+
+Keep it to a page. The new session can read files for itself; what it cannot recover on
+its own is the reasoning behind where the work stands.
+
+## 2. Spawn the session
+
+```sh
+{{.SpawnLine}}
+```
+
+{{.SpawnNote}}
+
+`--cli` names the target agent; add `--model m`, `--dir d` or `--name n` as needed. The
+new session id is printed on stdout, alone — capture it, every verb below takes it.
+
+## 3. Observe the session you started
+
+```sh
+swarm ls --json
+swarm watch <id> --until ready_for_review
+swarm peek <id>
+swarm send <id> --text "..."
+swarm send <id> --key enter
+swarm kill <id>
+```
+
+`swarm watch` blocks on the daemon's event stream and prints the matching session row as
+JSON — use it instead of polling. Besides `ready_for_review`, its `--until` accepts
+`needs_input`, `completed`, and `change` (any event for that session at all); `--timeout d`
+bounds the wait, and watch exits 2 on timeout, which means "still working", not "failed".
+
+`swarm peek` renders the session's current screen; `--lines N` prints just the tail.
+`swarm send --text` submits what it types — pass `--no-submit` to leave the text sitting
+unsent in the session's prompt for a human to finish. `swarm send --key` takes one of
+enter, esc, ctrl-c, tab, up, down.
