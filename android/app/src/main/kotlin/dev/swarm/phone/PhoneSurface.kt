@@ -30,6 +30,7 @@ import dev.swarm.phone.ui.StatusBanner
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
@@ -1537,6 +1538,13 @@ class PhoneSurface(
         // -- not what the phone core last reported. A session the user has never seen has not
         // transitioned in front of them, and neither has one this scope was hiding.
         val promoted = screen?.let { TriageInboxScreen.promotions(inboxDrawn, it) }.orEmpty()
+        // THE SAME EVENT THE SWEEP FIRES ON, TOLD TO THE HAND (migration plan O6.2, `needs-you
+        // two-pulse`). A promotion is a session that has just started asking, in front of a user
+        // who is already holding the phone -- the one moment in this app where something arrives
+        // rather than being asked for. It is fired ONCE per draw and not once per session: two
+        // rows promoted by one journal event are one interruption, and D5's "at most one sweep
+        // animating per viewport" is the same ruling one sense over.
+        if (promoted.isNotEmpty()) Haptics.play(activity, Haptics.Signal.NEEDS_YOU)
         inboxDrawn = screen
         detailDrawn = null
         hostContent(
@@ -2280,14 +2288,32 @@ class PhoneSurface(
      *  refusals, and returns null for a press that resolves without reaching the wire -- a launch
      *  draft missing a required field, a Stop with no lease to send on. A null still redraws,
      *  because the refusal it just recorded is what the screen has to show.
+     *
+     * THE HAPTIC ANSWER IS GIVEN HERE AND THAT IS THE ONLY PLACE IT COULD BE (migration plan O6.2:
+     * "fired locally on tap, never on server ack"). This function is exactly the seam where the
+     * phone has decided what a press means and has not yet asked the machine anything: the plan
+     * either produced a verb, which is `SENT`, or refused it on the handset, which is `FAILED`.
+     * One line further in ([dispatchPress]'s settle) the answer belongs to the relay and can be
+     * five seconds old -- feedback that late is not feedback, it is a second event -- and one line
+     * back, in the click listener, the press has not been resolved yet, so a signal there would
+     * report `SENT` for a launch form with an empty field.
      */
     private fun press(control: View, plan: () -> Press?) {
         when (val startup = runtime.phone()) {
-            is PhoneStartup.Unavailable -> outcome.text = startup.error.message
+            // The phone core would not build, so nothing was sent and nothing will be. It is the
+            // same fact as a model refusal from the hand's point of view: the press stopped here.
+            is PhoneStartup.Unavailable -> {
+                outcome.text = startup.error.message
+                Haptics.play(control.context, Haptics.Signal.FAILED)
+            }
             is PhoneStartup.Ready -> {
                 val app = startup.app
                 val planned = plan()
-                if (planned != null) return dispatchPress(control, app, planned)
+                if (planned != null) {
+                    Haptics.play(control.context, Haptics.Signal.SENT)
+                    return dispatchPress(control, app, planned)
+                }
+                Haptics.play(control.context, Haptics.Signal.FAILED)
             }
         }
         render()

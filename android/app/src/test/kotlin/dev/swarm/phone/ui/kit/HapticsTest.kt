@@ -172,29 +172,49 @@ class HapticsTest {
         )
     }
 
+    /**
+     * THE TWO EFFECTS ARE COMPARED AGAINST ONES BUILT HERE FROM [Haptics.RHYTHMS], not against the
+     * implementation's own output and not against a Robolectric recording. That is what makes this
+     * an assertion about the DESIGN reaching the hardware: a dropped delay, a scale applied to the
+     * wrong beat or a fallback built from different numbers all fail it, and none of them would
+     * fail a count of how many primitives the shadow saw.
+     */
     @Test
     fun `the composition is used where the primitives exist and the waveform where they do not`() {
-        hapticsEnabled(true)
         shadowOf(vibrator).setHasVibrator(true)
         val rhythm = Haptics.RHYTHMS.getValue(Haptics.Signal.COMPLETED)
+        val ids = rhythm.beats.map { it.primitive }
 
-        shadowOf(vibrator).setSupportedPrimitives(rhythm.beats.map { it.primitive })
-        assertTrue(Haptics.play(context, Haptics.Signal.COMPLETED))
+        shadowOf(vibrator).setSupportedPrimitives(ids)
+        ids.forEach { shadowOf(vibrator).setPrimitiveDurations(it, SUPPORTED_PRIMITIVE_MS) }
+        val tuned = Haptics.effectFor(vibrator, rhythm)
+
+        var wanted = VibrationEffect.startComposition()
+        rhythm.beats.forEach { beat ->
+            wanted = wanted.addPrimitive(beat.primitive, beat.scale, beat.delayMs.toInt())
+        }
         assertEquals(
-            "a device that supports the primitives must feel the tuned composition, not the " +
-                "fallback: the primitives are the hardware's own strike shapes and a waveform is " +
-                "an approximation of one.",
-            rhythm.beats.size,
-            shadowOf(vibrator).primitiveEffects?.size ?: 0,
+            "a device that supports the primitives must feel the tuned composition, beat for " +
+                "beat: the primitives are the hardware's own strike shapes and the waveform is " +
+                "this file approximating one.",
+            wanted.compose(),
+            tuned,
         )
 
         shadowOf(vibrator).setSupportedPrimitives(emptyList())
-        assertTrue(Haptics.play(context, Haptics.Signal.COMPLETED))
+        ids.forEach { shadowOf(vibrator).setPrimitiveDurations(it, 0) }
+        val fallback = Haptics.effectFor(vibrator, rhythm)
         assertEquals(
-            "a device without primitive support must still feel the signal, as the waveform the " +
-                "same rhythm renders to.",
-            rhythm.timings.toList(),
-            shadowOf(vibrator).pattern?.toList(),
+            "a device without primitive support must still feel the SAME signal, as the waveform " +
+                "the same rhythm renders to.",
+            VibrationEffect.createWaveform(rhythm.timings, rhythm.amplitudes, PLAY_ONCE),
+            fallback,
+        )
+        assertNotEquals(
+            "the two branches produced the same effect, so the primitive-support check decides " +
+                "nothing and one of the two paths has never been played by anybody.",
+            tuned,
+            fallback,
         )
     }
 
@@ -209,5 +229,14 @@ class HapticsTest {
                 effect.toString().isNotEmpty(),
             )
         }
+    }
+
+    private companion object {
+
+        /** Any non-zero duration: the shadow reads support off the per-primitive duration table. */
+        const val SUPPORTED_PRIMITIVE_MS = 25
+
+        /** `createWaveform`'s "do not repeat" sentinel. Nothing in this vocabulary loops. */
+        const val PLAY_ONCE = -1
     }
 }

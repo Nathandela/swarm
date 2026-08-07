@@ -482,6 +482,18 @@ func s23OwnedFiles() map[string]bool {
 // s23_motion_test.go, and the package comment says why the split exists.
 const s23MotionFile = "Motion.kt"
 
+// s23HapticsFile is the SECOND kit source this slice does not own, on the same terms as the first
+// and for a reason the split makes obvious: nothing in it is a visual value.
+//
+// The scans below are about what the kit PAINTS -- colours, dimensions, radii, typefaces, the
+// metric join into PB-DS-7's table. `Haptics.kt` paints nothing. Its numbers are milliseconds and
+// 0..1 intensities, exactly as Motion.kt's are durations and easing points, so a metric join into
+// a table of surfaces and paddings would have nothing to join to and would report every one of
+// them as a value somebody chose. The obsidian migration plan's O6.2 owns it, and
+// android/gate/o6_haptics_test.go is the fence: one construction site, six signals joined to the
+// plan's own phrases, and the user's haptic setting consulted.
+const s23HapticsFile = "Haptics.kt"
+
 // s23ClaimedFiles is every file in the kit package that some fence reads, and which fence reads it.
 //
 // "THE KIT" MEANT ELEVEN OF TWELVE FILES, and until this existed the difference was a hole wide
@@ -511,6 +523,7 @@ func s23ClaimedFiles() map[string]string {
 		claimed[file] = "PB-DS-6/PB-DS-7, by s23OwnedFiles in this file"
 	}
 	claimed[s23MotionFile] = "PB-DS-8, by s23_motion_test.go's exemption"
+	claimed[s23HapticsFile] = "obsidian-migration-plan O6.2, by o6_haptics_test.go's exemption"
 	return claimed
 }
 

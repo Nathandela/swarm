@@ -293,10 +293,13 @@ var o6PlannedSignals = map[string]string{
 	"SCROLL_TICK":  "scroll ratchet tick",
 }
 
-// o6SignalValue matches one `Signal` enum constant: a bare SCREAMING_SNAKE name inside the enum
-// body. Anchored the way guidedControlValue is, and applied to a body this file isolates rather
-// than to the whole file, so a mention in a `when` arm or a KDoc cannot be read as a declaration.
-var o6SignalValue = regexp.MustCompile(`[A-Z][A-Z0-9_]*`)
+// o6SignalValue matches one `Signal` enum constant: a bare SCREAMING_SNAKE name on its own line
+// inside the enum body, with the trailing comma Kotlin requires between constants.
+//
+// ANCHORED ON THE LINE, exactly as guidedControlValue is, and for a reason measured rather than
+// anticipated: an unanchored `[A-Z][A-Z0-9_]*` reads the `S` out of `enum class Signal {` as a
+// seventh constant. A declaration is a line; a capital letter is not.
+var o6SignalValue = regexp.MustCompile(`(?m)^\s*([A-Z][A-Z0-9_]*)\s*,\s*$`)
 
 // o6Signals reads the Signal enum body out of a Haptics SOURCE.
 //
@@ -317,11 +320,8 @@ func o6Signals(t *testing.T, src string) []string {
 		body = body[:end]
 	}
 	var out []string
-	for _, m := range o6SignalValue.FindAllString(body, -1) {
-		if m == "Signal" {
-			continue
-		}
-		out = append(out, m)
+	for _, m := range o6SignalValue.FindAllStringSubmatch(body, -1) {
+		out = append(out, m[1])
 	}
 	sort.Strings(out)
 	return out
