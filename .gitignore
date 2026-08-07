@@ -22,6 +22,9 @@
 .dolt/
 *.db
 .beads-credential-key
+# Play publishing credential -- never committed. Lives at secrets/play-service-account.json,
+# shared with quiet-training (one service account deploys both apps; owner-authorized copy).
+/secrets/
 
 # build artifacts. Every cmd/ target compiles to the repo root under an unqualified
 # `go build ./cmd/...`, and this tree has six recorded incidents of a stray artifact reaching
