@@ -143,7 +143,8 @@ const gridRegionRows = 12
 const composerMarkers = ">›❯"
 
 // escToInterrupt is the near-universal "a turn is running" hint both codex and
-// claude print in their status region while working.
+// claude print in their status region while working. It counts only in the shape
+// a real status row renders it (busyHintOnRow), never as a bare substring.
 const escToInterrupt = "esc to interrupt"
 
 // codexApprovalHint is the standing footer of Codex's modal approval dialog
@@ -223,7 +224,7 @@ func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 }
 
 // hasBusyMarker reports whether the bottom region carries a "turn is running"
-// signal: the literal "esc to interrupt" hint or a braille spinner glyph.
+// signal: the busy hint in its status-row shape, or a braille spinner glyph.
 func hasBusyMarker(snap *vt.Snap) bool {
 	last, _, ok := lastContentLine(snap)
 	if !ok {
@@ -231,7 +232,7 @@ func hasBusyMarker(snap *vt.Snap) bool {
 	}
 	for y := last; y >= 0 && y > last-gridRegionRows; y-- {
 		t := lineText(snap.Lines[y])
-		if strings.Contains(t, escToInterrupt) {
+		if busyHintOnRow(t) {
 			return true
 		}
 		for _, r := range t {
@@ -241,6 +242,49 @@ func hasBusyMarker(snap *vt.Snap) bool {
 		}
 	}
 	return false
+}
+
+// busyHintOnRow reports whether row carries the busy hint the way a live status
+// line renders it: inside a parenthesis group that both opens and closes on that
+// same row — "• Working (1s • esc to interrupt)", "Baking… (12s · esc to
+// interrupt)". Every frame in the corpus that shows the hint has this shape
+// (docs/verification/fixtures/spike-sa/codex-*), including the two-group row
+// "• Starting MCP servers (2/4): codex_apps, context7 (0s • esc to interrupt)",
+// where the earlier group must not be mistaken for the enclosing one.
+//
+// The bare substring is NOT enough: a session whose scrolled OUTPUT carries the
+// phrase — an agent editing this very file, a quoted doc, a pasted transcript —
+// then read WORKING while sitting idle at its composer, and stuck there, since
+// the grid tap that would correct it kept re-reading the same prose
+// (agents-tracker-fji).
+func busyHintOnRow(row string) bool {
+	for off := 0; ; {
+		i := strings.Index(row[off:], escToInterrupt)
+		if i < 0 {
+			return false
+		}
+		i += off
+		end := i + len(escToInterrupt)
+		if enclosedInParens(row, i, end) {
+			return true
+		}
+		off = end
+	}
+}
+
+// enclosedInParens reports whether row[start:end] sits inside a "(...)" group
+// opened and closed on this row.
+func enclosedInParens(row string, start, end int) bool {
+	if open := strings.LastIndexByte(row[:start], '('); open < 0 || strings.LastIndexByte(row[:start], ')') > open {
+		return false
+	}
+	tail := row[end:]
+	closing := strings.IndexByte(tail, ')')
+	if closing < 0 {
+		return false
+	}
+	opening := strings.IndexByte(tail, '(')
+	return opening < 0 || opening > closing
 }
 
 // regionContains reports whether any row in the bottom region contains the
