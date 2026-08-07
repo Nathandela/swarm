@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -242,6 +243,41 @@ const o3SoftLightNeutral = 128.0
 // twentieth of a unit on screen; one whole unit of ladder step is what this exists to protect.
 const o3GrainMeanTolerance = 1.5
 
+// o3DocTileRe is row 21's "140x140 tile", which is the one metric in the derivation table written
+// as a PAIR.
+//
+// IT IS NOT `s23DocMetric`, AND THAT IS A FACT ABOUT THE ROW RATHER THAN A SECOND READER FOR ITS
+// OWN SAKE. That function reads a labelled scalar -- `height 16`, `2 dp stroke` -- and anchors the
+// number on a word boundary, which "140x140" does not have between its halves: `x` and `1` are both
+// word characters, so there is no boundary before the second number and the general reader
+// correctly reports that the row states no `tile <number>`. Widening it to find a number inside a
+// token would make it match half of every dimension pair in the table.
+var o3DocTileRe = regexp.MustCompile(`\b([0-9]+)x([0-9]+)\s+tile\b`)
+
+// o3DocTile reads row 21's tile size, and requires it to be SQUARE.
+//
+// The design writes one number twice and the raster has two dimensions; a reader that returned the
+// first would let a 140x70 row and a 140x140 raster agree. Both halves are compared here so the
+// row cannot state a rectangle the checks below would then measure as a square.
+func o3DocTile(row string) (int, error) {
+	m := o3DocTileRe.FindStringSubmatch(row)
+	if m == nil {
+		return 0, fmt.Errorf("the row states no `NxN tile`")
+	}
+	w, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, err
+	}
+	h, err := strconv.Atoi(m[2])
+	if err != nil {
+		return 0, err
+	}
+	if w != h {
+		return 0, fmt.Errorf("the row states a %dx%d tile, which is not square", w, h)
+	}
+	return w, nil
+}
+
 // o3GrainStats is what the checked-in tile actually is.
 type o3GrainStats struct {
 	Width, Height int
@@ -351,12 +387,12 @@ func TestPBDS5_TheGrainRasterIsTheCheckedInWarmNeutralTile(t *testing.T) {
 		t.Fatalf("ADR-009 D4.3: %s has no `%s` row, so the tile's size would be a number this "+
 			"gate wrote down rather than one the design states", s23ComponentsDoc, o3GrainRow)
 	}
-	tile, err := s23DocMetric(row, "tile")
+	tile, err := o3DocTile(row)
 	if err != nil {
 		t.Fatalf("ADR-009 D4.3: `%s` states no tile size: %v", o3GrainRow, err)
 	}
 
-	for _, fault := range o3GrainFaults(o3ReadGrain(t, raw), int(tile)) {
+	for _, fault := range o3GrainFaults(o3ReadGrain(t, raw), tile) {
 		t.Errorf("ADR-009 D4.3: %s: %s", mustRel(t, path), fault)
 	}
 }

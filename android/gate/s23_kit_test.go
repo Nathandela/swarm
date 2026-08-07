@@ -294,6 +294,20 @@ var s23Inbox = []s23Component{
 			"of one rule.",
 	},
 	{
+		Factory: "grainOverlay",
+		File:    "Grain.kt",
+		Derived: "#21 Grain overlay",
+		Why: "PB-DS-5's other unmet count, and the one component in this kit whose design source " +
+			"is a FILE. `feTurbulence` output is implementation-defined, so row 21 makes the noise " +
+			"an asset rather than a colour -- pre-rendered once at 140x140 and checked in -- and " +
+			"the requirement recorded \"no grain raster exists\" for two months while every gate " +
+			"was green, because nothing anywhere asked. It is a component and not a treatment for " +
+			"`focusRing`'s reason inverted: the ring is applied TO something, and this is a " +
+			"surface of its own that happens to lie over everything. It is a foreground at its " +
+			"call site because row 21 says non-interactive and a foreground cannot take a touch, " +
+			"which is `scanReticle`'s argument over a camera preview.",
+	},
+	{
 		Factory: "presenceDot",
 		File:    "PresenceDot.kt",
 		Derived: "#11 Machine row",
@@ -1755,11 +1769,21 @@ func s23ParseDerived(raw string) (ref, field string) {
 
 // s23MetricTokenOrigin is `origin: --p-card-fx alpha` -- a part of a token's value, for the four
 // effect tokens that have no colour resource and no CSS rule of their own.
-var s23MetricTokenOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(--[a-z0-9-]+)\s+(px|alpha|stop)\s*(?:\*/)?\s*$`)
+// s23MetricTokenOrigin reads `origin: --p-card-fx alpha` -- an effect token, and which part of it.
+//
+// `opacity` IS THE ONE PART THAT IS THE WHOLE VALUE. The other three read a number OUT of a larger
+// value: a px length inside a shadow, an alpha inside an `rgba()`, a stop inside a gradient.
+// `--p-grain` is the bare fraction `0.04` and has no larger value to be read out of, so a reader
+// that only knew the three would have made the grain's opacity a number with no origin -- which is
+// the one thing the annotation exists to make impossible.
+var s23MetricTokenOrigin = regexp.MustCompile(`^(?:\s|\*|/)*origin:\s*(--[a-z0-9-]+)\s+(px|alpha|stop|opacity)\s*(?:\*/)?\s*$`)
 
 var s23PxRe = regexp.MustCompile(`([0-9]*\.?[0-9]+)px`)
 var s23RGBARe = regexp.MustCompile(`rgba\(\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\s*,\s*([0-9]*\.?[0-9]+)\s*\)`)
 var s23StopRe = regexp.MustCompile(`([0-9]*\.?[0-9]+)%`)
+
+// s23OpacityRe is a token whose ENTIRE value is a bare fraction -- `--p-grain` is `"0.04"`.
+var s23OpacityRe = regexp.MustCompile(`^\s*([0-9]*\.?[0-9]+)\s*$`)
 
 // s23Metric is one constant the kit declares, paired with the origin annotation above it.
 //
@@ -2048,6 +2072,12 @@ func s23TokenMetric(tokens map[string]string, token, part string) (float64, erro
 		m = s23RGBARe.FindStringSubmatch(value)
 	case "stop":
 		m = s23StopRe.FindStringSubmatch(value)
+	case "opacity":
+		// THE WHOLE VALUE, ANCHORED. A substring match would read `0.04` out of any token that
+		// happened to contain those characters, which is how a reader stops being about the token
+		// it names; a token cited as an opacity that is not a bare number is a citation error and
+		// says so below.
+		m = s23OpacityRe.FindStringSubmatch(value)
 	}
 	if m == nil {
 		return 0, fmt.Errorf("%q carries no %s", value, part)

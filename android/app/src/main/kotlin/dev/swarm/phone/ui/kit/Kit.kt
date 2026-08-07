@@ -357,6 +357,19 @@ internal object KitMetrics {
     const val WORKBAR_FADE_STOP = 0.85f
 
     /**
+     * The grain's opacity: `--p-grain` is the bare fraction `0.04`.
+     *
+     * IT IS THE ONE TOKEN IN THE ORIGIN WHOSE WHOLE VALUE IS A NUMBER, which is why the join reads
+     * it as `opacity` rather than as `alpha` or `stop`. Those two read a number OUT of a larger
+     * value -- an alpha inside an `rgba()`, a stop inside a gradient -- and this token has no
+     * larger value to read it out of. `effect`-typed, so PB-TOK-6's converters produce nothing for
+     * it and the kit has to carry it as a constant; the Go gate recomputes it from the origin.
+     *
+     * origin: --p-grain opacity
+     */
+    const val GRAIN_ALPHA = 0.04f
+
+    /**
      * The badge's box. `--p-chip-r` is 8 dp, so a 16 dp box renders a pill -- the derivation is
      * the row's, and the pill is a consequence rather than a fifth radius.
      *

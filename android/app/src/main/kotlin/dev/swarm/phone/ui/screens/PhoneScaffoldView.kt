@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.StatusBanner
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.TabItem
 import dev.swarm.phone.ui.kit.ctaButton
+import dev.swarm.phone.ui.kit.grainOverlay
 import dev.swarm.phone.ui.kit.readOnlyNote
 import dev.swarm.phone.ui.kit.tabBar
 
@@ -169,6 +170,24 @@ fun phoneScaffoldView(
         clipChildren = false
         clipToPadding = false
         layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+        // ADR-009 D4.3 / derivation row 21: the grain, full-bleed over the whole destination.
+        //
+        // A FOREGROUND AND NOT A BACKGROUND, WHICH IS THE ENTIRE PLACEMENT. A background is drawn
+        // UNDER the children, so a grain there would be covered by every card, chip and bar in the
+        // app and would texture only the gaps between them -- correct in every value a test could
+        // read and absent from every surface it exists for. A foreground is drawn after the
+        // children, over all of them, and cannot take a touch (row 21: non-interactive).
+        //
+        // THIS SCREEN IS THE HOST BECAUSE OF WHAT IT DOES NOT COVER. Row 21 exempts the QR tile --
+        // 4% soft-light noise on a 29-module symbol is a scan risk -- and the scaffold hosts the
+        // four paired destinations while `pairOnlyView`, which draws the code, replaces it
+        // outright. So the exemption is structural rather than a condition someone has to remember.
+        //
+        // IT IS A COMPOSITION AND NOT A CHOICE, which is what keeps it inside PB-DS-9's rule for
+        // this package: the value, the tile and the blend are all the kit's, and this line says
+        // only WHERE the overlay goes. `s24_screens_test.go` fences a `background =` here for the
+        // stronger reason -- a screen that painted its own surface would be choosing one.
+        foreground = grainOverlay(context)
         // FIRST, AND ABOVE THE SCROLL. Both halves are the requirement: above, because a warning
         // under the destination is a warning under the fold; outside the scroll, because one
         // inside it leaves the screen as soon as the user reads past it.
