@@ -5,11 +5,12 @@
 // are the contract package and internal/vt (the T-5 boundary E11.8 greps for).
 //
 // Claude Code reports status through SETTINGS-CONFIGURED HOOKS: the documented
-// events (PreToolUse/PostToolUse/Notification/Stop/SubagentStop/UserPromptSubmit),
-// plus PermissionRequest as the DEDICATED permission event, each posting a JSON
-// payload. Because the adapter owns no fds it cannot write a settings file, so
-// Command injects the hooks as an INLINE-JSON --settings value (T-2, per-invocation
-// — never a global-config mutation) that wires every event to `swarm hook <event>`.
+// events (PreToolUse/PostToolUse/Notification/Stop/SubagentStart/SubagentStop/
+// UserPromptSubmit), plus PermissionRequest as the DEDICATED permission event,
+// each posting a JSON payload. Because the adapter owns no fds it cannot write a
+// settings file, so Command injects the hooks as an INLINE-JSON --settings value
+// (T-2, per-invocation — never a global-config mutation) that wires every event
+// to `swarm hook <event>`.
 // Idle/active is derived from those hooks via the engine's SignalSource mapping,
 // with the generic grid heuristic as the T-3 fallback. Notification is NOT
 // unconditionally a permission prompt: it maps by its subtype (its default is a
@@ -53,6 +54,15 @@ const sessionMarker = "Session "
 // clobber a permission the dedicated event just set. PermissionRequest is the
 // unconditional, dedicated permission event, so a genuine permission signal never
 // depends on guessing a Notification subtype.
+//
+// SubagentStart/SubagentStop bracket every background child (docs/verification/
+// spike-SE.md F1). SubagentStart is the only hook reporting that a child BEGAN, so
+// it maps turn=active. SubagentStop reports that a child ENDED, which is never
+// evidence the session is working — that mapping was the agents-tracker-707 race
+// source — so its turn is EMPTY: a blank turn declares NO turn dimension at all
+// (the engine's deriveDims drops it), leaving the turn exactly as it found it.
+// Whether a session with outstanding children is still working is the engine's
+// accounting to make, not this one event's to assert.
 var hookEvents = []struct {
 	event, turn, interaction string
 	subtypeField, subtypeMap string
@@ -62,7 +72,8 @@ var hookEvents = []struct {
 	{"PostToolUse", "active", "none", "", ""},
 	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt"},
 	{"Stop", "idle", "none", "", ""},
-	{"SubagentStop", "active", "none", "", ""},
+	{"SubagentStart", "active", "none", "", ""},
+	{"SubagentStop", "", "none", "", ""},
 	{"PermissionRequest", "idle", "permission", "", ""},
 }
 

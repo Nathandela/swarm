@@ -152,6 +152,12 @@ type session struct {
 	lastTypedAt  time.Time // when the last typed signal applied (precedence freshness)
 	lastSignalAt time.Time // when any signal (typed or output) was last observed (staleness)
 	lastStopAt   time.Time // when the last idle-setting Stop applied (the turn boundary, see postStopGrace)
+
+	// children counts the background children currently outstanding (see
+	// subagentStartEvent). It is IN-MEMORY ONLY and never persisted: a daemon
+	// restart forgets it, and the grid path (the workflow row marker in
+	// heuristic.go) re-establishes the truth from the screen, in both directions.
+	children int
 }
 
 // New builds an Engine from cfg, defaulting the injectable effects so a partial
@@ -255,6 +261,9 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		e.mu.Unlock()
 		return errors.New("engine: callback token does not match the session's live token")
 	}
+	// Outstanding-children accounting, in ARRIVAL order and only for a callback
+	// that authenticated: a rejected post must not move the count.
+	countChild(s, cb.Event)
 	// Normalize the callback's event + payload into status dimensions via the
 	// session's registered SignalSources (the mapping bridge, seam c): a real hook
 	// posts {event, payload fields} and the engine derives turn/interaction from the
@@ -269,6 +278,10 @@ func (e *Engine) HandleCallback(cb Callback) error {
 		return nil
 	}
 	now := e.now()
+	// A Stop is the turn boundary whether or not children mask its idle below, so
+	// read the boundary off the Stop's OWN derived turn before masking.
+	idleStop := cb.Event == stopEvent && dims[PayloadKeyTurn] == string(status.TurnIdle)
+	dims = withChildrenHoldingTheTurn(s, cb.Event, dims)
 	if dims = withoutPostStopReactivation(s, cb.Event, dims, now); len(dims) == 0 {
 		// A post-Stop straggler naming nothing but the turn it may not reopen:
 		// accept as a benign no-op, like an unmapped event.
@@ -288,7 +301,7 @@ func (e *Engine) HandleCallback(cb Callback) error {
 	}
 	s.lastTypedAt = now
 	s.lastSignalAt = now
-	if cb.Event == stopEvent && next.Turn == status.TurnIdle {
+	if idleStop {
 		s.lastStopAt = now // arm the turn boundary (postStopGrace)
 	}
 	changed := commit(s, next)
@@ -560,18 +573,72 @@ const (
 	postStopGrace = 2 * time.Second
 )
 
+// The hooks that bracket a BACKGROUND CHILD (docs/verification/spike-SE.md F1):
+// a claude orchestrating background agents fires Stop when its MAIN turn ends
+// while the workflow keeps running, and only these two say whether anything is
+// still out there. Like stopEvent these are Claude Code's hook names
+// (internal/adapter/claude), the one place the otherwise CLI-agnostic engine core
+// knows an event by name; the eventual home for the classification is an adapter
+// descriptor key alongside descKeySubtypeField.
+const (
+	subagentStartEvent = "SubagentStart"
+	subagentStopEvent  = "SubagentStop"
+)
+
 // trailingEdgeEvents are the hooks whose turn=active means "work that was
 // already running has ENDED", so they can never legitimately start a turn.
 // UserPromptSubmit and PreToolUse are deliberately absent: they report work
-// STARTING, so they are a genuine new turn and must always win.
+// STARTING, so they are a genuine new turn and must always win. SubagentStop was
+// a member until agents-tracker-c7i4 made it turn-NEUTRAL at the adapter: with no
+// turn to withhold there is nothing here to do, so it left this table rather than
+// being guarded twice.
 //
 // These are Claude Code's hook names (internal/adapter/claude), the one place the
 // otherwise CLI-agnostic engine core knows an event by name. The eventual home
 // for the classification is an adapter descriptor key alongside
 // descKeySubtypeField — an adapter-side change this fix does not reach into.
 var trailingEdgeEvents = map[string]bool{
-	"PostToolUse":  true,
-	"SubagentStop": true,
+	"PostToolUse": true,
+}
+
+// countChild moves the session's outstanding-children count for the bracketing
+// hooks and leaves every other event alone. The DECREMENT FLOORS AT ZERO, which
+// is not defensive rounding: the live capture carries three SubagentStops for two
+// SubagentStarts (an agent RESUME re-fires SubagentStart, and a child can stop
+// without this session ever having seen its start), so an unfloored count drifts
+// negative and the next real child then fails to hold the turn. Nothing resets
+// the count — in particular NOT UserPromptSubmit, which the auto-continuation
+// fires mid-workflow (spike-SE F3). Caller holds e.mu.
+func countChild(s *session, event string) {
+	switch event {
+	case subagentStartEvent:
+		s.children++
+	case subagentStopEvent:
+		if s.children > 0 {
+			s.children--
+		}
+	}
+}
+
+// withChildrenHoldingTheTurn masks a Stop's idle turn to active while background
+// children are still outstanding: the MAIN loop ended, the workflow did not, and
+// reporting "done" there is the false completion agents-tracker-c7i4 removes
+// (76-91 per session per day, spike-SE). Only Stop is masked — PermissionRequest
+// is also turn=idle, but a session waiting on the human is waiting on the human
+// whether or not children run, and needs_input must never be hidden behind
+// working. Every other callback is returned unchanged, and dims is never mutated
+// in place (deriveDims may return the caller's own payload map). Caller holds
+// e.mu.
+func withChildrenHoldingTheTurn(s *session, event string, dims map[string]string) map[string]string {
+	if event != stopEvent || s.children == 0 || dims[PayloadKeyTurn] != string(status.TurnIdle) {
+		return dims
+	}
+	held := make(map[string]string, len(dims))
+	for k, v := range dims {
+		held[k] = v
+	}
+	held[PayloadKeyTurn] = string(status.TurnActive)
+	return held
 }
 
 // withoutPostStopReactivation drops the turn dimension of a trailing-edge hook

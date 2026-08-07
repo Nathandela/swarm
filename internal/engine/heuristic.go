@@ -219,9 +219,13 @@ func evaluateCodexGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 // evaluateClaudeGrid reads Claude's real screen (dqh). The modal dialogs are
 // checked FIRST: each is modal, and each spells its selected option with the
 // composer glyph, so any later check would misread them. Then a busy marker is
-// active; a composer prompt anywhere in the bottom region with no busy marker is
-// idle — it does not require the cursor on the composer row, since Claude's idle
-// footer ("Brewed for Ns") renders below the composer box; else inconclusive.
+// active; then the WORKFLOW marker — background children running behind an idle
+// main loop (c7i4), which the busy row cannot see because claude drops the busy
+// hint the moment the main turn ends; a composer prompt anywhere in the bottom
+// region with neither marker is idle — it does not require the cursor on the
+// composer row, since Claude's idle footer ("Brewed for Ns") renders below the
+// composer box; else inconclusive. The busy and workflow markers both mean
+// active, so their relative order is immaterial.
 func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 	if snap == nil {
 		return status.TurnUnknown, status.InteractionUnknown, false
@@ -231,7 +235,7 @@ func evaluateClaudeGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
 			return status.TurnIdle, status.InteractionPermission, true
 		}
 	}
-	if hasBusyMarker(snap) {
+	if hasBusyMarker(snap) || hasWorkflowMarker(snap) {
 		return status.TurnActive, status.InteractionNone, true
 	}
 	if composerInRegion(snap) {
@@ -303,6 +307,95 @@ func busyHintOnRow(row string) bool {
 // U+00B7 MIDDLE DOT with one ASCII space on each side (byte-exact from
 // fixtures/spike-sd/busy-stream.json).
 const statusBarSeparator = " · "
+
+// The status-bar fields claude renders while BACKGROUND WORK is outstanding
+// (agents-tracker-c7i4, spike-SE F4). When the main turn ends the busy hint
+// disappears and the composer comes back, so the busy row cannot see a workflow
+// that is still running; these fields can. Byte-exact from
+// fixtures/spike-se/workflow-background.json, whose idle-with-children rows read
+//
+//	"⏸ manual mode on · ? for shortcuts · ← 2 agents · ↓ to manage"
+//	"⏸ manual mode on · 1 shell · ← 2 agents · ↓ to manage"
+//
+// manageBackgroundHint is U+2193 DOWNWARDS ARROW + " to manage", the affordance
+// that opens the background-task list. shellCountField is the count of live
+// background shells; the anchor is the trailing " shell" so a plural ("2 shells")
+// counts too.
+//
+// "← N agents" is deliberately NOT a marker despite sitting in the same bar: the
+// same capture shows it on screen at session start with nothing running (and as
+// "← for agents" before the count resolves), and the spike-SD idle tail —
+// conclusively idle, no child ever launched — ends "· ← 3 agents". It is the
+// agent-picker keyboard affordance, not a running count.
+const (
+	manageBackgroundHint = "↓ to manage"
+	shellCountField      = " shell"
+)
+
+// hasWorkflowMarker reports whether the bottom region carries a background-work
+// field of claude's status bar.
+func hasWorkflowMarker(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	for y := last; y >= 0 && y > last-gridRegionRows; y-- {
+		if workflowHintOnRow(lineText(snap.Lines[y])) {
+			return true
+		}
+	}
+	return false
+}
+
+// workflowHintOnRow reports whether row carries a background-work FIELD of the
+// dot-separated status bar, mirroring busyHintOnRow's discipline: the bare
+// substring is not enough, because claude prints the same words in its own
+// transcript ("⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)") where they
+// stay in scrollback for the rest of the session — the agents-tracker-fji failure
+// mode. A field of the bar is preceded by the separator; that parenthetical is
+// preceded by "(". Prose quoting a whole bar row verbatim, separators and all,
+// still fools it; that residual is accepted here exactly as it is for the busy
+// hint.
+func workflowHintOnRow(row string) bool {
+	return barFieldOnRow(row, manageBackgroundHint) || shellCountOnRow(row)
+}
+
+// barFieldOnRow reports whether field occurs in row immediately after a status-bar
+// separator.
+func barFieldOnRow(row, field string) bool {
+	for off := 0; ; {
+		i := strings.Index(row[off:], field)
+		if i < 0 {
+			return false
+		}
+		i += off
+		if strings.HasSuffix(row[:i], statusBarSeparator) {
+			return true
+		}
+		off = i + len(field)
+	}
+}
+
+// shellCountOnRow reports whether row carries a "<digits> shell[s]" field of the
+// status bar — the digits run back to a separator, so the count is the field's
+// first token and prose that merely ends a clause with a number does not qualify.
+func shellCountOnRow(row string) bool {
+	for off := 0; ; {
+		i := strings.Index(row[off:], shellCountField)
+		if i < 0 {
+			return false
+		}
+		i += off
+		start := i
+		for start > 0 && row[start-1] >= '0' && row[start-1] <= '9' {
+			start--
+		}
+		if start < i && strings.HasSuffix(row[:start], statusBarSeparator) {
+			return true
+		}
+		off = i + len(shellCountField)
+	}
+}
 
 // abutsDotSeparator reports whether row[start:end] is a FIELD of a dot-separated
 // status bar — a separator immediately before it, or immediately after it.

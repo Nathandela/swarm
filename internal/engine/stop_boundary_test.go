@@ -12,11 +12,17 @@ package engine
 // only governs once the typed signal goes stale.
 //
 // The rule under test: within postStopGrace of an idle-setting Stop, a
-// TRAILING-EDGE hook (SubagentStop, PostToolUse — events that report work
-// ENDING) may not reopen the turn. A LEADING-EDGE hook (UserPromptSubmit,
-// PreToolUse — events that report work STARTING) always wins: that is a real new
-// turn. Past the window, a trailing-edge hook is honored as before: work that
-// really is still running (a background task) belongs in the working group.
+// TRAILING-EDGE hook (PostToolUse — an event that reports work ENDING) may not
+// reopen the turn. A LEADING-EDGE hook (UserPromptSubmit, PreToolUse — events
+// that report work STARTING) always wins: that is a real new turn. Past the
+// window, a trailing-edge hook is honored as before: work that really is still
+// running (a background task) belongs in the working group.
+//
+// SubagentStop was the other trailing-edge member. agents-tracker-c7i4 made it
+// turn-NEUTRAL at the adapter (spike-SE F1/F2: it means a child ENDED), so it can
+// no longer reopen anything and this grace window has nothing to withhold from
+// it. The AfterStop case below still passes — a neutral turn leaves the settled
+// idle standing — but by that mapping, not by the grace window.
 //
 // Time is injected (Config.Now via fakeClock), so nothing here depends on wall
 // clock. The sources are the REAL claude adapter's, so these tests fail if the
@@ -102,17 +108,32 @@ func TestBead707_LeadingHookAfterStopStartsANewTurn(t *testing.T) {
 // Past the window a trailing-edge hook behaves exactly as before: this is no
 // longer a straggler racing the turn boundary but work that genuinely started
 // after it — a background task completing — and the session IS busy again.
+//
+// SubagentStop was pinned here to that same reactivation until agents-tracker-c7i4.
+// spike-SE F1/F2 shows what it actually reports: a CHILD ENDED. That is never
+// evidence the session is working, so the adapter now gives it no turn at all and
+// it reopens nothing at any distance from the Stop. What a running child does to
+// the turn is the outstanding-children accounting's job (c7i4_workflow_children_test.go),
+// which holds the turn active from the child's START rather than resurrecting it
+// on the child's end.
 func TestBead707_TrailingHookPastGraceReactivates(t *testing.T) {
-	for _, event := range []string{"SubagentStop", "PostToolUse"} {
-		t.Run(event, func(t *testing.T) {
+	cases := []struct {
+		event string
+		want  status.Turn
+	}{
+		{"PostToolUse", status.TurnActive},
+		{"SubagentStop", status.TurnIdle},
+	}
+	for _, tc := range cases {
+		t.Run(tc.event, func(t *testing.T) {
 			e, clk, rec, seq := postStopFixture(t)
 
 			clk.advance(10 * time.Second) // far past the boundary grace window
-			if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok1", Sequence: seq, Event: event}); err != nil {
-				t.Fatalf("%s: %v", event, err)
+			if err := e.HandleCallback(Callback{SessionID: "s1", Token: "tok1", Sequence: seq, Event: tc.event}); err != nil {
+				t.Fatalf("%s: %v", tc.event, err)
 			}
-			if got, _ := rec.last(); got.s.Turn != status.TurnActive {
-				t.Fatalf("%s(seq %d) 10s after Stop left turn=%s; want active (a genuinely new background task)", event, seq, got.s.Turn)
+			if got, _ := rec.last(); got.s.Turn != tc.want {
+				t.Fatalf("%s(seq %d) 10s after Stop left turn=%s; want %s", tc.event, seq, got.s.Turn, tc.want)
 			}
 		})
 	}

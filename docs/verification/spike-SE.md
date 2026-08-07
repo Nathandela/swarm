@@ -54,7 +54,13 @@ Timeline (ms offsets):
    until the last child stops. UserPromptSubmit must not reset the counter
    (F3); a lost SubagentStop self-heals through the grid path (3) once the
    typed-signal suppression window lapses.
-3. Grid: a claude frame whose status row carries the mid-dot
-   "N shell" / "← N agents" segments reads (active, none, conclusive) even
-   with the composer visible — the workflow analogue of the busy row, and
-   the self-correcting fallback for counter drift in both directions.
+3. Grid: a claude frame whose status row carries the mid-dot "N shell" /
+   "↓ to manage" segments reads (active, none, conclusive) even with the
+   composer visible — the workflow analogue of the busy row, and the
+   self-correcting fallback for counter drift in both directions.
+   CORRECTION (found during implementation): F4's "← N agents" segment is
+   NOT a children indicator — it is the agent-picker keyboard affordance,
+   present on genuinely quiet bars too (spike-SD idle tail shows
+   "? for shortcuts · ← 3 agents"). The fields that appear exactly when
+   background work exists are "· N shell" and "· ↓ to manage" (zero hits
+   in every earlier spike fixture, eight in this one).
