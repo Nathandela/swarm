@@ -35,11 +35,18 @@ type EventListener interface {
 	OnEvent(e *Event)
 }
 
-// Event is one asynchronous notification. Kind names the family ("journal", "terminal",
-// "outcome", "connection", "overflow"); Stream names the per-stream staleness plane the
-// event belongs to, so the UI can decide whether a view is live. Dropped is non-zero
+// Event is one asynchronous notification. Kind names the family ("journal", "interaction",
+// "terminal", "outcome", "connection", "overflow"); Stream names the per-stream staleness plane
+// the event belongs to, so the UI can decide whether a view is live. Dropped is non-zero
 // only on an "overflow" event, where it counts the events discarded since the previous
 // overflow.
+//
+// An "interaction" event is one transcript item appended or updated (ADR-009). It rides the
+// "journal" stream because that is the channel it arrived on and is repaired by (IS-LAYER-4),
+// and it carries the item's KIND on Message and its status on State -- a wake that could not
+// say whether prose or an approval card landed would force every screen to re-read the whole
+// transcript to find out. It is a WAKE and not a delivery: the body is read back through
+// App.ReadTranscript, which is the only surface holding the folded item.
 type Event struct {
 	Kind      string
 	Stream    string
@@ -229,6 +236,95 @@ func (p *JournalPage) NextCursor() (c int64, err error) {
 		return 0, errNoReceiver
 	}
 	return p.next, nil
+}
+
+// TranscriptItem is one interaction item as the app sees it: one durable, replayable unit of
+// the conversation -- a message, a tool run, a file change, an approval, a plan revision, a
+// status marker (ADR-009, docs/specifications/interaction-schema.md §3).
+//
+// Text is the RECONSTRUCTED body, folded by the Go core: a streamed agent_message arrives as
+// increments and the core concatenates them in cursor order (IS-DELTA-1), so a client that
+// read `text` out of Body would render the last increment as the whole message.
+//
+// Body is the item object VERBATIM as JSON, and the per-kind fields of §3 are read from it by
+// the client. That is a gomobile constraint before it is a design choice -- there is no bound
+// map and no variant type, the same limit that makes Snapshot.Text a joined string rather than
+// a []string -- and it is what makes an unknown kind or an unknown field free on this boundary
+// (IS-COMPAT-1/-2): a build that has never heard of a field still carries it across intact.
+//
+// Cursor is the item's position in the transcript: the journal cursor of its FIRST record
+// (IS-LAYER-3). Degraded marks an item from a NEWER item schema than the Go core understands,
+// rendered as far as it does understand it rather than dropped (IS-COMPAT-4). Resolved is set
+// on an approval_request whose approval_resolved has landed (IS-LIFE-2), which is what
+// dismisses a stale card -- including one answered at the machine.
+type TranscriptItem struct {
+	SessionID string
+	ItemID    string
+	Cursor    int64
+	Kind      string
+	Status    string
+	TurnID    string
+	TSUnixMs  int64
+	Text      string
+	Body      string
+	Truncated bool
+	Detail    bool
+	Degraded  bool
+	Resolved  bool
+}
+
+// TranscriptPage is a transcript HANDLE, for the same reason as SessionList: gomobile has no
+// bound list type, so a collection crosses as an opaque object with Count/At.
+type TranscriptPage struct {
+	items []TranscriptItem
+	next  int64
+	stale bool
+}
+
+// Count is the number of items in the page.
+func (p *TranscriptPage) Count() (n int, err error) {
+	defer barrier(&err)
+	if p == nil {
+		return 0, errNoReceiver
+	}
+	return len(p.items), nil
+}
+
+// At returns the item at index i.
+func (p *TranscriptPage) At(i int) (it *TranscriptItem, err error) {
+	defer barrier(&err)
+	if p == nil {
+		return nil, errNoReceiver
+	}
+	if i < 0 || i >= len(p.items) {
+		return nil, classed(ErrClassNotFound,
+			fmt.Errorf("swarmmobile: transcript index %d out of range [0,%d)", i, len(p.items)))
+	}
+	item := p.items[i]
+	return &item, nil
+}
+
+// NextCursor is the cursor the next ReadTranscript should resume from.
+func (p *TranscriptPage) NextCursor() (c int64, err error) {
+	defer barrier(&err)
+	if p == nil {
+		return 0, errNoReceiver
+	}
+	return p.next, nil
+}
+
+// Stale reports that the journal stream this transcript was folded from has an unrepaired
+// hole (PB-APP-8), so the conversation is not a complete record of what the agent did.
+//
+// It rides ON THE HANDLE for SessionList.Stale's reason, and the case is stronger here: a
+// transcript reads as a complete conversation, and a missing tool run or approval in the
+// middle of one is invisible.
+func (p *TranscriptPage) Stale() (stale bool, err error) {
+	defer barrier(&err)
+	if p == nil {
+		return false, errNoReceiver
+	}
+	return p.stale, nil
 }
 
 // Snapshot is one session's server-rendered terminal grid. Text is the daemon-sanitized

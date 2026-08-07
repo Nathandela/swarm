@@ -38,6 +38,20 @@ const (
 	TypeLost            RecordType = "lost"
 	TypeDeleted         RecordType = "deleted"
 	TypePresence        RecordType = "presence"
+	// TypeInteraction is one interaction item -- a message, tool run, file change,
+	// approval, plan revision or status marker of the phone's chat transcript (ADR-009,
+	// ADR-010, docs/specifications/interaction-schema.md IS-LAYER-1). The item object IS
+	// the record's Payload, and the item's own `kind` discriminator lives only in there:
+	// nothing that spec defines may become a record field, let alone a header field the
+	// seq bucket keys on (IS-LAYER-2, PB-SYNC-1). Ordering is the cursor Append assigns and
+	// nothing else -- an item carries no private sequence number (IS-LAYER-3).
+	//
+	// Adding the type did NOT bump SchemaVersion, and interaction_test.go pins why: a new
+	// TYPE is a new value of an existing string field, so the on-disk field set is
+	// unchanged, and a reader that does not know the type skips the record and advances its
+	// cursor (IS-COMPAT-1/-3) instead of rejecting the whole journal the way a version bump
+	// would make it.
+	TypeInteraction RecordType = "interaction"
 	// TypeRoster is a SYNTHETIC snapshot record: it is emitted ONLY inside
 	// Resume.Roster (the atomic snapshot half of R-JRN.4) to describe a session that
 	// is live as-of the read cursor. It is NEVER appended to the journal — no

@@ -75,6 +75,19 @@ field StateSummary.Reconciled bool
 field StateSummary.RelayCursor int64
 field StateSummary.Restored bool
 field StateSummary.SendSeq int64
+field TranscriptItem.Body string
+field TranscriptItem.Cursor int64
+field TranscriptItem.Degraded bool
+field TranscriptItem.Detail bool
+field TranscriptItem.ItemID string
+field TranscriptItem.Kind string
+field TranscriptItem.Resolved bool
+field TranscriptItem.SessionID string
+field TranscriptItem.Status string
+field TranscriptItem.TSUnixMs int64
+field TranscriptItem.Text string
+field TranscriptItem.Truncated bool
+field TranscriptItem.TurnID string
 field UndeliveredInput.AtMillis int64
 field UndeliveredInput.Bytes int
 field UndeliveredInput.Reason string
@@ -109,11 +122,13 @@ method App.PairedDeviceName() (string, error)
 method App.PairingState() (string, error)
 method App.Paste(string, string) error
 method App.Peek(string) (*Snapshot, error)
+method App.PendingApprovals() (*TranscriptPage, error)
 method App.PendingOpCount() (int, error)
 method App.Presence() (string, error)
 method App.PurgeKeys() error
 method App.PushPreference() (*PushPreference, error)
 method App.ReadJournal(int64, int) (*JournalPage, error)
+method App.ReadTranscript(string, int64, int) (*TranscriptPage, error)
 method App.RegisterPushToken(string) error
 method App.ReleaseControl(string) (*Op, error)
 method App.Resize(string, int, int) error
@@ -152,6 +167,10 @@ method Pairing.State() (string, error)
 method SessionList.At(int) (*Session, error)
 method SessionList.Count() (int, error)
 method SessionList.Stale() (bool, error)
+method TranscriptPage.At(int) (*TranscriptItem, error)
+method TranscriptPage.Count() (int, error)
+method TranscriptPage.NextCursor() (int64, error)
+method TranscriptPage.Stale() (bool, error)
 method UndeliveredList.At(int) (*UndeliveredInput, error)
 method UndeliveredList.Count() (int, error)
 method UndeliveredList.Dropped() (int, error)
@@ -174,6 +193,8 @@ type Session struct
 type SessionList struct
 type Snapshot struct
 type StateSummary struct
+type TranscriptItem struct
+type TranscriptPage struct
 type UndeliveredInput struct
 type UndeliveredList struct
 type WakeAlert struct

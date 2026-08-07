@@ -903,6 +903,95 @@ func (a *App) ReadJournal(from int64, limit int) (page *JournalPage, err error) 
 	return out, nil
 }
 
+// ReadTranscript returns one session's interaction items after cursor from, at most limit of
+// them, oldest first (ADR-009's chat transcript; docs/specifications/interaction-schema.md).
+//
+// It is deliberately NOT served from the journal page ReadJournal reads. That page is an
+// in-memory log of record TYPES, bounded by journalLogSize and rebuilt empty by every process
+// death; the transcript is the folded, DURABLE model the core holds -- records merged by
+// item_id, agent_message increments concatenated, the latest plan revision kept. Serving it
+// from the page would show an empty conversation after the SIGKILL Android hands out routinely,
+// with the durable receive high-water refusing the relay's redelivery of the frames that built
+// it. The content would be gone, not merely unread.
+//
+// from is the ordering cursor of the last item the caller already has; 0 reads from the start
+// of what the phone holds. An item UPDATED in place keeps its first record's cursor
+// (IS-LAYER-3), so a caller that wants the update re-reads the tail rather than paging past
+// it -- which is what the "interaction" event exists to prompt.
+func (a *App) ReadTranscript(session string, from int64, limit int) (page *TranscriptPage, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = journalLogSize
+	}
+	out := &TranscriptPage{next: from, stale: a.streamStale(phonecore.StreamJournal)}
+	for _, it := range core.Router().Items().Session(session) {
+		if int64(it.Cursor) <= from {
+			continue
+		}
+		out.items = append(out.items, transcriptItem(it))
+		if c := int64(it.Cursor); c > out.next {
+			out.next = c
+		}
+		if len(out.items) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// PendingApprovals is every approval_request the machine is still waiting on, across all
+// sessions, oldest first. IS-LIFE-3 keeps these alive across a reconnect and a process death
+// -- exempt from the transcript's retention bound until their approval_resolved lands --
+// precisely so a surface can still show them.
+//
+// IT IS READ ONLY, and that is this workpackage's boundary rather than a design position.
+// Answering a card is IS-LIFE-4's signed ActionApprove carrying a new ApproveReq wire body
+// (agent_instance, interaction_id, content_hash, expires_at, decision) that no slice has built
+// yet, and IS-APR-2 requires the phone to echo content_hash and expires_at VERBATIM rather
+// than compute them -- so a verb added here before that body exists could only send something
+// the daemon would refuse. Showing the card is useful on its own: the user learns the machine
+// is blocked, and can answer at the machine (IS-LIFE-2 then dismisses it here).
+func (a *App) PendingApprovals() (page *TranscriptPage, err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	out := &TranscriptPage{stale: a.streamStale(phonecore.StreamJournal)}
+	for _, it := range core.Router().Items().PendingApprovals() {
+		out.items = append(out.items, transcriptItem(it))
+		if c := int64(it.Cursor); c > out.next {
+			out.next = c
+		}
+	}
+	return out, nil
+}
+
+// transcriptItem carries one folded item across the bound boundary. Body is the raw item JSON
+// as a string because gomobile binds no []byte-shaped value type on a struct field, and the
+// per-kind decoding belongs to the client anyway (see TranscriptItem).
+func transcriptItem(it phonecore.Item) TranscriptItem {
+	return TranscriptItem{
+		SessionID: it.SessionID,
+		ItemID:    it.ItemID,
+		Cursor:    int64(it.Cursor),
+		Kind:      it.Kind,
+		Status:    it.Status,
+		TurnID:    it.TurnID,
+		TSUnixMs:  it.TSUnixMs,
+		Text:      it.Text,
+		Body:      string(it.Body),
+		Truncated: it.Truncated,
+		Detail:    it.Detail,
+		Degraded:  it.Degraded,
+		Resolved:  it.Resolved,
+	}
+}
+
 // SubscribeJournal resumes journal event delivery to the EventListener.
 func (a *App) SubscribeJournal() (err error) {
 	defer barrier(&err)

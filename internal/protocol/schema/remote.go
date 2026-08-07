@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/status"
@@ -28,7 +29,7 @@ func (c ErrorCode) Transient() bool { return c == CodeRateLimit }
 
 // JournalRecord is one wire-facing journal event (R-PROT.3). It mirrors the
 // daemon journal's record fields the phone needs; the daemon-internal payload is
-// not carried on the wire.
+// not carried on the wire, with the single exception of Item below.
 type JournalRecord struct {
 	Cursor    uint64       `json:"cursor"`
 	SessionID string       `json:"session_id"`
@@ -40,6 +41,25 @@ type JournalRecord struct {
 	// event may not. An absent agent means the record does not carry one -- readers must
 	// not read the empty string as an agent named "".
 	Agent string `json:"agent,omitempty"`
+	// Item is the interaction item object -- one unit of the phone's chat transcript
+	// (ADR-009, docs/specifications/interaction-schema.md §1 and §2). It is populated ONLY
+	// when Type is "interaction", where the daemon record's payload IS the item
+	// (IS-LAYER-1); every other type's payload stays daemon-internal, and
+	// internal/skeleton/api.go's toWireJournalRecord is the sole producer of this field.
+	//
+	// It is carried raw. The gateway seals and forwards items and parses none of them
+	// (interaction-schema.md §10), so the item's `kind` discriminator is only ever read
+	// inside the AEAD-covered plaintext and never reaches SenderKeyID or EpochID
+	// (IS-LAYER-2, PB-SYNC-1). An unknown kind or an unknown field costs a consumer a skip,
+	// not a decode failure (IS-COMPAT-1/-2). omitempty keeps every record type that
+	// predates the field byte-identical.
+	//
+	// Documenting it is a PROCEDURAL obligation, not a fenced one: GG-7's drift check
+	// (internal/protocol/protocolmd_test.go) reflects Control, SessionView, LaunchReq and
+	// TerminalSnapshot only, so no build fails on a missing row. Its row lives in
+	// docs/specifications/protocol.md under "The JournalRecord message" and was written in
+	// the same change as this field.
+	Item json.RawMessage `json:"item,omitempty"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They

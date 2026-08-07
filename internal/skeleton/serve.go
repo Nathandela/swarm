@@ -43,6 +43,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/machineid"
+	"github.com/Nathandela/swarm/internal/remotegw"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -119,6 +120,19 @@ type Daemon struct {
 	convScanMu sync.Mutex
 	convScan   map[string]convScanState
 
+	// The INTERACTION PRODUCER's state (ADR-009 / ADR-010; interaction.go). items is
+	// ADR-010 §7's append floor -- ONE per machine, because IS-DELTA-2a's ceiling is per
+	// TARGET across every session and kind. itemIDs maps a CLI's own interaction id to the
+	// minted item_id so successive records of one item fold under it (IS-ENV-2), and turnIDs
+	// holds each session's open turn (IS-ENV-1); both are cleared by endSession. adapterFor
+	// resolves an agent type to its adapter -- registry.New in production, overridable in
+	// tests, the sampleFn/captureFn precedent above.
+	itemMu     sync.Mutex
+	items      *remotegw.ItemAdmission
+	itemIDs    map[string]string
+	turnIDs    map[string]string
+	adapterFor func(agentType string) (adapter.Adapter, bool)
+
 	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
 	// read a session's snapshot is OBSERVABLE rather than a silent heuristic death
 	// (R1.2.6 — the pre-1.2 oversized-snapshot bug failed exactly here). tapLastLog
@@ -149,6 +163,7 @@ func Serve(cfg Config) (*Daemon, error) {
 		capturing:  make(map[string]struct{}),
 	}
 	d.sampleFn = d.sampleGrid // the per-session grid sample (overridable in tests)
+	d.initInteractions()      // the ADR-010 §7 append floor + the adapter resolver (interaction.go)
 
 	// Build the status engine BEFORE opening the core: daemon.Open runs reconcile
 	// synchronously and, for every reconnected running session, fires OnSessionStart
@@ -293,6 +308,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// a Wait (F7).
 	d.tapWG.Add(1)
 	go func() { defer d.tapWG.Done(); d.tapGrids(ctx) }() // shim->engine output tap (seam b)
+	go d.releaseInteractions(ctx)                         // ADR-010 §7's append floor clock (interaction.go)
 
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
@@ -322,6 +338,14 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// the staleness guard can downgrade a now-idle session. Folding the status into
 	// RegisterSession closes the register->seed gap an early hook could fall into.
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+}
+
+// registryAdapter is the production adapter resolver behind d.adapterFor: the ONE table
+// mapping an agent name to its adapter (T-5/T-7), the same lookup registerSession and
+// captureConversationIDGated make. It is a method rather than registry.New itself so the seam
+// has one shape whether or not a test replaced it.
+func (d *Daemon) registryAdapter(agentType string) (adapter.Adapter, bool) {
+	return registry.New(agentType)
 }
 
 // emitStatus is the engine's late-bound emission sink (see Serve): it forwards an
@@ -354,6 +378,8 @@ func (d *Daemon) endSession(id string) {
 	if d.eng != nil {
 		d.eng.EndSession(id)
 	}
+	// The interaction fold keys and the open turn name a CLI that is gone (interaction.go).
+	d.forgetInteractions(id)
 }
 
 // gridPoll is how often the assembly samples each running session's shim grid and

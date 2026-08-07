@@ -403,3 +403,555 @@ func TestGatewayRunTerminal_CoalescedPeekShowsLatestGrid(t *testing.T) {
 		t.Errorf("forwarded session = %q, want m/s1: the wrapper must not lose the endpoint namespacing", got[0].Session)
 	}
 }
+
+// --- ADR-010 §7: the PRODUCER-side append floor for interaction items --------
+//
+// FAILING-FIRST (TDD RED, GG-5). Everything below is undefined at RED: the admission queue
+// exists nowhere in the tree.
+//
+// THE DEFECT §7 names. The peek case above bounds the TERMINAL stream at the gateway, where
+// CoalescingSink may coalesce it latest-wins. A journal record may not be coalesced there at
+// all (R-GW.5; coalesce.go's Event forwards immediately and never drops), and ADR-009 makes
+// the journal dense: an item per user message, per agent-message increment, per tool-run
+// open, per tool-run close, per file change, per approval. `PreToolUse` plus `PostToolUse`
+// alone is two appends per tool call, and each consumes a slot in the SAME <= 8 appends/s
+// combined budget the peek used to spend (§6.0, PB-GW-7). So the rate is bound in the one
+// place the merge is lossless: the PRODUCER, upstream of the sink that is forbidden to help.
+//
+// THE SEAM these tests pin -- one admission queue per TARGET (IS-DELTA-2a: admission is
+// bounded per target across every session and every kind; a per-item_id window does not
+// bind, because N concurrent sessions multiply straight past it):
+//
+//	type ItemAdmissionConfig struct {
+//		Append func(session string, item json.RawMessage) error // the release seam
+//		Window time.Duration                                    // 0 => DefaultAppendWindow
+//		Now    func() time.Time                                 // clock seam
+//	}
+//	func NewItemAdmission(cfg ItemAdmissionConfig) *ItemAdmission
+//	func (a *ItemAdmission) Offer(session string, item json.RawMessage) error
+//	func (a *ItemAdmission) Flush() error
+//	func (a *ItemAdmission) Pending() int
+//
+// Pinned semantics (ADR-010 §7; interaction-schema.md IS-DELTA-1/-2/-2a/-3):
+//   - at most one release per window per TARGET, across all sessions and kinds;
+//   - a SPACING FLOOR, not a batching delay: an item offered a full window after the last
+//     release is admitted at once;
+//   - `agent_message` is the ONLY kind merged by text concatenation, and only within one
+//     `item_id`; text is never concatenated across item_ids or across kinds;
+//   - every other kind merges by RECORD COLLAPSE within one `item_id` (a `tool_run` open and
+//     its close inside one window become one record) and never by text;
+//   - `approval_request` is never merged and takes the HEAD of the queue, so it waits at
+//     most one window and never behind a backlog of prose;
+//   - nothing is ever dropped: the merge is lossless, or the record keeps its own slot.
+
+// itemJSON builds one serialized interaction item: the §2 envelope with the §3 kind fields
+// flat beside it, which is the shape internal/daemon marshals and the queue receives.
+func itemJSON(t *testing.T, id, kind string, fields map[string]any) json.RawMessage {
+	t.Helper()
+	m := map[string]any{"v": 1, "item_id": id, "kind": kind, "ts": "2026-08-07T12:00:00Z"}
+	for k, v := range fields {
+		m[k] = v
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("itemJSON(%s, %s): %v", id, kind, err)
+	}
+	return b
+}
+
+// releasedItem is one item the queue admitted, with the virtual instant it was released at
+// so a test can measure how long an approval waited.
+type releasedItem struct {
+	at      time.Time
+	session string
+	item    json.RawMessage
+}
+
+// releaseLog is the release seam: what the queue admitted, in order.
+type releaseLog struct {
+	now func() time.Time
+
+	mu  sync.Mutex
+	got []releasedItem
+}
+
+func (l *releaseLog) append(session string, item json.RawMessage) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.got = append(l.got, releasedItem{at: l.now(), session: session, item: append(json.RawMessage(nil), item...)})
+	return nil
+}
+
+func (l *releaseLog) all() []releasedItem {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]releasedItem(nil), l.got...)
+}
+
+func (l *releaseLog) count() int { return len(l.all()) }
+
+// transcriptRecord is an INDEPENDENT decode of one released item: only the fields these
+// tests assert on, so no assertion inherits the producer's own struct.
+type transcriptRecord struct {
+	ItemID     string `json:"item_id"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	Text       string `json:"text"`
+	Tool       string `json:"tool"`
+	ExitCode   *int   `json:"exit_code"`
+	Path       string `json:"path"`
+	StopReason string `json:"stop_reason"`
+}
+
+func decodeItem(t *testing.T, raw json.RawMessage) transcriptRecord {
+	t.Helper()
+	var rec transcriptRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatalf("released item %s does not decode: %v", raw, err)
+	}
+	return rec
+}
+
+func offerItem(t *testing.T, a *ItemAdmission, session string, item json.RawMessage) {
+	t.Helper()
+	if err := a.Offer(session, item); err != nil {
+		t.Fatalf("Offer(%s, %s): %v", session, item, err)
+	}
+}
+
+// newAdmissionHarness returns an admission queue over a release log, both on one virtual
+// clock, at the production DefaultAppendWindow: these tests measure the real floor.
+func newAdmissionHarness() (*ItemAdmission, *releaseLog, *vclock) {
+	clk := newVClock()
+	log := &releaseLog{now: clk.Now}
+	adm := NewItemAdmission(ItemAdmissionConfig{Append: log.append, Window: DefaultAppendWindow, Now: clk.Now})
+	return adm, log, clk
+}
+
+// TestItemAdmission_IsASpacingFloorNotABatchingDelay pins IS-DELTA-2's own words: an item
+// offered more than one window after the last release is admitted AT ONCE. A queue that
+// always waited for its window would add 125 ms to every item in an idle session -- the
+// transcript's whole latency budget spent on a stream that was never near the ceiling.
+func TestItemAdmission_IsASpacingFloorNotABatchingDelay(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	offerItem(t, adm, "m/s1", itemJSON(t, "u1", "user_message", map[string]any{"text": "hi", "source": "owner"}))
+	if got := log.count(); got != 1 {
+		t.Fatalf("the first item released %d times, want 1: the window is a spacing floor, not a batching delay (IS-DELTA-2)", got)
+	}
+	clk.Advance(DefaultAppendWindow)
+	offerItem(t, adm, "m/s1", itemJSON(t, "u2", "user_message", map[string]any{"text": "again", "source": "owner"}))
+	if got := log.count(); got != 2 {
+		t.Fatalf("an item offered a full %s after the last release produced %d appends, want 2: it must not wait a second window", DefaultAppendWindow, got)
+	}
+	if got := adm.Pending(); got != 0 {
+		t.Fatalf("Pending() = %d after both items were released, want 0", got)
+	}
+}
+
+// TestItemAdmission_AgentMessageMergesByTextConcatenation is IS-DELTA-1/-2: increments for
+// one item_id inside one window become ONE record whose text is their lossless
+// concatenation, and the terminal increment's own fields survive the merge. Losing one
+// increment here is unrecoverable -- the phone rebuilds the message by concatenating in
+// cursor order and has no way to notice a hole.
+func TestItemAdmission_AgentMessageMergesByTextConcatenation(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	// The first increment consumes the free slot.
+	offerItem(t, adm, "m/s1", itemJSON(t, "am1", "agent_message", map[string]any{"text": "Hel", "status": "in_progress"}))
+	for _, tok := range []string{"lo, ", "wor"} {
+		clk.Advance(10 * time.Millisecond)
+		offerItem(t, adm, "m/s1", itemJSON(t, "am1", "agent_message", map[string]any{"text": tok, "status": "in_progress"}))
+	}
+	clk.Advance(10 * time.Millisecond)
+	offerItem(t, adm, "m/s1", itemJSON(t, "am1", "agent_message", map[string]any{"text": "ld", "status": "completed", "stop_reason": "end_turn"}))
+	if got := log.count(); got != 1 {
+		t.Fatalf("%d appends for four increments inside one %s window, want 1 (IS-DELTA-2)", got, DefaultAppendWindow)
+	}
+	clk.Advance(DefaultAppendWindow)
+	if err := adm.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	got := log.all()
+	if len(got) != 2 {
+		t.Fatalf("%d appends in total, want 2 (one immediate, one merged)", len(got))
+	}
+	first, merged := decodeItem(t, got[0].item), decodeItem(t, got[1].item)
+	if first.Text+merged.Text != "Hello, world" {
+		t.Errorf("the phone reconstructs %q, want %q: the merge is LOSSLESS text concatenation in cursor order (IS-DELTA-1)",
+			first.Text+merged.Text, "Hello, world")
+	}
+	if merged.ItemID != "am1" {
+		t.Errorf("merged item_id = %q, want am1: every record of a streamed item repeats it (IS-ENV-2)", merged.ItemID)
+	}
+	if merged.Status != "completed" || merged.StopReason != "end_turn" {
+		t.Errorf("merged status/stop_reason = %q/%q, want completed/end_turn: the terminal increment's own fields must survive the merge (IS-ST-1)",
+			merged.Status, merged.StopReason)
+	}
+}
+
+// TestItemAdmission_NeverConcatenatesAcrossItemIDsOrKinds is IS-DELTA-3's hard prohibition:
+// `agent_message` is the ONLY kind merged by text, and only within one item_id. Two
+// sessions' prose merged into one record would be a transcript attributing one agent's words
+// to another, and no consumer could detect it.
+func TestItemAdmission_NeverConcatenatesAcrossItemIDsOrKinds(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	offerItem(t, adm, "m/s1", itemJSON(t, "seed", "session_status", map[string]any{"process": "running"}))
+	offerItem(t, adm, "m/s1", itemJSON(t, "am1", "agent_message", map[string]any{"text": "alpha"}))
+	offerItem(t, adm, "m/s2", itemJSON(t, "am2", "agent_message", map[string]any{"text": "beta"}))
+	offerItem(t, adm, "m/s1", itemJSON(t, "fc1", "file_change", map[string]any{"path": "a.go", "change": "modify"}))
+	offerItem(t, adm, "m/s1", itemJSON(t, "fc2", "file_change", map[string]any{"path": "b.go", "change": "modify"}))
+
+	for i := 0; i < 6 && adm.Pending() > 0; i++ {
+		clk.Advance(DefaultAppendWindow)
+		if err := adm.Flush(); err != nil {
+			t.Fatalf("Flush: %v", err)
+		}
+	}
+	byID := map[string]transcriptRecord{}
+	for _, r := range log.all() {
+		rec := decodeItem(t, r.item)
+		if _, dup := byID[rec.ItemID]; dup {
+			t.Fatalf("item_id %q was released twice; nothing here shares a window twice", rec.ItemID)
+		}
+		byID[rec.ItemID] = rec
+	}
+	if len(byID) != 5 {
+		t.Fatalf("%d records released, want 5: distinct item_ids are never merged, only spaced", len(byID))
+	}
+	if byID["am1"].Text != "alpha" || byID["am2"].Text != "beta" {
+		t.Errorf("prose came back as %q/%q, want alpha/beta: text is never concatenated across item_ids (IS-DELTA-3)",
+			byID["am1"].Text, byID["am2"].Text)
+	}
+	if byID["fc1"].Path != "a.go" || byID["fc2"].Path != "b.go" {
+		t.Errorf("file_change paths came back as %q/%q, want a.go/b.go: collapsing two changes into one record loses a path "+
+			"(IS-DELTA-3: lossless, or its own slot)", byID["fc1"].Path, byID["fc2"].Path)
+	}
+}
+
+// TestItemAdmission_ToolRunOpenAndCloseCollapseToOneRecord is ADR-010 §7's record collapse:
+// whole records merge, never text. A tool call is two appends (`PreToolUse`, `PostToolUse`),
+// which is exactly what makes the transcript dense enough to need a floor.
+func TestItemAdmission_ToolRunOpenAndCloseCollapseToOneRecord(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	offerItem(t, adm, "m/s1", itemJSON(t, "seed", "session_status", map[string]any{"process": "running"}))
+	offerItem(t, adm, "m/s1", itemJSON(t, "tr1", "tool_run", map[string]any{
+		"tool": "Bash", "status": "in_progress", "action": map[string]any{"type": "execute", "command": "go test ./..."},
+	}))
+	clk.Advance(20 * time.Millisecond)
+	offerItem(t, adm, "m/s1", itemJSON(t, "tr1", "tool_run", map[string]any{
+		"status": "completed", "output_excerpt": "ok\tswarm\t0.4s", "exit_code": 0,
+	}))
+	clk.Advance(DefaultAppendWindow)
+	if err := adm.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	got := log.all()
+	if len(got) != 2 {
+		t.Fatalf("%d appends, want 2 (the seed, then ONE collapsed tool_run): an open and its close inside one window become "+
+			"one record (ADR-010 §7, IS-DELTA-3)", len(got))
+	}
+	rec := decodeItem(t, got[1].item)
+	if rec.Tool != "Bash" {
+		t.Errorf("collapsed tool = %q, want Bash: the OPEN's fields must survive the collapse -- a card with no tool name is the "+
+			"open record silently dropped", rec.Tool)
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 0 || rec.Status != "completed" {
+		t.Errorf("collapsed exit_code/status = %v/%q, want 0/completed: the CLOSE's fields must win", rec.ExitCode, rec.Status)
+	}
+	var full map[string]any
+	if err := json.Unmarshal(got[1].item, &full); err != nil {
+		t.Fatalf("collapsed item does not decode: %v", err)
+	}
+	if _, ok := full["action"]; !ok {
+		t.Errorf("collapsed item lost `action`: a collapse is a UNION of the two records, not a replacement (§7)")
+	}
+	if _, ok := full["output_excerpt"]; !ok {
+		t.Errorf("collapsed item lost `output_excerpt`")
+	}
+}
+
+// TestItemAdmission_ApprovalRequestHeadsTheQueueAndIsNeverMerged is IS-DELTA-3's ordering
+// rule, and the reason the floor is affordable at all: an approval is never merged, takes
+// the head of the queue, and waits at most ONE window -- never behind a backlog of prose.
+// The expiry budget (spike-SC: Codex 120 s, Claude >= 300 s) is what makes one window cheap;
+// a backlog would not be.
+func TestItemAdmission_ApprovalRequestHeadsTheQueueAndIsNeverMerged(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	offerItem(t, adm, "m/s1", itemJSON(t, "seed", "session_status", map[string]any{"process": "running"}))
+	// A backlog: prose from one session and tool runs from another, all held by the floor.
+	for i := 0; i < 5; i++ {
+		offerItem(t, adm, "m/s1", itemJSON(t, fmt.Sprintf("am%d", i), "agent_message", map[string]any{"text": "prose "}))
+		offerItem(t, adm, "m/s2", itemJSON(t, fmt.Sprintf("tr%d", i), "tool_run", map[string]any{"tool": "Read", "status": "in_progress"}))
+	}
+	approval := itemJSON(t, "ap1", "approval_request", map[string]any{
+		"summary": "Bash: rm -rf build", "content_hash": "sha256:beef", "expires_at": "2026-08-07T12:02:00Z",
+		"mode": "card", "decisions": []any{map[string]any{"id": "accept", "label": "Allow"}},
+	})
+	offeredAt := clk.Now()
+	offerItem(t, adm, "m/s2", approval)
+
+	clk.Advance(DefaultAppendWindow)
+	if err := adm.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := log.all()
+	if len(got) < 2 {
+		t.Fatalf("only %d appends; the approval never came out", len(got))
+	}
+	next := got[1]
+	rec := decodeItem(t, next.item)
+	if rec.Kind != "approval_request" {
+		t.Fatalf("the first record released after the approval was offered is a %q (%s), want approval_request: every kind other "+
+			"than agent_message takes the head of the queue, approval_request first of all (IS-DELTA-3)", rec.Kind, rec.ItemID)
+	}
+	if waited := next.at.Sub(offeredAt); waited > DefaultAppendWindow {
+		t.Errorf("the approval waited %s behind a backlog of 10 items, want <= one %s window (IS-DELTA-3)", waited, DefaultAppendWindow)
+	}
+	if string(next.item) != string(approval) {
+		t.Errorf("the approval was rewritten in flight:\n got %s\nwant %s\nan approval_request is NEVER merged -- its bytes are the "+
+			"content the daemon hashed (IS-APR-2)", next.item, approval)
+	}
+	if pending := adm.Pending(); pending != 10 {
+		t.Errorf("Pending() = %d after the approval jumped the queue, want 10: jumping the queue must not DROP what it jumped", pending)
+	}
+}
+
+// TestItemAdmission_CeilingIsPerTargetAcrossSessionsAndKinds is IS-DELTA-2a, the governing
+// rule and the mutation a per-item_id window would pass everything else with: six sessions
+// each streaming their own item_ids share ONE ceiling, because a quota-refused append burns
+// an outbound seq (PB-GW-7) and the gap it manufactures stales journal AND terminal
+// (PB-SYNC-1). Oldest-first release is the other half: the ceiling must not be a queue one
+// loud session monopolizes.
+func TestItemAdmission_CeilingIsPerTargetAcrossSessionsAndKinds(t *testing.T) {
+	adm, log, clk := newAdmissionHarness()
+	start := clk.Now()
+	sessions := []string{"m/s1", "m/s2", "m/s3", "m/s4", "m/s5", "m/s6"}
+	for frame := 0; frame < 600; frame++ { // 600 * 16 ms = 9.6 s of six dense sessions
+		for _, s := range sessions {
+			offerItem(t, adm, s, itemJSON(t, fmt.Sprintf("%s-%d", s, frame), "tool_run",
+				map[string]any{"tool": "Read", "status": "completed"}))
+		}
+		clk.Advance(renderDebounceRate)
+	}
+	elapsed := clk.Now().Sub(start)
+	budget := int(elapsed/DefaultAppendWindow) + 2
+	got := log.all()
+	if len(got) > budget {
+		t.Errorf("%d appends over %s = %.1f/s from %d sessions, over the per-TARGET budget of %d: admission is bounded per target "+
+			"across every session and kind -- a per-item_id window multiplies by the number of sessions (IS-DELTA-2a)",
+			len(got), elapsed, float64(len(got))/elapsed.Seconds(), len(sessions), budget)
+	}
+	if len(got)*2 < budget {
+		t.Errorf("only %d appends over %s against a budget of %d: the floor must SPACE the stream, not stall it", len(got), elapsed, budget)
+	}
+	served := map[string]int{}
+	for _, r := range got {
+		served[r.session]++
+	}
+	for _, s := range sessions {
+		if served[s] == 0 {
+			t.Errorf("session %s was never released in %s while five others were: the queue releases OLDEST-FIRST, so no session "+
+				"is starved (ADR-010 §7)", s, elapsed)
+		}
+	}
+}
+
+// outboundItemFrame is an INDEPENDENT decode of a sealed journal frame carrying an item, so
+// the end-to-end assertions read what the PHONE would read, not what the producer kept.
+type outboundItemFrame struct {
+	Cursor    uint64          `json:"cursor"`
+	SessionID string          `json:"session_id"`
+	Type      string          `json:"type"`
+	Item      json.RawMessage `json:"item"`
+}
+
+// TestItemAdmission_SustainedTranscriptStaysUnderAppendBudget is ADR-010 §7's fence: the
+// transcript case beside the peek case above. It drives 150 s (crossing the relay's tumbling
+// minute boundary twice) of three sessions streaming agent prose at the REAL 16 ms render
+// rate, a tool call every ~320 ms, and one approval in the middle -- through the admission
+// queue, a real RelaySink and the relay's real per-target quota -- then replays everything
+// the relay accepted into the phone's real receiver.
+//
+// It asserts the four things the floor exists for: no quota refusal, no manufactured gap, no
+// LOST content (prose reconstructs byte-for-byte, every tool run keeps both halves), and the
+// approval out within one window.
+func TestItemAdmission_SustainedTranscriptStaysUnderAppendBudget(t *testing.T) {
+	clk := newVClock()
+	start := clk.Now()
+	key := budgetTestKey()
+	app := &quotaAppender{now: clk.Now, perMin: relay.DefaultConfig().Quotas.MailboxAppendPerMin}
+	inner := NewRelaySink(RelayConfig{
+		Appender:    app,
+		Target:      "phone-routing-id",
+		EpochID:     7,
+		Key:         key,
+		SenderKeyID: [8]byte{9, 10, 11, 12, 13, 14, 15, 16},
+		Now:         clk.Now,
+	})
+	sink := NewCoalescingSink(CoalesceConfig{Inner: inner, Window: DefaultAppendWindow, Now: clk.Now})
+
+	log := &releaseLog{now: clk.Now}
+	var cursor uint64
+	var sinkErrs int
+	adm := NewItemAdmission(ItemAdmissionConfig{
+		Window: DefaultAppendWindow,
+		Now:    clk.Now,
+		Append: func(session string, item json.RawMessage) error {
+			_ = log.append(session, item)
+			cursor++
+			// The gateway forwards a journal record IMMEDIATELY and never coalesces it
+			// (R-GW.5): the queue upstream is the only thing spacing this stream.
+			if err := sink.Event(protocol.JournalRecord{Cursor: cursor, SessionID: session, Type: "interaction", Item: item}); err != nil {
+				sinkErrs++
+				return err
+			}
+			return nil
+		},
+	})
+
+	const run = 150 * time.Second
+	sessions := []string{"m/s1", "m/s2", "m/s3"}
+	prose := map[string]string{}
+	toolRuns := map[string]bool{}
+	approval := itemJSON(t, "ap1", "approval_request", map[string]any{
+		"summary": "Bash: rm -rf build", "content_hash": "sha256:beef", "mode": "card",
+	})
+	approvalOffered := false
+	var approvalOfferedAt time.Time
+	approvalAt := start.Add(45 * time.Second)
+
+	for frame := 0; clk.Now().Sub(start) < run; frame++ {
+		for _, s := range sessions {
+			tok := fmt.Sprintf("%d ", frame)
+			prose[s] += tok
+			offerItem(t, adm, s, itemJSON(t, "am-"+s, "agent_message", map[string]any{"text": tok, "status": "in_progress"}))
+		}
+		if frame%20 == 0 { // a tool call roughly every 320 ms: open, then close
+			id := fmt.Sprintf("tr-%d", frame)
+			toolRuns[id] = true
+			offerItem(t, adm, "m/s1", itemJSON(t, id, "tool_run", map[string]any{"tool": "Read", "status": "in_progress"}))
+			offerItem(t, adm, "m/s1", itemJSON(t, id, "tool_run", map[string]any{"status": "completed", "exit_code": 0}))
+		}
+		if !approvalOffered && !clk.Now().Before(approvalAt) {
+			approvalOffered, approvalOfferedAt = true, clk.Now()
+			offerItem(t, adm, "m/s2", approval)
+		}
+		clk.Advance(renderDebounceRate)
+	}
+	for i := 0; adm.Pending() > 0; i++ {
+		if i > 100_000 {
+			t.Fatalf("the queue would not drain: %d items still pending", adm.Pending())
+		}
+		clk.Advance(DefaultAppendWindow)
+		if err := adm.Flush(); err != nil {
+			t.Fatalf("Flush: %v", err)
+		}
+	}
+	elapsed := clk.Now().Sub(start)
+	stored, refused := app.snapshotState()
+
+	// (a) NO QUOTA REFUSAL and (b) UNDER BUDGET. Two appends per tool call plus a delta per
+	// render tick is ~200 items/s offered; unbounded, that is refused within seconds.
+	if refused != 0 || sinkErrs != 0 {
+		t.Errorf("the relay refused %d of %d appends (%d sink errors) over %s of transcript: the producer must hold the stream "+
+			"under MailboxAppendPerMin=%d itself, because the gateway may not coalesce a journal record (R-GW.5, PB-GW-7)",
+			refused, refused+len(stored), sinkErrs, elapsed, app.perMin)
+	}
+	budget := int(elapsed/DefaultAppendWindow) + 2
+	if len(stored) > budget {
+		t.Errorf("%d appends over %s = %.1f/s, over the §6.0 budget of %d (<= 8/s combined)", len(stored), elapsed,
+			float64(len(stored))/elapsed.Seconds(), budget)
+	}
+	if floor := int(elapsed.Seconds()) * 4; len(stored) < floor {
+		t.Errorf("only %d appends reached the phone over %s (< %d, i.e. 4/s): the floor must SPACE the transcript, not silence it",
+			len(stored), elapsed, floor)
+	}
+
+	// (c) Replay what the relay accepted into the phone's real receiver: no manufactured gap,
+	// and the transcript reconstructs LOSSLESSLY from what arrived.
+	phone := crypto.NewMailboxReceiver()
+	var gaps int
+	gotProse := map[string]string{}
+	toolSeen := map[string]int{}
+	toolTool := map[string]string{}
+	toolExit := map[string]bool{}
+	approvals := 0
+	var approvalRaw json.RawMessage
+	for i, raw := range stored {
+		env, err := crypto.ParseEnvelope(raw)
+		if err != nil {
+			t.Fatalf("append %d does not parse: %v", i, err)
+		}
+		res, err := phone.Accept(key, env)
+		if err != nil {
+			t.Fatalf("the phone rejected append %d (seq %d): %v", i, env.Header.Seq, err)
+		}
+		if res.Gap {
+			gaps++
+		}
+		var f outboundItemFrame
+		if err := json.Unmarshal(res.Plaintext, &f); err != nil {
+			t.Fatalf("append %d plaintext is not decodable: %v", i, err)
+		}
+		if f.Type != "interaction" {
+			t.Fatalf("append %d carries type %q, want interaction", i, f.Type)
+		}
+		rec := decodeItem(t, f.Item)
+		switch rec.Kind {
+		case "agent_message":
+			gotProse[f.SessionID] += rec.Text
+		case "tool_run":
+			toolSeen[rec.ItemID]++
+			if rec.Tool != "" {
+				toolTool[rec.ItemID] = rec.Tool
+			}
+			if rec.ExitCode != nil {
+				toolExit[rec.ItemID] = true
+			}
+		case "approval_request":
+			approvals++
+			approvalRaw = f.Item
+		}
+	}
+	if gaps != 0 {
+		t.Errorf("the phone saw %d GAPS with no relay failure: a refused append burns an outbound seq and the gap stales journal "+
+			"AND terminal (PB-SYNC-1)", gaps)
+	}
+	for _, s := range sessions {
+		if gotProse[s] != prose[s] {
+			t.Errorf("session %s reconstructed %d bytes of prose, want %d: merging agent_message increments is LOSSLESS "+
+				"concatenation, and a hole is invisible to a consumer that rebuilds by concatenating in cursor order (IS-DELTA-1)",
+				s, len(gotProse[s]), len(prose[s]))
+			break
+		}
+	}
+	for id := range toolRuns {
+		if toolSeen[id] == 0 {
+			t.Fatalf("tool run %s never reached the phone: the floor MERGES, it never drops (ADR-010 §7)", id)
+		}
+		if toolSeen[id] > 2 {
+			t.Fatalf("tool run %s produced %d records from 2 offers", id, toolSeen[id])
+		}
+		if toolTool[id] == "" || !toolExit[id] {
+			t.Fatalf("tool run %s came back without its tool name (%q) or its exit code (%v): a collapse is a lossless UNION of "+
+				"the open and the close, never a replacement (ADR-010 §7)", id, toolTool[id], toolExit[id])
+		}
+	}
+	if approvals != 1 {
+		t.Errorf("the approval reached the phone %d times, want exactly 1 (never merged, never duplicated)", approvals)
+	} else if string(approvalRaw) != string(approval) {
+		t.Errorf("the approval arrived rewritten:\n got %s\nwant %s", approvalRaw, approval)
+	}
+	var approvalReleasedAt time.Time
+	for _, r := range log.all() {
+		if decodeItem(t, r.item).Kind == "approval_request" {
+			approvalReleasedAt = r.at
+			break
+		}
+	}
+	if waited := approvalReleasedAt.Sub(approvalOfferedAt); waited > DefaultAppendWindow {
+		t.Errorf("the approval waited %s under a saturated transcript, want <= one %s window: approval_request is never merged and "+
+			"takes the HEAD of the queue, so it never waits behind a backlog of prose (IS-DELTA-3)", waited, DefaultAppendWindow)
+	}
+}

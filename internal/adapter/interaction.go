@@ -1,0 +1,304 @@
+package adapter
+
+// ADR-010 — structured interaction capture: an OPTIONAL, ADDITIVE extension of
+// the frozen contract. The Adapter method set (adapter.go) is UNCHANGED and every
+// existing adapter compiles and behaves exactly as before; an adapter that
+// implements nothing here is complete and fully supported, and the daemon detects
+// that absence through AsInteractionSource and falls back to deriving items from
+// the sanitized snapshot (ADR-010 §5 "Generic fallback").
+//
+// The extension keeps the boundary's original guarantee: it adds DESCRIPTORS and
+// PURE FUNCTIONS, the same trick Detect(a, HostProber) already plays. No adapter
+// gains an fd — Decision returns a descriptor the CORE executes, exactly as
+// Command/Resume return an argv core runs (E9.2 / ADR-001).
+//
+// The adapter returns NORMALIZED FIELDS AND NOTHING ELSE. Item ids, ordering and
+// journal cursor, timestamps, size caps and excerpting, redaction, the byte-exact
+// canonicalization and its SHA-256, expires_at, the D7 binding tuple, and
+// transport are ALL daemon-side (ADR-010 §3). The normative field list is
+// docs/specifications/interaction-schema.md §3; this file names only the subset an
+// adapter can source.
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// Item kinds — interaction-schema.md §3, the AEAD-plaintext-bound discriminator.
+// It lives only inside the item payload: nothing here is ever written to
+// SenderKeyID or EpochID (IS-LAYER-2, PB-SYNC-1).
+const (
+	KindUserMessage      = "user_message"
+	KindAgentMessage     = "agent_message"
+	KindToolRun          = "tool_run"
+	KindFileChange       = "file_change"
+	KindApprovalRequest  = "approval_request"
+	KindApprovalResolved = "approval_resolved"
+	KindPlanUpdate       = "plan_update"
+	KindSessionStatus    = "session_status"
+)
+
+// Item statuses — interaction-schema.md §4. in_progress is the only
+// non-terminal one; IS-ST-1 allows at most one terminal status per item.
+const (
+	StatusInProgress = "in_progress"
+	StatusCompleted  = "completed"
+	StatusFailed     = "failed"
+	StatusDeclined   = "declined"
+)
+
+// Approval apply modes — interaction-schema.md §3.5. card means Decision applies
+// the verdict natively; prompt_card is IS-LIFE-6's fallback, where the machine
+// injects a mapped keystroke instead.
+const (
+	ModeCard       = "card"
+	ModePromptCard = "prompt_card"
+)
+
+// user_message sources — interaction-schema.md §3.1.
+const (
+	SourcePhone   = "phone"
+	SourceOwner   = "owner"
+	SourceDerived = "derived"
+)
+
+// DescriptorCapture is the SignalSource.Descriptor key an adapter sets to declare
+// that an event's body must be PRESERVED rather than flattened to top-level
+// strings (ADR-010 §1). Capture is declared in the existing descriptor map, so
+// SignalSource itself is untouched and an adapter that declares nothing behaves
+// exactly as today.
+const DescriptorCapture = "capture"
+
+// CaptureRaw is the ONLY capture value ADR-010 §1 defines.
+//
+// ponytail: an unrecognized value is a conformance VIOLATION, not an ignored key.
+// A typo would otherwise silently flatten the CLI's bodies away with no signal at
+// all — the failure would surface as an empty transcript, three layers downstream.
+const CaptureRaw = "raw"
+
+// descriptorEvent is the descriptor key naming the event a row describes. It is
+// the engine's lookup key (descriptorForEvent); spelled literally here so the
+// contract package keeps depending on nothing but itself and internal/vt (T-5).
+const descriptorEvent = "event"
+
+// Interaction is the pure, normalized content ONE adapter shaped out of ONE
+// captured event body. It is the adapter's whole output: the daemon is the sole
+// producer of what goes on the wire (ADR-010 §3).
+//
+// Fields are grouped by the kind that uses them, mirroring interaction-schema.md
+// §3.1-§3.7. A field belonging to another kind is left zero.
+//
+// ponytail: there are no fields for approval_resolved (§3.6) or session_status
+// (§3.8) because no adapter sources them — IS-LIFE-2's resolver covers five paths
+// of which four are daemon-observed, IS-ST-2's sweep fires on instance death, and
+// IS-SS-1 makes session_status the status.* projection the roster already derives.
+// The KIND constants cover all eight (they are the wire vocabulary the daemon
+// reuses) and Validate accepts all eight, so a later agent-sourced cancel is an
+// additive field, not a contract change.
+type Interaction struct {
+	// Kind is one of the eight kinds above. Required.
+	Kind string
+	// Status is one of the four statuses above, or empty when the kind carries
+	// none (interaction-schema.md §2: "absent means not applicable to the kind").
+	Status string
+
+	// Ref is the CLI's OWN id for this interaction, in the CLI's own vocabulary.
+	// It is NOT the item_id and never reaches the phone: the daemon mints the
+	// ULID item_id (IS-APR-1 leaves exactly one id on the wire) and maps Ref to
+	// it. It serves two machine-side jobs, which is why there is one field and
+	// not two:
+	//
+	//   - it is the ref Decision(ref, verdict) is later called with, for an
+	//     approval_request (ADR-010 §4);
+	//   - it is the correlation key that lets the daemon fold successive records
+	//     of ONE item under one item_id — the agent_message increments of
+	//     IS-DELTA-1 and the tool_run open+close IS-DELTA-3 collapses. The
+	//     adapter is the only party that sees the CLI's own id, so nobody else
+	//     can supply it.
+	//
+	// Empty for a self-contained one-record item.
+	Ref string
+
+	// user_message (§3.1) / agent_message (§3.2). Text on an agent_message is the
+	// INCREMENT this record appends, never the accumulated body (IS-DELTA-1).
+	Text       string
+	Source     string // user_message only: phone | owner | derived
+	StopReason string // agent_message terminal record only: end_turn | interrupted | error
+
+	// tool_run (§3.3). ExitCode is meaningful only for an execute action; the
+	// daemon omits it otherwise, so a zero here is not "exited 0" for a read.
+	Tool             string
+	Action           ToolAction // §7; also the approval_request summary action
+	OutputExcerpt    string
+	TruncationMarker string // the CLI's own truncation text, VERBATIM (IS-TOOL-3)
+	ExitCode         int
+
+	// file_change (§3.4). IS-FC-1: only an APPLIED change is a file_change; a
+	// proposed edit is an approval_request.
+	Path        string
+	Change      string // create | modify | delete | rename
+	OldPath     string // rename only
+	DiffExcerpt string // unified diff text; the producer normalizes (spike-SB: Claude's Edit body is old_string/new_string)
+	Added       int
+	Removed     int
+
+	// approval_request (§3.5). content_hash, expires_at and the agent_instance
+	// binding tuple are daemon-authoritative and deliberately absent here.
+	Summary   string
+	Decisions []DecisionChoice // the CLI's OWN decision vocabulary, not a normalized one
+	// Mode declares the apply mechanism AT CAPTURE, because that is where the
+	// spike-SC carve-out is decidable — the adapter can see the tool and its
+	// input then, so the daemon knows before the phone renders whether the
+	// request resolves natively (ADR-010 §4).
+	Mode        string
+	PromptLines []string // prompt_card only: the sanitized prompt region, as text
+
+	// Keystrokes is the decision->keystroke map, keyed by DecisionChoice.ID.
+	// Present IFF Mode == prompt_card, because Decision is never called on that
+	// path, so the map must be produced at capture (ADR-010 §2/§4).
+	//
+	// ponytail: this is MACHINE-SIDE data with a deliberate ceiling — the daemon
+	// holds it and SHALL NOT copy it onto the item. IS-APR-3 forbids the item
+	// carrying it and IS-LIFE-6 forbids the phone authoring the keystroke, so a
+	// wire field for it would only invite the implementation those rules exist to
+	// prevent. It rides Interaction because Interaction is the only adapter->core
+	// carrier there is; DecisionAction deliberately has no Keys field.
+	Keystrokes map[string]string
+
+	// plan_update (§3.7). IS-PLAN-1: latest-state, not incremental.
+	Revision int
+	Steps    []PlanStep
+}
+
+// ToolAction is interaction-schema.md §7's structured summary — what makes a card
+// read "Read src/main.rs". IS-TOOL-1 puts its production machine-side, in the
+// per-CLI adapter; IS-TOOL-2 says an unclassifiable call is "other", never
+// guessed at.
+type ToolAction struct {
+	Type    string // read | edit | write | search | execute | fetch | other
+	Path    string // read/edit/write
+	Query   string // search
+	Command string // execute
+}
+
+// DecisionChoice is one decision the CLI offers for a pending approval (§3.5).
+// The ids are the CLI's own vocabulary (spike-SB captured Codex's accept /
+// acceptWithExecpolicyAmendment / cancel), never a normalized set.
+type DecisionChoice struct {
+	ID    string
+	Label string
+}
+
+// PlanStep is one step of a plan_update (§3.7).
+type PlanStep struct {
+	Text  string
+	State string // pending | in_progress | completed | cancelled
+}
+
+// InteractionSource is the OPTIONAL extension a CLI-native adapter implements.
+// It is discovered by TYPE ASSERTION (AsInteractionSource), never by a method on
+// Adapter: the frozen method set gains nothing (ADR-010 Non-goals).
+type InteractionSource interface {
+	// Interactions maps ONE captured event body to zero or more items. PURE and
+	// TOTAL, on the same terms as ExtractConversationID: never panics on a nil,
+	// truncated, garbage, or unbounded body; deterministic; and it never returns
+	// content it did not observe in p.Raw.
+	Interactions(p HookPayload) []Interaction
+
+	// Decision describes HOW to apply a verdict to the pending approval named by
+	// ref, as a descriptor the CORE executes — the adapter performs no I/O (E9.2),
+	// exactly as Command/Resume return an argv core runs. ok == false means this
+	// CLI has no native mechanism here and the daemon must use the prompt card.
+	Decision(ref, verdict string) (DecisionAction, bool)
+}
+
+// DecisionAction is the core-executed effect: the body core writes back on the
+// pending hook or JSON-RPC channel. The prompt-card path carries NO DecisionAction
+// — spike S-C's carve-out is exactly the path on which Decision is never called, so
+// its decision-to-keystroke map is produced at capture and held MACHINE-SIDE. It is
+// never a field on the item and never reaches the phone (interaction-schema.md
+// IS-APR-3 and IS-LIFE-6; ADR-009 (4)).
+type DecisionAction struct {
+	Reply json.RawMessage
+}
+
+// AsInteractionSource reports whether a implements the optional capture
+// extension. ok == false is the GENERIC-FALLBACK SIGNAL (ADR-010 §5): the adapter
+// is complete and fully supported, and the daemon derives items from the
+// sanitized snapshot instead. Native capture is an upgrade, never a precondition.
+func AsInteractionSource(a Adapter) (InteractionSource, bool) {
+	src, ok := a.(InteractionSource)
+	return src, ok
+}
+
+// Validate reports the first structural violation in one shaped item: an unknown
+// kind, status or enum value, or a broken card/prompt-card pairing. It is PURE
+// and checks SHAPE ONLY — interaction-schema.md §5's size caps, §2's ids and
+// timestamps, and §3.5's hash/expiry are daemon-side and deliberately unchecked
+// here (ADR-010 §3).
+func (in Interaction) Validate() error {
+	if err := oneOf("kind", in.Kind, false, KindUserMessage, KindAgentMessage, KindToolRun,
+		KindFileChange, KindApprovalRequest, KindApprovalResolved, KindPlanUpdate, KindSessionStatus); err != nil {
+		return err
+	}
+	if err := oneOf("status", in.Status, true, StatusInProgress, StatusCompleted, StatusFailed, StatusDeclined); err != nil {
+		return err
+	}
+	if err := oneOf("source", in.Source, true, SourcePhone, SourceOwner, SourceDerived); err != nil {
+		return err
+	}
+	if err := oneOf("stop_reason", in.StopReason, true, "end_turn", "interrupted", "error"); err != nil {
+		return err
+	}
+	if err := oneOf("change", in.Change, true, "create", "modify", "delete", "rename"); err != nil {
+		return err
+	}
+	if in.OldPath != "" && in.Change != "rename" {
+		return fmt.Errorf("old_path is set with change %q; interaction-schema.md §3.4 carries it on a rename only", in.Change)
+	}
+	if err := oneOf("action.type", in.Action.Type, true, "read", "edit", "write", "search", "execute", "fetch", "other"); err != nil {
+		return err
+	}
+	if err := oneOf("mode", in.Mode, true, ModeCard, ModePromptCard); err != nil {
+		return err
+	}
+	if in.Kind == KindApprovalRequest && len(in.Decisions) == 0 {
+		return fmt.Errorf("approval_request carries no decisions; the card labels its buttons from decisions[].label (IS-APR-3), so a request with none renders an unactionable card — an adapter that cannot enumerate the CLI's decisions emits no approval at all")
+	}
+	for i, d := range in.Decisions {
+		if d.ID == "" {
+			return fmt.Errorf("decisions[%d] has an empty id; the card resolves a decision by id (interaction-schema.md §3.5)", i)
+		}
+	}
+	if len(in.Keystrokes) > 0 && in.Mode != ModePromptCard {
+		return fmt.Errorf("keystrokes are held with mode %q; the decision->keystroke map exists only for %s (IS-APR-3, IS-LIFE-6)", in.Mode, ModePromptCard)
+	}
+	if len(in.PromptLines) > 0 && in.Mode != ModePromptCard {
+		return fmt.Errorf("prompt_lines are set with mode %q; interaction-schema.md §3.5 carries them on %s only", in.Mode, ModePromptCard)
+	}
+	for i, s := range in.Steps {
+		// A plan step's state is its OWN vocabulary (§3.7), not the item status
+		// enum of §4 — the two overlap on two values and must not be conflated.
+		if err := oneOf(fmt.Sprintf("steps[%d].state", i), s.State, true, "pending", "in_progress", "completed", "cancelled"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// oneOf reports a violation when v is not one of want. An empty v is a violation
+// unless optional.
+func oneOf(field, v string, optional bool, want ...string) error {
+	if v == "" {
+		if optional {
+			return nil
+		}
+		return fmt.Errorf("%s is empty; it is required (interaction-schema.md §2)", field)
+	}
+	for _, w := range want {
+		if v == w {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s %q is not one of %v (interaction-schema.md §3/§4)", field, v, want)
+}

@@ -1081,6 +1081,305 @@ func assertNoFieldOfType(t *testing.T, v any, typeName string, match func(any) b
 	}
 }
 
+// --- ADR-010 §4: the approval wake -------------------------------------------
+//
+// FAILING-FIRST (TDD RED, GG-5). Both rules below are decided by ADR-010 §4 and neither
+// exists: PushConfig has no timer seam at RED, and maybeWake returns on the first gate for
+// every record these tests send.
+//
+// THE DEFECT, exactly as ADR-010 §4 states it. IS-LIFE-1 requires a push wake on every
+// captured approval, and today's wake cannot deliver one:
+//
+//	(a) maybeWake ignores any record with no Group (push.go), and Group is set on group
+//	    transitions only (journal.go) -- so an `interaction` append wakes NOBODY on its own.
+//	    Today's approval wake is a side effect of the flat status descriptor going idle/
+//	    permission, which does not fire when the session is ALREADY in that group: a second
+//	    approval inside one turn wakes nothing at all.
+//	(b) A wake the §6.0 30 s per-session window suppresses is DROPPED -- claimWindow returns
+//	    false and maybeWake returns with no retry timer. For a status transition that is
+//	    correct (the phone was just woken and reads the same roster state). For an approval
+//	    it is a request the owner never learns about until it expires.
+//
+// THE SEAM these tests pin: PushConfig gains one timer seam, because the deferral is the one
+// push-path behaviour that happens with NO journal record to drive it and a virtual clock
+// alone cannot observe it.
+//
+//	After func(d time.Duration, f func()) // nil => time.AfterFunc
+//
+// SCOPE, and it is deliberate. Rule (b) applies to the INTERACTION wake only. A suppressed
+// group-transition wake stays dropped, which is what TestPBPUSH0_CoalescesRepeatTransitions-
+// WithinTheWindow above already pins: those wakes are redundant (same session, same roster
+// state, re-read on the next connect), while an approval is a distinct expiring request.
+// Widening the deferral to every wake would contradict that existing fence, and a fence is
+// never edited to make a new rule fit.
+//
+// WHAT THE GATEWAY MAY NOT DO, and the resolution it forces. interaction-schema.md §10 says
+// the gateway "parses no item", and the wire record's Type is the coarse `interaction`
+// (IS-LAYER-1) -- the item's `kind` lives inside the AEAD-covered payload. So the gateway
+// CANNOT single out `approval_request` without doing the one thing §10 forbids. These tests
+// therefore pin the leanest compliant reading: EVERY `interaction` append is wake-eligible,
+// which is a superset of §4(a)'s requirement, with the existing 30 s per-session window
+// bounding the cost.
+
+// fakeTimer is the deferred-wake timer seam: it records what was scheduled instead of
+// sleeping, so a test drives the deferral deterministically alongside the virtual clock.
+type fakeTimer struct {
+	mu    sync.Mutex
+	delay []time.Duration
+	fn    []func()
+}
+
+func (ft *fakeTimer) after(d time.Duration, f func()) {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	ft.delay = append(ft.delay, d)
+	ft.fn = append(ft.fn, f)
+}
+
+func (ft *fakeTimer) scheduled() []time.Duration {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return append([]time.Duration(nil), ft.delay...)
+}
+
+// fire runs the n-th scheduled timer, as the runtime would when its delay elapses.
+func (ft *fakeTimer) fire(t *testing.T, n int) {
+	t.Helper()
+	ft.mu.Lock()
+	if n >= len(ft.fn) {
+		ft.mu.Unlock()
+		t.Fatalf("no timer %d was scheduled (only %d): the suppressed wake was DROPPED, not deferred (ADR-010 §4(b))", n, len(ft.fn))
+	}
+	f := ft.fn[n]
+	ft.mu.Unlock()
+	f()
+}
+
+// newApprovalPushHarness is newPushHarnessWith plus the timer seam. It is a separate
+// constructor rather than a change to the shared one so that no existing PB-PUSH test's
+// environment moves.
+func newApprovalPushHarness(t *testing.T, prefs PushPrefs) (*pushHarness, *fakeTimer) {
+	t.Helper()
+	pusher := &fakePusher{}
+	inner := &recordingSink{}
+	sp := &stubPrefs{prefs: prefs}
+	clk := newTestClock()
+	ft := &fakeTimer{}
+	seq, err := OpenSeqSource("")
+	if err != nil {
+		t.Fatalf("OpenSeqSource: %v", err)
+	}
+	n := NewPushNotifier(inner, PushConfig{
+		Pusher:  pusher,
+		Target:  "phone-routing-id",
+		WakeKey: testWakeKey(),
+		EpochID: 7,
+		Now:     clk.Now,
+		Seq:     seq,
+		Prefs:   sp,
+		After:   ft.after,
+	})
+	return &pushHarness{notifier: n, pusher: pusher, inner: inner, prefs: sp, clk: clk}, ft
+}
+
+// interaction delivers one bare interaction journal record: no Group, because an item is not
+// a roster transition and IS-LAYER-1 gives it the coarse type `interaction`.
+func (h *pushHarness) interaction(t *testing.T, cursor uint64, s string) {
+	t.Helper()
+	if err := h.notifier.Event(protocol.JournalRecord{
+		Cursor: cursor, SessionID: s, Type: "interaction",
+		Item: []byte(`{"v":1,"item_id":"ap1","ts":"2026-08-07T12:00:00Z","kind":"approval_request","summary":"Bash: rm -rf build"}`),
+	}); err != nil {
+		t.Fatalf("Event(interaction, %s): %v", s, err)
+	}
+}
+
+// TestADR010_InteractionAppendWakesWithoutAGroup is rule (a): an interaction append is
+// wake-eligible ON ITS OWN, independent of Group and of isTransition. Without it IS-LIFE-1
+// is unimplementable -- the approval is journalled, the phone is asleep, and the only
+// mechanism that could tell it is gated on a field the record does not carry.
+func TestADR010_InteractionAppendWakesWithoutAGroup(t *testing.T) {
+	h, _ := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	h.interaction(t, 1, "m/s1")
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("push count for an interaction append with no Group: got %d, want 1 (ADR-010 §4(a))", got)
+	}
+	if got := h.inner.eventCount(); got != 1 {
+		t.Fatalf("the record reached the sealing sink %d times, want 1: the wake is strictly ADDITIVE", got)
+	}
+	// Control: the Group gate is otherwise untouched -- a group-less record of any OTHER
+	// type still wakes nobody (TestPBPUSH0_RecordWithNoGroupIsNotATransition's rule).
+	h.clk.advance(10 * DefaultPushWindow)
+	h.event(t, 2, "m/s1", "")
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("push count after a group-less NON-interaction record: got %d, want 1 (the bypass is for interaction records only)", got)
+	}
+}
+
+// TestADR010_SecondApprovalInsideOneTurnStillWakes is the half of rule (a) that the flat
+// status descriptor cannot cover at all: the session is ALREADY in the permission group, so
+// there is no transition to ride, and the owner would never learn about the second request.
+func TestADR010_SecondApprovalInsideOneTurnStillWakes(t *testing.T) {
+	h, _ := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	h.event(t, 1, "m/s1", status.GroupNeedsInput) // the first approval, via the status path
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("control: the transition into needs_input produced %d pushes, want 1", got)
+	}
+	h.clk.advance(DefaultPushWindow + time.Second)
+	h.interaction(t, 2, "m/s1") // a second approval, same group, no transition
+	if got := h.pusher.count(); got != 2 {
+		t.Fatalf("push count for a second approval inside one turn: got %d, want 2 -- the session never left the permission "+
+			"group, so there is no transition to ride (ADR-010 §4(a))", got)
+	}
+}
+
+// TestADR010_SuppressedInteractionWakeIsDeferredNotDropped is rule (b). The arithmetic it
+// protects: a <= 30 s deferral against Codex's 120 s measured expiry leaves >= 90 s, still
+// above spike-SC's 60 s one-tap floor. A DROP leaves zero.
+func TestADR010_SuppressedInteractionWakeIsDeferredNotDropped(t *testing.T) {
+	h, ft := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	h.interaction(t, 1, "m/s1")
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("first approval: got %d pushes, want 1", got)
+	}
+	h.clk.advance(5 * time.Second)
+	h.interaction(t, 2, "m/s1") // inside the 30 s window: suppressed
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("a second approval 5s later produced %d pushes, want 1 still: §6.0's window is not repealed by the deferral", got)
+	}
+	sched := ft.scheduled()
+	if len(sched) != 1 {
+		t.Fatalf("%d deferral timers scheduled, want exactly 1", len(sched))
+	}
+	if want := DefaultPushWindow - 5*time.Second; sched[0] != want {
+		t.Errorf("the deferral was scheduled for %s, want %s: the wake is deferred to the END OF THAT WINDOW, not a fresh one", sched[0], want)
+	}
+
+	h.clk.advance(DefaultPushWindow - 5*time.Second)
+	ft.fire(t, 0)
+	if got := h.pusher.count(); got != 2 {
+		t.Fatalf("push count after the deferred wake fired: got %d, want 2 (ADR-010 §4(b): deferred, never dropped)", got)
+	}
+	// The deferred wake CLAIMS the window it fired in, so it cannot immediately re-fire.
+	h.interaction(t, 3, "m/s1")
+	if got := h.pusher.count(); got != 2 {
+		t.Errorf("an approval right after the deferred wake produced %d pushes, want 2: firing a deferred wake consumes the "+
+			"session's window like any other", got)
+	}
+}
+
+// TestADR010_OneDeferredWakeServesEveryPendingRequest pins the coalescing §4(b) explicitly
+// allows: the envelope is a constant-size empty plaintext (PushWakeEnvelopeSize), so one
+// wake serving three pending requests discloses nothing extra and loses nothing -- and three
+// separate wakes would burn the FCM quota ADR-007 B16 names as the cost of dropping the
+// socket.
+func TestADR010_OneDeferredWakeServesEveryPendingRequest(t *testing.T) {
+	h, ft := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	sessions := []string{"m/s1", "m/s2", "m/s3"}
+	for i, s := range sessions {
+		h.interaction(t, uint64(i+1), s)
+	}
+	if got := h.pusher.count(); got != 3 {
+		t.Fatalf("three sessions' first approvals produced %d pushes, want 3 (the window is PER SESSION)", got)
+	}
+	h.clk.advance(10 * time.Second)
+	for i, s := range sessions {
+		h.interaction(t, uint64(i+4), s) // all three suppressed inside their windows
+	}
+	if got := h.pusher.count(); got != 3 {
+		t.Fatalf("suppressed approvals produced %d pushes, want 3 still", got)
+	}
+	if sched := ft.scheduled(); len(sched) != 1 {
+		t.Fatalf("%d deferral timers scheduled for three pending sessions, want exactly 1: ONE deferred wake serves every "+
+			"request pending at that moment (ADR-010 §4(b))", len(sched))
+	}
+	h.clk.advance(DefaultPushWindow - 10*time.Second)
+	ft.fire(t, 0)
+	if got := h.pusher.count(); got != 4 {
+		t.Fatalf("push count after the single deferred wake: got %d, want 4 (3 + ONE serving all three)", got)
+	}
+}
+
+// TestADR010_SuppressedGroupTransitionIsStillDropped pins the SCOPE of rule (b), so a later
+// reader does not read it as universal and break the fence above it. A redundant status wake
+// stays dropped; only the interaction wake is deferred.
+func TestADR010_SuppressedGroupTransitionIsStillDropped(t *testing.T) {
+	h, ft := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	h.event(t, 1, "m/s1", status.GroupNeedsInput)
+	h.clk.advance(time.Second)
+	h.event(t, 2, "m/s1", status.GroupWorking)
+	h.event(t, 3, "m/s1", status.GroupReadyForReview) // push-worthy, inside the window
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("push count inside one window: got %d, want 1", got)
+	}
+	if sched := ft.scheduled(); len(sched) != 0 {
+		t.Fatalf("%d deferral timers scheduled for a suppressed GROUP transition, want 0: rule (b) is the interaction wake's, "+
+			"and TestPBPUSH0_CoalescesRepeatTransitionsWithinTheWindow pins the other", len(sched))
+	}
+}
+
+// TestADR010_InteractionWakeIsStillSuppressedByPreference: rule (a) bypasses the GROUP gate,
+// not the user's. PB-PUSH-8 requires suppression AT THE SENDER, because a push that is sent
+// and then ignored still lets the provider observe token, timing and size. It also pins
+// WHICH category an interaction wake is charged to: needs_input -- an approval is the agent
+// blocked on its owner, which is what that category means.
+func TestADR010_InteractionWakeIsStillSuppressedByPreference(t *testing.T) {
+	h, ft := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: false, Finished: true})
+	h.interaction(t, 1, "m/s1")
+	if got := h.pusher.count(); got != 0 {
+		t.Fatalf("push count with needs_input disabled: got %d, want 0 (PB-PUSH-8: zero calls, suppressed at the sender)", got)
+	}
+	if sched := ft.scheduled(); len(sched) != 0 {
+		t.Fatalf("%d deferral timers scheduled for a wake the PREFERENCE suppressed, want 0: a suppressed category must not "+
+			"come back through the deferral path", len(sched))
+	}
+	if got := h.inner.eventCount(); got != 1 {
+		t.Fatalf("the journal record reached the sink %d times, want 1: a preference suppresses the WAKE, never the record", got)
+	}
+}
+
+// TestADR010_ADeferredWakeHonoursAPreferenceFlippedMeanwhile closes the hole rule (b) opens
+// in the test above. The preference is read BEFORE the window is claimed, so a wake armed
+// while needs_input was on fires up to a full window later -- and PB-PUSH-8 requires "no push
+// is sent, verified at the sender, not the receiver" of a disabled toggle, which a wake the
+// owner switched off 25 s ago is not. The deferral is the only push this type emits with no
+// record driving it, so it is the only one that can outlive the preference it was authorized
+// under; the immediate path re-reads on every record and cannot.
+func TestADR010_ADeferredWakeHonoursAPreferenceFlippedMeanwhile(t *testing.T) {
+	h, ft := newApprovalPushHarness(t, PushPrefs{Version: 1, NeedsInput: true, Finished: true})
+	h.interaction(t, 1, "m/s1")
+	h.clk.advance(5 * time.Second)
+	h.interaction(t, 2, "m/s1") // inside the window: suppressed, deferral armed
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("control: got %d pushes before the flip, want 1", got)
+	}
+	if err := h.prefs.SavePrefs(PushPrefs{Version: 2, NeedsInput: false, Finished: true}); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+	h.clk.advance(DefaultPushWindow - 5*time.Second)
+	ft.fire(t, 0)
+	if got := h.pusher.count(); got != 1 {
+		t.Fatalf("the deferred wake fired for a category the owner had since disabled: got %d pushes, want 1 "+
+			"(PB-PUSH-8: suppressed at the SENDER, or the provider still sees token, timing and size)", got)
+	}
+	// The deferral state was CONSUMED, not left armed: a dropped wake must not wedge the one
+	// timer slot shut for every session that defers after it. Turning the category back on is
+	// what makes the check observable -- while it is off nothing arms in the first place.
+	if err := h.prefs.SavePrefs(PushPrefs{Version: 3, NeedsInput: true, Finished: true}); err != nil {
+		t.Fatalf("SavePrefs: %v", err)
+	}
+	h.clk.advance(DefaultPushWindow)
+	h.interaction(t, 3, "m/s1") // the window is free again: wakes immediately
+	if got := h.pusher.count(); got != 2 {
+		t.Fatalf("got %d pushes after re-enabling the category, want 2", got)
+	}
+	h.clk.advance(time.Second)
+	h.interaction(t, 4, "m/s1") // inside the new window: must arm a SECOND timer
+	if sched := ft.scheduled(); len(sched) != 2 {
+		t.Fatalf("%d deferral timers scheduled in total, want 2: dropping a deferred wake must still release the arm", len(sched))
+	}
+}
+
 // hasFieldOfType is assertNoFieldOfType's positive control.
 func hasFieldOfType(v any, match func(any) bool) bool {
 	rv := reflect.ValueOf(v)

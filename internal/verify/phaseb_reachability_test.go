@@ -160,6 +160,7 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/skeleton.Daemon.SocketPath":       "as Daemon.Core.",
 	"github.com/Nathandela/swarm/internal/adapter.Conformance":              "the adapter conformance harness: a test contract by construction.",
 	"github.com/Nathandela/swarm/internal/adapter.CheckConformance":         "as Conformance.",
+	"github.com/Nathandela/swarm/internal/adapter.CheckInteractionFixture":  "as Conformance: ADR-010's obligation-3 corpus half and obligation 4, replaying a recorded fixture's payloads through Interactions. Its two siblings above -- AsInteractionSource and Interaction.Validate -- are NOT listed, because internal/skeleton's interaction producer calls both in production (interaction.go).",
 	"github.com/Nathandela/swarm/internal/idempotency.Open":                 "production opens the store via OpenWithOptions; this is the default-options form.",
 	"github.com/Nathandela/swarm/internal/transcript.Writer.Dropped":        "drop counter read by the transcript tests; the shipped writer reports drops through its metrics.",
 	"github.com/Nathandela/swarm/internal/remote/pairing.Machine.Listening": "readiness probe for the rendezvous, used by tests to avoid a sleep.",

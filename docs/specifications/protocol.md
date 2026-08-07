@@ -97,12 +97,47 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
 uses none of them serializes byte-identically to the pre-remote shape. The nested
-`ApproveReq` (approval), `JournalRecord` (journal event), `DeviceView` (paired
-device), `PolicyView` (launch policy), and `PairingControl` (pairing payload)
-shapes are documented at the field level in `internal/protocol` and are not
-repeated as wire tables here. `send_input` (ADR-010 A2) is the one **owner-tier**
-addition in that block and follows the same rule: `omitempty`, and its `SendInputReq`
-payload is described in its op section below rather than as a second wire table.
+`ApproveReq` (approval), `DeviceView` (paired device), `PolicyView` (launch
+policy), and `PairingControl` (pairing payload) shapes are documented at the field
+level in `internal/protocol` and are not repeated as wire tables here.
+`JournalRecord` is the exception, below: it is the phone's whole view of the
+machine, roster and transcript alike. `send_input`
+(`ADR-010-inter-session-orchestration.md` A2 — cited by filename because two ADRs
+carry the number 010, see `docs/adr/README.md`) is the one **owner-tier** addition
+in that block and follows the same rule: `omitempty`, and its `SendInputReq` payload
+is described in its op section below rather than as a second wire table.
+
+## The `JournalRecord` message
+
+`JournalRecord` is one wire-facing journal event, carried in `Control.journal`
+(`journal_read` / `journal_event`) and in `Control.roster` (the snapshot half of a
+`journal_read`, R-JRN.4). It mirrors the daemon journal's record fields the phone
+needs; the daemon-internal payload is not carried, with the single exception of
+`item`.
+
+| Field        | Go type           | Meaning                                                                 |
+| ------------ | ----------------- | ----------------------------------------------------------------------- |
+| `cursor`     | uint64            | the record's monotonic journal cursor; ordering is this and nothing else. Deliberately unset (`0`) on a roster record, which is a set member and not a point in the stream (PB-SYNC-8) |
+| `session_id` | string            | namespaced session id the record is about; absent on a session-neutral record (`presence`) |
+| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` |
+| `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
+| `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
+| `item`       | `json.RawMessage` | the interaction item object, carried ONLY when `type` is `interaction` — one unit of the phone's chat transcript (ADR-009, `interaction-schema.md` §1/§2, IS-LAYER-1). Opaque on the wire: the gateway forwards it and parses no item (§10), and the item's own `kind` discriminator stays inside it (IS-LAYER-2) |
+
+Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
+that predates one of them serializes byte-identically to what earlier builds wrote.
+
+This table's header column reads **`Field`**, not `JSON key`, and that is
+deliberate rather than a style slip: GG-7's bidirectional drift check
+(`internal/protocol/protocolmd_bidi_test.go`) collects the rows of every table
+headed `JSON key` and asserts set equality against the json tags of the four
+reflected wire types — `Control`, `SessionView`, `LaunchReq` and
+`TerminalSnapshot`. `JournalRecord` is not one of them (`interaction-schema.md` §1
+says so and relies on it), so rows like `type` and `item` — real fields of a type
+the check does not reflect — would fail its reverse direction. Keeping this table
+in step with `internal/protocol/schema.JournalRecord` is therefore a **procedural**
+obligation, carried by those fields' Go doc comments; changing the header would not
+extend the check to this type, only break it.
 
 ## The `SessionView` message
 

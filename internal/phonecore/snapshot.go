@@ -257,6 +257,12 @@ type MailboxRouter struct {
 	sessions  *SessionCache
 	snapshots *SnapshotCache
 	replies   *ReplyCache
+	// items is the TRANSCRIPT (interaction.go). It is bound beside the other caches and
+	// replaced by the same rebind, but it is deliberately NOT in bound(): every existing
+	// caller of that helper wants a different cache, and widening its result would edit seven
+	// call sites to carry a pointer none of them reads. Items() takes the same lock for the
+	// same instant instead.
+	items *ItemStore
 
 	// core is the durable custody AcceptCommit commits through, nil for a bare router
 	// (Accept-only, no persistence).
@@ -310,6 +316,7 @@ func newMailboxRouter(key crypto.ContentKey, core *Core) *MailboxRouter {
 		sessions:  NewSessionCache(),
 		snapshots: NewSnapshotCache(),
 		replies:   NewReplyCache(),
+		items:     NewItemStore(),
 		core:      core,
 		stale:     map[Bucket]bool{},
 		staleStr:  map[string]bool{},
@@ -333,10 +340,19 @@ func (r *MailboxRouter) rebind(st State) {
 	for _, s := range st.Snapshots {
 		snapshots.Apply(s)
 	}
+	// The transcript is restored for the reason the caches above are, and the case is sharper:
+	// the receive high-water is durable, so a relay redelivery of the frames that built it is
+	// REFUSED (crypto.ErrStaleSeq). A transcript held only in memory is therefore gone for
+	// good after the SIGKILL Android hands out routinely, not merely re-fetched -- and with it
+	// goes any pending approval card the machine is still blocked on (IS-LIFE-3).
+	items := NewItemStore()
+	for _, it := range st.Items {
+		items.restore(it)
+	}
 
 	r.mu.Lock()
 	r.key, r.recv = st.Keys.ContentKey, recv
-	r.sessions, r.snapshots = sessions, snapshots
+	r.sessions, r.snapshots, r.items = sessions, snapshots, items
 	// The delivery FIFO is rebuilt from the DURABLE outcomes: a reply is decoded content
 	// like any other, so losing it on a process death would leave the phone unable to
 	// settle an op whose frame the durable high-water now refuses on redelivery
@@ -411,6 +427,13 @@ func (r *MailboxRouter) Snapshots() *SnapshotCache { _, _, _, s, _ := r.bound();
 
 // Replies is the command-reply cache the phone drains after driving a command.
 func (r *MailboxRouter) Replies() *ReplyCache { _, _, _, _, c := r.bound(); return c }
+
+// Items is the transcript folded from the journal's interaction records (IS-LAYER-1).
+func (r *MailboxRouter) Items() *ItemStore {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.items
+}
 
 // TakeGrant pops the oldest pending epoch-grant plaintext demuxed off the mailbox
 // (found=false when none). Route+expose only: pairing / epoch-rotation (C5) opens it.
@@ -680,11 +703,36 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 		// highest applied cursor -- so the designated repair channel would report success
 		// and change nothing.
 		sessions.reseed(f.reseed)
+		// The TRANSCRIPT merges instead, and the difference is not an oversight. PB-SYNC-8's
+		// replace rule is about a SET whose absent members have ended; a transcript is a
+		// cursor-ordered log, and IS-CAP-4 lets the reseed's events half be CUT at a floor to
+		// keep the repair inside one frame -- so replacing would delete history the phone
+		// legitimately holds on every repair. The events half is also where IS-LIFE-3
+		// re-delivers unresolved approval_requests, at their own cursors, which is why the
+		// roster half is not read here at all: a roster record's cursor is deliberately zero
+		// (PB-SYNC-8) and cannot be ordered against an approval_resolved.
+		r.Items().applyAll(f.reseed.Events)
 	case kindEpochGrant:
 		r.grantMu.Lock()
 		r.grants = append(r.grants, f.grant)
 		r.grantMu.Unlock()
 	case "":
+		// IS-LAYER-1 forbids a new MAILBOX kind for an item, not a branch on the record's own
+		// type inside the existing kind-less one: an interaction record IS a bare journal
+		// record, routed by the existing journal path. It shapes the TRANSCRIPT and not the
+		// roster (IS-SS-1) -- an item that marked its session Present would put a session on
+		// the triage screen off the back of a tool call.
+		if f.record.Type == RecordTypeInteraction {
+			items := r.Items()
+			items.Apply(f.record)
+			// The read position still moves. Ordering is the journal cursor (IS-LAYER-3) and
+			// the repair channel is the journal's own (IS-LAYER-4), so a record consumed here
+			// and not folded into the roster must not leave Resync asking from behind it --
+			// after ADR-009 items are the bulk of the stream, and the reseed that answered an
+			// oversized range would be cut at IS-CAP-4's floor.
+			sessions.AdvanceCursor(f.record.Cursor)
+			return
+		}
 		sessions.Apply(f.record)
 	}
 }

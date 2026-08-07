@@ -59,7 +59,17 @@ type PushConfig struct {
 	Seq     SeqSource        // DURABLE wake replay coordinate (nil => in-memory, non-durable)
 	Prefs   PushPrefsSource  // the user's push preference (nil => fail closed, no wake)
 	Window  time.Duration    // per-session coalescing window (0 => DefaultPushWindow)
+	// After schedules f to run after d: the DEFERRED-WAKE timer seam of ADR-010 §4(b)
+	// (nil => time.AfterFunc). It is a seam because the deferral is the one push-path
+	// behaviour that happens with NO journal record to drive it, so a test holding only a
+	// virtual clock could not observe it at all.
+	After func(d time.Duration, f func())
 }
+
+// recordTypeInteraction is journal.TypeInteraction as it appears on the wire. It is a
+// literal rather than an import because this package must not link the daemon, and because
+// the value is frozen by interaction-schema.md IS-LAYER-1.
+const recordTypeInteraction = "interaction"
 
 // PushNotifier is the gateway-side push trigger (PB-PUSH-0): an OutboundSink that passes
 // the journal through unchanged and, on the transitions an owner is waiting on, ADDITIONALLY
@@ -82,6 +92,7 @@ type PushNotifier struct {
 	cfg    PushConfig
 	now    func() time.Time
 	window time.Duration
+	after  func(d time.Duration, f func())
 
 	mu sync.Mutex
 	// lastGroup is the group each session was last SEEN in. It is what distinguishes
@@ -91,7 +102,14 @@ type PushNotifier struct {
 	// lastWake is when each session last woke the phone -- the per-session coalescing
 	// state.
 	lastWake map[string]time.Time
-	lastErr  error
+	// deferred holds the sessions whose interaction wake the window suppressed, and
+	// deferArmed whether the single timer that serves them is already scheduled
+	// (ADR-010 §4(b)). One wake serves every session in the set: the envelope is a
+	// constant-size empty plaintext (PushWakeEnvelopeSize), so coalescing wakes discloses
+	// nothing and loses nothing.
+	deferred   map[string]struct{}
+	deferArmed bool
+	lastErr    error
 }
 
 // The notifier is a full outbound sink and forwards both optional contracts. Pinned so a
@@ -115,13 +133,23 @@ func NewPushNotifier(inner OutboundSink, cfg PushConfig) *PushNotifier {
 	if cfg.Seq == nil {
 		cfg.Seq, _ = OpenSeqSource("") // in-memory, cannot error
 	}
+	after := cfg.After
+	if after == nil {
+		// ponytail: the timer is never cancelled and never held. At most one is armed at a
+		// time and it fires a content-free wake at most one window later, so a gateway
+		// shutting down leaves one pending 78-byte send -- cheaper than a lifecycle this
+		// type does not otherwise have.
+		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
+	}
 	return &PushNotifier{
 		inner:     inner,
 		cfg:       cfg,
 		now:       now,
 		window:    window,
+		after:     after,
 		lastGroup: map[string]status.Group{},
 		lastWake:  map[string]time.Time{},
+		deferred:  map[string]struct{}{},
 	}
 }
 
@@ -231,20 +259,63 @@ func (n *PushNotifier) setErr(err error) {
 var errNoPushPrefs = errors.New("remotegw: push suppressed: no preference custody configured")
 
 // maybeWake decides whether this record is a hand-off worth waking the phone for and, if
-// so, sends the wake. It never returns an error: see Event.
+// so, sends the wake -- now, or at the end of the window that suppressed it. It never
+// returns an error: see Event.
+//
+// send is a closure rather than a method for one deliberate reason: relay's PB-PUSH-3
+// producer ledger (internal/remote/relay/pbpush3_producers_test.go) enumerates every
+// FUNCTION that hands a payload to the push provider, so that a new producer fails by name.
+// The deferred wake is not a new producer -- same seal, same empty plaintext, same constant
+// 78 bytes -- and keeping its one PushTrigger call inside this function keeps that ledger
+// accurate rather than merely quiet.
 func (n *PushNotifier) maybeWake(rec protocol.JournalRecord) {
-	// A group-less record (session-neutral, or a type carrying no status) is IGNORED
-	// rather than read as a transition into the empty group. Read as one it would both
-	// fire on the next real needs_input as though it were a change from "", and let a
-	// stream of group-less records reset every session's remembered state.
-	if rec.Group == "" {
-		return
+	send := func() {
+		env, err := n.sealWake()
+		if err != nil {
+			n.setErr(err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), defaultPushTimeout)
+		defer cancel()
+		if err := n.cfg.Pusher.PushTrigger(ctx, n.cfg.Target, env); err != nil {
+			n.setErr(err)
+		}
 	}
-	if !n.isTransition(rec) {
-		return
-	}
-	if !isWakeWorthy(rec.Group) {
-		return
+
+	category := rec.Group
+	deferrable := false
+	if rec.Type == recordTypeInteraction {
+		// ADR-010 §4(a): an interaction append is wake-eligible ON ITS OWN, independent of
+		// Group and of isTransition. It carries no Group (an item is not a roster
+		// transition), so the gate below would drop it and IS-LIFE-1's "the daemon SHALL
+		// send a push wake" would be unimplementable -- and a second approval inside one
+		// turn, with the session already in the permission group, would wake nothing at
+		// all even if it did carry one.
+		//
+		// It fires for EVERY interaction record, not only approval_request, and that is
+		// forced rather than chosen: IS-LAYER-1 gives every item the coarse wire type
+		// `interaction` and interaction-schema.md §10 forbids the gateway parsing an item,
+		// so the kind is only readable inside the AEAD-covered payload. This is the
+		// superset that needs no parse; the per-session window below is what bounds it.
+		//
+		// The category is needs_input because that is what an approval IS -- the agent
+		// blocked on its owner. Charging it to `finished` would put the one wake the owner
+		// is waiting on behind the preference for the one they are not.
+		category, deferrable = status.GroupNeedsInput, true
+	} else {
+		// A group-less record (session-neutral, or a type carrying no status) is IGNORED
+		// rather than read as a transition into the empty group. Read as one it would both
+		// fire on the next real needs_input as though it were a change from "", and let a
+		// stream of group-less records reset every session's remembered state.
+		if rec.Group == "" {
+			return
+		}
+		if !n.isTransition(rec) {
+			return
+		}
+		if !isWakeWorthy(rec.Group) {
+			return
+		}
 	}
 	// No transport configured is not a failure: "the system works without push"
 	// (PB-PUSH-5). Checked before the preference so a gateway that never pushes at all
@@ -252,22 +323,73 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord) {
 	if n.cfg.Pusher == nil {
 		return
 	}
-	if !n.categoryEnabled(rec.Group) {
+	if !n.categoryEnabled(category) {
 		return
 	}
-	if !n.claimWindow(rec.SessionID) {
+	remaining, ok := n.claimWindow(rec.SessionID)
+	if !ok {
+		// ADR-010 §4(b): a suppressed interaction wake is DEFERRED to the end of the window
+		// that suppressed it, never dropped, and one timer serves every session pending at
+		// that moment. The arithmetic: <= 30 s against Codex's 120 s measured expiry leaves
+		// >= 90 s, above spike-SC's 60 s one-tap floor, and is not close against Claude
+		// Code's >= 300 s.
+		//
+		// A suppressed GROUP transition is still dropped, deliberately. That wake is
+		// redundant -- same session, same roster state, re-read whole on the next connect --
+		// and PB-PUSH-0's own fence
+		// (TestPBPUSH0_CoalescesRepeatTransitionsWithinTheWindow) pins that it fires once
+		// per window. An approval is the opposite: a distinct request with an expiry, which
+		// nothing later re-announces.
+		if deferrable && n.armDeferral(rec.SessionID) {
+			n.after(remaining, func() {
+				// The preference is re-read AT SEND. This is the only push this type emits
+				// with no record driving it, so it is the only one that can outlive the
+				// preference it was authorized under -- and PB-PUSH-8 wants a disabled toggle
+				// to mean no push sent, verified at the sender. claimDeferred runs first
+				// either way: a dropped wake must still release the single timer arm, or one
+				// preference flip wedges the deferral path shut for every session after it.
+				owed := n.claimDeferred()
+				if owed && n.categoryEnabled(status.GroupNeedsInput) {
+					send()
+				}
+			})
+		}
 		return
 	}
-	env, err := n.sealWake()
-	if err != nil {
-		n.setErr(err)
-		return
+	send()
+}
+
+// armDeferral records that session needs a wake its window suppressed, and reports whether
+// the caller must schedule the timer. Only the first suppressed session arms it: a timer
+// already pending will fire within one window and serve everyone in the set, so arming a
+// second would spend a second wake on the same information.
+func (n *PushNotifier) armDeferral(session string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.deferred[session] = struct{}{}
+	if n.deferArmed {
+		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultPushTimeout)
-	defer cancel()
-	if err := n.cfg.Pusher.PushTrigger(ctx, n.cfg.Target, env); err != nil {
-		n.setErr(err)
+	n.deferArmed = true
+	return true
+}
+
+// claimDeferred consumes the deferred set and reports whether a wake is still owed. It
+// stamps every deferred session's coalescing window at the moment the wake goes out, so the
+// one wake counts for all of them and none of them re-fires immediately after.
+func (n *PushNotifier) claimDeferred() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.deferArmed = false
+	if len(n.deferred) == 0 {
+		return false
 	}
+	now := n.now()
+	for s := range n.deferred {
+		n.lastWake[s] = now
+		delete(n.deferred, s)
+	}
+	return true
 }
 
 // isTransition records the record's group and reports whether it CHANGED the session's
@@ -285,15 +407,21 @@ func (n *PushNotifier) isTransition(rec protocol.JournalRecord) bool {
 // claimWindow reports whether session may wake the phone now, consuming its coalescing
 // window if so. A suppressed wake (wrong group, disabled category) never reaches here, so
 // it does not consume the window either.
-func (n *PushNotifier) claimWindow(session string) bool {
+//
+// On refusal it also returns how long is LEFT of the window, which is the deferral's
+// deadline: ADR-010 §4(b) defers to the end of the window that suppressed the wake, not to a
+// fresh one.
+func (n *PushNotifier) claimWindow(session string) (remaining time.Duration, ok bool) {
 	now := n.now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if last, ok := n.lastWake[session]; ok && now.Sub(last) < n.window {
-		return false
+	if last, seen := n.lastWake[session]; seen {
+		if elapsed := now.Sub(last); elapsed < n.window {
+			return n.window - elapsed, false
+		}
 	}
 	n.lastWake[session] = now
-	return true
+	return 0, true
 }
 
 // isWakeWorthy selects the transitions an owner is actually waiting on.

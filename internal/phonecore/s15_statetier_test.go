@@ -76,6 +76,10 @@ const (
 	s15OpOutcome   = "s15-outcome-9c4a2f"
 	s15QueuedOp    = "s15-queued-op-3d9f7b"
 	s15StaleStream = "s15-stream-6f2e1a"
+	// s15ItemText is the TRANSCRIPT's sentinel: the reconstructed body of one interaction item
+	// (ADR-009). It is what the user and the agent actually said to each other, which makes it
+	// the most revealing thing this file measures.
+	s15ItemText = "s15-item-text-1e7c5a"
 
 	s15EpochID         uint32 = 1000000007
 	s15GrantEpoch      uint32 = 1000000009
@@ -155,6 +159,10 @@ func s15State() State {
 		ReconciledEpoch:     s15ReconciledEpoch,
 		LastHeardAt:         s15LastHeardAt,
 		Disowned:            true,
+		Items: []Item{{
+			SessionID: s15SessionID, ItemID: "s15-item-id", Kind: KindAgentMessage,
+			Status: StatusCompleted, Text: s15ItemText,
+		}},
 	}
 	return st
 }
@@ -315,6 +323,12 @@ func s15Inventory() []s15Tier {
 		{field: "Sessions", tier: "content", needles: s15Str(s15SessionID)},
 		{field: "Snapshots", tier: "content", needles: s15Str(s15SnapLine)},
 		{field: "OpOutcomes", tier: "content", needles: append(s15Str(s15OpID), s15Str(s15OpOutcome)...)},
+		// The TRANSCRIPT (ADR-009). Content tier and PURGEABLE, by both of PB-STATE-9's tests:
+		// it is a decrypted machine-sealed cache like Sessions and Snapshots above it, and it
+		// is the conversation itself -- prose, file paths, diffs and the summaries of pending
+		// permissions -- so a locked handset reading it in the clear would disclose more than
+		// the other three combined.
+		{field: "Items", tier: "content", needles: s15Str(s15ItemText)},
 
 		// REASSIGNED, on this row's own instruction. It was written UNASSIGNED and FLAGGED --
 		// "the offline mutating-op queue holds session ids and, for a launch, the command line

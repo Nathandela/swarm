@@ -9,6 +9,7 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -103,7 +104,11 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 		if err := json.Unmarshal(plain, &got); err != nil {
 			t.Fatalf("env %d plaintext not a JournalRecord: %v", i, err)
 		}
-		if got != want[i] {
+		// DeepEqual, not ==: JournalRecord gained the additive Item field
+		// (json.RawMessage, the interaction item of interaction-schema.md §1), and a
+		// struct holding a slice is not comparable. The assertion is unchanged --
+		// the whole record, field for field, against the one that was sealed.
+		if !reflect.DeepEqual(got, want[i]) {
 			t.Errorf("env %d record = %+v, want %+v", i, got, want[i])
 		}
 

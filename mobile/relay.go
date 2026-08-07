@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"os"
@@ -747,6 +748,10 @@ func (a *App) adoptReconcile() {
 }
 
 func (a *App) onJournal(rec schema.JournalRecord) {
+	if rec.Type == phonecore.RecordTypeInteraction {
+		a.onInteraction(rec)
+		return
+	}
 	entry := JournalEntry{
 		Cursor:    int64(rec.Cursor),
 		SessionID: rec.SessionID,
@@ -773,6 +778,41 @@ func (a *App) onJournal(rec schema.JournalRecord) {
 		State:     string(rec.Group),
 		Message:   rec.Type,
 		Cursor:    entry.Cursor,
+	})
+}
+
+// onInteraction raises the item-appended event. The core has already folded the item into the
+// durable transcript by the time this runs (AcceptCommit commits before apply), so the event
+// is a WAKE and not a delivery: a screen re-reads through ReadTranscript, which is the only
+// surface that has the folded body.
+//
+// IT DOES NOT TOUCH a.journal OR a.needs. The journal page is the activity log of roster
+// events and Need is the verbatim record type the triage row renders, so an item written into
+// either would replace "needs_input" on a session row with a word about carriage, and invent
+// a log entry for something the transcript already holds (IS-SS-1).
+//
+// The KIND rides on Message, unparsed by anything here beyond the discriminator: a wake that
+// cannot say whether prose or an approval card arrived forces every screen to re-read the
+// whole transcript to find out.
+func (a *App) onInteraction(rec schema.JournalRecord) {
+	a.mu.Lock()
+	subscribed := a.subscribed
+	a.mu.Unlock()
+	if !subscribed {
+		return
+	}
+	var item struct {
+		Kind   string `json:"kind"`
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(rec.Item, &item) // an undecodable item was already skipped by the core
+	a.events.emit(&Event{
+		Kind:      "interaction",
+		Stream:    "journal",
+		SessionID: rec.SessionID,
+		State:     item.Status,
+		Message:   item.Kind,
+		Cursor:    int64(rec.Cursor),
 	})
 }
 

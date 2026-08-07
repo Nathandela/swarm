@@ -186,6 +186,20 @@ func (c *SessionCache) reseed(rs schema.JournalReseed) {
 	c.cursor = rs.Cursor
 }
 
+// AdvanceCursor moves the journal READ POSITION without folding anything into the roster.
+// It exists for the one record type that is consumed off this stream and belongs to another
+// model: an interaction item, which shapes the transcript alone (IS-SS-1, interaction.go).
+// The cursor is what Resync resumes from, so leaving it behind on those records would have
+// the phone ask for a range it already holds -- and IS-CAP-4 cuts an oversized reseed at a
+// floor, which is content the phone asked for and lost.
+func (c *SessionCache) AdvanceCursor(cursor uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cursor > c.cursor {
+		c.cursor = cursor
+	}
+}
+
 // restore seeds one cached session from durable state, bypassing the cursor guard (the
 // entry IS the resume point, not a record being applied on top of it).
 func (c *SessionCache) restore(cs CachedSession) {

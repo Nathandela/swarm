@@ -504,14 +504,23 @@ var _ protocol.JournalBackend = (*coreAPI)(nil)
 // protocol.JournalRecord (only the fields the phone needs; the opaque payload and
 // schema/ts are not carried on the wire). Agent IS one of those fields: the session
 // row renders it, and this conversion is the only place it can cross.
+//
+// An `interaction` record is the ONE payload exception (interaction-schema.md §1): its
+// payload IS the transcript item (IS-LAYER-1), so it crosses verbatim as Item. Every other
+// type's payload -- `presence`'s online flag today -- stays daemon-internal, which is why
+// the copy is gated on the type rather than done unconditionally.
 func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
-	return protocol.JournalRecord{
+	out := protocol.JournalRecord{
 		Cursor:    r.Cursor,
 		SessionID: r.SessionID,
 		Type:      string(r.Type),
 		Group:     r.Group,
 		Agent:     r.Agent,
 	}
+	if r.Type == journal.TypeInteraction {
+		out.Item = r.Payload
+	}
+	return out
 }
 
 // JournalReadFrom forwards journal_read to the core and converts the daemon

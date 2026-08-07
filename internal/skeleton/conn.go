@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/daemon"
-	"github.com/Nathandela/swarm/internal/hookclient"
 )
 
 const (
@@ -86,17 +85,28 @@ func (d *Daemon) handleConn(conn net.Conn) {
 // a line in the daemon log. The point is that a hook post never corrupts the
 // shared socket (this connection is the hook's alone and is closed here), so a
 // client can still use the socket afterward.
+//
+// It is ALSO the interaction plane's ingest (ADR-010 §1, interaction.go): the same body,
+// offered to the session's adapter, but ONLY once the engine has accepted the callback. The
+// engine's token check is what stands between a local process and the owner's transcript, and
+// a capture that ran before it would be a second, unauthenticated write path into the journal.
 func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
 	r := io.MultiReader(bytes.NewReader([]byte{brace}), conn)
-	cb, err := hookclient.Decode(r)
+	cb, body, err := decodeHookCallback(r)
 	if err != nil {
 		return
 	}
 	if err := d.eng.HandleCallback(cb); err != nil {
+		// The engine authenticates; a rejection is expected pre-Epic-11. Returning is
+		// load-bearing for the capture below: a body the engine refused must never be
+		// shaped into an item, or the capture becomes a second, unauthenticated write
+		// path into the journal (the rule this function's own header states).
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
+		return
 	}
+	d.serveHookInteractions(cb, body)
 }
 
 // serveVersionHandshake answers the daemon's version handshake with the daemon's

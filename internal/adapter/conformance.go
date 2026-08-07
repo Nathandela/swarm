@@ -16,10 +16,17 @@ package adapter
 // fd/socket" fd-count signal and the import-boundary checks are inherently
 // CI/review checks and live in the test layer (fd-count in conformance_test.go,
 // the source grep in boundary_test.go and refadapter/refadapter_test.go).
+//
+// ADR-010 adds the OPTIONAL structured-capture obligations at the foot of this
+// file. They run inside CheckConformance, so every adapter already calling
+// Conformance(t, a) gets them for free and an adapter that opts out of capture
+// entirely passes them trivially.
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -76,6 +83,7 @@ func CheckConformance(a Adapter) []error {
 	errs = append(errs, checkSignalSources(a)...)
 	errs = append(errs, checkResume(a)...)
 	errs = append(errs, checkExtract(a)...)
+	errs = append(errs, checkInteractionSource(a)...)
 	return errs
 }
 
@@ -391,4 +399,184 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// ADR-010 — the structured-capture conformance obligations.
+// ---------------------------------------------------------------------------
+
+// interactionProbes is the body battery Interactions must survive (ADR-010
+// conformance obligation 1): a nil body, no body at all, an empty object, a
+// truncated body, garbage bytes, a deeply nested body, an oversized body, and
+// realistic shaped bodies. It is the Interactions analogue of parseVersionProbes.
+var interactionProbes = []HookPayload{
+	{},
+	{Event: "UserPromptSubmit"},
+	{Event: "UserPromptSubmit", Raw: json.RawMessage(``)},
+	{Event: "UserPromptSubmit", Raw: json.RawMessage(`{}`)},
+	{Event: "UserPromptSubmit", Raw: json.RawMessage(`{"prompt":"probe"}`), ReceivedAtMs: 1},
+	{Event: "PreToolUse", Raw: json.RawMessage(`{"tool":"Read","path":"a.go","ref":"t-1"}`)},
+	{Event: "PermissionRequest", Raw: json.RawMessage(`{"tool":"Read","ref":"req-1"}`)},
+	{Event: "PermissionRequest", Raw: json.RawMessage(`{"tool":"Bash","ref":"bash-1"}`)},
+	{Event: "PreToolUse", Raw: json.RawMessage(`{"tool_input":{`)},
+	{Event: "\x00\xff", Raw: json.RawMessage("\x00\xff not json")},
+	{Event: "PreToolUse", Raw: json.RawMessage(deeplyNestedBody)},
+	{Event: "UserPromptSubmit", Raw: json.RawMessage(oversizedBody)},
+}
+
+// deeplyNestedBody and oversizedBody are the two unbounded-input probes. The
+// oversized one is valid JSON well past interaction-schema.md §5's 8 KiB
+// MaxItemBytes — the adapter must not choke on it, and it is the DAEMON that
+// truncates (ADR-010 §3).
+var (
+	deeplyNestedBody = `{"a":` + strings.Repeat("[", 256) + strings.Repeat("]", 256) + `}`
+	oversizedBody    = `{"prompt":"` + strings.Repeat("x", 64<<10) + `"}`
+)
+
+// checkInteractionSource runs ADR-010's conformance obligations 1, 3 and 5 — the
+// half decidable from the interface alone (obligation 3's corpus half is
+// CheckInteractionFixture; obligation 2 is the source grep in boundary_test.go).
+//
+// An adapter that declares no capture and implements no InteractionSource is
+// fully conformant and this returns nothing: the extension is OPTIONAL and the
+// generic fallback is a supported path, never a defect (ADR-010 §5).
+func checkInteractionSource(a Adapter) []error {
+	var errs []error
+	declared := 0
+	for i, s := range a.SignalSources() {
+		mode, ok := s.Descriptor[DescriptorCapture]
+		if !ok {
+			continue
+		}
+		declared++
+		if mode != CaptureRaw {
+			errs = append(errs, fmt.Errorf("SignalSources()[%d]: capture %q is not a defined capture mode (want %q); an unrecognized value would silently flatten the body away", i, mode, CaptureRaw))
+		}
+		if s.Descriptor[descriptorEvent] == "" {
+			errs = append(errs, fmt.Errorf("SignalSources()[%d]: declares capture but names no %q; every declared capture key must name a real event row", i, descriptorEvent))
+		}
+	}
+
+	src, isSource := AsInteractionSource(a)
+	switch {
+	case declared > 0 && !isSource:
+		errs = append(errs, fmt.Errorf("SignalSources() declares %s=%s but the adapter implements no InteractionSource; the body would be preserved for a shaper that does not exist", DescriptorCapture, CaptureRaw))
+	case isSource && declared == 0:
+		errs = append(errs, fmt.Errorf("implements InteractionSource but declares %s=%s on no event row; shaping would never receive a body", DescriptorCapture, CaptureRaw))
+	}
+	if !isSource {
+		return errs
+	}
+
+	for _, p := range interactionProbes {
+		got, panicked := interactionsSafe(src, p)
+		if panicked {
+			errs = append(errs, fmt.Errorf("Interactions panicked on event %q, body %q; it must be total (never panic on a nil, truncated, garbage or unbounded body)", p.Event, truncate(string(p.Raw))))
+			continue
+		}
+		again, _ := interactionsSafe(src, p)
+		if !reflect.DeepEqual(got, again) {
+			errs = append(errs, fmt.Errorf("Interactions is not deterministic on event %q, body %q: %+v then %+v", p.Event, truncate(string(p.Raw)), got, again))
+		}
+		errs = append(errs, checkShapedItems(src, got, fmt.Sprintf("event %q", p.Event))...)
+	}
+	return errs
+}
+
+// checkShapedItems validates the items one call shaped: each is structurally
+// well-formed, and each approval_request declares an apply mechanism consistent
+// with what Decision reports (ADR-010 §4 and conformance obligation 5).
+func checkShapedItems(src InteractionSource, items []Interaction, where string) []error {
+	var errs []error
+	for i, in := range items {
+		if err := in.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("Interactions(%s) item %d: %w", where, i, err))
+			continue
+		}
+		if in.Kind != KindApprovalRequest {
+			continue
+		}
+		if in.Mode == "" {
+			errs = append(errs, fmt.Errorf("Interactions(%s) item %d: an approval_request declares no mode; the apply mechanism is decided AT CAPTURE, so the daemon knows before the phone renders (ADR-010 §4)", where, i))
+			continue
+		}
+		for _, d := range in.Decisions {
+			_, native, panicked := decisionSafe(src, in.Ref, d.ID)
+			if panicked {
+				errs = append(errs, fmt.Errorf("Decision(%q, %q) panicked; it must be total", in.Ref, d.ID))
+				continue
+			}
+			if in.Mode == ModePromptCard && native {
+				errs = append(errs, fmt.Errorf("Interactions(%s) item %d declares mode %s but Decision(%q, %q) reports a native mechanism; the carve-out is the path on which Decision is never called", where, i, ModePromptCard, in.Ref, d.ID))
+			}
+			if in.Mode == ModeCard && !native {
+				errs = append(errs, fmt.Errorf("Interactions(%s) item %d declares mode %s but Decision(%q, %q) reports no native mechanism (ok==false); such a request must declare %s instead", where, i, ModeCard, in.Ref, d.ID, ModePromptCard))
+			}
+			if in.Mode == ModePromptCard {
+				if _, held := in.Keystrokes[d.ID]; !held {
+					errs = append(errs, fmt.Errorf("Interactions(%s) item %d declares mode %s but holds no keystroke for decision %q; the decision->keystroke map is produced AT CAPTURE because Decision is never called here (ADR-010 §2/§4)", where, i, ModePromptCard, d.ID))
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// CheckInteractionFixture runs ADR-010's conformance obligations 3 (corpus half)
+// and 4 against a recorded fixture: every payload is replayed through the
+// adapter's shaper, every shaped item must be well-formed, and any event that
+// shapes an item MUST declare capture=raw — at runtime an undeclared event's body
+// is flattened to top-level strings before the shaper ever sees it (ADR-010 §6),
+// so shaping it here would be proving something the ingest path cannot deliver.
+//
+// It is PURE: fx is already in memory (the disk read lives in fixtureio, E9.2).
+// An adapter with no InteractionSource has nothing to replay and yields nothing.
+// The per-CLI GOLDEN comparison is the caller's: it holds the expected items.
+func CheckInteractionFixture(a Adapter, fx Fixture) []error {
+	src, ok := AsInteractionSource(a)
+	if !ok {
+		return nil
+	}
+	captured := make(map[string]bool)
+	for _, s := range a.SignalSources() {
+		if s.Descriptor[DescriptorCapture] == CaptureRaw && s.Descriptor[descriptorEvent] != "" {
+			captured[s.Descriptor[descriptorEvent]] = true
+		}
+	}
+	var errs []error
+	for i, hp := range fx.HookPayloads {
+		items, panicked := interactionsSafe(src, hp)
+		if panicked {
+			errs = append(errs, fmt.Errorf("Interactions panicked on %s hook_payloads[%d] (event %q); it must be total", fx.Scenario, i, hp.Event))
+			continue
+		}
+		if len(items) > 0 && !captured[hp.Event] {
+			errs = append(errs, fmt.Errorf("%s hook_payloads[%d]: event %q shapes %d item(s) but declares no %s=%s row, so its body is flattened before shaping", fx.Scenario, i, hp.Event, len(items), DescriptorCapture, CaptureRaw))
+		}
+		errs = append(errs, checkShapedItems(src, items, fmt.Sprintf("%s hook_payloads[%d]", fx.Scenario, i))...)
+	}
+	return errs
+}
+
+// interactionsSafe calls Interactions under a recover so a panicking shaper is
+// reported as a violation rather than crashing the suite.
+func interactionsSafe(src InteractionSource, p HookPayload) (items []Interaction, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+		}
+	}()
+	items = src.Interactions(p)
+	return
+}
+
+// decisionSafe calls Decision under a recover, on the same terms.
+func decisionSafe(src InteractionSource, ref, verdict string) (act DecisionAction, ok, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+		}
+	}()
+	act, ok = src.Decision(ref, verdict)
+	return
 }

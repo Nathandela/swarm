@@ -99,6 +99,14 @@ var requiredScreenElements = []string{
 	// mobile/s17_screencoverage_test.go states the case for it and hard-codes it there too, so
 	// this list and that one keep meeting in the middle.
 	"push.notification", // PB-PUSH-4/PB-PUSH-3: a push arrived and no verb decided what to render
+
+	// ADDED BY THE INTERACTION PROGRAM (ADR-009), additively and for the same reason. ADR-009
+	// makes the transcript the phone's PRIMARY surface -- items and nothing else, no terminal
+	// grid -- so the two verbs that serve it are screen elements in exactly the sense this list
+	// enumerates. mobile/interaction_screencoverage_test.go states the case for each and
+	// hard-codes them there too, so this list and that one keep meeting in the middle.
+	"transcript.read",              // ADR-009: the chat itself, which no existing verb serves
+	"transcript.approvals_pending", // IS-LIFE-3: a card the machine is blocked on, kept answerable
 }
 
 type coverageRow struct {

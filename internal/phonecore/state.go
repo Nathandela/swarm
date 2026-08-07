@@ -96,7 +96,22 @@ import (
 // is unrecoverable short of clearing the app's data. The field is omitempty, so an INSTALLED v8
 // blob loads as not-disowned, which is the correct reading of a phone that was paired and never
 // revoked.
-const StateSchemaVersion = 9
+//
+// v10 adds items, the phone's TRANSCRIPT (ADR-009's structured chat, interaction.go). It sits
+// INSIDE content_purgeable rather than at the top level -- it is a decrypted machine-sealed
+// cache, the same class as sessions and snapshots and the most revealing of the three -- so the
+// top-level tag set is unchanged and TestStateSchemaVersion_IsPinnedToTheDurableFieldSet alone
+// would not have noticed it. The bump is required all the same, and PinnedSealedFixturesStillLoad
+// is what makes it mechanical: a build one version back drops the container's new field, so the
+// transcript comes back EMPTY after the SIGKILL Android hands out routinely -- and because the
+// receive high-water is durable, the relay's redelivery of the frames that built it is refused
+// (crypto.ErrStaleSeq). The loss is permanent rather than re-fetchable, and it takes any pending
+// approval card the machine is still blocked on with it (IS-LIFE-3).
+//
+// It does NOT bump journal.SchemaVersion or the item's own `v`, which IS-COMPAT-3 forbids. Those
+// two are the WIRE's versions; this one stamps a file only this build writes and only this build
+// reads.
+const StateSchemaVersion = 10
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -211,6 +226,18 @@ type State struct {
 	// in memory comes back clear, and the phone presents a gap it already knew about as live
 	// on the very next launch.
 	StaleStreams map[string]bool
+	// Items is the journal-derived TRANSCRIPT: interaction items folded by item_id
+	// (interaction.go, docs/specifications/interaction-schema.md). It is content tier and
+	// PURGEABLE -- a decrypted machine-sealed cache, the same class as Sessions and Snapshots,
+	// and the most revealing of the three.
+	//
+	// It is DURABLE for the reason those two are, and the case is sharper than theirs: the
+	// receive high-water is durable as well, so the relay's redelivery of the frames that
+	// built the transcript is REFUSED on resume (crypto.ErrStaleSeq). A transcript held only
+	// in memory is therefore DESTROYED by the process death Android hands out routinely rather
+	// than re-fetched, and it takes with it any pending approval the machine is still blocked
+	// on -- the one item IS-LIFE-3 exists to keep answerable across exactly that event.
+	Items []Item
 	// PushToken is the provider push token PB-STATE-9 assigns to the WAKE tier and
 	// PB-PUSH-9 requires to survive process death and app upgrade: a token held only in
 	// memory is re-registered only if the app happens to be foregrounded.
@@ -300,6 +327,7 @@ func (s State) clone() State {
 	s.Receive = maps.Clone(s.Receive)
 	s.Sessions = slices.Clone(s.Sessions)
 	s.Snapshots = slices.Clone(s.Snapshots)
+	s.Items = slices.Clone(s.Items)
 	s.PendingOps = slices.Clone(s.PendingOps)
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
 	s.Stale = maps.Clone(s.Stale)
@@ -491,12 +519,15 @@ type keptContainer struct {
 	PendingOps []QueuedOp      `json:"pending_ops,omitempty"`
 }
 
-// purgeableContainer is the plaintext of stateFile.ContentPurgeable: the three decrypted
-// caches PB-KEY-7 names, and nothing else.
+// purgeableContainer is the plaintext of stateFile.ContentPurgeable: the decrypted caches
+// PB-KEY-7 names, and nothing else. The TRANSCRIPT joined them in v10 -- it is machine-sealed
+// content this phone decrypted, exactly like the sessions and grids beside it, and it is the
+// most revealing of the set.
 type purgeableContainer struct {
 	Sessions   []CachedSession           `json:"sessions,omitempty"`
 	Snapshots  []Snapshot                `json:"snapshots,omitempty"`
 	OpOutcomes map[string]schema.Control `json:"op_outcomes,omitempty"`
+	Items      []Item                    `json:"items,omitempty"`
 }
 
 // sendSeqRecord is one epoch's durable send-seq reservation ceiling.
@@ -747,9 +778,9 @@ func (s *fileStore) refuseUnreadableContentWrite(st State) error {
 		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s) and %d pending op(s) "+
 			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps))
 	}
-	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0) {
-		return fmt.Errorf("%w: %d session(s), %d snapshot(s) and %d outcome(s) cannot be recorded",
-			ErrContentTierLocked, len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes))
+	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0 || len(st.Items) > 0) {
+		return fmt.Errorf("%w: %d session(s), %d snapshot(s), %d outcome(s) and %d transcript item(s) cannot be recorded",
+			ErrContentTierLocked, len(st.Sessions), len(st.Snapshots), len(st.OpOutcomes), len(st.Items))
 	}
 	return nil
 }
@@ -808,7 +839,7 @@ func keptContainerOf(st State) keptContainer {
 }
 
 func purgeableContainerOf(st State) purgeableContainer {
-	return purgeableContainer{Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes}
+	return purgeableContainer{Sessions: st.Sessions, Snapshots: st.Snapshots, OpOutcomes: st.OpOutcomes, Items: st.Items}
 }
 
 // dropContentMaterial returns st holding exactly what a process that could NOT OPEN the
@@ -839,7 +870,7 @@ func purgeableContainerOf(st State) purgeableContainer {
 // live, which is the lie PB-APP-8 forbids.
 func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
-	st.Sessions, st.Snapshots, st.OpOutcomes = nil, nil, nil
+	st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = nil, nil, nil, nil
 	st.SendSeq, st.Receive, st.PendingOps = nil, nil, nil
 	return st
 }
@@ -1377,7 +1408,7 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 		if err := json.Unmarshal(plain, &c); err != nil {
 			return fmt.Errorf("%w: %s: decrypted cache container: %v", ErrCorruptState, path, err)
 		}
-		st.Sessions, st.Snapshots, st.OpOutcomes = c.Sessions, c.Snapshots, c.OpOutcomes
+		st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = c.Sessions, c.Snapshots, c.OpOutcomes, c.Items
 	}
 	return nil
 }

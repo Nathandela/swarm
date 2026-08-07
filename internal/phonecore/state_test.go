@@ -105,6 +105,11 @@ func fullState() State {
 		StaleStreams:        map[string]bool{StreamJournal: true},
 		LastHeardAt:         1753900000000,
 		Disowned:            true,
+		Items: []Item{{
+			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, Kind: KindAgentMessage,
+			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
+			Body: json.RawMessage(`{"v":1,"item_id":"itm-1","kind":"agent_message"}`),
+		}},
 	}
 }
 
@@ -455,14 +460,29 @@ const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaG
 // thing that can carry the fact.
 const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"9A8+xA7qCVgjeQmNLMlmphMYLglEdfmvDlMC3Z0xyKFQHKICgvCTC6Y/qtXno2uPRkgFAcj9ZXIaKd6+","content_key":"z+o0S1vblLNcliSxEpKgiX7c2HbabSse8BoxlDiXvcUBsQVIo5yIAtZ7+bt6HKWKAQQ3RrqBCUADAwU5","wake_state":"VIaWolwwUV1eygdw8dkwzyTAurcQEJtZd0cqh0nyTblN5TlnH6LyZNgZhI4Mz1zg3YgfiplYONEZzoyBEkzjQXMXggGtV5/F3qE=","content_kept":"WQtT1MV2/CT6tSlSemtn/ksK7RnblCFENQi35DzNuYeGHAwxfn4344S3cXRFqyb4+rPy34Sgihgp8/sCpC4TMtPhen+Ha0l7F9VXfFW5hhNTtvYBUYehUJNue+3/KZLqsq60CeZ9yJDf2yYI9oh6VFpfFx/FMOxQRDNckAdVRW0MRJ1bPXTyFUr3A18kbPzVfiZo8u5xkpE/+iJ0q/skNXdFJ8eXJDDQc99XvzTITGl+uvQL72lE7BfT5gIF9Y3iWUWEPri8HTdoEtKLdaeaW2SZgSEILwa0rOCLVPVFqCAd+JRADLZ20jT7GVwD79w5or5cGXArfNXVw9K9XRL0NCxy55u2gpJZsc7pCre8PCGAMXA9Skwf+GJQq5qek8JKYqZXy302wOyiK8jGvZV1aHxOWOAalSK7dEjYUF07RSKGbg6CfXazHESNF+zbJatzrcQm+h/zfh+tE1VCwSefzHelOAIIlA0juS1Rzel99z18/rAyN7/Np27/nNGUjHpvEmTa6OSsFjA3V4uv/YXtDGK0MY1f","content_purgeable":"dSBXI9e9MQVcUcwpfuPkaRP4vT1ADKOIT+8I7umnrMV77yqworL08cH/jGP3ZGHgMZprckW5eGpZjmJ1cdF/iQ5F+wapazgFwEmCZkHVy/tp9r6lvSt1aviIopZfIaGUzLLRxAWhJIl+O+RMIVyFv1CsXySA8/zlh+llDJ1iq3U3vtIXbnx2wf6AtfV7bMp+pSQIQoW0B9mTF9cKSjGoy+XKOt8j0SzIYK2XVYJJCvOGl/MD0u7QOgSHV02zyQWAYYnumpdUDl2qvPzjERxbnBgHQZPT6/oRtZ2au5w8JImOwfcmxKDRt0KnGd9LSdcmtXZP8APK6/BXjeklrQmD9EGxAQ==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
+// stateV10Fixture is the PINNED v10 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v10 adds items, the phone's TRANSCRIPT (ADR-009's structured chat), inside
+// content_purgeable. The top-level tag set is UNCHANGED, which is exactly why the version had to
+// move -- the mechanical field-set check below reflects stateFile and would not have seen a field
+// added inside a sealed container, and TestStateStore_PinnedSealedFixturesStillLoad is what
+// catches it instead.
+//
+// A build one version back drops the container's new field, and the loss is permanent rather than
+// re-fetchable: the receive high-water is durable too, so the relay's redelivery of the frames
+// that built the transcript is refused with crypto.ErrStaleSeq. It takes any pending approval card
+// the machine is still blocked on with it, which is the one item IS-LIFE-3 exists to keep
+// answerable across exactly this process death.
+const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"2C6fYgxMdR0FSsHa2kAEhULMqUcF2INbdeW1pIKOfJrGjNuJncGnLA+jlzs0PuntYLT4id7Tq37DJOv/","content_key":"JerXaja3mL5C8++9Y5wmtM20c1AkS+kIMa2+HKPmEnsTbaRg632nuVzKcK5TSqwL2ZsuXjMITRj6zEA7","wake_state":"Uiq6/TZjSbmZGbnBRM0wYS9FXs+0rp2EbqpFiReW1TI+fuZ+ARkYTlmZ8MFTTz/k0KOnDh+fMrGpslDJdcXZ/yPtd6gjJ6KLhoA=","content_kept":"JcX6+X/BK2AV0sMJTRWDQF4wDmYHKC2GVY9w5mPxdNz05NwXhtQTpx3Hs3Yugj5rWa6G86Yh5hrtRqMLv5oHDvKe+dj9WBnNYvWA188ZynvQBTCF/tB0zkg9ujqnCWGti/oSJzuf3aRdprkfhtDASLzWG3Jv8ijhpvX3KapdBZRSzQ7kl1xfOH6RlzRarvdVoFdU3L1RVsf2c6qbRb9+sJPkQI5sqL0ocVLJUAgCME6ROGbK60BKuorf/uthatwBYLy2PUuFKySbqVhbvZw67qgxwuHiCNDtzn7eJWyLt/KrdZJLmUtsYsfHDpQu9FHh21nr0OwndpY9Vet26BuitvTsxq+z3aRluH/4hP9GAW7Tn9KPwLDFY67/HqzQLSP3q5vwZF9jnZu3B4zl6KekIG6rZnr+QQIKZnDqrvYed1c+JV6U0AceTmrOjmTmc7/4B2krKuZkIIcWaIhNo1M66pWDcZplibMhK/RfRaSrL/aA1O88A2EKymOGI95BP/vWIE1Nj8t/64UwDbeRbNXUI9vpPccD","content_purgeable":"ys6PsB5ElnAWY1pkkmJ0QqUvT9jmzWvAfLZxTzJ25/7hhOq6UfjU8PzzkimDgu7ge5oaG3KdSpZCjAnfLmyxPDBmlxjIda6J9dIpeMYdfzD4RTehg59n4C4vxGB7TN8I/QeRxsMMmqIUg6Npzq1HA5Ks3cjXQMPH+kRZIJN2TGHW+EOjlMQqsrnW99ZgePBQPAmcbU96y9Je8XTDzEpceUjqb6s+S08ucjQCwc0Z1D3C8r7VSUE0ZeiR+GcaglFTVFNI6JX1WSyhJ6tIX7QRnFcqaL3rFxJOctDNlBQ2HGSAMZnuuBX5+2o2BNL2NOUIe9Q4xxHFoAEYBHR0R/SDjZXo+ZNhTiopyEK2OmQ7+8U6J1pfheUJq66mA9x4cQXev0LGeF2vf52lDT8nBJDbBYq7lpJ9D2p/724lNCiHoa5Nf4QKrf7NEP6UywgLOSk4joSf0i6NoKPPKijSXrPROW6vBHpPzwiDoRzJZEY15DpfrED4oq97GO4ooTGJnPmMcNyuqpQltAMUcyL442gD107qO83kewYtM6t2KeQbUV19XidU6oR6g2Os1oaGHrEFzIZG8gdIp+cRtyAeINYoBi4E5EWtmWje7N3BcjYqEJd3J/lnroVYuC+Z4We2ozIzRcqqHCWyegtcgaxr/+d+GXOvQO0xOeZkWCfrVzOh1YAoFvHdE67LR46tPZSstDBXMssGb6pALprvi+s0sFn3HeHcXUunLCeUQKiBkk8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
 var stateFixtures = map[int]string{
-	1: stateV1Fixture,
-	4: stateV4Fixture,
-	5: stateV5Fixture,
-	6: stateV6Fixture,
-	7: stateV7Fixture,
-	8: stateV8Fixture,
-	9: stateV9Fixture,
+	1:  stateV1Fixture,
+	4:  stateV4Fixture,
+	5:  stateV5Fixture,
+	6:  stateV6Fixture,
+	7:  stateV7Fixture,
+	8:  stateV8Fixture,
+	9:  stateV9Fixture,
+	10: stateV10Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

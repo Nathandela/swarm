@@ -711,7 +711,17 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		scratch := NewSessionCache()
 		scratch.reseed(f.reseed)
 		st.Sessions = sortedSessions(scratch)
+		// The transcript MERGES the events half rather than replacing (see MailboxRouter.apply
+		// for why the two halves of one frame commit under opposite rules), and it is the
+		// channel IS-LIFE-3 re-delivers an unresolved approval_request on.
+		st.Items = itemsWith(c.router.Items(), f.reseed.Events...)
 	case "":
+		// An interaction record shapes the TRANSCRIPT alone (IS-LAYER-1, IS-SS-1); everything
+		// else keeps the roster path unchanged.
+		if f.record.Type == RecordTypeInteraction {
+			st.Items = itemsWith(c.router.Items(), f.record)
+			return
+		}
 		st.Sessions = sessionsWith(c.router.Sessions(), f.record)
 	}
 	// Grants, reserved kinds and the reconcile record carry no cache state.
