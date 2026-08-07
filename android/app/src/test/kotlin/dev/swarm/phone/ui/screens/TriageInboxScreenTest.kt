@@ -544,6 +544,88 @@ class TriageInboxScreenTest {
 
     // ---- the copy tables ---------------------------------------------------
 
+    // ---- promotion: what ADR-009 D5's sweep fires from ---------------------
+    //
+    // A PROMOTION IS A TRANSITION AND NOT A STATE, which is the whole of this section. `lit` is
+    // already the state -- this session is blocked on the human -- and it is true for as long as
+    // that lasts; the sweep is the MOMENT it became true. Deriving one from the other is how a
+    // screen full of NeedsInput rows would sweep every one of them on every redraw, which is
+    // field-register motion arrived at by forgetting a comparison.
+    //
+    // IT IS THE VIEW STATE'S PREVIOUS GROUPS AND NOT THE WIRE'S. What the user last SAW is what a
+    // transition is relative to: a session the phone core has always reported as needs_input, on a
+    // screen that has just been drawn for the first time, has not transitioned in front of anyone.
+
+    @Test
+    fun `a session that becomes needs_input is promoted`() {
+        val before = screenOf(listOf(row("mbp/one", "working")))
+        val after = screenOf(listOf(row("mbp/one", "needs_input")))
+        assertEquals(setOf("mbp/one"), TriageInboxScreen.promotions(before, after))
+    }
+
+    @Test
+    fun `a session that was already needs_input is not promoted again`() {
+        // The redraw case, and the one that decides whether this is a transition or a state. A
+        // journal event that changes something else entirely -- a need line, another session --
+        // redraws this screen, and a row that has been waiting for ten minutes must not sweep.
+        val before = screenOf(listOf(row("mbp/one", "needs_input")))
+        val after = screenOf(listOf(row("mbp/one", "needs_input", need = "something else")))
+        assertEquals(emptySet<String>(), TriageInboxScreen.promotions(before, after))
+    }
+
+    @Test
+    fun `a session that first appears already needing input does not sweep`() {
+        val before = screenOf(listOf(row("mbp/one", "working")))
+        val after = screenOf(listOf(row("mbp/one", "working"), row("mbp/two", "needs_input")))
+        assertEquals(
+            "arriving in the list is not a transition in front of the user; the lit slab says " +
+                "what state it is in, and the sweep says what just changed",
+            emptySet<String>(),
+            TriageInboxScreen.promotions(before, after),
+        )
+    }
+
+    @Test
+    fun `nothing is promoted against a screen that was never drawn`() {
+        val after = screenOf(listOf(row("mbp/one", "needs_input"), row("mbp/two", "needs_input")))
+        assertEquals(
+            "the first draw has no before, so every row on it is a first appearance",
+            emptySet<String>(),
+            TriageInboxScreen.promotions(null, after),
+        )
+    }
+
+    @Test
+    fun `leaving needs_input is not a promotion`() {
+        val before = screenOf(listOf(row("mbp/one", "needs_input")))
+        val after = screenOf(listOf(row("mbp/one", "completed")))
+        assertEquals(emptySet<String>(), TriageInboxScreen.promotions(before, after))
+    }
+
+    @Test
+    fun `every session that transitioned is named, not only the first`() {
+        // One journal event can promote two sessions. The MODEL reports both -- deciding which one
+        // moves is the kit's, and Motion's newest-wins rule is where "one moving element per
+        // viewport" is enforced. A model that reported one would make that rule unfalsifiable and
+        // would silently drop a promotion the day the rule changed.
+        val before = screenOf(listOf(row("mbp/one", "working"), row("mbp/two", "ready_for_review")))
+        val after = screenOf(listOf(row("mbp/one", "needs_input"), row("mbp/two", "needs_input")))
+        assertEquals(setOf("mbp/one", "mbp/two"), TriageInboxScreen.promotions(before, after))
+    }
+
+    @Test
+    fun `a promotion is the group changing and not the row's identity`() {
+        // NEGATIVE CONTROL for every assertion above, from the other side: a comparison keyed on
+        // anything but the session id -- a row's position, its need line, the section it sits in --
+        // would report this pair as a promotion, because everything about the row changed except
+        // the one thing that decides.
+        val before = screenOf(listOf(row("mbp/one", "needs_input", need = "one thing")))
+        val after = screenOf(
+            listOf(row("mbp/zero", "working"), row("mbp/one", "needs_input", need = "another")),
+        )
+        assertEquals(emptySet<String>(), TriageInboxScreen.promotions(before, after))
+    }
+
     @Test
     fun `every group the model can carry has a heading and empty copy`() {
         // The reverse of the section assertions: not "the screen built four sections" but "no

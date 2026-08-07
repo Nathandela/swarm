@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.kit
 
+import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
@@ -8,8 +9,12 @@ import android.util.TypedValue
 import android.view.View
 import androidx.core.view.animation.PathInterpolatorCompat
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.theme.DesignScale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -688,6 +693,172 @@ class MotionTest {
         assertEquals(mockCaretDimAlpha(), caret.alpha, 0f)
         animator.setCurrentFraction(0.25f)
         assertEquals(1f, caret.alpha, 0f)
+    }
+
+    // ------------------------------------------------------------------
+    // THE SPECULAR SWEEP -- ADR-009 D5's one new named exception, and D8.2's four constraints.
+    //
+    // WHAT IS ASSERTED HERE AND WHAT IS ASSERTED IN android/gate/o4_sweep_test.go, because the two
+    // are not the same question and neither subsumes the other. That gate reads SOURCE: it joins
+    // all eight of the sweep's numbers to the maquette and the token, and it holds the shape of
+    // the builder -- reduced motion asked before anything is constructed, the predecessor ENDED
+    // rather than cancelled, no INFINITE anywhere near it. This file RUNS the thing: an animator's
+    // repeatCount, the listener that actually fires on a superseded sweep, and the null the
+    // builder returns under reduced motion. The two numeric assertions below are the ones the
+    // BEHAVIOUR depends on (a duration and a peak alpha the animator carries), not a second copy
+    // of the gate's join.
+    // ------------------------------------------------------------------
+
+    /** ADR-009 D3's effect token: `sweep 500ms rgba(255,252,244,0.30)`. */
+    private fun sweepToken(): String = requireNotNull(DesignScale.token("--p-sweep-fx")) {
+        "the token origin declares no --p-sweep-fx; O2 added it, and every assertion about the " +
+            "sweep's own numbers would be read out of nothing without it"
+    }
+
+    @Test
+    fun the_register_and_the_token_state_the_same_sweep() {
+        // TWO DOCUMENTS, ONE EFFECT. D3 puts the sweep in the palette as an `effect` token and D5
+        // puts it in the register; the app reads the token, so the register agreeing with it is a
+        // property nothing else checks. `--p-sweep-fx` is typed `effect`, which means no TSV row
+        // and no `res/values` converter (D8.1's closing note) -- tokens.json is the only place it
+        // exists, and that is exactly why a constant derived from it needs a join.
+        val row = AdrRegister.value("Specular sweep")
+        assertEquals(AdrRegister.millis(sweepToken()), AdrRegister.millis(row))
+        assertEquals(AdrRegister.rgba(sweepToken()), AdrRegister.rgba(row))
+    }
+
+    @Test
+    fun the_sweeps_duration_and_peak_alpha_are_the_tokens_own() {
+        assertEquals(AdrRegister.millis(sweepToken()), Motion.SWEEP_DURATION_MS)
+        assertEquals(AdrRegister.rgba(sweepToken())[3], Motion.SWEEP_PEAK_ALPHA, 1e-6f)
+    }
+
+    @Test
+    fun the_sweeps_skew_is_the_registers_own_angle() {
+        assertEquals(
+            AdrRegister.degrees(AdrRegister.value("Specular sweep")),
+            Motion.SWEEP_SKEW_DEG,
+            1e-6f,
+        )
+    }
+
+    @Test
+    fun the_streak_travels_from_the_designs_start_to_its_far_side() {
+        // The offset is a PURE FUNCTION for [Motion.caretAlphaAt]'s reason: the travel is testable
+        // without driving an Animator's update machinery, and the drawable that spends it is
+        // private to the file that builds it.
+        assertEquals(Motion.SWEEP_FROM_SHARE, Motion.sweepOffsetAt(0f), 1e-6f)
+        assertEquals(Motion.SWEEP_TO_SHARE, Motion.sweepOffsetAt(1f), 1e-6f)
+        assertTrue(
+            "the streak enters from before the leading edge and leaves past the trailing one",
+            Motion.SWEEP_FROM_SHARE < 0f && Motion.SWEEP_TO_SHARE > 1f,
+        )
+        // MONOTONE, sampled: a travel that reversed would sweep back across a row that has already
+        // been read, which is a second moving element in the same viewport wearing one name.
+        val samples = (0..20).map { Motion.sweepOffsetAt(it / 20f) }
+        assertEquals(samples.sorted(), samples)
+    }
+
+    // (a) ONE-SHOT.
+
+    @Test
+    fun specularSweep_runs_once_at_the_tokens_duration() {
+        val animator = requireNotNull(Motion.specularSweep(context, View(context))) as ValueAnimator
+        assertEquals(Motion.SWEEP_DURATION_MS, animator.duration)
+        assertEquals("a sweep that repeats is the ambient motion D5 bans", 0, animator.repeatCount)
+    }
+
+    @Test
+    fun a_finished_sweep_leaves_nothing_in_flight() {
+        val animator = requireNotNull(Motion.specularSweep(context, View(context)))
+        animator.end()
+        assertNull(
+            "a sweep that has played must release the slot, or the next promotion supersedes a " +
+                "ghost and the one after it finds nothing to supersede",
+            Motion.inFlightSweep,
+        )
+    }
+
+    // (b) AT MOST ONE PER VIEWPORT, NEWEST WINS, AND THE OLD ONE COMPLETES.
+
+    @Test
+    fun a_second_sweep_supersedes_the_first_by_completing_it_instantly() {
+        val first = requireNotNull(Motion.specularSweep(context, View(context)))
+        var cancelled = false
+        var ended = false
+        first.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) = Unit
+            override fun onAnimationEnd(animation: Animator) { ended = true }
+            override fun onAnimationCancel(animation: Animator) { cancelled = true }
+            override fun onAnimationRepeat(animation: Animator) = Unit
+        })
+
+        val second = requireNotNull(Motion.specularSweep(context, View(context)))
+
+        assertTrue("the superseded sweep must be over the instant the new one starts", ended)
+        assertFalse(
+            "and it must be over by COMPLETING. cancel() skips the end listeners, so the streak " +
+                "it drew stays on a row nobody is looking at -- which is two highlights on a " +
+                "near-black ground, the ~80:1 amplification the one-per-viewport rule exists for",
+            cancelled,
+        )
+        assertSame("newest wins", second, Motion.inFlightSweep)
+    }
+
+    @Test
+    fun one_sweep_alone_is_not_ended_by_anything() {
+        // NEGATIVE CONTROL for the test above: an implementation that ended every sweep the
+        // instant it started would satisfy "the first one ended" perfectly.
+        var ended = false
+        val only = requireNotNull(Motion.specularSweep(context, View(context)))
+        only.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) = Unit
+            override fun onAnimationEnd(animation: Animator) { ended = true }
+            override fun onAnimationCancel(animation: Animator) = Unit
+            override fun onAnimationRepeat(animation: Animator) = Unit
+        })
+        assertFalse("a sweep with nothing superseding it must still be running", ended)
+        assertSame(only, Motion.inFlightSweep)
+    }
+
+    // (d) REDUCED MOTION COLLAPSES IT TO NOTHING.
+
+    @Test
+    fun the_sweep_collapses_to_nothing_when_motion_is_reduced() {
+        setAnimatorScale(0f)
+        val slab = View(context)
+        assertNull(
+            "not a shorter sweep and not a zero-duration one: NOTHING. A 0ms ValueAnimator still " +
+                "delivers one update at fraction 1.0, which is a full-alpha final frame -- the " +
+                "exact defect the caret shipped once",
+            Motion.specularSweep(context, slab),
+        )
+        assertNull(
+            "and nothing may be left in flight either. The builder is the only site that attaches " +
+                "a streak, and o4_sweep_test.go holds the ordering that puts the reduced-motion " +
+                "question before every construction in it; an empty slot is what that ordering " +
+                "produces, and it is the half a runtime test can see",
+            Motion.inFlightSweep,
+        )
+    }
+
+    @Test
+    fun the_sweep_still_plays_when_motion_is_not_reduced() {
+        // NEGATIVE CONTROL for the test above: a builder that always returned null would satisfy
+        // every reduced-motion assertion in this file.
+        assertNotNull(Motion.specularSweep(context, View(context)))
+        assertNotNull(Motion.inFlightSweep)
+    }
+
+    @Test
+    fun a_sweep_in_flight_is_not_disturbed_by_a_refused_one() {
+        // Reduced motion turned on WHILE a sweep is playing must not reach in and clear the slot:
+        // the animator already handed out goes on being the one in flight, exactly as
+        // [reduced_motion_is_fixed_at_construction_not_re_read_at_start] holds for a duration.
+        val playing = requireNotNull(Motion.specularSweep(context, View(context)))
+        setAnimatorScale(0f)
+        assertNull(Motion.specularSweep(context, View(context)))
+        assertSame(playing, Motion.inFlightSweep)
     }
 }
 

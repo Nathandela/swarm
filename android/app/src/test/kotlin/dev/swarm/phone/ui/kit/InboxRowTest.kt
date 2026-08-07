@@ -420,6 +420,7 @@ class InboxRowTest {
         val row = sessionRow(
             context, "quanthome/api", "claude", "Wants to run something", "needs_input",
             lit = true,
+            promoted = false,
             stateDescription = "needs you",
         )
         assertEquals("needs you", row.kitRequire(KitTag.DOT).contentDescription)
@@ -443,7 +444,65 @@ class InboxRowTest {
      */
     private fun row(group: String, lit: Boolean = false): ViewGroup = sessionRow(
         context, "quanthome/api", "claude", "Wants to run something", group, lit,
+        promoted = false,
     ) as ViewGroup
+
+    // ---- ADR-009 D5's sweep, from the row that earns it ---------------------
+
+    @Test
+    fun `a promoted row sweeps once, and a resting one never does`() {
+        // THE ROW IS TOLD, IT DOES NOT DECIDE -- `lit`'s own argument, applied to the moment
+        // rather than the state. Which Group is blocked on the human is `TriageInboxScreen`'s
+        // decision, and WHEN it changed is the view state's; what this component owes is that a
+        // row told it was just promoted plays the one effect, and a row told nothing plays none.
+        Motion.inFlightSweep?.end()
+        sessionRow(
+            context, "quanthome/api", "claude", "Wants to run something", "needs_input",
+            lit = true, promoted = false,
+        )
+        assertNull(
+            "a row that is merely lit has been waiting; the slab says so and nothing moves",
+            Motion.inFlightSweep,
+        )
+
+        sessionRow(
+            context, "quanthome/api", "claude", "Wants to run something", "needs_input",
+            lit = true, promoted = true,
+        )
+        assertNotNull(
+            "a row that has just been promoted plays D5's one new exception",
+            Motion.inFlightSweep,
+        )
+        Motion.inFlightSweep?.end()
+    }
+
+    @Test
+    fun `two promoted rows leave one sweep, not two`() {
+        // D5's one-per-viewport rule, asserted where a viewport actually gets two of them: one
+        // journal event promoting two sessions builds two rows in one pass. The rule is Motion's
+        // (newest wins, the superseded one completes instantly); this is the composition that
+        // exercises it, and the assertion is that the kit routes through that rule rather than
+        // around it.
+        Motion.inFlightSweep?.end()
+        val first = sessionRow(
+            context, "quanthome/api", "claude", "Wants to run something", "needs_input",
+            lit = true, promoted = true,
+        )
+        val firstSweep = Motion.inFlightSweep
+        val second = sessionRow(
+            context, "quanthome/web", "codex", "Wants to run something", "needs_input",
+            lit = true, promoted = true,
+        )
+        assertNotNull(firstSweep)
+        assertNotNull(Motion.inFlightSweep)
+        assertNotEquals(
+            "the second row's sweep must have superseded the first's, not joined it",
+            firstSweep,
+            Motion.inFlightSweep,
+        )
+        assertNotEquals(first, second)
+        Motion.inFlightSweep?.end()
+    }
 
     /** `.prow`: the card, its padding, and the three text roles it carries. */
     @Test
@@ -508,14 +567,14 @@ class InboxRowTest {
      */
     @Test
     fun `the agent cell is the wire's word, and is absent when the wire carried none`() {
-        val named = sessionRow(context, "quanthome/api", "claude", "Wants to run something", "working", lit = false)
+        val named = sessionRow(context, "quanthome/api", "claude", "Wants to run something", "working", lit = false, promoted = false)
         assertEquals(
             "the agent cell does not carry the agent the machine reported",
             "claude",
             (named.kitRequire(KitTag.AGENT) as TextView).text.toString(),
         )
 
-        val anonymous = sessionRow(context, "quanthome/api", "", "Wants to run something", "working", lit = false)
+        val anonymous = sessionRow(context, "quanthome/api", "", "Wants to run something", "working", lit = false, promoted = false)
         assertNull(
             "a session whose records carried NO agent still gets an agent cell on its row -- an " +
                 "empty TextView holding the 8 dp gap before it. `swarmmobile.Session.Agent` is " +

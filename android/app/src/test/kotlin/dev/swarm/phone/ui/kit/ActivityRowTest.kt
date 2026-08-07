@@ -129,7 +129,7 @@ class ActivityRowTest {
     fun `the row's card IS the session row's card, not a second recipe for it`() {
         val subject = (row().background as SubstrateSurface).spec
         val prow = (
-            sessionRow(context, "quanthome/api", "claude", "Wants to run something", "completed", lit = false)
+            sessionRow(context, "quanthome/api", "claude", "Wants to run something", "completed", lit = false, promoted = false)
                 .background as SubstrateSurface
             ).spec
 

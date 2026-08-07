@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.Claim
 import dev.swarm.phone.ui.kit.KitOrigin
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.StatusDotDrawable
 import dev.swarm.phone.ui.kit.SubstrateSurface
 import dev.swarm.phone.ui.kit.kitFind
@@ -73,11 +74,13 @@ class TriageInboxViewTest {
         selected: String? = null,
         onSelectSession: (String) -> Unit = {},
         onSelectScope: (String?) -> Unit = {},
+        promoted: Set<String> = emptySet(),
     ): View = triageInboxView(
         context = context,
         screen = screen(rows, stale, scope, selected),
         onSelectSession = onSelectSession,
         onSelectScope = onSelectScope,
+        promoted = promoted,
     )
 
     /** Every descendant carrying [tag], in depth-first (that is, on-screen) order. */
@@ -395,5 +398,46 @@ class TriageInboxViewTest {
 
         chips.getChildAt(0).performClick()
         assertNull("the All machines chip must clear the scope, not select a machine named it", chosen)
+    }
+
+    // ---- ADR-009 D5's sweep, composed ---------------------------------------
+
+    @Test
+    fun `the promotion the screen names is the row that sweeps`() {
+        // THE SCREEN PASSES DATA AND THE KIT PLAYS THE EFFECT, which is PB-DS-6's whole clause
+        // read one layer up: this file's subject is that the promoted SESSION ID reaches the row
+        // that renders it. Which session that is, is `TriageInboxScreen.promotions`; what the
+        // effect does once fired -- one-shot, one per viewport, nothing under reduced motion --
+        // is Motion's, and android/gate/o4_sweep_test.go fences where it may be built at all.
+        Motion.inFlightSweep?.end()
+        view(listOf(row("mbp/one", "needs_input"), row("mbp/two", "working")))
+        assertNull(
+            "a draw with no promotion in it must move nothing, however many rows are lit",
+            Motion.inFlightSweep,
+        )
+
+        view(
+            listOf(row("mbp/one", "needs_input"), row("mbp/two", "working")),
+            promoted = setOf("mbp/one"),
+        )
+        assertNotNull(
+            "the session the caller named as just-promoted must have swept",
+            Motion.inFlightSweep,
+        )
+        Motion.inFlightSweep?.end()
+    }
+
+    @Test
+    fun `a promotion naming a session this list does not hold sweeps nothing`() {
+        // The scope-filter case, and the reason this is a set of ids rather than a flag on the
+        // screen: a session promoted on a machine the user has just narrowed away from is not on
+        // this viewport at all, and the honest response to that is silence rather than sweeping
+        // whichever row happens to be first.
+        Motion.inFlightSweep?.end()
+        view(
+            listOf(row("mbp/one", "needs_input")),
+            promoted = setOf("other-machine/nine"),
+        )
+        assertNull(Motion.inFlightSweep)
     }
 }
