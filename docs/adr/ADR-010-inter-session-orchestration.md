@@ -1,6 +1,6 @@
 # ADR-010: Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs
 
-**Status**: Proposed (design lock for the inter-session orchestration epic; ratifies to Accepted when Phase 1 lands)
+**Status**: Accepted (2026-08-07 — Phases 0-4 landed with TDD evidence under docs/verification/adr010/)
 **Date**: 2026-07-24
 
 ## Context

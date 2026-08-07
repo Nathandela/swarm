@@ -15,7 +15,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [008](ADR-008-status-events-latest-state-coalescing.md) | Status events are level-triggered latest-state snapshots (coalescing permitted) | Accepted | 2026-07-18 |
 | [008](ADR-008-go-toolchain-floor-1-25.md) | Go toolchain floor moves to 1.25 (gomobile tool directive) | Accepted | 2026-07-22 |
 | [009](ADR-009-obsidian-visual-direction.md) | Obsidian visual direction — warm material, champagne accent, one specular moment | Accepted | 2026-08-07 |
-| [010](ADR-010-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Proposed | 2026-07-24 |
+| [010](ADR-010-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Accepted | 2026-08-07 |
 
 Numbers 007 and 008 are each carried by TWO documents: the main line and the remote-control line
 minted them independently before merging (2026-08-02). Both pairs stay as published — the remote
