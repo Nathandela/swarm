@@ -62,16 +62,46 @@ func o6KotlinSource(t *testing.T, rel string) string {
 // the whole feature switched off in a way that reads, at a glance, like the feature switched on.
 var o6BackInvokedAttr = regexp.MustCompile(`android:enableOnBackInvokedCallback\s*=\s*"([^"]*)"`)
 
-// o6ManifestOptIn reports the attribute's value in the given manifest source, or "".
+// o6XMLComment is stripped before anything below reads the manifest.
+//
+// MEASURED, NOT ANTICIPATED. The first version of this file located the attribute with
+// `strings.Index` over the raw source, and the KDoc-equivalent XML comment that EXPLAINS the
+// attribute sits above `<application>` -- so the reader found the word in the prose, concluded it
+// was declared before the tag, and reported a correctly-placed attribute as misplaced. A
+// constraint a comment can satisfy, or break, is one the next thorough comment turns off.
+var o6XMLComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// o6ApplicationTag returns the `<application ... >` OPEN TAG of a manifest source, comments
+// stripped, or "" when there is none.
+func o6ApplicationTag(src string) string {
+	code := o6XMLComment.ReplaceAllString(src, "")
+	at := strings.Index(code, "<application")
+	if at < 0 {
+		return ""
+	}
+	end := strings.Index(code[at:], ">")
+	if end < 0 {
+		return ""
+	}
+	return code[at : at+end]
+}
+
+// o6ManifestOptIn reports the attribute's value ON THE <application> TAG, or "".
 //
 // It takes the SOURCE so the control below can feed a perturbed one to the same function the real
 // assertion calls.
 func o6ManifestOptIn(src string) string {
-	m := o6BackInvokedAttr.FindStringSubmatch(src)
+	m := o6BackInvokedAttr.FindStringSubmatch(o6ApplicationTag(src))
 	if m == nil {
 		return ""
 	}
 	return m[1]
+}
+
+// o6ManifestDeclaresAnywhere reports whether the attribute appears at all, on any tag. It is what
+// separates "nobody wrote it" from "somebody wrote it on the wrong element".
+func o6ManifestDeclaresAnywhere(src string) bool {
+	return o6BackInvokedAttr.MatchString(o6XMLComment.ReplaceAllString(src, ""))
 }
 
 func o6ManifestSource(t *testing.T) string {
@@ -84,21 +114,17 @@ func o6ManifestSource(t *testing.T) string {
 // TestO63_TheManifestOptsIntoPredictiveBack is constraint (a).
 func TestO63_TheManifestOptsIntoPredictiveBack(t *testing.T) {
 	src := o6ManifestSource(t)
-	switch got := o6ManifestOptIn(src); got {
-	case "true":
+	switch got := o6ManifestOptIn(src); {
+	case got == "true":
+	case got == "" && o6ManifestDeclaresAnywhere(src):
 		// The opt-in has to be on <application> and not on the <activity>: the app has ONE
-		// Activity, so the two would be equivalent today and would stop being equivalent the day
-		// a second one is declared, silently, for whichever one nobody edited.
-		app := strings.Index(src, "<application")
-		attr := strings.Index(src, "android:enableOnBackInvokedCallback")
-		end := strings.Index(src[app:], ">")
-		if app < 0 || attr < app || (end >= 0 && attr > app+end) {
-			t.Errorf("O6.3: android:enableOnBackInvokedCallback is declared outside the "+
-				"<application> tag. The app has one Activity today, so the two spellings behave "+
-				"identically and stop doing so the day a second one is declared -- for whichever "+
-				"of them nobody edited.")
-		}
-	case "":
+		// Activity, so the two are equivalent today and stop being equivalent the day a second one
+		// is declared, silently, for whichever one nobody edited.
+		t.Errorf("O6.3: android:enableOnBackInvokedCallback is declared, and not on the " +
+			"<application> tag. The app has one Activity today, so the two spellings behave " +
+			"identically and stop doing so the day a second one is declared -- for whichever of " +
+			"them nobody edited.")
+	case got == "":
 		t.Errorf("O6.3: AndroidManifest.xml declares no android:enableOnBackInvokedCallback. " +
 			"Without it the platform never dispatches the gesture's progress, so every " +
 			"OnBackAnimationCallback member the Activity implements is declared, compiled, " +
@@ -127,6 +153,17 @@ func TestO63_TheManifestReaderRefusesPerturbedInput(t *testing.T) {
 		{"the attribute switched off", strings.Replace(src,
 			`android:enableOnBackInvokedCallback="true"`,
 			`android:enableOnBackInvokedCallback="false"`, 1), "false"},
+		// Moved onto the one Activity: identical behaviour today, and a hole the day a second
+		// Activity is declared. The reader must not find it on <application>.
+		{"the attribute moved to the activity", strings.Replace(
+			strings.Replace(src, `android:enableOnBackInvokedCallback="true"`, "", 1),
+			`android:name=".PhoneActivity"`,
+			`android:name=".PhoneActivity"`+"\n            "+
+				`android:enableOnBackInvokedCallback="true"`, 1), ""},
+		// Commented out: the attribute is in the file and does nothing.
+		{"the attribute commented out", strings.Replace(src,
+			`android:enableOnBackInvokedCallback="true"`,
+			`<!-- android:enableOnBackInvokedCallback="true" -->`, 1), ""},
 	} {
 		if got := o6ManifestOptIn(tc.src); got != tc.want {
 			t.Errorf("O6.3: with %s the reader answered %q, want %q. A reader that reports the "+
@@ -220,9 +257,23 @@ var o6BackGeometry = []struct {
 	Want     string // the literal the constant must carry
 }{
 	{"PREDICTIVE_BACK_SCALE", "scale to 90%", "0.90f"},
-	{"PREDICTIVE_BACK_MARGIN_DP", "8dp margin", "8f"},
 	{"PREDICTIVE_BACK_CROSSFADE_AT", "35% crossfade", "0.35f"},
 }
+
+// o6BackMarginDimen is the plan's third number, and it is NOT a constant in Motion.kt.
+//
+// THE MARGIN IS A LENGTH AND THE OTHER TWO ARE RATIOS, which is the whole of why they are checked
+// differently. PB-DS-1 owns every length in this app -- "every spacing value comes from
+// res/values/dimens.xml" -- and `TestPBDS1_NoRawPixelPaddingSurvives` refused
+// `const val PREDICTIVE_BACK_MARGIN_DP = 8f` when it was written that way, correctly: 8 typed in
+// Kotlin is the ladder's own value copied out of the ladder, free to drift from it the day the
+// scale is re-tuned. So the join runs plan -> dimens.xml -> Motion.kt instead, and this row is
+// where the three meet.
+var o6BackMarginDimen = struct {
+	Resource string
+	Phrase   string
+	Want     string
+}{"swarm_space_8", "8dp margin", "8dp"}
 
 // o6ConstantValue reads `const val NAME = <literal>` out of a source.
 func o6ConstantValue(src, name string) string {
@@ -253,5 +304,27 @@ func TestO63_TheChoreographyIsThePlansOwnNumbers(t *testing.T) {
 				"that behaves differently from every other app on the handset, for a reason "+
 				"nobody wrote down.", o6MotionFile, row.Constant, got, row.Phrase, row.Want)
 		}
+	}
+
+	// The margin, through the ledger. Three hops, each of which can be wrong on its own: the plan
+	// still says 8dp, the ladder step named by the code still IS 8dp, and the code still names it.
+	if !strings.Contains(plan, o6BackMarginDimen.Phrase) {
+		t.Errorf("O6.3: %s no longer says %q, and the preview's margin is joined to it.",
+			o6PlanFile, o6BackMarginDimen.Phrase)
+	}
+	dimens := readFileOrFail(t,
+		filepath.Join(appModule(t), "src", "main", "res", "values", "dimens.xml"),
+		"obsidian-migration-plan O6.3")
+	want := `<dimen name="` + o6BackMarginDimen.Resource + `">` + o6BackMarginDimen.Want + `</dimen>`
+	if !strings.Contains(dimens, want) {
+		t.Errorf("O6.3: dimens.xml does not declare %s, and %s spends that step as the preview's "+
+			"8dp margin. The step moving under the constant is exactly what routing the length "+
+			"through the ladder is supposed to make visible.", want, o6MotionFile)
+	}
+	if !strings.Contains(kotlinCodeOnly(motion), "R.dimen."+o6BackMarginDimen.Resource) {
+		t.Errorf("O6.3: %s never names R.dimen.%s. The plan's `8dp margin` is a LENGTH, so it "+
+			"comes from res/values/dimens.xml -- PB-DS-1's own sentence, and the reason "+
+			"TestPBDS1_NoRawPixelPaddingSurvives refuses a bare 8 typed here.",
+			o6MotionFile, o6BackMarginDimen.Resource)
 	}
 }

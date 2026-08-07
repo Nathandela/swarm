@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.view.View
 import android.view.animation.Interpolator
 import androidx.core.view.animation.PathInterpolatorCompat
+import dev.swarm.phone.R
 import kotlin.math.roundToInt
 import kotlin.math.tan
 
@@ -265,6 +266,139 @@ object Motion {
             pushBannerHiddenTranslation(bannerHeightPx, topInsetPx),
             NAV_DURATION_MS,
         )
+
+    // ------------------------------------------------------------------
+    // Predictive back: the drill-down's preview while a thumb is on the edge.
+    // ------------------------------------------------------------------
+
+    /**
+     * 0.90 -- what the screen being left shrinks to at full drag.
+     *
+     * origin: obsidian-migration-plan O6.3 `scale to 90%`
+     *
+     * IT IS THE PLATFORM'S NUMBER RATHER THAN THIS SKIN'S, which is why it cites the plan and not
+     * ADR-009 D5. The back gesture is a system gesture: a person forms an expectation of what it
+     * looks like from every other app on the handset, so an app that previews its own way is not
+     * expressing an identity, it is failing to answer a question the user is asking with their
+     * thumb. D5's register governs what this app MOVES; this governs how it answers the platform.
+     */
+    const val PREDICTIVE_BACK_SCALE = 0.90f
+
+    /**
+     * The least the previewed screen may sit from its container's edge, in px.
+     *
+     * origin: obsidian-migration-plan O6.3 `8dp margin`, spent as PB-DS-1's `space_8`
+     *
+     * **IT IS A LEDGER STEP AND NOT A NUMBER IN THIS FILE**, which is PB-DS-1 rather than taste
+     * and was learned here rather than remembered: the first version of this constant was
+     * `const val PREDICTIVE_BACK_MARGIN_DP = 8f`, and `TestPBDS1_NoRawPixelPaddingSurvives`
+     * refused it in as many words -- "every spacing value comes from res/values/dimens.xml". It
+     * was right to. The plan says 8dp; the 2dp scale has an 8dp step; a second 8 written here
+     * would be the ladder's value copied out of the ladder, free to drift from it on the day
+     * somebody re-tunes the scale. The scale and the crossfade above stay as constants because
+     * they are RATIOS -- neither is a length, so neither has a step to be.
+     *
+     * A FLOOR AND NOT A SECOND WAY OF WRITING THE SCALE. On a handset, [PREDICTIVE_BACK_SCALE]
+     * already leaves 5% of the width on each side -- about 20dp -- so the margin never binds and
+     * looks redundant. It binds on any surface small enough for a 10% inset to be thinner than
+     * 8dp, and on such a surface 90% is simply the wrong number: the preview would touch the edge
+     * and read as a glitch rather than as a card lifting away. [predictiveBackScale] takes the
+     * smaller of the two on BOTH axes.
+     */
+    fun predictiveBackMarginPx(context: Context): Float =
+        Kit.dimen(context, R.dimen.swarm_space_8)
+
+    /**
+     * 0.35 -- the drag fraction at which the screen being left starts to go.
+     *
+     * origin: obsidian-migration-plan O6.3 `35% crossfade`
+     *
+     * THE THRESHOLD IS WHAT MAKES AN ABANDONED GESTURE FREE. Below it the user has been shown a
+     * shape moving; above it they have been shown a screen leaving. A crossfade that started at
+     * zero would make every accidental edge-touch look like the beginning of a departure, on the
+     * one screen in this app a person is reading rather than scanning.
+     */
+    const val PREDICTIVE_BACK_CROSSFADE_AT = 0.35f
+
+    /**
+     * How far [view] scales at full drag: [PREDICTIVE_BACK_SCALE], reduced on either axis where
+     * that would leave less than [PREDICTIVE_BACK_MARGIN_DP] of edge.
+     *
+     * AN UNMEASURED VIEW FALLS BACK TO THE PLAIN SCALE rather than to zero. A width of 0 makes the
+     * margin arithmetic negative, and a preview that inverted the screen because a gesture
+     * arrived one frame before layout is a worse answer than one that ignores the margin for that
+     * frame.
+     */
+    private fun predictiveBackScale(context: Context, view: View): Float {
+        val marginPx = predictiveBackMarginPx(context)
+        var scale = PREDICTIVE_BACK_SCALE
+        listOf(view.width, view.height).forEach { side ->
+            if (side <= 0) return@forEach
+            scale = minOf(scale, (side - 2f * marginPx) / side)
+        }
+        return scale.coerceAtLeast(0f)
+    }
+
+    /**
+     * The screen being left, previewed at [progress] of the back gesture.
+     *
+     * `androidx.activity`'s `OnBackPressedCallback` delivers `BackEventCompat.progress` on every
+     * frame the thumb moves; this is what one of those frames looks like. It is a PURE FUNCTION OF
+     * PROGRESS AND THE VIEW'S OWN BOX and it drives no [Animator] at all, which is deliberate
+     * twice over: the gesture is the clock, so an animator would be a second one fighting it, and
+     * a frame that is a function can be asked for in a JVM, which a gesture cannot be replayed in.
+     *
+     * REDUCED MOTION COLLAPSES IT TO NOTHING -- not to a smaller movement, which is D5's own
+     * ruling for the sweep and the same class of thing here. The gesture still works: back is
+     * still dispatched, the drill-down still closes. What a user who asked for stillness gets is a
+     * screen that changes once instead of one that follows their thumb.
+     *
+     * WHAT IT DOES NOT DO, recorded rather than left to be discovered. The platform's full
+     * choreography also pivots the preview away from the swiped edge
+     * (`BackEventCompat.swipeEdge`) and translates it horizontally, and it cross-fades the
+     * INCOMING screen up as this one goes down. Neither is here: this app's nav is one
+     * `FrameLayout` whose content is replaced rather than a stack of two live views, so there is
+     * no incoming view on screen to fade up, and a translation without one reads as the drill-down
+     * sliding off to nowhere. The scale and the fade are the half that is honest with one hosted
+     * view; the other half arrives with a nav that keeps both screens alive
+     * (`PhoneSurface.hostContent`), and doing it here would mean rebuilding that nav inside a
+     * gesture handler.
+     */
+    fun predictiveBack(context: Context, view: View, progress: Float) {
+        if (isReducedMotion(context)) return
+        val drag = progress.coerceIn(0f, 1f)
+        val scale = 1f - drag * (1f - predictiveBackScale(context, view))
+        view.scaleX = scale
+        view.scaleY = scale
+        view.alpha = predictiveBackAlpha(drag)
+    }
+
+    /**
+     * The previewed screen's opacity at [progress]: fully opaque until the threshold, then
+     * straight down to nothing by the end of the drag.
+     *
+     * A pure function, and public, for [caretAlphaAt]'s reason: the shape of the fade is the
+     * decision, and it is checkable without a View.
+     */
+    fun predictiveBackAlpha(progress: Float): Float {
+        val drag = progress.coerceIn(0f, 1f)
+        if (drag <= PREDICTIVE_BACK_CROSSFADE_AT) return 1f
+        return 1f - (drag - PREDICTIVE_BACK_CROSSFADE_AT) / (1f - PREDICTIVE_BACK_CROSSFADE_AT)
+    }
+
+    /**
+     * Put [view] back exactly as it was, for a gesture the user abandoned.
+     *
+     * IT IS UNCONDITIONAL AND DOES NOT ASK ABOUT REDUCED MOTION. Under reduced motion
+     * [predictiveBack] changed nothing, so this writes three values that are already there; the
+     * alternative is a branch whose false arm is the one that leaves a screen scaled down forever
+     * if the setting is flipped mid-gesture.
+     */
+    fun clearPredictiveBack(view: View) {
+        view.scaleX = 1f
+        view.scaleY = 1f
+        view.alpha = 1f
+    }
 
     // ------------------------------------------------------------------
     // The streaming caret.

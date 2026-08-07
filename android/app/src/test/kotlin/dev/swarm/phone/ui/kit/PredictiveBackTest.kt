@@ -48,9 +48,6 @@ class PredictiveBackTest {
     private fun drillDown(widthPx: Int = PHONE_WIDTH_PX, heightPx: Int = PHONE_HEIGHT_PX): View =
         View(context).apply { layout(0, 0, widthPx, heightPx) }
 
-    private val density: Float
-        get() = context.resources.displayMetrics.density
-
     @Before
     fun startFromOrdinaryMotion() {
         reducedMotion(false)
@@ -99,7 +96,8 @@ class PredictiveBackTest {
     @Test
     fun `the eight-dp margin binds when ninety percent would not keep it`() {
         // A view narrow enough that a 10% inset is thinner than the margin the plan states.
-        val narrow = (4 * Motion.PREDICTIVE_BACK_MARGIN_DP * density).toInt()
+        val marginPx = Motion.predictiveBackMarginPx(context)
+        val narrow = (4 * marginPx).toInt()
         val view = drillDown(widthPx = narrow, heightPx = narrow)
         Motion.predictiveBack(context, view, 1f)
         val gapPx = narrow * (1f - view.scaleX) / 2f
@@ -108,7 +106,7 @@ class PredictiveBackTest {
                 "On a phone the 90% scale already leaves more than that, which is exactly why " +
                 "the margin has to be a FLOOR rather than a second way of writing the scale: on " +
                 "any surface small enough for 10% to be thinner than 8dp, 90% is the wrong number.",
-            gapPx >= Motion.PREDICTIVE_BACK_MARGIN_DP * density - TOLERANCE,
+            gapPx >= marginPx - TOLERANCE,
         )
     }
 

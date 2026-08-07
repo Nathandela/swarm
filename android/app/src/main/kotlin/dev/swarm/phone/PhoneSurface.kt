@@ -31,6 +31,7 @@ import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.Haptics
+import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
@@ -1825,7 +1826,36 @@ class PhoneSurface(
         // one press on one screen; carried across a departure it would greet the user on their
         // return with a failure from before they left.
         stopNotSentFor = ""
+        // THE PREVIEW IS UNDONE BEFORE THE NEXT SCREEN IS DRAWN INTO THE SAME HOST. A committed
+        // gesture leaves [contentHost] at 90% and fully transparent, and the inbox is hosted in
+        // that same view -- so without this the user's back gesture succeeds and lands them on an
+        // invisible list. It is here rather than only in the Activity because this is the one
+        // function every departure runs through, chevron and gesture alike.
+        Motion.clearPredictiveBack(contentHost)
         render()
+    }
+
+    /**
+     * One frame of the system back gesture, previewed on the drill-down (migration plan O6.3).
+     *
+     * IT SCALES [contentHost] AND NOT [root], and the difference is the whole reason the drill-down
+     * is the subject: the tab bar and the status banner are chrome that the gesture is not leaving,
+     * so a preview that shrank the window would tell the user they were about to exit the app --
+     * which is what back does on the inbox, and is exactly the thing this callback exists to
+     * prevent them confusing.
+     *
+     * WHAT CROSSES FROM [PhoneActivity] IS A FLOAT, which is PB-SEC-11 and not style. That class is
+     * exported with a LAUNCHER filter, so the gesture handler over there may touch local screen
+     * state and nothing else; the view work lives here, one call away, exactly as
+     * [closeSessionDetail]'s does.
+     */
+    internal fun previewBack(progress: Float) {
+        Motion.predictiveBack(activity, contentHost, progress)
+    }
+
+    /** The gesture was abandoned: put the drill-down back exactly as it was. */
+    internal fun cancelBackPreview() {
+        Motion.clearPredictiveBack(contentHost)
     }
 
     private fun selectScope(machine: String?) {
