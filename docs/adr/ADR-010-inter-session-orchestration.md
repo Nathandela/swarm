@@ -180,3 +180,73 @@ spawned-from meta field and any `SessionView` exposure get their `protocol.md` r
 added (GG-7). Phase 2/3 port the observation/steering ops; their ops, fields, and the
 system-spec invariant updates (P-5 observer mode, concurrent-control note) land with the
 port, never silently.
+
+## Amendment 1 (2026-08-07): steering is a daemon-mediated write, not a control session
+
+A code audit against current main invalidated two assumptions above and refines D5, D6,
+and D8. The original text stays as written; this amendment governs where they conflict.
+
+### A1. The remote-control mechanics have already merged — and do not compose locally
+
+`take_control`, `take_control_end`, `terminal_subscribe`, and `terminal_snapshot` are on
+main (`internal/protocol/server.go`), fully entangled with the remote tier: device
+signatures, single-use gate tokens bound via content hash, the kill switch, and the
+durable-store operation claimer. "Minus the crypto" (D6) is most of the code, not a thin
+layer. Decisive for the design: `handleTakeControl` acquires the ordinary attach lease
+via `srv.attach` — one lease pool, generation bump. Any lease-based local control
+session, TTL'd or not, therefore supersedes an attached human, which is the exact defect
+the rejected "simple lease-steal" alternative was rejected for.
+
+### A2. D6 refined: `send_input`, an owner-tier one-shot daemon-mediated write
+
+`swarm send <session> (--text s [--no-submit] | --key enter|esc|ctrl-c|up|down|tab)`
+uses a NEW owner-tier op `send_input`. The handler does not take or touch the attach
+lease. The daemon writes the message to the shim through the same `SessionStream.Input`
+funnel every lease write uses, serialized against concurrent lease input so the whole
+message is atomic, applying the frozen r3p discipline daemon-side:
+
+- maximal-run framing — a PTY write is all submit bytes (CR/LF) or all non-submit bytes,
+  never mixed (extracted from `internal/phonecore/coalesce.go` into a shared package);
+- a ~150ms gap before a submit-only frame relative to the preceding text frame
+  (`internal/remotegw/lease.go` semantics), slept daemon-side — never in the shim, whose
+  `ptyWriter` lock is shared with the VT emulator's DSR/CPR reply pump.
+
+Invariant S2 (single-controller) keeps its intent — at most one interactive controller,
+stale generations write nothing — and gains a sentence: the daemon itself may perform
+serialized one-shot message writes (`send_input`); the shim still has exactly one input
+connection (the daemon), through which all writes serialize. An attached human watching
+the child sees the injected message appear before submission — transparency by
+construction. `send_input` is refused on the remote socket; the remote tier keeps its
+own full lane. The TUI trigger in D3 becomes a caller of this same op, making "two
+triggers, one code path" literal.
+
+### A3. D5 refined: `peek` is a gating relaxation, not a port
+
+`swarm peek <session> [--lines N]` reuses the merged `terminal_snapshot` server
+rendering (sanitized text, no escapes). The change is authorization only: owner-tier
+connections on the main socket may request it without the remote preconditions (device
+auth, kill switch). The remote path keeps its full gate.
+
+### A4. Verb surface additions
+
+`swarm kill <session>` (existing `OpKill`, one-line wrapper) and `swarm ls --json`
+exposing the full `SessionView` (raw status dims, server-derived group, last activity,
+summary). `swarm watch <session> [--until needs_input|ready_for_review|completed|change]
+[--timeout d]` filters the `OpSubscribe` stream and exits with the matching
+`SessionView` on stdout (distinct exit code on timeout). `swarm spawn` additionally
+accepts `--prompt <text>` (inline instructions) as the lightweight alternative to
+`--handoff <file>`; with `--handoff`, the initial prompt is a one-line pointer telling
+the child to read the file, so instructions never travel as argv.
+
+### A5. D8 re-phased (the worktree dependency is gone)
+
+- Phase 0 — groundwork: fix the launch-form worktree regression (`submitLaunch` drops
+  the toggle — found in this audit), extract the shared submit-boundary framing package
+  with the r3p test vectors.
+- Phase 1 — read verbs, zero protocol changes: `ls --json`, `watch`, `kill`.
+- Phase 2 — `spawn` + lineage metadata end-to-end + roster badge.
+- Phase 3 — `send_input` op + owner-tier `peek`, their `protocol.md` rows (GG-7), and
+  the S2 wording amendment, in one slice.
+- Phase 4 — `swarm agents install` (slash commands + usage doc) and the TUI trigger.
+
+Phases are independently shippable; TDD failing-first evidence per GG-5 throughout.
