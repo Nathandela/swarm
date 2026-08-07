@@ -331,7 +331,7 @@ internal object KitMetrics {
     const val KEY_LIGHT_DP = 1f
 
     /** origin: --p-card-fx alpha */
-    const val KEY_LIGHT_ALPHA = 0.045f
+    const val KEY_LIGHT_ALPHA = 0.10f
 
     /** origin: --p-workbar stop */
     const val WORKBAR_FADE_STOP = 0.85f
@@ -429,7 +429,7 @@ internal object KitMetrics {
      *
      * origin: --p-cta-fx alpha
      */
-    const val CTA_BLOOM_ALPHA = 0.20f
+    const val CTA_BLOOM_ALPHA = 0.22f
 
     /**
      * The scanner reticle's square: the size the code should look in the shot.

@@ -38,9 +38,9 @@ object SwarmTheme {
      * value, which is what stops this becoming a third copy of the palette again.
      */
     val EXPECTED_DARK_COLORS: IntArray = intArrayOf(
-        0xFF08090A.toInt(), // android:colorBackground   <- --p-bg
-        0xFFF7F8F8.toInt(), // android:textColorPrimary  <- --p-ink
-        0xFF8A8F98.toInt(), // android:textColorSecondary <- --p-ink2
+        0xFF0E0B08.toInt(), // android:colorBackground   <- --p-bg
+        0xFFF6F3EC.toInt(), // android:textColorPrimary  <- --p-ink
+        0xFFA69D8E.toInt(), // android:textColorSecondary <- --p-ink2
     )
 
     /** Pins the delegate's night mode. Called from [dev.swarm.phone.SwarmApplication]. */

@@ -3445,8 +3445,18 @@ func TestPBDS7_TheMetricJoinCanActuallyFail(t *testing.T) {
 		part  string
 		want  float64
 	}{
+		// AUTHORIZED VALUE MIGRATION, ADR-009 O2. These four are the reader's KNOWN ANSWERS,
+		// re-read out of the origin so the control still contradicts a reader that returned a
+		// constant. The alpha row said 0.045 until ADR-009 D3 strengthened and warmed the
+		// key-light to `inset 0 1px 0 rgba(246,243,236,0.10)`:
+		//
+		//	{"--p-card-fx", "alpha", 0.045},
+		//
+		// The other three did not move, and that is the useful part: --p-tabbg's alpha and
+		// --p-workbar's stop are unchanged by a skin that repainted both of their colours, so a
+		// reader that had started returning whatever it was handed would show up here.
 		{"--p-card-fx", "px", 1},
-		{"--p-card-fx", "alpha", 0.045},
+		{"--p-card-fx", "alpha", 0.10},
 		{"--p-tabbg", "alpha", 0.88},
 		{"--p-workbar", "stop", 0.85},
 	} {

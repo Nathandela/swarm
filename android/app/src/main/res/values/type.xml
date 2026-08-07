@@ -52,8 +52,19 @@
       FAMILIES ARE THE PLATFORM'S (ADR-007 B134 decision 2). The design names SF Pro and SF Mono;
       neither is licensable off Apple, so every style in this app has always rendered a substitute
       chosen by nobody. The decision is `sans-serif` and `monospace` with zero bundled assets.
-      Weight 650 is reachable because android:textFontWeight resolves against the platform's
-      variable Roboto at API 33, which minSdk guarantees.
+      Every weight here is reachable because android:textFontWeight resolves against the
+      platform's variable Roboto at API 33, which minSdk guarantees.
+
+      ADR-009 (O2) MOVED FOUR STYLES AND NOBODY TYPED A NUMBER TO DO IT. The two display styles
+      lost 150 units of weight (650 to 500) and the four tracking values that cite a token
+      changed sign (body tracking goes POSITIVE on light-on-dark text, per the reading-ergonomics
+      guidance the ADR cites). Both facts arrived the only way this file accepts a number: the
+      CSS rules those styles cite state their weight and tracking as `var(p-display-wt)` and
+      `var(p-body-tr)` (leading dashes elided, as everywhere else in this file), the gate
+      resolves those vars through internal/design/tokens.json, and this file had to follow or
+      fail. The styles whose CSS states a literal weight, 600 on a row title and 400 on a
+      message, did not move, because the design did not move them. That is the difference
+      between a skin change and a find-and-replace.
 
       THE RECORDED RESIDUAL IS NOT WHAT THE ADR SAYS IT IS. B134 records that `monospace` may show
       TOFU for U+2500-257F. Measured (MonoBoxDrawingTest), the box-drawing glyphs all resolve -
@@ -90,16 +101,16 @@
     <!-- origin: .pnav .big -->
     <style name="TextAppearance.Swarm.Display.NavTitle" parent="TextAppearance.AppCompat">
         <item name="android:textSize">27sp</item>
-        <item name="android:textFontWeight">650</item>
-        <item name="android:letterSpacing">-0.025</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">-0.015</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
     <!-- origin: .sheet2 h4 -->
     <style name="TextAppearance.Swarm.Title.Sheet" parent="TextAppearance.AppCompat">
         <item name="android:textSize">15.5sp</item>
-        <item name="android:textFontWeight">650</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
@@ -107,7 +118,7 @@
     <style name="TextAppearance.Swarm.Title.Row" parent="TextAppearance.AppCompat">
         <item name="android:textSize">14sp</item>
         <item name="android:textFontWeight">600</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
@@ -132,7 +143,7 @@
     <style name="TextAppearance.Swarm.Body.Message" parent="TextAppearance.AppCompat">
         <item name="android:textSize">12.5sp</item>
         <item name="android:textFontWeight">400</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:lineHeight">18.125sp</item>
     </style>
