@@ -113,6 +113,18 @@ class PairedMachineRowTest {
         )
     }
 
+    /**
+     * agents-tracker-ksvb.6: shortened once more, and the fact that must survive the shortening
+     * is the ORDER -- the current pairing ends before the new one starts.
+     */
+    @Test
+    fun `the sublabel is the shortened form, with the ordering fact intact`() {
+        assertEquals(
+            "Ends this pairing first, then re-pairs.",
+            PairedMachineRowScreen.of("nathans-mbp").sublabel,
+        )
+    }
+
     // ---- the confirmation ----------------------------------------------------
     //
     // FAILING-FIRST (TDD RED, GG-5) for agents-tracker-mrq5. `Replace this computer` deregisters
