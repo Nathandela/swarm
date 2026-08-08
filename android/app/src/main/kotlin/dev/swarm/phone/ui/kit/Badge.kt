@@ -47,6 +47,16 @@ fun badge(context: Context, count: Int, description: CharSequence?): TextView =
             Kit.dimenPx(context, R.dimen.swarm_space_6),
             Kit.dimenPx(context, R.dimen.swarm_space_2),
         )
+        // THE PILL IS AT LEAST AS WIDE AS IT IS TALL, and that is a fact about being ANCHORED
+        // rather than a shape somebody liked. The badge hangs off the Inbox tab's glyph at
+        // `END or TOP` with a negative margin, so it grows LEFTWARD across the icon it is pinned
+        // to -- and a box sized to its text alone is a different width for every count. The ninth
+        // session arriving turned a narrow lozenge into a wide one and moved the mark against the
+        // glyph underneath. One digit in a square is the box row 3 draws.
+        //
+        // A FLOOR AND NOT A FIXED WIDTH: two digits and `99+` still have to fit, and a fixed box
+        // would clip the count this component exists to show.
+        minimumWidth = Kit.dpPx(context, KitMetrics.BADGE_HEIGHT_DP)
         layoutParams = LinearLayout.LayoutParams(
             WRAP,
             Kit.dpPx(context, KitMetrics.BADGE_HEIGHT_DP),

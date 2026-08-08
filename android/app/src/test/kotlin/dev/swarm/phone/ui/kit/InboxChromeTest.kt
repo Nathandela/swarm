@@ -484,6 +484,32 @@ class InboxChromeTest {
     }
 
     /**
+     * agents-tracker-ksvb.3: the pill has a floor, and the floor is its own height.
+     *
+     * THE BADGE IS ANCHORED, WHICH IS WHY ITS WIDTH IS NOT ITS OWN BUSINESS. It hangs off the
+     * Inbox tab's icon at `Gravity.END or Gravity.TOP` with a negative `marginEnd`, so it grows
+     * LEFTWARD across the glyph it is pinned to. A box sized to its text alone is a different
+     * width for every count -- a one-digit badge is a narrow lozenge and the ninth session
+     * arriving turns it into a wide one, moving the mark against the icon underneath. A minimum
+     * equal to the 16 dp height makes one digit sit in a square, which is the box row 3 draws.
+     *
+     * IT IS `minimumWidth` RATHER THAN A FIXED WIDTH, because two digits and `99+` still have to
+     * fit: a fixed box would clip the count this component exists to show.
+     */
+    @Test
+    fun `the badge's pill is at least as wide as it is tall`() {
+        val badge = badge(context, 9, "9 sessions need you")
+
+        assertEquals(
+            "the badge has no width floor, so a one-digit count draws a narrower pill than a " +
+                "two-digit one and the mark shifts against the icon it is anchored to when the " +
+                "ninth session arrives",
+            badge.layoutParams.height,
+            badge.minimumWidth,
+        )
+    }
+
+    /**
      * THE BADGE IS NEVER SILENCED, which is what `?: ""` did.
      *
      * The tab bar filled a missing description with the empty string. A non-null content
