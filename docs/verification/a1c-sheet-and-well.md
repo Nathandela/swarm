@@ -487,6 +487,59 @@ assertions can pass vacuously. `kitRequire(TranscriptTag.APPROVAL)` throws when 
 `var` initialised to `null`, so a listener that is never called leaves it null. That rules out the
 vacuous-pass class. It does not replace watching each one fail for its own reason.
 
+#### 5.2.1 The run was taken. RESOLVED — recorded by A-TRANSCRIPT, 2026-08-08
+
+The three prepared controls were applied and run by the neighbouring workpackage once the lane was
+free and the tree was clean at `f81975f`. **The clean tree is what made it safe**, and it is the
+condition this section should have named rather than "the lane is free": with every path committed,
+`git checkout --` is a byte-exact revert that needs no discipline to get right, so the perturbation
+cannot outlive the run even if the run is killed. The script reverted from a shell `trap ... EXIT`
+for that reason, and the trap was exercised for real — the first attempt died on `exit 127` (the
+wrapper is `android/gradlew`, not `./gradlew` from the repo root) and reverted anyway.
+
+Applied together, one line each:
+
+| Perturbation | Site |
+|---|---|
+| `transcript = transcript` → `transcript = transcript.copy()` | `SessionDetailPanel.kt:250` |
+| `leaseNoticeFor(lease.showsRelease, verdict)` → `leaseNoticeFor(lease.showsRelease)` | `SessionDetailPanel.kt:254` |
+| `transcriptView(context, panel.transcript, onApproval)` → `…, null)` | `SessionDetailView.kt:223` |
+
+```
+SessionDetailPanelTest       > the conversation the screen is handed is the conversation it carries          FAILED
+SessionDetailViewTest        > an approval block tapped on this screen reaches the caller with its item id    FAILED
+SessionDetailLeaseVerdictTest> a refused take control says the machine refused it, in the machine's own words FAILED
+SessionDetailLeaseVerdictTest> a severed lease is reported as ended and not as a refusal                      FAILED
+
+SessionDetailPanelTest.xml        tests="8"  failures="1"
+SessionDetailViewTest.xml         tests="14" failures="1"
+SessionDetailLeaseVerdictTest.xml tests="5"  failures="2"
+```
+
+Reverted, then the same three suites re-run on the restored tree: **27 tests, 0 failures**,
+`git status` clean at the same `f81975f`. Same suites, same counts, four failures and zero — so the
+failures are the perturbations and nothing else.
+
+**Three perturbations produced FOUR failures, and the extra one is the useful part.** Dropping
+`verdict` collapses two distinct branches at once — `verdict.result == ENDED` and `verdict.refused`
+— and the suite reports them separately, in the words that make them different remedies: *"the
+screen dropped the machine's reason for refusing control, so the user is left to guess between a
+kill switch, a revoked device and a policy"*, and *"PB-INPUT-2: a lease that died is not visibly
+reported at all, so the phone types into a void with the keyboard shut and no sentence saying why"*.
+A single failure there would have meant the two clauses were not independently asserted.
+
+The pass-through control is the one that reads as pedantic and is not: its message is *"the session
+detail rebuilt the transcript it was handed, so the conversation on this screen is a second fold of
+the same items — and only one of the two is the one `TranscriptScreen` decided"*. `.copy()` produces
+an EQUAL object, so an `assertEquals` would have stayed green through it. `assertSame` is doing the
+work.
+
+**What this closes and what it does not.** GG-5 asks for a failing-first run, and this is not that —
+it is a failing-after run, which demonstrates that the assertions BITE but not that they were
+written before the code. For the three ADDED assertions the distinction is real and §5.2 above
+should keep saying so. What is now gone is the weaker worry, that nine green-on-first-execution
+assertions might be green because they check nothing.
+
 ---
 
 ## 6. What is NOT verified here, stated plainly
