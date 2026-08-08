@@ -70,7 +70,21 @@ type Record struct {
 	// ""), and a build predating the field reads records carrying one (encoding/json
 	// ignores the unknown key). A bump would instead make every older daemon reject every
 	// record this build writes, costing them the whole journal to gain nothing.
-	Agent   string          `json:"agent,omitempty"`
+	Agent string `json:"agent,omitempty"`
+	// Name is the session's USER-GIVEN label (persist.Meta.Name), so the phone can head a row
+	// with what a person called the session instead of the 16-char random local id. It is set
+	// at exactly the sites Agent is -- the roster snapshot and all four journalworthy
+	// transitions -- and the `deleted` record deliberately carries none, for Agent's reason: a
+	// tombstone REMOVES the session, and a label on it would describe nothing.
+	//
+	// It is omitempty and its ABSENCE IS MEANINGFUL, again as Agent's: most sessions are never
+	// labelled, so an empty name means the user gave none. The phone falls back to the id
+	// (mobile/app.go's session()); nothing anywhere may substitute a plausible label for a
+	// missing one.
+	//
+	// Adding it did NOT bump SchemaVersion, and internal/journal/namefield_test.go pins why in
+	// both directions, exactly as agentfield_test.go did for Agent.
+	Name    string          `json:"name,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"` // opaque per-type extra
 }
 

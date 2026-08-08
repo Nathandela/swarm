@@ -503,7 +503,9 @@ var _ protocol.JournalBackend = (*coreAPI)(nil)
 // toWireJournalRecord converts a daemon-internal journal.Record to the wire-facing
 // protocol.JournalRecord (only the fields the phone needs; the opaque payload and
 // schema/ts are not carried on the wire). Agent IS one of those fields: the session
-// row renders it, and this conversion is the only place it can cross.
+// row renders it, and this conversion is the only place it can cross. Name is the
+// second: the session's user-given label heads the row the agent identity annotates,
+// and it crosses here for the same reason and by the same rule.
 func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 	return protocol.JournalRecord{
 		Cursor:    r.Cursor,
@@ -511,6 +513,7 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 		Type:      string(r.Type),
 		Group:     r.Group,
 		Agent:     r.Agent,
+		Name:      r.Name,
 	}
 }
 

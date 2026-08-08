@@ -839,9 +839,25 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 	a.mu.Lock()
 	need := a.needs[cs.SessionID]
 	a.mu.Unlock()
+	// THE USER'S OWN LABEL FIRST, the id only when there is none (agents-tracker-ksvb.1).
+	//
+	// The id arm below is what every session rendered as before the wire carried a name, and it
+	// is kept EXACTLY: a 16-char random base32 local part, or the whole id when it names no
+	// machine. A daemon predating schema.JournalRecord.Name sends no name, so it still lands
+	// here and still renders what it rendered yesterday -- which is the whole compatibility
+	// claim, and mobile/namefacade_test.go is where it is asserted.
+	//
+	// AN EMPTY NAME IS NOT A LABEL TO IMPROVE ON. persist.Meta.Name's own comment says "" falls
+	// back to AgentType at display time, and that is the TUI's fallback, not this one: the
+	// agent type names the CLI, not the session, so two claude sessions would head identical
+	// rows on a triage screen whose whole job is telling them apart. The id is unique and
+	// honest; a shared word is neither (ADR-007 B135).
 	title := cs.SessionID
 	if _, local, ok := strings.Cut(cs.SessionID, "/"); ok {
 		title = local
+	}
+	if cs.Name != "" {
+		title = cs.Name
 	}
 	return Session{
 		ID:      cs.SessionID,
