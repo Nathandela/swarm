@@ -268,6 +268,34 @@ object PairingFlow {
     fun offersManualEntry(state: ScannerState): Boolean = true
 
     /**
+     * What the screen says when the camera never opened (agents-tracker-ksvb.5).
+     *
+     * **IT REPLACES THE RESERVED UNKNOWN ROW.** `PairingSurface.scanFailed` handed the CameraX
+     * failure to `ErrorRouter.route(failure.message.orEmpty())`, and that router keys on the class
+     * token the Go facade stamps -- which an `IllegalArgumentException` out of
+     * `CameraSelector.select` does not carry. So the most-used screen in the product answered a
+     * failure it recognises by name with "Something failed in a way the app does not recognise.
+     * Try again, and report it if it keeps happening." Every clause of that is wrong here:
+     * `QrScanner.failToStart` catches this case deliberately and documents it, "try again" is the
+     * one act that cannot help while another app holds the camera, and the row is RESERVED for
+     * messages the facade did not produce -- spending it on a known failure turns the taxonomy's
+     * one honest "I do not know" into a bucket.
+     *
+     * **THE TWO ACTS ARE BOTH THERE BECAUSE ONLY ONE OF THEM IS THE USER'S TO JUDGE.** A camera
+     * held by another app is fixed by closing it; a camera CameraX refuses for a reason this side
+     * cannot resolve is not fixed at all, and for that person the typed path is the whole way
+     * forward. [offersManualEntry] answers true unconditionally for the same reason
+     * (agents-tracker-qun0), so the door this sentence points at is always open.
+     *
+     * IT IS A VALUE ON THIS OBJECT AND NOT A LITERAL IN THE SURFACE, which is `hasCameraHardware`'s
+     * arrangement (agents-tracker-nz9h): `PairingSurface` is reachable only once the gomobile AAR
+     * has loaded, which this module's unit-test JVM cannot do, so a sentence written there has no
+     * seam any test can reach.
+     */
+    const val CAMERA_DID_NOT_START: String = "The camera did not start. Close any other app " +
+        "using it and try again, or enter the code instead."
+
+    /**
      * Only a permanent denial. An ordinary one is re-askable, and Settings is a detour.
      *
      * [ScannerState.NO_CAMERA] IS EXCLUDED ON PURPOSE (agents-tracker-nz9h): nothing in Settings

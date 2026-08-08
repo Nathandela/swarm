@@ -619,12 +619,25 @@ class PairingSurface(
 
     /**
      * A camera that started binding and then failed -- no available camera, a lifecycle already
-     * gone, anything CameraX itself refuses -- routed to the same outcome line every other
+     * gone, anything CameraX itself refuses -- written to the same outcome line every other
      * pairing failure reaches instead of crashing the app (agents-tracker-nz9h).
+     *
+     * IT IS AUTHORED COPY AND NOT A ROUTED MESSAGE (agents-tracker-ksvb.5). [routed] reads the
+     * class token the Go facade stamps onto its own errors, and this failure comes from CameraX:
+     * it carries no token, so it landed on the RESERVED unknown row -- "Something failed in a way
+     * the app does not recognise" -- on the screen every user of this product meets first. The
+     * app recognises it exactly: `QrScanner.failToStart` catches it by name. What was missing was
+     * a sentence, and [PairingFlow.CAMERA_DID_NOT_START] is where it lives, for the reason its own
+     * KDoc gives.
+     *
+     * The parameter stays. Nothing is read off it any more, and it is what makes this a handler
+     * for THIS failure rather than a state the screen enters on its own -- `QrScanner.onError`
+     * hands over the exception it caught, and a signature that dropped it would let any caller
+     * post the camera's sentence over a camera that is running.
      */
     private fun scanFailed(failure: Exception) {
         stopScanning()
-        outcome.text = routed(failure)
+        outcome.text = PairingFlow.CAMERA_DID_NOT_START
         render()
     }
 
