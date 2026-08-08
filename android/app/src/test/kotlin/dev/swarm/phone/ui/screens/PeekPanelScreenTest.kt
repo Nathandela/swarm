@@ -164,8 +164,18 @@ class PeekPanelScreenTest {
         )
     }
 
+    /**
+     * agents-tracker-ksvb.6: a confirmed lease is now SILENT -- "healthy is silent", the pattern
+     * every other conditional notice in this app already follows -- rather than a sentence
+     * confirming what the user is already free to do. Unconfirmed shrinks to one line.
+     *
+     * THIS REPLACES `the two lease sentences go with the two lease states and not the other way
+     * round`, which asserted `held.contains("confirmed you have control")` and
+     * `notHeld.contains("Take control first")` -- both true only while the confirmed state still
+     * spent a sentence and the unconfirmed one still ended that way.
+     */
     @Test
-    fun `the two lease sentences go with the two lease states and not the other way round`() {
+    fun `the confirmed lease is silent, and the unconfirmed one is a one-line prompt`() {
         val held = PeekPanelScreen.of(peek(leaseHeld = true)).leaseNotice
         val notHeld = PeekPanelScreen.of(peek(leaseHeld = false)).leaseNotice
 
@@ -177,13 +187,14 @@ class PeekPanelScreenTest {
             held != notHeld,
         )
         assertTrue(
-            "the confirmed sentence does not say what it confirms",
-            held.contains("confirmed you have control"),
+            "a confirmed lease renders a sentence where healthy is meant to be silent, the same " +
+                "call this app makes for every other notice with nothing wrong to report",
+            held.isEmpty(),
         )
         assertTrue(
-            "the unconfirmed sentence does not say what to do about it, which leaves a shut " +
+            "the unconfirmed line does not say what to do about it, which leaves a shut " +
                 "keyboard with no reason beside it",
-            notHeld.contains("Take control first"),
+            notHeld.contains("take control", ignoreCase = true),
         )
     }
 

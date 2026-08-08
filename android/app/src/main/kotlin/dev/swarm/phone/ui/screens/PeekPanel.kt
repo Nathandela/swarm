@@ -84,21 +84,22 @@ object PeekPanelScreen {
     private const val NOTE = "Read-only · escape-filtered VT snapshot"
 
     /**
-     * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because a
-     * shut keyboard with no reason beside it is the invisible suppression the requirement is
-     * against.
+     * PB-INPUT-2's "visibly", for the two states this app renders as themselves rather than as a
+     * transition.
      *
-     * THEY MOVED HERE FROM `PhoneSurface`'s COMPANION OBJECT, which is where the copy of a screen
-     * had been living. PB-DS-9 assigns copy to the screen; nothing else about them changed, and
-     * `PhoneSurfaceControlsTest` and the instrumented smoke read them by value.
+     * CONFIRMED IS SILENT (agents-tracker-ksvb.6): it used to spend a full sentence saying
+     * control is granted, unconditionally, on the one screen where typing is the whole point --
+     * the app's only UNGATED notice, printed over the state where nothing needs saying. That is
+     * the "healthy is silent" pattern every other conditional notice in this app already follows;
+     * the lease sentence is not exempt from it for being the one PB-INPUT-2 names by name.
+     *
+     * NOT CONFIRMED IS ONE LINE. It still says what to do -- a shut keyboard with no reason
+     * beside it is the invisible suppression the requirement is against -- in the fewest words
+     * that say it.
      */
-    private const val LEASE_CONFIRMED =
-        "Your machine has confirmed you have control of this session, so what you type is " +
-            "sent live."
+    private const val LEASE_CONFIRMED = ""
 
-    private const val LEASE_NOT_CONFIRMED =
-        "Your machine has not confirmed control of this session, so the keyboard stays shut " +
-            "-- anything typed would be dropped without a word. Take control first."
+    private const val LEASE_NOT_CONFIRMED = "Read-only -- take control to type."
 
     /**
      * The two sentences a REFUSAL and a SEVERANCE get instead (agents-tracker-qlf9).

@@ -143,7 +143,13 @@ fun peekPanelView(
     // then hid it would be the second, contradictable statement PB-DS-9 fences against.
     if (panel.offersTakeControl) column.addView(takeControl.tagged(PeekTag.TAKE_CONTROL))
 
-    column.addView(readOnlyNote(context, panel.leaseNotice).apply { tag = PeekTag.LEASE })
+    // AGENTS-TRACKER-KSVB.6: A CONFIRMED LEASE PRINTS NOTHING, the same call [staleNotice]
+    // above already makes -- a blank note drawn over a healthy state is a warning nobody wrote.
+    // The refusal and severance sentences this field also carries are transitions, not a healthy
+    // resting state, so they still draw.
+    if (panel.leaseNotice.isNotEmpty()) {
+        column.addView(readOnlyNote(context, panel.leaseNotice).apply { tag = PeekTag.LEASE })
+    }
 
     below?.let { column.addView(it) }
     return column

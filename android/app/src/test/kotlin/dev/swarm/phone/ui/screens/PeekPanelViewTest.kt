@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -269,20 +270,29 @@ class PeekPanelViewTest {
 
     // ---- the lease sentence -------------------------------------------------
 
+    /**
+     * NOT HELD still puts the model's sentence on screen; HELD now puts nothing there at all
+     * (agents-tracker-ksvb.6 -- a confirmed lease is silent, the same call [staleNotice] already
+     * makes). This replaces a version of this test that ran `kitRequire(PeekTag.LEASE)`
+     * unconditionally over both states, which throws once HELD draws no such view.
+     */
     @Test
     fun `the lease sentence on screen is the one the model chose for that state`() {
-        listOf(true, false).forEach { held ->
-            val panel = PeekPanelScreen.of(peek(leaseHeld = held))
-            assertEquals(
-                panel.leaseNotice,
-                textOf(view(panel).kitRequire(PeekTag.LEASE)),
-            )
-        }
-        assertTrue(
+        val notHeld = PeekPanelScreen.of(peek(leaseHeld = false))
+        assertEquals(notHeld.leaseNotice, textOf(view(notHeld).kitRequire(PeekTag.LEASE)))
+
+        val held = PeekPanelScreen.of(peek(leaseHeld = true))
+        assertTrue("a confirmed lease has nothing left to print", held.leaseNotice.isEmpty())
+        assertNull(
+            "a confirmed lease drew a note anyway, which is a blank line nobody wrote -- the " +
+                "same call this file already makes for a fresh snapshot's stale notice",
+            view(held).kitFind(PeekTag.LEASE),
+        )
+        assertNotEquals(
             "the two lease states put the same sentence on screen, which is the state PB-INPUT-2 " +
                 "was recorded NOT MET in -- a user could not tell until a keystroke vanished",
-            textOf(view(PeekPanelScreen.of(peek(leaseHeld = true))).kitRequire(PeekTag.LEASE)) !=
-                textOf(view(PeekPanelScreen.of(peek(leaseHeld = false))).kitRequire(PeekTag.LEASE)),
+            notHeld.leaseNotice,
+            held.leaseNotice,
         )
     }
 
