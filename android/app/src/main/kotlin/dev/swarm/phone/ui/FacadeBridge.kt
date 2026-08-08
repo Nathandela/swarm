@@ -122,10 +122,29 @@ class FacadeBridge(private val app: App) {
      *  guessing at a fact the reply already carries.
      */
     fun terminalPeek(sessionId: String, leaseHeld: Boolean): TerminalPeek = try {
-        peekOf(app.peek(sessionId), leaseHeld = leaseHeld, online = isOnline())
+        peekOf(app.peek(sessionId), sessionTitle(sessionId), leaseHeld = leaseHeld, online = isOnline())
     } catch (refused: Exception) {
         if (!isAwaitingFirstFrame(classOf(refused))) throw refused
-        noFrameYet(sessionId, leaseHeld = leaseHeld, online = isOnline())
+        noFrameYet(sessionId, sessionTitle(sessionId), leaseHeld = leaseHeld, online = isOnline())
+    }
+
+    /**
+     * What a person calls one session -- `swarmmobile.Session.Title` -- or empty where the roster
+     * cannot answer for it (agents-tracker-ksvb.1).
+     *
+     * GUARDED, for the reason `terminalPeek` above is guarded and `PhoneSurface.inboxScreen` after
+     * it: `App.Session` REFUSES an id the cached roster does not hold, and a peek or a drill-down
+     * on a session that has just left the roster is an ordinary race rather than a failure. What a
+     * refusal costs here is a label, and the screens fall back to the id -- so propagating it would
+     * kill a surface over a nicety.
+     *
+     * EMPTY IS NEVER A NAME. It is "this phone could not read one", and every caller renders the
+     * id instead, which is what all of them rendered before this method existed.
+     */
+    fun sessionTitle(sessionId: String): String = try {
+        app.session(sessionId).getTitle()
+    } catch (unknown: Exception) {
+        ""
     }
 
     /**
@@ -157,6 +176,44 @@ class FacadeBridge(private val app: App) {
      */
     fun machineFreshness(): MachineFreshness = app.machineFreshness().let {
         MachineFreshness(silent = it.getSilent(), lastHeardUnixMs = it.getLastHeardUnixMs())
+    }
+
+    /**
+     * What the MACHINE calls itself (agents-tracker-ksvb.1): `App.MachineName`, the hostname it
+     * published in the pairing payload, or empty where it published none.
+     *
+     * IT IS SAFE FROM A RENDER, which is the question android/unbound-verbs.tsv makes anyone ask
+     * of a verb reached from a draw. `App.Presence` is barred here because it is a blocking relay
+     * round-trip at a 10 s call timeout; this reads durable state behind a mutex, the same class
+     * as `App.ClockVerdict` and `App.StreamState`, which `LinkPanel` already renders on this
+     * argument.
+     *
+     * IT IS NOT LABELLED HERE. `MachineLabel.of` is where the name and the endpoint id become one
+     * string a person reads, and doing it at this seam would put a display decision in the
+     * adapter that "decides no policy".
+     */
+    fun machineName(): String = app.machineName()
+
+    /**
+     * The machines this phone can NAME, keyed by the endpoint id the roster namespaces their
+     * sessions under (agents-tracker-ksvb.1). The inbox's scope chips read it.
+     *
+     * IT HAS AT MOST ONE ENTRY AND IS STILL A MAP. Pairing is to one machine and no facade verb
+     * enumerates them -- `MachinesPanel` states the same fact about its own single row -- but the
+     * ROSTER is namespaced per machine, so a chip bar that assumed one would label another
+     * machine's sessions with this machine's name. A lookup that misses is the honest shape: the
+     * chip renders its endpoint id.
+     *
+     * EMPTY WHERE THERE IS NOTHING TO SAY, and that covers every degenerate case in one place: no
+     * pairing, a machine that published no hostname, or a state this phone cannot read. All three
+     * leave the chips exactly as they were before this method existed.
+     */
+    fun machineNames(): Map<String, String> = try {
+        val endpoint = app.stateSummary().takeIf { it.paired }?.machine.orEmpty()
+        val name = app.machineName()
+        if (endpoint.isEmpty() || name.isEmpty()) emptyMap() else mapOf(endpoint to name)
+    } catch (unreadable: Exception) {
+        emptyMap()
     }
 
     /**
@@ -252,8 +309,9 @@ class FacadeBridge(private val app: App) {
     )
 
     /** The text crosses verbatim. There is no renderer on this side to put between them. */
-    private fun peekOf(snapshot: Snapshot, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
+    private fun peekOf(snapshot: Snapshot, title: String, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
         sessionId = snapshot.getSessionID(),
+        title = title,
         text = snapshot.getText(),
         cols = snapshot.getCols().toInt(),
         rows = snapshot.getRows().toInt(),
@@ -315,8 +373,13 @@ class FacadeBridge(private val app: App) {
          * view that exists and has stopped being refreshed. The lease and the link are the caller's
          * facts and cross unchanged.
          */
-        fun noFrameYet(sessionId: String, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
+        // `title` is DEFAULTED here and required at no other seam: the production caller passes
+        // the session's own name, and a suite whose subject is "what does the empty grid claim"
+        // has nothing to say about the label. Empty is "nobody said" and the header then renders
+        // the id -- exactly what it rendered before this parameter existed.
+        fun noFrameYet(sessionId: String, title: String = "", leaseHeld: Boolean, online: Boolean) = TerminalPeek(
             sessionId = sessionId,
+            title = title,
             text = "",
             cols = 0,
             rows = 0,

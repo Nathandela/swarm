@@ -27,6 +27,7 @@ import dev.swarm.phone.runtime.PermissionState
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.FacadeBridge
+import dev.swarm.phone.ui.MachineLabel
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushSync
@@ -580,8 +581,29 @@ class SettingsSurface(
      */
     private fun machineOf(app: App): String? = try {
         app.stateSummary().takeIf { it.paired }?.machine?.takeIf { it.isNotEmpty() }
+            // THE MACHINE'S OWN NAME WHERE IT PUBLISHED ONE (agents-tracker-ksvb.1). This row and
+            // the destructive `Replace <machine>?` question under it are the two places a person
+            // is asked to recognise their computer, and `ep-` plus four bytes of a hash is not
+            // something anyone recognises. `MachineLabel.of` keeps the id as the fallback, so a
+            // machine that published no hostname reads exactly as it did before.
+            //
+            // WHAT IS PINNED IS STILL THE ID. The endpoint id above is what decides whether there
+            // IS a pairing to offer a replace over; the name only changes the word. A name read
+            // where the id was empty would put a Replace control over no pairing at all.
+            ?.let { MachineLabel.of(machineNameOf(app), it) }
     } catch (unreadable: Exception) {
         null
+    }
+
+    /**
+     * `App.MachineName`, guarded on its own so an unreadable name cannot take the PAIRING down
+     * with it: [machineOf]'s answer is what decides whether the Replace control exists at all, and
+     * that question is the endpoint id's. Empty falls back to the id.
+     */
+    private fun machineNameOf(app: App): String = try {
+        app.machineName()
+    } catch (unreadable: Exception) {
+        ""
     }
 
     /**

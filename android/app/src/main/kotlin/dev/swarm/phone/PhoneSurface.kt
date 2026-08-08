@@ -1321,6 +1321,13 @@ class PhoneSurface(
             inbox = bridge.triageInbox(),
             scope = scope,
             selectedSession = chosen.takeIf { it.isNotEmpty() },
+            // WHAT THE MACHINE CALLS ITSELF, for the scope chips (agents-tracker-ksvb.1). This
+            // phone is paired to exactly one machine -- `App.MachineName` answers for that one and
+            // there is no verb that enumerates machines -- so the map has at most one entry, keyed
+            // by the endpoint id the roster namespaces sessions under. The chips still FILTER on
+            // the id; an entry only changes the word on the chip, and a machine the phone holds no
+            // name for keeps rendering its id.
+            machineNames = bridge.machineNames(),
         )
     } catch (refused: Exception) {
         outcome.text = bridge.routeFacadeError(refused.message.orEmpty()).message
@@ -1666,6 +1673,10 @@ class PhoneSurface(
         return SessionDetailScreen.of(
             SessionDetail(
                 sessionId = open,
+                // THE SESSION'S OWN NAME for the nav header (agents-tracker-ksvb.1). `open` stays
+                // the identity every control on this screen acts on; only what is READ changes,
+                // and an unreadable roster leaves this empty so the id renders as it did before.
+                title = bridge.sessionTitle(open),
                 journal = log.rows.filter { it.sessionId == open },
                 snapshotText = grid.text,
                 leaseHeld = lease,

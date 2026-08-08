@@ -139,7 +139,10 @@ object PeekPanelScreen {
     }
 
     fun of(peek: TerminalPeek, lease: CommandVerdict = CommandVerdict.UNANSWERED): PeekPanel = PeekPanel(
-        title = "${peek.sessionId} · ${peek.cols}x${peek.rows}",
+        // THE SESSION'S OWN NAME BEFORE THE GRID'S SHAPE, and the id only where there is no name
+        // (agents-tracker-ksvb.1). The `cols x rows` half is untouched: it is the fact this
+        // header carries that no other surface does.
+        title = "${peek.title.ifEmpty { peek.sessionId }} · ${peek.cols}x${peek.rows}",
         snapshot = peek.rendered,
         // THE GRID, WHICH THE TITLE ABOVE ALREADY SPENDS. `peek.rows` is what the daemon opened
         // the PTY at; the well takes it as a floor so the card stops resizing per frame.

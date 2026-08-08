@@ -195,6 +195,19 @@ object ActivityPanelScreen {
             // The SESSION, now that one reaches this screen. It is what the mock emphasises -- the
             // thing the row is about -- and it falls back to the Group only where the record
             // carries no session, so the eye still lands on a wire token rather than on a type.
+            //
+            // IT STAYS THE RAW SESSION ID, and that is agents-tracker-ksvb.1's explicit ruling
+            // rather than a site nobody got to. Every other surface in this app now prefers the
+            // human name -- the inbox row, both nav headers, the machine row, the scope chips, the
+            // settings pairing row -- and this one does not, because Activity is a MONO LOG: the
+            // machine's own register, read when something has gone wrong and one line has to be
+            // matched against a daemon log, a journal cursor or a signed command. Those all carry
+            // the id. A label here would make the one surface whose job is correlation the one
+            // surface that cannot be correlated.
+            //
+            // `JournalRow` also carries no title to prefer, and that is downstream of the same
+            // ruling rather than the reason for it: `swarmmobile.JournalEntry` is the wire's
+            // record shape, and a name on it would exist only to be ignored here.
             emphasis = session ?: group,
         )
     }

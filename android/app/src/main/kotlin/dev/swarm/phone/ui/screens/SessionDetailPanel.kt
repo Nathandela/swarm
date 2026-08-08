@@ -197,7 +197,10 @@ object SessionDetailScreen {
     private const val FIELD_SEPARATOR = " · "
 
     fun of(detail: SessionDetail): SessionDetailPanel = SessionDetailPanel(
-        title = detail.sessionId,
+        // THE SESSION'S OWN NAME, and the id only where there is none (agents-tracker-ksvb.1).
+        // The id keeps every other job it had on this screen -- it is what Stop, kill and
+        // take_control act on -- and loses only the one it was never good at: being read.
+        title = detail.title.ifEmpty { detail.sessionId },
         back = BACK,
         transcript = TranscriptSection(
             heading = TRANSCRIPT,

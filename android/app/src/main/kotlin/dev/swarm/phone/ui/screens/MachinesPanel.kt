@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.MachineLabel
 import dev.swarm.phone.ui.MachinePane
 import dev.swarm.phone.ui.kit.PresenceMark
 
@@ -73,11 +74,19 @@ data class MachinesPanel(
 /**
  * One machine: derivation row 11.
  *
- * THE `endpoint <id>` SLOT IS NOT HERE. Row 11 gives the row three text cells -- a name, a mono
- * `endpoint id` and a meta line -- and this product has ONE identifier for a machine, not two.
- * `MachinePane.machineId` IS the endpoint id (`machine-endpoint-0001` in the model's own test),
- * and rendering it twice would be a second copy of the name wearing the mock's label rather than
- * a second fact.
+ * THE `endpoint <id>` SLOT IS HERE AS OF agents-tracker-ksvb.1, AND THE REASON IT WAS NOT IS
+ * RECORDED RATHER THAN DELETED. This comment used to say row 11's mono cell had no source
+ * because "this product has ONE identifier for a machine, not two" -- `MachinePane.machineId` IS
+ * the endpoint id, so rendering it twice would have been a second copy of the name wearing the
+ * mock's label rather than a second fact. That was true and it stopped being true when the
+ * pairing payload's hostname started reaching the phone: there are now two facts about a machine,
+ * a NAME a person chose and an ID the software derived, and row 11's two cells are exactly the
+ * shape for them.
+ *
+ * THE OLD REASONING STILL GOVERNS THE UNNAMED CASE, which is why [MachineRow.endpoint] is
+ * nullable rather than always the id. A machine that published no name renders its id in the NAME
+ * cell -- [MachineLabel.of]'s fallback -- and an endpoint cell beside it would print the same
+ * string twice, one of them labelled as though it were something else.
  *
  * THE PARALLEL THIS COMMENT USED TO DRAW IS GONE, and the correction is recorded rather than
  * quietly dropped. It said [InboxRow.agent] was "the same cell in the same position and is empty
@@ -88,8 +97,22 @@ data class MachinesPanel(
  * unaffected -- it never rested on the parallel, only borrowed it.
  */
 data class MachineRow(
-    /** Row 11's `name`, `Title.Row` / `--p-ink`: the machine as this product names it. */
+    /**
+     * Row 11's `name`, `Title.Row` / `--p-ink`: the machine as this product names it -- which
+     * since agents-tracker-ksvb.1 means the name the MACHINE published, and the endpoint id only
+     * where it published none. [MachineLabel.of] makes that choice; this field is its answer.
+     */
     val name: String,
+    /**
+     * Row 11's mono `endpoint id` cell, or null where there is nothing a second cell could add.
+     *
+     * NULL IS NOT "NO ID". It is "the id is already in the name cell": a machine that published
+     * no hostname falls back to its endpoint id for [name], and repeating it here would print one
+     * string twice with the second copy labelled as a different fact. `ui/kit/MachineRow.kt`
+     * draws no cell at all for null rather than an empty one, which is the same rule its
+     * sublabel and the activity row's timestamp already follow.
+     */
+    val endpoint: String?,
     /**
      * Row 11's `meta` line -- [MachinePane.presenceExplanation], the pane's OWN sentence.
      *
@@ -265,7 +288,11 @@ object MachinesPanelScreen {
     fun of(pane: MachinePane, formatTime: (Long) -> String): MachinesPanel = MachinesPanel(
         title = TITLE,
         machine = MachineRow(
-            name = pane.machineId,
+            name = MachineLabel.of(pane.machineName, pane.machineId),
+            // THE ID KEEPS ITS OWN CELL, and only while the name cell is saying something else.
+            // See [MachineRow.endpoint]: this is a second FACT beside the name, never a second
+            // copy of it.
+            endpoint = pane.machineId.takeIf { pane.machineName.isNotEmpty() },
             presenceLine = pane.presenceExplanation(formatTime),
             mark = when (pane.presence) {
                 ONLINE -> PresenceMark.ONLINE

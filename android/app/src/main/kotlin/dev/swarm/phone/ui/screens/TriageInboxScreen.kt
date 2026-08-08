@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.MachineLabel
 import dev.swarm.phone.ui.TriageInbox
 
 /**
@@ -269,10 +270,19 @@ object TriageInboxScreen {
      * @param scope the machine the user has narrowed to, or null for every machine.
      * @param selectedSession the session the surface's controls act on, or null for none.
      */
+    /**
+     * @param machineNames what each machine CALLS itself, keyed by the endpoint id its sessions
+     *  are namespaced under (agents-tracker-ksvb.1). A machine with no entry, or an empty one,
+     *  renders its endpoint id -- [MachineLabel.of]'s fallback, and what every chip read before
+     *  this parameter existed. It is a MAP rather than a single name because the roster is
+     *  namespaced per machine and nothing here may assume there is only one; the phone is paired
+     *  to one machine today, and a chip bar that hard-coded that would be wrong silently.
+     */
     fun of(
         inbox: TriageInbox,
         scope: String? = null,
         selectedSession: String? = null,
+        machineNames: Map<String, String> = emptyMap(),
     ): InboxScreen {
         val sections = inbox.sections.map { section ->
             InboxSection(
@@ -303,7 +313,7 @@ object TriageInboxScreen {
         return InboxScreen(
             title = TITLE,
             live = liveCount(inFlight, whole = !inbox.stale),
-            scopes = scopesOf(inbox, scope),
+            scopes = scopesOf(inbox, scope, machineNames),
             sections = sections,
             tabs = tabsOf(blocked),
             staleNotice = inbox.staleNotice,
@@ -368,7 +378,11 @@ object TriageInboxScreen {
      * the fold is there so a roster in mid-update cannot report a machine offline because one
      * stale row says so.
      */
-    private fun scopesOf(inbox: TriageInbox, scope: String?): List<ScopeChip> {
+    private fun scopesOf(
+        inbox: TriageInbox,
+        scope: String?,
+        machineNames: Map<String, String>,
+    ): List<ScopeChip> {
         val machines = sortedMapOf<String, Boolean>()
         inbox.sections.asSequence().flatMap { it.rows.asSequence() }.forEach { row ->
             val machine = machineOf(row.id) ?: return@forEach
@@ -384,12 +398,17 @@ object TriageInboxScreen {
             description = null,
         )
         return listOf(all) + machines.map { (machine, present) ->
+            // THE CHIP READS THE NAME AND ACTS ON THE ID (agents-tracker-ksvb.1). `machine` is the
+            // endpoint id the roster namespaces sessions under, so it stays the filter key and the
+            // selection key; only what a person reads changes. Reversing that -- keying the filter
+            // on a hostname -- would break the moment two machines shared a name, and quietly.
+            val label = MachineLabel.of(machineNames[machine].orEmpty(), machine)
             ScopeChip(
                 machine = machine,
-                label = machine,
+                label = label,
                 present = present,
                 selected = machine == scope,
-                description = "$machine, ${if (present) "online" else "offline"}",
+                description = "$label, ${if (present) "online" else "offline"}",
             )
         }
     }
