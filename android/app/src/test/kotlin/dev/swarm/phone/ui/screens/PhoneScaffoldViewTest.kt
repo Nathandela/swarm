@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import dev.swarm.phone.ui.SessionRow
 import dev.swarm.phone.ui.TriageInbox
+import dev.swarm.phone.ui.kit.GrainDrawable
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
@@ -63,6 +64,7 @@ class PhoneScaffoldViewTest {
         rows: List<SessionRow> = listOf(row("mbp/one", "working")),
         destination: Destination = Destination.INBOX,
         content: View? = null,
+        banner: View? = null,
         onSelectDestination: (Destination) -> Unit = {},
     ): View {
         val screen = inbox(rows)
@@ -77,6 +79,7 @@ class PhoneScaffoldViewTest {
             tabs = screen.tabs,
             destination = destination,
             onSelectDestination = onSelectDestination,
+            banner = banner,
         )
     }
 
@@ -225,6 +228,49 @@ class PhoneScaffoldViewTest {
                 rest.distinct().size,
             )
         }
+    }
+
+    // ---- the grain is the content's and not the window's -------------------
+
+    /**
+     * agents-tracker-ksvb.3: row 21's noise moves WITH what it textures.
+     *
+     * WHY THE PLACEMENT IS A DEFECT AND NOT A DETAIL. A foreground on the scaffold ROOT is
+     * anchored to the window, and the destination scrolls underneath it -- so each glyph meets a
+     * different sample of the tile on every frame, and at 9.5-11 sp the antialiasing ramp is most
+     * of a stroke. The type shimmers while the page moves, which is invisible in a screenshot and
+     * is the whole of the field report. Anchored to the scrolled child, the tile and the glyph
+     * travel together and the modulation is constant.
+     *
+     * THE CHROME IS INCLUDED BECAUSE IT IS STILL A SURFACE. The banner and the bar do not scroll,
+     * so a root overlay was the only thing texturing them; each takes its own overlay rather than
+     * losing the material ADR-009 D4.3 gives every surface in the app.
+     */
+    @Test
+    fun `the grain travels with the content instead of hanging off the window`() {
+        val banner = TextView(context)
+        val root = scaffold(banner = banner)
+        val scrolled = (root.kitRequire(ScaffoldTag.CONTENT) as ViewGroup).getChildAt(0)
+
+        assertNull(
+            "the scaffold root carries the grain, so the noise is a window-anchored field the " +
+                "type moves under -- every glyph's antialiasing is re-modulated per scroll frame",
+            root.foreground,
+        )
+        assertTrue(
+            "the scrolled content carries no grain, so the destination lost row 21's material " +
+                "entirely: what the root used to texture is exactly what scrolls",
+            scrolled.foreground is GrainDrawable,
+        )
+        assertTrue(
+            "the banner slot carries no grain. It does not scroll, so the root overlay was the " +
+                "only thing texturing it, and moving the overlay must not strip the chrome",
+            banner.foreground is GrainDrawable,
+        )
+        assertTrue(
+            "the tab bar carries no grain, for the banner's reason exactly",
+            root.kitRequire(ScaffoldTag.TABS).foreground is GrainDrawable,
+        )
     }
 
     @Test
