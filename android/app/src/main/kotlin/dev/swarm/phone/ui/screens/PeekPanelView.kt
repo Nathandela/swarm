@@ -4,9 +4,9 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeaderDrill
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.readOnlyNote
 
 /**
@@ -119,19 +119,14 @@ fun peekPanelView(
     // output byte for byte, so English in it reads as something the agent typed. It is drawn only
     // when there is something to warn about, which is the call every other notice here makes.
     //
-    // IT IS A BARE `TextView` CARRYING NO APPEARANCE, for `ActivityPanelView`'s stale line's
-    // reason: there is no notice or body-copy component in the kit -- row 8's empty state is
-    // centred with 48 dp of vertical padding and is a different thing -- so this renders at the
-    // theme's default until there is one. Reaching for `Body.Secondary` here would be a screen
-    // choosing type, which `android/gate/s24_screens_test.go` fences this package against.
+    // IT IS THE KIT'S `notice` NOW (agents-tracker-ksvb.4). It was a bare TextView carrying no
+    // appearance, recorded here as rendering "at the theme's default until there is one" -- and
+    // the theme's default for a TextView is the PLATFORM's ~14 sp, larger than every body style in
+    // this app's ladder, so a warning about a stale grid was set bigger than the grid. `§4 Notice
+    // line` specifies the type and the ink; the choosing stays out of this package, which
+    // `android/gate/s24_screens_test.go` still fences against `setTextAppearance`.
     if (panel.staleNotice.isNotEmpty()) {
-        column.addView(
-            TextView(context).apply {
-                tag = PeekTag.STALE
-                text = panel.staleNotice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+        column.addView(notice(context, panel.staleNotice).apply { tag = PeekTag.STALE })
     }
     // `terminal = true` is where `tokens.json`'s `terminal_peek.fg` pin finally reaches a pixel.
     column.addView(monoWell(context, panel.snapshot, terminal = true).apply { tag = PeekTag.WELL })

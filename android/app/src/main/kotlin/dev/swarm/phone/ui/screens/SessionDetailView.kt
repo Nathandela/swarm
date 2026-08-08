@@ -4,12 +4,13 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeaderDrill
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 
@@ -202,9 +203,11 @@ fun sessionDetailView(
 
     // BOTH NOTICES SIT ABOVE THE CONTENT THEY QUALIFY, and each is drawn only when it has something
     // to say -- a blank warning line over a healthy session is a warning nobody wrote.
-    if (panel.staleNotice.isNotEmpty()) column.addView(notice(context, panel.staleNotice, DetailTag.STALE))
+    if (panel.staleNotice.isNotEmpty()) {
+        column.addView(notice(context, panel.staleNotice).apply { tag = DetailTag.STALE })
+    }
     if (panel.notSentNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.notSentNotice, DetailTag.NOT_SENT))
+        column.addView(notice(context, panel.notSentNotice).apply { tag = DetailTag.NOT_SENT })
     }
 
     // ABSENT IS NOT EMPTY. A session the machine has sent no frame for gets no card at all rather
@@ -215,7 +218,9 @@ fun sessionDetailView(
         // that the grid is out of date, over a session that has sent no grid at all, describes
         // something that is not on screen.
         if (panel.snapshotStaleNotice.isNotEmpty()) {
-            column.addView(notice(context, panel.snapshotStaleNotice, DetailTag.SNAPSHOT_STALE))
+            column.addView(
+                notice(context, panel.snapshotStaleNotice).apply { tag = DetailTag.SNAPSHOT_STALE },
+            )
         }
         column.addView(
             monoWell(context, panel.snapshot, terminal = true).apply { tag = DetailTag.SNAPSHOT },
@@ -250,26 +255,23 @@ fun sessionDetailView(
     // transcript and the not-sent line qualifies what was typed; this one qualifies the two
     // controls, and a refusal drawn at the top of a scrolling transcript is a report the person who
     // pressed the button is no longer looking at.
-    if (outcome.isNotEmpty()) column.addView(notice(context, outcome, DetailTag.OUTCOME))
+    //
+    // IT IS THE ERROR VARIANT AND THE OTHER THREE ARE NOT, which is `§4 Notice line`'s own split
+    // between a state the screen is reporting and a verdict the machine returned. What reaches
+    // this parameter is `PhoneSurface`'s routed line, and that line is only ever non-empty on a
+    // REFUSAL: `PressFeedback.ofSuccess` and `ofUnsent` both leave it "" and say what they have to
+    // say in the toast. The stale, not-sent and snapshot-stale lines above are the screen's own
+    // sentences about a link and a lease, and painting those `--p-err` would report a refusal
+    // nobody made -- which is `ofUnsent`'s own recorded argument, one layer up.
+    if (outcome.isNotEmpty()) {
+        column.addView(
+            notice(context, outcome, NoticeKind.ERROR).apply { tag = DetailTag.OUTCOME },
+        )
+    }
 
     column.addView(stop.tagged(DetailTag.STOP))
     column.addView(kill.tagged(DetailTag.KILL))
     return column
-}
-
-/**
- * A notice line.
- *
- * IT IS A BARE `TextView` AND CARRIES NO APPEARANCE, for the reason `ActivityPanelView`'s stale
- * line and `SettingsPanelView`'s notices are bare: there is no notice or body-copy component in the
- * kit -- row 8's empty state is centred with 48 dp of vertical padding and is a different thing --
- * so this renders at the theme's default until there is one. That is the absence of a decision
- * rather than one made here; reaching for `Body.Secondary` directly would be a screen choosing type.
- */
-private fun notice(context: Context, text: String, tag: String) = TextView(context).apply {
-    this.tag = tag
-    this.text = text
-    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 }
 
 /**

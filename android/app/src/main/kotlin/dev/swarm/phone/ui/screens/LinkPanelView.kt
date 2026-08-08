@@ -4,7 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 import dev.swarm.phone.ui.kit.settingsRow
@@ -36,11 +36,12 @@ import dev.swarm.phone.ui.kit.statusLabel
  * `StreamView.notice` -- which says what is missing, where a colour could only say that something
  * is.
  *
- * THE CLOCK LINE IS A BARE `TextView`, for the reason `ActivityPanelView`'s stale line is: there is
- * no notice or body-copy component in the kit -- row 8's empty state is centred with 48 dp of
- * vertical padding and is a different thing -- so it carries the model's copy and no appearance at
- * all. That is the absence of a decision rather than one made here; reaching for `Body.Secondary`
- * directly would be a screen choosing type.
+ * THE CLOCK LINE IS THE KIT'S `notice`, for the reason `ActivityPanelView`'s stale line is
+ * (agents-tracker-ksvb.4). It was a bare `TextView` carrying the model's copy and no appearance at
+ * all, and this paragraph called that the absence of a decision. It was not one: the platform
+ * default is ~14 sp, larger than every body style in this app's ladder, so a clock warning was set
+ * bigger than the four channel rows underneath it. `§4 Notice line` specifies the type and the ink
+ * and `ui/kit/Notice.kt` chooses them, which is what keeps this screen out of the choice.
  *
  * IT SITS UNDER THE HEADING AND ABOVE THE CHANNELS, which is the one placement decision here. The
  * heading names the subject; a clock this phone cannot trust is the first thing true of it, and it
@@ -89,13 +90,7 @@ fun linkPanelView(
     // line and holds harder here: an always-attached notice is either a permanent warning over a
     // phone whose clock is fine, or a permanent blank line where one goes.
     if (panel.clockNotice.isNotEmpty()) {
-        column.addView(
-            TextView(context).apply {
-                tag = LinkTag.CLOCK
-                text = panel.clockNotice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+        column.addView(notice(context, panel.clockNotice).apply { tag = LinkTag.CLOCK })
     }
 
     // `sessionList` IS `.prows`, and it is a REUSE for `ActivityPanelView`'s reason: it carries

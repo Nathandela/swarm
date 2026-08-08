@@ -4,12 +4,12 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.kit.navHeader
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.settingsRow
 
@@ -39,10 +39,14 @@ import dev.swarm.phone.ui.kit.settingsRow
  * an identity that has to survive a redraw, and `SettingsSurface` is where all three are. It
  * arrives as [settingsPanelView]'s `replaceFor` and is tagged [SettingsTag.REPLACE] once placed.
  *
- * THE NOTICE LINES ARE STILL BARE `TextView`s. There is no notice or body-copy component -- row 8's
- * empty state is centred with 48 dp of vertical padding and is a different thing -- so they carry
- * the model's copy and no appearance at all. That is the absence of a decision rather than one
- * made here; reaching for `Body.Secondary` directly would be a screen choosing type.
+ * THE NOTICE LINES ARE THE KIT'S NOW (agents-tracker-ksvb.4). This paragraph read "THE NOTICE LINES
+ * ARE STILL BARE `TextView`s ... that is the absence of a decision rather than one made here", and
+ * the premise was false in the one way that matters: a `TextView` with no `TextAppearance` renders
+ * at the platform's ~14 sp, which is larger than every body style in this app's ladder -- so the
+ * disclosure and every dead-switch notice were the biggest body text on the settings screen, above
+ * the rows they were about. `§4 Notice line` specifies them and `ui/kit/Notice.kt` draws them.
+ * Reaching for `Body.Secondary` HERE would still be a screen choosing type, and the fence above
+ * still refuses it.
  */
 object SettingsTag {
     /** C6.1 `.pnav`. */
@@ -185,22 +189,12 @@ fun settingsPanelView(
 
     // UNCONDITIONAL AND SO DRAWN BEFORE THE NOTICES: the disclosure is not the reason a switch is
     // dead, so it does not belong under the sentence that is.
-    column.addView(
-        TextView(context).apply {
-            tag = SettingsTag.DISCLOSURE
-            text = panel.disclosure
-            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-        },
-    )
+    column.addView(notice(context, panel.disclosure).apply { tag = SettingsTag.DISCLOSURE })
 
-    panel.notices.forEach { notice ->
-        column.addView(
-            TextView(context).apply {
-                tag = SettingsTag.NOTICE
-                text = notice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+    // The loop variable is `line` and not `notice`: the sentence and the kit factory that draws it
+    // cannot share a name in one scope.
+    panel.notices.forEach { line ->
+        column.addView(notice(context, line).apply { tag = SettingsTag.NOTICE })
     }
 
     // AFTER THE NOTICES, because the sentence is why the control is there: the blocked notice names
