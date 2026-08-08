@@ -477,8 +477,15 @@ the pass-through; `transcriptView(..., null)` to break the approval tap; droppin
 byte-for-byte, because five other agents' Gradle launchers were live at that moment.** Perturbing
 shared production source while four other sessions are compiling it would have fed them a defect that
 is not in the code and invited them to act on it — a worse outcome than a missing RED. The
-perturbations are reverted (`grep` confirms no marker survives and all three original lines are back);
-the script is ready to run when the build lane is free.
+perturbations are reverted (`grep` confirms no marker survives and all three original lines are back).
+
+**That last clause originally read "the script is ready to run when the build lane is free", and the
+condition was wrong** — corrected here rather than in §5.2.1 alone, so this paragraph does not
+contradict its own subsection. The free lane was necessary but incidental; what actually made the run
+safe was the **clean tree**, because with every path committed `git checkout --` is a byte-exact
+revert that cannot be got wrong and cannot outlive the run. When these controls were prepared the tree
+was dirty across four sessions and reverting was a manual copy-back — which is why declining then was
+right, and why the reason to decline was never really the lane. §5.2.1 is the run.
 
 What can be said WITHOUT that run is structural, and is weaker on purpose: none of the three added
 assertions can pass vacuously. `kitRequire(TranscriptTag.APPROVAL)` throws when the block is absent;
