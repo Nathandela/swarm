@@ -96,7 +96,23 @@ import (
 // is unrecoverable short of clearing the app's data. The field is omitempty, so an INSTALLED v8
 // blob loads as not-disowned, which is the correct reading of a phone that was paired and never
 // revoked.
-const StateSchemaVersion = 9
+//
+// v10 adds machine_name, the hostname the machine published in the pairing payload
+// (agents-tracker-ksvb.1). ITS BUMP IS MECHANICAL RATHER THAN ARGUED FROM A FAILURE, and saying
+// so is more honest than inventing one: unlike v7's pin, v8's clock and v9's revoke, a build one
+// version back drops this field and the screens fall back to the endpoint id -- which is what
+// they render today, is a fact, and is not a lie about anything. Nothing breaks.
+//
+// The bump happens anyway because the rule is unconditional and its value is in being
+// unconditional: TestStateSchemaVersion_IsPinnedToTheDurableFieldSet ties the constant to the
+// durable field set in both directions precisely so nobody has to be right, field by field,
+// about which additions are survivable. A rule with an exemption for "harmless" fields is a rule
+// whose next application is an argument, and pairing is the only channel this coordinate has --
+// so a downgrade that dropped it silently would restore the very "ep- plus a hash" the bead
+// exists to remove, with no on-device way to tell that from a machine that published no name.
+// An INSTALLED v9 blob loads with an empty name, which is the correct reading of a phone that
+// paired before the field existed: it is not named, so the endpoint id renders.
+const StateSchemaVersion = 10
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -133,7 +149,26 @@ type Bucket struct {
 // walk the counter away from the gateway's per-(sender,epoch) high-water. Receive is keyed
 // per Bucket for the mirror reason.
 type State struct {
-	Machine        string // machine endpoint id these coordinates belong to
+	Machine string // machine endpoint id these coordinates belong to
+	// MachineName is the machine's own HOSTNAME as it published it in the pairing payload
+	// (pairing.MachinePayload.Hostname, from machineid.Identity.Hostname()). It is DISPLAY
+	// ONLY: Machine above stays the identity every signed command carries and the key
+	// OpenStore filters this blob on, and nothing internal ever keys on this string.
+	//
+	// IT IS A SECOND COORDINATE RATHER THAN A BETTER Machine, and that is forced rather than
+	// preferred, for the reason Disowned's own paragraph gives: a hostname is not unique, not
+	// stable and not something crypto.Command.Canonical could sign over, so writing it into
+	// Machine would take the endpoint id's place in the load-time filter and discard the whole
+	// blob on the next process start.
+	//
+	// EMPTY MEANS THE MACHINE PUBLISHED NONE, which is an ordinary state -- a machine identity
+	// generated where os.Hostname() failed carries "" -- and the render sites fall back to the
+	// endpoint id, which is a fact rather than a fabrication (ADR-007 B135).
+	//
+	// IT IS CLEARTEXT for RelaySPKIPin's reason: it is a record ABOUT the registration rather
+	// than content under it, and a screen that names the machine must be able to do so on a
+	// push-woken process with the content tier locked.
+	MachineName    string
 	MachineStatic  []byte // machine Noise-static public key pinned at pairing
 	MachineSignPub []byte // machine Ed25519 grant-signing public key pinned at pairing
 	// MachineRelayAuthPub is the machine's relay-auth Ed25519 public key, pinned at
@@ -406,8 +441,12 @@ type Store interface {
 // ---------------------------------------------------------------------------
 
 type stateFile struct {
-	SchemaVersion       int    `json:"schema_version"`
-	Machine             string `json:"machine"`
+	SchemaVersion int    `json:"schema_version"`
+	Machine       string `json:"machine"`
+	// MachineName is omitempty because a machine that published no hostname must leave no key
+	// behind: an absent key and an empty one mean the same thing here, and writing one says
+	// the phone learned something it did not.
+	MachineName         string `json:"machine_name,omitempty"`
 	MachineStatic       []byte `json:"machine_static,omitempty"`
 	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
 	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
@@ -1187,6 +1226,7 @@ func (s *fileStore) load() error {
 
 	st := State{
 		Machine:             f.Machine,
+		MachineName:         f.MachineName,
 		MachineStatic:       f.MachineStatic,
 		MachineSignPub:      f.MachineSignPub,
 		MachineRelayAuthPub: f.MachineRelayAuthPub,
@@ -1420,6 +1460,7 @@ func persistState(path string, st State, seals stateSeals) error {
 	f := stateFile{
 		SchemaVersion:       StateSchemaVersion,
 		Machine:             st.Machine,
+		MachineName:         st.MachineName,
 		MachineStatic:       st.MachineStatic,
 		MachineSignPub:      st.MachineSignPub,
 		MachineRelayAuthPub: st.MachineRelayAuthPub,

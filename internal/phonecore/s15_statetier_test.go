@@ -68,6 +68,7 @@ import (
 
 const (
 	s15Machine     = "s15-machine-8f3a1c"
+	s15MachineName = "s15-hostname-1e6c93"
 	s15RoutingID   = "s15-routing-4d7e2b"
 	s15PushToken   = "s15-push-token-c19a6f"
 	s15SessionID   = "s15-session-2b8d4e"
@@ -132,6 +133,7 @@ func s15State() State {
 	st := State{
 		Keys:                s15EpochKeys(),
 		Machine:             s15Machine,
+		MachineName:         s15MachineName,
 		MachineStatic:       s15MachineStatic(),
 		MachineSignPub:      s15MachineSignPub(),
 		MachineRelayAuthPub: s15MachineRelayPub(),
@@ -276,6 +278,13 @@ func s15Inventory() []s15Tier {
 		{field: "Machine", needles: s15Str(s15Machine),
 			why: "the load path filters on it BEFORE any unseal (a blob belonging to another machine " +
 				"is discarded wholesale), so it cannot itself be behind a seal"},
+		{field: "MachineName", needles: s15Str(s15MachineName),
+			why: "the hostname the machine published at pairing (agents-tracker-ksvb.1). It is a " +
+				"DISPLAY LABEL for the coordinate above it, not a fact about a session, so it is the " +
+				"same class as Machine itself -- and it must be readable with the content tier " +
+				"LOCKED, because a push-woken process renders the machine's name on the notification " +
+				"it woke for. A name behind the content seal would leave that surface naming the " +
+				"machine `ep-` plus a hash on exactly the screens a person reads without unlocking"},
 		{field: "MachineStatic", needles: s15Raw(s15MachineStatic()),
 			why: "a public key pinned at pairing; public by definition, as device.key's cleartext " +
 				"public half already is"},

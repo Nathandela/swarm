@@ -81,6 +81,7 @@ func fullState() State {
 	}
 	return State{
 		Machine:             "m1",
+		MachineName:         "nathans-mbp",
 		MachineStatic:       bytes.Repeat([]byte{0xA1}, 32),
 		MachineSignPub:      bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
 		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
@@ -455,14 +456,27 @@ const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaG
 // thing that can carry the fact.
 const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"9A8+xA7qCVgjeQmNLMlmphMYLglEdfmvDlMC3Z0xyKFQHKICgvCTC6Y/qtXno2uPRkgFAcj9ZXIaKd6+","content_key":"z+o0S1vblLNcliSxEpKgiX7c2HbabSse8BoxlDiXvcUBsQVIo5yIAtZ7+bt6HKWKAQQ3RrqBCUADAwU5","wake_state":"VIaWolwwUV1eygdw8dkwzyTAurcQEJtZd0cqh0nyTblN5TlnH6LyZNgZhI4Mz1zg3YgfiplYONEZzoyBEkzjQXMXggGtV5/F3qE=","content_kept":"WQtT1MV2/CT6tSlSemtn/ksK7RnblCFENQi35DzNuYeGHAwxfn4344S3cXRFqyb4+rPy34Sgihgp8/sCpC4TMtPhen+Ha0l7F9VXfFW5hhNTtvYBUYehUJNue+3/KZLqsq60CeZ9yJDf2yYI9oh6VFpfFx/FMOxQRDNckAdVRW0MRJ1bPXTyFUr3A18kbPzVfiZo8u5xkpE/+iJ0q/skNXdFJ8eXJDDQc99XvzTITGl+uvQL72lE7BfT5gIF9Y3iWUWEPri8HTdoEtKLdaeaW2SZgSEILwa0rOCLVPVFqCAd+JRADLZ20jT7GVwD79w5or5cGXArfNXVw9K9XRL0NCxy55u2gpJZsc7pCre8PCGAMXA9Skwf+GJQq5qek8JKYqZXy302wOyiK8jGvZV1aHxOWOAalSK7dEjYUF07RSKGbg6CfXazHESNF+zbJatzrcQm+h/zfh+tE1VCwSefzHelOAIIlA0juS1Rzel99z18/rAyN7/Np27/nNGUjHpvEmTa6OSsFjA3V4uv/YXtDGK0MY1f","content_purgeable":"dSBXI9e9MQVcUcwpfuPkaRP4vT1ADKOIT+8I7umnrMV77yqworL08cH/jGP3ZGHgMZprckW5eGpZjmJ1cdF/iQ5F+wapazgFwEmCZkHVy/tp9r6lvSt1aviIopZfIaGUzLLRxAWhJIl+O+RMIVyFv1CsXySA8/zlh+llDJ1iq3U3vtIXbnx2wf6AtfV7bMp+pSQIQoW0B9mTF9cKSjGoy+XKOt8j0SzIYK2XVYJJCvOGl/MD0u7QOgSHV02zyQWAYYnumpdUDl2qvPzjERxbnBgHQZPT6/oRtZ2au5w8JImOwfcmxKDRt0KnGd9LSdcmtXZP8APK6/BXjeklrQmD9EGxAQ==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
+// stateV10Fixture is the PINNED v10 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v10 adds machine_name, the hostname the machine published in the pairing
+// payload (agents-tracker-ksvb.1) -- the phone's only source for what a person calls the computer
+// it is bound to, since the endpoint id is `ep-` plus four bytes of a hash of a directory.
+//
+// ITS BUMP IS THE MECHANICAL ONE AND SAYS SO. v7's pin, v8's clock and v9's revoke each named a
+// specific brick a downgrade produced; this field's downgrade produces a machine rendered by its
+// endpoint id, which is exactly what shipped before it and is not a lie. The version moves anyway
+// because the tie between the constant and the durable field set is unconditional on purpose:
+// see StateSchemaVersion's own paragraph.
+const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"PmfgMwX6Uns8zJLuUA9mAtiU5jNx+YsH6Pr8oKj4Kb2wPrM9U3Wu9zHzj05lkCRlpyXqx/YQB4DkbRYn","content_key":"NlluJ6V31SU/CpV62DvokkATJsxs6eForsyF4/V1VA+oYpH/QJXIWIdOXSvYdUQe7huMVPjJvlyja9IC","wake_state":"oFDW8MQcwJa4DD29//q9dhMq8+LApZFF7N+purtiCUBb3SPMEfmPzLj4OZ/mE15bhn886KHvOtpsQIKQ8kVyiu9K2vIn35X/Pug=","content_kept":"oxITQCQRAB5hSLdI+3/9i8IdXjRZ45C3HVuNCsKIL05lg1HDz6rcK3qPu50tiDJccn58TCkpm8Uu758qcF2NBEqOnU0DjeBefiFgyH0Huts8AaECGOmfzjWPpxO6FCPApGaxVVQMLWtLSvUVkqDJfmtzqua7Z3oyQleLKAec17JgDvq1X+WfEh7o8Ck3Bd4AoZ+XcDy681SvkjllmNlZkDFYuYGTmsP8FSxNUciyGL9iSRiADxrkwajmYgh9Eb8tDyzLmislEwUDJeXKbGWOCBT6uS/GuPNIcmQiv54hY84+N/2e07RTNYTOJQmUzqNfY8UL0dyHKmI9ceChmO3grVdCTqMQTFFZtOPa9iQQLcDIO3k5oWWZ5xcsJP3ThE1QViP/QEqoSw1eHgdETiDa5BFAcmouBrXjxzWAaJBEJJAaO5DLRdjis0sYCzlCEW/G7zHFcUK1hO/+k3uO6zNRWXRtrcLnaFLy7lBe2FjVEMuE85jre3CrRqc2a5TXmgoLm1QcKMBqOwj9RWB5jz1sX/yhp5Ha","content_purgeable":"HCJqYRqSKBXvaEQ0MR8py30GK33SvI9Ut5On8ZHctwzlnpMoNDYdS1+cpKcpprGQtST2QeaFMhqJYU2difDE50YE8ShreL8U8JpvB6vqoPKBHi+/dcUacMo8vQcRJ7ZD8w2JJ2y73lgu93ZFGNONvKVUX3rrj6ygl90p6OT/xXxdxLk6RBetRY2QRx9bmAQ4aaZL/E2ywXa1wMx2VHQUrcxu0Y0QxyrrzsBgTJXQ+WImeJmqPg2D2pOkmiAdg2ivC52wKEOoUfLh4j5KI0Da9b4y/nho+zI8LaJd1J72bwIjAns9Y8qeJhzLYEqdSC7tJJDBAVxAiDRVZ/EZxlraAtxnXt0/++Cz7xtfuHM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+
 var stateFixtures = map[int]string{
-	1: stateV1Fixture,
-	4: stateV4Fixture,
-	5: stateV5Fixture,
-	6: stateV6Fixture,
-	7: stateV7Fixture,
-	8: stateV8Fixture,
-	9: stateV9Fixture,
+	1:  stateV1Fixture,
+	4:  stateV4Fixture,
+	5:  stateV5Fixture,
+	6:  stateV6Fixture,
+	7:  stateV7Fixture,
+	8:  stateV8Fixture,
+	9:  stateV9Fixture,
+	10: stateV10Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
