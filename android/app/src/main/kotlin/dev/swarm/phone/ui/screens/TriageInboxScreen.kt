@@ -175,15 +175,19 @@ object TriageInboxScreen {
      * three empty states for this screen -- kill switch on, a scope with zero sessions, and a
      * machine offline -- and no per-section copy at all, because the artifact simply drops empty
      * sections. PB-DS-9 requires the opposite, so the words for the case the artifact does not
-     * draw had to be written. They are deliberately flat statements of fact rather than
-     * encouragement: this is a triage surface, and "nothing is waiting on you" is the most useful
-     * thing it can report.
+     * draw had to be written.
+     *
+     * CAPTIONS, NOT SENTENCES (agents-tracker-ksvb.6). Three of these used to be full sentences,
+     * stacked on the one screen this app means to be glanceable -- a defect the words themselves
+     * caused rather than fixed. What survives at two words is exactly the fact this file's own
+     * KDoc argues for: an EMPTY section still says so, distinguishably from a section that has
+     * merely scrolled off screen. A caption anchors that distinction as well as a sentence did.
      */
     private val EMPTY_SECTION_COPY: Map<String, String> = mapOf(
-        "needs_input" to "Nothing is waiting on you.",
-        "ready_for_review" to "Nothing is waiting to be reviewed.",
-        "completed" to "Nothing has finished here yet.",
-        "working" to "Nothing is running.",
+        "needs_input" to "Nothing waiting",
+        "ready_for_review" to "Nothing to review",
+        "completed" to "Nothing finished",
+        "working" to "Nothing running",
     )
 
     /**

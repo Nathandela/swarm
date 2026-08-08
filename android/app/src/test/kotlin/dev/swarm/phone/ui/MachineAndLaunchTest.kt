@@ -79,6 +79,30 @@ class MachinePaneTest {
     }
 
     /**
+     * agents-tracker-ksvb.6: "Your machine is $presence." used to print unconditionally, on
+     * every visit, restating what the presence dot beside it already says in colour -- the one
+     * always-on sentence this app's own conditional-notice discipline argues against everywhere
+     * else. A healthy machine now renders NOTHING (the house pattern), and the fact moves to
+     * [MachinePane.presenceAnnouncement] rather than disappearing, because the dot has no words
+     * of its own for a screen reader.
+     */
+    @Test
+    fun `a healthy machine's presence line is silent, and the fact moves to the announcement`() {
+        val healthy = pane(presence = "online")
+
+        assertEquals("", healthy.presenceExplanation { "14:26" })
+        assertEquals("Your machine is online.", healthy.presenceAnnouncement)
+
+        // The silent case is unaffected: it already says presence in words, so there is nothing
+        // for the announcement to carry that the line does not.
+        val silent = pane(
+            presence = "online",
+            freshness = MachineFreshness(silent = true, lastHeardUnixMs = 1_753_900_000_000),
+        )
+        assertTrue(silent.presenceExplanation { "14:26" }.isNotEmpty())
+    }
+
+    /**
      * A phone that has never heard from its machine says so rather than naming a time it does
      * not have. Zero is not a timestamp, and rendering it would read as 1 January 1970.
      */
@@ -105,6 +129,22 @@ class MachinePaneTest {
         assertTrue(engaged.killSwitchExplanation.isNotBlank())
         assertFalse("PB-SEC-6: no control may re-enable remote control", engaged.canSetKillSwitch)
         assertTrue("revoking THIS device is the phone's own panic action", engaged.canRevokeThisDevice)
+    }
+
+    /**
+     * agents-tracker-ksvb.6: the ON state's paragraph shrinks to one short line -- it is
+     * reporting nothing wrong, unlike the OFF state below it, which keeps its full teaching.
+     */
+    @Test
+    fun `the enabled state's sentence is one short line, and the disabled state keeps its teaching`() {
+        val disengaged = pane(killSwitchEngaged = false)
+        assertEquals("Remote control is on. Only the machine can switch it off.", disengaged.killSwitchExplanation)
+
+        val engaged = pane(killSwitchEngaged = true)
+        assertTrue(
+            "the disabled state lost the teaching that only the owner can switch it back on",
+            engaged.killSwitchExplanation.contains("Only the machine's owner"),
+        )
     }
 
 }

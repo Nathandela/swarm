@@ -16,6 +16,7 @@ import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -226,15 +227,16 @@ class MachinesPanelViewTest {
     }
 
     /**
-     * The dot says nothing a screen reader needs, because the line under it says it in words.
+     * The dot says nothing a screen reader needs WHILE the line under it still says presence in
+     * words.
      *
      * A described dot here would have the row read its presence twice, and `contentDescription = ""`
      * -- the shape a caller writing `description ?: ""` ships -- would ask the reader to skip a
      * view that has something to say.
      */
     @Test
-    fun `the presence mark is decorative, because the row states presence in words`() {
-        val root = view(panel())
+    fun `the presence mark is decorative while the row still states presence in words`() {
+        val root = view(panel(silent = true))
         val dot = root.kitRequire(KitTag.PRESENCE_DOT)
 
         assertEquals(
@@ -247,6 +249,39 @@ class MachinesPanelViewTest {
                 "alone -- which for a screen reader user is not carried at all",
             textOf(root.kitRequire(MachinesTag.MACHINE).kitRequire(KitTag.MACHINE_META))
                 .contains("online"),
+        )
+    }
+
+    /**
+     * agents-tracker-ksvb.6: a healthy machine now prints NOTHING where "Your machine is
+     * online." used to sit on every visit -- the presence dot's colour was already carrying the
+     * fact. The words did not disappear with the sentence; they moved to the one thing left on
+     * screen that can still speak for a screen reader.
+     *
+     * THIS REPLACES `the presence mark is decorative, because the row states presence in words`,
+     * which asserted the opposite of both halves below over the same default panel: that the dot
+     * carried `View.IMPORTANT_FOR_ACCESSIBILITY_NO` with a null description, and that the meta
+     * line's text contained "online". Neither survives a healthy machine printing an empty line.
+     */
+    @Test
+    fun `the presence mark announces the state once the row has nothing printed to say it`() {
+        val root = view(panel())
+        val dot = root.kitRequire(KitTag.PRESENCE_DOT)
+
+        assertTrue(
+            "the meta line still carries a sentence, so a description on the dot would have the " +
+                "row say its own state twice",
+            textOf(root.kitRequire(MachinesTag.MACHINE).kitRequire(KitTag.MACHINE_META)).isEmpty(),
+        )
+        assertNotEquals(
+            "a healthy machine's dot is still marked decorative, so a screen reader learns " +
+                "nothing about presence at all now that the sentence beside it is gone",
+            View.IMPORTANT_FOR_ACCESSIBILITY_NO,
+            dot.importantForAccessibility,
+        )
+        assertTrue(
+            "the dot's description does not say the machine is online: ${dot.contentDescription}",
+            dot.contentDescription?.contains("online") == true,
         )
     }
 

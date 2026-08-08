@@ -169,6 +169,21 @@ class TriageInboxScreenTest {
         )
     }
 
+    /**
+     * agents-tracker-ksvb.6: three full sentences stacked on the one glanceable screen shrink to
+     * captions -- two words apiece, still one per Group, still distinguishing "empty" from
+     * "scrolled away" the way this file's class KDoc argues for.
+     */
+    @Test
+    fun `the empty section copy is a caption, not a sentence`() {
+        val empty = screenOf(emptyList()).sections.associate { it.group to it.emptyCopy }
+
+        assertEquals("Nothing waiting", empty["needs_input"])
+        assertEquals("Nothing running", empty["working"])
+        assertEquals("Nothing to review", empty["ready_for_review"])
+        assertEquals("Nothing finished", empty["completed"])
+    }
+
     @Test
     fun `the headings are the recorded copy`() {
         val screen = screenOf(emptyList())

@@ -397,10 +397,11 @@ data class SettingsScreen(
          * there is no system screen that turns Doze or battery saver off for one app, and B16's
          * decision was to drop the connection rather than fight them, so the sentence states the
          * behaviour rather than offering a way around it.
+         *
+         * ONE LINE (agents-tracker-ksvb.6). It is still always-on -- the fact is always true,
+         * unlike every notice above it -- but always true does not require two sentences to say.
          */
-        const val PUSH_DELAY_DISCLOSURE =
-            "This phone disconnects in the background. Battery saver and Doze can delay the " +
-                "push that would otherwise wake it, so these notifications may arrive late."
+        const val PUSH_DELAY_DISCLOSURE = "Battery saver can delay these notifications."
 
         /**
          * What a refusal says when the machine sent no words with it (agents-tracker-os37).

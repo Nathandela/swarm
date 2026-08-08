@@ -344,9 +344,12 @@ object PairOnlyScreen {
      * to the screen that handset lands on, and moving it as a reference is what stops the two
      * drifting into two answers.
      *
-     * [BODY] FOLLOWS BOTH CAUSES rather than being replaced by them, because it answers a
-     * different question -- why the app is empty -- and that question is sharper for a phone that
-     * had a machine an hour ago than for one that never did.
+     * [BODY] IS FIRST_RUN'S ALONE (agents-tracker-ksvb.6). It used to follow both causes below,
+     * on the argument that it answers a different question -- why the app is empty -- than either
+     * cause does. The argument was right and beside the point: a phone that already has a specific
+     * reason does not need the generic one repeated after it, and concatenating them read as one
+     * cause explained twice at different heights of detail. FIRST_RUN has no cause of its own, so
+     * [BODY] is the only sentence that state gets.
      *
      * [CTA] IS THE SAME CONTROL IN EVERY ROW. It is inventory C7's own name for the flow it opens,
      * and the flow is the same flow: the recovery ends with `swarm remote pair` showing a code and
@@ -358,13 +361,13 @@ object PairOnlyScreen {
 
         PairOnlyReason.REVOKED -> PairOnlyCopy(
             TITLE_REVOKED,
-            ConnectionBanner.of(ConnectionState.REVOKED).text + " " + BODY,
+            ConnectionBanner.of(ConnectionState.REVOKED).text,
             CTA,
         )
 
         PairOnlyReason.REPAIR_REQUIRED -> PairOnlyCopy(
             TITLE_REPAIR_REQUIRED,
-            REPAIR_REQUIRED_CAUSE + " " + BODY,
+            REPAIR_REQUIRED_CAUSE,
             CTA,
         )
     }

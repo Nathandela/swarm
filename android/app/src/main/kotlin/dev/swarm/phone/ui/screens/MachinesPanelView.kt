@@ -116,9 +116,12 @@ fun machinesPanelView(
                     // Row 11's `endpoint id` cell, or nothing where the panel says the id is
                     // already in the name cell. The decision is the panel's; this carries it.
                     endpoint = panel.machine.endpoint,
-                    // No description either: the line under the mark says presence in words,
-                    // including whose word it is, so a described dot would say it twice.
-                    presenceDescription = null,
+                    // THE MODEL'S OWN CALL, carried rather than re-decided here. Null while the
+                    // line under the mark still says presence in words, including whose word it
+                    // is -- a described dot there would say it twice. Non-null exactly where a
+                    // healthy machine has printed nothing (agents-tracker-ksvb.6), which is the
+                    // one case left where the dot is the only thing on screen carrying the state.
+                    presenceDescription = panel.machine.presenceDescription,
                 ).apply { tag = MachinesTag.MACHINE },
             )
         },

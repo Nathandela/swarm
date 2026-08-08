@@ -654,4 +654,17 @@ class SettingsScreenTest {
             SettingsScreen(alerts = true, mentions = true).pushDelayDisclosure.isNotEmpty(),
         )
     }
+
+    /**
+     * agents-tracker-ksvb.6: the disclosure is still always-on -- battery saver delaying a push
+     * is always true, unlike every other notice on this screen -- but always true does not need
+     * two sentences to say it.
+     */
+    @Test
+    fun `the disclosure is one line`() {
+        assertEquals(
+            "Battery saver can delay these notifications.",
+            SettingsScreen.PUSH_DELAY_DISCLOSURE,
+        )
+    }
 }

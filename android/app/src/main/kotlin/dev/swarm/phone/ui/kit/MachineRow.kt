@@ -46,7 +46,9 @@ import dev.swarm.phone.R
  *  printed twice with the second copy wearing the mock's label. See `MachineRow.endpoint` in
  *  `ui/screens/MachinesPanel.kt`, which owns that decision.
  * @param presenceDescription what a screen reader says about the mark, or null where [presence]
- *  states it in words -- which it does at the one call site, so the mark is decorative there.
+ *  already states it in words -- which it does at the call site for every state but one: a
+ *  healthy machine prints no [presence] line at all (agents-tracker-ksvb.6), and the dot is what
+ *  is left to carry it.
  */
 fun machineRow(
     context: Context,

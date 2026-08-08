@@ -69,8 +69,12 @@ object PairedMachineRowScreen {
      * pinned machine -- which the revoke does not clear -- and went on showing the four-tab shell,
      * with the pairing entry point on the settings screen inside it. The press now leaves the phone
      * reading unpaired and redraws the whole window, so the sentence describes what happens.
+     *
+     * SHORTENED AGAIN (agents-tracker-ksvb.6), and the ordering fact is the one thing that must
+     * survive a shortening: "first" carries what "the current pairing" and "then" carried before,
+     * in fewer words.
      */
-    private const val COST = "Replacing ends the current pairing, then pairs a new computer."
+    private const val COST = "Ends this pairing first, then re-pairs."
 
     /**
      * The confirmation's subject when this phone cannot read the machine's name.
