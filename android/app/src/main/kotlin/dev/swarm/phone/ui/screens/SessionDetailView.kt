@@ -6,7 +6,9 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.navHeaderDrill
+import dev.swarm.phone.ui.kit.notice
 
 /**
  * PB-APP-3 -- inventory C2: the session detail, composed from the component kit.
@@ -211,9 +213,11 @@ fun sessionDetailView(
 
     // BOTH NOTICES SIT ABOVE THE CONTENT THEY QUALIFY, and each is drawn only when it has something
     // to say -- a blank warning line over a healthy session is a warning nobody wrote.
-    if (panel.staleNotice.isNotEmpty()) column.addView(notice(context, panel.staleNotice, DetailTag.STALE))
+    if (panel.staleNotice.isNotEmpty()) {
+        column.addView(notice(context, panel.staleNotice).apply { tag = DetailTag.STALE })
+    }
     if (panel.notSentNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.notSentNotice, DetailTag.NOT_SENT))
+        column.addView(notice(context, panel.notSentNotice).apply { tag = DetailTag.NOT_SENT })
     }
 
     // THE CONVERSATION, WHICH IS THIS SCREEN'S SUBJECT NOW. It is `transcriptView`'s composition and
@@ -228,14 +232,26 @@ fun sessionDetailView(
     // transcript and the not-sent line qualifies what was typed; this one qualifies the two
     // controls, and a refusal drawn at the top of a scrolling transcript is a report the person who
     // pressed the button is no longer looking at.
-    if (outcome.isNotEmpty()) column.addView(notice(context, outcome, DetailTag.OUTCOME))
+    //
+    // IT IS THE ERROR VARIANT AND THE OTHER THREE ARE NOT, which is `§4 Notice line`'s own split
+    // between a state the screen is reporting and a verdict the machine returned. What reaches
+    // this parameter is `PhoneSurface`'s routed line, and that line is only ever non-empty on a
+    // REFUSAL: `PressFeedback.ofSuccess` and `ofUnsent` both leave it "" and say what they have to
+    // say in the toast. The stale, not-sent and snapshot-stale lines above are the screen's own
+    // sentences about a link and a lease, and painting those `--p-err` would report a refusal
+    // nobody made -- which is `ofUnsent`'s own recorded argument, one layer up.
+    if (outcome.isNotEmpty()) {
+        column.addView(
+            notice(context, outcome, NoticeKind.ERROR).apply { tag = DetailTag.OUTCOME },
+        )
+    }
 
     // PB-INPUT-2's "visibly", above the controls it qualifies -- the same rule the two notices
     // above follow. It is ALWAYS DRAWN, unlike them, because there is no state of this screen in
     // which the lease has nothing to say: a session is either one the machine has confirmed control
     // of or one it has not, and the requirement's recorded failure is precisely a surface that
     // looked identical either way.
-    column.addView(notice(context, panel.leaseNotice, DetailTag.LEASE))
+    column.addView(notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE })
 
     // THE BUTTON SITS DIRECTLY UNDER THE SENTENCE, which is row 22's own arrangement: it is that
     // sentence's `[Take control]` promoted out of the prose, not a control that happens to be
@@ -250,18 +266,46 @@ fun sessionDetailView(
 }
 
 /**
- * A notice line.
+ * Put a new conversation into a drill-down that is ALREADY on screen, or refuse and let the caller
+ * rebuild.
  *
- * IT IS A BARE `TextView` AND CARRIES NO APPEARANCE, for the reason `ActivityPanelView`'s stale
- * line and `SettingsPanelView`'s notices are bare: there is no notice or body-copy component in the
- * kit -- row 8's empty state is centred with 48 dp of vertical padding and is a different thing --
- * so this renders at the theme's default until there is one. That is the absence of a decision
- * rather than one made here; reaching for `Body.Secondary` directly would be a screen choosing type.
+ * IT IS agents-tracker-ksvb.3'S ARGUMENT, TRANSLATED TO THE SURFACE THAT REPLACED ITS SUBJECT.
+ * The original stood over the daemon-rendered grid: `PhoneSurface.drawDetail` guards on whole-panel
+ * equality, [SessionDetailPanel] CONTAINED the snapshot, and an agent writing to its terminal made
+ * that guard false on every journal event -- so the header, the notices and both controls were
+ * destroyed and rebuilt at output rate. ADR-009 (1)/(3) deleted the grid, and the defect moved with
+ * the traffic rather than dying with it: the transcript is now what a working agent changes on
+ * every item, and it is CONTAINED by the panel in exactly the same way.
+ *
+ * WHAT THAT REBUILD MOVES IS THIS SCREEN'S OWN HARM, and it is why the rule is kept rather than
+ * retired with the well. The take-control and Stop controls are slots the surface OWNS and
+ * re-parents (see [tagged]), so a rebuild at output rate re-attached the button under the finger
+ * about to press it -- and the notices above them are what the user was reading to decide.
+ *
+ * IT PATCHES THE CONVERSATION AND NOTHING ELSE, which is what keeps it inside PB-DS-9: a screen
+ * states what is on it by composing it, and an update that patched several parts would be a second,
+ * contradictable statement of the same screen. The one difference this accepts is the transcript;
+ * anything else differing is a rebuild. The rows themselves are recomposed -- a conversation is a
+ * list, not a string, so there is no `.text` to set -- but the header, the notices and both control
+ * slots are left exactly where the finger last saw them.
+ *
+ * @param onApproval passed through unchanged, because the recomposed blocks carry the tap that
+ *  answers an approval and a patch that dropped it would leave a card that draws and does nothing.
+ * @return true when [host] now shows [next]. False means nothing was touched.
  */
-private fun notice(context: Context, text: String, tag: String) = TextView(context).apply {
-    this.tag = tag
-    this.text = text
-    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+fun sessionDetailRedraw(
+    host: View,
+    drawn: SessionDetailPanel?,
+    next: SessionDetailPanel,
+    onApproval: ((String) -> Unit)? = null,
+): Boolean {
+    if (drawn == null || next != drawn.copy(transcript = next.transcript)) return false
+    val slot = host.findViewWithTag<View>(DetailTag.TRANSCRIPT) as? ViewGroup ?: return false
+    slot.removeAllViews()
+    val rebuilt = transcriptView(slot.context, next.transcript, onApproval)
+    (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
+    slot.addView(rebuilt)
+    return true
 }
 
 /**

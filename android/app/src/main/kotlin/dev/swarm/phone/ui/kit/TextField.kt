@@ -41,6 +41,11 @@ import dev.swarm.phone.R
  * inset exists to prevent, one layer in.
  */
 fun textField(context: Context, hint: CharSequence): EditText = EditText(context).apply {
+    // [Kit.textView]'s property, on the one kit view that cannot come from that constructor: an
+    // EditText is a TextView and takes the same slack, and a field whose text sat on a different
+    // line from the read-only well beside it would be the delta this kit just spent a commit
+    // removing, in the one place a user is typing.
+    includeFontPadding = false
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_primary))
     setHintTextColor(Kit.colour(context, R.color.swarm_text_secondary))

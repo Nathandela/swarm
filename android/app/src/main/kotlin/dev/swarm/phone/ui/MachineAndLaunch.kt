@@ -27,8 +27,45 @@ import java.util.UUID
  * a kill_switch refusal is legible, and offers the only panic action a phone legitimately has:
  * revoking itself.
  */
+object MachineLabel {
+
+    /**
+     * What to CALL a machine, decided in ONE place (agents-tracker-ksvb.1).
+     *
+     * THE NAME IS A WIRE FACT AND THE ID IS THE FALLBACK, never the other way round.
+     * `swarmmobile.App.MachineName` returns the hostname the machine published in its pairing
+     * payload; the endpoint id is `ep-` plus four bytes of a hash of a state directory, which is
+     * the string this product used to put in front of people because nothing carried the name.
+     *
+     * AN EMPTY NAME MEANS THE MACHINE PUBLISHED NONE and the id renders -- which is a fact, is
+     * unique, and is exactly what shipped before. Nothing here invents a word for the gap:
+     * ADR-007 B135, and `Unnamed`/`Unknown` on a machine row would be indistinguishable from a
+     * machine actually called that.
+     *
+     * IT IS ONE FUNCTION RATHER THAN AN `ifEmpty` AT EACH SITE because there are seven sites --
+     * the machine row, the inbox scope chips, the settings pairing row and its destructive
+     * Replace confirmation among them -- and the one that got written the other way round would
+     * show a raw id beside six names with nothing to fail. `TriageInboxScreen` records the same
+     * lesson about `needs_input` written out three times before it was named once.
+     */
+    fun of(name: String, endpointId: String): String = name.ifEmpty { endpointId }
+}
+
 data class MachinePane(
     val machineId: String,
+    /**
+     * The machine's own name, verbatim from `swarmmobile.App.MachineName`, or empty where it
+     * published none. [MachineLabel.of] is what turns the pair into what a person reads; this
+     * field never renders on its own.
+     *
+     * IT IS DEFAULTED WHERE [dev.swarm.phone.ui.SessionRow.agent] IS NOT, and the difference is
+     * what an omission COSTS. Forgetting the agent renders exactly what a machine reporting none
+     * renders -- nothing -- so the two are indistinguishable on screen. Forgetting this renders
+     * the endpoint id, which is what every one of these screens rendered before this field
+     * existed: visible, honest, and the thing the bead is about, so an unpopulated site announces
+     * itself the moment anyone looks at the screen.
+     */
+    val machineName: String = "",
     /**
      * `App.Presence`, verbatim -- and it is the RELAY'S OPINION, never evidence about the
      * machine (PB-APP-11). It must be rendered with [freshness] beside it, which is why that

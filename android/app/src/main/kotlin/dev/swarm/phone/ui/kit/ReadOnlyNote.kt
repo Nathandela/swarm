@@ -34,12 +34,28 @@ import dev.swarm.phone.R
  * The ink is `--p-ink2` rather than `--p-ink3`: row 22 says `Body.Secondary` / `--p-ink2`, and it
  * is prose a user is meant to read -- `--p-ink3` fails the 4.5:1 body-text floor on every surface
  * in this product.
+ *
+ * @param capped true where the note is STANDING CHROME above a scroll rather than prose under a
+ *  block (agents-tracker-ksvb.3). The scaffold's connection banner is this component, and it sits
+ *  outside the scroll by design -- so a sentence that wrapped to four lines pushed the whole app
+ *  down, on every destination, while the user was reading something else. Two lines and the
+ *  platform's truncation mark bound the displacement without hiding that there is more.
+ *
+ *  IT IS A PARAMETER AND NOT THE COMPONENT'S OWN RULE, because the same note under a terminal
+ *  well must wrap: row 22's sentence is prose a person is meant to read to the end, and clamping
+ *  it there would put the second half of an explanation behind an ellipsis. What differs is the
+ *  SITE -- inside a scroll or above one -- which is a fact only the composing screen has.
  */
-fun readOnlyNote(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun readOnlyNote(
+    context: Context,
+    text: CharSequence,
+    capped: Boolean = false,
+): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     gravity = Gravity.CENTER
     this.text = text
+    if (capped) Kit.cappedNote(this)
     layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {
         topMargin = Kit.dimenPx(context, R.dimen.swarm_space_10)
         marginStart = Kit.dimenPx(context, R.dimen.swarm_space_18)

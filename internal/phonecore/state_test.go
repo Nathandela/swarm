@@ -81,6 +81,7 @@ func fullState() State {
 	}
 	return State{
 		Machine:             "m1",
+		MachineName:         "nathans-mbp",
 		MachineStatic:       bytes.Repeat([]byte{0xA1}, 32),
 		MachineSignPub:      bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
 		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
@@ -461,31 +462,37 @@ const stateV8Fixture = `{"schema_version":8,"machine":"m1","machine_static":"oaG
 const stateV9Fixture = `{"schema_version":9,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"9A8+xA7qCVgjeQmNLMlmphMYLglEdfmvDlMC3Z0xyKFQHKICgvCTC6Y/qtXno2uPRkgFAcj9ZXIaKd6+","content_key":"z+o0S1vblLNcliSxEpKgiX7c2HbabSse8BoxlDiXvcUBsQVIo5yIAtZ7+bt6HKWKAQQ3RrqBCUADAwU5","wake_state":"VIaWolwwUV1eygdw8dkwzyTAurcQEJtZd0cqh0nyTblN5TlnH6LyZNgZhI4Mz1zg3YgfiplYONEZzoyBEkzjQXMXggGtV5/F3qE=","content_kept":"WQtT1MV2/CT6tSlSemtn/ksK7RnblCFENQi35DzNuYeGHAwxfn4344S3cXRFqyb4+rPy34Sgihgp8/sCpC4TMtPhen+Ha0l7F9VXfFW5hhNTtvYBUYehUJNue+3/KZLqsq60CeZ9yJDf2yYI9oh6VFpfFx/FMOxQRDNckAdVRW0MRJ1bPXTyFUr3A18kbPzVfiZo8u5xkpE/+iJ0q/skNXdFJ8eXJDDQc99XvzTITGl+uvQL72lE7BfT5gIF9Y3iWUWEPri8HTdoEtKLdaeaW2SZgSEILwa0rOCLVPVFqCAd+JRADLZ20jT7GVwD79w5or5cGXArfNXVw9K9XRL0NCxy55u2gpJZsc7pCre8PCGAMXA9Skwf+GJQq5qek8JKYqZXy302wOyiK8jGvZV1aHxOWOAalSK7dEjYUF07RSKGbg6CfXazHESNF+zbJatzrcQm+h/zfh+tE1VCwSefzHelOAIIlA0juS1Rzel99z18/rAyN7/Np27/nNGUjHpvEmTa6OSsFjA3V4uv/YXtDGK0MY1f","content_purgeable":"dSBXI9e9MQVcUcwpfuPkaRP4vT1ADKOIT+8I7umnrMV77yqworL08cH/jGP3ZGHgMZprckW5eGpZjmJ1cdF/iQ5F+wapazgFwEmCZkHVy/tp9r6lvSt1aviIopZfIaGUzLLRxAWhJIl+O+RMIVyFv1CsXySA8/zlh+llDJ1iq3U3vtIXbnx2wf6AtfV7bMp+pSQIQoW0B9mTF9cKSjGoy+XKOt8j0SzIYK2XVYJJCvOGl/MD0u7QOgSHV02zyQWAYYnumpdUDl2qvPzjERxbnBgHQZPT6/oRtZ2au5w8JImOwfcmxKDRt0KnGd9LSdcmtXZP8APK6/BXjeklrQmD9EGxAQ==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
 // stateV10Fixture is the PINNED v10 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v10 adds items, the phone's TRANSCRIPT (ADR-009's structured chat), inside
-// content_purgeable. The top-level tag set is UNCHANGED, which is exactly why the version had to
-// move -- the mechanical field-set check below reflects stateFile and would not have seen a field
-// added inside a sealed container, and TestStateStore_PinnedSealedFixturesStillLoad is what
-// catches it instead.
+// stateV4FixtureKEK. v10 adds machine_name, the hostname the machine published in the pairing
+// payload (agents-tracker-ksvb.1) -- the phone's only source for what a person calls the computer
+// it is bound to, since the endpoint id is `ep-` plus four bytes of a hash of a directory.
 //
-// A build one version back drops the container's new field, and the loss is permanent rather than
-// re-fetchable: the receive high-water is durable too, so the relay's redelivery of the frames
-// that built the transcript is refused with crypto.ErrStaleSeq. It takes any pending approval card
-// the machine is still blocked on with it, which is the one item IS-LIFE-3 exists to keep
-// answerable across exactly this process death.
-const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"2C6fYgxMdR0FSsHa2kAEhULMqUcF2INbdeW1pIKOfJrGjNuJncGnLA+jlzs0PuntYLT4id7Tq37DJOv/","content_key":"JerXaja3mL5C8++9Y5wmtM20c1AkS+kIMa2+HKPmEnsTbaRg632nuVzKcK5TSqwL2ZsuXjMITRj6zEA7","wake_state":"Uiq6/TZjSbmZGbnBRM0wYS9FXs+0rp2EbqpFiReW1TI+fuZ+ARkYTlmZ8MFTTz/k0KOnDh+fMrGpslDJdcXZ/yPtd6gjJ6KLhoA=","content_kept":"JcX6+X/BK2AV0sMJTRWDQF4wDmYHKC2GVY9w5mPxdNz05NwXhtQTpx3Hs3Yugj5rWa6G86Yh5hrtRqMLv5oHDvKe+dj9WBnNYvWA188ZynvQBTCF/tB0zkg9ujqnCWGti/oSJzuf3aRdprkfhtDASLzWG3Jv8ijhpvX3KapdBZRSzQ7kl1xfOH6RlzRarvdVoFdU3L1RVsf2c6qbRb9+sJPkQI5sqL0ocVLJUAgCME6ROGbK60BKuorf/uthatwBYLy2PUuFKySbqVhbvZw67qgxwuHiCNDtzn7eJWyLt/KrdZJLmUtsYsfHDpQu9FHh21nr0OwndpY9Vet26BuitvTsxq+z3aRluH/4hP9GAW7Tn9KPwLDFY67/HqzQLSP3q5vwZF9jnZu3B4zl6KekIG6rZnr+QQIKZnDqrvYed1c+JV6U0AceTmrOjmTmc7/4B2krKuZkIIcWaIhNo1M66pWDcZplibMhK/RfRaSrL/aA1O88A2EKymOGI95BP/vWIE1Nj8t/64UwDbeRbNXUI9vpPccD","content_purgeable":"ys6PsB5ElnAWY1pkkmJ0QqUvT9jmzWvAfLZxTzJ25/7hhOq6UfjU8PzzkimDgu7ge5oaG3KdSpZCjAnfLmyxPDBmlxjIda6J9dIpeMYdfzD4RTehg59n4C4vxGB7TN8I/QeRxsMMmqIUg6Npzq1HA5Ks3cjXQMPH+kRZIJN2TGHW+EOjlMQqsrnW99ZgePBQPAmcbU96y9Je8XTDzEpceUjqb6s+S08ucjQCwc0Z1D3C8r7VSUE0ZeiR+GcaglFTVFNI6JX1WSyhJ6tIX7QRnFcqaL3rFxJOctDNlBQ2HGSAMZnuuBX5+2o2BNL2NOUIe9Q4xxHFoAEYBHR0R/SDjZXo+ZNhTiopyEK2OmQ7+8U6J1pfheUJq66mA9x4cQXev0LGeF2vf52lDT8nBJDbBYq7lpJ9D2p/724lNCiHoa5Nf4QKrf7NEP6UywgLOSk4joSf0i6NoKPPKijSXrPROW6vBHpPzwiDoRzJZEY15DpfrED4oq97GO4ooTGJnPmMcNyuqpQltAMUcyL442gD107qO83kewYtM6t2KeQbUV19XidU6oR6g2Os1oaGHrEFzIZG8gdIp+cRtyAeINYoBi4E5EWtmWje7N3BcjYqEJd3J/lnroVYuC+Z4We2ozIzRcqqHCWyegtcgaxr/+d+GXOvQO0xOeZkWCfrVzOh1YAoFvHdE67LR46tPZSstDBXMssGb6pALprvi+s0sFn3HeHcXUunLCeUQKiBkk8=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+// ITS BUMP IS THE MECHANICAL ONE AND SAYS SO. v7's pin, v8's clock and v9's revoke each named a
+// specific brick a downgrade produced; this field's downgrade produces a machine rendered by its
+// endpoint id, which is exactly what shipped before it and is not a lie. The version moves anyway
+// because the tie between the constant and the durable field set is unconditional on purpose:
+// see StateSchemaVersion's own paragraph.
+const stateV10Fixture = `{"schema_version":10,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"PmfgMwX6Uns8zJLuUA9mAtiU5jNx+YsH6Pr8oKj4Kb2wPrM9U3Wu9zHzj05lkCRlpyXqx/YQB4DkbRYn","content_key":"NlluJ6V31SU/CpV62DvokkATJsxs6eForsyF4/V1VA+oYpH/QJXIWIdOXSvYdUQe7huMVPjJvlyja9IC","wake_state":"oFDW8MQcwJa4DD29//q9dhMq8+LApZFF7N+purtiCUBb3SPMEfmPzLj4OZ/mE15bhn886KHvOtpsQIKQ8kVyiu9K2vIn35X/Pug=","content_kept":"oxITQCQRAB5hSLdI+3/9i8IdXjRZ45C3HVuNCsKIL05lg1HDz6rcK3qPu50tiDJccn58TCkpm8Uu758qcF2NBEqOnU0DjeBefiFgyH0Huts8AaECGOmfzjWPpxO6FCPApGaxVVQMLWtLSvUVkqDJfmtzqua7Z3oyQleLKAec17JgDvq1X+WfEh7o8Ck3Bd4AoZ+XcDy681SvkjllmNlZkDFYuYGTmsP8FSxNUciyGL9iSRiADxrkwajmYgh9Eb8tDyzLmislEwUDJeXKbGWOCBT6uS/GuPNIcmQiv54hY84+N/2e07RTNYTOJQmUzqNfY8UL0dyHKmI9ceChmO3grVdCTqMQTFFZtOPa9iQQLcDIO3k5oWWZ5xcsJP3ThE1QViP/QEqoSw1eHgdETiDa5BFAcmouBrXjxzWAaJBEJJAaO5DLRdjis0sYCzlCEW/G7zHFcUK1hO/+k3uO6zNRWXRtrcLnaFLy7lBe2FjVEMuE85jre3CrRqc2a5TXmgoLm1QcKMBqOwj9RWB5jz1sX/yhp5Ha","content_purgeable":"HCJqYRqSKBXvaEQ0MR8py30GK33SvI9Ut5On8ZHctwzlnpMoNDYdS1+cpKcpprGQtST2QeaFMhqJYU2difDE50YE8ShreL8U8JpvB6vqoPKBHi+/dcUacMo8vQcRJ7ZD8w2JJ2y73lgu93ZFGNONvKVUX3rrj6ygl90p6OT/xXxdxLk6RBetRY2QRx9bmAQ4aaZL/E2ywXa1wMx2VHQUrcxu0Y0QxyrrzsBgTJXQ+WImeJmqPg2D2pOkmiAdg2ivC52wKEOoUfLh4j5KI0Da9b4y/nho+zI8LaJd1J72bwIjAns9Y8qeJhzLYEqdSC7tJJDBAVxAiDRVZ/EZxlraAtxnXt0/++Cz7xtfuHM=","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
-// stateV11Fixture is the PINNED v11 blob: what this build writes for fullState() under
-// stateV4FixtureKEK. v11 adds Item.LastCursor, the transcript fold's per-item high water
-// (interaction.go), which sits one level deeper than v10's items -- inside the array inside
-// content_purgeable -- so neither the top-level tag check nor the sealed-tag list above can see
-// it, and this literal is again the only thing that can.
+// stateV12Fixture is the PINNED v12 blob: what this build writes for fullState() under
+// stateV4FixtureKEK. v12 IS THE MERGE OF TWO INDEPENDENT v10s and the literal is where that
+// becomes checkable: main minted v10 for machine_name (agents-tracker-ksvb.1) while the
+// interaction-program branch minted v10 for items -- the phone's TRANSCRIPT -- and then v11 for
+// Item.LastCursor, its per-item fold high water. No shipped build ever wrote the union, so no
+// older literal can stand in for it.
 //
-// A build one version back drops the high water and comes back with items whose guard reads zero,
-// so the first repair after that launch re-folds records the phone had already folded: each
-// increment concatenated twice (IS-DELTA-1) and the item's fields re-collapsed to older values.
-// The damage is silent by construction -- the transcript still reads as prose -- and it is
-// durable, because the repair commits with its own watermark (PB-SYNC-3).
-const stateV11Fixture = `{"schema_version":11,"machine":"m1","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"kfaTGTMAkprMneg4RrpkqIJrPodNByqKuo4FQRLtK0cdkuwelKjkOjbt0awpiVyoeljCq81BbP/A1efn","content_key":"2gnAiHxlHN4vvnKdycOa78SZ/OixHVjVrRW67CEF1ExDf68S5JklcMmWhAmVPIarJBbzUJ6mDUaxsOhV","wake_state":"ojWKnXYsvywMO9En8CU8kr80Zjm9EJFC63ChmFNE+JRxqEVTXU8dloeGd6g6yWDFOTq6UfalEAX10efxIkzvLbxi24aS/4qSj+4=","content_kept":"idiF4l0hHVuWgjVou7cJ0tSHJOUnRz9QQYr6cySvLBmhkgIWAfd5FyMw+9Wgqb9pBfSOmlgegQS7V9MRHkb2EznSd4n/hH+a4n0EDA8GNmcosnz992vY5zHWXz6dglIf6KNQepiOtSBmAZbtNkYLLAjkJMqhs+Dwx4cZ8TIrNIvfeeQkV5uQhlXq5dznzH/9NrB9xsEg7WMtVUgyFlOg1ybrDiyAn6D0MS0bye+BSiP/pdird1gpDQaCuULpHZ3ZTBh4W5/oIAzyQihuzkMP085gHodWambO/noPRjwA7N65Z2FIetdnMHHQRIX8zvlbISxokLEWrrmblStKrru8gn7XH9aULSgzkmoZCrOpC/AXSX0JK+AOcn6vgckwCaPD9jeUxuCIhTUFFWjGIFreIv751Fmjl+ybT2RpRnFkojIEaCsJZkdnkrJbbsgcyU94kFI3Tt4OzBCjsNp4k8zHJwBlt7cOBPvgMVsn0umBiLTsyhJMb9OQxBMExVBVD1J38K+lYrQ9kPcbDAjM853Hb6aQM/dA","content_purgeable":"JbU9CuBdRdWvtWObYWcI30ZSpJc9folF/xHFgyxBWBPwGIgkvKjIbps3dgP0Xv4L4PkqES+LNoCYPp4OcXrZo6yKPixLCe2X4xYlnduuSL6tnR3b8gB6BxZsEEH6ANm0Tprz2Y4+u8w09dNbtyijCqly3mrFk6A1T2MlAwZV8EVxjAJEI0hrOjJie03lZ8nAqe+GwuqddvdDU/YwYiLek/mk3R7YqFw3I7qZ7g0e6e+jlYYRAIVaeILLlvNgB9Ck/DOcd1MiOb1RQMsK5daMroJY5oWLwbY5TyBK8oS02tEQCVp9CVV2JEulAW9KIO5VL+S0LfsoK8D1GIkAGtuN+fJAIBn5UYXxVIU24x0pih6OTMieQ+npovSmkT3ONewcOHuTvd8ag7h442kp0ON1vrCcDSB/b/YNn7i72wcRiKKzxsfQE2HVDW7ukgIkXJoeyxIQ7pPlojYvCRSoiPVjniK7hUmwYxTDLpB3VrEQnrzzc/AOR93t5L1qr/UGrB5ZOCvdlx0nc7+UoQfgnr2xgBJgMUq8doH6QNgNsU5nLl+oh8yW9VV6TrUUsvQEisfhUgblGRiZBPL0SShzC0rT61LGhCWtcZZdHbLgYym02eu4ICx0TpJMAeb894y4Y4ThqoKka/1L2iXWmu51+MZl/g5hr3XqCycCFr/mot4cj4GEFaMlSktftBXEs1sLhufOnytuRhS1tI+7Qtb2hgCOqyAI1a0UxbNiKs0a8+1Hdc4E8vvEeule0XNXVhUs","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
+// It is CAPTURED, not regenerated, and it has to be: persistState seals with a fresh AEAD nonce
+// per write (state.go), so the file is not byte-stable from v5 on -- a literal can only ever be a
+// recording of one write. The two branch v10 literals are deliberately NOT both kept: they pin
+// different field sets under one number, and a map cannot carry that.
+//
+// What a downgrade costs is the union of both bumps. Dropping machine_name renders the machine by
+// its endpoint id, which is what shipped before and is not a lie. Dropping items empties the
+// transcript permanently -- the receive high-water is durable, so the relay refuses to redeliver
+// the frames that built it (crypto.ErrStaleSeq) -- and takes any pending approval card with it
+// (IS-LIFE-3). Dropping LastCursor is worse than either because it is silent: the first repair
+// after that launch re-folds records already folded, concatenating each increment twice
+// (IS-DELTA-1), and what the user reads is prose, and wrong.
+const stateV12Fixture = `{"schema_version":12,"machine":"m1","machine_name":"nathans-mbp","machine_static":"oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=","machine_sign_pub":"srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrI=","machine_relay_auth_pub":"w8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8M=","relay_spki_pin":"1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NQ=","disowned":true,"routing_id":"rid-m1","epoch_id":7,"push_preference":{"alerts":true,"mentions":true},"reconciled_epoch":7,"wake_key":"foz43PX1gRLgN2TdFCccQ4jELrDM4zKOCrdYzswqIzyo0nueNhfJq362MUODyDfQiGyYlhEMRjK0iOQu","content_key":"/TfZWg3cGcevtGTUXouSdSjnO49NfLdWHply6YPkVbkZ5VN0VyGx2J4w8pmRrlQam2TSZcvGZn1S7vL0","wake_state":"tgH4O3Z2cDqiKVD+ywzQMhNEvGJ1QtZzwqbwBqARsZdYW3Oil/P2efseTrLQig8QpXTg3C19qJ2jJy7cPKDNJCGh44D9xtsPvvM=","content_kept":"yK2Arrg/RiCNM9Qe/kAl0xA0yI2/l5UvLN7hNinbeuBw9DYrqem2Cu9dC25L1bRBGj0Myjjw3HE7NVMosPAsGIJoOfpoOTBOA24UmOkz0aQksCV3Lta1Tk/BF0prIg2h3dnV5dEV8Y8qOaA1SnDPa2ljyZXr7DhcSMEV/YExJlq+aEyQu0iP/hndOVlY2DoLPAq5ZVpxWwTSxSW+Ljspenz5PaGZ7G4VcI1L+kbYPY2I/n14nF6Cb0YjB66ZdcVnHdeCdSfFhr1a2vCSxWdPOyfLc5LsSwnYDS6RZKDXoit1E9nR6vONDjjd0D4E0lIkI9yw0uuTZSXsZKbwroGstkWIxbJvgyLVbhBZECN5vXv8cF8bqJCFTsknCESVZNDH9kzQoQAswgbqqdhoX8pTGW4aoB5PuvadGJGAqeUeKY8kbIMRru7YOj44+OH1BmswEboFDrjw/F4T3JGlbAy4FyyehuLPusUb4U8hU9FuM1da3OLigmEzkZmX4agQaSkl5KtAi3UY4mi/sFsruXk65DL+MzDz","content_purgeable":"MHJeU/Egku4tPsnRHLmBSRcCw9mxRQI82BUJuxY1d5Lm/mLx5DV8/TusrsZTDzyAybStYY3Lg6nkLI99bbd45NGdGDAR7gQJG7uKjwBKSC7w6y73y7fIHRL+C2urqBLZkf3c0mQGg+hOEKhQJde/rl+5EY24B5ORWncZv56h2Nir2X09zfgfsKa0WSgES1nZtBY3TUgQgr4/HRz63OJr0hMLTTKcZshjv7oh82njhYkOBUdZAr4+iYGuiPjzchs8+2/4gFFkE5mW0ipNIZAPbNg/yrByuj+01zTvPZ94tE9J9q+wqVbKe8PVKoMFpV3FYEK2k48AJp06qM350JpdCpCgm1x0NlfHdD/mx9opMGnn/uJk9A2VyP/AIAXDOE3qJ2DYtoEjd6R8e/JUdy0w5n1AxWa2VDXuehsVYUxiIzWKxaHeHKcH4MqkHaH2kYKwcNawonMfCGugsNo7fVYJDDNBgT/Kcj2Gl3+sP9CRVQCiHa0ZbqRI2PLlE97b1Rqwioomwhny7y1kBk9VR49X+cezssvyjl3SeIVA0K7S3wiPrJ9bV2U/GfrFFoqtt0kDkpCTSdzpdXZoOySGUQCD7b72oZVEHg181171615jluZC9I8efDfFv+BPYvNgnASg0rPduI9ynGP71bRN5Y5j4VQnWFlTpZLQgb82/ErlW8+ofXPpF0M6ZxrOBzSbhABeyipmL+23C/l1tuEetinkBlTEQNbmpdDlmmyxSmGAemaoNQyfLs3pHYr6nTh1BaA24+KJFvd7bA==","grant_epoch":7,"grant_seq":2,"relay_cursor":17,"stale":[{"sender":"0000000000000000","epoch":7}],"stale_streams":["journal"],"last_heard_at":1753900000000}`
 
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
@@ -496,7 +503,7 @@ var stateFixtures = map[int]string{
 	8:  stateV8Fixture,
 	9:  stateV9Fixture,
 	10: stateV10Fixture,
-	11: stateV11Fixture,
+	12: stateV12Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

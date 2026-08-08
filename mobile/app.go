@@ -839,9 +839,25 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 	a.mu.Lock()
 	need := a.needs[cs.SessionID]
 	a.mu.Unlock()
+	// THE USER'S OWN LABEL FIRST, the id only when there is none (agents-tracker-ksvb.1).
+	//
+	// The id arm below is what every session rendered as before the wire carried a name, and it
+	// is kept EXACTLY: a 16-char random base32 local part, or the whole id when it names no
+	// machine. A daemon predating schema.JournalRecord.Name sends no name, so it still lands
+	// here and still renders what it rendered yesterday -- which is the whole compatibility
+	// claim, and mobile/namefacade_test.go is where it is asserted.
+	//
+	// AN EMPTY NAME IS NOT A LABEL TO IMPROVE ON. persist.Meta.Name's own comment says "" falls
+	// back to AgentType at display time, and that is the TUI's fallback, not this one: the
+	// agent type names the CLI, not the session, so two claude sessions would head identical
+	// rows on a triage screen whose whole job is telling them apart. The id is unique and
+	// honest; a shared word is neither (ADR-007 B135).
 	title := cs.SessionID
 	if _, local, ok := strings.Cut(cs.SessionID, "/"); ok {
 		title = local
+	}
+	if cs.Name != "" {
+		title = cs.Name
 	}
 	return Session{
 		ID:      cs.SessionID,
@@ -1309,6 +1325,20 @@ func (a *App) PendingOpCount() (n int, err error) {
 	return len(a.inflight), nil
 }
 
+// machineGaveNoReason is what a reply that carried no words says about itself
+// (agents-tracker-ksvb.5).
+//
+// THE FALLBACK USED TO BE THE WIRE OP, and that is a token rather than a sentence:
+// `remotegw.refusePushPrefs` seals a refusal with neither code nor words, so the phone's
+// durable outcome for it read `error`, and a severed lease read `detach`. Every screen that
+// renders a refusal renders this string as the second half of one -- "Your machine refused
+// this phone control of the session: detach." -- so the fallback is copy whether or not
+// anybody chose it as copy, and a protocol token is the one thing it must never be.
+//
+// It is deliberately not "unknown error" or an empty string: the first invents a fault
+// nobody reported and the second leaves the screen with a colon and nothing after it.
+const machineGaveNoReason = "the machine gave no reason"
+
 func outcomeOf(ctrl schema.Control) *Outcome {
 	code := string(ctrl.ErrorCode)
 	if code == "" {
@@ -1316,7 +1346,7 @@ func outcomeOf(ctrl schema.Control) *Outcome {
 	}
 	msg := ctrl.Error
 	if msg == "" {
-		msg = ctrl.Op
+		msg = machineGaveNoReason
 	}
 	return &Outcome{OperationID: ctrl.OperationID, Code: code, Message: msg, Resolved: true}
 }

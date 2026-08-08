@@ -223,12 +223,28 @@ class DesignScaleResolutionTest {
                     if (spec.isMono) MONO_FONT_FEATURES else null,
                     values.getString(IDX_FEATURES),
                 )
-                spec.lineHeightPx?.let { wantLeading ->
-                    assertEquals(
+                // LEADING, IN BOTH DIRECTIONS -- and the null arm is the half that used to be
+                // unasserted here (ADR-009 D7, amended 2026-08-08). A design fact stating
+                // `line-height: 1` states NO EXTRA LEADING, which on Android is the absence of
+                // `android:lineHeight` rather than `android:lineHeight` equal to the text size:
+                // the attribute sets the line box's absolute height, so the same number shrinks a
+                // box the font wants taller and the platform pays for it with a negative
+                // `lineSpacingExtra`. Asserting the absence is what stops `Label.Button` sitting
+                // low in its own CTA again. See TypeScale.Spec.lineHeightPx.
+                val resolvedLeading = values.getDimension(IDX_LINE_HEIGHT, MISSING)
+                when (val wantLeading = spec.lineHeightPx) {
+                    null -> assertEquals(
+                        "$name (origin `$origin`) resolves a lineHeight and the design states " +
+                            "no leading to transcribe (line-height ${spec.lineHeightMultiplier})",
+                        MISSING,
+                        resolvedLeading,
+                        0f,
+                    )
+                    else -> assertEquals(
                         "$name (origin `$origin`) lineHeight: the design says " +
                             "${spec.lineHeightMultiplier} x ${spec.sizePx}px",
                         wantLeading,
-                        values.getDimension(IDX_LINE_HEIGHT, MISSING) / scale,
+                        resolvedLeading / scale,
                         0.001f,
                     )
                 }

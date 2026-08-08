@@ -6,7 +6,6 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.TextAppearanceSpan
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -88,7 +87,7 @@ fun activityRow(
 
     if (timestamp != null) {
         row.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = timestamp
@@ -100,7 +99,7 @@ fun activityRow(
         )
     }
     row.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
             // `--p-ink`, which is row 14's cell and NOT the `--p-ink2` a body line takes on the
             // session row. `.prow .ln` is a session's need -- a subordinate second line under a

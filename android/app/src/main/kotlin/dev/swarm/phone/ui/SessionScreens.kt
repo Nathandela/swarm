@@ -118,6 +118,22 @@ data class SessionDetail(
      * press resolves to anything else or the drill-down closes.
      */
     val stopNotSent: Boolean = false,
+    /**
+     * What a person calls this session -- `swarmmobile.Session.Title`, which since
+     * agents-tracker-ksvb.1 is the user's own label where the machine sent one and the id's local
+     * part where it did not.
+     *
+     * IT IS A SECOND FIELD RATHER THAN A BETTER [sessionId], and that is not tidiness. The id is
+     * what every verb on this screen ACTS on -- the Stop, the kill, the take_control -- and a
+     * screen that had only the label would have to reconstruct an identity from a string a user
+     * typed. The label is for reading; the id is for signing.
+     *
+     * DEFAULTED FOR [stopNotSent]'S REASON, and the default is safe here in a way it would not be
+     * on an agent cell: empty means "nobody said", and `SessionDetailScreen` then renders the id --
+     * which is exactly what this screen rendered before the field existed. A construction site that
+     * forgets it loses the improvement, never the truth.
+     */
+    val title: String = "",
 ) {
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale
@@ -236,6 +252,16 @@ data class SessionLease(
      */
     val leaseHeld: Boolean,
     val online: Boolean,
+    /**
+     * What a person calls this session, for the nav header: `swarmmobile.Session.Title`, empty
+     * where nothing said. [SessionDetail.title] carries the whole argument, including why the id
+     * stays beside it rather than being replaced by it.
+     *
+     * THE `cols x rows` SUFFIX IS NOT AFFECTED. That is the grid's shape and the one thing this
+     * header says that the detail screen's does not; naming the session better does not make the
+     * PTY's size less worth stating.
+     */
+    val title: String = "",
 ) {
     val showsTakeControl: Boolean get() = !leaseHeld
 

@@ -261,7 +261,7 @@ func (a *App) BeginPairingWithCode(code, relayURL string) (p *Pairing, err error
 func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 	trimmed := strings.TrimSpace(relayURL)
 	if trimmed == "" {
-		return pairing.QRPayload{}, classed(ErrClassPairingFailed,
+		return pairing.QRPayload{}, classed(ErrClassRelayUnknown,
 			errors.New("this phone has no relay yet: scan the QR once, or paste the full code"))
 	}
 	dest, err := relayAddress(trimmed)
@@ -271,7 +271,7 @@ func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 	}
 	id, psk, err := pairing.DeriveShortCode(code)
 	if err != nil {
-		return pairing.QRPayload{}, classed(ErrClassPairingFailed, err)
+		return pairing.QRPayload{}, classed(ErrClassPairingCodeInvalid, err)
 	}
 	return pairing.QRPayload{RelayURL: dest, RendezvousID: id, PairingSecret: psk}, nil
 }
@@ -287,7 +287,7 @@ func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 // spelling the transport reads. Everything else is preserved as written -- the string the confirm
 // step shows has to be the address the user can compare against their terminal.
 func relayAddress(raw string) (string, error) {
-	shape := classed(ErrClassPairingFailed, errors.New("that is not a relay address: it looks "+
+	shape := classed(ErrClassRelayAddressInvalid, errors.New("that is not a relay address: it looks "+
 		"like wss://host:port (or ws:// on your own network), and your machine printed the "+
 		"whole thing"))
 	parsed, err := url.Parse(raw)
@@ -829,6 +829,34 @@ func (a *App) PairedDeviceName() (name string, err error) {
 	return DeviceName, nil
 }
 
+// MachineName is what the MACHINE calls itself: the hostname it published in the pairing
+// payload, pinned by pin() and read back here (agents-tracker-ksvb.1).
+//
+// IT IS THE VERB PairedDeviceName's DOC PROMISED and deliberately not the same shape. That one
+// returns a Go constant because the device name goes out and nothing comes back; this returns a
+// WIRE FACT, so it reads durable state rather than a literal, and an owner renaming the machine
+// changes what it answers at the next pairing rather than never.
+//
+// EMPTY IS AN ANSWER AND NOT A FAILURE. A machine whose identity carries no hostname publishes
+// none, and the caller renders the endpoint id -- which every screen already has, and which is
+// the honest fallback (ADR-007 B135). A screen must never turn this into a placeholder word.
+//
+// IT IS DISPLAY ONLY. The endpoint id remains the machine's identity everywhere internal: it is
+// what phonecore.OpenStore filters the durable blob on and what crypto.Command.Canonical signs
+// over. Nothing may route, sign or key on the string this returns.
+//
+// A PHONE THAT HAS NEVER PAIRED ANSWERS EMPTY rather than refusing. It is the same "" for the
+// same reason -- nobody has told this phone -- and a refusal would be a pairing gate this verb
+// cannot actually apply: a.ready() checks only that the receiver exists and is open, which is
+// exactly what PairedDeviceName above is gated by.
+func (a *App) MachineName() (name string, err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return "", err
+	}
+	return a.core.State().MachineName, nil
+}
+
 // PairingState is the PERSISTED pairing state machine (PB-PAIR-4): "" when no attempt is
 // outstanding, and otherwise the transition the last attempt reached.
 //
@@ -943,6 +971,21 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		// relay, made over the one channel this design trusts for exactly that. An absent pin
 		// is part of the statement, not a gap in it.
 		st.RelaySPKIPin = out.Machine.RelaySPKIPin
+		// THE MACHINE'S HUMAN NAME (agents-tracker-ksvb.1), and pairing is the seam DeviceName's
+		// own doc reserved for it four screens up: "if a screen ever needs the name the MACHINE
+		// holds -- which an owner can rename -- that is a different verb carrying a fact the wire
+		// actually delivers". MachinePayload.Hostname is msg2's first field, so the wire has been
+		// delivering it since A4-1a and this line is what stops throwing it away.
+		//
+		// ADOPTED VERBATIM, INCLUDING ITS ABSENCE, and unlike MachineEndpointID below it needs no
+		// guard because it carries none of that field's hazard: nothing filters, signs or routes
+		// on this string, so persisting an empty one costs a label rather than the pairing. What a
+		// guard would buy is a name from an EARLIER pairing outliving the machine's own current
+		// answer -- a hostname an owner has just changed, still on screen, sourced from nothing
+		// the wire said. RelaySPKIPin one line up adopts absence for the same reason: a completed
+		// pairing is the machine's own authenticated statement about itself, and the gap is part
+		// of the statement.
+		st.MachineName = out.Machine.Hostname
 		// The machine's NAME (S19), and the only production source a handset has for it:
 		// Config.MachineID is "" on a phone, and the gateway's reconcile record -- the one
 		// other authenticated frame carrying it -- cannot arrive before the gateway exists,

@@ -152,7 +152,7 @@ class PairOnlyRevokeNoticeTest {
             pairing = View(context),
             started = false,
             onStartPairing = {},
-            notice = notice,
+            revokedNotice = notice,
         )
 
         assertEquals(
@@ -175,7 +175,7 @@ class PairOnlyRevokeNoticeTest {
             pairing = View(context),
             started = true,
             onStartPairing = {},
-            notice = notice,
+            revokedNotice = notice,
         )
 
         assertEquals(notice, textOf(root.kitFind(PairOnlyTag.NOTICE)))
@@ -204,7 +204,7 @@ class PairOnlyRevokeNoticeTest {
             pairing = View(context),
             started = false,
             onStartPairing = {},
-            notice = PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED),
+            revokedNotice = PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED),
         )
 
         assertFalse(

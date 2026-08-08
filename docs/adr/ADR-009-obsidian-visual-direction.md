@@ -127,6 +127,26 @@ Obsidian's "glass" is simulated by composition, never by `RenderEffect` backdrop
    solid dark background produces a black rectangle"), and banning it keeps every API level
    identical. If a future skin wants real refraction it writes its own ADR.
 
+#### Amendment to D4.3 (2026-08-08, agents-tracker-ksvb.3): the grain is content-anchored.
+
+D4.3 states the grain's value, its blend and its provenance and says nothing about where the
+overlay is attached. The 0.3.0 field test named what that silence shipped: **the grain was a
+foreground on the screen scaffold's ROOT**, which does not scroll, while the destination inside
+it does. A tiled noise field pinned to the window with the type sliding under it re-modulates
+every glyph's antialiasing on every scroll frame — and at this app's 9.5–11 sp body sizes the
+antialiasing ramp is most of a stroke, so the text visibly shimmers while the page moves. It is
+invisible in a screenshot, which is why every gate and every verification image passed it.
+
+**The grain is now attached to each part that moves, and to each part that does not, separately.**
+In `PhoneScaffoldView` that is three overlays instead of one: the scrolled child (the destination),
+the banner slot, and the tab bar. The tile, the opacity and the blend are unchanged — this
+amendment moves no number and touches no token. What changes is that a glyph and the noise over it
+now travel together, so the modulation each stroke receives is constant instead of per-frame.
+
+**The QR exemption is unaffected and stays structural.** Row 21 exempts the pairing symbol because
+4% soft-light noise on a 29-module code is a scan risk; `pairOnlyView` replaces the whole scaffold
+rather than being hosted inside it, so every site named above is still inside the paired app.
+
 ### D5. Motion register — amends PB-DS-8.
 
 PB-DS-8's decision "no decorative animation; only navigation affordances move, 350ms on
@@ -269,6 +289,47 @@ measurement does not decompose, and the honest number to quote is the whole-file
 today's screens is a tofu bug waiting for tomorrow's — and tofu is the failure mode this whole
 decision exists to avoid. Revisit only if the release AAB's font contribution is ever the binding
 constraint; at 1.16% of a debug APK dominated by an 11.8 MB native library, it is not.
+
+#### Amendment (2026-08-08, agents-tracker-ksvb.3): `line-height: 1` transcribes as silence.
+
+A transcription correction, not a design change: no size, weight, tracking or family moves, and
+the design source is untouched.
+
+The design states two label rules with a `/1` in the `font` shorthand — `.acts2 button`
+(`600 13.5px/1`) and `.chip` (`600 11px/1`). The type join transcribed both by the same arithmetic
+it applies to every other multiplier, `line-height x size`, and wrote `android:lineHeight` equal to
+the text size into `Label.Button` and `Label.Chip`.
+
+**That arithmetic is wrong for this one value.** CSS `line-height: 1` on a single-line label means
+*no extra leading*. `android:lineHeight` is not a leading — it sets the line box's **absolute
+height**, and a font's natural line box is taller than its em. Asking for a box exactly one em tall
+makes the platform subtract the difference as a negative `lineSpacingExtra`, so the box shrinks
+around the text: the CTA's label sat low inside its own button and the filter chip's descenders
+clipped. Every other `/N` in the design (1.4, 1.45, 1.5, 1.55, 1.6) is larger than the natural box
+and transcribes correctly; 1 is the only one that does not.
+
+**The Android form of `/1` is to declare nothing**, which is also how the join already treats a
+rule that states no line-height at all. Both readers of the join now say so, in both directions —
+`android/gate/s22b_type_test.go` (`s22bNoExtraLeading`, with its own negative control) and the
+Robolectric resolution test through `TypeScale.Spec.lineHeightPx`. The two `android:lineHeight`
+items are removed.
+
+What the readers asserted before this amendment:
+
+```go
+case spec.LineHeight != 0 && !declared:
+    fault("PB-DS-2: %s declares no android:lineHeight; the design says %g x %gpx = %gsp",
+        where, spec.LineHeight, spec.SizePx, spec.LineHeight*spec.SizePx)
+```
+
+```kotlin
+val lineHeightPx: Float? get() = lineHeightMultiplier?.let { it * sizePx }
+```
+
+```xml
+<item name="android:lineHeight">13.5sp</item>   <!-- Label.Button -->
+<item name="android:lineHeight">11sp</item>     <!-- Label.Chip   -->
+```
 
 ### D8. Quality gates added by this direction.
 

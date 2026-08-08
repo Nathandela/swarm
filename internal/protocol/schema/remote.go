@@ -60,6 +60,15 @@ type JournalRecord struct {
 	// docs/specifications/protocol.md under "The JournalRecord message" and was written in
 	// the same change as this field.
 	Item json.RawMessage `json:"item,omitempty"`
+	// Name is the session's user-given label (persist.Meta.Name), carried so the phone can
+	// head a row with what a person called the session rather than the random local id.
+	// Like Agent it is omitempty because most record types do not carry it, and because most
+	// sessions are never labelled at all: an absent name means the record carries none --
+	// readers must fall back to the id and must never fabricate a label (ADR-007 B135).
+	//
+	// A daemon predating this field simply omits the key, and the phone then renders exactly
+	// what it renders today (mobile/namefacade_test.go pins that compatibility).
+	Name string `json:"name,omitempty"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They

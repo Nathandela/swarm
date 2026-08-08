@@ -3,7 +3,6 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -87,7 +86,7 @@ fun sessionRow(
         },
     )
     line.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             // `.prow .pj` declares no colour: it inherits `.pscreen { color: var(--p-ink) }`.
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
@@ -95,6 +94,9 @@ fun sessionRow(
             // `flex: 1` -- the project takes the slack so the agent name sits hard right.
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             tag = KitTag.PROJECT
+            // A project is a path, not a sentence: a monorepo name that wrapped turned this
+            // two-line card into a four-line one and moved every row under it.
+            Kit.identityCell(this)
         },
     )
     // NO AGENT MEANS NO CELL, not an empty one. `swarmmobile.Session.Agent` is verbatim from the
@@ -110,12 +112,13 @@ fun sessionRow(
     // (ADR-007 B135).
     if (agent.isNotBlank()) {
         line.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = agent
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
                 tag = KitTag.AGENT
+                Kit.identityCell(this)
             },
         )
     }
@@ -135,7 +138,7 @@ fun sessionRow(
     }
     row.addView(line)
     row.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = need

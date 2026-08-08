@@ -7,9 +7,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -30,8 +32,10 @@ import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.PairingControl
 import dev.swarm.phone.ui.screens.PairingPanel
@@ -96,8 +100,17 @@ class PairingSurface(
     private val runtime: PhoneRuntime,
 ) {
 
-    private val message = label()
-    private val notice = label()
+    private val message = noticeLine()
+
+    /**
+     * PB-PAIR-4's interrupted-attempt sentence and the destination's own caveat.
+     *
+     * IT WAS `notice` UNTIL agents-tracker-ksvb.4, and the rename is not cosmetic: with the kit's
+     * `notice` factory imported into this file, a property of that name shadows it everywhere in
+     * the class and the compiler reports "Type checking has run into a recursive problem" on the
+     * declaration itself. The slot it fills is still `PairingSlots.notice`.
+     */
+    private val stepNotice = noticeLine()
 
     /**
      * The destination the user is being asked to join, in the design's code face.
@@ -111,7 +124,19 @@ class PairingSurface(
      */
     private val destination = monoWell(activity, "")
 
-    private val outcome = label()
+    /**
+     * What just happened, and it is NOT the error variant -- unlike the outcome lines on the other
+     * two surfaces, which look identical and are not.
+     *
+     * `PhoneSurface`'s and `SettingsSurface`'s outcome lines are only ever non-empty on a refusal:
+     * `PressFeedback.ofSuccess` and `ofUnsent` both leave the line "" and speak in the toast, so
+     * every value those hold is a verdict and they take `NoticeKind.ERROR`. This one is written
+     * from five places and two of them are not verdicts at all -- the empty-field prompt in
+     * [acceptScannedPayload] ("Paste the code your machine printed...") and the frame-dump
+     * confirmation in [dumpOneAnalysisFrame]. Painting those `--p-err` would tell a user that
+     * being told what to type next is a failure.
+     */
+    private val outcome = noticeLine()
 
     /**
      * What the camera has looked at, under the viewfinder (agents-tracker-av7k).
@@ -123,7 +148,14 @@ class PairingSurface(
      * live PreviewView out of the hierarchy and put it back at that rate. The words are still the
      * screen model's ([PairingPanelScreen.scanProgress]).
      */
-    private val scanProgress = label()
+    private val scanProgress = noticeLine()
+
+    /**
+     * The counter's clock (agents-tracker-ksvb.3). The camera analyses roughly thirty frames a
+     * second and each one used to be written straight into [scanProgress], so the one line telling
+     * a person their camera is looking was itself repainting at frame rate under the viewfinder.
+     */
+    private val scanProgressRate = ScanProgressThrottle()
 
     /**
      * The six symbols. Named for what it is -- a DISPLAY -- because the one thing this screen
@@ -131,30 +163,30 @@ class PairingSurface(
      * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
      *
      * PB-DS-11: it was `textSize = SAS_TEXT_SP` with `SAS_TEXT_SP = 28f`, a size chosen at a call
-     * site. THE STYLE IT SHOULD TAKE DOES NOT EXIST: derivation row 7 specifies `Display.SAS` at
-     * 34 sp and §7 calls it "the one style this document adds to PB-DS-2's 18" --
-     * res/values/type.xml carries the 18 and not the 19th. `Display.NavTitle` at 27 sp is the
-     * largest style the scale has, so the raw literal is gone and the size is 7 sp under the
-     * design's. **That is a recorded approximation and not a fix.**
+     * site, and then `Display.NavTitle` at 27 sp with a paragraph here explaining that the style
+     * derivation row 7 asks for "does not exist". IT DOES (agents-tracker-ksvb.4). `Display.SAS`
+     * has been in `res/values/type.xml` since the type ladder landed -- 34 sp / 400 / sans, the
+     * one style §7 adds to PB-DS-2's 18, carrying a `derived:` citation rather than an `origin:`
+     * because `.sas` is absent from the shared CSS block. The join the old paragraph said would
+     * have to be rebuilt was rebuilt: `android/gate/s22b_type_test.go` counts the two citation
+     * classes separately. So this is the design's own size, and the seven-sp approximation is gone.
      *
-     * IT IS NOT "ONE ENTRY IN type.xml", WHICH IS WHAT THIS COMMENT USED TO SAY, and the
-     * correction matters because the cheap-sounding version invites someone to try it and get
-     * stuck. `android/gate/s22b_type_test.go` joins the two sides bidirectionally and BY COUNT:
-     * it asserts the design source declares 18 text styles, that type.xml defines 18, that every
-     * style names an `origin:` selector which IS a text style in the design source, and that no
-     * design rule is left unclaimed. `.sas` is absent from the shared CSS block entirely -- it is
-     * a derived addition, which is the whole of §7's point -- so a 19th style would fail on the
-     * count from both directions AND on an origin that resolves to nothing. Making it pass means
-     * teaching that join the difference between a transcribed rule and a derived one, which is
-     * rebuilding the join. `docs/design/substrate-components.md:333` already records that the
-     * gate "must fail until it exists" and does not; a round-3 finding says the same. Closing
-     * this belongs with that finding, not with a screens slice.
+     * IT IS CENTRED, which is row 7's "row, gap `space_14`" read for what it is: six symbols a
+     * person is holding up against another screen are a display and not a paragraph, and
+     * left-aligned they read as a value in a form. The gaps are the SCREEN's -- the separator
+     * below joins them -- because there is no SAS row component and one built here would be this
+     * file choosing spacing.
+     *
+     * IT CARRIES NO INK, and `Display.SAS` declares none either: row 7 records the exception --
+     * emoji glyphs are drawn by the platform's colour emoji font, which ignores textColor.
      */
-    private val sasDisplay = label().apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
+    private val sasDisplay = TextView(activity).apply {
+        setTextAppearance(R.style.TextAppearance_Swarm_Display_SAS)
+        gravity = Gravity.CENTER_HORIZONTAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    private val sasInstruction = label()
+    private val sasInstruction = noticeLine()
 
     /**
      * The viewfinder, sized by a rule rather than by a number.
@@ -196,8 +228,8 @@ class PairingSurface(
      * `--p-btn-r`)". It is now [ctaButton] with [CtaKind.APPROVE], which is that rule -- the same
      * component the approval sheet's primary action spends, with the phosphor bloom row 18 asks for.
      *
-     * IT STILL GOES THROUGH [touchFilteredButton], so PB-SEC-12 clause 1's filter is applied at
-     * construction exactly as before. What changed is the view the filter is applied to.
+     * IT STILL GOES THROUGH [ctaAction], so PB-SEC-12 clause 1's filter is applied at construction
+     * exactly as before. What changed is the view the filter is applied to.
      *
      * A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records that gap and cannot close it -- it has
      * no click to hang the role on -- so the role is set where the click is, which is
@@ -233,7 +265,24 @@ class PairingSurface(
      */
     private val relayUrl = textField(activity, "Relay address, like wss://host:8443")
 
-    private val useTypedPayload = touchFilteredButton("Use this code") {
+    /**
+     * The fallback path's own action, and the one CTA on this screen whose champagne is CONTESTED.
+     *
+     * IT IS `.a2-ok` BECAUSE IT IS WHAT PAIRS THE PHONE. In the two states where the camera is
+     * withdrawn for good -- a permanent denial, or a handset with no camera at all -- this is the
+     * only way through the screen, and a screen whose only action is tertiary has no primary.
+     *
+     * **AND IN ONE STATE THERE ARE THEN TWO CHAMPAGNE BUTTONS ON SCREEN, which is recorded rather
+     * than hidden.** `PairingFlow.offersManualEntry` answers true unconditionally
+     * (agents-tracker-qun0), so once [revealTypedPayload] has been pressed on a handset whose
+     * camera still works, `Scan` and this sit in the same column and both carry `--p-cta-bg`. That
+     * contradicts what [revealTypedPayload] argues one declaration down -- "two phosphor-green
+     * buttons on one screen would be two primary paths". The variant cannot be decided per draw
+     * here: these controls are built once and re-placed, because they carry PB-SEC-12 clause 1's
+     * touch filter and a listener that must survive a rebuild. Which of the two paths is primary
+     * when both are open is a design decision and it is left to the owner rather than taken here.
+     */
+    private val useTypedPayload = ctaAction("Use this code", CtaKind.APPROVE) {
         acceptScannedPayload(typedPayload.text.toString().trim())
     }
 
@@ -255,20 +304,46 @@ class PairingSurface(
         render()
     }
 
-    private val openSystemSettings = touchFilteredButton("Open this app's settings") {
+    /**
+     * The detour, and `.a2-more` because a detour is not a path through the screen.
+     *
+     * It replaces [startScan] rather than sitting beside it -- `PairingControl.OPEN_SYSTEM_SETTINGS`
+     * is offered only on a permanent denial, which is the one state that withdraws the scanner --
+     * so the champagne on that state belongs to [useTypedPayload], the thing that still works
+     * without leaving the app.
+     */
+    private val openSystemSettings = ctaAction("Open this app's settings", CtaKind.MORE) {
         activity.startActivity(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                 .setData(Uri.fromParts("package", activity.packageName, null)),
         )
     }
 
-    private val confirmDestination = touchFilteredButton("Join this destination") { confirmTheShownOrigin() }
+    /** PB-PAIR-6's confirm: the one action of the step it belongs to, so `.a2-ok`. */
+    private val confirmDestination = ctaAction("Join this destination", CtaKind.APPROVE) {
+        confirmTheShownOrigin()
+    }
 
-    private val stopPairing = touchFilteredButton("Stop pairing") { cancelAttempt() }
+    /**
+     * `.a2-no`, and it is a DENIAL rather than a neutral escape.
+     *
+     * Abandoning a handshake is destructive in the one sense that matters here: `Pairing` is a
+     * process-local handle, so the attempt this cancels cannot be resumed by anything -- a fresh
+     * `BeginPairing` is what overwrites the record. Substrate's tertiary would read as "not now".
+     */
+    private val stopPairing = ctaAction("Stop pairing", CtaKind.DENY) { cancelAttempt() }
 
-    private val codesMatch = touchFilteredButton("They match") { answerSas(SasAnswer.MATCHES) }
+    /**
+     * The human-in-the-loop security check, in the two variants the design already declares.
+     *
+     * ADR-007 B133 left these as the ONLY checkpoint in the product, and the pair is the one place
+     * in this app where the two treatments carry their literal meaning: `.a2-ok` is the user
+     * vouching that two screens agree, `.a2-no` is the user reporting a man in the middle. They are
+     * the sole champagne and the sole denial on the comparing step, beside [stopPairing].
+     */
+    private val codesMatch = ctaAction("They match", CtaKind.APPROVE) { answerSas(SasAnswer.MATCHES) }
 
-    private val codesDoNotMatch = touchFilteredButton("They do not match") {
+    private val codesDoNotMatch = ctaAction("They do not match", CtaKind.DENY) {
         answerSas(SasAnswer.DOES_NOT_MATCH)
     }
 
@@ -367,7 +442,7 @@ class PairingSurface(
      */
     private val slots = PairingSlots(
         body = message,
-        notice = notice,
+        notice = stepNotice,
         destination = destination,
         sas = sasDisplay,
         sasInstruction = sasInstruction,
@@ -513,6 +588,7 @@ class PairingSurface(
         // PreviewView's surface out from under a camera that had just been given it.
         cameraLive = true
         scanProgress.text = ""
+        scanProgressRate.reset()
         render()
 
         val live = scanner ?: QrScanner(activity).also {
@@ -531,19 +607,37 @@ class PairingSurface(
             // WRITTEN STRAIGHT INTO THE VIEW, never through a redraw: a render() here would ask
             // the Go core for its state several times a second and rebuild the tree under the
             // running preview. The screen model still owns the words.
-            onFrames = { seen -> scanProgress.text = PairingPanelScreen.scanProgress(seen) },
+            onFrames = { seen ->
+                scanProgressRate.next(
+                    PairingPanelScreen.scanProgress(seen),
+                    SystemClock.elapsedRealtime(),
+                )?.let { scanProgress.text = it }
+            },
             onError = { failure -> scanFailed(failure) },
         )
     }
 
     /**
      * A camera that started binding and then failed -- no available camera, a lifecycle already
-     * gone, anything CameraX itself refuses -- routed to the same outcome line every other
+     * gone, anything CameraX itself refuses -- written to the same outcome line every other
      * pairing failure reaches instead of crashing the app (agents-tracker-nz9h).
+     *
+     * IT IS AUTHORED COPY AND NOT A ROUTED MESSAGE (agents-tracker-ksvb.5). [routed] reads the
+     * class token the Go facade stamps onto its own errors, and this failure comes from CameraX:
+     * it carries no token, so it landed on the RESERVED unknown row -- "Something failed in a way
+     * the app does not recognise" -- on the screen every user of this product meets first. The
+     * app recognises it exactly: `QrScanner.failToStart` catches it by name. What was missing was
+     * a sentence, and [PairingFlow.CAMERA_DID_NOT_START] is where it lives, for the reason its own
+     * KDoc gives.
+     *
+     * The parameter stays. Nothing is read off it any more, and it is what makes this a handler
+     * for THIS failure rather than a state the screen enters on its own -- `QrScanner.onError`
+     * hands over the exception it caught, and a signature that dropped it would let any caller
+     * post the camera's sentence over a camera that is running.
      */
     private fun scanFailed(failure: Exception) {
         stopScanning()
-        outcome.text = routed(failure)
+        outcome.text = PairingFlow.CAMERA_DID_NOT_START
         render()
     }
 
@@ -743,7 +837,7 @@ class PairingSurface(
      */
     private fun draw(panel: PairingPanel) {
         message.text = panel.body
-        notice.text = panel.notice
+        stepNotice.text = panel.notice
         destination.text = panel.destination
         // Three spaces, so the six symbols read as six things rather than one word. The
         // separator is the screen's, and the alphabet is the shared Go core's -- never Kotlin's.
@@ -921,35 +1015,24 @@ class PairingSurface(
     }
 
     /**
-     * A control, with PB-SEC-12 clause 1's touch filter applied by construction.
+     * Every control on this screen, drawn by the kit and carrying PB-SEC-12 clause 1's touch filter.
      *
-     * IT WAS `gatedButton`, AND THE NAME WAS THE ONLY THING THAT CHANGED (ADR-007 B133). There
-     * was never a biometric behind these: [SecureWindow.gate] sets `filterTouchesWhenObscured`,
-     * which discards a tap that arrived while another window covered the view. That defence
-     * SURVIVES the de-auth and matters more than before, so what the rename removes is a word
-     * that would have read as a checkpoint this screen no longer has.
-     */
-    private fun touchFilteredButton(text: String, onPress: () -> Unit): Button =
-        SecureWindow.gate(
-            Button(activity).apply {
-                this.text = text
-                setOnClickListener { onPress() }
-            },
-        )
-
-    /**
-     * The same control as [touchFilteredButton], drawn by the kit instead of by the platform.
+     * IT WAS TWO FACTORIES AND `touchFilteredButton` IS GONE (agents-tracker-ksvb.4). That one
+     * built a platform `Button` -- all-caps 14 sp Roboto Medium on the stock Material background --
+     * for six of this screen's eight controls, beside two kit CTAs. Its KDoc called the split a
+     * scope statement: "`Join this destination`, the two SAS answers and `Stop pairing` belong to
+     * steps this slice did not redesign". They are redesigned now, into the three variants
+     * Substrate already declares, so nothing is chosen here beyond which of them a control is.
      *
-     * ROW 18 SPECIFIES THE PAIRING CTA AND THIS IS IT: "CTA is `.a2-ok` unchanged". The two
-     * controls that go through here are the ones the owner's design draws as buttons -- the scanner
-     * and the fallback that replaces it -- and they are the two variants Substrate already declares,
-     * so nothing is chosen here beyond which of them a control is.
-     *
-     * THE REST OF THIS SCREEN'S CONTROLS ARE STILL PLATFORM BUTTONS, and that is a scope statement
-     * rather than an oversight: `Join this destination`, the two SAS answers and `Stop pairing`
-     * belong to steps this slice did not redesign, and restyling the two controls that decide the
-     * only human-in-the-loop security check in the product (ADR-007 B133) is not a change to make
-     * in passing.
+     * WHAT SURVIVED THE MERGE IS THE SECURITY CONTROL, unchanged and by construction.
+     * [SecureWindow.gate] sets `filterTouchesWhenObscured`, which discards a tap that arrived while
+     * another window covered the view; ADR-007 B133 removed the biometric tiers and left that
+     * filter as the ONLY defence standing on the SAS answers. It is applied here, to every control,
+     * exactly as `touchFilteredButton` applied it -- what changed is the view it is applied to.
+     * `PhoneSurfaceControlsTest.every_button_and_switch_on_screen_filters_obscured_touches` is what
+     * holds that: it walks the real hierarchy and reads `background is CtaSurface`, so a kit CTA
+     * is in its subject and a control that lost the filter fails whether or not anyone updated
+     * [touchFilteredActions].
      */
     private fun ctaAction(text: String, kind: CtaKind, onPress: () -> Unit): TextView =
         SecureWindow.gate(
@@ -973,17 +1056,19 @@ class PairingSurface(
         )
 
     /**
-     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. The same two lines were in
-     * all three surface files.
+     * One line the screen says about its own state.
      *
-     * THE HEADING IS NO LONGER THIS FILE'S. [dev.swarm.phone.ui.kit.navHeader] draws the step
-     * title now, in `Display.NavTitle`, which is what derivation row 18 specifies for it. What
-     * this factory still produces is body copy, and the kit has no component for that -- so the
-     * `heading` parameter is gone with the heading and the rest render at the theme's default.
+     * IT WAS `label()`, AND WHAT IT PRODUCED WAS A BARE `TextView` (agents-tracker-ksvb.4). The
+     * KDoc here said "the kit has no component for that ... the rest render at the theme's
+     * default", which read as an absence and was not one: a `TextView` with no `TextAppearance`
+     * renders at the platform's ~14 sp, larger than every body style in this app's ladder, so five
+     * lines on the pairing screen -- the step body, the caveat, the outcome, the frame counter and
+     * the SAS instruction -- were the largest body text on it. `§4 Notice line` specifies them now.
+     *
+     * @param kind ERROR only where every non-empty value is a refusal. [outcome] is the one, and
+     *  it is not one on this screen alone -- see its own declaration.
      */
-    private fun label() = TextView(activity).apply {
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    private fun noticeLine(kind: NoticeKind = NoticeKind.INFO) = notice(activity, "", kind)
 
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
@@ -1008,3 +1093,58 @@ class PairingSurface(
  */
 internal fun hasCameraHardware(packageManager: PackageManager): Boolean =
     packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+/**
+ * The scan counter's own clock: at most two writes a second, and never one that says nothing new
+ * (agents-tracker-ksvb.3).
+ *
+ * **THE DIAGNOSTIC CAUSED A SMALL VERSION OF THE THING IT DIAGNOSES.** `QrScanner` reports every
+ * analysed frame, which on a handset is roughly thirty a second, and the count went straight onto
+ * the notice under the viewfinder. A `TextView` re-lays out and re-antialiases its whole line on
+ * every assignment, so a line whose job is to say "the camera IS looking" was itself flickering
+ * thirty times a second, three centimetres under a viewfinder somebody was holding steady.
+ *
+ * **BOTH CONDITIONS ARE REQUIRED AND EITHER ALONE IS WRONG.** A write only when the STRING changes
+ * is still thirty a second, because the number changes on every frame. A write only on a TIMER
+ * repaints the identical line forever once the analyser stalls -- which is the state this counter
+ * exists to make visible, spent as a repaint. So a write needs a new string and a fresh interval.
+ *
+ * **THE CLOCK IS PASSED IN**, for [hasCameraHardware]'s reason one paragraph up: `PairingSurface`
+ * reaches `swarmmobile.App` and CameraX and has no unit test of its own, while this decision is
+ * arithmetic on a string and a millisecond. A throttle that read the clock itself could only be
+ * tested by sleeping.
+ */
+internal class ScanProgressThrottle {
+
+    private var drawn = ""
+
+    private var writtenAtMillis = 0L
+
+    /** Forget the previous scan, so its first frame is not held back by the last one's interval. */
+    fun reset() {
+        drawn = ""
+        writtenAtMillis = 0L
+    }
+
+    /**
+     * @return the line to put on screen, or null to leave the view exactly as it is. NULL RATHER
+     *  THAN THE OLD STRING, because assigning the same text is the repaint being avoided.
+     */
+    fun next(line: String, nowMillis: Long): String? {
+        if (line == drawn) return null
+        if (nowMillis - writtenAtMillis < MIN_INTERVAL_MILLIS) return null
+        drawn = line
+        writtenAtMillis = nowMillis
+        return line
+    }
+
+    private companion object {
+        /**
+         * Two updates a second. Fast enough that a moving count reads as a live camera and slow
+         * enough that the line is not being redrawn while somebody reads it; it is a REPAINT rate
+         * and not one of ADR-009 D5's motion durations, which is why it is here rather than in
+         * `Motion.kt`.
+         */
+        const val MIN_INTERVAL_MILLIS = 500L
+    }
+}

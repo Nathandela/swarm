@@ -40,12 +40,15 @@ fun filterChip(
      * do is substitute the empty string, which silences the label as well as the dot.
      */
     contentDescription: CharSequence? = null,
-): TextView = TextView(context).apply {
+): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(
         Kit.colour(context, if (selected) R.color.swarm_hero_ink else R.color.swarm_text_secondary),
     )
     text = label
+    // A chip names a machine, so it is an identity: the scope bar is one row of a fixed height
+    // and a chip that wrapped grew taller than the bar drawn around it.
+    Kit.identityCell(this)
     this.contentDescription = contentDescription
     background = chipSurface(context, selected)
     gravity = Gravity.CENTER_VERTICAL

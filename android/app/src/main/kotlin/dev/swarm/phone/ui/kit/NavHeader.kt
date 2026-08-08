@@ -31,13 +31,14 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 
         addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
                 // `.pnav .big` declares no colour: it inherits `.pscreen { color: var(--p-ink) }`.
                 setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                 text = title
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
                 tag = KitTag.TITLE
+                Kit.identityCell(this)
             },
         )
         if (live != null) {
@@ -61,7 +62,7 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
  * That argument only holds while they stay visually distinct, which is why this is `--p-hero` and
  * the badge is `--p-att`.
  */
-fun liveCounter(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun liveCounter(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Label_Live)
     setTextColor(Kit.colour(context, R.color.swarm_hero))
     this.text = text

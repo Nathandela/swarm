@@ -22,7 +22,23 @@ data class SessionRow(
     val title: String,
     /** Verbatim from `swarmmobile.Session.Group`. One of [TriageInbox.TRIAGE_ORDER]. */
     val group: String,
-    /** The one-line need summary: the journal record type verbatim, never an invented phrase. */
+    /**
+     * The one-line need summary: the journal record type, verbatim from the wire.
+     *
+     * IT STAYS VERBATIM HERE ON PURPOSE (agents-tracker-ksvb.2's ruling). THIS CLASS IS THE MODEL
+     * -- "nothing here is computed on the handset", the class KDoc's own words -- and THE MODEL
+     * KEEPS THE WIRE'S OWN WORD; turning a record type into a phrase a person reads is
+     * presentation, which PB-DS-9 assigns to the screen that composes what a person reads, not to
+     * the model of what the wire said. `TriageInboxScreen.of` is where the seven record types
+     * become `Started`, `Waiting on you`, and so on, for the two surfaces the field-test audit
+     * rated as human copy -- the inbox row's need line and the approval sheet's question -- and it
+     * falls back to this field's OWN value, VERBATIM, for a record type it does not recognise: the
+     * honesty fallback, never an invented phrase for a token this build does not know.
+     *
+     * Activity rows and the Session Detail transcript read this same field directly and get no
+     * mapping at all: the ruling names them the machine's own register and rates them clean as
+     * they already are.
+     */
     val need: String,
     /**
      * Machine reachability, which is NOT staleness. Collapsing the two tells a user whose

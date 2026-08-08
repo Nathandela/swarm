@@ -48,6 +48,20 @@ object SwarmErrorTokens {
     const val NEEDS_LEASE: String = "swarm/no-lease"
     const val RATE_LIMITED: String = "swarm/rate-limited"
     const val PAIRING_FAILED: String = "swarm/pairing-failed"
+
+    /**
+     * The three ways a pairing ENTRY is wrong, split off [PAIRING_FAILED] (agents-tracker-ksvb.5).
+     *
+     * `mobile/pairing.go` has authored a specific sentence for each of them since
+     * agents-tracker-3fkm and all three were stamped `swarm/pairing-failed`, whose row says "The
+     * pairing call itself failed. Start the pairing again from your machine's code." None of the
+     * three ever reached a call, so that row's advice is wrong for all of them -- and the acts
+     * that fix them differ by exactly the fact the reader already has: the code in front of them,
+     * no relay address at all, or one typed in the wrong shape.
+     */
+    const val PAIRING_CODE_INVALID: String = "swarm/pairing-code"
+    const val RELAY_UNKNOWN: String = "swarm/relay-unknown"
+    const val RELAY_ADDRESS_INVALID: String = "swarm/relay-address"
 }
 
 /**
@@ -77,6 +91,15 @@ enum class ErrorState {
     NEEDS_LEASE,
     RATE_LIMITED,
     PAIRING_FAILED,
+
+    /**
+     * The three pairing-ENTRY states (agents-tracker-ksvb.5). They are three and not one for
+     * [SwarmErrorTokens.PAIRING_CODE_INVALID]'s reason: two states that read identically are one
+     * state, and the reader's next move differs between all three.
+     */
+    PAIRING_CODE_INVALID,
+    RELAY_UNKNOWN,
+    RELAY_ADDRESS_INVALID,
 }
 
 /**
@@ -272,6 +295,26 @@ object ErrorRouter {
         SwarmErrorTokens.PAIRING_FAILED to RoutedError(
             ErrorState.PAIRING_FAILED, Remedy.RETRY_PAIRING,
             "The pairing call itself failed. Start the pairing again from your machine's code.",
+        ),
+        // THE THREE ENTRY ROWS. They share PAIRING_FAILED's remedy and none of its words, and
+        // that is the split rather than a redundancy: RETRY_PAIRING is the act of trying again
+        // WHERE THE READER IS STANDING -- it is not Remedy.PAIR, so no screen offers to open a
+        // flow they are already inside -- while the sentence has to name which of the four
+        // things went wrong, because the four are fixed in four different places.
+        SwarmErrorTokens.PAIRING_CODE_INVALID to RoutedError(
+            ErrorState.PAIRING_CODE_INVALID, Remedy.RETRY_PAIRING,
+            "That code does not look right. It is ten characters from your machine's screen -- " +
+                "check for a typo and try again.",
+        ),
+        SwarmErrorTokens.RELAY_UNKNOWN to RoutedError(
+            ErrorState.RELAY_UNKNOWN, Remedy.RETRY_PAIRING,
+            "This phone does not know your relay address yet. Scan the QR once, or paste the " +
+                "full code your machine printed.",
+        ),
+        SwarmErrorTokens.RELAY_ADDRESS_INVALID to RoutedError(
+            ErrorState.RELAY_ADDRESS_INVALID, Remedy.RETRY_PAIRING,
+            "That is not a relay address. It looks like wss://host:port -- your machine printed " +
+                "the whole thing.",
         ),
     )
 

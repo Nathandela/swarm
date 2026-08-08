@@ -540,6 +540,9 @@ var _ protocol.JournalBackend = (*coreAPI)(nil)
 // payload IS the transcript item (IS-LAYER-1), so it crosses verbatim as Item. Every other
 // type's payload -- `presence`'s online flag today -- stays daemon-internal, which is why
 // the copy is gated on the type rather than done unconditionally.
+// Name is the
+// second: the session's user-given label heads the row the agent identity annotates,
+// and it crosses here for the same reason and by the same rule.
 func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 	out := protocol.JournalRecord{
 		Cursor:    r.Cursor,
@@ -547,6 +550,7 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 		Type:      string(r.Type),
 		Group:     r.Group,
 		Agent:     r.Agent,
+		Name:      r.Name,
 	}
 	if r.Type == journal.TypeInteraction {
 		out.Item = r.Payload

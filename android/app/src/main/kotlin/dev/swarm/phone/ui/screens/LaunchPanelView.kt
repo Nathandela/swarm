@@ -4,7 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
 
 /**
@@ -33,14 +33,17 @@ import dev.swarm.phone.ui.kit.sectionLabel
  * Both are still built out of the kit; `android/gate/s24_screens_test.go` reads the call sites
  * where they actually are.
  *
- * ## The notice line has no component, and that is an absence rather than a decision
+ * ## The notice line is the kit's, and the absence it used to record was not an absence
  *
- * There is no notice or status component in the kit. Row 8's empty state is centred with 48 dp of
- * vertical air and means something else; row 22's read-only note is the terminal peek's and means
- * something else again. So the notice is a bare `TextView` carrying the model's copy and no
- * appearance at all -- `SettingsPanelView` reached the same place for the same reason. Reaching
- * for `Body.Secondary` here would be a screen choosing type, which the fence refuses and is right
- * to.
+ * This section read "there is no notice or status component in the kit ... so the notice is a bare
+ * `TextView` carrying the model's copy and no appearance at all". `§4 Notice line` now specifies
+ * one and `ui/kit/Notice.kt` builds it (agents-tracker-ksvb.4). What the old paragraph got wrong is
+ * that no appearance is itself an appearance: a `TextView` with no `TextAppearance` renders at the
+ * platform's ~14 sp, and the largest body style in this app's ladder is 12.5 sp -- so the form's
+ * report about a refused launch was the biggest text on the form. Row 8's empty state and row 22's
+ * read-only note still mean something else, which is why §4 gained a row rather than this file
+ * borrowing one. Reaching for `Body.Secondary` HERE would still be a screen choosing type, and the
+ * fence still refuses it.
  */
 object LaunchTag {
     /** The section the form sits under, in `.plabel`. */
@@ -95,13 +98,7 @@ fun launchPanelView(
     // form that has launched nothing has not been refused and has not succeeded, and a line
     // reserved for a status that does not exist is a status about an operation nobody issued.
     if (panel.notice.isNotEmpty()) {
-        column.addView(
-            TextView(context).apply {
-                tag = LaunchTag.NOTICE
-                text = panel.notice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+        column.addView(notice(context, panel.notice).apply { tag = LaunchTag.NOTICE })
     }
 
     below?.let { column.addView(it) }

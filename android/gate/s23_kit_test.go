@@ -221,6 +221,25 @@ var s23Inbox = []s23Component{
 			"be the copy of `.a2-more` the reuse rule exists to prevent.",
 	},
 	{
+		Factory: "notice",
+		File:    "Notice.kt",
+		Derived: "§4 Notice line",
+		Why: "the sentence a screen says about its own state, and the component whose ABSENCE was " +
+			"documented in eight KDocs rather than fixed. Sixteen bare `TextView`s -- the pairing " +
+			"screen's five, the phone surface's two, the settings surface's one, and one to four " +
+			"in each of six recomposed screens -- carried no appearance at all and rendered at the " +
+			"platform's ~14 sp default, which is LARGER than every body style in the ladder: a " +
+			"warning line was the biggest body text on the screen it warned about. §4 is the whole " +
+			"specification because the artifact draws no notice and the retired mock drew none " +
+			"either. Its ink is `--p-ink2` and not `--p-ink3` for row 22's reason, which is the " +
+			"same reason it is a component and not a screen's own `setTextAppearance`: " +
+			"s24_screens_test.go fences the screens package against choosing type, so the choosing " +
+			"has to happen here. The ERROR variant is `--p-err` with nothing else moved -- same " +
+			"style, same box -- because a refusal the machine sent is a different kind of sentence " +
+			"from a state the screen is reporting, and it is a parameter rather than a second " +
+			"factory for `ctaButton`'s reason: the site differs, not the component.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",
@@ -2907,11 +2926,21 @@ var s23LiteralExemptions = map[string]string{
 	"0f": "the same, as a Float: a zero shadow offset, a suppressed key light, a gradient's first " +
 		"stop.",
 	"1": "`1 - fraction` in ColorMix: the complement of a share. It is arithmetic on a ratio and " +
-		"there is no length in it.",
+		"there is no length in it. THE SECOND SITE IS NAMED for the reason `2f` gives -- an " +
+		"exemption is a thing a reader has to agree with, and a reader cannot agree with a use " +
+		"the row does not mention. `Kit.identityCell` sets `maxLines = 1` on the cells that carry " +
+		"an identity (a project, an agent, a machine name, an endpoint id, a chip, a tab label, " +
+		"a nav title). A COUNT OF LINES IS NOT A LENGTH: it does not scale with density, it has " +
+		"no px in any design rule, and what it states is that a name is drawn on one line -- " +
+		"which every rule that draws one already says by drawing it that way.",
 	"1f": "a LinearLayout weight. Weight is a proportion between siblings, not a dimension -- the " +
 		"design has no px for it because CSS expresses the same thing as `flex: 1`.",
 	"2": "`corePx + 2 * haloPx`: the halo sits on BOTH sides of the core, so the 2 is a count of " +
-		"sides. The dot's diameter and the halo's radius are both checked constants.",
+		"sides. The dot's diameter and the halo's radius are both checked constants. THE SECOND " +
+		"SITE IS `Kit.cappedNote`'s `maxLines = 2`, and it is a count of LINES rather than of " +
+		"sides -- see the `1` row for why a line count is not a length. What it bounds is how far " +
+		"the scaffold's connection banner, which is drawn outside the scroll, may push the " +
+		"destination down when its sentence wraps.",
 	"2f": "half of a length the design states, at the TWO sites that take a half. `diameterPx / 2f` " +
 		"is the status dot's radius; `trackHeightPx / 2f` and `thumbPx / 2f` are the toggle's, " +
 		"where row 4 writes the exception out in those words -- \"radius = half the track (14) and " +

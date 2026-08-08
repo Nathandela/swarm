@@ -1093,6 +1093,7 @@ var s24ScreenComponents = map[string]map[string]string{
 		"navHeader":    "C6.1 -- the settings screen's own title",
 		"sectionLabel": "C6.2 `.seclabel` -- one per section",
 		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
+		"notice":       "§4 Notice line -- the disclosure and the per-toggle notices",
 	},
 	// C4 -- the machines screen. Its three blocks are derivation rows 11, 12 and 13, and TWO OF
 	// THEM ARE COMPONENTS OF THEIR OWN rather than settings rows wearing different words. Row 11's
@@ -1141,6 +1142,7 @@ var s24ScreenComponents = map[string]map[string]string{
 	// it ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
 	"dev/swarm/phone/ui/screens/SessionDetailView.kt": {
 		"navHeaderDrill": "C2.1 `.navhead` -- the chevron and the session it names, per §4",
+		"notice":         "§4 Notice line -- the stale, not-sent, lease and outcome lines",
 	},
 	// C2.3 as ADR-009 (1) redraws it: "the phone's only session surface is a structured chat
 	// transcript". The four components below are the session log's, reused verbatim -- the heading,
@@ -1181,6 +1183,7 @@ var s24ScreenComponents = map[string]map[string]string{
 	// screen owning a listener and a native call, which is not what a screen is.
 	"dev/swarm/phone/ui/screens/LaunchPanelView.kt": {
 		"sectionLabel": "`.plabel` -- the section the form sits under",
+		"notice":       "§4 Notice line -- what the form has to report about the last launch",
 	},
 	// THE ACTIVITY SCREEN HAS ONE SECTION AND THE MOCK DRAWS TWO. `renderActivity()` splits its
 	// rows under `While you were away` and `Informative`, and NOTHING ON THE WIRE SUPPORTS THAT
@@ -1201,6 +1204,7 @@ var s24ScreenComponents = map[string]map[string]string{
 		// itself, which is the PB-DS-6 violation the kit exists to prevent.
 		"sessionList": "`.prows` -- the rows' container, carrying the gap and the side padding",
 		"emptyState":  "derivation row 8 -- a heading over nothing is a section that lies",
+		"notice":      "§4 Notice line -- the stale mark over a journal that has stopped arriving",
 	},
 	// THE LINK SECTION HAS NO ROW OF ITS OWN, AND THAT IS WHY THE CLAIM IS WRITTEN OUT HERE. The
 	// derivation table specifies no clock-skew notice and no per-channel arrival readout --
@@ -1211,16 +1215,27 @@ var s24ScreenComponents = map[string]map[string]string{
 	// in this skin, which is exactly and only what a live channel is making -- so a stale channel
 	// gets no status label at all, and its absence is the assertion `LinkPanelViewTest` makes.
 	//
-	// The clock line is NOT claimed below, because it is not a component. It is a bare TextView
-	// carrying the model's copy and no appearance, which is what `ActivityPanelView` does with its
-	// stale notice and states in its own words as "the absence of a decision rather than one made
-	// here". There is no notice or body-copy component in the kit; row 8's empty state is centred
-	// with 48 dp of vertical padding and is a different thing.
+	// THE CLOCK LINE IS CLAIMED NOW (AMENDED 2026-08-08, agents-tracker-ksvb.4). This paragraph read:
+	//
+	//	The clock line is NOT claimed below, because it is not a component. It is a bare TextView
+	//	carrying the model's copy and no appearance, which is what `ActivityPanelView` does with its
+	//	stale notice and states in its own words as "the absence of a decision rather than one made
+	//	here". There is no notice or body-copy component in the kit; row 8's empty state is centred
+	//	with 48 dp of vertical padding and is a different thing.
+	//
+	// The premise went: §4's `Notice line` row now specifies exactly that sentence and `ui/kit/
+	// Notice.kt` builds it. "No appearance" was never the absence of a decision -- a `TextView` with
+	// no `TextAppearance` renders at the platform's ~14 sp default, which is LARGER than every body
+	// style in this app's ladder, so the clock warning was set bigger than the channel rows it sat
+	// over. What row 8 is still a different thing FROM is unchanged and is why the notice is its own
+	// row rather than a reuse: the empty state is centred inside 48 dp of vertical air because it
+	// stands in for a section's contents, and a notice qualifies the block under it.
 	"dev/swarm/phone/ui/screens/LinkPanelView.kt": {
 		"sectionLabel": "`.plabel` -- the one section, over the four repair channels",
 		"sessionList":  "`.prows` -- the rows' container, carrying the gap and the side padding",
 		"settingsRow":  "derivation row 15 -- one per channel: the channel, and what is true of it",
 		"statusLabel":  "row 15's status text, `--p-hero` -- the liveness claim, on live channels only",
+		"notice":       "§4 Notice line -- the clock-skew warning over the four channels",
 	},
 }
 

@@ -506,16 +506,34 @@ func s22bStyleFaults(where string, style s22bStyle, spec s22bTypeSpec) []string 
 	// LINE HEIGHT, where the design gives one. CSS's unitless multiplier has no Android form --
 	// android:lineHeight is an absolute dimension -- so the product is the value, computed here
 	// rather than transcribed.
+	//
+	// **A MULTIPLIER OF 1 TRANSCRIBES AS SILENCE, AND IT USED TO TRANSCRIBE AS `1 x size`**
+	// (ADR-009 D7, amended 2026-08-08). `line-height: 1` on a single-line label states NO EXTRA
+	// LEADING. Writing the same number into android:lineHeight states something else: the
+	// attribute sets the line box's ABSOLUTE height, a font's natural line box is taller than its
+	// em, and the platform pays the difference as a NEGATIVE lineSpacingExtra -- so the box
+	// shrinks around the text. On the two styles that carried it the result was visible:
+	// `Label.Button`'s words sat low inside their own CTA and `Label.Chip`'s descenders clipped.
+	// So a `/1` rule is held to the same standard as a rule that states no leading at all, which
+	// is the arm above it.
+	leading := spec.LineHeight != 0 && spec.LineHeight != s22bNoExtraLeading
 	raw, declared := style.Items["android:lineHeight"]
 	switch {
+	case spec.LineHeight == s22bNoExtraLeading && declared:
+		fault("PB-DS-2 (ADR-009 D7 as amended 2026-08-08): %s declares android:lineHeight=%q "+
+			"against a design line-height of 1, which states NO EXTRA LEADING. android:lineHeight "+
+			"is the line box's absolute height, so that number SHRINKS the box the font asks for "+
+			"and the platform spends the difference as a negative lineSpacingExtra -- the label "+
+			"sits low and its descenders clip. The Android form of `/1` is to declare nothing.",
+			where, raw)
 	case spec.LineHeight == 0 && declared:
 		fault("PB-DS-2: %s declares android:lineHeight=%q, and the design fact it descends from "+
 			"declares no line-height at all. An invented leading is a design decision made in an "+
 			"XML file.", where, raw)
-	case spec.LineHeight != 0 && !declared:
+	case leading && !declared:
 		fault("PB-DS-2: %s declares no android:lineHeight; the design says %g x %gpx = %gsp",
 			where, spec.LineHeight, spec.SizePx, spec.LineHeight*spec.SizePx)
-	case spec.LineHeight != 0:
+	case leading:
 		want := spec.LineHeight * spec.SizePx
 		if !strings.HasSuffix(raw, "sp") {
 			fault("PB-DS-2: %s has android:lineHeight=%q; it must be sp so leading scales "+
@@ -529,6 +547,11 @@ func s22bStyleFaults(where string, style s22bStyle, spec s22bTypeSpec) []string 
 	}
 	return faults
 }
+
+// s22bNoExtraLeading is the CSS line-height that states no leading at all. Named rather than
+// written as a bare 1 in the switch above, because the whole of the amendment is that this ONE
+// value means something different on Android from every other multiplier the design states.
+const s22bNoExtraLeading = 1.0
 
 // ---------------------------------------------------------------------------
 // The DERIVED class: styles whose authority is a document's row, not the artifact's rule.
@@ -954,6 +977,29 @@ func TestPBDS2_TheDerivedReadersRefusePerturbedInput(t *testing.T) {
 		t.Error("PB-DS-2: a derived style carrying a line height passes against a row that states " +
 			"none. §7 states three properties for an added style, and a fourth appearing in " +
 			"type.xml is a design decision taken in a resource file.")
+	}
+
+	// AND THE `/1` ARM, WHICH IS THE 2026-08-08 AMENDMENT'S OWN. It cannot be reached by
+	// perturbing a value either: what it judges is a design fact whose multiplier is exactly 1,
+	// against a style that either transcribes it as a number or -- correctly -- says nothing.
+	// Both directions, because an arm that only refused would pass a green that comes from
+	// refusing everything.
+	singleLine := spec
+	singleLine.LineHeight = s22bNoExtraLeading
+	if faults := s22bStyleFaults("control", s22bStyle{Items: correct}, singleLine); len(faults) != 0 {
+		t.Errorf("PB-DS-2: a style declaring NO android:lineHeight against a design line-height "+
+			"of 1 is reported as a fault: %v. `line-height: 1` states no extra leading, and "+
+			"silence is its Android form.", faults)
+	}
+	transcribedOne := map[string]string{"android:lineHeight": "34sp"}
+	for k, v := range correct {
+		transcribedOne[k] = v
+	}
+	if faults := s22bStyleFaults("control", s22bStyle{Items: transcribedOne}, singleLine); len(faults) == 0 {
+		t.Error("PB-DS-2: a style whose android:lineHeight equals its own text size passes " +
+			"against a design line-height of 1. That is the shrunken line box the amendment " +
+			"exists to refuse -- the platform pays for it with a negative lineSpacingExtra, and " +
+			"the label sits low in its own control.")
 	}
 
 	// 3. ADR-009 D7's mono direction. The perturbations above all run against a SANS spec, so the

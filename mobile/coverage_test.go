@@ -108,6 +108,17 @@ var requiredScreenElements = []string{
 	"transcript.read",              // ADR-009: the chat itself, which no existing verb serves
 	"transcript.approvals_pending", // IS-LIFE-3: a card the machine is blocked on, kept answerable
 	"transcript.approve",           // IS-LIFE-4: ANSWERING one -- a card with no answering verb leaves the machine blocked
+
+	// ADDED BY agents-tracker-ksvb.1, additively and for the reason S16's block states.
+	//
+	// It is its OWN element rather than a second method on paired_device, which is the row it
+	// looks most like. That one is the name THIS PHONE gave itself, is a Go constant, and the
+	// wire never returns it; this is the name the MACHINE holds, is a wire fact delivered in
+	// the pairing payload, and an owner can change it. paired_device's own note names the
+	// distinction and reserves this verb by describing it. Folding them together would put a
+	// constant and a wire fact behind one element, which is how a screen ends up rendering the
+	// first while believing it has the second.
+	"machine_name",
 }
 
 type coverageRow struct {

@@ -166,6 +166,39 @@ class MonoWellTest {
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
 
+    /**
+     * agents-tracker-ksvb.3: the well's height is the GRID's, not this frame's.
+     *
+     * **A WELL THAT WRAPS ITS CONTENT IS A WELL THAT RESIZES PER FRAME.** The terminal peek prints
+     * `Snapshot.Text`, which arrives again every time the agent writes a byte, and the number of
+     * lines in it is whatever the daemon rendered this instant -- so the card grew and shrank
+     * under the reader while everything below it (the note, `[Take control]`, the lease sentence)
+     * moved with it. The machine's grid has a fixed row count and that is the stable number: a
+     * floor of `rows` lines makes the well one size for as long as the terminal is one size.
+     *
+     * A FLOOR AND NOT A HEIGHT, so a snapshot the daemon rendered TALLER than its own grid is
+     * still shown whole rather than clipped -- what is refused is shrinking, which is what jumps.
+     *
+     * ZERO IS "NOBODY SAID", and it must leave the well exactly as it was. The pairing command
+     * line is one line of shell that arrives once and never changes; a floor there would be a
+     * height nobody asked for under a block that cannot move.
+     */
+    @Test
+    fun `the well takes its floor from the grid rather than from this frame`() {
+        assertEquals(
+            "the well does not pin a line floor, so its height is whatever this frame happened " +
+                "to render and everything under it moves whenever the agent writes",
+            24,
+            monoWell(context, "$ ls\nfile\n", terminal = true, lines = 24).minLines,
+        )
+        assertEquals(
+            "a well told no line count pinned one anyway, so the pairing command line acquired a " +
+                "height nobody asked for",
+            0,
+            monoWell(context, "$ swarm remote on").minLines,
+        )
+    }
+
     /** The negative control, through the same comparison the assertions above use. */
     @Test
     fun `the mono well assertions can actually fail`() {

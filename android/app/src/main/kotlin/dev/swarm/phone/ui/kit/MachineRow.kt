@@ -4,7 +4,6 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -41,10 +40,11 @@ import dev.swarm.phone.R
  *  see [presenceDot], which argues why `unknown` is neither `online` nor `offline` and what the
  *  maquette draws for it.
  * @param endpoint row 11's `endpoint id` cell. Null renders no cell AT ALL rather than an empty
- *  one -- [settingsRow]'s sublabel and [activityRow]'s timestamp take the same position. It is
- *  null at the one call site this component has, because the product has ONE identifier for a
- *  machine rather than two: `MachinePane.machineId` IS the endpoint id, and rendering it twice
- *  would be a second copy of the name wearing the mock's label rather than a second fact.
+ *  one -- [settingsRow]'s sublabel and [activityRow]'s timestamp take the same position. Its call
+ *  site passes null exactly when the id is ALREADY in the name cell, which is a machine that
+ *  published no hostname (agents-tracker-ksvb.1): the same string in both cells would be one fact
+ *  printed twice with the second copy wearing the mock's label. See `MachineRow.endpoint` in
+ *  `ui/screens/MachinesPanel.kt`, which owns that decision.
  * @param presenceDescription what a screen reader says about the mark, or null where [presence]
  *  states it in words -- which it does at the one call site, so the mark is decorative there.
  */
@@ -76,7 +76,7 @@ fun machineRow(
         },
     )
     line.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             // Row 11 states `--p-ink` explicitly, where `.prow .pj` inherits the same token from
             // `.pscreen`. The value is one; the authority is this row's.
@@ -86,16 +86,18 @@ fun machineRow(
             // machine name pushes it rather than running under it.
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             tag = KitTag.MACHINE_NAME
+            Kit.identityCell(this)
         },
     )
     if (endpoint != null) {
         line.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = endpoint
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
                 tag = KitTag.MACHINE_ENDPOINT
+                Kit.identityCell(this)
             },
         )
     }
@@ -113,7 +115,7 @@ fun machineRow(
     }
     row.addView(line)
     row.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = presence

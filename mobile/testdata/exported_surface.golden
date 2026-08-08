@@ -10,8 +10,11 @@ const ErrClassNoLease
 const ErrClassNotFound
 const ErrClassNotPaired
 const ErrClassOffline
+const ErrClassPairingCodeInvalid
 const ErrClassPairingFailed
 const ErrClassRateLimited
+const ErrClassRelayAddressInvalid
+const ErrClassRelayUnknown
 const ErrClassRepairRequired
 const ErrClassRevoked
 const ErrClassStateCorrupt
@@ -117,6 +120,7 @@ method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
 method App.MachineFreshness() (*Freshness, error)
+method App.MachineName() (string, error)
 method App.MachinePresence() (*MachinePresence, error)
 method App.Outcome(string) (*Outcome, error)
 method App.PairedDeviceName() (string, error)

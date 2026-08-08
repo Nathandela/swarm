@@ -164,6 +164,11 @@ fun phoneScaffoldView(
         layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         addView(content)
     }
+    // ADR-009 D4.3 as amended 2026-08-08: the grain goes on the SCROLLED CHILD and not on the
+    // ScrollView, which is the whole of what "content-anchored" means. A ScrollView does not
+    // move; its child does, so an overlay on the viewport is the window-anchored field again
+    // under a different parent.
+    content.foreground = grainOverlay(context)
 
     return LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -178,20 +183,32 @@ fun phoneScaffoldView(
         // read and absent from every surface it exists for. A foreground is drawn after the
         // children, over all of them, and cannot take a touch (row 21: non-interactive).
         //
-        // THIS SCREEN IS THE HOST BECAUSE OF WHAT IT DOES NOT COVER. Row 21 exempts the QR tile --
-        // 4% soft-light noise on a 29-module symbol is a scan risk -- and the scaffold hosts the
-        // four paired destinations while `pairOnlyView`, which draws the code, replaces it
-        // outright. So the exemption is structural rather than a condition someone has to remember.
+        // **IT IS ONE OVERLAY PER MOVING PART AND IT USED TO BE ONE ON THIS ROOT** (ADR-009 D4.3's
+        // 2026-08-08 amendment, agents-tracker-ksvb.3). This column does not scroll and the
+        // destination inside it does, so a single overlay here was a noise field pinned to the
+        // WINDOW with the type sliding under it: at 9.5-11 sp the antialiasing ramp is most of a
+        // stroke, so every glyph was re-modulated on every scroll frame. Invisible in a
+        // screenshot, and the literal reading of "the fonts are dancing". Anchored to each part
+        // that moves -- the scrolled child above, and the two pieces of chrome below, which move
+        // with nothing and so keep an overlay of their own -- the tile and the glyph travel
+        // together and the modulation stops changing.
+        //
+        // THIS SCREEN IS STILL THE HOST BECAUSE OF WHAT IT DOES NOT COVER. Row 21 exempts the QR
+        // tile -- 4% soft-light noise on a 29-module symbol is a scan risk -- and the scaffold
+        // hosts the four paired destinations while `pairOnlyView`, which draws the code, replaces
+        // it outright (`PhoneSurface.drawPairOnly` empties the app host first). So the exemption is
+        // structural rather than a condition someone has to remember, and moving the overlay down
+        // one level does not weaken it: every site below is still inside the paired scaffold.
         //
         // IT IS A COMPOSITION AND NOT A CHOICE, which is what keeps it inside PB-DS-9's rule for
-        // this package: the value, the tile and the blend are all the kit's, and this line says
+        // this package: the value, the tile and the blend are all the kit's, and these lines say
         // only WHERE the overlay goes. `s24_screens_test.go` fences a `background =` here for the
         // stronger reason -- a screen that painted its own surface would be choosing one.
-        foreground = grainOverlay(context)
+        //
         // FIRST, AND ABOVE THE SCROLL. Both halves are the requirement: above, because a warning
         // under the destination is a warning under the fold; outside the scroll, because one
         // inside it leaves the screen as soon as the user reads past it.
-        banner?.let { addView(it) }
+        banner?.let { addView(it.apply { foreground = grainOverlay(context) }) }
         addView(scroll)
         addView(
             tabBar(
@@ -208,7 +225,10 @@ fun phoneScaffoldView(
                         onTap = { onSelectDestination(target) },
                     )
                 },
-            ).apply { tag = ScaffoldTag.TABS },
+            ).apply {
+                tag = ScaffoldTag.TABS
+                foreground = grainOverlay(context)
+            },
         )
     }
 }
@@ -255,8 +275,16 @@ fun statusBannerView(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         tag = ScaffoldTag.BANNER
+        // `capped = true` IS THE SLOT'S OWN FACT AND NOT THE COMPONENT'S (agents-tracker-ksvb.3).
+        // This banner is the one `readOnlyNote` in the app drawn OUTSIDE a scroll, so a sentence
+        // that wraps does not cost its own height -- it pushes the destination, on all four tabs,
+        // under a user who is reading something else. Three facts wrapping to four lines each is
+        // a third of a handset. Two lines and the platform's mark bound that; the same component
+        // under a terminal well still wraps, because there it is prose in a column that scrolls.
         banner.lines.forEach { line ->
-            addView(readOnlyNote(context, line).apply { tag = ScaffoldTag.BANNER_LINE })
+            addView(
+                readOnlyNote(context, line, capped = true).apply { tag = ScaffoldTag.BANNER_LINE },
+            )
         }
         // `CtaKind.MORE` IS THE NEUTRAL RULE AND THAT IS THE RIGHT ONE HERE. The press approves
         // nothing and destroys nothing -- it opens the screen this banner's sentence sends the user

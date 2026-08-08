@@ -86,22 +86,27 @@ func (r *JournalReceiver) SeedHighWater(sender [8]byte, epoch uint32, seq uint64
 	r.recv.SeedHighWater(sender, epoch, seq)
 }
 
-// CachedSession is the phone's view of one session. Group and Agent are verbatim from
-// the wire.
+// CachedSession is the phone's view of one session. Group, Agent and Name are verbatim
+// from the wire.
 type CachedSession struct {
 	SessionID string
 	Group     status.Group
 	// Agent is the session's agent identity as the machine reported it. The phone never
 	// derives it: a session whose records carry no agent has none, and the empty string
 	// is that absence rather than an agent.
-	Agent   string
+	Agent string
+	// Name is the session's user-given label as the machine reported it. Like Agent it is
+	// never derived here: a session whose records carry no name has none, and the empty
+	// string is that absence rather than a label. mobile/app.go's session() is where the
+	// fallback to the id lives, because that is a DISPLAY decision and this is the model.
+	Name    string
 	Present bool
 }
 
 // SessionCache is the phone's merged session model (R-PHC.3), keyed by namespaced
-// session id. Group and Agent are applied VERBATIM from each record (roster snapshots and
-// group_transition events carry the Group; the roster carries the Agent); the phone never
-// derives either on-device.
+// session id. Group, Agent and Name are applied VERBATIM from each record (roster snapshots
+// and group_transition events carry the Group; the roster carries the Agent and the Name);
+// the phone never derives any of them on-device.
 type SessionCache struct {
 	mu       sync.Mutex
 	sessions map[string]CachedSession
@@ -152,6 +157,9 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	}
 	if rec.Agent != "" {
 		cs.Agent = rec.Agent // verbatim from the wire, same rule as Group
+	}
+	if rec.Name != "" {
+		cs.Name = rec.Name // verbatim from the wire, same rule as Group and Agent
 	}
 	c.sessions[rec.SessionID] = cs
 	return true

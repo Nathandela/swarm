@@ -182,6 +182,20 @@ func animatorPermitted(line string, at int, id string) bool {
 	if id == "Animator" || id == "animation" {
 		return true
 	}
+	// GROUP_TRANSITION IS THE WIRE'S OWN RECORD TYPE, SPELLED, NOT AN ANIMATION.
+	// `internal/journal.TypeGroupTransition` is the literal `"group_transition"`, and
+	// agents-tracker-ksvb.2's need-line vocabulary (`ui/screens/TriageInboxScreen.kt`) has to
+	// compare against that exact string to give the record type a phrase -- one string constant,
+	// one map built from it, and the quoted literal itself. animatorVocabulary judges spelling,
+	// not meaning, so all three read as "transition" to it, and none of them constructs, routes to
+	// or even imports anything from android.animation.
+	//
+	// CASE-INSENSITIVE AND BY PREFIX so the one exemption covers `GROUP_TRANSITION`,
+	// `GROUP_TRANSITION_VOCABULARY` and the lower-case string literal together, rather than
+	// growing a second row here the day another identifier is built from the same constant.
+	if strings.HasPrefix(strings.ToUpper(id), "GROUP_TRANSITION") {
+		return true
+	}
 	// Reached through Motion, which is the routing PB-DS-8 asks for. Checked on the text BEFORE
 	// the identifier rather than by a regexp over the line, so `Motion.colorTransition` is
 	// permitted and a bare `colorTransition` -- a local copy of the primitive, which is the thing

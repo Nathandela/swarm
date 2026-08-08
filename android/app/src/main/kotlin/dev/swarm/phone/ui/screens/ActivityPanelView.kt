@@ -4,10 +4,10 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 
@@ -27,11 +27,13 @@ import dev.swarm.phone.ui.kit.sessionList
  * row 14 makes that column wrap-content instead of the mock's fixed 52 dp. [ActivityPanel] argues
  * all of it; this file is where the argument becomes an argument that is not passed.
  *
- * THE STALE LINE IS A BARE `TextView`, for the reason `SettingsPanelView`'s notices are: there is
- * no notice or body-copy component in the kit -- row 8's empty state is centred with 48 dp of
- * vertical padding and is a different thing -- so it carries the model's copy and no appearance at
- * all. That is the absence of a decision rather than one made here; reaching for `Body.Secondary`
- * directly would be a screen choosing type.
+ * THE STALE LINE IS THE KIT'S `notice` (agents-tracker-ksvb.4). It was a bare `TextView` carrying
+ * the model's copy and no appearance at all, recorded here as "the absence of a decision rather
+ * than one made here" -- and that was wrong: a `TextView` with no `TextAppearance` renders at the
+ * platform's ~14 sp, which is larger than every body style in this app's ladder, so the warning was
+ * set bigger than the records it was warning about. `§4 Notice line` is the row that specifies it
+ * and `ui/kit/Notice.kt` is where the type and the ink are now chosen, which is what keeps this
+ * screen out of it: the fence above still refuses `setTextAppearance` here.
  *
  * IT SITS ABOVE THE HEADING RATHER THAN INSIDE THE LIST, which is the one placement decision here
  * and it differs from `PeekPanel`'s deliberately. There the banner goes INSIDE the mono well,
@@ -84,13 +86,7 @@ fun activityPanelView(
     column.addView(navHeader(context, panel.title, null).apply { tag = ActivityTag.NAV })
 
     if (panel.staleNotice.isNotEmpty()) {
-        column.addView(
-            TextView(context).apply {
-                tag = ActivityTag.STALE
-                text = panel.staleNotice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+        column.addView(notice(context, panel.staleNotice).apply { tag = ActivityTag.STALE })
     }
 
     panel.sections.forEach { section ->

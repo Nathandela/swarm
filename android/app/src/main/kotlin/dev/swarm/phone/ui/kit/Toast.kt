@@ -55,7 +55,7 @@ import dev.swarm.phone.R
  *  sentence, it is an identifier appended to one.
  */
 fun toast(context: Context, message: CharSequence, suffix: CharSequence? = null): TextView =
-    TextView(context).apply {
+    Kit.textView(context).apply {
         setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
         setTextColor(Kit.colour(context, R.color.swarm_text_primary))
         background = toastSurface(context)

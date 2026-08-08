@@ -113,9 +113,9 @@ fun machinesPanelView(
                     machine = panel.machine.name,
                     presence = panel.machine.presenceLine,
                     mark = panel.machine.mark,
-                    // Row 11's `endpoint id` cell has no source: `MachinePane.machineId` IS the
-                    // endpoint id, and it is already the name. See MachinesPanel.
-                    endpoint = null,
+                    // Row 11's `endpoint id` cell, or nothing where the panel says the id is
+                    // already in the name cell. The decision is the panel's; this carries it.
+                    endpoint = panel.machine.endpoint,
                     // No description either: the line under the mark says presence in words,
                     // including whose word it is, so a described dot would say it twice.
                     presenceDescription = null,

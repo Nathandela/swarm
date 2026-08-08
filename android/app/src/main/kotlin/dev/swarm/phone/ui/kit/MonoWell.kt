@@ -40,12 +40,26 @@ import dev.swarm.phone.R
  *
  * @param terminal true for the escape-filtered VT snapshot, which takes `--p-hero`; false for
  *  every other mono block, which takes `--p-ink`.
+ * @param lines the GRID's row count, which is the well's floor (agents-tracker-ksvb.3). A well
+ *  that only wraps its content is a well that resizes per frame: this one prints
+ *  `Snapshot.Text`, which arrives again every time the agent writes a byte, and the number of
+ *  lines in it is whatever the daemon rendered at that instant -- so the card grew and shrank
+ *  under the reader and the note, the button and the lease sentence below it moved with it. The
+ *  machine's terminal has a fixed row count and that is the number that does not move.
+ *
+ *  A FLOOR AND NOT A HEIGHT, so a snapshot longer than its own grid is still drawn whole rather
+ *  than clipped. What is refused is SHRINKING, which is what jumps.
+ *
+ *  ZERO IS "NOBODY SAID" and leaves the well exactly as it was. The pairing command line is one
+ *  line of shell that arrives once and never changes; a floor there would be a height nobody
+ *  asked for under a block that cannot move.
  */
 fun monoWell(
     context: Context,
     text: CharSequence,
     terminal: Boolean = false,
-): TextView = TextView(context).apply {
+    lines: Int = 0,
+): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
     setTextColor(
         Kit.colour(
@@ -54,6 +68,7 @@ fun monoWell(
         ),
     )
     this.text = text
+    if (lines > 0) minLines = lines
     // A SubstrateSurface rather than a bare GradientDrawable, and not for tidiness: the platform
     // exposes no getter for a shape's stroke or its corner radius, so a well built directly could
     // only ever have its FILL asserted. `SurfaceSpec` is the single input the layers are built

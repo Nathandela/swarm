@@ -97,9 +97,19 @@ class ApprovalSheetPanelTest {
         )
     }
 
+    /**
+     * OLD ASSERTION, QUOTED: this test used to be `the question is the need verbatim`, feeding
+     * `need = "needs_input"` and asserting `panel?.question == "needs_input"` on the ground that
+     * "InboxRow.need is `the journal record type verbatim, never an invented phrase`". That ceased
+     * to be InboxRow.need's whole rule at agents-tracker-ksvb.2: `TriageInboxScreen.of` now maps
+     * the seven known record types to a human phrase before this model ever sees the row. What the
+     * old assertion was actually protecting -- that THIS model invents nothing OF ITS OWN -- does
+     * not depend on which field the question is read from, so it is pinned over §3.5's `summary`
+     * here, and the raw-token case moves to the test below.
+     */
     @Test
     fun `the question is the item's summary and not the roster's record type`() {
-        val panel = ApprovalSheetScreen.of(item(), row(need = "needs_input"))
+        val panel = ApprovalSheetScreen.of(item(), row(need = "Waiting on you"))
         assertEquals(
             "§3.5's `summary` is `one line for the card headline`, written machine-side by the " +
                 "adapter that captured the permission. The question used to be `needs_input` -- a " +
@@ -107,6 +117,20 @@ class ApprovalSheetPanelTest {
             "Claude wants to push the release commit to main.",
             panel.question,
         )
+    }
+
+    /**
+     * The other half of the old assertion, over the field the question is now read from. It fed
+     * `need = "a_future_record_type"` -- a token this build's vocabulary does not know -- and
+     * asserted it reached the sheet unmapped, because the only honest fallback was
+     * `TriageInboxScreen`'s and this model must not add a second one. The sheet reads no `need` at
+     * all now, so the same rule is pinned over `summary`: whatever sentence the machine wrote
+     * arrives verbatim, and nothing here recognises, rewords or ranks it.
+     */
+    @Test
+    fun `the machine's own sentence reaches the sheet verbatim`() {
+        val panel = ApprovalSheetScreen.of(item(summary = "a_future_record_type"), row())
+        assertEquals("a_future_record_type", panel.question)
     }
 
     @Test
