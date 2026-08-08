@@ -216,9 +216,12 @@ object PairingPanelScreen {
      * bare text field with no camera and no instructions (agents-tracker-qx9m). The camera half of
      * that is the permission catch-22 `PairingFlow.offersScanner` closes. This is the other half,
      * and it is not the same defect: even with a working scan button, nothing on the screen said
-     * where a code comes from. `PairingFlow.messageFor(SCAN)` says "Scan the code your machine is
-     * showing", which presupposes a machine that is already showing one -- and the phone is where a
-     * person is standing when they need to be told to go and make that happen.
+     * where a code comes from. `PairingFlow.messageFor(SCAN)` said "Scan the code your machine is
+     * showing", which presupposed a machine that is already showing one -- and the phone is where a
+     * person is standing when they need to be told to go and make that happen. THAT SENTENCE IS
+     * GONE NOW (agents-tracker-ksvb.6): it duplicated step 2 below word for word once this
+     * guidance existed, and this comment is left in the past tense as the reason the guidance was
+     * written, not as a claim about what the screen still says beside it.
      *
      * ## "your computer" and never "your Mac"
      *
@@ -241,10 +244,10 @@ object PairingPanelScreen {
     /**
      * The primary action, named for what it produces rather than for what it operates.
      *
-     * It was "Scan the code on your machine", which is the same sentence
-     * [PairingFlow.messageFor] already puts on screen two lines above it. A button that restates
-     * the instruction above it gives a reader nothing to distinguish them by; this names the thing
-     * the user is looking for.
+     * It was "Scan the code on your machine", which was the same sentence
+     * [PairingFlow.messageFor] put on screen two lines above it before agents-tracker-ksvb.6
+     * deleted that sentence for the same reason. A button that restates the instruction above it
+     * gives a reader nothing to distinguish them by; this names the thing the user is looking for.
      */
     const val SCAN_CTA = "Scan QR code"
 

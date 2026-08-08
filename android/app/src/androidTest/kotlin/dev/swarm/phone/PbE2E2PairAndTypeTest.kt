@@ -68,8 +68,11 @@ class PbE2E2PairAndTypeTest {
 
         ActivityScenario.launch(PhoneActivity::class.java).use { app ->
             // ---- pairs -------------------------------------------------------------------
+            // agents-tracker-ksvb.6: `PairingFlow.messageFor(SCAN)` -- "Scan the code your
+            // machine is showing." -- was deleted for duplicating the numbered guidance's step
+            // 2 below it. That guidance is now the SCAN step's own waypoint.
             app.awaitScreen(
-                "Scan the code your machine is showing.",
+                "It shows a QR code. Scan it below.",
                 "the app did not open on the pairing step, so there is nothing to pair with",
             )
             app.type("Paste the pairing code your machine printed", qr)
@@ -90,8 +93,12 @@ class PbE2E2PairAndTypeTest {
             app.press("Join this destination")
 
             // ---- SAS matches -------------------------------------------------------------
+            // agents-tracker-ksvb.6: `PairingFlow.messageFor(COMPARING_CODES)` -- "Compare the
+            // six symbols with the ones on your machine." -- was deleted for duplicating
+            // `SasStep.instruction`, rendered beside the symbols. That instruction is now the
+            // waypoint.
             app.awaitScreen(
-                "Compare the six symbols with the ones on your machine.",
+                "Check these six against the ones on your machine's screen.",
                 "the handshake never reached the SAS gate, so \"SAS matches\" has no subject",
             )
             val symbols = sasOnScreen(app.textOnScreen())

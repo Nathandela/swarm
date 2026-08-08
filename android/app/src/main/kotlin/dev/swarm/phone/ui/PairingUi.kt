@@ -433,10 +433,16 @@ object PairingFlow {
     /**
      * Every step reads differently, because two states that read identically are one state and
      * the user's next move differs between them.
+     *
+     * SCAN AND COMPARING_CODES SAY NOTHING HERE (agents-tracker-ksvb.6), and neither is an
+     * exception to the rule above -- each duplicated words this screen prints somewhere else on
+     * the same draw. SCAN's sentence restated `PairingPanel.GUIDANCE`'s numbered step 2 ("It
+     * shows a QR code. Scan it below."); COMPARING_CODES's restated `SasStep.instruction`,
+     * rendered beside the very symbols it was telling the user to compare. Deleting the body left
+     * each step's one remaining sentence exactly where it already was.
      */
     fun messageFor(step: PairingStep): String = when (step) {
-        PairingStep.SCAN ->
-            "Scan the code your machine is showing."
+        PairingStep.SCAN -> ""
 
         PairingStep.CONFIRM_DESTINATION ->
             "Check the destination below before this phone joins anything."
@@ -444,8 +450,7 @@ object PairingFlow {
         PairingStep.HANDSHAKING ->
             "Reaching your machine."
 
-        PairingStep.COMPARING_CODES ->
-            "Compare the six symbols with the ones on your machine."
+        PairingStep.COMPARING_CODES -> ""
 
         PairingStep.AWAITING_MACHINE_DECISION ->
             "Waiting for your machine to confirm this device."

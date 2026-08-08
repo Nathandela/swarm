@@ -378,6 +378,17 @@ class PairingStepTest {
         assertEquals(PairingStep.SCAN, fresh.step)
         assertFalse(fresh.explainsInterruptedAttempt)
     }
+
+    /**
+     * agents-tracker-ksvb.6: SCAN duplicated `PairingPanel.GUIDANCE` step 2 and COMPARING_CODES
+     * duplicated `SasStep.instruction`, rendered beside the very symbols it was about. Both
+     * bodies are deleted; the surviving sentence is unchanged in each case.
+     */
+    @Test
+    fun `the scan and comparing-codes steps say nothing their own screen does not already say beside them`() {
+        assertEquals("", PairingFlow.messageFor(PairingStep.SCAN))
+        assertEquals("", PairingFlow.messageFor(PairingStep.COMPARING_CODES))
+    }
 }
 
 /**
