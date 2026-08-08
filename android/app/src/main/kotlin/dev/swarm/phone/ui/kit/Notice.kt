@@ -54,7 +54,7 @@ fun notice(
     context: Context,
     text: CharSequence,
     kind: NoticeKind = NoticeKind.INFO,
-): TextView = TextView(context).apply {
+): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
     setTextColor(Kit.colour(context, noticeInk(kind)))
     this.text = text

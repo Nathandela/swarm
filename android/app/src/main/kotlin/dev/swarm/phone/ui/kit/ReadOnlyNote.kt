@@ -35,7 +35,7 @@ import dev.swarm.phone.R
  * is prose a user is meant to read -- `--p-ink3` fails the 4.5:1 body-text floor on every surface
  * in this product.
  */
-fun readOnlyNote(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun readOnlyNote(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     gravity = Gravity.CENTER

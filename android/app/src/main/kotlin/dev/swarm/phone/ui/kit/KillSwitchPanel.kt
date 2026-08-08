@@ -3,7 +3,6 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -76,7 +75,7 @@ fun killSwitchPanel(
         }
     }
     panel.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             // `--p-err` on the TITLE and nowhere else in this panel. It is the one place the skin
             // spends the error token on something that is not a destructive control, and row 12
@@ -88,7 +87,7 @@ fun killSwitchPanel(
         },
     )
     panel.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = Kit.emphasised(context, body, command)

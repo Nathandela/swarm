@@ -19,7 +19,7 @@ import dev.swarm.phone.R
  * (3.17 to 3.50:1). That is a property of the pinned token rather than of this component;
  * PB-DS-12 asks for it to be recorded with the sites it affects, and this is one of them.
  */
-fun sectionLabel(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun sectionLabel(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Label_Section)
     setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
     isAllCaps = true

@@ -36,7 +36,7 @@ import dev.swarm.phone.R
  * `--p-ink3` fails the 4.5:1 body-text floor on every surface in the product (3.17 to 3.50:1).
  * The derivation table makes the same call for the same reason.
  */
-fun emptyState(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun emptyState(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     gravity = Gravity.CENTER

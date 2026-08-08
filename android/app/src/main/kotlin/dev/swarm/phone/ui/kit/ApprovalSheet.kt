@@ -3,7 +3,6 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -57,7 +56,7 @@ fun approvalSheet(
     setPaddingRelative(pad, pad, pad, pad)
 
     addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
             setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
             isAllCaps = true
@@ -67,7 +66,7 @@ fun approvalSheet(
     )
 
     addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             // `Display.NavTitle` IS THE APP'S DISPLAY STYLE AT `--p-display-wt`, and the §4 row
             // records why it is this one rather than the maquette's 19 px: that drawing is on a
             // 300 px gallery phone, and this app's type ladder is deliberately still Substrate's.

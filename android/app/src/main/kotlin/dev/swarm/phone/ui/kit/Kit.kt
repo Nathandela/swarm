@@ -8,6 +8,7 @@ import android.text.style.TextAppearanceSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.annotation.ColorRes
 import androidx.annotation.DimenRes
 import dev.swarm.phone.R
@@ -35,6 +36,35 @@ import kotlin.math.roundToInt
  * difference between a small checked set and somewhere to put numbers.
  */
 internal object Kit {
+
+    /**
+     * A `TextView` with THIS app's line box rather than the font's.
+     *
+     * **IT EXISTS FOR ONE PROPERTY, AND THAT PROPERTY HAS NOWHERE ELSE TO LIVE.**
+     * `includeFontPadding` is a `TextView` field, not a `TextAppearance` attribute -- there is no
+     * `<item>` that carries it -- so `type.xml` cannot state it beside the size, the weight and
+     * the family the way it states everything else. The only place left is where the view is
+     * built, and this is the kit's one such place.
+     *
+     * **WHAT IT TURNS OFF.** On by default, it pads each line by the difference between the font's
+     * ascent/descent and its top/bottom -- slack the family reserves for accents this app never
+     * renders. The number is different for every family, weight and size, so a kit that left it on
+     * adds an UNSTATED delta to every gap PB-DS-1 states: `space_4` between a session row's two
+     * lines arrives as `space_4` plus the `Title.Row`-to-`Body.Secondary` delta, and the same
+     * `space_4` in a settings row arrives as something else. The steps stop being a grid.
+     *
+     * **UNIFORMLY, WHICH IS WHY IT IS A CONSTRUCTOR AND NOT A CALL AT EACH SITE.** Half a kit with
+     * font padding and half without is worse than either: the delta then differs between two
+     * components the design gives identical spacing, which is exactly the defect. A shared
+     * constructor cannot be half-applied by forgetting a line.
+     *
+     * IT IS HERE AND NOT A TOP-LEVEL FUNCTION for [focusable]'s reason: every top-level `fun` in
+     * this package is read as a component factory by `android/gate/s23_kit_test.go`, and this is a
+     * platform default corrected rather than a thing on screen.
+     */
+    fun textView(context: Context): TextView = TextView(context).apply {
+        includeFontPadding = false
+    }
 
     fun colour(context: Context, @ColorRes id: Int): Int = context.getColor(id)
 

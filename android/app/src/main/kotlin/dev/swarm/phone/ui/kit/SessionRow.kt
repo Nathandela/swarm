@@ -3,7 +3,6 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -87,7 +86,7 @@ fun sessionRow(
         },
     )
     line.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             // `.prow .pj` declares no colour: it inherits `.pscreen { color: var(--p-ink) }`.
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
@@ -110,7 +109,7 @@ fun sessionRow(
     // (ADR-007 B135).
     if (agent.isNotBlank()) {
         line.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = agent
@@ -135,7 +134,7 @@ fun sessionRow(
     }
     row.addView(line)
     row.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = need

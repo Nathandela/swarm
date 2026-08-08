@@ -4,7 +4,6 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -76,7 +75,7 @@ fun machineRow(
         },
     )
     line.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             // Row 11 states `--p-ink` explicitly, where `.prow .pj` inherits the same token from
             // `.pscreen`. The value is one; the authority is this row's.
@@ -90,7 +89,7 @@ fun machineRow(
     )
     if (endpoint != null) {
         line.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = endpoint
@@ -113,7 +112,7 @@ fun machineRow(
     }
     row.addView(line)
     row.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = presence

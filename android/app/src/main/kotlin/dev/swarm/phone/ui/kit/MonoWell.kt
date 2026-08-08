@@ -45,7 +45,7 @@ fun monoWell(
     context: Context,
     text: CharSequence,
     terminal: Boolean = false,
-): TextView = TextView(context).apply {
+): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
     setTextColor(
         Kit.colour(

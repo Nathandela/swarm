@@ -90,7 +90,7 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
         // does with whatever width the control leaves it.
         back?.let { addView(backControl(context, it)) }
         addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Title_Sheet)
                 setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                 text = title
@@ -115,7 +115,7 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
  * for this header and this is the only other place inside it where two things sit side by side;
  * spending anything else would be a step nobody wrote down.
  */
-private fun backControl(context: Context, label: CharSequence): TextView = TextView(context).apply {
+private fun backControl(context: Context, label: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     text = label

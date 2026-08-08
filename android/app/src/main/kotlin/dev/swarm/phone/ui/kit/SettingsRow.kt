@@ -44,7 +44,7 @@ fun settingsRow(
         layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
     }
     text.addView(
-        TextView(context).apply {
+        Kit.textView(context).apply {
             setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             this.text = label
@@ -54,7 +54,7 @@ fun settingsRow(
     )
     if (sublabel != null) {
         text.addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
                 setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
                 this.text = sublabel
@@ -110,7 +110,7 @@ fun settingsRow(
  * the caller could pass both. What it must NOT be is a TextView the screen styles: an ink and a
  * text appearance chosen in `ui/screens/` is the PB-DS-6 violation this package exists to prevent.
  */
-fun statusLabel(context: Context, text: CharSequence): TextView = TextView(context).apply {
+fun statusLabel(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Label_CardHead)
     setTextColor(Kit.colour(context, R.color.swarm_hero))
     this.text = text

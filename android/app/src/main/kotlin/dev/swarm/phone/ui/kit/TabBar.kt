@@ -8,7 +8,6 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -189,7 +188,7 @@ private fun tab(context: Context, item: TabItem): View {
         item.onTap?.let { tap -> setOnClickListener { tap() } }
         addView(iconFrame)
         addView(
-            TextView(context).apply {
+            Kit.textView(context).apply {
                 setTextAppearance(R.style.TextAppearance_Swarm_Label_Tab)
                 setTextColor(ink)
                 text = item.label

@@ -32,7 +32,7 @@ import dev.swarm.phone.R
  * this parameter is nullable rather than defensive.
  */
 fun badge(context: Context, count: Int, description: CharSequence?): TextView =
-    TextView(context).apply {
+    Kit.textView(context).apply {
         setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
         setTextColor(Kit.colour(context, R.color.swarm_hero_ink))
         // Three digits either overflow a 16 dp pill or shrink the type below the 10 sp floor

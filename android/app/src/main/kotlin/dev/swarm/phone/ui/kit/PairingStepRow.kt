@@ -104,7 +104,7 @@ fun pairingStep(
  * top-level `fun` in this package as one. Both cells go through it so the two cannot drift into
  * being two type decisions.
  */
-private fun body(context: Context, text: CharSequence): TextView = TextView(context).apply {
+private fun body(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
     setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     this.text = text
