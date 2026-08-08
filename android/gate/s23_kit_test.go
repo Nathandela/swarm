@@ -221,6 +221,25 @@ var s23Inbox = []s23Component{
 			"be the copy of `.a2-more` the reuse rule exists to prevent.",
 	},
 	{
+		Factory: "notice",
+		File:    "Notice.kt",
+		Derived: "§4 Notice line",
+		Why: "the sentence a screen says about its own state, and the component whose ABSENCE was " +
+			"documented in eight KDocs rather than fixed. Sixteen bare `TextView`s -- the pairing " +
+			"screen's five, the phone surface's two, the settings surface's one, and one to four " +
+			"in each of six recomposed screens -- carried no appearance at all and rendered at the " +
+			"platform's ~14 sp default, which is LARGER than every body style in the ladder: a " +
+			"warning line was the biggest body text on the screen it warned about. §4 is the whole " +
+			"specification because the artifact draws no notice and the retired mock drew none " +
+			"either. Its ink is `--p-ink2` and not `--p-ink3` for row 22's reason, which is the " +
+			"same reason it is a component and not a screen's own `setTextAppearance`: " +
+			"s24_screens_test.go fences the screens package against choosing type, so the choosing " +
+			"has to happen here. The ERROR variant is `--p-err` with nothing else moved -- same " +
+			"style, same box -- because a refusal the machine sent is a different kind of sentence " +
+			"from a state the screen is reporting, and it is a parameter rather than a second " +
+			"factory for `ctaButton`'s reason: the site differs, not the component.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",
