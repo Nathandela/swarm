@@ -3,7 +3,9 @@ package phonecore
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -84,6 +86,62 @@ func SignTakeControl(ks crypto.KeyStore, in TakeControlInput) (schema.DeviceComm
 		OperationID: in.OperationID,
 		ExpiresAt:   in.ExpiresAt,
 		ContentHash: h[:],
+	})
+}
+
+// ApproveInput is the identity of an approve op the phone authors (IS-LIFE-4). ContentHash is
+// the approval_request's OWN `content_hash`, as text, exactly as the card carried it.
+type ApproveInput struct {
+	Machine     string    // target machine endpoint id
+	Session     string    // namespaced session id the approval belongs to
+	OperationID string    // durable client-generated idempotency key; NEVER the interaction id (IS-APR-1)
+	ExpiresAt   time.Time // command validity horizon (the COMMAND's, not the approval's)
+	ContentHash string    // the item's content_hash, echoed verbatim (IS-APR-2)
+}
+
+// SignApprove authors and signs an approve command (IS-LIFE-4), mirroring SignTakeControl but
+// binding the INTERACTION CONTENT rather than a token: ADR-007 D7 spends the signed tuple's
+// one content slot on it, and the daemon derives the same slot by decoding the WIRE body's
+// content_hash -- so a gateway that swaps the hash to redirect the approval breaks the
+// signature rather than reaching the machine as a well-formed approve for another card.
+//
+// The hash is DECODED, never derived. IS-APR-2 makes the phone echo `content_hash` verbatim,
+// and a value it cannot decode is refused here: SHA256("") is a valid 32-byte digest, so
+// falling back to an empty hash would produce a structurally-perfect command bound to nothing
+// -- refused at the machine as a stale card, which reports a phone-side bug as the user's
+// problem. This is handleTakeControl's empty-gate-token rule for the other content slot.
+func SignApprove(ks crypto.KeyStore, in ApproveInput) (schema.DeviceCommandAuth, error) {
+	h, err := hex.DecodeString(in.ContentHash)
+	if err != nil || len(h) != sha256.Size {
+		return schema.DeviceCommandAuth{}, fmt.Errorf(
+			"phonecore: approval content_hash %q is not a 32-byte hex digest; a phone echoes it verbatim and computes none of its own (IS-APR-2)",
+			in.ContentHash)
+	}
+	return SignCommand(ks, CommandInput{
+		Action:      schema.ActionApprove,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: h,
+	})
+}
+
+// SealApproveEnvelope seals the SIGNED approve command together with its ApproveReq body
+// (IS-LIFE-4), mirroring SealLaunchEnvelope: the body rides beside the signed tuple so the
+// gateway can reconstruct the approve Control the daemon validates against. seq must be
+// unique per epoch.
+//
+// Only content_hash is bound by the signature. The rest of the body needs no binding it does
+// not already have: agent_instance, interaction_id and expires_at are checked against the
+// daemon's OWN stored tuple, so altering one yields CodeStaleApproval rather than a misapplied
+// decision, and the decision id is deliberately unsigned (IS-LIFE-4) -- it rides inside the
+// epoch-sealed frame, unforgeable by the relay and alterable only by the gateway, which is the
+// documented D4/D5 owner-uid residual.
+func SealApproveEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, approve schema.ApproveReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind:          kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd, Approve: &approve},
 	})
 }
 

@@ -320,16 +320,19 @@ func flushTerminal(sink TerminalSink) error {
 // remote socket and returns the daemon's reply. It is the command-IN counterpart to
 // the journal-OUT bridge: the gateway is a blind conduit -- it forwards the phone's
 // signature untouched, and the daemon verifies it independently (R-POL.9). The gateway
-// holds no device key and cannot forge or escalate a command. `launch` is set only for
-// an OpLaunch (nil otherwise). A fresh connection is used per command (pooling is a
+// holds no device key and cannot forge or escalate a command. The in-envelope bodies ride
+// across on the frame itself: `rc.Launch` for an OpLaunch, `rc.Approve` for an OpApprove
+// (IS-LIFE-4), nil for everything else. A fresh connection is used per command (pooling is a
 // later refinement).
-func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error) {
+func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol.Control, error) {
 	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway)
 	if err != nil {
 		return protocol.Control{}, err
 	}
 	defer dc.Close()
 
+	cmd := rc.DeviceCommandAuth
+	sessionID := rc.Session
 	exp := cmd.ExpiresAt
 	ctrl := protocol.Control{
 		Op:          op,
@@ -339,7 +342,8 @@ func (g *Gateway) ForwardCommand(op, sessionID string, cmd protocol.DeviceComman
 		DeviceID:    cmd.DeviceID,
 		DeviceSig:   cmd.Sig,
 		ExpiresAt:   &exp,
-		Launch:      launch,
+		Launch:      rc.Launch,
+		Approve:     rc.Approve,
 	}
 	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
 	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to

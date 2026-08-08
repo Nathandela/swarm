@@ -124,8 +124,10 @@ func s25SurfaceCodes(t *testing.T) map[string]string {
 // edit and adding a third is a red one that has to be argued for in review.
 var s25RenderPathExemptions = map[string]map[string]string{
 	"PhoneSurface.kt": {
-		"watch":   "agents-tracker-jx1x: TerminalWatch from renderReady reaches awaitConn",
-		"unwatch": "agents-tracker-jx1x: TerminalUnwatch from release, which must precede the socket close",
+		// `watch` AND `unwatch` STOOD HERE and are gone with the functions themselves, which is
+		// what this ledger's own rule asks for: "a ledger nobody prunes stops meaning anything".
+		// ADR-009-structured-chat-interaction (2) stops this app issuing a terminal watch at all,
+		// so the two main-thread `awaitConn` reaches these rows excused are ABSENT, not fixed.
 	},
 }
 

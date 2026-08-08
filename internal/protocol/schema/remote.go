@@ -171,10 +171,25 @@ type RemoteCommand struct {
 	// gateway -- it arrives sealed under the epoch content key, which the relay cannot
 	// forge, and the gateway is itself the custodian that decides delivery. A hash it
 	// recomputed against its own file would protect nothing it could not simply overwrite.
-	PushPrefs  *PushPrefs `json:"push_prefs,omitempty"`
-	Launch     *LaunchReq `json:"launch,omitempty"`
-	GateToken  string     `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
-	TTLSeconds int        `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
+	PushPrefs *PushPrefs `json:"push_prefs,omitempty"`
+	// Approve is the approve body (IS-LIFE-4): the ApproveReq the gateway reconstructs
+	// Control.Approve from. It is the ONE wire field this spec adds, and it adds no signed
+	// action -- ActionApprove already exists.
+	//
+	// It is bound to the signature the way a launch spec is, and only in part. ContentHash is
+	// the digest of the INTERACTION CONTENT the phone echoes verbatim (IS-APR-2, ADR-007 D7),
+	// so a gateway that swaps the hash to redirect the approval breaks the signature. The
+	// remaining fields are not covered, and do not need to be: agent_instance, interaction_id
+	// and expires_at are checked against the daemon's own stored binding tuple, so altering
+	// any of them yields CodeStaleApproval rather than a misapplied decision. The DECISION is
+	// deliberately unsigned (IS-LIFE-4) -- the signed tuple has one content slot and D7 spends
+	// it on the content -- riding instead inside the epoch-sealed frame, unforgeable by the
+	// relay and alterable only by the gateway, which is the documented D4/D5 owner-uid
+	// residual and not a new one.
+	Approve    *ApproveReq `json:"approve,omitempty"`
+	Launch     *LaunchReq  `json:"launch,omitempty"`
+	GateToken  string      `json:"gate_token,omitempty"`  // take_control: one-shot gate token; the gateway reconstructs Control.GateToken from it. Bound into the signature via ContentHash=SHA256(GateToken), not carried in the signed tuple.
+	TTLSeconds int         `json:"ttl_seconds,omitempty"` // take_control: caller-requested control-session lifetime (seconds), clamped server-side. Not signed (cosmetic like Cols/Rows).
 	// ResyncCursor is journal_resync's from-cursor: the boundary the phone's session cache
 	// currently stands at. The gateway's journal_read(from) answers with the complete roster
 	// as-of a new boundary plus the events in between, which is exactly JournalReseed's

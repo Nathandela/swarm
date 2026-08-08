@@ -82,6 +82,51 @@ class FacadeBridge(private val app: App) {
     }
 
     /**
+     * ADR-009 (1)'s chat transcript: one session's interaction items, oldest first.
+     *
+     * IT IS NOT [journal] NARROWED TO A SESSION, and `App.ReadTranscript`'s own doc says why at
+     * length: the journal page is an in-memory log of record TYPES, bounded and rebuilt empty by
+     * every process death, while the transcript is the folded DURABLE model the core holds --
+     * records merged by `item_id`, `agent_message` increments concatenated, the latest plan
+     * revision kept. Serving a conversation from the page would show it empty after the SIGKILL
+     * Android hands out routinely, with the durable receive high-water refusing the relay's
+     * redelivery of the frames that built it.
+     *
+     * It returns the PAGE for [journal]'s reason: the cursor to read from next and the stream's
+     * stale mark ride on the handle, and a caller handed a bare list can neither advance nor say
+     * the conversation has a hole in it. The staleness is the JOURNAL's, because an interaction
+     * item IS a journal record (IS-LAYER-1) and inherits that repair channel (IS-LAYER-4).
+     *
+     * @param afterCursor the ordering cursor of the last item the caller already has; 0 reads from
+     *  the start of what the phone holds. An item UPDATED in place keeps its first record's cursor
+     *  (IS-LAYER-3), so a caller that wants the update re-reads the tail rather than paging past
+     *  it -- which is what the `interaction` event exists to prompt.
+     * @param limit at most this many items; a non-positive value is the core's own bound.
+     */
+    fun transcript(sessionId: String, afterCursor: Long, limit: Long): TranscriptPageView {
+        val page = app.readTranscript(sessionId, afterCursor, limit)
+        return TranscriptPageView(
+            items = (0 until page.count()).map { index ->
+                val item = page.at(index)
+                InteractionItem(
+                    sessionId = item.getSessionID(),
+                    itemId = item.getItemID(),
+                    cursor = item.getCursor(),
+                    kind = item.getKind(),
+                    status = item.getStatus(),
+                    text = item.getText(),
+                    body = item.getBody(),
+                    truncated = item.getTruncated(),
+                    degraded = item.getDegraded(),
+                    resolved = item.getResolved(),
+                )
+            },
+            nextCursor = page.nextCursor(),
+            stale = page.stale(),
+        )
+    }
+
+    /**
      * The roster handle read ONCE: its rows and its own staleness verdict, together.
      *
      * Together is the point. Two calls to `App.Roster` would answer two different questions
@@ -99,33 +144,68 @@ class FacadeBridge(private val app: App) {
     private data class RosterView(val rows: List<SessionRow>, val stale: Boolean)
 
     /**
-     * PB-APP-4's grid.
+     * PB-INPUT-2's lease state for one session, and WHAT IS LEFT OF PB-APP-4's grid read.
      *
-     * A SESSION WITH NO FRAME YET IS NOT A FAILURE, and this is the one place that can say so
-     * (agents-tracker-9ds). `App.Peek` reads a cache the MACHINE fills, and refuses with
-     * [SwarmErrorTokens.NOT_FOUND] while it holds nothing for the session -- which is the state
-     * every session is in for the whole round trip after `terminalWatch`. Propagated, that refusal
-     * crossed `PhoneSurface.render`, reached `PhoneEvents`' `main.post { }` uncaught and killed the
-     * app on the ordinary path of opening a session that has not printed. [TerminalPeek] models the
-     * empty grid and `SessionDetailPanel.hasSnapshot` draws it; nothing had to invent a state, only
-     * to stop treating "not yet" as "broken".
+     * `terminalPeek` stood here and asked `App.Peek` for the daemon-rendered snapshot. ADR-009
+     * (2)/(3) deletes both ends of that: no phone surface issues a `terminal_watch`, so the cache
+     * it read is never filled, and no screen draws a grid. What the call was ALSO carrying is the
+     * lease -- which was never on the snapshot in the first place ([SessionLease.leaseHeld] is a
+     * parameter, and its own doc says why) -- so the lease survives the deletion intact and the
+     * grid does not.
      *
-     * ONLY THAT ONE CLASS IS ABSORBED. Every other refusal is a real failure and keeps propagating
-     * to the router that already renders it with a remedy: a device revoked, a custody state
-     * needing repair, a rate limit or a refused transport must never reach a user as a terminal
-     * that has quietly printed nothing. `FacadeBridgeTest` asserts both directions and reads the
-     * class list by reflection, so a token added to the taxonomy propagates by default.
+     * IT ASKS THE FACADE FOR NOTHING. Both facts are already this side's: the caller's take_control
+     * outcome, and the transport state [isOnline] reads. The read that remains is a joining, which
+     * is what this adapter is for.
      *
-     * @param leaseHeld whether the machine has CONFIRMED a control lease. It is not on the
-     *  snapshot and is not asked for here: the lease is the outcome of this screen's own
-     *  take_control operation (PB-INPUT-3), and reading it back from a snapshot would be
-     *  guessing at a fact the reply already carries.
+     * @param leaseHeld whether the machine has CONFIRMED a control lease. It is the outcome of
+     *  this screen's own take_control operation (PB-INPUT-3), claimed by operation id.
      */
-    fun terminalPeek(sessionId: String, leaseHeld: Boolean): TerminalPeek = try {
-        peekOf(app.peek(sessionId), leaseHeld = leaseHeld, online = isOnline())
+    fun sessionLease(sessionId: String, leaseHeld: Boolean): SessionLease =
+        SessionLease(sessionId = sessionId, leaseHeld = leaseHeld, online = isOnline())
+
+    /**
+     * The unresolved `approval_request` this session is blocked on, or null when there is none.
+     *
+     * IT IS THE FIRST ONE THE MACHINE IS STILL WAITING ON, oldest first, which is `App
+     * .PendingApprovals`' own order. One card at a time is the surface's shape rather than the
+     * wire's: the sheet is D4.4's heaviest material, "reserved for the moment of decision", and a
+     * stack of them would ask the user to answer a question while a second one is on screen.
+     *
+     * IS-LIFE-2 IS WHAT MAKES THAT SAFE. Every `approval_request` reaches exactly one
+     * `approval_resolved` -- including cancelled, superseded, expired and answered at the machine
+     * -- and the Go side drops a resolved item out of this list, so a card that has stopped being
+     * a question stops being on screen without this side deciding anything.
+     *
+     * A SESSION WITH NO CARD IS NOT A FAILURE, which is the same absorption [isAwaitingFirstFrame]
+     * was written for one verb over: a phone that holds nothing for the session answers null, and
+     * every other refusal keeps propagating to the router that renders it with a remedy.
+     */
+    fun pendingApproval(sessionId: String): ApprovalItem? = try {
+        firstApprovalFor(sessionId)
     } catch (refused: Exception) {
         if (!isAwaitingFirstFrame(classOf(refused))) throw refused
-        noFrameYet(sessionId, leaseHeld = leaseHeld, online = isOnline())
+        null
+    }
+
+    private fun firstApprovalFor(sessionId: String): ApprovalItem? {
+        val page = app.pendingApprovals()
+        for (index in 0 until page.count()) {
+            val item = page.at(index)
+            if (item.getSessionID() != sessionId) continue
+            // RESOLVED IS ASKED EVEN THOUGH THE LIST IS OF UNRESOLVED CARDS. IS-LIFE-2's guarantee
+            // is what dismisses a stale card on every surface, and the flag is durable with the
+            // item precisely so it survives the process death Android hands out; reading it here
+            // costs nothing and means this side never draws a question the machine has stopped
+            // asking, whichever of the two ends resolved it.
+            if (item.getResolved()) continue
+            val approval = ApprovalItem.of(
+                sessionId = item.getSessionID(),
+                itemId = item.getItemID(),
+                body = item.getBody(),
+            )
+            if (approval != null) return approval
+        }
+        return null
     }
 
     /**
@@ -251,26 +331,13 @@ class FacadeBridge(private val app: App) {
         agent = session.getAgent(),
     )
 
-    /** The text crosses verbatim. There is no renderer on this side to put between them. */
-    private fun peekOf(snapshot: Snapshot, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
-        sessionId = snapshot.getSessionID(),
-        text = snapshot.getText(),
-        cols = snapshot.getCols().toInt(),
-        rows = snapshot.getRows().toInt(),
-        stale = snapshot.getStale(),
-        leaseHeld = leaseHeld,
-        online = online,
-    )
-
     /**
-     * The two halves of [terminalPeek]'s recovery, lifted out of the instance ON PURPOSE.
+     * The pure halves of this adapter, lifted out of the instance ON PURPOSE.
      *
-     * NEITHER TAKES AN `App`, AND THAT IS WHAT MAKES THEM TESTABLE. `swarmmobile.App` is a gomobile
+     * NONE TAKES AN `App`, AND THAT IS WHAT MAKES THEM TESTABLE. `swarmmobile.App` is a gomobile
      * class over .so files cross-compiled for Android ABIs, so it cannot be constructed on the
-     * unit-test JVM and no test can call [terminalPeek] at all. The decision that can be got wrong
-     * -- which refusals mean "no frame yet" and which must keep propagating -- is pure Kotlin and
-     * is asserted in `FacadeBridgeTest`. What stays untested is the placement of the `try/catch`
-     * around them, which is review's.
+     * unit-test JVM. The decisions that can be got wrong are pure Kotlin and are asserted in
+     * `FacadeBridgeTest`; what stays untested is where the calls are placed, which is review's.
      */
     internal companion object {
         /** `App.StreamState` answers "stale" or "live". */
@@ -298,31 +365,17 @@ class FacadeBridge(private val app: App) {
         val REPAIR_CHANNELS: List<String> = listOf("journal", "terminal", "reply", "grant")
 
         /**
-         * Whether a refusal means the machine simply has not sent this session's grid yet.
+         * Whether a refusal means this phone simply holds nothing yet for the session.
          *
          * IT IS AN EQUALITY AND NOT A SET, because exactly one class in the taxonomy means "not
-         * yet" and every widening of this is a real failure rendered as a quiet terminal.
+         * yet" and every widening of it is a real failure rendered as a quiet screen.
+         *
+         * IT OUTLIVED THE GRID IT WAS WRITTEN FOR. It guarded `App.Peek`, whose cache is empty for
+         * the whole round trip after a watch; the well is deleted (ADR-009 (3)) and the same shape
+         * of refusal now arrives from [pendingApproval], where a card the phone has already
+         * answered or never received is `NOT_FOUND` and is not a failure to report.
          */
         fun isAwaitingFirstFrame(errorClass: String): Boolean =
             errorClass == SwarmErrorTokens.NOT_FOUND
-
-        /**
-         * A session the machine has sent no frame for.
-         *
-         * IT INVENTS NOTHING. The text is empty, which is what `SessionDetail.hasSnapshotCard`
-         * reads to draw NO CARD rather than a well containing nothing; the grid is unmeasured
-         * because no grid arrived; and it is not marked stale, because staleness is a property of a
-         * view that exists and has stopped being refreshed. The lease and the link are the caller's
-         * facts and cross unchanged.
-         */
-        fun noFrameYet(sessionId: String, leaseHeld: Boolean, online: Boolean) = TerminalPeek(
-            sessionId = sessionId,
-            text = "",
-            cols = 0,
-            rows = 0,
-            stale = false,
-            leaseHeld = leaseHeld,
-            online = online,
-        )
     }
 }

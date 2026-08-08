@@ -257,9 +257,17 @@ func TestPBSEC4_ThePolicyRecordsScreenshotsAreAllowedOnEveryScreen(t *testing.T)
 func TestPBSEC4_ThePolicyStillCoversTheTwoScreensTheRequirementNamed(t *testing.T) {
 	rows := readWindowPolicy(t)
 
+	// THE SECOND ROLE IS AMENDED AND NOT DROPPED, which is the whole of what this change is.
+	// The requirement named the terminal peek because the peek was where session content was
+	// shown; `ADR-009-structured-chat-interaction.md` (3) deletes that screen at slice I1's exit
+	// and (1) puts the same content -- what the agent said, ran and changed -- on the session
+	// detail. So the ARGUMENT survives its screen and moves with it, and this table asks the
+	// table of record to keep answering it. Dropping the role because the screen was renamed out
+	// of existence would drop B65's answer along with the question it answered, which is exactly
+	// what the test below this one exists to prevent from the other direction.
 	needed := map[string][]string{
-		"pairing":       {"pair"},
-		"terminal peek": {"peek", "terminal"},
+		"pairing":        {"pair"},
+		"session detail": {"detail", "session"},
 	}
 	for role, needles := range needed {
 		found := false

@@ -58,7 +58,7 @@ func TestE2E_PhoneSignedKillThroughGatewayExecuted(t *testing.T) {
 	}
 
 	gw := remotegw.New(rsock, nil)
-	reply, err := gw.ForwardCommand(protocol.OpKill, namespaced, cmd, nil)
+	reply, err := gw.ForwardCommand(protocol.OpKill, protocol.RemoteCommand{DeviceCommandAuth: cmd})
 	if err != nil {
 		t.Fatalf("gateway forward: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestE2E_PhoneSignedKillThroughGatewayExecuted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("other sign: %v", err)
 	}
-	reply, err = gw.ForwardCommand(protocol.OpKill, namespaced, bad, nil)
+	reply, err = gw.ForwardCommand(protocol.OpKill, protocol.RemoteCommand{DeviceCommandAuth: bad})
 	if err != nil {
 		t.Fatalf("gateway forward (unpaired): %v", err)
 	}

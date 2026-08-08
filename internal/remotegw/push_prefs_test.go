@@ -70,7 +70,7 @@ type refusingForwarder struct {
 	ops []string
 }
 
-func (f *refusingForwarder) ForwardCommand(op, _ string, _ protocol.DeviceCommandAuth, _ *protocol.LaunchReq) (protocol.Control, error) {
+func (f *refusingForwarder) ForwardCommand(op string, _ protocol.RemoteCommand) (protocol.Control, error) {
 	f.ops = append(f.ops, op)
 	return protocol.Control{Op: protocol.OpError, Error: "device signature invalid", ErrorCode: protocol.CodeNotAuthorized}, nil
 }

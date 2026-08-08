@@ -1,10 +1,13 @@
 package dev.swarm.phone.ui.screens
 
-import dev.swarm.phone.ui.JournalRow
+import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,54 +15,62 @@ import org.junit.Test
  * FAILING-FIRST (TDD RED, GG-5) for PB-APP-3's session detail -- inventory C2's SCREEN MODEL.
  *
  * WHY THERE IS A MODEL BESIDE [SessionDetail]. That one answers what the session IS and what may be
- * done to it: the journal, the snapshot, whether a lease is held, and the three-way outcome of
- * pressing Stop. Those semantics were settled on 2026-07-25 and this file does not relitigate them
- * -- Stop is a KEYSTROKE (0x03 through a PTY in ISIG mode) and not a new signed action, it REQUIRES
- * the lease, and it rides the live-only path so an offline Stop is "not sent" and never queued.
- * This answers what the SCREEN says about all of that: the title, the heading over the transcript,
- * what each control reads as, what the confirmation asks, and what the screen says when the machine
- * did not receive something. Every one of those is copy or arrangement, and PB-DS-9 assigns both to
- * the screen.
+ * done to it: whether a lease is held, and the three-way outcome of pressing Stop. Those semantics
+ * were settled on 2026-07-25 and this file does not relitigate them -- Stop is a KEYSTROKE (0x03
+ * through a PTY in ISIG mode) and not a new signed action, it REQUIRES the lease, and it rides the
+ * live-only path so an offline Stop is "not sent" and never queued. This answers what the SCREEN
+ * says about all of that: the title, what each control reads as, what the confirmation asks, and
+ * what the screen says when the machine did not receive something. Every one of those is copy or
+ * arrangement, and PB-DS-9 assigns both to the screen.
  *
- * IT IS A PURE FUNCTION OVER [SessionDetail], which is the shape this package already uses
- * ([ActivityPanelScreen], [MachinesPanelScreen], [TriageInboxScreen]). No Android import, so the
- * interesting half is checkable without a device.
+ * IT IS A PURE FUNCTION OVER [SessionDetail], [TranscriptPanel] AND [SessionLease] NOW, and that
+ * three-way split is `docs/adr/ADR-009-structured-chat-interaction.md` landing on this test file
+ * rather than a refactor made here. `SessionDetail` used to carry the journal AND the daemon-
+ * rendered grid alongside the lease; IS-SS-1 splits the conversation from the roster ("a client
+ * renders the roster from the latter and the transcript from the former"), and (1)/(2)/(3) delete
+ * the grid and the terminal_watch that filled it. What is left on `SessionDetail` is the lease, the
+ * link and the Stop/Kill facts; the conversation is [TranscriptPanel]'s, built by [TranscriptScreen]
+ * off the session's interaction items and handed to [SessionDetailScreen.of] as its own parameter.
  *
- * THE TRANSCRIPT REUSES [ActivityEntry] AND THAT IS §2'S RULE, not a shortcut. `activityRow`'s own
- * KDoc says it is "the activity feed's only structural element, and the machine pane's audit log --
- * one factory for both, which is why it takes a body and an optional emphasis rather than a
- * JournalRow". A per-session journal is the third caller of exactly that shape, and a second entry
- * type carrying the same two fields would be the copy the reuse rule exists to prevent.
+ * WHAT MOVED RATHER THAN DIED. The transcript-content assertions this file used to carry --
+ * ordering, and what an empty conversation says -- are `TranscriptPanelTest`'s and
+ * `TranscriptViewTest`'s now, over the model and the view that actually own that surface. The
+ * snapshot-content assertions (a grid present or absent, its own stale mark) have no new home:
+ * ADR-009 (3) deletes the terminal well outright, so there is no grid anywhere in the app for an
+ * assertion about one to be about.
  */
 class SessionDetailPanelTest {
 
-    private fun record(cursor: Long, type: String, group: String = "") =
-        JournalRow(cursor = cursor, sessionId = "mbp/api", type = type, group = group)
-
     private fun detail(
-        journal: List<JournalRow> = listOf(record(1, "launched")),
-        snapshotText: String = "$ git push",
         leaseHeld: Boolean = true,
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
-        snapshotStale: Boolean = false,
     ) = SessionDetail(
         sessionId = "mbp/api",
-        journal = journal,
-        snapshotText = snapshotText,
         leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
         stopNotSent = stopNotSent,
-        snapshotStale = snapshotStale,
+    )
+
+    /**
+     * [detail] and the [SessionLease] a screen reads alongside it, KEPT IN THE SAME STATE they are
+     * in production: `PhoneSurface.detailPanel` derives both `SessionDetail.leaseHeld` and
+     * `SessionLease.leaseHeld` from the one verdict its own take_control earned, so a fixture that
+     * let them disagree would test a combination the surface never produces.
+     */
+    private fun panelOf(detail: SessionDetail = detail()) = SessionDetailScreen.of(
+        detail,
+        TranscriptScreen.of(emptyList()),
+        SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
     )
 
     // ---- what the screen is about -----------------------------------------
 
     @Test
     fun `the header names the session the user drilled into`() {
-        val panel = SessionDetailScreen.of(detail())
+        val panel = panelOf()
 
         assertEquals(
             "the drill-down header does not name the session, so a user who opened it from a " +
@@ -73,48 +84,11 @@ class SessionDetailPanelTest {
         )
     }
 
-    @Test
-    fun `the transcript is the session's own journal, newest first, verbatim`() {
-        val panel = SessionDetailScreen.of(
-            detail(
-                journal = listOf(
-                    record(1, "launched"),
-                    record(2, "group_transition", group = "needs_input"),
-                ),
-            ),
-        )
-
-        // The record's own words. `TriageInbox` states the rule for the need line and it holds
-        // here for the stronger reason: a table turning wire tokens into English would have to
-        // fail on a value it did not know, and a server that added a record type would take this
-        // screen down.
-        assertEquals(
-            listOf("group_transition · needs_input", "launched"),
-            panel.transcript.rows.map { it.body },
-        )
-    }
-
-    @Test
-    fun `a session with no records says so rather than showing an empty area`() {
-        val panel = SessionDetailScreen.of(detail(journal = emptyList()))
-
-        assertTrue(
-            "an empty transcript renders nothing at all, which is indistinguishable from a feed " +
-                "that failed to load -- PB-DS-9's rule is that an empty section is still a section",
-            panel.transcript.emptyCopy.isNotEmpty(),
-        )
-        assertTrue(
-            "the empty copy claims nothing happened, which is a claim about the MACHINE that a " +
-                "phone holding no records is in no position to make",
-            !panel.transcript.emptyCopy.lowercase().contains("nothing has happened"),
-        )
-    }
-
     // ---- the controls, and what they say ----------------------------------
 
     @Test
     fun `Stop offers the take-control step when the lease is not held`() {
-        val observing = SessionDetailScreen.of(detail(leaseHeld = false))
+        val observing = panelOf(detail(leaseHeld = false))
 
         // PB-INPUT-3: input is refused without a confirmed lease, so a Stop button that silently
         // did nothing is the failure the recorded decision names. The screen shows the step that
@@ -123,14 +97,14 @@ class SessionDetailPanelTest {
         assertNotEquals(
             "an observer is offered the same Stop wording as a controller, so pressing it will " +
                 "be refused by the machine with nothing on screen having warned them",
-            SessionDetailScreen.of(detail(leaseHeld = true)).stopLabel,
+            panelOf(detail(leaseHeld = true)).stopLabel,
             observing.stopLabel,
         )
     }
 
     @Test
     fun `Kill is never one tap away`() {
-        val panel = SessionDetailScreen.of(detail())
+        val panel = panelOf()
 
         assertTrue(
             "Kill ends the session outright and is offered without a confirmation step",
@@ -154,7 +128,7 @@ class SessionDetailPanelTest {
      */
     @Test
     fun `an offline Stop says it was not sent and does not promise a retry`() {
-        val panel = SessionDetailScreen.of(detail(online = false))
+        val panel = panelOf(detail(online = false))
 
         assertEquals(StopAction.NOT_SENT, panel.confirmedStopAction)
         assertEquals(
@@ -164,7 +138,7 @@ class SessionDetailPanelTest {
             panel.notSentNotice,
         )
 
-        val pressed = SessionDetailScreen.of(detail(online = false, stopNotSent = true))
+        val pressed = panelOf(detail(online = false, stopNotSent = true))
         assertTrue(
             "the screen does not tell the user their Stop never reached the machine",
             pressed.notSentNotice.isNotEmpty(),
@@ -180,8 +154,8 @@ class SessionDetailPanelTest {
 
     @Test
     fun `a holed journal is never presented as a complete history`() {
-        val whole = SessionDetailScreen.of(detail(journalStale = false))
-        val holed = SessionDetailScreen.of(detail(journalStale = true))
+        val whole = panelOf(detail(journalStale = false))
+        val holed = panelOf(detail(journalStale = true))
 
         assertEquals(
             "a journal with an unrepaired gap is drawn as a plain list, so the user reads it as " +
@@ -193,56 +167,76 @@ class SessionDetailPanelTest {
     }
 
     /**
-     * FAILING-FIRST for agents-tracker-0qe7's second half: **the snapshot's staleness is the
-     * snapshot's, and this screen only carried the journal's.**
+     * The conversation crosses this model UNTOUCHED, which is the one thing left to assert about it
+     * here.
      *
-     * [SessionDetailPanel.staleNotice] is PB-APP-8 over the CHRONOLOGY -- "some records are
-     * missing ... this is not a complete log of the session" -- and it is the only stale mark on
-     * the screen. The card above it prints a grid the machine may have stopped sending frames for,
-     * and a terminal is the one surface a user reads AS live: a snapshot with no mark is taken for
-     * what the session is doing now. The two facts are independent (a repaired journal beside a
-     * frozen grid is an ordinary state) and they have different remedies, so one sentence cannot
-     * stand for both.
+     * WHY IT IS IDENTITY AND NOT CONTENT. The transcript-content assertions moved to
+     * `TranscriptPanelTest` (see this file's KDoc), and re-asserting ordering or empty copy here
+     * would be a second reading of one fold -- the copy §2's reuse rule exists to prevent. What is
+     * genuinely this model's is that it PASSES THE PANEL THROUGH: a screen that rebuilt, filtered or
+     * re-sorted the blocks on the way past would be a second transcript able to disagree with the
+     * one its own test proved right, and `assertSame` is the only assertion that catches that.
      */
     @Test
-    fun `the snapshot carries its own stale mark and not the journal's verdict`() {
-        val fresh = SessionDetailScreen.of(detail(snapshotStale = false, journalStale = false))
-        val frozen = SessionDetailScreen.of(detail(snapshotStale = true, journalStale = false))
+    fun `the conversation the screen is handed is the conversation it carries`() {
+        val chat = TranscriptScreen.of(
+            listOf(InteractionItem(itemId = "i-1", cursor = 1, kind = "agent_message", text = "on it")),
+        )
 
-        assertEquals(
-            "a snapshot mark is drawn over a grid the machine is still sending frames for",
-            "",
-            fresh.snapshotStaleNotice,
+        assertSame(
+            "the session detail rebuilt the transcript it was handed, so the conversation on this " +
+                "screen is a second fold of the same items -- and only one of the two is the one " +
+                "TranscriptPanelTest proved right",
+            chat,
+            SessionDetailScreen.of(
+                detail(),
+                chat,
+                SessionLease(sessionId = "mbp/api", leaseHeld = true, online = true),
+            ).transcript,
         )
-        assertTrue(
-            "the snapshot card has no stale mark of its own, so a grid the phone knows is out of " +
-                "date is read as what the session is doing now",
-            frozen.snapshotStaleNotice.isNotEmpty(),
-        )
-        assertEquals(
-            "the snapshot's mark is the JOURNAL's verdict, which is a different fact with a " +
-                "different remedy: an unrepaired event stream says nothing about whether the last " +
-                "frame is current",
-            "",
-            frozen.staleNotice,
-        )
-        assertNotEquals(
-            SessionDetailScreen.of(detail(journalStale = true)).staleNotice,
-            frozen.snapshotStaleNotice,
+    }
+
+    // ---- PB-INPUT-2, RE-HOMED FROM THE DELETED PEEK ------------------------
+    //
+    // BOTH TESTS BELOW ARE `PeekPanelScreenTest`'S, WORD FOR WORD WHERE THE MODEL ALLOWS. That suite
+    // is deleted with the terminal peek (ADR-009 (3)), and these two assertions are not: PB-INPUT-2
+    // is untouched by the ADR -- (5) keeps the input substrate "exactly as decided" -- and the peek
+    // carried the lease copy only because the peek was where the keyboard was. This is the screen a
+    // session is read on now, so the sentence and the button are here, and so is their coverage.
+    //
+    // The third test of that group, `the keyboard follows both of the model's clauses, not just the
+    // lease`, is NOT here: `keyboardEnabled` stayed on the model rather than moving to this screen,
+    // and `SessionLeaseTest` in `ui/SessionScreensTest.kt` asserts it over both clauses.
+
+    @Test
+    fun `take control is offered exactly while the machine has not confirmed one`() {
+        assertTrue(panelOf(detail(leaseHeld = false)).offersTakeControl)
+        assertFalse(
+            "the control to take a lease is offered over a lease the machine already granted",
+            panelOf(detail(leaseHeld = true)).offersTakeControl,
         )
     }
 
     @Test
-    fun `the snapshot card is absent when no frame has arrived, not blank`() {
-        val quiet = SessionDetailScreen.of(detail(snapshotText = ""))
-        val printing = SessionDetailScreen.of(detail(snapshotText = "$ git push"))
+    fun `the two lease sentences go with the two lease states and not the other way round`() {
+        val held = panelOf(detail(leaseHeld = true)).leaseNotice
+        val notHeld = panelOf(detail(leaseHeld = false)).leaseNotice
 
+        assertEquals(SessionDetailScreen.leaseNoticeFor(confirmed = true), held)
+        assertEquals(SessionDetailScreen.leaseNoticeFor(confirmed = false), notHeld)
         assertTrue(
-            "a session the machine has sent no frame for still draws a snapshot card, which is " +
-                "an empty terminal presented as the session's screen",
-            !quiet.hasSnapshot,
+            "the two states read the same, which is the invisible suppression PB-INPUT-2 exists " +
+                "to prevent: the user cannot tell until a keystroke vanishes",
+            held != notHeld,
         )
-        assertTrue(printing.hasSnapshot)
-        assertEquals("$ git push", printing.snapshot)
+        assertTrue(
+            "the confirmed sentence does not say what it confirms",
+            held.contains("confirmed you have control"),
+        )
+        assertTrue(
+            "the unconfirmed sentence does not say what to do about it, which leaves a shut " +
+                "keyboard with no reason beside it",
+            notHeld.contains("Take control first"),
+        )
     }
 }

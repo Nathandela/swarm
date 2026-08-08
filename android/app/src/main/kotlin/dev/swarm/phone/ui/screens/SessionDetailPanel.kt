@@ -1,8 +1,9 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.CommandResult
 import dev.swarm.phone.ui.CommandVerdict
-import dev.swarm.phone.ui.JournalRow
 import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
 
 /**
@@ -25,11 +26,11 @@ import dev.swarm.phone.ui.StopAction
  * control is called, what the confirmation asks, and what the screen says when something did not
  * reach the machine. All of it is copy or arrangement, and PB-DS-9 assigns both to the screen.
  *
- * THE TRANSCRIPT IS [ActivityEntry] AND THAT IS §2'S REUSE RULE. `activityRow` is documented as
- * "the activity feed's only structural element, and the machine pane's audit log -- one factory for
- * both, which is why it takes a body and an optional emphasis rather than a JournalRow". A
- * per-session journal is the third caller of that exact shape; a second entry type carrying the
- * same two fields would be the copy the rule exists to prevent.
+ * THE TRANSCRIPT IS [TranscriptPanel]'s AND NO LONGER THIS MODEL'S. This object built a section of
+ * `ActivityEntry` out of `JournalRow`s -- a record type and a display group per line -- because that
+ * is what the wire carried. Interaction items carry the conversation itself, so the section is a
+ * screen model of its own and is handed in; what is left here is the screen's own copy, which is
+ * what PB-DS-9 assigns it.
  *
  * ## What inventory C2 draws that this does not
  *
@@ -39,32 +40,46 @@ import dev.swarm.phone.ui.StopAction
  * the machines screen made about a kill-switch toggle, for the same reason. Recorded here rather
  * than left for the next reader to wonder about.
  *
- * **Tool cards.** The mock draws structured cards per tool call; `swarmmobile.JournalEntry` is
- * `(Cursor, SessionID, Type, Group)` and carries no tool, no arguments and no result. There is
- * nothing on the wire to build a card out of.
+ * **Tool cards, which are now HALF here.** The mock draws structured cards per tool call, and
+ * §3.3's `tool_run` is what one is made of -- [TranscriptPanel] renders it as a row plus a mono
+ * well. What is still absent is the CARD: a bordered block with a tool glyph, a status and an
+ * expandable body, for which the kit has no factory.
  */
 data class SessionDetailPanel(
     /** The drill-down header's title: the session the user opened, by the id the wire gave it. */
     val title: String,
     /** §4's back control. The label a screen reader reads; the chevron is the kit's. */
     val back: String,
-    val transcript: TranscriptSection,
     /**
-     * The daemon-rendered grid, or empty when no frame has arrived for this session.
+     * The conversation, which is ADR-009-structured-chat-interaction (1) landing on this screen.
      *
-     * IT IS THE TEXT AND NOT A RENDERING. ADR-007 D2 puts the VT emulator on the machine; this is
-     * `swarmmobile.Snapshot.Text` byte for byte, and a renderer on this side would reinterpret
-     * bytes the daemon has already declared sanitized.
+     * IT IS THE ITEM TRANSCRIPT AND NOT THE JOURNAL LOG ANY MORE. What stood here was a
+     * `TranscriptSection` over `JournalRow`s -- a record type and a display group per line, which is
+     * what the wire carried before interaction items existed. It is now [TranscriptPanel], folded
+     * from the items themselves, and the two are not two views of one thing: IS-SS-1 splits them
+     * deliberately ("a client renders the roster from the latter and the transcript from the
+     * former"), and the journal log stays where it belongs, on the activity feed that spans every
+     * session.
      */
-    val snapshot: String,
+    val transcript: TranscriptPanel,
     /**
-     * Whether there is a snapshot card at all.
+     * PB-INPUT-2's "visibly", in whichever of the two states the machine has put the user in.
      *
-     * ABSENT IS NOT EMPTY. A session the machine has sent no frame for gets no card, rather than a
-     * card showing an empty terminal -- which would present "we have not heard" as "the screen is
-     * blank", and those are different facts about the session.
+     * IT ARRIVED HERE WITH THE PEEK'S DELETION and it is the same sentence, unchanged. The terminal
+     * peek carried the lease copy because the peek was where the keyboard was; ADR-009 (3) deletes
+     * that screen, and this is the screen a session is now read on. The requirement is untouched by
+     * the ADR -- (5) keeps the input substrate "exactly as decided" -- so what moved is where the
+     * sentence is drawn and nothing about what it says.
      */
-    val hasSnapshot: Boolean,
+    val leaseNotice: String,
+    /**
+     * Whether the Take control step is on offer, per `SessionLease.showsTakeControl`.
+     *
+     * IT IS OFFERED EXACTLY WHILE IT IS THE STEP TO TAKE, and there is no Release beside it because
+     * `App.ReleaseControl` is still ledgered unbound in `android/unbound-verbs.tsv`: a screen that
+     * hid the way in without offering a way out would be worse than one that never hid it.
+     */
+    val offersTakeControl: Boolean,
     /** What pressing Stop does NOW, from the model that decides it. */
     val stopAction: StopAction,
     /** What the Stop control reads as, which differs for an observer -- see [SessionDetailScreen]. */
@@ -80,38 +95,9 @@ data class SessionDetailPanel(
     val notSentNotice: String,
     /** PB-APP-8: what the screen says when the journal has a hole in it. */
     val staleNotice: String,
-    /**
-     * PB-APP-8 for the SNAPSHOT, which is a different fact (agents-tracker-0qe7).
-     *
-     * [staleNotice] is the journal's verdict -- the event stream had a gap -- and it was the only
-     * stale mark on this screen, so a grid the machine had stopped sending frames for was drawn
-     * with nothing beside it. A terminal is the one surface a user reads AS live, and the two
-     * facts are independent: a repaired journal beside a frozen grid is an ordinary state.
-     */
-    val snapshotStaleNotice: String,
-)
-
-/** The per-session journal: a heading, its rows, and what it says when it holds none. */
-data class TranscriptSection(
-    val heading: String,
-    val rows: List<ActivityEntry>,
-    val emptyCopy: String,
 )
 
 object SessionDetailScreen {
-
-    /** The mock's own heading over a session's records. */
-    private const val TRANSCRIPT = "Session log"
-
-    /**
-     * What the transcript says when this phone holds no records for the session.
-     *
-     * IT SAYS NOTHING HAS REACHED THIS PHONE, NOT THAT NOTHING HAPPENED -- [ActivityPanelScreen]'s
-     * distinction, and it is sharper here: a session detail is opened from a row that exists, so
-     * the user KNOWS the session is real, and a screen saying "nothing has happened" would be
-     * contradicting the list they just tapped.
-     */
-    private const val TRANSCRIPT_EMPTY = "No records for this session have reached this phone yet."
 
     /**
      * Stop, in the two wordings the lease decides.
@@ -191,22 +177,82 @@ object SessionDetailScreen {
     fun killNoticeFor(verdict: CommandVerdict): String =
         if (verdict.refused) verdict.sentence(KILL_REFUSED) else ""
 
-    /** The separator between a record's type and its group. `PeekPanelScreen` set the idiom. */
-    private const val FIELD_SEPARATOR = " · "
+    /**
+     * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because a shut
+     * keyboard with no reason beside it is the invisible suppression the requirement is against.
+     *
+     * THEY MOVED HERE FROM THE TERMINAL PEEK, WORD FOR WORD. That screen is deleted (ADR-009 (3))
+     * and its copy is not: PB-DS-9 assigns copy to the screen, and this is the screen a session is
+     * read on now. `PhoneSurfaceControlsTest` and the instrumented smoke read them by value.
+     */
+    private const val LEASE_CONFIRMED =
+        "Your machine has confirmed you have control of this session, so what you type is " +
+            "sent live."
 
-    fun of(detail: SessionDetail): SessionDetailPanel = SessionDetailPanel(
+    private const val LEASE_NOT_CONFIRMED =
+        "Your machine has not confirmed control of this session, so the keyboard stays shut " +
+            "-- anything typed would be dropped without a word. Take control first."
+
+    /**
+     * The two sentences a REFUSAL and a SEVERANCE get instead (agents-tracker-qlf9).
+     *
+     * [LEASE_NOT_CONFIRMED] was shown for both, and it is wrong for both in the same way: it reads
+     * as "you have not pressed the button yet", and the step it offers is the one that was just
+     * declined. The machine's own words follow, because a kill switch, a revoked device and a
+     * policy refusal have three different remedies and only the reply says which one this is.
+     *
+     * THEY ARE TWO SENTENCES AND NOT ONE. A lease the machine GRANTED and later ended is not a
+     * lease it refused; `internal/remotegw/lease_sever.go` seals the detach under the
+     * take_control's own operation id, so the difference arrives on this very outcome and a single
+     * wording would accuse the machine of declining a lease it had given.
+     */
+    private const val LEASE_REFUSED = "Your machine refused this phone control of the session"
+
+    private const val LEASE_ENDED = "Your machine ended this phone's control of the session"
+
+    /** What every not-granted state shares, said once rather than in each sentence. */
+    private const val KEYBOARD_SHUT = " The keyboard stays shut."
+
+    /**
+     * @param verdict the machine's answer to the take_control THIS screen issued. It is defaulted
+     *  to [CommandVerdict.UNANSWERED] rather than required, because a phone that has asked for no
+     *  lease has not been refused one -- and the two must not read the same.
+     */
+    fun leaseNoticeFor(
+        confirmed: Boolean,
+        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+    ): String = when {
+        // THE LEASE ITSELF IS THE AUTHORITY and this clause is first for that reason: `leaseHeld`
+        // is what shuts the keyboard, and a notice announcing control over a shut keyboard is the
+        // contradiction PB-INPUT-2's "visibly" exists to prevent.
+        confirmed -> LEASE_CONFIRMED
+        verdict.result == CommandResult.ENDED -> verdict.sentence(LEASE_ENDED) + KEYBOARD_SHUT
+        verdict.refused -> verdict.sentence(LEASE_REFUSED) + KEYBOARD_SHUT
+        else -> LEASE_NOT_CONFIRMED
+    }
+
+    /**
+     * @param transcript the conversation, decided by [TranscriptScreen] off the items themselves.
+     *  It is a PARAMETER and not something read here, for [lease]'s reason: this object owns copy
+     *  and arrangement, and the transcript is a screen model of its own with its own heading and its
+     *  own empty copy.
+     * @param lease PB-INPUT-2's three lease facts, which used to reach the user through the peek.
+     * @param verdict the rest of the machine's answer to this screen's own take_control.
+     */
+    fun of(
+        detail: SessionDetail,
+        transcript: TranscriptPanel,
+        lease: SessionLease,
+        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+    ): SessionDetailPanel = SessionDetailPanel(
         title = detail.sessionId,
         back = BACK,
-        transcript = TranscriptSection(
-            heading = TRANSCRIPT,
-            // NEWEST FIRST, for `ActivityPanelScreen`'s reason: `ReadJournal` walks the page in
-            // ascending cursor order because that is what a cursor is for, and a log is read from
-            // the top.
-            rows = detail.journal.sortedByDescending { it.cursor }.map(::entryFor),
-            emptyCopy = TRANSCRIPT_EMPTY,
-        ),
-        snapshot = detail.snapshotText,
-        hasSnapshot = detail.hasSnapshotCard,
+        transcript = transcript,
+        // THE VERDICT IS THE MODEL'S, not the press's: `showsRelease` is what the MACHINE answered
+        // this screen's own take_control with, claimed by operation id, and [verdict] is the rest of
+        // that same answer -- which the peek used to discard on the way in.
+        leaseNotice = leaseNoticeFor(lease.showsRelease, verdict),
+        offersTakeControl = lease.showsTakeControl,
         stopAction = detail.stop(),
         stopLabel = if (detail.leaseHeld) STOP else STOP_NEEDS_LEASE,
         stopConfirmation = STOP_CONFIRMATION,
@@ -219,25 +265,6 @@ object SessionDetailScreen {
         // ends up promising a delivery this transport never makes.
         notSentNotice = detail.notSentNotice,
         staleNotice = if (detail.stale) STALE_NOTICE else "",
-        // THE MODEL'S SENTENCE AGAIN, and it is `TerminalPeek`'s: the peek and this card show the
-        // same object for the same session, so the wording is read from one place rather than
-        // written twice.
-        snapshotStaleNotice = detail.snapshotStaleNotice,
     )
 
-    /**
-     * One record as the transcript renders it: the wire's own words, and the span the row marks.
-     *
-     * The emphasis is the GROUP rather than the session: every row here is about the same session,
-     * so emphasising it would put the eye on the one token every row shares. `ActivityPanelScreen`
-     * emphasises the session for the opposite reason -- its feed spans all of them.
-     */
-    private fun entryFor(row: JournalRow): ActivityEntry {
-        val group = row.group.ifEmpty { null }
-        return ActivityEntry(
-            cursor = row.cursor,
-            body = listOfNotNull(row.type, group).joinToString(FIELD_SEPARATOR),
-            emphasis = group,
-        )
-    }
 }

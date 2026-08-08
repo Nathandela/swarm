@@ -1,7 +1,6 @@
 package dev.swarm.phone.ui
 
 import java.lang.reflect.Modifier
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -99,30 +98,11 @@ class FacadeBridgeTest {
         )
     }
 
-    /**
-     * The fallback the recognised case produces.
-     *
-     * IT CARRIES NO GRID AND IS NOT STALE. `SessionDetailPanel.hasSnapshot` reads
-     * `snapshotText.isNotEmpty()`, so empty text is what draws NO CARD AT ALL rather than a well
-     * containing nothing -- the model's own "absent is not empty" rule. Stale is false because
-     * staleness is a property of a grid that exists and has stopped being refreshed; there is no
-     * grid here, and "this view of the terminal is out of date" would be a claim about content
-     * this phone has never been sent.
-     */
-    @Test
-    fun `the answer carries no grid, and claims nothing about one`() {
-        val peek = FacadeBridge.noFrameYet("mbp/api", leaseHeld = true, online = true)
-
-        assertEquals("mbp/api", peek.sessionId)
-        assertEquals("a fabricated grid stands in for one the machine never sent", "", peek.text)
-        assertFalse(
-            "a session that has sent no frame is reported as a STALE view of the terminal, " +
-                "which is a claim about content this phone has never received",
-            peek.stale,
-        )
-        assertEquals("", peek.staleNotice)
-        // The two facts the caller supplied cross unchanged: the fallback invents neither.
-        assertTrue(peek.leaseHeld)
-        assertTrue(peek.keyboardEnabled)
-    }
+    // `the answer carries no grid, and claims nothing about one` is DELETED rather than amended.
+    // It asserted `FacadeBridge.noFrameYet`, the fallback `App.Peek`'s not-found refusal produced;
+    // `docs/adr/ADR-009-structured-chat-interaction.md` (2)/(3) deletes the terminal well and the
+    // `terminal_watch` this app issued to fill it, so there is no grid fallback left to have an
+    // opinion about. `isAwaitingFirstFrame` survives the same deletion -- it now guards
+    // [FacadeBridge.pendingApproval] instead, per that method's own KDoc -- and the four tests
+    // above are its coverage, unchanged.
 }

@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
@@ -59,6 +60,59 @@ func (a *App) TakeControl(session string) (op *Op, err error) {
 		return nil, err
 	}
 	return a.signedCommand(schema.ActionTakeControl, session, nil, commandBody{gate: token})
+}
+
+// Approve answers ONE pending approval_request (IS-LIFE-4): the phone's decision travels as
+// the existing signed ActionApprove, validated machine-side against ADR-007 D7's binding tuple
+// before the adapter applies it.
+//
+// THE ARGUMENTS ARE THE THREE THINGS A SCREEN KNOWS, and nothing else. session and itemID name
+// the card (itemID IS D7's interaction_id, IS-APR-1) and decisionID is the id the tapped
+// button carried, in the CLI's OWN vocabulary -- Codex offers accept |
+// acceptWithExecpolicyAmendment | cancel (IS-APR-3), and this side never normalizes it,
+// because a daemon reading `cancel` as a refusal would be guessing at a vocabulary it does not
+// own. Flat strings because gomobile binds no struct argument.
+//
+// THE BINDING TUPLE IS NOT A PARAMETER, and that is IS-APR-2 expressed as a signature. A phone
+// echoes content_hash and expires_at verbatim and computes neither, so they are read off the
+// card this phone is holding rather than accepted from a caller -- a screen that could pass
+// them is a screen that could compute them, and the failure would be a perfectly valid command
+// the daemon refuses as stale.
+//
+// It answers LOCALLY for a card it cannot answer, and that is not a shortcut around the
+// daemon's authority. An unknown item, a resolved one and a malformed one all come back from
+// the machine as CodeStaleApproval, which the phone can only render as "your card is out of
+// date" -- true for the resolved case, wrong and unactionable for the other two. The daemon
+// still re-validates everything it is sent; this only refuses what could never have been sent.
+//
+// LIVE-ONLY, NEVER QUEUED (B43): sealSignedCommand appends to the mailbox or fails, and an
+// approval has a daemon-authoritative window, so a decision stored for a later reconnect would
+// be answering a question the agent has stopped asking.
+func (a *App) Approve(session, itemID, decisionID string) (op *Op, err error) {
+	defer barrier(&err)
+	if session == "" || itemID == "" || decisionID == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: Approve needs a session, an item id and the decision id the tapped button carried"))
+	}
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	b, ok := core.Router().Items().PendingApproval(session, itemID)
+	if !ok {
+		return nil, classed(ErrClassNotFound, fmt.Errorf(
+			"swarmmobile: this phone holds no unresolved approval %q for session %q that carries an answerable binding tuple",
+			itemID, session))
+	}
+	expires := b.ExpiresAt
+	return a.signedCommand(schema.ActionApprove, session, nil, commandBody{approve: &schema.ApproveReq{
+		Session:       session,
+		AgentInstance: schema.AgentInstanceRef{ShimPID: b.ShimPID, ShimStartTime: b.ShimStartTime},
+		InteractionID: itemID,
+		ContentHash:   b.ContentHash,
+		ExpiresAt:     &expires,
+		Decision:      decisionID,
+	}})
 }
 
 // gateTokenBytes is the entropy behind one gate token. 16 bytes is the same width the phone
@@ -657,6 +711,10 @@ type commandBody struct {
 	// field because it changes BOTH halves of the frame: the signature covers SHA256(it) and
 	// the envelope carries it beside the signed tuple, and the two must be the same value.
 	gate string
+	// approve is IS-LIFE-4's ApproveReq. Like gate it changes both halves -- the signature
+	// covers the body's content_hash and the envelope carries the body -- and for the same
+	// reason the derivation is phonecore's (SignApprove), not this package's.
+	approve *schema.ApproveReq
 }
 
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
@@ -720,7 +778,8 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	// same forbidden duplication as re-deriving LaunchContentHash -- a divergence produces a
 	// signature the daemon rejects, with no compile error and no message naming the cause.
 	var cmd schema.DeviceCommandAuth
-	if body.gate != "" {
+	switch {
+	case body.gate != "":
 		cmd, err = phonecore.SignTakeControl(core.KeyStore(), phonecore.TakeControlInput{
 			Machine:     core.State().Machine,
 			Session:     session,
@@ -728,7 +787,20 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 			ExpiresAt:   expiresAt,
 			GateToken:   body.gate,
 		})
-	} else {
+	case body.approve != nil:
+		// Approve signs a DIFFERENT tuple too: ADR-007 D7 spends the content slot on the
+		// INTERACTION CONTENT, so the hash under the signature is the card's own content_hash,
+		// echoed verbatim (IS-APR-2). Decoding it is phonecore's rule for the same reason
+		// SHA256(gate token) is -- a divergence here produces a signature the daemon rejects,
+		// with no compile error and no message naming the cause.
+		cmd, err = phonecore.SignApprove(core.KeyStore(), phonecore.ApproveInput{
+			Machine:     core.State().Machine,
+			Session:     session,
+			OperationID: id,
+			ExpiresAt:   expiresAt,
+			ContentHash: body.approve.ContentHash,
+		})
+	default:
 		cmd, err = phonecore.SignCommand(core.KeyStore(), phonecore.CommandInput{
 			Action:      action,
 			Machine:     core.State().Machine,
@@ -762,6 +834,11 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		env, err = phonecore.SealLaunchEnvelope(sc.key, sc.epoch, seq, cmd, body.launch)
 	case body.prefs != nil:
 		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
+	case body.approve != nil:
+		// The body rides beside the signed tuple so the gateway can rebuild the approve Control
+		// the daemon validates against -- launch's shape, for the other action whose payload the
+		// daemon reads.
+		env, err = phonecore.SealApproveEnvelope(sc.key, sc.epoch, seq, cmd, *body.approve)
 	case body.gate != "":
 		// The wire token rides beside the signed tuple so the gateway can rebuild the
 		// take_control Control the daemon verifies against. The requested lifetime is the

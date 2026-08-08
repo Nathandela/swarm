@@ -17,6 +17,7 @@ import dev.swarm.phone.runtime.LifecycleConvergence
 import dev.swarm.phone.runtime.LifecycleEvent
 import dev.swarm.phone.runtime.RuntimeState
 import dev.swarm.phone.runtime.SocketDisposition
+import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.ControlLease
@@ -38,6 +39,8 @@ import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
+import dev.swarm.phone.ui.screens.ApprovalSheetPanel
+import dev.swarm.phone.ui.screens.ApprovalSheetScreen
 import dev.swarm.phone.ui.screens.Destination
 import dev.swarm.phone.ui.screens.InboxScreen
 import dev.swarm.phone.ui.screens.InboxTab
@@ -49,17 +52,16 @@ import dev.swarm.phone.ui.screens.LinkPanelScreen
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
-import dev.swarm.phone.ui.screens.PeekPanel
-import dev.swarm.phone.ui.screens.PeekPanelScreen
 import dev.swarm.phone.ui.screens.Presentation
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
+import dev.swarm.phone.ui.screens.TranscriptScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.linkPanelView
+import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
-import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.sessionDetailView
 import dev.swarm.phone.ui.screens.statusBannerView
@@ -181,25 +183,28 @@ class PhoneSurface(
     private val outcome = label()
 
     /**
-     * PB-DS-9: the terminal peek, rebuilt into a host of its own.
+     * ADR-009 (4)'s approval card, in the host the terminal peek used to occupy.
      *
-     * IT IS A HOST AND NOT A PANEL because the peek changes on a different clock from everything
-     * around it. The inbox is redrawn only when [InboxScreen] changes -- [drawInbox] argues why
-     * -- and a machine printing steadily changes the snapshot on every journal event. Composing
-     * the peek inside the inbox's tree would tie one to the other: either the peek would stop
-     * updating, or the list would be thrown back to the top under whoever was scrolling it.
+     * IT IS A HOST AND NOT A PANEL, which is the peek's own reason and is sharper here. The inbox
+     * is redrawn only when [InboxScreen] changes -- [drawInbox] argues why -- and an approval
+     * arrives on its own clock, at the moment an agent stops and asks. Composing the card inside
+     * the inbox's tree would tie one to the other: either the card would arrive late, or the list
+     * would be thrown back to the top under whoever was scrolling it.
      *
-     * WHAT THE PEEK USED TO BE, so the size of the change is on the record: a heading `TextView`
-     * holding the session id, a mono well, and a lease sentence -- three loose children of the
-     * flat column below, with `renderLease` setting a visibility and two enabled flags over them.
-     * It is now [PeekPanel] and one composition (inventory C3, derivation §4 and row 22).
+     * **IT IS THE SAME SLOT IN THE SAME COLUMN, and that is the whole of what half 2 moved here.**
+     * What stood in it was `peekHost` and the grid: `ADR-009-structured-chat-interaction` (3)
+     * deletes it at slice I1's exit, and (4) says what a phone shows instead when a session is
+     * blocked on a human -- "the phone renders the sanitized prompt region as a CARD whose buttons
+     * carry the same signed `ActionApprove` op every other approval card uses". The place on screen
+     * where a user used to go to read what their machine was waiting for is where the question now
+     * is, with the answer beside it.
      */
-    private val peekHost = LinearLayout(activity).apply {
+    private val approvalHost = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    /** PB-APP-6's form, hosted for [peekHost]'s reason: it is redrawn when its notice changes. */
+    /** PB-APP-6's form, hosted for [approvalHost]'s reason: it is redrawn when its notice changes. */
     private val launchHost = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -578,7 +583,7 @@ class PhoneSurface(
      * be producing events. [LaunchPanel] is a data class, so "has anything on it changed" is one
      * comparison, and the only thing that ever changes is the notice.
      */
-    private var peekDrawn: PeekPanel? = null
+    private var approvalDrawn: ApprovalSheetPanel? = null
 
     private var launchDrawn: LaunchPanel? = null
 
@@ -679,13 +684,6 @@ class PhoneSurface(
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
 
-    /**
-     * The session the MACHINE has been asked to render frames for, which is not the same fact as
-     * [session]. `terminalWatch` is a request that costs the daemon per-session render work, so
-     * what is open has to be tracked in order to be closed.
-     */
-    private var watching: String = ""
-
     /** True once this surface installed its listener and started journal delivery. */
     private var observing = false
 
@@ -697,7 +695,7 @@ class PhoneSurface(
      * single 24 dp padding, which was the entire spatial output of the product. PB-DS-9 replaces
      * it with real screens and puts the triage inbox first, so what is here now is the remainder.
      *
-     * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [peekHost] and
+     * WHAT IS LEFT IN IT AFTER THE LAST TWO SCREENS, which is the honest list. [approvalHost] and
      * [launchHost] are composed panels rather than loose views. What is genuinely unrecomposed is
      * the startup line, the capability notice, the outcome line, and the KEYBOARD -- the field and
      * Send.
@@ -754,7 +752,7 @@ class PhoneSurface(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
-            status, notice, peekHost,
+            status, notice, approvalHost,
             typed, send, launchHost, outcome,
         )) {
             addView(child)
@@ -915,11 +913,13 @@ class PhoneSurface(
         }
         connected = null
 
-        // ADR-007 B16: backgrounding DISCONNECTS. Both of these are requests the machine is
-        // still serving on the phone's behalf -- per-session terminal render work, and journal
-        // delivery into a queue nothing is draining -- so they are withdrawn before the socket
-        // goes, while there is still a socket to withdraw them over.
-        unwatch(live)
+        // ADR-007 B16: backgrounding DISCONNECTS. Journal delivery is a request the machine is
+        // still serving on the phone's behalf, into a queue nothing is draining, so it is
+        // withdrawn before the socket goes, while there is still a socket to withdraw it over.
+        //
+        // THE TERMINAL WATCH USED TO BE WITHDRAWN HERE BESIDE IT. There is none left to withdraw:
+        // ADR-009 (2) stops this app issuing one at all, so the per-session render work it cost
+        // the daemon is not started rather than being cleaned up.
         try {
             live.unsubscribeJournal()
         } catch (refused: Exception) {
@@ -940,9 +940,14 @@ class PhoneSurface(
      *
      * `SetEventListener`, `SubscribeJournal` and `TerminalWatch` appeared ZERO times in all
      * Kotlin (residuals §2.9). So no listener was installed, journal delivery never started, and
-     * the machine was never asked to send terminal frames -- while [FacadeBridge.terminalPeek]
-     * read `App.Peek`, a LOCAL cache that only a watched session ever fills. The peek was
-     * permanently empty, and it failed looking exactly like a quiet machine.
+     * the machine was never asked to send terminal frames -- while the peek read `App.Peek`, a
+     * LOCAL cache that only a watched session ever fills. It was permanently empty, and it failed
+     * looking exactly like a quiet machine.
+     *
+     * THE THIRD VERB IS DELIBERATELY NOT CALLED HERE ANY MORE. ADR-009 (2) ends the watch rather
+     * than fixing it: with no grid on any screen, a phone that asked for terminal frames would be
+     * spending the machine-to-phone append budget (7) on frames nothing draws. The two remaining
+     * calls are what journal delivery needs, and interaction items ride that same journal.
      *
      * IT IS IDEMPOTENT AND GUARDED, because [render] runs on every resume and after every gated
      * action. Installing the same listener twice is harmless; re-subscribing on every button
@@ -964,42 +969,15 @@ class PhoneSurface(
     }
 
     /**
-     * Ask the machine to render [next], and stop it rendering whatever came before.
+     * WHERE `watch` AND `unwatch` USED TO BE, recorded rather than left as a gap.
      *
-     * THE PEEK IS NOT A PULL. `App.Peek` reads `Router().Snapshots()`, a cache the machine fills
-     * by pushing terminal frames -- and it pushes them only for a session the phone has WATCHED
-     * (PB-APP-4). Without this call the peek is empty forever and says so in the words of a
-     * session with nothing on screen.
+     * They asked `App.TerminalWatch` for the session on screen and `App.TerminalUnwatch` for the one
+     * before it, which is what filled the cache the peek read. `ADR-009-structured-chat-interaction`
+     * (2) ends both: "no phone surface issues a watch", so no snapshot frames are appended to a
+     * phone at all and the transcript inherits the whole of the machine-to-phone append budget the
+     * peek used to spend (7). The two verbs stay exported and stay on the wire -- nothing is deleted
+     * protocol-side -- and are ledgered unbound in `android/unbound-verbs.tsv`.
      */
-    private fun watch(app: App, next: String) {
-        if (next == watching) return
-        unwatch(app)
-        if (next.isEmpty()) return
-        try {
-            app.terminalWatch(next)
-            watching = next
-        } catch (refused: Exception) {
-            outcome.text = FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message
-        }
-    }
-
-    /**
-     * Close the open peek. Without it the peek plane leaks per-session server render work for
-     * every session the user ever looked at, which is `App.TerminalUnwatch`'s own reason for
-     * existing.
-     */
-    private fun unwatch(app: App) {
-        val open = watching
-        watching = ""
-        if (open.isEmpty()) return
-        try {
-            app.terminalUnwatch(open)
-        } catch (refused: Exception) {
-            // Recorded as closed regardless: this runs on the way to the background and on a
-            // session that has gone away, and a phone that kept retrying a stale unwatch would
-            // spend a reconnect on a session nobody is looking at.
-        }
-    }
 
     /**
      * Connect, which nothing did before S19 -- and it is why PB-E2E-2's "observes, takes control,
@@ -1057,10 +1035,11 @@ class PhoneSurface(
         // armed against a screen that is not there.
         detail = null
         setActionsEnabled(false)
-        // NO PANEL RATHER THAN AN EMPTY ONE. A peek with no session is not a peek showing nothing
-        // -- there is no session to hold a lease on, so the screen says nothing about a lease
-        // rather than asserting the absence of one.
-        drawPeek(null)
+        // NO CARD RATHER THAN AN EMPTY ONE. A phone whose core refused holds no approvals, so
+        // there is no question to put on screen -- and a sheet drawn over nothing would be this
+        // handset asserting that its machine is waiting for nobody, which it is in no position to
+        // say.
+        drawApproval(null)
         setKeyboardEnabled(false)
         // There is no phone to launch through either. The FORM still draws: it is the one thing on
         // this branch a user could reasonably be reaching for, and a handset whose core refused
@@ -1192,13 +1171,8 @@ class PhoneSurface(
         // to the first row in triage order when the chosen one is no longer on screen -- which is
         // right for a list and catastrophic for a detail: Stop would interrupt whichever session
         // happens to be first while the user is reading a different one, the proximity error
-        // PB-SYNC-2 exists to forbid. While a session is open, it IS the target, and [watch] below
-        // follows it so the grid on screen is that session's.
+        // PB-SYNC-2 exists to forbid. While a session is open, it IS the target.
         session = detail ?: targetOf(inbox)
-
-        // Before the peek is read, and on the empty branch too: a session that has gone away
-        // still leaves a watch open on the machine.
-        watch(startup.app, session)
 
         // LAUNCH IS NOT A SESSION CONTROL, and this line is where that difference is stated: the
         // session it starts does not exist yet, so an empty roster is exactly the state a user
@@ -1209,7 +1183,7 @@ class PhoneSurface(
         drawLaunch()
 
         if (session.isEmpty()) {
-            drawPeek(null)
+            drawApproval(null)
             setActionsEnabled(false)
             setKeyboardEnabled(false)
             return
@@ -1217,27 +1191,43 @@ class PhoneSurface(
         // PB-INPUT-2: the lease is what the MACHINE answered this screen's own take_control with,
         // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
         // every user they held nothing while Send stayed live from a different fact entirely.
-        val lease = leaseVerdictFor(session, bridge)
+        val verdict = leaseVerdictFor(session, bridge)
         // THE REFUSAL OUTRANKS THE GRANT (agents-tracker-agre) -- [detailPanel]'s clause, on the
-        // screen that owns the Take control button. A peek drawn as held over a machine that has
-        // just refused a keystroke for want of a lease leaves the keyboard open and the one control
-        // that would fix it off screen, which is `PeekPanel.offersTakeControl` reading a fact the
-        // wire has already contradicted.
-        val view = bridge.terminalPeek(
+        // screen that owns the Take control button. A lease drawn as held over a machine that has
+        // just refused a keystroke for want of one leaves the keyboard open and the control that
+        // would fix it off screen, which is `SessionDetailPanel.offersTakeControl` reading a fact
+        // the wire has already contradicted.
+        val lease = bridge.sessionLease(
             session,
-            leaseHeld = lease.accepted && leaseRefusedFor != session,
+            leaseHeld = verdict.accepted && leaseRefusedFor != session,
         )
-        // AND THE REST OF THE MACHINE'S ANSWER GOES WITH IT (agents-tracker-qlf9). The peek used to
-        // be handed a boolean, so a refused take_control drew the sentence written for one nobody
-        // had asked for.
-        drawPeek(PeekPanelScreen.of(view, lease))
+        // ADR-009 (4)'s card, for the question this session is actually blocked on. It is read
+        // BESIDE the roster and not off it: `InboxRow.lit` is the display group, and an unresolved
+        // approval_request is the machine waiting for an answer -- two different facts that a sheet
+        // must not confuse (IS-SS-1).
+        drawApproval(approvalPanel(bridge, inbox))
         setActionsEnabled(true)
-        // EVERY ONE OF THE THREE PROPERTIES IS THE MODEL'S, which is what [PeekPanel] carries:
-        // `keyboardEnabled` is `leaseHeld && online`, and the second half is a separate clause --
-        // a lease cannot be live while the link is down. A surface that enabled the keyboard from
-        // its own lease flag would satisfy the requirement's first clause and drop the second,
-        // silently, while the model that states it stayed green and unread.
-        setKeyboardEnabled(view.keyboardEnabled)
+        // BOTH CLAUSES, AND THEY ARE THE MODEL'S. `keyboardEnabled` is `leaseHeld && online`, and
+        // the second half is a separate clause -- a lease cannot be live while the link is down. A
+        // surface that enabled the keyboard from its own lease flag would satisfy PB-INPUT-2's
+        // first clause and drop the second, silently, while the model that states it stayed green
+        // and unread.
+        setKeyboardEnabled(lease.keyboardEnabled)
+    }
+
+    /**
+     * The approval card on screen, or null when this phone holds no question for [session].
+     *
+     * THE ROW IS FOR THE CONTEXT LINE AND NOTHING ELSE. Which session is asking comes from the
+     * ITEM; who is asking -- the project and the agent -- is the roster's, and the two can
+     * legitimately disagree, because a pending approval survives a reconnect and a process death
+     * (IS-LIFE-3) while a roster is whatever the last read returned. `ApprovalSheetScreen.of` takes
+     * a null row for exactly that case and falls back to the session's own id.
+     */
+    private fun approvalPanel(bridge: FacadeBridge, inbox: InboxScreen?): ApprovalSheetPanel? {
+        val item = bridge.pendingApproval(session) ?: return null
+        val row = inbox?.sections?.flatMap { it.rows }?.firstOrNull { it.id == session }
+        return ApprovalSheetScreen.of(item, row)
     }
 
     /**
@@ -1268,7 +1258,7 @@ class PhoneSurface(
     /**
      * The inbox's model. It is built on every draw because the tab badge is counted from it.
      *
-     * agents-tracker-3nx6: GUARDED, the way [FacadeBridge.terminalPeek] already guards `App.peek`
+     * agents-tracker-3nx6: GUARDED, the way [FacadeBridge.pendingApproval] guards its own read
      * (agents-tracker-9ds). This is called unconditionally from [renderReady], on the path
      * [PhoneEvents.onEvent]'s `main.post` reaches on every journal event -- so a refusal from
      * `bridge.triageInbox()` (the machine offline, revoked, rate-limited) used to propagate
@@ -1598,16 +1588,15 @@ class PhoneSurface(
     /**
      * PB-APP-3's session detail, as the model of it, or null when no session is drilled into.
      *
-     * IT READS THE SAME TWO FACADE CALLS THE REST OF THE SCREEN ALREADY MAKES, which is why
-     * opening a session costs no new traffic: the journal page is the whole retained log
-     * [drawActivity] already reads, narrowed here to one session by `JournalRow.sessionId`, and the
-     * grid is the peek [renderReady] already reads for the watched session.
+     * IT READS ONE FACADE CALL THE REST OF THE SCREEN ALREADY MAKES, which is why opening a session
+     * costs no new traffic: the journal page is the whole retained log [drawActivity] already reads,
+     * narrowed here to one session by `JournalRow.sessionId`.
      *
-     * THE SNAPSHOT MAY BE EMPTY ON THE FIRST DRAW AND THAT IS HONEST. `App.Peek` is a cache the
-     * MACHINE fills, and only for a session this phone has WATCHED -- [watch] follows [detail] one
-     * line below this in [renderReady], so the frame arrives on a later event.
-     * [SessionDetailPanel.hasSnapshot] draws no card at all until it does, which says "we have not
-     * heard from this session" rather than "this session's screen is blank".
+     * IT USED TO READ A SECOND ONE -- the daemon-rendered grid, off `App.Peek`, for the session
+     * [watch] had asked the machine to render. Both are gone with the terminal well
+     * (`ADR-009-structured-chat-interaction.md` (2)/(3)): no phone surface issues a `terminal_watch`,
+     * so no snapshot frames are appended at all and the transcript inherits the whole of the
+     * machine-to-phone budget the peek used to spend.
      *
      * @param bridge null on the branch where the phone core refused, where there is no detail to
      *  read. [renderUnavailable] closes the drill-down on that branch rather than leaving a user
@@ -1620,30 +1609,39 @@ class PhoneSurface(
         // machine's answer to a take_control that may be older than the refusal this session's last
         // press just earned; without this clause the panel goes on labelling the control `Stop`,
         // and pressing it collects `swarm/no-lease` again.
-        val lease = leaseVerdictFor(open, bridge).accepted && leaseRefusedFor != open
-        val grid = bridge.terminalPeek(open, leaseHeld = lease)
-        val log = bridge.journal(JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        val verdict = leaseVerdictFor(open, bridge)
+        val lease = verdict.accepted && leaseRefusedFor != open
+        val control = bridge.sessionLease(open, leaseHeld = lease)
+        // THE CONVERSATION, AND IT IS ONE READ RATHER THAN TWO. `App.ReadTranscript` is per session,
+        // so there is no roster-wide page to filter down here -- and `TranscriptPageView.stale` is
+        // the JOURNAL's own stale mark, read off the handle that carried the items, because an
+        // interaction item IS a journal record (IS-LAYER-1/-4). Reading from cursor zero on every
+        // draw is deliberate: the core holds at most `MaxItemsPerSession` per session, and an item
+        // updated in place keeps its FIRST record's cursor (IS-LAYER-3), so paging past the tail
+        // would miss exactly the updates the event fired for.
+        val chat = bridge.transcript(open, JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
         return SessionDetailScreen.of(
             SessionDetail(
                 sessionId = open,
-                journal = log.rows.filter { it.sessionId == open },
-                snapshotText = grid.text,
                 leaseHeld = lease,
-                // ONLINE IS THE PEEK'S AND NOT A SECOND OPINION. `TerminalPeek.online` is the
+                // ONLINE IS THE LEASE MODEL'S AND NOT A SECOND OPINION. `SessionLease.online` is the
                 // transport fact `FacadeBridge` already derived, and it is the clause that decides
                 // whether a confirmed Stop is sent or discarded.
-                online = grid.online,
-                journalStale = log.stale,
+                online = control.online,
+                journalStale = chat.stale,
                 // PB-INPUT-1's notice answers a PRESS (agents-tracker-4lta), and this is where the
                 // press is read back: the Stop plan latched the session it could not send for, and
                 // a notice about another session's press would be the proximity error again.
                 stopNotSent = stopNotSentFor == open,
-                // THE SNAPSHOT'S OWN STALENESS (agents-tracker-0qe7), which rides the read the
-                // grid already came on. It was dropped here, so the card was drawn with only the
-                // JOURNAL's verdict beside it -- a different fact, with a different remedy, about
-                // a different stream.
-                snapshotStale = grid.stale,
             ),
+            TranscriptScreen.of(chat.items),
+            // PB-INPUT-2 REACHES THE USER HERE NOW, and that is the peek's deletion landing rather
+            // than a new fact: the sentence and the Take control button were that screen's, and this
+            // is the screen a session is read on. The verdict travels with the lease for
+            // agents-tracker-qlf9's reason -- a refusal and a severance are not "you have not
+            // pressed the button yet", and only the machine's own reply says which one this is.
+            control,
+            verdict,
         )
     }
 
@@ -1671,6 +1669,10 @@ class PhoneSurface(
             sessionDetailView(
                 context = activity,
                 panel = panel,
+                // PB-INPUT-2's step, on the screen that now carries its sentence. It is the SAME
+                // button the deleted peek was handed, unchanged: this surface owns the verb, the
+                // operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
+                takeControl = takeControl,
                 stop = stop,
                 kill = kill,
                 // PB-APP-9's routed line, which is a child of the column this screen replaces. It
@@ -1678,8 +1680,28 @@ class PhoneSurface(
                 // here and a refusal with nowhere to land is a control that fails silently.
                 outcome = routed,
                 onBack = ::closeSessionDetail,
+                onApproval = ::openApproval,
             ),
         )
+    }
+
+    /**
+     * Where an approval block in the conversation goes when it is tapped: to the card that answers
+     * it, which is composed under the list ([approvalHost]).
+     *
+     * IT IS A NAVIGATION AND NOT A SECOND COMPOSITION. Drawing a copy of the sheet inside the
+     * transcript would be two surfaces able to disagree about one pending item -- and one of them
+     * would be inside a scrolling conversation, which is where a decision is least legible.
+     *
+     * @param itemId the block's `item_id`, which IS the `interaction_id` (IS-APR-1). It is COMPARED
+     *  rather than spent: the card is `pendingApproval(session)` and the tapped block belongs to
+     *  that same session, so the only thing this id can still tell the surface is whether the
+     *  question is the one being asked. A block whose approval resolved while the user was reading
+     *  (IS-LIFE-2) therefore navigates nowhere, instead of to a card about something else.
+     */
+    private fun openApproval(itemId: String) {
+        if (approvalDrawn?.itemId != itemId) return
+        closeSessionDetail()
     }
 
     /**
@@ -1757,7 +1779,7 @@ class PhoneSurface(
      */
     private fun drawActivity(bridge: FacadeBridge?) {
         val panel = bridge?.let {
-            // agents-tracker-3nx6: GUARDED, the way [FacadeBridge.terminalPeek] already guards
+            // agents-tracker-3nx6: GUARDED, the way [FacadeBridge.pendingApproval] guards
             // `App.peek` (agents-tracker-9ds). Reachable from [PhoneEvents.onEvent]'s `main.post`
             // on every journal event while the Activity tab is on screen; a refusal from
             // `it.journal(...)` used to propagate uncaught onto the main looper instead of
@@ -1920,34 +1942,74 @@ class PhoneSurface(
     }
 
     /**
-     * PB-DS-9: the terminal peek, composed rather than shown and hidden.
+     * ADR-009 (4)'s approval card, composed rather than shown and hidden.
      *
-     * **THE VISIBILITY WRITES ARE GONE AND THAT IS THE POINT OF THIS FUNCTION.** What stood here
-     * was `renderLease`, which set `takeControl.visibility` from `showsTakeControl` and blanked
-     * two `TextView`s on the null branch -- a second, contradictable statement of what is on the
-     * screen, made three lines away from the composition that put it there. A view that is not on
-     * screen is now a view this did not add. `android/gate/s24_screens_test.go` fences the screen
-     * package against the pattern; the surface is where the last of it lived.
+     * **IT IS `drawPeek` WITH THE GRID TAKEN OUT AND THE QUESTION PUT IN.** What stood here drew
+     * `peekPanelView` into `peekHost`; the ADR deletes that screen at slice I1's exit (3), and this
+     * is the surface it names in its place. What is unchanged is the shape: one host, a diff
+     * against what was last drawn, and no visibility writes -- "a view that is not on screen is a
+     * view this did not add". That was the fix for `renderLease`, which stated what was on screen a
+     * second time, three lines from the composition that put it there, and could contradict it.
      *
-     * The Take control button is offered exactly while it is the step to take -- there is no
-     * Release beside it, because `App.ReleaseControl` is still ledgered unbound in
-     * `android/unbound-verbs.tsv` and a screen that hid the way in without offering a way out
-     * would be worse than one that never hid it. That condition is [PeekPanel.offersTakeControl]
-     * and the composition reads it.
+     * THE BUTTONS ARE BUILT PER DRAW, AND THE DATA FORCES IT. Every other control on this surface
+     * is a field built once and re-parented, because it holds what the user typed or must survive a
+     * redraw. A decision button holds nothing, and how many there are and what they are called is
+     * `decisions[]` -- 1..8 entries in the CLI's own vocabulary (§5's `MaxDecisions`) -- so there is
+     * nothing to preserve when one card replaces another.
      *
-     * @param panel null when there is no session to hold a lease ON -- an unavailable phone or an
-     *  empty roster. Nothing is composed, because with no session there is no question.
+     * @param panel null when this phone holds no unresolved approval for the session on screen.
+     *  Nothing is composed, because with no question there is nothing to answer.
      */
-    private fun drawPeek(panel: PeekPanel?) {
-        if (panel == peekDrawn) return
-        peekDrawn = panel
-        peekHost.removeAllViews()
+    private fun drawApproval(panel: ApprovalSheetPanel?) {
+        if (panel == approvalDrawn) return
+        approvalDrawn = panel
+        approvalHost.removeAllViews()
         if (panel == null) return
-        peekHost.addView(peekPanelView(activity, panel, takeControl))
+        approvalHost.addView(
+            approvalSheetView(
+                context = activity,
+                panel = panel,
+                actionFor = { decision -> approvalAction(panel, decision) },
+            ),
+        )
     }
 
     /**
-     * The keyboard's two controls, which are NOT part of the peek.
+     * One offered decision, as the control that answers it.
+     *
+     * IT IS `CtaKind.MORE` FOR EVERY DECISION, AND THAT IS IS-APR-4 RATHER THAN A TASTE. The
+     * verdict -- `allow` | `deny` | `other` -- is classified by the adapter at capture and read by
+     * the DAEMON to resolve §3.6's allowed/denied. It is deliberately NOT a field on the item:
+     * "the card labels its buttons from `decisions[].label` and no phone surface switches on
+     * polarity". `.a2-ok` or `.a2-no` on a label this side cannot classify would be a grant or a
+     * refusal asserted by the paint, over a vocabulary this side does not own.
+     *
+     * THE PRESS SENDS THE ID AND NOTHING ELSE (IS-APR-2). `App.Approve` reads the binding tuple --
+     * the agent instance, the content hash, the daemon-authoritative expiry -- off the card this
+     * phone is already holding, and refuses one it does not hold. A screen able to PASS those
+     * values is a screen able to compute them, and the failure would be a perfectly valid command
+     * the daemon rejects as stale.
+     *
+     * IT IS ON THE COMMAND PLANE because an approval is signed: `mobile/commands.go` polls
+     * `awaitConn` for a connection on that path and deliberately does not on the live one
+     * (ADR-007 D7), and the two must not share a lane.
+     *
+     * IT ADDS NO CONFIRMATION AND NO TOAST. The sheet IS the confirmation -- D4.4's heaviest
+     * surface, "reserved for the moment of decision" -- and a second dialog over a button the user
+     * pressed after reading the question would ask them to confirm the thing they just read. What
+     * the machine answers arrives the way every other verb's answer does, on the routed line, and
+     * the card leaving the screen is what an accepted decision looks like (IS-LIFE-2).
+     */
+    private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
+        ctaAction(decision.label, CtaKind.MORE) {
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.approve(panel.sessionId, panel.itemId, decision.id) },
+            )
+        }
+
+    /**
+     * The keyboard's two controls, which were never part of the peek.
      *
      * They are inventory C2's composer -- derivation row 9 specifies a translucent bar with a
      * recessed field, a voice glyph and a stop control -- and C2 is unbuilt, so what is here is a
@@ -2075,7 +2137,7 @@ class PhoneSurface(
      * answered the keyboard's question correctly and threw away the rest of the reply, so every
      * refusal reached the screen as "your machine has not confirmed control ... Take control
      * first" -- which reads as "you have not pressed the button yet" and offers as the remedy the
-     * step that was just declined. [PeekPanelScreen.leaseNoticeFor] is what needs the rest.
+     * step that was just declined. [SessionDetailScreen.leaseNoticeFor] is what needs the rest.
      */
     private fun leaseVerdictFor(session: String, bridge: FacadeBridge): CommandVerdict {
         if (leaseOp.isEmpty() || session != leaseSession) return CommandVerdict.UNANSWERED
@@ -2133,7 +2195,7 @@ class PhoneSurface(
         // duplication: the line and the peek keep the message where it can be re-read, and the
         // toast puts it in front of the eye that was on the control -- which on this surface may
         // be the session detail's Stop, on a screen the peek is not composed into at all.
-        say(PressFeedback.ofRefusal(PeekPanelScreen.leaseNoticeFor(confirmed = false, verdict)))
+        say(PressFeedback.ofRefusal(SessionDetailScreen.leaseNoticeFor(confirmed = false, verdict)))
     }
 
     /**
@@ -2499,7 +2561,7 @@ class PhoneSurface(
      * WHAT USED TO BE HERE WAS THE COPY OF FIVE SCREENS. This companion held PB-INPUT-2's two
      * lease sentences and the launch form's three notices -- the words a user reads, in the file
      * that also owns the transport, the lifecycle and six panels, reachable by nothing and
-     * asserted by nothing. PB-DS-9 assigns copy to the screen: they are [PeekPanelScreen]'s and
+     * asserted by nothing. PB-DS-9 assigns copy to the screen: they are [SessionDetailScreen]'s and
      * [LaunchPanelScreen]'s now, unchanged to the character, and each has a test that says which
      * sentence goes with which state.
      */

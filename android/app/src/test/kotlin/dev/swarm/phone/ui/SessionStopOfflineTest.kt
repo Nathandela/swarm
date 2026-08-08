@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui
 
 import dev.swarm.phone.ui.screens.SessionDetailScreen
+import dev.swarm.phone.ui.screens.TranscriptScreen
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -38,8 +39,6 @@ class SessionStopOfflineTest {
         online: Boolean = true,
     ) = SessionDetail(
         sessionId = "mbp/api",
-        journal = emptyList(),
-        snapshotText = "$ git push",
         leaseHeld = leaseHeld,
         online = online,
         journalStale = false,
@@ -87,7 +86,12 @@ class SessionStopOfflineTest {
         // `PhoneSurface.stopQuestion()` asks the panel and offers the confirmation only for
         // CONFIRM. The panel is where that gate reads its answer, so the fix has to arrive here or
         // the dialog is built anyway.
-        val offline = SessionDetailScreen.of(detail(leaseHeld = true, online = false))
+        val d = detail(leaseHeld = true, online = false)
+        val offline = SessionDetailScreen.of(
+            d,
+            TranscriptScreen.of(emptyList()),
+            SessionLease(sessionId = d.sessionId, leaseHeld = d.leaseHeld, online = d.online),
+        )
 
         assertEquals(StopAction.NOT_SENT, offline.stopAction)
     }

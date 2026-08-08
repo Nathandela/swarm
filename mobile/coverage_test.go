@@ -107,6 +107,7 @@ var requiredScreenElements = []string{
 	// hard-codes them there too, so this list and that one keep meeting in the middle.
 	"transcript.read",              // ADR-009: the chat itself, which no existing verb serves
 	"transcript.approvals_pending", // IS-LIFE-3: a card the machine is blocked on, kept answerable
+	"transcript.approve",           // IS-LIFE-4: ANSWERING one -- a card with no answering verb leaves the machine blocked
 }
 
 type coverageRow struct {

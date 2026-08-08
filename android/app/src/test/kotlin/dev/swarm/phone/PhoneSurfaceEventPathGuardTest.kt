@@ -131,7 +131,9 @@ class PhoneSurfaceEventPathGuardTest {
                 "-- propagates out of drawActivity, out of render(), and into PhoneEvents.onEvent's " +
                 "`main.post { sink?.invoke() }` uncaught: an app crash, on the ordinary path of a " +
                 "machine that refuses a request while the user is on the Activity tab. Guard it the " +
-                "way FacadeBridge.terminalPeek already guards App.peek (agents-tracker-9ds)",
+                "way FacadeBridge.pendingApproval already guards App.PendingApprovals -- the same " +
+                "absorption terminalPeek carried for App.Peek before ADR-009 deleted that verb's " +
+                "caller (agents-tracker-9ds)",
             guarded(member, ".journal("),
         )
     }
@@ -144,8 +146,9 @@ class PhoneSurfaceEventPathGuardTest {
                 "unconditionally from renderReady, so a facade refusal there propagates out of " +
                 "render() and into PhoneEvents.onEvent's `main.post { sink?.invoke() }` uncaught " +
                 "-- an app crash reachable on every redraw while the phone is paired, not only " +
-                "while a session is open. Guard it the way FacadeBridge.terminalPeek already " +
-                "guards App.peek (agents-tracker-9ds)",
+                "while a session is open. Guard it the way FacadeBridge.pendingApproval already " +
+                "guards App.PendingApprovals -- the same absorption terminalPeek carried for " +
+                "App.Peek before ADR-009 deleted that verb's caller (agents-tracker-9ds)",
             guarded(member, ".triageInbox("),
         )
     }

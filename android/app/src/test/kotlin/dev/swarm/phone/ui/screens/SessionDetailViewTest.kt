@@ -6,14 +6,16 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
-import dev.swarm.phone.ui.JournalRow
+import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,10 +30,18 @@ import org.robolectric.RobolectricTestRunner
  * defect PB-DS-6 was recorded NOT MET over, and this screen is the eighth and last chance to repeat
  * it.
  *
- * THE CONTROLS ARE SLOTS AND NOT CONSTRUCTIONS. Stop and Kill reach facade verbs, carry PB-SEC-12
- * clause 1's touch filter, and must survive a redraw, so `PhoneSurface` owns them and hands them in
- * -- the arrangement `peekPanelView` already uses for `[Take control]`. What this file asserts is
- * that the screen PLACES them, not that pressing one does anything.
+ * THE CONTROLS ARE SLOTS AND NOT CONSTRUCTIONS. Take control, Stop and Kill reach facade verbs,
+ * carry PB-SEC-12 clause 1's touch filter, and must survive a redraw, so `PhoneSurface` owns them
+ * and hands them in -- the arrangement `peekPanelView` already used for `[Take control]` before that
+ * screen was deleted. What this file asserts is that the screen PLACES them, not that pressing one
+ * does anything.
+ *
+ * THE TRANSCRIPT IS ONE SLOT NOW, NOT FOUR. `docs/adr/ADR-009-structured-chat-interaction.md`
+ * deletes the terminal well and its own stale mark, and replaces the per-session journal's heading,
+ * rows and empty state with [transcriptView]'s single composition -- so where this file used to
+ * assert `DetailTag.SECTION_LABEL`, `.ROW`, `.EMPTY`, `.SNAPSHOT` and `.SNAPSHOT_STALE` one at a
+ * time, it now asserts `DetailTag.TRANSCRIPT` is placed, and leaves what is INSIDE it to
+ * `TranscriptViewTest` -- the suite built for exactly that surface.
  */
 @RunWith(RobolectricTestRunner::class)
 class SessionDetailViewTest {
@@ -39,42 +49,80 @@ class SessionDetailViewTest {
     private val context: Context
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
-    private fun record(cursor: Long, type: String, group: String = "") =
-        JournalRow(cursor = cursor, sessionId = "mbp/api", type = type, group = group)
-
     private fun panel(
-        journal: List<JournalRow> = listOf(record(1, "launched")),
-        snapshotText: String = "$ git push",
         leaseHeld: Boolean = true,
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
-        snapshotStale: Boolean = false,
-    ) = SessionDetailScreen.of(
-        SessionDetail(
+    ): SessionDetailPanel {
+        val detail = SessionDetail(
             sessionId = "mbp/api",
-            journal = journal,
-            snapshotText = snapshotText,
             leaseHeld = leaseHeld,
             online = online,
             journalStale = journalStale,
             stopNotSent = stopNotSent,
-            snapshotStale = snapshotStale,
-        ),
-    )
+        )
+        return SessionDetailScreen.of(
+            detail,
+            TranscriptScreen.of(emptyList()),
+            SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
+        )
+    }
+
+    /**
+     * A panel whose conversation carries one unresolved `approval_request`.
+     *
+     * IT IS BUILT FROM AN ITEM AND NOT FROM A HAND-MADE BLOCK, because the property under test is a
+     * whole path: the item decodes (`ApprovalItem`), the fold marks it answerable
+     * ([TranscriptScreen]), the transcript draws it as its own tag, and THIS screen has to have
+     * handed the listener down for the tap to reach anything.
+     */
+    private fun panelWithApproval(): SessionDetailPanel {
+        val detail = SessionDetail(
+            sessionId = "mbp/api",
+            leaseHeld = true,
+            online = true,
+            journalStale = false,
+        )
+        return SessionDetailScreen.of(
+            detail,
+            TranscriptScreen.of(
+                listOf(
+                    InteractionItem(
+                        sessionId = detail.sessionId,
+                        itemId = "i-approve-1",
+                        cursor = 1,
+                        kind = "approval_request",
+                        body = """
+                            {"summary":"Run the test suite?",
+                             "action":{"command":"go test ./..."},
+                             "decisions":[{"id":"accept","label":"Allow"}]}
+                        """.trimIndent(),
+                    ),
+                ),
+            ),
+            SessionLease(sessionId = detail.sessionId, leaseHeld = true, online = true),
+        )
+    }
 
     private fun view(
         panel: SessionDetailPanel = panel(),
         outcome: String = "",
         onBack: () -> Unit = {},
+        takeControl: View = TextView(context),
+        onApproval: ((String) -> Unit)? = null,
     ): View = sessionDetailView(
         context = context,
         panel = panel,
+        takeControl = takeControl,
         stop = TextView(context).apply { text = panel.stopLabel },
         kill = TextView(context).apply { text = panel.killLabel },
         outcome = outcome,
         onBack = onBack,
+        onApproval = onApproval,
     )
+
+    private fun textOf(view: View?): String = (view as? TextView)?.text?.toString().orEmpty()
 
     private fun View.allTagged(tag: String): List<View> {
         val found = mutableListOf<View>()
@@ -86,17 +134,13 @@ class SessionDetailViewTest {
         return found
     }
 
-    private fun textOf(view: View?): String = (view as? TextView)?.text?.toString().orEmpty()
-
     @Test
     fun `the screen is composed of the parts its recorded composition names`() {
         val root = view()
 
         listOf(
             DetailTag.NAV to "C2.1 -- the drill-down header, per derivation section 4",
-            DetailTag.SNAPSHOT to "C2.2 -- the daemon-rendered grid in the mono well",
-            DetailTag.SECTION_LABEL to "C2.3 -- the heading over the session's own journal",
-            DetailTag.ROW to "C2.3 -- one record",
+            DetailTag.TRANSCRIPT to "C2.3 -- the conversation, composed by transcriptView",
             DetailTag.STOP to "PB-APP-3's persistent Stop",
             DetailTag.KILL to "the escalation, behind its own confirmation",
         ).forEach { (tag, what) ->
@@ -124,48 +168,6 @@ class SessionDetailViewTest {
                 "agents-tracker-2yb reports: a control that looks like a control and does not act",
             went,
         )
-    }
-
-    @Test
-    fun `the transcript renders one row per record, newest first, in the wire's words`() {
-        val root = view(
-            panel(
-                journal = listOf(
-                    record(1, "launched"),
-                    record(2, "group_transition", group = "needs_input"),
-                ),
-            ),
-        )
-
-        assertEquals(
-            listOf("group_transition · needs_input", "launched"),
-            root.allTagged(DetailTag.ROW).map { textOf(it.kitRequire(KitTag.ACTIVITY_BODY)) },
-        )
-    }
-
-    @Test
-    fun `a session with no records draws its copy, not an empty area`() {
-        val root = view(panel(journal = emptyList()))
-
-        assertTrue(
-            "an empty transcript renders nothing under its heading, which reads as a feed that " +
-                "failed to load rather than a session with no records yet",
-            textOf(root.kitFind(DetailTag.EMPTY)).isNotEmpty(),
-        )
-        assertNull("an empty transcript still drew a row", root.kitFind(DetailTag.ROW))
-    }
-
-    @Test
-    fun `no snapshot means no card at all`() {
-        val quiet = view(panel(snapshotText = ""))
-        val printing = view(panel(snapshotText = "$ git push"))
-
-        assertNull(
-            "a session the machine has sent no frame for draws an empty terminal, which " +
-                "presents \"we have not heard\" as \"the screen is blank\"",
-            quiet.kitFind(DetailTag.SNAPSHOT),
-        )
-        assertNotNull(printing.kitFind(DetailTag.SNAPSHOT))
     }
 
     /**
@@ -199,44 +201,8 @@ class SessionDetailViewTest {
         assertTrue(textOf(pressed.kitFind(DetailTag.NOT_SENT)).isNotEmpty())
     }
 
-    /**
-     * FAILING-FIRST for agents-tracker-0qe7 as DRAWN: the mark goes beside the card, and it is a
-     * notice rather than a line inside the grid.
-     *
-     * THE WELL PRINTS THE MACHINE'S OUTPUT BYTE FOR BYTE. `monoWell(terminal = true)` renders
-     * `swarmmobile.Snapshot.Text` as the daemon sanitized it, so a sentence written into the text
-     * would be an English line in the machine's own register -- which is the defect this issue
-     * reports on the peek, and there is no reason to repeat it here.
-     */
     @Test
-    fun `a stale snapshot is marked beside its card, not inside the grid`() {
-        val frozen = view(panel(snapshotStale = true, snapshotText = "$ git push"))
-        val fresh = view(panel(snapshotStale = false, snapshotText = "$ git push"))
-
-        assertTrue(
-            "the snapshot card carries no stale mark, so a grid the phone knows is out of date " +
-                "reads as what the session is doing now",
-            textOf(frozen.kitFind(DetailTag.SNAPSHOT_STALE)).isNotEmpty(),
-        )
-        assertEquals(
-            "the stale sentence was written into the grid, in the well that prints the machine's " +
-                "own output byte for byte",
-            "$ git push",
-            textOf(frozen.kitFind(DetailTag.SNAPSHOT)),
-        )
-        assertNull(
-            "a stale mark is drawn over a snapshot the machine is still sending frames for",
-            fresh.kitFind(DetailTag.SNAPSHOT_STALE),
-        )
-        assertNull(
-            "a stale mark is drawn for a session that has sent no frame at all, which warns about " +
-                "a card that is not on screen",
-            view(panel(snapshotStale = true, snapshotText = "")).kitFind(DetailTag.SNAPSHOT_STALE),
-        )
-    }
-
-    @Test
-    fun `a holed journal says so above the records it is missing from`() {
+    fun `a holed journal says so above the conversation it is missing from`() {
         val whole = view(panel(journalStale = false))
         val holed = view(panel(journalStale = true))
 
@@ -284,6 +250,13 @@ class SessionDetailViewTest {
     /**
      * The ON-SCREEN ORDER, which is what [DetailTag.COMPOSITION] records and what nothing read.
      *
+     * THE LEASE ROW AND TAKE CONTROL ARE PART OF THIS SCREEN'S RECORDED ORDER NOW. Both arrived
+     * with the terminal peek's deletion: PB-INPUT-2's "visibly" sentence and the step that would
+     * confirm a lease used to live on that screen, and this is the screen a session is read on now.
+     * [leaseHeld] is set to `false` here, and only here among this file's tests, so that Take
+     * control is actually offered and its tag appears for the walk below to find -- every other
+     * fact this test varies (`journalStale`, `online`, `stopNotSent`) is independent of it.
+     *
      * THE OUTCOME SITS WITH THE CONTROLS AND NOT WITH THE NOTICES. Every other notice on this
      * screen qualifies the CONTENT above which it is drawn -- the stale line qualifies the
      * transcript, the not-sent line qualifies what was typed -- and this one qualifies the two
@@ -292,16 +265,12 @@ class SessionDetailViewTest {
      */
     @Test
     fun `the parts are drawn in the order the recorded composition names`() {
-        // `stopNotSent` joins the state this draws from because the not-sent line is press-gated
-        // (agents-tracker-4lta): a panel that is merely offline no longer draws it, and a part
-        // this asserts the ORDER of has to be on screen for the order to mean anything.
-        // `snapshotStale` joins it for the same reason, one part later (agents-tracker-0qe7).
         val root = view(
             panel = panel(
+                leaseHeld = false,
                 journalStale = true,
                 online = false,
                 stopNotSent = true,
-                snapshotStale = true,
             ),
             outcome = "Your machine refused that.",
         )
@@ -314,5 +283,109 @@ class SessionDetailViewTest {
         walk(root)
 
         assertEquals(DetailTag.COMPOSITION.toList(), order)
+    }
+
+    // ---- PB-INPUT-2 AS DRAWN, RE-HOMED FROM THE DELETED PEEK ---------------
+    //
+    // THE FOUR TESTS BELOW ARE `PeekPanelViewTest`'S. That file is deleted with the terminal peek
+    // (ADR-009 (3)) and these assertions are not: the peek held PB-INPUT-2's sentence and the Take
+    // control button only because the peek was where the keyboard was, (5) keeps the input substrate
+    // "exactly as decided", and this is the screen a session is read on now. `PeekTag.TAKE_CONTROL`
+    // and `PeekTag.LEASE` become `DetailTag.TAKE_CONTROL` and `DetailTag.LEASE`; nothing else about
+    // what they assert changed.
+
+    @Test
+    fun `take control is on screen exactly while the model offers it`() {
+        // PB-INPUT-2's recorded failure mode is that this control looked identical in both states.
+        // The inverse defect is the one that nearly shipped elsewhere: drawing it unconditionally,
+        // which tells a user who already holds the lease to take it.
+        val offered = panel(leaseHeld = false)
+        assertTrue("the model does not offer the control, so this asserts nothing", offered.offersTakeControl)
+        assertEquals(1, view(offered).allTagged(DetailTag.TAKE_CONTROL).size)
+
+        val held = panel(leaseHeld = true)
+        assertTrue("the model still offers the control, so this asserts nothing", !held.offersTakeControl)
+        assertEquals(
+            "the Take control button is on screen for a session whose lease the machine has " +
+                "already confirmed",
+            0,
+            view(held).allTagged(DetailTag.TAKE_CONTROL).size,
+        )
+    }
+
+    @Test
+    fun `the control on screen is the one the surface supplied`() {
+        val supplied = TextView(context)
+        val root = view(panel(leaseHeld = false), takeControl = supplied)
+
+        assertSame(supplied, root.allTagged(DetailTag.TAKE_CONTROL).single())
+    }
+
+    @Test
+    fun `a control re-composed after a redraw is not refused for having a parent`() {
+        // The panel is rebuilt whenever the conversation changes, which is every interaction item.
+        // A slot arriving at its next addView still claiming a discarded parent is refused by
+        // Android outright, and the failure is a crash on a screen somebody is holding.
+        val supplied = TextView(context)
+        val panel = panel(leaseHeld = false)
+        view(panel, takeControl = supplied)
+        val second = view(panel, takeControl = supplied)
+
+        assertSame(supplied, second.allTagged(DetailTag.TAKE_CONTROL).single())
+    }
+
+    @Test
+    fun `the lease sentence on screen is the one the model chose for that state`() {
+        listOf(true, false).forEach { held ->
+            val panel = panel(leaseHeld = held)
+            assertEquals(panel.leaseNotice, textOf(view(panel).kitRequire(DetailTag.LEASE)))
+        }
+        assertTrue(
+            "the two lease states put the same sentence on screen, which is the state PB-INPUT-2 " +
+                "was recorded NOT MET in -- a user could not tell until a keystroke vanished",
+            textOf(view(panel(leaseHeld = true)).kitRequire(DetailTag.LEASE)) !=
+                textOf(view(panel(leaseHeld = false)).kitRequire(DetailTag.LEASE)),
+        )
+    }
+
+    // ---- the way to the sheet ---------------------------------------------
+
+    /**
+     * The tap that opens the approval sheet, asserted AT THIS SCREEN because this screen is the only
+     * thing between the surface's callback and the block that carries it.
+     *
+     * WHAT `TranscriptViewTest` CANNOT SEE. That suite hands `transcriptView` a listener directly and
+     * proves the block calls it; it says nothing about whether the session detail passed one DOWN.
+     * `sessionDetailView`'s own contract is "passed straight through", and the failure mode is silent
+     * in exactly the way the kit's own rule names: null draws the block and no control, so a screen
+     * that dropped the argument renders an approval that looks identical and does nothing -- the
+     * dead-chevron defect (agents-tracker-2yb) one surface over.
+     */
+    @Test
+    fun `an approval block tapped on this screen reaches the caller with its item id`() {
+        var opened: String? = null
+        val root = view(panelWithApproval(), onApproval = { opened = it })
+
+        root.kitRequire(TranscriptTag.APPROVAL).performClick()
+
+        assertEquals(
+            "the session detail did not hand its onApproval down to the transcript, so the block " +
+                "the machine is blocked on is drawn as a tappable row that reaches nothing -- and " +
+                "the sheet that answers it has no way in",
+            "i-approve-1",
+            opened,
+        )
+    }
+
+    @Test
+    fun `a screen given no destination for an approval draws the block anyway`() {
+        // `transcriptView`'s ruling, asserted through this screen: never hide what the machine is
+        // waiting on, and never draw a tap with nothing behind it. The block is present; only the
+        // listener is absent.
+        assertNotNull(
+            "the approval block vanished when no destination was supplied, which hides the one " +
+                "thing in the conversation the machine is waiting on",
+            view(panelWithApproval(), onApproval = null).kitFind(TranscriptTag.APPROVAL),
+        )
     }
 }

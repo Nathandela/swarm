@@ -209,7 +209,7 @@ func TestEnrollmentE2E_PairThenCommandNoManualSetup(t *testing.T) {
 	}
 
 	gw := remotegw.New(rsock, nil)
-	reply, err := gw.ForwardCommand(protocol.OpKill, got.Session, got, nil)
+	reply, err := gw.ForwardCommand(protocol.OpKill, protocol.RemoteCommand{DeviceCommandAuth: got})
 	if err != nil {
 		t.Fatalf("gateway forward: %v", err)
 	}

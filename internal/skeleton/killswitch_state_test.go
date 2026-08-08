@@ -159,7 +159,7 @@ func TestKillSwitch_DefaultOffUntilDevicePaired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phone sign: %v", err)
 	}
-	reply, err := remotegw.New(rsock, nil).ForwardCommand(protocol.OpKill, namespaced, cmd, nil)
+	reply, err := remotegw.New(rsock, nil).ForwardCommand(protocol.OpKill, protocol.RemoteCommand{DeviceCommandAuth: cmd})
 	if err != nil {
 		t.Fatalf("gateway forward: %v", err)
 	}

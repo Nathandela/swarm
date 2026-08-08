@@ -52,3 +52,23 @@ type DeviceRegranter interface {
 type DeviceRegistrar interface {
 	DeviceRegistered(deviceID string) bool
 }
+
+// InteractionApprover is the optional interface a DaemonAPI implements to expose approve
+// (IS-LIFE-4, backed by skeleton.Daemon.approveInteraction in production): it validates ONE
+// arriving approve against the stored ADR-007 D7 binding tuple -- agent instance, content
+// hash, daemon-authoritative expiry -- and the decision vocabulary the request actually
+// offered, then resolves the approval.
+//
+// It returns an ErrorCode BESIDE the error rather than only prose, because the refusal is the
+// interesting outcome: a stale card and a decision that was never offered are different facts
+// with different phone-side remedies, and D10's taxonomy is what carries the difference. An
+// empty code with a non-nil error is a refusal the phone can only render, which is the shape
+// confirmLease's own refusals already take.
+//
+// Like DeviceRevoker this is MUTATING, so handleApprove puts it behind requireRemoteAuthz. A
+// backend that does not implement it refuses the op outright: replying OK to a decision
+// nothing applied would dismiss the card on every surface (IS-LIFE-2) while the CLI stays
+// blocked.
+type InteractionApprover interface {
+	ApproveInteraction(machine, operationID string, req ApproveReq) (ErrorCode, error)
+}

@@ -45,8 +45,16 @@ type Mailbox interface {
 
 // CommandForwarder forwards a device-signed command to the daemon and returns the
 // reply. (*Gateway).ForwardCommand satisfies it.
+//
+// It takes the OPENED RemoteCommand rather than a tail of its parts, which is what
+// LeaseRouter.Begin has always done. The parts were (sessionID, cmd, launch) and IS-LIFE-4
+// adds an ApproveReq body, so the alternative was a fourth nil-by-default parameter that
+// every existing call site passes nil for -- the shape mobile/commands.go's commandBody
+// comment already warns about, where "a positional nil is exactly the kind of argument that
+// gets passed in the wrong slot". One argument that is the frame the gateway opened cannot be
+// mispaired with itself, and the next body needs no signature change at all.
 type CommandForwarder interface {
-	ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error)
+	ForwardCommand(op string, rc protocol.RemoteCommand) (protocol.Control, error)
 }
 
 // LeaseRouter is the live-input seam the command loop routes take_control and input
@@ -619,11 +627,11 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 // forward sends a mutating command to the daemon and seals its reply back to the
 // phone mailbox.
 func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) error {
-	op, err := opForAction(rc.Action, rc.Launch)
+	op, err := opForAction(rc)
 	if err != nil {
 		return err
 	}
-	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc.Session, rc.DeviceCommandAuth, rc.Launch)
+	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc)
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
@@ -663,11 +671,13 @@ func (b *CommandBridge) applyPushPrefs(ctx context.Context, rc protocol.RemoteCo
 	if b.cfg.Prefs == nil {
 		return b.refusePushPrefs(ctx, rc, errNoPrefsCustody)
 	}
-	op, err := opForAction(rc.Action, rc.Launch)
+	op, err := opForAction(rc)
 	if err != nil {
 		return err
 	}
-	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc.Session, rc.DeviceCommandAuth, nil)
+	// The preference body stays HERE: it is the gateway's own durable custody (PB-PUSH-10) and
+	// the daemon only authorizes, so the frame forwarded carries the tuple and nothing else.
+	reply, err := b.cfg.Forwarder.ForwardCommand(op, protocol.RemoteCommand{DeviceCommandAuth: rc.DeviceCommandAuth})
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
@@ -710,8 +720,8 @@ func (b *CommandBridge) refusePushPrefs(ctx context.Context, rc protocol.RemoteC
 // ride in the sealed envelope (RemoteCommand.Launch); a launch action with no body is
 // refused loudly rather than forwarded with a nil spec (which would fail the daemon's
 // content-hash binding). push_prefs carries its body in RemoteCommand.PushPrefs, which
-// applyPushPrefs has already checked by the time it asks for the op. approve is not a
-// daemon remote op (D6/D7).
+// applyPushPrefs has already checked by the time it asks for the op. approve carries an
+// ApproveReq under the same rule as launch: see its arm.
 //
 // device_revoke's arm was MISSING until S18, and the omission was the whole of the phone's
 // panic button. ActionDeviceRevoke is in the signed action set, skeleton/deviceauth.go classes
@@ -720,8 +730,14 @@ func (b *CommandBridge) refusePushPrefs(ctx context.Context, rc protocol.RemoteC
 // SEALED, so the op could never resolve either. mobile.RevokeThisDevice worked around it by
 // sealing nothing and recording a durable local refusal; with the arm in place that workaround
 // is gone and the verb rides this path like every other mutation.
-func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
-	switch action {
+//
+// approve's arm was MISSING for exactly one slice longer than device_revoke's, and the reason
+// was true when it was written: "approve is not a daemon remote op (D6/D7)". It is now
+// (protocol.OpApprove), and the daemon-side validation it reaches -- the ADR-007 D7 binding
+// tuple, the content hash, the daemon-authoritative expiry -- had no production caller until
+// this arm existed.
+func opForAction(rc protocol.RemoteCommand) (string, error) {
+	switch rc.Action {
 	case protocol.ActionKill:
 		return protocol.OpKill, nil
 	case protocol.ActionDelete:
@@ -729,13 +745,22 @@ func opForAction(action string, launch *protocol.LaunchReq) (string, error) {
 	case protocol.ActionDeviceRevoke:
 		return protocol.OpDeviceRevoke, nil
 	case protocol.ActionLaunch:
-		if launch == nil {
+		if rc.Launch == nil {
 			return "", errors.New("remotegw: launch command missing its launch spec in-envelope")
 		}
 		return protocol.OpLaunch, nil
+	case protocol.ActionApprove:
+		// Launch's rule, for the one other action whose body the daemon reads. A stripped
+		// ApproveReq forwarded as a zero body would be an approve naming no interaction, which
+		// the daemon refuses CodeStaleApproval -- so the user would be told their card is out of
+		// date by a frame that merely lost its payload.
+		if rc.Approve == nil {
+			return "", errors.New("remotegw: approve command missing its approve body in-envelope")
+		}
+		return protocol.OpApprove, nil
 	case protocol.ActionPushPrefs:
 		return protocol.OpPushPrefs, nil
 	default:
-		return "", fmt.Errorf("remotegw: unsupported command action %q", action)
+		return "", fmt.Errorf("remotegw: unsupported command action %q", rc.Action)
 	}
 }

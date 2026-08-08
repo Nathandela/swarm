@@ -84,8 +84,15 @@ func TestWiring_TheScreenComingToTheFrontStartsObserving(t *testing.T) {
 		{"SubscribeJournal", "journal delivery never starts: mobile/relay.go's onJournal " +
 			"returns early unless `subscribed` is set, so every record is folded into durable " +
 			"state and none is announced"},
-		{"TerminalWatch", "the machine is never asked to send terminal frames, so App.Peek " +
-			"reads a local snapshot cache nothing populates and the peek is empty forever"},
+		// `TerminalWatch` STOOD HERE AND IS DELETED WITH THE WELL, not merely dropped from a
+		// list. It was required because a peek over an unwatched session is empty forever and
+		// fails looking exactly like a quiet machine. ADR-009-structured-chat-interaction (2)
+		// answers that a different way: "no phone surface issues a watch", because there is no
+		// grid left to fill -- and (7) makes it load-bearing rather than tidy, since the
+		// machine-to-phone budget is <= 8 appends/s across journal AND terminal combined for one
+		// target and the transcript now inherits the whole of it. The INVERSION is asserted
+		// below rather than the requirement merely removed: a check that only stopped asking
+		// would pass again the day somebody re-added the call.
 	} {
 		if !s17NamesVerb(body, want.verb) {
 			t.Errorf("PB-APP-3/4/5: nothing reachable from PhoneSurface.render calls "+
@@ -110,12 +117,38 @@ func TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor(t *testing.T) {
 	for _, want := range []struct{ verb, why string }{
 		{"UnsubscribeJournal", "a backgrounded screen goes on being fed events it will never " +
 			"render, into the bounded drop-oldest queue mobile/events.go documents"},
-		{"TerminalUnwatch", "the peek plane leaks per-session server render work for every " +
-			"session the user ever opened -- which is the reason this verb exists"},
+		// `TerminalUnwatch` STOOD HERE, and it goes with its other half: a phone that opens no
+		// watch leaks none. See the note in the test above, and the inversion below.
 	} {
 		if !s17NamesVerb(body, want.verb) {
 			t.Errorf("PB-RUN-3/ADR-007 B16: nothing reachable from PhoneSurface.release calls "+
 				"App.%s.\n%s\nreachable from release:\n%s", want.verb, want.why, s17Indent(body))
+		}
+	}
+}
+
+// TestWiring_NoScreenIssuesATerminalWatch is the AMENDMENT the two tests above record, stated as
+// its own assertion so the deletion is a rule rather than an omission.
+//
+// **This is a sanctioned change to a passing gate, and the design mandated it.**
+// `docs/adr/ADR-009-structured-chat-interaction.md` (2): "no phone surface issues a watch ...
+// `TerminalSnapshot` and `terminal_watch` stay on the wire unchanged -- no protocol change,
+// nothing deleted -- but no phone surface issues a watch, and the machine->phone append budget in
+// (7) is spent by the journal alone". The verbs stay exported and ledgered in
+// android/unbound-verbs.tsv; what may not come back is this app asking for frames it no longer
+// draws.
+func TestWiring_NoScreenIssuesATerminalWatch(t *testing.T) {
+	kotlin := kotlinCodeOnly(appKotlinSource(t))
+
+	for _, verb := range []string{"terminalWatch", "terminalUnwatch"} {
+		if strings.Contains(kotlin, "."+verb+"(") {
+			t.Errorf("ADR-009 (2): production Kotlin calls App.%s.\n"+
+				"With no grid on any screen, a watch spends the machine->phone append budget on "+
+				"frames nothing draws -- and PB-SYNC-1 stales journal AND terminal together on a "+
+				"shared-bucket gap, so the cost lands on the transcript. The verb is deliberately "+
+				"still exported: (2) narrows the renderer's ROLE and withdraws nothing from the "+
+				"wire. Re-adding the call needs an amendment to that ADR, not a commit.",
+				strings.ToUpper(verb[:1])+verb[1:])
 		}
 	}
 }

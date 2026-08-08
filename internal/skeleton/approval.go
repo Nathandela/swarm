@@ -381,12 +381,14 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 // switch are checked BEFORE this by authorizeCommand and requireRemoteAuthz -- this is the
 // content check those cannot make, and it is the one D7 specifies.
 //
-// ponytail: it has no wire route yet, and that is the task's boundary rather than an omission.
-// `opForAction` refuses an approve one hop short of the daemon ("approve is not a daemon remote
-// op (D6/D7)", internal/remotegw/command_loop.go), and APPLYING the decision -- writing the
-// adapter's DecisionAction back on the CLI's pending hook, ADR-010 §4 -- is the producer slice's.
-// This is the half those two need to exist and neither can define: the object to validate
-// against.
+// IT NOW HAS A WIRE ROUTE (W-APPROVE, docs/verification/a1c-approve-roundtrip.md), and the note
+// that used to stand here -- "opForAction refuses an approve one hop short of the daemon" -- is
+// the record of what was built to remove it: protocol.OpApprove + handleApprove, the
+// InteractionApprover seam coreAPI satisfies, remotegw's ActionApprove arm carrying the
+// ApproveReq in-envelope, and swarmmobile.App.Approve at the far end. What is still the
+// PRODUCER's and not this function's is APPLYING the decision -- writing the adapter's
+// DecisionAction back on the CLI's pending hook (ADR-010 §4). This remains the half neither the
+// route nor the application can define: the object to validate against.
 func (d *Daemon) approveInteraction(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error) {
 	endpoint, local, ok := protocol.ParseID(req.Session)
 	if !ok {

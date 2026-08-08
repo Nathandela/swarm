@@ -26,7 +26,7 @@ import (
 // is the case an ack would destroy the only copy of.
 type unreachableForwarder struct{}
 
-func (unreachableForwarder) ForwardCommand(_, _ string, _ protocol.DeviceCommandAuth, _ *protocol.LaunchReq) (protocol.Control, error) {
+func (unreachableForwarder) ForwardCommand(_ string, _ protocol.RemoteCommand) (protocol.Control, error) {
 	return protocol.Control{}, errors.New("dial remote.sock: connection refused")
 }
 

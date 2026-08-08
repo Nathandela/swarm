@@ -57,6 +57,12 @@ type coreAPI struct {
 	// config file. A nil policy denies (fail-closed) via RemoteLaunchAllowed.
 	launchPolicy protocol.LaunchPolicy
 
+	// approve is the approval lifecycle's validator (IS-LIFE-4), handed in at assembly
+	// (Daemon.approveInteraction). It is a func field rather than a back-pointer to the outer
+	// Daemon for the reason sampleFn and captureFn are: one seam, not the whole assembly.
+	// nil => the daemon cannot answer an approve, and says so.
+	approve func(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error)
+
 	// pairing carries the machine-side pairing identity + enrollment material and the
 	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
 	// until provisioned (a LATER slice: `swarm remote init`); a nil config makes
@@ -429,6 +435,31 @@ func (a *coreAPI) DescribePolicy() protocol.PolicyView {
 // coreAPI ALSO satisfies protocol.PolicyDescriber so the assembled remote-tier
 // Server can serve policy_query (R-POL.3).
 var _ protocol.PolicyDescriber = (*coreAPI)(nil)
+
+// ApproveInteraction makes coreAPI a protocol.InteractionApprover (IS-LIFE-4): it validates one
+// arriving approve against the stored ADR-007 D7 binding tuple and resolves the approval. It
+// delegates to the outer Daemon's approveInteraction, which owns the pending-approval state.
+//
+// An UNWIRED approver refuses, and refuses LOUDLY. A bare test Daemon literal and a
+// misassembled one both reach here with a nil func, and the two wrong answers are worse than
+// the error: replying OK dismisses the card on every surface (IS-LIFE-2) while the CLI stays
+// blocked on a permission nobody applied, and staying silent leaves the phone's op in flight
+// forever. This is ListDevices' nil-registry rule with the direction that fits a mutation.
+//
+// It carries NO ErrorCode, and that is refusePushPrefs's rule (remotegw/command_loop.go): none
+// of D10's six describes a machine-side assembly failure, and inventing a mapping tells the
+// phone's retry policy something untrue -- not_authorized above all, which would send a
+// correctly-paired owner off to re-pair a device that is fine.
+func (a *coreAPI) ApproveInteraction(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error) {
+	if a.approve == nil {
+		return "", errors.New("skeleton: this daemon has no interaction approver wired; nothing applied the decision")
+	}
+	return a.approve(machine, operationID, req)
+}
+
+// coreAPI ALSO satisfies protocol.InteractionApprover so the assembled remote-tier Server can
+// serve approve (IS-LIFE-4).
+var _ protocol.InteractionApprover = (*coreAPI)(nil)
 
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{

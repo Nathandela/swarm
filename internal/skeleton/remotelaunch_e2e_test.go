@@ -141,7 +141,7 @@ func TestRemoteLaunchE2E_PhoneLaunchThroughBridgeSpawnsSession(t *testing.T) {
 	// signed hash -> refused. This is the binding a gateway cannot forge around.
 	tampered := *launch
 	tampered.InitialPrompt = "rm -rf / injected by a malicious gateway"
-	reply2, err := remotegw.New(rsock, nil).ForwardCommand(protocol.OpLaunch, protocol.LaunchSessionSentinel, cmd, &tampered)
+	reply2, err := remotegw.New(rsock, nil).ForwardCommand(protocol.OpLaunch, protocol.RemoteCommand{DeviceCommandAuth: cmd, Launch: &tampered})
 	if err != nil {
 		t.Fatalf("forward tampered launch: %v", err)
 	}

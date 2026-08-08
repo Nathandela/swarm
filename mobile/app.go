@@ -948,13 +948,12 @@ func (a *App) ReadTranscript(session string, from int64, limit int) (page *Trans
 // -- exempt from the transcript's retention bound until their approval_resolved lands --
 // precisely so a surface can still show them.
 //
-// IT IS READ ONLY, and that is this workpackage's boundary rather than a design position.
-// Answering a card is IS-LIFE-4's signed ActionApprove carrying a new ApproveReq wire body
-// (agent_instance, interaction_id, content_hash, expires_at, decision) that no slice has built
-// yet, and IS-APR-2 requires the phone to echo content_hash and expires_at VERBATIM rather
-// than compute them -- so a verb added here before that body exists could only send something
-// the daemon would refuse. Showing the card is useful on its own: the user learns the machine
-// is blocked, and can answer at the machine (IS-LIFE-2 then dismisses it here).
+// IT IS THE LIST, AND Approve IS THE ANSWER (commands.go). This comment used to end "it is READ
+// ONLY, and that is this workpackage's boundary" because IS-LIFE-4's ApproveReq wire body did
+// not exist; it does now, end to end, so a card here is answerable rather than merely visible.
+// The read stays exactly as it was: the binding tuple a caller needs is NOT returned from here
+// as parameters to pass back, because IS-APR-2 makes the phone echo content_hash and expires_at
+// verbatim and Approve reads them off this same stored item instead.
 func (a *App) PendingApprovals() (page *TranscriptPage, err error) {
 	defer barrier(&err)
 	core, err := a.ready()

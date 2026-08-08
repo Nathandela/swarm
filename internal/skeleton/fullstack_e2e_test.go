@@ -100,7 +100,7 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 		t.Fatalf("gateway open command: %v", err)
 	}
 	gw := remotegw.New(rsock, nil)
-	reply, err := gw.ForwardCommand(protocol.OpKill, got.Session, got, nil)
+	reply, err := gw.ForwardCommand(protocol.OpKill, protocol.RemoteCommand{DeviceCommandAuth: got})
 	if err != nil {
 		t.Fatalf("gateway forward: %v", err)
 	}

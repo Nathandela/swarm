@@ -124,7 +124,7 @@ func TestPBPUSH8_DaemonServesThePushPrefsOp(t *testing.T) {
 	}
 
 	gw := remotegw.New(rsock, nil)
-	reply, err := gw.ForwardCommand(protocol.OpPushPrefs, protocol.LaunchSessionSentinel, cmd, nil)
+	reply, err := gw.ForwardCommand(protocol.OpPushPrefs, protocol.RemoteCommand{DeviceCommandAuth: cmd})
 	if err != nil {
 		t.Fatalf("gateway forward: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestPBPUSH8_DaemonServesThePushPrefsOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("other sign: %v", err)
 	}
-	reply, err = gw.ForwardCommand(protocol.OpPushPrefs, protocol.LaunchSessionSentinel, bad, nil)
+	reply, err = gw.ForwardCommand(protocol.OpPushPrefs, protocol.RemoteCommand{DeviceCommandAuth: bad})
 	if err != nil {
 		t.Fatalf("gateway forward (unpaired): %v", err)
 	}

@@ -74,9 +74,8 @@ func (p *s16CountingPusher) Calls() int {
 // PB-PUSH-8 one.
 type s16OKForwarder struct{}
 
-func (s16OKForwarder) ForwardCommand(op, session string, cmd protocol.DeviceCommandAuth,
-	_ *protocol.LaunchReq) (protocol.Control, error) {
-	return protocol.Control{Op: protocol.OpOK, SessionID: session, OperationID: cmd.OperationID}, nil
+func (s16OKForwarder) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol.Control, error) {
+	return protocol.Control{Op: protocol.OpOK, SessionID: rc.Session, OperationID: rc.OperationID}, nil
 }
 
 func s16NewMachine(t *testing.T, h *harness) *s16Machine {

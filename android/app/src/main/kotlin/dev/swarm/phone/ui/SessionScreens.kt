@@ -88,12 +88,18 @@ enum class StopAction {
     KILL,
 }
 
-/** PB-APP-3's session detail: the journal, the snapshot card, and a persistent Stop. */
+/**
+ * PB-APP-3's session detail: the session's transcript, the lease, and a persistent Stop.
+ *
+ * THE SNAPSHOT CARD IS GONE, and that is ADR-009-structured-chat-interaction (3) landing rather
+ * than a field falling out of use. This model carried `snapshotText`, `hasSnapshotCard` and
+ * `snapshotStale` -- the daemon-rendered grid and the two facts about it -- and the ADR deletes
+ * "the plain-text terminal well ... and the screens under it" at slice I1's exit, on the ground
+ * that a fallback outliving its replacement becomes the design. What is left is the transcript,
+ * which is the session surface (1).
+ */
 data class SessionDetail(
     val sessionId: String,
-    val journal: List<JournalRow>,
-    /** The daemon-rendered grid, or empty when no snapshot has arrived for this session. */
-    val snapshotText: String,
     val leaseHeld: Boolean,
     val online: Boolean,
     val journalStale: Boolean,
@@ -112,33 +118,9 @@ data class SessionDetail(
      * press resolves to anything else or the drill-down closes.
      */
     val stopNotSent: Boolean = false,
-    /**
-     * Whether the machine has stopped sending frames for the grid in [snapshotText]
-     * (agents-tracker-0qe7).
-     *
-     * IT IS A SECOND FACT AND NOT [journalStale]. That one is PB-APP-8 over the CHRONOLOGY -- the
-     * event stream had a gap -- and the two are independent: a repaired journal beside a frozen
-     * grid is an ordinary state, and so is the reverse. They also have different remedies, so one
-     * sentence standing for both would send the user after the wrong one.
-     *
-     * IT IS `TerminalPeek.stale`, which this screen was already reading the grid from and dropping.
-     */
-    val snapshotStale: Boolean = false,
 ) {
-    val hasSnapshotCard: Boolean get() = snapshotText.isNotEmpty()
-
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale
-
-    /**
-     * What the screen says beside a snapshot card whose grid has gone quiet.
-     *
-     * THE WORDS ARE [TerminalPeek]'s AND ARE NOT WRITTEN AGAIN HERE. The peek and this card show
-     * the same object -- `swarmmobile.Snapshot.Text` for the same session -- so a second sentence
-     * would be two files deciding what one fact reads as, and they would drift the first time
-     * either was edited.
-     */
-    val snapshotStaleNotice: String get() = if (snapshotStale) TerminalPeek.STALE_NOTICE else ""
 
     /** Stop is PERSISTENT -- on screen in every state, per PB-APP-3. */
     val stopVisible: Boolean = true
@@ -227,24 +209,34 @@ data class SessionDetail(
 }
 
 /**
- * PB-APP-4's terminal peek.
+ * PB-INPUT-2's three lease facts, and what is LEFT of PB-APP-4's terminal peek.
  *
- * [rendered] is the identity of [text] on purpose. It is the whole obligation this type has:
- * the screen displays what the daemon handed it and there is no code path by which it could
- * display anything else.
+ * WHAT WAS DELETED AND WHAT SURVIVED, because the difference is the whole of
+ * ADR-009-structured-chat-interaction (2)/(3). The type here was `TerminalPeek`: a grid, its
+ * dimensions, its staleness, and these three lease properties hanging off the same object. The
+ * grid is gone with the well -- "no phone surface issues a watch", so no snapshot frames are
+ * appended at all, and there is nothing left for a `Snapshot` to be read into. The LEASE is
+ * untouched by that ADR: (5) keeps the keystroke transport "exactly as decided, as the substrate",
+ * and the three properties below are the requirement's own content.
+ *
+ * THEY STAY A MODEL RATHER THAN BECOMING TWO BOOLEANS AT A CALL SITE, which is the recorded reason
+ * they existed here in the first place: [keyboardEnabled] is `leaseHeld && online`, and "an
+ * implementation that enables the keyboard from its own lease flag satisfies PB-INPUT-2's first
+ * clause and drops the second, silently, while the model that states it stays green and unread"
+ * (`android/gate/pbapp6_pbinput2_surface_test.go`).
  */
-data class TerminalPeek(
+data class SessionLease(
     val sessionId: String,
-    /** `swarmmobile.Snapshot.Text`: the daemon-sanitized grid, already flattened to lines. */
-    val text: String,
-    val cols: Int,
-    val rows: Int,
-    val stale: Boolean,
+    /**
+     * Whether the MACHINE has confirmed the control lease this phone asked for.
+     *
+     * It is a PARAMETER wherever it is built, and always was: the lease is the outcome of this
+     * screen's own take_control operation, claimed by operation id (PB-SYNC-2), never a fact read
+     * back off something the machine sent for another reason.
+     */
     val leaseHeld: Boolean,
     val online: Boolean,
 ) {
-    val rendered: String get() = text
-
     val showsTakeControl: Boolean get() = !leaseHeld
 
     val showsRelease: Boolean get() = leaseHeld
@@ -255,40 +247,16 @@ data class TerminalPeek(
      * cannot be live while the link is down either, so both conditions are required.
      */
     val keyboardEnabled: Boolean get() = leaseHeld && online
-
-    /**
-     * A stale grid is banner-marked and the keyboard STAYS available: the hole is in what the
-     * phone was shown, not in what it can send.
-     */
-    val staleNotice: String get() = if (stale) STALE_NOTICE else ""
-
-    companion object {
-
-        /**
-         * The one sentence this product has for a grid the machine has stopped refreshing.
-         *
-         * IT IS A CONSTANT BECAUSE TWO SCREENS SHOW THE SAME OBJECT (agents-tracker-0qe7): the
-         * terminal peek and the session detail's snapshot card are both
-         * `swarmmobile.Snapshot.Text` for a session, so [SessionDetail.snapshotStaleNotice] reads
-         * it here rather than writing a second wording of the same fact.
-         *
-         * IT SAYS THE VIEW IS OLD AND NOT THAT THE SESSION IS IDLE, which is the whole of what the
-         * phone knows: no frame has arrived, and what the agent is doing meanwhile is a fact this
-         * handset has not been told.
-         */
-        const val STALE_NOTICE =
-            "This view of the terminal is out of date; the machine has not sent a fresh one yet."
-    }
 }
 
 /**
  * PB-INPUT-2's fact: whether the MACHINE has confirmed the control lease this phone asked for.
  *
  * IT IS DECIDED FROM THE TAKE_CONTROL OPERATION'S OWN OUTCOME, claimed by operation id, which is
- * PB-SYNC-2's discipline and the only honest source a screen has. [TerminalPeek.leaseHeld] is a
- * PARAMETER for exactly that reason -- `FacadeBridge.terminalPeek`'s own doc says the lease "is
- * the outcome of this screen's own take_control operation ... reading it back from a snapshot
- * would be guessing at a fact the reply already carries" -- and until this existed the surface
+ * PB-SYNC-2's discipline and the only honest source a screen has. [SessionLease.leaseHeld] is a
+ * PARAMETER for exactly that reason -- the lease is the outcome of this screen's own take_control
+ * operation, and reading it back off something the machine sent for another reason would be
+ * guessing at a fact the reply already carries -- and until this existed the surface
  * passed the literal `false` in its place, so every session rendered as one the user did not
  * hold while Send was enabled anyway (ADR-007 B83(3)).
  *

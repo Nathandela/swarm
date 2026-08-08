@@ -77,15 +77,17 @@ type fakeForwarder struct {
 	seen     []protocol.DeviceCommandAuth
 	ops      []string
 	launches []*protocol.LaunchReq
+	approves []*protocol.ApproveReq
 }
 
-func (f *fakeForwarder) ForwardCommand(op, sessionID string, cmd protocol.DeviceCommandAuth, launch *protocol.LaunchReq) (protocol.Control, error) {
+func (f *fakeForwarder) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol.Control, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.seen = append(f.seen, cmd)
+	f.seen = append(f.seen, rc.DeviceCommandAuth)
 	f.ops = append(f.ops, op)
-	f.launches = append(f.launches, launch)
-	return protocol.Control{Op: protocol.OpOK, SessionID: sessionID}, nil
+	f.launches = append(f.launches, rc.Launch)
+	f.approves = append(f.approves, rc.Approve)
+	return protocol.Control{Op: protocol.OpOK, SessionID: rc.Session}, nil
 }
 
 func sealedCmd(t *testing.T, key crypto.ContentKey, seq uint64, cmd protocol.DeviceCommandAuth) []byte {

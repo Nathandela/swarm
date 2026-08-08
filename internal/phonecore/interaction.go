@@ -14,6 +14,7 @@ package phonecore
 // session on the triage list off the back of a tool call.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"sort"
 	"sync"
@@ -382,6 +383,70 @@ func (s *ItemStore) PendingApprovals() []Item {
 		}
 	}
 	return out
+}
+
+// ApprovalBinding is the ADR-007 D7 binding tuple of one pending approval_request: §3.5's
+// three DAEMON-AUTHORITATIVE fields, read straight off the item the phone stored.
+//
+// It exists because an approve must ECHO those three and compute none of them (IS-APR-2), and
+// the facade that authors one takes flat strings across the gomobile boundary -- so the tuple
+// has to be recovered from the card the handset is holding, which is this store.
+type ApprovalBinding struct {
+	ShimPID       int
+	ShimStartTime int64
+	ContentHash   string
+	ExpiresAt     time.Time
+}
+
+// approvalBody is the §3.5 subset an approve is authored from. It is the ONE place this
+// package decodes per-kind item fields, and the exception is narrow on purpose: Item.Body
+// exists so a client reads its own kinds (IS-COMPAT-2), but the binding tuple is not
+// rendering -- it is wire content the phone must reproduce byte for byte, and a client that
+// re-typed it would be one silent divergence away from a command the daemon refuses.
+type approvalBody struct {
+	AgentInstance struct {
+		ShimPID       int   `json:"shim_pid"`
+		ShimStartTime int64 `json:"shim_start_time"`
+	} `json:"agent_instance"`
+	ContentHash string     `json:"content_hash"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+}
+
+// PendingApproval returns the binding tuple of the UNRESOLVED approval_request (session,
+// itemID) names, if this phone holds one that can actually be answered.
+//
+// It reports false in three cases that are one fact from a caller's side -- there is no card
+// here to answer. The item is absent (a reseed floor cut it, or the id is wrong); it has
+// already reached its approval_resolved, so IS-LIFE-2 has spent its one resolution and every
+// surface has stopped showing it; or its §3.5 fields are missing or malformed, which makes it
+// a card no approve can be authored from. The third is worth failing on rather than papering
+// over: an approve carrying an invented tuple is refused CodeStaleApproval, which tells the
+// user their card is out of date when what actually happened is that it arrived broken.
+func (s *ItemStore) PendingApproval(session, itemID string) (ApprovalBinding, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.indexOf(session, itemID)
+	if i < 0 || !pendingApproval(s.items[i]) {
+		return ApprovalBinding{}, false
+	}
+	var body approvalBody
+	if err := json.Unmarshal(s.items[i].Body, &body); err != nil {
+		return ApprovalBinding{}, false
+	}
+	if body.ContentHash == "" || body.ExpiresAt == nil || body.AgentInstance.ShimPID == 0 {
+		return ApprovalBinding{}, false
+	}
+	if len(body.ContentHash) != 2*sha256.Size {
+		// The daemon ships a bare 64-char hex digest (internal/skeleton/approval.go). Anything
+		// else the signer would refuse anyway; refusing here names the CARD as the problem.
+		return ApprovalBinding{}, false
+	}
+	return ApprovalBinding{
+		ShimPID:       body.AgentInstance.ShimPID,
+		ShimStartTime: body.AgentInstance.ShimStartTime,
+		ContentHash:   body.ContentHash,
+		ExpiresAt:     *body.ExpiresAt,
+	}, true
 }
 
 // All is the whole transcript in cursor order (a snapshot copy) -- what the durable blob

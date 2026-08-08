@@ -84,6 +84,13 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealPushPrefsEnvelope: %v", err)
 	}
+	// IS-LIFE-4's approve. It is the eighth producer, and the sweep below is what demanded it
+	// be added here: an unstamped approve would be refused by PB-GW-2's bound forever, so a
+	// user's only remote answer to a blocked agent would silently never arrive.
+	approve, err := SealApproveEnvelope(key, epoch, seq.Next(), auth, schema.ApproveReq{Session: "m1/s1"})
+	if err != nil {
+		t.Fatalf("SealApproveEnvelope: %v", err)
+	}
 	return map[string][]byte{
 		"SealInputData":           data,
 		"SealInputResize":         resize,
@@ -92,6 +99,7 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 		"SealLaunchEnvelope":      lau,
 		"SealResyncEnvelope":      resync,
 		"SealPushPrefsEnvelope":   prefs,
+		"SealApproveEnvelope":     approve,
 	}
 }
 

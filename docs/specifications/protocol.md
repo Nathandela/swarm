@@ -365,6 +365,39 @@ tier has no unsigned `attach` and instead requires a signed `take_control`.
   signature), clears the control session, and releases the lease — shutting the input
   gate.
 
+### `approve`
+
+The phone's answer to one pending `approval_request` (interaction-schema.md IS-LIFE-4).
+It is a signed, MUTATING remote-tier op and rides `requireRemoteAuthz` exactly like
+`kill`/`device_revoke`/`take_control` (ADR-007 D4: no remote-class mutating op executes
+without a valid device signature). Its capability class is `ActionApprove`, so a
+`read_approve` device may answer a card without being able to control anything.
+
+The body rides in `Control.approve` (`ApproveReq`: `session`, `agent_instance`,
+`interaction_id`, `content_hash`, `expires_at`, `decision`), reconstructed by the gateway
+from the sealed `RemoteCommand.approve` the phone appended. Three rules make it what it is:
+
+- **The signed tuple's `content_hash` IS the interaction's own** — ADR-007 D7 spends the
+  one content slot on the interaction content, and the phone echoes `content_hash` and
+  `expires_at` **verbatim** (IS-APR-2). The daemon decodes the hash from the wire body and
+  authorizes against it, so a relay or gateway that swaps it breaks the signature rather
+  than redirecting the approval. A `content_hash` that is not 32 bytes of hex is refused
+  `invalid_field`, and `approve.session` must equal `session_id` or the frame is refused
+  before authorization.
+- **The `decision` is deliberately UNSIGNED** (IS-LIFE-4). It rides inside the
+  epoch-sealed frame — unforgeable by the relay, alterable only by the gateway, which is
+  the documented D4/D5 owner-uid residual and not a new one.
+- **The daemon validates before any effect** and never translates an approve into a blind
+  keystroke (ADR-007 D7). The stored binding tuple (agent instance, content hash,
+  daemon-authoritative expiry) and the offered decision set are checked; a mismatch is
+  `stale_approval`, a decision the request never offered is `invalid_field`, and the card
+  is left pending in that case. On success exactly one `approval_resolved` is journalled
+  (IS-LIFE-2), attributed `by: phone` and echoing the phone's `operation_id`.
+
+`operation_id` is the phone-minted idempotency key of the OP and is never equal to
+`interaction_id`, which names the interaction (IS-APR-1). No replay dedup is needed: a
+re-delivered approve finds the approval already resolved and is refused `stale_approval`.
+
 ### `terminal_subscribe` / `terminal_snapshot`
 
 Terminal peek (A7 renderer slice B), mirroring the

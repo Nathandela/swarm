@@ -6,12 +6,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.ui.kit.KitTag
-import dev.swarm.phone.ui.kit.activityRow
-import dev.swarm.phone.ui.kit.emptyState
-import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeaderDrill
-import dev.swarm.phone.ui.kit.sectionLabel
-import dev.swarm.phone.ui.kit.sessionList
 
 /**
  * PB-APP-3 -- inventory C2: the session detail, composed from the component kit.
@@ -22,13 +17,27 @@ import dev.swarm.phone.ui.kit.sessionList
  * there was nowhere for a back control to go (agents-tracker-2yb: "the chevron therefore looks like
  * a control and does not act"). [onBack] is that destination arriving.
  *
- * WHAT IT COMPOSES: the drill header (§4), the snapshot in the terminal mono well (C3's component,
- * reused here because a session's grid and the peek's grid are the same object), a `sectionLabel`
- * over the session's own journal, an `activityRow` per record -- or row 8's `emptyState` when there
- * are none -- PB-APP-9's routed line for what the machine last answered, and the two controls the
+ * WHAT IT COMPOSES: the drill header (§4), a `sectionLabel` over the session's own journal, an
+ * `activityRow` per record -- or row 8's `emptyState` when there are none -- PB-APP-9's routed line
+ * for what the machine last answered, PB-INPUT-2's lease sentence, and the three controls the
  * surface owns. It decides nothing about how any of them
  * looks: `android/gate/s24_screens_test.go` fences this package, so an `R.color`, an `R.dimen`, an
  * `R.style`, a `setTextAppearance`, a `setPadding` or a `background =` here fails the build.
+ *
+ * **THE TERMINAL WELL IS GONE, AT THE DATE THE DECISION SET.**
+ * `docs/adr/ADR-009-structured-chat-interaction.md` (3) deletes "the plain-text terminal well ...
+ * `PhoneSurface.kt`'s `peekHost` / `PeekPanel` path and the screens under it" at slice I1's exit,
+ * and (1) says why this screen is what is left: "the phone's only session surface is a structured
+ * chat transcript ... no terminal emulation and no raw grid anywhere in the app". This file drew
+ * that grid twice over -- `monoWell(terminal = true)` here, the same well one screen over -- and it
+ * is the transcript below, not the well, that a person now reads a session on.
+ *
+ * **PB-INPUT-2's SENTENCE AND THE TAKE CONTROL BUTTON ARRIVED WITH THAT DELETION.** They were the
+ * peek's, because the peek was where the keyboard lived; the requirement is untouched by the ADR
+ * -- (5) keeps raw input "exactly as decided, as the substrate" -- so the capability did not move,
+ * only its home did. A slice that deleted the grid and the way to take control with it would have
+ * left the phone unable to type for as long as the composer takes to land, which no decision asked
+ * for.
  *
  * THE CONTROLS ARE SLOTS. Stop and Kill reach facade verbs, carry PB-SEC-12 clause 1's touch filter
  * and must survive a redraw, so `PhoneSurface` builds them out of the kit and hands them in -- the
@@ -111,26 +120,8 @@ object DetailTag {
     /** PB-INPUT-1: what did not reach the machine. */
     const val NOT_SENT = "detail.notsent"
 
-    /**
-     * PB-APP-8 for the grid: what the screen says when the machine has stopped sending frames.
-     *
-     * IT IS BESIDE THE CARD AND NOT INSIDE IT (agents-tracker-0qe7). The well prints
-     * `swarmmobile.Snapshot.Text` byte for byte, so a sentence written into the text would be
-     * English in the machine's own register -- which is the defect that issue reports on the peek.
-     */
-    const val SNAPSHOT_STALE = "detail.snapshot.stale"
-
-    /** C2.2 -- the daemon-rendered grid. Absent entirely when no frame has arrived. */
-    const val SNAPSHOT = "detail.snapshot"
-
-    /** C2.3 `.plabel` over the session's own journal. */
-    const val SECTION_LABEL = "detail.section.label"
-
-    /** C2.3 -- one record. */
-    const val ROW = "detail.row"
-
-    /** Row 8's block, under a heading whose session has no records yet. */
-    const val EMPTY = "detail.empty"
+    /** C2.3 -- the conversation, composed by `transcriptView` and placed here. */
+    const val TRANSCRIPT = "detail.transcript"
 
     /**
      * PB-APP-9: what the machine answered the two controls below.
@@ -150,9 +141,15 @@ object DetailTag {
     /** The escalation, behind its own confirmation. */
     const val KILL = "detail.kill"
 
+    /** Row 22's standalone tertiary button, supplied by the surface that owns the verb. */
+    const val TAKE_CONTROL = "detail.control.take"
+
+    /** PB-INPUT-2's "visibly", in row 22's component. */
+    const val LEASE = "detail.lease"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> =
-        setOf(NAV, STALE, NOT_SENT, SNAPSHOT_STALE, SNAPSHOT, SECTION_LABEL, ROW, OUTCOME, STOP)
+        setOf(NAV, STALE, NOT_SENT, TRANSCRIPT, OUTCOME, LEASE, TAKE_CONTROL, STOP)
 }
 
 /**
@@ -168,15 +165,27 @@ object DetailTag {
  *  empty when they have asked nothing or the answer was yes. It is a STRING and not a slot for the
  *  reason the notices are strings: the surface holds the one routed line the whole app reports on,
  *  and handing the VIEW in would take it out of the column it belongs to and never give it back.
+ * @param takeControl PB-INPUT-2's step, drawn only while [SessionDetailPanel.offersTakeControl] says
+ *  it is the step to take. IT IS THE PEEK'S BUTTON, ARRIVING WITH THAT SCREEN'S DELETION: the same
+ *  `ctaButton(kind = MORE)` the surface already built there, on the screen a session is read on now.
+ *  A slot rather than a construction for [stop]'s reason -- `PhoneSurface` owns the verb, the
+ *  operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
  * @param onBack where §4's chevron goes: back to the list this session was opened from.
+ * @param onApproval where an approval block in the conversation goes when it is tapped, called with
+ *  the block's `item_id` -- which IS the `interaction_id` a signed `ActionApprove` names (IS-APR-1).
+ *  Passed straight through: this screen places the transcript and decides nothing about it. Null
+ *  draws the block and no control, which is `navHeaderDrill(back = null)`'s ruling -- never hide what
+ *  the machine is waiting on, and never draw a tap with nothing behind it.
  */
 fun sessionDetailView(
     context: Context,
     panel: SessionDetailPanel,
+    takeControl: View,
     stop: View,
     kill: View,
     outcome: String,
     onBack: () -> Unit,
+    onApproval: ((String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -207,43 +216,12 @@ fun sessionDetailView(
         column.addView(notice(context, panel.notSentNotice, DetailTag.NOT_SENT))
     }
 
-    // ABSENT IS NOT EMPTY. A session the machine has sent no frame for gets no card at all rather
-    // than a well containing nothing, which would present "we have not heard from this session" as
-    // "this session's screen is blank".
-    if (panel.hasSnapshot) {
-        // AND THE MARK GOES WITH THE CARD, drawn only where there is a card to mark: a warning
-        // that the grid is out of date, over a session that has sent no grid at all, describes
-        // something that is not on screen.
-        if (panel.snapshotStaleNotice.isNotEmpty()) {
-            column.addView(notice(context, panel.snapshotStaleNotice, DetailTag.SNAPSHOT_STALE))
-        }
-        column.addView(
-            monoWell(context, panel.snapshot, terminal = true).apply { tag = DetailTag.SNAPSHOT },
-        )
-    }
-
+    // THE CONVERSATION, WHICH IS THIS SCREEN'S SUBJECT NOW. It is `transcriptView`'s composition and
+    // not a second one written here: the heading, the rows, the wells and row 8's empty state are
+    // all its, and a screen that rebuilt them would be the copy §2's reuse rule exists to prevent.
     column.addView(
-        sectionLabel(context, panel.transcript.heading).apply { tag = DetailTag.SECTION_LABEL },
+        transcriptView(context, panel.transcript, onApproval).apply { tag = DetailTag.TRANSCRIPT },
     )
-    if (panel.transcript.rows.isEmpty()) {
-        column.addView(
-            emptyState(context, panel.transcript.emptyCopy).apply { tag = DetailTag.EMPTY },
-        )
-    } else {
-        column.addView(
-            sessionList(context).apply {
-                panel.transcript.rows.forEach { entry ->
-                    addView(
-                        activityRow(
-                            context = context,
-                            body = entry.body,
-                            emphasis = entry.emphasis,
-                        ).apply { tag = DetailTag.ROW },
-                    )
-                }
-            },
-        )
-    }
 
     // IT SITS WITH THE CONTROLS RATHER THAN WITH THE OTHER NOTICES, and the placement is the same
     // rule they follow: a notice goes above what it qualifies. The stale line qualifies the
@@ -251,6 +229,20 @@ fun sessionDetailView(
     // controls, and a refusal drawn at the top of a scrolling transcript is a report the person who
     // pressed the button is no longer looking at.
     if (outcome.isNotEmpty()) column.addView(notice(context, outcome, DetailTag.OUTCOME))
+
+    // PB-INPUT-2's "visibly", above the controls it qualifies -- the same rule the two notices
+    // above follow. It is ALWAYS DRAWN, unlike them, because there is no state of this screen in
+    // which the lease has nothing to say: a session is either one the machine has confirmed control
+    // of or one it has not, and the requirement's recorded failure is precisely a surface that
+    // looked identical either way.
+    column.addView(notice(context, panel.leaseNotice, DetailTag.LEASE))
+
+    // THE BUTTON SITS DIRECTLY UNDER THE SENTENCE, which is row 22's own arrangement: it is that
+    // sentence's `[Take control]` promoted out of the prose, not a control that happens to be
+    // nearby. It is added only while the model offers it -- once the machine has confirmed the
+    // lease there is nothing left to take, and a screen that composed it anyway and then hid it
+    // would be the second, contradictable statement PB-DS-9 fences against.
+    if (panel.offersTakeControl) column.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
 
     column.addView(stop.tagged(DetailTag.STOP))
     column.addView(kill.tagged(DetailTag.KILL))
@@ -277,8 +269,8 @@ private fun notice(context: Context, text: String, tag: String) = TextView(conte
  *
  * The detach is not tidiness: the panel is rebuilt whenever the transcript changes, and a slot
  * arriving at its next `addView` still claiming a discarded parent is refused by Android with "the
- * specified child already has a parent". `PeekPanelView` carries the same four lines for the same
- * reason.
+ * specified child already has a parent". `PairingPanelView` and `ApprovalSheetView` carry the same
+ * four lines for the same reason.
  */
 private fun View.tagged(tag: String): View = apply {
     this.tag = tag

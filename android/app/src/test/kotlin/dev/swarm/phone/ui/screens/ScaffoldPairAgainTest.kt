@@ -93,8 +93,8 @@ class ScaffoldPairAgainTest {
 
         assertEquals(
             "the control is drawn with no listener behind it, which is a button that looks like " +
-                "a button and does not act -- `PeekPanelScreen` records why that is worse than a " +
-                "gap",
+                "a button and does not act -- `transcriptView`'s onApproval records why that is " +
+                "worse than a gap",
             1,
             pressed,
         )

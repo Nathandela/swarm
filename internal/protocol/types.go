@@ -116,6 +116,17 @@ const (
 	// op precisely so the verb rides the one authorization plane (requireRemoteAuthz)
 	// instead of growing a second one inside a gateway that holds no device key.
 	OpPushPrefs = "push_prefs"
+
+	// OpApprove is the signed remote MUTATING op behind ActionApprove (IS-LIFE-4): the phone
+	// answers ONE pending approval_request. The body rides on Control.Approve, which has
+	// carried the ApproveReq shape since amendment D.0-A6 and had no op to arrive on.
+	//
+	// The DECISION inside the body is deliberately unsigned (IS-LIFE-4) -- ADR-007 D7 spends
+	// the signed tuple's one content slot on the interaction content, which the phone echoes
+	// verbatim (IS-APR-2) and so cannot fold a choice into. THE OP IS NOT: it runs through
+	// requireRemoteAuthz like kill, launch, device_revoke and take_control, because D4 admits
+	// no remote-class mutating op without a valid device signature.
+	OpApprove = "approve"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

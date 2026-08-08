@@ -272,6 +272,14 @@ func Serve(cfg Config) (*Daemon, error) {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}
 	d.api.pairing = pc
+	// IS-LIFE-4: the coreAPI is what the protocol Server holds, and the approval lifecycle
+	// lives on the OUTER Daemon (approval.go's binding tuples ride d.itemMu). Handing the
+	// method across here is the same shape as sampleFn/captureFn -- the alternative, a
+	// back-pointer to the Daemon on the coreAPI, would let any coreAPI method reach the whole
+	// assembly. Left nil, ApproveInteraction refuses rather than pretending: an approve
+	// answered OK by a daemon that applied nothing dismisses the card on every surface
+	// (IS-LIFE-2) while the CLI stays blocked.
+	d.api.approve = d.approveInteraction
 	d.srv = protocol.NewServer(d.api, epID)
 	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
 

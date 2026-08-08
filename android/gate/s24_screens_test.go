@@ -1123,30 +1123,47 @@ var s24ScreenComponents = map[string]map[string]string{
 	// to check: the screen passed because nothing was asked of it, which reads identical to
 	// passing. It is the last screen the inventory names and the one with the most kit in it.
 	//
-	// TWO OF ITS COMPONENTS ARE REUSED RATHER THAN MINTED, which is §2's rule. `monoWell` is C3's
-	// terminal well -- a session's grid and the peek's grid are the same object -- and `activityRow`
-	// is the activity feed's row, already documented as taking a body and an optional emphasis
-	// "rather than a JournalRow" precisely so a third caller like this one costs no second type.
+	// **THIS ROW IS AMENDED BY ADR-009-structured-chat-interaction, AND THE AMENDMENT IS THE POINT
+	// OF THE SLICE.** It used to require `monoWell` -- "C2.2 `.term` -- the daemon-rendered grid,
+	// reused from C3" -- beside the four components of the session's own journal log. (1) leaves
+	// "no terminal emulation and no raw grid anywhere in the app" and (3) deletes the well at slice
+	// I1's exit, so the requirement it carried is GONE rather than unmet, and a row that went on
+	// demanding it would fail a screen for obeying a decision. The four journal components are not
+	// deleted either: they moved WHOLE to `TranscriptView.kt` below, which is the section this
+	// screen now places, so §2's reuse rule is satisfied one file over rather than dropped.
 	//
-	// THE TWO CONTROLS ARE ABSENT FROM THIS LIST AND THAT IS `PairingPanelView`'s ARRANGEMENT.
-	// Stop and Kill reach facade verbs, carry PB-SEC-12 clause 1's touch filter and must survive a
-	// redraw, so `PhoneSurface` builds and owns them and the screen only places them. The composer
-	// is absent for a different reason: derivation row 9's bar has no kit factory at all, and it
-	// ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
+	// WHAT IS LEFT HERE IS ONE FACTORY, and that is honest rather than thin. Everything else on
+	// this screen is either a slot the surface owns (Take control, Stop, Kill -- they reach facade
+	// verbs, carry PB-SEC-12 clause 1's touch filter and must survive a redraw, which is
+	// `PairingPanelView`'s arrangement), a bare notice `TextView` (there is no body-copy component
+	// in the kit and this file says so in as many words), or the transcript's own composition. The
+	// composer is absent for a third reason: derivation row 9's bar has no kit factory at all, and
+	// it ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
 	"dev/swarm/phone/ui/screens/SessionDetailView.kt": {
 		"navHeaderDrill": "C2.1 `.navhead` -- the chevron and the session it names, per §4",
-		"monoWell":       "C2.2 `.term` -- the daemon-rendered grid, reused from C3",
-		"sectionLabel":   "C2.3 `.plabel` -- the heading over the session's own journal",
-		"activityRow":    "C2.3 -- one record, derivation row 14 reused from the activity feed",
-		"sessionList":    "C2.3 `.prows` -- the rows' container, carrying the gap and side padding",
-		"emptyState":     "derivation row 8 -- a heading over no records is a section that lies",
 	},
-	"dev/swarm/phone/ui/screens/PeekPanelView.kt": {
-		// The session title alone: this screen is composed under the inbox rather than pushed over
-		// it, so it names no destination and the header draws no back control (agents-tracker-joe7).
-		"navHeaderDrill": "C3.1 `.navhead` -- the session title, per §4, with no destination",
-		"monoWell":       "C3.2 `.term` -- the escape-filtered VT snapshot, in `terminal_peek.fg`",
-		"readOnlyNote":   "C3.3 `.ro-note` -- derivation row 22, and PB-INPUT-2's lease sentence",
+	// C2.3 as ADR-009 (1) redraws it: "the phone's only session surface is a structured chat
+	// transcript". The four components below are the session log's, reused verbatim -- the heading,
+	// the container, the row and row 8's empty state -- which is what makes this a MOVE rather than
+	// a second inventory of the same shapes. `monoWell` is here for a tool's output and a file's
+	// diff, at `terminal = FALSE`: it is §2's one factory for every mono block, and the variant
+	// that printed the VT grid in `terminal_peek.fg` has no caller left in this app.
+	"dev/swarm/phone/ui/screens/TranscriptView.kt": {
+		"sectionLabel": "the heading over the conversation -- an empty section is still a section (PB-DS-9)",
+		"sessionList":  "`.prows` -- the blocks' container, carrying the gap and the side padding",
+		"activityRow":  "one interaction item, derivation row 14 reused a fourth time",
+		"monoWell":     "a tool's output and a file's diff -- §2's one factory for every mono block",
+		"emptyState":   "derivation row 8 -- a heading over no conversation is a section that lies",
+	},
+	// The approval card (ADR-009 (4)), and the row that keeps `monoWell`'s reuse rule fenced now
+	// that the two terminal screens are gone. It is the LITERAL a decision is about -- §7's action
+	// line, or IS-APR-3's sanitized prompt region on the prompt-card fallback -- and it is a card
+	// either way, never a grid. `ctaButton` is claimed because the buttons ARE the screen: a sheet
+	// that drew a question with no way to answer it is the state O6 shipped and recorded PARTIAL.
+	"dev/swarm/phone/ui/screens/ApprovalSheetView.kt": {
+		"approvalSheet": "D4.4's sheet -- the heaviest material in the app, for the moment of decision",
+		"monoWell":      "the literal the decision is about, §5's one mono block spent again",
+		"ctaButton":     "one per `decisions[].label`, every one `.a2-more` -- IS-APR-4 keeps polarity machine-side",
 	},
 	// The launch form HAS NO SCREEN INVENTORY ENTRY. The eight screens the artifacts draw are the
 	// inbox, the session detail, the terminal peek, machines, activity, settings, pairing and the

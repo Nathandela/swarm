@@ -32,6 +32,12 @@ var interactionScreenElements = map[string]string{
 	// a reconnect and a process death. A retention exemption with no surface to render what it
 	// preserved is a requirement satisfied while the defect ships.
 	"transcript.approvals_pending": "ADR-009,PB-APP-2,PB-APP-3",
+	// W-APPROVE: ANSWERING one. IS-LIFE-4 makes a phone approval the existing signed
+	// ActionApprove, and until this slice the whole path between the card and
+	// approveInteraction was missing -- so "the machine is blocked and you may not act" was the
+	// product. A rendered card with no answering verb is the requirement's failure mode, not
+	// its scope.
+	"transcript.approve": "ADR-009,PB-APP-2,PB-APP-3",
 }
 
 func TestInteraction_TheTranscriptVerbsAreTracedToFacadeMethods(t *testing.T) {
@@ -76,28 +82,59 @@ func TestInteraction_TheTranscriptVerbsAreTracedToFacadeMethods(t *testing.T) {
 	}
 }
 
-// TestInteraction_TheFacadeCannotAnswerAnApproval is the read-only half, adversarially: this
-// workpackage exposes the pending card and NOTHING that decides it.
+// TestInteraction_TheFacadeAnswersAnApprovalAndNothingElse REPLACES the read-only guard that
+// stood here, and the amendment is deliberate rather than a test bent to fit an
+// implementation.
 //
-// It is a real property and not bookkeeping. IS-LIFE-4 makes an approval a SIGNED ActionApprove
-// carrying a wire body (agent_instance, interaction_id, content_hash, expires_at, decision)
-// that does not exist yet, and IS-APR-2 forbids the phone computing content_hash or expires_at
-// -- it echoes both verbatim. A verb shipped here before that body exists could only send
-// something the daemon refuses, or worse, be tempted into the blind keystroke ADR-007 D7 and
-// IS-LIFE-6 both forbid the phone from authoring. When the ApproveReq slice lands it will add
-// the verb, its row and its own guard; until then the absence is the contract.
-func TestInteraction_TheFacadeCannotAnswerAnApproval(t *testing.T) {
+// WHAT THE OLD GUARD SAID, verbatim in its own words: the facade may export no verb named
+// approve / answerapproval / decide / ... because "answering an approval is IS-LIFE-4's signed
+// ActionApprove with an ApproveReq wire body no slice has built; a verb here today can only
+// send a refusal". Its final sentence named its own expiry: "When the ApproveReq slice lands
+// it will add the verb, its row and its own guard; until then the absence is the contract."
+//
+// THAT SLICE IS THIS ONE. schema.RemoteCommand carries the ApproveReq body, opForAction routes
+// it, protocol.OpApprove serves it and approveInteraction validates it -- so the premise the
+// ban rested on ("can only send a refusal") is now false, and keeping the ban would be
+// enforcing a condition that no longer exists against the requirement it was protecting.
+//
+// WHAT REPLACES IT IS NOT WEAKER. The thing the old guard was really defending is ADR-007 D7
+// and IS-LIFE-6: the phone must never author the approving KEYSTROKE. That danger does not
+// expire with the wire body -- it gets sharper, because a screen now has a button. So the ban
+// stays, narrowed to the verbs that would express it: nothing here may send a keystroke, key
+// or prompt reply in the name of an approval, and the one answering verb is the signed
+// command. The names below are the ones an implementer reaching for the forbidden shortcut
+// would actually type.
+func TestInteraction_TheFacadeAnswersAnApprovalAndNothingElse(t *testing.T) {
 	src := loadFacade(t)
 
-	banned := []string{"approve", "answerapproval", "decide", "decideapproval", "denyapproval", "resolveapproval"}
+	// The verb the interaction program owes: one, signed, and named for what it is.
+	answers := false
+	for _, s := range entryPoints(src) {
+		if s.Name == "Approve" {
+			answers = true
+		}
+	}
+	if !answers {
+		t.Error("the facade exports no Approve. IS-LIFE-3 keeps an unresolved approval_request " +
+			"answerable across a reconnect and a process death precisely so a surface can act on it; " +
+			"a card the user can see and not answer leaves the machine blocked and calls that the product")
+	}
+
+	// ADR-007 D7 / IS-LIFE-6: the DECISION travels as the signed ActionApprove and the
+	// machine-side adapter applies it. A phone that typed the approving keystroke -- even for
+	// prompt_card, where a keystroke IS what eventually lands -- would be authoring an approval
+	// the daemon never validated, which is the one thing both rules forbid in as many words.
+	banned := []string{
+		"approvekeystroke", "answerprompt", "sendapproval", "approvewithkey",
+		"approvekey", "answerapprovalkey", "resolveapprovalkey", "typeapproval",
+	}
 	for _, s := range entryPoints(src) {
 		low := strings.ToLower(s.Name)
 		for _, b := range banned {
 			if low == b {
-				t.Errorf("the facade exports %s. Answering an approval is IS-LIFE-4's signed ActionApprove "+
-					"with an ApproveReq wire body no slice has built; a verb here today can only send a "+
-					"refusal, and the phone must never author the approving keystroke instead (ADR-007 D7, "+
-					"IS-LIFE-6). The pending card is exposed READ ONLY on purpose", s.Line())
+				t.Errorf("the facade exports %s. An approval is answered by the signed ActionApprove and "+
+					"applied MACHINE-side; the phone must never author the approving keystroke (ADR-007 D7: "+
+					"an approve is \"never translated into a blind keystroke\"; IS-LIFE-6)", s.Line())
 			}
 		}
 	}

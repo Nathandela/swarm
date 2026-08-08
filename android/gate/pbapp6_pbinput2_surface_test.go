@@ -6,7 +6,7 @@ package gate
 // WHY THESE TWO ARE IN ONE FILE. They are the same defect wearing two faces, and ADR-007 B80 and
 // B83(3) found them in the same round: a screen MODEL that decides the right thing, tested green,
 // with the shipped surface reaching a different answer. PB-APP-6 has `ui/MachineAndLaunch.kt`'s
-// LaunchScreen and no launch form. PB-INPUT-2 has `ui/SessionScreens.kt`'s TerminalPeek --
+// LaunchScreen and no launch form. PB-INPUT-2 has `ui/SessionScreens.kt`'s lease model --
 // `keyboardEnabled = leaseHeld && online`, `showsTakeControl`, `showsRelease` -- and
 // PhoneSurface.kt passes `leaseHeld = false` as a LITERAL, so the verdict is computed from a
 // constant and then not read at all.
@@ -61,14 +61,14 @@ func TestPBAPP6_TheAppCanStartASessionAndTheLedgerAgrees(t *testing.T) {
 	ledger := ledgerIndex(readUnboundLedger(t))
 
 	if !callsBoundVerb(kotlin, "Launch") {
-		t.Errorf("PB-APP-6: no production Kotlin calls swarmmobile.App.Launch, so there is no "+
-			"path from a phone screen to a launch.\n"+
-			"`ui/MachineAndLaunch.kt` ships LaunchScreen -- the model that decides what a launch "+
-			"screen shows -- with unit tests over its policy, and no launch screen. Testing the "+
-			"model harder cannot meet an acceptance criterion that reads \"UI + facade test\", "+
-			"and section 1's binding exit criterion is a phone that \"pairs, observes, LAUNCHES, "+
-			"and types into a real session\".\n"+
-			"The check looks for `.Launch(` or `.launch(` in production Kotlin with comments "+
+		t.Errorf("PB-APP-6: no production Kotlin calls swarmmobile.App.Launch, so there is no " +
+			"path from a phone screen to a launch.\n" +
+			"`ui/MachineAndLaunch.kt` ships LaunchScreen -- the model that decides what a launch " +
+			"screen shows -- with unit tests over its policy, and no launch screen. Testing the " +
+			"model harder cannot meet an acceptance criterion that reads \"UI + facade test\", " +
+			"and section 1's binding exit criterion is a phone that \"pairs, observes, LAUNCHES, " +
+			"and types into a real session\".\n" +
+			"The check looks for `.Launch(` or `.launch(` in production Kotlin with comments " +
 			"stripped; the hosted half is PhoneLaunchSurfaceTest.")
 	}
 
@@ -140,7 +140,7 @@ func redundantLedgerRows(kotlin string, rows []ledgerRow) []ledgerRow {
 
 // TestPBINPUT2_TheLeaseIsAFactAndNotALiteral is ADR-007 B83(3), verified from the source side.
 //
-// `PhoneSurface.renderReady` calls `bridge.terminalPeek(session, leaseHeld = false)`. The comment
+// `PhoneSurface.renderReady` calls `bridge.sessionLease(session, leaseHeld = false)`. The comment
 // beside it is honest -- "this surface never takes a lease on its own" -- and it is exactly the
 // problem: the surface DOES have a Take control button, so the one screen that can acquire a lease
 // renders every session as one it does not hold, always, and then enables Send from a different
@@ -149,29 +149,29 @@ func redundantLedgerRows(kotlin string, rows []ledgerRow) []ledgerRow {
 // BOTH LITERALS ARE REJECTED, and the second matters more than the first. `true` is the mutation a
 // reader reaches for to make a lease assertion go green, and it is strictly worse than `false`: it
 // tells every user they hold control of every session, so the keyboard opens over a machine that
-// will drop the frames silently. What the parameter is FOR is stated on FacadeBridge.terminalPeek
+// will drop the frames silently. What the parameter is FOR is stated on FacadeBridge.sessionLease
 // itself -- "whether the machine has CONFIRMED a control lease ... reading it back from a snapshot
 // would be guessing at a fact the reply already carries" -- and a literal is not a reply.
 func TestPBINPUT2_TheLeaseIsAFactAndNotALiteral(t *testing.T) {
-	args := peekLeaseArgs(kotlinCodeOnly(appKotlinSource(t)))
-	if len(args) < peekCallSiteFloor {
-		t.Fatalf("PB-INPUT-2: the scan found %d call(s) to FacadeBridge.terminalPeek in "+
+	args := leaseArgsOf(kotlinCodeOnly(appKotlinSource(t)))
+	if len(args) < leaseCallSiteFloor {
+		t.Fatalf("PB-INPUT-2: the scan found %d call(s) to FacadeBridge.sessionLease in "+
 			"production Kotlin, want at least %d.\n"+
-			"The surface does render the peek; a count this low means this file has stopped "+
+			"The surface does render the lease; a count this low means this file has stopped "+
 			"reading the sources, and every assertion below would then pass over nothing -- which "+
 			"is the defect class the whole android/gate package exists for, applied to itself.",
-			len(args), peekCallSiteFloor)
+			len(args), leaseCallSiteFloor)
 	}
 	for _, arg := range args {
 		if arg == "" {
-			t.Errorf("PB-INPUT-2: a call to FacadeBridge.terminalPeek was found whose `leaseHeld` " +
+			t.Errorf("PB-INPUT-2: a call to FacadeBridge.sessionLease was found whose `leaseHeld` " +
 				"argument could not be read. The check reads the named form " +
 				"(`leaseHeld = ...`) or the second positional argument; a call it cannot read is " +
 				"a call it cannot fence, and it must not pass by default")
 			continue
 		}
 		if isBooleanLiteral(arg) {
-			t.Errorf("PB-INPUT-2: FacadeBridge.terminalPeek is passed the LITERAL %s for "+
+			t.Errorf("PB-INPUT-2: FacadeBridge.sessionLease is passed the LITERAL %s for "+
 				"`leaseHeld`, so the lease is not a fact the screen holds -- it is a constant.\n"+
 				"The requirement is that input is refused until the machine CONFIRMS a lease and "+
 				"that the confirmation is visible. With a literal the surface renders the same "+
@@ -188,7 +188,7 @@ func TestPBINPUT2_TheLeaseIsAFactAndNotALiteral(t *testing.T) {
 // nothing" class, on a screen model rather than on a facade verb -- which is why no existing
 // control sees it.
 //
-// android/unbound-verbs.tsv covers bound facade verbs and FacadeBridge methods. `TerminalPeek` is
+// android/unbound-verbs.tsv covers bound facade verbs and FacadeBridge methods. `SessionLease` is
 // neither: it is a Kotlin data class, so the ledger has no row for it and the boundverbledger walk
 // never asks. And its three lease properties -- `keyboardEnabled`, `showsTakeControl`,
 // `showsRelease` -- are read by NO production Kotlin at all, only by SessionScreensTest. That is
@@ -210,7 +210,7 @@ func TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel(t *testi
 	kotlin := kotlinCodeOnly(appKotlinSource(t))
 
 	if !readsModelProperty(kotlin, "keyboardEnabled") {
-		t.Errorf("PB-INPUT-2: no production Kotlin reads TerminalPeek.keyboardEnabled.\n" +
+		t.Errorf("PB-INPUT-2: no production Kotlin reads SessionLease.keyboardEnabled.\n" +
 			"Its own doc says why it exists: \"Ungated, the user types happily at a machine that " +
 			"granted them nothing and the gateway drops every frame silently: a live keyboard " +
 			"over a dead terminal.\" The surface instead enables Send and the text field from " +
@@ -223,7 +223,7 @@ func TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel(t *testi
 	}
 
 	if !readsModelProperty(kotlin, "showsTakeControl") && !readsModelProperty(kotlin, "showsRelease") {
-		t.Errorf("PB-INPUT-2: no production Kotlin reads TerminalPeek.showsTakeControl or " +
+		t.Errorf("PB-INPUT-2: no production Kotlin reads SessionLease.showsTakeControl or " +
 			".showsRelease, so nothing on screen distinguishes a session the user HOLDS from one " +
 			"they are merely watching.\n" +
 			"\"Visibly confirmed\" is the requirement's own word. Today the surface shows the " +
@@ -243,22 +243,22 @@ func TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel(t *testi
 // package survived five rounds of finding its checks measured nothing.
 // ---------------------------------------------------------------------------
 
-// peekCallSiteFloor is the "cannot pass by measuring nothing" floor. One call site exists today.
-const peekCallSiteFloor = 1
+// leaseCallSiteFloor is the "cannot pass by measuring nothing" floor. One call site exists today.
+const leaseCallSiteFloor = 1
 
-// terminalPeekCall matches a CALL to FacadeBridge.terminalPeek. The dot is required, which is what
-// keeps the DECLARATION in ui/FacadeBridge.kt (`fun terminalPeek(sessionId: String, ...)`) from
+// sessionLeaseCall matches a CALL to FacadeBridge.sessionLease. The dot is required, which is what
+// keeps the DECLARATION in ui/FacadeBridge.kt (`fun sessionLease(sessionId: String, ...)`) from
 // reading as a call -- the same strengthening boundVerbCall documents, for the same reason.
-var terminalPeekCall = regexp.MustCompile(`\.\s*terminalPeek\s*\(`)
+var sessionLeaseCall = regexp.MustCompile(`\.\s*sessionLease\s*\(`)
 
-// peekLeaseArgs is the expression passed for `leaseHeld` at every terminalPeek call site.
+// leaseArgsOf is the expression passed for `leaseHeld` at every sessionLease call site.
 //
 // It reads the NAMED form first and falls back to the second positional argument, because both
 // compile and a check that understood only one would be silenced by rewriting the call.
-func peekLeaseArgs(src string) []string {
+func leaseArgsOf(src string) []string {
 	var out []string
 	for offset := 0; ; {
-		loc := terminalPeekCall.FindStringIndex(src[offset:])
+		loc := sessionLeaseCall.FindStringIndex(src[offset:])
 		if loc == nil {
 			return out
 		}
@@ -377,43 +377,43 @@ func TestPBAPP6PBINPUT2_TheDecisionsRejectTheWrongImplementations(t *testing.T) 
 		}{
 			{
 				name:   "the shipped defect: a named false",
-				src:    `val view = bridge.terminalPeek(session, leaseHeld = false)`,
+				src:    `val view = bridge.sessionLease(session, leaseHeld = false)`,
 				want:   "false",
 				reject: true,
 			},
 			{
 				name:   "the tempting repair, which is worse: a named true",
-				src:    `val view = bridge.terminalPeek(session, leaseHeld = true)`,
+				src:    `val view = bridge.sessionLease(session, leaseHeld = true)`,
 				want:   "true",
 				reject: true,
 			},
 			{
 				name:   "the same literal moved to the positional form",
-				src:    `val view = bridge.terminalPeek(session, false)`,
+				src:    `val view = bridge.sessionLease(session, false)`,
 				want:   "false",
 				reject: true,
 			},
 			{
 				name:   "a fact the screen holds is accepted, whatever it is called",
-				src:    `val view = bridge.terminalPeek(session, leaseHeld = lease.heldFor(session))`,
+				src:    `val view = bridge.sessionLease(session, leaseHeld = lease.heldFor(session))`,
 				want:   "lease.heldFor(session)",
 				reject: false,
 			},
 			{
 				name:   "and a plain property read",
-				src:    `val view = bridge.terminalPeek(session, leaseHeld = confirmedLease)`,
+				src:    `val view = bridge.sessionLease(session, leaseHeld = confirmedLease)`,
 				want:   "confirmedLease",
 				reject: false,
 			},
 			{
 				name:   "arguments on separate lines, which is how this call is actually written",
-				src:    "val view = bridge.terminalPeek(\n    session,\n    leaseHeld = false,\n)",
+				src:    "val view = bridge.sessionLease(\n    session,\n    leaseHeld = false,\n)",
 				want:   "false",
 				reject: true,
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				args := peekLeaseArgs(tc.src)
+				args := leaseArgsOf(tc.src)
 				if len(args) != 1 {
 					t.Fatalf("the scan found %d lease argument(s) in %q, want exactly 1. A call "+
 						"site it cannot see is a call site it cannot fence", len(args), tc.src)
@@ -433,10 +433,10 @@ func TestPBAPP6PBINPUT2_TheDecisionsRejectTheWrongImplementations(t *testing.T) 
 	// explains it. Both live in ui/FacadeBridge.kt, so both are read by the production scan.
 	t.Run("a declaration is not a call site", func(t *testing.T) {
 		const decl = `
-    fun terminalPeek(sessionId: String, leaseHeld: Boolean): TerminalPeek =
-        peekOf(app.peek(sessionId), leaseHeld = leaseHeld, online = isOnline())
+    fun sessionLease(sessionId: String, leaseHeld: Boolean): SessionLease =
+        SessionLease(sessionId, leaseHeld = leaseHeld, online = isOnline())
 `
-		if got := peekLeaseArgs(decl); len(got) != 0 {
+		if got := leaseArgsOf(decl); len(got) != 0 {
 			t.Errorf("the scan read %v out of FacadeBridge's own declaration. A check that "+
 				"treats a declaration as a call site fences the wrong file, and would report the "+
 				"adapter's `leaseHeld = leaseHeld` forwarding as the defect", got)
@@ -449,7 +449,7 @@ func TestPBAPP6PBINPUT2_TheDecisionsRejectTheWrongImplementations(t *testing.T) 
 			src  string
 			want bool
 		}{
-			{"a read on the peek", "send.isEnabled = view.keyboardEnabled", true},
+			{"a read on the lease model", "send.isEnabled = view.keyboardEnabled", true},
 			{"a safe call", "send.isEnabled = view?.keyboardEnabled == true", true},
 			{"the dot on the previous line", "send.isEnabled = view\n    .keyboardEnabled", true},
 			{

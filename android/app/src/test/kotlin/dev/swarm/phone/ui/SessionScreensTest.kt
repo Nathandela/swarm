@@ -31,32 +31,36 @@ import org.junit.Test
 class SessionDetailTest {
 
     private fun detail(
-        journal: List<JournalRow> = emptyList(),
-        snapshotText: String = "",
         leaseHeld: Boolean = false,
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
     ) = SessionDetail(
         sessionId = "m/sess-1",
-        journal = journal,
-        snapshotText = snapshotText,
         leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
         stopNotSent = stopNotSent,
     )
 
-    /** Journal events and snapshot cards are both present, and Stop is always reachable. */
+    /**
+     * Stop is PERSISTENT -- on screen in every state, per PB-APP-3.
+     *
+     * BOTH THE SNAPSHOT AND THE JOURNAL HALVES OF THIS ASSERTION ARE DELETED, and each is deleted
+     * for its own reason. The snapshot card: `docs/adr/ADR-009-structured-chat-interaction.md` (1)
+     * leaves "no terminal emulation and no raw grid anywhere in the app" and (3) dates the well's
+     * removal to slice I1's exit, so `snapshotText` and `hasSnapshotCard` are gone from the model.
+     * The journal: IS-SS-1 splits the roster from the conversation ("a client renders the roster
+     * from the latter and the transcript from the former"), so `SessionDetail` never carries the
+     * conversation either -- it is [TranscriptPanel]'s now, handed to `SessionDetailScreen.of`
+     * alongside this model rather than folded through it. `TranscriptPanelTest` and
+     * `TranscriptViewTest` are where that coverage lives now. What is left here, and what this
+     * asserts, is the one property `SessionDetail` alone still owns: Stop is on screen in EVERY
+     * state.
+     */
     @Test
-    fun `the detail screen shows journal events and a snapshot card with a persistent stop`() {
-        val d = detail(
-            journal = listOf(JournalRow(cursor = 7, sessionId = "naef", type = "tool_use", group = "working")),
-            snapshotText = "$ ls\nREADME.md",
-        )
-        assertEquals(1, d.journal.size)
-        assertTrue(d.hasSnapshotCard)
-        assertTrue("Stop is PERSISTENT: it is on screen in every state", d.stopVisible)
+    fun `stop is persistent regardless of what the session has done`() {
+        assertTrue("Stop is PERSISTENT: it is on screen in every state", detail().stopVisible)
     }
 
     /**
@@ -135,43 +139,43 @@ class SessionDetailTest {
     }
 }
 
-class TerminalPeekTest {
+/**
+ * PB-INPUT-2's three lease facts, and WHAT SURVIVED `TerminalPeekTest`.
+ *
+ * **This class was `TerminalPeekTest` and it is amended rather than deleted, because half of what
+ * it asserted is untouched by the ruling that removed the other half.**
+ *
+ * DELETED WITH THE GRID: `the grid is the daemon-rendered text verbatim` (that the screen renders
+ * `swarmmobile.Snapshot.Text` byte for byte, escape-looking input included) and `a stale grid is
+ * banner-marked and the keyboard stays available` (PB-APP-8 over the snapshot). Both were about a
+ * surface `docs/adr/ADR-009-structured-chat-interaction.md` (1)/(3) retires: there is no grid on any
+ * screen, and (2) stops this app issuing a `terminal_watch` at all, so no snapshot arrives to be
+ * fresh or stale. The verbatim-rendering property is not lost -- `android/gate/s16_ui_test.go` still
+ * fences that no VT emulator exists on this side, and the machine-side choke point in
+ * `internal/daemon/terminalrender.go` is explicitly unchanged by (2).
+ *
+ * KEPT WORD FOR WORD: the two lease assertions. ADR-009 (5) keeps the input substrate "exactly as
+ * decided", PB-INPUT-2 is untouched, and the three properties moved intact to [SessionLease].
+ */
+class SessionLeaseTest {
 
-    private fun peek(
-        text: String = "",
-        stale: Boolean = false,
+    private fun lease(
         leaseHeld: Boolean = false,
         online: Boolean = true,
-    ) = TerminalPeek(
+    ) = SessionLease(
         sessionId = "m/sess-1",
-        text = text,
-        cols = 80,
-        rows = 24,
-        stale = stale,
         leaseHeld = leaseHeld,
         online = online,
     )
 
-    /**
-     * The screen renders exactly the daemon-sanitized text it was handed. The input below
-     * carries a sequence that WOULD be an escape if anything on this side parsed one; the
-     * assertion is that it comes back byte for byte, so a future renderer that interpreted it
-     * fails here as well as in android/gate's source fence.
-     */
-    @Test
-    fun `the grid is the daemon-rendered text verbatim`() {
-        val sanitized = "$ echo done\ndone\n[not-an-escape] 31m"
-        assertEquals(sanitized, peek(text = sanitized).rendered)
-    }
-
     /** Take control, then release. Both are on screen; neither is implicit. */
     @Test
     fun `the lease is acquired and released explicitly`() {
-        val idle = peek(leaseHeld = false)
+        val idle = lease(leaseHeld = false)
         assertTrue(idle.showsTakeControl)
         assertFalse(idle.showsRelease)
 
-        val held = peek(leaseHeld = true)
+        val held = lease(leaseHeld = true)
         assertFalse(held.showsTakeControl)
         assertTrue(held.showsRelease)
     }
@@ -183,38 +187,15 @@ class TerminalPeekTest {
      */
     @Test
     fun `the keyboard is enabled only while the lease is held`() {
-        assertFalse(peek(leaseHeld = false).keyboardEnabled)
-        assertTrue(peek(leaseHeld = true).keyboardEnabled)
-        assertFalse("a lease cannot be live while the link is down", peek(leaseHeld = true, online = false).keyboardEnabled)
-    }
-
-    /** A stale grid is never presented as live (PB-APP-8). */
-    @Test
-    fun `a stale grid is banner-marked and the keyboard stays available`() {
-        val stale = peek(text = "$ ", stale = true, leaseHeld = true)
-        assertTrue(stale.stale)
-        assertTrue(stale.staleNotice.isNotBlank())
-        assertTrue(
-            "typing must still work: the hole is in what the phone was SHOWN, not in what it can send",
-            stale.keyboardEnabled,
+        assertFalse(lease(leaseHeld = false).keyboardEnabled)
+        assertTrue(lease(leaseHeld = true).keyboardEnabled)
+        assertFalse(
+            "a lease cannot be live while the link is down",
+            lease(leaseHeld = true, online = false).keyboardEnabled,
         )
     }
 }
 
-/**
- * PB-INPUT-2's lease, as a FACT rather than a literal (ADR-007 B83(3)).
- *
- * `PhoneSurface` passed `leaseHeld = false` into the peek and enabled Send from whether the
- * triage inbox yielded a row, so the screen rendered every session as one the user did not hold
- * while the keyboard was live over all of them. [ControlLease] is what it consults instead: the
- * outcome of the take_control THIS screen issued, claimed by operation id.
- *
- * WHY THE CODES ARE ASSERTED AS STRINGS. The Kotlin side cannot read the Go constants -- the
- * unit-test JVM does not load the AAR -- so the wire ops are literals here and in the model, and
- * these cases are what pin the two together. `lease` is protocol.OpLease and `detach` is
- * protocol.OpDetach; internal/remotegw/lease_sever.go seals the second under the SAME operation
- * id as the take_control, which is why a severance answers this question at all.
- */
 class ControlLeaseTest {
 
     private fun outcome(code: String) =

@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -1074,6 +1075,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleTakeControlEnd(c)
 	case OpPushPrefs:
 		cc.handlePushPrefs(c)
+	case OpApprove:
+		cc.handleApprove(c)
 	case OpPairStart:
 		cc.handlePairStart(c)
 	case OpPairConfirm:
@@ -1437,6 +1440,60 @@ func (cc *clientConn) handleDeviceRegrant(c Control) {
 // refuses the stale write.
 func (cc *clientConn) handlePushPrefs(c Control) {
 	if !cc.requireRemoteAuthz(c, ActionPushPrefs, c.SessionID, nil) {
+		return
+	}
+	cc.replyOK(c.SessionID)
+}
+
+// handleApprove serves the signed approve op (IS-LIFE-4): the phone's answer to one pending
+// approval_request. It is the route approveInteraction has been waiting for -- that function
+// holds the content check no other hop can make (ADR-007 D7's binding tuple, the content hash
+// and the daemon-authoritative expiry), and this handler is the authorization and structural
+// half in front of it.
+//
+// THE CONTENT HASH IS THE SIGNED TUPLE'S CONTENT SLOT. D7 spends that slot on the interaction
+// content and IS-APR-2 makes the phone echo `content_hash` verbatim, so the bytes bound into
+// the signature are exactly the digest the item shipped. It is decoded from the WIRE body,
+// which is what makes the binding real: a relay or gateway that swaps the hash to redirect an
+// approval produces a different tuple and the device signature stops verifying, rather than
+// reaching the daemon as a well-formed approve for some other card. A hash that is not 32
+// bytes of hex is refused here rather than signed over as empty -- SHA256("") is a valid
+// digest, the same trap handleTakeControl's empty-gate-token check exists for.
+//
+// The body's own Session must be the session the signature covered. The gateway opens the
+// sealed frame and is the documented D4/D5 owner-uid residual, so leaving the two free to
+// differ would let it point a signature authorized for one session at another -- the
+// field-collision hazard remote_devicerevoke_test.go records for TargetDeviceID, in the one
+// place where the collision would apply a decision.
+//
+// It needs no OperationClaimer replay dedup, for handlePushPrefs's reason arrived at from the
+// other side: a re-delivered approve finds the approval already resolved and is refused
+// CodeStaleApproval by approveInteraction's first case, which is the correct answer to a
+// replay and fails closed by construction rather than by a second store.
+func (cc *clientConn) handleApprove(c Control) {
+	ia, ok := cc.srv.d.(InteractionApprover)
+	if !ok {
+		cc.replyError("approve not supported by this daemon")
+		return
+	}
+	if c.Approve == nil {
+		cc.replyErrorCode("approve requires an approve body", CodeInvalidField)
+		return
+	}
+	if c.Approve.Session != c.SessionID {
+		cc.replyErrorCode("approve body names a session the command does not", CodeInvalidField)
+		return
+	}
+	hash, err := hex.DecodeString(c.Approve.ContentHash)
+	if err != nil || len(hash) != sha256.Size {
+		cc.replyErrorCode("approve content_hash is not a 32-byte hex digest", CodeInvalidField)
+		return
+	}
+	if !cc.requireRemoteAuthz(c, ActionApprove, c.SessionID, hash) {
+		return
+	}
+	if code, err := ia.ApproveInteraction(cc.endpointID, c.OperationID, *c.Approve); err != nil {
+		cc.replyErrorCode("approve: "+err.Error(), code)
 		return
 	}
 	cc.replyOK(c.SessionID)
