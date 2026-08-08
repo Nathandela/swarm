@@ -338,6 +338,85 @@ $ go vet ./android/gate/                           clean
 The whole `android/gate` suite is green, including the four amended fences above and the eleven other
 files that assert over the same sources.
 
+### 5.1 The Robolectric suite — RUN, and proved to have actually run
+
+```
+$ . ./android/toolchain.env
+$ ./android/gradlew -p ./android --no-daemon --rerun-tasks --no-build-cache :app:testDebugUnitTest
+
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugUnitTestKotlin
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL in 4m 1s
+31 actionable tasks: 31 executed
+```
+
+**130 suites, 1056 tests, 0 failures, 0 errors, 0 skipped.**
+
+`agents-tracker-4ok` is why that sentence is not the whole of the evidence: after a build collision
+`compileDebugUnitTestKotlin` can restore FROM-CACHE with an empty output, `testDebugUnitTest` then
+reports `NO-SOURCE`, and the run exits 0 having executed nothing. Three things were checked so that
+`NO-SOURCE` could not read as success here:
+
+1. **The tasks executed.** `31 actionable tasks: 31 executed` — no `FROM-CACHE`, no `UP-TO-DATE` on
+   either compile task or the test task. `--rerun-tasks --no-build-cache` is what forces it.
+2. **The count is nonzero and was parsed from the XML**, not from Gradle's exit code: every
+   `TEST-*.xml`'s `tests`/`failures`/`errors` attributes summed independently.
+3. **No result is stale.** Every one of the 130 XMLs has mtime `13:42:48`, and the newest `.kt` edit
+   in the module is `13:31:17` — so all 130 postdate the source they are about. Zero stale suites were
+   found, which matters because a leftover XML from a dead run is a result for source that no longer
+   exists.
+
+The safe idiom from that issue was followed exactly: **no deletion** of `app/build/test-results` (that
+is what kills a concurrent run and was misattributed to memory pressure twice), and a live-build guard
+before starting. The guard was narrowed from the issue's `pgrep -x java`, and the narrowing is
+recorded because it is a real difference: `-x java` also matches the Gradle daemon and the Kotlin
+compiler daemon, which persist between builds by design and write nothing to `test-results`, so on
+this host it never clears and the guard becomes a permanent refusal. What actually collides is a
+build's `gradle-wrapper.jar` launcher and its `GradleWorkerMain` workers; those are what is checked,
+and neither string can self-match the checking shell the way `pgrep -f gradle` does.
+
+The suites this slice touched, all green:
+
+| Suite | Tests |
+| --- | --- |
+| `ui.screens.SessionDetailViewTest` | 14 |
+| `ui.screens.TranscriptPanelTest` | 21 |
+| `ui.screens.SessionDetailPanelTest` | 8 |
+| `ui.screens.ApprovalSheetPanelTest` | 8 |
+| `ui.screens.TranscriptViewTest` | 7 |
+| `ui.kit.ApprovalSheetTest` | 7 |
+| `ui.SessionDetailTest` | 6 |
+| `ui.screens.SessionDetailLeaseVerdictTest` | 5 |
+| `ui.screens.SessionDetailKillVerdictTest` | 5 |
+| `ui.SessionStopOfflineTest` | 5 |
+| `ui.screens.ScaffoldPairAgainTest` | 5 |
+| `PhoneSurfaceEventPathGuardTest` | 5 |
+| `ui.FacadeBridgeTest` | 4 |
+| `ui.SessionLeaseTest` | 2 |
+
+### 5.2 The RED that is MISSING, named rather than skipped
+
+**The nine assertions §4.6 lists as MOVED or ADDED were green on their first execution, and GG-5 asks
+for a failing-first run.** For the MOVED ones the original RED is real but historical — it was earned
+in the peek suites, against the peek. For the three ADDED ones there is no RED at all.
+
+Three one-line negative controls were prepared and applied (`transcript = transcript.copy()` to break
+the pass-through; `transcriptView(..., null)` to break the approval tap; dropping `verdict` from
+`leaseNoticeFor` to break the verdict suite). **The run was abandoned and the perturbations reverted
+byte-for-byte, because five other agents' Gradle launchers were live at that moment.** Perturbing
+shared production source while four other sessions are compiling it would have fed them a defect that
+is not in the code and invited them to act on it — a worse outcome than a missing RED. The
+perturbations are reverted (`grep` confirms no marker survives and all three original lines are back);
+the script is ready to run when the build lane is free.
+
+What can be said WITHOUT that run is structural, and is weaker on purpose: none of the three added
+assertions can pass vacuously. `kitRequire(TranscriptTag.APPROVAL)` throws when the block is absent;
+`assertEquals(1, allTagged(DetailTag.TAKE_CONTROL).size)` fails on both zero and two;
+`assertSame` fails on any object that is not the one handed in; and the tap test compares against a
+`var` initialised to `null`, so a listener that is never called leaves it null. That rules out the
+vacuous-pass class. It does not replace watching each one fail for its own reason.
+
 ---
 
 ## 6. What is NOT verified here, stated plainly
@@ -363,21 +442,21 @@ run is recorded in §5.1.
 
 Consequences, each named rather than absorbed:
 
-1. **`ApprovalSheetPanelTest.kt` is rewritten but unrun.** It is amended assertion-for-assertion
-   against the new model (summary rather than `need`, the action's literal rather than the snapshot,
-   `decisions[].label` in wire order, the prompt-card mode taking the same sheet, and the two ids an
-   answer has to name). It compiles against the API as written; it has not been executed.
-2. **The Kotlin suites are amended and no longer reference deleted symbols — but they are unrun.**
-   All six are done (§4.6 is the ledger): `ui/SessionScreensTest.kt`, `ui/SessionStopOfflineTest.kt`,
-   `ui/FacadeBridgeTest.kt`, `ui/screens/SessionDetailPanelTest.kt`,
-   `ui/screens/SessionDetailViewTest.kt`, and the new `ui/screens/SessionDetailLeaseVerdictTest.kt`.
-   Verified by a comment-and-string-stripped scan of every `.kt` under `android/app/src` for the
-   deleted names (`noFrameYet`, `TerminalPeek`, `PeekPanel*`, `snapshotText`, `snapshotStale`,
-   `hasSnapshot*`, `DetailTag.SNAPSHOT*`/`.SECTION_LABEL`/`.ROW`/`.EMPTY`, `SessionDetail.journal`,
-   `terminalWatch`/`terminalUnwatch`/`terminalPeek`, `PeekTag`) — **zero hits in code**, and every
-   `DetailTag.*` and `TranscriptTag.*` member referenced from a test exists on the object. That is a
-   static check of the API surface, not a compile: it cannot see a type error inside a lambda, and it
-   is not a substitute for `:app:compileDebugUnitTestKotlin`.
+1. ~~`ApprovalSheetPanelTest.kt` is rewritten but unrun.~~ **RUN AND GREEN** — 8 tests, §5.1. Amended
+   assertion-for-assertion against the new model (summary rather than `need`, the action's literal
+   rather than the snapshot, `decisions[].label` in wire order, the prompt-card mode taking the same
+   sheet, and the two ids an answer has to name).
+2. ~~The Kotlin suites are amended but unrun.~~ **COMPILED AND GREEN** — `compileDebugUnitTestKotlin`
+   executed clean and all six ran (§4.6 is the amendment ledger, §5.1 the counts):
+   `ui/SessionScreensTest.kt`, `ui/SessionStopOfflineTest.kt`, `ui/FacadeBridgeTest.kt`,
+   `ui/screens/SessionDetailPanelTest.kt`, `ui/screens/SessionDetailViewTest.kt`, and the new
+   `ui/screens/SessionDetailLeaseVerdictTest.kt`. The static scan that stood in for a compile before
+   the run (every `.kt` under `android/app/src`, comments and string literals stripped, for
+   `noFrameYet`, `TerminalPeek`, `PeekPanel*`, `snapshotText`, `snapshotStale`, `hasSnapshot*`,
+   `DetailTag.SNAPSHOT*`/`.SECTION_LABEL`/`.ROW`/`.EMPTY`, `SessionDetail.journal`,
+   `terminalWatch`/`terminalUnwatch`/`terminalPeek`, `PeekTag` — zero hits) agreed with the compiler,
+   which is worth one line: it was a sound proxy for THIS class of breakage and would still have
+   missed a type error inside a lambda. It is not a substitute and was not treated as one.
    `androidTest/PhoneScreenDriver.kt` names `TerminalPeek.keyboardEnabled` in **prose only** and is
    instrumented (never built by the unit-test task); it is left alone deliberately.
 3. **The composition depends on a sibling workpackage.** `PhoneSurface.detailPanel` calls
