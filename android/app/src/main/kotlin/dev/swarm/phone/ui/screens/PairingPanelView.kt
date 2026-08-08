@@ -9,6 +9,7 @@ import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.pairingStep
 import dev.swarm.phone.ui.kit.readOnlyNote
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the pairing screen, composed in inventory C7's order.
@@ -226,7 +227,12 @@ private fun guidance(context: Context, steps: List<PairingGuidance>): View =
                     line = step.line,
                     // Empty is not a placeholder: a step with no command gets no well, rather than
                     // a well with nothing in it under a sentence that never mentioned one.
-                    detail = step.command.takeIf { it.isNotEmpty() }?.let { monoWell(context, it) },
+                    //
+                    // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a relay pairing command
+                    // can run past the step's own width, and this is what makes the rest of it
+                    // reachable instead of clipped.
+                    detail = step.command.takeIf { it.isNotEmpty() }
+                        ?.let { monoWell(context, it).scrolledHorizontally() },
                 ),
             )
         }

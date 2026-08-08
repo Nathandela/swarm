@@ -36,6 +36,7 @@ import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.PairingControl
 import dev.swarm.phone.ui.screens.PairingPanel
@@ -443,7 +444,12 @@ class PairingSurface(
     private val slots = PairingSlots(
         body = message,
         notice = stepNotice,
-        destination = destination,
+        // `.scrolledHorizontally()`, NOT `destination` ITSELF (agents-tracker-ksvb.7): a relay
+        // URL can run past the field's own width, so what the panel adds to its column is the
+        // `HorizontalScrollView` around `destination` rather than the well directly.
+        // `destination.text =` below still targets the `TextView` itself, called once here so it
+        // is parented exactly once.
+        destination = destination.scrolledHorizontally(),
         sas = sasDisplay,
         sasInstruction = sasInstruction,
         scanner = scannerHost,

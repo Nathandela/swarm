@@ -2,6 +2,8 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.util.TypedValue
+import android.view.View
+import android.widget.HorizontalScrollView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.DesignScale
 import dev.swarm.phone.theme.SwarmTheme
@@ -196,6 +198,47 @@ class MonoWellTest {
                 "height nobody asked for",
             0,
             monoWell(context, "$ swarm remote on").minLines,
+        )
+    }
+
+    // ---- reachability (agents-tracker-ksvb.7) ------------------------------
+
+    /**
+     * FAILING-FIRST for agents-tracker-ksvb.7's part (a): `setHorizontallyScrolling(true)` tells
+     * the well not to WRAP a long line; it says nothing about where the part past the visible
+     * edge goes. With `MATCH_PARENT` width and no scroller, it went nowhere -- silently clipped,
+     * not merely unreadable. [TextView.scrolledHorizontally] is what gives the overflow somewhere
+     * to be: the well measures its unclipped width inside it, and this asserts both halves of
+     * "reachable" -- the scroller is a [HorizontalScrollView], and the well's own measured width
+     * is wider than a viewport that could not have shown a 500-character line whole.
+     *
+     * IT IS `monoWell(...).scrolledHorizontally()` AND NOT `monoWell(...)` ALONE, because
+     * `monoWell` itself still has to return a bare, unparented well -- `ApprovalSheetTest` and
+     * `PairingStepRowTest` both add its return value directly as another component's own child,
+     * and a well arriving pre-parented would make that `addView` throw.
+     */
+    @Test
+    fun `a line longer than the well is reachable through its scroller`() {
+        val well = monoWell(context, "$ " + "x".repeat(500))
+        val scroller = well.scrolledHorizontally()
+
+        assertTrue(
+            "the well's own scroller is not a HorizontalScrollView, so a line wider than the " +
+                "viewport is clipped rather than merely off-screen",
+            scroller is HorizontalScrollView,
+        )
+
+        val viewportWidthPx = 300
+        scroller.measure(
+            View.MeasureSpec.makeMeasureSpec(viewportWidthPx, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        scroller.layout(0, 0, scroller.measuredWidth, scroller.measuredHeight)
+
+        assertTrue(
+            "the well measured no wider than its viewport, so a 500-character line has nowhere " +
+                "left to scroll to",
+            well.measuredWidth > viewportWidthPx,
         )
     }
 
