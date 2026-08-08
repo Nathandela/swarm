@@ -33,6 +33,12 @@ object TypeScale {
     const val MONO_FAMILY = "@font/jetbrains_mono"
 
     /**
+     * The CSS line-height that states no leading at all. See [Spec.lineHeightPx] for why the
+     * design's `/1` and Android's `android:lineHeight` are not the same statement.
+     */
+    const val NO_EXTRA_LEADING = 1f
+
+    /**
      * The resource NAME behind a `@font/...` substitution, or null when the family is a platform
      * name the resource table knows nothing about.
      *
@@ -103,10 +109,21 @@ object TypeScale {
         val lineHeightMultiplier: Float?,
     ) {
         /**
+         * The leading to transcribe, or null where there is none TO transcribe.
+         *
          * CSS's unitless multiplier has no Android form -- `android:lineHeight` is an absolute
          * dimension -- so the product is the value, computed rather than transcribed.
+         *
+         * **A MULTIPLIER OF 1 TRANSCRIBES AS NULL, AND IT USED TO TRANSCRIBE AS `1 x size`**
+         * (ADR-009 D7, amended 2026-08-08). The two are not the same statement on this platform.
+         * `line-height: 1` on a single-line label means NO EXTRA LEADING; `android:lineHeight`
+         * sets the line box's absolute height, and a font's natural line box is taller than its
+         * em -- so the same number there SHRINKS the box, which the platform spends as a negative
+         * `lineSpacingExtra`. The visible result is `Label.Button` sitting low inside its own CTA
+         * and `Label.Chip`'s descenders clipping. The honest Android form of `/1` is silence.
          */
-        val lineHeightPx: Float? get() = lineHeightMultiplier?.let { it * sizePx }
+        val lineHeightPx: Float?
+            get() = lineHeightMultiplier?.takeIf { it != NO_EXTRA_LEADING }?.let { it * sizePx }
 
         /**
          * Does this design fact render in the mono family?

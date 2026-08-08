@@ -147,13 +147,16 @@
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
+    <!-- `.acts2 button` is `font: 600 13.5px/1`, and the `/1` transcribes as NOTHING (ADR-009 D7,
+         amended 2026-08-08): android:lineHeight is an ABSOLUTE line-box height, so 13.5sp on
+         13.5sp shrinks the box the font asks for and the platform pays for it with a negative
+         lineSpacingExtra. The CTA's label sat low inside its own button. -->
     <!-- origin: .acts2 button -->
     <style name="TextAppearance.Swarm.Label.Button" parent="TextAppearance.AppCompat">
         <item name="android:textSize">13.5sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
-        <item name="android:lineHeight">13.5sp</item>
     </style>
 
     <!-- origin: .ptime -->
@@ -201,13 +204,14 @@
         <item name="android:lineHeight">17.25sp</item>
     </style>
 
+    <!-- `.chip` is `font: 600 11px/1`; see `Label.Button` above for why the `/1` is transcribed
+         as silence. At 11 sp the shrunken box was clipping the chip's own descenders. -->
     <!-- origin: .chip -->
     <style name="TextAppearance.Swarm.Label.Chip" parent="TextAppearance.AppCompat">
         <item name="android:textSize">11sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
-        <item name="android:lineHeight">11sp</item>
     </style>
 
     <!-- origin: .tcard .b -->
