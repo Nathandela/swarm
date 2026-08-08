@@ -7,6 +7,7 @@ import dev.swarm.phone.ui.kit.PresenceMark
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -141,13 +142,29 @@ class MachinesPanelTest {
         )
     }
 
-    /** The word is the relay's, verbatim. A screen that translated it would be inventing state. */
+    /**
+     * The word is the relay's, verbatim, wherever it reaches the screen. A screen that
+     * translated it would be inventing state.
+     *
+     * agents-tracker-ksvb.6 moves WHERE a healthy machine's word surfaces: the visible line is
+     * silent there, so it is [MachineRow.presenceDescription] -- what a screen reader hears --
+     * that must still carry the relay's own word rather than a translation of it. A silent
+     * machine's visible line is unaffected and is asserted the original way.
+     */
     @Test
     fun `the relay's word reaches the screen untranslated`() {
+        val healthy = panel(presence = "unknown").machine
+        assertTrue(
+            "the description says something other than the relay's own `unknown`, so the " +
+                "screen has decided what the relay meant: ${healthy.presenceDescription}",
+            healthy.presenceDescription.orEmpty().contains("unknown"),
+        )
+
+        val quiet = panel(presence = "unknown", silent = true).machine
         assertTrue(
             "the line says something other than the relay's own `unknown`, so the screen has " +
-                "decided what the relay meant: ${panel(presence = "unknown").machine.presenceLine}",
-            panel(presence = "unknown").machine.presenceLine.contains("unknown"),
+                "decided what the relay meant: ${quiet.presenceLine}",
+            quiet.presenceLine.contains("unknown"),
         )
     }
 
@@ -182,28 +199,40 @@ class MachinesPanelTest {
     }
 
     /**
-     * Row 12's inline command, and the half of it the mock gets wrong.
+     * Row 12's inline command, over the OFF state -- the one with a recovery to teach.
      *
-     * `swarm remote off` and `swarm remote on` are both real verbs (`cmd/swarm/remote.go`). The
-     * mock prints the first unconditionally, which is an instruction that does nothing for the
-     * user who is reading this panel BECAUSE their remote control is off. The command rendered is
-     * the one that moves the switch from where it actually is, and it must occur in the body or
-     * the component cannot mark it.
+     * `swarm remote on` is the real verb (`cmd/swarm/remote.go`) that moves the switch from where
+     * it actually is, and it must occur in the body or the component cannot mark it.
      */
     @Test
-    fun `the command is the verb that moves the switch from the state it is in`() {
+    fun `the disabled state carries the verb that re-enables it, marked inside its own sentence`() {
         val engaged = panel(killSwitchEngaged = true).remoteAccess
-        val open = panel(killSwitchEngaged = false).remoteAccess
 
         assertEquals("swarm remote on", engaged.command)
-        assertEquals("swarm remote off", open.command)
-        listOf(engaged, open).forEach { row ->
-            assertTrue(
-                "the command `${row.command}` is not in the body it is supposed to be marked " +
-                    "inside: ${row.body}",
-                row.body.contains(row.command),
-            )
-        }
+        assertTrue(
+            "the command `${engaged.command}` is not in the body it is supposed to be marked " +
+                "inside: ${engaged.body}",
+            engaged.body.contains(engaged.command.orEmpty()),
+        )
+    }
+
+    /**
+     * agents-tracker-ksvb.6 shrinks the ON paragraph to one line with no command slot, so there
+     * is nothing left for `Kit.emphasised` to mark.
+     *
+     * THIS REPLACES `the command is the verb that moves the switch from the state it is in`,
+     * which asserted `assertEquals("swarm remote off", open.command)` and that the ON body
+     * contained it -- both true only while the ON state still carried the mock's second sentence.
+     */
+    @Test
+    fun `the enabled state carries no command at all, because there is nothing left to move`() {
+        val open = panel(killSwitchEngaged = false).remoteAccess
+
+        assertNull(
+            "remote access is on and the paragraph is one line now; a command absent from the " +
+                "body is what `Kit.emphasised` refuses to mark rather than silently drops",
+            open.command,
+        )
     }
 
     // ---- the paired device ---------------------------------------------------

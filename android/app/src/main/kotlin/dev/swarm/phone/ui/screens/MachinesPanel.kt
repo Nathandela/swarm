@@ -120,8 +120,20 @@ data class MachineRow(
      * query and the relay is the declared adversary, so this line is the one place the screen
      * says whose word `online` is; two files deciding that separately is how one of them ends up
      * telling a user their machine is fine.
+     *
+     * EMPTY FOR A HEALTHY MACHINE (agents-tracker-ksvb.6), which is when [presenceDescription]
+     * stops being null.
      */
     val presenceLine: String,
+    /**
+     * What the presence dot announces, or null where [presenceLine] already says it in words.
+     *
+     * A HEALTHY MACHINE PRINTS NO LINE, so the dot -- otherwise decorative -- is the only thing
+     * left on screen carrying the state, and [MachinePane.presenceAnnouncement] is what it reads
+     * out. Non-null exactly where [presenceLine] is empty: a described dot beside a sentence
+     * that already says the same thing would have a screen reader announce presence twice.
+     */
+    val presenceDescription: String?,
     /**
      * Which of the relay's THREE words the mark draws, carried rather than collapsed.
      *
@@ -156,9 +168,10 @@ data class RemoteAccessRow(
      * Row 12's subtitle: what the switch is doing, and where it lives.
      *
      * The first sentence is [MachinePane.killSwitchExplanation] unchanged -- the pane's own words
-     * about its own state, not re-worded here, for [MachineRow.presenceLine]'s reason. The second
-     * is this screen's, and it exists because the first one ends by saying the switch is somebody
-     * else's without saying where to find it.
+     * about its own state, not re-worded here, for [MachineRow.presenceLine]'s reason. The second,
+     * naming where the switch lives, follows it ONLY while the switch is off (agents-tracker-
+     * ksvb.6): that is the state with a recovery to teach, and the ON state's own sentence already
+     * says who can move it.
      */
     val body: String,
     /**
@@ -166,8 +179,12 @@ data class RemoteAccessRow(
      * CLI (`cmd/swarm/remote.go`), and the one that applies to the state the switch is in. The
      * mock prints `swarm remote off` unconditionally, which is the wrong instruction to give
      * somebody whose remote control is already off.
+     *
+     * NULL WHILE THE SWITCH IS ON, because [body] carries no command for `Kit.emphasised` to mark
+     * in that state (agents-tracker-ksvb.6) -- a non-null command absent from the body is what
+     * that function refuses to draw rather than silently drop.
      */
-    val command: String,
+    val command: String?,
 )
 
 /**
@@ -249,16 +266,18 @@ object MachinesPanelScreen {
     private const val THIS_DEVICE = "this device"
 
     /**
-     * The second sentence of row 12's subtitle, and the two real verbs it ends with.
+     * The second sentence of row 12's subtitle, said only over the OFF state (agents-tracker-
+     * ksvb.6): the ON state's sentence already says who can move the switch, and shrinking that
+     * paragraph to one line means this half no longer follows it there.
      *
-     * BOTH ARE SHIPPED CLI COMMANDS (`cmd/swarm/remote.go`: `swarm remote off` disables remote
-     * control, `swarm remote on` clears the override). The one rendered is the one that applies to
-     * the state the switch is IN -- telling a user whose remote control is already off to run
-     * `swarm remote off`, which is what the mock's static copy does, is an instruction that does
-     * nothing.
+     * `swarm remote on` IS THE ONLY VERB LEFT HERE, and that is a narrowing rather than an
+     * oversight: `swarm remote off` (`cmd/swarm/remote.go`) is real and still what turns the
+     * switch off, but nothing on this row states it any more -- the ON paragraph that used to
+     * carry it is a single sentence with no command slot, and printing the OFF verb over a
+     * machine already off would be the instruction that does nothing this comment used to warn
+     * against for the other direction.
      */
     private const val SWITCH_LIVES = "The switch lives on the machine: "
-    private const val COMMAND_DISABLE = "swarm remote off"
     private const val COMMAND_ENABLE = "swarm remote on"
 
     /**
@@ -287,19 +306,7 @@ object MachinesPanelScreen {
      */
     fun of(pane: MachinePane, formatTime: (Long) -> String): MachinesPanel = MachinesPanel(
         title = TITLE,
-        machine = MachineRow(
-            name = MachineLabel.of(pane.machineName, pane.machineId),
-            // THE ID KEEPS ITS OWN CELL, and only while the name cell is saying something else.
-            // See [MachineRow.endpoint]: this is a second FACT beside the name, never a second
-            // copy of it.
-            endpoint = pane.machineId.takeIf { pane.machineName.isNotEmpty() },
-            presenceLine = pane.presenceExplanation(formatTime),
-            mark = when (pane.presence) {
-                ONLINE -> PresenceMark.ONLINE
-                OFFLINE -> PresenceMark.OFFLINE
-                else -> PresenceMark.UNKNOWN
-            },
-        ),
+        machine = machineRowOf(pane, formatTime),
         remoteAccess = remoteAccessOf(pane),
         pairedDevicesHeading = PAIRED_DEVICES,
         pairedDevice = PairedDeviceRow(
@@ -309,15 +316,48 @@ object MachinesPanelScreen {
         ),
     )
 
+    /**
+     * Row 11, including the description its dot needs once [MachineRow.presenceLine] has
+     * nothing printed to say (agents-tracker-ksvb.6).
+     *
+     * READ ONCE AND BRANCHED ON ONCE, for the class doc's reason: a second call to
+     * [MachinePane.presenceExplanation] could in principle answer differently from the first
+     * (a formatter is not guaranteed pure), and a row whose line and description disagreed
+     * about whether the machine is healthy would be exactly the drift PB-APP-11 exists to
+     * refuse.
+     */
+    private fun machineRowOf(pane: MachinePane, formatTime: (Long) -> String): MachineRow {
+        val line = pane.presenceExplanation(formatTime)
+        return MachineRow(
+            name = MachineLabel.of(pane.machineName, pane.machineId),
+            // THE ID KEEPS ITS OWN CELL, and only while the name cell is saying something else.
+            // See [MachineRow.endpoint]: this is a second FACT beside the name, never a second
+            // copy of it.
+            endpoint = pane.machineId.takeIf { pane.machineName.isNotEmpty() },
+            presenceLine = line,
+            presenceDescription = if (line.isEmpty()) pane.presenceAnnouncement else null,
+            mark = when (pane.presence) {
+                ONLINE -> PresenceMark.ONLINE
+                OFFLINE -> PresenceMark.OFFLINE
+                else -> PresenceMark.UNKNOWN
+            },
+        )
+    }
+
     private fun remoteAccessOf(pane: MachinePane): RemoteAccessRow {
-        // The verb that MOVES the switch from where it is: `on` re-enables what the owner turned
-        // off, `off` is what turns it off. Read off the same flag the sentence before it is read
-        // from, so the two cannot disagree about which state they are describing.
-        val command = if (pane.killSwitchEngaged) COMMAND_ENABLE else COMMAND_DISABLE
+        // ON HAS NOTHING LEFT TO MOVE THE SWITCH WITH (agents-tracker-ksvb.6). The paragraph is
+        // one line and states no command, so there is no verb for `Kit.emphasised` to mark --
+        // passing one anyway is exactly the "asked to emphasise a fragment its own sentence does
+        // not contain" case that function refuses to draw silently.
+        if (!pane.killSwitchEngaged) {
+            return RemoteAccessRow(title = REMOTE_ACCESS, body = pane.killSwitchExplanation, command = null)
+        }
+        // OFF is the live teaching moment: the recovery command follows the pane's own sentence,
+        // read off the same flag so the two cannot disagree about which state they describe.
         return RemoteAccessRow(
             title = REMOTE_ACCESS,
-            body = "${pane.killSwitchExplanation} $SWITCH_LIVES$command.",
-            command = command,
+            body = "${pane.killSwitchExplanation} $SWITCH_LIVES$COMMAND_ENABLE.",
+            command = COMMAND_ENABLE,
         )
     }
 }

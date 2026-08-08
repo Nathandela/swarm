@@ -91,20 +91,41 @@ data class MachinePane(
      * What the pane says about reachability, and it refuses to let the relay's word stand
      * alone: while the machine is silent past section 6.0's budget, the presence line is
      * qualified by what this phone can actually vouch for.
+     *
+     * A MACHINE INSIDE THE BUDGET RENDERS NOTHING (agents-tracker-ksvb.6). It used to print
+     * "Your machine is $presence." unconditionally, restating what the presence dot beside it
+     * already says in colour, on every visit -- the same always-on sentence this app's
+     * conditional-notice discipline exists to refuse everywhere else. [presenceAnnouncement] is
+     * where the fact goes for a reader this line no longer speaks to.
      */
     fun presenceExplanation(formatTime: (Long) -> String): String =
         freshness.notice(formatTime)?.let { notice ->
             "$notice The relay reports \"$presence\", which is the relay's word and not your " +
                 "machine's."
-        } ?: "Your machine is $presence."
+        } ?: ""
+
+    /**
+     * The sentence [presenceExplanation] no longer prints for a healthy machine, said once more
+     * for a screen reader.
+     *
+     * IT IS NOT DELETED WITH THE LINE, because the presence dot's colour is the only thing left
+     * on screen once the sentence is gone, and a mark with no words of its own is exactly the
+     * accessibility gap a silent notice must not open. Read only where [presenceExplanation]
+     * renders nothing -- see the row that carries both.
+     */
+    val presenceAnnouncement: String
+        get() = "Your machine is $presence."
 
     val killSwitchExplanation: String
         get() = if (killSwitchEngaged) {
             "Remote control is switched off at your machine, so it will refuse anything this " +
                 "phone asks it to change. Only the machine's owner can switch it back on."
         } else {
-            "Remote control is switched on at your machine. Only the machine itself can switch " +
-                "it off."
+            // ON IS ONE SHORT LINE, AND SAYS NO MORE (agents-tracker-ksvb.6). It used to spend a
+            // second sentence on the same words the OFF branch above needs for its own reason --
+            // that only the machine can move the switch -- rendered on every visit to a screen
+            // that is, in this state, reporting nothing wrong.
+            "Remote control is on. Only the machine can switch it off."
         }
 }
 
