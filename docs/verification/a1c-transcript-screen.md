@@ -589,6 +589,69 @@ claim requires a nonzero test count read out of the JUnit XML**, per the house r
 
 ---
 
+## 8. Addendum by A-TRANSCRIPT: §7's points 1 and 2 are closed, and by what
+
+Added 2026-08-08 by the workpackage that owns this file's body. The appendix above left its
+Robolectric assertions unrun on purpose and named the run as somebody else's to report. This is
+that report, and it is recorded here rather than in a new file because the claim it settles is
+stated above.
+
+The coordinator's 130-suite / 1056-test run is a **13:42 snapshot** and
+`TranscriptScreenGoldenTest.kt` has mtime **13:56**, so that run never counted the new suite and
+cannot be cited for it. A separate exclusive-lane run was taken at 14:22, with
+`test-results/testDebugUnitTest` removed first so no stale XML could be counted and the lane
+confirmed empty by `pgrep -fl GradleWorkerMain` and `pgrep -fl gradle-wrapper.jar`:
+
+```
+TranscriptScreenGoldenTest.xml  tests="6"  skipped="0" failures="0" errors="0"
+TranscriptPanelTest.xml         tests="21" skipped="0" failures="0" errors="0"
+TranscriptViewTest.xml          tests="7"  skipped="0" failures="0" errors="0"
+BUILD SUCCESSFUL in 23s
+```
+
+**§7.1 closed.** The six recorded-bytes assertions pass. The appendix guessed its most likely red
+would be "a copy expectation of mine against `TranscriptScreen`'s joins"; there was none, and
+§3b's two surprises — `Yes`/`No` over `allow`/`deny`, and the approval sitting above the two tool
+runs it blocked — are the two places that could most easily have gone the other way. The second is
+a live confirmation from the real producer that keeping the wire's ascending-cursor order is right:
+the recorded turn raised its permission at `PreToolUse`, so oldest-first is what puts the question
+before the work.
+
+**§7.2 closed, and not by the task merely reporting success.** `policyTestResources` reported
+`UP-TO-DATE` in this run, which is the exact signal that open point warns about, so it was checked
+rather than trusted:
+
+```
+$ shasum -a 256 internal/skeleton/testdata/i1-transcript-screen.golden.json \
+    android/app/build/intermediates/java_res/debugUnitTest/processDebugUnitTestJavaRes/out/i1-transcript-screen.golden.json
+8aff87ba8c174557febcead452bca19508e0e8cbdbfe7e3aad5c8932a9d189c7  (recorded)
+8aff87ba8c174557febcead452bca19508e0e8cbdbfe7e3aad5c8932a9d189c7  (on the unit-test classpath)
+```
+
+Byte-identical, so the `UP-TO-DATE` was a real up-to-date and not a cache predating the
+`build.gradle.kts` staging entry. The suite was reading the recorder's own bytes.
+
+**§7.3 stands, unmoved.** No handset. Both the appendix and this file's own open point 6 say so,
+and one exclusive-lane Robolectric run does not change it.
+
+### Two false-failure signatures, recorded because they read as red and are not
+
+Reaching the run above cost two aborted attempts, both of which printed `BUILD FAILED`:
+
+```
+> java.io.EOFException
+> java.nio.file.NoSuchFileException: .../test-results/testDebugUnitTest/binary/in-progress-results-generic.bin
+```
+
+Neither is a test failure. Both are a half-written or clobbered Gradle binary results file from two
+`:app:testDebugUnitTest` invocations sharing one `android/app/build`. `agents-tracker-6qi` already
+records both modes, and already records `pgrep -f gradle-wrapper.jar` as the only reliable
+distinguisher — which two workpackages in this slice independently rederived rather than read.
+The lesson worth carrying forward is not the signatures; it is that the ledger was written to more
+often than it was read.
+
+---
+
 # Appendix — INTEGRATION run 2: the forced compile, and the first Robolectric assertions to execute
 
 **Workpackage**: INTEGRATION (second agent on the same three jobs), run after the appendix above was
