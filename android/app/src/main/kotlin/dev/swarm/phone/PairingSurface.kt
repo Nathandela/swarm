@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
@@ -148,6 +149,13 @@ class PairingSurface(
      * screen model's ([PairingPanelScreen.scanProgress]).
      */
     private val scanProgress = noticeLine()
+
+    /**
+     * The counter's clock (agents-tracker-ksvb.3). The camera analyses roughly thirty frames a
+     * second and each one used to be written straight into [scanProgress], so the one line telling
+     * a person their camera is looking was itself repainting at frame rate under the viewfinder.
+     */
+    private val scanProgressRate = ScanProgressThrottle()
 
     /**
      * The six symbols. Named for what it is -- a DISPLAY -- because the one thing this screen
@@ -580,6 +588,7 @@ class PairingSurface(
         // PreviewView's surface out from under a camera that had just been given it.
         cameraLive = true
         scanProgress.text = ""
+        scanProgressRate.reset()
         render()
 
         val live = scanner ?: QrScanner(activity).also {
@@ -598,7 +607,12 @@ class PairingSurface(
             // WRITTEN STRAIGHT INTO THE VIEW, never through a redraw: a render() here would ask
             // the Go core for its state several times a second and rebuild the tree under the
             // running preview. The screen model still owns the words.
-            onFrames = { seen -> scanProgress.text = PairingPanelScreen.scanProgress(seen) },
+            onFrames = { seen ->
+                scanProgressRate.next(
+                    PairingPanelScreen.scanProgress(seen),
+                    SystemClock.elapsedRealtime(),
+                )?.let { scanProgress.text = it }
+            },
             onError = { failure -> scanFailed(failure) },
         )
     }
@@ -1066,3 +1080,58 @@ class PairingSurface(
  */
 internal fun hasCameraHardware(packageManager: PackageManager): Boolean =
     packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+
+/**
+ * The scan counter's own clock: at most two writes a second, and never one that says nothing new
+ * (agents-tracker-ksvb.3).
+ *
+ * **THE DIAGNOSTIC CAUSED A SMALL VERSION OF THE THING IT DIAGNOSES.** `QrScanner` reports every
+ * analysed frame, which on a handset is roughly thirty a second, and the count went straight onto
+ * the notice under the viewfinder. A `TextView` re-lays out and re-antialiases its whole line on
+ * every assignment, so a line whose job is to say "the camera IS looking" was itself flickering
+ * thirty times a second, three centimetres under a viewfinder somebody was holding steady.
+ *
+ * **BOTH CONDITIONS ARE REQUIRED AND EITHER ALONE IS WRONG.** A write only when the STRING changes
+ * is still thirty a second, because the number changes on every frame. A write only on a TIMER
+ * repaints the identical line forever once the analyser stalls -- which is the state this counter
+ * exists to make visible, spent as a repaint. So a write needs a new string and a fresh interval.
+ *
+ * **THE CLOCK IS PASSED IN**, for [hasCameraHardware]'s reason one paragraph up: `PairingSurface`
+ * reaches `swarmmobile.App` and CameraX and has no unit test of its own, while this decision is
+ * arithmetic on a string and a millisecond. A throttle that read the clock itself could only be
+ * tested by sleeping.
+ */
+internal class ScanProgressThrottle {
+
+    private var drawn = ""
+
+    private var writtenAtMillis = 0L
+
+    /** Forget the previous scan, so its first frame is not held back by the last one's interval. */
+    fun reset() {
+        drawn = ""
+        writtenAtMillis = 0L
+    }
+
+    /**
+     * @return the line to put on screen, or null to leave the view exactly as it is. NULL RATHER
+     *  THAN THE OLD STRING, because assigning the same text is the repaint being avoided.
+     */
+    fun next(line: String, nowMillis: Long): String? {
+        if (line == drawn) return null
+        if (nowMillis - writtenAtMillis < MIN_INTERVAL_MILLIS) return null
+        drawn = line
+        writtenAtMillis = nowMillis
+        return line
+    }
+
+    private companion object {
+        /**
+         * Two updates a second. Fast enough that a moving count reads as a live camera and slow
+         * enough that the line is not being redrawn while somebody reads it; it is a REPAINT rate
+         * and not one of ADR-009 D5's motion durations, which is why it is here rather than in
+         * `Motion.kt`.
+         */
+        const val MIN_INTERVAL_MILLIS = 500L
+    }
+}
