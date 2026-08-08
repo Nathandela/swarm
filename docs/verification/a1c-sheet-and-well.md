@@ -480,12 +480,19 @@ is not in the code and invited them to act on it — a worse outcome than a miss
 perturbations are reverted (`grep` confirms no marker survives and all three original lines are back).
 
 **That last clause originally read "the script is ready to run when the build lane is free", and the
-condition was wrong** — corrected here rather than in §5.2.1 alone, so this paragraph does not
-contradict its own subsection. The free lane was necessary but incidental; what actually made the run
-safe was the **clean tree**, because with every path committed `git checkout --` is a byte-exact
-revert that cannot be got wrong and cannot outlive the run. When these controls were prepared the tree
-was dirty across four sessions and reverting was a manual copy-back — which is why declining then was
-right, and why the reason to decline was never really the lane. §5.2.1 is the run.
+condition was wrong** — but so was its first correction. This paragraph has now been wrong twice, and
+both versions are recorded because the second error is the instructive one:
+
+1. *"when the build lane is free"* — the lane was necessary but incidental.
+2. *"what made it safe was the clean tree"* — better, and still wrong. It licenses perturbing shared
+   source whenever `git status` is empty.
+
+The project's standing answer, recorded 2026-08-03 and found only after both of the above were
+written, is that a destructive negative control **must not touch the shared working tree at all** —
+perturb in memory inside the test, or use a scratch worktree. **§5.2.2 is that correction and
+supersedes this paragraph.** Declining to run these controls on a dirty tree was right; the reason was
+neither the lane nor the revert path, but that in-place perturbation of a shared checkout is the wrong
+method whatever the tree looks like.
 
 What can be said WITHOUT that run is structural, and is weaker on purpose: none of the three added
 assertions can pass vacuously. `kitRequire(TranscriptTag.APPROVAL)` throws when the block is absent;
@@ -540,6 +547,40 @@ detail rebuilt the transcript it was handed, so the conversation on this screen 
 the same items — and only one of the two is the one `TranscriptScreen` decided"*. `.copy()` produces
 an EQUAL object, so an `assertEquals` would have stayed green through it. `assertSame` is doing the
 work.
+
+#### 5.2.2 The METHOD was wrong, and the project had already said so
+
+**A standing team norm forbids what §5.2.1 did, and neither workpackage checked for one.**
+`bd memories "destructive negative controls"` returns
+`team-norm-for-shared-worktree-agent-fleets-learned`, recorded **2026-08-03**, five days before this
+slice:
+
+> DESTRUCTIVE NEGATIVE CONTROLS MUST NEVER TOUCH THE SHARED WORKING TREE. Every gate in this repo
+> demands a negative control (prove the check can fail), and the obvious method — perturb the source
+> file in place, run the test, copy it back — is actively hazardous when several agents share one
+> checkout.
+
+It names the cost in a previous session: an agent perturbed `PairingSurface.kt:192` in place, and
+during that window another agent's grep and full Gradle run "saw a source state that existed in NO
+COMMIT", which burned a verification pass and then a reconciliation effort. It gives the correct
+methods in preference order: **(1) perturb IN MEMORY inside the test** — `strings.Replace` on the
+source text, never a write, which `android/gate/guidedpairing_test.go:143` already does and four
+other gate files besides; **(2) a scratch git worktree or clone**; **(3) never in place.**
+
+§5.2.1 used method (3). The clean tree and the `trap ... EXIT` made it *recoverable*, and the hazard
+did not materialise — but recoverable is not the test the norm sets, and "the tree was clean" is not
+one of the three answers. **So the conclusion §5.2 reached — that the clean tree is the enabling
+condition — is wrong as guidance**, and it is wrong in the direction that invites repetition: a
+future reader would take it as licence to perturb shared source whenever `git status` is empty. The
+enabling condition the project actually recorded is *not touching the shared tree at all*.
+
+What this does **not** change: the four failures in §5.2.1 are real, and what they establish about the
+assertions stands. A wrong method that happened to run cleanly still produced correct evidence. The
+correction is to the method and to the rule extracted from it, not to the result.
+
+**This is the fifth thing in one session that was already written down** — after `6qi`'s lane guard,
+`6qi`'s two false-failure signatures, and `180i`. It is the only one of the five where the standing
+guidance would have changed what we DID rather than merely saved us the trouble of rederiving it.
 
 **What this closes and what it does not.** GG-5 asks for a failing-first run, and this is not that —
 it is a failing-after run, which demonstrates that the assertions BITE but not that they were
