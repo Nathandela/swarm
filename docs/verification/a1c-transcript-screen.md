@@ -261,3 +261,497 @@ No Go production code was touched by this workpackage, so `go build` / `go vet` 
    assertion here is a unit test over the folded item; the end-to-end proof that the producer's
    items render as chat on a device is `docs/verification/a1c-approve-roundtrip.md`'s rig plus a
    manual run, and slice I1's exit claim should not be signed off without one.
+
+---
+---
+
+# Appendix — INTEGRATION: the AAR rebuild, and joining the screen to the facade's own bytes
+
+**Workpackage**: INTEGRATION, run after A-TRANSCRIPT, A-SHEET-AND-WELL and W-APPROVE had all
+landed in this worktree.
+**Its three jobs**: (1) rebuild the gomobile AAR so the Kotlin layer can see the new facade verbs;
+(2) make the app compile and its unit tests pass against that AAR, fixing any signature mismatch
+in favour of the facade; (3) write the integration test that proves slice I1 exit as far as this
+environment allows.
+**Files added**: `internal/skeleton/interaction_screen_golden_test.go`,
+`internal/skeleton/testdata/i1-transcript-screen.golden.json`,
+`android/gate/i1_screengolden_test.go`,
+`android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptScreenGoldenTest.kt`.
+**File edited**: `android/app/build.gradle.kts` (one staging entry). No production code, Go or
+Kotlin, was changed — see §6, which is itself a result.
+
+---
+
+## 1. The AAR was rebuilt, and the toolchain is present after all
+
+**ONE** of the three preceding workpackages recorded the AAR as unbuildable here — A-SHEET-AND-WELL,
+in those words: "no Java runtime on this session's PATH and no Android SDK on the machine". **That
+was a PATH artefact, not a missing toolchain.** `android/toolchain.env` exists precisely because
+"nothing Android is discoverable on this host by default"; sourcing it resolves everything:
+
+> **Narrowed 2026-08-08 from "The three preceding workpackages all recorded..." at A-TRANSCRIPT's
+> request, and checked against all three files rather than taken on report.** A-TRANSCRIPT never made
+> the claim: it BUILT the AAR (`android/app/libs/` directory mtime 12:43 is that first write,
+> arm64-v8a + x86_64, before it compiled anything — the file mtimes inside are this integration run's
+> 13:40 overwrite), and reached it by passing `JAVA_HOME` and `ANDROID_HOME` inline on every gradle
+> call rather than sourcing `toolchain.env`. Same fix, worse ergonomics; sourcing the file is the
+> better habit. W-APPROVE made a DIFFERENT and correct claim — that the AAR is a gitignored local
+> artifact so "the Kotlin binding does not exist until someone reruns that script" — which is about a
+> missing artifact, not a missing toolchain, and is not corrected by this section. The error was
+> A-SHEET-AND-WELL's alone; it is also corrected at the head of that file's own §6.
+
+```
+gomobile: /Users/Nathan/go/bin/gomobile
+gobind:   /Users/Nathan/go/bin/gobind
+java:     /usr/local/opt/openjdk@21/bin/java
+javac:    /usr/local/opt/openjdk@21/bin/javac
+go:       /usr/local/bin/go
+ANDROID_HOME=/usr/local/share/android-commandlinetools               SDK platforms: present
+ANDROID_NDK_HOME=.../ndk/27.2.12479018                               NDK dir: present
+```
+
+`android/build-aar.sh` then runs unmodified, exit 0, both pinned ABIs:
+
+```
+$ sh android/build-aar.sh
+building .../android/app/libs/swarm.aar for arm64-v8a x86_64 (androidapi 21)
+$ ls -la android/app/libs/
+-rw-r--r--  1 Nathan  staff     56895 Aug  8 13:40 swarm-sources.jar
+-rw-r--r--  1 Nathan  staff  11891471 Aug  8 13:40 swarm.aar
+```
+
+All three verbs the app half was written against are now bound, with the arity and types the
+Kotlin passes:
+
+```
+$ unzip -p android/app/libs/swarm-sources.jar swarmmobile/App.java | grep -Ei 'approv|transcript'
+73:  public native Op approve(String session, String itemID, String decisionID) throws Exception;
+394: public native TranscriptPage pendingApprovals() throws Exception;
+458: public native TranscriptPage readTranscript(String session, long from, long limit) throws Exception;
+```
+
+Go `int` binds as Java `long`, which is why `readTranscript`'s `limit int` appears as `long` and
+why `FacadeBridge.transcript(..., limit: Long)` is correct rather than a mismatch.
+
+---
+
+## 2. No signature mismatch existed — and a real compiler said so
+
+The task anticipated fixing drift between what the UI called and what the facade exports. **There
+was none.** Two independent checks, in increasing strength.
+
+**A mechanical name-and-arity scan** of every `app.*` call site in production Kotlin against the
+rebuilt `App.java`:
+
+```
+App bound methods (53): approve=True readTranscript=True pendingApprovals=True
+unresolved call sites: 0
+```
+
+(The scan also flagged eight `item.optString(`/`item.optJSONObject(`-style hits; all are
+`org.json.JSONObject` locals inside `ApprovalItem.kt`/`InteractionItem.kt`, not the bound
+`TranscriptItem`. Recorded so the number is not read as eight real defects.)
+
+**The Kotlin compiler**, from the `:app:testDebugUnitTest` invocation described in §5:
+
+```
+> Task :app:compileDebugKotlin FROM-CACHE
+> Task :app:compileDebugUnitTestKotlin
+> Task :app:processDebugUnitTestJavaRes
+> Task :app:testDebugUnitTest
+```
+
+`compileDebugUnitTestKotlin` **completed**. The whole module — production Kotlin plus the entire
+test source set, including the suites A-SHEET-AND-WELL had left mid-amendment and the new suite
+below — compiles against the rebuilt AAR. That closes the largest unknown the three preceding
+workpackages left, and closes it with a compiler rather than a source scan. What it does not do is
+run the assertions; see §5.
+
+---
+
+## 3. The integration test, and the gap it actually closes
+
+Slice I1's exit is "a real Claude Code session reads as chat, and the approval in it can be
+answered". Two thirds of that was already proven **in Go**: `TestClaudeChainE2E_...` shows the real
+producer's items reach the phone, and `TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval`
+shows `swarmmobile.App.Approve` answers one over the whole shipped stack. Both stop at the facade.
+
+**Everything above the facade was asserted against itself.** `TranscriptPanelTest` decides what a
+`tool_run` reads as from a body its own author typed; `ApprovalSheetPanelTest` labels its buttons
+from a `decisions[]` its own author typed. Nothing joined either to what the adapter and the
+producer actually emit. The gap is structural rather than an oversight: `swarmmobile.App` is a
+gomobile class over Android-ABI `.so` files, so **no Robolectric test can construct the facade** —
+which is why `FacadeBridge` lifts its pure halves out of the instance in the first place.
+
+So the crossing is **recorded**, and the two halves are joined by the recording.
+
+### 3a. `internal/skeleton/interaction_screen_golden_test.go` — the recorder
+
+Reuses the existing S19 rig, so nothing is faked: real recorded corpus → real
+`internal/adapter/claude` → real producer → **separate gateway process** → real relay → real
+durable phone core → real bound `App.ReadTranscript` / `App.PendingApprovals`. It then taps
+`App.Approve` **with the id the card itself offered** (read off `decisions[]`, never a literal — a
+hardcoded `"allow"` would pass while the app sent a token the CLI never offered), waits for the
+resolution to fold, and pins both sides of it.
+
+RED, verbatim, before the golden existed:
+
+```
+$ go test ./internal/skeleton/ -run TestI1_TheScreensBytesAreTheFacadesBytes -count=1 -v
+=== RUN   TestI1_TheScreensBytesAreTheFacadesBytes
+    interaction_screen_golden_test.go:187: no pinned crossing at
+    testdata/i1-transcript-screen.golden.json: open testdata/i1-transcript-screen.golden.json:
+    no such file or directory. The Android suite renders this file; without it the screen is
+    asserted only against fixtures written on its own side
+--- FAIL: TestI1_TheScreensBytesAreTheFacadesBytes (8.03s)
+FAIL	github.com/Nathandela/swarm/internal/skeleton	9.019s
+```
+
+GREEN, and — the property that makes the golden worth having — **byte-stable across two
+independent live runs of the full rig**:
+
+```
+$ go test ./internal/skeleton/ -run TestI1_... -count=1 -update-screen-golden
+ok  	github.com/Nathandela/swarm/internal/skeleton	9.744s
+$ go test ./internal/skeleton/ -run TestI1_... -count=1     # fresh rig, fresh ULIDs, diffed
+ok  	github.com/Nathandela/swarm/internal/skeleton	9.422s
+```
+
+Stability took two passes to earn. The first golden leaked two per-run values inside the
+`approval_resolved` body — `interaction_id` (the request's real ULID) and `operation_id` (the
+phone's own per-tap mint) — which the first normalizer missed because it only walked the envelope.
+Both are now pinned, and `interaction_id` is **mapped through the same numbering rather than
+blanked**, so the golden shows the resolution pointing at the card above it, which is the
+relationship IS-LIFE-2 is about:
+
+```
+"Body": "{\"by\":\"phone\",\"decision\":\"allowed\",\"interaction_id\":\"item-2\",
+          \"item_id\":\"item-7\",\"kind\":\"approval_resolved\",
+          \"operation_id\":\"00000000000000000000000000000000\", ...}"
+```
+
+**What is normalized, and why it weakens nothing.** Six values differ per run: the session id, the
+item and turn ULIDs, the cursors, the capture instants, and the approval's ADR-007 D7 binding
+tuple (`content_hash`, `expires_at`, `agent_instance`). The Android decode reads **none** of them —
+between them `InteractionItem.fields()` and `ApprovalItem.of` read `tool`, `action`,
+`output_excerpt`, `truncation_marker`, `change`, `path`, `old_path`, `added`, `removed`,
+`diff_excerpt`, `steps`, `decision`, `by`, `process`, `turn`, `interaction`, `note`, `summary`,
+`decisions`, `mode` and `prompt_lines`. Every key is **kept** and only the unstable values are held
+still, so the golden is the real body with the clock stopped.
+
+The recorder also asserts the screen's read-set **where it is produced**, which the Android side
+structurally cannot: the app's decode is total by construction (IS-COMPAT-1/-2 — an unreadable body
+costs a row and nothing else), so a producer that stopped sending `body` would render six neutral
+rows saying only their kind **and every Robolectric assertion would still pass**.
+
+### 3b. What the recording turned out to contain
+
+Two facts worth the record, because both would have been guessed wrong:
+
+- **The real dialog's buttons are `Yes` and `No`**, ids `allow`/`deny` — not the maquette's
+  `Allow`/`Deny`. A phone-side table over that vocabulary would have mislabelled the one surface in
+  the app that must not editorialise. §3.5 keeping the ids the CLI's own is doing real work.
+- **The approval sits third from the top, above the two tool runs it was blocking.** The recorded
+  turn raised the permission at `PreToolUse`, so the fold's ascending-cursor order puts the question
+  before the work. `TranscriptScreen` keeping the wire's order is what makes the phone show the
+  conversation the machine actually had.
+
+### 3c. `TranscriptScreenGoldenTest.kt` — the renderer
+
+Six tests over the recorded bytes: the whole turn as one ordered list (one assertion, not six —
+reading is sequential, and a per-row assertion passes over a shuffled transcript); the two mono
+wells and the absence of a third where the `Edit` run carried no `output_excerpt`; the approval row
+being the tappable one and reporting the id the facade accepted; the sheet's question, literal and
+`Yes`/`No` buttons with the pressed id compared against the golden's own `decision_id`; the
+answered card staying in the conversation while ceasing to be a decision, with `allowed · phone` as
+the last row; and the card model carrying **no part of the binding tuple** — asserted after first
+asserting the recording still contains all three, so the check cannot go vacuous.
+
+### 3d. `android/gate/i1_screengolden_test.go` — the join that stops the recording going vacuous
+
+Because Robolectric cannot construct the facade, the suite builds its `InteractionItem`s **by hand**
+from the golden. That hand mapping is a second spelling of `FacadeBridge.transcript`, and nothing in
+either toolchain compares them — so a getter dropped from the bridge would leave the screen suite
+green over a field the app no longer reads. This is PB-APP-8's repair channels and PB-PAIR-5's
+terminal states again, and the remedy is the same one
+`android/gate/pbapp8_repairchannels_test.go` uses: set-compare the two spellings, read from source,
+fail in either direction.
+
+**Proved non-vacuous by mutation.** Replacing `resolved = o.getBoolean("Resolved")` with
+`resolved = false` in the suite:
+
+```
+--- FAIL: TestI1_TheScreenSuiteReadsTheFieldsTheBridgeReads (0.01s)
+    slice I1: android/.../FacadeBridge.kt reads [Resolved] off the facade and the recorded-bytes
+    suite renders none of them. A field the app reads in production and the golden suite does not
+    is a field whose rendering is asserted nowhere, which is what the recording was written to end.
+      bridge: [Body Cursor Degraded ItemID Kind Resolved SessionID Status Text Truncated]
+      suite:  [Body Cursor Degraded ItemID Kind SessionID Status Text Truncated]
+```
+
+Both sets are the real ten fields, so the comparison measures what it claims to. The mutation was
+reverted and the gate re-run green.
+
+---
+
+## 4. Gates
+
+```
+$ go build ./...                                          BUILD OK
+$ go vet ./internal/skeleton/ ./android/gate/ ./mobile/    VET OK
+$ gofmt -l internal/skeleton/interaction_screen_golden_test.go android/gate/i1_screengolden_test.go
+                                                          (empty — both clean)
+$ go test ./android/gate/ -count=1
+ok  	github.com/Nathandela/swarm/android/gate	7.440s
+```
+
+The **whole** `android/gate` suite is green with the two new join tests in it. `gofmt -l` over the
+three touched packages does list six files — `internal/skeleton/revoke_reaudit_test.go` and
+`android/gate/{il7u_tokenrevert,o6_haptics,o6_predictiveback,pbapp11_freshness,w6o3_terminalpaironly}_test.go`
+— **none touched by this workpackage**; they are pre-existing, and are named here so the count is
+not mistaken for new debt.
+
+Confirmed empirically on the way past: `i1_sheetandwell_test.go`'s "a screen must not parse JSON"
+fence is scoped to the main source set, so the new suite's use of `org.json` does not trip it.
+
+---
+
+## 5. NOT VERIFIED BY THIS WORKPACKAGE: the Robolectric assertions
+
+**No Robolectric result is claimed here, and §2's compile signal must not be read as one.** The run
+that produced it was killed at the test phase, by another agent, before a single assertion ran:
+
+```
+> Task :app:testDebugUnitTest
+Daemon is stopping immediately stop command received
+FAILURE: Gradle build daemon has been stopped: stop command received
+gradle exit status: 1
+MISSING app/build/test-results/testDebugUnitTest
+```
+
+The coordinator then took the gradle lane exclusively and this workpackage stood down from it. The
+`:app:testDebugUnitTest` numbers belong in that agent's record and are not invented here. **A green
+claim requires a nonzero test count read out of the JUnit XML**, per the house rule that
+`./gradlew | tail` exits 0 when Gradle exits 1.
+
+### Two serialization traps, recorded because both cost real time
+
+1. **`scripts/o2-gradle-run.sh` issues `./gradlew --stop` as its FIRST action.** With two or more
+   agents driving it, every new run kills the one in progress, and the steady state is that nobody
+   ever completes one. It also leaves `test-results/` **absent**, which looks like a build that ran
+   nothing rather than one that was shot. This is what killed the run in §2.
+2. **`until ! pgrep -f "gradle-wrapper.jar"; do sleep 10; done` never exits.** The waiting bash
+   process's own command line contains the pattern, so `pgrep -f` matches the waiter itself. Two
+   agents sat in it for 15+ minutes. It is the same trap that script's own header documents for
+   `pgrep -x java` ("an IDLE Gradle daemon is also a java process"), in a new disguise. Match
+   `org.gradle.launcher.daemon` instead.
+
+---
+
+## 6. What was NOT needed, which is itself a result
+
+- **No production code changed, Go or Kotlin.** The instruction was to fix the app side to the
+  facade on any disagreement. There was no disagreement: the app half had been written against the
+  Go half's real signatures, and they met.
+- **`android/unbound-verbs.tsv` needed no edit.** `App.Approve`'s row was already retired by
+  A-SHEET-AND-WELL wiring the sheet's buttons to it, and `App.ReadTranscript`'s by A-TRANSCRIPT.
+- **The five Kotlin suites A-SHEET-AND-WELL handed over as non-compiling now compile** — repaired
+  by the parallel agent before this workpackage took the lane, and confirmed by
+  `compileDebugUnitTestKotlin` completing over the whole test source set.
+
+---
+
+## 7. Open points
+
+1. **The Robolectric suite has not been run by this workpackage** (§5). Everything above the facade
+   is written and compiles; whether the assertions pass is the coordinator's run to report. The most
+   likely red is a copy expectation of mine against `TranscriptScreen`'s joins rather than a facade
+   problem, since the golden side is pinned by a live run of the real rig.
+2. **`policyTestResources` must actually re-run for the new suite to see its recording.** The
+   staging entry for `i1-transcript-screen.golden.json` is new; a cached `UP-TO-DATE` from before
+   the edit would leave the file off the classpath. The suite then fails **loudly** ("is not on the
+   unit-test classpath") rather than passing over nothing, on `Pin`'s precedent — so this cannot go
+   silently wrong, but it can waste a triage.
+3. **A HANDSET IS STILL NOT PROVEN, and this appendix does not move that.** Robolectric is a JVM
+   sandbox: no glass, no compositor, no real `.so`. Slice I1's exit claim as written — a real session
+   reads as chat *on a device* — remains PB-E2E-5's deferred physical gate. What is closed is
+   narrower and was the actual hole: the screen is no longer asserted only against fixtures written
+   on its own side.
+4. **The golden is one turn, and it covers six of eight kinds.** `plan_update` and `session_status`
+   have no recorded corpus behind them, so their rows are still asserted only against hand-written
+   bodies. The recorder fails loudly if the corpus stops producing any of the five kinds it does
+   cover, so coverage cannot decay silently — but widening it needs a new recording, not a new
+   fixture.
+5. **The recorded corpus carries an absolute path** (`/Users/Nathan/spike-sb-work/...`), stable
+   because it is *recorded* rather than because this machine has that directory. It reaches the
+   golden and therefore the Kotlin assertions verbatim. Worth knowing before anyone re-records the
+   corpus on a different machine.
+
+---
+
+# Appendix — INTEGRATION run 2: the forced compile, and the first Robolectric assertions to execute
+
+**Workpackage**: INTEGRATION (second agent on the same three jobs), run after the appendix above was
+written. It **added no test and changed no production code**; its whole output is verification, plus
+one deletion of its own duplicate work (§C).
+
+This appendix exists to close §5 above, which correctly refused to claim a Robolectric result.
+
+---
+
+## A. The AAR rebuild, independently confirmed
+
+Confirmed rather than restated: `android/build-aar.sh` runs unmodified in this environment once
+`android/toolchain.env` is sourced, exit 0, both pinned ABIs. The artifact and its three verbs:
+
+```
+AAR_MTIME = 2026-08-08 13:40:29        android/app/libs/swarm.aar   (11 891 471 B)
+
+$ unzip -p android/app/libs/swarm-sources.jar swarmmobile/App.java | grep -Ei 'approv|transcript'
+ 73: public native Op approve(String session, String itemID, String decisionID) throws Exception;
+394: public native TranscriptPage pendingApprovals() throws Exception;
+458: public native TranscriptPage readTranscript(String session, long from, long limit) throws Exception;
+```
+
+The three preceding workpackages each recorded the toolchain as absent. It is present; the header of
+`android/toolchain.env` predicts that exact misreading and says it "has already cost three readers".
+It has now cost five.
+
+---
+
+## B. THE COMPILE, FORCED — the evidence the Go source scans structurally cannot give
+
+Every Android fence in this slice is a Go scan over Kotlin **source text**, so none of them can see a
+type error inside a lambda, and none can see a facade signature that moved. Only a compiler can. The
+difficulty is that gradle kept declining to be one:
+
+| run | what it said about the compile | worth as evidence |
+|---|---|---|
+| 1 | `compileDebugKotlin FAILED` | measured another agent's uncommitted negative-control mutations, not the slice |
+| 2 | `compileDebugKotlin UP-TO-DATE` | **none** — gradle saying it did not do the work |
+| 3 | `--rerun-tasks` | **none** — dies in AGP's resource compiler on nine locales before any Kotlin is read |
+| 4 | `compileDebugUnitTestKotlin FROM-CACHE` | **none** — a cache hit is not a compilation |
+
+`UP-TO-DATE` and `FROM-CACHE` are the quiet version of the false green: the build succeeds and
+nothing was checked. Forcing execution needs the output **deleted** and the cache **off** —
+`--rerun-tasks` is the obvious lever and the wrong one:
+
+```
+$ rm -rf app/build/tmp/kotlin-classes app/build/test-results \
+         app/build/tmp/testDebugUnitTest app/build/reports/tests
+$ ./gradlew --no-daemon --no-build-cache :app:testDebugUnitTest
+
+AAR_MTIME    = 2026-08-08 13:40:29
+RUN_START    = 2026-08-08 14:14:43          <- 34 minutes AFTER the AAR: the ordering is provable
+> Task :app:compileDebugKotlin              <- EXECUTED. no UP-TO-DATE, no FROM-CACHE
+> Task :app:compileDebugUnitTestKotlin
+kotlin error lines: 1
+```
+
+**That single `e:` is `e: Daemon compilation failed`, paired with `w: Failed to compile with Kotlin
+daemon: java.lang.Exception` — the Kotlin daemon dying of host memory pressure (§D), not a rejected
+source.** It fell back and `compileDebugUnitTestKotlin` completed. Every other diagnostic is a
+pre-existing deprecation warning in `ui/kit` (`CtaButton`, `FocusRing`, `Grain`, `Haptics`, `Motion`,
+`ScanReticle`, `StatusDot`, `Surfaces` ×4, `Toggle` — all `overrides a deprecated member`).
+
+**Nothing about `approve`. Nothing about `PhoneSurface`. Nothing about the transcript.**
+
+So: production Kotlin **plus the entire test source set** compiles against the rebuilt AAR, and
+**there was no signature mismatch to fix.** `app.approve(panel.sessionId, panel.itemId, decision.id)`
+(`PhoneSurface.kt:2007`) and `onApproval = ::openApproval` (`:1683`) are accepted by a real compiler.
+Go `int` binding as Java `long` is why `FacadeBridge.transcript(..., limit: Long)` is correct.
+
+---
+
+## C. The integration test is NOT this workpackage's, and the duplicate was deleted
+
+This agent independently built a second recorder/renderer pair — a `phonecore`-level fixture emitter,
+a committed `interaction-screen-fixture.json`, and a Robolectric suite over it — in the same minutes
+as §3's. **All three were deleted rather than kept**, and the reasoning is the point:
+
+- §3a's recorder drives the **real bound facade** — `App.ReadTranscript`, `App.PendingApprovals`,
+  `App.Approve` over the full rig with a separate gateway process. The deleted one folded through
+  `phonecore` in-process, one struct-copy below the boundary.
+- §3's Kotlin compares the pressed button's id against **the id the real `App.Approve` accepted**
+  (`tap("pending").decision_id`). The deleted suite could only compare it against the id its own
+  fixture offered — it never called the facade, so that assertion was circular where §3's is not.
+- Normalizing the volatile fields **at emission** (`item-1`, `turn-1`, fixed `ts`, zeroed
+  `content_hash`) beats scrubbing them at compare time, which is what the deleted one had to do.
+
+**Two goldens of one crossing is worse than one**: they can disagree, and then neither is evidence.
+Recorded here so nobody reinstates the weaker half from a transcript.
+
+---
+
+## D. §5 CLOSED: the assertions executed, and the golden suite is GREEN
+
+The XML below was **snapshotted out of `app/build` the moment the task finished**, because the next
+run's task-start cleanup deletes it — which is what destroyed four earlier attempts' evidence. The
+three files are archived in-repo at **`docs/verification/i1-robolectric/`**, so this claim is
+re-readable rather than resting on a transcript.
+
+```
+TranscriptPanelTest:        tests=21 failures=0 errors=0 skipped=0  ts=2026-08-08T12:22:20.380Z
+TranscriptScreenGoldenTest: tests=6  failures=0 errors=0 skipped=0  ts=2026-08-08T12:22:33.523Z
+TranscriptViewTest:         tests=7  failures=0 errors=0 skipped=0  ts=2026-08-08T12:22:35.528Z
+TOTAL                       tests=34 failures=0 errors=0 skipped=0
+```
+
+(Timestamps are UTC; 12:22Z is 14:22 local.)
+
+**`TranscriptScreenGoldenTest` 6/6 green is slice I1's app half passing against the machine's own
+recorded bytes** — §3's whole claim, executed rather than merely compiled.
+
+**Why these are provably not the stale corpse.** Run 4 above **deleted `app/build/test-results`
+outright at 14:14:43**, so nothing in that tree can predate it. The full ordering:
+
+```
+13:40:29  AAR rebuilt
+13:51:11  i1-transcript-screen.golden.json recorded
+14:14:43  app/build/test-results DELETED
+14:22:20  first assertion executes
+14:22:35  last assertion executes
+```
+
+`TranscriptScreenGoldenTest` did not exist before today, so it cannot be a stale artifact of anything.
+
+**Open point 7.2 is retired**: `i1-transcript-screen.golden.json` is confirmed staged into
+`app/build/generated/policy-test-resources/` alongside `design-tokens.tsv` and the rest, so the suite
+read the recording rather than failing loudly for want of it.
+
+### What is still NOT claimed
+
+- **The full-suite number.** A directory-wide aggregate read at ~14:22:30 gave
+  `CLASSES=131 TESTS=1062 FAILURES=0`, and seconds later all but the three files above were gone. A
+  131-class run and a 3-class run cannot both have completed inside 40 seconds, so **that 1062 is
+  recorded as observed-but-unsubstantiated and is not a green.** Only the three snapshotted classes
+  are stood behind here.
+- **A handset.** Unchanged by this appendix, and §7.3 states it correctly.
+
+---
+
+## E. Corrections to the record, each of which cost a cycle today
+
+1. **`NoSuchFileException: .../binary/in-progress-results-generic.bin` is an OOM signature, not a
+   concurrent-Gradle signature.** §5's trap list attributes it to collision. It was tested: clearing
+   `test-results/`, `tmp/testDebugUnitTest/` **and** `reports/tests/` and re-running produced the
+   identical error, with `vm.swapusage: used = 8083.25M / 9216.00M`. It is the test **worker** dying
+   before it can create its own results file. Diagnosing it as a clobber sends you to serialization,
+   which does not fix it; the fix is fewer resident JVMs.
+2. **`scripts/o2-gradle-run.sh` resolves `ROOT` from its own location.** Invoked from the main
+   checkout it builds **the main checkout**, not the worktree. A run at 13:47:57 reported
+   `BUILD SUCCESSFUL in 4m26s` having tested main while this worktree was the subject. Use the
+   worktree's own `android/gradlew`.
+3. **`until ! pgrep -f "gradle-wrapper.jar"; do sleep 10; done` can never exit** — the waiter's own
+   command line contains the pattern, so `pgrep -f` matches itself. Three such waiters sat for
+   25–40 minutes. Put the pattern in a **script file** and match with `ps | grep '[G]radle'`, so the
+   waiter's argv is only a path.
+4. **`--rerun-tasks` is not a way to force an AGP build to recompile** (§B table, run 3).
+5. **A stale XML count reads exactly like a green.** `scripts/o2-gradle-run.sh` printed
+   `testDebugUnitTest: 130 result files, 130 written in the last hour` for a build whose Kotlin
+   compile had **failed**. A count is only evidence if the files are newer than the run that claims
+   them — which is why every number in §D carries a timestamp and a deletion that precedes it.
+
+**Five false greens surfaced in one day** on this one verification: the AAR-overwrite run, the
+main-checkout run, the stale-130 count, `UP-TO-DATE`, and `FROM-CACHE`. Each looks identical to
+success at the point a reader would stop.

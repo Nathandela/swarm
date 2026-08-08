@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.swarm.phone.ui.screens.TranscriptViewTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-08-08T12:22:35.528Z" hostname="MacBookPro" time="1.181">
+  <properties/>
+  <testcase name="the transcript is composed of the parts its recorded composition names" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.345"/>
+  <testcase name="the marked span is the one the model named" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.322"/>
+  <testcase name="an approval block with nowhere to go is drawn and is not a dead control" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.076"/>
+  <testcase name="a block carrying a machine literal draws it in the mono well" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.086"/>
+  <testcase name="the approval block is the one a tap can answer, and it names what it answers" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.118"/>
+  <testcase name="every block is drawn, in the order the panel put them in" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.088"/>
+  <testcase name="a conversation with nothing in it draws its copy, not an empty area" classname="dev.swarm.phone.ui.screens.TranscriptViewTest" time="0.134"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

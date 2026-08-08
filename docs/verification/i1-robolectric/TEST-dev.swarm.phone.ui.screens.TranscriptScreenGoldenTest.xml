@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-08-08T12:22:33.523Z" hostname="MacBookPro" time="1.98">
+  <properties/>
+  <testcase name="the sheet asks the machine's question and offers the machine's own decisions" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="1.137"/>
+  <testcase name="the recorded Claude Code turn reads as a conversation" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="0.271"/>
+  <testcase name="the recorded output and the recorded diff are the only mono blocks" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="0.164"/>
+  <testcase name="the recorded approval is the row a tap answers, and it names what the facade accepted" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="0.173"/>
+  <testcase name="the answered card stays in the conversation and stops being a decision" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="0.157"/>
+  <testcase name="the card the screen builds carries no part of the binding tuple" classname="dev.swarm.phone.ui.screens.TranscriptScreenGoldenTest" time="0.059"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

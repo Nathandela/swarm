@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="dev.swarm.phone.ui.screens.TranscriptPanelTest" tests="21" skipped="0" failures="0" errors="0" timestamp="2026-08-08T12:22:20.380Z" hostname="MacBookPro" time="13.107">
+  <properties/>
+  <testcase name="an answered approval stops being a decision" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="10.942"/>
+  <testcase name="an agent message is the agent's own words and nothing added" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.26"/>
+  <testcase name="a rename says where the file came from" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.106"/>
+  <testcase name="a streamed message is the fold and never the last increment alone" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.056"/>
+  <testcase name="a session status renders inline in the wire's own words" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.068"/>
+  <testcase name="a truncated item says that it is truncated" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.084"/>
+  <testcase name="the conversation is oldest first, in the order it was said" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.153"/>
+  <testcase name="a tool run reads as what the tool did, from the structured action" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.087"/>
+  <testcase name="a truncated tool output shows the CLI's own marker verbatim" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.082"/>
+  <testcase name="each action type is read from its own field rather than from the tool name" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.099"/>
+  <testcase name="a resolution says what was decided and who decided it" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.058"/>
+  <testcase name="an item from a newer machine is marked rather than dropped" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.078"/>
+  <testcase name="a plan update renders its steps and the state of each" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.063"/>
+  <testcase name="a user message is attributed to the person who sent it" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.048"/>
+  <testcase name="an unclassified call falls back to the tool and guesses nothing" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.076"/>
+  <testcase name="an approval request is the block a user can answer" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.041"/>
+  <testcase name="a session with no items says so rather than showing an empty area" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.039"/>
+  <testcase name="a status note is the machine's sentence and replaces the state line" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.037"/>
+  <testcase name="an unreadable body renders as a neutral row and never crashes" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.035"/>
+  <testcase name="an unknown kind renders as a neutral row and never crashes" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.051"/>
+  <testcase name="a file change names the change, the path and the size of it" classname="dev.swarm.phone.ui.screens.TranscriptPanelTest" time="0.052"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

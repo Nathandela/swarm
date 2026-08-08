@@ -186,6 +186,27 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
         rootProject.layout.projectDirectory.dir("..")
             .file("docs/adr/ADR-009-obsidian-visual-direction.md"),
     )
+    // ADR-009-structured-chat-interaction (1) (slice I1): THE FACADE'S OWN BYTES.
+    //
+    // Every artifact above is a DESIGN source -- what the app should look like. This one is a
+    // RECORDING: `internal/skeleton/interaction_screen_golden_test.go` drives the recorded Claude
+    // Code corpus through the real adapter, the real producer, a separate gateway process, the
+    // real relay and the real phone core, reads it back through the real bound
+    // `swarmmobile.App.ReadTranscript`/`PendingApprovals`, taps `App.Approve`, and writes what
+    // crossed.
+    //
+    // WHY THE ROBOLECTRIC SUITE MUST READ IT. `swarmmobile.App` is a gomobile class over .so files
+    // cross-compiled for Android ABIs, so it cannot be constructed on the unit-test JVM
+    // (FacadeBridge's own KDoc says so). The consequence was that every transcript and approval
+    // assertion in this module ran against item JSON hand-written in Kotlin, with nothing joining
+    // it to what the machine actually sends -- the same shape of gap as a test that transcribed a
+    // colour from the implementation it was checking. Staged from the classpath, never by relative
+    // path, like everything above it: the screen is now asserted against the producer's bytes, and
+    // a drift in either half turns the other red.
+    from(
+        rootProject.layout.projectDirectory.dir("..")
+            .file("internal/skeleton/testdata/i1-transcript-screen.golden.json"),
+    )
     into(policyTestResourceDir)
 }
 
