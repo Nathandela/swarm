@@ -22,8 +22,9 @@ object CapabilityNotice {
     fun of(anomalies: List<CapabilityAnomaly>): String {
         if (anomalies.isEmpty()) return ""
         val listed = anomalies.joinToString(", ") { "${it.capability} (${it.state})" }
-        return "This handset did not confirm $listed. Nothing this app needs is affected -- " +
-            "at the supported Android versions the platform is meant to offer them, so include " +
-            "this line if you ever report a problem."
+        // agents-tracker-ksvb.6: dropped the "include this line if you ever report a problem"
+        // clause. It was bug-report instrumentation wearing user copy -- a reader who is not
+        // about to file anything is told to remember text for a report they may never write.
+        return "This handset did not confirm $listed. Nothing this app needs is affected."
     }
 }

@@ -4,6 +4,7 @@ import dev.swarm.phone.keys.CapabilityAnomaly
 import dev.swarm.phone.keys.CapabilityState
 import dev.swarm.phone.keys.PlatformCapability
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -80,5 +81,18 @@ class CapabilityNoticeTest {
                 !notice.contains(alarm),
             )
         }
+    }
+
+    /**
+     * agents-tracker-ksvb.6: "include this line if you ever report a problem" was bug-report
+     * instrumentation wearing user copy -- instructions for a report the reader may never file.
+     */
+    @Test
+    fun the_notice_does_not_ask_the_reader_to_remember_it_for_a_bug_report() {
+        val notice = CapabilityNotice.of(listOf(absentX25519))
+        assertFalse(
+            "the notice still tells the reader to include this line in a report: $notice",
+            notice.contains("report"),
+        )
     }
 }
