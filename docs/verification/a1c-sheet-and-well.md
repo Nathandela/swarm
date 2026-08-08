@@ -403,9 +403,19 @@ already recorded**, which is worth saying plainly rather than presenting as a fi
 in its command line so both `pgrep -x java` and `pgrep -f gradle` report busy when nothing builds. The
 only reliable distinguisher is `pgrep -f gradle-wrapper.jar` = active build." The reasoning here
 (daemons persist by design and write nothing to `test-results`, so `-x java` never clears on this host
-and becomes a permanent refusal) is a rederivation of that note, not an addition to it. The lesson is
-about the ledger rather than the guard: the answer was already written down, and two sessions spent
-effort re-finding it.
+and becomes a permanent refusal) is a rederivation of that note, not an addition to it.
+
+**THE LEDGER CONTRADICTS ITSELF ON THIS POINT, AND THE WRONG HALF IS THE DISCOVERABLE ONE.** The
+memory `parallel-agent-constraint-for-the-android-lane-only` (2026-08-01) says to use
+`pgrep -x java`. Issue `agents-tracker-6qi` (updated 2026-08-06) says `pgrep -x java` **also** fails,
+for the 7200s `KotlinCompileDaemon` reason, and names `pgrep -f gradle-wrapper.jar` as the only
+reliable distinguisher. The issue supersedes the memory — but `bd memories` searches memories, not
+issue descriptions, so an agent doing the lookup the project documents gets the 2026-08-01 answer and
+never sees the 2026-08-06 correction. Neither guard is unconditionally safe in any case: `-f` can
+self-match when the pattern is typed on the checking command line (avoided here by running it inside
+a script file, whose argv does not contain the literal). **The durable check is not the guard at all
+— it is confirming afterwards that the result XML was written by your own run.** Flagged for a human;
+not fixed here, because the memory is shared project state outside this worktree.
 
 The suites this slice touched, all green:
 
@@ -569,7 +579,24 @@ other gate files besides; **(2) a scratch git worktree or clone**; **(3) never i
 
 §5.2.1 used method (3). The clean tree and the `trap ... EXIT` made it *recoverable*, and the hazard
 did not materialise — but recoverable is not the test the norm sets, and "the tree was clean" is not
-one of the three answers. **So the conclusion §5.2 reached — that the clean tree is the enabling
+one of the three answers. A concurrent plain `grep` would have seen a source state in no commit, and
+no lane check catches that.
+
+**METHOD (1) WAS NOT AVAILABLE HERE, AND THE NORM DOES NOT SAY SO.** This is worth recording against
+the norm itself rather than only against this slice. In-memory `strings.Replace` works for the gates
+it cites because those gates **assert over source text**: `guidedpairing_test.go` reads the surface
+into a string, perturbs the string, and re-runs its own reader over the perturbed copy
+(`guidedSlots(crippled)`) — the subject IS the text, so perturbing the text perturbs the whole
+subject. These three controls are **Robolectric behavioural tests**: they construct a real
+`SessionDetailPanel`, build a real view hierarchy and call `performClick()`, all of which need
+compiled Kotlin. No in-memory string edit changes what `leaseNoticeFor` does at runtime.
+
+So the correct available method was **(2), a scratch worktree or clone** — and that is what should
+have been used. The gap matters because an agent who reads the norm, follows its first-ranked method
+to `guidedpairing_test.go`, and finds it unreachable from a Robolectric suite may conclude the norm
+has no answer for behavioural tests and fall back to (3). That is precisely the path taken here.
+**The norm's ranking is sound but its methods are not interchangeable: (1) is for source-scanning
+assertions, (2) is for anything that must run compiled code.** **So the conclusion §5.2 reached — that the clean tree is the enabling
 condition — is wrong as guidance**, and it is wrong in the direction that invites repetition: a
 future reader would take it as licence to perturb shared source whenever `git status` is empty. The
 enabling condition the project actually recorded is *not touching the shared tree at all*.
