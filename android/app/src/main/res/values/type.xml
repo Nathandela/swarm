@@ -3,11 +3,20 @@
     <!--
       PB-DS-2 and PB-DS-3 (S22b): the typography scale.
 
-      18 product text styles across 12 sizes, 4 weights and 5 tracking values, plus the one
-      docs/design/substrate-components.md §7 adds - `Display.SAS`, the 34 sp the pairing screen's
-      verification emoji are set in. Before this file the app expressed zero of them: 1582 lines
-      of surface code held one Typeface.MONOSPACE, one Typeface.BOLD, and no setTextSize or
-      setLetterSpacing anywhere.
+      19 product text styles across 13 sizes: PB-DS-2's 18 across 12 sizes, 4 weights and 5
+      tracking values, plus the one docs/design/substrate-components.md §7 adds - `Display.SAS`,
+      the 34 sp the pairing screen's verification emoji are set in, which is the 13th size.
+
+      THE HEADING COUNT WAS 18/12 UNTIL 2026-08-08 (agents-tracker-ksvb.4) and the file has held
+      19 across 13 since `Display.SAS` landed. The sentence read as PB-DS-2's requirement and was
+      also the only place a reader could count the FILE, so the two claims sat on one line and
+      only one of them was true. The requirement's numbers are unchanged and are named as the
+      requirement's; the file's own count leads, because that is what a reader of this file is
+      counting. ADR-009 D7 states the same total ("Type scale structure (19 styles, sp units,
+      colour-free styles) is unchanged"). Prose only: no style, size, weight or tracking moved.
+
+      Before this file the app expressed zero of them: 1582 lines of surface code held one
+      Typeface.MONOSPACE, one Typeface.BOLD, and no setTextSize or setLetterSpacing anywhere.
 
       EACH STYLE DECLARES THE DESIGN FACT IT DESCENDS FROM, in the annotation above it. That
       comment is machine-read - android/gate/s22b_type_test.go and the Robolectric suite both
