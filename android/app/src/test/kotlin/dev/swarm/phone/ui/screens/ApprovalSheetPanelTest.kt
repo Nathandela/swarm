@@ -15,14 +15,19 @@ import org.junit.Test
  * own clause is "no new information, reordered hierarchy", and a sheet that computed a fourth fact
  * would be a new screen wearing a reordering's clothes.
  *
- * **NOTHING IS PHRASED HERE THAT THE WIRE DID NOT SAY.** `InboxRow.need` is documented as "the
- * journal record type verbatim, never an invented phrase", and `ActivityPanel`'s KDoc argues the
- * general case at length: a table turning a record type into English has to fail loudly on a value
- * it does not know, and a server that adds one would then take the screen down. So the question
- * line is the need VERBATIM -- the app's own statement of what the session is blocked on -- and
- * what O6.1 changes is where it sits and how big it is, which is exactly what the plan asks for.
- * The maquette's `Claude wants to push the release commit to main.` is a drawing of a wire this
- * product does not have yet; see the panel's KDoc for the gap, stated rather than filled in.
+ * **THIS MODEL PHRASES NOTHING ITSELF.** `InboxRow.need` USED TO BE documented as "the journal
+ * record type verbatim, never an invented phrase", and this class's own KDoc read the question
+ * line as that value, VERBATIM. agents-tracker-ksvb.2 gave the inbox row's need line a human
+ * vocabulary for the seven record types -- `TriageInboxScreen.of` maps `launched` to `Started`,
+ * `group_transition` to a phrase read off the row's own Group, and so on -- and `question` still
+ * reads `need` unchanged, which is now sometimes that phrase. What survives is the narrower claim:
+ * this model invents NOTHING OF ITS OWN. It is `InboxRow.need`, whatever that already says, and an
+ * unrecognised token still reaches this screen verbatim because the mapping's own fallback is the
+ * wire's word, never a guess (`NeedVocabularyTest` covers the mapping itself; this file covers only
+ * that the sheet does not touch it a second time). What O6.1 changes is where the line sits and how
+ * big it is, which is exactly what the plan asks for. The maquette's `Claude wants to push the
+ * release commit to main.` is a drawing of a wire this product does not have yet; see the panel's
+ * KDoc for the gap, stated rather than filled in.
  */
 class ApprovalSheetPanelTest {
 
@@ -66,16 +71,38 @@ class ApprovalSheetPanelTest {
         )
     }
 
+    /**
+     * OLD ASSERTION, QUOTED: this test used to be `the question is the need verbatim`, feeding
+     * `need = "needs_input"` and asserting `panel?.question == "needs_input"` on the ground that
+     * "InboxRow.need is `the journal record type verbatim, never an invented phrase`". That ceased
+     * to be InboxRow.need's whole rule at agents-tracker-ksvb.2: `TriageInboxScreen.of` now maps
+     * the seven known record types to a human phrase before this model ever sees the row. What the
+     * old assertion was actually protecting -- that THIS model invents nothing OF ITS OWN -- does
+     * not depend on whether `need` happens to be a raw wire token or a mapped phrase, so it is
+     * pinned here with a mapped-looking value instead, and the raw-token case moves to the test
+     * below.
+     */
     @Test
-    fun `the question is the need verbatim`() {
-        val panel = ApprovalSheetScreen.of(row(need = "needs_input"), snapshot = "")
+    fun `the question is InboxRow need, unchanged -- whatever that already says`() {
+        val panel = ApprovalSheetScreen.of(row(need = "Waiting on you"), snapshot = "")
         assertEquals(
-            "the question is the need the roster carries, VERBATIM. InboxRow.need is `the journal " +
-                "record type verbatim, never an invented phrase`, and a sheet that reworded it " +
-                "would be inventing the one sentence the user is deciding on.",
-            "needs_input",
+            "the question is InboxRow.need, unchanged. The mapping from record type to phrase " +
+                "already happened upstream (TriageInboxScreen.of); a sheet that reworded it again " +
+                "would be inventing a second phrase for the one sentence the user is deciding on.",
+            "Waiting on you",
             panel?.question,
         )
+    }
+
+    /**
+     * The other half of the old assertion: a token this build's vocabulary does not know still
+     * reaches the sheet exactly as the wire sent it, because the fallback that produces that is
+     * `TriageInboxScreen`'s, and this model must not add a second one.
+     */
+    @Test
+    fun `an unmapped need still reaches the sheet verbatim`() {
+        val panel = ApprovalSheetScreen.of(row(need = "a_future_record_type"), snapshot = "")
+        assertEquals("a_future_record_type", panel?.question)
     }
 
     @Test

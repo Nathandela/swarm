@@ -24,13 +24,19 @@ package dev.swarm.phone.ui.screens
  * gap, and the defect class ADR-007 B135 exists for.
  *
  *  - **The sentence.** `swarmmobile.Session.Need` is "the verbatim journal record TYPE that last
- *    touched the session" (`mobile/types.go`), which is a value like `needs_input`, and
- *    [InboxRow.need] restates the rule that binds every consumer of it: "the journal record type
- *    verbatim, never an invented phrase". So [question] is that value, VERBATIM. A table turning
- *    it into English would have to fail loudly on a type it did not know, and a server that added
- *    one would take this sheet down at the moment it is needed. **What O6.1 changes is where the
- *    line sits and how big it is** -- which is the whole of what the plan asks for -- not what it
- *    says.
+ *    touched the session" (`mobile/types.go`) -- a value like `launched` or `group_transition` --
+ *    and [dev.swarm.phone.ui.SessionRow.need] keeps it exactly that verbatim; THE MODEL keeps the
+ *    wire's own word (agents-tracker-ksvb.2's ruling). What changed under O6.1's own surface is
+ *    that the inbox row's need line, which [question] simply reads, was rated human copy rather
+ *    than the machine's register -- so by the time this model sees it, [InboxRow.need] is usually
+ *    the vocabulary's phrase for that type (`Started`, `Waiting on you`, ...), falling back to the
+ *    wire's own word, VERBATIM, for a type `TriageInboxScreen.of` does not recognise. [question] is
+ *    that value UNCHANGED either way: this model still phrases nothing of its own, it reads
+ *    [InboxRow.need] and stops. A table turning an unrecognised type into English would have had to
+ *    fail loudly or lie; this one instead falls back to the wire's word, so a server that adds a
+ *    record type degrades this sheet's copy by one word, never takes it down. **What O6.1 changes
+ *    is where the line sits and how big it is** -- which is the whole of what the plan asks for --
+ *    not what it says.
  *  - **The command.** Nothing on this wire carries the literal a session is blocked on. What the
  *    phone has is the daemon-rendered terminal snapshot, which is where the command is actually
  *    printed, so [command] is that snapshot verbatim and the well keeps its meaning: the literal
@@ -45,7 +51,11 @@ package dev.swarm.phone.ui.screens
 data class ApprovalSheetPanel(
     /** Who is asking: the project and the agent, joined. Never a machine name this side invents. */
     val contextLine: String,
-    /** The blocking question, verbatim. See the class KDoc: this is `need` and nothing else. */
+    /**
+     * The blocking question: [InboxRow.need], UNCHANGED. See the class KDoc -- this model phrases
+     * nothing of its own; `need` is now usually the human vocabulary's phrase for the row's record
+     * type (agents-tracker-ksvb.2), and this field is that value and nothing else either way.
+     */
     val question: String,
     /** The literal the machine is showing. Empty when this phone has not watched the session. */
     val command: String,

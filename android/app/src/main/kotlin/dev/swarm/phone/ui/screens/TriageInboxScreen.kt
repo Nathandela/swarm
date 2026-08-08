@@ -101,7 +101,17 @@ data class InboxRow(
      * at all (`ui/kit/SessionRow.kt`) rather than a blank one or a plausible substitute.
      */
     val agent: String,
-    /** `.prow .ln` -- the journal record type verbatim, never an invented phrase. */
+    /**
+     * `.prow .ln` -- the human phrase for the wire's journal record type
+     * (agents-tracker-ksvb.2's vocabulary, [needCopy]), or the type ITSELF where this screen does
+     * not recognise it.
+     *
+     * THE FALLBACK CARRIES FORWARD [dev.swarm.phone.ui.SessionRow.need]'S OWN RULE rather than
+     * replacing it: that field -- what this one is built from -- keeps "the journal record type
+     * verbatim, never an invented phrase" for exactly the case this screen cannot place, so a token
+     * outside the seven this build knows renders as the wire sent it, never a guessed English
+     * sentence that would fail silently the day the server adds one.
+     */
     val need: String,
     val group: String,
     /**
@@ -175,6 +185,70 @@ object TriageInboxScreen {
         "working" to "Nothing is running.",
     )
 
+    /**
+     * NEED_VOCABULARY is agents-tracker-ksvb.2's phone-side lookup table: the human phrase for
+     * each of the wire's own journal record types (`internal/journal.RecordType`), read here
+     * because this is where the screen composes [InboxRow]'s display strings -- the approval
+     * sheet's question reads the same phrase off the row unchanged (`ApprovalSheetPanel.kt:85`),
+     * so one table answers both surfaces.
+     *
+     * `group_transition` IS NOT HERE. Its own content beyond the session it names IS the Group it
+     * moved to (`internal/journal/journal.go`'s own comment on the field: "set on
+     * group_transition"), so its phrase is a lookup over the row's own Group --
+     * [GROUP_TRANSITION_VOCABULARY] -- and not a fixed string this map could hold.
+     *
+     * `presence` CARRIES NO ONLINE/OFFLINE DIRECTION HERE ON PURPOSE. The producer
+     * (`internal/daemon/journal.go`'s `RecordGatewayPresence`) is "a daemon-side liveness proxy"
+     * for the remote gateway connecting or disconnecting, and the online flag rides in the record's
+     * opaque payload -- but `mobile/relay.go`'s `a.needs[rec.SessionID] = rec.Type` keeps only the
+     * TYPE, so no direction ever reaches this map to read. "Connection updated" says the one thing
+     * this table can know: something about connectivity changed.
+     *
+     * `roster` IS HERE EVEN THOUGH THE JOURNAL NEVER APPENDS IT. `journal.TypeRoster`'s own comment
+     * says it is "emitted ONLY inside Resume.Roster... NEVER appended", and it reaches this need
+     * line exactly like an appended record -- `mobile/app.go`'s `a.needs` map does not distinguish
+     * the two. "Synced" is what that snapshot IS to a person: the phone catching up to what the
+     * machine already knows, not a new event having happened.
+     */
+    private val NEED_VOCABULARY: Map<String, String> = mapOf(
+        "launched" to "Started",
+        "exited" to "Ended",
+        "lost" to "Connection lost",
+        "deleted" to "Deleted",
+        "presence" to "Connection updated",
+        "roster" to "Synced",
+    )
+
+    /**
+     * `group_transition`'s own phrase, BY THE GROUP IT NAMES -- a lookup, not a second derivation.
+     * [InboxRow.group] already carries `swarmmobile.Session.Group` verbatim (`TriageInbox` states
+     * the rule this screen never breaks: the Group is never derived on-device), so this reads it
+     * rather than deciding it again.
+     */
+    private val GROUP_TRANSITION_VOCABULARY: Map<String, String> = mapOf(
+        "needs_input" to "Waiting on you",
+        "working" to "Working",
+        "ready_for_review" to "Ready for review",
+        "completed" to "Done",
+    )
+
+    private const val GROUP_TRANSITION = "group_transition"
+
+    /**
+     * The need line's phrase for one row: [NEED_VOCABULARY] or [GROUP_TRANSITION_VOCABULARY], and
+     * the wire's own word where NEITHER table knows it.
+     *
+     * AN UNRECOGNISED TOKEN RENDERS VERBATIM, [dev.swarm.phone.ui.SessionRow.need]'s own rule
+     * carried forward rather than replaced: a table that guessed at a record type it did not know
+     * would put an invented phrase on screen the moment the server adds one, and the failure would
+     * be silent -- every field still a plain string, nothing to throw on.
+     */
+    private fun needCopy(need: String, group: String): String = if (need == GROUP_TRANSITION) {
+        GROUP_TRANSITION_VOCABULARY[group] ?: need
+    } else {
+        NEED_VOCABULARY[need] ?: need
+    }
+
     /** Inventory C1.4: `Inbox` (on) - `Machines` - `Activity` - `Settings`. */
     private val TAB_LABELS: List<String> = listOf("Inbox", "Machines", "Activity", "Settings")
 
@@ -212,7 +286,7 @@ object TriageInboxScreen {
                             id = row.id,
                             project = row.title,
                             agent = row.agent,
-                            need = row.need,
+                            need = needCopy(row.need, row.group),
                             group = row.group,
                             stateDescription = headingOf(section.group),
                             selected = row.id == selectedSession,
