@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.notice
@@ -149,10 +150,42 @@ fun peekPanelView(
 }
 
 /**
+ * Put a new grid into a peek that is ALREADY on screen, or refuse and let the caller rebuild.
+ *
+ * **WHY A SCREEN HAS AN UPDATE AT ALL, WHICH IS THE ONE EXCEPTION AND ITS WHOLE JUSTIFICATION**
+ * (agents-tracker-ksvb.3). `PhoneSurface.drawPeek` guards on whole-panel equality, and [PeekPanel]
+ * CONTAINS the snapshot -- so an agent writing to its terminal made that guard false on every
+ * journal event and the entire screen was destroyed and rebuilt at output rate. A rebuilt
+ * `TextView` re-measures and re-antialiases its own text, so the 11.5 sp mono grid shimmered
+ * exactly while somebody was watching it stream, and every live thing on the screen -- the
+ * accessibility focus, the well's scroll position -- was thrown away with it.
+ *
+ * **IT PATCHES ONE FIELD AND REFUSES EVERYTHING ELSE, WHICH IS WHAT KEEPS IT INSIDE PB-DS-9.** A
+ * screen states what is on it by composing it; an update that patched several parts would be a
+ * second, contradictable statement of the same screen, drifting from the composition above the
+ * first time a part is added there and forgotten here. So the only difference this accepts is the
+ * snapshot itself -- `next == drawn.copy(snapshot = next.snapshot)` is the whole test, and it is
+ * expressed against the WHOLE panel rather than field by field precisely so that a field added to
+ * [PeekPanel] later falls into the rebuild arm by default.
+ *
+ * THE GRID'S ROW COUNT IS NOT THE GRID. `snapshotRows` is the well's own floor, so a terminal that
+ * was RESIZED changes the card's height and not just its text -- and the comparison above refuses
+ * it, because `copy` keeps the drawn panel's rows.
+ *
+ * @return true when [host] now shows [next]. False means nothing was touched.
+ */
+fun peekPanelRedraw(host: View, drawn: PeekPanel?, next: PeekPanel): Boolean {
+    if (drawn == null || next != drawn.copy(snapshot = next.snapshot)) return false
+    val well = host.findViewWithTag<View>(PeekTag.WELL) as? TextView ?: return false
+    well.text = next.snapshot
+    return true
+}
+
+/**
  * Tag a slot with the part it renders and detach it from whatever last held it.
  *
- * The detach is not tidiness: the panel is rebuilt whenever the snapshot changes, and a slot
- * arriving at its next `addView` still claiming a discarded parent is refused by Android with
+ * The detach is not tidiness: the panel is rebuilt whenever anything but the grid changes, and a
+ * slot arriving at its next `addView` still claiming a discarded parent is refused by Android with
  * "the specified child already has a parent". `PairingPanelView` carries the same four lines for
  * the same reason.
  */

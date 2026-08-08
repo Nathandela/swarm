@@ -61,8 +61,10 @@ import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.linkPanelView
 import dev.swarm.phone.ui.screens.pairOnlyView
+import dev.swarm.phone.ui.screens.peekPanelRedraw
 import dev.swarm.phone.ui.screens.peekPanelView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
+import dev.swarm.phone.ui.screens.sessionDetailRedraw
 import dev.swarm.phone.ui.screens.sessionDetailView
 import dev.swarm.phone.ui.screens.statusBannerView
 import dev.swarm.phone.ui.screens.triageInboxView
@@ -1704,6 +1706,18 @@ class PhoneSurface(
         ) {
             return
         }
+        // THE SAME NARROW PATCH [drawPeek] TAKES, and the transcript is the reason it matters more
+        // here: a rebuild at output rate re-created every `activityRow` the user was reading AND
+        // re-parented the two controls, one of which may be under a finger. `sessionDetailRedraw`
+        // accepts a difference in the snapshot alone; the two clauses beside it are this
+        // function's own guard, unchanged -- a routed line that moved is not on the panel, and a
+        // destination change means the drill-down is not the view in the host.
+        if (routed == detailOutcomeDrawn && contentShows == Destination.INBOX &&
+            sessionDetailRedraw(contentHost, detailDrawn, panel)
+        ) {
+            detailDrawn = panel
+            return
+        }
         detailDrawn = panel
         detailOutcomeDrawn = routed
         stop.text = panel.stopLabel
@@ -1981,6 +1995,18 @@ class PhoneSurface(
      */
     private fun drawPeek(panel: PeekPanel?) {
         if (panel == peekDrawn) return
+        // A STREAMING GRID IS A NEW STRING AND NOT A NEW SCREEN (agents-tracker-ksvb.3). The guard
+        // above is whole-panel equality and [PeekPanel] CONTAINS the snapshot, so an agent writing
+        // to its terminal made it false on every journal event and this function rebuilt the
+        // header, the notices, the well, the note, the button and the lease sentence at output
+        // rate -- which is exactly when somebody is looking at it. `peekPanelRedraw` accepts a
+        // difference in the snapshot ALONE and refuses everything else, so what is patched can
+        // never disagree with what was composed; see its own KDoc for why the test is expressed
+        // over the whole panel rather than field by field.
+        if (panel != null && peekPanelRedraw(peekHost, peekDrawn, panel)) {
+            peekDrawn = panel
+            return
+        }
         peekDrawn = panel
         peekHost.removeAllViews()
         if (panel == null) return

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.activityRow
@@ -276,12 +277,34 @@ fun sessionDetailView(
 }
 
 /**
+ * Put a new grid into a drill-down that is ALREADY on screen, or refuse and let the caller rebuild.
+ *
+ * IT IS `peekPanelRedraw`'S ARGUMENT OVER THE OTHER SCREEN THAT SHOWS THE SAME GRID, and that KDoc
+ * carries it in full: `PhoneSurface.drawDetail` guards on whole-panel equality, [SessionDetailPanel]
+ * contains the snapshot, and an agent writing to its terminal therefore rebuilt the header, the
+ * transcript, the notices and both controls on every journal event.
+ *
+ * WHAT IS PARTICULAR TO THIS SCREEN is what else that rebuild moved. The transcript under the card
+ * is a list of `activityRow`s the user may be reading, and the two controls are slots the surface
+ * owns and re-parents -- so a rebuild at output rate also re-attached the button under the finger
+ * about to press it. This patches the card and nothing else; anything else differing is a rebuild.
+ *
+ * @return true when [host] now shows [next]. False means nothing was touched.
+ */
+fun sessionDetailRedraw(host: View, drawn: SessionDetailPanel?, next: SessionDetailPanel): Boolean {
+    if (drawn == null || next != drawn.copy(snapshot = next.snapshot)) return false
+    val card = host.findViewWithTag<View>(DetailTag.SNAPSHOT) as? TextView ?: return false
+    card.text = next.snapshot
+    return true
+}
+
+/**
  * Tag a slot with the part it renders and detach it from whatever last held it.
  *
- * The detach is not tidiness: the panel is rebuilt whenever the transcript changes, and a slot
- * arriving at its next `addView` still claiming a discarded parent is refused by Android with "the
- * specified child already has a parent". `PeekPanelView` carries the same four lines for the same
- * reason.
+ * The detach is not tidiness: the panel is rebuilt whenever anything but the grid changes, and a
+ * slot arriving at its next `addView` still claiming a discarded parent is refused by Android with
+ * "the specified child already has a parent". `PeekPanelView` carries the same four lines for the
+ * same reason.
  */
 private fun View.tagged(tag: String): View = apply {
     this.tag = tag
