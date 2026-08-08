@@ -409,9 +409,25 @@ and becomes a permanent refusal) is a rederivation of that note, not an addition
 memory `parallel-agent-constraint-for-the-android-lane-only` (2026-08-01) says to use
 `pgrep -x java`. Issue `agents-tracker-6qi` (updated 2026-08-06) says `pgrep -x java` **also** fails,
 for the 7200s `KotlinCompileDaemon` reason, and names `pgrep -f gradle-wrapper.jar` as the only
-reliable distinguisher. The issue supersedes the memory — but `bd memories` searches memories, not
-issue descriptions, so an agent doing the lookup the project documents gets the 2026-08-01 answer and
-never sees the 2026-08-06 correction. Neither guard is unconditionally safe in any case: `-f` can
+reliable distinguisher. The issue supersedes the memory — and the correction is **unreachable by
+search**, while the superseded version is what search returns. Measured against the main DB (345
+issues):
+
+```
+$ bd search "concurrent Gradle"    -> agents-tracker-6qi     (matches its TITLE)
+$ bd search "KotlinCompileDaemon"  -> No issues found
+$ bd search "distinguisher"        -> No issues found
+$ bd search "gradle-wrapper"       -> No issues found
+```
+
+All three misses are verbatim strings from 6qi's own description, and two are plain single words, so
+this is not a tokenisation artefact: **`bd search` matches titles only.** The 2026-08-06 correction is
+therefore reachable by exactly one route — `bd show agents-tracker-6qi`, which requires already
+knowing the id. An agent who does not know it runs `bd memories gradle`, receives the 2026-08-01
+answer confidently, and never learns it was superseded.
+
+State it that way rather than as "hard to find": a reader who thinks this is a ranking or coverage
+problem will try harder queries and still get the wrong answer. Neither guard is unconditionally safe in any case: `-f` can
 self-match when the pattern is typed on the checking command line (avoided here by running it inside
 a script file, whose argv does not contain the literal). **The durable check is not the guard at all
 — it is confirming afterwards that the result XML was written by your own run.** Flagged for a human;
