@@ -8,12 +8,12 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
+import dev.swarm.phone.ui.kit.notice
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on, as drawn.
@@ -75,10 +75,12 @@ object PairOnlyTag {
  * @param started whether the offer has been taken up. The two states are exclusive on purpose;
  *  see the class comment.
  * @param onStartPairing what the one control does.
- * @param notice what a revoke left this phone unable to confirm, or empty where there is nothing
- *  to say. It is drawn in BOTH states and above both, because the state it warns about is the one
- *  the pairing flow is walking into -- see [PairOnlyTag.NOTICE]. It is LAST and defaulted so the
- *  existing call sites are unaffected, which is the shape `phoneScaffoldView`'s banner took.
+ * @param revokedNotice what a revoke left this phone unable to confirm, or empty where there is
+ *  nothing to say. It is drawn in BOTH states and above both, because the state it warns about is
+ *  the one the pairing flow is walking into -- see [PairOnlyTag.NOTICE]. It is LAST and defaulted
+ *  so the existing call sites are unaffected, which is the shape `phoneScaffoldView`'s banner took.
+ *  It was called `notice` until agents-tracker-ksvb.4: the sentence and the kit factory that draws
+ *  it cannot share a name in one scope.
  * @param copy the three sentences, which differ by WHY this phone is unpaired
  *  (agents-tracker-w6o3). It defaults to the first-run screen because that is what an offer with
  *  no reason behind it is; every other value comes from [PairOnlyScreen.reasonFor], and the screen
@@ -90,7 +92,7 @@ fun pairOnlyView(
     pairing: View,
     started: Boolean,
     onStartPairing: () -> Unit,
-    notice: String = "",
+    revokedNotice: String = "",
     copy: PairOnlyCopy = PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
 ): View {
     val column = LinearLayout(context).apply {
@@ -101,14 +103,12 @@ fun pairOnlyView(
     // DRAWN ONLY WHEN IT HAS SOMETHING TO SAY, which is `sessionDetailView`'s rule for its own
     // three notices: a blank warning line over a phone that has revoked nothing is a warning
     // nobody wrote.
-    if (notice.isNotEmpty()) {
-        column.addView(
-            TextView(context).apply {
-                tag = PairOnlyTag.NOTICE
-                text = notice
-                layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            },
-        )
+    //
+    // IT IS THE KIT'S `§4 Notice line` NOW and no longer a bare TextView (agents-tracker-ksvb.4).
+    // The parameter is `revokedNotice` rather than `notice` for exactly that reason: the sentence
+    // and the component that draws it cannot both be called the same thing in one scope.
+    if (revokedNotice.isNotEmpty()) {
+        column.addView(notice(context, revokedNotice).apply { tag = PairOnlyTag.NOTICE })
     }
 
     if (started) {

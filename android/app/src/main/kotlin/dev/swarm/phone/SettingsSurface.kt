@@ -33,9 +33,11 @@ import dev.swarm.phone.ui.PushSync
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
@@ -105,8 +107,19 @@ class SettingsSurface(
      * The error line, which is NOT part of inventory C6 and is hosted under the panel rather than
      * inside it. C6 draws sections of rows; a routed facade refusal is the same class of thing as
      * `PhoneSurface`'s outcome line and belongs on the same seam.
+     *
+     * IT IS `§4 Notice line`'S ERROR VARIANT NOW (agents-tracker-ksvb.4). It was built by a local
+     * `label()` whose KDoc said "IT CARRIES NO TEXT APPEARANCE, and that is a statement about what
+     * is missing rather than a regression ... it renders at the theme's default until there is
+     * [a factory]". The theme's default for a `TextView` is the PLATFORM's ~14 sp, above every body
+     * style in this app's ladder, so the one line on the settings screen that reports a failure was
+     * also the largest line on it -- which reads as emphasis nobody chose. `label()` had no other
+     * caller and is gone with it.
+     *
+     * ERROR AND NOT INFO, because every value this holds is a verdict: `startup.error.message`, and
+     * `PressFeedback.line`, which `ofSuccess` and `ofUnsent` both leave empty on purpose.
      */
-    private val outcome = label()
+    private val outcome = notice(activity, "", NoticeKind.ERROR)
 
     private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
     private val finished = touchFilteredSwitch(PushToggle.SECOND)
@@ -1269,19 +1282,6 @@ class SettingsSurface(
         },
     )
 
-    /**
-     * The routed-error line.
-     *
-     * IT CARRIES NO TEXT APPEARANCE, and that is a statement about what is missing rather than a
-     * regression. It used to be `setTypeface(typeface, Typeface.BOLD)`, then
-     * `R.style.TextAppearance_Swarm_Title_Row` on a heading this panel no longer has -- the
-     * heading is now [dev.swarm.phone.ui.kit.navHeader]'s. What is left is one line of body copy,
-     * and the component that would style it is derivation row 15's neighbour: there is no
-     * notice or body-copy factory in the kit, so it renders at the theme's default until there is.
-     */
-    private fun label() = TextView(activity).apply {
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
 
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT

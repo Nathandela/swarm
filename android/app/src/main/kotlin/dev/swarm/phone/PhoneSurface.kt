@@ -32,9 +32,11 @@ import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
@@ -170,15 +172,30 @@ class PhoneSurface(
      * [renderUnavailable] closes all of it -- so the sentence belongs with the screen that branch
      * draws rather than in the standing banner, which reports on a link this handset does not have.
      */
-    private val status = label(heading = true)
+    private val status = heading()
 
     /**
      * PB-KEY-8's non-fatal half. [dev.swarm.phone.keys.CustodyPlanner] records a capability the
      * handset did not confirm that no matrix row consumes; until this label existed the record
      * was computed on every launch and read by nobody.
+     *
+     * IT WAS `notice` UNTIL agents-tracker-ksvb.4. With the kit's `notice` factory imported into
+     * this file a property of that name shadows it across the whole class, and the compiler reports
+     * it as "Type checking has run into a recursive problem" on the declaration itself.
      */
-    private val notice = label()
-    private val outcome = label()
+    private val capabilityNotice = noticeLine()
+
+    /**
+     * PB-APP-9's routed line, and the ERROR variant because every value it ever holds is a refusal.
+     *
+     * The five writes below it are `routeFacadeError`, `startup.error.message`,
+     * `PhoneRuntime.unlockContent`'s `RoutedError` and `PressFeedback.line` -- and that last one is
+     * the load-bearing check: `ofSuccess` and `ofUnsent` both set `line = ""` and speak in the
+     * toast instead, deliberately, so a success never reaches this view at all. `PairingSurface`'s
+     * outcome line looks identical and is NOT the error variant, for the reason its own declaration
+     * gives.
+     */
+    private val outcome = noticeLine(NoticeKind.ERROR)
 
     /**
      * PB-DS-9: the terminal peek, rebuilt into a host of its own.
@@ -251,7 +268,7 @@ class PhoneSurface(
      * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
      * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
      */
-    private val takeControl = ctaAction("Take control", CtaKind.MORE) { takeControlOf(session) }
+    private val takeControl = actionButton("Take control", CtaKind.MORE) { takeControlOf(session) }
 
     /**
      * PB-APP-3's persistent Stop, and the one control on this surface whose PRESS DOES TWO
@@ -264,8 +281,13 @@ class PhoneSurface(
      * naming the action, so a phone that wrote the byte here would be a second implementation of
      * an interrupt and would leave the bound verb unreachable. [SessionDetail.interruptBytes] is
      * the phone-side statement of the constant and is consumed by its own unit test, not by this.
+     *
+     * IT IS `.a2-no` (agents-tracker-ksvb.4). Both of its arms end a thing the user started -- an
+     * interrupt, or the lease step that leads to one -- and the deny treatment is what the design
+     * gives an action whose result cannot be taken back. [kill] is the same treatment and the
+     * confirmation is what separates them, not the colour.
      */
-    private val stop = actionButton(SLOT_LABEL, ask = ::stopQuestion) {
+    private val stop = actionButton(SLOT_LABEL, CtaKind.DENY, ask = ::stopQuestion) {
         // THE BRANCH IS TAKEN ON THE MAIN THREAD, and it has to be: `detailDrawn` is the panel
         // this surface last drew, written by `render` and owned by the looper. Reading it from a
         // lane would be a data race on the fact that decides which of two different things this
@@ -317,9 +339,14 @@ class PhoneSurface(
      * CONSEQUENCE rather than the action precisely so it does not read like Stop's -- a
      * confirmation that read the same for both would train the user to dismiss the one that
      * matters.
+     *
+     * IT IS `.a2-no`, THE SAME TREATMENT AS [stop], and the sameness is deliberate: two destructive
+     * controls in one stack that were painted differently would be claiming a difference the design
+     * has no register for. What distinguishes them is the question above.
      */
     private val kill = actionButton(
         SLOT_LABEL,
+        CtaKind.DENY,
         ask = { detailDrawn?.killConfirmation.orEmpty() },
     ) {
         val target = session
@@ -349,8 +376,19 @@ class PhoneSurface(
      *
      * The bytes are UTF-8 and nothing on this side interprets them. There is no VT emulator on
      * the handset (ADR-007 D2): what goes out is what was typed.
+     *
+     * IT IS `.a2-ok`: sending is the composer's whole purpose, and derivation row 9's own bar draws
+     * its send affordance as the primary thing on it.
+     *
+     * **AND IT IS THE SECOND CHAMPAGNE IN [unrecomposedControls], which is recorded rather than
+     * hidden (agents-tracker-ksvb.4).** [launch] is `.a2-ok` too and the two are siblings in that
+     * column, so on the Inbox destination both are on screen at once. They belong to different
+     * things -- one submits a form, one types into a session -- and neither is the other's
+     * secondary, which is why neither was demoted here. The real repair is that the composer stops
+     * being a loose field and a button under the inbox at all: row 9's bar has no kit factory and
+     * ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
      */
-    private val send = actionButton("Send line") {
+    private val send = actionButton("Send line", CtaKind.APPROVE) {
         // Read here, on the looper that owns the field. The lane never touches a View.
         val target = session
         val line = typed.text.toString()
@@ -386,7 +424,7 @@ class PhoneSurface(
      * field is refused at the machine too, but only after burning a durable command seq and a
      * signature on a request the phone could see was incomplete.
      */
-    private val launch = ctaAction("Launch a session", CtaKind.APPROVE) {
+    private val launch = actionButton("Launch a session", CtaKind.APPROVE) {
         // The three fields are read on the looper that owns them, and the model's refusal is
         // resolved here too -- a draft the phone can already see is incomplete never reaches a
         // lane, let alone the wire.
@@ -754,7 +792,7 @@ class PhoneSurface(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
-            status, notice, peekHost,
+            status, capabilityNotice, peekHost,
             typed, send, launchHost, outcome,
         )) {
             addView(child)
@@ -1050,7 +1088,7 @@ class PhoneSurface(
         // handset is in no position to make, which is [drawContent]'s own argument for drawing no
         // inbox here.
         drawBanner(StatusBanner.NONE)
-        notice.text = ""
+        capabilityNotice.text = ""
         session = ""
         // AND NO DRILL-DOWN. The detail is read from the phone core, so a handset whose core
         // refused has nothing to fill one with -- and leaving it open would leave the back gesture
@@ -1180,7 +1218,7 @@ class PhoneSurface(
         // refused once and started on the next resume would otherwise leave its refusal standing
         // under a working app.
         status.text = ""
-        notice.text = CapabilityNotice.of(startup.anomalies)
+        capabilityNotice.text = CapabilityNotice.of(startup.anomalies)
 
         // THE TARGET IS THE ROW ON SCREEN. It used to be
         // `triageInbox().sections.flatMap{}.firstOrNull()?.id` -- a session picker that discarded
@@ -1350,7 +1388,7 @@ class PhoneSurface(
                     pairingStarted = true
                     render()
                 },
-                notice = revoked,
+                revokedNotice = revoked,
                 copy = PairOnlyScreen.copyFor(reason),
             ),
         )
@@ -2211,6 +2249,16 @@ class PhoneSurface(
      * PB-SEC-2 is VOID and both tiers left the product, so a control that named one would be
      * claiming a checkpoint that no longer exists anywhere behind it.
      *
+     * AND NOT TWO EITHER, WHICH IS WHERE `ctaAction` WENT (agents-tracker-ksvb.4). This file
+     * carried a second factory beside it whose KDoc argued "TWO FACTORIES AND NOT ONE, and the
+     * split is the SCREEN and not the verb": a control composed into a recomposed panel took the
+     * shape the design gives that site, and "the four controls still sitting in the unrecomposed
+     * remainder have no design source at all". Three of those four -- Stop, Kill and Send line --
+     * are mapped now, to `.a2-no`, `.a2-no` and `.a2-ok`, so the split had nothing left on the
+     * other side of it and a platform `Button` was the last thing keeping them apart. What the
+     * merged factory kept from BOTH is the touch filter and the accessibility role; what it lost
+     * is all-caps 14 sp Roboto Medium on the stock Material background, beside champagne CTAs.
+     *
      * WHAT [SecureWindow.gate] APPLIES IS NOT A GATE IN THAT SENSE, and it stays: PB-SEC-12
      * clause 1's touch filter makes the framework discard a tap that arrived while another
      * window covered this view. Every control built here is destructive or authorising, which
@@ -2227,12 +2275,26 @@ class PhoneSurface(
      */
     private fun actionButton(
         text: String,
+        kind: CtaKind,
         ask: () -> String = { "" },
         plan: () -> Press?,
-    ): Button = SecureWindow.gate(
-        Button(activity).apply {
-            this.text = text
+    ): TextView = SecureWindow.gate(
+        ctaButton(activity, text, kind).apply {
             setOnClickListener { control -> confirmThenPress(control, ask(), plan) }
+            // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close it --
+            // it has no click to hang the role on (`CtaButton`'s own KDoc) -- so the role is set
+            // where the click is.
+            setAccessibilityDelegate(
+                object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(
+                        host: View,
+                        info: AccessibilityNodeInfo,
+                    ) {
+                        super.onInitializeAccessibilityNodeInfo(host, info)
+                        info.className = Button::class.java.name
+                    }
+                },
+            )
         },
     )
 
@@ -2262,50 +2324,6 @@ class PhoneSurface(
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
-
-    /**
-     * The same control, as the design draws one.
-     *
-     * TWO FACTORIES AND NOT ONE, and the split is the SCREEN and not the verb. A control composed
-     * into a recomposed panel takes the shape the design gives that site -- derivation row 22 says
-     * the peek's `[Take control]` is `.a2-more`, and the launch form's submit is the primary
-     * action, so it is `.a2-ok` with its `--p-cta-fx` bloom. The four controls still sitting in
-     * the unrecomposed remainder have no design source at all: inventory C2 is unbuilt, and
-     * painting `.a2-ok` on a Kill session button because it happens to be a button would be
-     * choosing a variant for a site the design has not specified.
-     *
-     * ONE THING COMES WITH [ctaButton] THAT A `Button` HAD FOR FREE, and it is handled here because
-     * the kit cannot: a `TextView` announces itself as text rather than as a button, and the kit has
-     * no click to hang the role on (`CtaButton`'s own KDoc records the gap). The role is set below.
-     *
-     * THE DISABLED APPEARANCE WAS THE SECOND AND IS NOW THE KIT'S. It used to be recorded here as a
-     * deliberate omission -- `Button` dims itself, this did not, and derivation row 24 had no
-     * implementation -- so [launch] refused the tap while drawing full-strength phosphor green with
-     * its bloom, which is a dead control that looks pressable. [ctaButton] now paints row 24's pair
-     * (`--p-hair` fill, `--p-ink3` ink, no bloom) off the view's own drawable state, so every
-     * `isEnabled = false` below both refuses the tap and looks refused, with nothing to remember at
-     * this call site.
-     */
-    private fun ctaAction(
-        text: String,
-        kind: CtaKind,
-        plan: () -> Press?,
-    ): TextView = SecureWindow.gate(
-        ctaButton(activity, text, kind).apply {
-            setOnClickListener { control -> press(control, plan) }
-            setAccessibilityDelegate(
-                object : View.AccessibilityDelegate() {
-                    override fun onInitializeAccessibilityNodeInfo(
-                        host: View,
-                        info: AccessibilityNodeInfo,
-                    ) {
-                        super.onInitializeAccessibilityNodeInfo(host, info)
-                        info.className = Button::class.java.name
-                    }
-                },
-            )
-        },
-    )
 
     /**
      * What one press does, in the three phases the main thread requires.
@@ -2464,14 +2482,29 @@ class PhoneSurface(
     }
 
     /**
-     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. See [SettingsSurface.label];
-     * the same two lines were in all three surface files, which is what "no visual constant may
-     * enter the app except through the theme" is a fence against.
+     * PB-DS-11: a heading takes a TEXT APPEARANCE, never a typeface. The same two lines were in all
+     * three surface files, which is what "no visual constant may enter the app except through the
+     * theme" is a fence against.
+     *
+     * ITS ONE CALLER IS [status], and the boolean is gone with the other branch
+     * (agents-tracker-ksvb.4). `label(heading = false)` returned a bare `TextView` and its two
+     * callers are [capabilityNotice] and [outcome], which are `§4 Notice line`s now -- so what is
+     * left here
+     * is a heading, and a factory with one shape does not need a flag to say which one.
      */
-    private fun label(heading: Boolean = false) = TextView(activity).apply {
-        if (heading) setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+    private fun heading() = TextView(activity).apply {
+        setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
+
+    /**
+     * One line this surface says about its own state, from the kit (agents-tracker-ksvb.4).
+     *
+     * It is `noticeLine` and not `notice` because a property of that name -- which is what
+     * [capabilityNotice] was called -- shadows the imported factory across the whole class, and the
+     * compiler reports it as "Type checking has run into a recursive problem" on the declaration.
+     */
+    private fun noticeLine(kind: NoticeKind = NoticeKind.INFO) = notice(activity, "", kind)
 
     /**
      * A text field, by the words that say what belongs in it. The hint IS the label on this
