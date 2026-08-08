@@ -367,7 +367,22 @@ reports `NO-SOURCE`, and the run exits 0 having executed nothing. Three things w
    found, which matters because a leftover XML from a dead run is a result for source that no longer
    exists.
 
-**THE RUN IS A SNAPSHOT AT 13:42, AND ONE SUITE LANDED AFTER IT.**
+**THE RUN IS COMPROMISED, AND THE CHECKS BELOW DID NOT CATCH IT.** `android/app/libs/swarm.aar` has
+mtime **13:40:29** — INTEGRATION's gomobile rebuild — and this build ran from roughly 13:38:50 to
+13:42:50. **A dependency this build compiles against was replaced about ninety seconds after it
+started.** Gradle snapshots a task's inputs when that task begins, so `compileDebugKotlin` and the
+test runtime classpath did not necessarily see the same AAR, and nothing in the three checks below
+looks at dependencies at all: they compare result XMLs against *source*, which is one input of
+several. The freshness discipline was applied on one axis and the run was broken on another.
+
+What this does and does not invalidate, kept separate because the difference is the honest part.
+Every suite named below is pure-Kotlin — screen models and Robolectric view tests — and none of them
+constructs a `swarmmobile` type at runtime (`FacadeBridgeTest`'s own KDoc records why: the gomobile
+class "CANNOT BE CONSTRUCTED on the unit-test JVM"). So the *assertions* are very unlikely to have
+been affected. But "very unlikely" is not what a verification document is for, and the run cannot be
+claimed as coherent. **It is superseded**: see §5.3.
+
+**THE RUN IS ALSO A SNAPSHOT AT 13:42, AND ONE SUITE LANDED AFTER IT.**
 `ui/screens/TranscriptScreenGoldenTest.kt` has mtime 13:56 — fourteen minutes later, from the
 INTEGRATION workpackage — so the 130 XMLs above **do not include it** and "1056" is not a count of
 the module as it now stands. That is the same freshness argument as check 3, pointed the other way:
@@ -410,6 +425,45 @@ The suites this slice touched, all green:
 | `PhoneSurfaceEventPathGuardTest` | 5 |
 | `ui.FacadeBridgeTest` | 4 |
 | `ui.SessionLeaseTest` | 2 |
+
+### 5.3 The authoritative run — exclusive lane, settled AAR, whole module
+
+§5.1 is superseded by this. Taken at 14:33:57 local in a lane confirmed empty, with
+`test-results/testDebugUnitTest` removed first — a deletion that is safe **only** because the lane was
+empty, which is the distinction `agents-tracker-6qi` draws (deleting it out from under a concurrent
+run is what destroys both).
+
+```
+AAR mtime before: 13:40:29
+run started 12:33:57Z
+> Task :app:policyTestResources
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugUnitTestKotlin
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL in 4m 9s
+31 actionable tasks: 31 executed
+run ended 12:38:07Z
+AAR mtime after:  13:40:29
+```
+
+**131 suites, 1062 tests, 0 failures, 0 errors, 0 skipped.**
+
+It closes the three defects in §5.1, each by construction rather than by assertion:
+
+1. **The AAR did not move.** Printed before and after: `13:40:29` both times, roughly fifty minutes
+   stale by the time the run began. This is the check §5.1 lacked entirely — it compared results
+   against *source* and never looked at dependencies.
+2. **Nothing is a snapshot.** 131 suites rather than 130: `TranscriptScreenGoldenTest` is included,
+   and 1062 is exactly 1056 + its 6. Every suite in the module ran.
+3. **Nothing can be stale.** The directory was empty when the run started, so every XML in it was
+   written by this run — a stronger guarantee than the mtime comparison, which can only detect
+   staleness it thinks to look for.
+
+`policyTestResources` **executed** rather than reporting `UP-TO-DATE`, which is the signal the
+integration appendix's §7.2 warns about: had it been cached, the golden JSON would not be on the
+unit-test classpath and `TranscriptScreenGoldenTest`'s 6 assertions would have been passing over
+nothing. `--rerun-tasks` is what forces it; the hash comparison in that appendix is the other way to
+prove it, and the two agree.
 
 ### 5.2 The RED that is MISSING, named rather than skipped
 
