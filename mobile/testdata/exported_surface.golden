@@ -10,8 +10,11 @@ const ErrClassNoLease
 const ErrClassNotFound
 const ErrClassNotPaired
 const ErrClassOffline
+const ErrClassPairingCodeInvalid
 const ErrClassPairingFailed
 const ErrClassRateLimited
+const ErrClassRelayAddressInvalid
+const ErrClassRelayUnknown
 const ErrClassRepairRequired
 const ErrClassRevoked
 const ErrClassStateCorrupt

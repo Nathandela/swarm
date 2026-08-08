@@ -1221,6 +1221,20 @@ func (a *App) PendingOpCount() (n int, err error) {
 	return len(a.inflight), nil
 }
 
+// machineGaveNoReason is what a reply that carried no words says about itself
+// (agents-tracker-ksvb.5).
+//
+// THE FALLBACK USED TO BE THE WIRE OP, and that is a token rather than a sentence:
+// `remotegw.refusePushPrefs` seals a refusal with neither code nor words, so the phone's
+// durable outcome for it read `error`, and a severed lease read `detach`. Every screen that
+// renders a refusal renders this string as the second half of one -- "Your machine refused
+// this phone control of the session: detach." -- so the fallback is copy whether or not
+// anybody chose it as copy, and a protocol token is the one thing it must never be.
+//
+// It is deliberately not "unknown error" or an empty string: the first invents a fault
+// nobody reported and the second leaves the screen with a colon and nothing after it.
+const machineGaveNoReason = "the machine gave no reason"
+
 func outcomeOf(ctrl schema.Control) *Outcome {
 	code := string(ctrl.ErrorCode)
 	if code == "" {
@@ -1228,7 +1242,7 @@ func outcomeOf(ctrl schema.Control) *Outcome {
 	}
 	msg := ctrl.Error
 	if msg == "" {
-		msg = ctrl.Op
+		msg = machineGaveNoReason
 	}
 	return &Outcome{OperationID: ctrl.OperationID, Code: code, Message: msg, Resolved: true}
 }

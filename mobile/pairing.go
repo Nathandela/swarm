@@ -261,7 +261,7 @@ func (a *App) BeginPairingWithCode(code, relayURL string) (p *Pairing, err error
 func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 	trimmed := strings.TrimSpace(relayURL)
 	if trimmed == "" {
-		return pairing.QRPayload{}, classed(ErrClassPairingFailed,
+		return pairing.QRPayload{}, classed(ErrClassRelayUnknown,
 			errors.New("this phone has no relay yet: scan the QR once, or paste the full code"))
 	}
 	dest, err := relayAddress(trimmed)
@@ -271,7 +271,7 @@ func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 	}
 	id, psk, err := pairing.DeriveShortCode(code)
 	if err != nil {
-		return pairing.QRPayload{}, classed(ErrClassPairingFailed, err)
+		return pairing.QRPayload{}, classed(ErrClassPairingCodeInvalid, err)
 	}
 	return pairing.QRPayload{RelayURL: dest, RendezvousID: id, PairingSecret: psk}, nil
 }
@@ -287,7 +287,7 @@ func payloadFromShortCode(code, relayURL string) (pairing.QRPayload, error) {
 // spelling the transport reads. Everything else is preserved as written -- the string the confirm
 // step shows has to be the address the user can compare against their terminal.
 func relayAddress(raw string) (string, error) {
-	shape := classed(ErrClassPairingFailed, errors.New("that is not a relay address: it looks "+
+	shape := classed(ErrClassRelayAddressInvalid, errors.New("that is not a relay address: it looks "+
 		"like wss://host:port (or ws:// on your own network), and your machine printed the "+
 		"whole thing"))
 	parsed, err := url.Parse(raw)

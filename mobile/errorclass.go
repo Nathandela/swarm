@@ -167,6 +167,31 @@ const (
 	// terminal state is on the Pairing handle (PB-PAIR-5); this is the class for the errors
 	// the pairing verbs themselves return.
 	ErrClassPairingFailed = "swarm/pairing-failed"
+
+	// THE THREE BELOW SPLIT OFF ErrClassPairingFailed (agents-tracker-ksvb.5), and the split
+	// is the point: that class means "the pairing CALL failed", and its routed sentence sends
+	// the user back to their machine for a new code. None of the three ever reached a call.
+	// They are the three ways the ENTRY can be wrong, they are refused before anything is
+	// dialled, and each has a different next act -- retype ten characters, give the phone an
+	// address, or fix the shape of the one that was typed. Collapsed onto one row the user is
+	// told to restart a ceremony that never started, which is the specific advice that cannot
+	// work for any of them.
+
+	// ErrClassPairingCodeInvalid is pairing.ErrShortCodeMalformed: what was typed is not ten
+	// Crockford characters. The code is still on the machine's screen, so the act is to read
+	// it again -- nothing about the pairing needs restarting.
+	ErrClassPairingCodeInvalid = "swarm/pairing-code"
+
+	// ErrClassRelayUnknown is a typed code with no relay to complete it: this handset has
+	// never scanned a QR and none was pasted beside the code. It is the phone MISSING a fact,
+	// not a failure of anything -- and the two ways to supply it are the scan and the paste.
+	ErrClassRelayUnknown = "swarm/relay-unknown"
+
+	// ErrClassRelayAddressInvalid is a relay address in the wrong SHAPE (relayAddress). It is
+	// separate from ErrClassRelayUnknown because the remedies differ by exactly the fact the
+	// user has: one person has no address and the other has typed one wrong, and telling the
+	// second to scan a QR ignores what they can see on their own screen.
+	ErrClassRelayAddressInvalid = "swarm/relay-address"
 )
 
 // errClasses is the closed set, longest token first so a scan that finds two overlapping
@@ -179,6 +204,9 @@ var errClasses = []string{
 	ErrClassUnreconciled,
 	ErrClassPairingFailed,
 	ErrClassStateCorrupt,
+	ErrClassRelayAddressInvalid,
+	ErrClassRelayUnknown,
+	ErrClassPairingCodeInvalid,
 	ErrClassAwaitingKey,
 	ErrClassRateLimited,
 	ErrClassNotPaired,
@@ -302,8 +330,28 @@ func stampErrorClass(err error) error {
 		return classed(ErrClassRepairRequired, err)
 	case errors.Is(err, phonecore.ErrCorruptState):
 		return classed(ErrClassStateCorrupt, fmt.Errorf("%w. %s", err, stateCorruptRecovery))
-	case errors.Is(err, relay.ErrRevoked):
+	case errors.Is(err, relay.ErrRevoked), errors.Is(err, relay.ErrConsentRetired):
+		// ErrConsentRetired IS A REVOCATION IN THE RELAY'S OWN WORDS (agents-tracker-ksvb.5).
+		// Its sentence ends "pair the device again", which is this class's remedy exactly:
+		// the route consent behind a live pairing has been superseded or withdrawn, so the
+		// registration on the machine is what has to move before anything the phone does can
+		// succeed. It fell to the default arm before, so a consent the owner retired reached
+		// the user as "The app hit an internal fault ... please report it" -- report_bug over
+		// a state the owner themselves created and can undo.
 		return classed(ErrClassRevoked, err)
+	case errors.Is(err, relay.ErrRendezvousExpired), errors.Is(err, relay.ErrRendezvousBurned):
+		// THE TWO ORDINARY ENDINGS OF A PAIRING MAILBOX, and the reason this arm exists.
+		// Neither is a fault: a rendezvous outlives its TTL whenever the person typing was
+		// slow, and a single-use one is burned the second time the button is pressed. Both
+		// defaulted to ErrClassInternal, so an EXPIRED PAIRING CODE -- the most common thing
+		// that goes wrong on the most-used screen in the product -- read "The app hit an
+		// internal fault. Nothing you did caused it; please report it."
+		//
+		// They are ErrClassPairingFailed and not one of the three entry classes below: those
+		// three refuse before anything is dialled, and these two are what the RELAY answered
+		// a claim with. The attempt really did fail and really is worth restarting from a
+		// fresh code, which is the pairing-failed row's advice.
+		return classed(ErrClassPairingFailed, err)
 	case errors.Is(err, phonecore.ErrGrantLost):
 		return classed(ErrClassGrantLost, err)
 	case errors.Is(err, phonecore.ErrUnreconciled):

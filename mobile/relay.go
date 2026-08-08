@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"time"
@@ -820,7 +821,13 @@ func (a *App) onReply(ctrl schema.Control) {
 func (a *App) reportSkew() {
 	msg := ""
 	if err := a.core.SkewMonitor().Check(); err != nil {
-		msg = err.Error()
+		// THE VERDICT IS THE MONITOR'S; THE WORDS ARE NOT (agents-tracker-ksvb.5). What used to
+		// go on the wire was err.Error() -- "phonecore: this device's clock is out of sync with
+		// the machine: measured 1m45.3018s off (machine minus phone), outside the +/-30s
+		// budget" -- and ConnectionUi renders what it is given, so that string WAS the banner
+		// above every screen. The measurement is read separately rather than parsed back out of
+		// the chain, which is where the number honestly lives.
+		msg = clockBannerText(a.core.SkewMonitor().Skew())
 	}
 	a.mu.Lock()
 	changed := a.skewed != (msg != "")
@@ -835,4 +842,42 @@ func (a *App) reportSkew() {
 		return
 	}
 	a.events.emit(&Event{Kind: "clock", Stream: "clock", State: "skewed", Message: msg})
+}
+
+// clockUnmeasuredBanner is PB-TIME-1's sentence with no figure in it.
+//
+// SkewMonitor.Check can only answer non-nil after a completed bracket, so a verdict with no
+// measurement behind it is not a state this app reaches -- this is the defence, and its shape
+// is the point: the half that survives is the REMEDY. A figure of zero would tell a user
+// whose clock is broken that it is exactly right, and dropping the sentence entirely would
+// leave the banner empty at the one moment it is the only thing explaining why every command
+// is being refused.
+const clockUnmeasuredBanner = "This phone's clock is too far off your machine's to send " +
+	"commands safely. Turn on automatic date and time in Android settings."
+
+// clockBannerText is the measured verdict as something a person can act on.
+//
+// THE SIGN IS DISCARDED ON PURPOSE. phonecore.Skew.Offset is MACHINE MINUS PHONE, so a handset
+// running fast measures negative; "about -105 seconds off" renders the measurement's own sign
+// convention as copy, and the reader's fact is the same either way -- the clock is wrong by
+// that much, and the setting that fixes it is the same setting.
+//
+// IT ROUNDS TO WHOLE SECONDS, which the +/-30 s budget makes safe: a verdict exists only when
+// the whole bracket lies outside that bound, so the figure is never small enough for the
+// rounding to matter and never zero. Full time.Duration precision was what made the old string
+// change on every reply.
+func clockBannerText(measured phonecore.Skew) string {
+	if !measured.Known {
+		return clockUnmeasuredBanner
+	}
+	off := measured.Offset
+	if off < 0 {
+		off = -off
+	}
+	seconds := int64((off + time.Second/2) / time.Second)
+	if seconds == 0 {
+		return clockUnmeasuredBanner
+	}
+	return fmt.Sprintf("This phone's clock is about %d seconds off your machine's -- too far "+
+		"to send commands safely. Turn on automatic date and time in Android settings.", seconds)
 }
