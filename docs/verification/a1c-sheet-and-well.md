@@ -367,14 +367,30 @@ reports `NO-SOURCE`, and the run exits 0 having executed nothing. Three things w
    found, which matters because a leftover XML from a dead run is a result for source that no longer
    exists.
 
+**THE RUN IS A SNAPSHOT AT 13:42, AND ONE SUITE LANDED AFTER IT.**
+`ui/screens/TranscriptScreenGoldenTest.kt` has mtime 13:56 — fourteen minutes later, from the
+INTEGRATION workpackage — so the 130 XMLs above **do not include it** and "1056" is not a count of
+the module as it now stands. That is the same freshness argument as check 3, pointed the other way:
+results newer than their source proves nothing about source newer than the results. INTEGRATION has
+since run it in an exclusive lane (`TranscriptPanelTest` 21, `TranscriptScreenGoldenTest` 6,
+`TranscriptViewTest` 7 — 34 tests, 0 failures, all XMLs written by that run after clearing the
+directory), so the suite is covered; it is covered by a **different run**, and this section does not
+claim it.
+
 The safe idiom from that issue was followed exactly: **no deletion** of `app/build/test-results` (that
 is what kills a concurrent run and was misattributed to memory pressure twice), and a live-build guard
-before starting. The guard was narrowed from the issue's `pgrep -x java`, and the narrowing is
-recorded because it is a real difference: `-x java` also matches the Gradle daemon and the Kotlin
-compiler daemon, which persist between builds by design and write nothing to `test-results`, so on
-this host it never clears and the guard becomes a permanent refusal. What actually collides is a
-build's `gradle-wrapper.jar` launcher and its `GradleWorkerMain` workers; those are what is checked,
-and neither string can self-match the checking shell the way `pgrep -f gradle` does.
+before starting.
+
+The guard used is `pgrep -f gradle-wrapper.jar` plus `pgrep -f GradleWorkerMain`, rather than the
+`pgrep -x java` that `-4ok` prescribes. **This was arrived at independently and then found to be
+already recorded**, which is worth saying plainly rather than presenting as a finding:
+`agents-tracker-6qi` states it in as many words — "KotlinCompileDaemon lingers 7200s with gradle paths
+in its command line so both `pgrep -x java` and `pgrep -f gradle` report busy when nothing builds. The
+only reliable distinguisher is `pgrep -f gradle-wrapper.jar` = active build." The reasoning here
+(daemons persist by design and write nothing to `test-results`, so `-x java` never clears on this host
+and becomes a permanent refusal) is a rederivation of that note, not an addition to it. The lesson is
+about the ledger rather than the guard: the answer was already written down, and two sessions spent
+effort re-finding it.
 
 The suites this slice touched, all green:
 
