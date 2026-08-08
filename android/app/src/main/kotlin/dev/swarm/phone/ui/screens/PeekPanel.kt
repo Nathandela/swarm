@@ -54,6 +54,16 @@ data class PeekPanel(
      */
     val snapshot: String,
     /**
+     * The MACHINE's terminal row count, which is the well's floor (agents-tracker-ksvb.3).
+     *
+     * IT IS NOT `snapshot.lines().size`, AND THE DIFFERENCE IS THE WHOLE FIELD REPORT. This model
+     * is rebuilt every time the agent writes a byte, and the line count of one frame is whatever
+     * the daemon happened to render at that instant -- so a well sized to it grew and shrank under
+     * the reader, taking the note, `[Take control]` and the lease sentence with it. The grid is
+     * one size for as long as the terminal is one size, which is the number that does not move.
+     */
+    val snapshotRows: Int,
+    /**
      * PB-APP-8's mark for the snapshot, ABOVE the well rather than inside it.
      *
      * Empty when the grid is current, which is the same call every other notice on this app makes:
@@ -131,6 +141,9 @@ object PeekPanelScreen {
     fun of(peek: TerminalPeek, lease: CommandVerdict = CommandVerdict.UNANSWERED): PeekPanel = PeekPanel(
         title = "${peek.sessionId} · ${peek.cols}x${peek.rows}",
         snapshot = peek.rendered,
+        // THE GRID, WHICH THE TITLE ABOVE ALREADY SPENDS. `peek.rows` is what the daemon opened
+        // the PTY at; the well takes it as a floor so the card stops resizing per frame.
+        snapshotRows = peek.rows,
         // THE MODEL'S OWN WORDING, carried rather than re-decided: `TerminalPeek.staleNotice` is
         // the sentence, and a second one written here would be two files deciding what the user
         // reads about one fact.

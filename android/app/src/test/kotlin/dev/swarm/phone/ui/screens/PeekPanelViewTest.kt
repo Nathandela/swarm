@@ -90,6 +90,27 @@ class PeekPanelViewTest {
     }
 
     /**
+     * agents-tracker-ksvb.3: the well's floor is the GRID's, so the card stops resizing per frame.
+     *
+     * THE TWO NUMBERS DISAGREE ON PURPOSE HERE. The peek below is a 24-row terminal that has
+     * printed two lines, which is the ordinary state of a session that has just started -- and a
+     * well sized to the frame would be two lines tall now and twenty-four in a moment, moving the
+     * note, the button and the lease sentence under it every time the agent writes.
+     */
+    @Test
+    fun `the well takes its floor from the terminal and not from this frame`() {
+        val well = view(PeekPanelScreen.of(peek(text = "$ go test ./...\nok", rows = 24)))
+            .kitRequire(PeekTag.WELL) as TextView
+
+        assertEquals(
+            "the well is sized to the frame it happens to be holding, so the card grows and " +
+                "shrinks under the reader at the rate the agent produces output",
+            24,
+            well.minLines,
+        )
+    }
+
+    /**
      * THE BACK CONTROL IS GONE, and agents-tracker-joe7 is why. This asserted it was drawn:
      *
      *     assertEquals("Inbox", textOf(nav.kitRequire(KitTag.DRILL_BACK)))

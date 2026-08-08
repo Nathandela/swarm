@@ -223,7 +223,8 @@ fun sessionDetailView(
             )
         }
         column.addView(
-            monoWell(context, panel.snapshot, terminal = true).apply { tag = DetailTag.SNAPSHOT },
+            monoWell(context, panel.snapshot, terminal = true, lines = panel.snapshotRows)
+                .apply { tag = DetailTag.SNAPSHOT },
         )
     }
 

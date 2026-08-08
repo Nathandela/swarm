@@ -124,6 +124,15 @@ data class SessionDetail(
      * IT IS `TerminalPeek.stale`, which this screen was already reading the grid from and dropping.
      */
     val snapshotStale: Boolean = false,
+    /**
+     * The MACHINE's terminal row count, for the well's floor (agents-tracker-ksvb.3).
+     *
+     * IT IS `TerminalPeek.rows`, off the same read [snapshotText] arrives on, and it is a floor
+     * rather than a height -- see `monoWell`'s `lines`. Defaulted for [stopNotSent]'s reason: the
+     * suites that build a detail out of a journal and a grid say nothing about the PTY's shape,
+     * and zero is "nobody said", which leaves the well wrapping exactly as it did.
+     */
+    val snapshotRows: Int = 0,
 ) {
     val hasSnapshotCard: Boolean get() = snapshotText.isNotEmpty()
 

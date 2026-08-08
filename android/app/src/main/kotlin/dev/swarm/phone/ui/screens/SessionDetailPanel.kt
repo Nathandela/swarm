@@ -57,6 +57,8 @@ data class SessionDetailPanel(
      * bytes the daemon has already declared sanitized.
      */
     val snapshot: String,
+    /** The machine's terminal row count: the well's floor. See [SessionDetail.snapshotRows]. */
+    val snapshotRows: Int,
     /**
      * Whether there is a snapshot card at all.
      *
@@ -206,6 +208,7 @@ object SessionDetailScreen {
             emptyCopy = TRANSCRIPT_EMPTY,
         ),
         snapshot = detail.snapshotText,
+        snapshotRows = detail.snapshotRows,
         hasSnapshot = detail.hasSnapshotCard,
         stopAction = detail.stop(),
         stopLabel = if (detail.leaseHeld) STOP else STOP_NEEDS_LEASE,

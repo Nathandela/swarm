@@ -129,7 +129,10 @@ fun peekPanelView(
         column.addView(notice(context, panel.staleNotice).apply { tag = PeekTag.STALE })
     }
     // `terminal = true` is where `tokens.json`'s `terminal_peek.fg` pin finally reaches a pixel.
-    column.addView(monoWell(context, panel.snapshot, terminal = true).apply { tag = PeekTag.WELL })
+    column.addView(
+        monoWell(context, panel.snapshot, terminal = true, lines = panel.snapshotRows)
+            .apply { tag = PeekTag.WELL },
+    )
     column.addView(readOnlyNote(context, panel.note).apply { tag = PeekTag.NOTE })
 
     // THE BUTTON SITS DIRECTLY UNDER THE NOTE, which is row 22's own arrangement -- it is the

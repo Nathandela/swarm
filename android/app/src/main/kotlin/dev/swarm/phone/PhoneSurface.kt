@@ -1681,6 +1681,9 @@ class PhoneSurface(
                 // JOURNAL's verdict beside it -- a different fact, with a different remedy, about
                 // a different stream.
                 snapshotStale = grid.stale,
+                // THE GRID'S SHAPE, so the well below has a floor that does not move with the
+                // output (agents-tracker-ksvb.3). It rides the read the text already came on.
+                snapshotRows = grid.rows,
             ),
         )
     }
