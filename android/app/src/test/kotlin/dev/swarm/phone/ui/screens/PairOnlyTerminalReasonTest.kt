@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.keys.ConnectionState
 import dev.swarm.phone.ui.ConnectionBanner
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -112,6 +113,24 @@ class PairOnlyTerminalReasonTest {
                 "by failing at it",
             copy.body.contains("refused"),
         )
+    }
+
+    /**
+     * agents-tracker-ksvb.6: a stated cause no longer carries the generic first-run tail after
+     * it. [PairOnlyScreen.BODY] answers "why is the app otherwise empty", and a phone that
+     * already knows it was revoked or that its key was destroyed does not need that answered a
+     * second, vaguer way underneath the specific one.
+     */
+    @Test
+    fun `a stated cause is not followed by the generic first-run tail`() {
+        for (reason in terminal) {
+            val copy = PairOnlyScreen.copyFor(reason)
+            assertFalse(
+                "the $reason screen still carries the generic tail after its own cause: " +
+                    "'${copy.body}'",
+                copy.body.contains(PairOnlyScreen.BODY),
+            )
+        }
     }
 
     @Test
