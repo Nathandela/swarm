@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -225,9 +226,27 @@ class KitFoundationTest {
                 ),
             ),
         )
+        // AUTHORIZED VALUE MIGRATION, ADR-009 O2. This is a KNOWN ANSWER, typed independently of
+        // the reader so that a key light which had quietly become opaque is contradicted by a
+        // number rather than by itself. What it said before:
+        //
+        //     (0.045f * 255f).toInt(),
+        //
+        // ADR-009 D3 strengthens and warms the key-light to
+        // `inset 0 1px 0 rgba(246,243,236,0.10)`: one light source, top edge, linen-toned. The
+        // assertion's point is unchanged and is still worth making at 0.10 -- an alpha this low
+        // is exactly the one a missing alpha turns into 255 without anything else noticing.
+        //
+        // `.toInt()` BECAME `.roundToInt()` IN THE SAME BREATH, and that is a correction rather
+        // than an accommodation. `.toInt()` TRUNCATES, and 0.045 * 255 = 11.475 truncates and
+        // rounds to the same 11 -- so the control agreed with ColorMix.quantise by luck and
+        // nobody could see that the two used different arithmetic. At 0.10 the product is exactly
+        // 25.5 and the two answers separate: truncation says 25, rounding says 26, and rounding
+        // is what an 8-bit alpha quantisation must do (it is what ColorMix does, once, at the end
+        // of the blend, for the reason its own doc gives).
         assertEquals(
-            "the key light is a translucent white, not the opaque one a missing alpha produces",
-            (0.045f * 255f).toInt(),
+            "the key light is a translucent linen, not the opaque one a missing alpha produces",
+            (0.10f * 255f).roundToInt(),
             Color.alpha(highlight.colour),
         )
     }
@@ -261,7 +280,23 @@ class KitFoundationTest {
                     Claim("`.prow.attention` border", expectedBorder, surface.spec.stroke),
                     Claim("rail colour", KitOrigin.cssColour(".prow.attention::before", "background"), rail!!.colour),
                     Claim("rail width", px(KitOrigin.cssDp(".prow.attention::before", "width")), rail.widthPx),
-                    Claim("the fill is unchanged", KitOrigin.cssColour(".prow", "background"), surface.spec.fill),
+                    // AUTHORIZED CLAIM MIGRATION, ADR-009 D3/D4. What this said before:
+                    //
+                    //     Claim("the fill is unchanged",
+                    //           KitOrigin.cssColour(".prow", "background"), surface.spec.fill)
+                    //
+                    // It was Substrate's decision stated as a property: the attention row differed
+                    // from a resting one by a border and a rail and by nothing else. ADR-009 adds
+                    // `--p-lit-fx` as a NEW effect for exactly this row -- "the promoted card: a
+                    // NeedsInput slab carries the stronger key-light" -- and the maquette draws it
+                    // one ladder step up, `.slab.lit { background: var(--p-elev) }`. So the fill
+                    // moves, and the claim is re-pointed at the source that moved it rather than
+                    // deleted: `.slab.lit` is read here, not transcribed.
+                    Claim(
+                        "the promoted fill is the maquette's",
+                        KitOrigin.maquetteColour(".slab.lit", "background"),
+                        surface.spec.fill,
+                    ),
                 ),
             ),
         )
@@ -271,6 +306,178 @@ class KitFoundationTest {
             KitOrigin.token("--p-hair"),
             surface.spec.stroke,
         )
+    }
+
+    /**
+     * `.slab.lit`: ADR-009 D4's promoted slab, which is a MATERIAL statement and not a decoration.
+     *
+     * The maquette gives a promoted row two things at once and either alone is the wrong drawing.
+     * It sits one ladder step up -- `background: var(--p-elev)` -- and it catches more of the one
+     * light source -- `box-shadow: var(--p-lit-fx)`, 0.22 against the resting 0.10. A slab that
+     * took the stronger edge on the card fill is a card with a bright line on it; a slab that took
+     * the elevated fill with the resting edge is a toast. Together they are the single thing D4
+     * describes: the same light, on material that has come forward.
+     *
+     * EVERY EXPECTATION IS READ FROM THE MAQUETTE, which is what makes this an assertion about the
+     * design rather than about itself. `.slab.lit`'s two declarations name tokens; the reader
+     * resolves them. A suite that wrote `--p-elev` and `0.22f` here would agree with the kit
+     * forever and could not tell a promoted slab from a toast.
+     */
+    @Test
+    fun `the promoted card is the elevated slab under the stronger key light`() {
+        val surface = cardSurface(context, attention = true)
+        val highlight = (0 until surface.numberOfLayers)
+            .map { surface.getDrawable(it) }
+            .filterIsInstance<EdgeHighlight>()
+            .singleOrNull()
+        assertTrue(
+            "the promoted card carries no EdgeHighlight layer at all, so --p-lit-fx is either " +
+                "missing or has been approximated by something that is not a layer",
+            highlight != null,
+        )
+        assertEquals(
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim(
+                        "`.slab.lit` fill",
+                        KitOrigin.maquetteColour(".slab.lit", "background"),
+                        surface.spec.fill,
+                    ),
+                    Claim(
+                        "`.slab.lit` key light",
+                        KitOrigin.maquetteRgba(".slab.lit", "box-shadow"),
+                        highlight!!.colour,
+                    ),
+                    Claim(
+                        "`.slab.lit` key-light band",
+                        px(KitOrigin.maquetteFirstPx(".slab.lit", "box-shadow")),
+                        highlight.heightPx,
+                    ),
+                    Claim(
+                        "the promoted key light is `--p-lit-fx` and not `--p-card-fx`",
+                        KitOrigin.rgbaToken("--p-lit-fx"),
+                        highlight.colour,
+                    ),
+                ),
+            ),
+        )
+
+        // THE TWO SURFACES MUST DIFFER, or every claim above holds over one value repeated. The
+        // resting slab is the subject of `the card surface resolves the design's card`; what is
+        // asserted here is that promotion is VISIBLE -- a lit slab whose fill and edge happened to
+        // equal the resting one would satisfy each equality above and render no promotion at all.
+        val resting = cardSurface(context, attention = false)
+        assertNotEquals(
+            "the promoted slab and the resting one paint the same fill, so ADR-009 D4's ladder " +
+                "step does not exist on screen",
+            resting.spec.fill,
+            surface.spec.fill,
+        )
+        assertNotEquals(
+            "the promoted slab and the resting one carry the same key light, so `--p-lit-fx` is " +
+                "`--p-card-fx` under another name",
+            resting.spec.keyLight,
+            surface.spec.keyLight,
+        )
+    }
+
+    /**
+     * `.sheet`: ADR-009 D4.4's approval sheet -- the ONE vertical gradient in the app, and the
+     * heaviest material there is, reserved for the moment of decision.
+     *
+     * FOUR THINGS AT ONCE, AND THE GRADIENT IS ONLY THE OBVIOUS ONE. The maquette draws
+     * `background: linear-gradient(180deg, var(--p-sheet-hi), var(--p-sheet-lo))`, the hairline
+     * every surface carries, `box-shadow: var(--p-lit-fx)` -- the strong 0.22 edge, which D4.4
+     * gives to this and to a promoted slab and to nothing else -- and `border-radius:
+     * var(--p-sheet-r)`, the one radius in the scale that had no component spending it.
+     *
+     * THE TWO STOPS ARE READ SEPARATELY. They are two tokens because a gradient's endpoints are
+     * chosen rather than computed from a base; a reader that took the first colour and let the
+     * second follow from an alpha would accept the exact collapse `colors.xml`'s own comment says
+     * the two resources exist to prevent.
+     *
+     * THE UNIQUENESS IS ASSERTED, not assumed. "The only vertical gradient" is a property of the
+     * whole kit and it is the half a test of this component alone cannot see, so every other
+     * surface recipe is asked whether it has a second stop.
+     */
+    @Test
+    fun `the approval sheet is the one vertical gradient, under the strong edge`() {
+        val surface = sheetSurface(context)
+        val stops = KitOrigin.maquetteColours(".sheet", "background")
+        val highlight = (0 until surface.numberOfLayers)
+            .map { surface.getDrawable(it) }
+            .filterIsInstance<EdgeHighlight>()
+            .singleOrNull()
+        assertTrue("the sheet carries no EdgeHighlight layer, so `--p-lit-fx` is not on it", highlight != null)
+
+        assertEquals(
+            "`.sheet { background }` resolves to a number of colours other than two, so the " +
+                "expectations below are reading something that is not the design's gradient",
+            2,
+            stops.size,
+        )
+        assertEquals(
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim("`.sheet` gradient top", stops[0], surface.spec.fill),
+                    Claim("`.sheet` gradient bottom", stops[1], surface.spec.fillBottom),
+                    Claim("`.sheet` border", KitOrigin.maquetteColour(".sheet", "border"), surface.spec.stroke),
+                    Claim(
+                        "`.sheet` border width",
+                        px(KitOrigin.maquetteFirstPx(".sheet", "border")).roundToInt(),
+                        surface.spec.strokeWidthPx,
+                    ),
+                    Claim(
+                        "`.sheet` radius",
+                        px(KitOrigin.maquetteFirstPx(".sheet", "border-radius")),
+                        surface.spec.radiusPx,
+                    ),
+                    Claim("`.sheet` key light", KitOrigin.maquetteRgba(".sheet", "box-shadow"), highlight!!.colour),
+                    Claim("the sheet is not a row", null, surface.spec.rail),
+                ),
+            ),
+        )
+        assertNotEquals(
+            "the sheet's two gradient stops are the same colour, so it renders as a flat surface " +
+                "and the one vertical gradient in the app does not exist",
+            surface.spec.fill,
+            surface.spec.fillBottom,
+        )
+        assertEquals(
+            "the sheet's radius is the card's, which is the coincidence `--p-sheet-r` exists to " +
+                "stop being one",
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    Claim(
+                        "the sheet radius differs from the card's",
+                        true,
+                        surface.spec.radiusPx != cardSurface(context, attention = false).spec.radiusPx,
+                    ),
+                ),
+            ),
+        )
+
+        // D4.4's word is ONLY, and that is a claim about every other surface in this kit.
+        listOf(
+            "cardSurface(resting)" to cardSurface(context, attention = false),
+            "cardSurface(promoted)" to cardSurface(context, attention = true),
+            "toastSurface" to toastSurface(context),
+            "chipSurface(idle)" to chipSurface(context, selected = false),
+            "chipSurface(selected)" to chipSurface(context, selected = true),
+            "wellSurface" to wellSurface(context),
+            "pillSurface" to pillSurface(context, KitOrigin.token("--p-att")),
+            "panelSurface" to panelSurface(context, Kit.killSwitchBorder(context)),
+        ).forEach { (name, other) ->
+            assertNull(
+                "$name carries a second gradient stop. ADR-009 D4.4 gives the app exactly one " +
+                    "vertical gradient and reserves it for the moment of decision; a second one " +
+                    "spends the heaviest material the skin has on something that is not a choice.",
+                other.spec.fillBottom,
+            )
+        }
     }
 
     /** `.chip` and `.chip.on`: the only component whose selected state changes three values. */

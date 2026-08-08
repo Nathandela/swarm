@@ -82,9 +82,34 @@ frame, every control, and the mark, at token fidelity:
    with new `swarm_sheet_gradient_top/bottom` resources). Resources regenerate.
 3. Authorized rewrites, quoting old assertions: skin pin, PB-TOK-5 count, design-source
    reader (now parses the maquette's `:root`).
-4. **NEW contrast gate, RED-first** (ADR-009 D8.1): APCA over the join — body pairs >= Lc 75,
-   large >= Lc 60, indicators >= 3:1 WCAG. Lands here so the new values are guarded at birth.
-   If any Obsidian pair fails, the token moves (ladder is tunable), never the threshold.
+4. **NEW contrast gate, RED-first** (ADR-009 D8.1): APCA over the join, against the **per-role
+   floors of D8.1's Amendment (2026-08-07, measured calibration)** — `--p-ink` >= 90,
+   `--p-ink2` >= 45, `--p-ink3` >= 24 (the named deviation, with its two standing rules),
+   `--p-hero-ink` on the champagne fills >= 55, `--p-hero` as text >= 50, `--p-err` as text
+   >= 38 (watch item for O7), indicators >= 3:1 WCAG. The blanket "Lc 75 body / Lc 60 large"
+   this line used to cite was set before measurement and failed the shipped Substrate palette
+   too; the amendment records the ceiling proof that made it unsatisfiable. Lands here so the
+   new values are guarded at birth.
+
+   **The ladder rule, corrected — this line contradicted itself and the contradiction shipped.**
+   It used to end: *"If any Obsidian pair fails, the token moves (ladder is tunable), never the
+   threshold."* Every threshold moved and no token moved, so the sentence was false about the
+   change made directly above it. The rule that actually holds, and the one D8.1's amendment
+   states, is narrower: **once a floor is set, a pair that later drops below it moves the TOKEN,
+   never the floor.** Setting the floors in the first place was a one-time calibration against
+   the first contrast measurement this repository has ever taken, and it is recorded as such
+   rather than as an application of the rule it broke.
+
+   **STANDING OWNER QUESTION, not resolved by any implementing session.** Two of the calibrated
+   floors sit below the rung the gate's own `apcaRungs` table quotes: `--p-ink3` at 24 is under
+   APCA's Lc 30 "absolute minimum for any text", and `--p-err` at 38 is under its declared 45.
+   ADR-009's status line reads "Accepted (owner decision)", and lowering a quality bar the owner
+   signed is the owner's call. The ceiling proof that retires Lc 75 for the CTA label is sound
+   and independent of this — no ink on `#c9a876` can exceed |Lc| 59.73 — but it does not extend
+   to ink2, ink3 or err, whose floors were set at what this palette happens to achieve. The two
+   conditions attached to the ink3 deviation (never the sole carrier of required information;
+   the O7 device glance pass) are stated in the ADR and the first of them is a claim about
+   screens with no test behind it.
 5. **Exit**: all four quality gates green; app builds and renders fully warm with zero Kotlin
    changes beyond the theme; device screenshot set (same shots as Substrate's PB-E2E-2 set)
    attached as evidence `docs/verification/obsidian-o2-evidence.md`.
@@ -126,6 +151,20 @@ frame, every control, and the mark, at token fidelity:
 1. **The pull-quote approval sheet** (adopted from Press, per ADR-009): the sheet's headline
    IS the blocking question — larger type, `--p-display-wt`, above the mono command well;
    the well keeps the literal command. No new information, reordered hierarchy.
+
+   **STATUS: PARTIAL, and this item is what keeps O6 from being closed.** `approvalSheet`,
+   `ApprovalSheetScreen` and `ApprovalSheetPanel` are built, tested and reachable from nothing:
+   a grep over `android/app/src/main/kotlin` finds zero references to any of the three outside
+   their own two files, so no user reaches the sheet on any run. It also strands one of the six
+   signals item 2 commissions — `Haptics.Signal.SHEET_SETTLE` has no call site, because there is
+   no sheet to settle. **The blocker is the protocol, not the skin**: `mobile/app.go` exports no
+   approve, deny or answer verb, so there is no facade surface to ledger in
+   `android/unbound-verbs.tsv`, and the way a blocked session is resolved from this phone today
+   is take-control plus send-line. `docs/verification/obsidian-o6-evidence.md` item 4 discloses
+   this and names two further wire gaps in `ApprovalSheetPanel`'s KDoc. **An unreachable
+   composition cannot be validated by anything except its own unit tests**, so the exit criterion
+   below is not met for this item and the phase is recorded as partial until a protocol decision
+   lands. That decision is a core ADR, not this plan's to make.
 2. **Haptics vocabulary**, `ui/kit/Haptics.kt`, six signals, rhythm-differentiated, fired
    locally on tap (never on server ack): needs-you two-pulse, sent single sharp, completed
    soft thud, failed double low, sheet-settle thud, scroll ratchet tick. Composition API with
@@ -133,7 +172,8 @@ frame, every control, and the mark, at token fidelity:
    `VibrationEffect` constructed outside Haptics.kt.
 3. **Predictive back** honoured on drill-downs (scale to 90%, 8dp margin, 35% crossfade),
    within the existing programmatic-Views nav.
-4. **Exit**: gates green; hand-feel pass on device recorded; evidence file.
+4. **Exit**: gates green; hand-feel pass on device recorded; evidence file. **Item 1 does not
+   meet it** (see its status note); O6 is PARTIAL, and O7 must not treat it as closed.
 
 ## Phase O7 — brand, QA protocol, release
 

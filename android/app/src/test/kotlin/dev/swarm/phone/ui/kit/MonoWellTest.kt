@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.util.TypedValue
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.theme.DesignScale
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -57,10 +58,25 @@ class MonoWellTest {
                 KitOrigin.cssFirstPx(".sheet2 .cmd", "border") * context.resources.displayMetrics.density,
                 spec().strokeWidthPx.toFloat(),
             ),
+            // AUTHORIZED REWRITE, ADR-009 O2. What this claim said before:
+            //
+            //     Claim(
+            //         "`.sheet2 .cmd` radius",
+            //         KitOrigin.cssFirstPx(".sheet2 .cmd", "border-radius") *
+            //             context.resources.displayMetrics.density,
+            //         spec().radiusPx,
+            //     ),
+            //
+            // It cited a CSS rule that writes a LITERAL 9px, and it passed because Substrate set
+            // --p-card-r and --p-btn-r to 9px as well: three numbers agreed and nothing could say
+            // which one the well was spending. ADR-009 separates the two radii (14 and 10), and
+            // the maquette settles it -- `.well { border-radius: var(--p-btn-r) }`, a
+            // control-sized recess rather than a slab. So the claim now cites the TOKEN, which
+            // is what it should always have cited: a literal in the design source is a number
+            // with no origin, and pinning against one is how a coincidence survives review.
             Claim(
-                "`.sheet2 .cmd` radius",
-                KitOrigin.cssFirstPx(".sheet2 .cmd", "border-radius") *
-                    context.resources.displayMetrics.density,
+                "--p-btn-r radius",
+                DesignScale.tokenPx("--p-btn-r") * context.resources.displayMetrics.density,
                 spec().radiusPx,
             ),
         )

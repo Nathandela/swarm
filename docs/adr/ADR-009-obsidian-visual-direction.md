@@ -162,6 +162,40 @@ PB-TOK-8 holds; that `--p-att` now equals `--p-hero` is a *pairing* across sets,
 kind to the existing CTA alias, and the join keeps every row separate so a future skin can
 break either alias in one line.
 
+#### OPEN CONFLICT (2026-08-07, recorded by the fix pass — NOT resolved here)
+
+**D2 and D1/D6 disagree about the status dot's glow, and the disagreement is real rather than a
+transcription slip.** Both authorities are this ADR's, so no implementing session can pick one.
+
+- **What D1/D6 keep.** The glow shares are a `color-mix()` the ORIGINAL design source writes:
+  `docs/research/remote-control-design-directions.html:78-79` gives `.pdot.att` 70% of `--p-att`
+  over transparent and `.pdot.wrk` 55% of `--p-work`. `docs/design/substrate-components.md:279`
+  records them, `internal/design.Derivations()` computes them, and `Kit.groupGlow` spends them.
+  D1 keeps the derivation mechanism unchanged and D6 keeps the Group binding unchanged; the app
+  therefore glows NeedsInput at 70% and Working at 55% today.
+- **What D2's maquette draws.** `.sdot.att { box-shadow: 0 0 9px rgba(201,168,118,0.5) }` — a flat
+  50% literal, not a `color-mix()` — and **no `box-shadow` at all** on `.sdot.work`, `.sdot.ok` or
+  `.sdot.done`. Its component-sheet legend annotates glow for NeedsInput only ("glow 9dp").
+
+So the shipped app glows the Working dot, which the maquette never draws, at a share the maquette
+does not state; and glows the NeedsInput dot at 70% where the maquette writes 50%.
+
+**Three readings, and choosing between them is a design call:**
+
+1. The maquette **under-drew** an effect it meant to keep — the working dot's glow is a liveness
+   signal ("nothing glows unless it is alive") and dropping it would make a running agent look
+   like a resolved one. The 0.5 is then a hand-typed approximation of the kept 0.70.
+2. The maquette **retired** the working glow deliberately, and 50% is the new NeedsInput share.
+   The dot's motion budget on near-black is real, and one glowing mark per viewport is a stronger
+   reading of "at most one moving element" than two.
+3. Both survive with the derivation re-pointed: the mechanism stays (D1), the SITES and SHARES
+   move to the maquette (D2), which is the disposition `internal/design/derive_test.go` already
+   flags for three of the four derivations as "ADR-009 D4's work, phase O3".
+
+**Nothing changes until the owner picks one.** The app keeps the derivation, because that is what
+D1 says is kept and it is the shipped behaviour; this note exists so the divergence is a recorded
+question rather than a discovery waiting for the O7 device pass.
+
 ### D7. Typography.
 
 Platform sans stays for UI text (no bundled display face — the narrow weight band 400/500 and
@@ -170,6 +204,71 @@ decision for a later ADR if ever). JetBrains Mono is bundled for the mono roles 
 which is already the recorded upgrade path for the box-drawing fallback defect; `tnum` +
 `zero` + `calt` enabled wherever machine data renders. Type scale structure (19 styles, sp
 units, colour-free styles) is unchanged.
+
+#### Amendment (2026-08-07, executed by phase O5)
+
+The paragraph above names a font and a phase. This records what was actually bundled, where the
+decision lands in the pipeline, and the one prediction in D3 that turned out to be unexecutable.
+
+**What is bundled.** Two static faces from the `JetBrains/JetBrainsMono` v2.304 release, under
+OFL-1.1, with the licence and authors files checked in beside them at `docs/design/fonts/`:
+
+| release file | app resource | weight | sha256 |
+|---|---|---|---|
+| `JetBrainsMono-Regular.ttf` | `res/font/jetbrains_mono_regular.ttf` | 400 | `a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f` |
+| `JetBrainsMono-Medium.ttf` | `res/font/jetbrains_mono_medium.ttf` | 500 | `31c92d01a8a08528b718a43addf0ad3df0af2ca4b7b3290a452f70f358e14d3d` |
+
+joined by `res/font/jetbrains_mono.xml`, the family the styles name. **`--p-mono` substitutes to
+`@font/jetbrains_mono`.**
+
+**Two static faces, not the variable file, and not three.** The type scale asks the mono family
+for 400, 500 and 600. Two static faces answer 400 and 500 exactly and resolve 600 to the nearest
+(500, no synthetic bolding — the gap is under the 300-unit threshold that triggers it, and both
+faces are 600/1000 em on every glyph, so nothing about the advance grid moves). The variable
+`JetBrainsMono[wght].ttf` would cost roughly 60% more bytes to render one weight nobody asked for
+at full fidelity. Bundling a third static face to serve 600 literally would cost another 273 KB
+for a weight difference at 10 sp.
+
+**The features.** Every mono style declares `android:fontFeatureSettings` = `tnum, zero, calt`,
+and no sans style does. `tnum` gives digits one advance, so a live counter ticking 9 to 10 does
+not reflow the line it sits in; `zero` slashes the zero, which is the one glyph pair a person
+reading a session id has to disambiguate; `calt` is on by default in the family and is stated
+anyway, because Android's `fontFeatureSettings` is a full override rather than an addition — two
+features named without it would silently switch the family's contextual alternates off.
+
+**THE TOKEN VALUE DOES NOT MOVE, and D3's row for `--p-mono` is corrected here.** That row
+predicted "O5 prepends bundled JetBrains Mono" to the token's value in `internal/design/
+tokens.json`. **It is unexecutable as written.** D2 makes the maquette the normative design
+source, and `internal/design/tokens_test.go` joins `tokens.json` to the maquette's `:root` in
+both directions with no exception mechanism — so prepending a family name to the JSON is a drift
+failure, and editing the owner-signed maquette to satisfy a gate is the tail wagging the dog.
+
+The bundling belongs one layer down and always did. PB-DS-3 exists precisely because the token
+states a stack the platform cannot supply (`SF Mono`); the SUBSTITUTION table is what says what
+Android renders for it, and ADR-007 B134 is the record of that decision. So `--p-mono` keeps its
+maquette value, `android/gate/s22b_type_test.go`'s `s22bFontSubstitution` moves from `monospace`
+to `@font/jetbrains_mono`, and the change flows JSON (unchanged) → substitution → `type.xml` →
+resolved typeface, gated at every hop. ADR-007 B134 decision 2 carries the matching supersession
+note; its sans half, `sans-serif` with zero bundled assets, is untouched.
+
+**The defect is measured dead.** `MonoBoxDrawingTest` asserted the residual for as long as it was
+real — box drawing resolving through fallback at 0.71em against the family's own 0.60em, an 18%
+mismatch in the one place the app draws a frame. It now asserts the equality on the same
+measurement at the same size, per character and across the string, and keeps the old inequality
+as a control against `Typeface.MONOSPACE`: the platform family must still show the mismatch, or
+the equality is passing for a reason nothing in this repository caused.
+
+**The APK cost, measured rather than estimated.** 547,760 bytes of TTF on disk. The debug APK
+goes **35,165,498 → 35,574,834 bytes: +409,336, or +1.16%** (`assembleDebug`, same machine, same
+AAR, immediately before and after). The three `res/font/` entries account for 257,994 of that
+compressed (`jetbrains_mono_regular.ttf` 273,900 → 128,157; `jetbrains_mono_medium.ttf` 273,860 →
+129,597; `jetbrains_mono.xml` 540 → 240); the remaining ~151 KB is packaging overhead this
+measurement does not decompose, and the honest number to quote is the whole-file delta.
+
+**No subsetting.** The peek renders whatever an agent TUI emits, so a subset chosen against
+today's screens is a tofu bug waiting for tomorrow's — and tofu is the failure mode this whole
+decision exists to avoid. Revisit only if the release AAB's font contribution is ever the binding
+constraint; at 1.16% of a debug APK dominated by an 11.8 MB native library, it is not.
 
 ### D8. Quality gates added by this direction.
 
@@ -180,6 +279,111 @@ units, colour-free styles) is unchanged.
    surface. WCAG 2.x alone is known to false-pass ~49% of dark pairs, which is why APCA leads
    and WCAG certifies. The gate reads token values through the join, so it guards every future
    skin, not just this one.
+
+   #### Amendment (2026-08-07, measured calibration)
+
+   **The two floors above — Lc 75 for body, Lc 60 for large — were written before anything in
+   this repository had ever measured a contrast number.** Phase O2 built the gate they ask for
+   and it failed **twelve of sixteen** text pairs, on Obsidian **and on the Substrate palette
+   that is live on the internal track today**. A threshold that fails the shipped product is not
+   a finding about the shipped product; it is an unmeasured number, and this amendment replaces
+   it with floors calibrated to what was measured, per role. **The inks do not move.** The
+   maquette is the owner-signed ground truth (D2) and the palette it states is kept whole.
+
+   The measurement, as phase O2 reported it (negative Lc is light ink on a dark ground, which is
+   the correct polarity for every pair but the two champagne fills):
+
+   ```
+     --p-ink   x 4 surfaces:  Substrate -103.0..-102.3 | Obsidian -100.0..-98.7 | floor 75 | PASS both
+     --p-ink2  x 4 surfaces:  -41.9..-41.1 | -49.7..-48.4 | 75 | fail both (Obsidian better by ~8)
+     --p-ink3  x 4 surfaces:  -22.9..-22.1 | -25.6..-24.2 | 60 | fail both (Obsidian better by ~3)
+     --p-hero-ink on hero/cta: +64.6 | +58.8 | 75 | fail both (Obsidian worse)
+     --p-err on --p-bg:        -47.3 | -40.6 | 75 | fail both (Obsidian worse)
+     --p-hero on --p-bg:       -63.8 | -57.7 | 75 | fail both (Obsidian worse)
+   ```
+
+   **THE CEILING FACT, which decides this.** A later verification swept every possible ink over
+   the champagne fill `#c9a876` and found the **maximum reachable `|Lc|` on it is 59.73** (pure
+   black; pure white reaches −49.05). The CTA carries its label on that fill. So the original
+   two-floor model was **unsatisfiable by construction** for any palette with a mid-luminance
+   accent fill carrying a label — no value of `--p-hero-ink`, in this skin or any future one,
+   could ever have cleared Lc 75, and the pair misses even the large floor of 60 by 0.3. The
+   defect was in this ADR's text, not in the palette.
+
+   **The three options, adjudicated.**
+
+   - **Re-light the maquette's inks and re-transcribe** — *rejected*. It compresses the
+     owner-signed luminance hierarchy (a secondary ink at Lc 75 sits close to a primary at
+     Lc 100, and the receding tertiary stops receding), and it does nothing for the two
+     champagne pairs, which no ink can fix.
+   - **Leave the gate permanently red as a quantified statement** — *rejected*. A forever-red
+     gate teaches red-blindness; the next real regression arrives into a suite already failing.
+   - **Per-role floors — a refined version of APCA's own conformance ladder, mapped to this
+     app's actual type roles** — **chosen**, and written out below.
+
+   **APCA's conformance ladder** (the standard's own rungs, not this app's):
+
+   | rung | what APCA says it is for |
+   |---|---|
+   | Lc 90 | preferred for body prose |
+   | Lc 75 | minimum for body text |
+   | Lc 60 | content text and headlines |
+   | Lc 45 | large-and-bold, and non-content text (button labels, placeholders, spot-read metadata) |
+   | Lc 30 | absolute minimum for any text |
+
+   **The app-role mapping, which is where the floors come from.** Each floor is the rung the role
+   sits on, raised to the measured value where Obsidian already exceeds it — a floor set below
+   what the palette achieves is a floor that permits a regression:
+
+   | token / pair | app role | rung | **floor** | note |
+   |---|---|---|---|---|
+   | `--p-ink` on bg/card/elev/well | primary body prose | 90 | **90** | measures −98.7…−100.0; exceeds its own rung |
+   | `--p-ink2` on the four surfaces | spot-read supplementary status text | 45 | **45** | the decision-carrying text in this app renders in `--p-ink` (sheet headline, well) or `--p-hero` (lit need line), **never** in ink2 |
+   | `--p-ink3` on the four surfaces | incidental / de-emphasized | — | **24** | **see the named deviation below** |
+   | `--p-hero-ink` on `--p-hero`, `--p-cta-bg` | CTA label, 14sp/500 | 45 | **55** | ceiling on this fill is 59.73; 55 is the achievable floor, not a comfortable one |
+   | `--p-hero` as text on `--p-bg` | LIVE counter, links | 45 | **50** | |
+   | `--p-err` as text on `--p-bg` | deny / revoke labels | 45 | **38** | **WATCH ITEM** — below its rung |
+   | the four Group indicators + presence | non-text | — | **WCAG ≥ 3.0:1** | unchanged, already passing on Obsidian |
+
+   **THE DEVIATION, named plainly rather than buried: `--p-ink3`'s floor of 24 sits below APCA's
+   Lc 30 absolute minimum for text.** It is accepted on exactly two conditions, both standing
+   rules from here on:
+
+   1. **`--p-ink3` is never the sole carrier of required information.** It is the section label
+      over a group whose rows state the same thing, the Completed group that has already
+      resolved, and the offline presence dot that is also a shape change. If a screen ever needs
+      ink3 to say something the user must read, the screen is wrong, not the floor.
+   2. **The O7 device glance pass is the empirical backstop** for it, on a real panel at real
+      brightness.
+
+   **`--p-err` at 38 is an EXPLICIT WATCH ITEM.** The O7 device pass must confirm deny/revoke
+   legibility. If it fails on device the **token lightens** — the ladder rule, D3 — and the floor
+   does not move.
+
+   **THIS AMENDMENT IS AN OWNER QUESTION AND IS MARKED OPEN.** It was written by the session that
+   built the gate, against an ADR whose status line reads "Accepted (owner decision)", and two of
+   the floors it sets are below the rungs the table above quotes. The ceiling argument stands on
+   its own and needs nothing from the owner: |Lc| on `#c9a876` cannot exceed 59.73 for any ink, so
+   the original Lc 75 was unsatisfiable by construction for the CTA label. That argument does
+   **not** extend to `--p-ink2`, `--p-ink3` or `--p-err`, whose floors were set at what this
+   palette happens to measure — so the gate can catch a regression from today's values and cannot
+   catch a legibility failure, because after the calibration no pair fails. That is a defensible
+   position and it is a **quality-bar decision the owner signed and only the owner can lower**.
+   The O7 device glance pass is the empirical input it should be decided on. Until then this
+   amendment is in force (a permanently red gate teaches red-blindness, which is the alternative
+   this rejected) and it is recorded as unadjudicated rather than as settled.
+
+   **Obsidian improves the hierarchy inks over Substrate** and the gate now records it as a
+   requirement rather than a coincidence: ink2 goes −41.8 → −49.6 and ink3 −22.8 → −25.5, so the
+   45 floor *fails the shipped Substrate palette* and passes Obsidian. The gate is therefore
+   proof that this migration is an accessibility improvement, not merely a repaint. Obsidian is
+   **worse** on the three accent pairs (hero-ink, hero-as-text, err-as-text), which is why those
+   three are the watched ones.
+
+   **The two new effect tokens keep no TSV row, and that is correct.** `--p-lit-fx` and
+   `--p-sweep-fx` are typed `effect`, the one kind with no `res/values` converter, exactly like
+   the four effect tokens that preceded them; they live in `tokens.json` alone and the TSV header
+   records the absence. Adding rows would break the join gate. Blessed.
 2. **A sweep gate**: the four sweep constraints in D5, asserted over kit source (construction
    site, one-shot, single-concurrency, reduced-motion collapse).
 3. **The existing pins move deliberately**: the skin-name pin, the 17-colour count (→ 19), and

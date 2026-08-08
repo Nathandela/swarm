@@ -112,7 +112,7 @@ fun machinesPanelView(
                     context = context,
                     machine = panel.machine.name,
                     presence = panel.machine.presenceLine,
-                    online = panel.machine.online,
+                    mark = panel.machine.mark,
                     // Row 11's `endpoint id` cell has no source: `MachinePane.machineId` IS the
                     // endpoint id, and it is already the name. See MachinesPanel.
                     endpoint = null,

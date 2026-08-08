@@ -43,10 +43,21 @@
          is unaffected by either attribute. PB-NET-2 is the sole control over that socket.
          v1 of the spec drew the opposite inference from this attribute and shipped it, so the
          statement sits beside the control rather than in an evidence file. -->
+    <!-- obsidian-migration-plan O6.3. The opt-in that makes the back gesture something the app
+         can PREVIEW rather than only be told about after the fact. Without it the platform
+         dispatches no progress, so PhoneActivity's three OnBackAnimationCallback members are
+         declared, compiled, unit-tested green and invoked by nothing at all - the failure this
+         same file records twice below, for the boot receiver and for the messaging service.
+
+         IT IS ON <application> AND NOT ON THE <activity>, which is equivalent today and stops
+         being equivalent the day a second Activity is declared: the attribute would then apply
+         to whichever one somebody remembered. android/gate/o6_predictiveback_test.go asserts
+         both the value and the placement. -->
     <application
         android:name=".SwarmApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

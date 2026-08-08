@@ -43,7 +43,7 @@ internal data class FocusRingSpec(
 /**
  * derived: docs/design/substrate-components.md #23 Focus ring
  *
- * `:focus-visible`: a 2 dp `--p-ink` ring, `space_2` clear of what it surrounds.
+ * `:focus-visible`: a 2 dp `--p-hero` ring, `space_2` clear of what it surrounds.
  *
  * **IT IS A FOREGROUND AND NOT A BACKGROUND, WHICH IS WHAT LETS IT BE ONE COMPONENT.** Row 23
  * applies to every focusable, and the focusables in this kit already spend their background on
@@ -56,12 +56,27 @@ internal data class FocusRingSpec(
  * traversal and stays absent under a finger, exactly as the pseudo-class it cites does. A ring
  * painted unconditionally would be a border on every control.
  *
- * **THE INK IS `--p-ink` AND §1.1 SPENDS A PAGE ON WHY.** The artifact's own `:focus-visible` uses
- * `#e2a33b`, which is the DOCUMENTATION PAGE's chrome accent and not a product token at all. The
- * four status tokens are out because they mean state, `--p-hero` is out because it means selected
- * (a hero ring around an unselected chip says the opposite of what is true), and `--p-ink2` is out
- * because it is the resting colour of chip labels and row summaries, so a ring in it reads as a
- * border. `--p-ink` is 18.73 / 17.91 / 17.19:1 on the three surfaces focus lands on.
+ * **THE INK IS `--p-hero`, WHICH ADR-009 D3 DECIDED AND §1.1 ARGUES.** The ring was the one
+ * component in this kit with no product origin at all: it had been specified only by the
+ * documentation page's own chrome accent, which is a fact about a documentation page, and PB-DS-7
+ * flagged it as a standing gap rather than pretending otherwise. D3 closes it with the champagne.
+ *
+ * WHY THE ACCENT, WHEN §1.1 ONCE REJECTED IT. Substrate's hero meant SELECTED and nothing else --
+ * the fill of `.chip.on`, the ink of `.ptabs .on` -- so a hero ring around an unselected chip said
+ * the opposite of what was true. Obsidian's accent means YOU: needs-you, CTA, focus, the live
+ * counter, the brand, unified on purpose. Focus is the fifth thing the one accent says, not a
+ * sixth meaning bolted onto a fill colour. What is still rejected is the neutral pair -- a ring in
+ * `--p-ink` or `--p-ink2` over a warm ladder whose hairline is `--p-hair` reads as a heavier
+ * border -- and the three status tokens that are not the accent, because they mean state.
+ *
+ * `--p-att` RESOLVES TO THESE SAME BYTES AND THAT IS THE ALIAS, NOT A COLLISION. ADR-009 D6 makes
+ * the NeedsInput token value-alias the hero deliberately; both keep their own row in
+ * `android/design-tokens.tsv` and their own `<color>`, so a future skin breaks either in one line.
+ * This ring resolves `swarm_hero`, which is the token it MEANS; a ring that reached for
+ * `swarm_state_attention` because the bytes matched would be a focus ring painted out of a status.
+ *
+ * Measured on Obsidian's ladder: 8.74 / 8.22 / 7.69:1 on `--p-bg` / `--p-card` / `--p-elev`, the
+ * three surfaces focus lands on, against the 3:1 floor ADR-009 D8.1 holds a non-text indicator to.
  *
  * @param componentRadiusPx the radius of the thing being surrounded. A component with no surface
  *  passes 0 and gets a 2 dp radius, which is the same rule: concentric with a square corner.
@@ -71,7 +86,7 @@ fun focusRing(context: Context, componentRadiusPx: Float): FocusRingDrawable {
     val strokePx = Kit.dp(context, KitMetrics.FOCUS_RING_DP)
     return FocusRingDrawable(
         FocusRingSpec(
-            ink = Kit.colour(context, R.color.swarm_text_primary),
+            ink = Kit.colour(context, R.color.swarm_hero),
             strokePx = strokePx,
             offsetPx = offsetPx,
             radiusPx = componentRadiusPx + offsetPx,

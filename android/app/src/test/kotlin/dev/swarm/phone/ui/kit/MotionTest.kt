@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.kit
 
+import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
@@ -8,8 +9,12 @@ import android.util.TypedValue
 import android.view.View
 import androidx.core.view.animation.PathInterpolatorCompat
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.theme.DesignScale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -20,18 +25,21 @@ import kotlin.math.abs
 import kotlin.math.roundToLong
 
 /**
- * PB-DS-8 -- "Motion: Substrate is static, and the exceptions are named."
+ * PB-DS-8, AS AMENDED BY ADR-009 D5 -- "the exceptions are named", and there is one more of them.
  *
- * ADR-007 B134 decision 3 is the standing decision this asserts: no decorative animation
- * anywhere. Only the bottom sheet, the push banner (both `translateY`, 350ms,
- * `cubic-bezier(0.32, 0.72, 0, 1)`) and the streaming caret (a liveness signal, 0.9s
- * `steps(2)`) move. Reduced motion -- `Settings.Global.ANIMATOR_DURATION_SCALE == 0` -- is
- * read once, AT ANIMATOR CONSTRUCTION, and it covers every animator [Motion] builds, including
- * the toggle's, which the artifact's own `prefers-reduced-motion` selector list omits.
+ * ADR-007 B134 decision 3 is still the standing principle: no decorative animation. What D5
+ * changes is the register the named exceptions run at -- navigation goes 350ms -> 300ms and the
+ * mock's `cubic-bezier(0.32, 0.72, 0, 1)` -> `(0.22, 1, 0.36, 1)`, an entrance duration and a
+ * travel ceiling arrive, the toggle and the caret are unchanged, and the specular sweep is added
+ * as the one new exception (D8.2 gates its four constraints). Reduced motion --
+ * `Settings.Global.ANIMATOR_DURATION_SCALE == 0` -- is read once, AT ANIMATOR CONSTRUCTION, and it
+ * covers every animator [Motion] builds, including the toggle's, which the artifact's own
+ * `prefers-reduced-motion` selector list omits.
  *
  * EVERY NUMBER THE IMPLEMENTATION IS CHECKED AGAINST IS READ FROM THE DOCUMENT THAT DECLARES
- * IT: the three durations, the four cubic-bezier control points, the keyframe opacity and
- * `steps(2)` through [MockCss] against `remote-control-mock.html`; the push banner's
+ * IT: the register's durations, its travel ceiling and its press bound through [AdrRegister]
+ * against ADR-009's D5 table; the caret's keyframe opacity, its `steps(2)` and the toggle's
+ * transition through [MockCss] against `remote-control-mock.html`; the push banner's
  * `-(own height + banner_top)` rule through [MockDoc] against `substrate-components.md`, the one
  * place that states it -- `.banner`'s own CSS declares no `height` to read. See each object's own
  * note for what hand-transcription it replaced and why.
@@ -90,79 +98,178 @@ class MotionTest {
     }
 
     @Before
-    fun startFromUnreducedMotion() {
+    fun startFromUnreducedMotionAndAnEmptySweepSlot() {
         // A prior test's setAnimatorScale(0f) must not leak into this one.
         setAnimatorScale(1f)
+        // Nor may a prior test's sweep. [Motion.inFlightSweep] is a singleton by design -- it IS
+        // the one-per-viewport rule -- and under Robolectric's paused looper an animator that was
+        // started never advances, so it would still be holding the slot in the next test. Ended
+        // rather than nulled, which is the same instant completion a superseding sweep performs:
+        // the field is private to Motion for exactly the reason that a test must not be able to
+        // put it in a state the app cannot reach.
+        Motion.inFlightSweep?.end()
     }
 
     // ------------------------------------------------------------------
     // The named numbers, EACH READ FROM THE DOCUMENT IT COMES FROM.
     //
-    // These five assertions used to read `assertEquals(350L, Motion.NAV_DURATION_MS)` -- a literal
+    // These assertions used to read `assertEquals(350L, Motion.NAV_DURATION_MS)` -- a literal
     // transcribed out of the implementation, compared against the implementation. Every other
     // assertion in this file is meaningless if these drift from the design, and nothing in the
     // repository read the design at all.
+    //
+    // ADR-009 D5's REGISTER is the document for the moving half of them now, and the mock is still
+    // the document for the rest.
+    //
+    // WHY THE SOURCE MOVED FOR THESE AND NOT FOR THE REST. `remote-control-mock.html` is a
+    // Substrate drawing: its `.banner` and `.sheet` declare `0.35s cubic-bezier(0.32,0.72,0,1)`,
+    // and ADR-009 D5 replaces exactly that with 300ms on (0.22, 1, 0.36, 1). Reading the mock for
+    // the navigation duration after D5 would be reading the superseded decision -- so these
+    // assertions read D5's own table, which is the ONLY place the entrance duration, the 4 dp
+    // travel ceiling and the 120 ms press bound are written at all. The caret and the toggle are
+    // "unchanged" in that table, so their assertions stay on the mock AND are joined to the
+    // register below: an "unchanged" row that quietly changed would otherwise be invisible.
     // ------------------------------------------------------------------
 
     @Test
-    fun nav_duration_is_the_transition_the_mock_declares_on_the_banner_and_the_sheet() {
-        val banner = MockCss.millis(MockCss.declaration(".banner", "transition"))
-        val sheet = MockCss.millis(MockCss.declaration(".sheet", "transition"))
-        assertEquals("the mock gives its two navigation surfaces one shared duration", banner, sheet)
-        assertEquals(banner, Motion.NAV_DURATION_MS)
+    fun nav_duration_is_the_registers_navigation_row() {
+        assertEquals(AdrRegister.millis(AdrRegister.value("Navigation (sheet, banner)")), Motion.NAV_DURATION_MS)
     }
 
     @Test
-    fun nav_duration_does_not_match_a_transition_the_mock_does_not_declare() {
-        // NEGATIVE CONTROL for the test above, run through MockCss.millis -- the same parse the
-        // real assertion calls, fed a perturbed declaration. Without it a millis() that returned a
+    fun nav_duration_does_not_match_a_duration_the_register_does_not_state() {
+        // NEGATIVE CONTROL for the test above, run through AdrRegister.millis -- the same parse the
+        // real assertion calls, fed a perturbed cell. Without it a millis() that returned a
         // constant, or that echoed Motion's own value, would satisfy the assertion above.
-        val perturbed = MockCss.millis("transform 0.5s cubic-bezier(0.32,0.72,0,1)")
-        assertEquals(500L, perturbed)
+        val perturbed = AdrRegister.millis("450ms, same curve")
+        assertEquals(450L, perturbed)
         assertNotEquals(perturbed, Motion.NAV_DURATION_MS)
     }
 
     @Test
-    fun nav_ease_is_the_cubic_bezier_the_mock_names() {
-        val fromBanner = MockCss.cubicBezier(MockCss.declaration(".banner", "transition"))
-        val fromSheet = MockCss.cubicBezier(MockCss.declaration(".sheet", "transition"))
-        assertEquals("the banner and the sheet share one curve", fromBanner, fromSheet)
+    fun the_navigation_row_records_which_duration_and_curve_it_replaces() {
+        // THE SUPERSESSION IS THE CLAIM, and it is the one thing a bare `300L` cannot carry. D5
+        // amends PB-DS-8 rather than discarding it, so the row states what it replaces -- and the
+        // mock still declares that superseded pair, on the very selectors this app animates. If
+        // the row ever stops naming them, the two documents no longer say the same thing about the
+        // same transition and this file is reading one of them for nothing.
+        val replaced = AdrRegister.rule("Navigation (sheet, banner)")
         assertEquals(
-            fromBanner,
-            listOf(Motion.NAV_EASE_P1X, Motion.NAV_EASE_P1Y, Motion.NAV_EASE_P2X, Motion.NAV_EASE_P2Y),
+            "D5's Navigation row must state the duration it replaces, and it must be the mock's",
+            MockCss.millis(MockCss.declaration(".sheet", "transition")),
+            AdrRegister.millis(replaced),
+        )
+        assertEquals(
+            "and the curve it replaces, which is the mock's own",
+            MockCss.cubicBezier(MockCss.declaration(".sheet", "transition")),
+            AdrRegister.curve(replaced),
+        )
+        assertNotEquals(AdrRegister.millis(replaced), Motion.NAV_DURATION_MS)
+    }
+
+    @Test
+    fun entrance_duration_is_the_registers_entrance_row() {
+        assertEquals(AdrRegister.millis(AdrRegister.value("Entrance")), Motion.ENTRANCE_DURATION_MS)
+    }
+
+    @Test
+    fun entrance_and_navigation_are_two_durations_and_not_one() {
+        // NEGATIVE CONTROL for both rows: a register whose rows were read off one another -- or a
+        // Motion that aliased one constant to the other -- would satisfy each assertion above.
+        assertNotEquals(Motion.ENTRANCE_DURATION_MS, Motion.NAV_DURATION_MS)
+    }
+
+    @Test
+    fun the_entrance_travel_ceiling_is_the_registers_own_dp() {
+        // 4 dp, and the reason it is a CEILING rather than a distance: D5 states "max travel", so
+        // the constant is what a future entrance may not exceed, not what one must travel.
+        assertEquals(
+            AdrRegister.dp(AdrRegister.rule("Entrance")),
+            Motion.ENTRANCE_MAX_TRAVEL_DP,
+            0f,
         )
     }
 
     @Test
-    fun nav_ease_interpolates_as_the_curve_the_document_declares() {
+    fun the_press_response_ceiling_is_the_registers_own_bound() {
+        assertEquals(AdrRegister.millis(AdrRegister.value("Press feedback")), Motion.PRESS_RESPONSE_CEILING_MS)
+    }
+
+    @Test
+    fun the_toggle_and_the_caret_are_the_rows_the_register_calls_unchanged() {
+        // The two rows D5 does not move, joined to it anyway. `unchanged` is a claim about two
+        // documents agreeing, and it is only checkable if both are read: the mock's own
+        // declarations are asserted above, and these are the register's statement of the same two
+        // numbers. A row edited to 200ms with the mock left alone would fail here and nowhere else.
+        assertEquals(AdrRegister.millis(AdrRegister.value("Toggle")), Motion.TOGGLE_DURATION_MS)
+        assertEquals(AdrRegister.millis(AdrRegister.value("Streaming caret")), Motion.CARET_PERIOD_MS)
+    }
+
+    @Test
+    fun ease_is_the_cubic_bezier_the_register_names() {
+        assertEquals(
+            AdrRegister.curve(AdrRegister.value("Entrance")),
+            listOf(Motion.EASE_P1X, Motion.EASE_P1Y, Motion.EASE_P2X, Motion.EASE_P2Y),
+        )
+    }
+
+    @Test
+    fun the_register_gives_entrance_and_navigation_ONE_curve() {
+        // D5 writes the navigation row's curve as "same curve" rather than as four control points,
+        // which is a fact about the register that Motion implements as one [Motion.EASE]. Read
+        // here so the day the row states its own points, this fails instead of quietly leaving
+        // navigation on the entrance's.
+        assertTrue(
+            "D5's Navigation row must defer to the Entrance row's curve; it now reads " +
+                "\"${AdrRegister.value("Navigation (sheet, banner)")}\"",
+            AdrRegister.value("Navigation (sheet, banner)").contains("same curve"),
+        )
+    }
+
+    @Test
+    fun ease_interpolates_as_the_curve_the_register_declares() {
         // The four control points above are what BUILDS the interpolator, so comparing them is a
         // comparison of inputs. This compares OUTPUTS: the curve the app runs against a curve
         // built here from the parsed values, sampled across the whole fraction range.
-        val p = MockCss.cubicBezier(MockCss.declaration(".banner", "transition"))
+        val p = AdrRegister.curve(AdrRegister.value("Entrance"))
         val fromTheDocument = PathInterpolatorCompat.create(p[0], p[1], p[2], p[3])
         for (i in 0..100) {
             val f = i / 100f
             assertEquals(
                 "at fraction $f",
                 fromTheDocument.getInterpolation(f),
-                Motion.NAV_EASE.getInterpolation(f),
+                Motion.EASE.getInterpolation(f),
                 1e-4f,
             )
         }
     }
 
     @Test
-    fun nav_ease_is_not_indistinguishable_from_a_different_curve() {
+    fun ease_is_not_indistinguishable_from_a_different_curve() {
         // NEGATIVE CONTROL for the test above, built through the same PathInterpolatorCompat.create
         // with one control point perturbed. If sampling could not tell two curves apart under this
         // harness, the comparison above would pass over any curve at all.
-        val p = MockCss.cubicBezier(MockCss.declaration(".banner", "transition"))
+        val p = AdrRegister.curve(AdrRegister.value("Entrance"))
         val perturbed = PathInterpolatorCompat.create(p[0] + 0.4f, p[1], p[2], p[3])
         val differs = (0..100).any { i ->
             val f = i / 100f
-            abs(perturbed.getInterpolation(f) - Motion.NAV_EASE.getInterpolation(f)) > 1e-3f
+            abs(perturbed.getInterpolation(f) - Motion.EASE.getInterpolation(f)) > 1e-3f
         }
         assertTrue("a curve with a different control point must sample differently", differs)
+    }
+
+    @Test
+    fun ease_is_not_the_curve_the_register_replaced() {
+        // The superseded curve, read from the mock that still declares it, sampled against the one
+        // the app runs. Two cubic-beziers can be distinguished (the control above), so a Motion
+        // left on `(0.32, 0.72, 0, 1)` must show up here -- which is the whole of what O4 moved.
+        val old = MockCss.cubicBezier(MockCss.declaration(".sheet", "transition"))
+        val superseded = PathInterpolatorCompat.create(old[0], old[1], old[2], old[3])
+        val differs = (0..100).any { i ->
+            val f = i / 100f
+            abs(superseded.getInterpolation(f) - Motion.EASE.getInterpolation(f)) > 1e-3f
+        }
+        assertTrue("ADR-009 D5 replaced the mock's curve; Motion.EASE is still on it", differs)
     }
 
     @Test
@@ -229,7 +336,7 @@ class MotionTest {
         val sheet = View(context)
         val animator = Motion.bottomSheetEnter(context, sheet, sheetHeightPx = 640f) as ObjectAnimator
         assertEquals(Motion.NAV_DURATION_MS, animator.duration)
-        assertSame(Motion.NAV_EASE, animator.interpolator)
+        assertSame(Motion.EASE, animator.interpolator)
 
         animator.setCurrentFraction(0f)
         assertEquals(640f, sheet.translationY, 0f)
@@ -242,7 +349,7 @@ class MotionTest {
         val sheet = View(context)
         val animator = Motion.bottomSheetExit(context, sheet, sheetHeightPx = 640f) as ObjectAnimator
         assertEquals(Motion.NAV_DURATION_MS, animator.duration)
-        assertSame(Motion.NAV_EASE, animator.interpolator)
+        assertSame(Motion.EASE, animator.interpolator)
 
         animator.setCurrentFraction(0f)
         assertEquals(0f, sheet.translationY, 0f)
@@ -352,7 +459,7 @@ class MotionTest {
             topInsetPx = dp(mockBannerTopDp()),
         ) as ObjectAnimator
         assertEquals(Motion.NAV_DURATION_MS, animator.duration)
-        assertSame(Motion.NAV_EASE, animator.interpolator)
+        assertSame(Motion.EASE, animator.interpolator)
 
         animator.setCurrentFraction(0f)
         assertEquals(dp(mockBannerHiddenDp()), banner.translationY, 0f)
@@ -594,6 +701,172 @@ class MotionTest {
         animator.setCurrentFraction(0.25f)
         assertEquals(1f, caret.alpha, 0f)
     }
+
+    // ------------------------------------------------------------------
+    // THE SPECULAR SWEEP -- ADR-009 D5's one new named exception, and D8.2's four constraints.
+    //
+    // WHAT IS ASSERTED HERE AND WHAT IS ASSERTED IN android/gate/o4_sweep_test.go, because the two
+    // are not the same question and neither subsumes the other. That gate reads SOURCE: it joins
+    // all eight of the sweep's numbers to the maquette and the token, and it holds the shape of
+    // the builder -- reduced motion asked before anything is constructed, the predecessor ENDED
+    // rather than cancelled, no INFINITE anywhere near it. This file RUNS the thing: an animator's
+    // repeatCount, the listener that actually fires on a superseded sweep, and the null the
+    // builder returns under reduced motion. The two numeric assertions below are the ones the
+    // BEHAVIOUR depends on (a duration and a peak alpha the animator carries), not a second copy
+    // of the gate's join.
+    // ------------------------------------------------------------------
+
+    /** ADR-009 D3's effect token: `sweep 500ms rgba(255,252,244,0.30)`. */
+    private fun sweepToken(): String = requireNotNull(DesignScale.token("--p-sweep-fx")) {
+        "the token origin declares no --p-sweep-fx; O2 added it, and every assertion about the " +
+            "sweep's own numbers would be read out of nothing without it"
+    }
+
+    @Test
+    fun the_register_and_the_token_state_the_same_sweep() {
+        // TWO DOCUMENTS, ONE EFFECT. D3 puts the sweep in the palette as an `effect` token and D5
+        // puts it in the register; the app reads the token, so the register agreeing with it is a
+        // property nothing else checks. `--p-sweep-fx` is typed `effect`, which means no TSV row
+        // and no `res/values` converter (D8.1's closing note) -- tokens.json is the only place it
+        // exists, and that is exactly why a constant derived from it needs a join.
+        val row = AdrRegister.value("Specular sweep")
+        assertEquals(AdrRegister.millis(sweepToken()), AdrRegister.millis(row))
+        assertEquals(AdrRegister.rgba(sweepToken()), AdrRegister.rgba(row))
+    }
+
+    @Test
+    fun the_sweeps_duration_and_peak_alpha_are_the_tokens_own() {
+        assertEquals(AdrRegister.millis(sweepToken()), Motion.SWEEP_DURATION_MS)
+        assertEquals(AdrRegister.rgba(sweepToken())[3], Motion.SWEEP_PEAK_ALPHA, 1e-6f)
+    }
+
+    @Test
+    fun the_sweeps_skew_is_the_registers_own_angle() {
+        assertEquals(
+            AdrRegister.degrees(AdrRegister.value("Specular sweep")),
+            Motion.SWEEP_SKEW_DEG,
+            1e-6f,
+        )
+    }
+
+    @Test
+    fun the_streak_travels_from_the_designs_start_to_its_far_side() {
+        // The offset is a PURE FUNCTION for [Motion.caretAlphaAt]'s reason: the travel is testable
+        // without driving an Animator's update machinery, and the drawable that spends it is
+        // private to the file that builds it.
+        assertEquals(Motion.SWEEP_FROM_SHARE, Motion.sweepOffsetAt(0f), 1e-6f)
+        assertEquals(Motion.SWEEP_TO_SHARE, Motion.sweepOffsetAt(1f), 1e-6f)
+        assertTrue(
+            "the streak enters from before the leading edge and leaves past the trailing one",
+            Motion.SWEEP_FROM_SHARE < 0f && Motion.SWEEP_TO_SHARE > 1f,
+        )
+        // MONOTONE, sampled: a travel that reversed would sweep back across a row that has already
+        // been read, which is a second moving element in the same viewport wearing one name.
+        val samples = (0..20).map { Motion.sweepOffsetAt(it / 20f) }
+        assertEquals(samples.sorted(), samples)
+    }
+
+    // (a) ONE-SHOT.
+
+    @Test
+    fun specularSweep_runs_once_at_the_tokens_duration() {
+        val animator = requireNotNull(Motion.specularSweep(context, View(context))) as ValueAnimator
+        assertEquals(Motion.SWEEP_DURATION_MS, animator.duration)
+        assertEquals("a sweep that repeats is the ambient motion D5 bans", 0, animator.repeatCount)
+    }
+
+    @Test
+    fun a_finished_sweep_leaves_nothing_in_flight() {
+        val animator = requireNotNull(Motion.specularSweep(context, View(context)))
+        animator.end()
+        assertNull(
+            "a sweep that has played must release the slot, or the next promotion supersedes a " +
+                "ghost and the one after it finds nothing to supersede",
+            Motion.inFlightSweep,
+        )
+    }
+
+    // (b) AT MOST ONE PER VIEWPORT, NEWEST WINS, AND THE OLD ONE COMPLETES.
+
+    @Test
+    fun a_second_sweep_supersedes_the_first_by_completing_it_instantly() {
+        val first = requireNotNull(Motion.specularSweep(context, View(context)))
+        var cancelled = false
+        var ended = false
+        first.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) = Unit
+            override fun onAnimationEnd(animation: Animator) { ended = true }
+            override fun onAnimationCancel(animation: Animator) { cancelled = true }
+            override fun onAnimationRepeat(animation: Animator) = Unit
+        })
+
+        val second = requireNotNull(Motion.specularSweep(context, View(context)))
+
+        assertTrue("the superseded sweep must be over the instant the new one starts", ended)
+        assertFalse(
+            "and it must be over by COMPLETING. cancel() skips the end listeners, so the streak " +
+                "it drew stays on a row nobody is looking at -- which is two highlights on a " +
+                "near-black ground, the ~80:1 amplification the one-per-viewport rule exists for",
+            cancelled,
+        )
+        assertSame("newest wins", second, Motion.inFlightSweep)
+    }
+
+    @Test
+    fun one_sweep_alone_is_not_ended_by_anything() {
+        // NEGATIVE CONTROL for the test above: an implementation that ended every sweep the
+        // instant it started would satisfy "the first one ended" perfectly.
+        var ended = false
+        val only = requireNotNull(Motion.specularSweep(context, View(context)))
+        only.addListener(object : Animator.AnimatorListener {
+            override fun onAnimationStart(animation: Animator) = Unit
+            override fun onAnimationEnd(animation: Animator) { ended = true }
+            override fun onAnimationCancel(animation: Animator) = Unit
+            override fun onAnimationRepeat(animation: Animator) = Unit
+        })
+        assertFalse("a sweep with nothing superseding it must still be running", ended)
+        assertSame(only, Motion.inFlightSweep)
+    }
+
+    // (d) REDUCED MOTION COLLAPSES IT TO NOTHING.
+
+    @Test
+    fun the_sweep_collapses_to_nothing_when_motion_is_reduced() {
+        setAnimatorScale(0f)
+        val slab = View(context)
+        assertNull(
+            "not a shorter sweep and not a zero-duration one: NOTHING. A 0ms ValueAnimator still " +
+                "delivers one update at fraction 1.0, which is a full-alpha final frame -- the " +
+                "exact defect the caret shipped once",
+            Motion.specularSweep(context, slab),
+        )
+        assertNull(
+            "and nothing may be left in flight either. The builder is the only site that attaches " +
+                "a streak, and o4_sweep_test.go holds the ordering that puts the reduced-motion " +
+                "question before every construction in it; an empty slot is what that ordering " +
+                "produces, and it is the half a runtime test can see",
+            Motion.inFlightSweep,
+        )
+    }
+
+    @Test
+    fun the_sweep_still_plays_when_motion_is_not_reduced() {
+        // NEGATIVE CONTROL for the test above: a builder that always returned null would satisfy
+        // every reduced-motion assertion in this file.
+        assertNotNull(Motion.specularSweep(context, View(context)))
+        assertNotNull(Motion.inFlightSweep)
+    }
+
+    @Test
+    fun a_sweep_in_flight_is_not_disturbed_by_a_refused_one() {
+        // Reduced motion turned on WHILE a sweep is playing must not reach in and clear the slot:
+        // the animator already handed out goes on being the one in flight, exactly as
+        // [reduced_motion_is_fixed_at_construction_not_re_read_at_start] holds for a duration.
+        val playing = requireNotNull(Motion.specularSweep(context, View(context)))
+        setAnimatorScale(0f)
+        assertNull(Motion.specularSweep(context, View(context)))
+        assertSame(playing, Motion.inFlightSweep)
+    }
 }
 
 /**
@@ -814,5 +1087,139 @@ private object MockDoc {
                 "$name is not on the unit-test classpath. app/build.gradle.kts must stage it as a " +
                     "unit-test resource so this assertion reads the design itself rather than a " +
                     "shape assumed in Kotlin",
+            )
+}
+
+/**
+ * ADR-009's D5 table, PARSED -- the MOTION REGISTER read as a document instead of transcribed into
+ * [Motion] and re-transcribed into this file's assertions.
+ *
+ * WHY IT EXISTS ALONGSIDE [MockCss], WHICH ALREADY READS A DESIGN. [MockCss] reads a DRAWING, and
+ * a drawing is a still picture of a moving thing. Four of the six numbers D5 states cannot be in
+ * one at all -- an entrance duration for a component the maquette draws at rest, a `max travel`
+ * CEILING (a bound, not a distance anything travels), a press-response bound on a document that
+ * cannot be pressed, and a sweep the maquette itself declares "looped at 6s here for display only".
+ * The remaining two are the ones D5 CHANGES, and reading `.sheet { transition }` for them after the
+ * amendment would be reading the superseded decision with a green test. So the register is read
+ * from the register.
+ *
+ * THE VALUE CELL AND THE RULE CELL ARE SEPARATE, and that separation is load-bearing rather than
+ * tidy. The Navigation row's rule cell says "replaces 350ms / (0.32, 0.72, 0, 1)" -- so a millis
+ * scan over the whole row finds 350 first and pins the app to the number D5 abolished. Cells are
+ * addressed by name, and the supersession test reads that pair deliberately, out of the cell that
+ * states it.
+ */
+private object AdrRegister {
+
+    private const val RESOURCE = "ADR-009-obsidian-visual-direction.md"
+
+    /** The section heading D5's table lives under, and the shape of the one after it. */
+    private const val SECTION = "### D5."
+    private const val NEXT_SECTION = "\n### "
+
+    private val MILLIS = Regex("""(\d+)\s*ms""")
+    private val PARENTHESISED = Regex("""\(([^)]*)\)""")
+    private val DP = Regex("""(-?\d*\.?\d+)\s*dp""")
+    private val DEGREES = Regex("""(-?\d*\.?\d+)\s*deg""")
+    private val RGBA = Regex("""rgba\(([^)]*)\)""")
+
+    /** Constant -> (value cell, rule cell), for every row of the one table in D5. */
+    private val rows: Map<String, Pair<String, String>> by lazy {
+        val text = readResource(RESOURCE)
+        val start = text.indexOf(SECTION)
+        require(start >= 0) {
+            "$RESOURCE no longer carries a `$SECTION` section. The motion register is that " +
+                "section's table, and every assertion over it would be read out of nothing."
+        }
+        val end = text.indexOf(NEXT_SECTION, start + SECTION.length).let { if (it < 0) text.length else it }
+        val out = LinkedHashMap<String, Pair<String, String>>()
+        text.substring(start, end).lineSequence().forEach { line ->
+            if (!line.trimStart().startsWith("|")) return@forEach
+            val cells = line.trim().trim('|').split("|").map { it.trim() }
+            if (cells.size < 3) return@forEach
+            val constant = cells[0].trim('*', ' ', '`')
+            // The header row and the `|---|---|---|` separator are rows by shape and not by
+            // content; dropping them by what they SAY rather than by position keeps this correct
+            // if the table ever grows a line above them.
+            if (constant.isEmpty() || constant == "Constant" || constant.all { it == '-' || it == ':' }) {
+                return@forEach
+            }
+            out[constant] = cells[1] to cells[2]
+        }
+        require(out.isNotEmpty()) {
+            "no register rows parsed from $RESOURCE's $SECTION section; every assertion over the " +
+                "motion decision would be vacuous"
+        }
+        out
+    }
+
+    private fun row(constant: String): Pair<String, String> = requireNotNull(rows[constant]) {
+        "$RESOURCE's D5 table states no `$constant` row. It states: ${rows.keys}"
+    }
+
+    /** The VALUE cell -- what the register says the constant IS. */
+    fun value(constant: String): String = row(constant).first
+
+    /** The RULE cell -- the clause beside it, which is where a ceiling and a supersession live. */
+    fun rule(constant: String): String = row(constant).second
+
+    /**
+     * A duration in ms out of one cell. THE CONVERSION EVERY TIMING ASSERTION AND ITS NEGATIVE
+     * CONTROL SHARE, for [MockCss.millis]'s reason: a control that did the arithmetic itself would
+     * be checking a second implementation of the parse rather than the one the assertion runs.
+     */
+    fun millis(cell: String): Long =
+        requireNotNull(MILLIS.find(cell)) { "\"$cell\" states no duration in ms" }
+            .groupValues[1].toLong()
+
+    /**
+     * A curve's four control values, in declaration order.
+     *
+     * D5 WRITES A CURVE TWO WAYS AND BOTH ARE THE SAME STATEMENT: the Entrance row's value cell
+     * spells it as CSS, `cubic-bezier(0.22, 1, 0.36, 1)`, and the Navigation row's rule cell names
+     * the one it replaces as a bare tuple, `(0.32, 0.72, 0, 1)`, because there it is quoting a
+     * value rather than writing a declaration. A parser that only knew the CSS spelling could not
+     * read the supersession clause at all -- which is the half of that row this file exists to
+     * pin -- so what is matched is "a parenthesised group of exactly four numbers".
+     *
+     * EXACTLY ONE such group must be in the cell. `rgba(255,252,244,0.30)` in the sweep row is
+     * also four numbers in parentheses, and a reader that took the first match would answer a
+     * question about a colour with a curve. Ambiguity fails loudly rather than picking.
+     */
+    fun curve(cell: String): List<Float> {
+        val candidates = PARENTHESISED.findAll(cell).mapNotNull { m ->
+            val parts = m.groupValues[1].split(",").map { it.trim().toFloatOrNull() }
+            if (parts.size == 4 && parts.all { it != null }) parts.filterNotNull() else null
+        }.toList()
+        require(candidates.size == 1) {
+            "\"$cell\" carries ${candidates.size} parenthesised four-number groups; a curve is " +
+                "read only from a cell that states exactly one"
+        }
+        return candidates.single()
+    }
+
+    /** `max travel **4dp**` -> 4. */
+    fun dp(cell: String): Float =
+        requireNotNull(DP.find(cell)) { "\"$cell\" states no dp length" }.groupValues[1].toFloat()
+
+    /** `skew -25deg` -> -25. */
+    fun degrees(cell: String): Float =
+        requireNotNull(DEGREES.find(cell)) { "\"$cell\" states no angle in degrees" }
+            .groupValues[1].toFloat()
+
+    /** `rgba(255,252,244,0.30)` -> its four components, in declaration order. */
+    fun rgba(cell: String): List<Float> {
+        val m = requireNotNull(RGBA.find(cell)) { "\"$cell\" names no rgba() colour" }
+        val parts = m.groupValues[1].split(",").map { it.trim().toFloat() }
+        require(parts.size == 4) { "rgba() in \"$cell\" carries ${parts.size} values, want 4" }
+        return parts
+    }
+
+    private fun readResource(name: String): String =
+        javaClass.classLoader?.getResourceAsStream(name)?.bufferedReader()?.use { it.readText() }
+            ?: error(
+                "$name is not on the unit-test classpath. app/build.gradle.kts must stage it as a " +
+                    "unit-test resource so these assertions read the decision itself rather than a " +
+                    "number copied out of the implementation they are checking",
             )
 }

@@ -152,30 +152,6 @@ internal object Kit {
     private const val DENY_FILL_SHARE = 0.13f
 
     /**
-     * The toggle's OFF track: `color-mix(in srgb, --p-ink3 40%, transparent)`.
-     *
-     * THE FIRST DERIVED COLOUR IN THIS KIT THAT SUBSTRATE DID NOT DRAW. The other four are
-     * `color-mix()` calls the artifact's own CSS makes; this one comes from
-     * `docs/design/substrate-components.md` row 4, for a component the artifact declares no rule
-     * for at all. It is consumed from `internal/design.Derivations()` like the rest rather than
-     * being resolved into a literal here, which is the whole of PB-TOK-7: a derived colour typed
-     * once is a copy of the palette that the token join is structurally blind to, because the
-     * resolved value is not any token's value and no row would ever have named it.
-     */
-    fun toggleTrackOff(context: Context): Int = ColorMix.mix(
-        colour(context, R.color.swarm_text_tertiary),
-        TOGGLE_TRACK_OFF_SHARE,
-        ColorMix.TRANSPARENT,
-    )
-
-    /**
-     * `--p-ink3`'s share of the toggle's off track, over transparent.
-     *
-     * origin: derivation toggle-track-off
-     */
-    private const val TOGGLE_TRACK_OFF_SHARE = 0.40f
-
-    /**
      * THE REBINDING. Substrate's demo phone labels the GREEN dot "Done"; B134 moves green to
      * ReadyForReview and gives Completed the recessive grey, because finished work should recede
      * on a triage surface rather than hold the most saturated colour on screen. Reading this off
@@ -227,7 +203,7 @@ internal object Kit {
      *
      * `isFocusableInTouchMode` IS DELIBERATELY NOT SET, and the row's own selector is why. Row 23
      * cites `:focus-visible`, not `:focus` -- the ring is for the user traversing with a keyboard,
-     * a D-pad or switch access, and a control that took focus on touch would leave a white ring
+     * a D-pad or switch access, and a control that took focus on touch would leave a champagne ring
      * behind every tap. Android's touch-mode rule produces exactly the pseudo-class's behaviour for
      * free, so what would look like the more thorough call is the wrong one.
      *
@@ -331,10 +307,43 @@ internal object KitMetrics {
     const val KEY_LIGHT_DP = 1f
 
     /** origin: --p-card-fx alpha */
-    const val KEY_LIGHT_ALPHA = 0.045f
+    const val KEY_LIGHT_ALPHA = 0.10f
+
+    /**
+     * The PROMOTED slab's key light: `--p-lit-fx` is `inset 0 1px 0 rgba(246,243,236,0.22)`.
+     *
+     * A SECOND ALPHA AND NOT A MULTIPLE OF THE FIRST. `0.22` is not `0.10` scaled by anything
+     * meaningful, and writing it as one would make the promoted edge move whenever the resting one
+     * did -- which is the opposite of what ADR-009 D4 asks for, since the whole statement is that
+     * the two surfaces catch DIFFERENT amounts of the same light. `--p-lit-fx` is its own token
+     * for that reason, and this is its alpha.
+     *
+     * THE RGB IS NOT HERE, exactly as [CTA_BLOOM_ALPHA]'s is not: `rgba(246,243,236, ...)` is
+     * `--p-ink` to the digit, so the promoted edge is the linen resource at this alpha rather than
+     * a second place the ink is written down. Both surfaces resolve it from `swarm_text_primary`.
+     *
+     * `effect` in tokens.json, so PB-TOK-6's converters produce no `<color>` and no `<dimen>` for
+     * it -- the position every one of these constants is in, and the reason this object exists.
+     *
+     * origin: --p-lit-fx alpha
+     */
+    const val LIT_KEY_LIGHT_ALPHA = 0.22f
 
     /** origin: --p-workbar stop */
     const val WORKBAR_FADE_STOP = 0.85f
+
+    /**
+     * The grain's opacity: `--p-grain` is the bare fraction `0.04`.
+     *
+     * IT IS THE ONE TOKEN IN THE ORIGIN WHOSE WHOLE VALUE IS A NUMBER, which is why the join reads
+     * it as `opacity` rather than as `alpha` or `stop`. Those two read a number OUT of a larger
+     * value -- an alpha inside an `rgba()`, a stop inside a gradient -- and this token has no
+     * larger value to read it out of. `effect`-typed, so PB-TOK-6's converters produce nothing for
+     * it and the kit has to carry it as a constant; the Go gate recomputes it from the origin.
+     *
+     * origin: --p-grain opacity
+     */
+    const val GRAIN_ALPHA = 0.04f
 
     /**
      * The badge's box. `--p-chip-r` is 8 dp, so a 16 dp box renders a pill -- the derivation is
@@ -386,25 +395,42 @@ internal object KitMetrics {
     const val WELL_HEIGHT_DP = 36f
 
     /**
-     * The toggle's thumb, which is also what its track is built out of.
+     * The toggle's track, thumb and inset -- four numbers, all four the maquette's own.
      *
-     * ROW 4 STATES FIVE NUMBERS AND ONLY TWO OF THEM ARE LEAVES. `track 46x28` is
-     * `thumb + travel + inset + inset` by `thumb + inset + inset`, and the inset is `space_2` off
-     * PB-DS-1's grid -- so the track is arithmetic over this constant, [TOGGLE_TRAVEL_DP] and a
-     * resource, and does not need a constant of its own. It could not have one anyway: the
-     * derivation-table reader parses `field <number>` and `track 46x28` matches nothing, which is
-     * the shape of citation that would have been a value nobody could check.
+     * THEY WERE `derived:` CITATIONS INTO `docs/design/substrate-components.md` ROW 4, and ADR-009
+     * D2 is why they are not any more. Row 4 states "track 46x28, thumb 24, inset `space_2`,
+     * travel 18" and was the whole specification for a control the Substrate artifact drew no rule
+     * for; the Obsidian maquette draws one, so the design source states the geometry directly and
+     * the citation moves to it.
      *
-     * derived: docs/design/substrate-components.md #4 Toggle { thumb }
+     * THERE IS NO `TOGGLE_TRAVEL_DP` ANY MORE, and its absence is the point. The maquette states
+     * four numbers and the travel is not among them -- it is what is left of the width after the
+     * two borders, the two insets and the thumb, computed in [ToggleSwitch]. A fifth constant
+     * would be a number free to disagree with the four, which is how `track 46x28` and `thumb 24`
+     * survived a skin change that redrew both.
+     *
+     * origin: maquette .tog { width }
      */
-    const val TOGGLE_THUMB_DP = 24f
+    const val TOGGLE_TRACK_WIDTH_DP = 40f
+
+    /** origin: maquette .tog { height } */
+    const val TOGGLE_TRACK_HEIGHT_DP = 24f
+
+    /** origin: maquette .tog i { width } */
+    const val TOGGLE_THUMB_DP = 16f
 
     /**
-     * How far the toggle's thumb travels between its two rest positions.
+     * The gap between the thumb and the track's INNER edge.
      *
-     * derived: docs/design/substrate-components.md #4 Toggle { travel }
+     * IT IS NOT A SPACING STEP AND MUST NOT BECOME ONE. PB-DS-1's ten-step scale governs the
+     * properties that place things relative to each other -- padding, margin, gap -- and this is
+     * `.tog i { top }`, absolute placement inside a positioned box, which `s22bSpacingProps`
+     * excludes by name. 3 is not on the 2 dp grid and rounding it onto `swarm_space_2` would
+     * shrink the track by 2 dp in each axis or leave the thumb off-centre inside it.
+     *
+     * origin: maquette .tog i { top }
      */
-    const val TOGGLE_TRAVEL_DP = 18f
+    const val TOGGLE_INSET_DP = 3f
 
     /**
      * The CTA's bloom radius: `--p-cta-fx` is `0 0 18px rgba(83, 206, 124, 0.20)`.
@@ -429,7 +455,7 @@ internal object KitMetrics {
      *
      * origin: --p-cta-fx alpha
      */
-    const val CTA_BLOOM_ALPHA = 0.20f
+    const val CTA_BLOOM_ALPHA = 0.22f
 
     /**
      * The scanner reticle's square: the size the code should look in the shot.

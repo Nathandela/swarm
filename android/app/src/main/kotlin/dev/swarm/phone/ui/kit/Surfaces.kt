@@ -2,7 +2,6 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -35,6 +34,20 @@ import dev.swarm.phone.R
  */
 internal data class SurfaceSpec(
     val fill: Int,
+    /**
+     * ADR-009 D4.4's vertical gradient: the BOTTOM stop, with [fill] as the top one. Null on every
+     * surface that is one flat colour, which is every surface but the approval sheet.
+     *
+     * **IT DEFAULTS TO NULL AND THAT IS THE `ONLY` IN D4.4.** "The approval sheet is the only
+     * vertical gradient" is a property of the whole kit rather than of the sheet, so the recipe
+     * that wants one has to say so and the seven that do not say nothing. A gradient reachable by
+     * omission would be the opposite arrangement.
+     *
+     * TWO FIELDS AND NOT A STOP LIST, because the design has two stops and no third. A list would
+     * be a place to put a third, and the moment a surface has three the "one light source" rule
+     * this file opens with has quietly acquired a second.
+     */
+    val fillBottom: Int? = null,
     val stroke: Int,
     /**
      * WHOLE PIXELS, because `GradientDrawable.setStroke` takes an int and the conversion has to
@@ -202,10 +215,34 @@ internal class TopRule(val fill: Int, val rule: Int, val rulePx: Float) : Drawab
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
 
-/** `.prow`, and `.prow.attention` when the row is the one blocked on the user. */
+/**
+ * `.prow`, and `.slab.lit` -- ADR-009 D4's promoted slab -- when the row is the one blocked on the
+ * user.
+ *
+ * **PROMOTION IS TWO CHANGES AT ONCE AND EITHER ALONE IS THE WRONG DRAWING.** The maquette says
+ * `.slab.lit { background: var(--p-elev); box-shadow: var(--p-lit-fx) }`: the slab comes forward
+ * one ladder step AND catches more of the one light source. Taking the stronger edge on the card
+ * fill draws a card with a bright line on it; taking the elevated fill with the resting edge draws
+ * a toast. Together they are the single statement D4 makes -- the same light, on material that has
+ * come forward -- which is why they are one boolean here rather than two parameters a caller could
+ * spend separately.
+ *
+ * ELEVATION IS STILL A LIGHTER SURFACE AND NEVER A SHADOW, so this is the ladder doing the work
+ * that `View.elevation` would be the obvious and forbidden implementation of. The file comment
+ * above says why; nothing about that changes because a second surface now uses the step.
+ *
+ * THE RAIL AND THE WARMED BORDER SURVIVE UNTOUCHED. ADR-009's amendment to PB-DS-5 adds the lit
+ * key-light as a NEW effect -- "Two effects are added, not substituted" -- so the two Substrate
+ * mechanisms that already said "this row needs you" keep saying it. The maquette's own `.slab.lit`
+ * draws neither; that is a divergence between the drawing and the requirement, and O3's scope is
+ * the material, so the requirement wins here and the drawing is left for a decision that names it.
+ */
 internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface = surface(
     SurfaceSpec(
-        fill = Kit.colour(context, R.color.swarm_surface_card),
+        fill = Kit.colour(
+            context,
+            if (attention) R.color.swarm_surface_elevated else R.color.swarm_surface_card,
+        ),
         stroke = if (attention) {
             Kit.attentionBorder(context)
         } else {
@@ -213,10 +250,27 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
         },
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
-        // rgba(255, 255, 255, 0.045). The white is `--p-card-fx`'s own RGB -- the token IS a
-        // translucent white -- and the alpha comes from KitMetrics, which the Go gate recomputes
-        // from that token. Color.WHITE rather than a hex, so nothing in this package is a literal.
-        keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        // rgba(246, 243, 236, 0.10) -- and the RGB is `swarm_text_primary`'s, not a hex and no
+        // longer `Color.WHITE`. ADR-009 D4 states the material rule this implements: surfaces are
+        // "gradients of LINEN over ground", one light source, top edge. `--p-card-fx`'s RGB is
+        // therefore exactly `--p-ink`, which is what the resource below resolves; the alpha comes
+        // from KitMetrics, which the Go gate recomputes from the same token.
+        //
+        // IT USED TO BE `Color.WHITE` AND THAT WAS RIGHT UNTIL IT WASN'T. Substrate's key light
+        // was a neutral white, so the constant was both correct and literal-free. Obsidian's is
+        // tinted, and a white key light over a warm ladder is the exact cool contamination the
+        // direction exists to remove -- visible on device, invisible in a diff, which is why the
+        // Kotlin appearance suite reads this colour out of the token rather than trusting it.
+        keyLight = ColorMix.withAlpha(
+            Kit.colour(context, R.color.swarm_text_primary),
+            // THE ONLY DIFFERENCE BETWEEN THE TWO EFFECTS IS THE ALPHA, which is why one
+            // expression serves both: `--p-card-fx` and `--p-lit-fx` are the same linen, at the
+            // same 1 dp, on the same edge, and they differ by how much of the light the surface
+            // catches. Two separate constructions here would be two chances to warm one and not
+            // the other -- and a promoted slab lit by a white edge over a warm ladder is the cool
+            // contamination the direction exists to remove, visible on device and invisible here.
+            if (attention) KitMetrics.LIT_KEY_LIGHT_ALPHA else KitMetrics.KEY_LIGHT_ALPHA,
+        ),
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
         rail = if (attention) Kit.colour(context, R.color.swarm_state_attention) else null,
         railPx = Kit.dp(context, KitMetrics.RAIL_DP),
@@ -247,10 +301,61 @@ internal fun toastSurface(context: Context): SubstrateSurface = surface(
         stroke = Kit.colour(context, R.color.swarm_hairline),
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
-        // The card's own recipe: `--p-card-fx`'s RGB is white and its alpha is the checked
-        // constant, exactly as `cardSurface` spends them.
-        keyLight = ColorMix.withAlpha(Color.WHITE, KitMetrics.KEY_LIGHT_ALPHA),
+        // The card's own recipe: `--p-card-fx`'s RGB is `--p-ink`'s linen and its alpha is the
+        // checked constant, exactly as `cardSurface` spends them.
+        keyLight = ColorMix.withAlpha(
+            Kit.colour(context, R.color.swarm_text_primary),
+            KitMetrics.KEY_LIGHT_ALPHA,
+        ),
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
+        rail = null,
+        railPx = 0f,
+    ),
+)
+
+/**
+ * `.sheet`: ADR-009 D4.4's approval sheet -- the ONE vertical gradient in the app, and the only
+ * surface besides a promoted slab carrying the strong 0.22 edge.
+ *
+ * **IT IS THE HEAVIEST MATERIAL THE SKIN HAS AND IT IS SPENT ON ONE MOMENT.** D4.4's word is
+ * "reserved": the sheet is where a person decides something a machine is blocked on, and every
+ * other surface in this kit is one flat colour under the resting key-light precisely so that this
+ * one reads as a different KIND of object rather than as a bigger card. That is why the gradient
+ * lives here rather than in a parameter [cardSurface] could take.
+ *
+ * **THE TWO STOPS ARE TWO RESOURCES AND NOT ONE PLUS AN ALPHA**, which is `colors.xml`'s own
+ * ruling and worth repeating at the point of use: a gradient's endpoints are CHOSEN, not computed
+ * from a base, so folding them into one resource would move the choice into whichever drawable
+ * consumed it -- the "decided at the point of use" this whole regime exists to forbid.
+ *
+ * **THE RADIUS IS `--p-sheet-r` AND NOTHING ELSE IN THE APP SPENDS IT.** Substrate set it to 14px
+ * and `--p-card-r` to 9px; ADR-009 separates them at 18 and 14, and until this recipe existed the
+ * sheet radius was a `<dimen>` in the resource table with no component behind it.
+ *
+ * NO CALLER YET, AND SAYING SO IS PART OF THE COMMIT RATHER THAN AN ADMISSION. The migration plan
+ * gives O3 the material and O6 the sheet itself (the pull-quote headline over the mono well), so
+ * this is the recipe arriving before its screen. `TestPBDS5_EveryColourResourceIsSpentBySomething
+ * ThatDraws` fences the half that can be fenced -- the two gradient stops now reach a surface --
+ * and records in as many words that it cannot see composition.
+ */
+internal fun sheetSurface(context: Context): SubstrateSurface = surface(
+    SurfaceSpec(
+        fill = Kit.colour(context, R.color.swarm_sheet_gradient_top),
+        fillBottom = Kit.colour(context, R.color.swarm_sheet_gradient_bottom),
+        stroke = Kit.colour(context, R.color.swarm_hairline),
+        strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_sheet),
+        // THE PROMOTED EDGE, NOT THE RESTING ONE. D4.4 names exactly two surfaces that carry
+        // `--p-lit-fx` -- a promoted slab and this -- so the alpha here is the lit constant and the
+        // linen RGB is the same `--p-ink` every key light in this file resolves.
+        keyLight = ColorMix.withAlpha(
+            Kit.colour(context, R.color.swarm_text_primary),
+            KitMetrics.LIT_KEY_LIGHT_ALPHA,
+        ),
+        keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
+        // A SHEET IS NOT A ROW. The rail says "this row needs you" on a list of rows; on the sheet
+        // the whole surface is the thing that needs you, and a leading bar would be the statement
+        // made twice at two scales.
         rail = null,
         railPx = 0f,
     ),
@@ -292,7 +397,14 @@ internal fun wellSurface(context: Context): SubstrateSurface = surface(
         fill = Kit.colour(context, R.color.swarm_surface_well),
         stroke = Kit.colour(context, R.color.swarm_hairline),
         strokeWidthPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
-        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        // THE BUTTON RADIUS, NOT THE CARD'S, AND IT USED TO BE THE CARD'S BY COINCIDENCE.
+        // Substrate set --p-card-r and --p-btn-r to the same 9px, and `.sheet2 .cmd` wrote a
+        // literal 9px rather than either token -- so every one of those three numbers agreed and
+        // nothing could tell which one the well was actually spending. ADR-009 separates them
+        // (14 and 10), and the maquette answers the question the coincidence had been hiding:
+        // it draws `.well { border-radius: var(--p-btn-r) }`. A well is a control-sized recess,
+        // not a slab.
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_button),
         keyLight = null,
         keyLightPx = 0f,
         rail = null,
@@ -352,7 +464,21 @@ private fun surface(spec: SurfaceSpec): SubstrateSurface {
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = spec.radiusPx
-            setColor(spec.fill)
+            // ONE FILL OR TWO, and the two are set through `colors` rather than `setColor` because
+            // those are different drawables: `setColor` clears any gradient the drawable had, so
+            // an implementation that called both would render whichever came last and look, in a
+            // diff, like it did both.
+            //
+            // ORIENTATION BEFORE COLOURS, and TOP_BOTTOM is `linear-gradient(180deg, ...)`.
+            // GradientDrawable's default is LEFT_RIGHT, so a sheet that set the stops and left the
+            // orientation alone would run the design's vertical gradient sideways -- correct in
+            // every value a test could read off the spec, and wrong on screen.
+            if (spec.fillBottom == null) {
+                setColor(spec.fill)
+            } else {
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                colors = intArrayOf(spec.fill, spec.fillBottom)
+            }
             setStroke(spec.strokeWidthPx, spec.stroke)
         },
     )

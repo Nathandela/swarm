@@ -67,23 +67,52 @@ func alphaLonghand(pct int) uint8 {
 func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T) {
 	src := loadTokenSource(t)
 
+	// AUTHORIZED VALUE MIGRATION, ADR-009 O2. What these five rows recorded before:
+	//
+	//	{"attention-row-border", "#6D5220"},
+	//	{"deny-fill", "#21FF6369"},
+	//	{"needs-input-dot-glow", "#B3F1A10D"},
+	//	{"working-dot-glow", "#8C00C2D7"},
+	//	{"toggle-track-off", "#6662666D"},
+	//
+	// Every one of them was a resolution of the SAME color-mix over the Substrate tokens. The
+	// blends did not change and neither did Derivations(); the tokens underneath them did, which
+	// is the whole point of PB-TOK-7 and is why these five moved without anybody editing a
+	// blend. The longhand cross-check below recomputes each from the tokens by integer
+	// arithmetic that shares no code with Mix, so what is recorded here is still checked by two
+	// independent implementations rather than trusted.
+	//
+	// WHAT THE FIELD NAME NOW OVERSTATES, recorded rather than quietly tolerated: ADR-009's
+	// maquette does not draw three of these five sites the way Substrate did (its status dots
+	// carry a literal rgba() glow at a different alpha, its deny control is an outline with no
+	// tint, and its promoted row is lit by --p-lit-fx rather than by a warmed hairline). The
+	// blends are still correct functions of the tokens and still the only place a consumer may
+	// get these colours from -- but re-pointing the derivation SITES at the new material is
+	// ADR-009 D4's work and belongs to phase O3 (PB-DS-5 re-parameterisation), not here. Doing
+	// it in a token-migration commit would hide a design change inside a value flow.
 	cases := []struct {
 		name string
-		// artifact is the value docs/research/remote-control-design-directions.html resolves
-		// to, recorded so a change in Mix that silently moves a shipped colour is caught.
+		// artifact is the value the design's color-mix resolves to over the CURRENT tokens,
+		// recorded so a change in Mix that silently moves a shipped colour is caught.
 		artifact string
 	}{
-		{"attention-row-border", "#6D5220"},
-		{"deny-fill", "#21FF6369"},
-		{"needs-input-dot-glow", "#B3F1A10D"},
-		{"working-dot-glow", "#8C00C2D7"},
-		// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row. Substrate
-		// draws no toggle; docs/design/substrate-components.md row 4 specifies one and states its
-		// off track as `--p-ink3` at 40%, quoting the resolved value `#6662666D`. So what is
-		// recorded here is the DERIVATION TABLE's number rather than a rendering of the HTML, and
-		// the assertion is the same either way: the blend this package computes has to equal the
-		// value the authority states, or a consumer would have to transcribe one of them.
-		{"toggle-track-off", "#6662666D"},
+		{"attention-row-border", "#66553D"},
+		{"deny-fill", "#21D96A62"},
+		{"needs-input-dot-glow", "#B3C9A876"},
+		{"working-dot-glow", "#8C6FA7A4"},
+		// THE FIFTH ROW IS GONE, AND IT IS NOT A VALUE MIGRATION THIS TIME. It read
+		//
+		//	// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row.
+		//	// Substrate draws no toggle; docs/design/substrate-components.md row 4 specifies
+		//	// one and states its off track as `--p-ink3` at 40% ...
+		//	{"toggle-track-off", "#66746B5D"},
+		//
+		// `docs/research/obsidian-maquette.html` draws `.tog`, and it gives the off track
+		// `background: var(--p-elev)` inside `border: 1px solid var(--p-hair)`. Two tokens, no
+		// blend. The derivation was retired with its only consumer (`Kit.toggleTrackOff`), so what
+		// is left in this table is again exactly the four color-mix() calls the artifact's own CSS
+		// makes -- which is what the field name `artifact` says, for the first time since row 4
+		// was let in.
 	}
 
 	byName := map[string]Derivation{}
@@ -282,7 +311,20 @@ func TestPBTOK7_ChangingABaseTokenMovesTheDerivedValue(t *testing.T) {
 			t.Fatalf("PB-TOK-7: resolving %s: %v", d.Name, err)
 		}
 
-		// A copy with exactly one base token perturbed by one unit of blue.
+		// A copy with exactly one base token perturbed in blue.
+		//
+		// THE PERTURBATION USED TO BE ONE UNIT, `base.B ^= 0x01`, and that was a control whose
+		// verdict depended on rounding luck rather than on the property it claims to test. A
+		// blend at 36% scales a one-unit input change to 0.36 of a unit, which rounds to the
+		// same byte for most starting values: under Substrate's --p-att the arithmetic happened
+		// to land either side of a .5 boundary and the control passed; under ADR-009's it lands
+		// on the same side and the control reported "the derivation is a hard-coded colour",
+		// which was false. A correct implementation must not be able to fail a control.
+		//
+		// So the perturbation is now larger than any mix fraction can round away (0x40 is a
+		// 64-unit swing; the smallest percentage in the table is 13%, which still moves the
+		// output by 8), and the property under test is unchanged: move the base, and the
+		// derived value must move.
 		moved := map[string]string{}
 		for k, v := range src.Tokens {
 			moved[k] = v
@@ -291,7 +333,7 @@ func TestPBTOK7_ChangingABaseTokenMovesTheDerivedValue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PB-TOK-7: token %s is not a colour: %v", d.Base, err)
 		}
-		base.B ^= 0x01
+		base.B ^= 0x40
 		moved[d.Base] = base.Hex()
 
 		after, err := d.Resolve(moved)

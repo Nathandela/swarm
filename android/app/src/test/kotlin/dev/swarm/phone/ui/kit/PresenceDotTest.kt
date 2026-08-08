@@ -29,7 +29,29 @@ import kotlin.math.roundToInt
  *
  * WHAT IT SHARES AND WHAT IT DOES NOT. The drawable, the 7 dp diameter and the flat treatment are
  * `.pdot`'s and are asserted against the design source here, exactly as `InboxRowTest` asserts
- * them for the status dot. The BINDING is the only thing that differs, and it is a boolean.
+ * them for the status dot. The BINDING is the only thing that differs, and it has THREE values.
+ *
+ * **THE BINDING WAS A BOOLEAN AND ADR-009 D2 IS WHY IT IS NOT.** This file's header used to end
+ * "The BINDING is the only thing that differs, and it is a boolean", and the factory took
+ * `online: Boolean`: `App.Presence`'s third word, `unknown`, was folded onto the offline visual on
+ * the reasoning that the caller states the word in copy beside the mark. That reasoning was sound
+ * against the SUBSTRATE artifact, which draws no `.pdot.unknown` rule at all -- row 11 gives
+ * presence two colours and two was all there was to render. The Obsidian maquette draws three:
+ *
+ *	.pdot.online  { background: var(--p-ok); }
+ *	.pdot.offline { background: var(--p-ink3); }
+ *	.pdot.unknown { background: transparent; border: 1px solid var(--p-ink3); }
+ *
+ * and its component sheet labels the cell "PresenceDot -- 3 states" with `unknown - hollow`. The
+ * maquette is the normative design source (ADR-009 D2) and the migration plan's phase O1 lists
+ * `PresenceDot x3` by name, so a component that renders two of the three is a fidelity miss and
+ * not a judgement call. The failure it produces is exact: a machine whose presence is `unknown`
+ * -- which is what a relay restart produces, since presence is never persisted -- renders
+ * identically to one confirmed asleep.
+ *
+ * WHAT SURVIVES THE CHANGE, because the old reasoning was half right: `unknown` still must not
+ * read as REACHABLE. A hollow ring in the recessive ink is not the online fill and could not be
+ * mistaken for it; it is the absence of a mark, drawn.
  *
  * IT NEVER GLOWS, IN EITHER STATE, and that is row 11's own sentence rather than an omission:
  * "Flat in both states -- no glow. Nothing glows unless it is alive, and a reachable machine is
@@ -69,17 +91,27 @@ class PresenceDotTest {
 
     @Test
     fun `presence is the design's 7dp mark in the two tokens row 11 names`() {
-        val online = drawableOf(presenceDot(context, online = true))
-        val offline = drawableOf(presenceDot(context, online = false))
+        val online = drawableOf(presenceDot(context, PresenceMark.ONLINE))
+        val offline = drawableOf(presenceDot(context, PresenceMark.OFFLINE))
 
         val claims = listOf(
-            Claim("online fill", KitOrigin.token("--p-ok"), online.fill),
-            Claim("offline fill", KitOrigin.token("--p-ink3"), offline.fill),
+            Claim("online fill", KitOrigin.maquetteColour(".pdot.online", "background"), online.fill),
+            Claim("offline fill", KitOrigin.maquetteColour(".pdot.offline", "background"), offline.fill),
             Claim("`.pdot` diameter, online", px(KitOrigin.cssDp(".pdot", "width")), online.diameterPx),
             Claim("`.pdot` diameter, offline", px(KitOrigin.cssDp(".pdot", "width")), offline.diameterPx),
             Claim("`.pdot` height", px(KitOrigin.cssDp(".pdot", "height")), online.diameterPx),
-            Claim("online occupies 7px of layout", corePx, footprint(presenceDot(context, true))),
-            Claim("offline occupies 7px of layout", corePx, footprint(presenceDot(context, false))),
+            Claim("online is a disc", 0f, online.strokePx),
+            Claim("offline is a disc", 0f, offline.strokePx),
+            Claim(
+                "online occupies 7px of layout",
+                corePx,
+                footprint(presenceDot(context, PresenceMark.ONLINE)),
+            ),
+            Claim(
+                "offline occupies 7px of layout",
+                corePx,
+                footprint(presenceDot(context, PresenceMark.OFFLINE)),
+            ),
         )
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
 
@@ -87,6 +119,60 @@ class PresenceDotTest {
             "online and offline paint the same colour, so the dot reports nothing at all",
             online.fill,
             offline.fill,
+        )
+    }
+
+    /**
+     * The third state: `.pdot.unknown` is a HOLLOW RING, and it is the one the app never drew.
+     *
+     * THE ASSERTION IS ABOUT SHAPE AND NOT ABOUT COLOUR, and that is the design's doing rather
+     * than a concession. The maquette gives the ring `--p-ink3`, which is the same ink the offline
+     * DISC takes -- so a test that only compared fills would pass over the exact defect this
+     * exists for. What separates the two states is that one is drawn and one is outlined, and the
+     * outline is what "we have no record" looks like: the mark is there, and there is nothing in
+     * it.
+     *
+     * THE STROKE IS INSIDE THE 7 dp AND THE FOOTPRINT DOES NOT MOVE. The maquette sets
+     * `box-sizing: border-box` on every element it draws, so `.pdot.unknown`'s 1px border is
+     * inside the 7px box rather than added to it. A ring that grew the mark by 2 dp would push
+     * every machine row's text a hairline sideways on a relay restart.
+     */
+    @Test
+    fun `the unknown machine is the maquette's hollow ring and not the offline disc`() {
+        val unknown = drawableOf(presenceDot(context, PresenceMark.UNKNOWN))
+        val offline = drawableOf(presenceDot(context, PresenceMark.OFFLINE))
+
+        val claims = listOf(
+            Claim("ring colour", KitOrigin.maquetteColour(".pdot.unknown", "border"), unknown.fill),
+            Claim(
+                // Rounded, because a 1 dp BORDER is quantised the way every other hairline in
+                // this kit is (PB-DS-6's one-value-one-rendering rule, which
+                // TestPBDS6_EveryKitMetricIsRenderedOneWay enforces over `HAIRLINE_DP`).
+                "ring weight",
+                px(KitOrigin.maquetteFirstPx(".pdot.unknown", "border")).roundToInt().toFloat(),
+                unknown.strokePx,
+            ),
+            Claim("`.pdot` diameter", px(KitOrigin.cssDp(".pdot", "width")), unknown.diameterPx),
+            Claim(
+                "the ring occupies 7px of layout, like the two discs",
+                corePx,
+                footprint(presenceDot(context, PresenceMark.UNKNOWN)),
+            ),
+        )
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+
+        assertNotEquals(
+            "`unknown` renders with the same stroke as `offline`, so the relay having no record " +
+                "of a machine is indistinguishable from the relay reporting it asleep. That is " +
+                "the state a relay restart produces, and the maquette draws a third mark for it",
+            offline.strokePx,
+            unknown.strokePx,
+        )
+        assertNotEquals(
+            "the unknown ring is painted `--p-ok`, so a machine nothing has heard from reads as " +
+                "reachable -- the absence of evidence rendered as evidence",
+            KitOrigin.token("--p-ok"),
+            unknown.fill,
         )
     }
 
@@ -101,7 +187,7 @@ class PresenceDotTest {
      */
     @Test
     fun `the offline mark is the recessive ink and not a second error colour`() {
-        val offline = drawableOf(presenceDot(context, online = false))
+        val offline = drawableOf(presenceDot(context, PresenceMark.OFFLINE))
         assertNotEquals(
             "the offline machine is painted `--p-err`. Red means denial, failure and destruction " +
                 "in this product, and a machine that is asleep is none of those -- row 11 gives " +
@@ -112,22 +198,26 @@ class PresenceDotTest {
     }
 
     /**
-     * Row 11: flat in both states.
+     * Row 11: flat in every state.
      *
      * BOTH HALVES ARE ASSERTED because either one alone renders nothing. `setShadowLayer` is
      * ignored under hardware acceleration for everything but text, so a glow set without a
      * software layer draws flat while every value a test could read off the Paint says otherwise;
      * and a software layer with no glow is a bitmap allocated per row for nothing.
+     *
+     * The loop was `listOf(true, false)` and walks [PresenceMark.entries] now: the ring is the
+     * state most likely to acquire a glow by accident, since "we cannot reach it" is the one a
+     * designer would be tempted to make anxious.
      */
     @Test
-    fun `neither state glows, and neither pays for a software layer`() {
-        listOf(true, false).forEach { online ->
-            val dot = presenceDot(context, online = online)
+    fun `no state glows, and none pays for a software layer`() {
+        PresenceMark.entries.forEach { mark ->
+            val dot = presenceDot(context, mark)
             val drawable = drawableOf(dot)
             val claims = listOf(
-                Claim("online=$online glow", null, drawable.glow),
-                Claim("online=$online glow radius", 0f, drawable.glowRadiusPx),
-                Claim("online=$online layer", View.LAYER_TYPE_NONE, dot.layerType),
+                Claim("$mark glow", null, drawable.glow),
+                Claim("$mark glow radius", 0f, drawable.glowRadiusPx),
+                Claim("$mark layer", View.LAYER_TYPE_NONE, dot.layerType),
             )
             assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
         }
@@ -143,7 +233,7 @@ class PresenceDotTest {
      */
     @Test
     fun `an undescribed dot is decorative and a described one is announced`() {
-        val silent = presenceDot(context, online = true)
+        val silent = presenceDot(context, PresenceMark.ONLINE)
         assertEquals(
             "an undescribed dot is left to a platform heuristic rather than marked decorative",
             View.IMPORTANT_FOR_ACCESSIBILITY_NO,
@@ -151,7 +241,7 @@ class PresenceDotTest {
         )
         assertNull("a decorative dot carries words it was never given", silent.contentDescription)
 
-        val spoken = presenceDot(context, online = false, description = "quanthome, offline")
+        val spoken = presenceDot(context, PresenceMark.OFFLINE, description = "quanthome, offline")
         assertEquals("quanthome, offline", spoken.contentDescription)
         assertNull(
             "a described dot announces nothing a screen reader can use",
@@ -163,7 +253,7 @@ class PresenceDotTest {
 
     @Test
     fun `the comparison fails when a value diverges`() {
-        val online = drawableOf(presenceDot(context, online = true))
+        val online = drawableOf(presenceDot(context, PresenceMark.ONLINE))
 
         assertTrue(
             "a perturbed fill produced no mismatch, so the colour claims above would hold against " +
@@ -172,10 +262,15 @@ class PresenceDotTest {
                 .isNotEmpty(),
         )
         assertTrue(
-            "a perturbed glow produced no mismatch, so \"flat in both states\" is asserted " +
+            "a perturbed glow produced no mismatch, so \"flat in every state\" is asserted " +
                 "against nothing and a glowing presence dot would pass",
             mismatches(listOf(Claim("online glow", KitOrigin.token("--p-ok"), online.glow)))
                 .isNotEmpty(),
+        )
+        assertTrue(
+            "a perturbed stroke produced no mismatch, so the ring assertion holds against a disc " +
+                "-- which is the exact defect the third state exists to fix",
+            mismatches(listOf(Claim("online stroke", 1f, online.strokePx))).isNotEmpty(),
         )
         assertTrue(
             "the comparison reports a mismatch for a value that agrees, so it fails on everything",

@@ -3,6 +3,7 @@ package dev.swarm.phone
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
+import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 
@@ -55,9 +56,61 @@ class PhoneActivity : AppCompatActivity() {
      * LAUNCHER filter, so anything on the device can start it -- and a back callback that reached a
      * verb would be session-acting code on the single most reachable surface this app has.
      * [PhoneSurface.closeSessionDetail] sets a nullable String and redraws;
-     * android/gate/s18_sec11_exported_test.go scans this file by name for every session verb.
+     * android/gate/s18_sec11_exported_test.go scans this file by name for every session verb. The
+     * three predictive members below hold the same line: what crosses from here is a float and a
+     * cancellation, and every view property they move is written in [PhoneSurface].
+     *
+     * IT WATCHES THE GESTURE NOW AND NOT ONLY ITS END (migration plan O6.3). `handleOnBackPressed`
+     * is the pre-predictive contract: it fires ONCE, after the user has committed, so a gesture
+     * dragged halfway across the screen showed nothing and the user could not tell whether letting
+     * go would leave the session they were reading. That question is the whole point of a
+     * predictive preview, and it is sharpest on exactly this screen -- the drill-down is where a
+     * person is READING rather than scanning, and where an accidental edge-touch costs them their
+     * place. The manifest's `android:enableOnBackInvokedCallback="true"` is what makes the platform
+     * dispatch the progress at all; without it these three are dead code with a green test suite.
      */
     private val backOutOfTheSessionDetail = object : OnBackPressedCallback(false) {
+
+        /**
+         * The gesture began. Nothing is previewed yet: `progress` is 0 at the start and the frame
+         * for 0 is the screen untouched, so drawing one here would be a redundant write on the
+         * frame where a person's thumb has moved furthest least.
+         *
+         * IT EXISTS ANYWAY, and not for symmetry. Without a `handleOnBackStarted` override, the
+         * androidx dispatcher still routes the gesture, but this callback has no place to reset a
+         * preview left behind by a gesture that ended in a way nothing else caught -- and a
+         * drill-down that starts a second gesture at 90% and half-faded is the state a user
+         * reports as "the app went weird". Resetting at the START is the one point in the gesture
+         * where the correct value is known unconditionally.
+         */
+        override fun handleOnBackStarted(backEvent: BackEventCompat) {
+            surface.cancelBackPreview()
+        }
+
+        /**
+         * The frame the user actually sees: scale toward 90%, never inside 8dp of the edge, and
+         * the crossfade past 35% (migration plan O6.3). [PhoneSurface.previewBack] owns the view
+         * work; what crosses from here is a float.
+         *
+         * `backEvent.progress` IS THE CLOCK AND THERE IS NO ANIMATOR. The gesture is the timeline,
+         * so an animator would be a second one racing the thumb -- which is why this is the one
+         * moving thing in the app that `ui/kit/Motion.kt` expresses as a pure function rather than
+         * as an `Animator`, and why PB-DS-8's fence is untroubled by it.
+         */
+        override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+            surface.previewBack(backEvent.progress)
+        }
+
+        /**
+         * The finger let go short of the threshold. The screen the user DECIDED TO STAY ON has to
+         * be put back exactly as it was, and "exactly" is the operative word: a preview left at
+         * 97% and alpha 0.98 is invisible in review and permanent on the device, because nothing
+         * else in this app ever writes those properties.
+         */
+        override fun handleOnBackCancelled() {
+            surface.cancelBackPreview()
+        }
+
         override fun handleOnBackPressed() {
             surface.closeSessionDetail()
         }

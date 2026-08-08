@@ -197,7 +197,9 @@ class KillSwitchPanelTest {
             Claim("command span start", start, (text as Spanned).getSpanStart(appearance)),
             Claim("command span end", start + command.length, text.getSpanEnd(appearance)),
             Claim("command ink", KitOrigin.token("--p-ink"), ink.foregroundColor),
-            Claim("command family", "monospace", appearance.family),
+            // ADR-009 D7: pitch, not a family string -- a bundled family reaches the span as a
+            // resolved Typeface and leaves getFamily() null.
+            Claim("command family is fixed-pitch", true, KitOrigin.isFixedPitch(appearance)),
         )
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }

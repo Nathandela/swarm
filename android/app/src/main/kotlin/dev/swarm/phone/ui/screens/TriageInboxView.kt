@@ -85,6 +85,14 @@ object InboxTag {
  * @param onSelectScope the machine a tapped chip names, or null for the "All machines" chip. A
  *  scope bar that did not narrow anything would be decoration, which is the same defect one
  *  indirection out.
+ * @param promoted the sessions whose Group became NeedsInput since the last draw --
+ *  `TriageInboxScreen.promotions` over the screen this one replaces. The row it names plays
+ *  ADR-009 D5's specular sweep once as it is built.
+ *
+ *  IT IS A SET OF IDS AND NOT A FLAG ON THE SCREEN, for the reason the empty case makes plain: a
+ *  session promoted on a machine the user has just scoped away from is not on this viewport, and
+ *  an id this list does not hold sweeps nothing. A boolean would have to be resolved against
+ *  "whichever row is first", which is the wrong row every time two are in flight.
  * @param below views this slice has NOT recomposed, hosted under the sections so the app still has
  *  one window and one scrolling column. It is a parameter rather than something the caller wraps
  *  around this view because the alternative is a split screen -- an inbox in the top half and the
@@ -96,6 +104,7 @@ fun triageInboxView(
     screen: InboxScreen,
     onSelectSession: (String) -> Unit,
     onSelectScope: (String?) -> Unit,
+    promoted: Set<String> = emptySet(),
     below: View? = null,
 ): View {
     val content = LinearLayout(context).apply {
@@ -161,6 +170,8 @@ fun triageInboxView(
                             agent = row.agent,
                             need = row.need,
                             group = row.group,
+                            lit = row.lit,
+                            promoted = row.id in promoted,
                             stateDescription = row.stateDescription,
                         ).apply {
                             tag = InboxTag.ROW

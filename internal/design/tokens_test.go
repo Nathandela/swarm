@@ -8,17 +8,17 @@
 //
 //	{
 //	  "schema": 1,
-//	  "source": "docs/research/remote-control-design-directions.html",
-//	  "skin": "substrate",                  // pinned; switching to void needs a spec/ADR change
+//	  "source": "docs/research/obsidian-maquette.html",
+//	  "skin": "obsidian",                   // pinned; changing it needs an ADR, not a JSON edit
 //	  "mode": "dark",                       // light mode is deferred to Phase C
 //	  "tokens": {
-//	    "--p-bg": "#08090a",
+//	    "--p-bg": "#0e0b08",
 //	    ...                                 // every --p-* token the chosen skin
-//	  },                                    // defines in the design HTML, verbatim
+//	  },                                    // defines in the design source, verbatim
 //	  "terminal_peek": {
 //	    "fg": "--p-hero",                   // token refs, not duplicated values:
-//	    "font": "--p-mono"                  // fg must be --p-hero (the phosphor
-//	  }                                     // green), font a monospace stack
+//	    "font": "--p-mono"                  // fg must be --p-hero (the accent
+//	  }                                     // phosphor), font a monospace stack
 //	}
 //
 // Token names keep the full CSS custom-property name so the drift check
@@ -29,6 +29,7 @@ package design
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -37,19 +38,33 @@ import (
 
 const (
 	tokenSourcePath = "tokens.json"
-	designHTMLPath  = "../../docs/research/remote-control-design-directions.html"
-	designHTMLRef   = "docs/research/remote-control-design-directions.html"
-	// htmlTokenCount is the verified count from requirements section 6.13:
-	// each direction block in the design HTML defines 31 distinct --p-* tokens.
-	htmlTokenCount = 31
+	designHTMLPath  = "../../docs/research/obsidian-maquette.html"
+	designHTMLRef   = "docs/research/obsidian-maquette.html"
+	// htmlTokenCount is the count the maquette's :root block declares: ADR-009 D3's 31
+	// inherited tokens plus the four it adds (--p-lit-fx, --p-sweep-fx, --p-sheet-hi,
+	// --p-sheet-lo).
+	htmlTokenCount = 35
 )
 
-// skinClass maps the recorded skin name to its CSS class in the design HTML.
-// Only the two retained directions are valid: d3 Signal (purple) and
-// d4 Instrument are marked "Not retained" in the artifact.
-var skinClass = map[string]string{
-	"substrate": "d1",
-	"void":      "d2",
+// AUTHORIZED REWRITE, ADR-009 D8.3 and the plan's O2.3. What the three constants above and the
+// map below used to say, quoted so the move is visible rather than inferred:
+//
+//	designHTMLPath  = "../../docs/research/remote-control-design-directions.html"
+//	designHTMLRef   = "docs/research/remote-control-design-directions.html"
+//	htmlTokenCount  = 31
+//	var skinClass = map[string]string{"substrate": "d1", "void": "d2"}
+//
+// Those were correct for a decision that has been superseded. ADR-009 D2 makes
+// docs/research/obsidian-maquette.html the normative design source: a complete maquette rather
+// than a four-way exploration, so there is ONE token block and it is `:root` rather than a
+// per-direction `.dN` class.
+//
+// THE SELECTOR IS NOW DATA FOR THE SAME REASON THE CLASS WAS. Reading `:root` through a table
+// keyed by skin name keeps the property the old map had: the skin recorded in tokens.json picks
+// which block is authoritative, so a future skin cannot start matching a block by accident, and
+// a skin name with no block is a hard failure instead of an empty token set.
+var skinSelector = map[string]string{
+	"obsidian": ":root",
 }
 
 type tokenSource struct {
@@ -93,25 +108,42 @@ func loadTokenSource(t *testing.T) tokenSource {
 
 var declRe = regexp.MustCompile(`(--p-[a-z0-9-]+)\s*:\s*([^;]+);`)
 
-// extractSkinTokens reads the design HTML and returns every --p-* declaration
-// of the given direction block (".dN { ... }"), values whitespace-normalized.
-func extractSkinTokens(t *testing.T, class string) map[string]string {
+// parseSkinTokens returns every --p-* declaration of the named block in the given design source,
+// values whitespace-normalized. It takes the SOURCE TEXT rather than reading the file, which is
+// what lets the negative control perturb a copy in memory: a control that edited the checked-in
+// maquette to prove the drift check works is a control that eventually gets committed.
+func parseSkinTokens(source, selector string) (map[string]string, error) {
+	blockRe := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(selector) + `\s*\{(.*?)\}`)
+	m := blockRe.FindStringSubmatch(source)
+	if m == nil {
+		return nil, fmt.Errorf("the design source defines no %s token block", selector)
+	}
+	tokens := make(map[string]string)
+	for _, d := range declRe.FindAllStringSubmatch(m[1], -1) {
+		tokens[d[1]] = normalize(d[2])
+	}
+	return tokens, nil
+}
+
+func readDesignHTML(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(designHTMLPath)
 	if err != nil {
-		t.Fatalf("design HTML %s not readable: %v", designHTMLRef, err)
+		t.Fatalf("design source %s not readable: %v", designHTMLRef, err)
 	}
-	blockRe := regexp.MustCompile(`(?s)\.` + class + `\s*\{(.*?)\}`)
-	m := blockRe.FindSubmatch(data)
-	if m == nil {
-		t.Fatalf("design HTML defines no .%s token block", class)
-	}
-	tokens := make(map[string]string)
-	for _, d := range declRe.FindAllStringSubmatch(string(m[1]), -1) {
-		tokens[d[1]] = normalize(d[2])
+	return string(data)
+}
+
+// extractSkinTokens reads the design source and returns the named block's tokens.
+func extractSkinTokens(t *testing.T, selector string) map[string]string {
+	t.Helper()
+	tokens, err := parseSkinTokens(readDesignHTML(t), selector)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
 	if len(tokens) != htmlTokenCount {
-		t.Fatalf("extractor sanity: .%s defines %d --p-* tokens, requirements section 6.13 verified %d", class, len(tokens), htmlTokenCount)
+		t.Fatalf("extractor sanity: %s defines %d --p-* tokens, ADR-009 D3 declares %d",
+			selector, len(tokens), htmlTokenCount)
 	}
 	return tokens
 }
@@ -142,18 +174,14 @@ func TestTokenSourceExistsAndMatchesSchema(t *testing.T) {
 // PB-TOK-1 (no drift) and PB-TOK-2 (completeness): the JSON carries exactly
 // the tokens the chosen skin defines in the design HTML, with equal values.
 func TestTokenSourceMatchesChosenSkinInDesignHTML(t *testing.T) {
-	// Exercise the extractor against both retained skins first, so any
-	// failure below can only mean the JSON is wrong, not the extractor.
-	for _, class := range skinClass {
-		extractSkinTokens(t, class)
-	}
-
 	src := loadTokenSource(t)
-	class, ok := skinClass[src.Skin]
+	selector, ok := skinSelector[src.Skin]
 	if !ok {
-		t.Fatalf("PB-TOK-2: recorded skin %q is not a retained direction (want substrate or void)", src.Skin)
+		t.Fatalf("PB-TOK-2/ADR-009 D1: recorded skin %q has no block in %s. The skin is a "+
+			"DECISION, so adding one here is an ADR's job, not a JSON edit's.",
+			src.Skin, designHTMLRef)
 	}
-	want := extractSkinTokens(t, class)
+	want := extractSkinTokens(t, selector)
 
 	for name, wantVal := range want {
 		gotVal, ok := src.Tokens[name]
@@ -172,14 +200,84 @@ func TestTokenSourceMatchesChosenSkinInDesignHTML(t *testing.T) {
 	}
 }
 
-// PB-TOK-2: the chosen skin is Substrate (d1), and the theme is pinned dark
-// (light mode is deferred to Phase C per requirements section 5). Void (d2)
-// remains a legal future choice, but switching to it requires a spec/ADR
-// change, not a silent edit here.
-func TestChosenSkinIsSubstrateAndPinnedDark(t *testing.T) {
+// TestTheDriftCheckCanActuallyFail is the NEGATIVE CONTROL for the assertion above.
+//
+// "The JSON carries exactly the tokens the design source defines, with equal values" is
+// satisfied by a parser that returns the JSON's own map, or by one that returns an empty map on
+// a source it cannot read. Both would be green forever. So the design source is perturbed IN
+// MEMORY -- one hex digit of --p-bg, and one token deleted -- and the comparison must notice.
+//
+// NOTHING HERE TOUCHES THE FILE. The maquette is the signed design source (ADR-009 D2); a
+// control that wrote to it to prove a fence works is a control that ends up committed, which is
+// a mistake this repository has paid for. The perturbation is a strings.Replace on a copy.
+func TestTheDriftCheckCanActuallyFail(t *testing.T) {
+	source := readDesignHTML(t)
+	real, err := parseSkinTokens(source, skinSelector["obsidian"])
+	if err != nil {
+		t.Fatalf("parsing the unperturbed source: %v", err)
+	}
+	if len(real) != htmlTokenCount {
+		t.Fatalf("the unperturbed source parses to %d tokens, want %d", len(real), htmlTokenCount)
+	}
+
+	// One digit of the ground.
+	mutated := strings.Replace(source, "--p-bg: #0e0b08;", "--p-bg: #0e0b09;", 1)
+	if mutated == source {
+		t.Fatal("the perturbation did not apply, so the control below proves nothing about the " +
+			"parser: --p-bg is no longer declared the way this control expects")
+	}
+	got, err := parseSkinTokens(mutated, skinSelector["obsidian"])
+	if err != nil {
+		t.Fatalf("parsing the perturbed source: %v", err)
+	}
+	if got["--p-bg"] == real["--p-bg"] {
+		t.Fatalf("the parser returns %q for --p-bg whether the source says #0e0b08 or #0e0b09, "+
+			"so every value comparison above is vacuous", got["--p-bg"])
+	}
+
+	// One token removed.
+	shortened := strings.Replace(source, "  --p-sheet-lo: #16110b;\n", "", 1)
+	if shortened == source {
+		t.Fatal("the deletion did not apply; --p-sheet-lo is no longer declared the way this " +
+			"control expects")
+	}
+	short, err := parseSkinTokens(shortened, skinSelector["obsidian"])
+	if err != nil {
+		t.Fatalf("parsing the shortened source: %v", err)
+	}
+	if len(short) != htmlTokenCount-1 {
+		t.Fatalf("removing a declaration left the parser reporting %d tokens, want %d; a parser "+
+			"whose count does not follow the source cannot detect a missing token",
+			len(short), htmlTokenCount-1)
+	}
+
+	// And a block that does not exist must be an error, not an empty map that compares equal to
+	// nothing and passes.
+	if _, err := parseSkinTokens(source, ".d1"); err == nil {
+		t.Error("the parser found a .d1 block in the maquette; a selector that does not exist " +
+			"must be an error rather than an empty token set")
+	}
+}
+
+// PB-TOK-2 / ADR-009 D1: the chosen skin is Obsidian, and the theme is pinned
+// dark (light mode is deferred to Phase C per requirements section 5).
+//
+// AUTHORIZED REWRITE, ADR-009 D8.3. What this test asserted before, quoted so the pin's move is
+// visible rather than inferred:
+//
+//	func TestChosenSkinIsSubstrateAndPinnedDark(t *testing.T) {
+//		src := loadTokenSource(t)
+//		if src.Skin != "substrate" {
+//			t.Errorf("PB-TOK-2: skin must be \"substrate\", got %q", src.Skin)
+//		}
+//
+// That assertion was correct for ADR-007-remote-access B3, which ADR-009 D1 supersedes in its
+// direction only. The pin itself is kept, and kept for the same reason: the skin is a decision,
+// so changing it must cost an ADR rather than a one-word JSON edit that nothing objects to.
+func TestChosenSkinIsObsidianAndPinnedDark(t *testing.T) {
 	src := loadTokenSource(t)
-	if src.Skin != "substrate" {
-		t.Errorf("PB-TOK-2: skin must be \"substrate\", got %q", src.Skin)
+	if src.Skin != "obsidian" {
+		t.Errorf("PB-TOK-2/ADR-009 D1: skin must be \"obsidian\", got %q", src.Skin)
 	}
 	if src.Mode != "dark" {
 		t.Errorf("PB-TOK-2: mode must be pinned to \"dark\", got %q", src.Mode)
@@ -246,11 +344,23 @@ func TestTerminalPeekIsPhosphorGreenMonospace(t *testing.T) {
 // edit that nothing objects to.
 var tokenKinds = []string{"color", "dimen", "font", "weight", "tracking", "effect"}
 
-// colourTokenCount is PB-TOK-5's number: the Substrate skin declares 16 hex colours out of its
-// 31 tokens. Pinned here so that retyping a colour as something else -- the cheapest way to make
-// a stubborn token stop failing a converter -- shows up as a count that no longer matches the
-// requirement rather than as a green run.
-const colourTokenCount = 17
+// colourTokenCount is PB-TOK-5's number: the skin declares 19 colour-typed tokens out of its 35.
+// Pinned here so that retyping a colour as something else -- the cheapest way to make a stubborn
+// token stop failing a converter -- shows up as a count that no longer matches the requirement
+// rather than as a green run.
+//
+// AUTHORIZED REWRITE, ADR-009 D8.3 and its ledger ("PB-TOK-5 / PB-TOK-8: counts (17 -> 19)").
+// What this line said before:
+//
+//	// colourTokenCount is PB-TOK-5's number: the Substrate skin declares 16 hex colours out of
+//	// its 31 tokens. [...]
+//	const colourTokenCount = 17
+//
+// (the prose said 16 and the constant said 17; --p-tabbg was added to the colour kind by the
+// 2026-08-01 audit and the sentence was left behind, which is the small way a comment starts
+// describing a thing it no longer is). ADR-009 D3 adds --p-sheet-hi and --p-sheet-lo, the
+// approval sheet's two gradient stops, and both are colours: 19.
+const colourTokenCount = 19
 
 var (
 	dimenRe    = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?px$`)
@@ -362,7 +472,7 @@ func TestPBTOK6_EveryTokenDeclaresAKindAndTheKindMatchesTheValue(t *testing.T) {
 	}
 
 	if byKind["color"] < colourTokenCount {
-		t.Errorf("PB-TOK-6/PB-TOK-5: %d tokens are typed \"color\"; the Substrate skin declares %d. "+
+		t.Errorf("PB-TOK-6/PB-TOK-5: %d tokens are typed \"color\"; the Obsidian skin declares %d. "+
 			"PB-TOK-5's whole scope is those %d reaching the app, so a different count means "+
 			"either a colour has been retyped or the skin changed without a spec change.",
 			byKind["color"], colourTokenCount, colourTokenCount)

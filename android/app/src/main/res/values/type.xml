@@ -49,18 +49,45 @@
       CSS, and on Android it is an inline span inside somebody else's paragraph, where line height
       is the paragraph's property and not the span's. There is nothing for it to carry.
 
-      FAMILIES ARE THE PLATFORM'S (ADR-007 B134 decision 2). The design names SF Pro and SF Mono;
-      neither is licensable off Apple, so every style in this app has always rendered a substitute
-      chosen by nobody. The decision is `sans-serif` and `monospace` with zero bundled assets.
-      Weight 650 is reachable because android:textFontWeight resolves against the platform's
-      variable Roboto at API 33, which minSdk guarantees.
+      FAMILIES ARE SUBSTITUTIONS (ADR-007 B134 decision 2, as amended by ADR-009 D7). The design
+      names SF Pro and SF Mono; neither is licensable off Apple, so every style in this app renders
+      a substitute, and the point of the decision is that the substitute is chosen once and written
+      down. The SANS half is unchanged: `sans-serif`, no bundled asset, and every weight here is
+      reachable because android:textFontWeight resolves against the platform's variable Roboto at
+      API 33, which minSdk guarantees.
 
-      THE RECORDED RESIDUAL IS NOT WHAT THE ADR SAYS IT IS. B134 records that `monospace` may show
-      TOFU for U+2500-257F. Measured (MonoBoxDrawingTest), the box-drawing glyphs all resolve -
-      through font FALLBACK, at 0.71em against the mono family's own 0.60em. The terminal peek's
-      frame therefore renders and is 18 percent wider per character than the text it frames, so it
-      does not align. That is a worse failure than tofu, because tofu is visible to anyone who
-      looks at the screen once. Bundling JetBrains Mono remains the upgrade path.
+      THE MONO HALF IS `@font/jetbrains_mono` FROM ADR-009 D7 (phase O5), and the paragraph below
+      is why. The bundled family answers 400 and 500; a mono style asking for 600 resolves to the
+      nearest, which is 500, with no synthetic bolding, and both faces advance 600/1000 em on every
+      glyph so the frame's grid does not depend on which weight asked for it.
+
+      THE MONO STYLES CARRY `tnum, zero, calt` AND THE SANS STYLES CARRY NOTHING, which is ADR-009
+      D7's "wherever machine data renders" made mechanical: every rule the design sets in
+      `var(p-mono)` is a machine's own register, and nothing proportional in this app renders a
+      number the machine produced. The attribute is a full OVERRIDE rather than an addition, so
+      `calt` is stated even though the family ships it on: naming two features without it would
+      switch the contextual alternates off. The gate asserts both directions.
+
+      ADR-009 (O2) MOVED FOUR STYLES AND NOBODY TYPED A NUMBER TO DO IT. The two display styles
+      lost 150 units of weight (650 to 500) and the four tracking values that cite a token
+      changed sign (body tracking goes POSITIVE on light-on-dark text, per the reading-ergonomics
+      guidance the ADR cites). Both facts arrived the only way this file accepts a number: the
+      CSS rules those styles cite state their weight and tracking as `var(p-display-wt)` and
+      `var(p-body-tr)` (leading dashes elided, as everywhere else in this file), the gate
+      resolves those vars through internal/design/tokens.json, and this file had to follow or
+      fail. The styles whose CSS states a literal weight, 600 on a row title and 400 on a
+      message, did not move, because the design did not move them. That is the difference
+      between a skin change and a find-and-replace.
+
+      THE RECORDED RESIDUAL IS DEAD, AND THIS IS WHAT IT WAS. B134 predicted that `monospace` may
+      show TOFU for U+2500-257F. Measured (MonoBoxDrawingTest), the box-drawing glyphs all resolved
+      instead, through font FALLBACK, at 0.71em against the mono family's own 0.60em: the terminal
+      peek's frame rendered 18 percent wider per character than the text it framed and did not
+      align. That is a worse failure than tofu, because tofu is visible to anyone who looks at the
+      screen once. ADR-009 D7 bundles JetBrains Mono, which covers the block at the family's own
+      advance, and the same test now asserts the equality instead of the mismatch. It keeps the old
+      inequality against Typeface.MONOSPACE, so the defect is still shown to be real one family
+      over rather than assumed away.
 
       Parents are stated explicitly on every style. `A.B.C` inherits from `A.B` implicitly in
       aapt, and the intermediate names here (TextAppearance.Swarm.Display, .Title, .Label, .Body,
@@ -90,16 +117,16 @@
     <!-- origin: .pnav .big -->
     <style name="TextAppearance.Swarm.Display.NavTitle" parent="TextAppearance.AppCompat">
         <item name="android:textSize">27sp</item>
-        <item name="android:textFontWeight">650</item>
-        <item name="android:letterSpacing">-0.025</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">-0.015</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
     <!-- origin: .sheet2 h4 -->
     <style name="TextAppearance.Swarm.Title.Sheet" parent="TextAppearance.AppCompat">
         <item name="android:textSize">15.5sp</item>
-        <item name="android:textFontWeight">650</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
@@ -107,7 +134,7 @@
     <style name="TextAppearance.Swarm.Title.Row" parent="TextAppearance.AppCompat">
         <item name="android:textSize">14sp</item>
         <item name="android:textFontWeight">600</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
@@ -132,7 +159,7 @@
     <style name="TextAppearance.Swarm.Body.Message" parent="TextAppearance.AppCompat">
         <item name="android:textSize">12.5sp</item>
         <item name="android:textFontWeight">400</item>
-        <item name="android:letterSpacing">-0.008</item>
+        <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:lineHeight">18.125sp</item>
     </style>
@@ -151,7 +178,8 @@
         <item name="android:textSize">11.5sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .sheet2 .cmd -->
@@ -159,7 +187,8 @@
         <item name="android:textSize">11.5sp</item>
         <item name="android:textFontWeight">400</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
         <item name="android:lineHeight">17.25sp</item>
     </style>
 
@@ -177,7 +206,8 @@
         <item name="android:textSize">11sp</item>
         <item name="android:textFontWeight">400</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
         <item name="android:lineHeight">17.05sp</item>
     </style>
 
@@ -186,7 +216,8 @@
         <item name="android:textSize">10.5sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0.09</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .tcard .h -->
@@ -194,7 +225,8 @@
         <item name="android:textSize">10.5sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .sheet2 .ctx -->
@@ -202,7 +234,8 @@
         <item name="android:textSize">10.5sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .pnav .live -->
@@ -210,7 +243,8 @@
         <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0.07</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .prow .ag -->
@@ -218,7 +252,8 @@
         <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
     <!-- origin: .ptabs div -->
@@ -234,7 +269,8 @@
         <item name="android:textSize">9.5sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">monospace</item>
+        <item name="android:fontFamily">@font/jetbrains_mono</item>
+        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
         <item name="android:lineHeight">15.2sp</item>
     </style>
 </resources>

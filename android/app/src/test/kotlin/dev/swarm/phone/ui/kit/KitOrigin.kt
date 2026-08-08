@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.graphics.Color
 import android.graphics.Typeface
 import android.text.TextPaint
+import android.text.style.TextAppearanceSpan
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -61,6 +62,77 @@ object KitOrigin {
         val hex = HEX.find(resolved)?.value
             ?: error("`$selector { $property: $resolved }` resolves to no colour")
         return DesignTokens.toArgb(hex)
+    }
+
+    /**
+     * One declaration of the OBSIDIAN MAQUETTE, resolved through `var()` to an ARGB.
+     *
+     * [cssColour]'s reader pointed at ADR-009 D2's normative source rather than at the Substrate
+     * artifact. Both are read in this suite and the split is recorded on [DesignScale]: the
+     * maquette states the app's own surfaces, the older artifact still states the three frame
+     * constants, the type ladder and the tab glyphs it does not draw.
+     *
+     * IT IS A SEPARATE FUNCTION AND NOT A FLAG ON [cssColour], because the selector names differ.
+     * The maquette calls the triage row `.slab` where Substrate calls it `.prow`, so a reader that
+     * fell back from one source to the other would answer `.prow` from the artifact that has it
+     * and silently stop being about the design that is normative.
+     */
+    fun maquetteColour(selector: String, property: String): Int {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property, so nothing can be expected of the " +
+                "component that cites it"
+        }
+        val resolved = DesignScale.resolve(raw)
+        val hex = HEX.find(resolved)?.value
+            ?: error("`$selector { $property: $resolved }` resolves to no colour")
+        return DesignTokens.toArgb(hex)
+    }
+
+    /**
+     * EVERY colour in one resolved maquette declaration, in the order the design writes them.
+     *
+     * [maquetteColour] answers the first, which is the whole answer for `background: var(--p-card)`
+     * and exactly half of it for a gradient. ADR-009 D4.4 gives the app one vertical gradient and
+     * its two stops are two tokens; a reader that could only see the first would let the bottom
+     * stop drift to anything at all, including the top one.
+     */
+    fun maquetteColours(selector: String, property: String): List<Int> {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val found = HEX.findAll(DesignScale.resolve(raw)).map { DesignTokens.toArgb(it.value) }.toList()
+        require(found.isNotEmpty()) { "`$selector { $property: $raw }` resolves to no colour" }
+        return found
+    }
+
+    /**
+     * The `rgba(r, g, b, a)` inside one resolved maquette declaration -- an effect token spent by
+     * a rule, as `.slab.lit { box-shadow: var(--p-lit-fx) }` spends the promoted key light.
+     *
+     * READING THE RULE RATHER THAN THE TOKEN IS THE POINT. [rgbaToken] answers what `--p-lit-fx`
+     * IS; this answers which surface the design gives it to, which is the half no token can carry
+     * and the half a component gets wrong.
+     */
+    fun maquetteRgba(selector: String, property: String): Int {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val m = requireNotNull(RGBA.find(DesignScale.resolve(raw))) {
+            "`$selector { $property: $raw }` resolves to no rgba()"
+        }
+        val (r, g, b, a) = m.destructured.toList().map { it.toFloat() }
+        return Color.argb((a * 255f).roundToInt(), r.toInt(), g.toInt(), b.toInt())
+    }
+
+    /** The first px length anywhere in a resolved maquette declaration. */
+    fun maquetteFirstPx(selector: String, property: String): Float {
+        val raw = requireNotNull(DesignScale.maquetteRule(selector)[property]) {
+            "the maquette's `$selector` declares no $property"
+        }
+        val m = requireNotNull(PX.find(DesignScale.resolve(raw))) {
+            "`$selector { $property: $raw }` carries no px length"
+        }
+        return m.groupValues[1].toFloat()
     }
 
     /** The nth px field of a CSS declaration, in design px (which is Android dp at 1:1). */
@@ -176,6 +248,21 @@ object KitOrigin {
         val m = requireNotNull(RGBA.find(raw)) { "$name = \"$raw\" carries no rgba()" }
         val (r, g, b, a) = m.destructured.toList().map { it.toFloat() }
         return Color.argb((a * 255f).roundToInt(), r.toInt(), g.toInt(), b.toInt())
+    }
+
+    /**
+     * A token whose whole value is a bare fraction -- `--p-grain` is `"0.04"` and nothing else.
+     *
+     * IT IS NOT [rgbaToken] AND NOT [percentInToken], which is worth a line because the three look
+     * interchangeable. Those read a number OUT of a larger value: an alpha inside an `rgba()`, a
+     * stop inside a gradient. This token has no larger value to read it out of, which is exactly
+     * why `tokens.json` types it `effect` and why PB-TOK-6's converters produce nothing for it.
+     */
+    fun fractionToken(name: String): Float {
+        val raw = requireNotNull(DesignScale.token(name)) { "the origin declares no $name" }
+        return requireNotNull(raw.trim().toFloatOrNull()) {
+            "$name = \"$raw\" is not a bare fraction, so it is not the kind of token this reads"
+        }
     }
 
     /** A fraction stated as a percentage inside a token value -- `--p-workbar`'s fade stop. */
@@ -376,6 +463,26 @@ object KitOrigin {
         isFixedPitch(TextPaint().apply { typeface = face })
 
     /**
+     * Is this span's face the mono one?
+     *
+     * WHY A SPAN NEEDS ITS OWN QUESTION, and why the answer stopped being a string comparison in
+     * ADR-009 D7. [TextAppearanceSpan] reports the family two different ways depending on what
+     * the style declared: a platform family name comes back from `getFamily()` with `getTypeface()`
+     * null, and a BUNDLED family (`@font/...`) comes back the other way round -- `getTypeface()`
+     * holds the resolved face and `getFamily()` is null, because the platform resolved the
+     * resource rather than passing a name along. A suite that kept comparing `getFamily()` to the
+     * substitution string would have gone from asserting the face to asserting null == a resource
+     * reference, and would have reported the bundling as a regression.
+     *
+     * So the question is asked as PITCH, which is what the terminal peek actually depends on and
+     * what this object already answers everywhere else. A span with neither a typeface nor a
+     * fixed-pitch one is not mono, which is the correct answer for a sans style AND the correct
+     * answer for a bundled family that failed to load.
+     */
+    fun isFixedPitch(span: TextAppearanceSpan): Boolean =
+        span.typeface?.let { isFixedPitch(it) } ?: false
+
+    /**
      * VALIDATES THE PROBE ITSELF, against two typefaces whose pitch is not in question.
      *
      * Every `is monospace` claim in this package is an inference from an advance-width comparison,
@@ -431,7 +538,7 @@ object KitOrigin {
             Claim("`$selector` size", quantisedTextSize(spec.sizePx * spScale), view.textSize),
             Claim("`$selector` tracking", spec.trackingEm, view.letterSpacing),
             Claim("`$selector` ink", ink, view.currentTextColor),
-            Claim("`$selector` is monospace", spec.androidFamily == "monospace", isFixedPitch(view.paint)),
+            Claim("`$selector` is monospace", spec.isMono, isFixedPitch(view.paint)),
         )
     }
 

@@ -18,19 +18,58 @@ object TypeScale {
 
     private const val TYPE_RESOURCE = "type.xml"
 
+    /** What `--p-font` substitutes to: the platform sans, still, still with no bundled asset. */
+    const val SANS_FAMILY = "sans-serif"
+
+    /**
+     * What `--p-mono` substitutes to (ADR-009 D7): the bundled family, as an XML resource
+     * reference rather than a family name, because that is the only spelling Android has for a
+     * face that ships inside the APK.
+     *
+     * IT IS A CONSTANT AND NOT A LITERAL AT EACH CALL SITE for the reason the whole of this file
+     * exists: nine styles and six suites ask "is this the mono family?", and nine copies of a
+     * string are nine places a skin change has to find.
+     */
+    const val MONO_FAMILY = "@font/jetbrains_mono"
+
+    /**
+     * The resource NAME behind a `@font/...` substitution, or null when the family is a platform
+     * name the resource table knows nothing about.
+     *
+     * A style whose family is a bundled resource resolves to a RESOURCE ID, not to a string, so a
+     * test comparing the two has to know which of the two it is holding. This is that question,
+     * asked once.
+     */
+    fun bundledFontName(family: String): String? =
+        family.removePrefix("@font/").takeIf { it != family }
+
     /**
      * ADR-007 B134 decision 2: the CSS stacks name SF Pro and SF Mono, neither licensable off
      * Apple, so every text style in this app has always rendered a substitute chosen by nobody.
-     * The decision is the platform families with zero bundled assets.
+     * The decision was the platform families with zero bundled assets.
      *
-     * android/gate/s22b_type_test.go is the authority for this table -- it joins the same pair
-     * back to the ADR's own words, so the decision cannot be changed here without the record
+     * android/gate/s22b_type_test.go is the authority for this table -- it joins each row back to
+     * the ADR that decides it, so the decision cannot be changed here without the record
      * disagreeing. This copy exists because the CSS says `var(--p-mono)` and Android says
-     * `monospace`, and something has to translate.
+     * something else, and something has to translate.
+     *
+     * AUTHORIZED REWRITE, ADR-009 D8.3 / D7 (phase O5). What this table said before:
+     *
+     *     private val ANDROID_FAMILY = mapOf(
+     *         "--p-font" to "sans-serif",
+     *         "--p-mono" to "monospace",
+     *     )
+     *
+     * The sans row does not move. The mono row does: `monospace` is Droid Sans Mono, which does
+     * not cover U+2500-257F, and MonoBoxDrawingTest measured what that costs -- the terminal
+     * peek's frame renders through fallback 18% wider per character than the text it frames.
+     * ADR-009 D7 bundles JetBrains Mono for the mono roles; the token value in tokens.json is
+     * unchanged, because the maquette is the normative source and the substitution is the layer
+     * that says what Android renders for it.
      */
     private val ANDROID_FAMILY = mapOf(
-        "--p-font" to "sans-serif",
-        "--p-mono" to "monospace",
+        "--p-font" to SANS_FAMILY,
+        "--p-mono" to MONO_FAMILY,
     )
 
     private val STYLE = Regex(
@@ -68,6 +107,15 @@ object TypeScale {
          * dimension -- so the product is the value, computed rather than transcribed.
          */
         val lineHeightPx: Float? get() = lineHeightMultiplier?.let { it * sizePx }
+
+        /**
+         * Does this design fact render in the mono family?
+         *
+         * ASKED THROUGH THE TOKEN'S SUBSTITUTION rather than by comparing the family string to a
+         * literal, because the literal moved once already (ADR-009 D7) and every call site that
+         * had spelled it out had to be found by hand.
+         */
+        val isMono: Boolean get() = androidFamily == MONO_FAMILY
     }
 
     /**

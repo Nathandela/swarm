@@ -26,6 +26,32 @@ import dev.swarm.phone.R
  * @param stateDescription what a screen reader should say about the Group's dot, which is the
  * only thing on the row carrying the state. It is copy, so it is the screen's; with none, the dot
  * is marked decorative rather than announced as an unlabelled view.
+ * @param lit ADR-009 D4's promotion: this session is the one blocked on the human, so the row is
+ *  drawn on the elevated slab under the stronger key-light.
+ *
+ *  **IT IS TAKEN AND NOT DERIVED, AND IT USED TO BE DERIVED HERE.** This component wrote
+ *  `group == "needs_input"`, which is a product decision -- WHICH Group is blocked on the human --
+ *  made a third time, beside the two `TriageInboxScreen` already makes with the same string. Three
+ *  copies disagree the day one moves: a skin that promoted a different Group would move the slab
+ *  and leave the tab badge counting the old one, every test green because each component was asked
+ *  for exactly what it drew. `InboxRow.lit` is the one name now, and this renders it.
+ *
+ *  IT HAS NO DEFAULT, for the reason `InboxRow.agent` gives about the same class of field: a
+ *  default makes it optional at every call site and it goes unpopulated at whichever one nobody
+ *  revisited -- and a row that quietly defaulted to `false` renders exactly what a correct resting
+ *  row renders, so the two are not ambiguous on screen, they are identical.
+ * @param promoted ADR-009 D5's moment: this session's Group BECAME NeedsInput since the last draw,
+ *  so the row plays the specular sweep once as it appears.
+ *
+ *  **IT IS A TRANSITION AND [lit] IS A STATE**, which is the whole difference between the two
+ *  flags and the reason there are two. `lit` is true for as long as a session waits; `promoted` is
+ *  true for the one draw in which it started waiting. A component that derived the second from the
+ *  first would sweep every waiting row on every redraw -- the ambient field-register motion D5
+ *  bans in the same paragraph that permits this one, arrived at by forgetting a comparison. Who
+ *  transitioned is `TriageInboxScreen.promotions`, which is the only place that can know: it
+ *  compares the screen against the one the user was actually looking at.
+ *
+ *  IT HAS NO DEFAULT, for [lit]'s reason exactly.
  */
 fun sessionRow(
     context: Context,
@@ -33,6 +59,8 @@ fun sessionRow(
     agent: CharSequence,
     need: CharSequence,
     group: String,
+    lit: Boolean,
+    promoted: Boolean,
     stateDescription: CharSequence? = null,
 ): View {
     val gap = Kit.dimenPx(context, R.dimen.swarm_space_8)
@@ -96,7 +124,7 @@ fun sessionRow(
         orientation = LinearLayout.VERTICAL
         clipChildren = false
         clipToPadding = false
-        background = cardSurface(context, attention = group == "needs_input")
+        background = cardSurface(context, attention = lit)
         setPaddingRelative(
             Kit.dimenPx(context, R.dimen.swarm_space_12),
             Kit.dimenPx(context, R.dimen.swarm_space_10),
@@ -118,6 +146,11 @@ fun sessionRow(
         },
     )
     if (group == "working") row.addView(workingBar(context))
+    // THE ONE CALL SITE THE SWEEP HAS, and it is here rather than in the screen because a screen
+    // composes components and passes data (PB-DS-6). The rule that at most one of these plays per
+    // viewport lives in Motion, so a list that builds two promoted rows in one pass gets one
+    // sweep -- the newest -- without this component knowing anything about the other row.
+    if (promoted) Motion.specularSweep(context, row)
     return row
 }
 

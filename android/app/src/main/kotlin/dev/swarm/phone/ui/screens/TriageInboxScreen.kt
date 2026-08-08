@@ -110,6 +110,29 @@ data class InboxRow(
      */
     val stateDescription: String,
     val selected: Boolean,
+    /**
+     * ADR-009 D4's promoted slab: this session is the one blocked on the human, so its row comes
+     * forward one ladder step and catches the stronger key-light.
+     *
+     * **IT IS NAMED HERE AND NOT DERIVED IN THE KIT, and the reason is that it was derived in the
+     * kit.** Which Group is blocked on the human is a product decision this model already makes
+     * twice -- [TriageInboxScreen.BLOCKED] is what the tab badge counts, and the order puts it
+     * first -- and `ui/kit/SessionRow.kt` made it a third time as `group == "needs_input"`. Three
+     * copies of one decision is how the three come to disagree: promote a different Group and the
+     * slab moves while the badge goes on counting the old one, with every test green because each
+     * component was asked for exactly what it drew. The kit renders what it is told.
+     *
+     * **IT IS ALSO WHAT ADR-009 D5's SWEEP FIRES FROM.** The specular sweep runs once "at the
+     * moment a session's Group becomes `NeedsInput`" -- that is this field, changing -- so O4 has
+     * a named fact to watch rather than a fourth derivation of the same Group.
+     *
+     * IT HAS NO DEFAULT, for [agent]'s reason and [JournalRow.sessionId]'s before it: a default
+     * makes the field optional at every construction site and it goes unpopulated at whichever one
+     * nobody revisited. A row that quietly defaulted to `false` renders as a resting row, which is
+     * exactly what a correct resting row renders as -- the two are not ambiguous on screen, they
+     * are identical.
+     */
+    val lit: Boolean,
 )
 
 /** One tab. Only the Inbox tab carries a badge (derivation table 1.4). */
@@ -193,6 +216,10 @@ object TriageInboxScreen {
                             group = row.group,
                             stateDescription = headingOf(section.group),
                             selected = row.id == selectedSession,
+                            // THE SAME CONSTANT THE BADGE COUNTS. One name for one decision is the
+                            // whole of InboxRow.lit's argument, and it is spent here rather than
+                            // restated as a second `== "needs_input"` four lines from the first.
+                            lit = row.group == BLOCKED,
                         )
                     },
             )
@@ -340,6 +367,55 @@ object TriageInboxScreen {
      */
     private val IN_FLIGHT: Set<String> = setOf("needs_input", "working")
 
-    /** The Group the tab badge counts, and the only one it counts. */
+    /**
+     * The sessions whose Group BECAME [BLOCKED] between [previous] and [next] -- ADR-009 D5's
+     * sweep, as a question about two screens.
+     *
+     * **A PROMOTION IS A TRANSITION AND `lit` IS A STATE.** `lit` is true for as long as a session
+     * waits; this is true for the one draw in which it started waiting. Deriving one from the
+     * other would sweep every waiting row on every redraw -- [InboxRow.lit] is recomputed on every
+     * journal event -- which is the ambient field-register motion D5 bans in the same paragraph
+     * that permits this one.
+     *
+     * **IT COMPARES SCREENS AND NOT ROSTERS**, which is what makes "in front of the user" true
+     * rather than approximately true. What the phone core reports and what the user was looking at
+     * are different things: a session filtered out by the scope chips is not on this viewport, and
+     * a screen being drawn for the first time has nothing to have transitioned from. Both cases
+     * fall out of comparing the drawn screens rather than the wire's rosters, and both are the
+     * correct answer -- a sweep is an announcement, and there is nobody to announce to.
+     *
+     * A SESSION THAT FIRST APPEARS ALREADY BLOCKED DOES NOT SWEEP. It arrived already waiting; the
+     * lit slab says so, and the sweep is reserved for the change. This is the case that decides
+     * whether this function is a transition or a state, and it is why [previous] is nullable
+     * rather than defaulted to an empty screen.
+     *
+     * EVERY TRANSITION IS NAMED, not only the first. One journal event can promote two sessions,
+     * and choosing which of them MOVES is Motion's rule (newest wins, one per viewport) -- a model
+     * that reported one would make that rule unfalsifiable and would silently drop a promotion the
+     * day the rule changed.
+     *
+     * @param previous the screen the user was looking at, or null on the first draw.
+     */
+    fun promotions(previous: InboxScreen?, next: InboxScreen): Set<String> {
+        if (previous == null) return emptySet()
+        val before = previous.sections.asSequence()
+            .flatMap { it.rows.asSequence() }
+            .associate { it.id to it.group }
+        return next.sections.asSequence()
+            .flatMap { it.rows.asSequence() }
+            .filter { it.group == BLOCKED }
+            .filter { before[it.id]?.let { was -> was != BLOCKED } == true }
+            .map { it.id }
+            .toSet()
+    }
+
+    /**
+     * The Group blocked on the human: what the tab badge counts, and the row ADR-009 D4 promotes.
+     *
+     * IT NAMES A STATE AND NOT A COMPONENT, which is why one constant carries both uses. The badge
+     * and the lit slab are two instruments reporting the same fact at two scales -- one across the
+     * whole app, one on the row itself -- and giving them a constant each is giving them a chance
+     * to disagree.
+     */
     private const val BLOCKED = "needs_input"
 }

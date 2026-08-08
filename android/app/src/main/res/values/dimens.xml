@@ -85,9 +85,16 @@
 
       (The token is spelled without its leading dashes throughout this comment because XML
       forbids a literal double hyphen inside a comment. It is p-dot-r in tokens.json.)
+
+      ADR-009 (O2): the four radii below moved with the skin (9/14/9/8 becomes 14/18/10/8)
+      and NOT ONE OF THEM WAS EDITED HERE. Each is its token in internal/design/tokens.json and
+      the gate joins them in both directions, so what happened is a value flowing through the
+      pipeline rather than four corners being re-chosen by eye. The fifth token's degeneracy is
+      unchanged: p-dot-r is still 4px on a 7px box, so the dot is still an oval with no radius
+      resource, and the paragraph above still holds word for word.
     -->
-    <dimen name="swarm_radius_card">9dp</dimen>
-    <dimen name="swarm_radius_sheet">14dp</dimen>
-    <dimen name="swarm_radius_button">9dp</dimen>
+    <dimen name="swarm_radius_card">14dp</dimen>
+    <dimen name="swarm_radius_sheet">18dp</dimen>
+    <dimen name="swarm_radius_button">10dp</dimen>
     <dimen name="swarm_radius_chip">8dp</dimen>
 </resources>

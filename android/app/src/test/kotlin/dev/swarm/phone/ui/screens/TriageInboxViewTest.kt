@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.Claim
 import dev.swarm.phone.ui.kit.KitOrigin
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.StatusDotDrawable
 import dev.swarm.phone.ui.kit.SubstrateSurface
 import dev.swarm.phone.ui.kit.kitFind
@@ -73,11 +74,13 @@ class TriageInboxViewTest {
         selected: String? = null,
         onSelectSession: (String) -> Unit = {},
         onSelectScope: (String?) -> Unit = {},
+        promoted: Set<String> = emptySet(),
     ): View = triageInboxView(
         context = context,
         screen = screen(rows, stale, scope, selected),
         onSelectSession = onSelectSession,
         onSelectScope = onSelectScope,
+        promoted = promoted,
     )
 
     /** Every descendant carrying [tag], in depth-first (that is, on-screen) order. */
@@ -249,6 +252,53 @@ class TriageInboxViewTest {
         )
     }
 
+    /**
+     * ADR-009 D4's promoted slab reaches the screen, and it reaches it FROM THE MODEL.
+     *
+     * THE STATE IS THE REAL RESOLVER'S, WHICH IS THE WHOLE POINT OF ASSERTING IT HERE. `KitFoundationTest`
+     * already asks whether `cardSurface(attention = true)` paints the maquette's `.slab.lit`; what
+     * only a screen can get wrong is WHICH row gets it, and a test that hand-fed `lit = true` to
+     * one row and asserted it came out promoted would be certifying that the renderer reads its
+     * argument. So the rows go in as the wire describes them, through `TriageInbox.from` and
+     * `TriageInboxScreen.of`, and the expectation for each drawn row is read off the model's own
+     * answer rather than off the Group string this file typed.
+     *
+     * BOTH SURFACES ARE READ FROM THE MAQUETTE. `.slab` and `.slab.lit` are two rules in ADR-009
+     * D2's normative source; naming `--p-card` and `--p-elev` here would be this suite agreeing
+     * with the kit about a design neither of them read.
+     */
+    @Test
+    fun `the row the model marks promoted is the one drawn on the lit slab`() {
+        val sessions = TriageInbox.TRIAGE_ORDER.map { group -> row("mbp/$group", group) }
+        val model = screen(sessions).sections.flatMap { it.rows }
+        val drawn = view(sessions).allTagged(InboxTag.ROW)
+
+        assertEquals(
+            "the screen drew a different number of rows from the number the model holds, so the " +
+                "pairing below is comparing a row against some other row's answer",
+            model.size,
+            drawn.size,
+        )
+        val claims = model.zip(drawn).map { (row, view) ->
+            Claim(
+                "the ${row.group} row's slab",
+                if (row.lit) {
+                    KitOrigin.maquetteColour(".slab.lit", "background")
+                } else {
+                    KitOrigin.maquetteColour(".slab", "background")
+                },
+                (view.background as SubstrateSurface).spec.fill,
+            )
+        }
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+
+        // AND THE MODEL MUST ANSWER BOTH WAYS OVER THIS ROSTER, or every claim above holds over
+        // one expectation repeated -- a model that promoted nothing, or everything, would satisfy
+        // each equality while drawing an inbox with no promotion in it at all.
+        assertTrue("the model promoted no row at all", model.any { it.lit })
+        assertTrue("the model promoted every row", model.any { !it.lit })
+    }
+
     @Test
     fun `only a working row carries the workbar`() {
         val root = view(TriageInbox.TRIAGE_ORDER.map { group -> row("mbp/$group", group) })
@@ -348,5 +398,46 @@ class TriageInboxViewTest {
 
         chips.getChildAt(0).performClick()
         assertNull("the All machines chip must clear the scope, not select a machine named it", chosen)
+    }
+
+    // ---- ADR-009 D5's sweep, composed ---------------------------------------
+
+    @Test
+    fun `the promotion the screen names is the row that sweeps`() {
+        // THE SCREEN PASSES DATA AND THE KIT PLAYS THE EFFECT, which is PB-DS-6's whole clause
+        // read one layer up: this file's subject is that the promoted SESSION ID reaches the row
+        // that renders it. Which session that is, is `TriageInboxScreen.promotions`; what the
+        // effect does once fired -- one-shot, one per viewport, nothing under reduced motion --
+        // is Motion's, and android/gate/o4_sweep_test.go fences where it may be built at all.
+        Motion.inFlightSweep?.end()
+        view(listOf(row("mbp/one", "needs_input"), row("mbp/two", "working")))
+        assertNull(
+            "a draw with no promotion in it must move nothing, however many rows are lit",
+            Motion.inFlightSweep,
+        )
+
+        view(
+            listOf(row("mbp/one", "needs_input"), row("mbp/two", "working")),
+            promoted = setOf("mbp/one"),
+        )
+        assertNotNull(
+            "the session the caller named as just-promoted must have swept",
+            Motion.inFlightSweep,
+        )
+        Motion.inFlightSweep?.end()
+    }
+
+    @Test
+    fun `a promotion naming a session this list does not hold sweeps nothing`() {
+        // The scope-filter case, and the reason this is a set of ids rather than a flag on the
+        // screen: a session promoted on a machine the user has just narrowed away from is not on
+        // this viewport at all, and the honest response to that is silence rather than sweeping
+        // whichever row happens to be first.
+        Motion.inFlightSweep?.end()
+        view(
+            listOf(row("mbp/one", "needs_input")),
+            promoted = setOf("other-machine/nine"),
+        )
+        assertNull(Motion.inFlightSweep)
     }
 }

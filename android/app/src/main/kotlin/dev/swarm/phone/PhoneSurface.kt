@@ -30,6 +30,8 @@ import dev.swarm.phone.ui.StatusBanner
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.Haptics
+import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
@@ -464,7 +466,16 @@ class PhoneSurface(
      */
     internal var onDrillDownChanged: (Boolean) -> Unit = {}
 
-    /** What the inbox last drew, so a redraw that changes nothing rebuilds nothing. */
+    /**
+     * What the inbox last put IN FRONT OF THE USER: null whenever the inbox list is not what is on
+     * screen.
+     *
+     * IT ANSWERS TWO QUESTIONS AND THE SECOND IS THE ONE THAT COSTS. The first is cheap -- a
+     * redraw that changes nothing rebuilds nothing. The second is ADR-009 D5's: it is the screen
+     * `TriageInboxScreen.promotions` compares against, so it decides which rows sweep and whether
+     * the NEEDS_YOU haptic fires. That makes "last drawn" the wrong reading and "last seen" the
+     * right one, and [drawContent] is where the difference is maintained.
+     */
     private var inboxDrawn: InboxScreen? = null
 
     /**
@@ -1496,7 +1507,26 @@ class PhoneSurface(
     }
 
     /**
-     * Draw the destination the user is on.
+     * Draw the destination the user is on, and forget the inbox when it is not what they see.
+     *
+     * **THE CLEAR AT THE BOTTOM IS THE OTHER HALF OF [inboxDrawn]'s MEANING.** That field is the
+     * screen `TriageInboxScreen.promotions` compares against, and the whole claim its KDoc makes
+     * is that a promotion happened "in front of the user" -- so the memo has to be what the user
+     * SAW, not what was last drawn. Those are the same thing only while the inbox list is on
+     * screen. Without this line the memo froze for as long as the user was on Machines, Activity
+     * or Settings, or inside a drill-down, and every session that started asking during that
+     * window was announced when they came back: a NEEDS_YOU two-pulse and a slab sweep for
+     * transitions nobody was there for.
+     *
+     * NULL IS THE RIGHT VALUE TO FORGET WITH, and `promotions` already defines it: `previous ==
+     * null` returns the empty set, because nothing can have transitioned in front of a user who
+     * has not been shown anything. Coming back to the inbox therefore announces nothing, which is
+     * correct -- what waits for them is carried by the lit slab, which is a state and not an event.
+     *
+     * THE INBOX ARM RETURNS RATHER THAN FALLING THROUGH, and that is not a style choice. Clearing
+     * the memo on the inbox's own draw would forget the screen the user is looking at right now,
+     * so the next redraw would treat every waiting session as newly promoted -- the same defect,
+     * louder. `android/gate/o4_sweepmemo_test.go` asserts both halves and perturbs each.
      *
      * @param bridge null on the branch where the phone core refused, which is the only reason
      *  three of the four destinations can have nothing to draw.
@@ -1505,13 +1535,17 @@ class PhoneSurface(
     private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
         when (destination) {
             Destination.INBOX -> when (val open = detailPanel(bridge)) {
-                null -> drawInbox(inbox)
+                null -> {
+                    drawInbox(inbox)
+                    return
+                }
                 else -> drawDetail(open)
             }
             Destination.MACHINES -> drawMachines(bridge)
             Destination.ACTIVITY -> drawActivity(bridge)
             Destination.SETTINGS -> drawSettings()
         }
+        inboxDrawn = null
     }
 
     /**
@@ -1532,6 +1566,18 @@ class PhoneSurface(
         // out of a session lands here with the list's data unchanged, so without it the early
         // return fires and the drill-down stays on screen over a tab that thinks it popped.
         if (screen == inboxDrawn && detailDrawn == null && contentShows == Destination.INBOX) return
+        // ADR-009 D5's sweep, computed BEFORE the previous screen is forgotten. [inboxDrawn] is
+        // "what the inbox last drew", which is exactly the state a promotion is a transition from
+        // -- not what the phone core last reported. A session the user has never seen has not
+        // transitioned in front of them, and neither has one this scope was hiding.
+        val promoted = screen?.let { TriageInboxScreen.promotions(inboxDrawn, it) }.orEmpty()
+        // THE SAME EVENT THE SWEEP FIRES ON, TOLD TO THE HAND (migration plan O6.2, `needs-you
+        // two-pulse`). A promotion is a session that has just started asking, in front of a user
+        // who is already holding the phone -- the one moment in this app where something arrives
+        // rather than being asked for. It is fired ONCE per draw and not once per session: two
+        // rows promoted by one journal event are one interruption, and D5's "at most one sweep
+        // animating per viewport" is the same ruling one sense over.
+        if (promoted.isNotEmpty()) Haptics.play(activity, Haptics.Signal.NEEDS_YOU)
         inboxDrawn = screen
         detailDrawn = null
         hostContent(
@@ -1542,6 +1588,7 @@ class PhoneSurface(
                     screen = screen,
                     onSelectSession = ::selectSession,
                     onSelectScope = ::selectScope,
+                    promoted = promoted,
                     below = unrecomposedControls,
                 )
             },
@@ -1811,7 +1858,36 @@ class PhoneSurface(
         // one press on one screen; carried across a departure it would greet the user on their
         // return with a failure from before they left.
         stopNotSentFor = ""
+        // THE PREVIEW IS UNDONE BEFORE THE NEXT SCREEN IS DRAWN INTO THE SAME HOST. A committed
+        // gesture leaves [contentHost] at 90% and fully transparent, and the inbox is hosted in
+        // that same view -- so without this the user's back gesture succeeds and lands them on an
+        // invisible list. It is here rather than only in the Activity because this is the one
+        // function every departure runs through, chevron and gesture alike.
+        Motion.clearPredictiveBack(contentHost)
         render()
+    }
+
+    /**
+     * One frame of the system back gesture, previewed on the drill-down (migration plan O6.3).
+     *
+     * IT SCALES [contentHost] AND NOT [root], and the difference is the whole reason the drill-down
+     * is the subject: the tab bar and the status banner are chrome that the gesture is not leaving,
+     * so a preview that shrank the window would tell the user they were about to exit the app --
+     * which is what back does on the inbox, and is exactly the thing this callback exists to
+     * prevent them confusing.
+     *
+     * WHAT CROSSES FROM [PhoneActivity] IS A FLOAT, which is PB-SEC-11 and not style. That class is
+     * exported with a LAUNCHER filter, so the gesture handler over there may touch local screen
+     * state and nothing else; the view work lives here, one call away, exactly as
+     * [closeSessionDetail]'s does.
+     */
+    internal fun previewBack(progress: Float) {
+        Motion.predictiveBack(activity, contentHost, progress)
+    }
+
+    /** The gesture was abandoned: put the drill-down back exactly as it was. */
+    internal fun cancelBackPreview() {
+        Motion.clearPredictiveBack(contentHost)
     }
 
     private fun selectScope(machine: String?) {
@@ -2274,14 +2350,32 @@ class PhoneSurface(
      *  refusals, and returns null for a press that resolves without reaching the wire -- a launch
      *  draft missing a required field, a Stop with no lease to send on. A null still redraws,
      *  because the refusal it just recorded is what the screen has to show.
+     *
+     * THE HAPTIC ANSWER IS GIVEN HERE AND THAT IS THE ONLY PLACE IT COULD BE (migration plan O6.2:
+     * "fired locally on tap, never on server ack"). This function is exactly the seam where the
+     * phone has decided what a press means and has not yet asked the machine anything: the plan
+     * either produced a verb, which is `SENT`, or refused it on the handset, which is `FAILED`.
+     * One line further in ([dispatchPress]'s settle) the answer belongs to the relay and can be
+     * five seconds old -- feedback that late is not feedback, it is a second event -- and one line
+     * back, in the click listener, the press has not been resolved yet, so a signal there would
+     * report `SENT` for a launch form with an empty field.
      */
     private fun press(control: View, plan: () -> Press?) {
         when (val startup = runtime.phone()) {
-            is PhoneStartup.Unavailable -> outcome.text = startup.error.message
+            // The phone core would not build, so nothing was sent and nothing will be. It is the
+            // same fact as a model refusal from the hand's point of view: the press stopped here.
+            is PhoneStartup.Unavailable -> {
+                outcome.text = startup.error.message
+                Haptics.play(control.context, Haptics.Signal.FAILED)
+            }
             is PhoneStartup.Ready -> {
                 val app = startup.app
                 val planned = plan()
-                if (planned != null) return dispatchPress(control, app, planned)
+                if (planned != null) {
+                    Haptics.play(control.context, Haptics.Signal.SENT)
+                    return dispatchPress(control, app, planned)
+                }
+                Haptics.play(control.context, Haptics.Signal.FAILED)
             }
         }
         render()

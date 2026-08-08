@@ -55,13 +55,13 @@ class MachineRowTest {
 
     private fun row(
         endpoint: CharSequence? = "endpoint a3f2",
-        online: Boolean = true,
+        mark: PresenceMark = PresenceMark.ONLINE,
     ): ViewGroup = machineRow(
         context = context,
         machine = "nathans-mbp",
         endpoint = endpoint,
         presence = "Your machine is online.",
-        online = online,
+        mark = mark,
     ) as ViewGroup
 
     // ---- the card, and the three cells row 11 states -------------------------
@@ -157,8 +157,16 @@ class MachineRowTest {
      */
     @Test
     fun `the leading mark is the presence dot, in the state the row was given`() {
-        listOf(true, false).forEach { online ->
-            val subject = row(online = online)
+        // The loop used to be `listOf(true, false)` over a `Boolean`, and it asserted
+        //
+        //	KitOrigin.token(if (online) "--p-ok" else "--p-ink3")
+        //
+        // -- two states, because the factory had two. The maquette draws three (`.pdot.unknown`,
+        // a hollow ring) and ADR-009 D2 makes it normative, so the third is exercised here rather
+        // than folded onto the second: what a row must never do is render "we have no record"
+        // with the same mark as "asleep", and a two-value loop cannot see that.
+        PresenceMark.entries.forEach { mark ->
+            val subject = row(mark = mark)
             val dot = subject.kitRequire(KitTag.PRESENCE_DOT)
             assertNull(
                 "a `.pdot` is on the machine row. The status dot takes a `status.Group`, and " +
@@ -166,11 +174,20 @@ class MachineRowTest {
                     "renders this correctly while inventing a state nothing on the wire sent",
                 subject.kitFind(KitTag.DOT),
             )
+            val drawn = dot.background as StatusDotDrawable
             assertEquals(
-                "the mark is not the colour row 11 gives a machine that is " +
-                    if (online) "reachable" else "not",
-                KitOrigin.token(if (online) "--p-ok" else "--p-ink3"),
-                (dot.background as StatusDotDrawable).fill,
+                "the mark is not the colour the maquette gives a machine that is $mark",
+                KitOrigin.maquetteColour(
+                    ".pdot.${mark.name.lowercase()}",
+                    if (mark == PresenceMark.UNKNOWN) "border" else "background",
+                ),
+                drawn.fill,
+            )
+            assertEquals(
+                "the $mark mark is drawn as a ${if (drawn.strokePx > 0f) "ring" else "disc"}, " +
+                    "which is not what `.pdot.${mark.name.lowercase()}` draws",
+                mark == PresenceMark.UNKNOWN,
+                drawn.strokePx > 0f,
             )
         }
     }

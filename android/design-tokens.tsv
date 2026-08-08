@@ -28,23 +28,40 @@
 # this table too, against values/dimens.xml. They are PB-DS's to add with that file; the gate
 # already carries their converter and will scan dimens.xml the moment it exists.
 #
+# ADR-009 (O2): THE SKIN IS OBSIDIAN, AND THIS TABLE IS THE PART THAT DID NOT MOVE. Twenty-seven
+# token values changed; not one row below changed because a row records the JOIN -- which token a
+# resource IS -- and the join is exactly the thing a skin change must not disturb. Two rows were
+# ADDED, for the approval sheet's two gradient stops (ADR-009 D4.4), taking the colour count from
+# seventeen to nineteen.
+#
+# THE TWO NEW EFFECT TOKENS DELIBERATELY HAVE NO ROW. --p-lit-fx (the promoted slab's stronger
+# key-light) and --p-sweep-fx (the specular sweep, ADR-009 D5) are typed `effect`, and `effect` is
+# the kind with no converter: there is no res/values primitive for an inset shadow or a one-shot
+# specular animation, which ADR-007 B134 decision 4 records as a custom-Drawable problem rather
+# than a conversion problem. A row here would name an android_resource that cannot exist, and
+# android/gate/s16_tokens_test.go treats a row whose kind has no converter as a hard failure --
+# correctly. So they sit beside --p-card-fx, --p-cta-fx, --p-grain and --p-workbar, which have
+# never had rows either, and O3/O4 give them Kotlin homes with their own gates.
+#
 # Columns: token <TAB> android_resource <TAB> kind <TAB> note
 #
 #token	android_resource	kind	note
---p-bg	swarm_background	color	The window background. This is the value that was wrong: colors.xml declared #FF101114 against the origin's #08090a and called it a placeholder.
+--p-bg	swarm_background	color	The window background. This is the value that was wrong: colors.xml declared #FF101114 against an origin that was then #08090a, and called it a placeholder. ADR-009 moves the ground to a warm near-black; the row is unchanged because the JOIN is what this table records, never the value.
 --p-card	swarm_surface_card	color	Card fill: session row, filter chip, agent message bubble, tool card.
 --p-elev	swarm_surface_elevated	color	One ladder step up from card, and the only step there is. Substrate bans drop shadows, so elevation is expressed as a lighter surface (ADR-007 B134 decision 4).
 --p-well	swarm_surface_well	color	Recessed: the command well in the approval sheet, and the terminal peek's ground.
 --p-hair	swarm_hairline	color	Every 1px border, the tab bar's top rule, the tool card's header divider.
---p-ink	swarm_text_primary	color	Primary text. Also previously divergent (#FFE6E8EB against #f7f8f8).
+--p-ink	swarm_text_primary	color	Primary text. Also previously divergent (colors.xml said #FFE6E8EB against an origin that was then #f7f8f8). Under ADR-009 it is linen, off-white on purpose: pure white halates for the 30-50% of adults with astigmatism.
 --p-ink2	swarm_text_secondary	color	Secondary text: labels, timestamps, the need summary under a session row.
 --p-ink3	swarm_text_tertiary	color	Tertiary: section labels, agent name, sheet context line, inactive tab. Also the Completed group (PB-TOK-8) and, per inventory G2, the offline machine dot.
 --p-hero	swarm_hero	color	Brand and live: the LIVE counter, selected chip, active tab, user message bubble, terminal peek foreground.
---p-hero-ink	swarm_hero_ink	color	Ink on hero fills. Near-black green, not a neutral.
+--p-hero-ink	swarm_hero_ink	color	Ink on hero fills. A near-black tinted with the accent's own hue, not a neutral -- ADR-009 turns it from near-black green into near-black brown for the same reason the green one existed.
 --p-att	swarm_state_attention	color	Attention. Bound to status.Group NeedsInput (PB-TOK-8) and to the expiry countdown.
 --p-work	swarm_state_working	color	Bound to status.Group Working (PB-TOK-8). Also the workbar gradient's opaque stop.
 --p-ok	swarm_state_ok	color	Bound to status.Group ReadyForReview (PB-TOK-8, ADR-007 B134 decision 1 -- green moves to review, NOT to done). Also diff additions and the chip presence dot.
 --p-err	swarm_state_error	color	Error and deny. Also diff deletions and the composer's stop button.
 --p-cta-bg	swarm_cta_background	color	CTA fill. Value-aliases --p-hero TODAY and keeps its own row and its own resource on purpose: a future skin can break the alias, and a join that deduplicated by value would not notice it had.
 --p-cta-ink	swarm_cta_ink	color	CTA ink. Value-aliases --p-hero-ink, same reasoning as the row above.
---p-tabbg	swarm_tabbar_background	color	The tab bar's translucent fill. Typed `effect` until 2026-08-01 because it is paired with a backdrop blur -- but the blur is the effect and this is the FILL, and an audit committee found the miscategorisation was what made the "all 16 colours reach the app" claim true. rgba(8,9,10,0.88) -> #E008090A.
+--p-tabbg	swarm_tabbar_background	color	The tab bar's translucent fill. Typed `effect` until 2026-08-01 because it is paired with a backdrop blur -- but the blur is the effect and this is the FILL, and an audit committee found the miscategorisation was what made the "all 16 colours reach the app" claim true. rgba(14,11,8,0.88) -> #E00E0B08. ADR-009 D4.5 bans the blur outright; the fill stays exactly what it was.
+--p-sheet-hi	swarm_sheet_gradient_top	color	NEW (ADR-009 D3/D4.4). The approval sheet's gradient TOP stop. The sheet is the one vertical gradient and the one heavy object in the app, reserved for the moment of decision; two stops get two rows and two resources because a gradient's endpoints are chosen rather than computed, and folding them into one resource plus an alpha would move the choice into whichever drawable consumed it.
+--p-sheet-lo	swarm_sheet_gradient_bottom	color	NEW (ADR-009 D3/D4.4). The same gradient's BOTTOM stop. Same reasoning as the row above, and the pair is why neither can drift alone.

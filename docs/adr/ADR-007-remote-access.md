@@ -7997,6 +7997,16 @@ re-bound token cannot land silently.
 
 ### 2. The fonts are the platform families, and the residual is named
 
+> **SUPERSEDED IN PART 2026-08-07 by ADR-009 D7, executed in migration phase O5. The MONO half of
+> this decision is taken back; the sans half stands.** Everything below is correct as written and
+> is kept, because it is the measurement that made the change legible: this entry set the
+> condition for bundling ("until the peek is seen to need it"), recorded that the condition was
+> met, and deferred the asset-weight decision to whoever owned the peek's screen. ADR-009 D7 is
+> that decision. `--p-mono` now substitutes to `@font/jetbrains_mono` — two bundled faces, OFL-1.1
+> — and the box-drawing residual described below is measured dead by the same test that measured
+> it alive. `--p-font` is unchanged: platform `sans-serif`, **zero bundled assets** on the sans
+> side, and that clause is still this entry's to keep.
+
 `--p-font` names SF Pro and `--p-mono` names SF Mono. Neither is licensable off Apple, so **every
 text style in this app has always been rendering a substitute chosen by nobody** — the token pinned a
 value the platform cannot supply, and the gate could not see it because a font stack has no ARGB
@@ -8025,6 +8035,13 @@ it ("until the peek is seen to need it") is met.** It is not taken in S22 becaus
 S24's and the decision carries a real asset-weight cost that belongs with whoever owns that screen.
 The evidence's own limit is stated in the test: it measures AOSP's font configuration, which is what a
 stock handset ships, not a survey of every OEM's customisation.
+
+**TAKEN 2026-08-07, ADR-009 D7 / phase O5.** The asset-weight cost this paragraph deferred was
+paid and measured: 547,760 bytes of TTF, +409,336 bytes on the debug APK (+1.16%).
+`MonoBoxDrawingTest` now asserts the
+equality — box-drawing at the same advance as ASCII in the bundled family — and keeps the old
+inequality as a control against `Typeface.MONOSPACE`, so the residual above is still shown to be
+real one family over. The residual described in this entry no longer describes the app.
 
 ### 3. No decorative animation
 

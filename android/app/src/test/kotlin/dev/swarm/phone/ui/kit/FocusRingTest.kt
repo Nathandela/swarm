@@ -120,7 +120,7 @@ class FocusRingTest {
             view.isFocusable,
         )
         assertFalse(
-            "the control asks for focus in TOUCH mode, so every tap would leave a white ring " +
+            "the control asks for focus in TOUCH mode, so every tap would leave a champagne ring " +
                 "behind it. Row 23 cites `:focus-visible`, which is the pseudo-class that does not.",
             view.isFocusableInTouchMode,
         )
@@ -193,20 +193,33 @@ class FocusRingTest {
             dp(KitMetrics.FOCUS_RING_DP),
             offset,
         )
-        // §1.1's rejections, as distinctions. If the chosen ink compared equal to either of the
-        // two it argues hardest against, the claim above would accept a ring that means selected
-        // or a ring that reads as a border.
-        assertNotEquals(
-            "`--p-ink` and `--p-hero` resolve to the same colour, so a ring meaning SELECTED " +
-                "would satisfy row 23",
-            KitOrigin.token("--p-hero"),
-            ink,
-        )
-        assertNotEquals(
-            "`--p-ink` and `--p-ink2` resolve to the same colour, so a ring that reads as a " +
-                "border would satisfy row 23",
-            KitOrigin.token("--p-ink2"),
-            ink,
-        )
+        // §1.1's rejections, as distinctions. If the chosen ink compared equal to any of the four
+        // the amended §1.1 argues against, the claim above would accept a ring that reads as a
+        // hairline or a ring that means state.
+        //
+        // THE TWO REJECTIONS THIS REPLACES WERE SUBSTRATE'S, AND ADR-009 D3 INVERTS BOTH:
+        //
+        //     assertNotEquals("`--p-ink` and `--p-hero` resolve to the same colour, so a ring
+        //         meaning SELECTED would satisfy row 23", KitOrigin.token("--p-hero"), ink)
+        //     assertNotEquals("`--p-ink` and `--p-ink2` resolve to the same colour, so a ring
+        //         that reads as a border would satisfy row 23", KitOrigin.token("--p-ink2"), ink)
+        //
+        // The first is not weakened, it is REVERSED: hero was rejected because it meant selected,
+        // and in Obsidian the accent means "you" -- focus is one of the five things it says. The
+        // second survives verbatim in substance; it is restated against the chosen ink rather than
+        // against the linen one, which is the same distinction pointed at the decision that holds.
+        //
+        // `--p-att` IS ABSENT FROM THIS LIST ON PURPOSE. It value-aliases `--p-hero` (ADR-009 D6),
+        // so asserting them distinct would assert against the decision. What keeps the alias
+        // breakable is that each keeps its own row and its own resource, which the token gates
+        // fence; there is nothing for this suite to add.
+        listOf("--p-ink", "--p-ink2", "--p-work", "--p-ok", "--p-err").forEach { rejected ->
+            assertNotEquals(
+                "row 23's ink and `$rejected` resolve to the same colour, so a ring that reads " +
+                    "as a hairline -- or one that means a status -- would satisfy row 23",
+                KitOrigin.token(rejected),
+                ink,
+            )
+        }
     }
 }
