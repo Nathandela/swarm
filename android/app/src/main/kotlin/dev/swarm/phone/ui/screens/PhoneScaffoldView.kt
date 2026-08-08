@@ -275,8 +275,16 @@ fun statusBannerView(
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         tag = ScaffoldTag.BANNER
+        // `capped = true` IS THE SLOT'S OWN FACT AND NOT THE COMPONENT'S (agents-tracker-ksvb.3).
+        // This banner is the one `readOnlyNote` in the app drawn OUTSIDE a scroll, so a sentence
+        // that wraps does not cost its own height -- it pushes the destination, on all four tabs,
+        // under a user who is reading something else. Three facts wrapping to four lines each is
+        // a third of a handset. Two lines and the platform's mark bound that; the same component
+        // under a terminal well still wraps, because there it is prose in a column that scrolls.
         banner.lines.forEach { line ->
-            addView(readOnlyNote(context, line).apply { tag = ScaffoldTag.BANNER_LINE })
+            addView(
+                readOnlyNote(context, line, capped = true).apply { tag = ScaffoldTag.BANNER_LINE },
+            )
         }
         // `CtaKind.MORE` IS THE NEUTRAL RULE AND THAT IS THE RIGHT ONE HERE. The press approves
         // nothing and destroys nothing -- it opens the screen this banner's sentence sends the user

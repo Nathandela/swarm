@@ -38,6 +38,7 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
                 text = title
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
                 tag = KitTag.TITLE
+                Kit.identityCell(this)
             },
         )
         if (live != null) {

@@ -85,6 +85,7 @@ fun machineRow(
             // machine name pushes it rather than running under it.
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             tag = KitTag.MACHINE_NAME
+            Kit.identityCell(this)
         },
     )
     if (endpoint != null) {
@@ -95,6 +96,7 @@ fun machineRow(
                 text = endpoint
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
                 tag = KitTag.MACHINE_ENDPOINT
+                Kit.identityCell(this)
             },
         )
     }

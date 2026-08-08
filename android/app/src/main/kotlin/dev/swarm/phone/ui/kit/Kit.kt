@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.text.style.TextAppearanceSpan
 import android.view.View
@@ -64,6 +65,47 @@ internal object Kit {
      */
     fun textView(context: Context): TextView = TextView(context).apply {
         includeFontPadding = false
+    }
+
+    /**
+     * An IDENTITY cell: one line, ended with the platform's truncation mark.
+     *
+     * **A NAME IS NOT A SENTENCE, AND THIS KIT USED TO TREAT THEM ALIKE.** Nothing in the package
+     * set `maxLines` or `ellipsize`, so every cell wrapped -- and the cells that carry an identity
+     * are exactly the ones a person does not read to the end. A monorepo path in `.prow .pj` turned
+     * a two-line card into a four-line one and moved every row under it; a long endpoint id did the
+     * same to a machine row; a long label wrapped inside a tab bar whose height is a fixed
+     * `tabbar_height`. The design draws every one of them on one line.
+     *
+     * **THE MARK IS THE OTHER HALF.** Clipping at one line without an ellipsis renders a truncated
+     * name as a SHORTER NAME -- indistinguishable, on screen, from a machine actually called that.
+     * `END` is the platform's own way of saying there is more, and it is the same mark on all of
+     * them so a reader learns it once.
+     *
+     * IT IS A TREATMENT AND NOT A COMPONENT, so it lives inside this object for [focusable]'s
+     * reason: every top-level `fun` in this package is read as a component factory by
+     * `android/gate/s23_kit_test.go`.
+     */
+    fun identityCell(view: TextView) {
+        view.maxLines = 1
+        view.ellipsize = TextUtils.TruncateAt.END
+    }
+
+    /**
+     * A note that is STANDING CHROME rather than prose inside a scroll: at most two lines.
+     *
+     * THE NUMBER BOUNDS A DISPLACEMENT AND IS NOT A LENGTH. `readOnlyNote(capped = true)` is the
+     * scaffold's connection banner, which sits ABOVE the scroll on all four destinations -- so
+     * what it costs when it wraps is not its own height but everything below it moving down while
+     * somebody is reading. Two is the smallest cap that still draws `StatusBanner`'s longest
+     * sentence without reaching for the mark on a handset; it does not scale with density, no
+     * design rule states it, and it is therefore not a `KitMetrics` constant.
+     *
+     * See [identityCell] for why the mark is `END` and why both treatments live in this object.
+     */
+    fun cappedNote(view: TextView) {
+        view.maxLines = 2
+        view.ellipsize = TextUtils.TruncateAt.END
     }
 
     fun colour(context: Context, @ColorRes id: Int): Int = context.getColor(id)

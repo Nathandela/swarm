@@ -197,6 +197,9 @@ private fun tab(context: Context, item: TabItem): View {
                     topMargin = Kit.dimenPx(context, R.dimen.swarm_space_4)
                 }
                 tag = KitTag.TAB_LABEL
+                // The bar's height is a fixed `tabbar_height`, so a label that wrapped inside
+                // it had nowhere to go.
+                Kit.identityCell(this)
             },
         )
     }

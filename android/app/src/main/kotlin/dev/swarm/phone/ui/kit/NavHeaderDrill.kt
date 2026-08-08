@@ -99,6 +99,7 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
                 // rather than push.
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
                 tag = KitTag.DRILL_TITLE
+                Kit.identityCell(this)
             },
         )
     }

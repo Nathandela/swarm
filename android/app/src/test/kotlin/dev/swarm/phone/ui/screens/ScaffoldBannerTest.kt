@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -117,6 +118,36 @@ class ScaffoldBannerTest {
             listOf(reconnecting, silent, holed),
             view.bannerLines(),
         )
+    }
+
+    /**
+     * agents-tracker-ksvb.3: the one `readOnlyNote` in the app that is drawn OUTSIDE a scroll.
+     *
+     * A LINE THAT WRAPS HERE DOES NOT COST ITS OWN HEIGHT. It pushes the destination down, on all
+     * four destinations, under a user who is reading something else -- and the banner carries up
+     * to three facts, so three wrapped sentences is a third of a handset. The cap is the slot's
+     * decision and not the component's: the same note under a terminal well still wraps, because
+     * there it is prose inside a column that scrolls.
+     */
+    @Test
+    fun `each line is capped so a long fact cannot push the app down`() {
+        val lines = statusBannerView(context, everything()).allTagged(ScaffoldTag.BANNER_LINE)
+
+        assertEquals("the banner drew no lines to assert over", 3, lines.size)
+        for (line in lines) {
+            assertEquals(
+                "a banner line wraps without bound, so a long sentence above the scroll moves " +
+                    "the whole destination down",
+                2,
+                (line as TextView).maxLines,
+            )
+            assertEquals(
+                "a banner line is clipped rather than ellipsised, so a truncated warning reads " +
+                    "as a complete one",
+                TextUtils.TruncateAt.END,
+                line.ellipsize,
+            )
+        }
     }
 
     @Test

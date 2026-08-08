@@ -94,6 +94,9 @@ fun sessionRow(
             // `flex: 1` -- the project takes the slack so the agent name sits hard right.
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             tag = KitTag.PROJECT
+            // A project is a path, not a sentence: a monorepo name that wrapped turned this
+            // two-line card into a four-line one and moved every row under it.
+            Kit.identityCell(this)
         },
     )
     // NO AGENT MEANS NO CELL, not an empty one. `swarmmobile.Session.Agent` is verbatim from the
@@ -115,6 +118,7 @@ fun sessionRow(
                 text = agent
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
                 tag = KitTag.AGENT
+                Kit.identityCell(this)
             },
         )
     }
