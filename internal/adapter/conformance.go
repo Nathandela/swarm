@@ -546,10 +546,8 @@ func CheckInteractionFixture(a Adapter, fx Fixture) []error {
 		return nil
 	}
 	captured := make(map[string]bool)
-	for _, s := range a.SignalSources() {
-		if s.Descriptor[DescriptorCapture] == CaptureRaw && s.Descriptor[descriptorEvent] != "" {
-			captured[s.Descriptor[descriptorEvent]] = true
-		}
+	for _, ev := range CaptureEvents(a) {
+		captured[ev] = true
 	}
 	var errs []error
 	for i, hp := range fx.HookPayloads {

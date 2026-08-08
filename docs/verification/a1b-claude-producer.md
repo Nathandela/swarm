@@ -3,6 +3,8 @@
 **Slice**: `internal/adapter/claude` implements `adapter.InteractionSource` per ADR-010 §5 —
 the four `capture=raw` hook rows, shaped into interaction-schema.md §3 items, with `Decision`
 returning the `PermissionRequest` hook reply body and spike S-C's carve-out declared at capture.
+**§13 extends that to five rows**: `Stop` shapes the `agent_message`, per the owner ruling of
+2026-08-07 and ADR-010's amendment of that date.
 
 **Normative**: [ADR-009](../adr/ADR-009-structured-chat-interaction.md),
 [ADR-010](../adr/ADR-010-adapter-structured-capture.md) §5 and its conformance obligations 3-5,
@@ -299,6 +301,9 @@ prompt and everything this hook reports was typed at the machine.
 - **`agent_message`.** ADR-010 §5 enumerates four capture rows and `Stop` is not among them,
   even though its body carries `last_assistant_message`. Staying inside the ADR; the transcript's
   agent prose is a follow-up, not a silent addition. **Recorded as an open point.**
+  **SUPERSEDED by §13** — the open point was ruled on (owner, 2026-08-07): `Stop` is the fifth
+  capture row and `last_assistant_message` is the `agent_message`. The follow-up was the ADR
+  amendment, and it happened.
 - **§7's `search` and `fetch`.** No `Grep`/`Glob`/`WebFetch` body was ever captured, so their
   argument key would be a guess. IS-TOOL-2's `other` is the sanctioned answer.
 - **`exit_code`, `stderr`, and a `failed` status.** No recorded response carries an exit code;
@@ -637,6 +642,15 @@ would be exactly the drift `docs/adr/README.md` forbids.
 and it is already green: wire the carriage, change `replayClaudeCorpus` to post over
 `hookclient.Post`, and everything below the entry point is proven unchanged.
 
+**CLOSED — [i1-carriage.md](i1-carriage.md).** The carriage is built: the first of the two
+options above (a spawn-injected variable listing the capture rows, `hookclient.EnvCapture`) was
+taken precisely because it implements §6 as written and needs no amendment, and the second — the
+body on every row, gated daemon-side — was refused as the deviation this section called it. The
+measurement above is now reproducible from the other direction: putting the envelope back
+(mutation 3 there) returns this zero. The chain test was NOT rewritten to post over
+`hookclient.Post`; a new `interaction_carriage_test.go` enters at the socket so the hop is
+covered where it lives, and this file's corpus replay keeps testing what it was written to test.
+
 ---
 
 ## 11. Teeth — five mutations, each applied for real, each reverted
@@ -749,3 +763,415 @@ Baseline unchanged.
 
 No file under `internal/` outside that one test was modified. Nothing was committed, per the
 task's do-not-commit rule; the working tree is the deliverable.
+
+---
+
+## 13. `Stop` — the fifth capture row, and the agent's own replies
+
+**Ruling**: owner (Nathan, 2026-08-07), carried into
+[ADR-010](../adr/ADR-010-adapter-structured-capture.md)'s second amendment of that date —
+"`Stop` is Claude Code's fifth capture row, so the transcript carries the agent's replies".
+
+§5 above recorded `agent_message` as *deliberately not shaped* and flagged it an open point. The
+open point is now closed, and the reason it had to be is the one §5 named: the four original rows
+carry the owner's messages, the tool cards and the approvals, and nothing the agent **said**. A
+phone rendering that transcript shows half a conversation — the half that is not the answer.
+
+`Stop` now declares `capture=raw` and shapes exactly one `agent_message` (§3.2) out of its body's
+`last_assistant_message`: `status: completed`, text verbatim, no `ref`.
+
+### 13.1 The fixture: nothing was added, because nothing needed to be
+
+The task sanctioned a faithful reconstruction if no recorded `Stop` body existed. Four do. The
+three fixtures are whole-run recordings copied byte-for-byte (§1), so every `Stop` body has been
+sitting in the corpus since the slice landed — preserved, and simply not shaped. Re-verified this
+session against the S-B originals:
+
+```
+$ cmp docs/verification/fixtures/spike-sb/claude-bash-permissionrequest-run1.json internal/adapter/claude/testdata/interaction/claude-bash-permissionrequest-run1.json
+rc=0
+$ cmp docs/verification/fixtures/spike-sb/claude-bash-pretooluse-no-escalation.json internal/adapter/claude/testdata/interaction/claude-bash-pretooluse-no-escalation.json
+rc=0
+$ cmp docs/verification/fixtures/spike-sb/claude-edit-permissionrequest-run1.json internal/adapter/claude/testdata/interaction/claude-edit-permissionrequest-run1.json
+rc=0
+```
+
+The four recorded bodies, listed out of the corpus itself:
+
+```
+$ python3 -c "
+import json,glob
+for f in sorted(glob.glob('internal/adapter/claude/testdata/interaction/*.json')):
+    d=json.load(open(f))
+    for i,p in enumerate(d['hook_payloads']):
+        if p['event']=='Stop':
+            print(f.split('/')[-1], 'hook_payloads[%d]'%i, json.dumps(p['raw']['last_assistant_message'], ensure_ascii=False))
+"
+claude-bash-permissionrequest-run1.json hook_payloads[5] "Done — created `approval-test.txt` in the working directory."
+claude-bash-pretooluse-no-escalation.json hook_payloads[3] "Done. The command output was:\n\n```\nhello-interactive-spike-approve\n```"
+claude-bash-pretooluse-no-escalation.json hook_payloads[5] "I'm not sure what \"1\" refers to — there's no question or list pending. What would you like me to do?"
+claude-edit-permissionrequest-run1.json hook_payloads[7] "Done. Changed 'line two' to 'line TWO EDITED' in edit-target3.txt."
+```
+
+`PROVENANCE.md` beside the fixtures records this in writing: the `Stop` bodies came with the
+verbatim copies, **no fixture was added, edited or reconstructed**, and nothing is marked
+`reconstructed` because nothing is.
+
+### 13.2 RED, verbatim
+
+Written before `claude.go` declared the row or `interaction.go` had the arm. The RED reason is the
+right one — the row is undeclared and the shaper has no `Stop` case — and not a compile error:
+
+```
+$ go test ./internal/adapter/claude/ -run 'TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows|TestStop_ShapesTheAgentsReplyFromLastAssistantMessage' -count=1 -v
+=== RUN   TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows
+    interaction_test.go:66: capture=raw rows = map[PermissionRequest:true PostToolUse:true PreToolUse:true UserPromptSubmit:true], want map[PermissionRequest:true PostToolUse:true PreToolUse:true Stop:true UserPromptSubmit:true] (ADR-010 §5 as amended 2026-08-07 names UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest and Stop, and no others)
+--- FAIL: TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows (0.01s)
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-pretooluse-no-escalation.json
+    interaction_test.go:105: hook_payloads[3] (Stop) shaped 0 item(s), want exactly 1 agent_message: []
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-permissionrequest-run1.json
+    interaction_test.go:105: hook_payloads[5] (Stop) shaped 0 item(s), want exactly 1 agent_message: []
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-edit-permissionrequest-run1.json
+    interaction_test.go:105: hook_payloads[7] (Stop) shaped 0 item(s), want exactly 1 agent_message: []
+--- FAIL: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage (0.02s)
+    --- FAIL: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-pretooluse-no-escalation.json (0.01s)
+    --- FAIL: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-permissionrequest-run1.json (0.00s)
+    --- FAIL: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-edit-permissionrequest-run1.json (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.705s
+FAIL
+```
+
+The golden table failed in the same RED. Its failure message dumps every item of every fixture
+(≈15 KB), so the run below is piped — the pipeline is part of the command, and its output is
+verbatim:
+
+```
+$ go test ./internal/adapter/claude/ -run TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems -count=1 2>&1 | grep -E 'shaped|^--- FAIL|^    --- FAIL|^FAIL'
+--- FAIL: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems (0.02s)
+    --- FAIL: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-pretooluse-no-escalation.json (0.01s)
+        interaction_test.go:235: shaped 4 item(s), want 6:
+    --- FAIL: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-permissionrequest-run1.json (0.00s)
+        interaction_test.go:235: shaped 4 item(s), want 5:
+    --- FAIL: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-edit-permissionrequest-run1.json (0.00s)
+        interaction_test.go:235: shaped 7 item(s), want 8:
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.889s
+FAIL
+```
+
+### 13.3 The two spec-follows edits to existing tests, recorded
+
+The hard rule is that a test is never modified to make it pass. Two existing expectations did
+change, and both are the sanctioned **fixture-follows-spec** direction — the spec moved first (an
+owner ruling, then an ADR amendment) and the expectation was tightened to match it. Recorded here
+so neither is discovered later as an unexplained edit:
+
+1. **`shapedRows` gained a fifth entry.** It is the test's transcription of ADR-010 §5's row list,
+   not an observation of the code — the amendment made the list five long, so the transcription is
+   five long. It is what made `TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows` fail
+   above, in **both** directions: the test asserts set equality, so it would equally have caught a
+   `capture` key added to a row that shapes nothing.
+2. **`goldenCorpus` gained four `agent_message` rows**, at the payload positions of the four
+   recorded `Stop` bodies. No existing row was altered, reordered or removed — the diff is four
+   insertions across three tables, and the fixtures' other 15 expected items stand byte-identical.
+
+Nothing was relaxed. Both edits **raise** the number of assertions the suite makes, and the RED
+above is the proof that they were failing before the producer changed.
+
+### 13.4 GREEN, verbatim
+
+```
+$ go test ./internal/adapter/claude/ -run 'TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows|TestStop_ShapesTheAgentsReplyFromLastAssistantMessage|TestGoldenCorpus_|TestConformance' -count=1 -v
+=== RUN   TestConformance
+--- PASS: TestConformance (0.03s)
+=== RUN   TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows
+--- PASS: TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows (0.00s)
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-pretooluse-no-escalation.json
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-permissionrequest-run1.json
+=== RUN   TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-edit-permissionrequest-run1.json
+--- PASS: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage (0.01s)
+    --- PASS: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-pretooluse-no-escalation.json (0.01s)
+    --- PASS: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-bash-permissionrequest-run1.json (0.00s)
+    --- PASS: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage/claude-edit-permissionrequest-run1.json (0.00s)
+=== RUN   TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems
+=== RUN   TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-pretooluse-no-escalation.json
+=== RUN   TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-permissionrequest-run1.json
+=== RUN   TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-edit-permissionrequest-run1.json
+--- PASS: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems (0.00s)
+    --- PASS: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-pretooluse-no-escalation.json (0.00s)
+    --- PASS: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-bash-permissionrequest-run1.json (0.00s)
+    --- PASS: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems/claude-edit-permissionrequest-run1.json (0.00s)
+=== RUN   TestGoldenCorpus_PassesCheckInteractionFixture
+=== RUN   TestGoldenCorpus_PassesCheckInteractionFixture/claude-bash-pretooluse-no-escalation.json
+=== RUN   TestGoldenCorpus_PassesCheckInteractionFixture/claude-bash-permissionrequest-run1.json
+=== RUN   TestGoldenCorpus_PassesCheckInteractionFixture/claude-edit-permissionrequest-run1.json
+--- PASS: TestGoldenCorpus_PassesCheckInteractionFixture (0.00s)
+    --- PASS: TestGoldenCorpus_PassesCheckInteractionFixture/claude-bash-pretooluse-no-escalation.json (0.00s)
+    --- PASS: TestGoldenCorpus_PassesCheckInteractionFixture/claude-bash-permissionrequest-run1.json (0.00s)
+    --- PASS: TestGoldenCorpus_PassesCheckInteractionFixture/claude-edit-permissionrequest-run1.json (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	0.580s
+```
+
+`TestConformance` is in that list on purpose: `CheckConformance` enforces obligation 3 in both
+directions (a shaped event with no `capture=raw` row, and a `capture=raw` row that shapes
+nothing), so the new declaration and the new arm must agree for it to stay green.
+
+### 13.5 Four judgement calls under the arm, each recorded rather than absorbed
+
+**(a) No `ref`.** One `Stop` is the whole reply, so this is a self-contained one-record item. The
+daemon's `itemIDLocked` mints a fresh `item_id` for a ref-less interaction and never folds into
+it — the right answer here, because a shared ref would fold two consecutive replies under one id
+and put two terminal statuses on one item (IS-ST-1). The no-escalation fixture is the case that
+proves it matters: two prompts, two `Stop` bodies, two distinct replies in one session.
+
+**(b) `stop_reason` left EMPTY.** No field of any recorded `Stop` body names a stop reason. Writing
+`end_turn` would be reading the CLI's documentation into an item, which is the posture IS-TOOL-2
+forbids elsewhere in this same file. Nothing downstream breaks: IS-ENV-1 closes the turn on **any**
+terminal status, and `turnIDLocked` (skeleton) switches on `terminalStatus(in.Status)` alone, so
+the `completed` record closes the turn and carries the closing turn's id. Left as an open point —
+the day a capture shows a reason, or a ruling supplies one, it is one field.
+
+**(c) The text is returned WHOLE.** §5's `MaxTextBytes`, the redaction and the excerpting are the
+daemon's (ADR-010 §3). An adapter that clipped would be excerpting untrusted tool output on the
+wrong side of the boundary.
+
+**(d) A reply-less `Stop` shapes NOTHING.** `last_assistant_message` is the entire content of this
+item, so an absent or empty one yields no item at all (IS-ENV-3) rather than an empty
+`agent_message` that would close the turn with a blank row on the phone. That guard is asserted,
+not assumed — see the mutation below.
+
+### 13.6 Teeth — one mutation, applied for real, caught, reverted
+
+The guard in (d) is the one line the corpus cannot exercise (all four recorded bodies carry a
+message), so it was mutated away and the suite re-run:
+
+```
+# internal/adapter/claude/interaction.go, the `case "Stop":` guard deleted
+$ go test ./internal/adapter/claude/ -run TestStop_ -count=1
+--- FAIL: TestStop_ShapesTheAgentsReplyFromLastAssistantMessage (0.02s)
+    interaction_test.go:130: a Stop body {} shaped [{Kind:agent_message Status:completed Ref: Text: Source: ...}]; a reply-less Stop shapes nothing
+    interaction_test.go:130: a Stop body {"hook_event_name":"Stop","last_assistant_message":""} shaped [{Kind:agent_message Status:completed Ref: Text: Source: ...}]; a reply-less Stop shapes nothing
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.669s
+FAIL
+```
+
+(the two item dumps are elided at `Source:` — the full lines print every zero field of
+`Interaction`.) Reverted from a `cp` backup and verified byte-identical (`cmp` rc=0), and
+`grep -n "MUTATION 6"` on the file returns nothing.
+
+### 13.7 Blast radius, measured rather than assumed
+
+- **The chain e2e** (`TestClaudeChainE2E_...`, §9) replays two of these fixtures through the real
+  daemon to the phone, and now carries the `Stop` records too. Green, and green under `-race`:
+  `ok internal/skeleton 10.162s`, then `ok internal/skeleton 14.413s` with `-race`. Its turn
+  assertion still holds because the closing `agent_message` carries the turn it closes
+  (`turnIDLocked` returns the id, then forgets it).
+- **`go test ./... -count=1`**: one FAIL, `mobile/conformance`'s
+  `TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff` — a backoff gap measured at
+  601.011625 ms against a `[400ms, 600ms]` window, on a machine running three other test binaries
+  at the time. It passes alone (`ok mobile/conformance 9.020s`), it is a timing flake, and that
+  package does not import the claude adapter.
+- **The status path is untouched.** The `Stop` row's `turn: idle` / `interaction: none` mapping is
+  unchanged, `TestSignalSources_DeclaresSixHooksWithStatusMapping` still asserts it, and ADR-010
+  §6's rule holds by construction: nothing in the shaper feeds `deriveDims`.
+
+### 13.8 Final verification
+
+```
+$ go build ./...                                          BUILD OK (no output)
+$ go vet ./...                                            VET OK (no output)
+$ gofmt -l internal/adapter/claude/                       (empty — clean)
+$ go test ./internal/adapter/claude/ -count=1             ok  	0.744s
+$ go test ./internal/adapter/claude/ -count=1 -race       ok  	2.077s
+$ go test ./internal/adapter/... ./internal/engine/... ./cmd/swarm/... -count=1
+                                                          11 packages ok, 0 FAIL
+$ go test ./internal/protocol/ ./internal/verify/ -count=1
+                                                          ok  	11.679s / ok  	10.184s
+$ go test ./internal/skeleton/ -run TestClaudeChainE2E -count=1 -race
+                                                          ok  	14.413s
+```
+
+`golangci-lint run ./internal/adapter/claude/...` reports **1 issue**, `helpers_test.go:60`
+errcheck on `defer emu.Close()` — at HEAD (`git log -1` on that file is 483c21b, untouched by this
+section). Baseline unchanged.
+
+**Files this section adds or edits:**
+
+- `internal/adapter/claude/claude.go` — the `Stop` row gains `capture=raw`; the table comment says five.
+- `internal/adapter/claude/interaction.go` — `hookBody.LastAssistantMessage`, and the `case "Stop"` arm.
+- `internal/adapter/claude/interaction_test.go` — the new `Stop` test, the reply-less probe, and §13.3's two spec-follows edits.
+- `internal/adapter/claude/testdata/interaction/PROVENANCE.md` — the `Stop` bodies were already here, verbatim.
+- `docs/adr/ADR-010-adapter-structured-capture.md` — the 2026-08-07 amendment.
+- `docs/verification/a1b-claude-producer.md` — this evidence (§13), plus the two pointers marking §5's open point superseded.
+
+`docs/specifications/interaction-schema.md` is **unchanged**: no sentence in it enumerates the
+per-CLI capture rows (the row set is ADR-010 §5's), and `agent_message` (§3.2), IS-DELTA-1/2/3 and
+IS-ENV-1 all describe this item exactly as it is now produced. Nothing was committed, per the
+task's do-not-commit rule.
+
+---
+
+## 14. BEAD nq0q — the provenance fence, and the merge-union arithmetic reconciled
+
+Two small, independent fences, neither touching a production file.
+
+### 14.1 A sha256 fence: every "copied" fixture stays byte-identical to its declared source
+
+**New file**: `internal/adapter/claude/provenance_test.go`, beside `interaction_test.go` (same
+package, same directory) as the task asked. `checkFixtureProvenance(t, dir, repoRoot)` parses
+`dir/PROVENANCE.md`'s table — `` `file` | `source` | marker `` — and for every row marked
+`copied` asserts `sha256(dir/file) == sha256(repoRoot/source)`. A row marked `reconstructed` is
+skipped (`t.Skip`), not asserted: PROVENANCE.md already says plainly there is nothing recorded to
+diff a hand-built fixture against. `TestFixtureProvenance_MatchesDeclaredSource` is the kept call,
+against the real corpus.
+
+**`PROVENANCE.md` gained a `Provenance` column** (`copied` on all three rows today; none is
+`reconstructed`) so the fence reads a marker instead of inferring one from prose. The intro
+paragraph's claim — "every fixture here is a verbatim byte-for-byte copy" — was already true and
+is now also machine-checked.
+
+**Why this file and not another `_test.go` under `testdata/`.** Go does not compile packages
+under `testdata/` (it is the one directory name `go build`/`go test` always skip), so the fence
+has to live in the `claude` package proper, reading `testdata/interaction/` as data. That is the
+same layout `interaction_test.go`'s `loadCorpus` already uses.
+
+### 14.2 RED — a corrupted TEMP COPY, never the tracked fixture
+
+The corpus is already correct (§1, §13.1's `cmp` re-checks), so there is no missing-implementation
+RED to produce here — the fence has nothing to implement against, only bytes to compare. The
+task's instruction was followed instead: a throwaway probe (`zz_provenance_probe_test.go`, **not
+kept**, same convention as `zz_measure_test.go` in §647 of `a1-gateway-floor.md` and
+`TestZZCarriageProbe` in §10 above) copied every file under `testdata/interaction/` into a
+`t.TempDir()`, flipped the first byte of one copied `.json` file **in memory, before the write**,
+and called `checkFixtureProvenance` against the temp directory. The tracked fixture is opened only
+for reading:
+
+```
+$ go test ./internal/adapter/claude/ -run TestZZProvenanceProbe_CorruptedCopyFails -count=1 -v
+=== RUN   TestZZProvenanceProbe_CorruptedCopyFails
+=== RUN   TestZZProvenanceProbe_CorruptedCopyFails/claude-bash-pretooluse-no-escalation.json
+=== RUN   TestZZProvenanceProbe_CorruptedCopyFails/claude-bash-permissionrequest-run1.json
+    provenance_test.go:54: sha256 = 00c1f419990c412dbee66ae670db5d0571fec8752859398c398f5ca4a4d48769, declared source docs/verification/fixtures/spike-sb/claude-bash-permissionrequest-run1.json sha256 = 1a902c0d12027d178f88d719003ae23d08450830494e65ea4886457e1f3f9979; PROVENANCE.md marks this a verbatim copy and the bytes have diverged
+=== RUN   TestZZProvenanceProbe_CorruptedCopyFails/claude-edit-permissionrequest-run1.json
+--- FAIL: TestZZProvenanceProbe_CorruptedCopyFails (0.03s)
+    --- PASS: TestZZProvenanceProbe_CorruptedCopyFails/claude-bash-pretooluse-no-escalation.json (0.00s)
+    --- FAIL: TestZZProvenanceProbe_CorruptedCopyFails/claude-bash-permissionrequest-run1.json (0.00s)
+    --- PASS: TestZZProvenanceProbe_CorruptedCopyFails/claude-edit-permissionrequest-run1.json (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.726s
+FAIL
+```
+
+Confirmed the tracked fixture was never touched:
+
+```
+$ cmp docs/verification/fixtures/spike-sb/claude-bash-permissionrequest-run1.json internal/adapter/claude/testdata/interaction/claude-bash-permissionrequest-run1.json && echo "REAL FIXTURE UNTOUCHED: IDENTICAL"
+REAL FIXTURE UNTOUCHED: IDENTICAL
+```
+
+The probe was then deleted (`rm internal/adapter/claude/zz_provenance_probe_test.go`).
+
+### 14.3 GREEN, verbatim
+
+```
+$ go test ./internal/adapter/claude/ -run TestFixtureProvenance_MatchesDeclaredSource -count=1 -v
+=== RUN   TestFixtureProvenance_MatchesDeclaredSource
+=== RUN   TestFixtureProvenance_MatchesDeclaredSource/claude-bash-pretooluse-no-escalation.json
+=== RUN   TestFixtureProvenance_MatchesDeclaredSource/claude-bash-permissionrequest-run1.json
+=== RUN   TestFixtureProvenance_MatchesDeclaredSource/claude-edit-permissionrequest-run1.json
+--- PASS: TestFixtureProvenance_MatchesDeclaredSource (0.01s)
+    --- PASS: TestFixtureProvenance_MatchesDeclaredSource/claude-bash-pretooluse-no-escalation.json (0.00s)
+    --- PASS: TestFixtureProvenance_MatchesDeclaredSource/claude-bash-permissionrequest-run1.json (0.00s)
+    --- PASS: TestFixtureProvenance_MatchesDeclaredSource/claude-edit-permissionrequest-run1.json (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	0.774s
+```
+
+### 14.4 The merge-union arithmetic row, reconciled
+
+`docs/adr/ADR-009-structured-chat-interaction.md`'s Amendment 1 table (§287) reads: *"merge union,
+2 × `MaxTextBytes`* | *8 368 B untruncated / **8 405 B** with the truncation pair"*.
+`docs/verification/a1-gateway-floor.md`'s harness table (§661) reads *"agent_message union of 2 x
+MaxTextBytes 8430 B"* — a different untruncated figure for the same case, while its neighbouring
+row *"FLOOR 2-way merged agent_message (as shipped) 8405 B"* already agrees with ADR-009's
+truncated-pair figure. One row, two documents, two numbers.
+
+**Which one the shipped code actually produces**: `a1-gateway-floor.md`'s own RED transcript, four
+lines below its table (§697), is the real merge/append-floor path running for real, at the
+UNRAISED 8 KiB cap:
+
+```
+2026/08/07 21:19:50 interaction: append floor release failed (0 item(s) still held): interaction: item is 8368 bytes, over the 8192-byte cap (interaction-schema.md §5)
+```
+
+**8368**, not 8430 — and the same figure appears a third time, independently, in
+`a1-carriage.md:529`'s earlier reproduction of the same defect. The kept fence,
+`internal/skeleton/interaction_cap_test.go:140`, hardcodes `worstMergeUnion = 8405` (the
+truncated-pair figure both documents already agree on) as the threshold it checks
+`daemon.MaxItemBytes` against — it does not carry the disputed untruncated number at all, so
+nothing in the test suite needed to change.
+
+**Arithmetic cross-check, not just transcript-counting**: `specMaxTextBytes = 4096`
+(`interaction_r2_test.go:32`), so two increments carry exactly 8192 B of raw text. `8368 - 8192 =
+176` B of JSON envelope (kind/item_id/status/ts/text keys and quoting) — and `8405 - 8368 = 37` B
+for the `truncated`/`full_bytes` pair, a plausible size for `"truncated":false,"full_bytes":8368`.
+Taking 8430 as the base instead gives `8430 - 8192 = 238` B of envelope and, adding the same 37 B
+pair, **8467** — which matches neither the 8405 both documents already agree is the shipped,
+as-built figure. 8368 is internally consistent with 8405; 8430 is not.
+
+**Conclusion: `a1-gateway-floor.md`'s harness table has the wrong number.** It came from a
+temporary, deleted harness (`internal/skeleton/zz_measure_test.go`, per its own §649) computing a
+synthetic union rather than replaying the real merge — everywhere the real merge/floor path was
+actually run (this file's own RED log, `a1-carriage.md`'s reproduction, and the persisted
+`interaction_cap_test.go` constant) it produced 8368/8405, matching ADR-009. `a1-gateway-floor.md`
+now carries a one-line `CORRECTED 2026-08-08` note directly under the table naming the right
+figure and why. `ADR-009` needed no edit — it was already right.
+
+### 14.5 Final verification
+
+```
+$ go build ./...                                          BUILD OK (no output)
+$ go vet ./...                                             VET OK (no output)
+$ gofmt -l internal/adapter/claude/*.go                    (empty -- clean)
+$ go test ./internal/adapter/claude/... -race -count=1     ok  	1.999s
+$ go test ./internal/adapter/... -count=1
+ok  	github.com/Nathandela/swarm/internal/adapter	0.636s
+ok  	github.com/Nathandela/swarm/internal/adapter/agy	0.889s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	1.666s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	0.947s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	9.302s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	1.396s
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	1.142s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	1.765s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	1.305s
+$ go test ./internal/verify/ -count=1                      ok  	7.268s
+$ go test ./internal/verify/ -run TestB94_EveryExportedSymbolIsReachableFromProduction -count=1 -v
+    phaseb_reachability_test.go:319: B94: 541 exported symbols examined, 54 unreachable and all accounted for
+--- PASS: TestB94_EveryExportedSymbolIsReachableFromProduction (2.35s)
+```
+
+541 unchanged from §4's baseline: `provenance_test.go` adds no new exported package symbol
+(`checkFixtureProvenance` is unexported; `Test...` functions are never B94 subjects).
+
+`golangci-lint run ./internal/adapter/claude/...` reports the same **1** pre-existing issue as
+§13.8 (`helpers_test.go:60` errcheck on `defer emu.Close()`, untouched by this section) and nothing
+in `provenance_test.go`. Baseline unchanged.
+
+**Files this section adds or edits:**
+
+- `internal/adapter/claude/provenance_test.go` — NEW, the sha256 fence (kept).
+- `internal/adapter/claude/testdata/interaction/PROVENANCE.md` — gained the `Provenance` column
+  the fence reads.
+- `docs/verification/a1-gateway-floor.md` — the one-line `CORRECTED 2026-08-08` note under §647's
+  table.
+- `docs/verification/a1b-claude-producer.md` — this evidence (§14).
+
+`docs/adr/ADR-009-structured-chat-interaction.md` needed no edit: its Amendment 1 table already
+carried the number the shipped code produces. `zz_provenance_probe_test.go` was written, run, and
+deleted; `git status` on `internal/adapter/claude/` shows no such file remaining. Nothing was
+committed, per the task's do-not-commit rule.

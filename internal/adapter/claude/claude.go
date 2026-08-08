@@ -66,9 +66,14 @@ const sessionMarker = "Session "
 //
 // `capture` is ADR-010 §5's structured-capture declaration: the body of a row that sets it is
 // PRESERVED for interaction.go's shaper instead of being flattened to top-level strings at
-// ingest (§6). It is set on exactly the rows that shaper turns into items, because both
+// ingest (§6). It is set on exactly the five rows that shaper turns into items, because both
 // directions are conformance violations — a shaped event that does not declare it never receives
 // a body, and a declared event that shapes nothing preserves one for nobody.
+//
+// Stop is the fifth row (ADR-010's 2026-08-07 amendment): its body carries
+// `last_assistant_message`, the only agent PROSE anywhere in the recorded corpus. Capture here
+// is what puts the agent's replies in the phone's transcript at all — the other four rows carry
+// the human's messages, the tool cards and the approvals, and none of them the answer.
 var hookEvents = []struct {
 	event, turn, interaction string
 	subtypeField, subtypeMap string
@@ -78,7 +83,7 @@ var hookEvents = []struct {
 	{"PreToolUse", "active", "none", "", "", true},
 	{"PostToolUse", "active", "none", "", "", true},
 	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt", false},
-	{"Stop", "idle", "none", "", "", false},
+	{"Stop", "idle", "none", "", "", true},
 	{"SubagentStart", "active", "none", "", "", false},
 	{"SubagentStop", "", "none", "", "", false},
 	{"PermissionRequest", "idle", "permission", "", "", true},

@@ -94,7 +94,7 @@ func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
 	r := io.MultiReader(bytes.NewReader([]byte{brace}), conn)
-	cb, body, err := decodeHookCallback(r)
+	cb, err := decodeHookCallback(r)
 	if err != nil {
 		return
 	}
@@ -106,7 +106,7 @@ func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
 		return
 	}
-	d.serveHookInteractions(cb, body)
+	d.serveHookInteractions(cb)
 }
 
 // serveVersionHandshake answers the daemon's version handshake with the daemon's

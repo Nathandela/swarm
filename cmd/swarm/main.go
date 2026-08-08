@@ -104,7 +104,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "shim":
 		return runShim(args[1:], stdout, stderr)
 	case "hook":
-		return runHook(args[1:], stdout, stderr)
+		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
 	case "spawn":
@@ -666,12 +666,19 @@ func reexecWithSetsid() (int, error) {
 // `key=value` args still work (and override a stdin field of the same name), so
 // `swarm hook Stop` and `swarm hook Notification notification_type=idle` both work.
 // A bare `swarm hook` with no event has nothing to post.
-func runHook(args []string, _, stderr io.Writer) int {
+//
+// For an event the session's adapter declared capture=raw on (ADR-010 §6), the callback ALSO
+// carries the CLI's body whole: the flattened payload keeps top-level strings only, so a tool's
+// input, its response and a diff — all nested objects — exist nowhere else by the time the
+// daemon sees the post. The status path is untouched by that: the same flattening, the same
+// reserved-key guard, the same dimensions.
+func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "hook: not implemented")
 		return 1
 	}
-	payload := parseHookStdin(os.Stdin)
+	body := readHookBody(stdin)
+	payload := parseHookStdin(bytes.NewReader(body))
 	for k, v := range parseHookPayload(args[1:]) {
 		payload[k] = v // explicit args override a stdin field of the same name
 	}
@@ -679,6 +686,14 @@ func runHook(args []string, _, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
+	}
+	if hookclient.CapturesRaw(os.Getenv, args[0]) && json.Valid(body) {
+		// json.Valid is the cap's teeth as much as a sanity check: a body OVER hookStdinLimit
+		// arrives truncated, and a truncated object is neither the whole body §6 asks for nor
+		// encodable onto the wire — json.Marshal fails on an invalid RawMessage, which would take
+		// this session's STATUS down with it. Untrusted tool output never gets to do that, so an
+		// unparseable body is dropped and the status post goes on exactly as before.
+		cb.Raw = body
 	}
 	if err := hookclient.Post(os.Getenv(hookclient.EnvSocket), cb); err != nil {
 		fmt.Fprintf(stderr, "hook: %v\n", err)
@@ -690,6 +705,21 @@ func runHook(args []string, _, stderr io.Writer) int {
 // hookStdinLimit bounds how much of a hook's stdin payload we read. Claude posts a
 // small JSON object; the cap guards against an unbounded or garbage stream.
 const hookStdinLimit = 1 << 20
+
+// readHookBody reads at most hookStdinLimit bytes of a hook's stdin. It is total: a nil or
+// unreadable stream yields nothing. The bytes are read ONCE and used twice — flattened into the
+// status payload, and (for a capture=raw event) carried whole on the callback — because stdin is
+// a stream and the second reader would find it empty.
+func readHookBody(r io.Reader) []byte {
+	if r == nil {
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, hookStdinLimit))
+	if err != nil {
+		return nil
+	}
+	return data
+}
 
 // parseHookStdin reads a hook's JSON payload from r (Claude Code posts it on stdin)
 // and extracts its top-level STRING fields into a status payload the engine

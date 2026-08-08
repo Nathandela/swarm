@@ -137,6 +137,50 @@ switches on it), while `CheckConformance` requires the field to be **present** (
 denial", which is the wrong answer given quietly). Violator stub: `decisionWithoutVerdict`.
 Evidence: `docs/verification/a1-integration.md`.
 
+## Amendment 2026-08-07 — `Stop` is Claude Code's fifth capture row, so the transcript carries the agent's replies
+
+**Status**: Accepted (owner ruling, Nathan, 2026-08-07). **Amends**: decision (5)'s Claude Code
+bullet, additively. Nothing here changes the `Adapter` method set, the `InteractionSource`
+signatures, the flattened status path, or any non-goal.
+
+Decision (5) named four `capture=raw` rows for Claude Code, and all four are the human's side of
+the conversation or the machinery under it: `UserPromptSubmit` (what the owner typed),
+`PreToolUse`/`PostToolUse` (what a tool did), `PermissionRequest` (what needs answering). None
+carries what the agent **said**. A phone rendering ADR-009's transcript from those four shows the
+owner's messages, the tool cards and the approvals, and not one agent reply — half a conversation,
+and the half that is not the point.
+
+**`Stop` gains `capture=raw`, and shapes an `agent_message`** (interaction-schema.md §3.2) out of
+its body's `last_assistant_message`: `status: completed`, `text` verbatim from that field, and no
+`ref` — one `Stop` is the whole reply, so the item is self-contained and the daemon mints it a
+fresh `item_id`; a shared `ref` would fold two consecutive replies under one id and put two
+terminal statuses on one item (IS-ST-1). Claude Code's row set is therefore **five**. Nothing else
+moves: `Stop` is already in the `hookEvents` table for status (`claude.go`, idle/none) and already
+injected by the inline `--settings` value, so the argv, the settings JSON and the ingest path gain
+nothing new — the row flips one declaration.
+
+**Why `Stop`, and not per-token streaming.** `Stop` is the one hook the recorded corpus shows
+carrying reply prose: every `Stop` body in all three S-B fixtures holds a non-empty
+`last_assistant_message` (`internal/adapter/claude/testdata/interaction/`), and no other captured
+event carries agent text at all. A hook fires per event, not per token, so this path is by
+construction one whole record per turn: the reply reaches the phone complete at the turn's end
+rather than as it is written. **Delta streaming stays open**, under IS-DELTA-1/IS-DELTA-2
+unchanged, for a future streaming source — a stream-json print mode, an SDK transport, or a later
+hook that emits increments. Nothing here forecloses it and no rule is bent to fit: the daemon's
+fold-by-`ref` machinery already exists for the day such a source does, and a producer that later
+emits increments carries a `ref` and needs no schema change. Shipping the whole-message record now
+is the difference between a transcript and a transcript with no answers in it.
+
+**Caps and trust are unchanged.** The adapter returns the field whole and normalizes nothing:
+§5's `MaxTextBytes` clip, the redaction and the excerpting stay daemon-side per decision (3), and
+`last_assistant_message` is untrusted tool output on exactly the terms decision (6) sets for every
+other captured body — it never influences status (the `Stop` row's idle/none mapping is untouched)
+and it is capped at ingest.
+
+**Conformance.** No new obligation. Obligation 3 (declare `capture=raw` on every row the producer
+shapes, and no others) and obligation 4 (fixture replay → golden items) already govern this row,
+and both now count `Stop`. Evidence: `docs/verification/a1b-claude-producer.md` §13.
+
 ## Alternatives Considered
 
 - **Widen `SignalSource.Descriptor` to `map[string]any`, or add methods to `Adapter`.** Rejected: forces every adapter and the whole conformance suite to change, for no capability the optional interface does not already give.

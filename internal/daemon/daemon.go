@@ -138,10 +138,16 @@ type LaunchSpec struct {
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
 	// SpawnedFrom, when non-empty, is the LOCAL id of the session that spawned this
-	// one (ADR-010 D4), and SpawnIntent is "handoff" or "delegate". The daemon only
-	// stamps them into meta — exactly as it does ResumedFrom.
+	// one (ADR-010-inter-session-orchestration D4), and SpawnIntent is "handoff" or
+	// "delegate". The daemon only stamps them into meta — exactly as it does ResumedFrom.
 	SpawnedFrom string
 	SpawnIntent string
+	// CaptureEvents are the session adapter's capture=raw events
+	// (ADR-010-adapter-structured-capture §6), injected into the agent env so its
+	// `swarm hook` keeps the CLI's own body for those events and no others. Resolved
+	// by the assembly from the adapter's SignalSources, exactly like Argv: the daemon
+	// imports no adapter package and only carries what it is given.
+	CaptureEvents []string
 	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
 	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
 	// session — the replay reuses the reserved session and spawns nothing. Local

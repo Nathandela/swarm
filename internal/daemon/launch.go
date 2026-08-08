@@ -351,7 +351,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		SessionID:  id,
 		Argv:       spec.Argv,
 		Cwd:        spec.Cwd,
-		Env:        injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir)),
+		Env:        injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), spec.CaptureEvents),
 		SocketPath: sock,
 		SessionDir: dir,
 		Cols:       spec.Cols,
@@ -403,19 +403,24 @@ func newHookToken() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// injectHookEnv appends the four per-session hook variables — session id, token,
-// daemon socket, and monotonic counter file — to the already allowlist-filtered
-// agent env (E10.1/G4). They are added POST-filter deliberately: FilterEnv (S-2)
-// would strip them, but the agent's `swarm hook` needs them to reach and
-// authenticate to the daemon.
-func injectHookEnv(filtered []string, id, token, sock, seqFile string) []string {
-	out := make([]string, 0, len(filtered)+4)
+// injectHookEnv appends the five per-session hook variables — session id, token,
+// daemon socket, monotonic counter file, and the adapter's capture=raw event rows
+// — to the already allowlist-filtered agent env (E10.1/G4, ADR-010 §6). They are
+// added POST-filter deliberately: FilterEnv (S-2) would strip them, but the agent's
+// `swarm hook` needs them to reach and authenticate to the daemon, and to know
+// which of its events carry a body worth keeping.
+func injectHookEnv(filtered []string, id, token, sock, seqFile string, capture []string) []string {
+	out := make([]string, 0, len(filtered)+5)
 	out = append(out, filtered...)
 	out = append(out,
 		hookclient.EnvSessionID+"="+id,
 		hookclient.EnvToken+"="+token,
 		hookclient.EnvSocket+"="+sock,
 		hookclient.EnvSequenceFile+"="+seqFile,
+		// Injected even when empty: "no capture rows" is the ordinary state of every
+		// adapter that implements no capture extension, and one contract ("read the
+		// list") is simpler for the hook than two ("read it, or infer from its absence").
+		hookclient.EnvCapture+"="+hookclient.CaptureEnv(capture),
 	)
 	return out
 }

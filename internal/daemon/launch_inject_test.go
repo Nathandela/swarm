@@ -24,7 +24,7 @@ func TestInjectHookEnv_PostFilter(t *testing.T) {
 	const allowed = "CONDA_PREFIX=/x"     // allowlisted (persist/env.go)
 	filtered := persist.FilterEnv([]string{secret, allowed})
 
-	got := injectHookEnv(filtered, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq")
+	got := injectHookEnv(filtered, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq", nil)
 
 	if lineIndex(got, secret) >= 0 || strings.Contains(strings.Join(got, "\n"), "SWARMLEAKCANARY") {
 		t.Fatalf("non-allowlisted var survived injection: %v", got)

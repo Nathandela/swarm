@@ -13,6 +13,7 @@
 package hookclient
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,7 +40,38 @@ const (
 	// to obtain a strictly increasing sequence, so per-event callbacks are never
 	// rejected as replays. This is the sole sequence source.
 	EnvSequenceFile = "SWARM_HOOK_SEQ_FILE"
+	// EnvCapture lists the session adapter's capture=raw events (ADR-010 §6),
+	// comma-separated. A hook invocation keeps the CLI's own event body only for an
+	// event named here.
+	//
+	// It is injected for the same reason the token is: the hook runs as a child of
+	// the AGENT and knows its event name but not the adapter that declared it, so
+	// the core resolves adapter.CaptureEvents once at spawn and hands down the
+	// answer. An empty or absent value means this session captures nothing, which is
+	// every adapter that implements no capture extension.
+	EnvCapture = "SWARM_HOOK_CAPTURE"
 )
+
+// CaptureEnv encodes capture rows for EnvCapture; CapturesRaw decodes them. They
+// are an inverse pair, like Post/Decode, so the separator is one package's
+// business and not a convention two packages have to agree on by hand.
+func CaptureEnv(events []string) string { return strings.Join(events, ",") }
+
+// CapturesRaw reports whether event is one of the capture rows the core declared
+// for this session. It is total: an unset, empty or malformed value captures
+// nothing, which is the safe answer — a body kept for nobody is bytes on the
+// socket, and the daemon's own adapter lookup is what ultimately admits it.
+func CapturesRaw(getenv func(string) string, event string) bool {
+	if event == "" {
+		return false
+	}
+	for _, e := range strings.Split(getenv(EnvCapture), ",") {
+		if e == event {
+			return true
+		}
+	}
+	return false
+}
 
 // FromEnv composes a Callback from the injected environment plus the event name
 // and payload the hook wiring supplies. getenv abstracts os.Getenv for testing. A
@@ -125,11 +157,18 @@ func Post(socketPath string, cb engine.Callback) error {
 		return fmt.Errorf("hookclient: dial %s: %w", socketPath, err)
 	}
 	defer conn.Close()
-	enc, err := json.Marshal(cb)
-	if err != nil {
+	// SetEscapeHTML(false): Callback.Raw is an untrusted CLI body carried for the
+	// shaper. Default HTML escaping rewrites <, > and & inside it (6 bytes each),
+	// so a body near the ingest cap could expand past a transport limit and take
+	// the session's STATUS post down with it - the inversion ADR-010 section 6
+	// forbids. With escaping off the bytes cross the wire verbatim.
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(cb); err != nil {
 		return fmt.Errorf("hookclient: encode callback: %w", err)
 	}
-	if _, err := conn.Write(enc); err != nil {
+	if _, err := conn.Write(buf.Bytes()); err != nil {
 		return fmt.Errorf("hookclient: write callback: %w", err)
 	}
 	return nil

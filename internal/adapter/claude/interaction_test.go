@@ -1,6 +1,6 @@
 package claude
 
-// The Claude Code PRODUCER's failing-first suite (TDD, GG-5): ADR-010 §5's four capture rows,
+// The Claude Code PRODUCER's failing-first suite (TDD, GG-5): ADR-010 §5's five capture rows,
 // shaped against the REAL recorded S-B corpus in testdata/interaction (provenance: PROVENANCE.md
 // there — verbatim copies of docs/verification/fixtures/spike-sb/*.json, real `claude` 2.1.214
 // driven through the real `swarm-char` binary on 2026-07-18).
@@ -22,9 +22,10 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/fixtureio"
 )
 
-// shapedRows are ADR-010 §5's four Claude Code rows: the events whose bodies are PRESERVED
-// rather than flattened, because this producer shapes an item out of each.
-var shapedRows = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest"}
+// shapedRows are ADR-010 §5's five Claude Code rows: the events whose bodies are PRESERVED
+// rather than flattened, because this producer shapes an item out of each. `Stop` is the fifth,
+// added by the 2026-08-07 owner ruling (ADR-010's amendment of that date).
+var shapedRows = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"}
 
 // loadCorpus reads one recorded fixture out of the golden corpus.
 func loadCorpus(t *testing.T, name string) adapter.Fixture {
@@ -62,7 +63,72 @@ func TestSignalSources_DeclareCaptureRawOnExactlyTheShapedRows(t *testing.T) {
 		}
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("capture=raw rows = %v, want %v (ADR-010 §5 names UserPromptSubmit, PreToolUse, PostToolUse and PermissionRequest and no others)", got, want)
+		t.Errorf("capture=raw rows = %v, want %v (ADR-010 §5 as amended 2026-08-07 names UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest and Stop, and no others)", got, want)
+	}
+}
+
+// TestStop_ShapesTheAgentsReplyFromLastAssistantMessage — the 2026-08-07 owner ruling, carried by
+// ADR-010's amendment of that date: `Stop` is the FIFTH capture row, and its body's
+// `last_assistant_message` is the agent_message. It is the ONE hook in the whole recorded corpus
+// that carries the agent's own prose — without it the phone renders the user's messages, the tool
+// cards and the approvals, and not a single agent reply.
+//
+// The text asserted below is byte-verbatim from the recorded bodies; nothing here is composed.
+func TestStop_ShapesTheAgentsReplyFromLastAssistantMessage(t *testing.T) {
+	src, ok := adapter.AsInteractionSource(New())
+	if !ok {
+		t.Fatal("claude is not an InteractionSource")
+	}
+	for _, tc := range []struct {
+		fixture string
+		want    []string // one recorded last_assistant_message per Stop payload, in payload order
+	}{
+		{"claude-bash-pretooluse-no-escalation.json", []string{
+			"Done. The command output was:\n\n```\nhello-interactive-spike-approve\n```",
+			"I'm not sure what \"1\" refers to — there's no question or list pending. What would you like me to do?",
+		}},
+		{"claude-bash-permissionrequest-run1.json", []string{
+			"Done — created `approval-test.txt` in the working directory.",
+		}},
+		{"claude-edit-permissionrequest-run1.json", []string{
+			"Done. Changed 'line two' to 'line TWO EDITED' in edit-target3.txt.",
+		}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			var got []adapter.Interaction
+			for i, hp := range loadCorpus(t, tc.fixture).HookPayloads {
+				if hp.Event != "Stop" {
+					continue
+				}
+				items := src.Interactions(hp)
+				if len(items) != 1 {
+					t.Fatalf("hook_payloads[%d] (Stop) shaped %d item(s), want exactly 1 agent_message: %+v", i, len(items), items)
+				}
+				got = append(got, items[0])
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("shaped %d agent_message(s), want %d", len(got), len(tc.want))
+			}
+			for i, in := range got {
+				// Ref stays EMPTY on purpose: one Stop is the whole message, so this is a
+				// self-contained one-record item and the daemon mints it a fresh item_id
+				// (skeleton's itemIDLocked). A shared ref would fold two replies into one item
+				// and put two terminal statuses on it (IS-ST-1).
+				want := adapter.Interaction{Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted, Text: tc.want[i]}
+				if !reflect.DeepEqual(in, want) {
+					t.Errorf("agent_message %d mismatch:\n got %+v\nwant %+v", i, in, want)
+				}
+			}
+		})
+	}
+
+	// A Stop that carries no reply shapes NOTHING. Not defensive padding: `last_assistant_message`
+	// is the entire content of this item, and an item that cannot be shaped is not emitted at all
+	// (IS-ENV-3) -- an empty agent_message would close the turn with a blank row on the phone.
+	for _, raw := range []string{`{}`, `{"hook_event_name":"Stop","last_assistant_message":""}`, `{not json`} {
+		if items := src.Interactions(adapter.HookPayload{Event: "Stop", Raw: json.RawMessage(raw)}); len(items) != 0 {
+			t.Errorf("a Stop body %s shaped %+v; a reply-less Stop shapes nothing", raw, items)
+		}
 	}
 }
 
@@ -74,7 +140,8 @@ var goldenCorpus = []struct {
 	want    []adapter.Interaction
 }{
 	{
-		// A Bash call that never escalated to a permission dialog. Two prompts, one tool run.
+		// A Bash call that never escalated to a permission dialog. Two prompts, one tool run,
+		// and the two replies its two Stop bodies carry.
 		fixture: "claude-bash-pretooluse-no-escalation.json",
 		want: []adapter.Interaction{
 			{Kind: adapter.KindUserMessage, Source: adapter.SourceOwner,
@@ -86,7 +153,11 @@ var goldenCorpus = []struct {
 				Ref: "toolu_01Q3Vd8s9HhtsCpKJjRHB2Qj", Tool: "Bash",
 				Action:        adapter.ToolAction{Type: "execute", Command: "echo hello-interactive-spike-approve"},
 				OutputExcerpt: "hello-interactive-spike-approve"},
+			{Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted,
+				Text: "Done. The command output was:\n\n```\nhello-interactive-spike-approve\n```"},
 			{Kind: adapter.KindUserMessage, Source: adapter.SourceOwner, Text: "1"},
+			{Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted,
+				Text: "I'm not sure what \"1\" refers to — there's no question or list pending. What would you like me to do?"},
 		},
 	},
 	{
@@ -112,6 +183,8 @@ var goldenCorpus = []struct {
 			{Kind: adapter.KindToolRun, Status: adapter.StatusCompleted,
 				Ref: "toolu_01WwtgUTi7urC7fP8YDPZAQz", Tool: "Bash",
 				Action: adapter.ToolAction{Type: "execute", Command: "touch approval-test.txt"}},
+			{Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted,
+				Text: "Done — created `approval-test.txt` in the working directory."},
 		},
 	},
 	{
@@ -148,6 +221,8 @@ var goldenCorpus = []struct {
 				Change:      "modify",
 				DiffExcerpt: "@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three",
 				Added:       1, Removed: 1},
+			{Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted,
+				Text: "Done. Changed 'line two' to 'line TWO EDITED' in edit-target3.txt."},
 		},
 	},
 }

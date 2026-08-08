@@ -151,10 +151,11 @@ func testClaudeRealCLI(t *testing.T) {
 
 	timeout := runTimeout()
 	res, err := runScenario(scenario{
-		argv:        argv,
-		cwd:         t.TempDir(),
-		captureHook: true,
-		timeout:     timeout,
+		argv:          argv,
+		cwd:           t.TempDir(),
+		captureHook:   true,
+		captureEvents: adapter.CaptureEvents(a),
+		timeout:       timeout,
 		input: []scriptedInput{
 			{delay: timeout / 3, data: approve},
 			{delay: timeout / 3, data: "\x03"}, // Ctrl-C to exit the TUI cleanly

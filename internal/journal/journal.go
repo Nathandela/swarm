@@ -64,12 +64,12 @@ const (
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by
 // Append and never reused for the journal's whole lifetime.
 type Record struct {
-	SchemaVersion int             `json:"schema_version"`
-	Cursor        uint64          `json:"cursor"`
-	TS            time.Time       `json:"ts"`
-	SessionID     string          `json:"session_id"`
-	Type          RecordType      `json:"type"`
-	Group         status.Group    `json:"group,omitempty"` // set on group_transition
+	SchemaVersion int          `json:"schema_version"`
+	Cursor        uint64       `json:"cursor"`
+	TS            time.Time    `json:"ts"`
+	SessionID     string       `json:"session_id"`
+	Type          RecordType   `json:"type"`
+	Group         status.Group `json:"group,omitempty"` // set on group_transition
 	// Agent is the session's agent identity (persist.Meta.AgentType), so the phone can label
 	// a session with the CLI running it. The daemon sets it on the roster snapshot and on all
 	// four journalworthy transitions (internal/daemon/journal.go); the `deleted` record

@@ -96,6 +96,25 @@ const CaptureRaw = "raw"
 // contract package keeps depending on nothing but itself and internal/vt (T-5).
 const descriptorEvent = "event"
 
+// CaptureEvents returns the events a declares capture=raw on, in declaration
+// order. An adapter that declares none returns nil, which is the ordinary case:
+// the extension is optional (ADR-010 §5).
+//
+// It is the READ side of DescriptorCapture, and it exists because the declaration
+// has to travel. A `swarm hook` process knows its event name but not the adapter
+// that launched it, so the core resolves the rows once at spawn and injects them
+// (hookclient.EnvCapture) — the same trick Detect(a, HostProber) plays, with the
+// adapter supplying pure data and the core doing everything else.
+func CaptureEvents(a Adapter) []string {
+	var out []string
+	for _, s := range a.SignalSources() {
+		if s.Descriptor[DescriptorCapture] == CaptureRaw && s.Descriptor[descriptorEvent] != "" {
+			out = append(out, s.Descriptor[descriptorEvent])
+		}
+	}
+	return out
+}
+
 // Interaction is the pure, normalized content ONE adapter shaped out of ONE
 // captured event body. It is the adapter's whole output: the daemon is the sole
 // producer of what goes on the wire (ADR-010 §3).

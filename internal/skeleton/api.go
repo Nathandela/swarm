@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,6 @@ import (
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"errors"
 
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
@@ -626,6 +626,15 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if _, registered := registry.New(spec.AgentType); registered && !registry.IsProduction(spec.AgentType) {
 			return daemon.LaunchSpec{}, fmt.Errorf("launch: agent %q is not a production provider and cannot be launched", spec.AgentType)
 		}
+	}
+
+	// The adapter's capture=raw rows (ADR-010 §6), resolved HERE because this is the
+	// only layer holding both the registry and the launch spec: internal/daemon
+	// imports no adapter package, and the `swarm hook` process it injects them into
+	// knows its event name but not its adapter. Resolved before the resume/fresh
+	// branches below so both carry them — a resumed session's hooks are the same hooks.
+	if ad, ok := registry.New(spec.AgentType); ok {
+		spec.CaptureEvents = adapter.CaptureEvents(ad)
 	}
 
 	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {

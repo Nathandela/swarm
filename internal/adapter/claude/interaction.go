@@ -1,7 +1,8 @@
 package claude
 
 // The Claude Code STRUCTURED-CAPTURE PRODUCER: ADR-010's optional InteractionSource, shaping the
-// four capture=raw hook bodies of ADR-010 §5 into interaction-schema.md §3 items.
+// five capture=raw hook bodies of ADR-010 §5 (as amended 2026-08-07) into
+// interaction-schema.md §3 items.
 //
 // It stays inside the frozen boundary exactly as the rest of this package does. It is PURE and
 // TOTAL — one hook body in, zero or more items out, no fd, no state, no clock — and Decision
@@ -84,11 +85,12 @@ const pathish = "/.<>"
 // {filePath,structuredPatch,...}), and a shape this struct does not model must cost that one
 // member, never the whole item.
 type hookBody struct {
-	Prompt       string          `json:"prompt"`
-	ToolName     string          `json:"tool_name"`
-	ToolUseID    string          `json:"tool_use_id"`
-	ToolInput    json.RawMessage `json:"tool_input"`
-	ToolResponse json.RawMessage `json:"tool_response"`
+	Prompt               string          `json:"prompt"`
+	LastAssistantMessage string          `json:"last_assistant_message"` // Stop only: the agent's reply
+	ToolName             string          `json:"tool_name"`
+	ToolUseID            string          `json:"tool_use_id"`
+	ToolInput            json.RawMessage `json:"tool_input"`
+	ToolResponse         json.RawMessage `json:"tool_response"`
 }
 
 // toolInput is the per-tool argument object. Claude Code's Edit body is
@@ -177,6 +179,34 @@ func (claudeAdapter) Interactions(p adapter.HookPayload) []adapter.Interaction {
 			return nil
 		}
 		return []adapter.Interaction{approvalFrom(b.ToolName, in, p.ReceivedAtMs)}
+
+	case "Stop":
+		if b.LastAssistantMessage == "" {
+			return nil
+		}
+		// ONE record, whole and terminal: Stop fires once the reply is finished, so the CLI hands
+		// over the finished text rather than increments. Hence no Ref -- this is a self-contained
+		// item and the daemon mints it a fresh item_id; a shared ref would fold two consecutive
+		// replies into one item and put two terminal statuses on it (IS-ST-1). IS-DELTA-1's
+		// increment semantics are not violated by a single record that is the whole text.
+		//
+		// StopReason is left EMPTY, and that is the honest reading: no field of the recorded body
+		// names a stop reason. IS-ENV-1 closes the turn on ANY terminal status, so the turn still
+		// closes; writing end_turn here would be reading the CLI's docs, not the capture.
+		//
+		// The text is returned WHOLE. §5's MaxTextBytes is the daemon's (ADR-010 §3) -- an adapter
+		// that clipped would be excerpting untrusted tool output on the wrong side of the
+		// boundary, and the daemon caps and redacts before anything is journaled (§6).
+		//
+		// ponytail: THE REPLY ARRIVES ALL AT ONCE, AT THE END OF THE TURN, and that is the ceiling
+		// of this path rather than an implementation detail to fix here. A hook fires per event,
+		// not per token, and Stop is the only recorded event carrying prose at all -- so nothing in
+		// this corpus can stream. IS-DELTA-1's increments stay open for a source that can (a
+		// stream-json print mode, an SDK transport, a hook that emits increments); such a producer
+		// carries a Ref and needs no schema change. Ruled 2026-08-07, ADR-010's amendment.
+		return []adapter.Interaction{{
+			Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted, Text: b.LastAssistantMessage,
+		}}
 	}
 	return nil
 }

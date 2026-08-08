@@ -65,6 +65,11 @@ type scenario struct {
 	cols, rows  int
 	timeout     time.Duration
 	captureHook bool
+	// captureEvents are the adapter's capture=raw rows (ADR-010 §6). The harness stands
+	// in as the daemon, so it injects them exactly as the daemon would: without them a
+	// `swarm hook` post carries no body and the recorded fixture holds only the flattened
+	// top-level strings.
+	captureEvents []string
 }
 
 // captureResult is everything one live run observed: the raw PTY bytes, the
@@ -139,7 +144,7 @@ func runScenario(sc scenario) (captureResult, error) {
 		defer sink.stop()
 
 		env = prependPath(env, binDir)
-		env = injectHookEnv(env, "realcli-session", "realcli-token", sockPath, filepath.Join(tmp, "hook.seq"))
+		env = injectHookEnv(env, "realcli-session", "realcli-token", sockPath, filepath.Join(tmp, "hook.seq"), sc.captureEvents)
 	}
 
 	capture, err := runInPTY(sc.argv, sc.cwd, env, sc.input, timeout, cols, rows)
@@ -411,10 +416,13 @@ func recordFixture(path string, fx adapter.Fixture) error {
 }
 
 // callbacksToHookPayloads reconstructs Fixture.HookPayloads from captured
-// callbacks: the event name is the callback's event, and the raw body is its
-// flattened string payload re-marshaled to JSON (the top-level fields `swarm hook`
-// extracted from the CLI's real stdin JSON). A callback with an empty payload
-// records an empty JSON object so Validate's "valid JSON raw" rule holds.
+// callbacks: the event name is the callback's event, and the raw body is the CLI's
+// OWN body when the callback carried one (a capture=raw row, ADR-010 §6), falling
+// back to the flattened string payload re-marshaled to JSON for every other event.
+// The distinction is the whole value of a re-recording: a flattened payload holds
+// top-level strings only, so a fixture rebuilt from it has no `tool_input` in it.
+// A callback with neither records an empty JSON object so Validate's "valid JSON
+// raw" rule holds.
 func callbacksToHookPayloads(cbs []engine.Callback) []adapter.HookPayload {
 	if len(cbs) == 0 {
 		return nil
@@ -425,6 +433,9 @@ func callbacksToHookPayloads(cbs []engine.Callback) []adapter.HookPayload {
 		raw, err := json.Marshal(cb.Payload)
 		if err != nil || len(cb.Payload) == 0 {
 			raw = []byte("{}")
+		}
+		if len(cb.Raw) > 0 {
+			raw = cb.Raw
 		}
 		out = append(out, adapter.HookPayload{
 			Event:        cb.Event,
@@ -498,16 +509,18 @@ func prependPath(env []string, dir string) []string {
 	return out
 }
 
-// injectHookEnv appends the four per-session hook variables the daemon injects at
-// spawn (session id, token, socket, monotonic counter file), so a launched CLI's
-// `swarm hook` reaches and authenticates to the stand-in socket. Mirrors
-// daemon.injectHookEnv exactly (via the shared hookclient env keys).
-func injectHookEnv(env []string, id, token, sock, seqFile string) []string {
+// injectHookEnv appends the five per-session hook variables the daemon injects at
+// spawn (session id, token, socket, monotonic counter file, capture rows), so a
+// launched CLI's `swarm hook` reaches and authenticates to the stand-in socket and
+// keeps its capture=raw bodies. Mirrors daemon.injectHookEnv exactly (via the shared
+// hookclient env keys).
+func injectHookEnv(env []string, id, token, sock, seqFile string, capture []string) []string {
 	return append(env,
 		hookclient.EnvSessionID+"="+id,
 		hookclient.EnvToken+"="+token,
 		hookclient.EnvSocket+"="+sock,
 		hookclient.EnvSequenceFile+"="+seqFile,
+		hookclient.EnvCapture+"="+hookclient.CaptureEnv(capture),
 	)
 }
 

@@ -664,6 +664,8 @@ agent_message union of 4 x MaxTextBytes         16622 B  (16.23 KiB)   <-- still
 FLOOR 2-way merged agent_message (as shipped)    8405 B  (8.21 KiB)   <-- worst sanctioned merge
 ```
 
+**CORRECTED 2026-08-08**: the `agent_message union of 2 x MaxTextBytes` row above misread **8430 B**; the shipped merge path (RED transcript below, and ADR-009 Amendment 1) measures it at **8368 B** untruncated, 8405 B with the pair — the deleted harness's arithmetic on that one row was wrong, this table's own RED run and `worstMergeUnion` in `interaction_cap_test.go` were not.
+
 `max(15 203, 8 405) = 15 203 B`; the next power-friendly bound is **16 KiB = 16 384 B**. 8 KiB was
 measurably insufficient (both cases over it) and 32 KiB buys nothing the arithmetic asks for.
 Headroom at 16 KiB: 1 181 B on the worst single item, 7 979 B on the worst sanctioned merge.

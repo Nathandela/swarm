@@ -22,17 +22,15 @@ package skeleton
 //	relay      REAL internal/remote/relay.Server over a real localhost WebSocket.
 //	phone      REAL swarmmobile.App over a durable phonecore.Core, paired through the ceremony.
 //
-// THE ONE HOP IT DOES NOT COVER, stated plainly because it is the reason this enters at
-// captureInteractions rather than at hookclient.Post: the CLI's own body does not reach the
-// shaper in production yet. ADR-010 §6 specifies the carriage ("engine.Callback gains Raw
-// json.RawMessage alongside Payload"; parseHookStdin keeps the whole body for capture=raw
-// rows) and NOTHING implements it -- cmd/swarm's parseHookStdin flattens the body to top-level
-// STRINGS, which drops `tool_input` and `tool_response` entirely, and serveHookInteractions
-// hands the shaper the callback ENVELOPE instead. So `claude`'s Interactions sees no
-// `tool_name` at the top level and shapes nothing from a real hook post today. Measured and
-// recorded in docs/verification/a1b-claude-producer.md §10. captureInteractions is the
-// production entry point serveHookInteractions itself calls, and the payload replayed into it
-// is the recorded HookPayload the carriage is specified to deliver.
+// WHERE IT ENTERS, AND WHAT COVERS THE HOP ABOVE. This file enters at captureInteractions --
+// the production entry point serveHookInteractions itself calls -- and the payload replayed
+// into it is the recorded HookPayload the carriage delivers. ADR-010 §6's carriage above that
+// entry point (`engine.Callback` carries `Raw`, `swarm hook` keeps the CLI's body for its
+// capture=raw rows) was NOT IMPLEMENTED when this file was written, which
+// docs/verification/a1b-claude-producer.md §10 measured as the producer shaping nothing in
+// production. It is implemented now, and interaction_carriage_test.go enters one hop higher, at
+// hookclient.Post over the daemon socket, so that hop is covered where it lives rather than by
+// widening this test's mouth (docs/verification/i1-carriage.md).
 //
 // Entering there also means the adapter is HANDED IN rather than looked up, so the one further
 // thing this does not exercise is `adapterFor`/`resolveAdapter` choosing `claude` for a claude

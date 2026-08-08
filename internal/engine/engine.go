@@ -32,6 +32,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -78,6 +79,18 @@ type Callback struct {
 	Sequence  uint64            `json:"sequence"`
 	Event     string            `json:"event"`
 	Payload   map[string]string `json:"payload"`
+	// Raw is the CLI's OWN event body, carried whole for events whose adapter
+	// descriptor declares capture=raw and absent for every other event (ADR-010 §6).
+	// It exists because Payload cannot hold it: the flattener keeps top-level STRINGS,
+	// so a tool's input, its response and a diff — all nested objects — are gone by the
+	// time a callback is composed, and the structured-interaction producer needs them.
+	//
+	// THE ENGINE NEVER READS IT. It is untrusted tool output: deriveDims works from the
+	// declared descriptor and the flat payload only, so B5's degrade-to-none and the
+	// 4-value status.Interaction enum are unaffected by anything a CLI writes here. The
+	// sole consumer is the daemon-side interaction producer, which caps, redacts and
+	// excerpts it before anything is journaled.
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // Config wires the Engine's injected effects and thresholds.

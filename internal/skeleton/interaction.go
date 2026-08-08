@@ -29,7 +29,6 @@ package skeleton
 // id (Interaction.Ref) is consumed HERE and never reaches the wire (IS-APR-1).
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -143,11 +142,16 @@ func (d *Daemon) releaseInteractions(ctx context.Context) {
 	}
 }
 
-// serveHookInteractions is serveHook's second half: the AUTHENTICATED callback's body, offered
-// to the session's adapter. It runs only after engine.HandleCallback accepted the callback --
-// an unauthenticated post must not reach the owner's transcript any more than it reaches their
-// status (S6/G5).
-func (d *Daemon) serveHookInteractions(cb engine.Callback, body []byte) {
+// serveHookInteractions is serveHook's second half: the AUTHENTICATED callback's captured body,
+// offered to the session's adapter. It runs only after engine.HandleCallback accepted the
+// callback -- an unauthenticated post must not reach the owner's transcript any more than it
+// reaches their status (S6/G5).
+// A callback with NO captured body is still offered. Skipping it here would be the daemon
+// deciding what an event can shape, and that is the adapter's decision alone: `Interactions`
+// takes the whole HookPayload, so a shaper may legitimately answer from the event name. A
+// non-capture row shapes nothing because the SHAPER finds nothing in it, which is where
+// ADR-010 §5 puts that judgement -- measured: the guard cost two existing tests (§4).
+func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 	m, ok := d.core.Get(cb.SessionID)
 	if !ok {
 		return
@@ -158,15 +162,10 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback, body []byte) {
 	}
 	d.captureInteractions(cb.SessionID, ad, adapter.HookPayload{
 		Event: cb.Event,
-		// The body the daemon RECEIVED -- today the callback ENVELOPE, not the CLI's own event
-		// body. ADR-010 §6's carriage (`engine.Callback` gains `Raw`, and cmd/swarm's
-		// parseHookStdin keeps the whole body for `capture: raw` rows) is specified and NOT
-		// IMPLEMENTED: the flattener keeps top-level STRINGS only, so `tool_input` and
-		// `tool_response` are dropped and `tool_name` survives only nested under `payload`.
-		// internal/adapter/claude now ships a shaper that reads those fields, so this hop is
-		// what stops it shaping anything in production -- measured, with the probe output, in
-		// docs/verification/a1b-claude-producer.md §10. It needs a slice of its own.
-		Raw:          body,
+		// The CLI's OWN event body, kept whole by `swarm hook` for this event's capture=raw row
+		// and carried on the callback (ADR-010 §6). It is what the flattened Payload structurally
+		// cannot hold: `tool_input`, `tool_response` and a diff are nested objects.
+		Raw:          cb.Raw,
 		ReceivedAtMs: time.Now().UnixMilli(),
 	})
 }
@@ -734,15 +733,9 @@ func newTurnID() string { return newItemID() }
 
 // ---- the hook body ---------------------------------------------------------
 
-// decodeHookCallback reads one callback AND the bytes it was decoded from. The raw body is what
-// the producer needs (ADR-010 §1) and hookclient.Decode consumes the reader, so the value is
-// captured first and decoded from memory -- a json.Decoder stops at the end of one value, so
-// this does not wait for the peer to close.
-func decodeHookCallback(r io.Reader) (engine.Callback, []byte, error) {
-	var raw json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(r, hookBodyLimit)).Decode(&raw); err != nil {
-		return engine.Callback{}, nil, err
-	}
-	cb, err := hookclient.Decode(bytes.NewReader(raw))
-	return cb, raw, err
+// decodeHookCallback reads one callback off a hook connection under hookBodyLimit. The captured
+// body rides INSIDE the callback (Callback.Raw, ADR-010 §6), so the decode is ordinary -- there
+// is nothing to preserve alongside it.
+func decodeHookCallback(r io.Reader) (engine.Callback, error) {
+	return hookclient.Decode(io.LimitReader(r, hookBodyLimit))
 }
