@@ -33,9 +33,11 @@ import org.robolectric.RobolectricTestRunner
  * starts an agent in the wrong place with no error anywhere.
  *
  * WHAT IS DELIBERATELY NOT ASSERTED: appearance. The section label's tracking is PB-DS-10's and is
- * asserted in `ui/kit`. The notice line HAS no appearance -- there is no notice component in the
- * kit -- and this suite says so by having nothing to claim about it rather than by asserting a
- * theme default as if it were a decision.
+ * asserted in `ui/kit`. This paragraph used to add that "the notice line HAS no appearance -- there
+ * is no notice component in the kit"; it has one now (`§4 Notice line`, agents-tracker-ksvb.4) and
+ * `NoticeTest` is where its type and its ink are read off the design source. The conclusion is
+ * unchanged and is now true for the ordinary reason: appearance is the kit's, and a second opinion
+ * about it here could disagree with the first.
  */
 @RunWith(RobolectricTestRunner::class)
 class LaunchPanelViewTest {
