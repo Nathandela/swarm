@@ -39,14 +39,28 @@ import dev.swarm.phone.R
  * top of whatever box it is given; with 12 dp more box than paint, a top-aligned line would sit
  * against the well's upper edge and leave the difference below it, which is the same defect the
  * inset exists to prevent, one layer in.
+ *
+ * @param mono agents-tracker-ksvb.7: true for the ONE field this row does not describe -- the
+ *  terminal composer, which types directly under `Mono.Code` grid content and, until this
+ *  parameter existed, rendered every keystroke in row 9's `Body.Message` regardless. It takes
+ *  [monoWell]'s own `.sheet2 .cmd` face rather than a second style invented for it, because a
+ *  composer echoing into a monospace terminal is the same design fact the well already answers
+ *  to. False for every other field on the surface -- the pairing code and the launch form's
+ *  three -- which stay row 9's `Body.Message` exactly as before.
  */
-fun textField(context: Context, hint: CharSequence): EditText = EditText(context).apply {
+fun textField(
+    context: Context,
+    hint: CharSequence,
+    mono: Boolean = false,
+): EditText = EditText(context).apply {
     // [Kit.textView]'s property, on the one kit view that cannot come from that constructor: an
     // EditText is a TextView and takes the same slack, and a field whose text sat on a different
     // line from the read-only well beside it would be the delta this kit just spent a commit
     // removing, in the one place a user is typing.
     includeFontPadding = false
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+    setTextAppearance(
+        if (mono) R.style.TextAppearance_Swarm_Mono_Code else R.style.TextAppearance_Swarm_Body_Message,
+    )
     setTextColor(Kit.colour(context, R.color.swarm_text_primary))
     setHintTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     this.hint = hint

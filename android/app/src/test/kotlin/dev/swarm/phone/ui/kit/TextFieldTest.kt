@@ -142,6 +142,61 @@ class TextFieldTest {
         assertEquals("Which agent to start", textField(context, "Which agent to start").hint)
     }
 
+    // ---- the mono variant (agents-tracker-ksvb.7) ---------------------------
+
+    /**
+     * FAILING-FIRST for agents-tracker-ksvb.7's part (b): the terminal composer types directly
+     * under `Mono.Code` grid content and has always taken `Body.Message` -- 12.5sp proportional
+     * Roboto -- like every other field on the surface. The one field that must render what a
+     * person types the way the terminal will echo it is the one field that did not.
+     *
+     * `MONO = TRUE` SPENDS THE SAME `.sheet2 .cmd` ORIGIN [monoWell] DOES, and the claim is built
+     * the same way MonoWellTest's is -- one design rule, checked at its second call site rather
+     * than transcribed into a second one.
+     */
+    @Test
+    fun `the mono variant is the well's own Mono Code face, not row 9's Body Message`() {
+        val claims = KitOrigin.textClaims(
+            view = textField(context, "Type into the session you hold", mono = true),
+            selector = ".sheet2 .cmd",
+            ink = KitOrigin.token("--p-ink"),
+            spScale = spScale,
+        )
+
+        assertTrue(
+            "the pitch probe cannot answer: ${KitOrigin.typefaceProbeFaults()}",
+            KitOrigin.typefaceProbeFaults().isEmpty(),
+        )
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
+     * Row 9's target/well split does not belong to the type choice: `WELL_HEIGHT_DP` and
+     * `MIN_TARGET_DP` come from `minimumHeight` and the background's layer insets, neither of
+     * which this variant touches. Asserted anyway, because "the mono variant fits in the well" is
+     * exactly the claim a font swap could quietly break.
+     */
+    @Test
+    fun `the mono variant keeps row 9's 36 dp well inside the 48 dp target`() {
+        val subject = textField(context, "Type into the session you hold", mono = true)
+        val faults = touchTargetFaults(
+            subject,
+            dp(KitMetrics.MIN_TARGET_DP).roundToInt(),
+            dp(PARENT_WIDTH_DP).roundToInt(),
+        )
+
+        assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
+
+        val well = subject.background as SubstrateSurface
+        val painted = subject.measuredHeight - well.getLayerInsetTop(0) - well.getLayerInsetBottom(0)
+        assertEquals(
+            "the mono variant's well is not row 9's 36 dp; a taller line box ate into the " +
+                "48 dp target or the well shrank inside it",
+            dp(KitMetrics.WELL_HEIGHT_DP).roundToInt(),
+            painted,
+        )
+    }
+
     /** The negative control, through the same comparison the assertions above use. */
     @Test
     fun `the text field assertions can actually fail`() {

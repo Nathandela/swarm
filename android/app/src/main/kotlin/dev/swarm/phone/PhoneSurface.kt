@@ -372,8 +372,12 @@ class PhoneSurface(
      * PB-E2E-2's "types", and PB-INPUT-3's precondition beside it: the machine refuses input
      * without a confirmed lease, so this control sits below Take control and the refusal it
      * produces without one routes through PB-APP-9 like every other.
+     *
+     * `mono = true` (agents-tracker-ksvb.7): it sits directly under [peekHost]'s `Mono.Code`
+     * grid, and it was the one field on this surface still set in row 9's proportional
+     * `Body.Message` -- a keystroke rendered in a face the terminal itself never uses.
      */
-    private val typed = field("Type into the session you hold")
+    private val typed = field("Type into the session you hold", mono = true)
 
     /**
      * ONE CARRIAGE RETURN IS APPENDED, AND THAT IS WHAT "A LINE" MEANS AT A TERMINAL -- the key
@@ -2604,8 +2608,12 @@ class PhoneSurface(
      * recessed `--p-well` field with the card radius, `Body.Message` ink and, deliberately, an
      * `--p-ink2` placeholder rather than `--p-ink3`: the hint is this surface's only label, so it
      * is text a user is actively trying to read and the 3.50:1 tertiary fails the body floor.
+     *
+     * @param mono agents-tracker-ksvb.7: [typed] alone passes true -- it is the field that types
+     *  under `Mono.Code` grid content, and the terminal is the one place a proportional face made
+     *  a keystroke hard to compare against what comes back. The launch fields below never pass it.
      */
-    private fun field(hint: String): EditText = textField(activity, hint)
+    private fun field(hint: String, mono: Boolean = false): EditText = textField(activity, hint, mono)
 
     /**
      * A launch field, by the words the SCREEN MODEL says belong in it.
