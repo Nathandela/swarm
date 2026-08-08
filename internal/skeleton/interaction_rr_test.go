@@ -7,9 +7,11 @@ package skeleton
 //     hash fence uses a small item, so truncate-then-hash is asserted where nothing truncates;
 //     R2's maxima cases are ASCII, so IS-CAP-1's rune boundary is asserted where every cut is a
 //     byte boundary anyway. This drives both at once: an approval_request on §5's documented
-//     maxima whose prompt lines are four-byte runes, which is 32 000 bytes of prompt against an
-//     8 KiB item cap -- so the uniform ceiling halves several times, every cut lands inside a
-//     multi-byte rune, and the digest is taken after all of it.
+//     maxima whose prompt lines are four-byte runes, which is 32 000 bytes of prompt against a
+//     16 KiB item cap -- so the uniform ceiling halves, every cut lands inside a multi-byte rune,
+//     and the digest is taken after all of it. It is the case ADR-009's Amendment 1 deliberately
+//     did NOT close: §5 caps a prompt line in RUNES, so no byte cap on the item can make the fit
+//     ceiling unnecessary here.
 //
 //  2. IS-LIFE-2's `expired` arm through sweepExpiredApprovals, which is otherwise unreached:
 //     approvalTTL is a bare constant with no clock seam, so the shipped 120 s window cannot be
@@ -56,8 +58,8 @@ func TestApprovalRequest_AtTheMaximaTheHashStillNamesTheBytesItShipped(t *testin
 	sk := assemble(t)
 	item, raw := captureOne(t, sk, "s-maxima", maximaApproval("req-max"))
 
-	if len(raw) > 8<<10 {
-		t.Fatalf("the shipped item is %d bytes, over §5's 8 KiB MaxItemBytes", len(raw))
+	if len(raw) > specMaxItemBytes {
+		t.Fatalf("the shipped item is %d bytes, over §5's %d-byte MaxItemBytes", len(raw), specMaxItemBytes)
 	}
 	if item["truncated"] != true {
 		t.Errorf("truncated = %v; want true -- §5's caps bound on this item (IS-CAP-1)", item["truncated"])

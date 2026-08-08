@@ -246,6 +246,122 @@ orchestration protocol step 6):
 - **ADR index rows** in `docs/adr/README.md` for all three companions (009, 010, **011**), same
   commit as this file, plus the stale "next is ADR-009" instruction moved to ADR-012.
 
+## Amendment 2026-08-07 — `MaxItemBytes` is raised to 16 KiB, so §5's own maxima fit inside it
+
+**Status**: Accepted (owner ruling, Nathan, 2026-08-07). **Amends**: this ADR's hand-back of §5's
+numbers to `docs/specifications/interaction-schema.md`, which left them "proposed and unratified".
+This ratifies **one** of them — the whole-item cap — and leaves the per-field numbers proposed.
+**Also cited as "ADR-009 Amendment 1"** (it is this ADR's first), which is how the code comments
+and fences name it — ADR-010 carries a same-dated amendment and the number disambiguates.
+
+### What was wrong
+
+An 8 KiB `MaxItemBytes` bounded neither of the two things a whole-item cap exists to bound, and
+both failures were confirmed on the shipped path rather than argued:
+
+1. **§5's own per-field maxima did not fit jointly inside it.** An item on the table's own numbers
+   was over the table's own item cap, so the producer's fit stage had to cut fields that were
+   already legal. Recorded as R2's open point in `docs/verification/a1-carriage.md`.
+2. **The one merge §6 sanctions overran it.** IS-DELTA-2 folds pending `agent_message` increments
+   for one `item_id` into one append and calls the merge "lossless text concatenation". With
+   `MaxTextBytes = MaxItemBytes / 2`, two increments already clipped to `MaxTextBytes` produce an
+   item the append boundary refuses — and by then the floor has dequeued it, so the text is
+   **dropped silently**: logged once, nothing marked damaged on any surface. Confirmed in
+   `a1-carriage.md`'s re-review of R2 and reproduced verbatim in `a1-gateway-floor.md`'s RED for
+   this amendment (`interaction: item is 8368 bytes, over the 8192-byte cap`).
+
+### The arithmetic (measured, not estimated)
+
+Every figure is the serialized item as `internal/skeleton.fitItem` produces it, measured through
+the shipped producer (harness in `a1-gateway-floor.md`; it is not kept).
+
+| Case | Serialized | Note |
+|---|---|---|
+| `approval_request` at §5's maxima | 11 736 B | 40 × 200-rune prompt lines, 256 B summary, 4 × 256 B action strings, 8 decisions × 256 B labels |
+| …plus §3.5's D7 tuple | 11 930 B | `agent_instance`, `expires_at`, `content_hash` |
+| …plus the `truncated`/`full_bytes` pair | 11 967 B | the worst-case approval |
+| `plan_update` at §5's maxima | 15 166 B | 64 steps × 200 B, longest step state (`in_progress`) |
+| …plus the truncation pair | **15 203 B** | **the worst single item §5's table can describe** |
+| `tool_run` at §5's maxima | 5 415 B | the record-collapse union of an open and its close is ≈ this, not the sum |
+| `file_change` at §5's maxima | 5 372 B | |
+| merge union, 2 × `MaxTextBytes` | 8 368 B untruncated / **8 405 B** with the truncation pair | **the worst sanctioned merge**; the floor's re-marshalled bytes |
+| merge union, 3 × `MaxTextBytes` | 12 526 B | fits |
+| merge union, 4 × `MaxTextBytes` | 16 622 B | does **not** fit — see the residual below |
+
+The binding constraint is `max(15 203, 8 405) = 15 203 B`. The next power-friendly bound above it
+is **16 KiB = 16 384 B**, leaving 1 181 B of headroom on the worst single item and 7 979 B on the
+worst sanctioned merge. 8 KiB was verified insufficient and 32 KiB buys nothing the arithmetic
+asks for, so:
+
+> **`MaxItemBytes` = 16 KiB (16 384 bytes).**
+
+### The consequence, stated honestly
+
+**The per-item wire budget doubles against an unchanged rate budget.** §6.0's combined ≤ 8
+appends/s per target and the relay's `MailboxAppendPerMin: 600` are untouched (§10 says this
+schema spends the budget differently and does not raise it). A target saturating the append slot
+with maximal items now moves up to 128 KiB/s of plaintext instead of 64 KiB/s. That is accepted:
+the cap is still ~48× under the relay's ~768 KiB per-envelope plaintext admission limit, the
+budget that actually binds is the append *count*, and a cap that drops an agent's message to save
+bandwidth nobody is short of is the wrong trade.
+
+**A second consequence, added by the adversarial review of 2026-08-07.** The ~48× headroom is per
+*single append*. IS-CAP-4's `journal_reseed` is the one frame that **aggregates** records, so the
+number of interaction records a reseed can carry before it exceeds that same admission limit is
+**halved** — roughly 96 maximal items to roughly 48. IS-CAP-4 already requires the events half to
+be bounded at "a record count that fits" and **nothing implements that bound**:
+`remotegw.Gateway.Resync` seals every record above the phone's cursor into one frame, over a
+journal that production opens with unbounded retention (`journal.Open`, `Options{}`). The gap is
+therefore pre-existing and orthogonal to this ruling, which makes it twice as easy to reach rather
+than creating it. Carried as an open point against IS-CAP-4, not against this amendment.
+
+**The joint bound is over bytes as §5 counts them, and three things still exceed it.** The fit
+stage (`skeleton.fitItem`'s stage 2) is therefore **kept unchanged**, and IS-CAP-5 says so
+normatively: `prompt_lines` is capped in *runes* (40 × 200 four-byte runes is 32 000 B); `tool`,
+`path`, `old_path`, `truncation_marker` and `decisions[].id` carry no per-field cap at all
+(IS-TOOL-3 requires the marker verbatim); and JSON escaping can expand a byte-capped field by up
+to 6×. No finite item cap removes the need to clip.
+
+**Residual, not closed by this ruling: an unbounded fold.** `ItemAdmission.concatText` merges
+*every* increment pending for one `item_id` in a window, not two. Four increments at
+`MaxTextBytes` inside one 125 ms window serialize to 16 622 B and are still refused and dropped.
+Reaching it takes ~16 KiB of agent prose in 125 ms (≈ 131 KB/s), which is far above any observed
+CLI token rate, and no adapter streams increments at all today — but it is the same defect in a
+narrower window, and closing it needs a rule this amendment does not make (a bounded merge would
+contradict IS-DELTA-2's "lossless"; splitting the fold across two appends changes the floor's
+one-append-per-window contract). Recorded as an open point in `a1-gateway-floor.md`.
+
+### The alternatives, and why this one
+
+The re-review recorded four resolutions (`a1-carriage.md`, "CONFIRMED DEFECT, NOT FIXED"). Each is
+rejected here on the record:
+
+- **Bound the merged text in `concatText`** — cheapest, and directly contradicts IS-DELTA-2's
+  "the merge is lossless text concatenation". Rejected: it silently truncates the agent's message
+  at a seam that has no `truncated`/`full_bytes` to set honestly.
+- **Refuse the fold and let the increment take its own slot** — lossless, but it changes the
+  floor's contract (one item may cost two appends), needs the cap plumbed into `internal/remotegw`
+  which deliberately does not link the daemon, and carries the re-homing trap the re-review
+  documented (a third increment folds into the *first* held entry, shipping the message scrambled
+  — worse than the drop it replaces).
+- **Truncate the merged item under IS-CAP-1** — R2's answer for a single item, but it makes the
+  *floor* a truncator, which is the opposite of lossless, and the floor cannot say which §5 cap
+  bound.
+- **Raise the item cap** — chosen. It is the only one of the four that fixes the *cause*: the
+  overrun was manufactured by `MaxTextBytes = MaxItemBytes / 2`, a relation between two numbers of
+  which one was never measured. It changes no normative rule, needs no new code path, and it also
+  closes the first failure above, which none of the other three touch.
+
+### What binds now
+
+- `interaction-schema.md` §5's table (`MaxItemBytes` = 16 KiB) and **IS-CAP-5**, which makes the
+  joint bound a rule rather than an observation and requires any future ruling that raises a
+  per-field cap to re-derive the item cap in the same ruling.
+- `internal/daemon.MaxItemBytes` = `16 << 10`, its comment no longer marked PROPOSED.
+- Three fences in `internal/skeleton/interaction_cap_test.go`: the merge union lands un-dropped,
+  a `plan_update` at the documented maxima ships whole, and the item cap admits both worst cases
+  (the arithmetic itself, so a later per-field raise fails a test rather than a transcript).
+
 ## Notes
 
 ADR-007 chose the terminal peek honestly, and under the information it had it chose correctly: three

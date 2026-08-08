@@ -324,6 +324,19 @@ above). The row was earned by the call, and the fence would notice if the call w
   supplies its own, and that row should be deleted the day one does (the allowlist is
   bidirectional and will demand it).
 
+  **CORRECTED 2026-08-07 (a1b, the Claude Code producer).** The corpus half came true — the
+  corpus is `internal/adapter/claude/testdata/interaction` and `CheckInteractionFixture` is
+  called over it — but **the prediction about the row was wrong, and the row stays**. It was
+  measured, not argued: deleting it fails B94 with `internal/adapter.CheckInteractionFixture`
+  as the only finding (verbatim in `a1b-claude-producer.md` §4). The mistake was about the
+  instrument, not the corpus. B94 loads with `Tests: false` and roots at `cmd/...` `main()`
+  plus the gomobile facade, so **no caller in a `_test.go` file can ever make a symbol
+  reachable**, and the bidirectional arm fires on production reachability alone. A conformance
+  harness has no production caller by construction — which is exactly the reason its neighbours
+  `Conformance` and `CheckConformance` carry, and the row now carries it too. The only way this
+  row could have died is a production call site, and inventing one for a function that replays
+  recorded fixtures is the move the fence's own header warns against.
+
 ---
 
 ## 7. Review finding R5 — one validation, on the shipped path
@@ -798,6 +811,9 @@ It was left alone rather than swept into this diff.
 ### 8.7 What is deliberately still open — and the one that needs an owner ruling
 
 - **`denied` IS NOT REACHABLE FROM THE PHONE PATH, and this is the finding's one genuine gap.**
+  > **CLOSED 2026-08-07 by owner ruling** — the first of the two closures this bullet named was
+  > taken: `adapter.DecisionChoice` gains an additive `Verdict` field. See "Owner ruling
+  > 2026-08-07 — the decision verdict" at the foot of this file.
   §3.6's `allowed`/`denied` split needs a NORMALIZED verdict for a decision id drawn from the
   CLI's OWN vocabulary — §3.5 says so explicitly, and spike-SB captured Codex offering
   `accept | acceptWithExecpolicyAmendment | cancel`, where the third is a refusal that travels
@@ -961,3 +977,247 @@ ok  	github.com/Nathandela/swarm/internal/skeleton	199.923s
 **R4's closure holds otherwise**, and its four disclosed open points (`denied` unreachable, the
 content-hash canonicalization needing sign-off, no wire route for the approve, `session_status`
 only from the sweep) are all still accurate as written.
+
+---
+
+# Owner ruling 2026-08-07 — the decision verdict
+
+**Ruling** (Nathan, 2026-08-07): *"`adapter.DecisionChoice` gains a `Verdict` field
+(allow | deny | other) the adapter sets at capture from its own CLI vocabulary; the daemon
+classifies `approval_resolved` allowed/denied from the chosen decision `Verdict`; conformance
+obliges every `approval_request` decision to carry a valid verdict."*
+
+This closes §8.7's first open point — the one that bullet said "needs an owner ruling" — by the
+first of the two closures it named. Recorded normatively as ADR-010's **Amendment 2026-08-07**
+(conformance obligation 6) and interaction-schema.md's **IS-APR-4** (§3.5) and **IS-RES-1** (§3.6).
+
+## The shape of the answer, and why each half sits where it does
+
+The old code resolved every validated approve as `allowed` and said so in its own comment. It was
+right to refuse to guess: §3.5 keeps decision **ids** the CLI's own on purpose, so `cancel` is a
+refusal only because Codex says it is. The fix is not to teach the daemon a vocabulary — it is to
+have the party that already knows attach one normalized bit at capture, exactly as `Mode` is
+attached at capture because that is where the spike-SC carve-out is decidable.
+
+**Three decisions, recorded:**
+
+1. **The verdict is MACHINE-SIDE — no wire field.** It rides `adapter.Interaction` into the daemon
+   and stops there, on the `Keystrokes` precedent (IS-APR-3). The card labels its buttons from
+   `decisions[].label` and no phone surface switches on polarity, so a wire field would be a second
+   place for the two to disagree, shipped ahead of any consumer. A phone that later wants it (to
+   style a destructive button) is an additive §3.5 field and a schema change.
+
+2. **The obligation is split between `Validate` and `CheckConformance`, deliberately.**
+   `Interaction.Validate` rejects a verdict **outside the vocabulary** — a shape error, because the
+   daemon switches on the value — but accepts an **absent** one. `CheckConformance` requires
+   presence. The split is what keeps the two failure modes distinguishable: a decision with no
+   verdict is not malformed, it is *incomplete*, and `Validate` is the daemon's own admission gate
+   (IS-ENV-3 drops the whole item), so requiring presence there would delete an adapter's approval
+   card rather than report the adapter. Completeness is what conformance exists to prove.
+   "The measurement behind decision 2" below is that paragraph run as an experiment rather than
+   argued.
+
+3. **One branch, on `deny` — and `other` resolves `allowed`.** §3.6 has no third value for a
+   remote answer. `denied` is an assertion that the owner REFUSED, so manufacturing one from a
+   decision the adapter declared unclassifiable would be exactly the guess the verdict exists to
+   remove; `allowed` here asserts only "answered from the phone, and not refused". This is the
+   weaker half of the ruling and it is written into IS-RES-1 rather than left to the code, and
+   fenced (`TestApprove_AnOtherVerdictDecisionResolvesAllowedNotDenied`) so the arm cannot flip in
+   either direction unnoticed.
+
+## RED — verbatim, failing first (GG-5)
+
+**Cycle 1, undefined-only** — the field does not exist. This is the same RED shape the carriage and
+daemon slices used for a new seam:
+
+```
+$ go test ./internal/adapter/ ./internal/skeleton/ -run 'TestInteractionValidate_|TestConformance_Requires|TestApprove_A.*Verdict' -count=1
+# github.com/Nathandela/swarm/internal/adapter [github.com/Nathandela/swarm/internal/adapter.test]
+internal/adapter/verdict_test.go:27:62: unknown field Verdict in struct literal of type DecisionChoice
+internal/adapter/verdict_test.go:33:13: undefined: VerdictAllow
+internal/adapter/verdict_test.go:33:27: undefined: VerdictDeny
+internal/adapter/verdict_test.go:33:40: undefined: VerdictOther
+internal/adapter/verdict_test.go:44:29: undefined: VerdictAllow
+internal/adapter/verdict_test.go:44:43: undefined: VerdictDeny
+internal/adapter/verdict_test.go:44:56: undefined: VerdictOther
+internal/adapter/verdict_test.go:47:54: unknown field Verdict in struct literal of type DecisionChoice
+FAIL	github.com/Nathandela/swarm/internal/adapter [build failed]
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/approval_verdict_test.go:28:34: unknown field Verdict in struct literal of type adapter.DecisionChoice
+internal/skeleton/approval_verdict_test.go:28:51: undefined: adapter.VerdictAllow
+internal/skeleton/approval_verdict_test.go:29:74: unknown field Verdict in struct literal of type adapter.DecisionChoice
+internal/skeleton/approval_verdict_test.go:29:91: undefined: adapter.VerdictAllow
+internal/skeleton/approval_verdict_test.go:30:33: unknown field Verdict in struct literal of type adapter.DecisionChoice
+internal/skeleton/approval_verdict_test.go:30:50: undefined: adapter.VerdictDeny
+internal/skeleton/approval_verdict_test.go:67:39: undefined: adapter.VerdictDeny
+internal/skeleton/approval_verdict_test.go:90:62: undefined: adapter.VerdictAllow
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+```
+
+**Cycle 2, BEHAVIOURAL** — the field and its three constants exist and the stubs carry them, but
+no rule reads either. This is the RED that matters, and it was taken as a separate step precisely
+so a compile error could not stand in for one:
+
+```
+$ go test ./internal/adapter/ -run 'TestInteractionValidate_|TestConformance_Requires' -count=1 -v
+=== RUN   TestInteractionValidate_RejectsAnUnknownDecisionVerdict
+    verdict_test.go:31: Validate accepted decisions[0].verdict = "maybe"; it is a CLOSED vocabulary (allow | deny | other) and the daemon resolves §3.6's allowed/denied split off it
+--- FAIL: TestInteractionValidate_RejectsAnUnknownDecisionVerdict (0.00s)
+=== RUN   TestInteractionValidate_AcceptsEachDefinedVerdict
+--- PASS: TestInteractionValidate_AcceptsEachDefinedVerdict (0.00s)
+=== RUN   TestConformance_RequiresAVerdictOnEveryApprovalDecision
+    verdict_test.go:65: an approval_request whose decision carries NO verdict was NOT flagged. The daemon classifies §3.6's allowed/denied off the chosen decision's verdict, so a decision without one resolves as `allowed` whatever the owner tapped
+--- FAIL: TestConformance_RequiresAVerdictOnEveryApprovalDecision (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter	0.729s
+
+$ go test ./internal/skeleton/ -run 'TestApprove_A.*VerdictDecisionResolves' -count=1 -v
+=== RUN   TestApprove_ADenyVerdictDecisionResolvesDenied
+    approval_verdict_test.go:65: decision = allowed; want "denied". The owner tapped "cancel", which the adapter classified deny at capture -- transcribing it as an approval records a grant the owner never gave (§3.6)
+--- FAIL: TestApprove_ADenyVerdictDecisionResolvesDenied (4.18s)
+=== RUN   TestApprove_AnAllowVerdictDecisionResolvesAllowed
+--- PASS: TestApprove_AnAllowVerdictDecisionResolvesAllowed (0.42s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.629s
+```
+
+Note which two passed under RED, and why that is the point: the allow arm and the
+accepts-each-verdict control were already satisfied by the old unconditional `allowed`, so only
+the deny arm and the two rule checks are new information.
+
+## GREEN
+
+```
+$ go test ./internal/adapter/ -run 'TestInteractionValidate|TestConformance' -count=1
+ok  	github.com/Nathandela/swarm/internal/adapter
+
+$ go test ./internal/skeleton/ -run 'TestApprove_A.*Verdict' -count=1 -v
+--- PASS: TestApprove_ADenyVerdictDecisionResolvesDenied (3.34s)
+--- PASS: TestApprove_AnAllowVerdictDecisionResolvesAllowed (0.40s)
+--- PASS: TestApprove_AnOtherVerdictDecisionResolvesAllowedNotDenied (0.41s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	5.201s
+```
+
+Every pre-existing approval fence passes **unmodified**, including
+`TestApprove_AValidApproveIsAcceptedAndResolvesTheCard` (whose fixture carries no verdicts, so it
+exercises the default arm) and the seven-row refusal table, whose "a decision the card never
+offered" and "no decision at all" rows now run against a map lookup instead of a slice scan.
+
+## What changed
+
+| File | What |
+|---|---|
+| `internal/adapter/interaction.go` | `VerdictAllow` / `VerdictDeny` / `VerdictOther`; `DecisionChoice.Verdict` with the machine-side ceiling stated on the field; `Validate` rejects a value outside the three (optional-empty). |
+| `internal/adapter/conformance.go` | Obligation 6 inside `checkShapedItems`, so it runs from both `CheckConformance` and `CheckInteractionFixture` — every adapter already calling `Conformance(t, a)` gets it. |
+| `internal/adapter/interaction_stubs_test.go` | `decisionWithoutVerdict` (new violator); the conformant `captureAdapter` and the three other single-defect approval violators carry verdicts, so each still breaks exactly one rule. |
+| `internal/skeleton/approval.go` | `pendingApproval.decisions` is `map[id]verdict` — one lookup for both membership and polarity; the resolution classifies off it; `containsString` deleted (its only caller is gone). |
+| `docs/specifications/interaction-schema.md` | IS-APR-4 (§3.5) and IS-RES-1 (§3.6); the `decisions` row notes the machine-side verdict. |
+| `docs/adr/ADR-010-adapter-structured-capture.md` | Amendment 2026-08-07: the field, why the adapter owns it, and conformance obligation 6 with the Validate/Conformance split. |
+| `internal/adapter/verdict_test.go`, `internal/skeleton/approval_verdict_test.go` (new) | Six fences: the vocabulary, the control, the obligation, and all three resolution arms. |
+
+## Teeth — three mutations, each reverted
+
+| Mutation | Result |
+|---|---|
+| Classify `verdict != allow` as denied (so `other` counts as a refusal) | **FAILS** `TestApprove_AnOtherVerdictDecisionResolvesAllowedNotDenied`: "decision = denied; want allowed (IS-RES-1)". The deny and allow arms both stay green, so the three arms are genuinely distinguishable and the `other` ruling is fenced rather than incidental. |
+| `if d.Verdict == ""` → `if false` in `checkShapedItems` | **FAILS** `TestConformance_RequiresAVerdictOnEveryApprovalDecision`; `TestConformance_AcceptsCapturingAdapter` stays green, so the obligation is not merely noisy. |
+| Drop the `oneOf` verdict check from `Validate` | **FAILS** `TestInteractionValidate_RejectsAnUnknownDecisionVerdict`; the conformance test stays green, which is what proves the two halves are independent rather than one rule tested twice. |
+
+### A fourth mutation, added by the adversarial review — MISSED, then fenced
+
+Decision 1 above says the verdict is machine-side and reaches no wire item (IS-APR-4). Nothing
+tested it. The mutation is one word in `skeleton.interactionFields`:
+
+```go
+-	decisions = append(decisions, map[string]string{"id": d.ID, "label": d.Label})
++	decisions = append(decisions, map[string]string{"id": d.ID, "label": d.Label, "verdict": d.Verdict})
+```
+
+`go test ./internal/skeleton/ ./internal/adapter/... ./internal/daemon/... -count=1` → **all
+green**. The whole suite shipped the machine-side bit to the phone without a single failure — the
+same class of hole `keystrokes` had before `assertNoKeystrokeLeak` existed
+(a1b-claude-producer.md §11 mutation 3), on the field added by this very ruling.
+
+Fixed by **strengthening**, never weakening: `assertDecisions` in
+`internal/skeleton/interaction_chain_e2e_test.go` — already called on both cards the chain test
+raises — now also requires each wire decision object to carry **exactly** `id` and `label`. It is
+the right home for the same reason the keystroke check is: it reads the decision as the PHONE
+received it, after the producer, the floor, the gateway, the relay and the facade.
+
+RED, against the live mutation (both cards, native and prompt-card):
+
+```
+$ go test ./internal/skeleton/ -run TestClaudeChainE2E -count=1
+--- FAIL: TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone (9.06s)
+    interaction_chain_e2e_test.go:194: decision "allow" carried "verdict" to the phone: allow. §3.5 puts {id, label} on the wire and IS-APR-4 keeps the verdict MACHINE-SIDE -- the daemon classifies allowed/denied from it and no phone surface switches on polarity
+    interaction_chain_e2e_test.go:194: decision "deny" carried "verdict" to the phone: deny. §3.5 puts {id, label} on the wire and IS-APR-4 keeps the verdict MACHINE-SIDE -- the daemon classifies allowed/denied from it and no phone surface switches on polarity
+    interaction_chain_e2e_test.go:279: decision "allow" carried "verdict" to the phone: allow. §3.5 puts {id, label} on the wire and IS-APR-4 keeps the verdict MACHINE-SIDE -- the daemon classifies allowed/denied from it and no phone surface switches on polarity
+    interaction_chain_e2e_test.go:279: decision "deny" carried "verdict" to the phone: deny. §3.5 puts {id, label} on the wire and IS-APR-4 keeps the verdict MACHINE-SIDE -- the daemon classifies allowed/denied from it and no phone surface switches on polarity
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	10.114s
+```
+
+GREEN, with the mutation reverted:
+
+```
+$ go test ./internal/skeleton/ -run TestClaudeChainE2E -count=1 -race
+ok  	github.com/Nathandela/swarm/internal/skeleton	13.546s
+```
+
+**The measurement behind decision 2** (a fourth mutation, kept as a measurement rather than a
+fence — the numbering above restarts for this ruling and does not continue R4's).
+Making `Validate`'s verdict check
+NON-optional (an absent verdict is a violation) turns the completeness obligation into an
+admission gate: every approval fixture in `internal/skeleton` that predates this ruling —
+`pendingApprovalInteraction` and its dependents — has its item dropped by `captureInteractions`
+under IS-ENV-3, and **12 of the 15 approval tests fail** with no `approval_request` in the journal
+at all (measured: `go test ./internal/skeleton/ -run TestApprov` → 12 `--- FAIL`, each a 10 s
+`awaitItems` timeout). That is the concrete cost of putting it there, and it is why decision 2
+above puts it in conformance instead. The three survivors are the ones that never capture a card.
+
+## Gates
+
+```
+$ go build ./...                                  OK
+$ go vet ./...                                    OK
+$ gofmt -l (files touched)                        clean
+$ go test ./internal/adapter/... -count=1 -race   ok  (9 packages)
+$ go test ./internal/skeleton/  -count=1 -race    ok  196.455s
+$ go test ./internal/daemon/    -count=1 -race    ok  54.298s
+$ go test ./internal/remotegw/  -count=1 -race    ok  33.972s
+$ go test ./internal/protocol/  -count=1 -race    ok  19.534s   (GG-7 drift fences green)
+$ go test ./internal/verify/    -count=1 -race    ok  35.104s   (B94 reachability green)
+$ go test ./... -count=1 -p 1                     exit 0, whole tree
+$ golangci-lint run ./internal/{adapter,skeleton,daemon}/...
+                                                  48 issues — IDENTICAL to the pre-change
+                                                  baseline measured by stashing this work
+                                                  (39 errcheck, 9 staticcheck, none in any
+                                                  file touched here)
+```
+
+`-p 1` on the whole-tree run is not cosmetic: with packages in parallel,
+`TestLaunch_InjectsHookEnvToAgent` fails on "daemon: another instance is already running" — a
+pre-existing lock-path contention between packages that each stand up a daemon, unrelated to
+either ruling (it passes alone, and the whole `internal/daemon` package passes alone with and
+without `-race`). Recorded so the next reader does not attribute it here.
+
+## What this ruling does NOT close
+
+- **The approve still has no wire route** (§8.7, unchanged): `opForAction` refuses one, so
+  `approveInteraction` is reachable only from tests. The verdict makes the *classification*
+  correct; it does not make the path live.
+- **Applying the decision is still not built.** `DecisionAction` is never written back to the
+  CLI's pending hook, so `denied` is recorded in the transcript and not yet enacted on the agent.
+  That was always the applying slice's work; what changes is that it no longer also owes the
+  classification.
+- **No adapter sets a verdict yet**, because no adapter implements `InteractionSource` at all. The
+  conformance obligation is what makes the first one that does carry the bit — a compile-clean
+  adapter that forgets it fails its own package's `Conformance(t, a)` call.
+
+  > **OVERTAKEN 2026-08-07 (a1b)** — the first one landed the same day.
+  > `internal/adapter/claude` implements `InteractionSource` and its `approval_request` carries
+  > `Verdict` on both decisions; the obligation held it to that from the first compile. What is
+  > still true is the reachability caveat, and it moved rather than closed: the shaper is not
+  > reachable from a real hook post because ADR-010 §6's carriage is unimplemented
+  > (`docs/verification/a1b-claude-producer.md` §10).

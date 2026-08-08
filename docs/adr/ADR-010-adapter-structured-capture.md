@@ -111,6 +111,32 @@ Additions to the E9.2/E9.4 suites, all mechanical:
 4. Fixture replay: recorded payloads → `Interactions` → golden items, per CLI and per scenario.
 5. `Decision` returning ok=false is a supported, exercised path, and the same carve-out fixture asserts the shaped item declares `mode: prompt_card` **and** that the adapter produced a machine-side decision→keystroke map the item does not carry — the fallback is tested where it is produced, not assumed.
 
+## Amendment 2026-08-07 — a decision carries its verdict, and conformance obligation 6
+
+**Status**: Accepted (owner ruling, Nathan, 2026-08-07). **Amends**: decision (4)'s capture-time
+declarations and the conformance obligations above, additively. Nothing here changes the `Adapter`
+method set, the `InteractionSource` signatures, or any non-goal.
+
+`DecisionChoice` gains a third field, **`Verdict`** — `allow` | `deny` | `other` — which the
+adapter sets at capture from its own CLI vocabulary, on exactly the terms `Mode` is already set at
+capture: it is decidable there and nowhere else. interaction-schema.md §3.5 keeps the decision
+**ids** the CLI's own (Codex: `accept` | `acceptWithExecpolicyAmendment` | `cancel`), and the
+daemon needs the grant/refuse polarity to resolve §3.6's `allowed` / `denied` split. A daemon
+reading `cancel` as a refusal would be guessing at a vocabulary it does not own — the posture
+IS-TOOL-2 forbids for the same reason — so the bit is captured beside the id instead. `other` is
+that rule's escape hatch, not a convenience: an unplaceable decision is declared unclassified.
+
+The verdict is **machine-side**, like the prompt-card keystroke map: it is never copied onto the
+item and never reaches the phone (interaction-schema.md IS-APR-4).
+
+**Conformance obligation 6.** Every decision an `approval_request` offers carries a verdict, and
+it is one of the three. The two halves are enforced in different places on purpose:
+`Interaction.Validate` rejects a value outside the vocabulary (a **shape** error — the daemon
+switches on it), while `CheckConformance` requires the field to be **present** (a
+**completeness** obligation — a verdict-less decision is not malformed, it resolves as "not a
+denial", which is the wrong answer given quietly). Violator stub: `decisionWithoutVerdict`.
+Evidence: `docs/verification/a1-integration.md`.
+
 ## Alternatives Considered
 
 - **Widen `SignalSource.Descriptor` to `map[string]any`, or add methods to `Adapter`.** Rejected: forces every adapter and the whole conformance suite to change, for no capability the optional interface does not already give.

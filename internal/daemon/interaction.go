@@ -17,11 +17,25 @@ const InteractionSchemaVersion = 1
 
 // MaxItemBytes caps one item's serialized JSON payload (interaction-schema.md §5).
 //
-// The number is PROPOSED AND UNRATIFIED -- §5 says so in its own preamble: ADR-009 carries
-// none of these numbers and hands the question back to the schema, so nothing has ratified
-// them. It is a floor chosen well under the relay's per-envelope admission cap (~768 KiB of
-// plaintext once base64 expansion is accounted for), not a measured optimum. Ratifying it
-// is a measured slice or an owner ruling written into ADR-009.
+// RATIFIED by the owner ruling of 2026-08-07, recorded as Amendment 1 to ADR-009 -- which is
+// the ratification §5's preamble said it was waiting for. It was raised from 8 KiB because
+// 8 KiB bounded neither of the two things a whole-item cap has to bound:
+//
+//   - §5's own per-field maxima did not JOINTLY fit inside it. A plan_update at 64 steps x
+//     200 B serializes to 15 203 B; an approval_request at the documented maxima with its D7
+//     tuple to 11 967 B. 16 KiB is the next power-friendly bound above the larger.
+//   - the ONE merge the schema sanctions overran it. IS-DELTA-2 folds two `agent_message`
+//     increments, each already clipped to MaxTextBytes = 4 KiB, into one lossless append:
+//     8 405 B against an 8 KiB cap, refused here and DROPPED (a1-carriage.md's re-review of
+//     R2). MaxTextBytes = MaxItemBytes / 2 could not survive its own merge.
+//
+// The cost is disclosed rather than absorbed: the per-item wire budget doubles against the
+// same combined 8 appends/s per target and the relay's MailboxAppendPerMin = 600. One item is
+// still ~48x under the relay's ~768 KiB per-envelope plaintext admission cap, so no SINGLE
+// append moves. What this does halve is how many interaction records fit in the one frame
+// IS-CAP-4 gives a journal_reseed -- that bound is unimplemented either way (Gateway.Resync
+// seals every record above the phone's cursor), which is a pre-existing gap this raise makes
+// twice as easy to reach, not one it creates.
 //
 // ponytail: this is the ONLY §5 cap enforced here, because it is the only one this seam can
 // see. The others (MaxTextBytes, MaxSummaryBytes, MaxPromptLines, MaxSteps, MaxDecisions)
@@ -31,7 +45,7 @@ const InteractionSchemaVersion = 1
 // it clips field-wise until the item fits THIS cap before it ever offers one. An item that
 // arrives over this cap therefore had that truncation skipped, which is a producer bug --
 // see the refusal note on RecordInteraction.
-const MaxItemBytes = 8 << 10
+const MaxItemBytes = 16 << 10
 
 // InteractionItem is the item envelope of interaction-schema.md §2, daemon-side: the shape
 // the daemon marshals into a journal record's payload. ADR-010 §3 makes the daemon the sole

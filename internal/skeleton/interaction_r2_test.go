@@ -28,13 +28,14 @@ import (
 
 // interaction-schema.md §5, verbatim from the table. Local to the test on purpose (see above).
 const (
-	specMaxTextBytes       = 4 << 10 // `text`, `output_excerpt`, `diff_excerpt`
-	specMaxSummaryBytes    = 256     // `summary`, each `action` string field, each decisions[].label
-	specMaxPromptLines     = 40      // `prompt_lines`, lines
-	specMaxPromptLineRunes = 200     // `prompt_lines`, runes per line
-	specMaxSteps           = 64      // `plan_update.steps`
-	specMaxStepBytes       = 200     // bytes per step
-	specMaxDecisions       = 8       // `decisions`
+	specMaxItemBytes       = 16 << 10 // the item's serialized JSON payload (ADR-009 Amendment 1)
+	specMaxTextBytes       = 4 << 10  // `text`, `output_excerpt`, `diff_excerpt`
+	specMaxSummaryBytes    = 256      // `summary`, each `action` string field, each decisions[].label
+	specMaxPromptLines     = 40       // `prompt_lines`, lines
+	specMaxPromptLineRunes = 200      // `prompt_lines`, runes per line
+	specMaxSteps           = 64       // `plan_update.steps`
+	specMaxStepBytes       = 200      // bytes per step
+	specMaxDecisions       = 8        // `decisions`
 )
 
 // ---- helpers ---------------------------------------------------------------
@@ -323,10 +324,14 @@ func TestInteractionR2_PlanStepsAreCappedInCountAndBytes(t *testing.T) {
 		Kind: adapter.KindPlanUpdate, Revision: 3, Steps: steps,
 	})
 
-	// The COUNT is exact; the per-step TEXT is an upper bound on purpose. §5's own step maxima
-	// are jointly insufficient the same way §3.5's are -- 64 steps x 200 B is 12.8 KiB of text
-	// alone, half again over the 8 KiB MaxItemBytes -- so the fit stage legitimately cuts these
-	// steps below 200 B. What must not happen is a step being emptied or a state being cut.
+	// The COUNT is exact; the per-step TEXT is an upper bound on purpose. Under the 8 KiB item cap
+	// this test was written against, 64 steps x 200 B (15 203 B serialized) forced the fit stage to
+	// cut these steps below 200 B; ADR-009's Amendment 1 raised the cap above that, so today they
+	// arrive at the full 200 B and the bound is slack. It stays a bound rather than an equality
+	// because the case this test drives is 192 OVER-LONG steps, where the §5 per-field cap is what
+	// binds and the exact-fit case is fenced separately
+	// (TestInteractionCap_APlanUpdateAtTheDocumentedMaximaFitsWhole). What must not happen either
+	// way is a step being emptied or a state being cut.
 	got := itemObjects(t, item, "steps")
 	if len(got) != specMaxSteps {
 		t.Errorf("journalled steps holds %d entries for a %d-step plan; §5 caps MaxSteps at %d, "+
@@ -351,17 +356,25 @@ func TestInteractionR2_PlanStepsAreCappedInCountAndBytes(t *testing.T) {
 
 // ---- the finding's headline case -------------------------------------------
 
-// TestInteractionR2_AnApprovalRequestAtTheDocumentedMaximaIsTruncatedNotDropped.
+// TestInteractionR2_AnApprovalRequestAtTheDocumentedMaximaIsShippedWholeNotDropped.
 //
-// §5's per-field caps are NOT jointly sufficient: an approval_request sitting exactly on them --
-// 40 prompt lines x 200 runes, a 256 B summary, 256 B action strings, 8 decisions with 256 B
-// labels -- serializes well past the 8 KiB MaxItemBytes. IS-CAP-1 makes that item TRUNCATED;
-// today it is refused at the append boundary and the owner is never asked, which is the worst
-// possible failure for the one kind that blocks the agent.
+// The finding's headline case, as ADR-009's Amendment 1 leaves it. R2 wrote this test against an
+// 8 KiB MaxItemBytes, where an approval_request sitting exactly on §5's per-field maxima -- 40
+// prompt lines x 200 runes, a 256 B summary, 256 B action strings, 8 decisions with 256 B labels
+// -- serialized to 11 967 B and was REFUSED at the append boundary, so the owner was never asked:
+// the worst possible failure for the one kind that blocks the agent. The fix R2 shipped was
+// IS-CAP-1's truncator, and the assertion here was that the item arrives TRUNCATED rather than
+// dropped.
 //
-// The card must survive as a CARD: IS-APR-3 labels its buttons from decisions[].label, so a fit
-// that empties the labels or drops the choices is not a fit.
-func TestInteractionR2_AnApprovalRequestAtTheDocumentedMaximaIsTruncatedNotDropped(t *testing.T) {
+// The 2026-08-07 owner ruling raised the item cap until §5's per-field maxima fit JOINTLY inside
+// it, which strengthens the outcome: at the documented maxima nothing is over a per-field cap, so
+// nothing is clipped at all and the card ships WHOLE. `truncated` must therefore be ABSENT -- §2
+// sets it only when a field WAS clipped, and an item that claims a clip that did not happen makes
+// every consumer render IS-DELTA-4's elision on a complete card.
+//
+// The card must still survive as a CARD: IS-APR-3 labels its buttons from decisions[].label, so a
+// fit that empties the labels or drops the choices is not a fit.
+func TestInteractionR2_AnApprovalRequestAtTheDocumentedMaximaIsShippedWholeNotDropped(t *testing.T) {
 	sk := assemble(t)
 	lines := make([]string, specMaxPromptLines)
 	for i := range lines {
@@ -389,7 +402,11 @@ func TestInteractionR2_AnApprovalRequestAtTheDocumentedMaximaIsTruncatedNotDropp
 	})
 
 	assertFitsItemCap(t, payload)
-	assertTruncationPair(t, item, payload)
+	if _, clipped := item["truncated"]; clipped {
+		t.Errorf("an approval_request on §5's own per-field maxima reports truncated = %v; ADR-009's "+
+			"Amendment 1 makes those maxima jointly fit MaxItemBytes, so nothing here is clipped and "+
+			"§2 sets the flag only when a field WAS", item["truncated"])
+	}
 
 	if k := itemString(t, item, "kind"); k != adapter.KindApprovalRequest {
 		t.Fatalf("journalled kind = %q; want %q", k, adapter.KindApprovalRequest)

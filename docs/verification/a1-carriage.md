@@ -497,7 +497,24 @@ ordering and R4's digest agree under truncation.
 `§5's per-field caps are not jointly sufficient` and the uniform-ceiling resolution are confirmed
 as the right shape for a single item. The four disclosed open points stand as written.
 
-## CONFIRMED DEFECT, NOT FIXED — the merged item is DROPPED, silently, and the text is lost
+## CONFIRMED DEFECT — the merged item is DROPPED, silently, and the text is lost
+
+> **CLOSED 2026-08-07 by owner ruling** — the fourth resolution below ("raise or drop
+> `MaxItemBytes` for merged items") was taken. `MaxItemBytes` is now 16 KiB, derived by arithmetic
+> from §5's own worst cases, and the 8 405-byte two-increment union lands in the journal
+> un-dropped. The decision and its alternatives are ADR-009's **Amendment 2026-08-07**; the
+> measurement, the RED and the teeth are in `a1-gateway-floor.md`'s section of the same name. The
+> spec defect this section identified — "§5's own maxima exceed §5's own item cap" — is closed by
+> the same ruling and made a rule by the new **IS-CAP-5**.
+>
+> **What is NOT closed**, and is carried forward as an open point: the fold is *unbounded*, not
+> two-wide. Four increments at `MaxTextBytes` inside one window still serialize to 16 622 B and
+> are still refused and dropped. No item cap fixes that — it needs a rule about the merge itself,
+> which the ruling did not make. The hazard note at the foot of this section stands unchanged for
+> whoever writes it.
+
+The section below is left as written, as the record of what was found.
+
 
 R2's headline claim is "AN ITEM IS NEVER DROPPED FOR SIZE" (`fitItem`'s own doc comment). That is
 true of an item the producer shapes. It is **false of the item the producer's own append floor

@@ -53,9 +53,11 @@ import (
 // with the shaping that writes those fields -- which is exactly where daemon.MaxItemBytes's own
 // comment says they belong.
 //
-// THE NUMBERS ARE PROPOSED AND UNRATIFIED, on the same terms as daemon.MaxItemBytes: §5's own
-// preamble says ADR-009 carries none of them and hands the question back, so nothing has
-// ratified them. What would is a measured slice or an owner ruling written into ADR-009.
+// THESE NUMBERS ARE STILL PROPOSED AND UNRATIFIED -- §5's own preamble says ADR-009 carries none
+// of them and hands the question back, and ADR-009's Amendment 1 ratified only the WHOLE-ITEM cap
+// (daemon.MaxItemBytes), deriving it from these as they stand. A later ruling that raises one of
+// them must re-derive that cap: the amendment's claim is a RELATION between the two, not a
+// property of either alone (fenced by TestInteractionCap_TheItemCapAdmitsEveryDocumentedFieldMaximum).
 //
 // ponytail: unexported. They are the producer's, no other package shapes a kind field, and an
 // exported constant nothing outside can reach is a new entry in B94's unreachable ledger.
@@ -156,11 +158,14 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback, body []byte) {
 	}
 	d.captureInteractions(cb.SessionID, ad, adapter.HookPayload{
 		Event: cb.Event,
-		// The body the daemon RECEIVED. ADR-010 §1's `capture: raw` -- which is what makes the
-		// CLI's OWN event body survive cmd/swarm's parseHookStdin flattening -- belongs to the
-		// producer slices this program excludes, so until one lands this is the callback
-		// envelope. That is honest input for a shaper: no shipped adapter shapes anything from
-		// it, which is exactly ADR-010 §5's supported state.
+		// The body the daemon RECEIVED -- today the callback ENVELOPE, not the CLI's own event
+		// body. ADR-010 §6's carriage (`engine.Callback` gains `Raw`, and cmd/swarm's
+		// parseHookStdin keeps the whole body for `capture: raw` rows) is specified and NOT
+		// IMPLEMENTED: the flattener keeps top-level STRINGS only, so `tool_input` and
+		// `tool_response` are dropped and `tool_name` survives only nested under `payload`.
+		// internal/adapter/claude now ships a shaper that reads those fields, so this hop is
+		// what stops it shaping anything in production -- measured, with the probe output, in
+		// docs/verification/a1b-claude-producer.md §10. It needs a slice of its own.
 		Raw:          body,
 		ReceivedAtMs: time.Now().UnixMilli(),
 	})
@@ -171,8 +176,9 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback, body []byte) {
 // shaped nothing and an event whose items were all refused are different outcomes.
 //
 // ADR-010 §5 IS THE FIRST BRANCH AND NOT AN ERROR PATH. An adapter that implements no capture
-// extension is complete and fully supported; native capture is an upgrade. Every adapter
-// shipped today is in that state, so this returning 0 is the normal case, not a defect.
+// extension is complete and fully supported; native capture is an upgrade. Every adapter except
+// internal/adapter/claude is still in that state, so this returning 0 is a normal case, not a
+// defect.
 func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p adapter.HookPayload) int {
 	src, ok := adapter.AsInteractionSource(ad)
 	if !ok {
@@ -453,14 +459,24 @@ func putAction(f map[string]any, a adapter.ToolAction) {
 
 // fitItem serializes the item with §3's kind fields flat beside the envelope, under §5's caps.
 //
-// TWO STAGES, because §5's per-field caps are NOT JOINTLY SUFFICIENT. An approval_request
-// sitting exactly on the documented maxima -- 40 prompt lines x 200 runes, a 256 B summary,
-// 256 B action strings, 8 decisions with 256 B labels -- serializes to ~11.7 KiB, half again
-// over the 8 KiB MaxItemBytes. So:
+// TWO STAGES:
 //
 //  1. capFields applies §5's per-field caps (the table's own numbers, per field).
 //  2. if the item is STILL over daemon.MaxItemBytes, clipStrings lowers ONE ceiling across
 //     every string alike, halving it until the item fits.
+//
+// STAGE 2 NO LONGER FIRES ON §5'S OWN MAXIMA, and that is the whole of ADR-009's Amendment 1:
+// the item cap was raised until the per-field maxima fit jointly inside it (the binding case is
+// a plan_update at 15 203 B). It is KEPT, unchanged, because three things §5's table does not
+// bound in serialized bytes still overrun it, and each is reachable:
+//
+//   - `prompt_lines` is capped in RUNES, so 40 x 200 four-byte runes is 32 000 B (fenced by
+//     TestApprovalRequest_AtTheMaximaTheHashStillNamesTheBytesItShipped);
+//   - §5 gives NO cap at all to `tool`, `path`, `old_path`, `truncation_marker` or a decision's
+//     `id` -- IS-TOOL-3 requires the truncation marker verbatim, so the item cap is deliberately
+//     their only bound;
+//   - JSON escaping expands a byte-capped field by up to 6x (a control rune becomes \uXXXX), and
+//     §5 counts the field's own bytes, not its encoding.
 //
 // WHY A UNIFORM CEILING AND NOT A PRIORITY ORDER. Something has to give, and §5 names no order
 // in which fields should give it. A privilege list would be this seam ruling on which half of a
@@ -586,13 +602,13 @@ func capFields(f map[string]any) bool {
 //
 // ponytail: the ENUM half is DELIBERATE AND CANNOT FIRE TODAY -- deleting those rows would
 // change no observable behaviour, and the mutation that removes them fails no test (recorded in
-// a1-carriage.md). The ceiling only falls while the item is over 8 KiB, and §5's COUNT caps
-// bound the residue: the widest item is 64 steps, which fits at a 64-byte ceiling (~6.2 KiB
-// measured), and the longest enum here is `in_progress` at 11. It is kept because that headroom
-// is arithmetic over numbers §5 marks PROPOSED AND UNRATIFIED: a ratifying ruling that raises
-// MaxSteps far enough drives the ceiling under 11 and starts shipping `pen` for `pending`,
-// silently. The IDENTIFIER half is NOT speculative: content_hash is 64 characters, which is
-// below the ceilings an over-cap approval_request already reaches (a1-carriage.md measured 128
+// a1-carriage.md). ADR-009's Amendment 1 widened that headroom rather than closing it: the
+// ceiling now only falls above 16 KiB, and a 64-step plan_update fits at the full 200 B per step
+// without it falling at all. It is kept because the headroom is arithmetic over numbers §5 still
+// marks PROPOSED AND UNRATIFIED: a later ruling that raises MaxSteps without re-deriving the item
+// cap drives the ceiling under 11 and starts shipping `pen` for `pending`, silently. The
+// IDENTIFIER half is NOT speculative: content_hash is 64 characters, which is below the ceilings
+// an approval_request with multi-byte prompt lines still reaches (a1-carriage.md measured 128
 // and 64).
 var itemUnclippedFields = map[string]bool{
 	"source": true, "stop_reason": true, "change": true, "mode": true, // top level

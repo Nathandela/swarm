@@ -62,6 +62,21 @@ const (
 	SourceDerived = "derived"
 )
 
+// Decision verdicts — the grant/refuse polarity of one offered decision, set by
+// the adapter AT CAPTURE from its own CLI vocabulary (owner ruling 2026-08-07,
+// ADR-009's amendment of that date). interaction-schema.md §3.5 keeps the decision
+// IDS the CLI's own — Codex offers accept | acceptWithExecpolicyAmendment | cancel
+// — so this is the ONLY normalized thing about a decision, and it is what §3.6's
+// allowed/denied split is classified from.
+//
+// VerdictOther is IS-TOOL-2's posture applied here: a decision the adapter cannot
+// place is declared unclassified rather than guessed at.
+const (
+	VerdictAllow = "allow"
+	VerdictDeny  = "deny"
+	VerdictOther = "other"
+)
+
 // DescriptorCapture is the SignalSource.Descriptor key an adapter sets to declare
 // that an event's body must be PRESERVED rather than flattened to top-level
 // strings (ADR-010 §1). Capture is declared in the existing descriptor map, so
@@ -108,7 +123,7 @@ type Interaction struct {
 	// it. It serves two machine-side jobs, which is why there is one field and
 	// not two:
 	//
-	//   - it is the ref Decision(ref, verdict) is later called with, for an
+	//   - it is the ref Decision(ref, decisionID) is later called with, for an
 	//     approval_request (ADR-010 §4);
 	//   - it is the correlation key that lets the daemon fold successive records
 	//     of ONE item under one item_id — the agent_message increments of
@@ -187,6 +202,23 @@ type ToolAction struct {
 type DecisionChoice struct {
 	ID    string
 	Label string
+	// Verdict is this decision's grant/refuse polarity: allow | deny | other.
+	// REQUIRED on an approval_request (conformance obligation, owner ruling
+	// 2026-08-07); Validate additionally rejects a value outside the three.
+	//
+	// It is the daemon's only source for §3.6's allowed/denied split. Nothing
+	// downstream can derive it: the ids are the CLI's own by §3.5's design, and a
+	// daemon classifying `cancel` as a refusal would be guessing at a vocabulary
+	// it does not own — the posture IS-TOOL-2 forbids for the same reason. The
+	// adapter knows it at capture, which is where Mode is decided too.
+	//
+	// ponytail: MACHINE-SIDE, like Keystrokes — it is never copied onto the item
+	// and never reaches the phone. The card labels its buttons from
+	// decisions[].label (IS-APR-3) and no phone surface switches on polarity, so a
+	// wire field would be a second place for the two to disagree. A phone that
+	// later needs it (styling a destructive button) is an additive §3.5 field and
+	// a schema change, not an unused field shipped ahead of its consumer.
+	Verdict string
 }
 
 // PlanStep is one step of a plan_update (§3.7).
@@ -205,11 +237,17 @@ type InteractionSource interface {
 	// content it did not observe in p.Raw.
 	Interactions(p HookPayload) []Interaction
 
-	// Decision describes HOW to apply a verdict to the pending approval named by
-	// ref, as a descriptor the CORE executes — the adapter performs no I/O (E9.2),
-	// exactly as Command/Resume return an argv core runs. ok == false means this
-	// CLI has no native mechanism here and the daemon must use the prompt card.
-	Decision(ref, verdict string) (DecisionAction, bool)
+	// Decision describes HOW to apply one offered choice to the pending approval
+	// named by ref, as a descriptor the CORE executes — the adapter performs no I/O
+	// (E9.2), exactly as Command/Resume return an argv core runs. ok == false means
+	// this CLI has no native mechanism here and the daemon must use the prompt card.
+	//
+	// decisionID is a DecisionChoice.ID — the CLI's OWN vocabulary (§3.5), which is
+	// what the adapter itself offered. It is NOT DecisionChoice.Verdict: the
+	// normalized allow|deny|other bit is what the DAEMON classifies §3.6's
+	// allowed/denied from, and an adapter switching on it here would be answering a
+	// choice it never offered.
+	Decision(ref, decisionID string) (DecisionAction, bool)
 }
 
 // DecisionAction is the core-executed effect: the body core writes back on the
@@ -268,6 +306,14 @@ func (in Interaction) Validate() error {
 	for i, d := range in.Decisions {
 		if d.ID == "" {
 			return fmt.Errorf("decisions[%d] has an empty id; the card resolves a decision by id (interaction-schema.md §3.5)", i)
+		}
+		// SHAPE only: an absent verdict is not malformed, it is incomplete, and
+		// completeness is conformance's (checkShapedItems). A value outside the
+		// three IS malformed — the daemon switches on it to classify §3.6's
+		// allowed/denied, so a fourth value would read as "not a denial".
+		if err := oneOf(fmt.Sprintf("decisions[%d].verdict", i), d.Verdict, true,
+			VerdictAllow, VerdictDeny, VerdictOther); err != nil {
+			return err
 		}
 	}
 	if len(in.Keystrokes) > 0 && in.Mode != ModePromptCard {

@@ -425,9 +425,9 @@ var interactionProbes = []HookPayload{
 }
 
 // deeplyNestedBody and oversizedBody are the two unbounded-input probes. The
-// oversized one is valid JSON well past interaction-schema.md §5's 8 KiB
-// MaxItemBytes — the adapter must not choke on it, and it is the DAEMON that
-// truncates (ADR-010 §3).
+// oversized one is valid JSON well past interaction-schema.md §5's 16 KiB
+// MaxItemBytes (ADR-009 Amendment 1) — the adapter must not choke on it, and it
+// is the DAEMON that truncates (ADR-010 §3).
 var (
 	deeplyNestedBody = `{"a":` + strings.Repeat("[", 256) + strings.Repeat("]", 256) + `}`
 	oversizedBody    = `{"prompt":"` + strings.Repeat("x", 64<<10) + `"}`
@@ -501,6 +501,14 @@ func checkShapedItems(src InteractionSource, items []Interaction, where string) 
 			continue
 		}
 		for _, d := range in.Decisions {
+			// The 2026-08-07 owner ruling: every decision an approval_request offers
+			// carries its grant/refuse polarity, set HERE because §3.5 keeps the ids
+			// the CLI's own and nothing downstream can classify them. Absent, the
+			// daemon resolves §3.6 as "not a denial" whatever the owner tapped —
+			// wrong, silent, and only an adapter can supply the missing bit.
+			if d.Verdict == "" {
+				errs = append(errs, fmt.Errorf("Interactions(%s) item %d: decision %q carries no verdict (want %s | %s | %s); the daemon classifies approval_resolved allowed/denied from it, and §3.5 keeps the decision ids the CLI's OWN so nothing downstream can infer one", where, i, d.ID, VerdictAllow, VerdictDeny, VerdictOther))
+			}
 			_, native, panicked := decisionSafe(src, in.Ref, d.ID)
 			if panicked {
 				errs = append(errs, fmt.Errorf("Decision(%q, %q) panicked; it must be total", in.Ref, d.ID))
@@ -571,12 +579,12 @@ func interactionsSafe(src InteractionSource, p HookPayload) (items []Interaction
 }
 
 // decisionSafe calls Decision under a recover, on the same terms.
-func decisionSafe(src InteractionSource, ref, verdict string) (act DecisionAction, ok, panicked bool) {
+func decisionSafe(src InteractionSource, ref, decisionID string) (act DecisionAction, ok, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = true
 		}
 	}()
-	act, ok = src.Decision(ref, verdict)
+	act, ok = src.Decision(ref, decisionID)
 	return
 }

@@ -156,11 +156,20 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/grant.ParseBootstrap": "superseded by internal/remote/grantwire.ParseBootstrap, which phonecore/snapshot.go:743 calls. This one is reached only by phonesim.",
 
 	// ---- accessors and helpers with no shipped caller ---------------------------------------
-	"github.com/Nathandela/swarm/internal/skeleton.Daemon.Core":             "accessor for the assembled core, used by the E2E rigs.",
-	"github.com/Nathandela/swarm/internal/skeleton.Daemon.SocketPath":       "as Daemon.Core.",
-	"github.com/Nathandela/swarm/internal/adapter.Conformance":              "the adapter conformance harness: a test contract by construction.",
-	"github.com/Nathandela/swarm/internal/adapter.CheckConformance":         "as Conformance.",
-	"github.com/Nathandela/swarm/internal/adapter.CheckInteractionFixture":  "as Conformance: ADR-010's obligation-3 corpus half and obligation 4, replaying a recorded fixture's payloads through Interactions. Its two siblings above -- AsInteractionSource and Interaction.Validate -- are NOT listed, because internal/skeleton's interaction producer calls both in production (interaction.go).",
+	"github.com/Nathandela/swarm/internal/skeleton.Daemon.Core":       "accessor for the assembled core, used by the E2E rigs.",
+	"github.com/Nathandela/swarm/internal/skeleton.Daemon.SocketPath": "as Daemon.Core.",
+	"github.com/Nathandela/swarm/internal/adapter.Conformance":        "the adapter conformance harness: a test contract by construction.",
+	"github.com/Nathandela/swarm/internal/adapter.CheckConformance":   "as Conformance.",
+	// a1-integration.md said this row "should be deleted the day a corpus exists". A corpus now
+	// exists -- internal/adapter/claude/testdata/interaction, replayed by
+	// TestGoldenCorpus_PassesCheckInteractionFixture -- and DELETING THE ROW WAS MEASURED TO FAIL
+	// THIS FENCE (a1b-claude-producer.md §4 carries the verbatim run). The prediction was wrong
+	// about this instrument, not about the corpus: the walk loads with Tests:false and roots at
+	// cmd/... main() plus the gomobile facade, so a caller in a _test.go file cannot make any
+	// symbol reachable, and the bidirectional arm fires on production reachability alone. The row
+	// therefore stands on the reason its two neighbours above stand on, and is now stated as the
+	// permanent one it is rather than as a placeholder awaiting a caller.
+	"github.com/Nathandela/swarm/internal/adapter.CheckInteractionFixture":  "as Conformance: a test contract by construction. It runs ADR-010's obligation-3 corpus half and obligation 4 over the recorded corpus (internal/adapter/claude, TestGoldenCorpus_PassesCheckInteractionFixture) -- from a test, which this fence's root set structurally cannot reach. Its two siblings AsInteractionSource and Interaction.Validate are NOT listed, because internal/skeleton's interaction producer calls both in production (interaction.go).",
 	"github.com/Nathandela/swarm/internal/idempotency.Open":                 "production opens the store via OpenWithOptions; this is the default-options form.",
 	"github.com/Nathandela/swarm/internal/transcript.Writer.Dropped":        "drop counter read by the transcript tests; the shipped writer reports drops through its metrics.",
 	"github.com/Nathandela/swarm/internal/remote/pairing.Machine.Listening": "readiness probe for the rendezvous, used by tests to avoid a sleep.",

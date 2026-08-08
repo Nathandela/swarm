@@ -77,13 +77,16 @@ func (captureAdapter) Interactions(p HookPayload) []Interaction {
 			return nil
 		}
 		in := Interaction{
-			Kind:      KindApprovalRequest,
-			Status:    StatusInProgress,
-			Ref:       body.Ref,
-			Summary:   "run " + body.Tool,
-			Action:    ToolAction{Type: "execute", Command: body.Tool},
-			Decisions: []DecisionChoice{{ID: "allow", Label: "Allow"}, {ID: "deny", Label: "Deny"}},
-			Mode:      ModeCard,
+			Kind:    KindApprovalRequest,
+			Status:  StatusInProgress,
+			Ref:     body.Ref,
+			Summary: "run " + body.Tool,
+			Action:  ToolAction{Type: "execute", Command: body.Tool},
+			Decisions: []DecisionChoice{
+				{ID: "allow", Label: "Allow", Verdict: VerdictAllow},
+				{ID: "deny", Label: "Deny", Verdict: VerdictDeny},
+			},
+			Mode: ModeCard,
 		}
 		if strings.HasPrefix(body.Ref, promptCardRefPrefix) {
 			in.Mode = ModePromptCard
@@ -177,7 +180,7 @@ func (promptCardWithoutKeys) Interactions(HookPayload) []Interaction {
 		Status:      StatusInProgress,
 		Ref:         promptCardRefPrefix + "1",
 		Summary:     "run Bash",
-		Decisions:   []DecisionChoice{{ID: "allow", Label: "Allow"}},
+		Decisions:   []DecisionChoice{{ID: "allow", Label: "Allow", Verdict: VerdictAllow}},
 		Mode:        ModePromptCard,
 		PromptLines: []string{"Allow Bash?"},
 	}}
@@ -194,7 +197,7 @@ func (cardWithNoNativeMechanism) Interactions(HookPayload) []Interaction {
 		Status:    StatusInProgress,
 		Ref:       promptCardRefPrefix + "1", // Decision returns ok==false for this ref
 		Summary:   "run Bash",
-		Decisions: []DecisionChoice{{ID: "allow", Label: "Allow"}},
+		Decisions: []DecisionChoice{{ID: "allow", Label: "Allow", Verdict: VerdictAllow}},
 		Mode:      ModeCard,
 	}}
 }
@@ -210,7 +213,25 @@ func (modelessApproval) Interactions(HookPayload) []Interaction {
 		Status:    StatusInProgress,
 		Ref:       "req-1",
 		Summary:   "run Read",
+		Decisions: []DecisionChoice{{ID: "allow", Label: "Allow", Verdict: VerdictAllow}},
+	}}
+}
+
+// decisionWithoutVerdict violates the 2026-08-07 owner ruling: every decision on
+// an approval_request carries a verdict (allow | deny | other), set by the adapter
+// at capture from its own CLI vocabulary. Without it the daemon cannot classify
+// §3.6's allowed/denied and resolves the card as "not a denial" whatever the owner
+// tapped — a wrong transcript line, given silently.
+type decisionWithoutVerdict struct{ captureAdapter }
+
+func (decisionWithoutVerdict) Interactions(HookPayload) []Interaction {
+	return []Interaction{{
+		Kind:      KindApprovalRequest,
+		Status:    StatusInProgress,
+		Ref:       "req-1",
+		Summary:   "run Read",
 		Decisions: []DecisionChoice{{ID: "allow", Label: "Allow"}},
+		Mode:      ModeCard,
 	}}
 }
 

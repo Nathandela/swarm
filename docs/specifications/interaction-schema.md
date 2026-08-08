@@ -148,7 +148,7 @@ Fields below are additional to the envelope. Every string field is capped per §
 | `expires_at` | time | **daemon-authoritative**; a phone countdown is display-only |
 | `summary` | string | one line for the card headline |
 | `action` | object | §7, so an approval card reads like a tool card |
-| `decisions` | []object | adapter-supplied available decisions, `{id, label}`. The ids are the CLI's **own** vocabulary, not a normalized one: spike-SB captured Codex's `availableDecisions` as `accept` \| `acceptWithExecpolicyAmendment` \| `cancel`, and Claude Code's `PermissionRequest` as a numbered dialog plus `permission_suggestions` (`addDirectories`, `setMode`). |
+| `decisions` | []object | adapter-supplied available decisions, `{id, label}`. The ids are the CLI's **own** vocabulary, not a normalized one: spike-SB captured Codex's `availableDecisions` as `accept` \| `acceptWithExecpolicyAmendment` \| `cancel`, and Claude Code's `PermissionRequest` as a numbered dialog plus `permission_suggestions` (`addDirectories`, `setMode`). Each also carries a machine-side **verdict** (IS-APR-4), which is not a wire field. |
 | `mode` | string | `card` (adapter applies the decision) \| `prompt_card` (IS-LIFE-6 fallback) |
 | `prompt_lines` | []string | `prompt_card` only: the sanitized prompt region, as text |
 
@@ -165,6 +165,19 @@ Fields below are additional to the envelope. Every string field is capped per §
   IS-LIFE-6 forbids the phone authoring the keystroke, so a field for it would only invite the
   implementation those rules exist to prevent. The card labels its buttons from
   `decisions[].label`.
+- **IS-APR-4** (Ubiquitous) Every decision an `approval_request` offers SHALL carry a **verdict**
+  — `allow` \| `deny` \| `other` — supplied by the adapter **at capture** from its own CLI
+  vocabulary, and an adapter that offers a decision without one is **non-conformant** (owner
+  ruling 2026-08-07; ADR-010's conformance obligations). It is the ONE normalized thing about a
+  decision, and it exists because the ids deliberately are not: nothing downstream can read
+  `cancel` as a refusal without guessing at a vocabulary it does not own, which is the posture
+  IS-TOOL-2 forbids for the same reason. `other` is that rule's escape hatch — a decision the
+  adapter can place neither way is declared unclassified rather than guessed at.
+  The verdict is **machine-side and is NOT a field on the item**, on the `keystrokes` precedent:
+  the card labels its buttons from `decisions[].label` and no phone surface switches on polarity,
+  so putting it on the wire would only create a second place for the two to disagree. A phone
+  need for it later is an additive field and a schema change, not an unused field shipped ahead
+  of its consumer.
 
 ### 3.6 `approval_resolved`
 
@@ -174,6 +187,13 @@ Fields below are additional to the envelope. Every string field is capped per §
 | `decision` | string | `allowed` \| `denied` \| `cancelled` \| `superseded` \| `expired` \| `answered_locally` |
 | `by` | string | `phone` \| `owner` \| `daemon` (expiry) \| `agent` (cancel/supersede) |
 | `operation_id` | string | echoed when a phone `ActionApprove` drove the resolution |
+
+- **IS-RES-1** (Ubiquitous) `allowed` and `denied` SHALL be classified from the **verdict** of the
+  chosen decision (IS-APR-4), never from its id and never from the CLI's later behaviour. Only a
+  `deny` verdict resolves `denied`. An `other` verdict resolves `allowed`, which here asserts no
+  more than "answered from the phone, and not refused" — §3.6 has no third value for a remote
+  answer, and manufacturing a refusal from an unclassified tap would be the guess IS-APR-4 exists
+  to remove. The four remaining values are daemon-observed and carry no verdict.
 
 ### 3.7 `plan_update`
 
@@ -223,16 +243,18 @@ Fields below are additional to the envelope. Every string field is capped per §
 
 ## 5. Size caps, excerpts, and detail on demand
 
-Numeric defaults below are **proposed by this document and unratified**. ADR-009 carries none of
-these numbers and hands the question back here, and its own status is Proposed — so nothing has
-ratified them. What would: a measured slice, or an owner ruling recorded in ADR-009 with the
-numbers written into it. They are floors chosen well under the relay's per-envelope admission cap
-— `relay.MaxFrame` is 1 MiB, but the check runs on the **base64-expanded** envelope
+`MaxItemBytes` is **ratified** by the owner ruling of 2026-08-07, recorded as
+[ADR-009's 2026-08-07 amendment](../adr/ADR-009-structured-chat-interaction.md#amendment-2026-08-07--maxitembytes-is-raised-to-16-kib-so-5s-own-maxima-fit-inside-it),
+which carries the arithmetic. The **per-field** numbers below remain **proposed by this document
+and unratified** — the amendment derived the item cap from them as they stand rather than
+ratifying them. What would ratify one: a measured slice, or a further owner ruling recorded in
+ADR-009. They are floors chosen well under the relay's per-envelope admission cap —
+`relay.MaxFrame` is 1 MiB, but the check runs on the **base64-expanded** envelope
 (`internal/remote/relay/server.go:1028`), so roughly 768 KiB of plaintext — not measured optima.
 
 | Cap | Default | Applies to |
 |---|---|---|
-| `MaxItemBytes` | 8 KiB | the item's serialized JSON payload |
+| `MaxItemBytes` | 16 KiB | the item's serialized JSON payload |
 | `MaxTextBytes` | 4 KiB | `text`, `output_excerpt`, `diff_excerpt` |
 | `MaxSummaryBytes` | 256 B | `summary`, each `action` string field, each `decisions[].label` |
 | `MaxPromptLines` | 40 lines × 200 runes | `prompt_lines` |
@@ -258,6 +280,17 @@ numbers written into it. They are floors chosen well under the relay's per-envel
   cut as an explicit floor the phone renders per IS-DELTA-4 ("incomplete from join"). Unresolved
   `approval_request` records SHALL survive that cap **by construction** (IS-LIFE-3). Paging the
   reseed would amend PB-SYNC-3 and needs an ADR, not a bullet in a payload schema.
+- **IS-CAP-5** (Ubiquitous) The per-field caps above SHALL be **jointly bounded** by
+  `MaxItemBytes`: an item carrying every field of its kind at that field's documented maximum
+  SHALL serialize within `MaxItemBytes`, and so SHALL the one merge §6 sanctions — IS-DELTA-2's
+  lossless concatenation of two `agent_message` increments already clipped to `MaxTextBytes`. A
+  ruling that raises a per-field cap SHALL re-derive `MaxItemBytes` in the same ruling; the
+  relation, not either number alone, is what ADR-009 Amendment 1 ratified. The joint bound covers
+  only what the table measures in **bytes**, and a producer SHALL still clip to fit under IS-CAP-1
+  rather than assume it: `prompt_lines` is capped in *runes* (40 × 200 four-byte runes is 32 000
+  bytes), several §3 strings carry no per-field cap at all (`tool`, `path`, `old_path`,
+  `truncation_marker`, `decisions[].id` — IS-TOOL-3 requires the marker verbatim), and JSON
+  escaping can expand a byte-capped field by up to 6×.
 
 ---
 

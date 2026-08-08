@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -282,9 +283,15 @@ func fsyncDir(dir string) error {
 	return d.Sync()
 }
 
-// buildEnv returns env unchanged except that a TERM is injected when the caller
-// supplied none (agents assume a terminfo-known TERM).
+// buildEnv returns the agent environment: the caller's env minus the
+// launch-environment denylist (persist.ScrubRemoteControl — a supervised session
+// must never inherit ambient Remote Control, agents-tracker-n047), plus a TERM
+// injected when the caller supplied none (agents assume a terminfo-known TERM).
+// This is the last gate before exec, so the denylist holds whatever composed
+// cfg.Env — a widened daemon allowlist, a post-filter injection, or a
+// hand-written shim-launch.json.
 func buildEnv(env []string) []string {
+	env = persist.ScrubRemoteControl(env)
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "TERM=") {
 			return env

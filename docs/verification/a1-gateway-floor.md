@@ -629,3 +629,193 @@ Widening the unique key to EVERY kind (`if kind != ""`) fails
 `TestItemAdmission_AgentMessageMergesByTextConcatenation` and
 `TestItemAdmission_ToolRunOpenAndCloseCollapseToOneRecord` — which is what proves the scoping is
 load-bearing rather than a blanket disabling of the collapse.
+
+---
+
+# Owner ruling 2026-08-07 — `MaxItemBytes` raised to 16 KiB, and the merge drop closed
+
+**Ruling** (Nathan, 2026-08-07): *"`MaxItemBytes` is RAISED so the section-5 field maxima jointly
+fit and the merge path can never produce an over-cap item — pick the exact value by arithmetic."*
+Recorded as ADR-009's **Amendment 2026-08-07**, which carries the decision and the alternatives;
+this section carries the measurement, the RED and the teeth.
+
+**Why the evidence lands here and not only in `a1-carriage.md`.** The defect was *recorded* in
+`a1-carriage.md`'s re-review of R2, but it is manufactured by the **append floor** — the merge in
+`remotegw.ItemAdmission` is what creates an item no single record could be — and this is the
+floor's evidence file. `a1-carriage.md`'s open-defect section carries a closing note pointing here.
+
+## The arithmetic, measured through the shipped producer
+
+A temporary harness (`internal/skeleton/zz_measure_test.go`, **not kept**) serialized each §5
+worst case through `skeleton.serializeItem`, the same function `fitItem` measures on:
+
+```
+approval_request maxima (no D7 tuple)           11736 B  (11.46 KiB)
+approval_request maxima (+ D7 tuple)            11930 B  (11.65 KiB)
+approval_request maxima (+tuple,+trunc pair)    11967 B  (11.69 KiB)
+plan_update maxima (state=in_progress)          15166 B  (14.81 KiB)
+plan_update maxima (+trunc pair)                15203 B  (14.85 KiB)   <-- worst single item
+tool_run maxima (output_excerpt at MaxText)      5415 B  (5.29 KiB)
+file_change maxima (diff_excerpt at MaxText)     5372 B  (5.25 KiB)
+agent_message union of 1 x MaxTextBytes          4334 B  (4.23 KiB)
+agent_message union of 2 x MaxTextBytes          8430 B  (8.23 KiB)
+agent_message union of 3 x MaxTextBytes         12526 B  (12.23 KiB)
+agent_message union of 4 x MaxTextBytes         16622 B  (16.23 KiB)   <-- still over 16 KiB
+FLOOR 2-way merged agent_message (as shipped)    8405 B  (8.21 KiB)   <-- worst sanctioned merge
+```
+
+`max(15 203, 8 405) = 15 203 B`; the next power-friendly bound is **16 KiB = 16 384 B**. 8 KiB was
+measurably insufficient (both cases over it) and 32 KiB buys nothing the arithmetic asks for.
+Headroom at 16 KiB: 1 181 B on the worst single item, 7 979 B on the worst sanctioned merge.
+
+**`plan_update`, not `approval_request`, is the binding case.** The ruling cited the approval at
+~11 697 B; the measurement says a 64-step plan is 3.2 KiB larger, because §5's step maxima
+(64 × 200 B) carry 64 JSON objects of structure with them. Verifying rather than assuming is what
+the ruling asked for, and it moved the binding constraint.
+
+**Two things the raise does NOT close, disclosed rather than absorbed:**
+
+1. **An unbounded fold.** `ItemAdmission.concatText` merges *every* increment pending for one
+   `item_id` in a window, not two. Four at `MaxTextBytes` is 16 622 B — still refused, still
+   dropped. Reaching it needs ~16 KiB of prose in 125 ms (≈131 KB/s), far above any observed CLI
+   token rate, and no adapter streams increments today. Open point, carried in the amendment.
+2. **Bytes as §5 counts them ≠ serialized bytes.** `prompt_lines` is capped in *runes*;
+   `tool` / `path` / `old_path` / `truncation_marker` / `decisions[].id` carry no per-field cap at
+   all; JSON escaping expands a byte-capped field by up to 6×. So `fitItem`'s stage 2 is **kept
+   unchanged** and IS-CAP-5 says so normatively.
+   `TestApprovalRequest_AtTheMaximaTheHashStillNamesTheBytesItShipped` (4-byte prompt runes,
+   32 000 B of prompt) is the case that still drives it.
+
+## RED — verbatim, failing first (GG-5)
+
+New fences in `internal/skeleton/interaction_cap_test.go`, against the unraised cap. The
+`steps[1..63]` lines are elided (identical to `steps[0]`); nothing else is.
+
+```
+$ go test ./internal/skeleton/ -run 'TestInteractionCap_' -count=1 -v
+=== RUN   TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped
+2026/08/07 21:19:50 interaction: append floor release failed (0 item(s) still held): interaction: item is 8368 bytes, over the 8192-byte cap (interaction-schema.md §5)
+    interaction_cap_test.go:68: no agent_message item reached the journal for session s-cap-merge after 10s. IS-DELTA-2 merges two pending increments for one item_id into ONE lossless append; §5's MaxItemBytes must admit that union, or the floor dequeues the item and the append boundary refuses it -- and the agent's text is gone with nothing marked damaged
+--- FAIL: TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped (12.36s)
+=== RUN   TestInteractionCap_APlanUpdateAtTheDocumentedMaximaFitsWhole
+    interaction_cap_test.go:108: a plan_update sitting exactly on §5's maxima reports truncated = true; the maxima are JOINTLY bounded by MaxItemBytes, so nothing on them is clipped and §2 sets the flag only when a field WAS
+    interaction_cap_test.go:119: journalled steps[0].text is 64 bytes; §5 allows a step 200 B and the item cap must admit all 64 of them
+    [... steps[1] .. steps[63], identical ...]
+--- FAIL: TestInteractionCap_APlanUpdateAtTheDocumentedMaximaFitsWhole (0.05s)
+=== RUN   TestInteractionCap_TheItemCapAdmitsEveryDocumentedFieldMaximum
+    interaction_cap_test.go:137: MaxItemBytes = 8192, under the 15203-byte plan_update §5's own maxima describe; the field maxima must be JOINTLY bounded by the item cap (ADR-009 Amendment 1)
+    interaction_cap_test.go:141: MaxItemBytes = 8192, under the 8405-byte union of two MaxTextBytes increments; IS-DELTA-2's merge is lossless, so an item cap below it drops the agent's text
+--- FAIL: TestInteractionCap_TheItemCapAdmitsEveryDocumentedFieldMaximum (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	13.481s
+```
+
+The first RED is the confirmed defect reproducing itself on the shipped path: the producer offered
+8 192 bytes of the agent's message and the transcript held **none of it**, with one log line as
+the only trace.
+
+## GREEN
+
+```
+$ go test ./internal/skeleton/ -run 'TestInteractionCap_' -count=1 -v
+--- PASS: TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped (2.23s)
+--- PASS: TestInteractionCap_APlanUpdateAtTheDocumentedMaximaFitsWhole (0.03s)
+--- PASS: TestInteractionCap_TheItemCapAdmitsEveryDocumentedFieldMaximum (0.00s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	3.336s
+```
+
+## What changed
+
+| File | What |
+|---|---|
+| `docs/adr/ADR-009-structured-chat-interaction.md` | Amendment 2026-08-07: the ruling, the arithmetic table, the disclosed cost, the four alternatives and why each was rejected. |
+| `docs/specifications/interaction-schema.md` | §5's `MaxItemBytes` row is 16 KiB and marked **ratified** (the per-field numbers stay proposed); new **IS-CAP-5** makes the joint bound normative and requires a future per-field raise to re-derive the item cap. |
+| `internal/daemon/interaction.go` | `MaxItemBytes = 16 << 10`; the comment no longer says PROPOSED AND UNRATIFIED and carries the two failures the old number caused. |
+| `internal/skeleton/interaction.go` | `fitItem`'s doc re-derived: stage 2 no longer fires on §5's maxima and is kept for the three cases the byte table does not bound. The per-field constants' comment now says only the item cap was ratified. `itemUnclippedFields`' headroom note re-measured. |
+| `internal/skeleton/interaction_cap_test.go` (new) | The three fences above. |
+
+## Three existing tests updated — the sanctioned fixture-follows-spec pattern, declared
+
+The ruling anticipated this: *"keep every existing cap test green without modifying it — if one
+hardcodes 8 KiB as a spec value, that is the fixture-follows-spec update pattern, record it
+explicitly."* Three tests encoded the old number. All three are recorded here in full; **no
+assertion was weakened to make an implementation pass**, and every other cap fence
+(`TestInteractionR2_*`, eight of them) is green **unmodified**. Tests that read the production
+constant instead of spelling the literal — `assertFitsItemCap` (`interaction_r2_test.go:138`) and
+`TestDaemon_RecordInteractionRefusesAnItemOverTheByteCap` (`daemon/interaction_test.go:166`) —
+tracked the raise with no edit at all, which is why they are not in this list.
+
+**1. `interaction_rr_test.go:59` — a literal.**
+
+```go
+-	if len(raw) > 8<<10 {
+-		t.Fatalf("the shipped item is %d bytes, over §5's 8 KiB MaxItemBytes", len(raw))
++	if len(raw) > specMaxItemBytes {
++		t.Fatalf("the shipped item is %d bytes, over §5's %d-byte MaxItemBytes", len(raw), specMaxItemBytes)
+```
+
+`specMaxItemBytes = 16 << 10` was added to `interaction_r2_test.go`'s spec-literal block, which is
+that file's own stated convention ("EVERY NUMBER BELOW IS SPELLED AS THE SPEC'S OWN LITERAL, not
+as a production constant"), so the number is pinned in one place and a wrong constant still fails.
+The test itself is otherwise untouched and still asserts the multi-byte-rune case truncates and
+the digest still names the shipped bytes.
+
+**2. `interaction_r2_test.go` — `AnApprovalRequestAtTheDocumentedMaximaIsTruncatedNotDropped`,
+renamed to `…IsShippedWholeNotDropped`.** This is the one whose *premise* the ruling inverts, so it
+is declared rather than quietly edited:
+
+```go
+-	assertTruncationPair(t, item, payload)
++	if _, clipped := item["truncated"]; clipped {
++		t.Errorf("an approval_request on §5's own per-field maxima reports truncated = %v; ...")
++	}
+```
+
+R2 wrote it against an 8 KiB cap, where an approval on §5's maxima was over the item cap and
+IS-CAP-1's truncator was what saved it from being dropped. Under the raise nothing on those maxima
+is over a per-field cap, so nothing is clipped and the card ships **whole** — a strictly stronger
+outcome, and `truncated` must now be **absent**, because §2 sets it only when a field *was*
+clipped and an item claiming a clip that did not happen makes every consumer render IS-DELTA-4's
+elision on a complete card. Everything else the test asserts (the card survives as a card: kind,
+summary, mode, 8 decisions with ids and labels intact, non-empty prompt lines, fits the item cap)
+is unchanged and still passes. Two stale prose comments naming "the 8 KiB MaxItemBytes" were
+corrected in the same file; neither is load-bearing for a pass.
+
+**3. `internal/adapter/interaction_test.go:242` — a literal inside a probe classifier.**
+
+```go
+-		case len(p.Raw) > 8<<10: // larger than interaction-schema.md §5's MaxItemBytes
++		case len(p.Raw) > 16<<10: // larger than interaction-schema.md §5's MaxItemBytes
+```
+
+`TestCheckConformance_InteractionsTotalityIsProbed` walks the probe battery and asserts an
+OVERSIZED body is among the shapes fed to `Interactions`. The only oversized probe is
+`oversizedBody` at **64 KiB**, which is over both numbers, so `sawOversized` fires either way and
+the assertion's outcome is unchanged — the edit keeps the comment's claim true, nothing more.
+It is recorded here because the rule is that every edit to a pre-existing test is declared, not
+only the ones that change an outcome.
+
+## Teeth — two mutations, each reverted
+
+| Mutation | Result |
+|---|---|
+| `concatText` returns only the first increment (a lossy merge that still *arrives*) | **FAILS** `TwoMaxTextIncrementsMergeAndAreNotDropped`: "the merged agent_message carries 4096 bytes of text; want 8192". The fence measures losslessness, not arrival — raising the cap without a working merge does not pass it. |
+| `maxSteps` 64 → 32 | **FAILS** `APlanUpdateAtTheDocumentedMaximaFitsWhole` on both halves (`truncated = true`, "journalled steps holds 32 entries"). The fence pins §5's number, not the producer's. |
+
+The RED above is itself the third mutation, run backwards: reverting `MaxItemBytes` to `8 << 10`
+fails all three new fences.
+
+## Gates
+
+```
+$ go build ./...                                  OK
+$ go vet ./...                                    OK
+$ go test ./internal/daemon/ -count=1 -race       ok   54.298s
+$ go test ./internal/remotegw/ -count=1 -race     ok   33.972s
+$ go test ./internal/protocol/ -count=1 -race     ok   19.534s   (GG-7 drift fences green)
+$ go test ./internal/verify/ -count=1 -race       ok   35.104s   (B94 reachability green)
+$ go test ./internal/adapter/... -count=1 -race   ok   (9 packages)
+```
+
+`internal/skeleton -race` is recorded with the verdict evidence in `a1-integration.md`, since both
+rulings land in that package and one run covers them.

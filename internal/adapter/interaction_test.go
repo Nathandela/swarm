@@ -239,7 +239,7 @@ func TestCheckConformance_InteractionsTotalityIsProbed(t *testing.T) {
 			sawNil = true
 		case !json.Valid(p.Raw):
 			sawTruncated = true
-		case len(p.Raw) > 8<<10: // larger than interaction-schema.md §5's MaxItemBytes
+		case len(p.Raw) > 16<<10: // larger than interaction-schema.md §5's MaxItemBytes
 			sawOversized = true
 		}
 	}

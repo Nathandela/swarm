@@ -63,18 +63,25 @@ const sessionMarker = "Session "
 // (the engine's deriveDims drops it), leaving the turn exactly as it found it.
 // Whether a session with outstanding children is still working is the engine's
 // accounting to make, not this one event's to assert.
+//
+// `capture` is ADR-010 §5's structured-capture declaration: the body of a row that sets it is
+// PRESERVED for interaction.go's shaper instead of being flattened to top-level strings at
+// ingest (§6). It is set on exactly the rows that shaper turns into items, because both
+// directions are conformance violations — a shaped event that does not declare it never receives
+// a body, and a declared event that shapes nothing preserves one for nobody.
 var hookEvents = []struct {
 	event, turn, interaction string
 	subtypeField, subtypeMap string
+	capture                  bool
 }{
-	{"UserPromptSubmit", "active", "none", "", ""},
-	{"PreToolUse", "active", "none", "", ""},
-	{"PostToolUse", "active", "none", "", ""},
-	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt"},
-	{"Stop", "idle", "none", "", ""},
-	{"SubagentStart", "active", "none", "", ""},
-	{"SubagentStop", "", "none", "", ""},
-	{"PermissionRequest", "idle", "permission", "", ""},
+	{"UserPromptSubmit", "active", "none", "", "", true},
+	{"PreToolUse", "active", "none", "", "", true},
+	{"PostToolUse", "active", "none", "", "", true},
+	{"Notification", "idle", "permission", "notification_type", "permission_prompt=permission;idle_prompt=none;idle=none;permission=permission;prompt=prompt", false},
+	{"Stop", "idle", "none", "", "", false},
+	{"SubagentStart", "active", "none", "", "", false},
+	{"SubagentStop", "", "none", "", "", false},
+	{"PermissionRequest", "idle", "permission", "", "", true},
 }
 
 // claudeAdapter is the stateless Claude Code strategy object. It carries no state,
@@ -149,6 +156,9 @@ func (claudeAdapter) SignalSources() []adapter.SignalSource {
 			desc["subtype_field"] = h.subtypeField
 			desc["subtype_interaction"] = h.subtypeMap
 		}
+		if h.capture {
+			desc[adapter.DescriptorCapture] = adapter.CaptureRaw
+		}
 		sources = append(sources, adapter.SignalSource{Kind: "hook", Descriptor: desc})
 	}
 	sources = append(sources, adapter.SignalSource{
@@ -202,9 +212,25 @@ func hookSettingsJSON() (string, error) {
 
 // optionFlags translates resolved option values into claude flags in a fixed
 // order, so Command stays deterministic.
+//
+// `model` is free-form launch-form text and is the only option whose VALUE
+// becomes an argv token, so it is the only place an operator can smuggle a flag
+// into a supervised argv — `--remote-control` above all, which would hand the
+// session's approvals to Anthropic's relay and race swarm's PermissionRequest
+// hook (agents-tracker-n047, ADR-010 section 5). No model alias starts with '-',
+// so a flag-shaped value is dropped and the CLI's own default model is used —
+// the same outcome as an empty value, and consistent with how a
+// dangerously-skip-permissions value other than "true" is ignored below.
+//
+// ponytail: this closes the option-derived tokens only. The positional
+// InitialPrompt is still appended unseparated in Command, so a prompt that
+// begins with '-' is parsed as a flag; closing that needs a `--` separator whose
+// acceptance must be confirmed against the live CLI. Out of scope here and no
+// threat under the frozen model (B133: the phone is trusted and the operator
+// types their own prompt) — recorded in docs/verification/a1b-rc-scrub.md.
 func optionFlags(opts map[string]string) []string {
 	var flags []string
-	if m := opts["model"]; m != "" {
+	if m := opts["model"]; m != "" && !strings.HasPrefix(m, "-") {
 		flags = append(flags, "--model", m)
 	}
 	if opts["dangerously-skip-permissions"] == "true" {

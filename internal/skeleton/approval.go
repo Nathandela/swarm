@@ -101,7 +101,11 @@ type pendingApproval struct {
 	shimStart int64     // ...both halves, because a REUSED pid is a mismatch (S3/F6)
 	hash      string    // the content hash the item shipped
 	expiresAt time.Time // the daemon's window; a phone countdown is display-only
-	decisions []string  // the ids the card offered, in the CLI's own vocabulary (§3.5)
+	// decisions maps each id the card offered -- in the CLI's own vocabulary (§3.5) -- to the
+	// verdict the ADAPTER classified it as at capture (allow | deny | other). It is both the
+	// membership set an arriving decision is checked against and the only source for §3.6's
+	// allowed/denied split, which is why it is one map and not a set beside a table.
+	decisions map[string]string
 }
 
 // openItem is one item the producer has journalled `in_progress` and not yet closed. It carries
@@ -143,9 +147,9 @@ func (d *Daemon) openApprovalLocked(session string, it daemon.InteractionItem, i
 	fields["expires_at"] = expires
 	fields["content_hash"] = contentHashZeros
 
-	ids := make([]string, 0, len(in.Decisions))
+	ids := make(map[string]string, len(in.Decisions))
 	for _, c := range in.Decisions {
-		ids = append(ids, c.ID)
+		ids[c.ID] = c.Verdict
 	}
 	d.approvals[session] = &pendingApproval{
 		itemID: it.ItemID, turnID: it.TurnID,
@@ -424,7 +428,8 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 		d.offerAll(local, out)
 		return protocol.CodeStaleApproval, errIsLife4("the daemon's window for approval %q has passed", req.InteractionID)
 	}
-	if !containsString(ap.decisions, req.Decision) {
+	verdict, offered := ap.decisions[req.Decision]
+	if req.Decision == "" || !offered {
 		// The card labels its buttons from decisions[].label (IS-APR-3), so an id outside that
 		// set was never rendered to anybody -- which makes it the gateway's or a bug's, not the
 		// owner's. Left PENDING: the owner has not answered.
@@ -432,17 +437,25 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 		return protocol.CodeInvalidField, errIsLife4("decision %q was not offered by approval %q", req.Decision, req.InteractionID)
 	}
 
-	// ponytail: A REMOTE DECISION RESOLVES AS `allowed`, AND THE `denied` ARM IS DELIBERATELY
-	// UNREACHED FROM HERE. §3.6's allowed/denied split needs a NORMALIZED verdict for an id drawn
-	// from the CLI's OWN vocabulary (§3.5: Codex offers accept | acceptWithExecpolicyAmendment |
-	// cancel), and adapter.DecisionChoice carries {ID, Label} and no verdict bit -- so classifying
-	// `cancel` as a refusal here would be this seam guessing at a CLI's vocabulary, which is
-	// exactly the posture IS-TOOL-2 forbids for the same reason. The bit belongs to the slice that
-	// APPLIES the decision (ADR-010 §4): it writes the CLI's reply and reads the outcome, and it
-	// calls this same resolver with `denied`. Until then no adapter implements the capture
-	// extension at all, so no card with decisions on it can be tapped and the gap is unreachable
-	// rather than wrong -- but it IS a gap, recorded in a1-integration.md.
-	out := d.resolveApprovalLocked(local, resolveAllowed, byPhone, operationID)
+	// §3.6's allowed/denied split, classified from the verdict the ADAPTER attached to this
+	// decision at capture (owner ruling 2026-08-07). It is the one thing about a decision that is
+	// normalized: §3.5 keeps the ids the CLI's own -- Codex offers accept |
+	// acceptWithExecpolicyAmendment | cancel -- so a daemon reading `cancel` as a refusal would be
+	// guessing at a vocabulary it does not own, which is the posture IS-TOOL-2 forbids for exactly
+	// this reason. Conformance obliges every offered decision to carry one.
+	//
+	// ponytail: ONE branch, on `deny`. §3.6 offers no third value for a remote answer, so `other`
+	// -- the escape hatch for a choice the adapter could place neither way -- lands in `allowed`
+	// with the rest. That is deliberate and it is the weaker half: `denied` is an assertion the
+	// owner REFUSED, and inventing one from an unclassified tap would be the guess the verdict
+	// exists to remove, while `allowed` here means only "answered from the phone, not refused".
+	// A verdict-less decision resolves the same way, which is what the conformance obligation is
+	// there to stop shipping.
+	decision := resolveAllowed
+	if verdict == adapter.VerdictDeny {
+		decision = resolveDenied
+	}
+	out := d.resolveApprovalLocked(local, decision, byPhone, operationID)
 	d.itemMu.Unlock()
 	d.offerAll(local, out)
 	return "", nil
@@ -456,18 +469,6 @@ func (d *Daemon) machineID() string {
 		return ""
 	}
 	return d.api.endpointID
-}
-
-func containsString(all []string, want string) bool {
-	if want == "" {
-		return false
-	}
-	for _, s := range all {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // errIsLife4 formats a refusal. The prose rides BESIDE the code, never instead of it: R-PROT.7
