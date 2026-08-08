@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 
@@ -113,7 +114,15 @@ fun transcriptView(
                 // gap is what puts them together, which is the same arrangement every other pair
                 // of stacked cards in this app gets.
                 if (block.well.isNotEmpty()) {
-                    addView(monoWell(context, block.well).apply { tag = TranscriptTag.WELL })
+                    // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a unified diff or a
+                    // tool's stdout is exactly the column-aligned text `setHorizontallyScrolling`
+                    // refuses to wrap, and a line past this card's own width was silently
+                    // clipped with nothing below it wide enough to reach the rest.
+                    addView(
+                        monoWell(context, block.well)
+                            .apply { tag = TranscriptTag.WELL }
+                            .scrolledHorizontally(),
+                    )
                 }
             }
         },

@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.approvalSheet
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 
 /**
  * ADR-009-structured-chat-interaction (1) and (4): the approval card, composed.
@@ -70,8 +71,12 @@ fun approvalSheetView(
     question = panel.question,
     // ABSENT IS NOT EMPTY: an approval whose action names no literal draws no well, rather than a
     // recessed box saying nothing in the shape of a command that is blank.
+    //
+    // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a long shell command is exactly the
+    // line `setHorizontallyScrolling` refuses to wrap, and this sheet is asking the reader to
+    // approve it -- reachable, not clipped, is the floor for a command someone is signing off on.
     well = if (panel.hasCommand) {
-        monoWell(context, panel.command).apply { tag = SheetTag.WELL }
+        monoWell(context, panel.command).apply { tag = SheetTag.WELL }.scrolledHorizontally()
     } else {
         null
     },
