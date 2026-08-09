@@ -229,6 +229,49 @@ class ScreenAirSweepTest {
     }
 
     /**
+     * The premise both claims above rest on: a destination's own left edge IS the screen's.
+     *
+     * The sweep lays each destination out at the window's width and reads from its own box, which
+     * is only the same measurement a person takes if nothing between it and the glass adds a side
+     * inset. `phoneScaffoldView` puts the destination in a `ScrollView` inside a column, and a side
+     * padding on either would shift every leaf on every screen by the same amount with the sweep
+     * still reporting green -- so it is checked rather than assumed.
+     */
+    @Test
+    fun `the scaffold hands the destination the whole width of the screen`() {
+        val destination = TextView(context).apply { text = "the destination" }
+        val scaffold = phoneScaffoldView(
+            context = context,
+            content = destination,
+            tabs = Destination.entries.map { d ->
+                InboxTab(label = d.label, selected = d == Destination.INBOX, badgeCount = 0, badgeDescription = null)
+            },
+            destination = Destination.INBOX,
+            onSelectDestination = {},
+        )
+        val width = screenWidthPx()
+        scaffold.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(width * 2, View.MeasureSpec.EXACTLY),
+        )
+        scaffold.layout(0, 0, width, width * 2)
+
+        var left = 0
+        var view: View = destination
+        while (view !== scaffold) {
+            left += view.left
+            view = view.parent as View
+        }
+        assertEquals(
+            "the scaffold insets the destination, so every inset this sweep measures is short by " +
+                "that much and the ruled floor is being read against the wrong edge",
+            0,
+            left,
+        )
+        assertEquals("the destination is not given the screen's whole width", width, destination.width)
+    }
+
+    /**
      * The negative controls, in memory. A reader that always answered "far enough" would certify
      * a screen built entirely out of flush text, and one that never counted the air twice would
      * certify F2 itself.
