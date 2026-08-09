@@ -236,8 +236,21 @@ class SessionDetailPanelTest {
         )
     }
 
+    /**
+     * agents-tracker-ksvb.6 RE-APPLIED (agents-tracker-nx44.6). A confirmed lease is SILENT --
+     * "healthy is silent", the pattern every other conditional notice in this app follows -- and
+     * the composer is now on this screen, so a sentence saying the user may type sits directly
+     * above the field they would type into.
+     *
+     * THIS REPLACES `the two lease sentences go with the two lease states and not the other way
+     * round`, which asserted `held.contains("confirmed you have control")` and
+     * `notHeld.contains("Take control first")`. Both were true only while the confirmed state
+     * spent a sentence and the unconfirmed one ended with that phrase. 4493a3f made exactly this
+     * rewrite on `PeekPanelScreenTest`, and a cross-session merge that resolved the peek's
+     * deletion as a deleted-file take reverted the ruling with it.
+     */
     @Test
-    fun `the two lease sentences go with the two lease states and not the other way round`() {
+    fun `the confirmed lease is silent, and the unconfirmed one is a one-line prompt`() {
         val held = panelOf(detail(leaseHeld = true)).leaseNotice
         val notHeld = panelOf(detail(leaseHeld = false)).leaseNotice
 
@@ -249,13 +262,16 @@ class SessionDetailPanelTest {
             held != notHeld,
         )
         assertTrue(
-            "the confirmed sentence does not say what it confirms",
-            held.contains("confirmed you have control"),
+            "a confirmed lease renders a sentence where healthy is meant to be silent, the same " +
+                "call this app makes for every other notice with nothing wrong to report -- and " +
+                "with the composer directly below it, that sentence tells the user they may type " +
+                "into the field they are already looking at",
+            held.isEmpty(),
         )
         assertTrue(
-            "the unconfirmed sentence does not say what to do about it, which leaves a shut " +
+            "the unconfirmed line does not say what to do about it, which leaves a shut " +
                 "keyboard with no reason beside it",
-            notHeld.contains("Take control first"),
+            notHeld.contains("take control", ignoreCase = true),
         )
     }
 

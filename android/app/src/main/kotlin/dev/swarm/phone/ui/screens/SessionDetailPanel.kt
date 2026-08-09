@@ -64,13 +64,14 @@ data class SessionDetailPanel(
      */
     val transcript: TranscriptPanel,
     /**
-     * PB-INPUT-2's "visibly", in whichever of the two states the machine has put the user in.
+     * PB-INPUT-2's "visibly", in whichever of the two states the machine has put the user in, or
+     * EMPTY where the machine has confirmed the lease and there is nothing left to say.
      *
-     * IT ARRIVED HERE WITH THE PEEK'S DELETION and it is the same sentence, unchanged. The terminal
-     * peek carried the lease copy because the peek was where the keyboard was; ADR-009 (3) deletes
-     * that screen, and this is the screen a session is now read on. The requirement is untouched by
-     * the ADR -- (5) keeps the input substrate "exactly as decided" -- so what moved is where the
-     * sentence is drawn and nothing about what it says.
+     * IT ARRIVED HERE WITH THE PEEK'S DELETION. The terminal peek carried the lease copy because
+     * the peek was where the keyboard was; ADR-009 (3) deletes that screen, and this is the screen
+     * a session is read on -- and typed into -- now. The requirement is untouched by the ADR --
+     * (5) keeps the input substrate "exactly as decided" -- so what moved is where the sentence is
+     * drawn, and what changed since is its density (agents-tracker-ksvb.6): see [LEASE_CONFIRMED].
      */
     val leaseNotice: String,
     /**
@@ -327,20 +328,30 @@ object SessionDetailScreen {
         if (verdict.refused) verdict.reason else ""
 
     /**
-     * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because a shut
-     * keyboard with no reason beside it is the invisible suppression the requirement is against.
+     * PB-INPUT-2's "visibly", for the two states this app renders as themselves rather than as a
+     * transition.
      *
-     * THEY MOVED HERE FROM THE TERMINAL PEEK, WORD FOR WORD. That screen is deleted (ADR-009 (3))
-     * and its copy is not: PB-DS-9 assigns copy to the screen, and this is the screen a session is
-     * read on now. `PhoneSurfaceControlsTest` and the instrumented smoke read them by value.
+     * **CONFIRMED IS SILENT** (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6). It
+     * used to spend a full sentence saying control is granted, drawn unconditionally -- the app's
+     * one UNGATED notice, printed over the state where nothing needs saying. "Healthy is silent"
+     * is the pattern every other conditional notice here already follows, and the lease sentence
+     * is not exempt from it for being the one PB-INPUT-2 names by name. The composer is now on
+     * this screen, which makes the old copy worse than redundant: it told the user that what they
+     * type is sent live, directly above the field they were already looking at.
+     *
+     * **NOT CONFIRMED IS ONE LINE.** It still says what to do -- a shut keyboard with no reason
+     * beside it is the invisible suppression the requirement is against -- in the fewest words
+     * that say it, and "Read-only" is the state the rest of the screen is in.
+     *
+     * THE RULING DIED IN A MERGE ONCE. 4493a3f made this change on `PeekPanelScreen`; the peek was
+     * deleted a slice later (ADR-009 (3)) and the copy moved here from the file's pre-ksvb.6
+     * state, so a cross-session resolution of a deleted file silently reverted an owner density
+     * decision. It is recorded here so the next reader knows the old two-sentence form is a
+     * regression rather than an earlier draft.
      */
-    private const val LEASE_CONFIRMED =
-        "Your machine has confirmed you have control of this session, so what you type is " +
-            "sent live."
+    private const val LEASE_CONFIRMED = ""
 
-    private const val LEASE_NOT_CONFIRMED =
-        "Your machine has not confirmed control of this session, so the keyboard stays shut " +
-            "-- anything typed would be dropped without a word. Take control first."
+    private const val LEASE_NOT_CONFIRMED = "Read-only -- take control to type."
 
     /**
      * The two sentences a REFUSAL and a SEVERANCE get instead (agents-tracker-qlf9).

@@ -381,17 +381,33 @@ class SessionDetailViewTest {
         assertSame(supplied, second.allTagged(DetailTag.TAKE_CONTROL).single())
     }
 
+    /**
+     * NOT HELD still puts the model's line on screen; HELD now puts nothing there at all
+     * (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6 -- a confirmed lease is silent,
+     * the same call the stale notice above it already makes).
+     *
+     * THIS REPLACES a version that ran `kitRequire(DetailTag.LEASE)` over BOTH states inside a
+     * loop and then compared the two rendered strings -- three calls that throw the moment a
+     * confirmed lease draws no such view. 4493a3f made the identical rewrite on
+     * `PeekPanelViewTest` before that screen was deleted.
+     */
     @Test
     fun `the lease sentence on screen is the one the model chose for that state`() {
-        listOf(true, false).forEach { held ->
-            val panel = panel(leaseHeld = held)
-            assertEquals(panel.leaseNotice, textOf(view(panel).kitRequire(DetailTag.LEASE)))
-        }
+        val notHeld = panel(leaseHeld = false)
+        assertEquals(notHeld.leaseNotice, textOf(view(notHeld).kitRequire(DetailTag.LEASE)))
+
+        val held = panel(leaseHeld = true)
+        assertTrue("a confirmed lease has nothing left to print", held.leaseNotice.isEmpty())
+        assertNull(
+            "a confirmed lease drew a notice anyway, which is a blank line nobody wrote -- and " +
+                "the composer is directly below it, so the sentence it used to print told the " +
+                "user they could type into the field already under their thumb",
+            view(held).kitFind(DetailTag.LEASE),
+        )
         assertTrue(
             "the two lease states put the same sentence on screen, which is the state PB-INPUT-2 " +
                 "was recorded NOT MET in -- a user could not tell until a keystroke vanished",
-            textOf(view(panel(leaseHeld = true)).kitRequire(DetailTag.LEASE)) !=
-                textOf(view(panel(leaseHeld = false)).kitRequire(DetailTag.LEASE)),
+            notHeld.leaseNotice != held.leaseNotice,
         )
     }
 
@@ -476,7 +492,7 @@ class SessionDetailViewTest {
      * screen on the way into this one. The promise was here and the affordance was not.
      */
     @Test
-    fun `the composer is on the screen that says what you type is sent live`() {
+    fun `the composer is on the screen a session is read and answered on`() {
         val composer = TextView(context)
 
         val placed = view(composer = composer).kitFind(DetailTag.COMPOSER)

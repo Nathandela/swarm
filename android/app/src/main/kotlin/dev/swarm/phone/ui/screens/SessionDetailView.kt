@@ -327,12 +327,16 @@ fun sessionDetailView(
         )
     }
 
-    // PB-INPUT-2's "visibly", above the controls it qualifies -- the same rule the two notices
-    // above follow. It is ALWAYS DRAWN, unlike them, because there is no state of this screen in
-    // which the lease has nothing to say: a session is either one the machine has confirmed control
-    // of or one it has not, and the requirement's recorded failure is precisely a surface that
-    // looked identical either way.
-    column.addView(notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE })
+    // PB-INPUT-2's "visibly", above the controls it qualifies -- the same rule the notices above
+    // follow, INCLUDING their gate (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6).
+    // A CONFIRMED LEASE PRINTS NOTHING: this was the app's one ungated notice, drawn over the
+    // state where nothing needs saying, and with the composer now at the bottom of this column the
+    // sentence it printed told the user they could type into the field already under their thumb.
+    // The refusal and severance sentences this field also carries are transitions rather than a
+    // healthy resting state, so they still draw.
+    if (panel.leaseNotice.isNotEmpty()) {
+        column.addView(notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE })
+    }
 
     // THE MACHINE'S OWN WORDS, IN THE MACHINE'S OWN REGISTER (agents-tracker-ksvb.10). They used to
     // be spliced into the sentence above, so a daemon Go error was drawn in the same type and ink

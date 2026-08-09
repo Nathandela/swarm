@@ -111,8 +111,14 @@ class SessionDetailLeaseVerdictTest {
             notice == SessionDetailScreen.leaseNoticeFor(confirmed = false),
         )
         assertFalse(
+            // agents-tracker-nx44.6: this read `notice.contains("Take control first")` -- the
+            // exact phrase the unconfirmed sentence used to end with. That sentence is
+            // "Read-only -- take control to type." now (agents-tracker-ksvb.6, re-applied), so
+            // the old spelling is nowhere in the app and an assertion pinning it would pass by
+            // measuring nothing. The claim is unchanged and it is now made against the words the
+            // screen actually has.
             "the screen tells a user whose take control was refused to take control",
-            notice.contains("Take control first"),
+            notice.contains("take control", ignoreCase = true),
         )
     }
 
