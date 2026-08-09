@@ -154,8 +154,13 @@ fun triageInboxView(
         // the obvious over-correction, and it tells a user holding two live sessions that the
         // section has nothing in it. `TriageInboxViewTest` asserts both directions.
         if (section.rows.isEmpty()) {
+            // agents-tracker-nx44.1: `compact = true`. Row 8's block is authored for ONE
+            // whole-panel empty state; this screen can draw up to four of them, and the
+            // whole-panel 96 dp vertical air pushes the last section's caption under the tab bar
+            // on a quiet inbox. `emptyState`'s own KDoc has both cells; this is the per-section one.
             content.addView(
-                emptyState(context, section.emptyCopy).apply { tag = InboxTag.SECTION_EMPTY },
+                emptyState(context, section.emptyCopy, compact = true)
+                    .apply { tag = InboxTag.SECTION_EMPTY },
             )
             return@forEach
         }

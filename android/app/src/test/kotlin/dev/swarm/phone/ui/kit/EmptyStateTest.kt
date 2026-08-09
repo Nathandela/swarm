@@ -33,10 +33,13 @@ import kotlin.math.roundToInt
  * 8 exists at all -- so the padding is read out of `docs/design/substrate-components.md` by
  * `android/gate/s24_screens_test.go`, on the same principle and in the lane that can read files.
  *
- * ROW 8 SPECIFIES A COMPACT VARIANT AND THIS COMPONENT DOES NOT SHIP ONE. `space_24` all round is
- * for a block inside a card; the triage inbox has no caller for it, and a parameter with no call
- * site is a second spelling of the same component that the first screen to need it would find
- * already wrong. Recorded here rather than left to look like an oversight.
+ * ROW 8'S COMPACT VARIANT NOW HAS ITS CALLER (agents-tracker-nx44.1). `space_24` all round was
+ * unspent while the triage inbox reused the whole-panel 96 dp block per SECTION, up to four times
+ * on one screen -- a quiet inbox pushes the last section's caption under the tab bar, which is the
+ * defect a container factory with no caller used to be recorded against rather than fixed.
+ * `compact` defaults to `false`: every whole-panel caller (`pairOnlyView`'s body, the pairing
+ * screen's camera notice, `MachinesPanelScreen.UNAVAILABLE_COPY`) is unaffected, and the inbox's
+ * per-section call is the one that passes `true`.
  */
 @RunWith(RobolectricTestRunner::class)
 // NATIVE, for the same reason InboxChromeTest gives: LEGACY graphics stubs the text stack and
@@ -102,6 +105,40 @@ class EmptyStateTest {
         )
 
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
+     * Row 8's OTHER cell: "compact variant `space_24` all round (mock 60/30 and 24)".
+     *
+     * agents-tracker-nx44.1: the triage inbox reuses the whole-panel 96 dp (2 x `space_24`)
+     * vertical padding per SECTION, up to four times on one screen -- row 8's own block was
+     * authored for ONE empty panel, and a quiet inbox with three empty sections pushes the last
+     * section's caption under the tab bar. `space_24` all round is the row's own second form, and
+     * this is the one caller with an actual quiet section to draw it for.
+     */
+    @Test
+    fun `the compact variant spends row 8's second cell -- space_24 all round`() {
+        val block = emptyState(context, "Nothing is waiting to be reviewed.", compact = true)
+        val step = dimenPx("swarm_space_24")
+
+        val claims = listOf(
+            Claim("compact padding-x (start)", step, block.paddingStart),
+            Claim("compact padding-x (end)", step, block.paddingEnd),
+            Claim("compact padding-y (top)", step, block.paddingTop),
+            Claim("compact padding-y (bottom)", step, block.paddingBottom),
+        )
+
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /** The default is UNCHANGED: every whole-panel caller keeps row 8's first cell. */
+    @Test
+    fun `the default empty state is not the compact variant`() {
+        val block = emptyState(context, "Nothing is running.")
+        val step = dimenPx("swarm_space_24")
+
+        assertEquals(step + step, block.paddingTop)
+        assertEquals(step + step, block.paddingBottom)
     }
 
     /** Row 8: "none (the ground shows)" -- no surface, no border, no radius. */
