@@ -20,8 +20,14 @@ import dev.swarm.phone.R
  * IT IS A CONTAINER FACTORY, ON `sessionList`'s PRECEDENT: "the rows' container ... exists so a
  * screen never types the 12 dp side padding or the gap between rows" (SessionRow.kt). This is the
  * same shape one level out -- the SCREEN's own inset rather than a list's -- and it is why the
- * factory takes no content: what varies between the pairing screen and the pair-only screen is
- * everything inside the column, never the column's own padding.
+ * factory takes no content: what varies inside the column is everything, never the column's own
+ * padding.
+ *
+ * **THE CALLER IS THE SCREEN THAT HOSTS, AND THERE IS EXACTLY ONE** (agents-tracker-2pnu F2).
+ * `pairingPanelView` spent this too, and `PhoneSurface.drawPairOnly` hosts that panel INSIDE
+ * `pairOnlyView`'s column -- so the started pairing path paid row 18's cell twice and rendered at
+ * 48 dp sides. A padding is spent by whoever owns the screen edge, and the pairing flow does not
+ * own one: it is always somebody's content.
  */
 fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
     orientation = LinearLayout.VERTICAL

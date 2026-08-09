@@ -750,6 +750,14 @@ internal object KitTag {
  * per-child margin puts a gap outside the first and last items too, so a list inherits a leading
  * indent its container never asked for and the design's own side padding is silently doubled at
  * one edge. Applying it on add, to every child but the first, is what `gap` means.
+ *
+ * **THE GAP IS WHAT A PERSON SEES, WHICH IS NOT THE MARGIN ON A CHILD THAT INFLATES ITSELF**
+ * (agents-tracker-2pnu F1). A blooming [ctaButton] carries 18 dp of transparent halo inside its
+ * own box and hands every pixel back as negative margin, so its VISIBLE edge is 18 dp inside its
+ * layout box. Writing the design's gap straight over that margin destroyed the hand-back: the
+ * first child rendered a bloom's worth low, and a later child left 26 dp of air where `.acts2`
+ * says 7. Subtracting the child's own inflation restores both, and costs nothing on a child that
+ * has none -- which is every child of `sessionList` and `chipRow`.
  */
 internal class KitStack(
     context: Context,
@@ -764,11 +772,15 @@ internal class KitStack(
     override fun onViewAdded(child: View) {
         super.onViewAdded(child)
         val params = child.layoutParams as? MarginLayoutParams ?: return
+        // Read off the background the child is actually painting, never from a flag a caller
+        // could forget: `CtaSurface` is built from the spec whose insetPx produced the negative
+        // margin, so the two cannot drift.
+        val inset = (child.background as? CtaSurface)?.spec?.insetPx ?: 0
         val gap = if (indexOfChild(child) == 0) 0 else gapPx
         if (orientation == VERTICAL) {
-            params.topMargin = gap
+            params.topMargin = gap - inset
         } else {
-            params.marginStart = gap
+            params.marginStart = gap - inset
         }
         child.layoutParams = params
     }

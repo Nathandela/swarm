@@ -508,14 +508,17 @@ var s23Inbox = []s23Component{
 		Factory: "screenColumn",
 		File:    "ScreenColumn.kt",
 		Derived: "#18 Pairing scaffold",
-		Why: "the pairing screen's and the pair-only screen's own outer column, row 18's " +
-			"`space_10` vertical x `space_24` horizontal padding. `swarm_space_24` has carried " +
-			"that cell since S22b with no caller (dimens.xml: \"24dp for its pairing-scaffold " +
-			"padding; neither appears in the Substrate artifact\"), and both screens built the " +
-			"column as a bare LinearLayout with none of it spent -- which s24_screens_test.go's " +
-			"fence made structural rather than an oversight: neither file may call R.dimen or " +
-			"setPadding itself. `sessionList`'s own row states the same argument one container " +
-			"over: \"a screen never types the 12 dp side padding or the gap between rows\".",
+		Why: "the pair-only screen's own outer column, row 18's `space_10` vertical x " +
+			"`space_24` horizontal padding. `swarm_space_24` has carried that cell since S22b " +
+			"with no caller (dimens.xml: \"24dp for its pairing-scaffold padding; neither " +
+			"appears in the Substrate artifact\"), and the screen built the column as a bare " +
+			"LinearLayout with none of it spent -- which s24_screens_test.go's fence made " +
+			"structural rather than an oversight: the file may not call R.dimen or setPadding " +
+			"itself. `sessionList`'s own row states the same argument one container over: \"a " +
+			"screen never types the 12 dp side padding or the gap between rows\". " +
+			"agents-tracker-2pnu F2: `pairingPanelView` spent this too and is ALWAYS hosted " +
+			"inside pairOnlyView's column, so the started-pairing path paid the cell twice and " +
+			"rendered at 48dp sides -- the padding belongs to whoever owns the screen edge.",
 	},
 	{
 		Factory: "ctaStack",
@@ -528,7 +531,10 @@ var s23Inbox = []s23Component{
 			"caller is the second spelling EmptyStateTest's KDoc argues against. " +
 			"PairingPanelView's control loop and SessionDetailView's take-control/stop/kill " +
 			"stack are that caller now, both stacking CtaButton.kt's own bloom-inset buttons " +
-			"with bare addView and zero gap.",
+			"with bare addView and zero gap. agents-tracker-2pnu F1: the gap is spent against " +
+			"the child's VISIBLE box -- a blooming CTA inflates itself 18dp and hands it back " +
+			"as negative margin, so the stack subtracts that inflation instead of overwriting " +
+			"it, and a note is hosted outside the stack rather than spaced as an action.",
 	},
 }
 

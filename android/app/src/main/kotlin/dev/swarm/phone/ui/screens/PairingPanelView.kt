@@ -10,7 +10,6 @@ import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.pairingStep
 import dev.swarm.phone.ui.kit.readOnlyNote
-import dev.swarm.phone.ui.kit.screenColumn
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 
 /**
@@ -125,10 +124,15 @@ fun pairingPanelView(
     slots: PairingSlots,
     below: View? = null,
 ): View {
-    // agents-tracker-nx44.1: row 18's own padding, `space_10` vertical x `space_24` horizontal --
-    // `screenColumn` is the kit factory that spends it, because this file is fenced against
-    // `R.dimen` and `setPadding` and cannot spend the row's cell itself.
-    val column = screenColumn(context)
+    // NO `screenColumn` HERE, AND ROW 18'S PADDING IS SPENT NO LESS FOR IT (agents-tracker-2pnu
+    // F2). `PhoneSurface.drawPairOnly` is the only production caller of this flow and it hosts
+    // the panel inside `pairOnlyView`'s own `screenColumn`, so a second column here spent the
+    // row's cell twice: a started pairing rendered at 48 dp sides and 20 dp top against the row's
+    // 24 and 10. The row is spent by the screen that HOSTS the flow, once.
+    val column = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+    }
 
     // Twelve of the fifteen steps have no recorded heading and get none; see [PairingPanel].
     panel.title?.let { title ->
@@ -175,7 +179,18 @@ fun pairingPanelView(
     // the controls carry `.acts2`'s own `space_8` gap between them rather than the zero addView
     // gave them -- which on `CtaKind.APPROVE`'s bloom variant was worse than zero, since the
     // button's own negative margin pulled a bare neighbour closer than its visible edge.
-    val controls = ctaStack(context)
+    //
+    // ONE STACK PER RUN OF CONSECUTIVE CONTROLS (agents-tracker-2pnu F1). `KitStack` writes
+    // `.acts2`'s gap onto every child it adopts, and the relay sentence is not an action: row 22
+    // gives it a `space_10` top margin of its own, which a stack that adopted it overwrote with
+    // 8. So the note lands on the COLUMN, between two stacks, and the row's cell survives at the
+    // one site that renders it.
+    var controls: LinearLayout? = null
+    fun controlStack(): LinearLayout = controls ?: ctaStack(context).also {
+        controls = it
+        column.addView(it)
+    }
+
     PairingControl.entries.filter { it in panel.controls }.forEach { control ->
         // THE RELAY SENTENCE IS COMPOSED WITH ITS FIELD AND NOT ABOVE THE STACK. Every other
         // block on this screen belongs to the STEP; this one belongs to one box, and a sentence
@@ -189,19 +204,23 @@ fun pairingPanelView(
         // alternative in the kit is `emptyState`, which this file already spends on the camera
         // notice, and its 48 dp of vertical air is written for a section that holds nothing
         // rather than for a caption on a text field.
+        //
+        // AND THE FIELD SITS DIRECTLY UNDER IT, which is row 22's own arrangement: the row states
+        // a top margin and no bottom one, because "the trailing air belongs to whatever the
+        // screen puts next" -- and what this screen puts next is the box the sentence is about.
         if (control == PairingControl.RELAY_URL && panel.relayNotice.isNotEmpty()) {
-            controls.addView(
+            column.addView(
                 readOnlyNote(context, panel.relayNotice).apply { tag = PairingTag.RELAY_NOTICE },
             )
+            controls = null
         }
-        controls.addView(
+        controlStack().addView(
             requireNotNull(slots.controls[control]) {
                 "PB-DS-9: the pairing panel offers $control and the surface supplied no view for " +
                     "it, so the step would render with one control missing and nothing to say so."
             }.tagged(PairingTag.control(control)),
         )
     }
-    column.addView(controls)
 
     below?.let { column.addView(it) }
     return column
