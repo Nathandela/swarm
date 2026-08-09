@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.noticeDetail
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.sectionLabel
 
 /**
@@ -77,6 +78,13 @@ object LaunchTag {
 /**
  * The launch form as a view.
  *
+ * **THE COLUMN IS BARE AND ITS FLUSH CHILDREN CARRY THE SCREEN'S AIR** (owner ruling 2026-08-09,
+ * agents-tracker-nx44.10). The heading is a `sectionLabel` and holds itself off the glass; the two
+ * boxes, the control and both notice lines carry nothing of their own, so `screenAir` gives each
+ * of them the ruled `swarm_space_12`, once. A padding on the column would spend it on the heading
+ * too, which is agents-tracker-2pnu F2's doubling -- `ui/kit/ScreenColumn.kt` argues it in full and
+ * `ScreenAirSweepTest` holds every screen to it.
+ *
  * @param fieldFor the input for one field. It is a function of the field id rather than a list so
  *  a caller cannot pair the working directory's box with the agent's hint, which is the one defect
  *  [LaunchField]'s named id exists to prevent.
@@ -101,15 +109,17 @@ fun launchPanelView(
     // working directory, then the first message. The two the daemon refuses a launch without come
     // first, so a user who stops reading has still answered them.
     panel.fields.forEach { field ->
-        column.addView(fieldFor(field.id).tagged(LaunchTag.field(field.id)))
+        column.addView(fieldFor(field.id).tagged(LaunchTag.field(field.id)).screenAir())
     }
-    column.addView(submit.tagged(LaunchTag.SUBMIT))
+    column.addView(submit.tagged(LaunchTag.SUBMIT).screenAir())
 
     // Drawn only when the form has something to report. An empty notice is not "nothing yet": a
     // form that has launched nothing has not been refused and has not succeeded, and a line
     // reserved for a status that does not exist is a status about an operation nobody issued.
     if (panel.notice.isNotEmpty()) {
-        column.addView(notice(context, panel.notice).apply { tag = LaunchTag.NOTICE })
+        column.addView(
+            notice(context, panel.notice).apply { tag = LaunchTag.NOTICE }.screenAir(),
+        )
     }
 
     // THE MACHINE'S OWN WORDS, UNDER THE FORM'S OWN SENTENCE (agents-tracker-ksvb.10). They used to
@@ -118,7 +128,9 @@ fun launchPanelView(
     // condition as the line above and for the same reason: only a refusal has one.
     if (panel.noticeDetail.isNotEmpty()) {
         column.addView(
-            noticeDetail(context, panel.noticeDetail).apply { tag = LaunchTag.NOTICE_DETAIL },
+            noticeDetail(context, panel.noticeDetail)
+                .apply { tag = LaunchTag.NOTICE_DETAIL }
+                .screenAir(),
         )
     }
 

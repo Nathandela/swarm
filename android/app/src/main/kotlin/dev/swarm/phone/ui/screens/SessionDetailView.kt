@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.kit.ctaStack
 import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.noticeDetail
+import dev.swarm.phone.ui.kit.screenAir
 
 /**
  * PB-APP-3 -- inventory C2: the session detail, composed from the component kit.
@@ -47,6 +48,15 @@ import dev.swarm.phone.ui.kit.noticeDetail
  * and must survive a redraw, so `PhoneSurface` builds them out of the kit and hands them in -- the
  * arrangement `peekPanelView` already uses for `[Take control]` and `launchPanelView` for its
  * submit. A screen that constructed them would be a screen owning a listener and a native call.
+ *
+ *
+ * **THE COLUMN IS BARE AND ITS FLUSH CHILDREN CARRY THE SCREEN'S AIR** (owner ruling
+ * 2026-08-09, agents-tracker-nx44.10). Every leaf on this screen renders at least
+ * `swarm_space_12` from both edges, spent exactly once: the components that already hold
+ * themselves off the glass keep their own step, and the ones §4 leaves bare -- the notice
+ * line, a loose CTA, row 9's field -- get `screenAir` here. A padding on the column would
+ * add 12 to the first group and re-run agents-tracker-2pnu F2's doubling; the argument is
+ * `ui/kit/ScreenColumn.kt`'s and `ScreenAirSweepTest` is what holds every screen to it.
  *
  * ## What C2 draws that this does not
  *
@@ -269,7 +279,9 @@ fun sessionDetailView(
     // BOTH NOTICES SIT ABOVE THE CONTENT THEY QUALIFY, and each is drawn only when it has something
     // to say -- a blank warning line over a healthy session is a warning nobody wrote.
     if (panel.staleNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.staleNotice).apply { tag = DetailTag.STALE })
+        column.addView(
+            notice(context, panel.staleNotice).apply { tag = DetailTag.STALE }.screenAir(),
+        )
     }
     // PB-SYNC-1's REPAIR, DIRECTLY UNDER THE SENTENCE IT ANSWERS (agents-tracker-upbo). The link
     // section on Machines draws all four channels' verdicts and can act on none of them; this is
@@ -277,28 +289,32 @@ fun sessionDetailView(
     // goes where the person reading about the gap already is. It is a slot for [stop]'s reason:
     // `App.Resync` is rate-bounded and refuses with ErrClassRateLimited, and the surface is what
     // routes a refusal through PB-APP-9's table.
-    if (panel.offersResync) column.addView(resync.tagged(DetailTag.RESYNC))
+    if (panel.offersResync) column.addView(resync.tagged(DetailTag.RESYNC).screenAir())
     // PB-INPUT-1'S LEDGER, ABOVE THE TRANSCRIPT AND NEVER OVER THE COMPOSER (agents-tracker-hxv's
     // own placement): it concerns input already gone, and a report of a loss must not cover the
     // control the user is reaching for to try again by hand.
     if (panel.undeliveredNotice.isNotEmpty()) {
         column.addView(
-            notice(context, panel.undeliveredNotice).apply { tag = DetailTag.UNDELIVERED },
+            notice(context, panel.undeliveredNotice)
+                .apply { tag = DetailTag.UNDELIVERED }
+                .screenAir(),
         )
     }
     if (panel.undeliveredDetail.isNotEmpty()) {
         column.addView(
-            noticeDetail(context, panel.undeliveredDetail).apply {
-                tag = DetailTag.UNDELIVERED_DETAIL
-            },
+            noticeDetail(context, panel.undeliveredDetail)
+                .apply { tag = DetailTag.UNDELIVERED_DETAIL }
+                .screenAir(),
         )
     }
     // THE ACKNOWLEDGEMENT IS A CONTROL AND NOT A DISMISS GESTURE, which is
     // `App.ClearUndeliveredInputs`' own split: a screen that OPENS must see the backlog, and a
     // user who dismisses it says so once, for every screen.
-    if (panel.offersAcknowledge) column.addView(acknowledge.tagged(DetailTag.ACKNOWLEDGE))
+    if (panel.offersAcknowledge) column.addView(acknowledge.tagged(DetailTag.ACKNOWLEDGE).screenAir())
     if (panel.notSentNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.notSentNotice).apply { tag = DetailTag.NOT_SENT })
+        column.addView(
+            notice(context, panel.notSentNotice).apply { tag = DetailTag.NOT_SENT }.screenAir(),
+        )
     }
 
     // THE CONVERSATION, WHICH IS THIS SCREEN'S SUBJECT NOW. It is `transcriptView`'s composition and
@@ -323,7 +339,9 @@ fun sessionDetailView(
     // nobody made -- which is `ofUnsent`'s own recorded argument, one layer up.
     if (outcome.isNotEmpty()) {
         column.addView(
-            notice(context, outcome, NoticeKind.ERROR).apply { tag = DetailTag.OUTCOME },
+            notice(context, outcome, NoticeKind.ERROR)
+                .apply { tag = DetailTag.OUTCOME }
+                .screenAir(),
         )
     }
 
@@ -335,7 +353,9 @@ fun sessionDetailView(
     // The refusal and severance sentences this field also carries are transitions rather than a
     // healthy resting state, so they still draw.
     if (panel.leaseNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE })
+        column.addView(
+            notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE }.screenAir(),
+        )
     }
 
     // THE MACHINE'S OWN WORDS, IN THE MACHINE'S OWN REGISTER (agents-tracker-ksvb.10). They used to
@@ -345,7 +365,9 @@ fun sessionDetailView(
     // reserved for a reply that does not exist.
     if (panel.leaseDetail.isNotEmpty()) {
         column.addView(
-            noticeDetail(context, panel.leaseDetail).apply { tag = DetailTag.LEASE_DETAIL },
+            noticeDetail(context, panel.leaseDetail)
+                .apply { tag = DetailTag.LEASE_DETAIL }
+                .screenAir(),
         )
     }
 
@@ -357,7 +379,7 @@ fun sessionDetailView(
     //
     // agents-tracker-nx44.1: `ctaStack` AND NOT `column`, so the three controls carry `.acts2`'s
     // own `space_8` gap between them rather than the zero addView gave them.
-    val controls = ctaStack(context)
+    val controls = ctaStack(context).also { it.screenAir() }
     if (panel.offersTakeControl) controls.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
     // AND THE WAY BACK OUT (agents-tracker-nx44.6). The two are never on screen together --
     // `SessionLease` decides them as the two sides of one fact -- so this is the same site in the

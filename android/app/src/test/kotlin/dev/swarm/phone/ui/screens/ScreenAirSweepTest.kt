@@ -137,9 +137,10 @@ class ScreenAirSweepTest {
             }
             if (!isLeaf(view)) return
 
-            // The view's own box, then what a negative margin handed back, then the padding on a
-            // view that paints nothing -- the glyphs are its edge when the ground shows through.
-            val room = maxOf(0, -(margins?.marginStart ?: 0)) to maxOf(0, -(margins?.marginEnd ?: 0))
+            // The view's own box, then the room it took inside its own bounds and does not paint,
+            // then the padding on a view that paints nothing -- the glyphs are its edge when the
+            // ground shows through.
+            val room = bloomRoom(view) to bloomRoom(view)
             val pad = if (view.background == null) view.paddingStart to view.paddingEnd else 0 to 0
             val box = clamp ?: left..(left + view.width)
             leaves += Leaf(
@@ -152,6 +153,18 @@ class ScreenAirSweepTest {
         walk(root, 0, null, 0)
         return leaves
     }
+
+    /**
+     * The room a view took inside its own bounds and does not paint: `ctaButton`'s halo.
+     *
+     * IT IS READ OFF THE DRAWABLE AND NOT OFF THE NEGATIVE MARGIN, which is the more accurate of
+     * two readings of the same fact rather than a softer one. `CtaSurface` insets every layer it
+     * paints by [dev.swarm.phone.ui.kit.CtaSpec.insetPx], so that IS where the visible edge is; the
+     * negative margin is the room being handed back to the layout, and `screenAir` legitimately
+     * changes it -- the air minus the room -- while the drawable's inset does not move.
+     */
+    private fun bloomRoom(view: View): Int =
+        (view.background as? dev.swarm.phone.ui.kit.CtaSurface)?.spec?.insetPx ?: 0
 
     /** What a person reads or presses: words on screen, or anything that takes a tap. */
     private fun isLeaf(view: View): Boolean =

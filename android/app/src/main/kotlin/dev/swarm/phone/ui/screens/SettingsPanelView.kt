@@ -12,6 +12,7 @@ import dev.swarm.phone.ui.kit.killSwitchPanel
 import dev.swarm.phone.ui.kit.machineRow
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.settingsRow
 
@@ -48,6 +49,15 @@ import dev.swarm.phone.ui.kit.settingsRow
  * something wrong. Nothing here owns a click: the section reports and offers no control, because
  * the one repair action this phone has is the sync detail sheet's and the one destructive action is
  * the PAIRING row's, two lines above.
+ *
+ *
+ * **THE COLUMN IS BARE AND ITS FLUSH CHILDREN CARRY THE SCREEN'S AIR** (owner ruling
+ * 2026-08-09, agents-tracker-nx44.10). Every leaf on this screen renders at least
+ * `swarm_space_12` from both edges, spent exactly once: the components that already hold
+ * themselves off the glass keep their own step, and the ones §4 leaves bare -- the notice
+ * line, a loose CTA, row 9's field -- get `screenAir` here. A padding on the column would
+ * add 12 to the first group and re-run agents-tracker-2pnu F2's doubling; the argument is
+ * `ui/kit/ScreenColumn.kt`'s and `ScreenAirSweepTest` is what holds every screen to it.
  *
  * THE NOTICE LINES ARE THE KIT'S NOW (agents-tracker-ksvb.4). This paragraph read "THE NOTICE LINES
  * ARE STILL BARE `TextView`s ... that is the absence of a decision rather than one made here", and
@@ -250,10 +260,14 @@ fun settingsPanelView(
         // placement puts a blank strip under the machine of every healthy phone -- the always-on
         // warning this app's conditional-notice discipline refuses everywhere else.
         section.health.takeIf { it.isNotEmpty() }?.let { line ->
-            column.addView(notice(context, line).apply { tag = SettingsTag.CONNECTION_HEALTH })
+            column.addView(
+                notice(context, line).apply { tag = SettingsTag.CONNECTION_HEALTH }.screenAir(),
+            )
         }
         section.clockNotice.takeIf { it.isNotEmpty() }?.let { line ->
-            column.addView(notice(context, line).apply { tag = SettingsTag.CONNECTION_CLOCK })
+            column.addView(
+                notice(context, line).apply { tag = SettingsTag.CONNECTION_CLOCK }.screenAir(),
+            )
         }
         // ROW 12'S PANEL, AND ONLY WHERE THE SWITCH IS OFF (agents-tracker-2pnu F5). It is the
         // last block in the section because it is the heaviest thing on the screen -- the one
@@ -290,26 +304,32 @@ fun settingsPanelView(
 
     // UNCONDITIONAL AND SO DRAWN BEFORE THE NOTICES: the disclosure is not the reason a switch is
     // dead, so it does not belong under the sentence that is.
-    column.addView(notice(context, panel.disclosure).apply { tag = SettingsTag.DISCLOSURE })
+    column.addView(
+        notice(context, panel.disclosure).apply { tag = SettingsTag.DISCLOSURE }.screenAir(),
+    )
 
     // The loop variable is `line` and not `notice`: the sentence and the kit factory that draws it
     // cannot share a name in one scope.
     panel.notices.forEach { line ->
-        column.addView(notice(context, line).apply { tag = SettingsTag.NOTICE })
+        column.addView(notice(context, line).apply { tag = SettingsTag.NOTICE }.screenAir())
     }
 
     // AFTER THE NOTICES, because the sentence is why the control is there: the blocked notice names
     // this control in its own words (`SettingsScreen.OPEN_NOTIFICATION_SETTINGS` is interpolated
     // into it), so a control drawn above the sentence would arrive before its reason.
     panel.permissionRedirectLabel?.let { label ->
-        column.addView(redirectFor(label).apply { tag = SettingsTag.PERMISSION_REDIRECT })
+        column.addView(
+            redirectFor(label).apply { tag = SettingsTag.PERMISSION_REDIRECT }.screenAir(),
+        )
     }
 
     // BESIDE IT AND UNDER THE NOTICES, for the same reason and by the same arrangement. The two are
     // never both present -- a permission notice suppresses the delivery one -- so what this places
     // is whichever way out the live fault has.
     panel.deliveryRedirectLabel?.let { label ->
-        column.addView(deliveryRedirectFor(label).apply { tag = SettingsTag.DELIVERY_REDIRECT })
+        column.addView(
+            deliveryRedirectFor(label).apply { tag = SettingsTag.DELIVERY_REDIRECT }.screenAir(),
+        )
     }
 
     below?.let { column.addView(it) }

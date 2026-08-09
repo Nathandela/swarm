@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 
@@ -34,6 +35,15 @@ import dev.swarm.phone.ui.kit.sessionList
  * set bigger than the records it was warning about. `§4 Notice line` is the row that specifies it
  * and `ui/kit/Notice.kt` is where the type and the ink are now chosen, which is what keeps this
  * screen out of it: the fence above still refuses `setTextAppearance` here.
+ *
+ *
+ * **THE COLUMN IS BARE AND ITS FLUSH CHILDREN CARRY THE SCREEN'S AIR** (owner ruling
+ * 2026-08-09, agents-tracker-nx44.10). Every leaf on this screen renders at least
+ * `swarm_space_12` from both edges, spent exactly once: the components that already hold
+ * themselves off the glass keep their own step, and the ones §4 leaves bare -- the notice
+ * line, a loose CTA, row 9's field -- get `screenAir` here. A padding on the column would
+ * add 12 to the first group and re-run agents-tracker-2pnu F2's doubling; the argument is
+ * `ui/kit/ScreenColumn.kt`'s and `ScreenAirSweepTest` is what holds every screen to it.
  *
  * IT SITS ABOVE THE HEADING RATHER THAN INSIDE THE LIST, which is the one placement decision here
  * and it differs from `PeekPanel`'s deliberately. There the banner goes INSIDE the mono well,
@@ -91,7 +101,9 @@ fun activityPanelView(
     column.addView(navHeader(context, panel.title, null, status).apply { tag = ActivityTag.NAV })
 
     if (panel.staleNotice.isNotEmpty()) {
-        column.addView(notice(context, panel.staleNotice).apply { tag = ActivityTag.STALE })
+        column.addView(
+            notice(context, panel.staleNotice).apply { tag = ActivityTag.STALE }.screenAir(),
+        )
     }
 
     panel.sections.forEach { section ->

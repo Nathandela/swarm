@@ -1526,6 +1526,65 @@ func TestPBDS7_TheRow18ReaderIsSpecificToRow18sShape(t *testing.T) {
 	}
 }
 
+// s23Row20SideAir reads row 20's side-air cell -- the owner's ruling of 2026-08-09 on
+// agents-tracker-nx44.10, which is where the destinations' side inset is stated. It is its own
+// reader and not s23DocPadding's because the cell is a SIDE air rather than a padding pair: the
+// scaffold pads top and bottom and the destinations' columns pad nothing, so there is no
+// `padding space_N x space_N` shape here to match.
+var s23Row20SideAir = regexp.MustCompile("side air `space_([0-9]+)` per destination")
+
+// TestPBDS7_TheScreenAirIsRow20sOwnStep joins `screenAir`'s step to the row that rules it, rather
+// than trusting the KDoc that cites it.
+//
+// THE NUMBER IS THE ONE THING A ROBOLECTRIC SWEEP CANNOT CHECK. `ScreenAirSweepTest` measures every
+// leaf against `R.dimen.swarm_space_12` and the kit spends `R.dimen.swarm_space_12`, so both halves
+// of that claim read the same resource: it proves the air is applied and cannot say the step is the
+// ruled one. This is where the step comes from the design source.
+func TestPBDS7_TheScreenAirIsRow20sOwnStep(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	row, ok := s23FindRow(doc, "#20 Screen scaffold")
+	if !ok {
+		t.Fatalf("PB-DS-7: no row 20 in %s, so screenAir's step is joined to nothing",
+			s23ComponentsDoc)
+	}
+	m := s23Row20SideAir.FindStringSubmatch(row)
+	if m == nil {
+		t.Fatalf("PB-DS-7: row 20 states no side air of the form this reader knows. The owner's "+
+			"2026-08-09 ruling on agents-tracker-nx44.10 is what put it there, and without the "+
+			"cell the kit's `swarm_space_12` is a number nobody ruled: %q", row)
+	}
+	want := "swarm_space_" + m[1]
+
+	sources := s23KitSources(t)
+	src, ok := sources["ScreenColumn.kt"]
+	if !ok {
+		t.Fatalf("PB-DS-7: the kit has no ScreenColumn.kt, which is where screenAir() lives")
+	}
+	code := kotlinCodeOnly(src)
+	if !strings.Contains(code, "R.dimen."+want) {
+		t.Errorf("PB-DS-7: ScreenColumn.kt never references R.dimen.%s, which row 20 rules as the "+
+			"destinations' own side air -- a dimension not read from the scale is one typed at the "+
+			"call site", want)
+	}
+	if !strings.Contains(code, "fun View.screenAir(") {
+		t.Error("PB-DS-7: ScreenColumn.kt declares no `screenAir`, so row 20's side air has no " +
+			"seam and every destination column is free to pay it itself")
+	}
+}
+
+// TestPBDS7_TheSideAirReaderIsSpecificToRow20sCell is that reader's negative control: row 18's
+// padding cell must not be read as row 20's, or a wording change in either could point this
+// reader at the other row's number.
+func TestPBDS7_TheSideAirReaderIsSpecificToRow20sCell(t *testing.T) {
+	m := s23Row20SideAir.FindStringSubmatch("side air `space_12` per destination, spent exactly once")
+	if m == nil || m[1] != "12" {
+		t.Fatalf("the side-air reader cannot parse the cell as the document writes it")
+	}
+	if s23Row20SideAir.MatchString("padding `space_10` vertical x `space_24` horizontal") {
+		t.Error("the side-air reader also matches row 18's padding cell")
+	}
+}
+
 // s23DerivedSpacing binds a component Substrate never drew to the scale steps ITS ROW in the
 // derivation table names.
 //
