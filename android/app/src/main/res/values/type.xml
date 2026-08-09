@@ -101,6 +101,15 @@
       `calt` is stated even though the family ships it on: naming two features without it would
       switch the contextual alternates off. The gate asserts both directions.
 
+      SINCE 2026-08-09 ONE STYLE'S FAMILY IS A RULING RATHER THAN A CITATION (ADR-012 phase 2 P9,
+      owner ruling R2). `Label.Section` cites `.plabel`, which is mono in the design source; the
+      ruling restates ADR-009 D7's "wherever machine data renders" as the standing boundary —
+      mono is for data the MACHINE produced (agent names, code, ids, timestamps) and nothing else,
+      so a section header the design WROTE is the app speaking and takes sans-serif, at the
+      ruling's own specimen tracking (0.11em) rather than `.plabel`'s 0.09em. The gate reads this
+      one exception from ADR-012 phase 2 P9 rather than from the citation, the same shape the rung
+      table already takes for size.
+
       ADR-009 (O2) MOVED FOUR STYLES AND NOBODY TYPED A NUMBER TO DO IT. The two display styles
       lost 150 units of weight (650 to 500) and the four tracking values that cite a token
       changed sign (body tracking goes POSITIVE on light-on-dark text, per the reading-ergonomics
@@ -242,13 +251,18 @@
         <item name="android:lineHeight">17.825sp</item>
     </style>
 
+    <!-- `.plabel` is `600 10.5px var(p-mono)` with `letter-spacing: 0.09em` — ADR-012 phase 2
+         P9, owner ruling R2 (2026-08-09), moves this style's FAMILY and TRACKING off that
+         citation: mono is for data the machine produced and a section header is the app speaking,
+         so this is sans now, at the ruling's own specimen tracking (`.secsans`, 0.11em) rather
+         than `.plabel`'s 0.09em. Weight and size are untouched — R2 argues the voice, not the
+         hierarchy — so 600 and the micro rung still come from `.plabel` and R1 respectively. -->
     <!-- origin: .plabel -->
     <style name="TextAppearance.Swarm.Label.Section" parent="TextAppearance.AppCompat">
         <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">600</item>
-        <item name="android:letterSpacing">0.09</item>
-        <item name="android:fontFamily">@font/jetbrains_mono</item>
-        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
+        <item name="android:letterSpacing">0.11</item>
+        <item name="android:fontFamily">sans-serif</item>
     </style>
 
     <!-- `.tcard .h` HAS NO STYLE HERE, AND THAT IS ADR-012 T1 (2026-08-09). It is 600 10.5px mono

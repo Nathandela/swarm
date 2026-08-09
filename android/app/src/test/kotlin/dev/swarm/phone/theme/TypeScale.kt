@@ -168,16 +168,34 @@ object TypeScale {
         rungs()[selector]?.sp ?: designSpec(selector).sizePx
 
     /**
+     * ADR-012 phase 2 P9, owner ruling R2 (2026-08-09): the ONE selector whose VOICE this app
+     * renders off its own citation. `.plabel` is `--p-mono` in the design source; `Label.Section`
+     * -- the style that descends from it -- renders sans-serif at the ruling's own specimen
+     * tracking (0.11em) instead. Keyed by selector rather than by style name because [designSpec]
+     * and [renderedSpec] both are, and `.plabel` has exactly one style descending from it.
+     */
+    private val SANS_HEADER_RULED_TRACKING: Map<String, Float> = mapOf(".plabel" to 0.11f)
+
+    /**
      * One CSS rule's typography as this app renders it: the design's rule, with the ruled rung's
-     * size in place of the rule's own px.
+     * size in place of the rule's own px, and -- for the one style ADR-012 phase 2 P9 rules --
+     * the sans family and tracking in place of the rule's own mono ones.
      *
-     * THE TWO ARE DIFFERENT CLAIMS AND BOTH ARE ASSERTED. [designSpec] is what the design draws
+     * THE THREE ARE DIFFERENT CLAIMS AND ALL ARE ASSERTED. [designSpec] is what the design draws
      * and is what the Go gate holds the rung table's `Design px` column to; this is what a view
      * has to resolve to. A suite comparing a rendered view against `designSpec` would have been
-     * asserting the ladder ADR-012 phase 2 retired.
+     * asserting the ladder ADR-012 phase 2 retired, or -- for `.plabel` since R2 -- the mono voice
+     * the ruling moved off.
      */
     fun renderedSpec(selector: String): Spec =
-        designSpec(selector).let { it.copy(sizePx = renderedSizeSp(selector)) }
+        designSpec(selector).let { spec ->
+            val rulesSansVoice = SANS_HEADER_RULED_TRACKING.containsKey(selector)
+            spec.copy(
+                sizePx = renderedSizeSp(selector),
+                trackingEm = SANS_HEADER_RULED_TRACKING[selector] ?: spec.trackingEm,
+                androidFamily = if (rulesSansVoice) SANS_FAMILY else spec.androidFamily,
+            )
+        }
 
     /** One CSS rule's resolved typography, in the units Android expresses them in. */
     data class Spec(

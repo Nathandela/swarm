@@ -115,7 +115,7 @@ because every remaining half-step is occupied by a style with call sites.
 
 ## Open questions — routed to the owner, decided nowhere in this ADR
 
-> **ALL FIVE WERE RULED ON 2026-08-09** (specimens: `https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`; recorded on beads `agents-tracker-v6sa` and `agents-tracker-oonj`, implemented under `agents-tracker-nx44.9`). They are left below **as asked**, because a question edited after it is answered stops being the record of what was uncertain. Question 1 is answered by P1, question 2 by phase 2's sibling ruling R2 (section headers move to sans; not this section's work), question 3 by P3, question 4 by P4 and question 5 by P5.
+> **ALL FIVE WERE RULED ON 2026-08-09** (specimens: `https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`; recorded on beads `agents-tracker-v6sa` and `agents-tracker-oonj`, implemented under `agents-tracker-nx44.9`). They are left below **as asked**, because a question edited after it is answered stops being the record of what was uncertain. Question 1 is answered by P1, question 2 by P9 (ruling R2: section headers move to sans), question 3 by P3, question 4 by P4 and question 5 by P5.
 
 None of these is a merge. Each one changes what somebody sees, so each is an owner ruling, and this
 ADR states them so they are adjudicated together rather than one at a time by whoever next edits a
@@ -196,11 +196,11 @@ pixels move" is one review where the second half is the one nobody separated out
 
 **Status**: Accepted
 **Date**: 2026-08-09
-**Decides**: the owner rulings R1, R3, R4 and R5 of 2026-08-09 (specimens
+**Decides**: the owner rulings R1, R2, R3, R4 and R5 of 2026-08-09 (specimens
 `https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`, recorded on bead
 `agents-tracker-v6sa`; implemented under `agents-tracker-nx44.9`). R2 (section headers move to
-sans) and R6–R8 (spacing exceptions, contrast floors, dot glow) are ruled in the same pass and
-land in their own records — R2 amends this ADR's own question 2, R6–R8 amend ADR-009.
+sans) amends this ADR's own question 2 and lands here, in P9. R6 (spacing exceptions) lands in its
+own gate record; R7–R8 (contrast floors, dot glow) amend ADR-009.
 **Amends**: phase 1's T5 ("17 styles across 12 sizes") — the style count is unchanged and the SIZE
 count becomes six. Phase 1's decisions T1–T4 are untouched.
 
@@ -374,6 +374,60 @@ so the next reader meets a decision instead of an artefact.
    status-text trailing form never acquired a production caller and its only candidate row is one
    `SettingsPanelScreen` deliberately does not build; the row keeps its ink rule verbatim, because
    that is the design record a future spend has to obey, and records that the FORM does not ship.
+
+### P9 — R2: section headers move to sans, and the mono boundary is restated
+
+R2 answers phase 1's own question 2 (the sans/mono role boundary). `Label.Section` — the group
+heading that sets NEEDS YOU, WORKING, PAIRING, NOTIFICATIONS — moves from mono to sans-serif caps.
+The ruling's own reason: "The rule becomes crisp and defensible: mono = data the machine produced
+(agent names, code, ids, timestamps), sans = the app speaking. Headers are the app speaking."
+
+`Label.Section`'s cited properties move, and its size does not — R1 already put it on the micro
+rung and R2 touches nothing there:
+
+| Property | Was (`.plabel`, mono) | Is (R2, sans) |
+| --- | --- | --- |
+| `android:fontFamily` | `@font/jetbrains_mono` | `sans-serif` |
+| `android:fontFeatureSettings` | `tnum, zero, calt` | none — sans carries nothing, the rule every other sans style in this file already holds |
+| `android:letterSpacing` | 0.09 (`.plabel`'s own) | 0.11 |
+
+Weight (600) does not move; `.plabel`'s own citation states it and R2 does not touch it.
+
+**THE 0.11 TRACKING IS THE RULING'S SPECIMEN, NOT `.plabel`'S AND NOT INVENTED.** The owner's
+rendered comparison draws the choice as `.secsans { font-size: 10.5px; font-weight: 600;
+letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink3); }` beside Substrate's own
+mono precedent, `.secmono` at 0.09em, so the wider tracking is read directly against the value it
+replaces rather than chosen after the fact. A sans face carrying a mono tracking sits tighter than
+spaced caps read on a proportional face; the specimen's 0.11em is the record of the value the
+ruling actually looked at.
+
+**THE MONO BOUNDARY, RESTATED AS THE RULED RULE.** ADR-009 D7's own words were "wherever machine
+data renders"; R2 makes that the standing rule for every style in this file, mono or sans, from
+here on: **mono is for data the machine produced — agent names, code, ids, timestamps — and
+nothing else.** A label the design wrote, however small or however uppercase, is the app speaking
+and takes the sans family. Phase 1's question 2 named two violations. `Label.Section` was the
+live one and R2 fixes it. The other was `Label.CardHead`'s role — the settings row's status word,
+merged into `Mono.Meta` by T1 for pixel-identity and then retired without ever acquiring a
+production caller (P8.2's own record, `agents-tracker-2pnu` F5) — and it has no call site left to
+move. Should that role ever return, this is the boundary it returns under: a status word is the
+app speaking, not data the machine produced, so it would not come back onto `Mono.Meta`.
+
+**`Mono.Meta` ITSELF DOES NOT MOVE.** Its three live call sites — `ActivityRow.kt`'s timestamp
+cell, `Notice.kt`'s `noticeDetail` (the machine's own raw reason, spliced under a notice line),
+`ApprovalSheet.kt`'s `contextLine` (the project, the agent and the machine — who is asking) — are
+each an instance of the ruled rule's own list: a timestamp, a diagnostic identifier, an agent
+name. `.tcard .h`'s own demo content in the shared block is a file path (`Edit ·
+internal/attach/attach.go`), which is why T1's merge into `Mono.Meta` was already safe on the
+boundary R2 states as well as on the pixels T1 argued: both rules are machine data, and R2 leaves
+that pair exactly where phase 1 put it.
+
+**The gate.** `android/gate/s22b_type_test.go` reads `Label.Section`'s family and tracking from a
+small RULED table rather than from `.plabel`'s own citation — the same shape R1's rung table takes
+for size: a role's VOICE is a decision about this app's own boundary, not a fact the cited CSS
+rule alone can state once the rule and the ruling disagree. The table has one row today, and every
+entry is checked against this section's own text (the `### P9 — R2:` heading above) so a family
+that moved without a citation behind it fails exactly as an uncited size move does in the rung
+table.
 
 ## Consequences
 

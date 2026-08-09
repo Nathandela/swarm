@@ -213,6 +213,51 @@ var s22bUnimplementedRules = map[string]s22bUnimplementedRule{
 }
 
 // ---------------------------------------------------------------------------
+// THE R2 OVERRIDE: the one style whose VOICE moved off its own citation, since ADR-012 phase 2 P9
+// (owner ruling R2, 2026-08-09).
+// ---------------------------------------------------------------------------
+//
+// Family, tracking, weight and font features come from the CSS rule a style cites everywhere else
+// in this file. R2 is the one exception: a role's VOICE (mono, for data the machine produced, or
+// sans, for the app speaking) is a decision about this app's own sans/mono boundary and not a fact
+// `.plabel` alone can state once the rule and the ruling disagree -- the same shape R1's rung
+// table takes for SIZE. This is that table's family/tracking counterpart, with one row.
+
+// s22bSansHeaderOverride is one style ADR-012 phase 2 P9 moves off its citation's family.
+type s22bSansHeaderOverride struct {
+	TrackingEm float64 // the ruling's own specimen tracking, not the citation's
+	Ruling     string  // "R2" -- checked against a `### P... — R2:` heading, as the rung table is
+}
+
+// s22bSansHeaderRuled is that table, keyed by style suffix (so the resource name is derivable).
+var s22bSansHeaderRuled = map[string]s22bSansHeaderOverride{
+	"Label.Section": {TrackingEm: 0.11, Ruling: "R2"},
+}
+
+// TestPBDS2_TheSansHeaderOverrideIsRuled is the citation check the rung table's Ruling column
+// gets in TestPBDS2_TheLadderIsTheFiveRuledRungs, applied to the one style s22bSansHeaderRuled
+// names: a voice that moved off its own citation is ruled or it is a family typed into a resource
+// file against its own design source.
+func TestPBDS2_TheSansHeaderOverrideIsRuled(t *testing.T) {
+	styles := s22bStyles(t)
+	adr := readFileOrFail(t,
+		filepath.Join(repoRoot(t), filepath.FromSlash(s22bTypeConsolidationADR)), "ADR-012 phase 2")
+
+	for suffix, ov := range s22bSansHeaderRuled {
+		name := "TextAppearance.Swarm." + suffix
+		if _, exists := styles[name]; !exists {
+			t.Errorf("PB-DS-2: the R2 override names %q, which type.xml does not declare", name)
+			continue
+		}
+		if !strings.Contains(adr, "— "+ov.Ruling+":") {
+			t.Errorf("PB-DS-2: %s moves off its citation's family on the authority of %s, and "+
+				"this record has no `### P... — %s:` section. Following the citation is what makes "+
+				"it one.", name, ov.Ruling, ov.Ruling)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // THE RUNG TABLE: where a style's SIZE comes from since ADR-012 phase 2 (2026-08-09).
 // ---------------------------------------------------------------------------
 //
@@ -697,6 +742,15 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 			continue
 		}
 		spec.RungSp = rung.Sp
+
+		// THE VOICE HALF OF THE JOIN COMES FROM THE R2 OVERRIDE (ADR-012 phase 2, ruling R2) FOR
+		// THE ONE STYLE IT NAMES. `.plabel` is `--p-mono` in the design source; `Label.Section`
+		// renders sans on the ruling's own authority, so its family and tracking are read from
+		// s22bSansHeaderRuled rather than from spec, exactly as size is read from the rung table.
+		if ov, ruled := s22bSansHeaderRuled[strings.TrimPrefix(name, "TextAppearance.Swarm.")]; ruled {
+			spec.Family = "--p-font"
+			spec.TrackingEm = ov.TrackingEm
+		}
 
 		s22bAssertStyleMatches(t, name, "origin `"+style.Origin+"`", style, spec)
 	}
@@ -1921,6 +1975,27 @@ func TestPBDS3_ExactlyTheDecidedFontsAreBundled(t *testing.T) {
 // The one-directional version ("every style whose family is monospace descends from a --p-mono
 // rule") is the weaker half and is the one that passes over an empty set: a type.xml with no
 // mono styles at all satisfies it.
+// AUTHORIZED REWRITE, ADR-012 phase 2 P9 (owner ruling R2, 2026-08-09). This test asserted every
+// --p-mono design rule renders mono in the app, with no exception; R2 rules exactly one. What the
+// loop below said before, quoted so the move is visible:
+//
+//	monoRules := 0
+//	for sel, spec := range design {
+//		if spec.Family != "--p-mono" {
+//			continue
+//		}
+//		monoRules++
+//		style, ok := byOrigin[sel]
+//		if !ok {
+//			continue // reported by the bidirectional join above
+//		}
+//		if got := style.Items["android:fontFamily"]; got != s22bFontSubstitution["--p-mono"] {
+//			t.Errorf("PB-DS-3: `%s` is a --p-mono rule and %q renders it in %q. The terminal "+
+//				"peek, every timestamp and every command line are on this family; a sans "+
+//				"substitution there is the app silently abandoning the fixed advance the design "+
+//				"draws frames with.", sel, style.Name, got)
+//		}
+//	}
 func TestPBDS3_EveryMonoRuleBecomesAMonoStyle(t *testing.T) {
 	design := s22bDesignTypeScale(t)
 	styles := s22bStyles(t)
@@ -1930,7 +2005,13 @@ func TestPBDS3_EveryMonoRuleBecomesAMonoStyle(t *testing.T) {
 		byOrigin[s.Origin] = s
 	}
 
+	sansRuled := map[string]bool{} // style NAME -> ruled sans by R2, so ".plabel" is not one entry
+	for suffix := range s22bSansHeaderRuled {
+		sansRuled["TextAppearance.Swarm."+suffix] = true
+	}
+
 	monoRules := 0
+	r2Exceptions := 0
 	for sel, spec := range design {
 		if spec.Family != "--p-mono" {
 			continue
@@ -1940,12 +2021,22 @@ func TestPBDS3_EveryMonoRuleBecomesAMonoStyle(t *testing.T) {
 		if !ok {
 			continue // reported by the bidirectional join above
 		}
+		if sansRuled[style.Name] {
+			r2Exceptions++
+			continue // ADR-012 phase 2 P9, ruling R2: this mono rule renders sans, on purpose
+		}
 		if got := style.Items["android:fontFamily"]; got != s22bFontSubstitution["--p-mono"] {
 			t.Errorf("PB-DS-3: `%s` is a --p-mono rule and %q renders it in %q. The terminal "+
 				"peek, every timestamp and every command line are on this family; a sans "+
 				"substitution there is the app silently abandoning the fixed advance the design "+
-				"draws frames with.", sel, style.Name, got)
+				"draws frames with, unless it is the one style ADR-012 phase 2 P9 (ruling R2) "+
+				"names.", sel, style.Name, got)
 		}
+	}
+	if want := len(s22bSansHeaderRuled); r2Exceptions != want {
+		t.Errorf("PB-DS-3: %d mono rule(s) rendered sans under the R2 exception, want %d. "+
+			"s22bSansHeaderRuled names %d style(s); one that never matched a mono design rule "+
+			"would mean the override is dead or the citation moved.", r2Exceptions, want, want)
 	}
 	// The design has 9 product mono rules: .pnav .live, .plabel, .prow .ag, .prow .ln b,
 	// .sheet2 .ctx, .sheet2 .cmd, .sheet2 .bind, .tcard .h and .tcard .b. `.panelframe .cap`

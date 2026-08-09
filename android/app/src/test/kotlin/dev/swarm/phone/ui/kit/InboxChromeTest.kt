@@ -169,15 +169,23 @@ class InboxChromeTest {
     // ---- section label ----------------------------------------------------
 
     /**
-     * `.plabel`: mono, tracked wide, uppercase, and in the tertiary ink whose contrast failure
-     * PB-DS-12 records rather than fixes.
+     * `.plabel`: tracked wide, uppercase, and in the tertiary ink whose contrast failure PB-DS-12
+     * records rather than fixes.
+     *
+     * SANS, NOT MONO, SINCE ADR-012 PHASE 2 P9 (owner ruling R2, 2026-08-09). `.plabel` is
+     * `--p-mono` in the design source and this style rendered it verbatim until R2 restated the
+     * sans/mono boundary as "mono is for data the machine produced -- agent names, code, ids,
+     * timestamps -- and nothing else": a section header is the app speaking, not machine data, so
+     * it moves to sans-serif at the ruling's own specimen tracking (0.11em) rather than `.plabel`'s
+     * own 0.09em. [KitOrigin.textClaims] reads both the family and the tracking through
+     * `TypeScale.renderedSpec`, which carries the one R2 exception.
      *
      * `text-transform: uppercase` is the COMPONENT's, not the copy's -- `isAllCaps` rather than an
      * uppercased string, so the screen keeps passing "Needs you" and the accessibility tree keeps
      * reading it as a word rather than as four letters.
      */
     @Test
-    fun `the section label is the design's mono uppercase heading`() {
+    fun `the section label is the design's sans-serif uppercase heading`() {
         val label = sectionLabel(context, "Needs you")
         val claims = mutableListOf(
             Claim("`.plabel` padding-top", dimenPx("swarm_space_12"), label.paddingTop),
