@@ -34,11 +34,12 @@ import org.junit.Test
 class MachinePaneTest {
 
     /**
-     * This phone's clock, 27 hours after the fixture's `lastHeardUnixMs` -- so the elapsed
-     * duration is arithmetic rather than a wait, and it crosses the day boundary that made the
-     * retired wall-clock form unreadable.
+     * This phone's clock, 19 hours after the fixture's `lastHeardUnixMs` -- so the elapsed
+     * duration is arithmetic rather than a wait, and it crosses the CALENDAR day boundary that
+     * made the retired wall-clock form unreadable while staying inside `sinceLastHeard`'s hours
+     * bucket (24 h and over coarsens to days, which would state a different unit than the claim).
      */
-    private val NOW = 1_753_900_000_000L + 27 * 3_600_000L
+    private val NOW = 1_753_900_000_000L + 19 * 3_600_000L
 
     private fun pane(
         presence: String = "online",
@@ -79,7 +80,7 @@ class MachinePaneTest {
         // `assertTrue("the user is told WHEN", line.contains("since 14:26"))` -- a wall clock
         // with no date on it, which at 09:00 the next morning reads the same as three minutes.
         val line = silent.presenceExplanation(NOW)
-        assertTrue("the user is told HOW LONG", line.contains("for 27h"))
+        assertTrue("the user is told HOW LONG", line.contains("for 19h"))
         assertTrue("the relay's word is attributed to the relay", line.contains("relay"))
 
         val healthy = pane(presence = "online")
