@@ -314,11 +314,22 @@ func installGatewayUnit(stateDir string, stderr io.Writer) bool {
 //
 // PATH remains the fallback: a source checkout has `go install`ed both into GOBIN with no
 // archive layout at all.
+//
+// AND THE ANSWER IS THE MOST STABLE NAME FOR THE FILE ADJACENCY PICKED (agents-tracker-nx44.4).
+// Resolving symlinks finds the right FILE and produces a path that names one RELEASE: on a
+// Homebrew cask that is /usr/local/Caskroom/swarm/<version>/swarm-remote, which the next `brew
+// upgrade` deletes while the unit stamped with it goes on being exec'd -- EX_CONFIG on every
+// restart until launchd parks the label, and the owner's phone served by nothing. A cask links
+// swarm-remote as well as swarm (.goreleaser.yaml's binaries:), and re-points those links on
+// every upgrade, so the link is the same program under a name that survives.
 func resolveGatewayBinary() (string, error) {
 	if self, err := osExecutable(); err == nil {
-		if self, err = filepath.EvalSymlinks(self); err == nil {
-			sibling := filepath.Join(filepath.Dir(self), gatewayBinary)
+		if resolved, err := filepath.EvalSymlinks(self); err == nil {
+			sibling := filepath.Join(filepath.Dir(resolved), gatewayBinary)
 			if isExecutableFile(sibling) {
+				if stable := stableGatewayAlias(self, sibling); stable != "" {
+					return stable, nil
+				}
 				return sibling, nil
 			}
 		}
@@ -328,6 +339,37 @@ func resolveGatewayBinary() (string, error) {
 		return "", err
 	}
 	return filepath.Abs(exe)
+}
+
+// stableGatewayAlias returns a path that names the same file as target through a location an
+// upgrade does not move, or "" when none does.
+//
+// IT IS A RESOLUTION AND NOT A NAME MATCH, and that is the whole of its safety. The two
+// candidates are the places an installer puts a link -- beside the path this binary was
+// INVOKED by (pre-symlink: the cask's bin directory), and the gateway PATH answers with -- and
+// either is accepted only when EvalSymlinks proves it lands on the very file adjacency picked.
+// A different swarm-remote earlier on PATH is precisely what the adjacency rule exists to
+// refuse, and preferring a stable-looking name over the shipped sibling would hand the
+// supervisor another program under the gateway's name.
+func stableGatewayAlias(self, target string) string {
+	var candidates []string
+	if filepath.IsAbs(self) {
+		candidates = append(candidates, filepath.Join(filepath.Dir(self), gatewayBinary))
+	}
+	if p, err := exec.LookPath(gatewayBinary); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			candidates = append(candidates, abs)
+		}
+	}
+	for _, cand := range candidates {
+		if cand == target || !isExecutableFile(cand) {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(cand); err == nil && resolved == target {
+			return cand
+		}
+	}
+	return ""
 }
 
 // isExecutableFile reports whether path is a regular file this user could exec.
@@ -1190,6 +1232,7 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 		warn(err)
 		return
 	}
+	restampGatewayUnit(verb, stateDir, sup, stderr)
 	switch err := sup.Ensure(); {
 	case err == nil:
 	case errors.Is(err, supervise.ErrNotInstalled):
@@ -1197,6 +1240,50 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 			"the paired device will receive nothing. Run `swarm remote init` to install one.\n", verb)
 	default:
 		warn(err)
+	}
+}
+
+// restampGatewayUnit repairs a unit that names a program which is no longer there, BEFORE the
+// supervisor is asked to start it.
+//
+// THE OUTAGE IT ENDS (agents-tracker-nx44.4, 2026-08-09). A unit stamped by an older release
+// named that release's staged gateway; `brew upgrade` deleted the directory; launchd went on
+// exec'ing the path, the job exited EX_CONFIG (78) on every restart until the label sat in the
+// penalty box, and `swarm remote pair` kickstarted that same stale label and reported success.
+// resolveGatewayBinary now prefers the version-stable link, which fixes the NEXT install and
+// does nothing for the machines already carrying a versioned unit -- and no command re-stamped
+// one: init installs, pair only ensures, and pairing is refused while a device is enrolled.
+//
+// IT IS THE PATH THAT IS CHECKED, not the file's age or its contents: a unit is a claim about
+// a program, and the only claim this can settle is whether that program is still there to run.
+// A unit naming a healthy gateway is LEFT ALONE, and that restraint is the point -- Ensure
+// never restarts a running gateway, and a bootout on every pair would drop the connection of
+// the phone being paired.
+//
+// AND THE RELOAD IS PART OF IT. launchd holds the plist it was bootstrapped with (bootstrap on
+// a loaded label is a no-op, which is why supervisor.go ignores its error), so a fresh file
+// alone changes nothing about the running job. Stop-then-Ensure is the bootout/bootstrap pair
+// by hand, expressed through the seam the CLI already has.
+//
+// Every failure is a warning, for ensureGatewayRunning's reason: the enrollment is durable and
+// already committed, and the operator is told rather than handed an exit status.
+func restampGatewayUnit(verb, stateDir string, sup supervise.Supervisor, stderr io.Writer) {
+	exe, err := supervise.InstalledExec(stateDir)
+	if err != nil || isExecutableFile(exe) {
+		// No unit to check (the caller's own ErrNotInstalled hint covers that), or the unit
+		// names a program that is right there.
+		return
+	}
+	fmt.Fprintf(stderr, "remote %s: the gateway supervision unit names %s, which is not an "+
+		"executable file any more -- an upgrade that moved it leaves the supervisor exec'ing a "+
+		"path that is gone, which is a gateway that never starts. Re-stamping the unit and "+
+		"reloading it.\n", verb, exe)
+	if !installGatewayUnit(stateDir, stderr) {
+		return
+	}
+	if err := sup.Stop(); err != nil && !errors.Is(err, supervise.ErrNotInstalled) {
+		fmt.Fprintf(stderr, "remote %s: the re-stamped unit was written, but the old job was not "+
+			"stopped, so the supervisor may still be holding the unit it loaded first: %v\n", verb, err)
 	}
 }
 
