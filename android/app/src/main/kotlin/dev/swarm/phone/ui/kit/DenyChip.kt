@@ -25,10 +25,13 @@ import dev.swarm.phone.R
  * restates either.
  *
  * WHY NOT `ctaButton(kind = DENY)`, WHICH IS THE OBVIOUS ANSWER. It has the colours and the wrong
- * metrics: `--p-btn-r` 9, `space_12` on all four edges and `Label.Button` at 13.5 sp, against row
- * 13's `--p-chip-r` 8, `space_8` x `space_10` and `Label.Chip` at 11 sp. A sheet CTA is the primary
- * thing on its sheet; this is a control inside a row, and it must not out-weigh the device name
- * beside it.
+ * metrics: `--p-btn-r` 9, `space_12` on all four edges and `Label.Button` at 14 sp, against row
+ * 13's `--p-chip-r` 8, `space_8` x `space_10` and `Label.Chip` at 11.5 sp. A sheet CTA is the
+ * primary thing on its sheet; this is a control inside a row, and it must not out-weigh the device
+ * name beside it. (The two sizes read "13.5 sp" and "11 sp" until owner ruling R1 of 2026-08-09
+ * consolidated the ramp to five rungs, ADR-012 phase 2 P1: the button label absorbed into the 14
+ * title rung and the chip label into the 11.5 code rung. The GAP is what this paragraph is about,
+ * and it survives the merge -- one rung, and the padding either side of it.)
  *
  * WHY NOT [filterChip], WHICH IS THE OTHER OBVIOUS ANSWER. It has the metrics and hard-codes its
  * own two fills -- `--p-card` and `--p-hero` -- because a scope chip's fill IS its selected state.

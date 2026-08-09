@@ -183,8 +183,11 @@ fun phoneScaffoldView(
         // **IT IS ONE OVERLAY PER MOVING PART AND IT USED TO BE ONE ON THIS ROOT** (ADR-009 D4.3's
         // 2026-08-08 amendment, agents-tracker-ksvb.3). This column does not scroll and the
         // destination inside it does, so a single overlay here was a noise field pinned to the
-        // WINDOW with the type sliding under it: at 9.5-11 sp the antialiasing ramp is most of a
-        // stroke, so every glyph was re-modulated on every scroll frame. Invisible in a
+        // WINDOW with the type sliding under it: at 10-11.5 sp the antialiasing ramp is most of a
+        // stroke, so every glyph was re-modulated on every scroll frame. (The range read "9.5-11
+        // sp" until owner ruling R1 of 2026-08-09 consolidated the ladder, ADR-012 phase 2 P1: the
+        // app's two smallest rungs are 10 micro and 11.5 code now. The argument is the ramp at the
+        // bottom of the scale, and the bottom of the scale moved.) Invisible in a
         // screenshot, and the literal reading of "the fonts are dancing". Anchored to each part
         // that moves -- the scrolled child above, and the two pieces of chrome below, which move
         // with nothing and so keep an overlay of their own -- the tile and the glyph travel

@@ -8,7 +8,16 @@ import dev.swarm.phone.R
 /**
  * origin: .plabel
  *
- * A Group heading: mono, 10.5 sp, tracked to 0.09 em, uppercase, in the tertiary ink.
+ * A Group heading: sans, 10 sp, tracked to 0.11 em, uppercase, in the tertiary ink.
+ *
+ * THE VOICE IS A RULING AND NOT THE CITATION, and that is owner ruling R2 (ADR-012 phase 2 P9,
+ * 2026-08-09), with the size the same ruling day's R1. What this line said before -- "mono, 10.5
+ * sp, tracked to 0.09 em" -- was `.plabel` read straight off the design source, and all three
+ * numbers have moved: mono is now for data the MACHINE produced (agent names, code, ids,
+ * timestamps), so a heading the design WROTE is the app speaking and takes sans-serif at the
+ * ruling's own specimen tracking (`.secsans`, 0.11em); and the micro rung of R1's five-rung ladder
+ * is 10. `origin:` still names `.plabel`, because the WEIGHT and the role are still read from it --
+ * `type.xml`'s own comment on `Label.Section` carries the split.
  *
  * `text-transform: uppercase` IS THE COMPONENT'S, NOT THE COPY'S. `isAllCaps` rather than an
  * uppercased string, so the screen keeps passing "Needs you" and the accessibility tree keeps
