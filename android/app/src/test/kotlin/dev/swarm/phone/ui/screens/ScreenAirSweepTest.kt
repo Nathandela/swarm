@@ -1,12 +1,15 @@
 package dev.swarm.phone.ui.screens
 
+import android.app.Activity
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.PhoneActivity
 import dev.swarm.phone.R
 import dev.swarm.phone.theme.SwarmTheme
 import dev.swarm.phone.ui.ApprovalDecision
@@ -130,13 +133,13 @@ class ScreenAirSweepTest {
      * horizontal scroller has clamped it to (null outside one), and how many times a container
      * above it has spent the screen's own side air.
      */
-    private fun sweep(root: View): List<Leaf> {
-        val width = screenWidthPx()
-        val host = layOut(root)
+    private fun sweep(root: View): List<Leaf> = leavesOf(layOut(root), screenWidthPx())
 
+    private fun leavesOf(root: View, width: Int): List<Leaf> {
         val leaves = mutableListOf<Leaf>()
         fun walk(view: View, left: Int, clamp: IntRange?, spentAbove: Int) {
             if (view.visibility != View.VISIBLE) return
+            if (chromeLeaf(view)) return
             val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
             val spent = spentAbove + if (margins?.marginStart in airSteps()) 1 else 0
             val scroller = clamp ?: if (view is HorizontalScrollView) left..(left + view.width) else null
@@ -163,7 +166,7 @@ class ScreenAirSweepTest {
                 airSpends = spent,
             )
         }
-        walk(host, 0, null, 0)
+        walk(root, 0, null, 0)
         return leaves
     }
 
@@ -210,10 +213,9 @@ class ScreenAirSweepTest {
      * IS that leaf. A card is the box those words sit in, and the box inside it is a box too, so
      * this walk descends all the way down and measures every one of them.
      */
-    private fun surfaces(root: View): List<Surface> {
-        val width = screenWidthPx()
-        val host = layOut(root)
+    private fun surfaces(root: View): List<Surface> = surfacesOf(layOut(root), screenWidthPx())
 
+    private fun surfacesOf(root: View, width: Int): List<Surface> {
         val painted = mutableListOf<Surface>()
         fun walk(view: View, left: Int, clamp: IntRange?) {
             if (view.visibility != View.VISIBLE) return
@@ -229,7 +231,7 @@ class ScreenAirSweepTest {
                 }
             }
         }
-        walk(host, 0, null)
+        walk(root, 0, null)
         return painted
     }
 
@@ -261,6 +263,28 @@ class ScreenAirSweepTest {
     }
 
     /**
+     * The same furniture where it is a LEAF rather than a surface, which is where a person presses
+     * it: ONE ITEM in the tab bar, and the strip.
+     *
+     * A tab item is `.ptabs div` -- a `flex: 1` column of a glyph and a word, at the bar's own
+     * `padding: 14px 8px 24px` -- so the first and last of the three necessarily reach the edges of
+     * a bar that is itself full-bleed. It is the only clickable thing in this app that is allowed
+     * to, and it is named by the label the kit tags rather than by its shape. The strip is exempt
+     * for the reason it is exempt as a surface, one sentence up; it appears here as well because it
+     * is a `TextView` with words in it, which is the definition of a leaf.
+     *
+     * NOTHING ELSE INSIDE THE TWO BARS IS EXEMPT, and that is the difference between this and
+     * [fullBleedChrome]. The composer's field and its Send control are content in a bar, held off
+     * the glass by row 9's own `space_14`, and the walk keeps descending to measure them.
+     */
+    private fun chromeLeaf(view: View): Boolean =
+        view.tag == KitTag.SYNC_STRIP ||
+            (
+                view is ViewGroup &&
+                    (0 until view.childCount).any { view.getChildAt(it).tag == KitTag.TAB_LABEL }
+                )
+
+    /**
      * The room a view took inside its own bounds and does not paint: `ctaButton`'s halo.
      *
      * IT IS READ OFF THE DRAWABLE AND NOT OFF THE NEGATIVE MARGIN, which is the more accurate of
@@ -276,11 +300,29 @@ class ScreenAirSweepTest {
     private fun isLeaf(view: View): Boolean =
         (view is TextView && view.text.isNotBlank()) || view.isClickable
 
+    /**
+     * What a fault names, and it names something a person could point at.
+     *
+     * A container's own words are the words INSIDE it: a tab item, a card and a bar are all
+     * untagged `LinearLayout`s, and three faults reading "LinearLayout" are three faults nobody can
+     * act on. So an untagged group borrows the first line of text under it.
+     */
     private fun describe(view: View): String {
-        val words = (view as? TextView)?.text?.toString()?.take(40).orEmpty()
+        val words = ((view as? TextView)?.text?.toString() ?: view.words()).take(40)
         val tag = view.tag?.toString()?.takeIf { it.isNotEmpty() }
         return "${view.javaClass.simpleName}${tag?.let { "[$it]" } ?: ""}" +
-            if (words.isEmpty()) "" else " \"$words\""
+            if (words.isBlank()) "" else " \"$words\""
+    }
+
+    /** The first words under [this], or "" where there are none. */
+    private fun View.words(): String {
+        if (this is TextView && text.isNotBlank()) return text.toString()
+        if (this is ViewGroup) {
+            for (i in 0 until childCount) {
+                getChildAt(i).words().takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        return contentDescription?.toString().orEmpty()
     }
 
     /** Every screen this app can put in front of a person, built the way production builds it. */
@@ -463,6 +505,106 @@ class ScreenAirSweepTest {
                 "`sessionList`'s ruled `space_12` -- so it would report every screen in the app",
             surfaces(held).none { minOf(it.start, it.end) < air() },
         )
+    }
+
+    // ---- the window, as the app actually assembles it -----------------------
+
+    /**
+     * The same two floors, read off the WINDOW rather than off a factory's return value.
+     *
+     * **WHAT NO DESTINATION BUILDER CAN REACH IS THE HALF THE SURFACES OWN** (agents-tracker-
+     * nx44.11). Five of the screen views take a `below:` slot -- views the slice has not recomposed,
+     * hosted under the panel -- and every builder above passes null, because what production puts
+     * in that slot is built by `PhoneSurface` and `SettingsSurface`: the startup line, the
+     * capability notice and PB-APP-9's routed outcome, which need an Activity, a facade and paired
+     * state to exist at all. They are kit `notice`s added to bare `MATCH_PARENT` columns that
+     * "carry no padding of their own any more", so three sentences on the Inbox and one that IS the
+     * whole of Settings rendered against both edges while every claim above stayed green. A guard
+     * that stops at the factories is a guard the next surface-owned view walks straight past.
+     *
+     * IT IS THE APP AND NOT A HARNESS. `PhoneRuntime.phone()` answers [dev.swarm.phone
+     * .PhoneStartup.Unavailable] on every JVM run -- the phone core is a gomobile AAR of `.so`
+     * files -- which is the one state that puts all of this on screen at once: the routed sentence
+     * is written to `PhoneSurface`'s `status` on the Inbox, to the Activity destination's own
+     * notice, and on Settings it replaces the panel entirely (`SettingsSurface.render`'s
+     * `Unavailable` branch clears the host and adds `outcome` alone). `PhoneSurfaceUnavailableTabs
+     * Test` reads the same three tabs in the same state for the same reason.
+     *
+     * THE CHROME IS ON SCREEN HERE AND NOWHERE ELSE, which is what makes [fullBleedChrome]'s
+     * exemptions load-bearing rather than documentary: the tab bar and the sync strip belong to the
+     * scaffold, so a destination built alone has neither.
+     */
+    @Test
+    fun `every leaf and every surface in the real window clears the ruled side inset`() {
+        val floor = air()
+        val faults = mutableListOf<String>()
+        val read = mutableMapOf<String, Int>()
+
+        for (tab in listOf("Inbox", "Activity", "Settings")) {
+            ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
+                scenario.onActivity { activity ->
+                    activity.tapTab(tab)
+                    val window = activity.laidOutWindow()
+                    val width = screenWidthPx()
+
+                    val leaves = leavesOf(window, width)
+                    read[tab] = leaves.size
+                    leaves.filter { minOf(it.start, it.end) < floor }.forEach { leaf ->
+                        faults += "$tab: ${leaf.what} sits ${leaf.start}px from the left edge " +
+                            "and ${leaf.end}px from the right, against the ruled ${floor}px floor"
+                    }
+                    surfacesOf(window, width).filter { minOf(it.start, it.end) < floor }
+                        .forEach { surface ->
+                            faults += "$tab: ${surface.what} paints ${surface.start}px from the " +
+                                "left edge and ${surface.end}px from the right, against the " +
+                                "ruled ${floor}px floor"
+                        }
+                }
+            }
+        }
+
+        // NON-VACUOUS FIRST. A sweep of a window that never laid itself out reports no faults and
+        // no leaves, which is the one way this claim could certify the defect it was written for.
+        read.forEach { (tab, leaves) ->
+            assertTrue(
+                "the $tab tab put NOTHING readable on screen, so this sweep measured an empty " +
+                    "window and would have passed whatever the app renders",
+                leaves > 0,
+            )
+        }
+        assertEquals(
+            "agents-tracker-nx44.11: ${faults.size} things the SURFACES own render inside the " +
+                "ruled `swarm_space_12` side inset -- the lines no screen factory builds:\n" +
+                faults.joinToString("\n"),
+            emptyList<String>(),
+            faults,
+        )
+    }
+
+    /** The window, measured and laid out at a handset's size -- Robolectric lays out nothing itself. */
+    private fun Activity.laidOutWindow(): View {
+        val width = screenWidthPx()
+        val height = width * 2
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
+        )
+        content.layout(0, 0, width, height)
+        return content
+    }
+
+    /** Press a tab by the word on it, which is what a person does and what the smoke does. */
+    private fun Activity.tapTab(label: String) {
+        val bar = mutableListOf<TextView>()
+        fun walk(view: View) {
+            if (view is TextView && view.tag == KitTag.TAB_LABEL) bar += view
+            if (view is ViewGroup) for (i in 0 until view.childCount) walk(view.getChildAt(i))
+        }
+        walk(findViewById<ViewGroup>(android.R.id.content))
+        val tab = bar.firstOrNull { it.text.toString() == label }
+        assertTrue("there is no tab labelled \"$label\" on screen", tab != null)
+        (tab!!.parent as View).performClick()
     }
 
     // ---- the screens, as production builds them ---------------------------
