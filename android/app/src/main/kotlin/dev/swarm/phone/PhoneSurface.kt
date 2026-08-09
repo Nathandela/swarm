@@ -38,6 +38,7 @@ import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
@@ -876,6 +877,20 @@ class PhoneSurface(
      * IT CARRIES NO PADDING OF ITS OWN ANY MORE. The 24 dp was the last thing on this surface
      * deciding a spatial value; the kit components above it carry theirs, and these views are
      * unstyled while they wait for the components that will style them.
+     *
+     * **AND THAT IS WHY THE THREE LINES PAY THE SCREEN'S AIR HERE** (owner ruling 2026-08-09,
+     * agents-tracker-nx44.11). This column is hosted under the Inbox's sections as
+     * `triageInboxView`'s `below:`, and §4's notice line carries "no margin, no padding and no
+     * gravity of its own ... the air is the composing column's" -- so with the padding gone, three
+     * sentences rendered against both edges of the glass on a destination whose rows sit 12 dp in.
+     *
+     * **PER LINE, AND NOT ON THIS COLUMN, WHICH WOULD BE THE F2 DOUBLING.** [launchHost] holds the
+     * launch form and [approvalHost] the approval sheet; both are compositions whose own children
+     * already spend `screenAir` (`ui/kit/ScreenColumn.kt`). A margin on this column would stack on
+     * top of theirs and walk the launch fields to 24 dp -- agents-tracker-2pnu F2 exactly -- which
+     * is also why `triageInboxView` must not air the slot itself: it cannot know that what arrives
+     * is half bare lines and half composed screens. The air goes to the three that arrive with
+     * none, where `ScreenAirSweepTest`'s window sweep is what holds it.
      */
     private val unrecomposedControls = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
@@ -886,6 +901,7 @@ class PhoneSurface(
         )) {
             addView(child)
         }
+        listOf(status, capabilityNotice, outcome).forEach { line -> line.screenAir() }
     }
 
     /**

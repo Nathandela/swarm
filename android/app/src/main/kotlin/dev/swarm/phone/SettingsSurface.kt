@@ -39,6 +39,7 @@ import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.screens.ConnectionSection
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PairedMachineRow
@@ -120,8 +121,17 @@ class SettingsSurface(
      *
      * ERROR AND NOT INFO, because every value this holds is a verdict: `startup.error.message`, and
      * `PressFeedback.line`, which `ofSuccess` and `ofUnsent` both leave empty on purpose.
+     *
+     * **IT CARRIES THE SCREEN'S SIDE AIR, AT CONSTRUCTION, BECAUSE IT HAS TWO HOSTS** (owner ruling
+     * 2026-08-09, agents-tracker-nx44.11). §4's notice line has "no margin, no padding and no
+     * gravity of its own ... the air is the composing column's", and this line is composed twice:
+     * `settingsPanelView`'s `below:` slot on the drawn panel, and [render]'s `Unavailable` branch,
+     * where it is added to a cleared [host] and IS the whole Settings screen. Both put it on a bare
+     * `MATCH_PARENT` column, so both rendered a refusal against both edges of the glass while the
+     * rows above it sat 12 dp in. Spending the step where the view is BUILT covers both hosts once:
+     * `screenAir` sets an absolute margin, so a second call cannot double it.
      */
-    private val outcome = notice(activity, "", NoticeKind.ERROR)
+    private val outcome = notice(activity, "", NoticeKind.ERROR).apply { screenAir() }
 
     private val needsInput = touchFilteredSwitch(PushToggle.FIRST)
     private val finished = touchFilteredSwitch(PushToggle.SECOND)
