@@ -154,9 +154,11 @@ class PhoneActivity : AppCompatActivity() {
      * `android/gate/tabbar_test.go` asserts both halves, because either alone is correct.
      */
     private fun insetTheSystemBars() {
+        val screenTopPx = resources.getDimensionPixelSize(R.dimen.swarm_screen_top)
         surface.root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            val top = screenTopOrRealInset(bars.top, screenTopPx)
+            view.setPadding(bars.left, top, bars.right, bars.bottom)
             insets
         }
     }
@@ -194,3 +196,25 @@ class PhoneActivity : AppCompatActivity() {
      */
     internal fun touchFilteredViews(): List<View> = surface.touchFilteredActions
 }
+
+/**
+ * Derivation row 20's own "or": the screen scaffold's top padding is "`screen_top` (OR THE REAL
+ * INSET)" -- a fallback, not a sum. `swarm_screen_top` (dimens.xml, 54dp; gate-pinned against the
+ * design source by android/gate/s22b_spacing_test.go) had no Kotlin consumer anywhere in the app
+ * before this: [insetTheSystemBars] applied only [measuredTopPx], with nothing under it for a
+ * window that reports a thinner inset than the design's own minimum -- most concretely, before
+ * this listener's first `WindowInsets` dispatch, when the padded root would otherwise start at 0
+ * (agents-tracker-nx44.1).
+ *
+ * `screenTopPx` DOES NOT WIN ON A REAL HANDSET, and that is row 19's own ruling rather than a gap:
+ * "`screen_top` 54 is an iPhone notch constant -- on Android it must come from
+ * `WindowInsets.statusBars`, with 54 as the design-time preview value only". A modern handset's
+ * measured inset is always taller, so this is a floor for the window before the platform has
+ * measured anything, not a second inset stacked under the real one.
+ *
+ * A TOP-LEVEL FUNCTION AND NOT A LOCAL, so the arithmetic is testable without driving a real
+ * `WindowInsets` dispatch through Robolectric -- which this app has never done, and which the
+ * platform makes awkward to construct in a unit test.
+ */
+internal fun screenTopOrRealInset(measuredTopPx: Int, screenTopPx: Int): Int =
+    maxOf(measuredTopPx, screenTopPx)
