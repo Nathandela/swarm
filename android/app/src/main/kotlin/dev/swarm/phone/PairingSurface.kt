@@ -354,7 +354,14 @@ class PairingSurface(
     /** The in-flight attempt as the CORE holds it. Null until a QR has been decoded. */
     private var handle: Pairing? = null
 
-    /** Set once the phone has been rebuilt for a completed pairing; see [renderReady]. */
+    /**
+     * Set once the phone has been rebuilt for a completed pairing; see [renderReady].
+     *
+     * IT IS PER ATTEMPT AND NOT PER PROCESS. [acceptScannedPayload] clears it, because a screen
+     * that has paired once is exactly where the next pairing starts: the revoke sends the
+     * handset here, and behind an unclearable latch that second pairing would complete and
+     * change nothing on screen.
+     */
     private var rebuilt = false
 
     /**
@@ -550,6 +557,20 @@ class PairingSurface(
             // have left it empty.
             val started = if (PairingFlow.entryCarriesItsOwnRelay(payload)) app.beginPairing(payload)
             else app.beginPairingWithCode(payload, relayForTypedCode())
+            // AND THE POST-PAIRING WORK IS OWED AGAIN (agents-tracker-nx44.4). [rebuilt] is a
+            // one-shot, so without this line the SECOND pairing in an Activity runs neither
+            // [PhoneRuntime.rebuildAfterPairing] nor [onPaired] -- and the second pairing is the
+            // documented recovery from a revoke, performed on the very screen the revoke sent the
+            // phone to. No onPaired means no whole-window redraw, and that redraw is the only
+            // thing that spends the revoke's divergence (`PhoneSurface` clears
+            // `settings.unpairNotice` and the latched operation id there and nowhere else), so
+            // the handset ends up paired and still showing REVOKE_UNCONFIRMED until the process
+            // is rebuilt.
+            //
+            // HERE AND NOT IN THE DRAW: an attempt beginning is the one event that owes the work
+            // again. renderReady runs on every poll, so a clear there would re-run the App swap
+            // on every draw of a paired screen.
+            rebuilt = false
             handle = started
             attempt = PairingFlow.begin(payload, started.origin(), started.originIsPrivate())
             outcome.text = ""
