@@ -24,11 +24,14 @@ import kotlin.math.tan
  * PB-DS-8, AS AMENDED BY ADR-009 D5 -- "the exceptions are named", and there are four of them.
  *
  * ADR-007 B134 decision 3, executed, and then amended once. The design source declares no
- * `@keyframes`, no `transition` and no `animation` anywhere -- its working affordance is the
+ * `@keyframes`, no `transition` and no `animation` anywhere -- its working affordance WAS the
  * STATIC dot glow plus the STATIC workbar gradient, and its own rule is "nothing glows unless it
- * is alive". `remote-control-mock.html`'s `pulse 1.6s` dot is inherited from the pre-skin iOS
- * palette and is a conflict with that rule, not a specification: this object does not implement
- * it, and must not grow a way to.
+ * is alive". Ruling R8 (2026-08-09) retired the glow half of that pair for Working specifically --
+ * the maquette's `.sdot.work` declares no `box-shadow` at all -- so today Working's affordance is
+ * the workbar gradient alone; NeedsInput keeps the static dot glow, unchanged. Both remain static:
+ * `remote-control-mock.html`'s `pulse 1.6s` dot is inherited from the pre-skin iOS palette and is
+ * a conflict with "nothing glows unless it is alive", not a specification: this object does not
+ * implement it, and must not grow a way to.
  *
  * ONLY FOUR THINGS MOVE, and this is the exhaustive list:
  *   - the bottom sheet: `translateY` 100% -> 0

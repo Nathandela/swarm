@@ -266,9 +266,10 @@ var s23Inbox = []s23Component{
 			"floor, and a word painted in one would be prose taking an ink measured as a dot -- " +
 			"which is also what keeps the three states legible to a reader who cannot separate " +
 			"teal from champagne, since the WORD differs in every state. Flat, no glow: §4's B134 " +
-			"mapping gives the two glows to NeedsInput and Working because they say a session is " +
-			"ALIVE, and none of these three is a running agent. The 48 dp floor is `denyChip`'s " +
-			"ruling under PB-DS-12 -- this opens the detail sheet, so it is a control.",
+			"mapping gave NeedsInput and Working a glow because they say a session is ALIVE; " +
+			"ruling R8 (2026-08-09) narrowed that to NeedsInput alone, and none of these three " +
+			"is that. The 48 dp floor is `denyChip`'s ruling under PB-DS-12 -- this opens the " +
+			"detail sheet, so it is a control.",
 	},
 	{
 		Factory: "syncStrip",
@@ -431,8 +432,9 @@ var s23Inbox = []s23Component{
 		File:    "StatusDot.kt",
 		Origin:  ".pdot",
 		Derived: "§4 Status dots, B134 mapping",
-		Why: "the 7dp mark and its glow are Substrate's; WHICH Group takes which colour, and " +
-			"which two of the four glow at all, is B134's rebinding and exists nowhere else",
+		Why: "the 7dp mark and its glow are Substrate's; WHICH Group takes which colour is " +
+			"B134's rebinding, and which one of the four glows at all is ruling R8 (2026-08-09) " +
+			"-- neither exists anywhere else",
 	},
 	{
 		Factory: "sessionRow",
@@ -451,7 +453,9 @@ var s23Inbox = []s23Component{
 		Factory: "workingBar",
 		File:    "WorkingBar.kt",
 		Origin:  ".workbar",
-		Why:     "Substrate's Working affordance is this static gradient plus the dot glow, no pulse",
+		Why: "Substrate's Working affordance WAS this static gradient plus the dot glow, no " +
+			"pulse; ruling R8 (2026-08-09) retired the glow half, so this bar is now the whole " +
+			"of it",
 	},
 	{
 		Factory: "filterChip",
@@ -3628,7 +3632,12 @@ func TestPBDS7_TheStatusDotBindingIsTheCheckedInMapping(t *testing.T) {
 // the blend from a share this gate joined to the same table is the supported way to obtain a
 // colour the gate forbids typing.
 //
-// Substrate's rule is "nothing glows unless it is alive". Exactly two Groups are alive.
+// "Nothing glows unless it is alive" is still the rule, and it is now a ONE-WAY implication
+// rather than the two-way reading it used to have. Two Groups are alive -- NeedsInput is blocked
+// on the human and Working is computing -- and since owner ruling R8 (2026-08-09,
+// bead agents-tracker-oonj) only ONE of them glows: the maquette draws a halo on `.sdot.att` alone,
+// with no `box-shadow` at all on `.sdot.work`. Working's liveness is still visible, on the
+// workbar, which this test does not touch.
 func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 	src, ok := s23KitSources(t)["Kit.kt"]
 	if !ok {
@@ -3642,14 +3651,20 @@ func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 
 	// The dot glows, keyed by the token they are a blend of. Selected by Site rather than by name
 	// so that a derivation renamed upstream fails loudly instead of silently dropping out.
+	//
+	// THE PREFIX MOVED FROM `.pdot` TO `.sdot`, RULING R8 (2026-08-09). The original directions
+	// artifact names the status dot `.pdot`; the owner-signed maquette renames it `.sdot` and
+	// gives `.pdot` to a different mark entirely (machine presence, `.chip .pd`). D2 makes the
+	// maquette normative, so `.sdot` is the honest prefix now -- see internal/design/derive.go's
+	// own record of the rename.
 	wantShare := map[string]float64{}
 	for _, d := range design.Derivations() {
-		if strings.HasPrefix(d.Site, ".pdot") {
+		if strings.HasPrefix(d.Site, ".sdot") {
 			wantShare[d.Base] = float64(d.Percent) / 100
 		}
 	}
 	if len(wantShare) == 0 {
-		t.Fatal("PB-DS-7: internal/design declares no .pdot derivation, so this test would " +
+		t.Fatal("PB-DS-7: internal/design declares no .sdot derivation, so this test would " +
 			"require the kit to glow nowhere and pass over an empty set")
 	}
 
@@ -3668,15 +3683,16 @@ func TestPBDS7_TheDotGlowsAreTheDeclaredDerivations(t *testing.T) {
 		switch {
 		case glows && got[group] != want:
 			t.Errorf("PB-DS-7: group %s (%s) must glow at %g of its own colour -- the derivation "+
-				"internal/design declares for `.pdot` -- and the kit declares %g. The glow is "+
+				"internal/design declares for `.sdot` -- and the kit declares %g. The glow is "+
 				"`Paint.setShadowLayer(9dp, 0, 0, blend)` on a software layer; the blend itself "+
 				"may not be typed (PB-TOK-7), so the share is what the kit carries.",
 				group, token, want, got[group])
 		case !glows && got[group] != 0:
 			t.Errorf("PB-DS-7: group %s (%s) glows at %g in the kit, and the design declares no "+
-				"glow for it. Substrate's stated rule is that nothing glows unless it is alive: "+
-				"ReadyForReview is finished work waiting on a human and Completed is finished, so "+
-				"neither is. `.pdot.ok` sets `box-shadow: none` explicitly.",
+				"glow for it. Nothing glows unless it is alive, and since ruling R8 that is a "+
+				"one-way implication: ReadyForReview and Completed are not alive, and Working IS "+
+				"alive but does not glow -- the maquette's `.sdot.work` declares no box-shadow at "+
+				"all, the same as `.sdot.ok` and `.sdot.done`.",
 				group, token, got[group])
 		}
 	}
@@ -3946,9 +3962,9 @@ func TestPBDS7_TheMetricScanCanActuallyFail(t *testing.T) {
 	}
 
 	// 2. A share cites internal/design's derivation table, and the VALUE is recomputed from it.
-	//    The two glow shares and the attention border are colour-mix inputs: PB-TOK-7 forbids
-	//    typing the resolved colour, so the share is what the kit holds and the table is where
-	//    it comes from.
+	//    The glow share, the deny fill and the attention border are colour-mix inputs: PB-TOK-7
+	//    forbids typing the resolved colour, so the share is what the kit holds and the table is
+	//    where it comes from.
 	if faults := check("/** origin: derivation attention-row-border */\nprivate const val S = 0.36f"); len(faults) != 0 {
 		t.Errorf("PB-DS-7: a share annotated `origin: derivation attention-row-border` and equal "+
 			"to the 36%% internal/design declares is reported as a fault: %v", faults)

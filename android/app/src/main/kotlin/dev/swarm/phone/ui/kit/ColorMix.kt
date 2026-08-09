@@ -7,11 +7,11 @@ import kotlin.math.roundToInt
  * `color-mix(in srgb, x <fraction>%, y)`: the ONE blend the design uses, on the platform that has
  * to render it.
  *
- * WHY THE KIT COMPUTES ITS DERIVED COLOURS INSTEAD OF SPENDING THEM AS RESOURCES. Four colours in
+ * WHY THE KIT COMPUTES ITS DERIVED COLOURS INSTEAD OF SPENDING THEM AS RESOURCES. Three colours in
  * this design are FUNCTIONS of tokens rather than tokens -- the attention row's warmed border, the
- * deny button's tint and the two status-dot glows -- so no `<color>` can carry them and PB-TOK-7
+ * deny button's tint and the status-dot glow -- so no `<color>` can carry them and PB-TOK-7
  * forbids typing their resolved values. `android/gate/s22_derived_test.go` enforces that by
- * scanning every shipped source for the four hexes. This file is the supported way to obtain them:
+ * scanning every shipped source for the three hexes. This file is the supported way to obtain them:
  * the SHARE is what the kit carries (joined to `internal/design.Derivations()` by
  * `android/gate/s23_kit_test.go`), and the arithmetic happens here.
  *
@@ -25,10 +25,10 @@ import kotlin.math.roundToInt
  *
  *  - `color-mix(in srgb, --p-att 36%, --p-hair)` blends toward a second OPAQUE colour. Both alphas
  *    are 1, so it is the plain weighted average of the channels.
- *  - `color-mix(in srgb, --p-att 70%, transparent)` blends toward `rgba(0, 0, 0, 0)`. This does
+ *  - `color-mix(in srgb, --p-att 50%, transparent)` blends toward `rgba(0, 0, 0, 0)`. This does
  *    NOT darken the colour. CSS interpolates in PREMULTIPLIED space, transparent's premultiplied
  *    contribution is zero on every channel, and un-premultiplying by the resulting alpha returns
- *    the base's RGB untouched at alpha 0.70.
+ *    the base's RGB untouched at alpha 0.50 -- the status dot's glow, ruling R8 (2026-08-09).
  *
  * Interpolating un-premultiplied gets the alpha right and the hue wrong, and the result still
  * reads as "a dimmer version of the token" in a diff -- so the mistake survives review. Doing the
@@ -75,10 +75,14 @@ internal object ColorMix {
     /**
      * Quantises one channel to 8 bits, ONCE, at the end of the blend.
      *
-     * Half rounds away from zero, which is `roundToInt`'s rule and is load-bearing rather than
-     * incidental: the needs-input glow's alpha is `0.70 * 255 = 178.5`, an exact tie, and the
-     * artifact renders `0xB3` = 179. Rounding half to even gives 178, and the one derivation whose
-     * arithmetic lands on the boundary comes out wrong by one.
+     * Half rounds away from zero, which is `roundToInt`'s rule and is CSS's own rule too. It used
+     * to be load-bearing in a way this file could show directly: before owner ruling R8
+     * (2026-08-09) the needs-input glow's alpha was `0.70 * 255 = 178.5`, an exact tie, and the
+     * artifact rendered `0xB3` = 179 -- away from zero. Rounding half to even would have given
+     * 178, wrong by one on the one derivation whose arithmetic landed on the boundary. R8 moved
+     * that derivation's share to 50%, whose own tie (`0.50 * 255 = 127.5`) rounds to 128 either
+     * way, so no value in this kit exercises the disagreement today; `roundToInt`'s rule is kept
+     * because it is still the CSS behaviour a future derivation may need.
      */
     private fun quantise(v: Float): Int = v.roundToInt().coerceIn(0, 255)
 }

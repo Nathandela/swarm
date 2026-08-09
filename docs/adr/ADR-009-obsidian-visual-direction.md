@@ -182,25 +182,28 @@ PB-TOK-8 holds; that `--p-att` now equals `--p-hero` is a *pairing* across sets,
 kind to the existing CTA alias, and the join keeps every row separate so a future skin can
 break either alias in one line.
 
-#### OPEN CONFLICT (2026-08-07, recorded by the fix pass — NOT resolved here)
+#### OPEN CONFLICT (2026-08-07, recorded by the fix pass) — RESOLVED (2026-08-09, owner ruling R8)
 
-**D2 and D1/D6 disagree about the status dot's glow, and the disagreement is real rather than a
-transcription slip.** Both authorities are this ADR's, so no implementing session can pick one.
+**D2 and D1/D6 disagreed about the status dot's glow, and the disagreement was real rather than a
+transcription slip.** Both authorities were this ADR's, so no implementing session could pick one
+— until the owner did, on the rendered specimen
+(`https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`, bead
+`agents-tracker-oonj`).
 
-- **What D1/D6 keep.** The glow shares are a `color-mix()` the ORIGINAL design source writes:
+- **What D1/D6 kept.** The glow shares were a `color-mix()` the ORIGINAL design source writes:
   `docs/research/remote-control-design-directions.html:78-79` gives `.pdot.att` 70% of `--p-att`
-  over transparent and `.pdot.wrk` 55% of `--p-work`. `docs/design/substrate-components.md:279`
-  records them, `internal/design.Derivations()` computes them, and `Kit.groupGlow` spends them.
-  D1 keeps the derivation mechanism unchanged and D6 keeps the Group binding unchanged; the app
-  therefore glows NeedsInput at 70% and Working at 55% today.
+  over transparent and `.pdot.wrk` 55% of `--p-work`. `docs/design/substrate-components.md:280`
+  recorded them, `internal/design.Derivations()` computed them, and `Kit.groupGlow` spent them.
+  D1 kept the derivation mechanism unchanged and D6 kept the Group binding unchanged; the app
+  therefore glowed NeedsInput at 70% and Working at 55% before this ruling.
 - **What D2's maquette draws.** `.sdot.att { box-shadow: 0 0 9px rgba(201,168,118,0.5) }` — a flat
   50% literal, not a `color-mix()` — and **no `box-shadow` at all** on `.sdot.work`, `.sdot.ok` or
   `.sdot.done`. Its component-sheet legend annotates glow for NeedsInput only ("glow 9dp").
 
-So the shipped app glows the Working dot, which the maquette never draws, at a share the maquette
-does not state; and glows the NeedsInput dot at 70% where the maquette writes 50%.
+So the shipped app glowed the Working dot, which the maquette never draws, at a share the maquette
+does not state; and glowed the NeedsInput dot at 70% where the maquette writes 50%.
 
-**Three readings, and choosing between them is a design call:**
+**Three readings were offered, and choosing between them was a design call:**
 
 1. The maquette **under-drew** an effect it meant to keep — the working dot's glow is a liveness
    signal ("nothing glows unless it is alive") and dropping it would make a running agent look
@@ -212,9 +215,15 @@ does not state; and glows the NeedsInput dot at 70% where the maquette writes 50
    move to the maquette (D2), which is the disposition `internal/design/derive_test.go` already
    flags for three of the four derivations as "ADR-009 D4's work, phase O3".
 
-**Nothing changes until the owner picks one.** The app keeps the derivation, because that is what
-D1 says is kept and it is the shipped behaviour; this note exists so the divergence is a recorded
-question rather than a discovery waiting for the O7 device pass.
+**RULING R8 CHOSE READING 2** (2026-08-09): "status-dot glow returns to the maquette reading —
+attention-only at 0.50, the working glow retires (the workbar already marks work; one glow means
+'needs you')." NeedsInput's glow share moved from 70% to 50%; Working's glow is deleted, not
+re-pointed — `internal/design.Derivations()`'s `working-dot-glow` entry retired with its only
+consumer, `Kit.groupGlow`'s `"working"` branch, and `needs-input-dot-glow`'s `Site` moved from the
+original artifact's `.pdot.att` to the maquette's own `.sdot.att` (D2 makes the maquette normative,
+and `.pdot` there names a different dot — machine presence — so `.sdot` is both the ruled and the
+honest citation). `Kit.kt`'s `StatusDot.kt` and `WorkingBar.kt`, and the Go and Robolectric gates
+that join them, are updated accordingly (`agents-tracker-nx44.9`, R8).
 
 ### D7. Typography.
 

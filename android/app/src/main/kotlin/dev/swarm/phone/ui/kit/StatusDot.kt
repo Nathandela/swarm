@@ -11,7 +11,12 @@ import android.widget.LinearLayout
 import kotlin.math.roundToInt
 
 /**
- * The 7 dp mark that carries a session's state, and the two glows that say it is alive.
+ * The 7 dp mark that carries a session's state, and the one glow that says NeedsInput needs you.
+ *
+ * ONE GLOW, NOT TWO, SINCE OWNER RULING R8 (2026-08-09, bead agents-tracker-oonj): Working is
+ * still alive and shows it on its own workbar, but the maquette's `.sdot.work` declares no
+ * `box-shadow` at all, so the dot itself stays flat there -- "one glow means one meaning: the
+ * light marks the session that needs you."
  *
  * THE RADIUS IS NOT A TOKEN AND CANNOT BE. `--p-dot-r` is 4 px applied to a 7 px box: `2 x 4 >= 7`,
  * so CSS clamps the corner and the dot renders a full circle. The literal 4 is unreachable, which
@@ -21,7 +26,7 @@ import kotlin.math.roundToInt
  */
 internal class StatusDotDrawable(
     val fill: Int,
-    /** The blended halo, or null for the two Groups the design leaves flat. */
+    /** The blended halo, or null for the three Groups the design leaves flat. */
     val glow: Int?,
     val diameterPx: Float,
     val glowRadiusPx: Float,
@@ -81,7 +86,7 @@ internal class StatusDotDrawable(
  * IT SETS A SOFTWARE LAYER WHEN IT GLOWS, and that is not an optimisation detail. `setShadowLayer`
  * is IGNORED under hardware acceleration for everything but text, so a dot that set the shadow and
  * left the view accelerated draws a flat circle -- correct in every value a test could read off
- * the Paint, and wrong on screen. The two Groups that do not glow stay on no layer at all: a
+ * the Paint, and wrong on screen. The three Groups that do not glow stay on no layer at all: a
  * software layer allocates a bitmap per view, and paying that on rows drawing a flat 7 dp circle
  * is a cost nobody would find again.
  *
@@ -89,13 +94,14 @@ internal class StatusDotDrawable(
  * THE MARK.** A 7 dp view on a software layer gets a 7 dp bitmap, and the 9 dp halo is clipped
  * INSIDE the layer -- before `clipChildren` on any parent is consulted, so setting that (which the
  * row and its line both do, and which a test asserted) cannot help: it governs the parent's clip,
- * not the layer's. The shipped dot had a correct Paint, a correct shadow radius, a correct layer
- * type and no visible glow on two of the four Groups, which is half of everything Substrate does
- * with an effect. So a dot THAT GLOWS is inflated by the halo's own radius on every side and gives
- * exactly that back as a NEGATIVE MARGIN: a CSS `box-shadow` does not participate in layout, and
- * the inflation must not either. `dot.layoutParams.width` is therefore no longer 7 dp on those
- * two, and the measurement that stayed 7 dp on all four is the one the design actually fixes --
- * what the mark occupies, which is `width + marginStart + marginEnd`.
+ * not the layer's. THE BUG THIS FIXED PREDATES RULING R8: when this was written two Groups were
+ * meant to glow, and the shipped dot had a correct Paint, a correct shadow radius, a correct layer
+ * type and no visible glow on either of them, which was half of everything Substrate did with an
+ * effect. So a dot THAT GLOWS is inflated by the halo's own radius on every side and gives exactly
+ * that back as a NEGATIVE MARGIN: a CSS `box-shadow` does not participate in layout, and the
+ * inflation must not either. `dot.layoutParams.width` is therefore no longer 7 dp on a glowing
+ * dot, and the measurement that stays 7 dp on all four Groups regardless is the one the design
+ * actually fixes -- what the mark occupies, which is `width + marginStart + marginEnd`.
  *
  * The inflation is the design's own 9 dp, so a Gaussian's outermost tail is still clipped: Skia
  * spreads a blur further than its stated radius. What is inside 9 dp is the halo the design
@@ -111,7 +117,7 @@ internal class StatusDotDrawable(
 fun statusDot(context: Context, group: String, description: CharSequence? = null): View {
     val corePx = Kit.dpPx(context, KitMetrics.DOT_DP)
     val glow = Kit.groupGlow(context, group)
-    // Room for the halo, and none at all for the two Groups the design leaves flat.
+    // Room for the halo, and none at all for the three Groups the design leaves flat.
     val haloPx = if (glow == null) 0 else Kit.dpPx(context, KitMetrics.GLOW_RADIUS_DP)
     return View(context).apply {
         background = StatusDotDrawable(

@@ -107,14 +107,18 @@ func ParseColor(s string) (RGBA, error) {
 // Mix is `color-mix(in srgb, x <fraction>%, y)`: the ONE blend function PB-TOK-7 asks for.
 //
 // THE TWO FORMS THE ARTIFACT USES LOOK ALIKE AND BEHAVE DIFFERENTLY, and one function has to get
-// both right or the four derived values become four hand-transcriptions again:
+// both right or the three derived values become three hand-transcriptions again:
 //
 //   - `color-mix(in srgb, --p-att 36%, --p-hair)` blends toward a second OPAQUE colour. Both
 //     alphas are 1, so this is the plain weighted average of the channels.
-//   - `color-mix(in srgb, --p-att 70%, transparent)` blends toward rgba(0,0,0,0). This does NOT
+//   - `color-mix(in srgb, --p-att 50%, transparent)` blends toward rgba(0,0,0,0). This does NOT
 //     darken the colour: CSS interpolates in PREMULTIPLIED space, transparent's premultiplied
 //     contribution is zero on every channel, and un-premultiplying by the resulting alpha
-//     returns the base colour's RGB untouched with alpha 0.70.
+//     returns the base colour's RGB untouched with alpha 0.50. Since owner ruling R8
+//     (2026-08-09), this is the maquette's `.sdot.att { box-shadow: 0 0 9px rgba(201,168,118,0.5)
+//     }` — a literal rgba() rather than a color-mix() call, and mathematically the same operation:
+//     an alpha-only blend over transparent is exactly what stating the base colour's own RGB at a
+//     reduced alpha means.
 //
 // Interpolating un-premultiplied gets the alpha right and the hue wrong, and the result still
 // reads as "a dimmer version of the token" in a diff -- so the mistake survives review. Doing the
@@ -148,10 +152,16 @@ func Mix(x RGBA, fraction float64, y RGBA) RGBA {
 // implementation that quantised its intermediates would accumulate a unit of error per operation
 // and land beside the artifact rather than on it.
 //
-// Half rounds away from zero, and that is load-bearing rather than incidental: the needs-input
-// glow's alpha is 0.70 * 255 = 178.5, an exact tie, and the artifact renders 0xB3 = 179. Rounding
-// half to even would produce 178 and the value would be wrong by one on the one derivation whose
-// arithmetic lands on the boundary.
+// Half rounds away from zero, which is CSS's own rule and browsers' own practice, and it used to
+// be load-bearing rather than incidental in a way this table could show directly: before owner
+// ruling R8 (2026-08-09) the needs-input glow's alpha was 0.70 * 255 = 178.5, an exact tie, and
+// the artifact rendered 0xB3 = 179 -- away from zero. Rounding half to even would have produced
+// 178, wrong by one on the one derivation whose arithmetic landed on the boundary. R8 moved that
+// derivation's share to 50%, whose own tie (0.50 * 255 = 127.5) happens to round to 128 either
+// way, so no row in this table exercises the disagreement today; the rule stays `math.Round`'s
+// own (away from zero) because that is still the CSS behaviour a future derivation may need.
+// TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha asserts 127.5 -> 128
+// directly, independent of which derivation currently lands there.
 func round8(v float64) uint8 {
 	r := math.Round(v)
 	if r <= 0 {
@@ -208,7 +218,7 @@ func (d Derivation) Resolve(tokens map[string]string) (RGBA, error) {
 
 // Derivations is every colour this product computes with color-mix rather than declares.
 //
-// SCOPE: the four the artifact's own CSS declares, and nothing else today.
+// SCOPE: the three the artifact's own CSS declares, and nothing else today.
 //
 // THERE WAS A FIFTH AND ADR-009 RETIRED IT. `toggle-track-off` -- `--p-ink3` at 40% over
 // transparent -- was the only entry whose authority was docs/design/substrate-components.md
@@ -218,6 +228,18 @@ func (d Derivation) Resolve(tokens map[string]string) (RGBA, error) {
 // gives the off track `--p-elev` inside a `--p-hair` border: two tokens and no blend. A derivation
 // whose only consumer has stopped consuming it is a colour nothing can get wrong, and keeping it
 // would leave the next reader looking for the component that spends it.
+//
+// THERE WAS A FOURTH TOO, AND OWNER RULING R8 RETIRED IT (2026-08-09, bead agents-tracker-oonj,
+// specimens https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b). ADR-009 D6
+// recorded an OPEN CONFLICT between the two design sources' own status-dot glows: the original
+// directions artifact's `.pdot.att`/`.pdot.wrk` glow NeedsInput at 70% and Working at 55%, and
+// the owner-signed maquette's `.sdot.att` glows only NeedsInput, at a literal 50%, with no
+// `box-shadow` at all on `.sdot.work`. R8 picked the maquette's reading -- "one glow means one
+// meaning: the light marks the session that needs you" -- so `working-dot-glow` retires with its
+// only consumer, `Kit.groupGlow`'s `"working"` branch, for [toggle-track-off]'s exact reason: a
+// derivation nothing spends is a colour nothing can get wrong, and a table entry with no caller
+// is a caller waiting to be rediscovered. `needs-input-dot-glow` survives, its Percent moved from
+// 70 to 50 and its Site re-pointed at the maquette's own selector.
 //
 // The invitation stands. A row here is still what lets a specified-but-undrawn blend in.
 //
@@ -244,16 +266,15 @@ func Derivations() []Derivation {
 		{
 			Name:    "needs-input-dot-glow",
 			Base:    "--p-att",
-			Percent: 70,
+			Percent: 50,
 			Over:    Transparent,
-			Site:    ".pdot.att box-shadow 0 0 9px -- the NeedsInput status dot's halo",
-		},
-		{
-			Name:    "working-dot-glow",
-			Base:    "--p-work",
-			Percent: 55,
-			Over:    Transparent,
-			Site:    ".pdot.wrk box-shadow 0 0 9px -- the Working status dot's halo",
+			// RULING R8 (2026-08-09): moved from the original directions artifact's `.pdot.att`
+			// (70%, color-mix) to the owner-signed maquette's own selector for the status dot,
+			// `.sdot.att` -- ADR-009 D2 makes the maquette normative and `.pdot` there names a
+			// DIFFERENT dot (machine presence, `.chip .pd`), so `.sdot` is the honest citation.
+			// `.sdot.att`'s box-shadow is a literal `rgba(201,168,118,0.5)`, mathematically the
+			// same operation Mix already computes for a color-mix()-over-transparent share.
+			Site: ".sdot.att box-shadow 0 0 9px rgba(...,0.5) -- the NeedsInput status dot's halo",
 		},
 	}
 }

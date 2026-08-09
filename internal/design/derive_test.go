@@ -59,12 +59,18 @@ func alphaLonghand(pct int) uint8 {
 // The requirement.
 // ---------------------------------------------------------------------------
 
-// TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens is PB-TOK-7's first half:
+// TestPBTOK7_TheThreeArtifactDerivationsAreComputedFromTheTokens is PB-TOK-7's first half:
 // "every derived colour is produced by a single documented blend function over token inputs".
 //
 // Each case states the artifact's resolved value AND the longhand arithmetic. The test fails if
 // Mix disagrees with either, so neither number is trusted on its own.
-func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T) {
+//
+// RENAMED FROM ...TheFourArtifactDerivations..., ADR-012's own naming discipline applied to this
+// file: owner ruling R8 (2026-08-09, bead agents-tracker-oonj) retired `working-dot-glow` with
+// its only consumer, so the table below is three rows and a function still called "Four" would be
+// the exact defect this suite's culture exists to catch elsewhere -- a name asserting a count
+// nobody re-checked.
+func TestPBTOK7_TheThreeArtifactDerivationsAreComputedFromTheTokens(t *testing.T) {
 	src := loadTokenSource(t)
 
 	// AUTHORIZED VALUE MIGRATION, ADR-009 O2. What these five rows recorded before:
@@ -82,14 +88,21 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 	// arithmetic that shares no code with Mix, so what is recorded here is still checked by two
 	// independent implementations rather than trusted.
 	//
-	// WHAT THE FIELD NAME NOW OVERSTATES, recorded rather than quietly tolerated: ADR-009's
-	// maquette does not draw three of these five sites the way Substrate did (its status dots
-	// carry a literal rgba() glow at a different alpha, its deny control is an outline with no
-	// tint, and its promoted row is lit by --p-lit-fx rather than by a warmed hairline). The
-	// blends are still correct functions of the tokens and still the only place a consumer may
-	// get these colours from -- but re-pointing the derivation SITES at the new material is
-	// ADR-009 D4's work and belongs to phase O3 (PB-DS-5 re-parameterisation), not here. Doing
-	// it in a token-migration commit would hide a design change inside a value flow.
+	// THEN THE FIFTH ROW LEFT (`toggle-track-off`, its consumer retired) AND THE TABLE READ FOUR,
+	// quoted here so ITS retirement is visible too:
+	//
+	//	{"attention-row-border", "#66553D"},
+	//	{"deny-fill", "#21D96A62"},
+	//	{"needs-input-dot-glow", "#B3C9A876"},
+	//	{"working-dot-glow", "#8C6FA7A4"},
+	//
+	// AUTHORIZED VALUE MIGRATION, RULING R8 (2026-08-09). `working-dot-glow` is gone with its only
+	// consumer, `Kit.groupGlow`'s `"working"` branch -- ADR-009 D6's OPEN CONFLICT resolved to the
+	// maquette's reading, one glow rather than two. `needs-input-dot-glow`'s own share moved from
+	// 70% to 50%, the maquette's own `.sdot.att { box-shadow: 0 0 9px rgba(201,168,118,0.5) }`, so
+	// its resolved hex moves too: alpha 0.70*255=178.5 rounded to 0xB3=179 becomes 0.50*255=127.5
+	// rounded to 0x80=128, and `#B3C9A876` becomes `#80C9A876`. `--p-att`'s own RGB (`C9A876`)
+	// does not move -- R8 changed the SHARE, not the base colour.
 	cases := []struct {
 		name string
 		// artifact is the value the design's color-mix resolves to over the CURRENT tokens,
@@ -98,21 +111,12 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 	}{
 		{"attention-row-border", "#66553D"},
 		{"deny-fill", "#21D96A62"},
-		{"needs-input-dot-glow", "#B3C9A876"},
-		{"working-dot-glow", "#8C6FA7A4"},
-		// THE FIFTH ROW IS GONE, AND IT IS NOT A VALUE MIGRATION THIS TIME. It read
-		//
-		//	// NOT THE ARTIFACT'S, and the field name above is wrong for exactly this row.
-		//	// Substrate draws no toggle; docs/design/substrate-components.md row 4 specifies
-		//	// one and states its off track as `--p-ink3` at 40% ...
-		//	{"toggle-track-off", "#66746B5D"},
-		//
-		// `docs/research/obsidian-maquette.html` draws `.tog`, and it gives the off track
-		// `background: var(--p-elev)` inside `border: 1px solid var(--p-hair)`. Two tokens, no
-		// blend. The derivation was retired with its only consumer (`Kit.toggleTrackOff`), so what
-		// is left in this table is again exactly the four color-mix() calls the artifact's own CSS
-		// makes -- which is what the field name `artifact` says, for the first time since row 4
-		// was let in.
+		{"needs-input-dot-glow", "#80C9A876"},
+		// THE FOURTH ROW IS GONE, AND LIKE THE FIFTH BEFORE IT THIS IS NOT A VALUE MIGRATION.
+		// `docs/research/obsidian-maquette.html` draws no `box-shadow` at all on `.sdot.work`; the
+		// derivation was retired with its only consumer (`Kit.groupGlow`'s `"working"` branch), so
+		// what is left in this table is again exactly the color-mix()-equivalent calls the design
+		// still makes -- which is what the field name `artifact` says.
 	}
 
 	byName := map[string]Derivation{}
@@ -199,7 +203,7 @@ func TestPBTOK7_TheFourArtifactDerivationsAreComputedFromTheTokens(t *testing.T)
 // The naive implementation treats `transparent` as opaque black and interpolates un-premultiplied.
 // It gets the alpha right and the hue wrong, and the error is invisible in a code review because
 // the result is still "a darker version of the token". This asserts the two behaviours directly
-// rather than only through the four artifact values, so the reason a value is right is pinned and
+// rather than only through the three artifact values, so the reason a value is right is pinned and
 // not just the value.
 func TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha(t *testing.T) {
 	white := RGBA{R: 255, G: 255, B: 255, A: 255}
@@ -245,7 +249,7 @@ func TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha(t 
 // TestPBTOK7_TheBlendCanActuallyFail is the NEGATIVE CONTROL for every assertion above.
 //
 // "Every derived colour is produced by a single documented blend function" is satisfiable by a
-// function that ignores its arguments and returns the four recorded hexes, and by one that
+// function that ignores its arguments and returns the three recorded hexes, and by one that
 // returns its first argument unchanged. Both would pass the artifact comparison for at least some
 // cases. So the blend is exercised on its own terms: the endpoints, the direction of travel, the
 // symmetry the CSS rule requires, and a one-unit mutation of an input that must move the output.

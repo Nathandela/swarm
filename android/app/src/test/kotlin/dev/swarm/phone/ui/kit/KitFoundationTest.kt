@@ -24,7 +24,7 @@ import kotlin.math.roundToInt
  *  diverges."
  *
  * WHY THE FOUNDATION GETS ITS OWN SUITE. Three of the four values a card paints -- the derived
- * attention border, the inset key-light and the two dot glows -- are colours that exist in NO
+ * attention border, the inset key-light and the one dot glow -- are colours that exist in NO
  * resource and CANNOT: they are functions of tokens, so PB-TOK-7 forbids typing them and the
  * resource table has no form for them. What the kit carries instead is the SHARE, joined to
  * internal/design's derivation table by the Go gate, and the blend that turns a share into a
@@ -73,25 +73,28 @@ class KitFoundationTest {
     }
 
     /**
-     * "Nothing glows unless it is alive." Exactly two Groups are.
+     * "Nothing glows unless it is alive" is still the rule; since ruling R8 it no longer runs
+     * both ways. Two Groups are alive (NeedsInput, Working) and exactly one glows.
      *
-     * The share is read off the CSS rule whose fill IS the Group's token, so which Groups glow is
-     * a property of the design rather than a list in this test: `.pdot.att` and `.pdot.wrk` carry
-     * a `box-shadow` with a `color-mix` share, `.pdot.ok` sets `box-shadow: none` explicitly, and
-     * `--p-ink3` has no `.pdot` rule at all.
+     * AUTHORIZED REWRITE, ruling R8 (2026-08-09, bead agents-tracker-oonj). The share used to be
+     * read off the shared block's `.pdot.att`/`.pdot.wrk`, both carrying a `color-mix` share; the
+     * maquette's own `.sdot.att` carries a literal `rgba()` and `.sdot.work`/`.sdot.ok`/
+     * `.sdot.done` declare no `box-shadow` at all -- one glow, not two. The share is still read
+     * off the rule whose fill IS the Group's token, so which Group glows is a property of the
+     * design rather than a list in this test.
      */
     @Test
-    fun `the two live Groups glow at the design's share and the other two do not glow`() {
-        val variants = KitOrigin.dotVariants()
+    fun `the one live Group that glows does so at the maquette's share, and the other three do not glow`() {
+        val variants = KitOrigin.maquetteDotVariants()
         assertTrue(
-            "the design declares no .pdot variants; every expectation here would be null",
+            "the maquette declares no .sdot variants; every expectation here would be null",
             variants.isNotEmpty(),
         )
 
         val claims = KitOrigin.groupTokens().map { (group, token) ->
             Claim("$group ($token) glow", KitOrigin.dotGlow(token)?.colour, Kit.groupGlow(context, group))
         }
-        assertEquals(2, claims.count { it.want != null })
+        assertEquals(1, claims.count { it.want != null })
         assertEquals(emptyList<String>(), mismatches(claims))
     }
 

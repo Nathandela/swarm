@@ -9,7 +9,13 @@ package gate
 // The blend function and the "changing a base token moves the derived value" half live in
 // internal/design (derive.go, derive_test.go), because that is where the arithmetic is and where
 // a perturbed token set can be constructed in memory. THIS file is the other half, and it can
-// only exist here: it is a scan of the Android module for the four values the artifact resolves.
+// only exist here: it is a scan of the Android module for the three values the artifact resolves.
+//
+// THE COUNT WAS FOUR AND OWNER RULING R8 RETIRED ONE (2026-08-09, bead agents-tracker-oonj):
+// `working-dot-glow` retired with its only consumer when the status-dot glow moved to the
+// maquette's reading, one glow rather than two -- see internal/design/derive.go's own record.
+// This file's scan reads `design.Derivations()` at test time rather than a count typed here, so
+// the retirement needed no edit below; only the surrounding prose's "four" moved to "three".
 //
 // WHY THE SCAN IS NECESSARY AND NOT BELT-AND-BRACES. PB-TOK-1's join is between a token NAME and
 // a resource name. #6D5220 is not any token's value, so no row would ever have named it, so the
@@ -19,7 +25,7 @@ package gate
 // reviewer comparing them could see the difference. A derived colour transcribed once looks like
 // an ordinary colour to everything that inspects the theme.
 //
-// AND THE FOUR ARE EXACTLY THE VALUES SOMEONE WILL TRANSCRIBE. They are quoted as resolved hex in
+// AND THE THREE ARE EXACTLY THE VALUES SOMEONE WILL TRANSCRIBE. They are quoted as resolved hex in
 // the requirements, in the design inventory and in the ADR, because that is how a human discusses
 // a colour. Reading `#B3F1A10D` in a spec and typing it into a Drawable is not carelessness; it
 // is the obvious thing to do, and the only thing that makes it wrong is that the spec's number is
@@ -195,7 +201,7 @@ func TestPBTOK7_NoShippedLiteralIsADerivationsOutput(t *testing.T) {
 // Two ways the assertion above can be green while proving nothing, and both look fine in review:
 // the scan finds no literals in the files it walks, or the regexp does not recognise the notation
 // a transcription would actually be written in. So the recogniser is run over a synthetic source
-// containing each of the four values in each spelling somebody would plausibly use, and every one
+// containing each of the three values in each spelling somebody would plausibly use, and every one
 // must be caught.
 func TestPBTOK7_TheLiteralScanCanActuallyFail(t *testing.T) {
 	derived := derivedValues(t)
@@ -203,7 +209,7 @@ func TestPBTOK7_TheLiteralScanCanActuallyFail(t *testing.T) {
 		t.Fatal("PB-TOK-7: no derived values to look for")
 	}
 
-	// Every notation the four values could arrive in, built from the DERIVED values rather than
+	// Every notation the three values could arrive in, built from the DERIVED values rather than
 	// typed, so this control cannot itself become a transcription.
 	var probes []string
 	for hex := range derived {
@@ -244,7 +250,7 @@ func TestPBTOK7_TheLiteralScanCanActuallyFail(t *testing.T) {
 		}
 	}
 
-	// Distinctness of the four resolved values is asserted inside derivedValues, at insertion,
+	// Distinctness of the three resolved values is asserted inside derivedValues, at insertion,
 	// where a collision is observable. It cannot be asserted from here: `derived` is a map, its
 	// keys are unique by construction, and a loop over it asking whether two entries collide
 	// answers no unconditionally.
@@ -252,7 +258,7 @@ func TestPBTOK7_TheLiteralScanCanActuallyFail(t *testing.T) {
 
 // TestPBTOK7_TheDerivationsAreReachableFromTheOrigin closes the loop the other way.
 //
-// The scan above forbids the four values from being TYPED. That is only half a requirement: a
+// The scan above forbids the three values from being TYPED. That is only half a requirement: a
 // forbidden value with no supported way to obtain it is a rule people route around. So this
 // asserts the derivations resolve from the staged origin -- the same tokens.json the Android
 // module stages as a test resource -- and that each one's inputs are tokens PB-TOK-5 actually

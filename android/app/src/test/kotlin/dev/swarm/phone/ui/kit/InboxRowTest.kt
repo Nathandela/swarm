@@ -137,7 +137,7 @@ class InboxRowTest {
      * every value a test could read off the Paint, and wrong on screen. The layer type is the
      * only observable that distinguishes them.
      *
-     * The two Groups that do not glow must be LAYER_TYPE_NONE rather than software: a software
+     * The three Groups that do not glow must be LAYER_TYPE_NONE rather than software: a software
      * layer allocates a bitmap per view, and paying for it on rows that draw a flat 7dp circle is
      * the kind of cost that is never found again.
      *
@@ -145,10 +145,11 @@ class InboxRowTest {
      * `Kit.groupGlow(context, group)` -- the call the drawable was built from, so the claim held
      * for any colour -- and WHICH Groups glow was decided by that same call, so a kit that glowed
      * on all four would have been checked against its own opinion and passed. Both now come from
-     * the `.pdot.*` variant whose fill is the Group's token.
+     * the `.sdot.*` variant whose fill is the Group's token (ruling R8, 2026-08-09: moved from
+     * the shared block's `.pdot.*` to the maquette's own selector for this dot).
      */
     @Test
-    fun `only the live Groups glow, and only they are on a software layer`() {
+    fun `only the live Group that glows does, and only it is on a software layer`() {
         val claims = KitOrigin.groupTokens().flatMap { (group, token) ->
             val dot = statusDot(context, group)
             val drawable = dot.background as StatusDotDrawable
@@ -169,9 +170,11 @@ class InboxRowTest {
         }
         assertEquals(emptyList<String>(), mismatches(claims))
         assertEquals(
-            "the design gives a halo to a number of Groups other than two, so \"nothing glows " +
-                "unless it is alive\" is being read off something that is not the design",
-            2,
+            "the design gives a halo to a number of Groups other than one, so \"nothing glows " +
+                "unless it is alive\" is being read off something that is not the design -- ruling " +
+                "R8 (2026-08-09) made this a one-way implication and dropped the count from two to " +
+                "one",
+            1,
             KitOrigin.groupTokens().values.count { KitOrigin.dotGlow(it) != null },
         )
     }
@@ -314,9 +317,12 @@ class InboxRowTest {
      * which is the whole reason this test draws.
      */
     @Test
-    fun `the live Groups' glow survives into the layer, and the flat Groups paint no halo`() {
+    fun `the one live Group's glow survives into the layer, and the flat Groups paint no halo`() {
         assertEquals(emptyList<String>(), shadowProbeFaults())
 
+        // `.pdot.att` rather than `.sdot.att`: this is only a generic "how much room does a 9dp
+        // halo need" measurement, not a per-Group claim, and both design sources still state 9px
+        // for it -- ruling R8 moved the SHARE and the SITE COUNT, not this radius.
         val roomForAHalo = corePx + 2 * px(KitOrigin.cssFirstPx(".pdot.att", "box-shadow")).roundToInt()
         KitOrigin.groupTokens().forEach { (group, token) ->
             val glow = KitOrigin.dotGlow(token)
@@ -324,8 +330,7 @@ class InboxRowTest {
                 assertEquals(
                     "the $group dot's halo does not render",
                     emptyList<String>(),
-                    // Its OWN variant's blur radius: the two live Groups declare the same 9px
-                    // today, and reading one for the other would be a join that happens to hold.
+                    // Its OWN variant's blur radius, read from the maquette's `.sdot.att`.
                     haloFaults(renderDot(statusDot(context, group)), glow.radiusDp),
                 )
             } else {
@@ -753,8 +758,12 @@ class InboxRowTest {
     // ---- the working bar --------------------------------------------------
 
     /**
-     * `.workbar` appears on Working rows and nowhere else -- it is half of Substrate's static
-     * Working affordance, the other half being the dot glow.
+     * `.workbar` appears on Working rows and nowhere else -- Working's own liveness affordance.
+     *
+     * IT USED TO BE HALF OF THE STORY, THE DOT GLOW BEING THE OTHER HALF. Ruling R8 (2026-08-09)
+     * retired the Working dot's glow -- "a working session already has its bar; glowing it too
+     * dilutes the only 'look here' signal the inbox has" -- so the workbar is now Working's WHOLE
+     * static affordance, and NeedsInput's dot glow is not paired with anything of its own.
      */
     @Test
     fun `the working bar is on the Working row and on no other`() {
@@ -831,7 +840,7 @@ class InboxRowTest {
         assertTrue(
             "a glow that lost its alpha passes the comparison",
             mismatches(
-                listOf(Claim("glow", KitOrigin.overTransparent(att, 0.70f), att)),
+                listOf(Claim("glow", KitOrigin.overTransparent(att, 0.50f), att)),
             ).isNotEmpty(),
         )
         assertTrue(
@@ -864,20 +873,27 @@ class InboxRowTest {
 
         // The glow reader must answer the four Groups DIFFERENTLY, or the claims it feeds hold
         // over one value repeated -- which is what reading them off Kit.groupGlow amounted to.
+        // Ruling R8 (2026-08-09) dropped the glowing count from two to one, so "differently" now
+        // means "finds the one glow and nothing else", which the null checks below exercise.
         val glows = KitOrigin.groupTokens().values.map { KitOrigin.dotGlow(it) }
         assertEquals(
-            "the design reader finds a halo on a number of Groups other than two",
-            2,
+            "the design reader finds a halo on a number of Groups other than one",
+            1,
             glows.count { it != null },
         )
         assertNotEquals(
-            "the design reader returns one colour for both live Groups, so a dot painted with " +
-                "the wrong Group's halo would pass",
+            "the design reader finds no halo on NeedsInput at all, so the one glow the maquette " +
+                "draws would go unread",
+            null,
             KitOrigin.dotGlow(KitOrigin.groupToken("needs_input"))?.colour,
-            KitOrigin.dotGlow(KitOrigin.groupToken("working"))?.colour,
         )
         assertNull(
-            "the design reader finds a halo on Completed, which `--p-ink3` has no `.pdot` rule " +
+            "the design reader finds a halo on Working, which ruling R8 retired -- the maquette's " +
+                "`.sdot.work` declares no `box-shadow` at all",
+            KitOrigin.dotGlow(KitOrigin.groupToken("working")),
+        )
+        assertNull(
+            "the design reader finds a halo on Completed, which `--p-ink3` has no `.sdot` rule " +
                 "for at all",
             KitOrigin.dotGlow(KitOrigin.groupToken("completed")),
         )

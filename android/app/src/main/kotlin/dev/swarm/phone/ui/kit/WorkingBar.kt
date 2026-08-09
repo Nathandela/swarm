@@ -12,9 +12,10 @@ import dev.swarm.phone.R
  * Substrate's Working affordance, and the half that is easy to lose.
  *
  * The mock pulses the Working dot on a 1.6 s loop; Substrate declares no animation anywhere and
- * says instead that the state is carried by a STATIC glow plus this static gradient (ADR-007 B134
- * decision 3). So a row that is computing shows a cyan bar fading out to the right, once, and
- * nothing moves.
+ * said instead that the state was carried by a STATIC glow plus this static gradient (ADR-007
+ * B134 decision 3). Ruling R8 (2026-08-09) retired the glow half -- the maquette's `.sdot.work`
+ * declares no `box-shadow` at all -- so this bar is now Working's WHOLE static affordance. A row
+ * that is computing shows a cyan bar fading out to the right, once, and nothing moves.
  */
 fun workingBar(context: Context): View {
     val work = Kit.colour(context, R.color.swarm_state_working)

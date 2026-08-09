@@ -134,13 +134,29 @@ internal object Kit {
     /**
      * The Group's glow, or null where the design declares none.
      *
-     * "Nothing glows unless it is alive", and exactly two of the four Groups are: NeedsInput is
-     * blocked on the human and Working is computing. `.pdot.ok` sets `box-shadow: none` explicitly
-     * and `--p-ink3` has no `.pdot` rule at all -- ReadyForReview is finished work waiting to be
-     * looked at, and Completed is finished.
+     * "Nothing glows unless it is alive" is still the rule, and since owner ruling R8 (2026-08-09,
+     * bead agents-tracker-oonj) it is a ONE-WAY implication: NeedsInput and Working are both
+     * alive, and only NeedsInput glows. `.sdot.work`, `.sdot.ok` and `.sdot.done` declare no
+     * `box-shadow` at all in the owner-signed maquette -- Working's liveness is the workbar's job
+     * now, ReadyForReview is finished work waiting to be looked at, and Completed is finished.
      *
-     * The value is BLENDED rather than read: it is `color-mix(--p-att 70%, transparent)`, which is
-     * a function of a token and therefore has no resource and may not be typed (PB-TOK-7).
+     * **AUTHORIZED REWRITE, ruling R8.** ADR-009 D6 recorded an OPEN CONFLICT between the original
+     * directions artifact (`.pdot.att` 70%, `.pdot.wrk` 55%, both mono dots glowing) and the
+     * maquette (`.sdot.att` a literal 50%, no `box-shadow` on `.sdot.work` at all). What this KDoc
+     * said before, quoted so the move is visible:
+     *
+     *     "Nothing glows unless it is alive", and exactly two of the four Groups are: NeedsInput
+     *     is blocked on the human and Working is computing. `.pdot.ok` sets `box-shadow: none`
+     *     explicitly and `--p-ink3` has no `.pdot` rule at all -- ReadyForReview is finished work
+     *     waiting to be looked at, and Completed is finished.
+     *
+     * The ruling's own words: "one glow means one meaning: the light marks the session that needs
+     * you." A working session already has its bar; glowing it too would dilute the only "look
+     * here" signal the inbox has.
+     *
+     * The value is BLENDED rather than read: it is `color-mix(--p-att 50%, transparent)` -- what
+     * the maquette's literal `rgba(201,168,118,0.5)` computes to -- a function of a token and
+     * therefore has no resource and may not be typed (PB-TOK-7).
      */
     fun groupGlow(context: Context, group: String): Int? = glowShare(group)?.let { share ->
         ColorMix.mix(groupColour(context, group), share, ColorMix.TRANSPARENT)
@@ -228,24 +244,30 @@ internal object Kit {
     /**
      * The share of its own colour a live Group's glow carries. Null means the design has none.
      *
-     * THE TWO NUMBERS ARE NAMED RATHER THAN INLINE, and the reason is a gate rather than taste: a
+     * THE NUMBER IS NAMED RATHER THAN INLINE, and the reason is a gate rather than taste: a
      * literal in a `when` branch could only be checked by a regexp that recognised the branch's
      * syntax, and a fence that depends on the shape of an expression stops matching the first
-     * time the expression is rewritten -- silently, and while still passing. Behind a name each
+     * time the expression is rewritten -- silently, and while still passing. Behind a name the
      * share carries an `origin:` annotation, which is the same join every other number in this
      * package answers to.
+     *
+     * **`WORKING_GLOW_SHARE` RETIRED, ruling R8** (2026-08-09, bead agents-tracker-oonj): the
+     * maquette's `.sdot.work` declares no `box-shadow` at all, so `"working"` falls to `else ->
+     * null` now, the same as `"ready_for_review"` and `"completed"` always did. The `when` this
+     * branch retired from, and the constant it named, are quoted in full in the commit that
+     * retired them (agents-tracker-nx44.9, R8) rather than here, so this file carries no orphaned
+     * numeric literal for the scan below to trip over.
      */
     private fun glowShare(group: String): Float? = when (group) {
         "needs_input" -> NEEDS_INPUT_GLOW_SHARE
-        "working" -> WORKING_GLOW_SHARE
         else -> null
     }
 
+    // 0.70 -> 0.50, owner ruling R8 (2026-08-09, bead agents-tracker-oonj): the maquette's
+    // `.sdot.att` states a literal rgba(201,168,118,0.5), not the original directions artifact's
+    // color-mix(--p-att 70%, transparent).
     /** origin: derivation needs-input-dot-glow */
-    private const val NEEDS_INPUT_GLOW_SHARE = 0.70f
-
-    /** origin: derivation working-dot-glow */
-    private const val WORKING_GLOW_SHARE = 0.55f
+    private const val NEEDS_INPUT_GLOW_SHARE = 0.50f
 
     /**
      * Give a view row 23's ring and make it something the ring can reach.

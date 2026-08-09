@@ -64,9 +64,9 @@ fun syncPill(
     contentDescription = description
     background = chipSurface(context, selected = false)
     gravity = Gravity.CENTER
-    // The 7 dp mark, flat. NO GLOW: the two glows in this kit say a session is ALIVE (row §4's
-    // B134 mapping gives them to NeedsInput and Working and to nothing else), and none of the
-    // three states here is a running agent -- a haloed BROKEN would read as a live failure.
+    // The 7 dp mark, flat. NO GLOW: the one glow in this kit says a session needs YOU (ruling R8,
+    // 2026-08-09, gives it to NeedsInput alone -- one glow, one meaning), and none of the three
+    // states here is that. A haloed BROKEN would read as the one thing this glow means.
     setCompoundDrawablesRelativeWithIntrinsicBounds(
         StatusDotDrawable(
             fill = Kit.colour(context, toneInk(tone)),

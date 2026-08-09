@@ -168,7 +168,7 @@ internal class CtaBloom(
  * `color-mix(in srgb, --p-err 13%, transparent)`, so it has no `<color>` resource and PB-TOK-7
  * forbids typing what it resolves to. [Kit.denyFill] computes it from the share
  * `internal/design.Derivations()` declares, which is the same arrangement the attention row's
- * border and the two status-dot glows are already in.
+ * border and the status-dot glow are already in.
  *
  * IT DOES NOT HANDLE ITS OWN TAP, and no component in this kit does -- PB-DS-6's sentence is that a
  * screen composes components and passes data. The consequence worth stating is that this is a

@@ -167,9 +167,19 @@ object KitOrigin {
         return m.groupValues[1].toFloat() / 100f
     }
 
-    /** Every `.pdot.*` variant the design draws, selector -> its declarations. */
-    fun dotVariants(): Map<String, Map<String, String>> =
-        DesignScale.sharedCss().filterKeys { it.startsWith(".pdot.") }
+    /**
+     * Every `.sdot.*` variant the OBSIDIAN MAQUETTE draws, selector -> its declarations -- the
+     * status dot with the glow.
+     *
+     * RULING R8 MOVED THIS FROM THE SHARED BLOCK'S `.pdot.*` (2026-08-09, bead
+     * agents-tracker-oonj). The two design sources use the SAME class name for TWO DIFFERENT
+     * dots: the shared block's `.pdot` is the status dot this function used to read, and the
+     * maquette's `.pdot` is a different mark entirely -- machine presence, `.chip .pd` -- while
+     * the maquette calls ITS status dot `.sdot`. ADR-009 D2 makes the maquette normative, and R8
+     * ruled the glow by its specimen, so `.sdot` is both the honest citation and the ruled one.
+     */
+    fun maquetteDotVariants(): Map<String, Map<String, String>> =
+        DesignScale.maquetteKitCss().filterKeys { it.startsWith(".sdot.") }
 
     /**
      * The halo the DESIGN gives the dot whose fill is [token], or null where it declares none.
@@ -181,7 +191,7 @@ object KitOrigin {
      * so a kit that glowed on all four would have been checked against its own opinion.
      *
      * The variant is found by its FILL rather than by its selector name, because the selector
-     * says nothing about which `status.Group` it belongs to: `.pdot.ok` is green, and after B134
+     * says nothing about which `status.Group` it belongs to: `.sdot.ok` is green, and after B134
      * green is ReadyForReview rather than Completed.
      *
      * THAT PROPERTY IS A CONSEQUENCE, NOT A VIRTUE, AND THIS KDOC USED TO SELL IT AS ONE. It read
@@ -198,19 +208,29 @@ object KitOrigin {
      * `s23ContestedHoldFaults` in `android/gate/s23_kit_test.go` fails the build the moment the ADR
      * stops marking the question open, and `s23ContestedBindings` keeps a revert cheap while it is.
      * This function is silent on the rebinding; that gate is not.
+     *
+     * **AUTHORIZED REWRITE, ruling R8** (2026-08-09). The design authority moved from the shared
+     * block's `.pdot.*` (a `color-mix()` share, read through [dotVariants]/[cssPercent]/
+     * [cssFirstPx]) to the maquette's own `.sdot.*` (a literal `rgba()`, read through
+     * [maquetteDotVariants]/[maquetteRgba]/[maquetteFirstPx]). What this function's body said
+     * before is quoted in the commit that moved it (agents-tracker-nx44.9, R8) rather than here --
+     * this is test scaffolding, not a design source, so its own numbers carry no `origin:` join
+     * for a quoted old value to disagree with, but a stray `box-shadow` fragment sitting unused in
+     * a KDoc is still a second copy of a design fact nobody would notice drift from the first.
      */
     fun dotGlow(token: String): DotGlow? {
         val fill = token(token)
-        val variant = dotVariants().entries.firstOrNull { (selector, _) ->
-            cssColour(selector, "background") == fill
+        val variant = maquetteDotVariants().entries.firstOrNull { (selector, _) ->
+            maquetteColour(selector, "background") == fill
         } ?: return null
         val shadow = variant.value["box-shadow"]?.trim()
-        // `.pdot.ok` says `box-shadow: none` and `--p-ink3` has no `.pdot` rule at all. Both mean
-        // the same thing: the design gives that Group no halo.
+        // `.sdot.work`, `.sdot.ok` and `.sdot.done` declare no `box-shadow` at all -- the design
+        // gives those Groups no halo. (Unlike the shared block's retired `.pdot.ok`, the maquette
+        // never spells this "none"; absence IS the statement.)
         if (shadow == null || shadow == "none") return null
         return DotGlow(
-            colour = overTransparent(fill, cssPercent(variant.key, "box-shadow")),
-            radiusDp = cssFirstPx(variant.key, "box-shadow"),
+            colour = maquetteRgba(variant.key, "box-shadow"),
+            radiusDp = maquetteFirstPx(variant.key, "box-shadow"),
         )
     }
 
