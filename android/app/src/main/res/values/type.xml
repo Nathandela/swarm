@@ -3,22 +3,29 @@
     <!--
       PB-DS-2 and PB-DS-3 (S22b): the typography scale.
 
-      17 product text styles across 12 sizes: PB-DS-2's 18 across 12 sizes, 4 weights and 5
+      17 product text styles across 6 sizes: PB-DS-2's 18 across 12 sizes, 4 weights and 5
       tracking values, plus the one docs/design/substrate-components.md §7 adds - `Display.SAS`,
       the 34 sp the pairing screen's verification emoji are set in - less the two ADR-012 takes
-      out.
+      out, and spent across the FIVE RUNGS ADR-012 phase 2 rules plus the SAS's own 34.
 
-      THE HEADING COUNT WAS 18/12, THEN 19/13, AND IS 17/12 SINCE 2026-08-09 (ADR-012, bead
-      agents-tracker-ksvb.8). The requirement's numbers are unchanged and are named as the
-      requirement's; the file's own count leads, because that is what a reader of this file is
-      counting. What moved: `Label.CardHead` merged into `Mono.Meta` (T1) and `Label.StatusBar`
-      was deleted (T2), which also took 13 sp out of the ladder - it was that size's only
-      occupant. Both are recorded in android/gate/s22b_type_test.go's s22bUnimplementedRules,
-      which is where a rule the design draws and this app does not spend has to name the decision
-      that says so. NO PIXEL MOVES: `.tcard .h` and `.sheet2 .ctx` render identically once
-      ADR-009 D7's two-face bundle resolves 600 to 500, and `.ptime` is the mock's status-bar
-      clock, which this app has never drawn. ADR-009 D7's own "(19 styles, ...)" is the record of
-      what D7 did not change and carries a dated pointer here.
+      THE HEADING COUNT WAS 18/12, THEN 19/13, THEN 17/12, AND IS 17/6 SINCE 2026-08-09 (ADR-012,
+      beads agents-tracker-ksvb.8 and agents-tracker-nx44.9). The requirement's numbers are
+      unchanged and are named as the requirement's; the file's own count leads, because that is
+      what a reader of this file is counting. What moved: `Label.CardHead` merged into `Mono.Meta`
+      (T1) and `Label.StatusBar` was deleted (T2), which also took 13 sp out of the ladder - it
+      was that size's only occupant. Both are recorded in android/gate/s22b_type_test.go's
+      s22bUnimplementedRules, which is where a rule the design draws and this app does not spend
+      has to name the decision that says so. NO PIXEL MOVED IN PHASE 1: `.tcard .h` and
+      `.sheet2 .ctx` render identically once ADR-009 D7's two-face bundle resolves 600 to 500, and
+      `.ptime` is the mock's status-bar clock, which this app has never drawn. ADR-009 D7's own
+      "(19 styles, ...)" is the record of what D7 did not change and carries a dated pointer here.
+
+      THEN PHASE 2 MOVED TWELVE PIXELS' WORTH OF SIZE, ON THE OWNER'S RULING, AND NO STYLE LEFT.
+      The field test's "fonts not well mastered" was, structurally, ten sizes inside a six-point
+      band with every half-step occupied. Ruling R1 (2026-08-09) consolidates them onto five rungs
+      - 10 micro, 11.5 code, 12.5 body, 14 title, 22 display - and R3 takes the display rung to the
+      signed maquette's 22. Every style keeps its name and its citation, because the design still
+      distinguishes the roles; what they share now is a size.
 
       Before this file the app expressed zero of them: 1582 lines of surface code held one
       Typeface.MONOSPACE, one Typeface.BOLD, and no setTextSize or setLetterSpacing anywhere.
@@ -30,8 +37,16 @@
       names nothing fails, and a design fact with no style here fails too - unless not
       implementing it is ITSELF a recorded decision, which since ADR-012 two rules are, and the
       gate holds each of those to the ADR that decided it rather than to a list it keeps quietly.
-      So a size cannot be edited here without the design disagreeing, and re-pointing a style at a
-      different rule is a visible claim.
+      So re-pointing a style at a different rule is a visible claim.
+
+      SINCE 2026-08-09 THE SIZE IS THE ONE NUMBER THAT COMES FROM SOMEWHERE ELSE, and it is not
+      this file either. A rung is a decision about THIS APP's hierarchy and no CSS rule can state
+      one, so ADR-012 phase 2's rung table is where a style's sp lives; both readers parse that
+      table, key it by style name, and fail on a size here that disagrees with it. The table also
+      carries each rule's own px and is asserted against the artifact, so a design that moves a
+      rule leaves the record visibly stale instead of quietly authorizing a size nobody compared.
+      A size still cannot be edited here without a record disagreeing; what changed is which
+      record.
 
       THERE ARE TWO CLASSES OF CITATION, AND THE DIFFERENCE IS WHERE THE AUTHORITY LIVES.
       `origin:` names a CSS rule in the shared block of
@@ -58,8 +73,10 @@
       shipped in dp would have decided against it here, silently, for every screen.
 
       LINE HEIGHT IS AN ABSOLUTE DIMENSION, because Android has no unitless multiplier on a
-      TextAppearance. Each value below is the design's multiplier times its own size, and the gate
-      recomputes the product rather than trusting it. It appears only on the seven styles whose
+      TextAppearance. Each value below is the design's multiplier times THE SIZE THE STYLE RENDERS
+      AT, which since ADR-012 phase 2 is the rung and not the CSS px - three of the five leadings
+      moved with their rung and nobody typed one - and the gate recomputes the product rather than
+      trusting it. It appears only on the five styles whose
       CSS rule declares a line-height; the other twelve inherit the platform's, which is what the
       design does. `.prow .ln b` is the interesting omission: it inherits 1.4 from `.prow .ln` in
       CSS, and on Android it is an inline span inside somebody else's paragraph, where line height
@@ -132,7 +149,7 @@
 
     <!-- origin: .pnav .big -->
     <style name="TextAppearance.Swarm.Display.NavTitle" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">27sp</item>
+        <item name="android:textSize">22sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">-0.015</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -140,7 +157,7 @@
 
     <!-- origin: .sheet2 h4 -->
     <style name="TextAppearance.Swarm.Title.Sheet" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">15.5sp</item>
+        <item name="android:textSize">14sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0.01</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -155,12 +172,14 @@
     </style>
 
     <!-- `.acts2 button` is `font: 600 13.5px/1`, and the `/1` transcribes as NOTHING (ADR-009 D7,
-         amended 2026-08-08): android:lineHeight is an ABSOLUTE line-box height, so 13.5sp on
-         13.5sp shrinks the box the font asks for and the platform pays for it with a negative
-         lineSpacingExtra. The CTA's label sat low inside its own button. -->
+         amended 2026-08-08): android:lineHeight is an ABSOLUTE line-box height, so a line height
+         equal to the text size shrinks the box the font asks for and the platform pays for it with
+         a negative lineSpacingExtra. The CTA's label sat low inside its own button. The size the
+         style renders at moved to the title rung on 2026-08-09 and the `/1` did not become a
+         number, because what the design states is a RATIO of nothing extra. -->
     <!-- origin: .acts2 button -->
     <style name="TextAppearance.Swarm.Label.Button" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">13.5sp</item>
+        <item name="android:textSize">14sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -177,11 +196,11 @@
 
     <!-- origin: .prow .ln -->
     <style name="TextAppearance.Swarm.Body.Secondary" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">12sp</item>
+        <item name="android:textSize">12.5sp</item>
         <item name="android:textFontWeight">400</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
-        <item name="android:lineHeight">16.8sp</item>
+        <item name="android:lineHeight">17.5sp</item>
     </style>
 
     <!-- origin: .prow .ln b -->
@@ -204,10 +223,10 @@
     </style>
 
     <!-- `.chip` is `font: 600 11px/1`; see `Label.Button` above for why the `/1` is transcribed
-         as silence. At 11 sp the shrunken box was clipping the chip's own descenders. -->
+         as silence. The shrunken box was clipping the chip's own descenders. -->
     <!-- origin: .chip -->
     <style name="TextAppearance.Swarm.Label.Chip" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">11sp</item>
+        <item name="android:textSize">11.5sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -215,17 +234,17 @@
 
     <!-- origin: .tcard .b -->
     <style name="TextAppearance.Swarm.Mono.CodeSmall" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">11sp</item>
+        <item name="android:textSize">11.5sp</item>
         <item name="android:textFontWeight">400</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">@font/jetbrains_mono</item>
         <item name="android:fontFeatureSettings">tnum, zero, calt</item>
-        <item name="android:lineHeight">17.05sp</item>
+        <item name="android:lineHeight">17.825sp</item>
     </style>
 
     <!-- origin: .plabel -->
     <style name="TextAppearance.Swarm.Label.Section" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">10.5sp</item>
+        <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">600</item>
         <item name="android:letterSpacing">0.09</item>
         <item name="android:fontFamily">@font/jetbrains_mono</item>
@@ -237,10 +256,18 @@
          so the 600 resolved to the 500 and `Label.CardHead` was `Mono.Meta` under a second name.
          The rule is listed in android/gate/s22b_type_test.go's s22bUnimplementedRules, which
          resolves both weights through res/font/jetbrains_mono.xml and fails the day the two stop
-         rendering identically. A bundled 600 face would be that day. -->
+         rendering identically. A bundled 600 face would be that day.
+
+         AND SINCE 2026-08-09 THIS STYLE HAS A SECOND TWIN, DISCLOSED RATHER THAN MERGED. `Mono
+         .Agent` below is `.prow .ag`, 600 mono, and the micro rung puts it at 10 sp beside this
+         one - same size, same family, same tracking, and the same resolved face. It is NOT merged,
+         and ADR-012 phase 2's P7 is why: that pair is identical only after a rung this app chose,
+         while the design still draws the two rules at 10.5 and 10, so recording either as
+         deliberately unimplemented would put a false statement about the design into the register
+         that exists to hold true ones. -->
     <!-- origin: .sheet2 .ctx -->
     <style name="TextAppearance.Swarm.Mono.Meta" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">10.5sp</item>
+        <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">@font/jetbrains_mono</item>
@@ -267,7 +294,7 @@
 
     <!-- origin: .ptabs div -->
     <style name="TextAppearance.Swarm.Label.Tab" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">9.5sp</item>
+        <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">sans-serif</item>
@@ -275,11 +302,11 @@
 
     <!-- origin: .sheet2 .bind -->
     <style name="TextAppearance.Swarm.Mono.Fine" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">9.5sp</item>
+        <item name="android:textSize">10sp</item>
         <item name="android:textFontWeight">500</item>
         <item name="android:letterSpacing">0</item>
         <item name="android:fontFamily">@font/jetbrains_mono</item>
         <item name="android:fontFeatureSettings">tnum, zero, calt</item>
-        <item name="android:lineHeight">15.2sp</item>
+        <item name="android:lineHeight">16sp</item>
     </style>
 </resources>
