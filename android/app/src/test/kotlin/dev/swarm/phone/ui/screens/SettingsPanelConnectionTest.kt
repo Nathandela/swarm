@@ -62,6 +62,7 @@ class SettingsPanelConnectionTest {
         freshness: MachineFreshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_000L),
         streams: List<StreamView> = streams(),
         clock: ClockBanner = ClockBanner.of(""),
+        killSwitchEngaged: Boolean = false,
     ) = SettingsPanelScreen.connectionOf(
         machineId = machineId,
         machineName = machineName,
@@ -69,7 +70,8 @@ class SettingsPanelConnectionTest {
         freshness = freshness,
         streams = streams,
         clock = clock,
-        formatTime = { "14:57" },
+        killSwitchEngaged = killSwitchEngaged,
+        nowUnixMs = NOW,
     )
 
     // ---- where the section sits -------------------------------------------
@@ -147,7 +149,7 @@ class SettingsPanelConnectionTest {
             "PB-APP-11: the relay is the party withholding the machine's frames, so a phone that " +
                 "has not heard from its machine must not print the relay's \"online\" as though " +
                 "the machine had said it. Line was: ${row.presenceLine}",
-            row.presenceLine.contains("Not heard from your machine since 14:57.") &&
+            row.presenceLine.contains("Not heard from your machine for") &&
                 row.presenceLine.contains("the relay's word and not your machine's"),
         )
         assertNull(
@@ -198,6 +200,60 @@ class SettingsPanelConnectionTest {
             connection(presence = "sort-of").machine.mark,
         )
         assertEquals(PresenceMark.UNKNOWN, connection(presence = "").machine.mark)
+    }
+
+    // ---- the kill switch, which lost its screen in the fold -----------------
+
+    /**
+     * FAILING-FIRST for agents-tracker-2pnu F5 / agents-tracker-zecs.
+     *
+     * agents-tracker-nx44.3 deleted `MachinesPanelView`, which was `killSwitchPanel`'s only
+     * production call site. So a machine whose owner has turned remote control OFF now says
+     * NOTHING about it anywhere in the app: every command the phone sends is refused, and the one
+     * screen that explained why is gone. agents-tracker-ksvb.6's ruling is the shape of the fix --
+     * "the ON state's paragraph shrinks to one short line ... unlike the OFF state below it, which
+     * keeps its full teaching" -- so the panel is drawn for the OFF state and for that state only.
+     * A read-only report drawn unconditionally is the always-on chrome the fold deleted four cards
+     * of.
+     */
+    @Test
+    fun `a machine with remote access off says so, with the recovery it teaches`() {
+        val off = connection(killSwitchEngaged = true).remoteAccess
+
+        assertNotNull(
+            "a machine that refuses everything this phone asks it says nothing about why, on any " +
+                "screen. The fold deleted killSwitchPanel's only caller and did not re-home it",
+            off,
+        )
+        assertTrue(
+            "the panel lost the sentence saying the switch is off at the machine",
+            off!!.body.contains("Remote control is switched off at your machine"),
+        )
+        assertTrue(
+            "the OFF state lost the teaching that only the owner can switch it back on",
+            off.body.contains("Only the machine's owner"),
+        )
+        assertEquals(
+            "the recovery verb is the one that applies to the state the switch is IN. The mock " +
+                "prints `swarm remote off` unconditionally, which is the wrong instruction to " +
+                "give somebody whose remote control is already off",
+            "swarm remote on",
+            off.command,
+        )
+        assertTrue(
+            "row 12's inline `Mono.InlineStrong` cell is a SPAN inside the body, and a command " +
+                "the body does not contain is what `Kit.emphasised` refuses to draw",
+            off.body.contains(off.command!!),
+        )
+    }
+
+    @Test
+    fun `a machine with remote access on reports nothing about the switch`() {
+        assertNull(
+            "a working switch is drawn on every visit, which is the unconditional readout the " +
+                "fold deleted a destination's worth of. Nothing is wrong, so nothing is said",
+            connection(killSwitchEngaged = false).remoteAccess,
+        )
     }
 
     // ---- the channels, as ONE line ----------------------------------------

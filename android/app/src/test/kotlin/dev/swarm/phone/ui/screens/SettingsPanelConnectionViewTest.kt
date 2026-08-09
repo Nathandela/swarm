@@ -41,6 +41,9 @@ class SettingsPanelConnectionViewTest {
     private val context: Context
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
+    /** This phone's clock, fixed so an elapsed duration is arithmetic rather than a wait. */
+    private val NOW = 1_754_000_000_000L
+
     private fun streams(vararg gapped: String): List<StreamView> =
         listOf("journal", "terminal", "reply", "grant").map { name ->
             StreamView(stream = name, stale = name in gapped, resyncPending = false)
@@ -51,6 +54,7 @@ class SettingsPanelConnectionViewTest {
         silent: Boolean = false,
         streams: List<StreamView> = streams(),
         clock: ClockBanner = ClockBanner.of(""),
+        killSwitchEngaged: Boolean = false,
     ): SettingsPanel = SettingsPanelScreen.of(
         SettingsScreen(alerts = true, mentions = true),
         machine = "nathans-mbp",
@@ -61,7 +65,8 @@ class SettingsPanelConnectionViewTest {
             freshness = MachineFreshness(silent = silent, lastHeardUnixMs = 1_000L),
             streams = streams,
             clock = clock,
-            formatTime = { "14:57" },
+            killSwitchEngaged = killSwitchEngaged,
+            nowUnixMs = NOW,
         ),
     )
 
@@ -164,6 +169,48 @@ class SettingsPanelConnectionViewTest {
             "Your clock is 42s ahead.",
             textOf(root.kitFind(SettingsTag.CONNECTION_CLOCK)),
         )
+    }
+
+    // ---- the kill switch, re-homed (agents-tracker-2pnu F5) -----------------
+
+    /**
+     * FAILING-FIRST for agents-tracker-zecs. `killSwitchPanel` -- derivation row 12, the one
+     * component in this kit with a border and no fill -- lost its only production call site when
+     * agents-tracker-nx44.3 deleted `MachinesPanelView`. So a machine whose owner has turned
+     * remote control off refuses everything this phone asks and says nothing about why, on any
+     * screen in the app.
+     *
+     * IT IS THE KIT'S FACTORY AND NOT A SENTENCE. The panel is the whole teaching -- an `--p-err`
+     * title, the state, and the recovery verb in row 12's inline mono cell -- and composing that
+     * by hand here is the copy-paste PB-DS-6 exists to prevent, which is why the assertion is on
+     * the tags the factory puts on its own two cells.
+     */
+    @Test
+    fun `a machine with remote access off draws row 12's panel`() {
+        val root = view(panel(killSwitchEngaged = true))
+
+        assertNotNull(
+            "the app says nothing anywhere about a machine that refuses every command it sends",
+            root.kitFind(SettingsTag.REMOTE_ACCESS),
+        )
+        assertEquals("Remote access", textOf(root.kitFind(KitTag.KILL_TITLE)))
+        assertEquals(
+            "the panel's body is not row 12's teaching",
+            true,
+            textOf(root.kitFind(KitTag.KILL_BODY)).contains("swarm remote on"),
+        )
+    }
+
+    @Test
+    fun `a machine with remote access on draws no panel at all`() {
+        val root = view(panel(killSwitchEngaged = false))
+
+        assertNull(
+            "a working switch is reported on every visit, which is the always-on chrome the tab " +
+                "fold deleted four cards of",
+            root.kitFind(SettingsTag.REMOTE_ACCESS),
+        )
+        assertNull(root.kitFind(KitTag.KILL_TITLE))
     }
 
     // ---- an unpaired phone -------------------------------------------------
