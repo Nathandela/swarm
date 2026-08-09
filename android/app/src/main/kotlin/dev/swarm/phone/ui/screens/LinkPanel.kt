@@ -53,10 +53,16 @@ import dev.swarm.phone.ui.StreamView
  * ## What this screen is not
  *
  * **It is not the connection banner.** `ConnectionBanner` is the TRANSPORT's opinion -- the socket
- * is up, the polls are succeeding -- and it is on the inbox's status line beside PB-APP-11's
- * freshness notice. This is what has actually arrived, per repair channel. A phone can read
- * "Connected to your machine." with four stale channels, and that pair of facts is the whole
- * subject of PB-APP-8.
+ * is up, the polls are succeeding -- and it is the READING row of the sync detail sheet
+ * (agents-tracker-nx44.2), beside PB-APP-11's HEARD. This is what has actually arrived, per repair
+ * channel. A phone can read "Connected to your machine." with four stale channels, and that pair
+ * of facts is the whole subject of PB-APP-8.
+ *
+ * **AND THE FOUR CHANNELS ARE NOW READ TWICE, WHICH IS ONE READ AND TWO AUDIENCES.** The sync
+ * status composes the same `FacadeBridge.streamViews()` into a ranked mark and names the holed
+ * ones in its sheet; this section is the unconditional readout, which is what the tab fold
+ * (agents-tracker-nx44.3) inherits. Neither re-derives what a hole MEANS -- both spend
+ * `StreamView.notice`.
  *
  * **It has no repair control OF ITS OWN, and one now exists elsewhere** (agents-tracker-upbo,
  * landed by agents-tracker-nx44.6). `App.Resync` was unbound while this file was written, and this

@@ -911,13 +911,13 @@ class PhoneSurface(
     }
 
     /**
-     * agents-tracker-e6mi: where PB-APP-8's connection states, PB-APP-11's freshness verdict and
-     * the roster's PB-APP-8 notice are drawn, above the destination and outside its scroll.
+     * agents-tracker-e6mi, as replaced by agents-tracker-nx44.2: where the BROKEN state's opaque
+     * strip and the sync detail are drawn, above the destination and outside its scroll.
      *
-     * IT IS A HOST THE SURFACE OWNS, for [contentHost]'s reason exactly. What the banner says
-     * changes whenever the transport, the machine's clock or the journal stream does -- which is
+     * IT IS A HOST THE SURFACE OWNS, for [contentHost]'s reason exactly. What the status says
+     * changes whenever the transport, the machine's clock or a repair channel does -- which is
      * to say on every event -- and the scaffold is rebuilt only when the bar changes. Handing the
-     * scaffold a fresh banner per draw would rebuild the bar at the rate the agents produce
+     * scaffold fresh chrome per draw would rebuild the bar at the rate the agents produce
      * events, and re-parent the destination under whoever is using it.
      *
      * WHAT IT REPLACES IS A LINE ON THE INBOX. The three facts were written to [status], a child
@@ -1278,13 +1278,11 @@ class PhoneSurface(
         // line and a verdict claimed after it would reach the screen one journal event late
         // (agents-tracker-qlf9).
         renderVerdicts(bridge)
-        // PB-APP-11 rides the same line as the connection banner, and it has to: the banner is
-        // the TRANSPORT's opinion, and a relay that answers every poll with an empty page while
-        // withholding the machine's frames leaves it reading "Connected to your machine." with
-        // nothing behind it. The freshness notice is the only thing on this screen that comes
-        // from the machine's own clock.
-        // PB-DS-9: the inbox is built BEFORE the status line is written, because the line now
-        // carries the roster's own PB-APP-8 verdict alongside the transport's.
+        // PB-APP-11 is ranked ABOVE the transport in [SyncStatus], and it has to be: the
+        // transport's opinion is that the socket is up, and a relay that answers every poll with
+        // an empty page while withholding the machine's frames leaves it reading "Connected to
+        // your machine." with nothing behind it. The machine's own clock is the only evidence on
+        // this screen a relay cannot forge newer.
         val inbox = inboxScreen(bridge)
         drawContent(bridge, inbox)
         drawScaffold(inbox.tabs)
@@ -1618,8 +1616,10 @@ class PhoneSurface(
         barDrawn = next
         // BOTH HOSTS SURVIVE THE REBUILD, and both have to be taken out of the scaffold that is
         // about to be discarded: Android refuses an `addView` of a child that still claims a
-        // parent. The banner joined the content host here rather than in `detachHostedViews`
-        // because it is not hosted IN the content -- that is the whole of the fix.
+        // parent. The status chrome joined the content host here rather than in
+        // `detachHostedViews` because it is not hosted IN the content -- that is the whole of the
+        // fix. The nav row's pill is the other way round ([statusSlot]): it IS inside a
+        // destination, so it detaches at composition time instead.
         (contentHost.parent as? ViewGroup)?.removeView(contentHost)
         (syncHost.parent as? ViewGroup)?.removeView(syncHost)
         host.removeAllViews()
@@ -2147,7 +2147,7 @@ class PhoneSurface(
      * One frame of the system back gesture, previewed on the drill-down (migration plan O6.3).
      *
      * IT SCALES [contentHost] AND NOT [root], and the difference is the whole reason the drill-down
-     * is the subject: the tab bar and the status banner are chrome that the gesture is not leaving,
+     * is the subject: the tab bar and the sync chrome are chrome that the gesture is not leaving,
      * so a preview that shrank the window would tell the user they were about to exit the app --
      * which is what back does on the inbox, and is exactly the thing this callback exists to
      * prevent them confusing.
