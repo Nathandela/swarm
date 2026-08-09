@@ -1014,6 +1014,22 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		// re-applied, while this state was read after it. So the one act that can clear the flag
 		// is the one act that proves it has seen it, which is the owner pairing again.
 		st.Disowned = false
+		// AND THE FRESHNESS CLOCK GOES BACK TO ZERO (agents-tracker-nx44.4). LastHeardAt is
+		// PB-APP-11's only coordinate -- the newest AAD-covered IssuedAt this phone has ACCEPTED
+		// -- and it is DURABLE, so without this a phone that has just paired starts inside the
+		// 5-minute budget on a stamp the PREVIOUS registration contributed, and presents every
+		// restored cache as live from a machine it has not heard one frame from. That is the
+		// presentation the requirement exists to forbid, reached with the relay withholding
+		// nothing.
+		//
+		// NOTHING ELSE CLEARS IT ON THE PLATFORM THIS SHIPS TO. phonecore's load-time discard of
+		// a blob stamped with another machine is guarded by a non-empty machine id, and Android
+		// passes none.
+		//
+		// UNCONDITIONAL, unlike Keys below. A re-pair to the same machine in the same epoch is
+		// the case no filter can see and the one this screen is reached from most often: the
+		// owner is here because the machine went quiet.
+		st.LastHeardAt = 0
 		newEpoch = st.EpochID != out.Machine.EpochID
 		if newEpoch {
 			st.Keys = crypto.EpochKeys{}
