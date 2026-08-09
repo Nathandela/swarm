@@ -99,6 +99,15 @@ fun settingsRow(
  * The settings row's OTHER trailing form: a state the row reports rather than a control that
  * changes it. Row 15 names it "status text `Label.CardHead` / `--p-hero`".
  *
+ * IT SPENDS `Mono.Meta`, AND THAT IS ROW 15'S STYLE UNDER ITS SURVIVING NAME (ADR-012 T1,
+ * 2026-08-09). `Label.CardHead` transcribed `.tcard .h` -- 600 10.5px mono -- and `Mono.Meta`
+ * transcribes `.sheet2 .ctx` -- 500 10.5px mono. ADR-009 D7 bundles two faces of JetBrains Mono,
+ * 400 and 500, so the 600 resolved to the 500 and the two styles were one rendered result under
+ * two names. The merge keeps the name whose rule states the weight that renders. Nothing here
+ * changes size, tracking, family or ink, which is why `SettingsRowTest` still claims this view
+ * against `.tcard .h` and still passes: the three properties it asserts are the three the two
+ * rules share.
+ *
  * IT IS `--p-hero` AND NOT `--p-ok`, WHICH IS THE WHOLE REASON THE ROW SPELLS IT OUT. The one
  * shipped caller says "active" about end-to-end encryption, and that is a LIVENESS statement,
  * which is what hero means in this skin. `--p-ok` would read as a status, and after ADR-007 B134
@@ -111,7 +120,7 @@ fun settingsRow(
  * text appearance chosen in `ui/screens/` is the PB-DS-6 violation this package exists to prevent.
  */
 fun statusLabel(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_CardHead)
+    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
     setTextColor(Kit.colour(context, R.color.swarm_hero))
     this.text = text
     layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)

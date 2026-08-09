@@ -3,17 +3,22 @@
     <!--
       PB-DS-2 and PB-DS-3 (S22b): the typography scale.
 
-      19 product text styles across 13 sizes: PB-DS-2's 18 across 12 sizes, 4 weights and 5
+      17 product text styles across 12 sizes: PB-DS-2's 18 across 12 sizes, 4 weights and 5
       tracking values, plus the one docs/design/substrate-components.md §7 adds - `Display.SAS`,
-      the 34 sp the pairing screen's verification emoji are set in, which is the 13th size.
+      the 34 sp the pairing screen's verification emoji are set in - less the two ADR-012 takes
+      out.
 
-      THE HEADING COUNT WAS 18/12 UNTIL 2026-08-08 (agents-tracker-ksvb.4) and the file has held
-      19 across 13 since `Display.SAS` landed. The sentence read as PB-DS-2's requirement and was
-      also the only place a reader could count the FILE, so the two claims sat on one line and
-      only one of them was true. The requirement's numbers are unchanged and are named as the
+      THE HEADING COUNT WAS 18/12, THEN 19/13, AND IS 17/12 SINCE 2026-08-09 (ADR-012, bead
+      agents-tracker-ksvb.8). The requirement's numbers are unchanged and are named as the
       requirement's; the file's own count leads, because that is what a reader of this file is
-      counting. ADR-009 D7 states the same total ("Type scale structure (19 styles, sp units,
-      colour-free styles) is unchanged"). Prose only: no style, size, weight or tracking moved.
+      counting. What moved: `Label.CardHead` merged into `Mono.Meta` (T1) and `Label.StatusBar`
+      was deleted (T2), which also took 13 sp out of the ladder - it was that size's only
+      occupant. Both are recorded in android/gate/s22b_type_test.go's s22bUnimplementedRules,
+      which is where a rule the design draws and this app does not spend has to name the decision
+      that says so. NO PIXEL MOVES: `.tcard .h` and `.sheet2 .ctx` render identically once
+      ADR-009 D7's two-face bundle resolves 600 to 500, and `.ptime` is the mock's status-bar
+      clock, which this app has never drawn. ADR-009 D7's own "(19 styles, ...)" is the record of
+      what D7 did not change and carries a dated pointer here.
 
       Before this file the app expressed zero of them: 1582 lines of surface code held one
       Typeface.MONOSPACE, one Typeface.BOLD, and no setTextSize or setLetterSpacing anywhere.
@@ -22,13 +27,15 @@
       comment is machine-read - android/gate/s22b_type_test.go and the Robolectric suite both
       parse it - and it is the only thing in this file that is a decision. Every NUMBER below is
       read out of that fact at test time and compared, in both directions: a style whose citation
-      names nothing fails, and a design fact with no style here fails too. So a size cannot be
-      edited here without the design disagreeing, and re-pointing a style at a different rule is a
-      visible claim.
+      names nothing fails, and a design fact with no style here fails too - unless not
+      implementing it is ITSELF a recorded decision, which since ADR-012 two rules are, and the
+      gate holds each of those to the ADR that decided it rather than to a list it keeps quietly.
+      So a size cannot be edited here without the design disagreeing, and re-pointing a style at a
+      different rule is a visible claim.
 
       THERE ARE TWO CLASSES OF CITATION, AND THE DIFFERENCE IS WHERE THE AUTHORITY LIVES.
       `origin:` names a CSS rule in the shared block of
-      docs/research/remote-control-design-directions.html - eighteen of the nineteen styles are
+      docs/research/remote-control-design-directions.html - sixteen of the seventeen styles are
       that, and they are transcriptions of a rule the artifact draws. `derived:` names a row of
       docs/design/substrate-components.md, which is where the design decided something the
       artifact never drew. `Display.SAS` is the only one: the artifact has no `.sas` rule at all,
@@ -159,14 +166,6 @@
         <item name="android:fontFamily">sans-serif</item>
     </style>
 
-    <!-- origin: .ptime -->
-    <style name="TextAppearance.Swarm.Label.StatusBar" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">13sp</item>
-        <item name="android:textFontWeight">600</item>
-        <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">sans-serif</item>
-    </style>
-
     <!-- origin: .m2 -->
     <style name="TextAppearance.Swarm.Body.Message" parent="TextAppearance.AppCompat">
         <item name="android:textSize">12.5sp</item>
@@ -233,15 +232,12 @@
         <item name="android:fontFeatureSettings">tnum, zero, calt</item>
     </style>
 
-    <!-- origin: .tcard .h -->
-    <style name="TextAppearance.Swarm.Label.CardHead" parent="TextAppearance.AppCompat">
-        <item name="android:textSize">10.5sp</item>
-        <item name="android:textFontWeight">600</item>
-        <item name="android:letterSpacing">0</item>
-        <item name="android:fontFamily">@font/jetbrains_mono</item>
-        <item name="android:fontFeatureSettings">tnum, zero, calt</item>
-    </style>
-
+    <!-- `.tcard .h` HAS NO STYLE HERE, AND THAT IS ADR-012 T1 (2026-08-09). It is 600 10.5px mono
+         and `.sheet2 .ctx` below is 500 10.5px mono; ADR-009 D7 bundles the 400 and the 500 face,
+         so the 600 resolved to the 500 and `Label.CardHead` was `Mono.Meta` under a second name.
+         The rule is listed in android/gate/s22b_type_test.go's s22bUnimplementedRules, which
+         resolves both weights through res/font/jetbrains_mono.xml and fails the day the two stop
+         rendering identically. A bundled 600 face would be that day. -->
     <!-- origin: .sheet2 .ctx -->
     <style name="TextAppearance.Swarm.Mono.Meta" parent="TextAppearance.AppCompat">
         <item name="android:textSize">10.5sp</item>
