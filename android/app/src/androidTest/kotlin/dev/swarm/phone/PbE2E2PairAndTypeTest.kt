@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.swarm.phone.PhoneScreenDriver.awaitPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitScreen
 import dev.swarm.phone.PhoneScreenDriver.press
+import dev.swarm.phone.PhoneScreenDriver.selectSession
 import dev.swarm.phone.PhoneScreenDriver.textOnScreen
 import dev.swarm.phone.PhoneScreenDriver.type
 import org.junit.Assert.assertEquals
@@ -122,15 +123,25 @@ class PbE2E2PairAndTypeTest {
             )
 
             // ---- observes ----------------------------------------------------------------
-            app.awaitPressable(
-                "Take control",
-                "the paired phone never rendered a session, so it observed nothing. The roster " +
-                    "is drawn from the journal stream, and an empty one after pairing means the " +
-                    "phone is not draining the machine's mailbox -- App.Start is what dials it, " +
-                    "and PhoneSurface is what calls Start.",
+            // AND OPENS THE SESSION, which is the step this test never took (agents-tracker-
+            // nx44.6). It pressed `Take control` straight from the inbox, and that control has
+            // been on the drill-down since 4b4cde0 -- so this run has been unrunnable as written
+            // since 2026-08-01, failing on a missing label rather than on anything it asserts.
+            app.selectSession(
+                "the paired phone never rendered a session row, so it observed nothing. The " +
+                    "roster is drawn from the journal stream, and an empty one after pairing " +
+                    "means the phone is not draining the machine's mailbox -- App.Start is what " +
+                    "dials it, and PhoneSurface is what calls Start.",
             )
 
             // ---- takes control -----------------------------------------------------------
+            app.awaitPressable(
+                "Take control",
+                "the session detail opened without the control that acquires a lease. It is " +
+                    "drawn while SessionLease.showsTakeControl is true and raised by " +
+                    "setActionsEnabled once the roster has a row, so an absent one is a " +
+                    "drill-down that did not arrive.",
+            )
             app.press("Take control")
 
             // PB-INPUT-2: the keyboard is shut until the MACHINE confirms the lease, so this is

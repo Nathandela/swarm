@@ -8,6 +8,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
+import dev.swarm.phone.ui.screens.InboxTag
 import org.junit.Assert.fail
 
 /**
@@ -75,20 +76,21 @@ object PhoneScreenDriver {
     /**
      * Wait until a control becomes pressable.
      *
-     * It is how "observes" is asserted without inventing a fact the test would have to be told.
      * `PhoneSurface.setActionsEnabled` raises the session controls only once the triage inbox
-     * yielded a row, so an enabled Take control IS the phone having drawn the machine's roster.
+     * yielded a row, so an enabled Take control is the phone having drawn the machine's roster AND
+     * the caller having opened a session on it -- see [selectSession], which is the step that has
+     * to come first.
      *
      * SEND LINE IS RAISED BY A DIFFERENT FACT and it is worth waiting on separately:
-     * `PhoneSurface.setKeyboardEnabled` enables it from `TerminalPeek.keyboardEnabled`, which is
+     * `PhoneSurface.setKeyboardEnabled` enables it from `SessionLease.keyboardEnabled`, which is
      * the lease the MACHINE confirmed and the link being up (PB-INPUT-2). So an enabled Send is
      * the take_control having been answered, not the roster having a row.
      *
-     * TAKE CONTROL IS ALSO NO LONGER ON SCREEN AT ALL UNTIL THE ROSTER HAS A ROW, and that is a
-     * strengthening rather than a hazard for this wait: PB-DS-9 composes the terminal peek instead
-     * of showing and hiding it, so a session-less phone draws no peek and therefore no Take
-     * control. The wait already tolerates the control being absent -- it polls until it is
-     * pressable -- and what it now proves is one step stronger.
+     * NEITHER CONTROL IS ON SCREEN AT ALL UNTIL A SESSION IS OPEN. Both are composed by
+     * `sessionDetailView`, which the Inbox destination draws only while a row has been tapped
+     * (4b4cde0), and the composer's Send moved there with them (agents-tracker-nx44.6). The wait
+     * tolerates a control being absent -- it polls until it is pressable -- so what it proves is
+     * that the drill-down arrived and the machine answered.
      */
     fun ActivityScenario<PhoneActivity>.awaitPressable(label: String, why: String) {
         val deadline = SystemClock.uptimeMillis() + PATIENCE_MILLIS
@@ -103,6 +105,40 @@ object PhoneScreenDriver {
             Thread.sleep(200)
         }
         fail("PB-E2E-2: \"$label\" never became pressable. $why\nthe screen said:\n${textOnScreen()}")
+    }
+
+    /**
+     * Open the first session in the triage inbox, which is where every session control now lives.
+     *
+     * WITHOUT THIS THE TWO SMOKES HAVE BEEN UNRUNNABLE AS WRITTEN SINCE 2026-08-01
+     * (agents-tracker-nx44.6). Both pressed `Take control` straight after pairing, and that
+     * control has been on the DRILL-DOWN since 4b4cde0 -- the session detail, reached by tapping a
+     * row -- so [press] found no such label and failed with "no enabled, visible control labelled
+     * \"Take control\"". The step this adds is the one a person performs and the tests silently
+     * assumed: they open a session before acting on it.
+     *
+     * IT IS ALSO WHERE "OBSERVES" IS ASSERTED NOW. A tappable session row IS the phone having
+     * drawn the machine's roster off the journal stream -- the fact `awaitPressable("Take
+     * control")` used to stand in for, one screen closer to the source.
+     *
+     * IT FINDS THE ROW BY THE TAG THE SCREEN GIVES IT and not by a label: a row's text is the
+     * session's own title, which comes from the machine and which no test may predict. `InboxTag`
+     * is production's own name for the part, which is the arrangement `KitTag` exists for.
+     */
+    fun ActivityScenario<PhoneActivity>.selectSession(why: String) {
+        val deadline = SystemClock.uptimeMillis() + PATIENCE_MILLIS
+        while (SystemClock.uptimeMillis() < deadline) {
+            var opened = false
+            onActivity { activity ->
+                val row = activity.controls().firstOrNull {
+                    it.tag == InboxTag.ROW && it.visibility == View.VISIBLE && it.isEnabled
+                }
+                if (row != null) opened = row.performClick()
+            }
+            if (opened) return
+            Thread.sleep(200)
+        }
+        fail("PB-E2E-2: no session row could be opened. $why\nthe screen said:\n${textOnScreen()}")
     }
 
     /** Press the control a user would press, found by the label they would read. */

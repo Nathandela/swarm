@@ -48,10 +48,14 @@ import dev.swarm.phone.ui.kit.statusLabel
  * is true of all four channels at once rather than of any one of them -- so it cannot attach to a
  * row, and it has to be read before them rather than found among them.
  *
- * **NOTHING IN THIS FILE OWNS A CLICK**, and here that is a gap rather than the usual division.
- * PB-SYNC-1's repair action is `App.Resync`, which stays unbound: it is rate-bounded per section
- * 6.0 and its refusal needs rendering. So this screen reports and cannot repair, and [below] is
- * where the rest of the Machines destination is hosted.
+ * **NOTHING IN THIS FILE OWNS A CLICK**, which is the usual division now rather than a gap.
+ * PB-SYNC-1's repair action is `App.Resync`, and it HAS a caller: `sessionDetailView` places it
+ * beside the stale notice on the screen where a hole is felt, and `PhoneSurface` owns the press,
+ * the rate-bounded refusal's route through PB-APP-9 and the touch filter (agents-tracker-upbo via
+ * agents-tracker-nx44.6). This section still reports rather than repairs, and that is now a
+ * placement rather than an absence: [below] is where the rest of the Machines destination is
+ * hosted, and agents-tracker-nx44.2's sync detail sheet is where this destination's own repair
+ * action lands.
  */
 object LinkTag {
     /** `.plabel` over the four channels. */

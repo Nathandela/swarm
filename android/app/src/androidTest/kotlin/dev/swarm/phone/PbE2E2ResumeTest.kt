@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.swarm.phone.PhoneScreenDriver.awaitPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitScreen
 import dev.swarm.phone.PhoneScreenDriver.press
+import dev.swarm.phone.PhoneScreenDriver.selectSession
 import dev.swarm.phone.PhoneScreenDriver.textOnScreen
 import dev.swarm.phone.PhoneScreenDriver.type
 import org.junit.Assert.assertTrue
@@ -50,11 +51,19 @@ class PbE2E2ResumeTest {
                     "has lost the durable blob, or cannot open it",
             )
 
-            app.awaitPressable(
-                "Take control",
+            // THE SESSION IS OPENED FIRST, and this test had the same defect its sibling did
+            // (agents-tracker-nx44.6): `Take control` has been on the drill-down since 4b4cde0,
+            // so pressing it from the inbox failed on a missing label rather than on the durable
+            // coordinates this run is about.
+            app.selectSession(
                 "the relaunched app never redrew a session. Its durable coordinates -- the epoch " +
                     "key, the relay cursor -- are what let it resume the mailbox rather than " +
                     "start from nothing",
+            )
+            app.awaitPressable(
+                "Take control",
+                "the reopened session detail offers no way to acquire a lease, so the lease this " +
+                    "test is about cannot be asked for",
             )
             app.press("Take control")
 

@@ -58,12 +58,18 @@ import dev.swarm.phone.ui.StreamView
  * "Connected to your machine." with four stale channels, and that pair of facts is the whole
  * subject of PB-APP-8.
  *
- * **It has no repair control**, and that is a gap rather than a decision. `App.Resync` is PB-SYNC-1's
- * action and stays unbound: it is rate-bounded per section 6.0 and its refusal has to be rendered,
- * which is a screen decision this slice did not take. The consequence is stated rather than hidden:
- * nothing in production sets `resyncAsked`, so [ChannelRow] can carry a repairing notice and no
- * user can currently reach one. The model renders whatever the facade reports; what is missing is
- * the button that makes the third state occur.
+ * **It has no repair control OF ITS OWN, and one now exists elsewhere** (agents-tracker-upbo,
+ * landed by agents-tracker-nx44.6). `App.Resync` was unbound while this file was written, and this
+ * paragraph recorded the consequence: nothing in production set `resyncAsked`, so [ChannelRow]
+ * could carry a repairing notice that no user could reach. That is no longer true. The session
+ * detail draws the repair beside the stale notice it mends -- closer to where a hole is actually
+ * felt, which is a conversation with records missing from it -- and the rewind that verb performs
+ * is the TRANSPORT's read position, shared by all four channels, so one press repairs what this
+ * section reports. `StreamBadge.RESYNCING` is reachable in production from that press.
+ *
+ * A SECOND ENTRY POINT BELONGS HERE AND IS agents-tracker-nx44.2's, which folds a repair action
+ * into the sync detail sheet; this section retires into that tab fold (agents-tracker-nx44.3)
+ * rather than growing a button first.
  */
 data class LinkPanel(
     /** The one `.plabel` over the channels. */
