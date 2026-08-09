@@ -85,10 +85,9 @@ class HumanNamesTest {
         freshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_753_900_000_000),
         streams = emptyList(),
         clock = ClockBanner.of(""),
-        formatTime = formatTime,
+        killSwitchEngaged = false,
+        nowUnixMs = 1_753_900_000_000L,
     ).machine
-
-    private val formatTime: (Long) -> String = { millis -> "at $millis" }
 
     @Test
     fun `the machine row names the machine and keeps the id in its own cell`() {

@@ -153,16 +153,6 @@ var s23Inbox = []s23Component{
 			"tractable at all.",
 	},
 	{
-		Factory: "statusLabel",
-		File:    "SettingsRow.kt",
-		Derived: "#15 Settings row",
-		Why: "row 15's OTHER trailing form: a state the row reports rather than a control that " +
-			"changes it. Separate from settingsRow because the row would otherwise take two " +
-			"mutually exclusive arguments and a caller could pass both. It is `--p-hero` and not " +
-			"`--p-ok`: \"active\" is a liveness statement, and after B134 --p-ok carries " +
-			"ReadyForReview.",
-	},
-	{
 		Factory: "toggle",
 		File:    "Toggle.kt",
 		Derived: "#4 Toggle",
@@ -2543,11 +2533,12 @@ func TestPBDS12_NoStatedTouchTargetIsUnassigned(t *testing.T) {
 	}
 
 	// SCOPED TO THE FILE AND NOT TO THE FACTORY, because one file can hold two of them.
-	// SettingsRow.kt declares `settingsRow` and `statusLabel`, and only the first carries a floor;
-	// a per-factory reading of the same text accuses the second of spending a constant its
-	// neighbour wrote. What a text scan can honestly say is that SOMETHING in this file was
-	// assigned a target, and TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent is what says
-	// the assignment was met.
+	// CtaButton.kt declares `ctaButton` and `ctaStack`, and only the first carries a floor; a
+	// per-factory reading of the same text accuses the second of spending a constant its
+	// neighbour wrote. (SettingsRow.kt was the example here until agents-tracker-2pnu F5 retired
+	// `statusLabel`, which left that file with one factory and the example without a subject.)
+	// What a text scan can honestly say is that SOMETHING in this file was assigned a target, and
+	// TestPBDS12_EveryStatedTouchTargetIsSpentByItsComponent is what says the assignment was met.
 	claimed := map[string]bool{}
 	for _, c := range s23Inbox {
 		if spenders[c.Factory] {

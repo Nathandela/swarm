@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -47,7 +46,6 @@ import dev.swarm.phone.ui.screens.SettingsPanel
 import dev.swarm.phone.ui.screens.SettingsPanelScreen
 import dev.swarm.phone.ui.screens.SettingsRow
 import dev.swarm.phone.ui.screens.settingsPanelView
-import java.util.Date
 import swarmmobile.App
 import swarmmobile.Op
 import swarmmobile.PushPreference
@@ -657,23 +655,20 @@ class SettingsSurface(
                 freshness = bridge.machineFreshness(),
                 streams = bridge.streamViews(),
                 clock = bridge.clockBanner(),
-                formatTime = ::clockTime,
+                // ROW 12'S STATE (agents-tracker-2pnu F5). It is READ ONLY by design and the
+                // section draws the panel only where it is engaged -- see `connectionOf`.
+                killSwitchEngaged = bridge.killSwitchEngaged(),
+                // THIS PHONE'S CLOCK, FOR ONE ELAPSED DURATION (agents-tracker-2pnu F5). It
+                // replaced `formatTime = ::clockTime`: the presence line printed a wall-clock
+                // time with no date on it, which at 09:00 the next morning reads the same as a
+                // machine heard from three minutes ago. It is read per draw and never latched,
+                // for `clockBanner`'s reason one line up.
+                nowUnixMs = System.currentTimeMillis(),
             )
         } catch (unreadable: Exception) {
             null
         }
     }
-
-    /**
-     * A unix millisecond as the user's own clock reads it.
-     *
-     * THE FORMATTER IS THE PLATFORM'S AND THE SENTENCE IS THE MODEL'S. `DateFormat.getTimeFormat`
-     * carries the locale, the time zone and the 12/24-hour preference, none of which a screen
-     * model may be right about to be testable -- which is why `MachineFreshness.notice` takes this
-     * as a parameter instead of reading a clock.
-     */
-    private fun clockTime(unixMs: Long): String =
-        DateFormat.getTimeFormat(activity).format(Date(unixMs))
 
     /**
      * `App.MachineName`, guarded on its own so an unreadable name cannot take the PAIRING down

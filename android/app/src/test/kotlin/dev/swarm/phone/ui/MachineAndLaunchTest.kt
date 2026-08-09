@@ -33,6 +33,13 @@ import org.junit.Test
  */
 class MachinePaneTest {
 
+    /**
+     * This phone's clock, 27 hours after the fixture's `lastHeardUnixMs` -- so the elapsed
+     * duration is arithmetic rather than a wait, and it crosses the day boundary that made the
+     * retired wall-clock form unreadable.
+     */
+    private val NOW = 1_753_900_000_000L + 27 * 3_600_000L
+
     private fun pane(
         presence: String = "online",
         killSwitchEngaged: Boolean = false,
@@ -67,14 +74,18 @@ class MachinePaneTest {
             presence = "online",
             freshness = MachineFreshness(silent = true, lastHeardUnixMs = 1_753_900_000_000),
         )
-        val line = silent.presenceExplanation { "14:26" }
-        assertTrue("the user is told WHEN", line.contains("since 14:26"))
+        // agents-tracker-2pnu F5: `presenceExplanation` takes THIS PHONE'S CLOCK and no longer
+        // a formatter, and the assertion moved with it. It read
+        // `assertTrue("the user is told WHEN", line.contains("since 14:26"))` -- a wall clock
+        // with no date on it, which at 09:00 the next morning reads the same as three minutes.
+        val line = silent.presenceExplanation(NOW)
+        assertTrue("the user is told HOW LONG", line.contains("for 27h"))
         assertTrue("the relay's word is attributed to the relay", line.contains("relay"))
 
         val healthy = pane(presence = "online")
         assertFalse(
             "a machine inside the budget carries no warning",
-            healthy.presenceExplanation { "14:26" }.contains("Not heard"),
+            healthy.presenceExplanation(NOW).contains("Not heard"),
         )
     }
 
@@ -90,7 +101,7 @@ class MachinePaneTest {
     fun `a healthy machine's presence line is silent, and the fact moves to the announcement`() {
         val healthy = pane(presence = "online")
 
-        assertEquals("", healthy.presenceExplanation { "14:26" })
+        assertEquals("", healthy.presenceExplanation(NOW))
         assertEquals("Your machine is online.", healthy.presenceAnnouncement)
 
         // The silent case is unaffected: it already says presence in words, so there is nothing
@@ -99,7 +110,7 @@ class MachinePaneTest {
             presence = "online",
             freshness = MachineFreshness(silent = true, lastHeardUnixMs = 1_753_900_000_000),
         )
-        assertTrue(silent.presenceExplanation { "14:26" }.isNotEmpty())
+        assertTrue(silent.presenceExplanation(NOW).isNotEmpty())
     }
 
     /**
@@ -109,9 +120,9 @@ class MachinePaneTest {
     @Test
     fun `a phone that has never heard from its machine names no time`() {
         val never = MachineFreshness(silent = true, lastHeardUnixMs = 0)
-        val notice = never.notice { "14:26" }
+        val notice = never.notice(NOW)
         assertEquals("Not heard from your machine yet.", notice)
-        assertNull("inside the budget there is nothing to say", MachineFreshness(false, 0).notice { "14:26" })
+        assertNull("inside the budget there is nothing to say", MachineFreshness(false, 0).notice(NOW))
     }
 
     /**

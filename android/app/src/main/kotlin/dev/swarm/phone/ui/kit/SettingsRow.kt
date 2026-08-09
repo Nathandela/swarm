@@ -4,7 +4,6 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.TextView
 import dev.swarm.phone.R
 
 /**
@@ -24,9 +23,19 @@ import dev.swarm.phone.R
  * settings row is what is IN it, which is this file.
  *
  * THE TRAILING CONTROL IS A VIEW THE CALLER PASSES, not a variant this component switches on. Row
- * 15 says it is "row 4, or status text" -- a [toggle] or a [statusLabel] -- and a factory that
- * took a `Boolean` and built one itself would own two components' worth of decisions and force a
- * third parameter the first time a row needed something else. The screen composes; this places.
+ * 15 says it is "row 4, or status text", and a factory that took a `Boolean` and built one itself
+ * would own two components' worth of decisions and force a third parameter the first time a row
+ * needed something else. The screen composes; this places.
+ *
+ * **ROW 15'S STATUS-TEXT FORM IS WITHDRAWN AND THE TRAILING SLOT IS NOT** (agents-tracker-2pnu
+ * F5, agents-tracker-zecs). `statusLabel` shipped this file's other half and its only would-be
+ * caller was inventory C6's `End-to-end encryption` row, which `SettingsPanelScreen` records as
+ * deliberately unbuilt: "nothing on this handset READS it, so \"active\" would be a word printed
+ * unconditionally beside a screen whose whole subject is what the machine has actually
+ * confirmed." A factory whose own justification rests on a row the screen model refuses to build
+ * is a component with no future caller, so it is retired rather than left to be rediscovered.
+ * The slot itself is unchanged: [toggle] fills it on every preference row and `denyChip` on the
+ * pairing row. The day a fact on the wire earns a live status, the form comes back with it.
  *
  * @param sublabel null renders no second line AT ALL rather than an empty one. A blank TextView
  *  still occupies its line height and its gap, so a row with no sublabel would sit taller than
@@ -91,38 +100,4 @@ fun settingsRow(
             )
         }
     }
-}
-
-/**
- * derived: docs/design/substrate-components.md #15 Settings row
- *
- * The settings row's OTHER trailing form: a state the row reports rather than a control that
- * changes it. Row 15 names it "status text `Label.CardHead` / `--p-hero`".
- *
- * IT SPENDS `Mono.Meta`, AND THAT IS ROW 15'S STYLE UNDER ITS SURVIVING NAME (ADR-012 T1,
- * 2026-08-09). `Label.CardHead` transcribed `.tcard .h` -- 600 10.5px mono -- and `Mono.Meta`
- * transcribes `.sheet2 .ctx` -- 500 10.5px mono. ADR-009 D7 bundles two faces of JetBrains Mono,
- * 400 and 500, so the 600 resolved to the 500 and the two styles were one rendered result under
- * two names. The merge keeps the name whose rule states the weight that renders. Nothing here
- * changes size, tracking, family or ink, which is why `SettingsRowTest` still claims this view
- * against `.tcard .h` and still passes: the three properties it asserts are the three the two
- * rules share.
- *
- * IT IS `--p-hero` AND NOT `--p-ok`, WHICH IS THE WHOLE REASON THE ROW SPELLS IT OUT. The one
- * shipped caller says "active" about end-to-end encryption, and that is a LIVENESS statement,
- * which is what hero means in this skin. `--p-ok` would read as a status, and after ADR-007 B134
- * it carries ReadyForReview -- so a green "active" here and a green dot on the inbox would be the
- * same colour saying two unrelated things.
- *
- * IT IS A SEPARATE FACTORY FROM [settingsRow] rather than a parameter on it, because the row would
- * otherwise take two mutually exclusive arguments -- a trailing View and a status String -- and
- * the caller could pass both. What it must NOT be is a TextView the screen styles: an ink and a
- * text appearance chosen in `ui/screens/` is the PB-DS-6 violation this package exists to prevent.
- */
-fun statusLabel(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
-    setTextColor(Kit.colour(context, R.color.swarm_hero))
-    this.text = text
-    layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
-    tag = KitTag.SETTINGS_STATUS
 }

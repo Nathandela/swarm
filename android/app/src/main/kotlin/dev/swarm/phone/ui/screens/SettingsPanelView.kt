@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
+import dev.swarm.phone.ui.kit.killSwitchPanel
 import dev.swarm.phone.ui.kit.machineRow
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
@@ -134,6 +135,16 @@ object SettingsTag {
      */
     const val CONNECTION_CLOCK = "settings.connection.clock"
 
+    /**
+     * Derivation row 12's kill-switch panel, drawn only where the switch is OFF
+     * (agents-tracker-2pnu F5, agents-tracker-zecs).
+     *
+     * IT IS THE THIRD ABSENT-WHEN-HEALTHY BLOCK IN THIS SECTION, for [CONNECTION_HEALTH]'s
+     * reason and one more: what row 12 draws is a bordered container in `--p-err`, and an
+     * `--p-err` box reporting that nothing is wrong is the loudest possible way to say it.
+     */
+    const val REMOTE_ACCESS = "settings.connection.remote"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, CONNECTION_ROW, ROW)
 }
@@ -243,6 +254,21 @@ fun settingsPanelView(
         }
         section.clockNotice.takeIf { it.isNotEmpty() }?.let { line ->
             column.addView(notice(context, line).apply { tag = SettingsTag.CONNECTION_CLOCK })
+        }
+        // ROW 12'S PANEL, AND ONLY WHERE THE SWITCH IS OFF (agents-tracker-2pnu F5). It is the
+        // last block in the section because it is the heaviest thing on the screen -- the one
+        // component in the kit with an `--p-err` border -- and it qualifies everything above it:
+        // a machine that refuses every command is why the phone is not getting what it asked for.
+        // The model decides whether there is anything to say; a null here is a working switch.
+        section.remoteAccess?.let { row ->
+            column.addView(
+                killSwitchPanel(
+                    context = context,
+                    title = row.title,
+                    body = row.body,
+                    command = row.command,
+                ).apply { tag = SettingsTag.REMOTE_ACCESS },
+            )
         }
     }
 

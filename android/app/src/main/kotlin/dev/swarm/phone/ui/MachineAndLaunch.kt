@@ -98,8 +98,8 @@ data class MachinePane(
      * conditional-notice discipline exists to refuse everywhere else. [presenceAnnouncement] is
      * where the fact goes for a reader this line no longer speaks to.
      */
-    fun presenceExplanation(formatTime: (Long) -> String): String =
-        explanationOf(presence, freshness, formatTime)
+    fun presenceExplanation(nowUnixMs: Long): String =
+        explanationOf(presence, freshness, nowUnixMs)
 
     /**
      * The sentence [presenceExplanation] no longer prints for a healthy machine, said once more
@@ -114,16 +114,7 @@ data class MachinePane(
         get() = announcementOf(presence)
 
     val killSwitchExplanation: String
-        get() = if (killSwitchEngaged) {
-            "Remote control is switched off at your machine, so it will refuse anything this " +
-                "phone asks it to change. Only the machine's owner can switch it back on."
-        } else {
-            // ON IS ONE SHORT LINE, AND SAYS NO MORE (agents-tracker-ksvb.6). It used to spend a
-            // second sentence on the same words the OFF branch above needs for its own reason --
-            // that only the machine can move the switch -- rendered on every visit to a screen
-            // that is, in this state, reporting nothing wrong.
-            "Remote control is on. Only the machine can switch it off."
-        }
+        get() = killSwitchExplanationOf(killSwitchEngaged)
 
     /**
      * The two sentences this pane owns, reachable WITHOUT one (agents-tracker-nx44.3).
@@ -153,20 +144,39 @@ data class MachinePane(
          * @param presence `App.MachinePresence`'s state, verbatim -- the RELAY's opinion.
          * @param freshness the phone's own evidence, which is what decides whether the relay's
          *  word is allowed to stand alone.
-         * @param formatTime an Android formatter carrying the user's locale and time zone, passed
-         *  through so this stays testable without one.
+         * @param nowUnixMs this phone's clock, for the elapsed duration alone (agents-tracker-2pnu
+         *  F5). It replaced an Android time FORMATTER: the sentence read `since 14:57`, and a
+         *  wall clock with no date on it reads the same at three minutes and at nineteen hours.
          */
         fun explanationOf(
             presence: String,
             freshness: MachineFreshness,
-            formatTime: (Long) -> String,
-        ): String = freshness.notice(formatTime)?.let { notice ->
+            nowUnixMs: Long,
+        ): String = freshness.notice(nowUnixMs)?.let { notice ->
             "$notice The relay reports \"$presence\", which is the relay's word and not your " +
                 "machine's."
         } ?: ""
 
         /** What the presence mark announces where [explanationOf] has printed nothing. */
         fun announcementOf(presence: String): String = "Your machine is $presence."
+
+        /**
+         * What a phone may say about the daemon-side switch, reachable WITHOUT a whole pane
+         * (agents-tracker-2pnu F5) -- [explanationOf]'s arrangement, for its reason: the settings
+         * CONNECTION section renders this and holds none of the pane's other fields, and a
+         * section that re-worded the sentence would be the second copy that drifts.
+         *
+         * ON IS ONE SHORT LINE, AND SAYS NO MORE (agents-tracker-ksvb.6). It used to spend a
+         * second sentence on the same words the OFF branch needs for its own reason -- that only
+         * the machine can move the switch -- rendered on every visit to a screen that is, in this
+         * state, reporting nothing wrong.
+         */
+        fun killSwitchExplanationOf(engaged: Boolean): String = if (engaged) {
+            "Remote control is switched off at your machine, so it will refuse anything this " +
+                "phone asks it to change. Only the machine's owner can switch it back on."
+        } else {
+            "Remote control is on. Only the machine can switch it off."
+        }
     }
 }
 

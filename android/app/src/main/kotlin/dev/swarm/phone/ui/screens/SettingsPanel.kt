@@ -172,6 +172,57 @@ data class ConnectionSection(
      * when the fix is their own clock.
      */
     val clockNotice: String,
+    /**
+     * Derivation row 12's kill-switch panel, or null while remote control is ON
+     * (agents-tracker-2pnu F5, agents-tracker-zecs).
+     *
+     * IT IS BACK BECAUSE IT HAD NOWHERE LEFT TO BE. `killSwitchPanel` was `MachinesPanelView`'s,
+     * and agents-tracker-nx44.3 deleted that file -- so a machine whose owner turned remote
+     * control off refused every command this phone sent and said nothing about why, anywhere.
+     *
+     * NULL IS THE ON STATE, and that is what makes this a fault report rather than the always-on
+     * chrome the fold deleted. Row 12's whole substance after its 2026-08-01 amendment is a
+     * read-only report -- `handleRemoteSetControl` refuses the remote tier before consulting its
+     * backend, so the phone can show the state and never move it -- and a read-only report drawn
+     * unconditionally is exactly what the fold argued against. agents-tracker-ksvb.6 had already
+     * ruled the shape: "the ON state's paragraph shrinks to one short line ... unlike the OFF
+     * state below it, which keeps its full teaching."
+     */
+    val remoteAccess: RemoteAccessRow?,
+)
+
+/**
+ * Derivation row 12's cells, as the CONNECTION section carries them.
+ *
+ * MOVED HERE FROM `MachinesPanel.kt` BY agents-tracker-2pnu F5, minus its ON branch. That file
+ * was the Machines destination's model and the destination is deleted; the OFF state is the part
+ * that answered a question a person had, so it moves to the section that can be asked it.
+ *
+ * **IT CARRIES NO CONTROL AND THAT IS A SECURITY DECISION.** Row 12 said "trailing control is row
+ * 4" until its 2026-08-01 amendment: `App.KillSwitchEngaged` is READ ONLY by design, because
+ * `protocol/server.go handleRemoteSetControl` refuses the remote tier before the backend is
+ * consulted -- a remote device must never re-enable a switch its owner turned off. A toggle here
+ * is a control that cannot act, and `killSwitchPanel` has no parameter for one.
+ */
+data class RemoteAccessRow(
+    /** Row 12's `Title.Row` / `--p-err` cell. The mock's `.kills` title, verbatim. */
+    val title: String,
+    /**
+     * Row 12's subtitle: what the switch is doing, and where it lives.
+     *
+     * The first sentence is [dev.swarm.phone.ui.MachinePane.killSwitchExplanationOf]'s unchanged
+     * -- the model's own words about the state, not re-worded here, for [MachineRow.presenceLine]'s
+     * reason. The second, naming where the switch lives, follows it because this row only ever
+     * describes the OFF state, which is the one with a recovery to teach.
+     */
+    val body: String,
+    /**
+     * The part of [body] that is row 12's inline `Mono.InlineStrong` cell: a real verb of the real
+     * CLI (`cmd/swarm/remote.go`), and the one that applies to the state the switch is in. The
+     * mock prints `swarm remote off` unconditionally, which is the wrong instruction to give
+     * somebody whose remote control is already off.
+     */
+    val command: String,
 )
 
 /**
@@ -354,6 +405,19 @@ object SettingsPanelScreen {
     private const val ONLINE = "online"
     private const val OFFLINE = "offline"
 
+    /** Row 12's `Title.Row` / `--p-err` cell -- the retired mock's `.kills` title, verbatim. */
+    private const val REMOTE_ACCESS = "Remote access"
+
+    /**
+     * Where the switch lives, and the verb that moves it.
+     *
+     * THE VERB IS THE ONE THAT APPLIES TO THE STATE THE SWITCH IS IN. `swarm remote on` and not
+     * the mock's unconditional `swarm remote off`, which is the wrong instruction to give
+     * somebody whose remote control is already off. Both are real verbs of `cmd/swarm/remote.go`.
+     */
+    private const val SWITCH_LIVES = "The switch lives on the machine: "
+    private const val COMMAND_ENABLE = "swarm remote on"
+
     fun labelFor(toggle: PushToggle): String = checkNotNull(ROW_LABELS[toggle]) {
         "PB-DS-9: no settings label for $toggle. A switch with no words beside it is a control " +
             "nobody can identify, so this fails loudly rather than rendering a blank row."
@@ -435,8 +499,13 @@ object SettingsPanelScreen {
      *  order is not decided here.
      * @param clock `FacadeBridge.clockBanner()` -- PB-TIME-1's verdict, pulled per draw and never
      *  latched, because a screen that opened after the measurement was never sent the event.
-     * @param formatTime an Android formatter carrying the user's locale and time zone, passed
-     *  through to the pane's own sentence so this stays checkable without one.
+     * @param killSwitchEngaged `App.KillSwitchEngaged` -- whether the machine's owner has turned
+     *  remote control off. READ ONLY by design (PB-SEC-6): this decides whether row 12's panel is
+     *  drawn and nothing else, because nothing on this handset can move the switch.
+     * @param nowUnixMs this phone's clock, for the elapsed duration in the presence line alone
+     *  (agents-tracker-2pnu F5). It replaced an Android time FORMATTER, and the reason is
+     *  `MachineFreshness.notice`'s: a wall clock with no date on it reads the same at three
+     *  minutes and at nineteen hours.
      */
     fun connectionOf(
         machineId: String,
@@ -445,12 +514,13 @@ object SettingsPanelScreen {
         freshness: MachineFreshness,
         streams: List<StreamView>,
         clock: ClockBanner,
-        formatTime: (Long) -> String,
+        killSwitchEngaged: Boolean,
+        nowUnixMs: Long,
     ): ConnectionSection {
-        // READ ONCE AND BRANCHED ON ONCE. A formatter is not guaranteed pure, so a second call
-        // could in principle answer differently -- and a row whose line and description disagreed
-        // about whether the machine is healthy is exactly the drift PB-APP-11 refuses.
-        val line = MachinePane.explanationOf(presence, freshness, formatTime)
+        // READ ONCE AND BRANCHED ON ONCE. The clock moves between two calls, so a second one
+        // could answer differently -- and a row whose line and description disagreed about
+        // whether the machine is healthy is exactly the drift PB-APP-11 refuses.
+        val line = MachinePane.explanationOf(presence, freshness, nowUnixMs)
         return ConnectionSection(
             heading = CONNECTION,
             machine = MachineRow(
@@ -477,6 +547,21 @@ object SettingsPanelScreen {
             // and a screen re-deriving that from the string would be a second opinion able to
             // disagree.
             clockNotice = if (clock.visible) clock.text else "",
+            // OFF IS THE ONLY STATE WITH ANYTHING TO SAY (agents-tracker-2pnu F5). The recovery
+            // command follows the model's own sentence and is read off the SAME flag, so the two
+            // cannot disagree about which state they describe -- and it is inside the body,
+            // because row 12's inline cell is a span and `Kit.emphasised` refuses to draw a
+            // fragment its own sentence does not contain.
+            remoteAccess = if (killSwitchEngaged) {
+                RemoteAccessRow(
+                    title = REMOTE_ACCESS,
+                    body = "${MachinePane.killSwitchExplanationOf(true)} " +
+                        "$SWITCH_LIVES$COMMAND_ENABLE.",
+                    command = COMMAND_ENABLE,
+                )
+            } else {
+                null
+            },
         )
     }
 

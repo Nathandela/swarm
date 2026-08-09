@@ -437,6 +437,22 @@ class FacadeBridge(private val app: App) {
     fun clockBanner(): ClockBanner = ClockBanner.of(app.clockVerdict())
 
     /**
+     * `App.KillSwitchEngaged`: whether the machine has refused a remote op because its owner
+     * turned remote control off (agents-tracker-2pnu F5).
+     *
+     * **READ ONLY, AND THE ASYMMETRY IS A SECURITY DECISION** (PB-SEC-6). There is deliberately no
+     * setter here and there never may be: `protocol/server.go handleRemoteSetControl` refuses the
+     * remote tier BEFORE consulting its backend, on the stated grounds that a remote device must
+     * never re-enable a switch its owner turned off. So the phone may SHOW the state and never
+     * move it, which is derivation row 12's 2026-08-01 amendment in one sentence.
+     *
+     * IT IS SAFE FROM A RENDER, which is the question `android/unbound-verbs.tsv` makes anyone ask
+     * of a verb reached from a draw: it reads a bool the relay goroutine set, behind a mutex, in
+     * the same class as `clockVerdict` above.
+     */
+    fun killSwitchEngaged(): Boolean = app.killSwitchEngaged()
+
+    /**
      * PB-APP-9's classifier, for a message that has already crossed as an exception.
      *
      * The Android side holds the tokens as literals ([SwarmErrorTokens]) because the unit-test

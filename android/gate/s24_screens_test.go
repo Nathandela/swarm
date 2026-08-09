@@ -1105,6 +1105,11 @@ var s24ScreenComponents = map[string]map[string]string{
 		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
 		"machineRow":   "derivation row 11 -- the CONNECTION section's machine, with its presence mark",
 		"notice":       "§4 Notice line -- the disclosure, the per-toggle notices, the link's faults",
+		// agents-tracker-2pnu F5: derivation row 12, which lost its only caller when nx44.3
+		// deleted MachinesPanelView -- so a machine with remote access OFF refused every command
+		// this phone sent and said nothing about why, anywhere. It is drawn ONLY for the OFF
+		// state; an --p-err box reporting that nothing is wrong is the loudest way to say it.
+		"killSwitchPanel": "derivation row 12 -- the machine's own switch, where the CONNECTION section can be asked",
 	},
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen
@@ -1200,8 +1205,9 @@ var s24ScreenComponents = map[string]map[string]string{
 	},
 	// THE SYNC DETAIL SHEET, WHICH INHERITED THE LINK SECTION'S JOB (agents-tracker-nx44.2, and
 	// agents-tracker-nx44.3 for the inheritance). This block used to claim `LinkPanelView.kt` --
-	// four unconditional per-channel rows on the Machines destination, `statusLabel` on the live
-	// ones and `notice` for the clock -- and that destination is deleted. The argument the deleted
+	// four unconditional per-channel rows on the Machines destination, a status label on the live
+	// ones and `notice` for the clock -- and that destination is deleted (the status label itself
+	// is retired by agents-tracker-2pnu F5, for want of any caller at all). The argument the deleted
 	// claim carried is preserved where it still holds: the UNCONDITIONAL readout, healthy rows
 	// included, is what makes "all of them are fine" distinguishable from "this screen forgot the
 	// reply channel", and this sheet is where it lives because a sheet is opened deliberately. The

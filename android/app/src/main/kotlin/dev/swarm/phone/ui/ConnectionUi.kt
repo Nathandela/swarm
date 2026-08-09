@@ -205,18 +205,28 @@ data class MachineFreshness(
     /**
      * The user-facing line, or null while the machine is inside the budget.
      *
-     * The time is formatted by the CALLER (an Android formatter carrying the user's locale and
-     * time zone), so this model states WHAT to say and never has to be right about a time zone
-     * to be testable.
+     * **IT SPENDS [sinceLastHeard] AND NO LONGER A CLOCK** (agents-tracker-2pnu F5,
+     * agents-tracker-egjh). It used to take an Android time formatter and print
+     * `Not heard from your machine since 14:57.` -- a wall-clock time with no date on it, which
+     * at 09:00 the next morning is indistinguishable from a machine heard from three minutes ago.
+     * Field test 3 photographed that, and the sync detail's HEARD row one tap away was already
+     * showing the elapsed duration, so the app said the same fact two ways within one tap.
+     *
+     * ONE WORDING FOR BOTH READERS, which is why the duration is not re-derived here: this and
+     * `SyncStatus.of` spend the same function on the same field, so a change to the coarsening
+     * reaches both.
      *
      * It says "not heard from" rather than "your machine is offline" deliberately: nothing on
      * this wire is a liveness beacon, so an idle machine and a withheld one are
      * indistinguishable from here. The phone reports what it knows.
+     *
+     * @param nowUnixMs this phone's clock, for the elapsed duration alone. Taken rather than read
+     *  so the model is testable without one -- `SyncStatus.of`'s own arrangement.
      */
-    fun notice(formatTime: (Long) -> String): String? = when {
+    fun notice(nowUnixMs: Long): String? = when {
         !silent -> null
         lastHeardUnixMs == 0L -> "Not heard from your machine yet."
-        else -> "Not heard from your machine since ${formatTime(lastHeardUnixMs)}."
+        else -> "Not heard from your machine for ${sinceLastHeard(nowUnixMs)}."
     }
 
     /**

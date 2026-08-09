@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.util.TypedValue
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
@@ -120,29 +121,18 @@ class SettingsRowTest {
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
 
-    /**
-     * Row 15's status text: `Label.CardHead` / **`--p-hero`**.
-     *
-     * THE INK IS THE POINT OF THE ASSERTION. `--p-ok` is the plausible wrong answer -- it is the
-     * green a reader reaches for when the word is "active" -- and after ADR-007 B134 it carries
-     * ReadyForReview, so it would be one colour saying two unrelated things on two screens.
-     */
-    @Test
-    fun `the status label is hero and not ok`() {
-        val claims = KitOrigin.textClaims(
-            view = statusLabel(context, "active"),
-            selector = ".tcard .h",
-            ink = KitOrigin.token("--p-hero"),
-            spScale = spScale,
-        )
-
-        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
-        assertNotEquals(
-            "the status ink equals --p-ok, which after B134 carries ReadyForReview",
-            KitOrigin.token("--p-ok"),
-            statusLabel(context, "active").currentTextColor,
-        )
-    }
+    // ROW 15'S STATUS-TEXT FORM IS RETIRED AND ITS CLAIM DIED WITH IT (agents-tracker-2pnu F5,
+    // agents-tracker-zecs). The test here read:
+    //
+    //   `the status label is hero and not ok` -- "THE INK IS THE POINT OF THE ASSERTION. `--p-ok`
+    //   is the plausible wrong answer ... and after ADR-007 B134 it carries ReadyForReview, so it
+    //   would be one colour saying two unrelated things on two screens."
+    //
+    // The argument was right and it was about a component with no caller: `statusLabel`'s only
+    // would-be one was inventory C6's `End-to-end encryption` row, which `SettingsPanelScreen`
+    // records as deliberately unbuilt -- "nothing on this handset READS it". The ink rule it
+    // protected is not lost: `--p-hero`'s meaning is stated in android/design-tokens.tsv and the
+    // one production spend of it is asserted where that spend is.
 
     // ---- the surface is reused, not re-derived ----------------------------
 
@@ -187,15 +177,37 @@ class SettingsRowTest {
         assertNotNull(subject.kitFind(KitTag.SETTINGS_LABEL))
     }
 
+    /**
+     * A trailing control as the kit builds one: a view carrying its own
+     * `LinearLayout.LayoutParams`. See the gap claim below for why that is the contract and not
+     * scaffolding.
+     */
+    private fun trailingStandIn(): View = View(context).apply {
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+    }
+
     @Test
     fun `the trailing control is placed with the row's own gap`() {
-        val control = statusLabel(context, "active")
+        // ANY VIEW THE KIT BUILDS, WHICH IS THE COMPONENT'S OWN CLAIM. The row takes a trailing
+        // `View` rather than a variant it switches on, so the subject here is a stand-in: it used
+        // to be `statusLabel(context, "active")`, and asserting the gap through a specific
+        // factory made this read as a claim about that factory rather than about the slot.
+        //
+        // IT CARRIES ITS OWN LAYOUT PARAMS, and that is the contract rather than test scaffolding.
+        // `settingsRow` writes the gap onto the child's existing `LinearLayout.LayoutParams`
+        // BEFORE the addView that would otherwise mint them, so a trailing view with none takes
+        // no gap at all. Every kit factory sets its own, which is what makes the rule hold at
+        // every real call site.
+        val control = trailingStandIn()
         val subject = row(trailing = control)
 
         assertEquals(
             "the trailing control is not in the row at all",
             control,
-            subject.kitFind(KitTag.SETTINGS_STATUS),
+            subject.getChildAt(1),
         )
         assertEquals(
             dimenPx("swarm_space_10"),
@@ -205,7 +217,7 @@ class SettingsRowTest {
 
     @Test
     fun `the text takes the slack so the control sits hard right`() {
-        val subject = row(trailing = statusLabel(context, "active"))
+        val subject = row(trailing = trailingStandIn())
         val text = subject.getChildAt(0)
 
         // `flex: 1`. Without it a long label pushes the control off the row rather than wrapping.
