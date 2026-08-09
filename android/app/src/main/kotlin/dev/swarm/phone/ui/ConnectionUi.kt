@@ -375,4 +375,42 @@ data class MachineFreshness(
         lastHeardUnixMs == 0L -> "Not heard from your machine yet."
         else -> "Not heard from your machine since ${formatTime(lastHeardUnixMs)}."
     }
+
+    /**
+     * How long since the machine's own last word, coarsely: `4m`, `18h`, `3d`. Empty where this
+     * phone has never heard from its machine at all (agents-tracker-nx44.2).
+     *
+     * **IT EXISTS BECAUSE [notice]'S TIME IS A BARE CLOCK.** The formatter it takes carries the
+     * user's locale and time zone and nothing else, so the sentence reads `since 14:57` with no
+     * date on it -- and at 09:00 the next morning that is indistinguishable from a machine heard
+     * from three minutes ago. Field test 3 photographed exactly that. An elapsed duration cannot
+     * be misread that way: it only ever grows, and one glance says whether the number is minutes
+     * or days.
+     *
+     * ONE UNIT, NEVER TWO. `18h` and not `18h 4m`: this is read on a nav-row pill sized for three
+     * upper-case characters, and the second unit is precision nobody acts on -- the decision a
+     * reader takes from it is *recent* or *stale*, which the leading unit already answers.
+     *
+     * A NEGATIVE ELAPSE FLOORS AT ZERO RATHER THAN RENDERING. The machine's stamp is its own
+     * clock and this phone's is its own; PB-TIME-1 exists because the two can disagree, and a
+     * pill reading `-3m` would report the skew as the machine's silence.
+     */
+    fun sinceLastHeard(nowUnixMs: Long): String {
+        if (lastHeardUnixMs == 0L) return ""
+        val elapsed = (nowUnixMs - lastHeardUnixMs).coerceAtLeast(0L)
+        val minutes = elapsed / MINUTE_MS
+        val hours = minutes / MINUTES_PER_HOUR
+        val days = hours / HOURS_PER_DAY
+        return when {
+            minutes < MINUTES_PER_HOUR -> "${minutes}m"
+            hours < HOURS_PER_DAY -> "${hours}h"
+            else -> "${days}d"
+        }
+    }
+
+    private companion object {
+        const val MINUTE_MS = 60_000L
+        const val MINUTES_PER_HOUR = 60L
+        const val HOURS_PER_DAY = 24L
+    }
 }
