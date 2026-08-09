@@ -94,7 +94,7 @@ const (
 	// --p-hero as text, the LIVE counter and links.
 	//                                Substrate      -63.8    | Obsidian      -57.7
 	apcaFloorAccentText = 50.0
-	// --p-err as text, the deny and revoke labels. THE WATCH ITEM.
+	// --p-err as text, the deny and revoke labels. Adjudicated 2026-08-09 (ruling R7).
 	//                                Substrate      -47.3    | Obsidian      -40.6
 	apcaFloorErrorText = 38.0
 
@@ -137,8 +137,9 @@ type apcaRole struct {
 	// Rung is the APCA conformance rung the role maps to; 0 means the role sits BELOW the
 	// standard's ladder entirely and must be a declared deviation.
 	Rung float64
-	// BelowRung records that the floor is knowingly under its own rung -- a watch item, not an
-	// oversight, and O7's device pass is what closes it.
+	// BelowRung records that the floor is knowingly under its own rung -- a named deviation, not
+	// an oversight. O7's device pass judged both on-device 2026-08-09 and the owner adjudicated
+	// them (ruling R7, bead agents-tracker-oonj): accepted as designed, no floor moved.
 	BelowRung bool
 	What      string
 }
@@ -161,7 +162,8 @@ var (
 	// standing rules written into ADR-009 D8.1's amendment: --p-ink3 is never the sole carrier of
 	// required information (it labels a group whose rows say the same thing, marks the Completed
 	// group that has already resolved, and carries an offline dot that is also a shape change),
-	// and the O7 device glance pass is the empirical backstop.
+	// and the O7 device glance pass was the empirical backstop -- run 2026-08-09, ADJUDICATED:
+	// the owner accepted the rendered token as designed (ruling R7, bead agents-tracker-oonj).
 	roleIncidental = apcaRole{
 		Name: "incidental", Floor: apcaFloorIncidental, Rung: 0, BelowRung: true,
 		What: "incidental / de-emphasized; BELOW APCA's absolute 30, never the sole carrier of required information",
@@ -174,12 +176,14 @@ var (
 		Name: "accent-text", Floor: apcaFloorAccentText, Rung: 45,
 		What: "champagne as text: the LIVE counter, the active tab, links",
 	}
-	// THE WATCH ITEM. 38 is below the 45 rung, and it is recorded as owed rather than granted:
-	// O7's device pass must confirm deny/revoke legibility, and if it fails there the TOKEN
-	// lightens -- ADR-009 D3's ladder rule -- and this number does not move.
+	// THE WATCH ITEM, CLOSED. 38 is below the 45 rung; O7's device pass confirmed deny/revoke
+	// legibility and the owner accepted the token as designed 2026-08-09 (ruling R7, bead
+	// agents-tracker-oonj) -- ADJUDICATED rather than owed. Had it failed on device the TOKEN
+	// would have lightened -- ADR-009 D3's ladder rule -- and that remains the remedy for any
+	// future regression; this number does not move.
 	roleErrorText = apcaRole{
 		Name: "error-text", Floor: apcaFloorErrorText, Rung: 45, BelowRung: true,
-		What: "terracotta as text: the deny and revoke labels. WATCH ITEM for the O7 device pass",
+		What: "terracotta as text: the deny and revoke labels. Adjudicated 2026-08-09 (ruling R7): accepted as designed",
 	}
 )
 
@@ -613,8 +617,8 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 		t.Errorf("ADR-009 D8.1: the roles below their rung are [%s]; the amendment adjudicates "+
 			"exactly two -- incidental (--p-ink3, below APCA's absolute 30, accepted only because "+
 			"ink3 is never the sole carrier of required information) and error-text (--p-err at "+
-			"38, the O7 watch item). Any other role drifting below its rung is a floor that was "+
-			"lowered rather than argued.", got)
+			"38, adjudicated 2026-08-09, ruling R7). Any other role drifting below its rung is a "+
+			"floor that was lowered rather than argued.", got)
 	}
 	// --p-ink3's floor is the one number in this file below APCA's absolute text minimum, and the
 	// assertion says the quiet part: it is a deviation, it is bounded, and the bound is 30.

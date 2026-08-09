@@ -422,25 +422,30 @@ val lineHeightPx: Float? get() = lineHeightMultiplier?.let { it * sizePx }
       over a group whose rows state the same thing, the Completed group that has already
       resolved, and the offline presence dot that is also a shape change. If a screen ever needs
       ink3 to say something the user must read, the screen is wrong, not the floor.
-   2. **The O7 device glance pass is the empirical backstop** for it, on a real panel at real
-      brightness.
+   2. **The O7 device glance pass was the empirical backstop** for it, on a real panel at real
+      brightness — **run 2026-08-09, ruling R7: ADJUDICATED, accepted as designed.**
 
-   **`--p-err` at 38 is an EXPLICIT WATCH ITEM.** The O7 device pass must confirm deny/revoke
-   legibility. If it fails on device the **token lightens** — the ladder rule, D3 — and the floor
-   does not move.
+   **`--p-err` at 38 was an EXPLICIT WATCH ITEM and is now ADJUDICATED** (2026-08-09, ruling R7).
+   The O7 device pass confirmed deny/revoke legibility on-device and the owner accepted the token
+   as designed. Had it failed on device the **token would have lightened** — the ladder rule, D3 —
+   and that remains the remedy for any future regression; the floor itself does not move.
 
-   **THIS AMENDMENT IS AN OWNER QUESTION AND IS MARKED OPEN.** It was written by the session that
-   built the gate, against an ADR whose status line reads "Accepted (owner decision)", and two of
-   the floors it sets are below the rungs the table above quotes. The ceiling argument stands on
-   its own and needs nothing from the owner: |Lc| on `#c9a876` cannot exceed 59.73 for any ink, so
-   the original Lc 75 was unsatisfiable by construction for the CTA label. That argument does
-   **not** extend to `--p-ink2`, `--p-ink3` or `--p-err`, whose floors were set at what this
-   palette happens to measure — so the gate can catch a regression from today's values and cannot
-   catch a legibility failure, because after the calibration no pair fails. That is a defensible
-   position and it is a **quality-bar decision the owner signed and only the owner can lower**.
-   The O7 device glance pass is the empirical input it should be decided on. Until then this
-   amendment is in force (a permanently red gate teaches red-blindness, which is the alternative
-   this rejected) and it is recorded as unadjudicated rather than as settled.
+   **THIS AMENDMENT WAS AN OWNER QUESTION AND IS NOW ADJUDICATED** (2026-08-09, ruling R7, bead
+   `agents-tracker-oonj`, specimens
+   `https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`). It was written by the
+   session that built the gate, against an ADR whose status line reads "Accepted (owner decision)",
+   and two of the floors it sets are below the rungs the table above quotes. The ceiling argument
+   stood on its own and needed nothing from the owner: |Lc| on `#c9a876` cannot exceed 59.73 for
+   any ink, so the original Lc 75 was unsatisfiable by construction for the CTA label. That
+   argument did **not** extend to `--p-ink2`, `--p-ink3` or `--p-err`, whose floors were set at
+   what this palette happens to measure — so the gate can catch a regression from today's values
+   and cannot, by itself, catch a legibility failure, because after the calibration no pair fails.
+   That was a defensible position resting on a **quality-bar decision only the owner could
+   settle**, and the O7 device glance pass was the empirical input it was to be decided on. **The
+   owner judged the rendered tokens on-device 2026-08-09 and accepted both floors as designed** —
+   ink3 at Lc 24 and err-text at Lc 38 (R7's own words: "ACCEPTED as designed — owner judged the
+   rendered tokens"). The floors do not move; what changes is that this amendment is recorded as
+   adjudicated rather than open, and the two deviations below are settled rather than pending.
 
    **Obsidian improves the hierarchy inks over Substrate** and the gate now records it as a
    requirement rather than a coincidence: ink2 goes −41.8 → −49.6 and ink3 −22.8 → −25.5, so the
