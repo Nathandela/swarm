@@ -14,8 +14,20 @@ import (
 type ErrorCode string
 
 const (
-	CodePolicy        ErrorCode = "policy"
-	CodeKillSwitch    ErrorCode = "kill_switch"
+	CodePolicy     ErrorCode = "policy"
+	CodeKillSwitch ErrorCode = "kill_switch"
+	// CodeRateLimit is RESERVED: no daemon or gateway site produces it (agents-tracker-ksvb.9
+	// verified this by grep -- every throttle in the repo lives on a different wire vocabulary).
+	// internal/remote/relay/errors.go's codeQuotaExceeded is the relay's OWN connection
+	// protocol, not Control.error_code. internal/protocol/pairing.go's PairFailRateLimited is
+	// the closed PairFailure enum, a different wire field. And the one path that DOES see a
+	// relay quota refusal -- remotegw's outbound append handling -- deliberately does NOT
+	// promote it to a definitive machine-side refusal (ADR-007 B125/B127: the relay is the
+	// adversary for that read, so its error code is evidence about nothing). The daemon's
+	// inbound command path (internal/protocol/server.go, replyErrorCode's call sites) has no
+	// rate limiter of its own to seal this from. Left in place for the day one exists:
+	// ErrorCode.Transient() below, android CommandVerdict.kt's REFUSED_TRANSIENTLY/RETRY_HINT,
+	// and MachineAndLaunch.kt's LaunchResult.REFUSED_TRANSIENTLY all already read it.
 	CodeRateLimit     ErrorCode = "rate_limit"
 	CodeStaleApproval ErrorCode = "stale_approval"
 	CodeNotAuthorized ErrorCode = "not_authorized"
