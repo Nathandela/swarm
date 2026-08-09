@@ -36,9 +36,10 @@ import org.junit.Test
  *
  * ## The duration is the whole of the machine's line now
  *
- * `MachineFreshness.notice` formats `lastHeardUnixMs` through an Android time formatter, which
- * yields a BARE CLOCK TIME. This model never does: an elapsed duration is monotonic in the one
- * direction a reader cares about and cannot be mistaken for a fresh reading a day later.
+ * `MachineFreshness.notice` USED TO format `lastHeardUnixMs` through an Android time formatter,
+ * yielding a BARE CLOCK TIME. agents-tracker-2pnu F5 retired that: `notice` spends an elapsed
+ * duration now, the same one this model reports, which is monotonic in the one direction a reader
+ * cares about and cannot be mistaken for a fresh reading a day later.
  */
 class SyncStatusTest {
 

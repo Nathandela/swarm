@@ -1288,9 +1288,10 @@ class PhoneSurface(
         drawSync(
             SyncStatus.of(
                 connection = bridge.connectionBanner(),
-                // THE MACHINE'S OWN STAMP, AND NO FORMATTER. `MachineFreshness.notice` renders a
-                // bare clock time through the user's locale; the model turns the same stamp into
-                // an elapsed duration, which is the whole of agents-tracker-nx44.2's second half.
+                // THE MACHINE'S OWN STAMP, AND NO FORMATTER. `MachineFreshness.notice` used to
+                // render a bare clock time through the user's locale; agents-tracker-2pnu F5
+                // retired that, and it spends the same elapsed-duration model this draw does,
+                // which is the whole of agents-tracker-nx44.2's second half.
                 freshness = bridge.machineFreshness(),
                 nowUnixMs = System.currentTimeMillis(),
                 // PB-APP-8 per channel, which is what the roster's single stale mark was a

@@ -28,10 +28,11 @@ package dev.swarm.phone.ui
  *
  * ## Duration, never a clock
  *
- * `MachineFreshness.notice` formats `lastHeardUnixMs` through an Android time formatter, which
- * yields a bare clock time: at 09:00 the next morning `since 14:57` is indistinguishable from a
- * machine heard from three minutes ago. Everything here is an ELAPSED duration, which is monotonic
- * in the one direction a reader cares about.
+ * `MachineFreshness.notice` USED TO format `lastHeardUnixMs` through an Android time formatter,
+ * which yielded a bare clock time: at 09:00 the next morning `since 14:57` was indistinguishable
+ * from a machine heard from three minutes ago. agents-tracker-2pnu F5 retired that formatter --
+ * `notice` spends `sinceLastHeard` now, the same duration this model reports -- so everything
+ * here is an ELAPSED duration, which is monotonic in the one direction a reader cares about.
  */
 enum class SyncState {
     /** Nothing to say. The only state that draws no pill. */
@@ -166,7 +167,8 @@ data class SyncStatus(
          *  and `lastHeardUnixMs` is the only source of the duration on the pill.
          * @param nowUnixMs this phone's clock, for the elapsed duration alone. The model takes it
          *  rather than reading one so it is testable without a clock, which is
-         *  `MachineFreshness.notice`'s own arrangement for the formatter it takes.
+         *  `MachineFreshness.notice`'s own arrangement too, now that agents-tracker-2pnu F5
+         *  retired the formatter it used to take.
          * @param streams `FacadeBridge.streamViews()` -- one per repair channel, in the adapter's
          *  order. The order is not decided here.
          * @param reconciled `StateSummary.Reconciled`: PB-SYNC-7's fail-closed hold. IT DEFAULTS TO
