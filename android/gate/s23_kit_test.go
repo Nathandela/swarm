@@ -240,6 +240,24 @@ var s23Inbox = []s23Component{
 			"factory for `ctaButton`'s reason: the site differs, not the component.",
 	},
 	{
+		Factory: "noticeDetail",
+		File:    "Notice.kt",
+		Origin:  ".sheet2 .ctx",
+		Why: "the MACHINE'S own reason under a notice, and the slot that did not exist while five " +
+			"screens pasted a daemon Go error into the middle of their own copy " +
+			"(agents-tracker-ksvb.10). It is an `origin:` and not a second §4 derivation because " +
+			"`.sheet2 .ctx` is exactly what it renders -- `500 10.5px var(--p-mono)` in `--p-ink3` " +
+			"-- and type.xml already cites that rule as `Mono.Meta`'s origin, so Substrate draws " +
+			"this cell and no derivation row has to invent it. IT IS A SECOND FACTORY AND NOT A " +
+			"THIRD `NoticeKind`, which is where the ERROR variant's own argument runs out: that " +
+			"parameter moves the ink and nothing else because a refusal is the same KIND of " +
+			"sentence in another voice, and this is not a sentence -- it is the machine's own " +
+			"register, mono and tertiary, under prose that is neither. `--p-ink3` is below APCA's " +
+			"absolute 30 and is taken here on obsidian_contrast_test.go's standing rule rather " +
+			"than by exception: the head sentence carries the user's next act, so this line is " +
+			"diagnostic and never the sole carrier of required information.",
+	},
+	{
 		Factory: "emptyState",
 		File:    "EmptyState.kt",
 		Derived: "#8 Empty state",

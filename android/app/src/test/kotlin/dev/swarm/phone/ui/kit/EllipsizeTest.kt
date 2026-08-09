@@ -133,6 +133,10 @@ class EllipsizeTest {
         assertWrapping("`.prow .ln` (the session's need)", sessionRow().kitFind(KitTag.NEED))
         assertWrapping("row 11's meta line", machineRow().kitFind(KitTag.MACHINE_META))
         assertWrapping("§4's notice line", notice(context, long))
+        // `.sheet2 .ctx` is an identity ELSEWHERE -- a machine, a project, a command -- and here
+        // it carries a daemon's own error string, which is read to the end or not at all. A
+        // clamped one would hide the half of a reason that names which refusal this was.
+        assertWrapping("`.sheet2 .ctx` (the machine's own reason)", noticeDetail(context, long))
         assertWrapping("row 8's empty state", emptyState(context, long))
         assertWrapping("row 22's note under a well", readOnlyNote(context, long))
     }

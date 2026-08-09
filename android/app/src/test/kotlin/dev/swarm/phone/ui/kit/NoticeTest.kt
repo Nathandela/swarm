@@ -148,6 +148,96 @@ class NoticeTest {
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
 
+    // ---- the detail: the machine's own register (agents-tracker-ksvb.10) ----
+
+    private val machineWords = "kill_switch: remote control is disabled (kill switch off)"
+
+    private fun detail() = noticeDetail(context, machineWords)
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5). `.sheet2 .ctx` is a rule Substrate DRAWS, so this component
+     * carries an `origin:` rather than a §4 derivation and every number below is read out of it.
+     *
+     * WHAT THE MACHINE SAYS IS NOT WHAT THE SCREEN SAYS, and the two had one appearance between
+     * them: five screens pasted a daemon Go error into the middle of their own sentence, so
+     * `remote control is disabled (kill switch off)` rendered as prose the product had written.
+     * Mono is what says a string came off the wire, and tertiary is what says it is not the line
+     * to act on.
+     */
+    @Test
+    fun `the detail is the sheet2 ctx cell -- Mono Meta in the tertiary ink`() {
+        val claims = KitOrigin.textClaims(
+            // `.sheet2 .ctx` is what type.xml records as Mono.Meta's origin.
+            view = detail(),
+            selector = ".sheet2 .ctx",
+            ink = KitOrigin.token("--p-ink3"),
+            spScale = spScale,
+        )
+
+        assertTrue(
+            "the pitch probe cannot answer: ${KitOrigin.typefaceProbeFaults()}",
+            KitOrigin.typefaceProbeFaults().isEmpty(),
+        )
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
+    /**
+     * The detail RECEDES BEHIND the sentence it explains, which is the whole demotion.
+     *
+     * A detail set in the notice's own ink and size would be the defect this component was written
+     * for wearing a second view: the machine's raw words would still be reading as the screen's
+     * primary copy, just on the next line.
+     */
+    @Test
+    fun `the detail is smaller and quieter than the notice it sits under`() {
+        val head = line()
+        val subject = detail()
+
+        assertTrue(
+            "the detail is set at ${subject.textSize / spScale} sp against the notice's " +
+                "${head.textSize / spScale} sp, so the machine's raw reason is drawn at least as " +
+                "loudly as the sentence the user is meant to act on",
+            subject.textSize < head.textSize,
+        )
+        assertNotEquals(
+            "the detail carries the notice's own ink, so nothing about it says the words came " +
+                "off the wire rather than out of this product's copy",
+            head.currentTextColor,
+            subject.currentTextColor,
+        )
+        assertEquals(
+            "the detail is not the tertiary ink. `--p-ink3` is what de-emphasised means everywhere " +
+                "in this kit, and it is legitimate HERE and not on the notice for one reason: the " +
+                "head sentence carries the user's next act, so this line is never the sole carrier " +
+                "of required information",
+            KitOrigin.token("--p-ink3"),
+            subject.currentTextColor,
+        )
+    }
+
+    /**
+     * The same three `none` cells the notice takes. The air belongs to the column that composes
+     * the pair, exactly as it does for the sentence above it.
+     */
+    @Test
+    fun `the detail paints no surface and claims no air`() {
+        val subject = detail()
+        assertNull(
+            "the detail carries a background, which would make every refusal a tinted panel",
+            subject.background,
+        )
+        val params = subject.layoutParams as LinearLayout.LayoutParams
+        val claims = listOf(
+            Claim("no top margin", 0, params.topMargin),
+            Claim("no start margin", 0, params.marginStart),
+            Claim("no end margin", 0, params.marginEnd),
+            Claim("no bottom margin", 0, params.bottomMargin),
+            Claim("no start padding", 0, subject.paddingStart),
+            Claim("no top padding", 0, subject.paddingTop),
+        )
+        assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
+    }
+
     /**
      * PB-DS-10's control, fed to the SAME function every assertion above calls.
      */

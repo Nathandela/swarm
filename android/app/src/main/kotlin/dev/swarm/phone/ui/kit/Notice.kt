@@ -62,6 +62,48 @@ fun notice(
 }
 
 /**
+ * origin: .sheet2 .ctx
+ *
+ * The MACHINE'S own words under a [notice]: a raw reason, in the machine's own register.
+ *
+ * **THE DEFECT IT CLOSES IS A SPLICE.** Five screens composed `head: reason.` and drew the result
+ * as one sentence, so `kill_switch: remote control is disabled (kill switch off)` -- a daemon Go
+ * error, lower case, parenthesised, with a wire code in front of it -- rendered in this app's own
+ * body type as though this app had written it. Two of the five had no head at all and showed the
+ * bare reason as the whole notice. A reader cannot tell where the product's copy stops and the
+ * diagnostic starts, and the product answers for both.
+ *
+ * **IT IS `.sheet2 .ctx` AND NOT A NEW DERIVATION.** Substrate draws this exact cell -- `500
+ * 10.5px var(--p-mono)` in `--p-ink3`, the context line under the approval sheet's question -- and
+ * `type.xml` already cites the rule as `Mono.Meta`'s origin. What that rule is FOR is the same
+ * thing this is for: the identifiers under a sentence, which qualify it and are not it.
+ *
+ * **IT IS A SECOND FACTORY AND NOT A THIRD [NoticeKind].** That parameter moves the ink and
+ * nothing else, on §4's own instruction that a refusal is the same KIND of sentence in a different
+ * voice. This is not a sentence: it is mono, it is tertiary, and it is a different type role
+ * entirely -- a variant that changed family, size and ink would be a second component wearing an
+ * enum.
+ *
+ * **`--p-ink3` IS BELOW APCA'S ABSOLUTE 30 AND IS TAKEN ON THE STANDING RULE, NOT BY EXCEPTION.**
+ * `android/gate/obsidian_contrast_test.go` declares the tertiary ink `roleIncidental`, accepted
+ * because it "is never the sole carrier of required information". That constraint BINDS THIS
+ * FACTORY and is the reason it may exist: the head sentence carries the user's next act -- your
+ * machine did not end this session, your machine kept this device registered -- and this line is
+ * diagnostic. A caller that put a remedy here, or that drew this with no notice above it, would
+ * make the tertiary ink the sole carrier and the deviation would stop being legitimate.
+ *
+ * IT CARRIES NO MARGIN, NO PADDING AND NO TAG, which is [notice]'s arrangement for [notice]'s
+ * reason: the air belongs to the column that composes the pair, and every call site names the PART
+ * it is drawing so a screen with two of these can tell them apart.
+ */
+fun noticeDetail(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
+    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+    setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
+    this.text = text
+    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+}
+
+/**
  * `--p-ink2`, or `--p-err` when the machine is the one talking.
  *
  * `--p-ink3` is the plausible wrong answer and it is wrong for [readOnlyNote]'s reason: it is what
