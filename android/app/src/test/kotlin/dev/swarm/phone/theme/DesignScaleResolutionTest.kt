@@ -145,7 +145,15 @@ class DesignScaleResolutionTest {
                 0,
                 res,
             )
-            val spec = TypeScale.designSpec(origin)
+            // AUTHORIZED REWRITE, ADR-012 phase 2 (owner ruling R1, 2026-08-09). What this line
+            // said before:
+            //
+            //     val spec = TypeScale.designSpec(origin)
+            //
+            // The rule is still resolved and every attribute below still comes out of it. Only
+            // the SIZE moves to the ruled rung, because R1 consolidated the ladder to five and
+            // a rung is a decision about this app's hierarchy that no CSS rule can state.
+            val spec = TypeScale.renderedSpec(origin)
             val values = context.obtainStyledAttributes(res, ATTR_IDS)
             try {
                 // Size. sp, and read back in px at the test display's density and font scale --
@@ -241,8 +249,9 @@ class DesignScaleResolutionTest {
                         0f,
                     )
                     else -> assertEquals(
-                        "$name (origin `$origin`) lineHeight: the design says " +
-                            "${spec.lineHeightMultiplier} x ${spec.sizePx}px",
+                        "$name (origin `$origin`) lineHeight: the design's multiplier on the " +
+                            "size this style renders at is " +
+                            "${spec.lineHeightMultiplier} x ${spec.sizePx}sp",
                         wantLeading,
                         resolvedLeading / scale,
                         0.001f,
@@ -290,6 +299,28 @@ class DesignScaleResolutionTest {
         val tab = TypeScale.designSpec(".ptabs div")
         assertEquals("`.pnav .big` is 27px in the design", 27f, nav.sizePx, 0f)
         assertEquals("`.ptabs div` is 9.5px", 9.5f, tab.sizePx, 0f)
+        // AND THE RUNG READER'S OWN KNOWN ANSWERS (ADR-012 phase 2, owner ruling R1). Typed
+        // independently of the reader, exactly as the two above are, and DIFFERENT from them --
+        // a rung reader that fell back to the design px for everything would make every size
+        // assertion in this suite an assertion about the ladder R1 retired, and would do it
+        // silently.
+        assertEquals(
+            "`.pnav .big` renders on the 22 sp display rung",
+            22f,
+            TypeScale.renderedSizeSp(".pnav .big"),
+            0f,
+        )
+        assertEquals(
+            "`.ptabs div` renders on the 10 sp micro rung",
+            10f,
+            TypeScale.renderedSizeSp(".ptabs div"),
+            0f,
+        )
+        assertNotEquals(
+            "the rung reader answers the design's own px, so no style was consolidated at all",
+            nav.sizePx,
+            TypeScale.renderedSizeSp(".pnav .big"),
+        )
         assertEquals("`.pnav .big` resolves --p-display-wt", 500, nav.weight)
         assertEquals("`.pnav .big` resolves --p-display-tr", -0.015f, nav.trackingEm, 1e-6f)
         assertNotEquals(

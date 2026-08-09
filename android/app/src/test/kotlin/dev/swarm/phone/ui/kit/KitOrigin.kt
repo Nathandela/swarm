@@ -533,7 +533,16 @@ object KitOrigin {
      * typeface has no readable name.
      */
     fun textClaims(view: TextView, selector: String, ink: Int, spScale: Float): List<Claim> {
-        val spec = TypeScale.designSpec(selector)
+        // THE SIZE IS THE RULED RUNG'S AND EVERYTHING ELSE IS THE RULE'S (ADR-012 phase 2, owner
+        // ruling R1, 2026-08-09). What this line said before:
+        //
+        //     val spec = TypeScale.designSpec(selector)
+        //
+        // `designSpec` is still the design's own reading and is still asserted -- the rung table's
+        // `Design px` column is held to it one gate over. What a VIEW resolves to is the rung,
+        // because R1 consolidated twelve sizes onto five and a suite comparing a rendered view
+        // against the CSS px would be asserting the ladder the ruling retired.
+        val spec = TypeScale.renderedSpec(selector)
         return listOf(
             Claim("`$selector` size", quantisedTextSize(spec.sizePx * spScale), view.textSize),
             Claim("`$selector` tracking", spec.trackingEm, view.letterSpacing),

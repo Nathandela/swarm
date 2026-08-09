@@ -180,7 +180,13 @@ class ToastTest {
             "the toast holds a plain String, so the suffix was never styled and every claim " +
                 "below would be about nothing"
         }
-        val spec = TypeScale.designSpec(".tcard .b")
+        // AUTHORIZED REWRITE, ADR-012 phase 2 (owner ruling R1, 2026-08-09). What this said before:
+        //
+        //     val spec = TypeScale.designSpec(".tcard .b")
+        //
+        // `.tcard .b` is 11px in the design and renders on the 11.5 sp code rung since R1
+        // consolidated the ladder; the size claim below is about what the span resolves to.
+        val spec = TypeScale.renderedSpec(".tcard .b")
         val appearance = spansOf<TextAppearanceSpan>(view).single()
         val ink = spansOf<ForegroundColorSpan>(view).single()
         val start = text.toString().indexOf(suffix)

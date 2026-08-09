@@ -212,7 +212,11 @@ class ActivityRowTest {
             "the body holds a plain String, so the emphasis was never applied and every claim " +
                 "below would be about nothing"
         }
-        val spec = TypeScale.designSpec(".prow .ln b")
+        // The rendered spec, not the design's, for the reason ADR-012 phase 2 gives: a size claim
+        // is about the rung a style stands on. `.prow .ln b` happens not to have moved -- 11.5px
+        // in the design, 11.5 sp on the code rung -- and reading the design px here would be
+        // right by coincidence and wrong on the next ruling.
+        val spec = TypeScale.renderedSpec(".prow .ln b")
         val appearance = spansOf<TextAppearanceSpan>(subject).single()
         val ink = spansOf<ForegroundColorSpan>(subject).single()
 

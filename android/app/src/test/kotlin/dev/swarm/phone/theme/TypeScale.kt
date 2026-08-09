@@ -18,6 +18,22 @@ object TypeScale {
 
     private const val TYPE_RESOURCE = "type.xml"
 
+    /**
+     * ADR-012 phase 2's rung table: where a style's SIZE has come from since owner ruling R1
+     * (2026-08-09).
+     *
+     * Everything else about a style is still read out of the CSS rule it cites. The size is not,
+     * and cannot be: R1 consolidated twelve sizes onto five rungs, and a rung is a decision about
+     * this app's own hierarchy rather than a fact any design rule states. So the record that
+     * decided it is read, by both halves of the join -- `android/gate/s22b_type_test.go` parses
+     * the same table out of the same file, which is what stops the two from checking two
+     * different ladders.
+     */
+    private const val RUNG_RESOURCE = "ADR-012-type-ladder-consolidation-phase-1.md"
+
+    /** The first cell of the rung table's header row, required so a moved table fails loudly. */
+    private const val RUNG_TABLE_HEADER = "Ladder style"
+
     /** What `--p-font` substitutes to: the platform sans, still, still with no bundled asset. */
     const val SANS_FAMILY = "sans-serif"
 
@@ -98,6 +114,70 @@ object TypeScale {
         }
         return out
     }
+
+    /** One row of the rung table: which rung a style stands on, and at what size. */
+    data class Rung(val style: String, val origin: String, val name: String, val sp: Float)
+
+    private val RUNG_ROW = Regex(
+        """^\|\s*`([A-Za-z]+\.[A-Za-z]+)`\s*\|\s*`([^`]+)`\s*\|\s*([0-9.]+)\s*\|""" +
+            """\s*([a-z]+)\s*\|\s*([0-9.]+)\s*\|""",
+    )
+
+    /** The rung table, keyed by the CSS selector the row's style cites. */
+    fun rungs(): Map<String, Rung> = RUNGS
+
+    private val RUNGS: Map<String, Rung> by lazy { parseRungs() }
+
+    private fun parseRungs(): Map<String, Rung> {
+        val text = readResource(RUNG_RESOURCE)
+        require(text.lineSequence().any { it.trimStart().startsWith("| $RUNG_TABLE_HEADER ") }) {
+            "$RUNG_RESOURCE has no table whose first column is `$RUNG_TABLE_HEADER`. That table " +
+                "is where a style's size is decided since ruling R1; a reader that cannot find " +
+                "it reports that no style has a rung, and every size assertion built on it would " +
+                "then be about nothing"
+        }
+        val out = LinkedHashMap<String, Rung>()
+        text.lineSequence().forEach { line ->
+            val m = RUNG_ROW.find(line.trim()) ?: return@forEach
+            val row = Rung(
+                style = m.groupValues[1],
+                origin = m.groupValues[2],
+                name = m.groupValues[4],
+                sp = m.groupValues[5].toFloat(),
+            )
+            require(out.put(row.origin, row) == null) {
+                "$RUNG_RESOURCE puts two styles on a rung for `${row.origin}`"
+            }
+        }
+        require(out.isNotEmpty()) {
+            "no rung rows parsed from $RUNG_RESOURCE's `$RUNG_TABLE_HEADER` table"
+        }
+        return out
+    }
+
+    /**
+     * The size a style renders at: its rung's, for the sixteen styles on the ladder.
+     *
+     * `Display.SAS` is not on it -- 34 sp for the pairing screen's verification emoji, a specimen
+     * to be matched rather than text read in a hierarchy -- and neither is any rule the app does
+     * not transcribe, so an unruled selector falls back to what the design draws. The fallback is
+     * NOT silent about being one: it is the only path on which the design px is still the app's
+     * size, and ADR-012 phase 2 names the one style that takes it.
+     */
+    fun renderedSizeSp(selector: String): Float =
+        rungs()[selector]?.sp ?: designSpec(selector).sizePx
+
+    /**
+     * One CSS rule's typography as this app renders it: the design's rule, with the ruled rung's
+     * size in place of the rule's own px.
+     *
+     * THE TWO ARE DIFFERENT CLAIMS AND BOTH ARE ASSERTED. [designSpec] is what the design draws
+     * and is what the Go gate holds the rung table's `Design px` column to; this is what a view
+     * has to resolve to. A suite comparing a rendered view against `designSpec` would have been
+     * asserting the ladder ADR-012 phase 2 retired.
+     */
+    fun renderedSpec(selector: String): Spec =
+        designSpec(selector).let { it.copy(sizePx = renderedSizeSp(selector)) }
 
     /** One CSS rule's resolved typography, in the units Android expresses them in. */
     data class Spec(

@@ -128,6 +128,13 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // means the text half and the resolved half cannot be checking two different mappings.
     from(rootProject.layout.projectDirectory.dir("..").file("docs/research/remote-control-design-directions.html"))
     from(layout.projectDirectory.file("src/main/res/values/type.xml"))
+    // ADR-012 phase 2 (owner ruling R1, 2026-08-09): the RUNG TABLE, staged for exactly the
+    // reason the two files above are. A style's size stopped being a transcription of its CSS
+    // rule the day the ladder was consolidated onto five rungs -- a rung is a decision about
+    // this app's hierarchy and no CSS rule can state one -- so the expected size is computed
+    // from the record that decides it. The Go gate reads the same table out of the same file,
+    // which is what keeps the two halves of the join from checking two different ladders.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/adr/ADR-012-type-ladder-consolidation-phase-1.md"))
     // PB-DS-8 (S23): MOTION's origin, staged for the same reason and after the same defect.
     //
     // The five numbers dev.swarm.phone.ui.kit.Motion declares -- 350ms, cubic-bezier(0.32,0.72,0,1),
