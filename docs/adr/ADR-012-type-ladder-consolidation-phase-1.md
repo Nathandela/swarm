@@ -1,7 +1,8 @@
-# ADR-012: Type ladder consolidation, phase 1 — safe merges
+# ADR-012: Type ladder consolidation — phase 1 (safe merges) and phase 2 (the ruled ladder)
 
-**Status**: Accepted (safe half); the questions in "Open questions" are **Proposed** and belong to the owner
-**Date**: 2026-08-09
+**Status**: Accepted. Phase 1 (T1–T5) took the two merges that moved no pixel. Phase 2 (P1–P8, below) implements the owner rulings of 2026-08-09 and is where every question phase 1 refused to answer is answered.
+**Date**: 2026-08-09 (phase 1), amended the same day with phase 2
+**Filename**: still `...-phase-1.md`. The path is cited from `type.xml`, from `android/gate/s22b_type_test.go`, from the Robolectric suite and from three beads; renaming the file to match its contents would break four joins to save one word. The title above is the record of what it is.
 **Amends**: [ADR-009](ADR-009-obsidian-visual-direction.md) D7's parenthetical "Type scale structure (19 styles, ...) is unchanged" — the count becomes 17. D7's decisions themselves are untouched: no size, weight, tracking, family or feature string moves here.
 **Companions**: `android/app/src/main/res/values/type.xml` (the scale), `android/gate/s22b_type_test.go` (the join), `docs/research/remote-control-design-directions.html` (the design source), bead `agents-tracker-v6sa` (the maquette-vs-scale reconciliation this ADR routes its open questions to).
 
@@ -114,6 +115,8 @@ because every remaining half-step is occupied by a style with call sites.
 
 ## Open questions — routed to the owner, decided nowhere in this ADR
 
+> **ALL FIVE WERE RULED ON 2026-08-09** (specimens: `https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`; recorded on beads `agents-tracker-v6sa` and `agents-tracker-oonj`, implemented under `agents-tracker-nx44.9`). They are left below **as asked**, because a question edited after it is answered stops being the record of what was uncertain. Question 1 is answered by P1, question 2 by phase 2's sibling ruling R2 (section headers move to sans; not this section's work), question 3 by P3, question 4 by P4 and question 5 by P5.
+
 None of these is a merge. Each one changes what somebody sees, so each is an owner ruling, and this
 ADR states them so they are adjudicated together rather than one at a time by whoever next edits a
 screen. They belong with `agents-tracker-v6sa`, which already holds the maquette-versus-scale half
@@ -186,3 +189,227 @@ design fact drift apart on the first edit").
 **Do the whole consolidation in one pass.** Rejected as the scope ruling for this bead: every
 remaining merge changes a rendered size, and a phase that mixes "no pixel moves" with "these
 pixels move" is one review where the second half is the one nobody separated out.
+
+---
+
+# Phase 2 — the ruled ladder
+
+**Status**: Accepted
+**Date**: 2026-08-09
+**Decides**: the owner rulings R1, R3, R4 and R5 of 2026-08-09 (specimens
+`https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b`, recorded on bead
+`agents-tracker-v6sa`; implemented under `agents-tracker-nx44.9`). R2 (section headers move to
+sans) and R6–R8 (spacing exceptions, contrast floors, dot glow) are ruled in the same pass and
+land in their own records — R2 amends this ADR's own question 2, R6–R8 amend ADR-009.
+**Amends**: phase 1's T5 ("17 styles across 12 sizes") — the style count is unchanged and the SIZE
+count becomes six. Phase 1's decisions T1–T4 are untouched.
+
+## Context
+
+Phase 1 took the two merges that moved no pixel and stated the rest as questions, because "every
+remaining merge changes a rendered size". Those questions were put to the owner as rendered
+specimens rather than as prose, and the owner ruled all of them. This section is the record of
+what was ruled and the join that holds the app to it.
+
+Nothing here is re-argued. Where this text gives a reason, the reason is the ruling's own.
+
+### P1 — R1: the ladder is five rungs
+
+The scale keeps its seventeen named styles and spends them across **five sizes** instead of
+twelve. The rungs, and what the ruling names each one for:
+
+| Rung | sp | What it sets |
+| --- | --- | --- |
+| micro | 10 | tabs, counters, agent names, section labels, meta |
+| code | 11.5 | terminal text, chips |
+| body | 12.5 | all running text |
+| title | 14 | row titles, buttons, sheet headings |
+| display | 22 | screen titles |
+
+**A style's size is now read out of this ADR and everything else about it out of the design
+source.** That is the shape of the change and it is the only thing about phase 2 that is
+structural: a rung is a decision this app made about its own hierarchy, so it cannot be read out
+of a CSS rule, and the alternative — typing sixteen sp values into `type.xml` — is the failure the
+whole type gate exists to prevent. Weight, tracking, family, font features and the leading
+MULTIPLIER still come from the rule each style cites, unchanged and unchangeable here.
+
+### The rung table
+
+Machine-read. `android/gate/s22b_type_test.go` and the Robolectric suite both parse it; the ADR is
+staged onto the unit-test classpath for that second reader, beside `type.xml` and the design
+source, so the text half and the resolved half cannot be reading two different tables.
+
+**Design px** is the size the cited CSS rule states, and the gate resolves the rule and fails if
+the two disagree — so a design that moves a rule leaves this table visibly stale rather than
+quietly wrong. **Move** is `sp − design px`, checked arithmetically, and **every non-zero move
+names the ruling that authorized it**: a size that moved without a citation is a size somebody
+chose.
+
+| Ladder style | Origin | Design px | Rung | sp | Move |
+| --- | --- | --- | --- | --- | --- |
+| `Display.NavTitle` | `.pnav .big` | 27 | display | 22 | -5 (R3) |
+| `Title.Sheet` | `.sheet2 h4` | 15.5 | title | 14 | -1.5 (R1) |
+| `Title.Row` | `.prow .pj` | 14 | title | 14 | 0 |
+| `Label.Button` | `.acts2 button` | 13.5 | title | 14 | +0.5 (R1) |
+| `Body.Message` | `.m2` | 12.5 | body | 12.5 | 0 |
+| `Body.Secondary` | `.prow .ln` | 12 | body | 12.5 | +0.5 (R1) |
+| `Mono.InlineStrong` | `.prow .ln b` | 11.5 | code | 11.5 | 0 |
+| `Mono.Code` | `.sheet2 .cmd` | 11.5 | code | 11.5 | 0 |
+| `Label.Chip` | `.chip` | 11 | code | 11.5 | +0.5 (R1) |
+| `Mono.CodeSmall` | `.tcard .b` | 11 | code | 11.5 | +0.5 (R1) |
+| `Label.Section` | `.plabel` | 10.5 | micro | 10 | -0.5 (R1) |
+| `Mono.Meta` | `.sheet2 .ctx` | 10.5 | micro | 10 | -0.5 (R1) |
+| `Label.Live` | `.pnav .live` | 10 | micro | 10 | 0 |
+| `Mono.Agent` | `.prow .ag` | 10 | micro | 10 | 0 |
+| `Label.Tab` | `.ptabs div` | 9.5 | micro | 10 | +0.5 (R1) |
+| `Mono.Fine` | `.sheet2 .bind` | 9.5 | micro | 10 | +0.5 (R1) |
+
+Sixteen rows for the sixteen styles that cite `origin:`. `Display.SAS` has none and is the one
+style outside the ladder — see P7.
+
+### P2 — no style is deleted, and no call site of a surviving style moves
+
+The ruling consolidates SIZES, not names. Every role keeps its own style, because a role is what
+the design source distinguishes and the app still transcribes every one of those distinctions:
+`.prow .ag` and `.sheet2 .ctx` remain two rules, with two weights and two names, that this app now
+renders at one size.
+
+This is why phase 2 adds nothing to `s22bUnimplementedRules`. That register means "the design
+draws this rule and the app deliberately does not spend it", and after the consolidation the app
+spends all sixteen — at a ruled rung rather than at the rule's own px. Retiring a style here would
+put a false statement in the register to describe a size change.
+
+### P3 — R3: the display rung is 22, not 27
+
+`Display.NavTitle` moves from Substrate's 27 to the signed maquette's 22. The ruling's reason:
+"it's the signed design, and the nav row is about to gain the status pill; 22 shares the row more
+gracefully."
+
+This is the one move in the table that is not a merge — it is a size change, ruled on its own
+specimen — which is why its Move cell cites R3 and not R1.
+
+### P4 — R4: drill-down titles take the display rung
+
+`navHeaderDrill` spends `Display.NavTitle` where it spent `Title.Sheet`. The ruling: "A screen is
+a screen; depth is shown by the back chevron, not by shrinking the name."
+
+The 43 percent drop phase 1 recorded as question 4 is gone: both headers now set their title at
+22, and what distinguishes a drill-down from a root screen is the back control, the three-step
+padding and the absence of a live counter — three differences that survive, so `NavHeaderDrill.kt`
+remains a separate component for the reason it always was.
+
+`Title.Sheet` is thereby **freed** and has no call site. It is not deleted, for phase 1's T3
+reason exactly: the design's own sheet-heading rule now has no impostor sitting on it, and the
+sheets that will spend it are specified (`agents-tracker-1my5`, `agents-tracker-joyi`). It sits at
+the title rung, which is where a sheet heading belongs.
+
+### P5 — R5: the approval sheet's question keeps the display size, and its citation is renamed
+
+Ratified as it renders. The question stays at the display rung — "the question is the moment's
+headline; the display size is right; only its style NAME is wrong" — so R5 changes no pixel beyond
+P3's global 27 → 22.
+
+What changes is the **reason written next to it**. The citation used to argue from the ladder's
+contents: `Display.NavTitle` is "the only style in the scale at `--p-display-wt` above
+`Title.Sheet`'s 15.5". That was a consequence of the ladder, not a decision about the sheet, and it
+stopped being true the moment P1 moved `Title.Sheet` to 14. The citation now states the decision:
+**the approval sheet's question takes the DISPLAY RUNG, deliberately, because the blocking question
+is a screen-level headline** — the same rung the screen title and the drill title take, for the
+same reason.
+
+The style keeps the name `Display.NavTitle`, because the thing it transcribes is still `.pnav
+.big`, and a style is named for the rule it descends from everywhere else in this file. The rung
+is what the three roles share and the rung has a name of its own now.
+
+### P6 — leading is recomputed on the rung
+
+`android:lineHeight` is an absolute dimension, so it is the design's multiplier times the size the
+text actually renders at. Five styles declare one, and three of the five move:
+
+| Style | Multiplier | Was | Is |
+| --- | --- | --- | --- |
+| `Body.Message` | 1.45 | 18.125sp | 18.125sp |
+| `Body.Secondary` | 1.4 | 16.8sp | 17.5sp |
+| `Mono.Code` | 1.5 | 17.25sp | 17.25sp |
+| `Mono.CodeSmall` | 1.55 | 17.05sp | 17.825sp |
+| `Mono.Fine` | 1.6 | 15.2sp | 16sp |
+
+Both gates recompute the product rather than trusting it, which is what they already did; the only
+change is which size they multiply.
+
+### P7 — what phase 2 leaves alone, and the one thing it discloses
+
+**`Display.SAS` is not on the ladder.** 34 sp, `derived:` from
+`docs/design/substrate-components.md` §7, and it sets the four verification emoji a person compares
+against their Mac's. It is a specimen to be matched, not text to be read in a hierarchy, and the
+ruling's five rungs are about hierarchy. The file therefore carries six sizes: five rungs and the
+SAS. The gate asserts exactly that split rather than counting to six.
+
+**`Mono.Fine` moves although it has no call site.** It is 9.5 today and the ruling retires 9.5; a
+reserved style left off the ladder would put the half-step back the day its screen is built.
+
+**DISCLOSED: the micro rung now carries a render-identical pair.** `Mono.Agent` (`.prow .ag`,
+600) and `Mono.Meta` (`.sheet2 .ctx`, 500) are both mono, both at 10, both untracked, and ADR-009
+D7's two-face bundle resolves 600 to the 500 face — so they render the same pixels, which is
+exactly the condition under which phase 1's T1 merged `Label.CardHead` into `Mono.Meta`.
+
+They are **not** merged here, and the difference from T1 is where the identity comes from. T1's
+pair was identical **in the design**: two CSS rules stating the same size, same tracking, same
+family. This pair is identical only **after** a rung this app chose; the design still draws them at
+10.5 and 10. Deleting one would record "the design draws `.prow .ag` and this app does not spend
+it", which is false — and it would also decide, in a resource file, which of two roles is the real
+one. Whether the app wants one name for both is a naming decision that belongs with R2's
+sans/mono boundary, and it is left open rather than taken here.
+
+### P8 — two fix-pass placements, ratified
+
+Both were taken by the wave-2 fixer, disclosed rather than buried, and are ratified by this record
+so the next reader meets a decision instead of an artefact.
+
+1. **The kill-switch panel sits LAST in Settings' `CONNECTION` section.** A control that severs
+   every session qualifies everything above it; a reader meets what the connection does before
+   meeting the way to end it, and a destructive control placed first reads as the section's
+   subject.
+2. **Derivation row 15 (settings row) was amended for `statusLabel`'s retirement.** The
+   status-text trailing form never acquired a production caller and its only candidate row is one
+   `SettingsPanelScreen` deliberately does not build; the row keeps its ink rule verbatim, because
+   that is the design record a future spend has to obey, and records that the FORM does not ship.
+
+## Consequences
+
+**Positive.**
+
+- The finding the field test reported structurally — eleven sizes inside a six-point band — is
+  gone. Five rungs, each at least 1.5 sp from its neighbour, is a hierarchy a reader can perceive.
+- The two nav headers and the approval sheet now state one rung instead of three sizes, so the
+  "how big is a screen title" question has one answer.
+- Sizes did not stop being machine-checked; they changed which machine-read record they are checked
+  against. `type.xml` still cannot carry a number nobody wrote down.
+
+**Negative.**
+
+- `type.xml` now joins TWO records instead of one, and a reader has to hold both: the design source
+  for what a style looks like, this ADR for how big it is. The gate reads both and fails on either,
+  which is the mitigation, but it is genuinely one more file in the chain.
+- The micro rung's render-identical pair, above. It is a defect by phase 1's own standard and it
+  is being carried deliberately, with the reason written down.
+- `Title.Sheet` has zero call sites again, one phase after phase 1 argued that a specified future
+  call site is what distinguishes T3 from T2. The argument still holds and it is now doing more
+  work.
+
+## Alternatives considered
+
+**Put the sp values in `type.xml` and let the gate read them from there.** Rejected: that is
+`EXPECTED_DARK_COLORS` again — a test certifying that the app renders whatever the resource file
+says. The ruling is a decision and a decision has a record; the record is what the gate reads.
+
+**Add a `rung:` field to each style's citation comment.** Rejected as a third place for the same
+fact. The rung table is keyed by style name, the citation is keyed by CSS rule, and a style
+declaring its own rung would let the file disagree with the ADR in a way the ADR could not see
+without checking the file it is the authority for.
+
+**Merge `Mono.Agent` and `Mono.Meta`.** Rejected under P7: it is a naming decision the ruling did
+not make, and the register it would have to be recorded in says something false about the design.
+
+**Keep 27 and move only the merges.** Rejected: R3 ruled the size, and the nav row's coming status
+pill is the reason the ruling gave.
