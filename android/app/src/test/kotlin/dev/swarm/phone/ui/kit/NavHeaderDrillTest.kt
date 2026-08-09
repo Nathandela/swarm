@@ -140,8 +140,8 @@ class NavHeaderDrillTest {
      * chose on purpose: drawing the affordance and hoping the user does not press it.
      *
      * THE TITLE AND THE FRAME ARE UNCHANGED, which is the point of doing it here: the peek is still
-     * a screen below a root screen, so it still carries §4's `Title.Sheet` and its three padding
-     * steps rather than the root header's 27 sp display title.
+     * a screen below a root screen, so it still carries the display rung and §4's three padding
+     * steps, and what it does not carry is a way back.
      */
     @Test
     fun `a header with no destination draws no back control at all`() {
@@ -168,22 +168,38 @@ class NavHeaderDrillTest {
     // ---- the type and the inks --------------------------------------------
 
     /**
-     * §4: "Title `Title.Sheet` / `--p-ink`", and the back label "`Body.Message` / `--p-ink2`".
+     * §4's two text roles, as ruling R4 leaves them: the title on the DISPLAY RUNG / `--p-ink`,
+     * and the back label "`Body.Message` / `--p-ink2`".
      *
-     * THE TITLE IS THE HALF WORTH SPELLING OUT. The plausible wrong answer is `Display.NavTitle`
-     * -- 27 sp at weight 650 -- because that is what the OTHER nav header renders and reusing
-     * `navHeader` for a drill-down screen is the obvious implementation. §4 moves the mock's
-     * 16/700 to 15.5/650, which is `Title.Sheet`, and the negative half below is what makes the
-     * distinction hold.
+     * AUTHORIZED REWRITE, ADR-012 phase 2 P4 (owner ruling R4, 2026-08-09). What this said before,
+     * and what it asserted:
+     *
+     *     §4: "Title `Title.Sheet` / `--p-ink`", and the back label "`Body.Message` / `--p-ink2`".
+     *
+     *     THE TITLE IS THE HALF WORTH SPELLING OUT. The plausible wrong answer is
+     *     `Display.NavTitle` -- 27 sp at weight 650 -- because that is what the OTHER nav header
+     *     renders and reusing `navHeader` for a drill-down screen is the obvious implementation.
+     *     §4 moves the mock's 16/700 to 15.5/650, which is `Title.Sheet`, and the negative half
+     *     below is what makes the distinction hold.
+     *
+     *     selector = ".sheet2 h4",
+     *
+     * The plausible wrong answer became the ruled one. R4: "A screen is a screen; depth is shown
+     * by the back chevron, not by shrinking the name." So the title takes `.pnav .big`, the same
+     * rule the root header transcribes, and the drop from 27 to 15.5 that phase 1 recorded as its
+     * question 4 is gone. What still makes this a different component from `navHeader` is the back
+     * control, the three padding steps and the absent live counter -- three differences, none of
+     * them a type size.
      */
     @Test
     fun `the title and the back label are the two text roles section 4 names`() {
         val subject = header()
 
         val claims = KitOrigin.textClaims(
-            // `.sheet2 h4` is what type.xml records as Title.Sheet's origin.
+            // `.pnav .big` is what type.xml records as Display.NavTitle's origin, and R4 puts this
+            // title on it.
             view = titleOf(subject),
-            selector = ".sheet2 h4",
+            selector = ".pnav .big",
             ink = KitOrigin.token("--p-ink"),
             spScale = spScale,
         ) + KitOrigin.textClaims(
@@ -201,19 +217,42 @@ class NavHeaderDrillTest {
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
 
+    /**
+     * AUTHORIZED REWRITE, ADR-012 phase 2 P4 (owner ruling R4, 2026-08-09). This test asserted the
+     * opposite, and the opposite is what the owner ruled against:
+     *
+     *     fun `the title is not the root header's display size`() {
+     *         // The root header's `.pnav .big` is 27 sp; this is 15.5 sp. Sharing one factory
+     *         // between the two headers would put that choice in a boolean, and a screen passing
+     *         // it would be a screen choosing type.
+     *         val rootSize = KitOrigin.quantisedTextSize(
+     *             dev.swarm.phone.theme.TypeScale.designSpec(".pnav .big").sizePx * spScale,
+     *         )
+     *         assertNotEquals(
+     *             "the drill-down title renders at the ROOT header's size, so §4's 15.5 sp " +
+     *                 "Title.Sheet has been replaced by `.pnav .big`'s 27 sp Display.NavTitle",
+     *             rootSize,
+     *             titleOf(header()).textSize,
+     *         )
+     *     }
+     *
+     * The inequality is now the defect. The two headers agree on the title's size ON PURPOSE and
+     * disagree on everything else, so what this asserts is the agreement -- and the separateness
+     * of the two factories is asserted where it actually lives, in the back control and the
+     * padding, which the tests above already cover.
+     */
     @Test
-    fun `the title is not the root header's display size`() {
-        // The root header's `.pnav .big` is 27 sp; this is 15.5 sp. Sharing one factory between
-        // the two headers would put that choice in a boolean, and a screen passing it would be a
-        // screen choosing type.
+    fun `the title takes the same display rung as the root header`() {
         val rootSize = KitOrigin.quantisedTextSize(
-            dev.swarm.phone.theme.TypeScale.designSpec(".pnav .big").sizePx * spScale,
+            dev.swarm.phone.theme.TypeScale.renderedSizeSp(".pnav .big") * spScale,
         )
-        assertNotEquals(
-            "the drill-down title renders at the ROOT header's size, so §4's 15.5 sp Title.Sheet " +
-                "has been replaced by `.pnav .big`'s 27 sp Display.NavTitle",
+        assertEquals(
+            "the drill-down title does not render at the root header's size. R4 put both on the " +
+                "display rung: a screen is a screen, and depth is the back chevron's job rather " +
+                "than a 43 percent drop in the name of the thing being looked at.",
             rootSize,
             titleOf(header()).textSize,
+            0f,
         )
     }
 
