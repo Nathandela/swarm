@@ -216,6 +216,37 @@ internal class TopRule(val fill: Int, val rule: Int, val rulePx: Float) : Drawab
 }
 
 /**
+ * [TopRule] at the other end of the column: a fill with the hairline along its BOTTOM edge.
+ *
+ * A BAR'S RULE GOES ON THE EDGE THAT FACES THE CONTENT, which is why this is a second class and
+ * not a boolean on the first. `.ptabs` and `.composer` sit under the destination and rule their
+ * top; the sync strip sits above it and rules its bottom. A parameter would let a caller put the
+ * rule on the side away from what it separates, which is the one thing neither shape may do.
+ */
+internal class BottomRule(val fill: Int, val rule: Int, val rulePx: Float) : Drawable() {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun draw(canvas: Canvas) {
+        if (bounds.isEmpty) return
+        paint.color = fill
+        canvas.drawRect(bounds, paint)
+        paint.color = rule
+        canvas.drawRect(
+            bounds.left.toFloat(),
+            bounds.bottom - rulePx,
+            bounds.right.toFloat(),
+            bounds.bottom.toFloat(),
+            paint,
+        )
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/**
  * `.prow`, and `.slab.lit` -- ADR-009 D4's promoted slab -- when the row is the one blocked on the
  * user.
  *

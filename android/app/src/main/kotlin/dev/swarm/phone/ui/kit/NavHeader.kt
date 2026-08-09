@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.R
@@ -17,8 +18,27 @@ import dev.swarm.phone.R
  * `margin-left: auto` HAS NO ANDROID FORM. The equivalent is giving the title the remaining width,
  * which is what a weight of 1 does. Writing it as a trailing gravity instead would work until the
  * title grew long enough to meet the counter, and then they would overlap rather than push.
+ *
+ * @param status the sync mark, or null while the phone has nothing to report (agents-tracker-nx44
+ *  .2). IT IS A SLOT AND NOT A MODEL, on [approvalSheet]'s and [pairingStep]'s precedent: the pill
+ *  opens a detail, so it carries a click and a destination, and both of those are the surface's.
+ *
+ *  **WHY THE NAV ROW IS WHERE IT GOES.** The sync state is a property of what the title names --
+ *  is this screen showing you the current thing -- and this row is where a reader's eye already is.
+ *  The alternative it replaces was a band of its own above the destination, which is a fifth bar
+ *  on a screen that already has a status bar, this row, a scroll and a tab bar; the four sentences
+ *  it drew overlapped this row's title on a real handset (field test 3).
+ *
+ *  IT SITS AFTER THE LIVE COUNTER, so the two trailing readouts read outward from the screen: the
+ *  counter is about what is happening IN this screen, the pill about whether the screen can be
+ *  trusted at all.
  */
-fun navHeader(context: Context, title: CharSequence, live: CharSequence?): LinearLayout =
+fun navHeader(
+    context: Context,
+    title: CharSequence,
+    live: CharSequence?,
+    status: View? = null,
+): LinearLayout =
     LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         isBaselineAligned = true
@@ -45,6 +65,14 @@ fun navHeader(context: Context, title: CharSequence, live: CharSequence?): Linea
             addView(
                 liveCounter(context, live).apply {
                     (layoutParams as LinearLayout.LayoutParams).marginStart =
+                        Kit.dimenPx(context, R.dimen.swarm_space_10)
+                },
+            )
+        }
+        status?.let {
+            addView(
+                it.apply {
+                    (layoutParams as? LinearLayout.LayoutParams)?.marginStart =
                         Kit.dimenPx(context, R.dimen.swarm_space_10)
                 },
             )

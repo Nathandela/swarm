@@ -130,6 +130,10 @@ object SettingsTag {
  *  own, for [redirectFor]'s reason: correct to look at, and attached to nothing.
  * @param below views this slice has NOT recomposed, hosted under the panel. Null is the finished
  *  shape.
+ * @param status the sync mark for the nav row, or null while the phone has nothing to report
+ *  (agents-tracker-nx44.2). It is a view the SURFACE owns, on the scaffold slot's own terms: what
+ *  it says changes on the surface's clock and this panel redraws itself, so a panel that built one
+ *  would rebuild the mark under whoever is pressing it.
  */
 fun settingsPanelView(
     context: Context,
@@ -139,6 +143,7 @@ fun settingsPanelView(
     redirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     deliveryRedirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     below: View? = null,
+    status: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -148,7 +153,7 @@ fun settingsPanelView(
     // C6.1. `navHeader`'s second argument is the live counter, and settings has none: the
     // counter is the inbox's in-context liveness readout (derivation §1.4) and a settings screen
     // has nothing in flight to report.
-    column.addView(navHeader(context, panel.title, null).apply { tag = SettingsTag.NAV })
+    column.addView(navHeader(context, panel.title, null, status).apply { tag = SettingsTag.NAV })
 
     // FIRST, above the preferences. This is where the pairing entry point lives once a phone is
     // paired (agents-tracker-64rf), and the defect it answers is an owner not finding it -- so it

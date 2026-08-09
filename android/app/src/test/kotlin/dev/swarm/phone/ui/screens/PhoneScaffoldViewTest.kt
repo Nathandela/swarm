@@ -79,7 +79,7 @@ class PhoneScaffoldViewTest {
             tabs = screen.tabs,
             destination = destination,
             onSelectDestination = onSelectDestination,
-            banner = banner,
+            status = banner,
         )
     }
 

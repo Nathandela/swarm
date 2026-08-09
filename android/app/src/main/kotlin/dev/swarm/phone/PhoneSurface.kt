@@ -1,6 +1,5 @@
 package dev.swarm.phone
 
-import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -27,7 +26,7 @@ import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.SessionDetail
-import dev.swarm.phone.ui.StatusBanner
+import dev.swarm.phone.ui.SyncStatus
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
@@ -69,9 +68,9 @@ import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
 import dev.swarm.phone.ui.screens.sessionDetailRedraw
 import dev.swarm.phone.ui.screens.sessionDetailView
-import dev.swarm.phone.ui.screens.statusBannerView
+import dev.swarm.phone.ui.screens.syncPillView
+import dev.swarm.phone.ui.screens.syncStatusView
 import dev.swarm.phone.ui.screens.triageInboxView
-import java.util.Date
 import swarmmobile.App
 import swarmmobile.LaunchSpec
 import swarmmobile.Op
@@ -169,7 +168,7 @@ class PhoneSurface(
      * IT NO LONGER CARRIES THE LINK'S NEWS, and that move is agents-tracker-e6mi. This label used
      * to hold the connection banner, the machine's freshness verdict and the roster's stale notice
      * as well -- three sentences joined into one, on a view hosted under the inbox's sections and
-     * therefore detached on every other destination. Those three are [bannerHost]'s now, above the
+     * therefore detached on every other destination. Those three are [syncHost]'s now, above the
      * scaffold's content, where a tab change cannot reach them.
      *
      * WHAT IS LEFT IS THE ONE THING THAT IS NOT ABOUT THE LINK. A core that would not start is not
@@ -266,9 +265,15 @@ class PhoneSurface(
     // AND THE TOAST OVERLAY, for the reason it is one overlay rather than one per surface: the
     // settings panel is hosted INSIDE the tab scaffold, so a toast of its own would be drawn under
     // the tab bar and would go with the panel on the redraw a revoke causes.
+    //
+    // AND THE SYNC PILL, which the settings nav row carries like the other two (agents-tracker-
+    // nx44.2). It is handed as a PROVIDER rather than as a view because the panel redraws itself:
+    // [statusSlot] detaches the one host from whichever screen held it last, and this surface is
+    // not told when the panel decides to rebuild.
     private val settings = SettingsSurface(activity, runtime, dispatch).also {
         it.onReplaced = ::render
         it.toasts = toasts
+        it.statusSlot = ::statusSlot
     }
 
     /**
@@ -654,12 +659,21 @@ class PhoneSurface(
     private var barDrawn: Pair<List<InboxTab>, Destination>? = null
 
     /**
-     * What the scaffold's banner last said, for [inboxDrawn]'s reason.
+     * What the sync chrome last said, for [inboxDrawn]'s reason.
      *
-     * It is NOT keyed on the destination, and that is the whole point of the slot: the banner says
+     * It is NOT keyed on the destination, and that is the whole point of the slot: the status says
      * the same thing wherever the user is standing, so nothing about navigation invalidates it.
      */
-    private var bannerDrawn: StatusBanner? = null
+    private var syncDrawn: SyncStatus? = null
+
+    /**
+     * Whether the sync detail is open.
+     *
+     * IT IS THE SURFACE'S AND NOT THE COMPOSITION'S. The chrome is rebuilt on every draw -- which
+     * is to say on every journal event -- so a flag owned by the view would close the sheet under
+     * a user who had just opened it, at whatever rate their agents happen to be producing work.
+     */
+    private var syncSheetOpen = false
 
     /**
      * Whether the offer on the unpaired phone's screen has been taken up.
@@ -825,7 +839,7 @@ class PhoneSurface(
      * sentences joined into [status], which is a child of this column -- so PB-APP-8's whole
      * subject was legible at the bottom of one of four tabs and nowhere else, and a link that
      * dropped while the user was reading a session changed nothing they could see. They are
-     * [bannerHost]'s now, above the scaffold's content and outside its scroll, and they are three
+     * [syncHost]'s now, above the scaffold's content and outside its scroll, and they are three
      * lines rather than one paragraph.
      *
      * **THE PAIRING PANEL HAS LEFT IT, AND THAT IS THE DEFECT agents-tracker-64rf REPORTS.** It was
@@ -912,8 +926,26 @@ class PhoneSurface(
      * Activity, Settings and into every session drill-down. The link dropping changed nothing on
      * screen for a user standing anywhere else, which is the moment PB-APP-8 exists for.
      */
-    private val bannerHost = FrameLayout(activity).apply {
+    private val syncHost = FrameLayout(activity).apply {
         layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
+    }
+
+    /**
+     * The nav row's sync pill, hosted rather than rebuilt (agents-tracker-nx44.2).
+     *
+     * IT IS ONE HOST FOR THREE NAV ROWS, and that is safe for the reason exactly one destination
+     * is on screen at a time. What makes it safe in PRACTICE is [statusSlot]: every composition
+     * that takes this view takes it through that method, which detaches it from whichever screen
+     * held it last. A screen tree is built before it is hosted, so a detach done at hosting time
+     * would run after the `addView` that throws.
+     *
+     * WHY A HOST AT ALL. The pill changes whenever the transport, the machine's clock or a repair
+     * channel does; the screens around it are rebuilt only when their own models change, and the
+     * settings panel is redrawn by a different object entirely. A pill built into each screen
+     * would be as stale as whichever screen was cheapest to skip.
+     */
+    private val statusHost = FrameLayout(activity).apply {
+        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
     }
 
     /**
@@ -1142,13 +1174,13 @@ class PhoneSurface(
         // a remedy, and `detail` exists for a bug report rather than for a person.
         status.text = startup.error.message
 
-        // AND THE BANNER SAYS NOTHING, which is the honest answer here rather than an omission.
-        // Every line it can carry is read from the phone core -- the transport's state, the
-        // machine's own stamp, the journal stream's completeness -- and on this branch there is no
-        // core to ask. A banner reporting "not connected" would be a claim about a machine this
-        // handset is in no position to make, which is [drawContent]'s own argument for drawing no
-        // inbox here.
-        drawBanner(StatusBanner.NONE)
+        // AND THE SYNC STATUS SAYS NOTHING, which is the honest answer here rather than an
+        // omission. Every fact it composes is read from the phone core -- the transport's state,
+        // the machine's own stamp, the repair channels' completeness -- and on this branch there is
+        // no core to ask. A status reporting "broken" would be a claim about a machine this handset
+        // is in no position to make, which is [drawContent]'s own argument for drawing no inbox
+        // here.
+        drawSync(SyncStatus.NONE)
         capabilityNotice.text = ""
         session = ""
         // AND NO DRILL-DOWN. The detail is read from the phone core, so a handset whose core
@@ -1257,21 +1289,22 @@ class PhoneSurface(
         drawContent(bridge, inbox)
         drawScaffold(inbox.tabs)
 
-        // THREE FACTS, THREE LINES, ON A SLOT NO TAB CHANGE REACHES (agents-tracker-e6mi). This
-        // was `listOfNotNull(...).joinToString(" ")` onto [status] -- one run-on paragraph, on a
-        // view hosted under the inbox's sections and detached on every other destination.
-        // [StatusBanner] owns the order and the emptiness rule; [bannerHost] owns the place.
-        drawBanner(
-            StatusBanner.of(
+        // ONE RANKED STATUS, ON A SLOT NO TAB CHANGE REACHES (agents-tracker-nx44.2). This was
+        // four stacked sentences, and before that one run-on paragraph on a view hosted under the
+        // inbox's sections and detached on every other destination. [SyncStatus] owns the rank and
+        // the silence; [statusHost] and [syncHost] own the two places.
+        drawSync(
+            SyncStatus.of(
                 connection = bridge.connectionBanner(),
-                freshness = bridge.machineFreshness().notice { millis ->
-                    DateFormat.getTimeFormat(activity).format(Date(millis))
-                },
-                // PB-APP-8 for the roster. `TriageInbox.staleNotice` decided the wording in S16
-                // and reached no user until now: a list drawn from a holed journal may be missing
-                // a session, an exit or a needs_input, and the one screen that must never present
-                // that as live is the one a person triages from.
-                staleNotice = inbox.staleNotice,
+                // THE MACHINE'S OWN STAMP, AND NO FORMATTER. `MachineFreshness.notice` renders a
+                // bare clock time through the user's locale; the model turns the same stamp into
+                // an elapsed duration, which is the whole of agents-tracker-nx44.2's second half.
+                freshness = bridge.machineFreshness(),
+                nowUnixMs = System.currentTimeMillis(),
+                // PB-APP-8 per channel, which is what the roster's single stale mark was a
+                // summary of. `LinkPanel` reads the same four and the sheet names the ones with
+                // holes in them.
+                streams = bridge.streamViews(),
                 // PB-SYNC-7's hold, shown before anyone presses anything (agents-tracker-pxz8).
                 reconciled = reconciledOf(startup),
             ),
@@ -1352,7 +1385,7 @@ class PhoneSurface(
     }
 
     /**
-     * PB-SYNC-7's fail-closed hold, for [StatusBanner.of]'s fourth fact (agents-tracker-pxz8).
+     * PB-SYNC-7's fail-closed hold, for [SyncStatus.of]'s fourth fact (agents-tracker-pxz8).
      *
      * `StateSummary.Reconciled` crosses the boundary and, before this line, was read by no
      * Kotlin at all -- only `.paired` (read above, through [PairOnlyScreen.presentationOf]) and
@@ -1588,7 +1621,7 @@ class PhoneSurface(
         // parent. The banner joined the content host here rather than in `detachHostedViews`
         // because it is not hosted IN the content -- that is the whole of the fix.
         (contentHost.parent as? ViewGroup)?.removeView(contentHost)
-        (bannerHost.parent as? ViewGroup)?.removeView(bannerHost)
+        (syncHost.parent as? ViewGroup)?.removeView(syncHost)
         host.removeAllViews()
         host.addView(
             phoneScaffoldView(
@@ -1597,7 +1630,7 @@ class PhoneSurface(
                 tabs = tabs,
                 destination = destination,
                 onSelectDestination = ::selectDestination,
-                banner = bannerHost,
+                status = syncHost,
             ),
         )
     }
@@ -1606,31 +1639,81 @@ class PhoneSurface(
      * Draw what the app has to say about its link, redrawn only when it has changed.
      *
      * THE EQUALITY CHECK IS [drawInbox]'s AND SHARPER HERE. This runs on every resume, after every
-     * action and on every journal event, and the banner sits above a destination somebody may be
+     * action and on every journal event, and the chrome sits above a destination somebody may be
      * scrolling; rebuilding it unconditionally would re-lay out the whole column at whatever rate
-     * their agents produce events. [StatusBanner] is a data class of three strings, so "has
-     * anything a user can read changed" is one comparison.
+     * their agents produce events. [SyncStatus] is a data class, so "has anything a user can read
+     * changed" is one comparison.
      *
-     * THE HOST IS ALWAYS FILLED, INCLUDING WITH SILENCE. A silent banner is a tagged container
-     * holding no lines rather than no container at all, which costs nothing on screen -- it has no
-     * fill, no border and no padding of its own -- and keeps the slot findable, so a test can tell
-     * "the phone has nothing to report" from "the slot went away again".
-     *
-     * WHERE THE ONE CONTROL LEADS IS DECIDED HERE (agents-tracker-agre), because navigation is the
-     * surface's and the composition cannot know it. The two states that offer it -- `RELAY_UNTRUSTED`
-     * and `RELAY_INSECURE` -- are terminal AND still paired, so the offer must not be `BeginPairing`:
-     * `swarm remote pair` is refused while this device is registered (PB-STATE-10), and a control
-     * that walked into that refusal would be PB-APP-10's failure loop one step further along. The
-     * Settings destination leads with the `Pairing` section, whose one control clears the
-     * registration first; [StatusBanner.PAIR_AGAIN] is named for it.
+     * BOTH HOSTS ARE ALWAYS FILLED, INCLUDING WITH SILENCE. A live phone leaves an empty tagged
+     * container in each, which costs nothing on screen -- neither has a fill, a border or padding
+     * of its own -- and keeps both slots findable, so a test can tell "the phone has nothing to
+     * report" from "the slot went away again".
      */
-    private fun drawBanner(banner: StatusBanner) {
-        if (banner == bannerDrawn && bannerHost.childCount > 0) return
-        bannerDrawn = banner
-        bannerHost.removeAllViews()
-        bannerHost.addView(
-            statusBannerView(activity, banner) { selectDestination(Destination.SETTINGS) },
+    private fun drawSync(status: SyncStatus) {
+        if (status == syncDrawn && syncHost.childCount > 0) return
+        syncDrawn = status
+        statusHost.removeAllViews()
+        syncPillView(activity, status, ::toggleSyncSheet)?.let { statusHost.addView(it) }
+        syncHost.removeAllViews()
+        syncHost.addView(
+            syncStatusView(
+                context = activity,
+                status = status,
+                open = syncSheetOpen,
+                onOpen = ::toggleSyncSheet,
+                onRepair = ::repairSync,
+            ),
         )
+    }
+
+    /**
+     * Open or close the sync detail.
+     *
+     * IT REDRAWS THROUGH [drawSync] RATHER THAN CALLING [render], because the state that changed is
+     * not one the phone core knows about: a full render would re-read the roster, the transcript
+     * and the journal to answer a disclosure toggle. Clearing [syncDrawn] first is what gets past
+     * that method's own equality check, which compares the STATUS and cannot see this flag.
+     */
+    private fun toggleSyncSheet() {
+        syncSheetOpen = !syncSheetOpen
+        val status = syncDrawn ?: return
+        syncDrawn = null
+        drawSync(status)
+    }
+
+    /**
+     * The sync detail's one control, and where it leads.
+     *
+     * THE MODEL DECIDED WHICH REMEDY IS OWED AND THIS SPENDS IT. [SyncStatus.PAIR_AGAIN] is the
+     * offer for a machine that has stopped answering this device: `swarm remote pair` is refused
+     * while a registration stands (PB-STATE-10), so the destination is Settings, whose leading
+     * section clears it -- the same reasoning, and the same word, the retired banner's control
+     * carried. Everything else is a hole in the transport's read position, which [resyncControl]'s
+     * verb rewinds for all four channels at once.
+     *
+     * IT PRESSES THE EXISTING CONTROL RATHER THAN REPEATING ITS VERB. `resyncControl` carries the
+     * press plumbing PB-SEC-12 clause 1 requires -- the touch filter, the dispatch, the routed
+     * refusal onto the outcome line -- and a second call site typing `app.resync(...)` would have
+     * none of it.
+     */
+    private fun repairSync() {
+        when (syncDrawn?.detail?.repair) {
+            SyncStatus.PAIR_AGAIN -> selectDestination(Destination.SETTINGS)
+            SyncStatus.REPAIR -> resyncControl.performClick()
+            else -> Unit
+        }
+    }
+
+    /**
+     * The sync pill's host, detached from whatever held it last.
+     *
+     * A SCREEN TREE IS BUILT BEFORE IT IS HOSTED, which is why this is a method and not a field
+     * read. `hostContent` detaches the surface's long-lived views, but by then the composition has
+     * already called `addView` on this one -- and Android refuses a child that still has a parent.
+     */
+    private fun statusSlot(): View {
+        (statusHost.parent as? ViewGroup)?.removeView(statusHost)
+        return statusHost
     }
 
     /**
@@ -1717,6 +1800,7 @@ class PhoneSurface(
                     onSelectScope = ::selectScope,
                     promoted = promoted,
                     below = unrecomposedControls,
+                    status = statusSlot(),
                 )
             },
         )
@@ -1969,7 +2053,7 @@ class PhoneSurface(
         // failure onto [status]; this is the same sentence the Inbox tab already carries, not a
         // second one invented here.
         hostContent(
-            panel?.let { activityPanelView(activity, it) }
+            panel?.let { activityPanelView(activity, it, status = statusSlot()) }
                 ?: emptyState(activity, status.text.toString()),
         )
     }
@@ -2005,7 +2089,7 @@ class PhoneSurface(
      * screen this host never held.
      */
     private fun detachHostedViews() {
-        for (view in listOf(unrecomposedControls, settings.root, pairing.root)) {
+        for (view in listOf(unrecomposedControls, settings.root, pairing.root, statusHost)) {
             (view.parent as? ViewGroup)?.removeView(view)
         }
     }

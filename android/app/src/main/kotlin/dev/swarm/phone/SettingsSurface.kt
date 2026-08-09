@@ -361,6 +361,21 @@ class SettingsSurface(
      */
     internal var unpairNotice: String = ""
 
+    /**
+     * The sync pill for this panel's nav row, or null while nothing owns one
+     * (agents-tracker-nx44.2).
+     *
+     * IT IS A PROVIDER AND NOT A VIEW. `PhoneSurface` owns ONE pill host across three nav rows --
+     * exactly one destination is on screen at a time -- and the provider is what detaches it from
+     * whichever screen held it last. A field holding the view would hand this panel a child that
+     * still has a parent, which Android refuses.
+     *
+     * IT IS ALSO WHY [draw]'S EQUALITY CHECK DOES NOT HAVE TO KNOW ABOUT THE PILL: the host is
+     * stable and its CONTENTS change, so a status that moves while this panel is unchanged reaches
+     * the screen without redrawing a column of switches under the finger on one.
+     */
+    internal var statusSlot: () -> View? = { null }
+
     fun render() {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> {
@@ -736,6 +751,7 @@ class SettingsSurface(
                 redirectFor = ::redirectFor,
                 deliveryRedirectFor = ::deliveryRedirectFor,
                 below = outcome,
+                status = statusSlot(),
             ),
         )
     }

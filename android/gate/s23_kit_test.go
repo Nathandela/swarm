@@ -258,6 +258,44 @@ var s23Inbox = []s23Component{
 			"factory for `ctaButton`'s reason: the site differs, not the component.",
 	},
 	{
+		Factory: "syncPill",
+		File:    "SyncBadge.kt",
+		Derived: "§4 Sync status pill and strip",
+		Why: "the nav row's sync mark, and the component that replaces a stack of up to four " +
+			"sentences of body copy drawn above every destination. Field test 3 photographed that " +
+			"stack sitting over the nav title and pushing the whole app down; §4 is the whole " +
+			"specification because neither artifact draws a sync mark at all -- there is no " +
+			"`.sync` rule in the shared Substrate block and the retired mock has no class for one. " +
+			"It is a COMPOSITION of two things the kit already has, which is §2's reuse rule: " +
+			"`chipSurface` is row 10's floating chip unchanged, and the mark is the same 7 dp disc " +
+			"`statusDot` paints, built as a compound drawable rather than a second view so the dot " +
+			"and the word cannot measure on different baselines. Its ink is `--p-ink2` and NOT one " +
+			"of the three status tokens: those are indicator colours held to WCAG's 3:1 non-text " +
+			"floor, and a word painted in one would be prose taking an ink measured as a dot -- " +
+			"which is also what keeps the three states legible to a reader who cannot separate " +
+			"teal from champagne, since the WORD differs in every state. Flat, no glow: §4's B134 " +
+			"mapping gives the two glows to NeedsInput and Working because they say a session is " +
+			"ALIVE, and none of these three is a running agent. The 48 dp floor is `denyChip`'s " +
+			"ruling under PB-DS-12 -- this opens the detail sheet, so it is a control.",
+	},
+	{
+		Factory: "syncStrip",
+		File:    "SyncBadge.kt",
+		Derived: "§4 Sync status pill and strip",
+		Why: "the escalation the BROKEN state adds, and a second factory rather than a variant of " +
+			"the pill for `noticeDetail`'s reason: it shares neither the surface, the shape, the " +
+			"type nor the box, and a variant that changed all four would be a second component " +
+			"wearing an enum. It is opaque `--p-elev` under a 1 dp `--p-hair` rule along its " +
+			"BOTTOM edge -- `TopRule` mirrored, because a bar's rule goes on the edge that faces " +
+			"the content, which is why `BottomRule` is a second class and not a boolean. Opaque " +
+			"and IN LAYOUT are the same requirement seen twice: an overlay cannot be made not to " +
+			"overlap, only positioned so that it usually does not, and a transparent banner over a " +
+			"nav title is the defect this replaces. One line with the platform's mark, because it " +
+			"sits outside the scroll and a sentence that wrapped would move the destination by " +
+			"however long the transport's refusal happens to be; the whole sentence is one tap " +
+			"away in the detail it opens.",
+	},
+	{
 		Factory: "noticeDetail",
 		File:    "Notice.kt",
 		Origin:  ".sheet2 .ctx",
@@ -2379,6 +2417,24 @@ var s23TouchTargets = []s23TouchTarget{
 			"1 dp `--p-hair`, `--p-btn-r` 9, `Label.Button` / `--p-ink`, padding `space_12`, min " +
 			"48. That is `ctaButton(kind = MORE)`, which is what ReadOnlyNote.kt's own KDoc says " +
 			"builds it.",
+	},
+	{
+		Row:     "§4 Sync status pill and strip",
+		Factory: "syncPill",
+		Why: "the pill opens the detail sheet, so it is a control and not a mark -- and it is the " +
+			"shape that measures too small by construction: it hugs one short upper-case word " +
+			"inside `.chip` metrics. §4 states the floor on both components in this row and this " +
+			"is the first of the two. It is a minimum and not a size, on `denyChip`'s terms, so " +
+			"the drawing is unchanged wherever the metrics already clear it.",
+	},
+	{
+		Row:     "§4 Sync status pill and strip",
+		Factory: "syncStrip",
+		Why: "the strip opens the same detail the pill does, because its own sentence is clamped " +
+			"to one line and the thing that finishes it is that sheet. §4 states the floor on it " +
+			"for that reason and not because a full-bleed bar could measure short -- it could " +
+			"not; a control the width of the window with no stated floor is a floor nobody " +
+			"assigned, which is the state this check exists to end.",
 	},
 	{
 		Row:     "§4 Drill-down nav header",

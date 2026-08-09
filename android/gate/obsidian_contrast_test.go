@@ -238,9 +238,10 @@ var obsidianExtraPairs = []inkPair{
 	{Ink: "--p-hero", Surface: "--p-bg", Role: roleAccentText, Polarity: lightOnDark, Where: "champagne as TEXT: the LIVE counter, the active tab, the peek foreground"},
 }
 
-// obsidianIndicators are the non-text colours: the four Group indicators (PB-TOK-8) and the
-// presence dots. --p-ink3 carries both the Completed group and the offline dot, which is why it
-// appears once rather than twice.
+// obsidianIndicators are the non-text colours: the four Group indicators (PB-TOK-8), the presence
+// dots, and the sync status pill's mark. --p-ink3 carries both the Completed group and the offline
+// dot, which is why it appears once rather than twice; --p-err is here for the pill alone, since no
+// Group and no presence state is a failure.
 var obsidianIndicators = []struct {
 	Token string
 	Why   string
@@ -249,6 +250,11 @@ var obsidianIndicators = []struct {
 	{"--p-work", "Group Working status dot and the workbar's opaque stop"},
 	{"--p-ok", "Group ReadyForReview status dot, and the ONLINE presence dot"},
 	{"--p-ink3", "Group Completed status dot, and the OFFLINE presence dot"},
+	// agents-tracker-nx44.2: the sync status pill's mark, which takes the three status tokens at
+	// their existing meanings. `--p-work` and `--p-att` are already rows above; this is the site
+	// that puts `--p-err` on a DOT for the first time, and a dot is judged by the non-text floor
+	// rather than by APCA -- so it needs a row here or the new site is measured by nothing.
+	{"--p-err", "the sync status pill's BROKEN mark"},
 }
 
 // obsidianIndicatorGrounds are the two surfaces a dot is ever drawn on: a row sits on a card, a

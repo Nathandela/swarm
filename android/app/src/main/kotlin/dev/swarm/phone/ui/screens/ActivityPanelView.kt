@@ -69,11 +69,16 @@ object ActivityTag {
  *
  * @param below views this slice has NOT recomposed, hosted under the panel. Null is the finished
  *  shape. `SettingsPanelView` takes the same parameter for the same reason.
+ * @param status the sync mark for the nav row, or null while the phone has nothing to report
+ *  (agents-tracker-nx44.2). It is a view the SURFACE owns, on the scaffold slot's own terms: what
+ *  it says changes on the surface's clock and this screen is rebuilt on its model's, so a screen
+ *  that built one would rebuild the mark under whoever is pressing it.
  */
 fun activityPanelView(
     context: Context,
     panel: ActivityPanel,
     below: View? = null,
+    status: View? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -83,7 +88,7 @@ fun activityPanelView(
     // `navHeader`'s second argument is the live counter, and activity has none: the counter is the
     // inbox's in-context liveness readout (derivation §1.4), and a log of what has already
     // happened has nothing in flight to count.
-    column.addView(navHeader(context, panel.title, null).apply { tag = ActivityTag.NAV })
+    column.addView(navHeader(context, panel.title, null, status).apply { tag = ActivityTag.NAV })
 
     if (panel.staleNotice.isNotEmpty()) {
         column.addView(notice(context, panel.staleNotice).apply { tag = ActivityTag.STALE })

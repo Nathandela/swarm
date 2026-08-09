@@ -91,23 +91,6 @@ internal object Kit {
         view.ellipsize = TextUtils.TruncateAt.END
     }
 
-    /**
-     * A note that is STANDING CHROME rather than prose inside a scroll: at most two lines.
-     *
-     * THE NUMBER BOUNDS A DISPLACEMENT AND IS NOT A LENGTH. `readOnlyNote(capped = true)` is the
-     * scaffold's connection banner, which sits ABOVE the scroll on all four destinations -- so
-     * what it costs when it wraps is not its own height but everything below it moving down while
-     * somebody is reading. Two is the smallest cap that still draws `StatusBanner`'s longest
-     * sentence without reaching for the mark on a handset; it does not scale with density, no
-     * design rule states it, and it is therefore not a `KitMetrics` constant.
-     *
-     * See [identityCell] for why the mark is `END` and why both treatments live in this object.
-     */
-    fun cappedNote(view: TextView) {
-        view.maxLines = 2
-        view.ellipsize = TextUtils.TruncateAt.END
-    }
-
     fun colour(context: Context, @ColorRes id: Int): Int = context.getColor(id)
 
     fun dimen(context: Context, @DimenRes id: Int): Float = context.resources.getDimension(id)
@@ -743,6 +726,21 @@ internal object KitTag {
      */
     const val STEP_ORDINAL = "pairing step ordinal"
     const val STEP_LINE = "pairing step line"
+
+    /**
+     * The sync status mark and its escalation (agents-tracker-nx44.2).
+     *
+     * Named for the PART, like [SETTINGS_LABEL] and [TOAST]: neither artifact draws either of them
+     * -- there is no `.sync` rule in the shared Substrate block and the retired mock has no class
+     * for one -- so a tag naming a selector would point a reader at a rule that does not exist.
+     *
+     * THEY ARE TWO TAGS AND NOT ONE, because they are two components with two lifetimes: the pill
+     * is on screen for three of the four states and the strip for one, and a test that found
+     * either under a shared tag could assert that a broken phone "shows its sync status" while the
+     * escalation was missing.
+     */
+    const val SYNC_PILL = "sync pill"
+    const val SYNC_STRIP = "sync strip"
 }
 
 /**

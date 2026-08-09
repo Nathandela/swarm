@@ -40,19 +40,18 @@ import org.junit.Test
  * field says which states a spinner would be truthful in, and there is no spinner. What is wired is
  * its complement, [ConnectionBanner.terminal] -- the fact that the app has STOPPED retrying -- which
  * is the half that can silence a promise without drawing anything new.
+ *
+ * ## What moved out of this file, and where it went (agents-tracker-nx44.2)
+ *
+ * `StatusBanner` is deleted, so the eight assertions here that built one are gone with it. NOTHING
+ * THEY CLAIMED IS UNCLAIMED: the composed sync status makes the same three claims in `SyncStatusTest`
+ * -- a terminal link ranks BROKEN and nothing else does, a broken link's own facts do not also
+ * render (`broken outranks every other fact being true at the same time`), and the remedy is a
+ * control the detail sheet offers (`a revoked device offers the pairing destination and not a
+ * resync`). What is left in this file is the half that was never the banner's: `ConnectionBanner`
+ * deriving its own offer, and `PressFeedback` deriving the take-control press.
  */
 class RemedyControlsTest {
-
-    private val holedRoster = TriageInbox.from(emptyList(), journalStale = true).staleNotice
-
-    private val silentMachine = MachineFreshness(silent = true, lastHeardUnixMs = 0L)
-        .notice { "09:14" }
-
-    private fun bannerFor(state: ConnectionState) = StatusBanner.of(
-        connection = ConnectionBanner.of(state),
-        freshness = silentMachine,
-        staleNotice = holedRoster,
-    )
 
     // ---- the pairing remedy becomes a control ------------------------------
 
@@ -67,121 +66,6 @@ class RemedyControlsTest {
                 banner.offersPairing,
             )
         }
-    }
-
-    @Test
-    fun `a link whose remedy is pairing offers a control and not only a sentence`() {
-        // The two states a phone stays IN THE APP for. `PairOnlyReason` records why the other two
-        // terminal states never reach this banner: `transportEndsPairing` folds a revoked and a
-        // repair_required handset into `paired = false`, so they get the pair-only screen. These
-        // two do not end a pairing, so the banner is the only thing that speaks for them -- and it
-        // said "Pair this phone again" with nothing on screen to press.
-        for (state in listOf(ConnectionState.RELAY_UNTRUSTED, ConnectionState.RELAY_INSECURE)) {
-            assertEquals(
-                "$state tells the user to pair again and offers no control to do it with, which " +
-                    "is PB-APP-10's failure loop written as advice",
-                StatusBanner.PAIR_AGAIN,
-                bannerFor(state).pairAgain,
-            )
-        }
-    }
-
-    @Test
-    fun `a link the app is still retrying offers no pair-again control`() {
-        for (state in listOf(
-            ConnectionState.OFFLINE,
-            ConnectionState.CONNECTING,
-            ConnectionState.RECONNECTING,
-        )) {
-            assertEquals(
-                "$state offers a pair-again control. Its remedy is to WAIT -- the link comes back " +
-                    "on its own -- and a control offered here sends a user through a destructive " +
-                    "re-pair for a dropped connection",
-                "",
-                bannerFor(state).pairAgain,
-            )
-        }
-    }
-
-    @Test
-    fun `a quiet link offers nothing at all`() {
-        val banner = StatusBanner.of(
-            connection = ConnectionBanner.of(ConnectionState.ONLINE),
-            freshness = null,
-            staleNotice = "",
-        )
-
-        assertEquals(
-            "a healthy phone carries a pairing control in the place its warnings go",
-            "",
-            banner.pairAgain,
-        )
-        assertTrue(banner.silent)
-    }
-
-    @Test
-    fun `the control is not a fourth line of the banner`() {
-        val banner = bannerFor(ConnectionState.RELAY_UNTRUSTED)
-
-        assertFalse(
-            "the control's words were folded into `lines`, so a view that draws one TextView per " +
-                "line renders the button as a sentence -- prose again, one level down",
-            banner.lines.contains(StatusBanner.PAIR_AGAIN),
-        )
-        assertTrue("a banner offering a control has nothing to say", banner.lines.isNotEmpty())
-    }
-
-    @Test
-    fun `the empty banner offers no control`() {
-        assertEquals("", StatusBanner.NONE.pairAgain)
-    }
-
-    // ---- a terminal link stops the app promising ---------------------------
-
-    @Test
-    fun `a terminal link carries its own line alone`() {
-        val banner = bannerFor(ConnectionState.RELAY_UNTRUSTED)
-
-        assertEquals(
-            "a link that has STOPPED RETRYING still carries \"$holedRoster\" and " +
-                "\"$silentMachine\" -- two promises of arrival under a transport that will never " +
-                "deliver another byte. That is \"a spinner is a promise\", in words, and nothing " +
-                "read `terminal` to end it",
-            listOf(ConnectionBanner.of(ConnectionState.RELAY_UNTRUSTED).text),
-            banner.lines,
-        )
-    }
-
-    @Test
-    fun `every terminal state suppresses the waiting facts and none of the others do`() {
-        for (state in ConnectionState.entries) {
-            val lines = bannerFor(state).lines
-            if (state.isTerminal) {
-                assertEquals(
-                    "$state has stopped retrying and the banner still carries a fact that says " +
-                        "\"yet\"",
-                    1,
-                    lines.size,
-                )
-            } else if (state != ConnectionState.ONLINE) {
-                assertEquals(
-                    "$state is a link the app is still working on, and the machine's own clock " +
-                        "and the roster's completeness were suppressed anyway -- the fix " +
-                        "swallowed two facts it was not about",
-                    3,
-                    lines.size,
-                )
-            }
-        }
-    }
-
-    @Test
-    fun `an online link still reports a silent machine and a holed roster`() {
-        // ADR-007 D9's adversary answers every poll and withholds the frames, so ONLINE beside a
-        // silent machine is the NORMAL pairing. ONLINE is not terminal and must not be swept up.
-        val banner = bannerFor(ConnectionState.ONLINE)
-
-        assertEquals(listOf(silentMachine, holedRoster), banner.lines)
     }
 
     // ---- NEEDS_LEASE offers the take-control press --------------------------

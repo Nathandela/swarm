@@ -3,16 +3,10 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import dev.swarm.phone.ui.StatusBanner
-import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.TabItem
-import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.grainOverlay
-import dev.swarm.phone.ui.kit.readOnlyNote
 import dev.swarm.phone.ui.kit.tabBar
 
 /**
@@ -50,7 +44,8 @@ object ScaffoldTag {
     const val TABS = "scaffold.tabs"
 
     /**
-     * agents-tracker-e6mi: what the app says about its link, above the destination.
+     * agents-tracker-e6mi, as replaced by agents-tracker-nx44.2: the app's sync chrome, above the
+     * destination.
      *
      * IT IS THE SCAFFOLD'S FOR THE TAB BAR'S OWN REASON. PB-APP-8's offline/reconnecting/stale
      * states and PB-APP-11's freshness verdict were written to a line inside the inbox's column,
@@ -58,30 +53,23 @@ object ScaffoldTag {
      * while the user was on Machines, Activity, Settings or inside a session changed nothing on
      * screen. A warning that belongs to one of four destinations is a warning the other three do
      * not have, which is the sentence this file already spends on the bar.
-     */
-    const val BANNER = "scaffold.banner"
-
-    /** One fact on the banner. Three of them are three lines, never one sentence. */
-    const val BANNER_LINE = "scaffold.banner.line"
-
-    /**
-     * The banner's one CONTROL, which is a different thing from a line (agents-tracker-agre).
      *
-     * IT HAS ITS OWN TAG BECAUSE IT IS NOT A FACT. [BANNER_LINE] names the sentences a reader
-     * reads; this names the thing a finger presses, and a test that found either under one tag
-     * could assert the remedy was "on screen" while it was drawn as a fourth paragraph -- which is
-     * precisely the defect the control exists to end.
+     * WHAT IT HOLDS CHANGED AND WHERE IT IS DID NOT. It used to be a stack of up to four sentences
+     * drawn for every state that had anything at all to say; it is now [syncStatusView] -- the
+     * opaque strip a BROKEN link escalates to, and the detail a tap opens -- while the ordinary
+     * report moved into the nav row's own pill. The slot is still above the content and still
+     * outside its scroll, for the reasons this file has always given.
      */
-    const val BANNER_ACTION = "scaffold.banner.action"
+    const val STATUS = "scaffold.status"
 
     /**
-     * The parts whose ON-SCREEN ORDER is the recorded composition: the banner, the content, then
-     * the bar. A tab bar that scrolled with the content would be a different screen, which is the
-     * assertion `PhoneScaffoldViewTest` inherited from the inbox's suite along with the bar -- and
-     * a banner UNDER the content is a warning below the fold, which is the same defect at the
+     * The parts whose ON-SCREEN ORDER is the recorded composition: the status chrome, the content,
+     * then the bar. A tab bar that scrolled with the content would be a different screen, which is
+     * the assertion `PhoneScaffoldViewTest` inherited from the inbox's suite along with the bar --
+     * and a strip UNDER the content is a warning below the fold, which is the same defect at the
      * other end of the column.
      */
-    val COMPOSITION: Set<String> = setOf(BANNER, CONTENT, TABS)
+    val COMPOSITION: Set<String> = setOf(STATUS, CONTENT, TABS)
 }
 
 /**
@@ -133,11 +121,11 @@ enum class Destination(val label: String) {
  *  was the only screen: it answers `label == "Inbox"` for every tab list it builds, which on the
  *  other three destinations would tell a user standing on Machines that they are in the Inbox.
  * @param onSelectDestination the destination a tapped tab names.
- * @param banner what the app says about its link, drawn above [content] and OUTSIDE its scroll, or
- *  null for a caller with nothing to say. It is a view for [content]'s reason -- what it says
+ * @param status the sync chrome ([syncStatusView]), drawn above [content] and OUTSIDE its scroll,
+ *  or null for a caller with nothing to say. It is a view for [content]'s reason -- what it says
  *  changes on the surface's clock and the scaffold is rebuilt on the bar's, so a scaffold that
  *  built one would re-parent the destination under whoever is using it. Being outside the scroll
- *  is the whole of the placement: a banner inside it scrolls away under a long journal, which is
+ *  is the whole of the placement: a strip inside it scrolls away under a long journal, which is
  *  the same disappearance this slot exists to end, in a slower form.
  */
 fun phoneScaffoldView(
@@ -146,7 +134,7 @@ fun phoneScaffoldView(
     tabs: List<InboxTab>,
     destination: Destination,
     onSelectDestination: (Destination) -> Unit,
-    banner: View? = null,
+    status: View? = null,
 ): View {
     val scroll = ScrollView(context).apply {
         tag = ScaffoldTag.CONTENT
@@ -208,7 +196,7 @@ fun phoneScaffoldView(
         // FIRST, AND ABOVE THE SCROLL. Both halves are the requirement: above, because a warning
         // under the destination is a warning under the fold; outside the scroll, because one
         // inside it leaves the screen as soon as the user reads past it.
-        banner?.let { addView(it.apply { foreground = grainOverlay(context) }) }
+        status?.let { addView(it.apply { foreground = grainOverlay(context) }) }
         addView(scroll)
         addView(
             tabBar(
@@ -232,88 +220,6 @@ fun phoneScaffoldView(
         )
     }
 }
-
-/**
- * The banner as a view: one line per fact the phone has to report, and nothing when it has none.
- *
- * THE LINES ARE THE MODEL'S AND THE ORDER IS TOO. [StatusBanner.lines] drops the facts with
- * nothing to say and puts the rest outward from the phone -- link, machine, list -- so this
- * composes what it is handed and decides neither. A view that assembled its own would be free to
- * re-run them together, which is the defect this whole change is about.
- *
- * THE COMPONENT IS `readOnlyNote` AND IT IS A REUSE RATHER THAN A NEAR MISS. The design's own type
- * register (substrate-components.md §7) puts the read-only note and the STALE NOTE in one cell --
- * "12 / 11.5 (ro-note, stale note, banner meta, cmdline, settings sublabel) takes `Body.Secondary`"
- * -- so the two are the same type role by the design's own assignment, not by a resemblance
- * noticed here. Building a second factory painting the same style would be the copy §2's reuse
- * rule exists to prevent, and it would need a derivation row that does not exist: the table's row 2
- * is the PUSH banner, an overlay with a motion budget and a tap target, which this is not.
- *
- * IT IS NOT ROW 2's BANNER AND MUST NOT ACQUIRE ITS SURFACE. That row is one of the two motions
- * ADR-007 B134 keeps -- it translates in, auto-dismisses and opens the approval sheet. This is
- * persistent chrome that says what is true right now and goes away when it stops being true; a
- * fill, a border and an entry animation would make a standing condition look like an event that
- * has just arrived.
- *
- * THE ONE CONTROL IS DRAWN LAST AND ONLY WHEN THE MODEL OFFERS ONE (agents-tracker-agre). PB-APP-10
- * asks for "an explicit re-pair PROMPT, not a failure loop", and a prompt is something a person can
- * press: a handset the transport has permanently refused reads "Pair this phone again" and, until
- * this control, had nothing on screen to do it with. [StatusBanner.pairAgain] decides whether it is
- * owed and what it reads; where it leads is the surface's, for [content]'s reason -- navigation is
- * not something a composition can know.
- *
- * @param onPairAgain what [StatusBanner.pairAgain]'s control does. It is defaulted so the suites
- *  that build a banner from three facts alone are unaffected; those banners offer no control, so
- *  the default is never installed on anything.
- */
-fun statusBannerView(
-    context: Context,
-    banner: StatusBanner,
-    onPairAgain: () -> Unit = {},
-): View =
-    LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-        tag = ScaffoldTag.BANNER
-        // `capped = true` IS THE SLOT'S OWN FACT AND NOT THE COMPONENT'S (agents-tracker-ksvb.3).
-        // This banner is the one `readOnlyNote` in the app drawn OUTSIDE a scroll, so a sentence
-        // that wraps does not cost its own height -- it pushes the destination, on all four tabs,
-        // under a user who is reading something else. Three facts wrapping to four lines each is
-        // a third of a handset. Two lines and the platform's mark bound that; the same component
-        // under a terminal well still wraps, because there it is prose in a column that scrolls.
-        banner.lines.forEach { line ->
-            addView(
-                readOnlyNote(context, line, capped = true).apply { tag = ScaffoldTag.BANNER_LINE },
-            )
-        }
-        // `CtaKind.MORE` IS THE NEUTRAL RULE AND THAT IS THE RIGHT ONE HERE. The press approves
-        // nothing and destroys nothing -- it opens the screen this banner's sentence sends the user
-        // to -- and `.a2-ok` on a warning would read as the app recommending the act.
-        if (banner.pairAgain.isNotEmpty()) {
-            addView(
-                ctaButton(context, banner.pairAgain, CtaKind.MORE).apply {
-                    tag = ScaffoldTag.BANNER_ACTION
-                    setOnClickListener { onPairAgain() }
-                    // A `TextView` ANNOUNCES ITSELF AS TEXT, which on this banner is the whole
-                    // distinction being drawn: three of these views ARE text, and a screen reader
-                    // that heard a fourth sentence would meet the same defect the sighted user
-                    // just stopped meeting. `pairOnlyView` sets the role at the click for the same
-                    // reason -- the kit has no click to hang it on.
-                    setAccessibilityDelegate(
-                        object : View.AccessibilityDelegate() {
-                            override fun onInitializeAccessibilityNodeInfo(
-                                host: View,
-                                info: AccessibilityNodeInfo,
-                            ) {
-                                super.onInitializeAccessibilityNodeInfo(host, info)
-                                info.className = Button::class.java.name
-                            }
-                        },
-                    )
-                },
-            )
-        }
-    }
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 

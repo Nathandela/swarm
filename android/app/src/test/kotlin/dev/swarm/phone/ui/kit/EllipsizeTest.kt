@@ -141,10 +141,4 @@ class EllipsizeTest {
         assertWrapping("row 22's note under a well", readOnlyNote(context, long))
     }
 
-    // ---- the one in between ------------------------------------------------
-
-    @Test
-    fun `the capped note stops at two lines so it cannot push the app down`() {
-        assertClamped("row 22's note, capped", readOnlyNote(context, long, capped = true), 2)
-    }
 }

@@ -98,6 +98,10 @@ object InboxTag {
  *  around this view because the alternative is a split screen -- an inbox in the top half and the
  *  old flat list in the bottom -- which would read as a design decision. Null is the finished
  *  shape, and every test below passes null.
+ * @param status the sync mark for the nav row, or null while the phone has nothing to report
+ *  (agents-tracker-nx44.2). It is a view the SURFACE owns, on the scaffold slot's own terms: what
+ *  it says changes on the surface's clock and this screen is rebuilt on its model's, so a screen
+ *  that built one would rebuild the mark under whoever is pressing it.
  */
 fun triageInboxView(
     context: Context,
@@ -106,6 +110,7 @@ fun triageInboxView(
     onSelectScope: (String?) -> Unit,
     promoted: Set<String> = emptySet(),
     below: View? = null,
+    status: View? = null,
 ): View {
     val content = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -118,7 +123,7 @@ fun triageInboxView(
     }
 
     content.addView(
-        navHeader(context, screen.title, screen.live).apply { tag = InboxTag.NAV },
+        navHeader(context, screen.title, screen.live, status).apply { tag = InboxTag.NAV },
     )
     content.addView(
         chipRow(context).apply {
