@@ -237,6 +237,15 @@ type Server struct {
 	// severControl) and the re-check (under ctlMu) cross lock domains.
 	severGen atomic.Uint64
 
+	// remoteControlledFn is the source of SessionView.RemoteControlled: the assembly
+	// registers the REMOTE-tier Server's IsControlled here on the OWNER-tier Server, so
+	// an owner's roster row reports when a paired device holds the lease. Unset (no
+	// remote listener configured) means no row is ever stamped.
+	//
+	// An atomic pointer, not a plain field: the setter runs at assembly while the
+	// accept loop is already live, and stampView reads it from every serving goroutine.
+	remoteControlledFn atomic.Pointer[controlledFunc]
+
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
 	leases map[string]*sessionLease // keyed by local session id
@@ -438,10 +447,14 @@ func (s *Server) fanoutLoop() {
 // endpoint id — and therefore its namespaced session id — differs there.
 func (s *Server) distribute(m persist.Meta) {
 	group := status.Derive(m.Status)
+	// Sampled ONCE per event, not per subscriber: the controller lease is a property
+	// of the session, so every subscriber's row must agree, and the shared-marshal
+	// fast path below depends on the two branches stamping the same value.
+	controlled := s.remoteControlled(m.ID)
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled)})
 	}
 
 	s.subMu.Lock()
@@ -449,7 +462,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -549,6 +562,31 @@ func (s *Server) IsControlled(local string) bool {
 	defer s.mu.Unlock()
 	ls := s.leases[local]
 	return ls != nil && ls.controller != nil
+}
+
+// controlledFunc reports whether a session (by LOCAL id) currently has a controller
+// lease. Named so the setter can hand it to an atomic.Pointer.
+type controlledFunc func(local string) bool
+
+// SetRemoteControlledFunc registers the source of SessionView.RemoteControlled.
+// Production wires the remote-tier Server's IsControlled onto the owner-tier Server
+// (skeleton.serve), so an owner's roster shows which sessions a paired device is
+// driving. nil clears it; unset, no row is ever stamped.
+func (s *Server) SetRemoteControlledFunc(fn func(local string) bool) {
+	if fn == nil {
+		s.remoteControlledFn.Store(nil)
+		return
+	}
+	f := controlledFunc(fn)
+	s.remoteControlledFn.Store(&f)
+}
+
+// remoteControlled answers the registered source, false when none is registered.
+func (s *Server) remoteControlled(local string) bool {
+	if p := s.remoteControlledFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return false
 }
 
 // attach installs cc as the controller of local at a new, higher generation (S2),
@@ -2499,14 +2537,14 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return stampView(cc.endpointID, m, group)
+	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID))
 }
 
 // stampView builds one general-view row (V-4) for the given endpoint id. It is
 // a free function (not just a *clientConn method) so distribute can stamp a
 // SHARED view once for every subscriber on a stable endpoint id (R3.3.1)
 // without needing a specific connection.
-func stampView(endpointID string, m persist.Meta, group status.Group) *SessionView {
+func stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled bool) *SessionView {
 	return &SessionView{
 		EndpointID:   endpointID,
 		ID:           NamespacedID(endpointID, m.ID),
@@ -2525,6 +2563,9 @@ func stampView(endpointID string, m persist.Meta, group status.Group) *SessionVi
 		// snapshot and the subscribe stream show where a session came from.
 		SpawnedFrom: m.SpawnedFrom,
 		SpawnIntent: m.SpawnIntent,
+		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
+		// by the caller at stamp time.
+		RemoteControlled: remoteControlled,
 	}
 }
 

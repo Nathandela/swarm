@@ -626,6 +626,12 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
 		gs.Render(padRight(statusToken(g), colStatus)) +
 		styleDim.Render(tail)
+	// The remote-control marker is amber, not dim, and rides OUTSIDE the dim tail:
+	// it says someone else has the keyboard right now, which is the one thing on this
+	// row the owner must not have to hunt for. Absent unless the daemon stamped it.
+	if s.RemoteControlled {
+		fields += styleAmber.Render(" " + remoteControlMarker)
+	}
 
 	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
 	// selected row, so a mid-confirm regroup/removal cannot paint the prompt onto a
@@ -662,6 +668,13 @@ func confirmPrompt(s protocol.SessionView) string {
 	}
 	return "delete? y/n"
 }
+
+// remoteControlMarker names the surface that currently holds the session's
+// controller lease. A bare word, not a glyph: the roster is read at a glance and a
+// decorative symbol here would be one more thing to learn. Device NAME display is
+// deliberately out of scope -- the daemon answers a bare bool, and naming the device
+// needs a deviceID accessor plus a registry lookup that does not exist yet.
+const remoteControlMarker = "phone control"
 
 // lineageBadge is the row's spawn-lineage decoration (ADR-010 D4): where a spawned
 // session came from, and whether it spawned any session currently on the roster.

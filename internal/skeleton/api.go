@@ -120,6 +120,15 @@ type coreAPI struct {
 	severMu                 sync.Mutex
 	onRemoteControlDisabled func()
 
+	// controlledFn is the roster poller's source for a session's REMOTE controller
+	// lease (the remote Server's IsControlled). It feeds the poller's diff key, not the
+	// wire: the protocol Server stamps the SessionView from its own registered source.
+	// Unset (no remote listener) reports false for every session.
+	//
+	// An atomic pointer, not a plain field: the poller goroutine starts in newCoreAPI,
+	// BEFORE the assembly can build the remote Server and wire this.
+	controlledFn atomic.Pointer[controlledFunc]
+
 	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
 	// it so the owner controller and the future remote peek can both observe one
 	// single-consumer shim session over a SINGLE upstream. Wired at construction.
@@ -895,18 +904,50 @@ func (a *coreAPI) close() {
 	a.wg.Wait()
 }
 
-// rosterSnap is the per-session change key the poller diffs on: the status the
-// board groups by PLUS the display label, so a rename (which changes only the name)
-// fans out live just like a status change. Both fields are comparable, so the whole
-// key compares with ==.
-type rosterSnap struct {
-	status status.Status
-	name   string
+// controlledFunc reports whether a session (by LOCAL id) currently has a REMOTE
+// controller lease. Named so the setter can hand it to an atomic.Pointer.
+type controlledFunc func(local string) bool
+
+// SetRemoteControlledFunc registers the roster poller's remote-control source. The
+// assembly wires it to the remote Server's IsControlled, beside the kill-switch
+// observer. nil clears it; unset, no session is ever reported controlled.
+func (a *coreAPI) SetRemoteControlledFunc(fn func(local string) bool) {
+	if fn == nil {
+		a.controlledFn.Store(nil)
+		return
+	}
+	f := controlledFunc(fn)
+	a.controlledFn.Store(&f)
 }
 
-// watch samples the roster and emits a meta whenever a session's status OR display
-// label changes (the core exposes no push source, so changes are observed by
-// polling). It mirrors protocol.FromDaemon's watcher: dedup by status+name, retry a
+// isControlled answers the registered source, false when none is registered.
+func (a *coreAPI) isControlled(local string) bool {
+	if p := a.controlledFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return false
+}
+
+// rosterSnap is the per-session change key the poller diffs on: the status the
+// board groups by, the display label (so a rename, which changes only the name,
+// fans out live just like a status change), and whether a paired device holds the
+// session's controller lease. All three fields are comparable, so the whole key
+// compares with ==.
+//
+// controlled is the one key member that is NOT derived from persist.Meta: a remote
+// take_control changes nothing the core persists, so without it in the key a control
+// flip alone would fan out no event at all and the roster badge would appear only
+// when some unrelated status change happened to follow (ADR-008's 1s roster bound
+// would silently fail for that field).
+type rosterSnap struct {
+	status     status.Status
+	name       string
+	controlled bool
+}
+
+// watch samples the roster and emits a meta whenever a session's status, display
+// label OR remote-control state changes (the core exposes no push source, so changes
+// are observed by polling). It mirrors protocol.FromDaemon's watcher: dedup, retry a
 // momentarily-full queue on the next poll (never drop a change), and prune vanished
 // sessions so the seen map stays bounded.
 func (a *coreAPI) watch() {
@@ -919,7 +960,7 @@ func (a *coreAPI) watch() {
 		present := map[string]struct{}{}
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
-			cur := rosterSnap{status: m.Status, name: m.Name}
+			cur := rosterSnap{status: m.Status, name: m.Name, controlled: a.isControlled(m.ID)}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

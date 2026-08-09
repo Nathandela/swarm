@@ -169,6 +169,17 @@ type SessionView struct {
 	// session's row serializes exactly as it did before the fields existed.
 	SpawnedFrom string `json:"spawned_from,omitempty"`
 	SpawnIntent string `json:"spawn_intent,omitempty"`
+	// RemoteControlled reports that a PAIRED DEVICE currently holds this session's
+	// controller lease (the remote-tier Server's IsControlled, R1.3.7). It is the
+	// board's honest answer to "who has the keyboard": a TUI attach and a phone
+	// take_control compete for the SAME single shim subscriber slot, so the two are
+	// mutually exclusive and no live in-attach indicator is possible -- the roster
+	// row is where the state can be shown at all.
+	//
+	// omitempty: an uncontrolled row serializes exactly as it did before the field
+	// existed, so the released 0.8.0 gateway -- which relays these frames verbatim
+	// and is untouched by this change -- sees no new bytes.
+	RemoteControlled bool `json:"remote_controlled,omitempty"`
 }
 
 // DeviceView is one paired-device row (R-DEV.1), carried on the device_list

@@ -315,6 +315,16 @@ func Serve(cfg Config) (*Daemon, error) {
 		// input. Wire the coreAPI kill-switch setter to the remote Server's teardown seam. Set
 		// before close(d.ready) below, so no served op can read the observer before it is wired.
 		d.api.SetRemoteControlObserver(rs.SeverAllRemoteControl)
+		// nx44.7: the owner's roster shows which sessions a PAIRED DEVICE is driving.
+		// The lease lives on the remote-tier Server (a phone's take_control registers
+		// through its attach path), so both readers source it from rs, not d.srv --
+		// d.srv's own leases are the owner's attaches, which are never "remote".
+		// Two readers because they answer different questions: the protocol Server
+		// stamps the value onto every SessionView it hands out, while the roster poller
+		// needs it in its diff key or a control flip -- which changes nothing the core
+		// persists -- would fan out no event at all.
+		d.srv.SetRemoteControlledFunc(rs.IsControlled)
+		d.api.SetRemoteControlledFunc(rs.IsControlled)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

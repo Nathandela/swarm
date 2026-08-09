@@ -160,6 +160,7 @@ alongside the group.
 | `summary`       | string          | V-4 one-line last-output summary                              |
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
+| `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
 
 ## The `LaunchReq` message
 
