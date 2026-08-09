@@ -212,6 +212,137 @@ var s22bUnimplementedRules = map[string]s22bUnimplementedRule{
 	},
 }
 
+// ---------------------------------------------------------------------------
+// THE RUNG TABLE: where a style's SIZE comes from since ADR-012 phase 2 (2026-08-09).
+// ---------------------------------------------------------------------------
+//
+// Until the owner ruled R1, every number in type.xml was read out of the CSS rule its style cites,
+// size included, and that is what this file's header still says about weight, tracking, family and
+// leading. R1 consolidated twelve sizes onto FIVE RUNGS, which is a decision about this app's own
+// hierarchy and therefore not a thing any CSS rule can state. So the size half of the join moves to
+// the record that decides it: ADR-012 phase 2's rung table, parsed here.
+//
+// THE JOIN IS NOT WEAKER FOR MOVING, and this is the point of parsing the ADR rather than writing
+// the sixteen sp values into a map below. Three things are checked at once:
+//
+//   - type.xml's declared size is the rung's, so a size edited in the resource file disagrees with
+//     the record;
+//   - the table's own `Design px` column is the CSS rule's, so a design that moves a rule leaves
+//     the table visibly stale instead of quietly wrong;
+//   - the table's `Move` column is the arithmetic difference, and every non-zero move cites the
+//     ruling that authorized it -- so a size that moved without a ruling behind it fails.
+//
+// The alternative was a table of numbers in this test compared against a resource file, which is
+// EXPECTED_DARK_COLORS: a gate certifying that the app renders whatever the app says.
+
+// s22bRungTableHeader is the first cell of the rung table's header row, and it is required: a
+// reader that cannot find the table would report "no style is on a rung" for a document that was
+// merely reorganised, and every assertion built on it would iterate zero times.
+const s22bRungTableHeader = "Ladder style"
+
+// s22bRung is one row of that table.
+type s22bRung struct {
+	Style    string  // "Display.NavTitle" -- the suffix, so the resource name is derivable
+	Origin   string  // the CSS selector the style cites, so the row and the citation must agree
+	DesignPx float64 // what the cited rule states, asserted against the design source
+	Rung     string  // "display", "title", "body", "code", "micro"
+	Sp       float64 // what the app renders
+	Move     float64 // Sp - DesignPx, stated by the row and checked
+	Ruling   string  // "R1", "R3", ... or "" on a row that does not move
+	Line     int
+}
+
+var (
+	// | `Display.NavTitle` | `.pnav .big` | 27 | display | 22 | -5 (R3) |
+	s22bRungStyleRe  = regexp.MustCompile("^`([A-Za-z]+\\.[A-Za-z]+)`$")
+	s22bRungOriginRe = regexp.MustCompile("^`(.+)`$")
+	s22bRungMoveRe   = regexp.MustCompile(`^([+-]?[0-9.]+)(?: \((R[0-9])\))?$`)
+)
+
+// s22bRungTable reads ADR-012 phase 2's rung table, keyed by the style suffix.
+func s22bRungTable(t *testing.T) map[string]s22bRung {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), filepath.FromSlash(s22bTypeConsolidationADR))
+	raw := readFileOrFail(t, path, "ADR-012 phase 2")
+
+	out := map[string]s22bRung{}
+	header := false
+	for i, line := range strings.Split(raw, "\n") {
+		cells := s22bTableCells(line)
+		if len(cells) < 6 {
+			continue
+		}
+		if cells[0] == s22bRungTableHeader {
+			header = true
+			continue
+		}
+		style := s22bRungStyleRe.FindStringSubmatch(cells[0])
+		if style == nil {
+			continue
+		}
+		row := s22bRung{Style: style[1], Line: i + 1}
+		origin := s22bRungOriginRe.FindStringSubmatch(cells[1])
+		if origin == nil {
+			t.Errorf("ADR-012 phase 2: %s:%d puts `%s` on a rung and states origin %q, which is not "+
+				"a `selector` in backticks. The row's whole authority is that it names the same "+
+				"rule type.xml's citation names.", mustRel(t, path), row.Line, row.Style, cells[1])
+			continue
+		}
+		row.Origin = origin[1]
+		var err error
+		if row.DesignPx, err = strconv.ParseFloat(cells[2], 64); err != nil {
+			t.Errorf("ADR-012 phase 2: %s:%d states design px %q for `%s`, which is not a number",
+				mustRel(t, path), row.Line, cells[2], row.Style)
+			continue
+		}
+		row.Rung = cells[3]
+		if row.Rung == "" {
+			t.Errorf("ADR-012 phase 2: %s:%d names no rung for `%s`", mustRel(t, path), row.Line, row.Style)
+			continue
+		}
+		if row.Sp, err = strconv.ParseFloat(cells[4], 64); err != nil {
+			t.Errorf("ADR-012 phase 2: %s:%d states sp %q for `%s`, which is not a number",
+				mustRel(t, path), row.Line, cells[4], row.Style)
+			continue
+		}
+		move := s22bRungMoveRe.FindStringSubmatch(cells[5])
+		if move == nil {
+			t.Errorf("ADR-012 phase 2: %s:%d states move %q for `%s`, and a move is a signed number "+
+				"optionally followed by the ruling that authorized it, as `+0.5 (R1)`",
+				mustRel(t, path), row.Line, cells[5], row.Style)
+			continue
+		}
+		if row.Move, err = strconv.ParseFloat(move[1], 64); err != nil {
+			t.Errorf("ADR-012 phase 2: %s:%d states move %q for `%s`, which is not a number",
+				mustRel(t, path), row.Line, move[1], row.Style)
+			continue
+		}
+		row.Ruling = move[2]
+		if first, dup := out[row.Style]; dup {
+			t.Errorf("ADR-012 phase 2: %s puts `%s` on a rung twice, at lines %d and %d",
+				mustRel(t, path), row.Style, first.Line, row.Line)
+			continue
+		}
+		out[row.Style] = row
+	}
+	if !header {
+		t.Fatalf("ADR-012 phase 2: %s has no table whose first column is %q. That table is where a "+
+			"style's SIZE is decided since R1, and a reader that cannot find it reports that no "+
+			"style has a rung -- which passes, saying nothing.", mustRel(t, path), s22bRungTableHeader)
+	}
+	if len(out) == 0 {
+		t.Fatalf("ADR-012 phase 2: %s's %q table has no rows the reader recognises",
+			mustRel(t, path), s22bRungTableHeader)
+	}
+	return out
+}
+
+// s22bRungFor is the rung a named style takes, or false when the record does not put it on one.
+func s22bRungFor(rungs map[string]s22bRung, styleName string) (s22bRung, bool) {
+	row, ok := rungs[strings.TrimPrefix(styleName, "TextAppearance.Swarm.")]
+	return row, ok
+}
+
 // s22bFontFamilyWeightRe reads the weights a bundled family answers, out of the family resource.
 var s22bFontFamilyWeightRe = regexp.MustCompile(`android:fontWeight="([0-9]+)"`)
 
@@ -314,6 +445,18 @@ type s22bTypeSpec struct {
 	TrackingEm float64
 	Family     string  // the --p-* token name, never the stack
 	LineHeight float64 // 0 when the rule declares none
+
+	// RungSp is the size ADR-012 phase 2 puts this style at, or 0 where no rung applies.
+	//
+	// IT IS A SEPARATE FIELD RATHER THAN AN OVERWRITE OF SizePx, because the two are different
+	// claims and both are asserted: SizePx is what the design draws and RungSp is what the app
+	// renders, and the rung table's `Move` column is the difference between them, named and
+	// authorized. Overwriting would leave the comparison unable to say which of the two a style
+	// disagrees with.
+	//
+	// The derived class (`Display.SAS`) leaves it 0: it is not on the ladder, so its size is still
+	// its own document row's, and the arm below falls back to SizePx unchanged.
+	RungSp float64
 }
 
 // s22bReadTypeSpec resolves one rule's typography, inheriting what CSS inherits.
@@ -464,6 +607,7 @@ func s22bDesignTypeScale(t *testing.T) map[string]s22bTypeSpec {
 func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 	design := s22bDesignTypeScale(t)
 	styles := s22bStyles(t)
+	rungs := s22bRungTable(t)
 
 	// PB-DS-2 counts 18 TRANSCRIBED styles, and the count is asserted on BOTH sides: a design that
 	// grew a 19th rule and a type.xml that grew a 19th style are different failures with the same
@@ -540,6 +684,20 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 		}
 		claimed[style.Origin] = name
 
+		// THE SIZE HALF OF THE JOIN COMES FROM THE RUNG TABLE (ADR-012 phase 2, ruling R1). A
+		// transcribed style with no row there has a size on nobody's authority, which is the same
+		// defect as a style with no origin -- so it is reported here rather than falling back to
+		// the CSS px and passing under the old regime.
+		rung, ruled := s22bRungFor(rungs, name)
+		if !ruled {
+			t.Errorf("PB-DS-2: %s:%d style %q is on no rung. %s's rung table is where a style's "+
+				"SIZE is decided since ruling R1 consolidated the ladder to five; a style missing "+
+				"from it renders a number that agrees with no record.",
+				mustRel(t, s22bTypePath(t)), style.Line, name, s22bTypeConsolidationADR)
+			continue
+		}
+		spec.RungSp = rung.Sp
+
 		s22bAssertStyleMatches(t, name, "origin `"+style.Origin+"`", style, spec)
 	}
 
@@ -563,6 +721,127 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 			"Each is a rule a screen will otherwise re-specify at its call site, which is the "+
 			"failure mode the requirement's own sentence names.",
 			len(orphan), strings.Join(orphan, "\n\t"))
+	}
+}
+
+// TestPBDS2_TheLadderIsTheFiveRuledRungs is ADR-012 phase 2's own criterion, executed.
+//
+// The test above asserts that each style declares the size its rung states. This one asserts that
+// the TABLE is honest: that it covers exactly the transcribed styles, that its `Design px` column
+// is still what the design draws, that its arithmetic adds up, that no size moved without a ruling
+// naming it, and that what came out is a ladder rather than a ramp with two fewer steps.
+//
+// THE RUNG COUNT IS ASSERTED AS A PROPERTY AND NOT AS A LIST, which is the same choice
+// DesignScaleResolutionTest makes about the spacing grid and for the same reason: five numbers
+// written here would be five numbers agreeing with five numbers one file over. What R1 actually
+// bought is separation -- "half-steps read as inconsistency, not hierarchy" -- so separation is
+// what is checked.
+func TestPBDS2_TheLadderIsTheFiveRuledRungs(t *testing.T) {
+	rungs := s22bRungTable(t)
+	design := s22bDesignTypeScale(t)
+	styles := s22bStyles(t)
+	classified := s22bClassifiedStyles(t)
+	adr := readFileOrFail(t,
+		filepath.Join(repoRoot(t), filepath.FromSlash(s22bTypeConsolidationADR)), "ADR-012 phase 2")
+
+	// 1. THE TABLE COVERS THE TRANSCRIBED CLASS AND NOTHING ELSE. A row for a style that does not
+	//    exist is a rung nobody stands on; a derived style on a rung would put `Display.SAS`'s 34
+	//    inside a ladder the ruling drew five rungs for.
+	for _, style := range sortedKeys(rungs) {
+		row := rungs[style]
+		name := "TextAppearance.Swarm." + style
+		got, exists := styles[name]
+		if !exists {
+			kind := "no style at all"
+			if c, ok := classified[name]; ok {
+				kind = "a `" + c.Kind + ":` style, which is not on the ladder"
+			}
+			t.Errorf("ADR-012 phase 2: %s:%d puts `%s` on the %s rung and type.xml has %s",
+				s22bTypeConsolidationADR, row.Line, style, row.Rung, kind)
+			continue
+		}
+		if got.Origin != row.Origin {
+			t.Errorf("ADR-012 phase 2: %s:%d puts `%s` on a rung as origin `%s`, and type.xml cites "+
+				"`%s`. The row and the citation must name one rule, or the table is describing a "+
+				"style the file does not have.",
+				s22bTypeConsolidationADR, row.Line, style, row.Origin, got.Origin)
+			continue
+		}
+
+		// 2. THE `Design px` COLUMN IS THE DESIGN'S. This is what keeps the consolidation from
+		//    becoming a place a design change can hide: move a CSS rule and the table is stale
+		//    here rather than silently authorizing a size it was never compared against.
+		spec, drawn := design[row.Origin]
+		if !drawn {
+			t.Errorf("ADR-012 phase 2: %s:%d puts `%s` on a rung against origin `%s`, which the "+
+				"design source declares no text rule for",
+				s22bTypeConsolidationADR, row.Line, style, row.Origin)
+			continue
+		}
+		if row.DesignPx != spec.SizePx {
+			t.Errorf("ADR-012 phase 2: %s:%d records `%s` as %gpx in the design and `%s` is %gpx. "+
+				"The consolidation was ruled against the sizes the design drew; a row that no "+
+				"longer states them is authorizing a move nobody saw.",
+				s22bTypeConsolidationADR, row.Line, style, row.DesignPx, row.Origin, spec.SizePx)
+		}
+
+		// 3. THE ARITHMETIC, AND THE RULING. A move is a stated delta or it is a number in a
+		//    resource file; a non-zero one is authorized by a ruling or it is somebody's taste.
+		if want := row.Sp - row.DesignPx; math.Abs(row.Move-want) > 1e-9 {
+			t.Errorf("ADR-012 phase 2: %s:%d states move %+g for `%s`, and %gsp against %gpx is %+g",
+				s22bTypeConsolidationADR, row.Line, row.Move, style, row.Sp, row.DesignPx, want)
+		}
+		switch {
+		case row.Move == 0 && row.Ruling != "":
+			t.Errorf("ADR-012 phase 2: %s:%d cites %s for `%s` and moves it nowhere. A ruling "+
+				"cited on a row that changes nothing makes the citation decoration.",
+				s22bTypeConsolidationADR, row.Line, row.Ruling, style)
+		case row.Move != 0 && row.Ruling == "":
+			t.Errorf("ADR-012 phase 2: %s:%d moves `%s` by %+g and cites no ruling. Every size in "+
+				"this app is somebody's decision written down; an uncited one is the first that "+
+				"is not.", s22bTypeConsolidationADR, row.Line, style, row.Move)
+		case row.Ruling != "" && !strings.Contains(adr, "— "+row.Ruling+":"):
+			t.Errorf("ADR-012 phase 2: %s:%d moves `%s` on the authority of %s, and this record has "+
+				"no `### P... — %s:` section. Following the citation is what makes it one.",
+				s22bTypeConsolidationADR, row.Line, style, row.Ruling, row.Ruling)
+		}
+	}
+	for _, name := range sortedStyleNames(styles) {
+		if _, ruled := s22bRungFor(rungs, name); !ruled {
+			t.Errorf("ADR-012 phase 2: %s cites `origin: %s` and stands on no rung",
+				name, styles[name].Origin)
+		}
+	}
+
+	// 4. IT IS A LADDER. One sp per rung name, five names, and no two rungs closer than a step a
+	//    reader can perceive -- which is the finding the field test reported and the whole of what
+	//    R1 bought.
+	ladder := map[string]float64{}
+	for _, style := range sortedKeys(rungs) {
+		row := rungs[style]
+		if first, seen := ladder[row.Rung]; seen && first != row.Sp {
+			t.Errorf("ADR-012 phase 2: the `%s` rung is %gsp on one row and %gsp on another. A rung "+
+				"with two sizes is two rungs sharing a name.", row.Rung, first, row.Sp)
+			continue
+		}
+		ladder[row.Rung] = row.Sp
+	}
+	const wantRungs = 5
+	if len(ladder) != wantRungs {
+		t.Errorf("ADR-012 phase 2: the ladder has %d rungs, and ruling R1 chose %d: %v",
+			len(ladder), wantRungs, ladder)
+	}
+	var sizes []float64
+	for _, sp := range ladder {
+		sizes = append(sizes, sp)
+	}
+	sort.Float64s(sizes)
+	for i := 1; i < len(sizes); i++ {
+		if sizes[i]-sizes[i-1] < 1 {
+			t.Errorf("ADR-012 phase 2: the ladder puts %gsp and %gsp within a point of each other. "+
+				"R1's finding was that a half-step reads as an inconsistency rather than as a "+
+				"hierarchy, and re-introducing one is the ramp coming back.", sizes[i-1], sizes[i])
+		}
 	}
 }
 
@@ -595,18 +874,37 @@ func s22bStyleFaults(where string, style s22bStyle, spec s22bTypeSpec) []string 
 
 	// SIZE. sp rather than dp: PB-DS-12's floor is that text scales with the user's setting,
 	// and a design system that ships dp text has decided against accessibility by default.
+	//
+	// WHERE THE NUMBER COMES FROM CHANGED ON 2026-08-09 (ADR-012 phase 2, owner ruling R1). What
+	// this arm said before, and what it compared against, quoted so the move is visible:
+	//
+	//	} else if got != spec.SizePx {
+	//		fault("PB-DS-2: %s is %gsp; the design says %gpx. CSS px in the 386x812 mock is "+
+	//			"Android dp/sp at 1:1 -- there is no scaling factor to explain the difference.",
+	//			where, got, spec.SizePx)
+	//	}
+	//
+	// The CSS px is still read, still asserted, and still the authority for everything else the
+	// rule states -- it is asserted against the rung table's own `Design px` column in
+	// TestPBDS2_TheLadderIsTheFiveRuledRungs. What a style declares is now the RUNG, because R1
+	// consolidated twelve sizes onto five and a rung is a decision about this app's hierarchy
+	// rather than a fact any CSS rule can state.
+	wantSize, sizeSays := spec.SizePx, fmt.Sprintf("the design says %gpx", spec.SizePx)
+	if spec.RungSp != 0 {
+		wantSize = spec.RungSp
+		sizeSays = fmt.Sprintf("ADR-012 phase 2 puts it on the %gsp rung (the design draws %gpx)",
+			spec.RungSp, spec.SizePx)
+	}
 	if raw, ok := style.Items["android:textSize"]; !ok {
-		fault("PB-DS-2: %s declares no android:textSize; the design says %gpx",
-			where, spec.SizePx)
+		fault("PB-DS-2: %s declares no android:textSize; %s", where, sizeSays)
 	} else if !strings.HasSuffix(raw, "sp") {
 		fault("PB-DS-2: %s has android:textSize=%q. Text must be sp: dp text does not respond "+
 			"to the user's font-size setting, and PB-DS-12 makes that a floor.", where, raw)
 	} else if got, err := strconv.ParseFloat(strings.TrimSuffix(raw, "sp"), 64); err != nil {
 		fault("PB-DS-2: %s has android:textSize=%q, which is not a number", where, raw)
-	} else if got != spec.SizePx {
-		fault("PB-DS-2: %s is %gsp; the design says %gpx. CSS px in the 386x812 mock is "+
-			"Android dp/sp at 1:1 -- there is no scaling factor to explain the difference.",
-			where, got, spec.SizePx)
+	} else if got != wantSize {
+		fault("PB-DS-2: %s is %gsp; %s. A size is not this file's to choose: it is the design's "+
+			"rule and the ruled ladder, and this style agrees with neither.", where, got, sizeSays)
 	}
 
 	// WEIGHT. --p-display-wt is 650, which is reachable only because minSdk 33 resolves
@@ -699,18 +997,23 @@ func s22bStyleFaults(where string, style s22bStyle, spec s22bTypeSpec) []string 
 			"declares no line-height at all. An invented leading is a design decision made in an "+
 			"XML file.", where, raw)
 	case leading && !declared:
-		fault("PB-DS-2: %s declares no android:lineHeight; the design says %g x %gpx = %gsp",
-			where, spec.LineHeight, spec.SizePx, spec.LineHeight*spec.SizePx)
+		fault("PB-DS-2: %s declares no android:lineHeight; the design says %g x %gsp = %gsp",
+			where, spec.LineHeight, wantSize, spec.LineHeight*wantSize)
 	case leading:
-		want := spec.LineHeight * spec.SizePx
+		// THE MULTIPLIER IS THE DESIGN'S AND THE SIZE IS THE RUNG'S (ADR-012 phase 2 P6). Leading
+		// is an absolute dimension on Android, so it is the design's ratio times the size the text
+		// actually renders at; multiplying by the CSS px would leave three styles leading a line
+		// they no longer set.
+		want := spec.LineHeight * wantSize
 		if !strings.HasSuffix(raw, "sp") {
 			fault("PB-DS-2: %s has android:lineHeight=%q; it must be sp so leading scales "+
 				"with the text it leads", where, raw)
 		} else if got, err := strconv.ParseFloat(strings.TrimSuffix(raw, "sp"), 64); err != nil {
 			fault("PB-DS-2: %s has android:lineHeight=%q, which is not a number", where, raw)
 		} else if math.Abs(got-want) > 1e-9 {
-			fault("PB-DS-2: %s has line height %gsp; the design says %g x %gpx = %gsp",
-				where, got, spec.LineHeight, spec.SizePx, want)
+			fault("PB-DS-2: %s has line height %gsp; the design's multiplier on the size this "+
+				"style renders at is %g x %gsp = %gsp",
+				where, got, spec.LineHeight, wantSize, want)
 		}
 	}
 	return faults
@@ -1209,6 +1512,89 @@ func TestPBDS2_TheDerivedReadersRefusePerturbedInput(t *testing.T) {
 			t.Errorf("ADR-009 D7: a mono style carrying %s passes the comparison. The decision "+
 				"is then a paragraph the gate cites and never checks.", what)
 		}
+	}
+}
+
+// TestPBDS2_TheRungReadersRefusePerturbedInput is the negative control for ADR-012 phase 2's half
+// of the join: the row reader, and the size arm that reads a rung instead of a design px.
+//
+// IT FEEDS THE REAL FUNCTIONS, in memory, exactly as the derived class's control does. A rung
+// table read by a pattern that matches nothing reports that no style is on a rung, and every
+// assertion built on it iterates zero times and passes.
+func TestPBDS2_TheRungReadersRefusePerturbedInput(t *testing.T) {
+	// 1. The row's own cells. The real row parses; each perturbation is a different way for an
+	//    edit to this record to mean something the gate would otherwise assert.
+	rowAsWritten := "| `Display.NavTitle` | `.pnav .big` | 27 | display | 22 | -5 (R3) |"
+	cells := s22bTableCells(rowAsWritten)
+	if len(cells) != 6 {
+		t.Fatalf("the table reader splits the rung row into %d cells, want 6: %q", len(cells), cells)
+	}
+	if m := s22bRungStyleRe.FindStringSubmatch(cells[0]); m == nil {
+		t.Errorf("the style pattern does not match the record's own spelling %q", cells[0])
+	}
+	if m := s22bRungMoveRe.FindStringSubmatch(cells[5]); m == nil || m[1] != "-5" || m[2] != "R3" {
+		t.Errorf("the move pattern reads %q as %v, want the delta and the ruling separately",
+			cells[5], m)
+	}
+	for _, perturbed := range []string{
+		"-5 R3",       // the ruling unbracketed: a move whose citation is prose
+		"-5 (ruling)", // not a ruling label
+		"minus five",  // not a number
+		"",            // no move stated at all
+	} {
+		if m := s22bRungMoveRe.FindStringSubmatch(perturbed); m != nil {
+			t.Errorf("the move pattern reads %q as a stated move (%v). A pattern this loose "+
+				"accepts a delta nobody wrote and a citation nobody can follow.", perturbed, m[1:])
+		}
+	}
+	if m := s22bRungMoveRe.FindStringSubmatch("0"); m == nil || m[2] != "" {
+		t.Errorf("the move pattern refuses `0`, which is what a style that did not move states")
+	}
+
+	// 2. The size arm. The spec below is a real row -- `.prow .ln` at 12px on the 12.5 body rung --
+	//    and the style is what type.xml has to hold for it. Both directions: the rung passes, the
+	//    design px it used to be compared against now FAILS, which is the whole of the change.
+	spec := s22bTypeSpec{
+		Selector: ".prow .ln", SizePx: 12, Weight: 400, TrackingEm: 0, Family: "--p-font",
+		LineHeight: 1.4, RungSp: 12.5,
+	}
+	onTheRung := map[string]string{
+		"android:textSize":       "12.5sp",
+		"android:textFontWeight": "400",
+		"android:letterSpacing":  "0",
+		"android:fontFamily":     "sans-serif",
+		"android:lineHeight":     "17.5sp", // 1.4 x 12.5, the rung's leading
+	}
+	if faults := s22bStyleFaults("control", s22bStyle{Items: onTheRung}, spec); len(faults) != 0 {
+		t.Errorf("ADR-012 phase 2: a style sitting on its own rung is reported as a fault: %v",
+			faults)
+	}
+	for what, items := range map[string]map[string]string{
+		"the design px it used to declare": {"android:textSize": "12sp"},
+		"a size on no rung at all":         {"android:textSize": "12.25sp"},
+		"the leading computed on the design px rather than the rung": {"android:lineHeight": "16.8sp"},
+	} {
+		perturbed := map[string]string{}
+		for k, v := range onTheRung {
+			perturbed[k] = v
+		}
+		for k, v := range items {
+			perturbed[k] = v
+		}
+		if faults := s22bStyleFaults("control", s22bStyle{Items: perturbed}, spec); len(faults) == 0 {
+			t.Errorf("ADR-012 phase 2: a style carrying %s passes the comparison. The rung table is "+
+				"then a record the gate cites and never reads.", what)
+		}
+	}
+
+	// 3. AND THE FALLBACK ARM. RungSp is 0 on the derived class, which must still be compared
+	//    against its own document row's size -- an arm that read 0 as "no size" would pass
+	//    `Display.SAS` against nothing.
+	offLadder := spec
+	offLadder.RungSp = 0
+	if faults := s22bStyleFaults("control", s22bStyle{Items: onTheRung}, offLadder); len(faults) == 0 {
+		t.Error("ADR-012 phase 2: a style off the ladder passes against a size that is neither its " +
+			"design px nor any rung. The fallback must compare, not abstain.")
 	}
 }
 
