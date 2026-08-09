@@ -68,7 +68,9 @@ import org.robolectric.RobolectricTestRunner
  * screen while every assertion in this file stayed green. What a person sees is the painted box,
  * so every view that paints one is measured against the same floor -- and the fix is the seam the
  * Inbox already proves: `sessionList` insets its cards by `space_12` and the card keeps its own
- * `space_14` inside, which is why a session row reads correctly and a settings row did not.
+ * padding inside -- `space_12` on a session row, rows 11 and 15's `space_14` on a settings or
+ * machine row. The ARRANGEMENT is what a settings row lacked, not the number: an outer step from
+ * the container, the card's own padding kept within it.
  *
  * The exemptions are the app's FURNITURE, and they are named one by one in [fullBleedChrome]
  * rather than inferred from a shape -- an exemption a reader cannot see is how the next full-bleed

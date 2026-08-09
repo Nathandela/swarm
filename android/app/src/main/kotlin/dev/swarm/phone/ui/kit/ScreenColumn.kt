@@ -46,9 +46,10 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
  * The screen's own side air, given to ONE child that carries none: `swarm_space_12`, the step the
  * Inbox's own row container already spends.
  *
- * **IT IS THE OWNER'S RULING OF 2026-08-09 (agents-tracker-nx44.10), AND THE DEFECT IS THAT SEVEN
+ * **IT IS THE OWNER'S RULING OF 2026-08-09 (agents-tracker-nx44.10), AND THE DEFECT IS THAT SIX
  * COMPONENTS OWN THEIR EDGE AND THE REST DO NOT.** `navHeader` and `sectionLabel` hold themselves
- * `space_18` off the glass, `sessionList` 12, `killSwitchPanel` 14, `emptyState` 24 -- so the Inbox
+ * `space_18` off the glass, `readOnlyNote` 18, `sessionList` 12, `killSwitchPanel` 14,
+ * `emptyState` 24 -- so the Inbox
  * reads correctly and so do the parts of every other screen built out of those. What has no air at
  * all is §4's notice line, which says so in as many words -- *"no margin, no padding and no gravity
  * of its own ... the air is the composing column's"* -- along with `ctaStack`, a loose `ctaButton`
@@ -62,8 +63,8 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
  * the `--p-card` fill and its `--p-hair` border underneath it do not, so on the one screen that
  * places those rows on the ground rather than in `sessionList` they ran edge to edge while the leaf
  * sweep stayed green. They are in the second group -- `settingsPanelView` gives each row the step
- * here, and the card keeps its 14 inside, which is exactly the arrangement `sessionList` already
- * ships on the Inbox. The `approvalSheet` is the same correction: it is a rounded card in a column
+ * here, and the card keeps its rows' 14 inside -- the same ARRANGEMENT `sessionList` ships on the
+ * Inbox, where the session card keeps its own 12. The `approvalSheet` is the same correction: it is a rounded card in a column
  * and not the docked sheet whose row rounds the top corners only.
  *
  * **IT IS A PER-CHILD SEAM AND NOT A PADDING ON THE COLUMN, WHICH IS THE WHOLE OF THE DESIGN.**
