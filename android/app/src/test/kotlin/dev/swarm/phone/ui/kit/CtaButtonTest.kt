@@ -647,6 +647,69 @@ class CtaButtonTest {
         }
     }
 
+    /**
+     * `.acts2 { gap: 7px }` OVER A BLOOMING CTA, which is the one case where the raw margin and
+     * the gap a person sees are different numbers (agents-tracker-2pnu F1).
+     *
+     * [CtaSpec.insetPx] inflates the APPROVE button by 18 dp on every edge -- the room the halo
+     * needs inside the view's own bounds -- and hands every pixel of it back as negative margin,
+     * "so what the design fixes is unchanged". A stack that writes the design's gap straight over
+     * `topMargin` destroys that hand-back: the first child renders 18 dp low, and a later child's
+     * VISIBLE gap becomes 8 + 18 = 26 rather than the 8 the row states.
+     *
+     * SO THE CLAIM IS ABOUT THE VISIBLE BOX AND NOT ABOUT `topMargin`. Reading the raw margin is
+     * what let the defect ship: 8 is the right number in the wrong coordinate system.
+     */
+    @Test
+    fun `the cta stack gaps a blooming button by what a person can see`() {
+        val stack = ctaStack(context)
+        val gap = dimenPx("swarm_space_8")
+        val inset = Kit.dpPx(context, KitMetrics.CTA_BLOOM_DP)
+
+        stack.addView(approve())
+        stack.addView(approve())
+
+        assertTrue("without a bloom there is nothing for this claim to be about", inset > 0)
+        val first = stack.getChildAt(0).layoutParams as LinearLayout.LayoutParams
+        val second = stack.getChildAt(1).layoutParams as LinearLayout.LayoutParams
+        assertEquals(
+            "the first CTA's visible top edge sits $inset px below the stack's own, so an " +
+                "APPROVE button leading a sheet renders a bloom's worth low",
+            0,
+            first.topMargin + inset,
+        )
+        assertEquals(
+            "the visible gap between two blooming CTAs is not `.acts2`'s own: each button's " +
+                "negative margin was overwritten with the gap, so the inflation it was handing " +
+                "back is added to the air instead",
+            gap,
+            first.bottomMargin + second.topMargin + 2 * inset,
+        )
+    }
+
+    /**
+     * The mixed stack, which is what both real callers build: a blooming APPROVE over a
+     * non-blooming neighbour. The formula has to hold across the boundary, or the fix is a
+     * special case rather than a rule.
+     */
+    @Test
+    fun `the visible gap holds where a blooming button meets one that does not`() {
+        val stack = ctaStack(context)
+        val gap = dimenPx("swarm_space_8")
+        val inset = Kit.dpPx(context, KitMetrics.CTA_BLOOM_DP)
+
+        stack.addView(approve())
+        stack.addView(ctaButton(context, "Deny", CtaKind.DENY))
+
+        val first = stack.getChildAt(0).layoutParams as LinearLayout.LayoutParams
+        val second = stack.getChildAt(1).layoutParams as LinearLayout.LayoutParams
+        assertEquals(
+            "APPROVE over DENY does not read as `.acts2`'s own gap",
+            gap,
+            first.bottomMargin + second.topMargin + inset,
+        )
+    }
+
     @Test
     fun `the cta stack is a vertical column that fills its screen's width`() {
         val stack = ctaStack(context)

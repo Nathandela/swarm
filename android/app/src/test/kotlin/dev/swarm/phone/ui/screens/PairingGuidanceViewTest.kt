@@ -11,8 +11,10 @@ import dev.swarm.phone.ui.PairingStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
+import dev.swarm.phone.ui.kit.readOnlyNote
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -287,6 +289,39 @@ class PairingGuidanceViewTest {
                 "question after the box they had to answer it in",
             order.indexOf(PairingTag.RELAY_NOTICE) <
                 order.indexOf(PairingTag.control(PairingControl.RELAY_URL)),
+        )
+    }
+
+    /**
+     * A NOTE IS NOT AN ACTION (agents-tracker-2pnu F1).
+     *
+     * `ctaStack` spends `.acts2 { gap: 7px }` between the BUTTONS it holds, and it spends it by
+     * writing `topMargin` on every child it adopts. The relay sentence is `readOnlyNote`, whose
+     * row 22 gives it a `space_10` top margin of its own -- so composing it into the stack
+     * silently overwrote the row's cell with a container's gap, which is a design record losing
+     * to an implementation detail.
+     */
+    @Test
+    fun `the relay sentence keeps row 22's own margin rather than the action stack's gap`() {
+        val root = draw(revealed = true, relayKnown = false)
+        val note = root.kitFind(PairingTag.RELAY_NOTICE)
+        val field = root.kitFind(PairingTag.control(PairingControl.RELAY_URL))
+        assertNotNull("the relay sentence is not on screen at all", note)
+        assertNotNull("the relay field is not on screen at all", field)
+
+        val row22 = readOnlyNote(context, "row 22, straight from the kit")
+        assertEquals(
+            "the relay sentence lost row 22's own top margin. It is inside `ctaStack`, which " +
+                "writes `.acts2`'s gap onto every child it adopts -- so the note is spaced as " +
+                "an action, and the row's cell is unspent at the one site that renders it",
+            (row22.layoutParams as ViewGroup.MarginLayoutParams).topMargin,
+            (note!!.layoutParams as ViewGroup.MarginLayoutParams).topMargin,
+        )
+        assertNotSame(
+            "the sentence and the field it captions share a parent, so whatever container " +
+                "spaces the controls also spaces the prose between them",
+            note.parent,
+            field!!.parent,
         )
     }
 
