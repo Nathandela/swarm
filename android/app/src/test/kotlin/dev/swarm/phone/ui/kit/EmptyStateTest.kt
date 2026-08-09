@@ -38,7 +38,7 @@ import kotlin.math.roundToInt
  * on one screen -- a quiet inbox pushes the last section's caption under the tab bar, which is the
  * defect a container factory with no caller used to be recorded against rather than fixed.
  * `compact` defaults to `false`: every whole-panel caller (`pairOnlyView`'s body, the pairing
- * screen's camera notice, `MachinesPanelScreen.UNAVAILABLE_COPY`) is unaffected, and the inbox's
+ * screen's camera notice) is unaffected, and the inbox's
  * per-section call is the one that passes `true`.
  */
 @RunWith(RobolectricTestRunner::class)

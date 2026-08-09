@@ -58,7 +58,11 @@ class FacadeBridge(private val app: App) {
     }
 
     /**
-     * PB-APP-3's event list, and the machine pane's activity log.
+     * PB-APP-3's event list -- the ACTIVITY destination's feed.
+     *
+     * It read "and the machine pane's activity log" until agents-tracker-nx44.3: that pane was
+     * deleted with the Machines destination, and it never had a production caller anyway.
+
      *
      * It returns the PAGE and not the rows: the cursor to read from next and the stream's stale
      * mark are on the handle, and dropping them left a caller unable to advance and unable to
@@ -367,7 +371,8 @@ class FacadeBridge(private val app: App) {
      * sessions under (agents-tracker-ksvb.1). The inbox's scope chips read it.
      *
      * IT HAS AT MOST ONE ENTRY AND IS STILL A MAP. Pairing is to one machine and no facade verb
-     * enumerates them -- `MachinesPanel` states the same fact about its own single row -- but the
+     * enumerates them -- the settings CONNECTION section states the same fact about its own single
+     * row -- but the
      * ROSTER is namespaced per machine, so a chip bar that assumed one would label another
      * machine's sessions with this machine's name. A lookup that misses is the honest shape: the
      * chip renders its endpoint id.

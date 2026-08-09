@@ -32,8 +32,8 @@ data class TabItem(
      * What pressing this tab does, and WITHOUT IT THE BAR WAS A PICTURE OF A BAR. Every field
      * above describes how a tab looks; none of them made one do anything, so the app shipped four
      * tabs a user could press with nothing behind them -- and two screens that are built, composed
-     * from this kit and covered by their own suites (`machinesPanelView`, `activityPanelView`) had
-     * zero production call sites, because nothing could navigate to them.
+     * from this kit and covered by their own suites (`activityPanelView`, and the since-deleted
+     * `machinesPanelView`) had zero production call sites, because nothing could navigate to them.
      *
      * IT IS THE ONLY BEHAVIOUR IN THE KIT AND THAT IS THE COMPONENT'S NATURE rather than an
      * exception being carved out. A tab bar is a CONTROL: `.ptabs` is inventory C1.4 and the

@@ -25,8 +25,8 @@ import dev.swarm.phone.R
  *
  * **WHAT IT REPLACES IS SILENCE.** Until this existed, every answer to a press landed in one of
  * three persistent text lines -- two of which are children of `PhoneSurface`'s unrecomposed column,
- * visible only at the bottom of the Inbox tab. A refusal produced by a control on the Machines
- * screen was written somewhere the user was not looking, and a SUCCESS was written nowhere at all:
+ * visible only at the bottom of the Inbox tab. A refusal produced by a control on any other
+ * destination was written somewhere the user was not looking, and a SUCCESS was written nowhere at all:
  * `dispatchPress` clears the line before dispatching, so "still crossing" and "done" are the same
  * empty line. The persistent lines stay -- see `PressFeedback`, which puts a refusal on both --
  * and what this adds is the half that lands where the press happened.

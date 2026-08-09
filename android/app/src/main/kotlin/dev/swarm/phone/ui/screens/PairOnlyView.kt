@@ -158,10 +158,12 @@ fun pairOnlyView(
             },
         )
         // `emptyState` IS THE SENTENCE COMPONENT HERE, which is the reuse `PhoneSurface` already
-        // makes for `MachinesPanelScreen.UNAVAILABLE_COPY`: row 8's block is body copy centred with
+        // made for `MachinesPanelScreen.UNAVAILABLE_COPY`, before agents-tracker-nx44.3 deleted
+        // that screen: row 8's block is body copy centred with
         // generous air, and what it says on this screen is what it says on that one -- there is
         // nothing here, and here is why. The alternative was a bare `TextView` with no appearance
-        // at all, which is what `LinkPanelView`'s clock line settles for because it sits inside a
+        // at all, which is what the settings CONNECTION section's clock line settles for because
+        // it sits inside a
         // populated screen; this sentence is half of the only screen this phone has.
         column.addView(emptyState(context, copy.body).apply { tag = PairOnlyTag.BODY })
         column.addView(

@@ -10,7 +10,7 @@ import dev.swarm.phone.R
  * derived: docs/design/substrate-components.md #3 Badge
  *
  * The cross-screen attention carrier: a count of the sessions blocked on the user, anchored to the
- * Inbox tab, and the only thing that survives the user going to Machines, Activity or Settings.
+ * Inbox tab, and the only thing that survives the user going to Activity or Settings.
  *
  * `--p-att`, NOT THE MOCK'S `#ff453a`. Red is retired here on semantics rather than on taste:
  * `--p-err` means denial, failure and destruction in this product, and a session waiting for a

@@ -13,12 +13,12 @@ import dev.swarm.phone.ui.kit.tabBar
  * PB-DS-9: the window's scaffold -- one destination, above one tab bar.
  *
  * WHY IT EXISTS, WHICH IS A STRUCTURAL FACT AND NOT A PREFERENCE. `tabBar` was composed inside
- * [triageInboxView], and [machinesPanelView] and [activityPanelView] compose none -- so a tab that
- * merely swapped the screen would land the user on Machines with no bar to come back with. A bar
- * that belongs to one of four destinations is a bar the other three do not have. Lifting it out is
- * what makes inventory C1.4 a navigation control instead of a picture of one, and it is what gave
- * the machines and activity screens their first production call site: both were built, composed
- * from the kit, covered by their own suites, and reachable from nothing.
+ * [triageInboxView], and no other destination composes one -- so a tab that merely swapped the
+ * screen would land the user somewhere with no bar to come back with. A bar that belongs to one
+ * destination is a bar the others do not have. Lifting it out is what makes inventory C1.4 a
+ * navigation control instead of a picture of one, and it is what gave the activity screen its
+ * first production call site: it was built, composed from the kit, covered by its own suite, and
+ * reachable from nothing.
  *
  * IT IS DERIVATION ROW 20, and the row is why this file spends no dimension. The screen scaffold's
  * padding is "top `screen_top` (or the real inset), bottom `screen_bottom` (or inset +
@@ -32,9 +32,9 @@ import dev.swarm.phone.ui.kit.tabBar
  *
  * THE SCROLL IS THE SCAFFOLD'S AND IT USED TO BE THE INBOX'S. Row 20 gives `.pscreen` the vertical
  * scroll and `scrollbar-width: none`; the inbox carried both because it was the only screen there
- * was. Here it serves all four, which is what lets [machinesPanelView], [activityPanelView] and
- * the settings panel be the wrap-height columns they already are -- none of them composes a scroll,
- * and without one they would be cut off at the fold on a long journal or a small handset.
+ * was. Here it serves every destination, which is what lets [activityPanelView] and the settings
+ * panel be the wrap-height columns they already are -- neither composes a scroll, and without one
+ * they would be cut off at the fold on a long journal or a small handset.
  */
 object ScaffoldTag {
     /** Row 20's `.pscreen` -- whichever destination is on screen, and its scroll. */
@@ -50,9 +50,9 @@ object ScaffoldTag {
      * IT IS THE SCAFFOLD'S FOR THE TAB BAR'S OWN REASON. PB-APP-8's offline/reconnecting/stale
      * states and PB-APP-11's freshness verdict were written to a line inside the inbox's column,
      * which the surface detaches on the way to every other destination -- so a link that dropped
-     * while the user was on Machines, Activity, Settings or inside a session changed nothing on
-     * screen. A warning that belongs to one of four destinations is a warning the other three do
-     * not have, which is the sentence this file already spends on the bar.
+     * while the user was on Activity, Settings or inside a session changed nothing on screen. A
+     * warning that belongs to one destination is a warning the others do not have, which is the
+     * sentence this file already spends on the bar.
      *
      * WHAT IT HOLDS CHANGED AND WHERE IT IS DID NOT. It used to be a stack of up to four sentences
      * drawn for every state that had anything at all to say; it is now [syncStatusView] -- the
@@ -122,13 +122,13 @@ enum class Destination(val label: String) {
  *  because what each destination shows is the SURFACE's business -- the inbox needs its callbacks,
  *  the activity screen needs a journal page, and the settings panel is a live object that redraws
  *  itself -- and a scaffold that built them would need the facade.
- * @param tabs the four tabs as `InboxScreen` records them: the labels, and the NeedsInput badge
- *  the inbox counts (derivation table 1.4). Their [InboxTab.selected] is not read here --
+ * @param tabs the tabs as `InboxScreen` records them: the labels, and the NeedsInput badge the
+ *  inbox counts (derivation table 1.4). Their [InboxTab.selected] is not read here --
  *  see [destination].
- * @param destination which of the four is on screen. IT IS THE PARAMETER AND `InboxTab.selected`
+ * @param destination which of them is on screen. IT IS THE PARAMETER AND `InboxTab.selected`
  *  IS NOT, because selection is a fact about navigation and that model was written when the inbox
  *  was the only screen: it answers `label == "Inbox"` for every tab list it builds, which on the
- *  other three destinations would tell a user standing on Machines that they are in the Inbox.
+ *  other destinations would tell a user standing on Activity that they are in the Inbox.
  * @param onSelectDestination the destination a tapped tab names.
  * @param status the sync chrome ([syncStatusView]), drawn above [content] and OUTSIDE its scroll,
  *  or null for a caller with nothing to say. It is a view for [content]'s reason -- what it says

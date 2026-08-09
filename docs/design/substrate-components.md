@@ -177,7 +177,7 @@ counters, two colours, two definitions, both about the same list, both on screen
 They are not, however, the same instrument.
 
 - The **tab badge** is the cross-screen attention carrier. It counts `NeedsInput` only, and it is the
-  one thing that survives when the user is on Machines, Activity or Settings. Deleting it costs the
+  one thing that survives when the user is on Activity or Settings. Deleting it costs the
   product its premise — *see the moment an agent needs you* — everywhere except one tab.
 - The **header counter** is the in-context liveness readout. It counts what is running. It answers
   "how much is in flight", never "what needs me".

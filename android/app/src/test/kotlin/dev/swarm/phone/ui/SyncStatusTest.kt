@@ -56,7 +56,8 @@ class SyncStatusTest {
     /**
      * The four repair channels, in `FacadeBridge.REPAIR_CHANNELS` order.
      *
-     * SPELLED HERE rather than read off the adapter, which is `LinkPanelTest`'s own arrangement:
+     * SPELLED HERE rather than read off the adapter, which was `LinkPanelTest`'s arrangement too
+     * (that suite retired with its subject in agents-tracker-nx44.3):
      * touching `FacadeBridge` initialises a class whose fields are gomobile types, and the AAR is
      * not on this JVM. `android/gate/pbapp8_repairchannels_test.go` is what joins the two lists.
      */
@@ -225,7 +226,8 @@ class SyncStatusTest {
     fun `the reading row is the transport's own sentence, including when it is healthy`() {
         // The sheet is a READOUT and not a fault report: it is opened deliberately, and hiding the
         // healthy rows makes "all three are fine" indistinguishable from "the sheet forgot one" --
-        // which is `LinkPanel`'s own ruling about its four channels, one level up.
+        // which was `LinkPanel`'s own ruling about its four channels, and is this sheet's now that
+        // the section it ruled over has retired into the settings CONNECTION summary.
         assertEquals(connection(ConnectionState.ONLINE).text, status().detail.rows[1].value)
         assertEquals(
             connection(ConnectionState.RECONNECTING).text,

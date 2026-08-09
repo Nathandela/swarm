@@ -18,9 +18,9 @@ import org.robolectric.RobolectricTestRunner
  *
  * THE ROUTED MESSAGE HAS SOMEWHERE TO GO ON EVERY OTHER DESTINATION AND NOT ON THESE TWO.
  * [PhoneSurface.renderUnavailable] writes PB-APP-9's routed startup failure onto `status`, a
- * child of `unrecomposedControls` -- so the Inbox tab shows it, and `PhoneSurfaceNavigationTest`
- * already pins that the Machines tab says something of its own
- * ([dev.swarm.phone.ui.screens.MachinesPanelScreen.UNAVAILABLE_COPY]) rather than nothing.
+ * child of `unrecomposedControls` -- so the Inbox tab shows it. (The Machines tab used to be named
+ * here too, as the destination `PhoneSurfaceNavigationTest` pinned a sentence on; agents-tracker-
+ * nx44.3 deleted the destination, so the two tabs below are the two this defect was about.)
  * `drawActivity(null)` calls `hostContent(null)` with no fallback, and
  * `SettingsSurface.render()`'s `Unavailable` branch clears its host and hides its own outcome
  * line -- so a user who taps either tab while the phone core refused construction is shown an

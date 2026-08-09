@@ -201,7 +201,8 @@ fun triageInboxView(
     // THE COLUMN IS RETURNED BARE: no scroll of its own, and no tab bar. Both belong to
     // [phoneScaffoldView], which hosts this screen and the other three above one shared bar
     // (derivation row 20). A scroll here would be a second one inside the scaffold's, and the bar
-    // here was what left `machinesPanelView` and `activityPanelView` with no way in.
+    // here was what left `activityPanelView` -- and the since-deleted `machinesPanelView` -- with
+    // no way in.
     return content
 }
 

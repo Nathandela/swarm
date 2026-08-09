@@ -199,7 +199,7 @@ class MachineRowTest {
      *
      * The row states the cell (`endpoint id`, `Mono.Agent` / `--p-ink3`) and the product has one
      * identifier for a machine rather than two, so the one caller this component has passes null --
-     * see `MachinesPanel`, which argues it. An empty string would leave a zero-width TextView in
+     * see `SettingsPanel`, which argues it. An empty string would leave a zero-width TextView in
      * the line and a gap in front of it; null renders no view at all, so the name simply runs to
      * the row's trailing edge.
      */
