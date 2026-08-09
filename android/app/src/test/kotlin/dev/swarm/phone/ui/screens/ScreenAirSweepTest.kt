@@ -16,11 +16,13 @@ import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SessionRow
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.PresenceMark
 import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sessionList
+import dev.swarm.phone.ui.kit.settingsRow
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.kit.toggle
 import org.junit.Assert.assertEquals
@@ -53,6 +55,21 @@ import org.robolectric.RobolectricTestRunner
  * own (a card, a well, a CTA), and the TEXT where it does not (a notice, a heading, an empty
  * state), because the ground shows through the second kind and the padding is the only thing
  * holding the glyphs off the glass.
+ *
+ * ## And what counts as a SURFACE
+ *
+ * **THE RULING IS ABOUT ELEMENTS AND NOT ONLY ABOUT WORDS.** A leaf sweep alone certifies a card
+ * that runs edge to edge as long as its own padding holds the label 14 dp in, which is exactly
+ * what shipped: `settingsRow` and `machineRow` pay `space_14` INSIDE their box and carry no margin
+ * at all, so on Settings the `--p-card` fill and its `--p-hair` border touched both edges of the
+ * screen while every assertion in this file stayed green. What a person sees is the painted box,
+ * so every view that paints one is measured against the same floor -- and the fix is the seam the
+ * Inbox already proves: `sessionList` insets its cards by `space_12` and the card keeps its own
+ * `space_14` inside, which is why a session row reads correctly and a settings row did not.
+ *
+ * The exemptions are the app's FURNITURE, and they are named one by one in [fullBleedChrome]
+ * rather than inferred from a shape -- an exemption a reader cannot see is how the next full-bleed
+ * card gets certified.
  *
  * NEGATIVE MARGINS ARE ROOM AND NOT POSITION. `ctaButton`'s bloom variant inflates itself by the
  * halo's radius and hands every pixel back with a negative margin ([dev.swarm.phone.ui.kit
@@ -115,11 +132,7 @@ class ScreenAirSweepTest {
      */
     private fun sweep(root: View): List<Leaf> {
         val width = screenWidthPx()
-        root.measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+        layOut(root)
 
         val leaves = mutableListOf<Leaf>()
         fun walk(view: View, left: Int, clamp: IntRange?, spentAbove: Int) {
@@ -152,6 +165,77 @@ class ScreenAirSweepTest {
         }
         walk(root, 0, null, 0)
         return leaves
+    }
+
+    /** Lay [root] out at a handset's width, which is the only state either walk can read. */
+    private fun layOut(root: View) {
+        val width = screenWidthPx()
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+    }
+
+    /** One painted surface, as measured: what it is, and how far in each painted edge sits. */
+    private data class Surface(val what: String, val start: Int, val end: Int)
+
+    /**
+     * Every visible SURFACE on [root]: a view that paints a background of its own.
+     *
+     * IT IS A SECOND WALK AND NOT A CASE IN THE FIRST, because the two stop in different places.
+     * [sweep] stops at a leaf -- what it measures is the words a person reads, and a clickable card
+     * IS that leaf. A card is the box those words sit in, and the box inside it is a box too, so
+     * this walk descends all the way down and measures every one of them.
+     */
+    private fun surfaces(root: View): List<Surface> {
+        val width = screenWidthPx()
+        layOut(root)
+
+        val painted = mutableListOf<Surface>()
+        fun walk(view: View, left: Int, clamp: IntRange?) {
+            if (view.visibility != View.VISIBLE) return
+            val scroller = clamp ?: if (view is HorizontalScrollView) left..(left + view.width) else null
+            if (view.background != null && !fullBleedChrome(view)) {
+                val room = bloomRoom(view)
+                val box = clamp ?: left..(left + view.width)
+                painted += Surface(describe(view), box.first + room, width - box.last + room)
+            }
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) {
+                    walk(view.getChildAt(i), left + view.getChildAt(i).left, scroller)
+                }
+            }
+        }
+        walk(root, 0, null)
+        return painted
+    }
+
+    /**
+     * The full-bleed chrome, BY NAME. Nothing else is exempt.
+     *
+     * THE TAB BAR AND THE COMPOSER BAR, which are one construction and the only two views in this
+     * app that paint [TopRule]: a fill plus a 1 dp `--p-hair` line across the WHOLE width, with the
+     * line as the only thing separating the bar from the content scrolling under it (Substrate bans
+     * drop shadows, and `TabBar.kt` records exactly that). A side margin here would stop the rule
+     * spanning the screen and leave the ground showing beside a bar that has no radius -- the two
+     * are the app's furniture, at their own ruled numbers (rows 19 and 9), rather than a
+     * destination's content.
+     *
+     * THE BROKEN-STATE STRIP, which §4's Sync status pill and strip row rules "radius none and no
+     * side inset: it is full-bleed chrome across the top of the app". It is tagged, so this names it
+     * exactly rather than by a shape something else could take.
+     *
+     * THE SCROLLED CONTENT'S OWN SCROLLER, for the reason the leaf walk already gives: a
+     * [HorizontalScrollView] measures its child with no width ceiling, so a diff wider than the
+     * phone has a right edge off-screen. The walk clamps everything inside one to the viewport; the
+     * scroller itself is the viewport and has nothing to be measured against.
+     */
+    private fun fullBleedChrome(view: View): Boolean = when {
+        view.background is dev.swarm.phone.ui.kit.TopRule -> true
+        view.tag == KitTag.SYNC_STRIP -> true
+        view is HorizontalScrollView -> true
+        else -> false
     }
 
     /**
@@ -205,6 +289,33 @@ class ScreenAirSweepTest {
             "agents-tracker-nx44.10: ${faults.size} leaves render inside the ruled " +
                 "`swarm_space_12` side inset -- text and buttons touching the glass:\n" +
                 faults.joinToString("\n"),
+            emptyList<String>(),
+            faults,
+        )
+    }
+
+    /**
+     * The same floor, against the box a person actually sees drawn.
+     *
+     * THE OWNER'S RULING IS ABOUT ELEMENTS. A card whose own padding holds its label 14 dp in still
+     * paints its fill and its border on the glass, and the leaf claim above cannot see it -- which
+     * is how Settings shipped a column of `--p-card` rows running edge to edge with every leaf
+     * assertion green.
+     */
+    @Test
+    fun `every visible surface on every destination clears the ruled side inset`() {
+        val floor = air()
+        val faults = destinations().flatMap { (screen, root) ->
+            surfaces(root).filter { minOf(it.start, it.end) < floor }.map { surface ->
+                "$screen: ${surface.what} paints ${surface.start}px from the left edge and " +
+                    "${surface.end}px from the right, against the ruled ${floor}px floor"
+            }
+        }
+
+        assertEquals(
+            "${faults.size} SURFACES touch the glass -- cards, wells and panels painted inside " +
+                "the ruled `swarm_space_12` side inset. The owner's 2026-08-09 ruling is about " +
+                "elements and not only about the words in them:\n" + faults.joinToString("\n"),
             emptyList<String>(),
             faults,
         )
@@ -294,6 +405,41 @@ class ScreenAirSweepTest {
         assertTrue(
             "the sweep counted one air spend where two containers spent it",
             sweep(doubled).any { it.airSpends > 1 },
+        )
+    }
+
+    /**
+     * The surface reader's own negative controls, in memory.
+     *
+     * A reader that always answered "far enough" would certify the very column this claim was
+     * added for, and one that exempted anything with a background would exempt every card in the
+     * app -- so both directions are held: a bare `settingsRow` in a bare column is seen, and the
+     * same row inside `sessionList`'s ruled `space_12` is not.
+     */
+    @Test
+    fun `the surface sweep can see a card on the glass and passes the one that is held off it`() {
+        val flush = LinearLayout(context).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            addView(settingsRow(context, label = "Alerts", sublabel = "When a session needs you"))
+        }
+        assertTrue(
+            "the surface sweep certified a card painted edge to edge, which is the defect it " +
+                "exists for: its label sits `space_14` in and the box it is drawn on does not",
+            surfaces(flush).any { minOf(it.start, it.end) < air() },
+        )
+
+        val held = LinearLayout(context).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            addView(
+                sessionList(context).apply {
+                    addView(settingsRow(context, label = "Alerts", sublabel = "the same row"))
+                },
+            )
+        }
+        assertTrue(
+            "the surface sweep found a fault in the seam the Inbox already ships -- a card inside " +
+                "`sessionList`'s ruled `space_12` -- so it would report every screen in the app",
+            surfaces(held).none { minOf(it.start, it.end) < air() },
         )
     }
 
