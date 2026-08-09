@@ -46,24 +46,34 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
  * The screen's own side air, given to ONE child that carries none: `swarm_space_12`, the step the
  * Inbox's own row container already spends.
  *
- * **IT IS THE OWNER'S RULING OF 2026-08-09 (agents-tracker-nx44.10), AND THE DEFECT IS THAT NINE
- * COMPONENTS OWN THEIR EDGE AND FOUR DO NOT.** `navHeader` and `sectionLabel` hold themselves
- * `space_18` off the glass, `sessionList` 12, `settingsRow` and `machineRow` 14, `emptyState` 24 --
- * so the Inbox reads correctly and so do the parts of every other screen built out of those. What
- * has no air at all is §4's notice line, which says so in as many words -- *"no margin, no padding
- * and no gravity of its own ... the air is the composing column's"* -- along with `ctaStack`,
- * a loose `ctaButton` and `textField`. On the Inbox and on pairing the composing column pays;
- * on Activity, Settings, the session detail and the launch form it was a bare `MATCH_PARENT`
- * column paying nothing, and the owner photographed the result: text and buttons on the glass.
+ * **IT IS THE OWNER'S RULING OF 2026-08-09 (agents-tracker-nx44.10), AND THE DEFECT IS THAT SEVEN
+ * COMPONENTS OWN THEIR EDGE AND THE REST DO NOT.** `navHeader` and `sectionLabel` hold themselves
+ * `space_18` off the glass, `sessionList` 12, `killSwitchPanel` 14, `emptyState` 24 -- so the Inbox
+ * reads correctly and so do the parts of every other screen built out of those. What has no air at
+ * all is §4's notice line, which says so in as many words -- *"no margin, no padding and no gravity
+ * of its own ... the air is the composing column's"* -- along with `ctaStack`, a loose `ctaButton`
+ * and `textField`. On the Inbox and on pairing the composing column pays; on Activity, Settings, the
+ * session detail and the launch form it was a bare `MATCH_PARENT` column paying nothing, and the
+ * owner photographed the result: text and buttons on the glass.
+ *
+ * **A PADDING IS NOT A MARGIN, AND THIS PARAGRAPH SAID IT WAS.** It read "`sessionList` 12,
+ * `settingsRow` and `machineRow` 14, `emptyState` 24", counting NINE components as holding their
+ * own edge. Rows 11 and 15 spend their `space_14` INSIDE the card: the label clears the floor and
+ * the `--p-card` fill and its `--p-hair` border underneath it do not, so on the one screen that
+ * places those rows on the ground rather than in `sessionList` they ran edge to edge while the leaf
+ * sweep stayed green. They are in the second group -- `settingsPanelView` gives each row the step
+ * here, and the card keeps its 14 inside, which is exactly the arrangement `sessionList` already
+ * ships on the Inbox. The `approvalSheet` is the same correction: it is a rounded card in a column
+ * and not the docked sheet whose row rounds the top corners only.
  *
  * **IT IS A PER-CHILD SEAM AND NOT A PADDING ON THE COLUMN, WHICH IS THE WHOLE OF THE DESIGN.**
  * A column that padded its own sides would add 12 to every child that already holds itself off the
  * edge: the nav title would render at 30 against the Inbox's 18, the section labels with it, and
- * the row cards at 24 -- three numbers the owner-signed maquette states directly (`.nav`,
- * `.sect` at `0 18px`, `.slab` at `margin: 0 14px`), on screens that would then disagree with the
- * Inbox across a tab switch. That is agents-tracker-2pnu F2 wearing a different pair of columns,
- * and the ruling's own words are that the air is spent EXACTLY ONCE. So the column stays bare and
- * the air goes to the children that arrive without one, where it can only be spent once.
+ * the Inbox's own row cards at 24 -- three numbers the owner-signed maquette states directly
+ * (`.nav`, `.sect` at `0 18px`, `.slab` at `margin: 0 14px`), on screens that would then disagree
+ * with the Inbox across a tab switch. That is agents-tracker-2pnu F2 wearing a different pair of
+ * columns, and the ruling's own words are that the air is spent EXACTLY ONCE. So the column stays
+ * bare and the air goes to the children that arrive without one, where it can only be spent once.
  *
  * **IT SETS RATHER THAN ADDS, BECAUSE THE SLOTS OUTLIVE THE DRAW.** `PhoneSurface` builds Stop,
  * Kill, the resync control and the launch form's fields once and re-parents them on every

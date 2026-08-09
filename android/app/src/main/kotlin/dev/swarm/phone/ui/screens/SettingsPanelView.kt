@@ -59,6 +59,16 @@ import dev.swarm.phone.ui.kit.settingsRow
  * add 12 to the first group and re-run agents-tracker-2pnu F2's doubling; the argument is
  * `ui/kit/ScreenColumn.kt`'s and `ScreenAirSweepTest` is what holds every screen to it.
  *
+ * **AND THE CARDS ARE IN THAT SECOND GROUP, WHICH THIS SCREEN READ WRONG ONCE.** Rows 11 and 15
+ * spend `space_14` INSIDE their box; a padding is not a margin, so the label cleared the ruled
+ * floor while the `--p-card` fill and its `--p-hair` border underneath ran edge to edge -- on the
+ * one screen in the app that places those two rows on the ground instead of in `sessionList`,
+ * which is the Inbox's own way of paying exactly this. So each row gets the same step here, once,
+ * and keeps its 14 inside: a settings card now sits where a session card does. `killSwitchPanel`
+ * is untouched, because row 12 gives that one a `space_14` margin of its own -- "the panel is the
+ * one block ... that sits on the ground rather than inside a list, so nothing above it can carry
+ * its inset" -- and 14 already clears 12.
+ *
  * THE NOTICE LINES ARE THE KIT'S NOW (agents-tracker-ksvb.4). This paragraph read "THE NOTICE LINES
  * ARE STILL BARE `TextView`s ... that is the absence of a decision rather than one made here", and
  * the premise was false in the one way that matters: a `TextView` with no `TextAppearance` renders
@@ -226,7 +236,7 @@ fun settingsPanelView(
                 // same class of action as Revoke -- because it IS the revoke. The control is the
                 // caller's; this places it and tags it.
                 trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
-            ).apply { tag = SettingsTag.MACHINE_ROW },
+            ).apply { tag = SettingsTag.MACHINE_ROW }.screenAir(),
         )
     }
 
@@ -253,7 +263,7 @@ fun settingsPanelView(
                 // has printed nothing, which is the one case left where the dot is the only thing
                 // on screen carrying the state.
                 presenceDescription = section.machine.presenceDescription,
-            ).apply { tag = SettingsTag.CONNECTION_ROW },
+            ).apply { tag = SettingsTag.CONNECTION_ROW }.screenAir(),
         )
         // THE TWO FAULT LINES ARE PLACED ONLY WHEN THERE IS A FAULT. `notice` with an empty string
         // draws a `TextView` that still takes its line height and its gap, so an unconditional
@@ -297,7 +307,7 @@ fun settingsPanelView(
                     label = row.label,
                     sublabel = row.sublabel,
                     trailing = rowFor(row),
-                ).apply { announceAsOneRow(row) },
+                ).apply { announceAsOneRow(row) }.screenAir(),
             )
         }
     }

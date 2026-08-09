@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.approvalSheet
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 
 /**
@@ -30,6 +31,15 @@ import dev.swarm.phone.ui.kit.scrolledHorizontally
  * the champagne foreground is the grid's, the grid is deleted at this slice's exit, and an accent
  * behind a row of decisions is a second thing on the sheet asking to be looked at first -- ADR-009's
  * visual direction spends `--p-hero` on one meaning at a time.
+ *
+ * **THE SHEET CARRIES THE SCREEN'S SIDE AIR, BECAUSE THIS ONE IS NOT DOCKED** (owner ruling
+ * 2026-08-09, agents-tracker-nx44.10). The `Docked bottom sheet` row draws `.sheet` with
+ * `--p-sheet-r` on the TOP CORNERS ONLY, and a sheet docked to the bottom of the window is
+ * full-bleed by construction. What ships is the inline form: `sheetSurface` rounds all four corners
+ * and `PhoneSurface` hosts this in a column under the Inbox's sections, so what a person sees is a
+ * card -- and a card painted edge to edge is the defect the ruling is about. `screenAir` sets an
+ * absolute margin, so the day a real docked host arrives it takes the sheet's edge back by owning
+ * the placement rather than by fighting this.
  */
 object SheetTag {
 
@@ -81,7 +91,7 @@ fun approvalSheetView(
         null
     },
     actions = panel.actions.map { decision -> actionFor(decision).tagged(SheetTag.ACTION) },
-).apply { tag = SheetTag.SHEET }
+).apply { tag = SheetTag.SHEET }.screenAir()
 
 /**
  * Tag a control with the part it renders and detach it from whatever last held it.

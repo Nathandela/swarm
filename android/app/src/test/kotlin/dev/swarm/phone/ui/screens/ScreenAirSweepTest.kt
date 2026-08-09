@@ -132,7 +132,7 @@ class ScreenAirSweepTest {
      */
     private fun sweep(root: View): List<Leaf> {
         val width = screenWidthPx()
-        layOut(root)
+        val host = layOut(root)
 
         val leaves = mutableListOf<Leaf>()
         fun walk(view: View, left: Int, clamp: IntRange?, spentAbove: Int) {
@@ -163,18 +163,40 @@ class ScreenAirSweepTest {
                 airSpends = spent,
             )
         }
-        walk(root, 0, null, 0)
+        walk(host, 0, null, 0)
         return leaves
     }
 
-    /** Lay [root] out at a handset's width, which is the only state either walk can read. */
-    private fun layOut(root: View) {
+    /**
+     * [root] laid out at a handset's width, inside the bare host that hosts it, which is what both
+     * walks read from.
+     *
+     * **THE HOST IS NOT SCAFFOLDING FOR THE TEST: IT IS THE ONE THING A MARGIN NEEDS TO EXIST.**
+     * Android applies a child's margin in its PARENT's layout pass, so a destination measured as the
+     * root of the window reports every margin it carries as zero -- and the approval sheet's air is
+     * a margin on the composition's own root. `phoneScaffoldView` puts a destination in a
+     * `ScrollView` that spends no side padding (the claim below is what proves it), so a bare
+     * `MATCH_PARENT` column IS that host, and reading from it is the more faithful measurement
+     * rather than a softer one.
+     */
+    private fun layOut(root: View): View {
         val width = screenWidthPx()
-        root.measure(
+        (root.parent as? ViewGroup)?.removeView(root)
+        val host = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            // A glowing dot and an inflated halo are drawn past their own bounds, and every
+            // container between them and the window has to allow it.
+            clipChildren = false
+            clipToPadding = false
+            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            addView(root)
+        }
+        host.measure(
             View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
-        root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+        host.layout(0, 0, host.measuredWidth, host.measuredHeight)
+        return host
     }
 
     /** One painted surface, as measured: what it is, and how far in each painted edge sits. */
@@ -190,7 +212,7 @@ class ScreenAirSweepTest {
      */
     private fun surfaces(root: View): List<Surface> {
         val width = screenWidthPx()
-        layOut(root)
+        val host = layOut(root)
 
         val painted = mutableListOf<Surface>()
         fun walk(view: View, left: Int, clamp: IntRange?) {
@@ -207,7 +229,7 @@ class ScreenAirSweepTest {
                 }
             }
         }
-        walk(root, 0, null)
+        walk(host, 0, null)
         return painted
     }
 
