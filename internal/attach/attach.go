@@ -66,6 +66,13 @@ type Config struct {
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
 	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
 	Name      string // session label rendered in the reserved-row hint
+	// TookOverRemote marks an attach that EVICTED a paired device's control lease, so
+	// the reserved row can say so. The caller samples it from the roster row BEFORE it
+	// dials: the dial itself destroys the answer (hub.attach evicts unconditionally,
+	// and the TUI attach and a phone take_control contend for the SAME single shim
+	// subscriber slot), so there is nothing live to re-read. One sample, carried for
+	// the life of the attach.
+	TookOverRemote bool
 }
 
 // chromeReassertInterval throttles the reserved-row re-assert on benign live frames to
@@ -243,7 +250,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// records that the region is ours to tear down.
 	var lastAssert time.Time
 	if chromeActive(rows) {
-		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows))
+		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows, cfg.TookOverRemote))
 		chromeEngaged = true
 		lastAssert = time.Now()
 	}
@@ -402,7 +409,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// reassertChrome re-emits region+hint at the current size and clears the owed re-assert.
 	// The caller has verified the parser is in GROUND (a safe boundary).
 	reassertChrome := func() {
-		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows, cfg.TookOverRemote))
 		lastAssert = time.Now()
 		pendingReassert = false
 	}
@@ -412,7 +419,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// byte-identical to Chrome:false). The caller has verified the parser is in GROUND.
 	applyResizeChrome := func() {
 		if chromeActive(curRows) {
-			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
+			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows, cfg.TookOverRemote))
 			chromeEngaged = true
 			lastAssert = time.Now()
 		} else if chromeEngaged {
@@ -515,7 +522,7 @@ func writeAll(w io.Writer, p []byte) {
 // survive both the region change (DECSTBM homes the cursor) and the paint. The caller
 // guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
 // CSI r region reset from the agent is repaired by the next re-assert).
-func chromeHint(name string, detachKey byte, cols, rows int) []byte {
+func chromeHint(name string, detachKey byte, cols, rows int, tookOverRemote bool) []byte {
 	var b strings.Builder
 	b.WriteString("\x1b7")    // DECSC: save cursor + pen + origin mode
 	b.WriteString("\x1b[?6l") // DECOM off: make the reserved-row CUP absolute even if the agent enabled origin mode; DECRC below restores the agent's DECOM
@@ -528,19 +535,37 @@ func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 	// v0.4 P2 (dim not reverse): a faint default-colored hint, not the harsh full-width
 	// reverse-video bar that read as a white strip on dark terminals.
 	b.WriteString("\x1b[2m") // faint/dim
-	b.WriteString(hintText(name, detachKey, cols))
+	b.WriteString(hintText(name, detachKey, cols, tookOverRemote))
 	b.WriteString("\x1b[0m") // reset pen
 	b.WriteString("\x1b[K")  // clear to end of the reserved row
 	b.WriteString("\x1b8")   // DECRC: restore cursor + pen
 	return []byte(b.String())
 }
 
+// takeoverNote is the one-shot heads-up for an attach that evicted a paired device's
+// control lease. It names the surface, not the device: the daemon answers a bare
+// bool, and naming the device needs a deviceID accessor plus a registry lookup that
+// does not exist yet.
+const takeoverNote = "took over from phone"
+
 // hintText builds the reserved-row hint, truncated to fit cols columns: the session
-// name and the return affordance ("<name>  ctrl+q returns to swarm"). The key label
+// name and the return affordance ("<name>  ctrl+q returns to swarm"), plus the
+// takeover note when this attach evicted a phone's control lease. The key label
 // tracks the configured detach key. Truncation keeps a wide row from wrapping (a wrap
 // on the bottom row scrolls); cols<=0 disables truncation.
-func hintText(name string, detachKey byte, cols int) string {
+//
+// TRUNCATION ORDER (nx44.7 ruling): the note goes LAST and is dropped WHOLE when the
+// row cannot hold it. The ctrl+q affordance is the escape route and is safety-
+// critical, so it survives a narrow terminal; the note is informational. Dropped
+// whole rather than sliced because a half-note ("took ove") would eat the very
+// columns the affordance needs while saying nothing.
+func hintText(name string, detachKey byte, cols int, tookOverRemote bool) string {
 	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
+	if tookOverRemote {
+		if full := s + "  " + takeoverNote; cols <= 0 || len([]rune(full)) <= cols {
+			s = full
+		}
+	}
 	if cols > 0 {
 		if r := []rune(s); len(r) > cols {
 			s = string(r[:cols])

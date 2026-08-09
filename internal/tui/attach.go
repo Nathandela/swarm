@@ -62,6 +62,12 @@ type TerminalHandoff struct {
 // bubbletea-side adapter; cmd wires the dialer and terminal handoff.
 func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 	return func(s protocol.SessionView, readOnly bool) error {
+		// nx44.7: sampled ONCE, here, BEFORE the dial — the dial destroys the answer.
+		// A TUI attach and a phone's take_control contend for the SAME single shim
+		// subscriber slot, so the dial below unconditionally evicts the phone and the
+		// daemon's lease flips to us; re-reading it later would always say "no phone".
+		// The roster row is the last honest observation of who held the session.
+		tookOver := s.RemoteControlled
 		sess, cleanup, err := dial(s.ID)
 		if err != nil {
 			return err
@@ -90,8 +96,9 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			// — the PTY is sized to rows-1 and a DECSTBM region keeps the agent off that
 			// row — so it can no longer overdraw snapshot/agent content the way the v0.2
 			// top-row banner did. The output pump self-heals full-screen damage.
-			Chrome: true,
-			Name:   displayName(s), // P2: identify the session by its label (falls back to the agent)
+			Chrome:         true,
+			Name:           displayName(s), // P2: identify the session by its label (falls back to the agent)
+			TookOverRemote: tookOver,
 		})
 		return err
 	}
