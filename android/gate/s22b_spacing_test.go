@@ -113,33 +113,51 @@ var s22bRadii = []struct {
 	{"swarm_radius_chip", "--p-chip-r"},
 }
 
-// s22bUnadjudicated is the register of spacing literals the OWNER-SIGNED maquette declares that no
-// scale step absorbs. It is a disclosure, not a licence.
+// s22bRatifiedExceptions is the register of spacing literals the OWNER-SIGNED maquette declares
+// that no scale step absorbs -- RATIFIED as stated exceptions of the spacing scale, 2026-08-09
+// (owner ruling R6, bead agents-tracker-oonj, specimens
+// https://claude.ai/code/artifact/cf7206b3-787c-43d7-b275-a46fa7e8320b): "the signed maquette's
+// 20/26/30 paddings are RATIFIED -- the spacing scale gains three stated exceptions."
 //
-// WHY IT EXISTS AT ALL. On 2026-08-07 commit 38046c1 edited the maquette so that these three
-// values became 18 and 24 -- moving the design onto the scale so this gate would pass -- ahead of
-// the RED that was supposed to expose the mismatch. ADR-009 D7's amendment names that move
-// forbidden in its own words ("editing the owner-signed maquette to satisfy a gate is the tail
-// wagging the dog"), and phase O1's exit is the OWNER's approval of the maquette. So the edit is
-// reverted and the mismatch is recorded here instead, where it is visible, bounded, and cannot
-// grow.
+// THIS REGISTER WAS `s22bUnadjudicated`, A DISCLOSURE RATHER THAN A LICENCE, UNTIL R6. What it
+// said before the ruling, quoted so the retirement is visible rather than inferred:
 //
-// THE APP IS NOT AFFECTED AND THAT IS WHY THIS IS A DISCLOSURE RATHER THAN A HOLE. Nothing on the
-// Android side spends 20, 26 or 30dp: `emptyState` spends `space_24` twice vertically and once
-// horizontally, and the approval sheet spends `space_14`/`space_12`/`space_10`. The ten steps and
-// the dimens they produce are untouched by this register. What is open is one design question --
-// whether the signed drawing moves onto the grid it claims, or whether the grid is wrong -- and
-// that is the owner's to answer, not this session's.
+//	// s22bUnadjudicated is the register of spacing literals the OWNER-SIGNED maquette declares
+//	// that no scale step absorbs. It is a disclosure, not a licence.
+//	var s22bUnadjudicated = []struct {
+//		Px       float64
+//		Selector string
+//		Property string
+//		Nearest  float64 // the step it would land on, and the drift that costs
+//	}{
+//		{20, ".sheet", "padding", 18},
+//		{26, ".empty", "padding", 24},
+//		{30, ".empty", "padding", 24},
+//	}
 //
-// IT IS PINNED IN BOTH DIRECTIONS by TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree: a
-// FOURTH off-scale value fails the ledger below exactly as it did before this register existed,
-// and an entry the maquette stops declaring fails too -- so when the owner does move them, the
-// register cannot be left behind as a record of nothing.
-var s22bUnadjudicated = []struct {
+// WHY THE THREE VALUES EXIST AT ALL. On 2026-08-07 commit 38046c1 edited the maquette so that
+// these three values became 18 and 24 -- moving the design onto the scale so this gate would pass
+// -- ahead of the RED that was supposed to expose the mismatch. ADR-009 D7's amendment names that
+// move forbidden in its own words ("editing the owner-signed maquette to satisfy a gate is the
+// tail wagging the dog"), and phase O1's exit is the OWNER's approval of the maquette. So the edit
+// was reverted and the mismatch was disclosed instead -- and now that the owner has ruled on it,
+// the disclosure becomes a record of the ruling: the grid does not govern these three.
+//
+// THE APP IS NOT AFFECTED, before or after ratification. Nothing on the Android side spends 20, 26
+// or 30dp: `emptyState` spends `space_24` twice vertically and once horizontally, and the approval
+// sheet spends `space_14`/`space_12`/`space_10` (substrate-components.md's own "reused rather than
+// re-derived", §2). The ten steps and the dimens they produce are untouched by this register.
+//
+// IT IS STILL PINNED IN BOTH DIRECTIONS by TestPBDS1_TheRatifiedExceptionsAreExactlyTheseThree: a
+// FOURTH off-scale value fails the ledger below exactly as it did when this was a disclosure, and
+// an entry the maquette stops declaring fails too -- so a future ruling that moves any of these
+// three onto the grid has to shorten the register deliberately rather than leave it behind as a
+// record of an exception that no longer exists.
+var s22bRatifiedExceptions = []struct {
 	Px       float64
 	Selector string
 	Property string
-	Nearest  float64 // the step it would land on, and the drift that costs
+	Nearest  float64 // the nearest step, kept for the log -- these three do NOT absorb onto it
 }{
 	{20, ".sheet", "padding", 18},
 	{26, ".empty", "padding", 24},
@@ -329,11 +347,11 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	sort.Float64s(values)
 
 	// The three values the signed design declares off the grid, keyed by value. They are excluded
-	// from the ledger below and asserted separately; see s22bUnadjudicated's own comment for why
-	// they are recorded rather than edited out of the design.
-	unadjudicated := map[float64]bool{}
-	for _, u := range s22bUnadjudicated {
-		unadjudicated[u.Px] = true
+	// from the ledger below and asserted separately; see s22bRatifiedExceptions's own comment for
+	// why they are recorded as exceptions rather than edited out of the design.
+	ratifiedExceptions := map[float64]bool{}
+	for _, u := range s22bRatifiedExceptions {
+		ratifiedExceptions[u.Px] = true
 	}
 
 	var movers []string
@@ -341,7 +359,7 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	for _, v := range values {
 		step, ok := absorbedBy[v]
 		if !ok {
-			if unadjudicated[v] {
+			if ratifiedExceptions[v] {
 				continue
 			}
 			t.Errorf("PB-DS-1: the design declares %gpx (%s) and no scale step absorbs it. The "+
@@ -398,34 +416,53 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 			worst, strings.Join(movers, ", "))
 	}
 	t.Logf("PB-DS-1 drift ledger over %d distinct maquette spacing values (%d of them absorbed, "+
-		"%d unadjudicated), worst %gdp:\n\t%s",
-		len(values), len(values)-len(s22bUnadjudicated), len(s22bUnadjudicated), worst,
+		"%d ratified exceptions), worst %gdp:\n\t%s",
+		len(values), len(values)-len(s22bRatifiedExceptions), len(s22bRatifiedExceptions), worst,
 		strings.Join(movers, "\n\t"))
 }
 
-// TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree is the fence around the register above.
+// TestPBDS1_TheRatifiedExceptionsAreExactlyTheseThree is the fence around the register above.
 //
-// A list of exceptions with nothing holding it closed is not a disclosure, it is a drain: the next
-// off-scale value gets appended, and the one after that, and the scale stops being a decision. So
-// the register is pinned in BOTH directions against the design itself.
+// AUTHORIZED REWRITE, owner ruling R6 (2026-08-09, bead agents-tracker-oonj). This test was
+// TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree, and what it said before the ruling is
+// quoted so the retirement is visible:
+//
+//	// TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree is the fence around the register
+//	// above.
+//	func TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree(t *testing.T) {
+//		const wantEntries = 3
+//		if len(s22bUnadjudicated) != wantEntries {
+//			t.Fatalf("PB-DS-1: the unadjudicated register holds %d entries, want %d. This list is
+//	the " +
+//				"owner's open question about the signed maquette (ADR-009 D2, plan phase O1) and it " +
+//				"grows only by an owner decision -- an implementer who appends to it has moved the " +
+//				"scale by editing its exception list.",
+//				len(s22bUnadjudicated), wantEntries)
+//		}
+//
+// A list of exceptions with nothing holding it closed is not a ratification, it is a drain: the
+// next off-scale value gets appended, and the one after that, and the scale stops being a
+// decision. So the register stays pinned in BOTH directions against the design itself, exactly as
+// it was while it was still a disclosure -- R6 changed what the three values MEAN, not whether
+// they are fenced.
 //
 //   - Every entry must still be declared by the maquette, at the selector and property it names,
-//     at the value it names. When the owner moves `.sheet` onto 18 and `.empty` onto 24, this
+//     at the value it names. If the design ever moves `.sheet` onto 18 and `.empty` onto 24, this
 //     fails, and the register has to be shortened deliberately rather than left behind as a record
-//     of a mismatch that no longer exists.
-//   - The count is pinned. A fourth off-scale value is not silently absorbed by the register: it
-//     is not in it, so the ledger above errors on it exactly as it did before the register existed
-//     -- and if somebody adds it here instead, THIS assertion fails.
+//     of an exception that no longer exists.
+//   - The count is pinned. A fourth off-scale value is not silently accepted by the register: it
+//     is not in it, so the ledger above errors on it exactly as it did before R6 -- a ruling on
+//     three named values is not a ruling on a fourth nobody looked at.
 //   - None of the three may be on the scale. An entry that a step DOES absorb is a stale record
-//     claiming a problem the design does not have.
-func TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree(t *testing.T) {
+//     claiming an exception the design does not have.
+func TestPBDS1_TheRatifiedExceptionsAreExactlyTheseThree(t *testing.T) {
 	const wantEntries = 3
-	if len(s22bUnadjudicated) != wantEntries {
-		t.Fatalf("PB-DS-1: the unadjudicated register holds %d entries, want %d. This list is the "+
-			"owner's open question about the signed maquette (ADR-009 D2, plan phase O1) and it "+
-			"grows only by an owner decision -- an implementer who appends to it has moved the "+
-			"scale by editing its exception list.",
-			len(s22bUnadjudicated), wantEntries)
+	if len(s22bRatifiedExceptions) != wantEntries {
+		t.Fatalf("PB-DS-1: the ratified-exceptions register holds %d entries, want %d. Ruling R6 "+
+			"(2026-08-09, bead agents-tracker-oonj) ratified exactly three signed values as "+
+			"exceptions of the spacing scale -- an implementer who appends a fourth has moved the "+
+			"scale by editing its exception list rather than by a ruling.",
+			len(s22bRatifiedExceptions), wantEntries)
 	}
 
 	absorbedBy := map[float64]bool{}
@@ -436,15 +473,16 @@ func TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree(t *testing.T) {
 	}
 
 	css := s22bMaquetteKitCSS(t)
-	for _, u := range s22bUnadjudicated {
+	for _, u := range s22bRatifiedExceptions {
 		if absorbedBy[u.Px] {
-			t.Errorf("PB-DS-1: %gpx is registered as unadjudicated AND absorbed by the scale. One "+
-				"of the two records is stale, and the register is the one that must go.", u.Px)
+			t.Errorf("PB-DS-1: %gpx is registered as a ratified exception AND absorbed by the "+
+				"scale. One of the two records is stale, and the register is the one that must go.",
+				u.Px)
 		}
 		rule, ok := css[u.Selector]
 		if !ok {
 			t.Errorf("PB-DS-1: the register names `%s`, which the maquette no longer declares. "+
-				"The open question died with the selector; delete the row.", u.Selector)
+				"The ratified value died with the selector; delete the row.", u.Selector)
 			continue
 		}
 		raw, ok := rule.Decls[u.Property]
@@ -466,13 +504,14 @@ func TestPBDS1_TheUnadjudicatedSpacingsAreExactlyTheseThree(t *testing.T) {
 				u.Selector, u.Property, u.Px, raw)
 		}
 	}
-	t.Logf("PB-DS-1: %d maquette spacing literals sit off the ten-step scale and are disclosed "+
-		"rather than absorbed; each would land %gdp/%gdp/%gdp away. Nothing in the Android module "+
-		"spends any of them: `emptyState` spends space_24 and the approval sheet space_14/12/10.",
-		len(s22bUnadjudicated),
-		math.Abs(s22bUnadjudicated[0].Px-s22bUnadjudicated[0].Nearest),
-		math.Abs(s22bUnadjudicated[1].Px-s22bUnadjudicated[1].Nearest),
-		math.Abs(s22bUnadjudicated[2].Px-s22bUnadjudicated[2].Nearest))
+	t.Logf("PB-DS-1: %d maquette spacing literals sit off the ten-step scale as RATIFIED "+
+		"exceptions (ruling R6, 2026-08-09) rather than absorbed; each would land "+
+		"%gdp/%gdp/%gdp away. Nothing in the Android module spends any of them: `emptyState` "+
+		"spends space_24 and the approval sheet space_14/12/10.",
+		len(s22bRatifiedExceptions),
+		math.Abs(s22bRatifiedExceptions[0].Px-s22bRatifiedExceptions[0].Nearest),
+		math.Abs(s22bRatifiedExceptions[1].Px-s22bRatifiedExceptions[1].Nearest),
+		math.Abs(s22bRatifiedExceptions[2].Px-s22bRatifiedExceptions[2].Nearest))
 }
 
 // TestPBDS1_TheAbsorptionLedgerCanActuallyFail is the negative control for the ledger above.
@@ -509,12 +548,13 @@ func TestPBDS1_TheAbsorptionLedgerCanActuallyFail(t *testing.T) {
 	// tiles in the mark gallery -- gallery furniture, excluded by the BLOCK BOUNDARY rather than by
 	// the property filter, and a scale that swallowed it would be a scale sized by the page the
 	// design was reviewed on. `.empty { padding }` is inside the phone kit and is not excluded by
-	// anything: it is one of the three entries in s22bUnadjudicated, disclosed as an open owner
-	// question. Neither may reach the scale, and this is the assertion that says so.
+	// anything: it is one of the three entries in s22bRatifiedExceptions, ruled a stated exception
+	// of the scale (R6, 2026-08-09) rather than a value the scale absorbs. Neither may reach the
+	// scale, and this is the assertion that says so.
 	if step, ok := absorbedBy[30]; ok {
 		t.Errorf("the ledger absorbs 30px into %gdp; it is the mark gallery's own gap and the "+
-			"empty state's unadjudicated padding, and a scale that swallows either has been sized "+
-			"by something other than the decision", step)
+			"empty state's ratified-exception padding, and a scale that swallows either has been "+
+			"sized by something other than the decision", step)
 	}
 	// And the drift arithmetic itself.
 	if d := math.Abs(7 - absorbedBy[7]); d != 1 {
