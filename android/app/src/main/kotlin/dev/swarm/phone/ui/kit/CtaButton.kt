@@ -228,6 +228,32 @@ fun ctaButton(
     }
 }
 
+/**
+ * origin: .acts2
+ *
+ * The column two or more CTAs stack in: `.acts2 { gap: 7px }`, which PB-DS-1's ledger absorbs
+ * into `swarm_space_8`.
+ *
+ * [ctaButton]'s OWN INVENTORY ROW RECORDS WHY THIS WAS LEFT UNSPENT: "the `.acts2` container's
+ * own `gap: 7px` is NOT here ... this slice ships the BUTTON and not the column it sits in ... a
+ * container factory with no caller is the second spelling `EmptyStateTest`'s KDoc argues against,
+ * and the gap belongs to whoever builds the sheet." `PairingPanelView`'s control loop and
+ * `SessionDetailView`'s take-control/stop/kill stack are that caller now, and both used to
+ * `addView` these buttons bare -- zero gap, and on `CtaKind.APPROVE`'s bloom variant, WORSE than
+ * zero: [CtaSpec.insetPx]'s negative margin pulls an un-gapped neighbour closer than the button's
+ * own visible edge (agents-tracker-nx44.1).
+ *
+ * `KitStack`, ON `sessionList`'s AND `chipRow`'s OWN PRECEDENT -- the container spends the gap and
+ * nowhere else, so a caller never types it at its own two or three call sites.
+ */
+fun ctaStack(context: Context): LinearLayout = KitStack(
+    context,
+    LinearLayout.VERTICAL,
+    Kit.dimenPx(context, R.dimen.swarm_space_8),
+).apply {
+    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+}
+
 /** Each variant's fill, border and bloom, read from the rule that declares it. */
 private fun ctaSpec(context: Context, kind: CtaKind, bloom: Boolean): CtaSpec {
     // `box-shadow` is declared on `.a2-ok` and on neither of the other two, and §4 removes it from

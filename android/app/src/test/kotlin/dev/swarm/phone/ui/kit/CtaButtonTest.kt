@@ -615,4 +615,44 @@ class CtaButtonTest {
             mismatches(listOf(Claim("row 24 bloom", null, fill))).isNotEmpty(),
         )
     }
+
+    // ---- ctaStack (agents-tracker-nx44.1, item 3) --------------------------
+    //
+    // `.acts2 { gap: 7px }` was deliberately unspent when this file's own inventory row landed:
+    // "this slice ships the BUTTON and not the column it sits in ... the gap belongs to whoever
+    // builds the sheet". PairingPanelView's control loop and SessionDetailView's take-control /
+    // stop / kill stack are that caller now, and both used to `addView` these buttons bare.
+
+    /** `.acts2 { gap: 7px }`, which PB-DS-1's ledger absorbs into `swarm_space_8`. */
+    @Test
+    fun `the cta stack spends acts2's own gap`() {
+        val stack = ctaStack(context)
+        val gap = dimenPx("swarm_space_8")
+
+        stack.addView(ctaButton(context, "First", CtaKind.MORE, bloom = false))
+        stack.addView(ctaButton(context, "Second", CtaKind.MORE, bloom = false))
+        stack.addView(ctaButton(context, "Third", CtaKind.MORE, bloom = false))
+
+        assertEquals(
+            "the first child of a gapped stack carries no leading gap of its own",
+            0,
+            (stack.getChildAt(0).layoutParams as LinearLayout.LayoutParams).topMargin,
+        )
+        for (i in 1 until stack.childCount) {
+            assertEquals(
+                "child $i does not carry acts2's own gap above it",
+                gap,
+                (stack.getChildAt(i).layoutParams as LinearLayout.LayoutParams).topMargin,
+            )
+        }
+    }
+
+    @Test
+    fun `the cta stack is a vertical column that fills its screen's width`() {
+        val stack = ctaStack(context)
+
+        assertEquals(LinearLayout.VERTICAL, stack.orientation)
+        assertEquals(android.view.ViewGroup.LayoutParams.MATCH_PARENT, stack.layoutParams.width)
+        assertEquals(android.view.ViewGroup.LayoutParams.WRAP_CONTENT, stack.layoutParams.height)
+    }
 }

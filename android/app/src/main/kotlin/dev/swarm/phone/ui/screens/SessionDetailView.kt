@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.NoticeKind
+import dev.swarm.phone.ui.kit.ctaStack
 import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.noticeDetail
@@ -279,10 +280,14 @@ fun sessionDetailView(
     // nearby. It is added only while the model offers it -- once the machine has confirmed the
     // lease there is nothing left to take, and a screen that composed it anyway and then hid it
     // would be the second, contradictable statement PB-DS-9 fences against.
-    if (panel.offersTakeControl) column.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
-
-    column.addView(stop.tagged(DetailTag.STOP))
-    column.addView(kill.tagged(DetailTag.KILL))
+    //
+    // agents-tracker-nx44.1: `ctaStack` AND NOT `column`, so the three controls carry `.acts2`'s
+    // own `space_8` gap between them rather than the zero addView gave them.
+    val controls = ctaStack(context)
+    if (panel.offersTakeControl) controls.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
+    controls.addView(stop.tagged(DetailTag.STOP))
+    controls.addView(kill.tagged(DetailTag.KILL))
+    column.addView(controls)
     return column
 }
 

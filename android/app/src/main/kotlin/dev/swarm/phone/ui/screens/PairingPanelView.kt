@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.ctaStack
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
@@ -169,6 +170,12 @@ fun pairingPanelView(
     // order, so composing it directly would put the controls on screen in whatever order the
     // implementation happened to insert them -- and "They match" / "They do not match" swapping
     // places between draws is the one pair in this product where a mis-tap is a security event.
+    //
+    // agents-tracker-nx44.1: `ctaStack` AND NOT `column`, so the relay sentence, the field and
+    // the controls carry `.acts2`'s own `space_8` gap between them rather than the zero addView
+    // gave them -- which on `CtaKind.APPROVE`'s bloom variant was worse than zero, since the
+    // button's own negative margin pulled a bare neighbour closer than its visible edge.
+    val controls = ctaStack(context)
     PairingControl.entries.filter { it in panel.controls }.forEach { control ->
         // THE RELAY SENTENCE IS COMPOSED WITH ITS FIELD AND NOT ABOVE THE STACK. Every other
         // block on this screen belongs to the STEP; this one belongs to one box, and a sentence
@@ -183,17 +190,18 @@ fun pairingPanelView(
         // notice, and its 48 dp of vertical air is written for a section that holds nothing
         // rather than for a caption on a text field.
         if (control == PairingControl.RELAY_URL && panel.relayNotice.isNotEmpty()) {
-            column.addView(
+            controls.addView(
                 readOnlyNote(context, panel.relayNotice).apply { tag = PairingTag.RELAY_NOTICE },
             )
         }
-        column.addView(
+        controls.addView(
             requireNotNull(slots.controls[control]) {
                 "PB-DS-9: the pairing panel offers $control and the surface supplied no view for " +
                     "it, so the step would render with one control missing and nothing to say so."
             }.tagged(PairingTag.control(control)),
         )
     }
+    column.addView(controls)
 
     below?.let { column.addView(it) }
     return column
