@@ -163,6 +163,145 @@ var s22bDocChromeSelectors = map[string]string{
 		"var(--mono) and appears on no product screen",
 }
 
+// s22bUnimplementedRule is a PRODUCT rule the design draws and this app deliberately does not
+// implement. It is a third thing, and the two that already exist could not express it.
+//
+// It is not doc chrome: `.ptime` and `.tcard .h` style the product, they parse cleanly against the
+// token origin, and TestPBDS2_TheDocChromeExclusionIsStillTrue would fail them on exactly that
+// evidence. It is not a derived style either -- that class is for a style the ARTIFACT never drew,
+// and these are rules the artifact draws that the APP does not spend.
+//
+// SO THE ENTRY IS A RECORD RATHER THAN AN EXCLUSION, and the difference is where the authority
+// lives. A selector listed here names the ADR that decided not to implement it and the anchor that
+// decision lives under; TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecordDecides follows the
+// citation and fails when the decision is not there, when the rule has left the design source, or
+// -- for a merge -- when the two rules stop rendering identically. A list nobody could disagree
+// with would be a hole in the join with a comment over it.
+type s22bUnimplementedRule struct {
+	Why        string
+	MergedInto string   // the selector whose style renders it instead; "" when nothing does
+	ADR        string   // repo-relative path to the record
+	Anchor     string   // the heading the decision lives under, so the search is scoped to it
+	Wants      []string // phrases the decision must contain, beyond the selector itself
+}
+
+// s22bTypeConsolidationADR is ADR-012, which is where a rule stops being implemented.
+const s22bTypeConsolidationADR = "docs/adr/ADR-012-type-ladder-consolidation-phase-1.md"
+
+// s22bUnimplementedRules is that list, and it has exactly two entries (ADR-012, 2026-08-09).
+//
+// `.tcard .h` IS A MERGE AND `.ptime` IS A DELETION, which is why the struct carries MergedInto
+// rather than a flag. The merge is the one that needs asserting: it is only safe while the design
+// keeps the two rules on the same numbers AND the bundled family keeps resolving both declared
+// weights to one face, and neither of those is this app's to guarantee.
+var s22bUnimplementedRules = map[string]s22bUnimplementedRule{
+	".tcard .h": {
+		Why: "10.5/600 mono, which ADR-009 D7's two-face bundle resolves to the 500 face -- the " +
+			"same pixels as `.sheet2 .ctx`, whose style survives the merge",
+		MergedInto: ".sheet2 .ctx",
+		ADR:        s22bTypeConsolidationADR,
+		Anchor:     "### T1.",
+		Wants:      []string{"`Label.CardHead`", "`Mono.Meta`"},
+	},
+	".ptime": {
+		Why: "the mock's simulated iOS status-bar clock. The system draws the status bar and this " +
+			"app never does, so the style had zero call sites from the day it landed",
+		ADR:    s22bTypeConsolidationADR,
+		Anchor: "### T2.",
+		Wants:  []string{"`Label.StatusBar`"},
+	},
+}
+
+// s22bFontFamilyWeightRe reads the weights a bundled family answers, out of the family resource.
+var s22bFontFamilyWeightRe = regexp.MustCompile(`android:fontWeight="([0-9]+)"`)
+
+// s22bBundledFaceWeights is which weights the mono family actually ships, read from
+// res/font/jetbrains_mono.xml rather than written down here.
+//
+// THE MERGE'S PREMISE IS THIS FILE'S CONTENT. `.tcard .h` asks for 600 and `.sheet2 .ctx` asks for
+// 500; they render the same glyphs because the family answers 400 and 500 and Android picks the
+// nearest. Add a 600 face -- which ADR-009 D7 priced at 273 KB and declined -- and the two rules
+// stop being the same pixels, the merge stops being safe, and this gate has to say so.
+func s22bBundledFaceWeights(t *testing.T) []int {
+	t.Helper()
+	family := s22bFontSubstitution["--p-mono"]
+	name := strings.TrimPrefix(family, "@font/")
+	if name == family {
+		t.Fatalf("PB-DS-3: the mono substitution is %q, which is not a bundled `@font/` resource, "+
+			"so there is no family table to resolve a declared weight through", family)
+	}
+	path := filepath.Join(appModule(t), "src", "main", "res", "font", name+".xml")
+	raw := readFileOrFail(t, path, "ADR-009 D7")
+
+	var out []int
+	for _, m := range s22bFontFamilyWeightRe.FindAllStringSubmatch(raw, -1) {
+		w, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Errorf("ADR-009 D7: %s declares android:fontWeight=%q, which is not a number",
+				mustRel(t, path), m[1])
+			continue
+		}
+		out = append(out, w)
+	}
+	if len(out) == 0 {
+		t.Fatalf("ADR-009 D7: %s declares no android:fontWeight at all. Every weight would then "+
+			"resolve to nothing and the render-equality comparison below would compare two "+
+			"absences and agree.", mustRel(t, path))
+	}
+	sort.Ints(out)
+	return out
+}
+
+// s22bResolvedFace is the face a declared weight actually renders in, given the weights a family
+// ships: the nearest one, ties to the lighter, which is Android's own rule.
+func s22bResolvedFace(want int, faces []int) int {
+	best := faces[0]
+	for _, face := range faces[1:] {
+		switch d, bd := abs(face-want), abs(best-want); {
+		case d < bd, d == bd && face < best:
+			best = face
+		}
+	}
+	return best
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// s22bRenderDifferences reports every way two design rules do NOT render identically, given the
+// faces the family ships. Empty means a style for one of them is a style for both.
+//
+// IT IS A FUNCTION RETURNING VALUES so the negative control can feed it perturbed pairs through the
+// same comparison the real assertion calls -- the rule the rest of this file already follows.
+//
+// WEIGHT IS COMPARED AFTER RESOLUTION, and that is the entire point: 600 and 500 are different
+// declarations and the same pixels on a family that ships no 600. On a family that ships one they
+// are different pixels, and this is where that difference arrives.
+func s22bRenderDifferences(a, b s22bTypeSpec, faces []int) []string {
+	var diffs []string
+	if a.SizePx != b.SizePx {
+		diffs = append(diffs, fmt.Sprintf("size %gpx against %gpx", a.SizePx, b.SizePx))
+	}
+	if math.Abs(a.TrackingEm-b.TrackingEm) > 1e-9 {
+		diffs = append(diffs, fmt.Sprintf("tracking %gem against %gem", a.TrackingEm, b.TrackingEm))
+	}
+	if a.Family != b.Family {
+		diffs = append(diffs, fmt.Sprintf("family %s against %s", a.Family, b.Family))
+	}
+	if a.LineHeight != b.LineHeight {
+		diffs = append(diffs, fmt.Sprintf("line-height %g against %g", a.LineHeight, b.LineHeight))
+	}
+	if fa, fb := s22bResolvedFace(a.Weight, faces), s22bResolvedFace(b.Weight, faces); fa != fb {
+		diffs = append(diffs, fmt.Sprintf("weight %d resolves to the %d face and weight %d to the "+
+			"%d face (the family ships %v)", a.Weight, fa, b.Weight, fb, faces))
+	}
+	return diffs
+}
+
 // ---------------------------------------------------------------------------
 // The design's own typography, read out of the CSS.
 // ---------------------------------------------------------------------------
@@ -337,8 +476,22 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 	// to report and would then be reporting about the wrong thing.
 	// TestPBDS2_EveryStyleIsClaimedByExactlyOneClass keeps the two classes exhaustive, so the
 	// split cannot become a place for a style to hide.
-	const wantStyles = 18
-	if len(design) != wantStyles {
+	//
+	// THE TWO NUMBERS SPLIT ON 2026-08-09 (ADR-012), AND THE SPLIT IS ARITHMETIC RATHER THAN A
+	// SECOND OPINION. What this assertion said before, quoted so the move is visible:
+	//
+	//	const wantStyles = 18
+	//	if len(design) != wantStyles { ... }
+	//	if len(styles) != wantStyles { ... }
+	//
+	// The design still draws 18 -- ADR-012 edits no design source, which is the whole of its
+	// safety argument. The app now implements 16 of them, because T1 merges `.tcard .h` into
+	// `.sheet2 .ctx` and T2 deletes the style for `.ptime`. The implemented count is DERIVED from
+	// the other two rather than typed, so a rule added to the unimplemented list without a style
+	// leaving type.xml fails here instead of balancing.
+	const wantDesignRules = 18
+	wantStyles := wantDesignRules - len(s22bUnimplementedRules)
+	if len(design) != wantDesignRules {
 		var got []string
 		for sel := range design {
 			got = append(got, sel)
@@ -347,11 +500,13 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 		t.Errorf("PB-DS-2: the design source declares %d product text styles, and the "+
 			"requirement is written against %d. Either a rule was added to the artifact or the "+
 			"doc-chrome exclusion list is wrong.\n\t%s",
-			len(design), wantStyles, strings.Join(got, "\n\t"))
+			len(design), wantDesignRules, strings.Join(got, "\n\t"))
 	}
 	if len(styles) != wantStyles {
-		t.Errorf("PB-DS-2: %s defines %d TextAppearance.Swarm.* styles citing `origin:`, want %d",
-			mustRel(t, s22bTypePath(t)), len(styles), wantStyles)
+		t.Errorf("PB-DS-2: %s defines %d TextAppearance.Swarm.* styles citing `origin:`, want %d "+
+			"(%d rules the design draws, less the %d ADR-012 records as deliberately "+
+			"unimplemented)", mustRel(t, s22bTypePath(t)), len(styles), wantStyles,
+			wantDesignRules, len(s22bUnimplementedRules))
 	}
 
 	claimed := map[string]string{} // CSS selector -> the style that claims it
@@ -369,6 +524,13 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 				mustRel(t, s22bTypePath(t)), style.Line, name, style.Origin)
 			continue
 		}
+		if rule, decided := s22bUnimplementedRules[style.Origin]; decided {
+			t.Errorf("PB-DS-2: %s:%d style %q cites origin `%s`, which %s records as deliberately "+
+				"unimplemented (%s). A style for a rule the record says this app does not spend is "+
+				"the decision being reversed in a resource file.",
+				mustRel(t, s22bTypePath(t)), style.Line, name, style.Origin, rule.ADR, rule.Why)
+			continue
+		}
 		// UNLISTED STYLE FAILS -- and so does a second style pointed at the same rule, which is
 		// the same defect wearing the other hat: two names for one design fact drift apart on
 		// the first edit.
@@ -381,9 +543,15 @@ func TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally(t *testing.T) {
 		s22bAssertStyleMatches(t, name, "origin `"+style.Origin+"`", style, spec)
 	}
 
-	// UNIMPLEMENTED ROW FAILS.
+	// UNIMPLEMENTED ROW FAILS -- unless not implementing it is itself a recorded decision, which
+	// is what s22bUnimplementedRules holds and TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecord
+	// Decides audits. A rule skipped here is skipped WITH a citation; the skip is not what makes
+	// it acceptable, the record is.
 	var orphan []string
 	for sel := range design {
+		if _, decided := s22bUnimplementedRules[sel]; decided {
+			continue
+		}
 		if _, ok := claimed[sel]; !ok {
 			orphan = append(orphan, fmt.Sprintf("`%s` (%gpx / %d / %gem / %s)",
 				sel, design[sel].SizePx, design[sel].Weight, design[sel].TrackingEm, design[sel].Family))
@@ -1085,6 +1253,125 @@ func TestPBDS2_TheDocChromeExclusionIsStillTrue(t *testing.T) {
 			t.Errorf("PB-DS-2: `%s` now resolves cleanly against the token origin, so the "+
 				"evidence for excluding it (%s) no longer holds. It must either get a "+
 				"TextAppearance or be excluded for a reason that is still true.", sel, why)
+		}
+	}
+}
+
+// TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecordDecides audits the one list in this file that
+// lets a design rule go unimplemented.
+//
+// THE BIDIRECTIONAL JOIN IS ONLY AS STRONG AS THIS TEST. Every selector in s22bUnimplementedRules
+// is a rule the join above stops asking for, so the list is the join's own escape hatch and the
+// three things checked here are what keep it from being one:
+//
+//   - the rule is STILL DRAWN by the design source. An entry for a rule that is gone is dead
+//     bookkeeping, and worse, it silently lowers the implemented count by one forever.
+//   - the DECISION IS ON RECORD, under the anchor the entry names, naming the style it applies to.
+//     Following the citation is what makes "deliberately" a claim a reviewer can check.
+//   - a MERGE STILL RENDERS IDENTICALLY. `.tcard .h` is dropped because `.sheet2 .ctx` draws the
+//     same pixels; the day the design moves either rule, or the day the mono family ships a 600
+//     face, that stops being true and the merge becomes a size change nobody reviewed.
+func TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecordDecides(t *testing.T) {
+	design := s22bDesignTypeScale(t)
+	faces := s22bBundledFaceWeights(t)
+
+	for _, sel := range sortedKeys(s22bUnimplementedRules) {
+		rule := s22bUnimplementedRules[sel]
+
+		spec, drawn := design[sel]
+		if !drawn {
+			t.Errorf("PB-DS-2: %s records `%s` as deliberately unimplemented and the design source "+
+				"declares no such text rule. An entry for a rule that is gone holds the implemented "+
+				"count down by one and explains nothing: delete it.", rule.ADR, sel)
+			continue
+		}
+
+		adr := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(rule.ADR)), "PB-DS-2")
+		start := strings.Index(adr, rule.Anchor)
+		if start < 0 {
+			t.Errorf("PB-DS-2: %s has no %q section, so `%s` is unimplemented on the authority of a "+
+				"map in a test file", rule.ADR, rule.Anchor, sel)
+			continue
+		}
+		entry := adr[start:]
+		if end := strings.Index(entry[len(rule.Anchor):], "\n### "); end >= 0 {
+			entry = entry[:len(rule.Anchor)+end]
+		}
+		for _, want := range append([]string{"`" + sel + "`"}, rule.Wants...) {
+			if !strings.Contains(entry, want) {
+				t.Errorf("PB-DS-2: %s %s does not mention %s. The record and this list must be the "+
+					"same decision, or the decision is whatever the gate happens to say.",
+					rule.ADR, strings.TrimSuffix(rule.Anchor, "."), want)
+			}
+		}
+
+		if rule.MergedInto == "" {
+			continue
+		}
+		into, ok := design[rule.MergedInto]
+		if !ok {
+			t.Errorf("PB-DS-2: `%s` is recorded as merged into `%s`, which the design source does "+
+				"not declare. The rule it merged into is the whole reason dropping it costs "+
+				"nothing.", sel, rule.MergedInto)
+			continue
+		}
+		if diffs := s22bRenderDifferences(spec, into, faces); len(diffs) > 0 {
+			t.Errorf("PB-DS-2 (%s %s): `%s` and `%s` no longer render identically -- %s. The merge "+
+				"was authorized on the ground that no pixel moves; it is now a size, weight or "+
+				"family change carried by a deletion.",
+				rule.ADR, strings.TrimSuffix(rule.Anchor, "."), sel, rule.MergedInto,
+				strings.Join(diffs, "; "))
+		}
+	}
+}
+
+// TestPBDS2_TheRenderEqualityRefusesAPerturbedPair is the negative control for the merge's premise.
+//
+// The pair below is the real one, read out of the design source, so a green here is about the rules
+// this app actually merged. Each perturbation is IN MEMORY -- a copy of the spec with one field
+// moved -- because a control that edited a file on disk would be proving something about a file
+// nobody ships.
+func TestPBDS2_TheRenderEqualityRefusesAPerturbedPair(t *testing.T) {
+	design := s22bDesignTypeScale(t)
+	faces := s22bBundledFaceWeights(t)
+
+	merged, into := ".tcard .h", ".sheet2 .ctx"
+	a, ok := design[merged]
+	if !ok {
+		t.Fatalf("PB-DS-2: the design source no longer declares `%s`; this control would be about "+
+			"a zero value", merged)
+	}
+	b, ok := design[into]
+	if !ok {
+		t.Fatalf("PB-DS-2: the design source no longer declares `%s`; this control would be about "+
+			"a zero value", into)
+	}
+	if diffs := s22bRenderDifferences(a, b, faces); len(diffs) > 0 {
+		t.Errorf("PB-DS-2: the pair ADR-012 T1 merges is reported as different: %v", diffs)
+	}
+
+	// A 600 FACE IS THE PERTURBATION THAT MATTERS, because it is the one that could arrive without
+	// anybody touching the design: 600 and 500 are the pair's declared weights, and they are the
+	// same pixels only while the family answers neither with its own face.
+	if diffs := s22bRenderDifferences(a, b, []int{400, 500, 600}); len(diffs) == 0 {
+		t.Errorf("PB-DS-2: `%s` (weight %d) and `%s` (weight %d) still compare equal against a "+
+			"family shipping a 600 face. The merge's whole premise is the resolution, so a "+
+			"comparison blind to it would certify a bold-against-medium substitution as no change.",
+			merged, a.Weight, into, b.Weight)
+	}
+
+	for what, perturb := range map[string]func(s22bTypeSpec) s22bTypeSpec{
+		"half a point of size": func(s s22bTypeSpec) s22bTypeSpec { s.SizePx += 0.5; return s },
+		"tracking the rule does not state": func(s s22bTypeSpec) s22bTypeSpec {
+			s.TrackingEm = 0.01
+			return s
+		},
+		"the sans family": func(s s22bTypeSpec) s22bTypeSpec { s.Family = "--p-font"; return s },
+		"a leading":       func(s s22bTypeSpec) s22bTypeSpec { s.LineHeight = 1.4; return s },
+	} {
+		if diffs := s22bRenderDifferences(perturb(a), b, faces); len(diffs) == 0 {
+			t.Errorf("PB-DS-2: a rule differing by %s compares equal to `%s`. The merge is then "+
+				"authorized by a comparison that agrees with everything.", what, into)
 		}
 	}
 }

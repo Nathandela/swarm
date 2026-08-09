@@ -225,6 +225,14 @@ which is already the recorded upgrade path for the box-drawing fallback defect; 
 `zero` + `calt` enabled wherever machine data renders. Type scale structure (19 styles, sp
 units, colour-free styles) is unchanged.
 
+**The count moved on 2026-08-09; the sentence stays as published (see
+[ADR-012](ADR-012-type-ladder-consolidation-phase-1.md)).** "19 styles" is the record of what D7
+did not change and it was true when D7 was written. ADR-012 takes the scale to **17**: it merges
+`Label.CardHead` into `Mono.Meta`, which this decision's own two-face bundle made pixel-identical
+by resolving 600 to 500, and deletes the dead `Label.StatusBar`. Everything else in the structure
+sentence still holds — sp units, colour-free styles, and no size, weight, tracking, family or
+feature string in this decision moves.
+
 #### Amendment (2026-08-07, executed by phase O5)
 
 The paragraph above names a font and a phase. This records what was actually bundled, where the
