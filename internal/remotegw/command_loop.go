@@ -629,7 +629,7 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) error {
 	op, err := opForAction(rc)
 	if err != nil {
-		return err
+		return b.refuseCommand(ctx, rc, err)
 	}
 	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc)
 	if err != nil {
@@ -638,6 +638,32 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	// Through the ONE serialised producer (lease_confirm.go): a second inline
 	// allocate -> append here would reintroduce the out-of-order hazard for this class.
 	return b.sealReply(ctx, reply)
+}
+
+// refuseCommand answers a command this gateway cannot route -- an action with no arm, or one
+// whose in-envelope body is missing -- and returns the reason so the item still fails locally.
+//
+// AN UNANSWERED COMMAND IS UNANSWERABLE, and that is the whole of why this exists
+// (agents-tracker-nx44.4). opForAction's refusal used to return straight out of forward, one
+// hop short of the daemon and BEFORE handle's consume, so nothing was ever sealed back: the
+// phone's operation stayed pending for the life of the install, because a reply is the only
+// thing that resolves one. S18 found it for device_revoke and IS-LIFE-4 found it for approve;
+// both fixes added the missing ARM, and neither closed the class -- which is what happens when
+// there is no arm, and a phone one release ahead of its gateway is the ordinary way to get one.
+//
+// THE ERROR IS STILL RETURNED, joined rather than replaced: an unconsumed item leaves the
+// inbound high-water where it is and puts the reason in a poll error an operator can read.
+// refusePushPrefs has the same shape and the same reasons, including the absence of an
+// ErrorCode -- none of the six in the taxonomy describes "this build has no arm for that", and
+// inventing a mapping would tell the phone's retry policy something untrue.
+func (b *CommandBridge) refuseCommand(ctx context.Context, rc protocol.RemoteCommand, reason error) error {
+	sealErr := b.sealReply(ctx, protocol.Control{
+		Op:          protocol.OpError,
+		SessionID:   rc.Session,
+		OperationID: rc.OperationID,
+		Error:       reason.Error(),
+	})
+	return errors.Join(reason, sealErr)
 }
 
 // errNoPrefsCustody refuses push_prefs on a bridge assembled without durable custody. The
