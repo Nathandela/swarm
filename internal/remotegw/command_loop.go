@@ -505,10 +505,34 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 		return b.routeInput(frame)
 	}
 	if err := b.routeCommand(ctx, frame.Command); err != nil {
+		// A SEALED REFUSAL IS FINAL, SO THE ITEM IS STILL CONSUMED (agents-tracker-2pnu F3).
+		// Every other failure here is a fact about the world -- the daemon was down, the relay
+		// refused the append -- and leaving it unconsumed is what lets the next drain deliver
+		// it. A refusal is a fact about THIS BINARY: it has no arm for the action, or the arm's
+		// body is not in the envelope, and neither changes on a retry. Left unconsumed the
+		// cursor never passes it, the relay is never acked, and the phone -- which already
+		// resolved the operation on the reply that went out -- gets a second copy on every
+		// restart. Consumed, the reason still rides out in the poll error below.
+		var refused refusedCommand
+		if !errors.As(err, &refused) {
+			return err
+		}
+		if consumeErr := b.consume(frame, it.Cursor); consumeErr != nil {
+			return errors.Join(err, consumeErr)
+		}
 		return err
 	}
 	return b.consume(frame, it.Cursor)
 }
+
+// refusedCommand marks a refusal this build can never take back: the reply IS sealed and the
+// item must be consumed. It is a type rather than a sentinel because the reason it carries is
+// the operator's only account of what was refused -- see handle.
+type refusedCommand struct{ reason error }
+
+func (r refusedCommand) Error() string { return r.reason.Error() }
+
+func (r refusedCommand) Unwrap() error { return r.reason }
 
 // consume records that frame's seq has been taken off its (sender, epoch) stream at
 // mailbox cursor, and persists that fact. It is the ONLY writer of the inbound replay
@@ -651,19 +675,26 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 // both fixes added the missing ARM, and neither closed the class -- which is what happens when
 // there is no arm, and a phone one release ahead of its gateway is the ordinary way to get one.
 //
-// THE ERROR IS STILL RETURNED, joined rather than replaced: an unconsumed item leaves the
-// inbound high-water where it is and puts the reason in a poll error an operator can read.
+// THE ERROR IS STILL RETURNED, so the reason rides out in a poll error an operator can read.
+// It is returned as a refusedCommand once the reply is SEALED, which is what tells handle to
+// consume the item anyway (agents-tracker-2pnu F3): the answer is out and no retry can change
+// it, so an unconsumed item would only wedge the cursor behind a question already answered. A
+// failed SEAL is the other case and keeps the old shape -- a refusal the phone never received
+// must be re-served, because that is the one retry that can still deliver.
+//
 // refusePushPrefs has the same shape and the same reasons, including the absence of an
 // ErrorCode -- none of the six in the taxonomy describes "this build has no arm for that", and
 // inventing a mapping would tell the phone's retry policy something untrue.
 func (b *CommandBridge) refuseCommand(ctx context.Context, rc protocol.RemoteCommand, reason error) error {
-	sealErr := b.sealReply(ctx, protocol.Control{
+	if sealErr := b.sealReply(ctx, protocol.Control{
 		Op:          protocol.OpError,
 		SessionID:   rc.Session,
 		OperationID: rc.OperationID,
 		Error:       reason.Error(),
-	})
-	return errors.Join(reason, sealErr)
+	}); sealErr != nil {
+		return errors.Join(reason, sealErr)
+	}
+	return refusedCommand{reason}
 }
 
 // errNoPrefsCustody refuses push_prefs on a bridge assembled without durable custody. The
@@ -732,13 +763,21 @@ func (b *CommandBridge) applyPushPrefs(ctx context.Context, rc protocol.RemoteCo
 // custody failure, and inventing a mapping would tell the phone's retry policy something
 // untrue -- the same shape confirmLease's refusals already take.
 func (b *CommandBridge) refusePushPrefs(ctx context.Context, rc protocol.RemoteCommand, reason error) error {
-	sealErr := b.sealReply(ctx, protocol.Control{
+	refusal := fmt.Errorf("push_prefs: %w", reason)
+	if sealErr := b.sealReply(ctx, protocol.Control{
 		Op:          protocol.OpError,
 		SessionID:   rc.Session,
 		OperationID: rc.OperationID,
 		Error:       reason.Error(),
-	})
-	return errors.Join(fmt.Errorf("push_prefs: %w", reason), sealErr)
+	}); sealErr != nil {
+		return errors.Join(refusal, sealErr)
+	}
+	// refuseCommand's shape, for its reason (agents-tracker-2pnu F3): once the phone has been
+	// told, re-serving the item only re-tells it. The persist failure that reaches here is the
+	// one arguable case and takes the same answer -- a preference the phone was told was NOT
+	// applied is resolved on its side, and 3 re-tells a second against a full disk is not a
+	// retry policy.
+	return refusedCommand{refusal}
 }
 
 // opForAction maps a command action to the daemon wire op. kill/delete carry no body

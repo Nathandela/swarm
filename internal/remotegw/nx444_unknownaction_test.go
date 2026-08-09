@@ -21,9 +21,14 @@ package remotegw
 //
 //  1. A REPLY IS SEALED. protocol.OpError carrying the command's own OperationID, so the phone
 //     resolves the op with an honest refusal rather than waiting on a frame that will never come.
-//  2. THE ITEM STILL FAILS. The error is not swallowed: an unconsumed item is what keeps the
-//     mailbox cursor where it is and puts the reason in a poll error an operator can see. This is
-//     refusePushPrefs' shape (errors.Join), and it is deliberately kept.
+//  2. THE ITEM STILL FAILS. The error is not swallowed: the reason rides out in a poll error an
+//     operator can see. This is refusePushPrefs' shape (errors.Join), and it is deliberately kept.
+//
+// AMENDED BY agents-tracker-2pnu F3. This clause used to read "an unconsumed item is what keeps
+// the mailbox cursor where it is" and treated that as the fix's second half. It was the fix's
+// second defect: a refusal is sealed and final, so leaving the item unconsumed wedged the cursor
+// behind an answer that had already gone out. The item is now consumed and the error still
+// returned; refusal_consume_test.go holds the claim.
 
 import (
 	"context"
