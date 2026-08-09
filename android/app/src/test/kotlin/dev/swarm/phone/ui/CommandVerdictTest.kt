@@ -158,15 +158,35 @@ class CommandVerdictTest {
 
     // ---- the sentence ----
 
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10: the head sentence is the WHOLE
+     * primary copy, and the machine's own words are a detail beside it.
+     *
+     * **THE OLD CONTRACT SPLICED A GO ERROR INTO THE PRODUCT'S OWN SENTENCE.** `head: reason.` put
+     * a string the daemon wrote -- `kill_switch: remote control is disabled (kill switch off)`,
+     * lower case, parenthesised, with a wire code in front of it -- inside a sentence this app
+     * authored, in this app's own body type. A reader cannot tell where the copy stops and the
+     * diagnostic starts, and the product reads as though it wrote both.
+     *
+     * IT IS NOT A DELETION. [CommandVerdict.reason] still carries the words verbatim and the five
+     * screens still show them: what changes is the REGISTER they are shown in -- `Mono.Meta` in
+     * `--p-ink3` under the sentence, which is the machine's own voice rather than this one's.
+     */
     @Test
-    fun `the machine's own words are what the sentence carries`() {
+    fun `the head is the whole sentence, and the machine's own words are the detail beside it`() {
         val verdict = CommandVerdict.of(outcome("kill_switch", "remote control is disabled"), id, CommandVerdict.ACCEPTED_OK)
 
         assertEquals(
-            "the machine's reason was dropped, which is the whole defect: the user's next step " +
-                "depends on which refusal it was",
-            "Your machine said no: remote control is disabled.",
+            "the machine's raw reason is still spliced into the middle of the screen's own " +
+                "sentence, so a daemon error string reads as copy this product wrote",
+            "Your machine said no.",
             verdict.sentence("Your machine said no"),
+        )
+        assertEquals(
+            "the machine's reason was dropped rather than demoted, and the user's next step " +
+                "depends on which refusal it was",
+            "remote control is disabled",
+            verdict.reason,
         )
     }
 

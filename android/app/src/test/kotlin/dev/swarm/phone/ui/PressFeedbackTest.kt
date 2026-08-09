@@ -47,6 +47,41 @@ class PressFeedbackTest {
             routed,
             feedback.toast,
         )
+        assertEquals(
+            "a routed failure carries a detail it was never given. `ErrorRouter` writes ONE " +
+                "sentence and it is the whole of what this press knows",
+            "",
+            feedback.detail,
+        )
+    }
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10: the machine's own words, in the
+     * toast's own second cell.
+     *
+     * **WHY THE TOAST IS THE HARD ONE.** Two of the five refusal sites -- `renderKillVerdict` and
+     * the settings surface's push_prefs refusal -- reach the user through this model and nothing
+     * else, and a toast is one line. It is not a dead end: derivation row 1 gives the toast a
+     * separate MONO suffix cell beside its message, which is exactly the register the demotion
+     * asks for. So the detail travels here and lands there, rather than being spliced back into
+     * the sentence at the one seam that had no second view to put it in.
+     */
+    @Test
+    fun `a refusal carries the machine's own words as a detail beside the sentence`() {
+        val machine = "kill_switch: remote control is disabled (kill switch off)"
+        val feedback = PressFeedback.ofRefusal(routed, detail = machine)
+
+        assertEquals(
+            "the sentence absorbed the machine's words, which is the splice this issue undoes",
+            routed,
+            feedback.toast,
+        )
+        assertEquals(
+            "the machine's words reach the toast's mono suffix nowhere, so the two sites that " +
+                "have only a toast lose the reason entirely",
+            machine,
+            feedback.detail,
+        )
     }
 
     @Test

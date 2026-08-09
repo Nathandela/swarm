@@ -73,6 +73,17 @@ data class SessionDetailPanel(
      */
     val leaseNotice: String,
     /**
+     * The MACHINE'S own words under [leaseNotice], or empty where it sent none
+     * (agents-tracker-ksvb.10).
+     *
+     * IT IS A SECOND FIELD AND NOT A LONGER SENTENCE. It used to be spliced into the middle of
+     * [leaseNotice] -- `Your machine refused this phone control of the session: <a Go error>.` --
+     * so a wire string was drawn in the same type, the same ink and the same voice as the copy this
+     * screen wrote. `sessionDetailView` draws it through the kit's `noticeDetail`, which is the
+     * `.sheet2 .ctx` cell: mono, tertiary, and visibly not this product talking.
+     */
+    val leaseDetail: String,
+    /**
      * Whether the Take control step is on offer, per `SessionLease.showsTakeControl`.
      *
      * IT IS OFFERED EXACTLY WHILE IT IS THE STEP TO TAKE, and there is no Release beside it because
@@ -178,6 +189,25 @@ object SessionDetailScreen {
         if (verdict.refused) verdict.sentence(KILL_REFUSED) else ""
 
     /**
+     * The machine's OWN words about the refusal, for the detail cell beside the sentence
+     * (agents-tracker-ksvb.10).
+     *
+     * IT IS A SECOND FUNCTION AND NOT A SECOND SENTENCE. `CommandVerdict.sentence` used to splice
+     * this string into the middle of [KILL_REFUSED], so a daemon Go error read as copy this screen
+     * had written. The words still matter for the reason qlf9 recorded -- a kill switch, a revoked
+     * device and a policy end in three different places -- so they are demoted rather than dropped:
+     * `ui/kit/Notice.kt`'s `noticeDetail` draws them mono and tertiary, and this surface's toast
+     * puts them in derivation row 1's own mono suffix cell.
+     *
+     * EMPTY WHERE THERE IS NOTHING TO EXPLAIN, which is what makes it a detail. A mono line under
+     * a sentence that reported no refusal is a diagnostic about nothing -- and the refusal the
+     * machine sent NO words with reaches here as `""` too, because the head already said
+     * everything known.
+     */
+    fun killDetailFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.reason else ""
+
+    /**
      * PB-INPUT-2's "visibly", in two sentences. The second says what to do about it, because a shut
      * keyboard with no reason beside it is the invisible suppression the requirement is against.
      *
@@ -232,6 +262,27 @@ object SessionDetailScreen {
     }
 
     /**
+     * [killDetailFor]'s program on this verb: the machine's own words beside the lease sentence,
+     * rather than inside it (agents-tracker-ksvb.10).
+     *
+     * IT ANSWERS FOR THE SEVERANCE AS WELL AS THE REFUSAL. `lease_sever.go` seals the detach with
+     * a message of its own -- what ended the lease is as diagnostic as what refused one -- and the
+     * two sentences above already keep them apart, so this cell does not have to.
+     *
+     * A CONFIRMED LEASE HAS NO DETAIL, and the clause is first for [leaseNoticeFor]'s reason: the
+     * lease itself is the authority, so a screen the model says holds control must not draw a
+     * refusal's diagnostic under a sentence announcing it.
+     */
+    fun leaseDetailFor(
+        confirmed: Boolean,
+        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+    ): String = when {
+        confirmed -> ""
+        verdict.result == CommandResult.ENDED || verdict.refused -> verdict.reason
+        else -> ""
+    }
+
+    /**
      * @param transcript the conversation, decided by [TranscriptScreen] off the items themselves.
      *  It is a PARAMETER and not something read here, for [lease]'s reason: this object owns copy
      *  and arrangement, and the transcript is a screen model of its own with its own heading and its
@@ -256,6 +307,7 @@ object SessionDetailScreen {
         // this screen's own take_control with, claimed by operation id, and [verdict] is the rest of
         // that same answer -- which the peek used to discard on the way in.
         leaseNotice = leaseNoticeFor(lease.showsRelease, verdict),
+        leaseDetail = leaseDetailFor(lease.showsRelease, verdict),
         offersTakeControl = lease.showsTakeControl,
         stopAction = detail.stop(),
         stopLabel = if (detail.leaseHeld) STOP else STOP_NEEDS_LEASE,

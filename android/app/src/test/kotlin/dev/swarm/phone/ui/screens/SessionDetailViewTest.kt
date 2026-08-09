@@ -6,7 +6,9 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.InteractionItem
+import dev.swarm.phone.ui.OperationOutcome
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.kit.KitTag
@@ -54,6 +56,7 @@ class SessionDetailViewTest {
         online: Boolean = true,
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
+        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
     ): SessionDetailPanel {
         val detail = SessionDetail(
             sessionId = "mbp/api",
@@ -66,8 +69,16 @@ class SessionDetailViewTest {
             detail,
             TranscriptScreen.of(emptyList()),
             SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
+            verdict,
         )
     }
+
+    /** A machine that refused this screen's own take_control, in the machine's own words. */
+    private fun refusedLease(): CommandVerdict = CommandVerdict.of(
+        OperationOutcome(operationId = "op-1", code = "kill_switch", message = "remote control is disabled"),
+        "op-1",
+        accepted = "lease",
+    )
 
     /**
      * A panel whose conversation carries one unresolved `approval_request`.
@@ -262,6 +273,11 @@ class SessionDetailViewTest {
      * transcript, the not-sent line qualifies what was typed -- and this one qualifies the two
      * controls, so it belongs immediately above them. A routed refusal at the top of a scrolling
      * transcript is a report the person who pressed the button is not looking at.
+     *
+     * THE VERDICT IS REFUSED FOR THE SAME REASON [leaseHeld] IS FALSE (agents-tracker-ksvb.10):
+     * `detail.lease.detail` is drawn only where the machine sent words, so a fixture with no
+     * refusal in it would walk past the one part whose POSITION this test is the only statement of
+     * -- under the sentence it explains, and above the control that sentence offers.
      */
     @Test
     fun `the parts are drawn in the order the recorded composition names`() {
@@ -271,6 +287,7 @@ class SessionDetailViewTest {
                 journalStale = true,
                 online = false,
                 stopNotSent = true,
+                verdict = refusedLease(),
             ),
             outcome = "Your machine refused that.",
         )
@@ -345,6 +362,37 @@ class SessionDetailViewTest {
                 "was recorded NOT MET in -- a user could not tell until a keystroke vanished",
             textOf(view(panel(leaseHeld = true)).kitRequire(DetailTag.LEASE)) !=
                 textOf(view(panel(leaseHeld = false)).kitRequire(DetailTag.LEASE)),
+        )
+    }
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10: the machine's own words are a
+     * SECOND VIEW, drawn only where there are words.
+     *
+     * They used to be spliced into the sentence above -- `Your machine refused this phone control
+     * of the session: <a Go error>.` -- so the wire string was drawn in the notice's own type and
+     * ink, and nothing on screen said which half this product had written. The kit's `noticeDetail`
+     * is the `.sheet2 .ctx` cell and `NoticeTest` argues what it looks like; what only this suite
+     * can say is that the screen composes one at all, and skips it when the machine sent nothing.
+     */
+    @Test
+    fun `the machine's own reason is drawn under the lease sentence, and only when there is one`() {
+        val refused = panel(leaseHeld = false, verdict = refusedLease())
+
+        assertEquals(
+            "the machine's reason reaches no view, so a refusal on screen names no cause at all",
+            refused.leaseDetail,
+            textOf(view(refused).kitRequire(DetailTag.LEASE_DETAIL)),
+        )
+        assertNull(
+            "an empty detail is drawn as a blank mono line -- a cell reserved for a reply the " +
+                "machine never sent, which is the call the outcome and stale notices already make",
+            view(panel(leaseHeld = false)).kitFind(DetailTag.LEASE_DETAIL),
+        )
+        assertTrue(
+            "the sentence swallowed the machine's words again, so the demotion is undone on screen " +
+                "whatever the model decided",
+            !textOf(view(refused).kitRequire(DetailTag.LEASE)).contains(refused.leaseDetail),
         )
     }
 

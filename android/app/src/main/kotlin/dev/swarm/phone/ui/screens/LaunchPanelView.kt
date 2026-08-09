@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.noticeDetail
 import dev.swarm.phone.ui.kit.sectionLabel
 
 /**
@@ -55,12 +56,22 @@ object LaunchTag {
     /** The machine's answer, or the form's own refusal. Drawn only when there is one. */
     const val NOTICE = "launch.notice"
 
+    /**
+     * The machine's own words under [NOTICE], in `.sheet2 .ctx` (agents-tracker-ksvb.10).
+     *
+     * IT IS ITS OWN PART for [DetailTag.LEASE_DETAIL]'s reason: it is drawn only for a refusal,
+     * and a test that could not tell it from the sentence could not say which of the two was
+     * carrying the wire string.
+     */
+    const val NOTICE_DETAIL = "launch.notice.detail"
+
     /** One field. The tag names WHICH field, so an assertion cannot confuse two. */
     fun field(id: LaunchFieldId): String = "launch.field." + id.name
 
     /** The parts whose ON-SCREEN ORDER is the composition. */
     val COMPOSITION: Set<String> =
-        setOf(HEADING) + LaunchFieldId.entries.map { field(it) } + setOf(SUBMIT, NOTICE)
+        setOf(HEADING) + LaunchFieldId.entries.map { field(it) } +
+            setOf(SUBMIT, NOTICE, NOTICE_DETAIL)
 }
 
 /**
@@ -99,6 +110,16 @@ fun launchPanelView(
     // reserved for a status that does not exist is a status about an operation nobody issued.
     if (panel.notice.isNotEmpty()) {
         column.addView(notice(context, panel.notice).apply { tag = LaunchTag.NOTICE })
+    }
+
+    // THE MACHINE'S OWN WORDS, UNDER THE FORM'S OWN SENTENCE (agents-tracker-ksvb.10). They used to
+    // BE the notice -- `noticeFor` returned `rendering.reason` and nothing else -- so a daemon
+    // error string was the whole of what a refused launch said, in this form's own body type. Same
+    // condition as the line above and for the same reason: only a refusal has one.
+    if (panel.noticeDetail.isNotEmpty()) {
+        column.addView(
+            noticeDetail(context, panel.noticeDetail).apply { tag = LaunchTag.NOTICE_DETAIL },
+        )
     }
 
     below?.let { column.addView(it) }

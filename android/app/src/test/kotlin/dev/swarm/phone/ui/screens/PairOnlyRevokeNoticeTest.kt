@@ -102,15 +102,36 @@ class PairOnlyRevokeNoticeTest {
         )
     }
 
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10 on this verb. The machine's reason
+     * moves OUT of the notice and into [PairOnlyScreen.revokeDetailFor], which the screen draws
+     * mono and tertiary beneath it.
+     *
+     * THE SENTENCE IS THE ONE THAT MATTERS HERE MORE THAN ANYWHERE. What the user has to act on is
+     * that the machine still holds this device -- `swarm remote pair` is refused while it does --
+     * and that fact was competing for the same line as a daemon error string.
+     */
     @Test
-    fun `a refused revoke says the machine kept the registration, in its own words`() {
-        val notice = PairOnlyScreen.revokeNoticeFor(
-            verdict("kill_switch", "remote control is disabled (kill switch off)"),
-        )
+    fun `a refused revoke says the machine kept the registration, with its words beside it`() {
+        val refused = verdict("kill_switch", "remote control is disabled (kill switch off)")
+        val notice = PairOnlyScreen.revokeNoticeFor(refused)
 
-        assertTrue(
-            "the machine's reason for refusing to remove this device was dropped",
+        assertFalse(
+            "the machine's raw reason sits inside the screen's own sentence, so a wire string " +
+                "reads as copy this product wrote about a registration",
             notice.contains("remote control is disabled (kill switch off)"),
+        )
+        assertEquals(
+            "the machine's reason for refusing to remove this device was dropped",
+            "remote control is disabled (kill switch off)",
+            PairOnlyScreen.revokeDetailFor(refused),
+        )
+        assertEquals(
+            "a confirmed or unanswered revoke prints a detail, which is a diagnostic under a " +
+                "sentence that reports no refusal",
+            "",
+            PairOnlyScreen.revokeDetailFor(verdict("ok", "ok")) +
+                PairOnlyScreen.revokeDetailFor(CommandVerdict.UNANSWERED),
         )
         assertTrue(
             "a refused revoke reads exactly like an unconfirmed one, so the user is not told " +
@@ -194,6 +215,40 @@ class PairOnlyRevokeNoticeTest {
             "the unpaired screen no longer offers exactly one control",
             1,
             root.controls().size,
+        )
+    }
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10 as DRAWN: the machine's own words
+     * are a second view, in the machine's own register, and there is none where it sent none.
+     */
+    @Test
+    fun `the machine's own reason is drawn under the notice, and only when there is one`() {
+        val refused = verdict("kill_switch", "remote control is disabled (kill switch off)")
+        val root = pairOnlyView(
+            context,
+            pairing = View(context),
+            started = false,
+            onStartPairing = {},
+            revokedNotice = PairOnlyScreen.revokeNoticeFor(refused),
+            revokedDetail = PairOnlyScreen.revokeDetailFor(refused),
+        )
+
+        assertEquals(
+            "the machine's reason reaches no view on the one screen that could state it",
+            "remote control is disabled (kill switch off)",
+            textOf(root.kitRequire(PairOnlyTag.NOTICE_DETAIL)),
+        )
+        assertNull(
+            "a blank mono line is drawn under a revoke the machine never answered, which is a " +
+                "cell reserved for a reply that does not exist",
+            pairOnlyView(
+                context,
+                pairing = View(context),
+                started = false,
+                onStartPairing = {},
+                revokedNotice = PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED),
+            ).kitFind(PairOnlyTag.NOTICE_DETAIL),
         )
     }
 

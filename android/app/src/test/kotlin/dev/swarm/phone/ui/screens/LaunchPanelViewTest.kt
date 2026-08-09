@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchResult
 import dev.swarm.phone.ui.kit.kitFind
@@ -177,8 +178,18 @@ class LaunchPanelViewTest {
         )
     }
 
+    /**
+     * agents-tracker-ksvb.10 moved the machine's words OUT of this line and into a second view, so
+     * what this asserts is the pair: the form's own sentence with its retry clause, and the wire's
+     * string beneath it in `.sheet2 .ctx`.
+     *
+     * THE RETRY CLAUSE IS NAMED RATHER THAN INFERRED FROM A PREFIX. It used to be asserted as "the
+     * notice starts with the machine's reason and is longer than it", which was a reading of the
+     * splice; `CommandVerdict.RETRY_HINT` is the value the model appends and is what the screen has
+     * to be carrying.
+     */
     @Test
-    fun `the notice on screen is the machine's own words, retry clause and all`() {
+    fun `the notice on screen is the form's sentence, with the machine's words beneath it`() {
         // The user's next step depends on which refusal it was: a kill-switch refusal told to a
         // user as "against policy" sends them to change a spec that was fine.
         val transient = LaunchPanelScreen.of(
@@ -188,14 +199,26 @@ class LaunchPanelViewTest {
                 retryable = true,
             ),
         )
-        val drawn = textOf(view(transient).allTagged(LaunchTag.NOTICE).single())
+        val root = view(transient)
+        val drawn = textOf(root.allTagged(LaunchTag.NOTICE).single())
 
         assertEquals(transient.notice, drawn)
         assertTrue(
             "the retry clause the model appends for a refusal worth retrying did not reach the " +
                 "screen:\n$drawn",
-            drawn.startsWith("The machine is still starting up.") && drawn.length >
-                "The machine is still starting up.".length,
+            drawn.endsWith(CommandVerdict.RETRY_HINT),
+        )
+        assertEquals(
+            "the machine's own reason reaches no view, so a refused launch names no cause at all",
+            listOf("The machine is still starting up."),
+            root.allTagged(LaunchTag.NOTICE_DETAIL).map { textOf(it) },
+        )
+        assertEquals(
+            "a detail is drawn under a launch nobody refused, which is a mono line reserved for a " +
+                "reply the machine never sent",
+            0,
+            view(LaunchPanelScreen.of(rendering(result = LaunchResult.LAUNCHED)))
+                .allTagged(LaunchTag.NOTICE_DETAIL).size,
         )
     }
 

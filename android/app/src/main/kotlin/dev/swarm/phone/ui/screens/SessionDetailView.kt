@@ -9,6 +9,7 @@ import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.noticeDetail
 
 /**
  * PB-APP-3 -- inventory C2: the session detail, composed from the component kit.
@@ -149,9 +150,18 @@ object DetailTag {
     /** PB-INPUT-2's "visibly", in row 22's component. */
     const val LEASE = "detail.lease"
 
+    /**
+     * The machine's own words under [LEASE], in `.sheet2 .ctx` (agents-tracker-ksvb.10).
+     *
+     * IT IS ITS OWN PART AND NOT PART OF [LEASE], because it is drawn only when the machine sent
+     * words -- a lease nobody has asked for has a sentence and no diagnostic -- and because a test
+     * that could not tell them apart could not say which of the two carried the wire string.
+     */
+    const val LEASE_DETAIL = "detail.lease.detail"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
     val COMPOSITION: Set<String> =
-        setOf(NAV, STALE, NOT_SENT, TRANSCRIPT, OUTCOME, LEASE, TAKE_CONTROL, STOP)
+        setOf(NAV, STALE, NOT_SENT, TRANSCRIPT, OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP)
 }
 
 /**
@@ -252,6 +262,17 @@ fun sessionDetailView(
     // of or one it has not, and the requirement's recorded failure is precisely a surface that
     // looked identical either way.
     column.addView(notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE })
+
+    // THE MACHINE'S OWN WORDS, IN THE MACHINE'S OWN REGISTER (agents-tracker-ksvb.10). They used to
+    // be spliced into the sentence above, so a daemon Go error was drawn in the same type and ink
+    // as the copy this screen wrote. Drawn only when there are words: a lease nobody has asked for
+    // has a sentence and nothing to diagnose, and an empty mono line under it would be a cell
+    // reserved for a reply that does not exist.
+    if (panel.leaseDetail.isNotEmpty()) {
+        column.addView(
+            noticeDetail(context, panel.leaseDetail).apply { tag = DetailTag.LEASE_DETAIL },
+        )
+    }
 
     // THE BUTTON SITS DIRECTLY UNDER THE SENTENCE, which is row 22's own arrangement: it is that
     // sentence's `[Take control]` promoted out of the prose, not a control that happens to be

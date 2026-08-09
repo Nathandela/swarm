@@ -32,6 +32,24 @@ data class PressFeedback(
     /** What the toast says, or empty when the press has nothing to announce. */
     val toast: String,
     /**
+     * The MACHINE'S own words about the refusal, for derivation row 1's mono suffix cell
+     * (agents-tracker-ksvb.10).
+     *
+     * **THE TOAST IS THE HARD SEAM OF THAT DEMOTION AND NOT A DEAD END.** Two of the five refusal
+     * sites -- `PhoneSurface.renderKillVerdict` and `SettingsSurface`'s push_prefs refusal -- reach
+     * the user through this model and nothing else, and a toast is one line. Row 1 gives that line
+     * a SEPARATE mono cell beside its message, which is exactly the register the demotion asks for:
+     * `Mono.CodeSmall` in `--p-ink2`, not part of the sentence but appended to it. So the reason
+     * travels here and lands there, rather than being spliced back into the screen's own prose at
+     * the one seam with no second view to put it in.
+     *
+     * IT IS DEFAULTED EMPTY. `ofSuccess`, `ofUnsent` and the routed `ofRefusal` have no machine
+     * reply behind them at all -- a confirmation the design wrote, a press that never reached the
+     * wire, and `ErrorRouter`'s single classified sentence -- and a suffix invented for any of them
+     * would be an identifier appended to a sentence nobody sealed.
+     */
+    val detail: String = "",
+    /**
      * Whether this answer leaves the screen owing the user the TAKE-CONTROL press
      * (agents-tracker-agre).
      *
@@ -76,8 +94,15 @@ data class PressFeedback(
         fun ofSuccess(confirmation: String?): PressFeedback =
             PressFeedback(line = "", toast = confirmation?.takeIf { it.isNotBlank() }.orEmpty())
 
-        /** @param routed the message [ErrorRouter] produced. It is what BOTH places show. */
-        fun ofRefusal(routed: String): PressFeedback = PressFeedback(line = routed, toast = routed)
+        /**
+         * @param routed the message [ErrorRouter] produced, or the SCREEN's own sentence for a
+         *  refusal the machine sealed. It is what BOTH places show.
+         * @param detail the machine's own words, for the toast's mono suffix -- see [PressFeedback.detail].
+         *  Defaulted empty because a routed failure has none: `ErrorRouter` writes one sentence and
+         *  it is the whole of what the press knows.
+         */
+        fun ofRefusal(routed: String, detail: String = ""): PressFeedback =
+            PressFeedback(line = routed, toast = routed, detail = detail)
 
         /**
          * The same refusal, WITH the remedy the router decided for it (agents-tracker-agre).

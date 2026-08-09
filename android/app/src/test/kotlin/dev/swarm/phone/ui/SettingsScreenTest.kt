@@ -468,27 +468,41 @@ class SettingsScreenTest {
     }
 
     /**
-     * The machine's own words are what the user reads, and there is a sentence for the refusal that
-     * carries none.
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10: THE SCREEN'S SENTENCE IS THE
+     * NOTICE, and the machine's own words are a detail beside it.
      *
-     * `refusePushPrefs` seals its reply with `Error` set and NO error code -- "none of the six in
-     * the taxonomy describes a machine-side custody failure" -- so the message is the only thing
-     * that says what happened. An empty one still has to say something, or the switch snaps back
-     * with no explanation at all, which is the silent failure this issue is about wearing a
-     * different coat.
+     * **THIS SITE HAD NO SENTENCE AT ALL.** `refusalNotice` returned `outcome.message` and fell
+     * back to [SettingsScreen.SYNC_REFUSED] only when the machine sent nothing -- so the ordinary
+     * case put `push_prefs: no durable preference custody configured` on screen as the WHOLE
+     * notice: a Go identifier, a colon and a daemon's internal vocabulary, shown to a user who
+     * moved a switch. The fallback was the only well-written half of it, and it was the half that
+     * almost never rendered.
+     *
+     * `refusePushPrefs` still seals its reply with `Error` set and NO error code -- "none of the
+     * six in the taxonomy describes a machine-side custody failure" -- so the message is the only
+     * thing that says WHAT happened, and it is carried verbatim in the detail rather than dropped.
      */
     @Test
-    fun `a refusal says what the machine said, or says that it said nothing`() {
+    fun `a refusal says the screen's own sentence, with the machine's words as the detail`() {
+        val spoken = OperationOutcome("op-1", code = "error", message = "push_prefs: no durable preference custody configured")
+        val wordless = OperationOutcome("op-1", code = "error", message = "")
+
+        assertEquals(
+            "the daemon's own error string IS the notice, so a wire identifier is the whole of " +
+                "what a user is told about a preference that did not save",
+            SettingsScreen.SYNC_REFUSED,
+            SettingsScreen.refusalNotice(),
+        )
         assertEquals(
             "the machine's reason was discarded, so the user is told a change failed and not why",
             "push_prefs: no durable preference custody configured",
-            SettingsScreen.refusalNotice(
-                OperationOutcome("op-1", code = "error", message = "push_prefs: no durable preference custody configured"),
-            ),
+            SettingsScreen.refusalDetail(spoken),
         )
         assertEquals(
-            SettingsScreen.SYNC_REFUSED,
-            SettingsScreen.refusalNotice(OperationOutcome("op-1", code = "error", message = "")),
+            "a reply that carried no words produced a detail anyway, which is an empty mono line " +
+                "under a sentence that already said everything known",
+            "",
+            SettingsScreen.refusalDetail(wordless),
         )
         assertTrue(SettingsScreen.SYNC_REFUSED.isNotBlank())
     }

@@ -55,6 +55,7 @@ import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.Presentation
+import dev.swarm.phone.ui.screens.RevokeNotice
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TranscriptScreen
@@ -613,7 +614,10 @@ class PhoneSurface(
     // reaches this screen and only then dials, so the transport's verdict routinely arrives AFTER
     // the first draw. Keyed without it, the redraw that carries "the owner removed this device"
     // would be the one the early return skips.
-    private var pairOnlyDrawn: Triple<Boolean, String, PairOnlyReason>? = null
+    // THE DETAIL IS IN THE KEY WITH IT (agents-tracker-ksvb.10). It is a second cell rather than
+    // a longer sentence, and [RevokeNotice] carries both so a machine reply arriving on a later
+    // draw cannot be skipped by an early return keyed on the head alone.
+    private var pairOnlyDrawn: Triple<Boolean, RevokeNotice, PairOnlyReason>? = null
 
     /**
      * What the peek and the launch form last drew, for [inboxDrawn]'s reason and one more.
@@ -1390,7 +1394,8 @@ class PhoneSurface(
                     pairingStarted = true
                     render()
                 },
-                revokedNotice = revoked,
+                revokedNotice = revoked.notice,
+                revokedDetail = revoked.detail,
                 copy = PairOnlyScreen.copyFor(reason),
             ),
         )
@@ -1443,9 +1448,9 @@ class PhoneSurface(
      * costs is a `when` arm; what deleting it would cost is the only correct behaviour available
      * if the outcome ever survives the purge. j45x holds the decision.
      */
-    private fun revokeNotice(app: App): String {
+    private fun revokeNotice(app: App): RevokeNotice {
         val issued = runtime.revokeOperation()
-        if (issued.isEmpty()) return settings.unpairNotice
+        if (issued.isEmpty()) return RevokeNotice(settings.unpairNotice, detail = "")
         val verdict = try {
             CommandVerdict.of(
                 FacadeBridge(app).launchOutcome(issued),
@@ -1476,7 +1481,15 @@ class PhoneSurface(
         // THE PANEL'S SENTENCE STILL WINS WHERE IT EXISTS, because it can say one thing this
         // cannot: the routed reason a revoke that never reached the wire failed, which no outcome
         // carries and no verdict can express.
-        return if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed }
+        //
+        // AND THE MACHINE'S OWN WORDS ARE A SECOND CELL NOW (agents-tracker-ksvb.10), which is
+        // correct on both arms rather than only on one: a verdict that ANSWERED is the arm whose
+        // sentence is `composed`, and an unanswered one has no reply to quote, so
+        // `revokeDetailFor` answers "" for exactly the case the panel's fallback wins.
+        return RevokeNotice(
+            notice = if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed },
+            detail = PairOnlyScreen.revokeDetailFor(verdict),
+        )
     }
 
     /**
@@ -2250,7 +2263,13 @@ class PhoneSurface(
         // confirmation, and [SessionDetailScreen] is where that silence is decided rather than
         // here -- `remote-control-mock.html` wrote no toast for a kill.
         val notice = SessionDetailScreen.killNoticeFor(verdict)
-        if (notice.isNotEmpty()) say(PressFeedback.ofRefusal(notice))
+        // THE MACHINE'S WORDS TRAVEL AS THE TOAST'S SUFFIX (agents-tracker-ksvb.10). This verb has
+        // no panel cell of its own -- the kill's answer reaches the user through the outcome line
+        // and row 1's toast and nowhere else -- and row 1 gives that toast a separate MONO cell
+        // beside its message, which is the register the demotion asks for.
+        if (notice.isNotEmpty()) {
+            say(PressFeedback.ofRefusal(notice, SessionDetailScreen.killDetailFor(verdict)))
+        }
     }
 
     private fun renderLeaseVerdict(bridge: FacadeBridge) {
@@ -2263,7 +2282,12 @@ class PhoneSurface(
         // duplication: the line and the peek keep the message where it can be re-read, and the
         // toast puts it in front of the eye that was on the control -- which on this surface may
         // be the session detail's Stop, on a screen the peek is not composed into at all.
-        say(PressFeedback.ofRefusal(SessionDetailScreen.leaseNoticeFor(confirmed = false, verdict)))
+        say(
+            PressFeedback.ofRefusal(
+                SessionDetailScreen.leaseNoticeFor(confirmed = false, verdict),
+                SessionDetailScreen.leaseDetailFor(confirmed = false, verdict),
+            ),
+        )
     }
 
     /**
@@ -2557,7 +2581,11 @@ class PhoneSurface(
      */
     private fun say(feedback: PressFeedback) {
         outcome.text = feedback.line
-        if (!feedback.saysNothing) toasts.show(feedback.toast)
+        // ROW 1'S SUFFIX IS THE MACHINE'S OWN CELL (agents-tracker-ksvb.10), and it is passed as
+        // null rather than "" where there is none: `toastText` treats an empty suffix as absent
+        // anyway, and a caller that spelled the absence as a blank string would still be appending
+        // the mock's separator space to a sentence with nothing after it.
+        if (!feedback.saysNothing) toasts.show(feedback.toast, feedback.detail.ifEmpty { null })
     }
 
     /**

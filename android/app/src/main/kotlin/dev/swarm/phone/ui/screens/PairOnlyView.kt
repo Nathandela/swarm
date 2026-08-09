@@ -14,6 +14,7 @@ import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.noticeDetail
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on, as drawn.
@@ -64,6 +65,14 @@ object PairOnlyTag {
      * in this product can state.
      */
     const val NOTICE = "pairOnly.notice"
+
+    /**
+     * The machine's own words under [NOTICE], in `.sheet2 .ctx` (agents-tracker-ksvb.10).
+     *
+     * It is drawn only where the machine ANSWERED and refused: the sentence a revoke that nobody
+     * confirmed leaves behind is this screen's own, and there is no reply to quote under it.
+     */
+    const val NOTICE_DETAIL = "pairOnly.notice.detail"
 }
 
 /**
@@ -81,6 +90,10 @@ object PairOnlyTag {
  *  so the existing call sites are unaffected, which is the shape `phoneScaffoldView`'s banner took.
  *  It was called `notice` until agents-tracker-ksvb.4: the sentence and the kit factory that draws
  *  it cannot share a name in one scope.
+ * @param revokedDetail the MACHINE'S own words about the refusal, or empty where it sent none
+ *  (agents-tracker-ksvb.10). It is a second parameter and not a longer [revokedNotice] because the
+ *  two are drawn in different registers: the sentence is this product's copy about a registration
+ *  the user has to act on, and this is a daemon reply quoted under it.
  * @param copy the three sentences, which differ by WHY this phone is unpaired
  *  (agents-tracker-w6o3). It defaults to the first-run screen because that is what an offer with
  *  no reason behind it is; every other value comes from [PairOnlyScreen.reasonFor], and the screen
@@ -93,6 +106,7 @@ fun pairOnlyView(
     started: Boolean,
     onStartPairing: () -> Unit,
     revokedNotice: String = "",
+    revokedDetail: String = "",
     copy: PairOnlyCopy = PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
 ): View {
     val column = LinearLayout(context).apply {
@@ -109,6 +123,15 @@ fun pairOnlyView(
     // and the component that draws it cannot both be called the same thing in one scope.
     if (revokedNotice.isNotEmpty()) {
         column.addView(notice(context, revokedNotice).apply { tag = PairOnlyTag.NOTICE })
+    }
+
+    // AND THE MACHINE'S OWN WORDS UNDER IT (agents-tracker-ksvb.10). The sentence above says the
+    // machine kept this device registered, which is what the user has to act on -- `swarm remote
+    // pair` is refused while it does -- and it was sharing a line with a daemon error string.
+    if (revokedDetail.isNotEmpty()) {
+        column.addView(
+            noticeDetail(context, revokedDetail).apply { tag = PairOnlyTag.NOTICE_DETAIL },
+        )
     }
 
     if (started) {

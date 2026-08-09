@@ -642,7 +642,17 @@ class SettingsSurface(
 
             PushSync.REFUSED -> {
                 pendingOp = null
-                say(PressFeedback.ofRefusal(SettingsScreen.refusalNotice(answer)))
+                // THE SCREEN'S SENTENCE AND THE MACHINE'S WORDS, IN THAT ORDER
+                // (agents-tracker-ksvb.10). This site had no sentence of its own: the notice WAS
+                // `outcome.message`, so `push_prefs: no durable preference custody configured` was
+                // the whole of what a user who moved a switch was told. The words are now row 1's
+                // mono suffix, which is where a wire string belongs.
+                say(
+                    PressFeedback.ofRefusal(
+                        SettingsScreen.refusalNotice(),
+                        SettingsScreen.refusalDetail(answer),
+                    ),
+                )
                 // THE TOKEN GOES BACK WITH THE SWITCHES (agents-tracker-b6iu). The tap reconciled
                 // it optimistically against the screen the machine has now rejected, so the
                 // deletion (or registration) it made stands for a preference that is no longer in
@@ -696,7 +706,9 @@ class SettingsSurface(
     private fun say(feedback: PressFeedback) {
         outcome.text = feedback.line
         outcome.visibility = if (feedback.line.isEmpty()) View.GONE else View.VISIBLE
-        if (!feedback.saysNothing) toasts?.show(feedback.toast)
+        // The suffix is row 1's mono cell and carries the machine's own words -- `PhoneSurface.say`
+        // has the argument in full (agents-tracker-ksvb.10).
+        if (!feedback.saysNothing) toasts?.show(feedback.toast, feedback.detail.ifEmpty { null })
     }
 
     /**

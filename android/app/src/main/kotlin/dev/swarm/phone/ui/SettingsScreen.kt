@@ -480,9 +480,34 @@ data class SettingsScreen(
             else -> PushSync.REFUSED
         }
 
-        /** The machine's own words about a refusal, or [SYNC_REFUSED] where it sent none. */
-        fun refusalNotice(outcome: OperationOutcome): String =
-            outcome.message.ifBlank { SYNC_REFUSED }
+        /**
+         * The screen's own sentence for a refusal. The machine's own words are [refusalDetail].
+         *
+         * IT TAKES NO OUTCOME ANY MORE (agents-tracker-ksvb.10) and the absence is the change: it
+         * used to return `outcome.message` and fall back to [SYNC_REFUSED] only where the reply
+         * carried none, so what a user who moved a switch was told was whatever string the daemon
+         * happened to send. Every refusal this screen can receive is the same fact about the same
+         * preference -- the machine did not save it -- and the one thing that VARIES is diagnostic,
+         * which is the other function.
+         */
+        fun refusalNotice(): String = SYNC_REFUSED
+
+        /**
+         * The machine's own words about the refusal, verbatim, or empty where it sent none
+         * (agents-tracker-ksvb.10).
+         *
+         * **THIS SITE HAD NO SENTENCE OF ITS OWN AT ALL.** [refusalNotice] returned the message and
+         * fell back to [SYNC_REFUSED] only when the reply carried none -- so the ordinary case put
+         * `push_prefs: no durable preference custody configured` on screen as the WHOLE notice: a
+         * Go identifier, a colon, and a daemon's internal vocabulary, shown to somebody who moved a
+         * switch. The well-written half was the one that almost never rendered.
+         *
+         * The words are still the only thing that says WHAT happened -- `remotegw.refusePushPrefs`
+         * seals its reply with no error code, "none of the six in the taxonomy describes a
+         * machine-side custody failure" -- so they are carried here and shown in derivation row 1's
+         * mono suffix cell, which is the machine's own register.
+         */
+        fun refusalDetail(outcome: OperationOutcome): String = outcome.message
 
         /** protocol.OpOK, as [LaunchScreen] holds it and for the same reason: the AAR is off-JVM. */
         private const val CODE_OK = "ok"

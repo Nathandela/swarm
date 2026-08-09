@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.OperationOutcome
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -54,28 +55,52 @@ class SessionDetailKillVerdictTest {
         )
     }
 
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10. The machine's reason is still
+     * carried and it is no longer INSIDE the sentence: `killDetailFor` is the second cell, drawn
+     * mono and tertiary under prose that is neither.
+     *
+     * A kill switch ends when the owner flips it, a not_authorized ends when they re-grant the
+     * device, and a policy refusal ends never -- so the words are still the only thing that tells
+     * the three apart, and losing them would be the defect qlf9 closed reopening.
+     */
     @Test
-    fun `a refused kill names the machine's own reason`() {
-        val notice = SessionDetailScreen.killNoticeFor(
-            verdict("kill_switch", "remote control is disabled (kill switch off)"),
-        )
+    fun `a refused kill carries the machine's reason as a detail, not inside the sentence`() {
+        val refused = verdict("kill_switch", "remote control is disabled (kill switch off)")
+        val notice = SessionDetailScreen.killNoticeFor(refused)
 
         assertTrue(
             "a refused kill said nothing, so the session stays in the inbox and the screen looks " +
                 "exactly like one where the kill worked",
             notice.isNotEmpty(),
         )
-        assertTrue(
-            "the machine's reason was dropped. A kill switch ends when the owner flips it, a " +
-                "not_authorized ends when they re-grant the device, and a policy refusal ends " +
-                "never -- the user cannot tell which without the words the machine sent",
+        assertFalse(
+            "the daemon's own error string is spliced into the middle of the screen's sentence, " +
+                "so `kill switch off` reads as copy this product wrote about a session",
             notice.contains("remote control is disabled (kill switch off)"),
+        )
+        assertEquals(
+            "the machine's reason reaches no cell at all, and the user cannot tell a kill switch " +
+                "from a revoked device from a policy without it",
+            "remote control is disabled (kill switch off)",
+            SessionDetailScreen.killDetailFor(refused),
         )
         assertTrue(
             "the sentence does not say the session is still running, which is the fact the user " +
                 "acted on",
             notice.contains("did not end"),
         )
+    }
+
+    /**
+     * The detail is a DETAIL: it exists only where there is a refusal to explain, and a screen
+     * that has nothing to say says nothing in both cells rather than one.
+     */
+    @Test
+    fun `a kill nobody refused has no detail either`() {
+        assertEquals("", SessionDetailScreen.killDetailFor(CommandVerdict.UNANSWERED))
+        assertEquals("", SessionDetailScreen.killDetailFor(verdict("ok", "ok")))
+        assertEquals("", SessionDetailScreen.killDetailFor(verdict("kill_switch")))
     }
 
     @Test

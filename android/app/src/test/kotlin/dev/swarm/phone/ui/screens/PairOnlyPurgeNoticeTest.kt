@@ -104,14 +104,26 @@ class PairOnlyPurgeNoticeTest {
         )
     }
 
+    /**
+     * The machine's REASON moved to its own cell with agents-tracker-ksvb.10 and the property this
+     * test is about did not move: the two facts are independent, so neither may be dropped when
+     * the other is present. What changed is which cell the machine's words are read from.
+     */
     @Test
     fun `both failures are stated when both happened`() {
         val refusal = "remote control is disabled (kill switch off)"
-        val notice = PairOnlyScreen.revokeNoticeFor(verdict("kill_switch", refusal), purgeFailure = routed)
+        val answered = verdict("kill_switch", refusal)
+        val notice = PairOnlyScreen.revokeNoticeFor(answered, purgeFailure = routed)
 
         assertTrue(
+            "the machine's refusal was dropped once a purge also failed, so the fact the user has " +
+                "to act on -- the machine still holds this device -- is on no screen",
+            notice.contains("refused to remove this device"),
+        )
+        assertEquals(
             "the machine's own reason for keeping this device was dropped once a purge also failed",
-            notice.contains(refusal),
+            refusal,
+            PairOnlyScreen.revokeDetailFor(answered),
         )
         assertTrue(
             "the purge failure was dropped once the machine also refused. These are independent " +

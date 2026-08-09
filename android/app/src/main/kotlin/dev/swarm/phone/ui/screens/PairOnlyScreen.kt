@@ -68,6 +68,17 @@ enum class PairOnlyReason {
 data class PairOnlyCopy(val title: String, val body: String, val cta: String)
 
 /**
+ * The two cells a revoke leaves on this screen: the sentence, and the machine's own words
+ * (agents-tracker-ksvb.10).
+ *
+ * IT IS A VALUE BECAUSE THE DRAW IS KEYED ON IT. `PhoneSurface.drawPairOnly` early-returns when
+ * nothing a user can see has changed, and the notice is part of that key -- so a second field
+ * carried beside it rather than inside it has to be in the key too, or a machine reply arriving on
+ * a later draw would be the one the early return skips.
+ */
+data class RevokeNotice(val notice: String, val detail: String)
+
+/**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on.
  *
  * ## What the words are for
@@ -169,7 +180,10 @@ object PairOnlyScreen {
         "confirmed that it removed the device. If pairing is refused, " + UNREGISTER_FIRST +
         " first."
 
-    /** The head of the refused sentence; the machine's own reason follows it. */
+    /**
+     * The whole of the refused sentence. The machine's own reason no longer follows it inside
+     * the string -- it is [revokeDetailFor], drawn beneath (agents-tracker-ksvb.10).
+     */
     private const val REVOKE_REFUSED = "Your machine refused to remove this device"
 
     /**
@@ -230,6 +244,22 @@ object PairOnlyScreen {
         }
         return joinedWithPurgeFailure(machine, purgeFailure)
     }
+
+    /**
+     * The machine's OWN words about the refusal, for the detail cell beside the sentence
+     * (agents-tracker-ksvb.10).
+     *
+     * THE SENTENCE MATTERS MORE HERE THAN ANYWHERE ELSE IN THE APP, and it was sharing a line with
+     * a daemon error string. What the user has to act on is that the machine still holds this
+     * device -- `swarm remote pair` is refused while it does (PB-STATE-10) -- and that fact was
+     * competing for the reader's attention with `kill_switch: remote control is disabled`.
+     *
+     * THE PURGE FAILURE IS NOT IN HERE, and that is the split the demotion turns on. It is
+     * PB-APP-9's ROUTED sentence -- this product's own copy about this handset -- so it stays in
+     * [revokeNoticeFor]'s primary line. Only the machine's verbatim reply is diagnostic.
+     */
+    fun revokeDetailFor(verdict: CommandVerdict): String =
+        if (verdict.answered && !verdict.accepted) verdict.reason else ""
 
     /**
      * The two facts as one notice, in the one place that knows how they read together.

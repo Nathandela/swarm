@@ -34,6 +34,16 @@ data class LaunchPanel(
      * operation as PENDING precisely so a screen is never told something happened.
      */
     val notice: String,
+    /**
+     * The MACHINE'S own words under [notice], or empty where there are none
+     * (agents-tracker-ksvb.10).
+     *
+     * THIS FORM HAD NO SENTENCE OF ITS OWN FOR A REFUSAL. `noticeFor` returned `rendering.reason`
+     * and nothing else, so the whole notice under a refused launch was whatever string the daemon
+     * sent, set in the form's own body type. The head is the screen's now and this is the wire's,
+     * drawn through the kit's `noticeDetail` -- the `.sheet2 .ctx` cell, mono and tertiary.
+     */
+    val noticeDetail: String,
 )
 
 /** One field of the launch form. */
@@ -87,6 +97,22 @@ object LaunchPanelScreen {
     private const val ACCEPTED = "Your machine started the session."
 
     /**
+     * What a refusal says, in the FORM'S own words (agents-tracker-ksvb.10).
+     *
+     * THIS FORM HAD NO SENTENCE FOR A REFUSAL AT ALL. [noticeFor] returned `rendering.reason` and
+     * nothing else, so the whole notice under a refused launch was whatever string the daemon sent
+     * -- set in this form's own body type, as though the product had written it.
+     *
+     * IT SAYS WHAT IS TRUE OF THE SESSION rather than naming the verb, which is
+     * `SessionDetailScreen.KILL_REFUSED`'s rule one screen over: "launch failed" is a report about
+     * a button, and "your machine did not start the session" is the fact the user acts on. It is
+     * ONE sentence for all three refusal results, because the difference between them reaches the
+     * user through the retry clause and through the machine's own words beneath, both of which say
+     * more than a third wording of the same fact would.
+     */
+    private const val REFUSED = "Your machine did not start the session."
+
+    /**
      * What a refusal waiting would fix says about itself.
      *
      * IT IS READ FROM [CommandVerdict] RATHER THAN SPELLED AGAIN (agents-tracker-qlf9). This
@@ -105,13 +131,14 @@ object LaunchPanelScreen {
     fun isRequired(field: LaunchFieldId): Boolean = field in REQUIRED
 
     /**
-     * The machine's answer in a sentence.
+     * The machine's answer in a sentence -- the form's own, and the whole of the primary copy.
      *
      * THE `when` IS EXHAUSTIVE so a result added later has to state its own wording rather than
      * inheriting one, and `retryable` is the model's own distinction between a refusal that
-     * waiting fixes and one it does not. The reason is the MACHINE'S OWN WORDS, verbatim: the
-     * user's next step depends on which refusal it was, and a kill-switch refusal told to the user
-     * as "against policy" sends them to change a spec that was fine.
+     * waiting fixes and one it does not. The machine's own words are [detailFor]: the user's next
+     * step still depends on which refusal it was, and a kill-switch refusal told to the user as
+     * "against policy" sends them to change a spec that was fine -- so the words are demoted to
+     * their own register rather than dropped (agents-tracker-ksvb.10).
      */
     fun noticeFor(rendering: LaunchRendering): String = when (rendering.result) {
         LaunchResult.PENDING -> PENDING
@@ -119,7 +146,27 @@ object LaunchPanelScreen {
         LaunchResult.REJECTED_BY_POLICY,
         LaunchResult.REFUSED_TRANSIENTLY,
         LaunchResult.REFUSED,
-        -> if (rendering.retryable) rendering.reason + RETRYABLE else rendering.reason
+        -> if (rendering.retryable) REFUSED + RETRYABLE else REFUSED
+    }
+
+    /**
+     * The machine's OWN words about the refusal, for the detail cell beside the sentence
+     * (agents-tracker-ksvb.10).
+     *
+     * ONLY A REFUSAL HAS ONE. [PENDING] and [ACCEPTED] are this screen's own statements about an
+     * operation nobody needs diagnosed, and `rendering.reason` on an accepted launch is the wire's
+     * `ok` -- a mono line reading `ok` under "your machine started the session" is a diagnostic
+     * about nothing.
+     *
+     * THE RETRY CLAUSE STAYS ON THE HEAD, where [noticeFor] appends it: it is copy this product
+     * wrote about what to do next, and the detail is what the machine said.
+     */
+    fun detailFor(rendering: LaunchRendering): String = when (rendering.result) {
+        LaunchResult.PENDING, LaunchResult.LAUNCHED -> ""
+        LaunchResult.REJECTED_BY_POLICY,
+        LaunchResult.REFUSED_TRANSIENTLY,
+        LaunchResult.REFUSED,
+        -> rendering.reason
     }
 
     /**
@@ -134,5 +181,6 @@ object LaunchPanelScreen {
         },
         submit = SUBMIT,
         notice = rendering?.let { noticeFor(it) }.orEmpty(),
+        noticeDetail = rendering?.let { detailFor(it) }.orEmpty(),
     )
 }

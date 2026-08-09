@@ -129,18 +129,39 @@ class LaunchPanelScreenTest {
         )
     }
 
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10. THIS FORM HAD NO SENTENCE OF ITS
+     * OWN: `noticeFor` returned `rendering.reason` and nothing else, so the whole notice under a
+     * refused launch was whatever string the daemon happened to send -- `kill_switch: remote
+     * control is disabled`, verbatim, in the form's own body type.
+     *
+     * The head is the screen's now, and it says what is TRUE OF THE SESSION rather than naming the
+     * verb, which is [SessionDetailScreen]'s rule for the same shape one screen over. The machine's
+     * words are unchanged and are the detail beside it.
+     */
     @Test
-    fun `a refusal is reported in the machine's own words`() {
+    fun `a refusal says the form's own sentence, with the machine's words as the detail`() {
         // The user's next step depends on WHICH refusal it was. A kill-switch refusal told to the
-        // user as "against policy" sends them to change a spec that was fine.
+        // user as "against policy" sends them to change a spec that was fine -- so the words are
+        // demoted rather than dropped.
+        val panel = LaunchPanelScreen.of(
+            rendering(
+                LaunchResult.REFUSED,
+                reason = "Remote control is switched off at your machine.",
+            ),
+        )
+
         assertEquals(
+            "the machine's own string is the whole notice, so a daemon error reads as the form's " +
+                "own copy about a launch",
+            "Your machine did not start the session.",
+            panel.notice,
+        )
+        assertEquals(
+            "the machine's reason reaches no cell, and it is the only thing that says which " +
+                "refusal this was",
             "Remote control is switched off at your machine.",
-            LaunchPanelScreen.of(
-                rendering(
-                    LaunchResult.REFUSED,
-                    reason = "Remote control is switched off at your machine.",
-                ),
-            ).notice,
+            panel.noticeDetail,
         )
     }
 
@@ -161,11 +182,14 @@ class LaunchPanelScreenTest {
             ),
         ).notice
 
-        assertEquals("Too many launches just now. This one is worth trying again shortly.", transient)
+        assertEquals(
+            "Your machine did not start the session. This one is worth trying again shortly.",
+            transient,
+        )
         assertEquals(
             "a considered refusal is advertised as retryable, which sends the user to press the " +
                 "same button against the same answer",
-            "That agent is not permitted here.",
+            "Your machine did not start the session.",
             settled,
         )
     }
@@ -176,8 +200,25 @@ class LaunchPanelScreenTest {
         // the result alone would be a second, silent copy of that mapping.
         val odd = LaunchPanelScreen.of(
             rendering(LaunchResult.REFUSED, reason = "Try later.", retryable = true),
-        ).notice
+        )
 
-        assertEquals("Try later. This one is worth trying again shortly.", odd)
+        assertEquals(
+            "Your machine did not start the session. This one is worth trying again shortly.",
+            odd.notice,
+        )
+        // THE RETRY HINT IS THE HEAD'S AND NOT THE DETAIL'S. It is copy this product wrote about
+        // what to do next; the detail is what the machine said.
+        assertEquals("Try later.", odd.noticeDetail)
+    }
+
+    /**
+     * The three states that are not refusals carry no detail, which is what makes it a detail: a
+     * mono line under "your machine started the session" is a diagnostic about nothing.
+     */
+    @Test
+    fun `only a refusal has a detail`() {
+        assertEquals("", LaunchPanelScreen.of().noticeDetail)
+        assertEquals("", LaunchPanelScreen.of(rendering(LaunchResult.PENDING)).noticeDetail)
+        assertEquals("", LaunchPanelScreen.of(rendering(LaunchResult.LAUNCHED, reason = "ok")).noticeDetail)
     }
 }

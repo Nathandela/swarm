@@ -62,23 +62,48 @@ class SessionDetailLeaseVerdictTest {
         verdict,
     ).leaseNotice
 
+    /**
+     * The panel's SECOND lease cell (agents-tracker-ksvb.10): the machine's own words, which the
+     * view draws mono and tertiary under the sentence rather than inside it.
+     */
+    private fun detail(leaseHeld: Boolean, verdict: CommandVerdict): String = SessionDetailScreen.of(
+        SessionDetail(
+            sessionId = "mbp/quanthome",
+            leaseHeld = leaseHeld,
+            online = true,
+            journalStale = false,
+        ),
+        TranscriptScreen.of(emptyList()),
+        SessionLease(sessionId = "mbp/quanthome", leaseHeld = leaseHeld, online = true),
+        verdict,
+    ).leaseDetail
+
     private fun verdict(code: String, message: String = "") = ControlLease.verdictOf(
         OperationOutcome(operationId = id, code = code, message = message),
         id,
     )
 
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10 on this verb. The reason survives
+     * and it leaves the sentence: PB-INPUT-2 wants the refusal said VISIBLY, and a wire string in
+     * the middle of the product's own prose is not the same claim as a wire string labelled as one.
+     */
     @Test
-    fun `a refused take control says the machine refused it, in the machine's own words`() {
-        val notice = notice(
-            leaseHeld = false,
-            verdict = verdict("kill_switch", "remote control is disabled (kill switch off)"),
-        )
+    fun `a refused take control says so in its own words, with the machine's beside them`() {
+        val refused = verdict("kill_switch", "remote control is disabled (kill switch off)")
+        val notice = notice(leaseHeld = false, verdict = refused)
 
-        assertTrue(
+        assertFalse(
+            "the machine's raw reason is spliced into the screen's own sentence, so a daemon " +
+                "error string reads as prose this product wrote about a lease",
+            notice.contains("remote control is disabled (kill switch off)"),
+        )
+        assertEquals(
             "the screen dropped the machine's reason for refusing control, so the user is left to " +
                 "guess between a kill switch, a revoked device and a policy -- three different " +
                 "remedies, none of which the screen names",
-            notice.contains("remote control is disabled (kill switch off)"),
+            "remote control is disabled (kill switch off)",
+            detail(leaseHeld = false, verdict = refused),
         )
         assertFalse(
             "a REFUSED take control still reads as one nobody has asked for, which tells a user " +
@@ -93,13 +118,20 @@ class SessionDetailLeaseVerdictTest {
 
     @Test
     fun `a severed lease is reported as ended and not as a refusal`() {
-        val ended = notice(leaseHeld = false, verdict = verdict("detach", "control was released"))
+        val severed = verdict("detach", "control was released")
+        val ended = notice(leaseHeld = false, verdict = severed)
         val refused = notice(leaseHeld = false, verdict = verdict("not_authorized", "control was released"))
 
         assertTrue(
             "PB-INPUT-2: a lease that died is not visibly reported at all, so the phone types " +
                 "into a void with the keyboard shut and no sentence saying why",
-            ended.contains("control was released"),
+            ended.contains("ended this phone's control"),
+        )
+        assertEquals(
+            "a severance carries no detail, so the machine's own account of why control went away " +
+                "reaches the user nowhere",
+            "control was released",
+            detail(leaseHeld = false, verdict = severed),
         )
         assertNotEquals(
             "a lease that ended normally reads exactly like one the machine refused, which " +
@@ -107,6 +139,17 @@ class SessionDetailLeaseVerdictTest {
             refused,
             ended,
         )
+    }
+
+    /**
+     * The detail is a DETAIL. A confirmed lease and one nobody asked for are not refusals, so
+     * there is no machine reason to print under them -- and a mono line under a sentence that
+     * reports success is a diagnostic about nothing.
+     */
+    @Test
+    fun `a granted and an unasked lease carry no detail`() {
+        assertEquals("", detail(leaseHeld = true, verdict = verdict("lease", "granted")))
+        assertEquals("", detail(leaseHeld = false, verdict = CommandVerdict.UNANSWERED))
     }
 
     /**

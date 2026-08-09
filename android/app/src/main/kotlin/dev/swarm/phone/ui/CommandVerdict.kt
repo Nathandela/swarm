@@ -65,7 +65,13 @@ enum class CommandResult {
  */
 data class CommandVerdict(
     val result: CommandResult,
-    /** The machine's message, verbatim. Empty while [CommandResult.PENDING], and possibly after. */
+    /**
+     * The machine's message, verbatim. Empty while [CommandResult.PENDING], and possibly after.
+     *
+     * IT IS THE DETAIL AND NO LONGER PART OF [sentence] (agents-tracker-ksvb.10). A screen shows it
+     * beside the sentence rather than inside one -- `noticeDetail` on the three panel sites, the
+     * toast's own mono suffix on the two that have no panel cell.
+     */
     val reason: String,
     val retryable: Boolean,
 ) {
@@ -88,20 +94,26 @@ data class CommandVerdict(
     }
 
     /**
-     * The machine's own words under [head], as one sentence a screen can show.
+     * The screen's own sentence about this answer -- the WHOLE primary copy.
      *
-     * IT IS HERE AND NOT AT THREE CALL SITES because all three assemble the same thing from the
-     * same two facts, and the interesting halves are easy to lose separately: a reply can carry NO
-     * message at all -- `remotegw.refusePushPrefs` seals one with neither code nor words, in its
-     * own words because "none of the six in the taxonomy describes a machine-side custody failure"
-     * -- and a refusal that waiting fixes must not read like one that nothing fixes.
+     * **IT USED TO SPLICE [reason] INTO THE MIDDLE OF IT** (`head: reason.`), and that is what
+     * agents-tracker-ksvb.10 undoes. The machine's string is a daemon Go error -- lower case,
+     * parenthesised, with a wire code in front of it -- and putting it inside a sentence this
+     * product authored, in this product's own body type, leaves a reader unable to tell where the
+     * copy stops and the diagnostic starts. The words are NOT dropped: [reason] carries them
+     * verbatim and every screen that shows one shows them in the register they belong to, which is
+     * `ui/kit/Notice.kt`'s `noticeDetail` -- mono, tertiary, visibly the machine talking.
+     *
+     * IT IS STILL HERE AND NOT AT THREE CALL SITES, for the half that is genuinely shared: a
+     * refusal that waiting fixes must not read like one that nothing fixes, and [RETRY_HINT] is a
+     * property of the ANSWER rather than of any one screen.
      *
      * @param head the screen's own words for what did not happen. It is a PARAMETER because it is
      *  copy, and copy belongs to the screen (PB-DS-9): "your machine did not end this session" and
      *  "your machine refused to remove this device" are different sentences about the same shape.
      */
     fun sentence(head: String): String {
-        val stated = if (reason.isBlank()) "$head." else "$head: $reason."
+        val stated = "$head."
         return if (retryable) stated + RETRY_HINT else stated
     }
 
