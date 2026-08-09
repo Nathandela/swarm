@@ -14,12 +14,17 @@ import dev.swarm.phone.R
  *
  * There is deliberately no `origin:` line. `.navhead` is the retired mock's class and the
  * directions artifact draws only `.pnav`, the root header -- which is why §4 exists at all, and
- * why this is a DIFFERENT COMPONENT rather than a flag on [navHeader]. The two disagree on every
- * cell: `.pnav` is a 27 sp `Display.NavTitle` over a two-step padding with a counter pushed right;
- * this is a 15.5 sp `Title.Sheet` over a three-step padding with a back control on the left. A
- * shared factory taking `drill: Boolean` would put the choice between two type styles in a
- * parameter, and a screen passing that parameter is a screen choosing type -- which is the one
- * thing `android/gate/s24_screens_test.go` fences the screen package against.
+ * why this is a DIFFERENT COMPONENT rather than a flag on [navHeader]. `.pnav` is a two-step
+ * padding with a live counter pushed right; this is a three-step padding with a back control on
+ * the left, and a shared factory taking `drill: Boolean` would put a component's whole composition
+ * in a parameter.
+ *
+ * THE TWO NO LONGER DISAGREE ABOUT TYPE, and that is owner ruling R4 (ADR-012 phase 2 P4,
+ * 2026-08-09). Both titles take the DISPLAY RUNG. What this paragraph said before -- "`.pnav` is
+ * a 27 sp `Display.NavTitle` ... this is a 15.5 sp `Title.Sheet`" -- described a 43 percent drop
+ * for one navigation step, which the drill header inherited because `Title.Sheet` was the only
+ * style below the display size and not because anyone chose it. The ruling: a screen is a screen,
+ * and depth is the back chevron's job.
  *
  * ## The chevron, and what has no source
  *
@@ -73,8 +78,8 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
         Kit.dimenPx(context, R.dimen.swarm_space_10),
     ).apply {
         // Not baseline-aligned, which is where this parts company with `.pnav` a second time. That
-        // header aligns a 27 sp title against a 10 sp counter, and baselines are what stops the
-        // pair looking dropped; here the tallest thing on the row is a GLYPH, which has no
+        // header aligns a display-rung title against a 10 sp counter, and baselines are what stops
+        // the pair looking dropped; here the tallest thing on the row is a GLYPH, which has no
         // baseline of its own worth aligning a title to.
         gravity = Gravity.CENTER_VERTICAL
         setPaddingRelative(
@@ -91,7 +96,12 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
         back?.let { addView(backControl(context, it)) }
         addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Title_Sheet)
+                // THE DISPLAY RUNG, and it is the ROOT header's style on purpose (ADR-012 phase 2
+                // P4, owner ruling R4). A drill-down screen's title used to be `Title.Sheet`,
+                // 15.5 sp against the root header's 27 -- a 43 percent drop for one navigation
+                // step, taken because nothing else existed rather than because anyone chose it.
+                // The ruling: a screen is a screen, and depth is the back chevron's job.
+                setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
                 setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                 text = title
                 // The remaining width, for `navHeader`'s reason: a trailing gravity works until

@@ -182,11 +182,13 @@ var s23Inbox = []s23Component{
 		Why: "the header a screen BELOW a root screen carries, which is a different component " +
 			"from `.pnav` rather than a variant of it: the artifact draws the root header and " +
 			"nothing else, so §4 is the whole specification -- a chevron glyph and its label in " +
-			"place of the display title, `Title.Sheet` in place of `Display.NavTitle`, and a " +
-			"padding that is three different steps rather than `.pnav`'s two. It is a separate " +
-			"file from NavHeader.kt for the reason liveCounter is a separate factory: sharing one " +
-			"function between them would make the root header's 27 sp title and this one's 15.5 sp " +
-			"a boolean, and a boolean is what a screen would then be choosing type with.",
+			"place of the live counter, and a padding that is three different steps rather than " +
+			"`.pnav`'s two. It is a separate file from NavHeader.kt for the reason liveCounter is " +
+			"a separate factory: sharing one function between them would put a component's whole " +
+			"composition in a boolean. The TITLE is no longer one of the differences -- owner " +
+			"ruling R4 (ADR-012 phase 2 P4, 2026-08-09) puts both headers' titles on the display " +
+			"rung, because depth is the back chevron's job and not a 43 percent drop in the name " +
+			"of the thing being looked at.",
 	},
 	{
 		Factory: "activityRow",

@@ -164,7 +164,7 @@ class PairingSurface(
      * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
      *
      * PB-DS-11: it was `textSize = SAS_TEXT_SP` with `SAS_TEXT_SP = 28f`, a size chosen at a call
-     * site, and then `Display.NavTitle` at 27 sp with a paragraph here explaining that the style
+     * site, and then `Display.NavTitle`, then 27 sp, with a paragraph here explaining that the style
      * derivation row 7 asks for "does not exist". IT DOES (agents-tracker-ksvb.4). `Display.SAS`
      * has been in `res/values/type.xml` since the type ladder landed -- 34 sp / 400 / sans, the
      * one style §7 adds to PB-DS-2's 18, carrying a `derived:` citation rather than an `origin:`

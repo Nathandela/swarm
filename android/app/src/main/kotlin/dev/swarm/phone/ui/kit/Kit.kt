@@ -646,9 +646,10 @@ internal object KitTag {
      * naming that selector would point a reader at a rule that does not exist. §4 is the whole
      * specification and it calls them the back control and the title.
      *
-     * [DRILL_TITLE] is NOT [TITLE], and the difference is a type style. `.pnav .big` is 27 sp
-     * `Display.NavTitle`; §4's is 15.5 sp `Title.Sheet`. One tag over both would let an appearance
-     * test find either and assert the other's metrics.
+     * [DRILL_TITLE] is NOT [TITLE], and it stopped being a type difference on 2026-08-09: owner
+     * ruling R4 put both titles on the display rung. The tags stay two because the two headers are
+     * two components -- one carries a live counter and the other a back control -- and a screen
+     * that wants the drill-down's title must not find the root header's when both are on screen.
      */
     const val DRILL_BACK = "drill back"
     const val DRILL_TITLE = "drill title"

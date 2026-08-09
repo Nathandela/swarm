@@ -11,7 +11,7 @@ import dev.swarm.phone.R
  *
  * The root-screen header: the display title, and the live counter pushed to the far right.
  *
- * BASELINE ALIGNMENT IS ASKED FOR, because 27 sp beside 10 sp is exactly the pair that looks wrong
+ * BASELINE ALIGNMENT IS ASKED FOR, because the display rung beside 10 sp is the pair that looks wrong
  * centred. The design says `align-items: baseline`; LinearLayout will do it, but only when the
  * container is told to.
  *

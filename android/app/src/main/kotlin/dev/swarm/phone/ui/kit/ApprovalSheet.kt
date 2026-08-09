@@ -67,9 +67,23 @@ fun approvalSheet(
 
     addView(
         Kit.textView(context).apply {
-            // `Display.NavTitle` IS THE APP'S DISPLAY STYLE AT `--p-display-wt`, and the §4 row
-            // records why it is this one rather than the maquette's 19 px: that drawing is on a
-            // 300 px gallery phone, and this app's type ladder is deliberately still Substrate's.
+            // THE QUESTION TAKES THE DISPLAY RUNG, DELIBERATELY (ADR-012 phase 2 P5, owner ruling
+            // R5, 2026-08-09). It is the moment's headline -- the blocking question a person is
+            // being asked -- and a headline is set at screen-title size for the same reason a
+            // screen title is. Not "because it is the largest style available".
+            //
+            // The citation used to argue exactly that, and the argument stopped being true when
+            // the ladder was consolidated. What this comment said before:
+            //
+            //     `Display.NavTitle` IS THE APP'S DISPLAY STYLE AT `--p-display-wt`, and the §4
+            //     row records why it is this one rather than the maquette's 19 px: that drawing
+            //     is on a 300 px gallery phone, and this app's type ladder is deliberately still
+            //     Substrate's.
+            //
+            // R5 ratified the SIZE as it renders and renamed the ROLE: the sheet's question cites
+            // the display rung on purpose. The maquette's own 19 px is still not this app's, for
+            // the reason the old text gave -- a 300 px gallery phone -- and the rung is 22 since
+            // R3, not 27.
             setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             text = question

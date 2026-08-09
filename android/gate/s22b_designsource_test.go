@@ -60,6 +60,14 @@ const (
 //     the migration plan gives O5 the visual verification of the styles against the maquette. A
 //     type-scale change smuggled inside a token migration is the defect this whole regime exists
 //     to prevent, so it is not made here.
+//
+//     SIZES DID MOVE ON 2026-08-09, AND NOT BY RE-POINTING ANYTHING (ADR-012 phase 2, owner
+//     rulings R1 and R3). The origins are untouched -- every style still transcribes the Substrate
+//     rule it always did, and this block is still where that rule is read. What moved is the
+//     AUTHORITY FOR THE SIZE, to ADR-012's rung table, which the owner ruled against rendered
+//     specimens. The maquette's 22 arrives there as a decision with a record rather than as a
+//     side effect of swapping design sources, which is exactly the distinction this note was
+//     written to hold.
 //   - THE FOUR TAB GLYPHS (tabbar_test.go). The maquette's tab bar is four labels; it draws no
 //     `<svg>` for them. ADR-009 moves material and not geometry, so the paths are unchanged and
 //     the artifact that states them is still the one that states them.
