@@ -6,6 +6,7 @@ import dev.swarm.phone.ui.SettingsScreen
 import dev.swarm.phone.ui.StreamView
 import dev.swarm.phone.ui.kit.PresenceMark
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,6 +38,10 @@ import org.junit.Test
  * it written here.
  */
 class SettingsPanelConnectionTest {
+
+    /** This phone's clock, fixed so an elapsed duration is arithmetic rather than a wait. */
+    private val NOW = 1_754_000_000_000L
+    private val HOUR_MS = 3_600_000L
 
     private fun screen() = SettingsScreen(alerts = true, mentions = true)
 
@@ -149,6 +154,36 @@ class SettingsPanelConnectionTest {
             "the line already says the machine's state in words, so a described dot would have a " +
                 "screen reader announce presence twice",
             row.presenceDescription,
+        )
+    }
+
+    /**
+     * FAILING-FIRST for agents-tracker-2pnu F5 / agents-tracker-egjh: the presence line is the
+     * ONE place left in this app that renders a bare clock.
+     *
+     * agents-tracker-nx44.2 wrote the argument against it, in `MachineFreshness.sinceLastHeard`'s
+     * own KDoc: "the sentence reads `since 14:57` with no date on it -- and at 09:00 the next
+     * morning that is indistinguishable from a machine heard from three minutes ago. Field test 3
+     * photographed exactly that." The sync detail's HEARD row one tap away already carries the
+     * elapsed duration, so the two now disagree about the same fact within one tap.
+     */
+    @Test
+    fun `the presence line reports an elapsed duration rather than a bare clock`() {
+        val row = connection(
+            presence = "online",
+            freshness = MachineFreshness(silent = true, lastHeardUnixMs = NOW - 18 * HOUR_MS),
+        ).machine
+
+        assertTrue(
+            "the presence line does not say HOW LONG the machine has been silent. Line was: " +
+                "${row.presenceLine}",
+            row.presenceLine.contains("for 18h"),
+        )
+        assertFalse(
+            "the line still renders a wall-clock time. A clock with no date on it reads the same " +
+                "at three minutes and at nineteen hours, which is the misreading field test 3 " +
+                "photographed. Line was: ${row.presenceLine}",
+            row.presenceLine.contains("14:57"),
         )
     }
 
