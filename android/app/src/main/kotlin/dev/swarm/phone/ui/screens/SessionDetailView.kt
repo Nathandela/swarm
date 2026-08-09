@@ -50,14 +50,16 @@ import dev.swarm.phone.ui.kit.noticeDetail
  *
  * ## What C2 draws that this does not
  *
- * **The composer (derivation row 9).** Not built here: it is a kit component that does not exist
- * yet, and until it does the field and Send stay where they are, in `PhoneSurface`'s unrecomposed
- * column. Row 9's own backdrop blur will land in the same recorded-omission state the tab bar's did
- * -- `RenderEffect` blurs a view's OWN content, so applying it to the composer bar would blur the
- * field and leave the transcript behind it sharp, which is a visible defect rather than an
- * approximation. **PB-INPUT-6's IME-COMMIT path is also unbuilt** (agents-tracker-76j): an IME
- * commit therefore travels the ordinary keystroke path, coalesced at 125 ms, rather than arriving
- * as one event the way a clipboard paste does.
+ * **The composer (derivation row 9) IS BUILT NOW** (agents-tracker-hxv, agents-tracker-nx44.6),
+ * and it is placed here as a slot: `ui/kit/Composer.kt` draws the bar and `PhoneSurface` owns the
+ * field, the Send control, the verb and PB-SEC-12 clause 1's touch filter. What row 9 still does
+ * not get is its backdrop blur -- `RenderEffect` blurs a view's OWN content, so applying it to the
+ * bar would blur the field and leave the transcript behind it sharp, which is a visible defect
+ * rather than an approximation, and the tab bar is the first site of the same omission. Its voice
+ * and stop glyphs are absent for the chips' reason below: no facade verb takes dictation, and the
+ * stop is this screen's own Stop. **PB-INPUT-6's IME-COMMIT path is also unbuilt**
+ * (agents-tracker-76j): an IME commit therefore travels the ordinary keystroke path, coalesced at
+ * 125 ms, rather than arriving as one event the way a clipboard paste does.
  *
  * **The quick-reply chips (row 10).** No facade verb sends a canned string, so a chip would be a
  * control whose behaviour the wire does not define. Same call the machines screen made about a
@@ -104,15 +106,16 @@ import dev.swarm.phone.ui.kit.noticeDetail
  * component (PB-SEC-11), so a back callback that reached a verb would put session-acting code on
  * the one surface any app on the device can start.
  *
- * **The loose typed/send controls STAY WHERE THEY ARE** until the composer lands, and no
- * composer-shaped affordance is drawn here in the meantime: an empty bar at the bottom would
- * promise an input path that does not exist, which is the machines-screen lesson in the other
- * direction. If a slot is needed, it is left absent rather than blank.
+ * **The loose typed/send controls ARE GONE FROM THE INBOX COLUMN** (agents-tracker-nx44.6). They
+ * stood at the bottom of the triage inbox, hosted through `triageInboxView`'s anonymous `below:`
+ * parameter, and `PhoneSurface.detachHostedViews` ripped them off the window on the way into this
+ * screen -- so the sentence below promising that what you type is sent live was drawn over a screen
+ * with no field on it. The same two views are the composer's slots now.
  *
- * **The composer and the ledger ship TOGETHER or not at all** (agents-tracker-hxv). PB-INPUT-1's
- * undelivered ledger is what stops an input path losing keystrokes with nothing on screen saying
- * so, so a composer delivered without it reintroduces exactly the defect the ledger exists to
- * prevent. They are one issue for that reason and must not be split.
+ * **The composer and the ledger SHIPPED TOGETHER** (agents-tracker-hxv's do-not-split ruling).
+ * PB-INPUT-1's undelivered ledger is what stops an input path losing keystrokes with nothing on
+ * screen saying so, so a composer delivered without it reintroduces exactly the defect the ledger
+ * exists to prevent.
  */
 object DetailTag {
     /** C2.1 -- §4's drill-down header: the chevron, and the session it names. */
@@ -121,8 +124,20 @@ object DetailTag {
     /** PB-APP-8: what the screen says when the session's journal has a hole in it. */
     const val STALE = "detail.stale"
 
+    /** PB-SYNC-1's repair, directly under the notice that reports the hole it mends. */
+    const val RESYNC = "detail.stale.resync"
+
     /** PB-INPUT-1: what did not reach the machine. */
     const val NOT_SENT = "detail.notsent"
+
+    /** PB-INPUT-1's ledger: the input this phone took and could not deliver. */
+    const val UNDELIVERED = "detail.undelivered"
+
+    /** The machine's own reason for that loss, in `.sheet2 .ctx`. */
+    const val UNDELIVERED_DETAIL = "detail.undelivered.detail"
+
+    /** The acknowledgement, which is a separate control because a clear is a separate verb. */
+    const val ACKNOWLEDGE = "detail.undelivered.clear"
 
     /** C2.3 -- the conversation, composed by `transcriptView` and placed here. */
     const val TRANSCRIPT = "detail.transcript"
@@ -148,6 +163,12 @@ object DetailTag {
     /** Row 22's standalone tertiary button, supplied by the surface that owns the verb. */
     const val TAKE_CONTROL = "detail.control.take"
 
+    /** PB-INPUT-3's take_control_end, the mirror of [TAKE_CONTROL] and never beside it. */
+    const val RELEASE = "detail.control.release"
+
+    /** Derivation row 9's bar: the field and the control that sends what is in it. */
+    const val COMPOSER = "detail.composer"
+
     /** PB-INPUT-2's "visibly", in row 22's component. */
     const val LEASE = "detail.lease"
 
@@ -160,9 +181,19 @@ object DetailTag {
      */
     const val LEASE_DETAIL = "detail.lease.detail"
 
-    /** The parts whose ON-SCREEN ORDER is the recorded composition. */
-    val COMPOSITION: Set<String> =
-        setOf(NAV, STALE, NOT_SENT, TRANSCRIPT, OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP)
+    /**
+     * The parts whose ON-SCREEN ORDER is the recorded composition.
+     *
+     * [RELEASE] IS DELIBERATELY NOT IN IT, and the omission is what makes this an ordered claim at
+     * all: release and [TAKE_CONTROL] occupy the SAME position in the control stack and can never
+     * both be drawn -- `SessionLease` decides them as the two sides of one fact -- so a list
+     * carrying both could not be compared against any single screen. Its placement is asserted
+     * against its own state instead, in `SessionDetailViewTest`.
+     */
+    val COMPOSITION: Set<String> = setOf(
+        NAV, STALE, RESYNC, UNDELIVERED, UNDELIVERED_DETAIL, ACKNOWLEDGE, NOT_SENT, TRANSCRIPT,
+        OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP, COMPOSER,
+    )
 }
 
 /**
@@ -183,6 +214,15 @@ object DetailTag {
  *  `ctaButton(kind = MORE)` the surface already built there, on the screen a session is read on now.
  *  A slot rather than a construction for [stop]'s reason -- `PhoneSurface` owns the verb, the
  *  operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
+ * @param release PB-INPUT-3's take_control_end, drawn only while [SessionDetailPanel.offersRelease]
+ *  says a lease is held. A slot for [takeControl]'s reason, and never on screen beside it.
+ * @param resync PB-SYNC-1's repair, drawn only beside the stale notice it mends. A slot because the
+ *  verb is rate-bounded and its ErrClassRateLimited refusal routes through PB-APP-9's table, which
+ *  is `PhoneSurface`'s line and not this composition's.
+ * @param acknowledge PB-INPUT-1's clear, drawn only while there is a backlog to clear.
+ * @param composer derivation row 9's bar. A slot rather than a construction for the reason every
+ *  other control here is one, plus a second: the field holds what the user typed, so it is built
+ *  once and re-parented, and a composition that built its own would empty it on every redraw.
  * @param onBack where §4's chevron goes: back to the list this session was opened from.
  * @param onApproval where an approval block in the conversation goes when it is tapped, called with
  *  the block's `item_id` -- which IS the `interaction_id` a signed `ActionApprove` names (IS-APR-1).
@@ -194,8 +234,12 @@ fun sessionDetailView(
     context: Context,
     panel: SessionDetailPanel,
     takeControl: View,
+    release: View,
     stop: View,
     kill: View,
+    resync: View,
+    acknowledge: View,
+    composer: View,
     outcome: String,
     onBack: () -> Unit,
     onApproval: ((String) -> Unit)? = null,
@@ -227,6 +271,32 @@ fun sessionDetailView(
     if (panel.staleNotice.isNotEmpty()) {
         column.addView(notice(context, panel.staleNotice).apply { tag = DetailTag.STALE })
     }
+    // PB-SYNC-1's REPAIR, DIRECTLY UNDER THE SENTENCE IT ANSWERS (agents-tracker-upbo). The link
+    // section on Machines draws all four channels' verdicts and can act on none of them; this is
+    // the one place a hole is FELT -- a conversation with records missing from it -- so the control
+    // goes where the person reading about the gap already is. It is a slot for [stop]'s reason:
+    // `App.Resync` is rate-bounded and refuses with ErrClassRateLimited, and the surface is what
+    // routes a refusal through PB-APP-9's table.
+    if (panel.offersResync) column.addView(resync.tagged(DetailTag.RESYNC))
+    // PB-INPUT-1'S LEDGER, ABOVE THE TRANSCRIPT AND NEVER OVER THE COMPOSER (agents-tracker-hxv's
+    // own placement): it concerns input already gone, and a report of a loss must not cover the
+    // control the user is reaching for to try again by hand.
+    if (panel.undeliveredNotice.isNotEmpty()) {
+        column.addView(
+            notice(context, panel.undeliveredNotice).apply { tag = DetailTag.UNDELIVERED },
+        )
+    }
+    if (panel.undeliveredDetail.isNotEmpty()) {
+        column.addView(
+            noticeDetail(context, panel.undeliveredDetail).apply {
+                tag = DetailTag.UNDELIVERED_DETAIL
+            },
+        )
+    }
+    // THE ACKNOWLEDGEMENT IS A CONTROL AND NOT A DISMISS GESTURE, which is
+    // `App.ClearUndeliveredInputs`' own split: a screen that OPENS must see the backlog, and a
+    // user who dismisses it says so once, for every screen.
+    if (panel.offersAcknowledge) column.addView(acknowledge.tagged(DetailTag.ACKNOWLEDGE))
     if (panel.notSentNotice.isNotEmpty()) {
         column.addView(notice(context, panel.notSentNotice).apply { tag = DetailTag.NOT_SENT })
     }
@@ -285,9 +355,23 @@ fun sessionDetailView(
     // own `space_8` gap between them rather than the zero addView gave them.
     val controls = ctaStack(context)
     if (panel.offersTakeControl) controls.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
+    // AND THE WAY BACK OUT (agents-tracker-nx44.6). The two are never on screen together --
+    // `SessionLease` decides them as the two sides of one fact -- so this is the same site in the
+    // stack rather than a second one, and a lease can now be given back from the screen that took
+    // it instead of being held until the machine expires it.
+    if (panel.offersRelease) controls.addView(release.tagged(DetailTag.RELEASE))
     controls.addView(stop.tagged(DetailTag.STOP))
     controls.addView(kill.tagged(DetailTag.KILL))
     column.addView(controls)
+
+    // DERIVATION ROW 9'S BAR, AND THE PROMISE ABOVE IT ARRIVING AT AN AFFORDANCE. The lease
+    // sentence has said "what you type is sent live" on this screen since the peek's deletion while
+    // the app's only field and Send were parented at the bottom of the triage inbox -- which
+    // `PhoneSurface.detachHostedViews` takes off screen on the way in here. It is LAST because row
+    // 9 puts the composer at the bottom of the screen, and because everything above it is either
+    // the conversation or a report about it: a control the user is reaching for must not be moved
+    // by a notice arriving above it.
+    column.addView(composer.tagged(DetailTag.COMPOSER))
     return column
 }
 

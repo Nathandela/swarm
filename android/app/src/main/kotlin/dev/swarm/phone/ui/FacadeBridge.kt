@@ -164,6 +164,73 @@ class FacadeBridge(private val app: App) {
         SessionLease(sessionId = sessionId, leaseHeld = leaseHeld, online = isOnline())
 
     /**
+     * PB-INPUT-1's ledger: what this phone took from the user and could not deliver.
+     *
+     * IT IS THE WHOLE LEDGER AND THE SCREEN NARROWS IT. `App.UndeliveredInputs` is process-wide --
+     * a phone loses keystrokes for every session at once when the link drops -- and
+     * [UndeliveredLedger.forSession] is where the narrowing is decided, because that decision has
+     * a consequence worth testing on a JVM: the overflow count belongs to the bound and to no
+     * session, so it survives the filter.
+     *
+     * IT READS `Dropped`, which nothing did. That method sat in android/unbound-verbs.tsv as one of
+     * the four bound receivers that lived in the ledger's own blind spot -- "a fact the facade goes
+     * to the trouble of carrying and the adapter dropped on the floor".
+     *
+     * AN UNREADABLE LEDGER IS EMPTY AND NOT A CRASH: this runs inside a render, and a phone whose
+     * core cannot answer has a screen to draw either way. What it must never do is claim a loss
+     * that did not happen, which [UndeliveredLedger.EMPTY] does not.
+     */
+    fun undelivered(): UndeliveredLedger = try {
+        val list = app.undeliveredInputs()
+        UndeliveredLedger(
+            entries = (0 until list.count()).map { index ->
+                val entry = list.at(index)
+                UndeliveredInput(
+                    sessionId = entry.getSessionID(),
+                    bytes = entry.getBytes().toInt(),
+                    reason = entry.getReason(),
+                    atMillis = entry.getAtMillis(),
+                )
+            },
+            dropped = list.dropped().toInt(),
+        )
+    } catch (unreadable: Exception) {
+        UndeliveredLedger.EMPTY
+    }
+
+    /**
+     * PB-INPUT-1's acknowledgement half.
+     *
+     * IT IS A SEPARATE VERB AND NOT A DRAINING [undelivered], which is the facade's own argument:
+     * "a screen that OPENS must see the backlog, and a user who DISMISSES it says so once, for
+     * every screen". It does not disable the ledger -- a clear that stopped recording would
+     * satisfy the same assertion and silently drop every future loss.
+     */
+    fun clearUndelivered() = app.clearUndeliveredInputs()
+
+    /**
+     * PB-SYNC-1's repair for the channel a CONVERSATION rides on (agents-tracker-upbo).
+     *
+     * IT TAKES NO CHANNEL NAME, and that is `REPAIR_CHANNELS`' own rule rather than a narrowing
+     * chosen here: the four names cross as bare strings, so a caller that typed one would be a
+     * second alphabet with nothing joining it to the core's --
+     * `android/gate/pbapp8_repairchannels_test.go` refuses exactly that. The channel is the
+     * JOURNAL because an interaction item IS a journal record (IS-LAYER-1) and inherits its repair
+     * channel (IS-LAYER-4), and because the journal is the only one of the four with a
+     * stream-scoped repair verb at all -- `App.Resync`'s own doc says the other three are mended
+     * by a snapshot, a durable outcome and a machine-side re-grant. The read position is rewound
+     * for every admitted resync regardless of channel, so this one press repairs the transport
+     * hole under all four.
+     *
+     * IT IS NOT WRAPPED IN A `try`, and that is the difference between this and [undelivered]
+     * above. A read runs inside a render and must not take the screen down; this is a PRESS, and
+     * its refusal is the whole point -- the verb is rate-bounded per section 6.0 and answers
+     * ErrClassRateLimited, which PB-APP-9's table renders with its own remedy. Swallowing it here
+     * would be a button that reports success for a repair the budget refused.
+     */
+    fun repairTranscript() = app.resync(REPAIR_CHANNELS.first())
+
+    /**
      * The unresolved `approval_request` this session is blocked on, or null when there is none.
      *
      * IT IS THE FIRST ONE THE MACHINE IS STILL WAITING ON, oldest first, which is `App
@@ -417,6 +484,12 @@ class FacadeBridge(private val app: App) {
          * either direction. That is `android/gate/pairingstates_test.go`'s shape, and it exists
          * for the same reason: PB-PAIR-5's alphabet moved on the Go side and the screen's did not,
          * with every check on both sides green.
+         *
+         * THE JOURNAL IS FIRST AND [repairTranscript] SPENDS IT BY POSITION. That is a coupling
+         * and it is the cheaper of the two available ones: the alternative is a second `"journal"`
+         * typed somewhere, which is the drift this whole declaration exists to prevent, and the
+         * order here is joined to the core by the set comparison above -- a reordering that broke
+         * it would leave the set identical, so the note is written here rather than fenced.
          */
         val REPAIR_CHANNELS: List<String> = listOf("journal", "terminal", "reply", "grant")
 

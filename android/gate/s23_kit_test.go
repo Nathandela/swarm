@@ -81,6 +81,24 @@ var s23Inbox = []s23Component{
 			"hint IS the field's label on a surface with no XML layouts to carry one.",
 	},
 	{
+		Factory: "composerBar",
+		File:    "Composer.kt",
+		Derived: "#9 Composer",
+		Why: "row 9's BAR, which is the half of that row no factory had ever built -- " +
+			"`textField` cites the same row and is its FIELD. The bar's own cells (--p-tabbg, a " +
+			"1 dp --p-hair top rule, space_8 x space_14 of padding and a space_8 gap) were spent " +
+			"nowhere, so the app's only composer was an EditText and a button added to a bare " +
+			"column under the triage inbox. The field and the send control are SLOTS on " +
+			"`approvalSheet`'s precedent, and here that is structural rather than reuse: the send " +
+			"control reaches a facade verb, carries PB-SEC-12 clause 1's touch filter and must " +
+			"survive a redraw, all three of which are PhoneSurface's. Two of row 9's cells are " +
+			"deliberately unspent and the file says why -- `composer_height` 52 measures the " +
+			"mock's 36 dp field and this kit's is a 48 dp target with the well inset inside it " +
+			"(textField's own recorded decision, PB-DS-12's floor), and `tabbar_height` sites the " +
+			"bar's bottom in the scaffold's frame rather than in this component. Row 9's backdrop " +
+			"blur is the tab bar's recorded omission at its second site.",
+	},
+	{
 		Factory: "approvalSheet",
 		File:    "ApprovalSheet.kt",
 		Derived: "§4 Approval sheet pull-quote",

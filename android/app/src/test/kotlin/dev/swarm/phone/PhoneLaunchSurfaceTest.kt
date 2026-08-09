@@ -189,9 +189,11 @@ class PhoneLaunchSurfaceTest {
                     labels.size >= CONTROL_FLOOR,
                 )
                 assertTrue(
-                    "the walk found no text field at all on the phone screen. The keyboard and " +
-                        "the pairing manual-entry field are both EditTexts and both are " +
-                        "attached, so an empty answer is the scan failing rather than the app.",
+                    "the walk found no text field at all on the phone screen. The launch form's " +
+                        "three and the pairing manual-entry field are all EditTexts and all are " +
+                        "attached, so an empty answer is the scan failing rather than the app. " +
+                        "The composer's field is NOT among them any more (agents-tracker-nx44.6): " +
+                        "it moved to the session detail with the Send control beside it.",
                     hints.isNotEmpty(),
                 )
             }
@@ -244,9 +246,8 @@ class PhoneLaunchSurfaceTest {
         /**
          * The number of pressable controls the surface carries WITH NO PANEL OPEN.
          *
-         * It is 2 -- "send line", "launch a session" -- and the file's standing rule is that this
-         * number never moves without NAMING the control that moved and saying where it went.
-         * Three times now:
+         * It is 1 -- "launch a session" -- and the file's standing rule is that this number never
+         * moves without NAMING the control that moved and saying where it went. Four times now:
          *
          *  - 5 -> 4: **Take control** left, into `peekPanelView`, which `peekHost` holds only while
          *    there is a peek to control. Offering it to someone who is not looking at a terminal
@@ -264,8 +265,19 @@ class PhoneLaunchSurfaceTest {
          *    NAMES the machine it unpairs, and the revoke keeps PB-SEC-12 clause 1's touch filter
          *    because `SettingsSurface` builds it and contributes it through
          *    `settings.touchFilteredActions` -- the coverage moved, it never lapsed.
+         *  - 2 -> 1: **Send line** left, into `sessionDetailView`, which the Inbox destination
+         *    holds only while a session is drilled into (agents-tracker-nx44.6). It and the field
+         *    beside it were derivation row 9's composer standing in a bare column under the triage
+         *    inbox -- and `PhoneSurface.detachHostedViews` takes that column off the window on the
+         *    way into the drill-down, which is the ONE screen whose lease sentence promises that
+         *    what you type is sent live. So the surface promised typing where there was no field
+         *    and offered a field where there was no promise. Both are `ui/kit/Composer.kt`'s bar on
+         *    the session detail now, and the send control keeps PB-SEC-12 clause 1's touch filter
+         *    because `PhoneSurface` still builds it and still lists it in
+         *    `touchFilteredActions` -- the coverage moved, it never lapsed. The label assertion in
+         *    `PhoneSurfaceControlsTest` reads that list and is untouched.
          *
-         * ALL THREE MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
+         * ALL FOUR MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
          * floor exists to draw is between "the surface shrank" and "the walk stopped reading the
          * window", and on each run that failed here the walk was reading perfectly -- it named
          * every control it found, and every label assertion in this file passed.
@@ -275,6 +287,6 @@ class PhoneLaunchSurfaceTest {
          * ceiling nobody can justify -- and the label assertions above, not this count, are what
          * actually pin the launch screen.
          */
-        const val CONTROL_FLOOR = 2
+        const val CONTROL_FLOOR = 1
     }
 }

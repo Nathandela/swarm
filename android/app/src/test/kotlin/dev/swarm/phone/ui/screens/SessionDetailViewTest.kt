@@ -11,6 +11,8 @@ import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.OperationOutcome
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
+import dev.swarm.phone.ui.UndeliveredInput
+import dev.swarm.phone.ui.UndeliveredLedger
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
@@ -57,6 +59,7 @@ class SessionDetailViewTest {
         journalStale: Boolean = false,
         stopNotSent: Boolean = false,
         verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+        undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
     ): SessionDetailPanel {
         val detail = SessionDetail(
             sessionId = "mbp/api",
@@ -70,8 +73,22 @@ class SessionDetailViewTest {
             TranscriptScreen.of(emptyList()),
             SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
             verdict,
+            undelivered,
         )
     }
+
+    /** One unit of input this phone took and could not deliver, in the shape the wire carries. */
+    private fun lost(reason: String = "the link dropped") = UndeliveredLedger(
+        entries = listOf(
+            UndeliveredInput(
+                sessionId = "mbp/api",
+                bytes = 4,
+                reason = reason,
+                atMillis = 1_700_000_000_000L,
+            ),
+        ),
+        dropped = 0,
+    )
 
     /** A machine that refused this screen's own take_control, in the machine's own words. */
     private fun refusedLease(): CommandVerdict = CommandVerdict.of(
@@ -121,13 +138,21 @@ class SessionDetailViewTest {
         outcome: String = "",
         onBack: () -> Unit = {},
         takeControl: View = TextView(context),
+        release: View = TextView(context),
+        resync: View = TextView(context),
+        acknowledge: View = TextView(context),
+        composer: View = TextView(context),
         onApproval: ((String) -> Unit)? = null,
     ): View = sessionDetailView(
         context = context,
         panel = panel,
         takeControl = takeControl,
+        release = release,
         stop = TextView(context).apply { text = panel.stopLabel },
         kill = TextView(context).apply { text = panel.killLabel },
+        resync = resync,
+        acknowledge = acknowledge,
+        composer = composer,
         outcome = outcome,
         onBack = onBack,
         onApproval = onApproval,
@@ -281,6 +306,10 @@ class SessionDetailViewTest {
      */
     @Test
     fun `the parts are drawn in the order the recorded composition names`() {
+        // THE LEDGER IS PART OF THE FIXTURE NOW (agents-tracker-nx44.6). Every part in
+        // `COMPOSITION` has to be on screen at once for an ordered comparison to mean anything,
+        // and PB-INPUT-1's three parts -- the notice, the machine's reason under it and the
+        // acknowledgement -- are drawn only over a session that actually lost input.
         val root = view(
             panel = panel(
                 leaseHeld = false,
@@ -288,6 +317,7 @@ class SessionDetailViewTest {
                 online = false,
                 stopNotSent = true,
                 verdict = refusedLease(),
+                undelivered = lost(),
             ),
             outcome = "Your machine refused that.",
         )
@@ -435,5 +465,134 @@ class SessionDetailViewTest {
                 "thing in the conversation the machine is waiting on",
             view(panelWithApproval(), onApproval = null).kitFind(TranscriptTag.APPROVAL),
         )
+    }
+
+    // ---- the composer, and the ledger it ships with (agents-tracker-hxv) ---
+
+    /**
+     * THE DEFECT agents-tracker-nx44.6 REPORTS, AS AN ASSERTION. This screen's lease sentence
+     * promised that "what you type is sent live" while the app's only composer was parented at the
+     * bottom of the triage inbox -- and `PhoneSurface.detachHostedViews` takes that column off
+     * screen on the way into this one. The promise was here and the affordance was not.
+     */
+    @Test
+    fun `the composer is on the screen that says what you type is sent live`() {
+        val composer = TextView(context)
+
+        val placed = view(composer = composer).kitFind(DetailTag.COMPOSER)
+
+        assertSame(
+            "the session detail places no composer, so the one screen a session is read on has " +
+                "a transcript, a lease and no way to answer",
+            composer,
+            placed,
+        )
+    }
+
+    /**
+     * agents-tracker-hxv: the ledger "renders ABOVE the transcript, never over the composer -- it
+     * concerns input already gone and must not cover the control the user is reaching for".
+     */
+    @Test
+    fun `the undelivered ledger is above the transcript and the composer is below it`() {
+        val root = view(panel(undelivered = lost()))
+        val order = root.compositionOrder()
+
+        assertTrue(
+            "the ledger is not on screen at all, so a composer accepts input with nothing " +
+                "reporting what it loses -- which is the state hxv's do-not-split ruling exists " +
+                "to prevent",
+            order.contains(DetailTag.UNDELIVERED),
+        )
+        assertTrue(
+            "the ledger draws BELOW the transcript, so what was lost sits under a conversation " +
+                "that grows while the user reads it",
+            order.indexOf(DetailTag.UNDELIVERED) < order.indexOf(DetailTag.TRANSCRIPT),
+        )
+        assertTrue(
+            "the composer is not last, so a report about input already gone can cover the " +
+                "control the user is reaching for",
+            order.indexOf(DetailTag.COMPOSER) == order.size - 1,
+        )
+    }
+
+    @Test
+    fun `the ledger draws nothing at all for a session that lost nothing`() {
+        val root = view(panel(undelivered = UndeliveredLedger.EMPTY))
+
+        assertNull(
+            "an empty ledger drew a notice anyway, which is a warning nobody wrote",
+            root.kitFind(DetailTag.UNDELIVERED),
+        )
+        assertNull(
+            "the acknowledgement is on screen with no backlog to acknowledge",
+            root.kitFind(DetailTag.ACKNOWLEDGE),
+        )
+    }
+
+    @Test
+    fun `the machine's reason for a loss is drawn in the machine's own register`() {
+        val root = view(panel(undelivered = lost("relay refused: swarm/offline")))
+
+        assertEquals(
+            "relay refused: swarm/offline",
+            textOf(root.kitRequire(DetailTag.UNDELIVERED_DETAIL)),
+        )
+        assertNull(
+            "a session that lost nothing drew an empty mono line, which is a cell reserved for " +
+                "a reason that does not exist",
+            view(panel(undelivered = UndeliveredLedger.EMPTY)).kitFind(DetailTag.UNDELIVERED_DETAIL),
+        )
+    }
+
+    /** PB-INPUT-3's take_control_end: a lease this screen took can now be given back. */
+    @Test
+    fun `release is placed exactly while the lease is held and take control is not`() {
+        val release = TextView(context)
+
+        val held = view(panel(leaseHeld = true), release = release)
+        val observing = view(panel(leaseHeld = false), release = TextView(context))
+
+        assertSame(release, held.kitFind(DetailTag.RELEASE))
+        assertNull(
+            "the screen offers to take a lease it says is held",
+            held.kitFind(DetailTag.TAKE_CONTROL),
+        )
+        assertNull(
+            "the screen offers to give back a lease the machine never granted",
+            observing.kitFind(DetailTag.RELEASE),
+        )
+    }
+
+    /** agents-tracker-upbo: the stale notice reports a hole and could not repair one. */
+    @Test
+    fun `the repair control sits with the notice that reports the hole, and nowhere else`() {
+        val resync = TextView(context)
+
+        val stale = view(panel(journalStale = true), resync = resync)
+        val whole = view(panel(journalStale = false), resync = TextView(context))
+        val order = stale.compositionOrder()
+
+        assertSame(resync, stale.kitFind(DetailTag.RESYNC))
+        assertTrue(
+            "the repair is drawn away from the sentence that explains what it repairs",
+            order.indexOf(DetailTag.RESYNC) == order.indexOf(DetailTag.STALE) + 1,
+        )
+        assertNull(
+            "a session whose chronology has no hole in it is offered a repair, which is a " +
+                "control that spends a rate-bounded verb on nothing",
+            whole.kitFind(DetailTag.RESYNC),
+        )
+    }
+
+    /** The parts actually on screen, in the order the column drew them. */
+    private fun View.compositionOrder(): List<String> {
+        val found = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.takeIf { it in DetailTag.COMPOSITION }?.let { found += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(this)
+        return found
     }
 }

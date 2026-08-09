@@ -35,6 +35,7 @@ import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ToastHost
+import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.notice
@@ -391,13 +392,11 @@ class PhoneSurface(
      * IT IS `.a2-ok`: sending is the composer's whole purpose, and derivation row 9's own bar draws
      * its send affordance as the primary thing on it.
      *
-     * **AND IT IS THE SECOND CHAMPAGNE IN [unrecomposedControls], which is recorded rather than
-     * hidden (agents-tracker-ksvb.4).** [launch] is `.a2-ok` too and the two are siblings in that
-     * column, so on the Inbox destination both are on screen at once. They belong to different
-     * things -- one submits a form, one types into a session -- and neither is the other's
-     * secondary, which is why neither was demoted here. The real repair is that the composer stops
-     * being a loose field and a button under the inbox at all: row 9's bar has no kit factory and
-     * ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
+     * **THE SECOND CHAMPAGNE IN [unrecomposedControls] IS RESOLVED BY LEAVING** (agents-tracker-
+     * ksvb.4 recorded it, agents-tracker-nx44.6 spends it). [launch] is `.a2-ok` too, and while
+     * both hung in that column the Inbox destination drew two primaries at once. The repair
+     * ksvb.4 named is the one that landed: this field and this button are derivation row 9's
+     * composer now, on the session detail, and the launch form keeps the column to itself.
      */
     private val send = actionButton("Send line", CtaKind.APPROVE) {
         // Read here, on the looper that owns the field. The lane never touches a View.
@@ -409,6 +408,80 @@ class PhoneSurface(
             // The field is emptied only once the bytes are away, which is where the clear has
             // always been: a send the machine refused leaves what the user typed on screen.
             settle = { typed.text.clear() },
+        )
+    }
+
+    /**
+     * Derivation row 9's bar, holding [typed] and [send] (agents-tracker-hxv, nx44.6).
+     *
+     * IT IS BUILT ONCE AND RE-PARENTED, which is every slot on this surface's rule and is sharper
+     * here than anywhere else: the field holds what the user has typed and not yet sent, and a bar
+     * rebuilt per draw would empty it at the rate the machine produces journal events.
+     */
+    private val composer = composerBar(activity, typed, send)
+
+    /**
+     * PB-INPUT-3's take_control_end, and the way OUT of a lease this app has never had
+     * (agents-tracker-nx44.6).
+     *
+     * `App.ReleaseControl` sat in android/unbound-verbs.tsv reading "the surface can TAKE a lease
+     * and cannot give one back, so a lease is held until the machine expires it". It is on the
+     * COMMAND plane with its sibling: a lease is claimed and surrendered by signed operations, and
+     * `mobile/commands.go` polls `awaitConn` on that path and deliberately does not on the live one.
+     *
+     * THE SETTLE FORGETS THE OPERATION THE LEASE WAS CLAIMED BY. [leaseVerdictFor] answers from the
+     * take_control this surface issued; a release that left that latch up would draw a lease as
+     * held over a session the machine has just been asked to detach, which is the same
+     * screen-disagrees-with-the-wire defect agents-tracker-agre found in the other direction.
+     */
+    private val release = actionButton(SLOT_LABEL, CtaKind.MORE) {
+        val target = session
+        Press(
+            SendPlane.COMMAND,
+            verb = { app -> app.releaseControl(target) },
+            settle = { forgetLease(target) },
+        )
+    }
+
+    /**
+     * PB-SYNC-1's repair, and `App.Resync`'s FIRST CALLER (agents-tracker-upbo).
+     *
+     * WHY IT IS HERE AND NOT ON THE LINK SECTION, which is where upbo sited it: that section draws
+     * four verdicts on the Machines destination, and the gap is felt on the screen where a
+     * conversation has records missing from it. The refusal it needs somewhere to render is the
+     * routed line this screen is already handed -- ErrClassRateLimited has a row in PB-APP-9's
+     * table with its own remedy ("wait a moment before trying again"), so a rate-bounded press
+     * lands there like every other refusal rather than needing a rule of its own.
+     *
+     * AND IT IS WHAT MAKES `StreamBadge.RESYNCING` REACHABLE. `App.Resync` marks `resyncAsked`
+     * before it seals anything, `App.ResyncPending` reads it back, and until this control existed
+     * nothing in production set it -- so `LinkPanel` modelled a third badge value no user could
+     * produce.
+     */
+    private val resyncControl = actionButton(SLOT_LABEL, CtaKind.MORE) {
+        Press(
+            SendPlane.COMMAND,
+            // THROUGH THE ADAPTER AND NOT `app.resync("journal")`. The four channel names cross as
+            // bare strings and are spelled once, in `FacadeBridge.REPAIR_CHANNELS`; a name typed
+            // at a call site is a second alphabet that `android/gate/pbapp8_repairchannels_test.go`
+            // refuses outright. `dispatchPress` already builds a bridge around the App this way.
+            verb = { app -> FacadeBridge(app).repairTranscript() },
+        )
+    }
+
+    /**
+     * PB-INPUT-1's acknowledgement (agents-tracker-hxv).
+     *
+     * It is a SEPARATE control from the notice it clears because the verb is separate, and
+     * `App.ClearUndeliveredInputs` says why: "a screen that OPENS must see the backlog, and a user
+     * who DISMISSES it says so once, for every screen". It is process-wide for the same reason --
+     * the ledger is -- so a user who clears it on one session clears it everywhere, which is what
+     * "says so once" means.
+     */
+    private val acknowledge = actionButton(SLOT_LABEL, CtaKind.MORE) {
+        Press(
+            SendPlane.COMMAND,
+            verb = { app -> FacadeBridge(app).clearUndelivered() },
         )
     }
 
@@ -777,14 +850,15 @@ class PhoneSurface(
      * session detail's escalation, behind [SessionDetailPanel.killConfirmation], on the screen that
      * names the session it ends. PB-APP-3's Stop is beside it and is new.
      *
-     * WHAT IS LEFT IS THE COMPOSER AND ONLY THE COMPOSER. The field and Send are derivation row 9's
-     * bar -- its 26 dp glyphs, its recessed field and its stop control -- and that component does
-     * not exist. It ships WITH PB-INPUT-1's undelivered-input ledger or not at all
-     * (agents-tracker-hxv): the ledger is what stops an input path losing keystrokes with nothing
-     * on screen saying so, so a composer delivered without it reintroduces exactly the defect the
-     * ledger exists to prevent. Until then a field and a button stand in for it here, rather than a
-     * composer-shaped affordance drawn on the detail screen promising an input path that is not
-     * wired.
+     * **THE COMPOSER HAS LEFT IT, AND THAT IS THE DEFECT agents-tracker-nx44.6 REPORTS CLOSING.**
+     * The field and Send hung here, under `triageInboxView`'s anonymous `below:` parameter -- the
+     * same parameter that hid the pairing block in defect 64rf -- while the screen that PROMISES
+     * live typing is the session detail, and [detachHostedViews] rips this whole column off the
+     * window on the way into it. So the app said "what you type is sent live" on a screen with no
+     * field on it. They are `ui/kit/Composer.kt`'s bar now, placed by `sessionDetailView`, and they
+     * arrived there WITH PB-INPUT-1's undelivered-input ledger, which is agents-tracker-hxv's
+     * do-not-split ruling: a composer that accepts input with no way to report losing it is a lie
+     * by omission.
      *
      * THE SETTINGS PANEL HAS LEFT IT, and that is the tab bar becoming a control. C6 is a
      * DESTINATION -- inventory C1.4's fourth tab -- and it was hosted here, halfway down a column
@@ -800,7 +874,7 @@ class PhoneSurface(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
         for (child in listOf(
             status, capabilityNotice, approvalHost,
-            typed, send, launchHost, outcome,
+            launchHost, outcome,
         )) {
             addView(child)
         }
@@ -898,7 +972,7 @@ class PhoneSurface(
     // working: the control moved to the screen that owns it and arrived back in this list with the
     // panel's own set, so the phone's one destructive action never stopped filtering obscured taps.
     val touchFilteredActions: List<View> =
-        listOf(takeControl, send, stop, kill, launch) +
+        listOf(takeControl, release, send, stop, kill, launch, resyncControl, acknowledge) +
             pairing.touchFilteredActions + settings.touchFilteredActions
 
     /**
@@ -1709,6 +1783,11 @@ class PhoneSurface(
             // pressed the button yet", and only the machine's own reply says which one this is.
             control,
             verdict,
+            // PB-INPUT-1's ledger, NARROWED HERE AND NOT IN THE FACADE. `App.UndeliveredInputs` is
+            // process-wide -- a dropped link loses keystrokes for every session at once -- and a
+            // screen open on one session that reported another's loss would be the proximity error
+            // PB-SYNC-2 forbids, applied to input.
+            bridge.undelivered().forSession(open),
         )
     }
 
@@ -1746,6 +1825,9 @@ class PhoneSurface(
         detailOutcomeDrawn = routed
         stop.text = panel.stopLabel
         kill.text = panel.killLabel
+        release.text = panel.releaseLabel
+        resyncControl.text = panel.resyncLabel
+        acknowledge.text = panel.acknowledgeLabel
         hostContent(
             sessionDetailView(
                 context = activity,
@@ -1754,8 +1836,15 @@ class PhoneSurface(
                 // button the deleted peek was handed, unchanged: this surface owns the verb, the
                 // operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
                 takeControl = takeControl,
+                release = release,
                 stop = stop,
                 kill = kill,
+                resync = resyncControl,
+                acknowledge = acknowledge,
+                // DERIVATION ROW 9'S BAR, ON THE SCREEN THAT PROMISES IT (agents-tracker-nx44.6).
+                // The field and Send used to hang under the triage inbox, which
+                // [detachHostedViews] takes off the window on the way in here.
+                composer = composer,
                 // PB-APP-9's routed line, which is a child of the column this screen replaces. It
                 // is handed in rather than left behind, because Stop and Kill reach a machine from
                 // here and a refusal with nowhere to land is a control that fails silently.
@@ -2182,6 +2271,26 @@ class PhoneSurface(
         leaseRefusedFor = ""
     }
 
+    /**
+     * Forget the take_control this surface issued, because the machine has been asked to end it.
+     *
+     * IT IS THE MIRROR OF [rememberLease] AND NOT A SECOND LEASE FACT. What decides the lease on
+     * this screen is the outcome claimed by [leaseOp]; a release that left that latch up would go
+     * on drawing the lease as held -- with the keyboard live and no Take control on offer -- over a
+     * session the machine is detaching. Dropping the id makes the next draw's verdict UNANSWERED,
+     * which is exactly what a phone holding no lease should read as.
+     *
+     * IT ONLY FORGETS ITS OWN. A release pressed while the latch names a different session would
+     * otherwise clear a lease the user still holds somewhere else.
+     */
+    private fun forgetLease(target: String) {
+        if (leaseSession != target) return
+        leaseOp = ""
+        leaseSession = ""
+        leaseSaid = ""
+        leaseRefusedFor = ""
+    }
+
     /** Latch the kill this surface issued, so [renderKillVerdict] can claim its answer. */
     private fun rememberKill(answer: Any?) {
         val issued = answer as? Op ?: return
@@ -2349,11 +2458,17 @@ class PhoneSurface(
         // action, and a phone whose session list is empty -- or whose machine is unreachable -- is
         // exactly the state its owner may need it in.
         takeControl.enable(enabled)
+        release.enable(enabled)
         // The session detail's two, which cannot in fact be on screen while this is false -- an
         // open drill-down IS the target, so the roster cannot be empty under one. They are here
         // because they act on the chosen session, which is what this function is about.
         stop.enable(enabled)
         kill.enable(enabled)
+        // THE REPAIR AND THE ACKNOWLEDGEMENT ARE NOT IN THIS FUNCTION and the omission is
+        // deliberate: neither acts on a session. `App.Resync` mends the transport's own read
+        // position and `App.ClearUndeliveredInputs` clears a process-wide ledger, so gating them
+        // on the roster having a row would disable exactly the two controls a phone with an empty
+        // roster may need -- which is [launch]'s own argument one control over.
     }
 
     /**

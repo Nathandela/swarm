@@ -4,6 +4,8 @@ import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
+import dev.swarm.phone.ui.UndeliveredInput
+import dev.swarm.phone.ui.UndeliveredLedger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -60,11 +62,28 @@ class SessionDetailPanelTest {
      * `SessionLease.leaseHeld` from the one verdict its own take_control earned, so a fixture that
      * let them disagree would test a combination the surface never produces.
      */
-    private fun panelOf(detail: SessionDetail = detail()) = SessionDetailScreen.of(
+    private fun panelOf(
+        detail: SessionDetail = detail(),
+        undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
+    ) = SessionDetailScreen.of(
         detail,
         TranscriptScreen.of(emptyList()),
         SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
+        undelivered = undelivered,
     )
+
+    private fun lost(count: Int, dropped: Int = 0, reason: String = "the link dropped") =
+        UndeliveredLedger(
+            entries = (0 until count).map {
+                UndeliveredInput(
+                    sessionId = "mbp/api",
+                    bytes = 4,
+                    reason = reason,
+                    atMillis = 1_700_000_000_000L + it,
+                )
+            },
+            dropped = dropped,
+        )
 
     // ---- what the screen is about -----------------------------------------
 
@@ -237,6 +256,118 @@ class SessionDetailPanelTest {
             "the unconfirmed sentence does not say what to do about it, which leaves a shut " +
                 "keyboard with no reason beside it",
             notHeld.contains("Take control first"),
+        )
+    }
+
+    /**
+     * PB-INPUT-3's take_control_end, and the half of the lease this app has never had
+     * (agents-tracker-nx44.6). `SessionLease.showsRelease` has decided it since the peek's
+     * deletion and no screen read it: a lease was held until the machine expired it.
+     */
+    @Test
+    fun `release is offered exactly while a lease is held, which is take control's mirror`() {
+        assertTrue(panelOf(detail(leaseHeld = true)).offersRelease)
+        assertFalse(
+            "the screen offers to give back a lease the machine never granted",
+            panelOf(detail(leaseHeld = false)).offersRelease,
+        )
+        assertNotEquals(
+            "the two lease controls are offered together, so a user is asked to take a lease " +
+                "they hold and give back one they do not",
+            panelOf(detail(leaseHeld = true)).offersTakeControl,
+            panelOf(detail(leaseHeld = true)).offersRelease,
+        )
+    }
+
+    // ---- PB-INPUT-1: the undelivered-input ledger --------------------------
+
+    /**
+     * agents-tracker-hxv's do-not-split ruling, from the ledger's side: "a composer that accepts
+     * input with no way to report losing it is a lie by omission".
+     */
+    @Test
+    fun `a session that lost nothing says nothing about losing it`() {
+        val panel = panelOf(undelivered = UndeliveredLedger.EMPTY)
+
+        assertEquals(
+            "the screen reports an input loss over a session that has had none, which is a " +
+                "warning nobody wrote -- the same call the stale notice above it already makes",
+            "",
+            panel.undeliveredNotice,
+        )
+        assertEquals("", panel.undeliveredDetail)
+        assertFalse(
+            "the screen offers to acknowledge a backlog that is empty",
+            panel.offersAcknowledge,
+        )
+    }
+
+    @Test
+    fun `the notice refuses the retry inference, because input is live-only`() {
+        val notice = panelOf(undelivered = lost(count = 3)).undeliveredNotice
+
+        assertTrue("the loss is not reported at all", notice.isNotEmpty())
+        assertTrue(
+            "the notice does not say the input is gone for good, so a user reads it as a queue " +
+                "that will flush when the link returns -- and PB-INPUT-1 is explicit that input " +
+                "is live-only and nothing is ever retried",
+            notice.contains("live-only"),
+        )
+        assertFalse(
+            "the notice promises a retry this transport never makes",
+            notice.contains("retry", ignoreCase = true) &&
+                !notice.contains("nothing", ignoreCase = true),
+        )
+    }
+
+    /**
+     * PB-INPUT-1: "a bound that discards silently would be a second defect wearing the first
+     * one's clothes -- the user is told about the last N keystrokes they lost and never told
+     * there were thousands, which understates the failure exactly when it is worst".
+     */
+    @Test
+    fun `what the bound discarded is reported whenever it is non-zero`() {
+        val silent = panelOf(undelivered = lost(count = 2, dropped = 0)).undeliveredNotice
+        val overflowed = panelOf(undelivered = lost(count = 2, dropped = 900)).undeliveredNotice
+
+        assertFalse("a ledger that discarded nothing reports a discard", silent.contains("900"))
+        assertTrue(
+            "the ledger's own bound discarded 900 earlier losses and the screen does not say " +
+                "so, so the user is told about two keystrokes and never about nine hundred",
+            overflowed.contains("900"),
+        )
+    }
+
+    /**
+     * The machine's own reason, in the machine's own register -- `noticeDetail`'s cell, which is
+     * agents-tracker-ksvb.10's ruling applied to this notice rather than a new one made here.
+     */
+    @Test
+    fun `the machine's reason is a separate cell and is never spliced into the sentence`() {
+        val panel = panelOf(undelivered = lost(count = 1, reason = "relay refused: swarm/offline"))
+
+        assertEquals("relay refused: swarm/offline", panel.undeliveredDetail)
+        assertFalse(
+            "a wire string is drawn inside the screen's own sentence, in the same type and the " +
+                "same voice as copy this product wrote",
+            panel.undeliveredNotice.contains("relay refused: swarm/offline"),
+        )
+        assertTrue(
+            "the acknowledgement is not offered over a backlog there is one of, so a notice the " +
+                "user has already read stays up for the life of the process",
+            panel.offersAcknowledge,
+        )
+    }
+
+    /**
+     * PB-SYNC-1's repair, and agents-tracker-upbo's control arriving at the site the gap is felt.
+     */
+    @Test
+    fun `the repair is offered exactly beside the notice that reports the hole`() {
+        assertTrue(panelOf(detail(journalStale = true)).offersResync)
+        assertFalse(
+            "the screen offers to repair a chronology it has just said is complete",
+            panelOf(detail(journalStale = false)).offersResync,
         )
     }
 }

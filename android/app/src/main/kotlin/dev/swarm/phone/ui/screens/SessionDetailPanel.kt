@@ -5,6 +5,7 @@ import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
+import dev.swarm.phone.ui.UndeliveredLedger
 
 /**
  * PB-APP-3 -- inventory C2's screen model: what the session detail SAYS about a [SessionDetail].
@@ -86,11 +87,20 @@ data class SessionDetailPanel(
     /**
      * Whether the Take control step is on offer, per `SessionLease.showsTakeControl`.
      *
-     * IT IS OFFERED EXACTLY WHILE IT IS THE STEP TO TAKE, and there is no Release beside it because
-     * `App.ReleaseControl` is still ledgered unbound in `android/unbound-verbs.tsv`: a screen that
-     * hid the way in without offering a way out would be worse than one that never hid it.
+     * IT IS OFFERED EXACTLY WHILE IT IS THE STEP TO TAKE, and [offersRelease] is now its mirror.
      */
     val offersTakeControl: Boolean,
+    /**
+     * PB-INPUT-3's take_control_end, per `SessionLease.showsRelease` (agents-tracker-nx44.6).
+     *
+     * IT IS THE HALF OF THE LEASE THIS APP NEVER HAD. `App.ReleaseControl` sat in
+     * `android/unbound-verbs.tsv` reading "the surface can TAKE a lease and cannot give one back,
+     * so a lease is held until the machine expires it" -- and the model that would drive the
+     * control, `SessionLease.showsRelease`, was decided, unit-tested and read by nothing.
+     */
+    val offersRelease: Boolean,
+    /** What the Release control reads as. */
+    val releaseLabel: String,
     /** What pressing Stop does NOW, from the model that decides it. */
     val stopAction: StopAction,
     /** What the Stop control reads as, which differs for an observer -- see [SessionDetailScreen]. */
@@ -106,6 +116,37 @@ data class SessionDetailPanel(
     val notSentNotice: String,
     /** PB-APP-8: what the screen says when the journal has a hole in it. */
     val staleNotice: String,
+    /**
+     * PB-SYNC-1's repair, offered exactly where [staleNotice] reports the hole
+     * (agents-tracker-upbo).
+     *
+     * IT IS SITED HERE AND NOT ON THE LINK SECTION, which is where that bead put it. The four
+     * channels are drawn on the Machines destination and the gap is FELT on this one -- a
+     * conversation with records missing from it -- so the control that repairs the journal sits
+     * under the sentence that says the journal is incomplete. The link section carries the second
+     * entry point; this is the one the user reaches for.
+     */
+    val offersResync: Boolean,
+    /** What the repair control reads as. */
+    val resyncLabel: String,
+    /**
+     * PB-INPUT-1's ledger, in words that refuse the retry inference (agents-tracker-hxv).
+     *
+     * IT IS EMPTY WHERE NOTHING WAS LOST, which is the same call the two notices above it make: a
+     * report of a loss over a session that has had none is a warning nobody wrote.
+     */
+    val undeliveredNotice: String,
+    /** The MACHINE'S own reason for the loss, in `noticeDetail`'s cell, or empty where it sent none. */
+    val undeliveredDetail: String,
+    /**
+     * Whether there is a backlog to acknowledge.
+     *
+     * IT IS A SEPARATE CONTROL AND NOT A DRAINING READ, which is `App.ClearUndeliveredInputs`' own
+     * argument: a screen that OPENS must see the backlog, and a user who DISMISSES it says so once.
+     */
+    val offersAcknowledge: Boolean,
+    /** What the acknowledgement reads as. */
+    val acknowledgeLabel: String,
 )
 
 object SessionDetailScreen {
@@ -173,6 +214,84 @@ object SessionDetailScreen {
 
     /** §4's back control, by where it goes rather than by a glyph a screen reader cannot read. */
     private const val BACK = "Back to inbox"
+
+    /**
+     * PB-INPUT-3's take_control_end, by what it does to the SESSION rather than by naming the verb.
+     *
+     * It is the mirror of "Take control" on purpose: the two are one fact in two states, and a
+     * release worded any other way would read as a different subject from the button it replaces.
+     */
+    private const val RELEASE = "Release control"
+
+    /**
+     * PB-SYNC-1's repair, named for what it mends rather than for the verb behind it
+     * (agents-tracker-upbo). "Resync" is the wire's word for a reseed; what the user is looking at
+     * is a log with records missing from it, and [STALE_NOTICE] is the sentence directly above.
+     */
+    private const val RESYNC = "Repair this record"
+
+    /**
+     * PB-INPUT-1's acknowledgement, and it says what it clears rather than "dismiss".
+     *
+     * The verb's own doc is why: a clear "does not disable the ledger", so a label reading as
+     * "stop telling me" would describe something this control deliberately does not do.
+     */
+    private const val ACKNOWLEDGE = "Clear this record"
+
+    /**
+     * PB-INPUT-1's ledger, in the words that refuse the inference a queue would invite.
+     *
+     * THE SECOND SENTENCE IS THE WHOLE POINT AND IS NOT PADDING. A report that input did not arrive
+     * reads, to anyone who has used a messaging app, as a thing that will go out when the link
+     * returns -- and this transport never does that: `App.SendInput` rides the live-only path
+     * (ADR-007 D7), so what was lost is lost. Saying only "3 things did not reach your machine"
+     * would be true and would leave the user waiting for a delivery.
+     *
+     * IT COUNTS RATHER THAN ECHOING. `UndeliveredInput` carries a byte count and not the bytes for
+     * the reason its own type records, so there is nothing here that could quote what was typed
+     * even if this file wanted to.
+     */
+    private const val UNDELIVERED_LIVE_ONLY =
+        " Input is live-only: none of it was held, and nothing is sent when the connection comes " +
+            "back."
+
+    private fun undeliveredHead(count: Int): String = when (count) {
+        1 -> "Something you typed did not reach your machine."
+        else -> "$count things you typed did not reach your machine."
+    }
+
+    /**
+     * What the ledger's own bound threw away, said whenever it is non-zero (PB-INPUT-1).
+     *
+     * "A bound that discarded silently would be a second defect wearing the first one's clothes:
+     * the user is told about the last N keystrokes they lost and never told there were thousands,
+     * which understates the failure exactly when it is worst."
+     */
+    private fun undeliveredOverflow(dropped: Int): String =
+        if (dropped <= 0) {
+            ""
+        } else {
+            " $dropped earlier losses are not listed: this record is bounded and discarded them."
+        }
+
+    fun undeliveredNoticeFor(ledger: UndeliveredLedger): String =
+        if (ledger.entries.isEmpty()) {
+            ""
+        } else {
+            undeliveredHead(ledger.entries.size) + UNDELIVERED_LIVE_ONLY +
+                undeliveredOverflow(ledger.dropped)
+        }
+
+    /**
+     * The MACHINE'S own reasons, in the machine's own register (agents-tracker-ksvb.10's ruling,
+     * applied to this notice rather than restated for it).
+     *
+     * DISTINCT, IN THE ORDER THEY FIRST ARRIVED. A link that drops mid-session produces one reason
+     * per lost keystroke, so printing every entry's reason would be the same sentence forty times;
+     * printing only the last would hide a second, different failure underneath it.
+     */
+    fun undeliveredDetailFor(ledger: UndeliveredLedger): String =
+        ledger.entries.map { it.reason }.filter { it.isNotEmpty() }.distinct().joinToString("\n")
 
     /**
      * The machine's answer to the kill this screen issued, or NOTHING where it has none to give.
@@ -295,6 +414,7 @@ object SessionDetailScreen {
         transcript: TranscriptPanel,
         lease: SessionLease,
         verdict: CommandVerdict = CommandVerdict.UNANSWERED,
+        undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
     ): SessionDetailPanel = SessionDetailPanel(
         // THE SESSION'S OWN NAME, and the id only where there is none
         // (agents-tracker-ksvb.1). The id keeps every other job it had on this screen --
@@ -309,6 +429,12 @@ object SessionDetailScreen {
         leaseNotice = leaseNoticeFor(lease.showsRelease, verdict),
         leaseDetail = leaseDetailFor(lease.showsRelease, verdict),
         offersTakeControl = lease.showsTakeControl,
+        // THE LEASE MODEL DECIDES BOTH, and they are read from the two properties rather than from
+        // one and its negation: `showsTakeControl` and `showsRelease` are the two sides of one
+        // fact, and a screen that computed the second here would be a second copy of a decision
+        // `SessionLease` already states.
+        offersRelease = lease.showsRelease,
+        releaseLabel = RELEASE,
         stopAction = detail.stop(),
         stopLabel = if (detail.leaseHeld) STOP else STOP_NEEDS_LEASE,
         stopConfirmation = STOP_CONFIRMATION,
@@ -321,6 +447,15 @@ object SessionDetailScreen {
         // ends up promising a delivery this transport never makes.
         notSentNotice = detail.notSentNotice,
         staleNotice = if (detail.stale) STALE_NOTICE else "",
+        // THE SAME CONDITION AS THE SENTENCE, deliberately: the control is what the sentence's
+        // reader reaches for, and a repair offered over a chronology this screen has just called
+        // complete would spend a rate-bounded verb on nothing.
+        offersResync = detail.stale,
+        resyncLabel = RESYNC,
+        undeliveredNotice = undeliveredNoticeFor(undelivered),
+        undeliveredDetail = undeliveredDetailFor(undelivered),
+        offersAcknowledge = undelivered.entries.isNotEmpty(),
+        acknowledgeLabel = ACKNOWLEDGE,
     )
 
 }
