@@ -478,7 +478,7 @@ func TestAgentsInstall_WriteFailureMidwayExitsOneNamesFailureOnStderr(t *testing
 	if err := os.Chmod(claudeDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(claudeDir, 0o755) }) // let t.TempDir clean up
+	t.Cleanup(func() { _ = os.Chmod(claudeDir, 0o755) }) // let t.TempDir clean up
 
 	var stdout, stderr bytes.Buffer
 	if exit := runAgentsInstall(nil, &stdout, &stderr); exit != 1 {
