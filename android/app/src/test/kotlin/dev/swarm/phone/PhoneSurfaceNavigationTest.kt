@@ -6,7 +6,6 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import dev.swarm.phone.ui.kit.KitTag
-import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,15 +40,28 @@ import org.robolectric.RobolectricTestRunner
  * and everything past that branch is out of reach here (the argument is
  * android/gate/pbapp6_pbinput2_surface_test.go's, in full). That bounds this file to what is true
  * on BOTH branches: the bar is the window's chrome, it survives on every destination, and tapping
- * a tab changes what is under it. The machines and activity screens' own composition is asserted
- * where it can be -- `MachinesPanelViewTest`, `ActivityPanelViewTest` -- over models this JVM can
- * build.
+ * a tab changes what is under it. A destination's own composition is asserted where it can be --
+ * `ActivityPanelViewTest`, `SettingsPanelConnectionViewTest` -- over models this JVM can build.
+ *
+ * THE FOURTH TAB IS GONE (agents-tracker-nx44.3) and the paragraphs above are left as written,
+ * because they are the record of why the bar moved out of the inbox and that reasoning is
+ * unchanged by there being one destination fewer. `machinesPanelView` no longer exists.
  */
 @RunWith(RobolectricTestRunner::class)
 class PhoneSurfaceNavigationTest {
 
-    /** Inventory C1.4's four tabs, in the order the artifact draws them. */
-    private val destinations = listOf("Inbox", "Machines", "Activity", "Settings")
+    /**
+     * The destinations this app has, in the order the artifact draws the tabs it kept.
+     *
+     * AMENDED BY agents-tracker-nx44.3. It read `listOf("Inbox", "Machines", "Activity",
+     * "Settings")` -- inventory C1.4's four -- and the Machines destination is deleted: everything
+     * on it was either failure prose or four gap cards, and the two facts a person wanted from it
+     * are the Settings screen's CONNECTION section now. The artifact still draws four tabs and its
+     * fourth glyph still joins to `swarm_tab_machines` (android/gate/tabbar_test.go reads the
+     * owner-signed artifact and is not edited for this); what changed is which of them this app
+     * puts a destination behind.
+     */
+    private val destinations = listOf("Inbox", "Activity", "Settings")
 
     /**
      * A control from the INBOX destination, by the words on it.
@@ -105,9 +117,9 @@ class PhoneSurfaceNavigationTest {
                     activity.showsInboxControl(),
                 )
 
-                activity.tapTab("Machines")
+                activity.tapTab("Activity")
                 assertTrue(
-                    "the inbox's own controls are STILL on screen after the Machines tab was " +
+                    "the inbox's own controls are STILL on screen after the Activity tab was " +
                         "tapped, so the tab is decoration: `TabItem` carries no tap handler and " +
                         "nothing swaps the content host's child",
                     !activity.showsInboxControl(),
@@ -123,41 +135,29 @@ class PhoneSurfaceNavigationTest {
     }
 
     /**
-     * PB-DS-9's empty-section rule, applied to a whole DESTINATION.
+     * agents-tracker-nx44.3: **the fourth tab is gone, and pressing where it was does nothing.**
      *
-     * The Machines screen cannot be drawn: `MachinesPanel` needs `App.Presence` -- a blocking relay
-     * round-trip that android/unbound-verbs.tsv forbids calling per redraw -- and a paired-device
-     * name no facade verb returns. That is settled and is agents-tracker-xtj's. What is NOT settled
-     * by it is what the user sees in the meantime, and a blank destination is the same defect
-     * PB-DS-9 spends its longest argument on: dropping an empty section makes "there is nothing
-     * here" indistinguishable from "this failed to load". A blank primary tab is worse than a blank
-     * section, because it is the steady state rather than a branch -- it reads as a crash on every
-     * single tap.
+     * THIS TEST REPLACES ONE THAT PINNED THE OPPOSITE, and the deleted assertion is quoted rather
+     * than dropped. It read:
      *
-     * IT ASSERTS READABLE TEXT AND NOT A PARTICULAR SENTENCE, because the sentence is the screen
-     * model's and is asserted against the model rather than against a second copy of itself here.
+     *	activity.tapTab("Machines")
+     *	assertEquals(listOf(MachinesPanelScreen.UNAVAILABLE_COPY), activity.readableContent())
+     *
+     * -- PB-DS-9's empty-section rule applied to a whole destination, which was the right call
+     * while the destination existed and could not be drawn (agents-tracker-xtj). The fold deletes
+     * the destination itself, so the sentence has nothing left to qualify: `MachinesPanelScreen`
+     * and its `UNAVAILABLE_COPY` are deleted with it, and this asserts what replaced them --
+     * nothing on the bar leads there, so a user cannot arrive at a screen with no content.
      */
     @Test
-    fun `the machines destination says something rather than nothing`() {
+    fun `there is no machines destination to arrive at`() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                activity.tapTab("Machines")
-
                 assertTrue(
-                    "the Machines destination puts NOTHING on screen: a user taps a primary tab " +
-                        "and gets an empty area under the bar, which is indistinguishable from a " +
-                        "crash, a failed load or a bug. PB-DS-9's own rule is that an empty " +
-                        "section is still a section -- the Activity screen next door carries " +
-                        "`emptyState` copy for exactly this reason",
-                    activity.readableContent().isNotEmpty(),
-                )
-                assertEquals(
-                    "the words on the Machines destination are not the screen model's, so the " +
-                        "copy a user reads was typed at the call site. PB-DS-9 assigns copy to " +
-                        "the screen, and MachinesPanelScreen already owns every other string on " +
-                        "this one",
-                    listOf(MachinesPanelScreen.UNAVAILABLE_COPY),
-                    activity.readableContent(),
+                    "the bar still draws a Machines tab. Its whole content was four gap cards " +
+                        "and a sentence saying this phone could not read its machine's details, " +
+                        "which is the page field test 3 could not find a purpose for",
+                    activity.tabLabels().none { it == "Machines" },
                 )
             }
         }
@@ -201,17 +201,6 @@ class PhoneSurfaceNavigationTest {
         )
         tab.performClick()
     }
-
-    /**
-     * Everything on screen a person could actually read, which is deliberately everything EXCEPT
-     * the bar's own four labels: the bar is present on every destination, so counting it would
-     * report a destination that draws nothing as one that says something.
-     */
-    private fun android.app.Activity.readableContent(): List<String> = onScreen()
-        .filterIsInstance<TextView>()
-        .filter { it.tag != KitTag.TAB_LABEL }
-        .map { it.text.toString() }
-        .filter { it.isNotBlank() }
 
     private fun android.app.Activity.showsInboxControl(): Boolean = onScreen()
         .filterIsInstance<TextView>()

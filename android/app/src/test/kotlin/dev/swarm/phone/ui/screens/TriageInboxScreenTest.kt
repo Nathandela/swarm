@@ -408,15 +408,27 @@ class TriageInboxScreenTest {
 
     // ---- the tab bar ------------------------------------------------------
 
+    /**
+     * AMENDED BY agents-tracker-nx44.3, WHICH IS A TAB FOLD AND NOT A RELAXATION. This read:
+     *
+     *	assertEquals(listOf("Inbox", "Machines", "Activity", "Settings"), screen.tabs.map { it.label })
+     *	assertEquals(listOf(true, false, false, false), screen.tabs.map { it.selected })
+     *
+     * Inventory C1.4's fourth tab is deleted rather than unwired: the Machines destination's whole
+     * content was four gap cards and a sentence saying this phone could not read its machine's
+     * details, and what it was for now lives in the Settings screen's CONNECTION section. The
+     * assertion is the same shape over the destinations that exist -- a tab this app cannot
+     * navigate to is what `Destination.forLabel` throws on.
+     */
     @Test
-    fun `the tab bar is the recorded four, with the inbox selected`() {
+    fun `the tab bar is the three destinations, with the inbox selected`() {
         val screen = screenOf(emptyList())
 
         assertEquals(
-            listOf("Inbox", "Machines", "Activity", "Settings"),
+            listOf("Inbox", "Activity", "Settings"),
             screen.tabs.map { it.label },
         )
-        assertEquals(listOf(true, false, false, false), screen.tabs.map { it.selected })
+        assertEquals(listOf(true, false, false), screen.tabs.map { it.selected })
     }
 
     // ---- the scope bar ----------------------------------------------------
