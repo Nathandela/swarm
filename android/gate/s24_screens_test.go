@@ -1089,30 +1089,22 @@ var s24ScreenComponents = map[string]map[string]string{
 	"dev/swarm/phone/ui/screens/PhoneScaffoldView.kt": {
 		"tabBar": "C1.4 `.ptabs` -- the four destinations, under whichever one is on screen",
 	},
+	// THE CONNECTION SECTION IS THIS SCREEN'S NOW (agents-tracker-nx44.3), which is why
+	// `machineRow` is claimed here. Inventory C4 -- the machines screen -- is deleted: its four
+	// per-channel gap cards and its "this phone cannot read your machine's details" sentence were
+	// the whole of a primary destination, and field test 3 recorded an owner reading it and asking
+	// what the page was for. Derivation row 11's machine row is the part that answered a question
+	// somebody asked, so it moves under the PAIRING section rather than being deleted with the
+	// screen -- and this file is its ONLY production call site now that `MachinesPanelView.kt` is
+	// gone. `notice` is claimed twice over: the disclosure and the per-toggle notices, and the
+	// section's two fault lines (the channel-health summary and PB-TIME-1's clock verdict), which
+	// draw only when there is a fault.
 	"dev/swarm/phone/ui/screens/SettingsPanelView.kt": {
 		"navHeader":    "C6.1 -- the settings screen's own title",
 		"sectionLabel": "C6.2 `.seclabel` -- one per section",
 		"settingsRow":  "C6.2 `.setrow` -- one per preference, derivation row 15",
-		"notice":       "§4 Notice line -- the disclosure and the per-toggle notices",
-	},
-	// C4 -- the machines screen. Its three blocks are derivation rows 11, 12 and 13, and TWO OF
-	// THEM ARE COMPONENTS OF THEIR OWN rather than settings rows wearing different words. Row 11's
-	// shape is a leading mark, a name and a trailing mono identifier over a meta line; row 12 is
-	// the one bordered container in the app with no fill. Only row 13 is a `settingsRow`, because
-	// with no fingerprint to render it is a name and a trailing control and nothing else.
-	//
-	// Its AUDIT LOG is deliberately absent from this list and from the screen: it is row 14, the
-	// activity row, which is a second agent's component and now exists -- the section arrives when
-	// the screen is wired, and raising a second one here would be the copy §2's reuse rule exists
-	// to prevent.
-	"dev/swarm/phone/ui/screens/MachinesPanelView.kt": {
-		"navHeader":       "C4.1 -- the root header, title `Machines`, no live counter",
-		"machineRow":      "C4.2 -- row 11, with row 11's presence mark inside it",
-		"sessionList":     "C4.2/4 `.prows` -- the container the rows sit in, per §6 over `.cards`",
-		"killSwitchPanel": "C4.3 -- row 12 as amended: the state, and no control",
-		"sectionLabel":    "C4.4 `.seclabel` -- `Paired devices`",
-		"settingsRow":     "C4.4 -- row 13's device row: a name and a trailing control",
-		"denyChip":        "C4.4 -- Revoke, row 13's `.a2-no` treatment at chip metrics",
+		"machineRow":   "derivation row 11 -- the CONNECTION section's machine, with its presence mark",
+		"notice":       "§4 Notice line -- the disclosure, the per-toggle notices, the link's faults",
 	},
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen
@@ -1206,36 +1198,23 @@ var s24ScreenComponents = map[string]map[string]string{
 		"emptyState":  "derivation row 8 -- a heading over nothing is a section that lies",
 		"notice":      "§4 Notice line -- the stale mark over a journal that has stopped arriving",
 	},
-	// THE LINK SECTION HAS NO ROW OF ITS OWN, AND THAT IS WHY THE CLAIM IS WRITTEN OUT HERE. The
-	// derivation table specifies no clock-skew notice and no per-channel arrival readout --
-	// Substrate's artifact draws neither and the mock draws neither -- so the alternative to this
-	// claim was a new component invented to carry them. What ships instead is row 15 spent twice:
-	// `settingsRow` is a label with an optional second line, and `statusLabel` is row 15's own
-	// other trailing form, "status text `Label.CardHead` / `--p-hero`". Hero is the LIVENESS claim
-	// in this skin, which is exactly and only what a live channel is making -- so a stale channel
-	// gets no status label at all, and its absence is the assertion `LinkPanelViewTest` makes.
+	// THE SYNC DETAIL SHEET, WHICH INHERITED THE LINK SECTION'S JOB (agents-tracker-nx44.2, and
+	// agents-tracker-nx44.3 for the inheritance). This block used to claim `LinkPanelView.kt` --
+	// four unconditional per-channel rows on the Machines destination, `statusLabel` on the live
+	// ones and `notice` for the clock -- and that destination is deleted. The argument the deleted
+	// claim carried is preserved where it still holds: the UNCONDITIONAL readout, healthy rows
+	// included, is what makes "all of them are fine" distinguishable from "this screen forgot the
+	// reply channel", and this sheet is where it lives because a sheet is opened deliberately. The
+	// summary that replaced the four cards is one `notice` in the settings CONNECTION section.
 	//
-	// THE CLOCK LINE IS CLAIMED NOW (AMENDED 2026-08-08, agents-tracker-ksvb.4). This paragraph read:
-	//
-	//	The clock line is NOT claimed below, because it is not a component. It is a bare TextView
-	//	carrying the model's copy and no appearance, which is what `ActivityPanelView` does with its
-	//	stale notice and states in its own words as "the absence of a decision rather than one made
-	//	here". There is no notice or body-copy component in the kit; row 8's empty state is centred
-	//	with 48 dp of vertical padding and is a different thing.
-	//
-	// The premise went: §4's `Notice line` row now specifies exactly that sentence and `ui/kit/
-	// Notice.kt` builds it. "No appearance" was never the absence of a decision -- a `TextView` with
-	// no `TextAppearance` renders at the platform's ~14 sp default, which is LARGER than every body
-	// style in this app's ladder, so the clock warning was set bigger than the channel rows it sat
-	// over. What row 8 is still a different thing FROM is unchanged and is why the notice is its own
-	// row rather than a reuse: the empty state is centred inside 48 dp of vertical air because it
-	// stands in for a section's contents, and a notice qualifies the block under it.
-	"dev/swarm/phone/ui/screens/LinkPanelView.kt": {
-		"sectionLabel": "`.plabel` -- the one section, over the four repair channels",
-		"sessionList":  "`.prows` -- the rows' container, carrying the gap and the side padding",
-		"settingsRow":  "derivation row 15 -- one per channel: the channel, and what is true of it",
-		"statusLabel":  "row 15's status text, `--p-hero` -- the liveness claim, on live channels only",
-		"notice":       "§4 Notice line -- the clock-skew warning over the four channels",
+	// NEITHER `navHeader` NOR `sectionLabel` IS CLAIMED: the sheet has no title of its own -- it
+	// opens from the nav row's pill and the pill is its heading -- and its three labelled rows are
+	// row 15's, which is the `settingsRow` below.
+	"dev/swarm/phone/ui/screens/SyncStatusView.kt": {
+		"sessionList": "`.prows` -- the three labelled facts' container, carrying the gap and the side padding",
+		"settingsRow": "derivation row 15 -- one per fact: HEARD, READING, VIEWS",
+		"notice":      "§4 Notice line -- one per repair channel with a hole in it",
+		"ctaButton":   "the one control: the repair, or the way back to Pairing",
 	},
 }
 
@@ -1331,25 +1310,31 @@ func TestPBAPP3_TheSessionDetailIsReachedFromTheApp(t *testing.T) {
 			"does not arrive at it")
 }
 
-// TestPBDS9_TheLinkSectionIsReachedFromTheApp is the same fence over the screen that was BUILT to
-// close this defect class, which is the one place it would be embarrassing to leave unfenced.
+// TestPBDS9_TheSyncDetailIsReachedFromTheApp is the same fence over the screen that carries
+// PB-APP-8's per-channel verdicts today, which is the one place it would be embarrassing to leave
+// unfenced.
 //
-// `LinkPanelView` exists because `ClockBanner` and `StreamView` were modelled, unit-tested, reached
-// by `FacadeBridge` and drawn by nothing (agents-tracker-ah2). A section written to fix
-// "reachable by nothing" and then left reachable by nothing is the same bug with more files in it,
-// and every check that would notice is on the wrong side of a seam: `LinkPanelViewTest` builds the
-// view itself, and the runtime half is out of reach because `PhoneRuntime.phone()` answers
-// Unavailable on every JVM run, where `drawMachines` gets a null bridge and draws only the
-// unavailable sentence. A source scan is what is left.
+// **IT NAMED `linkPanelView` UNTIL agents-tracker-nx44.3, AND THE SUBJECT MOVED RATHER THAN THE
+// FENCE BEING DROPPED.** That section existed because `ClockBanner` and `StreamView` were
+// modelled, unit-tested, reached by `FacadeBridge` and drawn by nothing (agents-tracker-ah2); it
+// lived on the Machines destination, and the tab fold deletes the destination and the section with
+// it. The four verdicts did not go with them: `syncStatusView` draws every repair channel with a
+// hole in it, from the same `FacadeBridge.streamViews()`, on a sheet reachable from every
+// destination -- and the clock verdict is the settings CONNECTION section's, which
+// `settingsPanelView` composes and `SettingsSurface` renders. So this is the same assertion about
+// the file that inherited the job.
 //
-// The comment above about scoping to ONE screen no longer holds and is superseded rather than
-// contradicted: there are two now, both named, and `machinesPanelView` is still legitimately
-// unrendered (agents-tracker-xtj). A blanket fence would still need an exemption table, and a
-// table of screens allowed to be unreachable is still a place for screens to go and stay.
-func TestPBDS9_TheLinkSectionIsReachedFromTheApp(t *testing.T) {
-	assertScreenIsReachedFromTheApp(t, "PB-DS-9", "linkPanelView",
-		"PB-TIME-1's clock verdict and PB-APP-8's four channel verdicts are drawn by nothing "+
-			"again, which is the exact defect this section was written to close")
+// A section written to fix "reachable by nothing" and then left reachable by nothing is the same
+// bug with more files in it, and every check that would notice is on the wrong side of a seam:
+// `SyncStatusViewTest` builds the view itself, and the runtime half is out of reach because
+// `PhoneRuntime.phone()` answers Unavailable on every JVM run. A source scan is what is left.
+//
+// STILL SCOPED TO NAMED SCREENS rather than blanket. A blanket fence would need an exemption
+// table, and a table of screens allowed to be unreachable is a place for screens to go and stay.
+func TestPBDS9_TheSyncDetailIsReachedFromTheApp(t *testing.T) {
+	assertScreenIsReachedFromTheApp(t, "PB-DS-9", "syncStatusView",
+		"PB-APP-8's per-channel verdicts are drawn by nothing again, which is the exact defect "+
+			"the section this one replaced was written to close")
 }
 
 // assertScreenIsReachedFromTheApp is the comparison both fences make.

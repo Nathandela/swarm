@@ -61,9 +61,9 @@ var pairingEntryInboxSources = []string{
 // comment turns off), and string literals out too.
 //
 // THE STRINGS GO FOR THE SAME REASON THE COMMENTS DO, in the other direction. Every screen in this
-// app carries its own copy, and copy talks about the product: `MachinesPanel` already writes "been
-// repaired", `LinkPanel` writes "repair channel", and a settings row that offers to pair will say
-// so in a sentence. This fence is about which VIEW is a child of which container, so a word in a
+// app carries its own copy, and copy talks about the product: `SessionDetailPanel` already writes
+// "Repair this record", `StreamView` writes "Repairing the journal view", and a settings row that
+// offers to pair will say so in a sentence. This fence is about which VIEW is a child of which container, so a word in a
 // user-visible string is not evidence and must not be able to fail it -- nor, by sitting there, to
 // make a green run look earned.
 //
@@ -129,8 +129,8 @@ func kotlinWithoutStringLiterals(code string) string {
 
 // pairingReference is the pairing panel NAMED. Every pairing symbol this app has spells it as a
 // whole word at the start of a token -- `pairing.root`, `PairingSurface`, `pairingPanelView`,
-// `PairingPanel` -- and the word boundary is what keeps "repairing" and "repaired", which the link
-// and machines screens both use, from firing it.
+// `PairingPanel` -- and the word boundary is what keeps "repairing" and "repaired", which the sync
+// detail sheet and the session detail both use, from firing it.
 //
 // ITS LIMIT IS STATED RATHER THAN HIDDEN: a host named without the word (`onPair`, `linkHost`) is
 // invisible to it. That is why the checks below read the container GRAPH as well as the text -- a
@@ -644,7 +644,7 @@ func TestPairingEntry_ThePairingScanDiscriminates(t *testing.T) {
 	}{
 		{"another destination's panel", "settings.root"},
 		{"a container with no pairing in it", "clean"},
-		{"a repaired channel", "linkPanelView(activity, panel, below = unavailable)"},
+		{"the sync detail sheet", "syncStatusView(activity, status, onRepair = {})"},
 		{"a screen composed from the kit", "activityPanelView(activity, panel)"},
 	}
 	for _, c := range allowed {

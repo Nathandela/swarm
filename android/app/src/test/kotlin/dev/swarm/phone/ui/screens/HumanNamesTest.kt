@@ -3,10 +3,10 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.ApprovalItem
 import dev.swarm.phone.ui.JournalPageView
+import dev.swarm.phone.ui.ClockBanner
 import dev.swarm.phone.ui.JournalRow
 import dev.swarm.phone.ui.MachineFreshness
 import dev.swarm.phone.ui.MachineLabel
-import dev.swarm.phone.ui.MachinePane
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.SessionRow
@@ -70,22 +70,29 @@ class HumanNamesTest {
     }
 
     // ---- the machine row: name cell and endpoint cell ------------------------
+    //
+    // THE ROW MOVED AND THE TWO ASSERTIONS DID NOT (agents-tracker-nx44.3). They read
+    // `MachinesPanelScreen.of(pane(...), formatTime).machine`; the Machines destination is deleted
+    // and derivation row 11's machine row is the settings screen's CONNECTION section now, so the
+    // subject is `SettingsPanelScreen.connectionOf`. What is asserted is unchanged, which is the
+    // point of re-pointing them rather than dropping them: this is one of the seven fallback sites
+    // this suite exists to hold in one place.
 
-    private fun pane(machineName: String = "") = MachinePane(
+    private fun machineRow(machineName: String = "") = SettingsPanelScreen.connectionOf(
         machineId = "ep-1a2b3c4d",
         machineName = machineName,
         presence = "online",
         freshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_753_900_000_000),
-        pairedDeviceName = "swarm phone",
-        killSwitchEngaged = false,
-        activity = emptyList(),
-    )
+        streams = emptyList(),
+        clock = ClockBanner.of(""),
+        formatTime = formatTime,
+    ).machine
 
     private val formatTime: (Long) -> String = { millis -> "at $millis" }
 
     @Test
     fun `the machine row names the machine and keeps the id in its own cell`() {
-        val row = MachinesPanelScreen.of(pane(machineName = "nathans-mbp"), formatTime).machine
+        val row = machineRow(machineName = "nathans-mbp")
         assertEquals("nathans-mbp", row.name)
         assertEquals("ep-1a2b3c4d", row.endpoint)
     }
@@ -97,7 +104,7 @@ class HumanNamesTest {
      */
     @Test
     fun `an unnamed machine renders its id once`() {
-        val row = MachinesPanelScreen.of(pane(machineName = ""), formatTime).machine
+        val row = machineRow(machineName = "")
         assertEquals("ep-1a2b3c4d", row.name)
         assertNull(row.endpoint)
     }

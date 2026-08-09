@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
+import dev.swarm.phone.ui.kit.machineRow
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sectionLabel
@@ -38,6 +39,14 @@ import dev.swarm.phone.ui.kit.settingsRow
  * REVOKES THIS DEVICE, so the control carries a facade verb, PB-SEC-12 clause 1's touch filter and
  * an identity that has to survive a redraw, and `SettingsSurface` is where all three are. It
  * arrives as [settingsPanelView]'s `replaceFor` and is tagged [SettingsTag.REPLACE] once placed.
+ *
+ * THE CONNECTION SECTION IS NOT IN INVENTORY C6 EITHER, and it is what the Machines destination
+ * left behind (agents-tracker-nx44.3). Inventory C4 was a whole screen; what survived the fold is
+ * derivation row 11's `machineRow` -- this is now its only production call site, `machinesPanelView`
+ * having been deleted with the destination -- and two §4 notice lines that draw only when there is
+ * something wrong. Nothing here owns a click: the section reports and offers no control, because
+ * the one repair action this phone has is the sync detail sheet's and the one destructive action is
+ * the PAIRING row's, two lines above.
  *
  * THE NOTICE LINES ARE THE KIT'S NOW (agents-tracker-ksvb.4). This paragraph read "THE NOTICE LINES
  * ARE STILL BARE `TextView`s ... that is the absence of a decision rather than one made here", and
@@ -101,8 +110,32 @@ object SettingsTag {
      */
     const val DELIVERY_REDIRECT = "settings.delivery.redirect"
 
+    /**
+     * agents-tracker-nx44.3's CONNECTION row -- derivation row 11's machine row, on this screen.
+     *
+     * It is NOT [MACHINE_ROW]: that one is the PAIRING section's, whose control revokes this
+     * device, and a caller reaching for one must not be handed the other. They sit two lines apart
+     * and are about the same computer, which is exactly why they need different handles.
+     */
+    const val CONNECTION_ROW = "settings.connection.row"
+
+    /**
+     * The one line naming the repair channels with holes in them. Absent -- not empty -- while
+     * every channel is current: a blank line still occupies its line height and its gap, so a
+     * healthy phone would get a strip of nothing under its machine that reads as a warning
+     * somebody forgot to write.
+     */
+    const val CONNECTION_HEALTH = "settings.connection.health"
+
+    /**
+     * PB-TIME-1's clock verdict, absent while the clock is in budget for [CONNECTION_HEALTH]'s
+     * reason. It is a separate tag because it is a separate fault with a separate remedy: the
+     * health line is about the machine's frames and this is about this phone's own clock.
+     */
+    const val CONNECTION_CLOCK = "settings.connection.clock"
+
     /** The parts whose ON-SCREEN ORDER is the recorded composition. */
-    val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, ROW)
+    val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, CONNECTION_ROW, ROW)
 }
 
 /**
@@ -174,6 +207,43 @@ fun settingsPanelView(
                 trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
             ).apply { tag = SettingsTag.MACHINE_ROW },
         )
+    }
+
+    // UNDER THE PAIRING SECTION AND ABOVE THE PREFERENCES (agents-tracker-nx44.3). The row above
+    // says which computer this phone is PINNED to; this says whether that computer is currently
+    // reachable and whether what the app is showing came from it, so it qualifies the row above
+    // and has to follow it. The preferences are a different subject and trail both.
+    panel.connection?.let { section ->
+        column.addView(
+            sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
+        )
+        column.addView(
+            machineRow(
+                context = context,
+                machine = section.machine.name,
+                presence = section.machine.presenceLine,
+                mark = section.machine.mark,
+                // Row 11's `endpoint id` cell, or nothing where the model says the id is already
+                // in the name cell. The decision is the model's; this carries it.
+                endpoint = section.machine.endpoint,
+                // THE MODEL'S OWN CALL, carried rather than re-decided here. Null while the line
+                // under the mark still says presence in words, including whose word it is -- a
+                // described dot there would say it twice. Non-null exactly where a healthy machine
+                // has printed nothing, which is the one case left where the dot is the only thing
+                // on screen carrying the state.
+                presenceDescription = section.machine.presenceDescription,
+            ).apply { tag = SettingsTag.CONNECTION_ROW },
+        )
+        // THE TWO FAULT LINES ARE PLACED ONLY WHEN THERE IS A FAULT. `notice` with an empty string
+        // draws a `TextView` that still takes its line height and its gap, so an unconditional
+        // placement puts a blank strip under the machine of every healthy phone -- the always-on
+        // warning this app's conditional-notice discipline refuses everywhere else.
+        section.health.takeIf { it.isNotEmpty() }?.let { line ->
+            column.addView(notice(context, line).apply { tag = SettingsTag.CONNECTION_HEALTH })
+        }
+        section.clockNotice.takeIf { it.isNotEmpty() }?.let { line ->
+            column.addView(notice(context, line).apply { tag = SettingsTag.CONNECTION_CLOCK })
+        }
     }
 
     panel.sections.forEach { section ->

@@ -1,8 +1,15 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.ClockBanner
+import dev.swarm.phone.ui.MachineFreshness
+import dev.swarm.phone.ui.MachineLabel
+import dev.swarm.phone.ui.MachinePane
 import dev.swarm.phone.ui.PushCategory
 import dev.swarm.phone.ui.PushToggle
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.StreamBadge
+import dev.swarm.phone.ui.StreamView
+import dev.swarm.phone.ui.kit.PresenceMark
 
 /**
  * Phase B slice S24 -- PB-DS-9: the SETTINGS screen's model.
@@ -72,6 +79,24 @@ data class SettingsPanel(
      */
     val machineSection: MachineSection? = null,
     /**
+     * agents-tracker-nx44.3: the CONNECTION section, or null on a phone that cannot read its own
+     * link (and on every caller written before this section existed).
+     *
+     * IT IS WHAT IS LEFT OF THE MACHINES DESTINATION. That tab drew four "The X view has a gap"
+     * cards and a sentence saying this phone could not read its machine's details; field test 3
+     * (2026-08-09) is the record of an owner reading it and asking what the page was for. The two
+     * questions it was actually there to answer -- which computer am I attached to, and is what I
+     * am looking at current -- are one row and one line, so they are a SECTION rather than a
+     * screen, and they sit here because [machineSection] directly above already answers the first
+     * half in the durable sense (which machine is this phone PINNED to) and this answers it in the
+     * live one.
+     *
+     * A FIELD OF ITS OWN, for [machineSection]'s reason exactly: [SettingsSection.rows] is
+     * `List<SettingsRow>` -- a list of push toggles -- and neither a machine row nor a fault line
+     * is one.
+     */
+    val connection: ConnectionSection? = null,
+    /**
      * agents-tracker-0dij: the words on the control that leads out of a permanently blocked
      * notification permission, or null on every other state.
      *
@@ -102,11 +127,132 @@ data class SettingsPanel(
      * who could not find the pairing entry point at all, so it leads and the preferences follow.
      */
     val sectionHeadingsInOrder: List<String>
-        get() = listOfNotNull(machineSection?.heading) + sections.map { it.heading }
+        get() = listOfNotNull(machineSection?.heading, connection?.heading) +
+            sections.map { it.heading }
 }
 
 /** One `.seclabel` and the rows under it. */
 data class SettingsSection(val heading: String, val rows: List<SettingsRow>)
+
+/**
+ * agents-tracker-nx44.3: the machine this phone is attached to, live.
+ *
+ * TWO OF ITS THREE FIELDS ARE SILENT WHEN THERE IS NOTHING WRONG, which is this app's standing
+ * rule for a fault report ("online is the only quiet state", `ConnectionBanner` since S16) and the
+ * thing the deleted destination got wrong: four cards that rendered on every visit, three of them
+ * usually saying a channel was fine, taught the reader to skip the fourth.
+ *
+ * THE UNCONDITIONAL READOUT STILL EXISTS AND IS NOT HERE. `SyncDetail` draws every repair channel
+ * including the healthy ones, because it is opened deliberately -- so "all four are fine" stays
+ * distinguishable from "this screen forgot the reply channel", which is the argument `LinkPanel`
+ * made for its four rows and which now belongs to the sheet that inherited them.
+ */
+data class ConnectionSection(
+    /** The `.seclabel` over the row. */
+    val heading: String,
+    /** Derivation row 11's machine row: who this phone is talking to, and whether it is reachable. */
+    val machine: MachineRow,
+    /**
+     * ONE line naming the repair channels with holes in them, or empty while every one is current.
+     *
+     * IT NAMES THEM AND DOES NOT DESCRIBE THEM. Which of the two unhealthy states a channel is in
+     * -- an idle hole or one being repaired -- is [dev.swarm.phone.ui.StreamView.notice]'s
+     * sentence, and the sync detail sheet prints it per channel. A section that reproduced that
+     * here would be the four cards again with the borders taken off.
+     */
+    val health: String,
+    /**
+     * PB-TIME-1's verdict, verbatim from the daemon, or empty while the clock is in budget.
+     *
+     * IT IS HERE BECAUSE IT WAS DRAWN BY `linkPanelView` AND BY NOTHING ELSE. `ClockBanner` and
+     * `StreamView` were fully modelled, unit-tested and reached no pixel until agents-tracker-ah2
+     * built a section for them; deleting that section without carrying the verdict would put the
+     * clock straight back into that state. It belongs with the link rather than with the machine:
+     * a skewed clock gets a command refused as "not authorized", which sends a user to pair again
+     * when the fix is their own clock.
+     */
+    val clockNotice: String,
+)
+
+/**
+ * One machine: derivation row 11.
+ *
+ * MOVED HERE FROM `MachinesPanel.kt` BY agents-tracker-nx44.3, unchanged except for this
+ * paragraph. That file was the Machines destination's model and the destination is deleted; this
+ * row is the one part of it that answered a question a person asked, so it moves to the section
+ * that asks it rather than being deleted and rewritten.
+ *
+ * THE `endpoint <id>` SLOT IS HERE AS OF agents-tracker-ksvb.1, AND THE REASON IT WAS NOT IS
+ * RECORDED RATHER THAN DELETED. This comment used to say row 11's mono cell had no source
+ * because "this product has ONE identifier for a machine, not two" -- `MachinePane.machineId` IS
+ * the endpoint id, so rendering it twice would have been a second copy of the name wearing the
+ * mock's label rather than a second fact. That was true and it stopped being true when the
+ * pairing payload's hostname started reaching the phone: there are now two facts about a machine,
+ * a NAME a person chose and an ID the software derived, and row 11's two cells are exactly the
+ * shape for them.
+ *
+ * THE OLD REASONING STILL GOVERNS THE UNNAMED CASE, which is why [MachineRow.endpoint] is
+ * nullable rather than always the id. A machine that published no name renders its id in the NAME
+ * cell -- [dev.swarm.phone.ui.MachineLabel.of]'s fallback -- and an endpoint cell beside it would
+ * print the same string twice, one of them labelled as though it were something else.
+ */
+data class MachineRow(
+    /**
+     * Row 11's `name`, `Title.Row` / `--p-ink`: the machine as this product names it -- which
+     * since agents-tracker-ksvb.1 means the name the MACHINE published, and the endpoint id only
+     * where it published none. [dev.swarm.phone.ui.MachineLabel.of] makes that choice; this field
+     * is its answer.
+     */
+    val name: String,
+    /**
+     * Row 11's mono `endpoint id` cell, or null where there is nothing a second cell could add.
+     *
+     * NULL IS NOT "NO ID". It is "the id is already in the name cell": a machine that published
+     * no hostname falls back to its endpoint id for [name], and repeating it here would print one
+     * string twice with the second copy labelled as a different fact. `ui/kit/MachineRow.kt`
+     * draws no cell at all for null rather than an empty one, which is the same rule its
+     * sublabel and the activity row's timestamp already follow.
+     */
+    val endpoint: String?,
+    /**
+     * Row 11's `meta` line -- [dev.swarm.phone.ui.MachinePane.explanationOf], the pane's OWN
+     * sentence.
+     *
+     * It is not re-worded here. PB-APP-11's whole subject is that the relay answers the presence
+     * query and the relay is the declared adversary, so this line is the one place the screen
+     * says whose word `online` is; two files deciding that separately is how one of them ends up
+     * telling a user their machine is fine.
+     *
+     * EMPTY FOR A HEALTHY MACHINE (agents-tracker-ksvb.6), which is when [presenceDescription]
+     * stops being null.
+     */
+    val presenceLine: String,
+    /**
+     * What the presence dot announces, or null where [presenceLine] already says it in words.
+     *
+     * A HEALTHY MACHINE PRINTS NO LINE, so the dot -- otherwise decorative -- is the only thing
+     * left on screen carrying the state, and [dev.swarm.phone.ui.MachinePane.announcementOf] is
+     * what it reads out. Non-null exactly where [presenceLine] is empty: a described dot beside a
+     * sentence that already says the same thing would have a screen reader announce presence
+     * twice.
+     */
+    val presenceDescription: String?,
+    /**
+     * Which of the relay's THREE words the mark draws, carried rather than collapsed.
+     *
+     * `App.MachinePresence` returns `unknown`, `offline` or `online`, and the cheap implementation
+     * is "not offline" -- which paints a machine nobody can vouch for as reachable. `unknown`
+     * means the relay has no live record, or that this phone has lost the link and can no longer
+     * ask (`presenceCache.forget`), and reporting the absence of evidence as evidence is the one
+     * thing this field must not do.
+     *
+     * IT WAS A `Boolean` UNTIL ADR-009 D2. The maquette draws `.pdot.unknown` as a hollow ring, so
+     * the third word now has a mark of its own; folding it onto `offline` here would put the
+     * collapse one layer up from where it was fixed. [PresenceMark] is a closed set, so a `when`
+     * over it cannot acquire a default arm to hide the third state in again.
+     */
+    val mark: PresenceMark,
+)
 
 /**
  * The paired machine's `.seclabel` and the one row under it.
@@ -181,6 +327,33 @@ object SettingsPanelScreen {
     /** The paired machine's `.seclabel`. See [MachineSection]. */
     private const val PAIRING = "Pairing"
 
+    /**
+     * The live link's `.seclabel` (agents-tracker-nx44.3).
+     *
+     * THE TRANSPORT'S WORD, DELIBERATELY. `LinkPanelScreen` headed the deleted section `Link` and
+     * argued for it: "Connection" was the transport's word and that section was about what had
+     * ARRIVED, per repair channel, which is a different fact. This section is both -- a machine
+     * and whether frames from it are current -- and it sits under `Pairing` on a screen a person
+     * opens asking about their computer. `Connection` is the word they arrive with.
+     */
+    private const val CONNECTION = "Connection"
+
+    /**
+     * The relay's words for a live authenticated connection and for a closed one
+     * (`relay.PresenceOnline`, `relay.PresenceOffline`).
+     *
+     * COMPARED AGAINST, NEVER RENDERED. The line a user reads carries whatever the relay actually
+     * said; these constants only decide which of the maquette's three marks the 7 dp dot takes.
+     *
+     * ANYTHING ELSE IS `unknown`, INCLUDING THE RELAY'S OWN THIRD WORD, and that is the safe
+     * direction rather than a shrug: a word this phone does not recognise is a word it has learned
+     * nothing from, which is exactly what `unknown` means. The failure the old `presence == ONLINE`
+     * boolean could produce -- an unrecognised word reading as reachable -- is impossible here for
+     * the same reason.
+     */
+    private const val ONLINE = "online"
+    private const val OFFLINE = "offline"
+
     fun labelFor(toggle: PushToggle): String = checkNotNull(ROW_LABELS[toggle]) {
         "PB-DS-9: no settings label for $toggle. A switch with no words beside it is a control " +
             "nobody can identify, so this fails loudly rather than rendering a blank row."
@@ -198,8 +371,17 @@ object SettingsPanelScreen {
      *  show a row about", and EMPTY is "there is one and this phone cannot read its name", which
      *  [PairedMachineRowScreen] renders as `Paired`. Defaulting to null is what lets every call
      *  site written before this row existed keep meaning what it meant.
+     * @param connection [connectionOf]'s answer, or null on a phone that cannot read its own link
+     *  -- which is the same null every call site written before agents-tracker-nx44.3 passes. It
+     *  is COMPOSED rather than built here so that the facts it needs (the relay's presence, the
+     *  phone's freshness, four stream verdicts and the clock) are read once, at the seam that can
+     *  read them, instead of this function growing six parameters it only forwards.
      */
-    fun of(settings: SettingsScreen, machine: String? = null): SettingsPanel = SettingsPanel(
+    fun of(
+        settings: SettingsScreen,
+        machine: String? = null,
+        connection: ConnectionSection? = null,
+    ): SettingsPanel = SettingsPanel(
         title = TITLE,
         sections = listOf(
             SettingsSection(
@@ -224,9 +406,99 @@ object SettingsPanelScreen {
         machineSection = machine?.let {
             MachineSection(heading = PAIRING, row = PairedMachineRowScreen.of(it))
         },
+        connection = connection,
         permissionRedirectLabel = settings.notificationRedirectLabel,
         deliveryRedirectLabel = settings.deliveryRedirectLabel,
     )
+
+    /**
+     * The CONNECTION section (agents-tracker-nx44.3).
+     *
+     * IT IS A PURE FUNCTION OVER FACTS THE ADAPTER CAN READ WITHOUT A ROUND TRIP, and that is what
+     * makes it callable from a draw at all. `App.MachinePresence` is a cached O(1) read fed by the
+     * relay goroutine on its own 15 s cadence -- NOT `App.Presence`, which is the blocking
+     * round-trip android/unbound-verbs.tsv bars a render from -- and `App.MachineFreshness`,
+     * `App.StreamState`, `App.ResyncPending` and `App.ClockVerdict` all read local state.
+     *
+     * @param machineId the endpoint id this phone is pinned to -- the machine's identity, and the
+     *  fallback for its name.
+     * @param machineName `App.MachineName`: the hostname the machine published, or empty where it
+     *  published none. WHICH CELL EACH ENDS UP IN IS DECIDED HERE and not at the call site, so the
+     *  one rule -- [dev.swarm.phone.ui.MachineLabel.of], and an endpoint cell only where it is a
+     *  SECOND fact -- is in a function a JVM can check.
+     * @param presence `App.MachinePresence`'s state, verbatim. It is the RELAY's opinion and never
+     *  evidence about the machine, which is why [freshness] is a required parameter here rather
+     *  than an option a caller may drop.
+     * @param freshness `App.MachineFreshness` -- the phone's OWN evidence, the one thing a relay
+     *  that answers every poll while withholding every frame cannot fake.
+     * @param streams `FacadeBridge.streamViews()`, in `FacadeBridge.REPAIR_CHANNELS` order. The
+     *  order is not decided here.
+     * @param clock `FacadeBridge.clockBanner()` -- PB-TIME-1's verdict, pulled per draw and never
+     *  latched, because a screen that opened after the measurement was never sent the event.
+     * @param formatTime an Android formatter carrying the user's locale and time zone, passed
+     *  through to the pane's own sentence so this stays checkable without one.
+     */
+    fun connectionOf(
+        machineId: String,
+        machineName: String,
+        presence: String,
+        freshness: MachineFreshness,
+        streams: List<StreamView>,
+        clock: ClockBanner,
+        formatTime: (Long) -> String,
+    ): ConnectionSection {
+        // READ ONCE AND BRANCHED ON ONCE. A formatter is not guaranteed pure, so a second call
+        // could in principle answer differently -- and a row whose line and description disagreed
+        // about whether the machine is healthy is exactly the drift PB-APP-11 refuses.
+        val line = MachinePane.explanationOf(presence, freshness, formatTime)
+        return ConnectionSection(
+            heading = CONNECTION,
+            machine = MachineRow(
+                name = MachineLabel.of(machineName, machineId),
+                // THE ID KEEPS ITS OWN CELL, and only while the name cell is saying something
+                // else. See [MachineRow.endpoint]: this is a second FACT beside the name, never a
+                // second copy of it.
+                endpoint = machineId.takeIf { machineName.isNotEmpty() },
+                presenceLine = line,
+                presenceDescription = if (line.isEmpty()) {
+                    MachinePane.announcementOf(presence)
+                } else {
+                    null
+                },
+                mark = when (presence) {
+                    ONLINE -> PresenceMark.ONLINE
+                    OFFLINE -> PresenceMark.OFFLINE
+                    else -> PresenceMark.UNKNOWN
+                },
+            ),
+            health = healthOf(streams.filter { it.badge != StreamBadge.LIVE }.map { it.stream }),
+            // [ClockBanner.visible] AND NOT `text.isNotEmpty()`. They agree today, and only one of
+            // them is the model's verdict: `of` decides that a blank verdict is a HEALTHY clock,
+            // and a screen re-deriving that from the string would be a second opinion able to
+            // disagree.
+            clockNotice = if (clock.visible) clock.text else "",
+        )
+    }
+
+    /**
+     * The one health line, over the channels [names] says have holes.
+     *
+     * THE CHANNEL NAMES ARE THE WIRE'S OWN WORDS. `journal`, `terminal`, `reply` and `grant` are
+     * `internal/phonecore`'s strings and a table turning them into English would have to invent a
+     * phrase for a fifth channel it had never seen -- which is `ChannelRow.stream`'s rule,
+     * inherited rather than re-decided. `android/gate/pbapp8_repairchannels_test.go` set-compares
+     * the four this app asks about against the four the core repairs.
+     *
+     * A REPAIR IN FLIGHT IS STILL A GAP, which is why the caller filters on `badge != LIVE` rather
+     * than on `STALE`. `App.Resync` marks the request and the mark clears when the repair LANDS,
+     * so a channel being repaired is a channel with a hole in it that is being worked on --
+     * reporting it as current is PB-SYNC-3's optimistic clear.
+     */
+    private fun healthOf(names: List<String>): String = when (names.size) {
+        0 -> ""
+        1 -> "The ${names.single()} view has a gap."
+        else -> "The ${names.dropLast(1).joinToString(", ")} and ${names.last()} views have gaps."
+    }
 
     private fun rowFor(settings: SettingsScreen, toggle: PushToggle): SettingsRow {
         val label = labelFor(toggle)

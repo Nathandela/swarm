@@ -55,9 +55,19 @@ data class TabItem(
  *
  * A LABEL IS A WEAK KEY AND IT IS THE RIGHT ONE HERE. The alternative is an identity on [TabItem]
  * that every call site would have to set, which is the arrangement that just shipped four empty
- * icon frames. The screen's tabs are the four literals the artifact names and the app has no
- * translations, so the miss below is unreachable today; when it stops being unreachable the tab
- * renders as it does now, without its glyph, rather than crashing on a screen a person is holding.
+ * icon frames. The screen's tabs are literals the artifact names and the app has no translations,
+ * so the miss below is unreachable today; when it stops being unreachable the tab renders as it
+ * does now, without its glyph, rather than crashing on a screen a person is holding.
+ *
+ * **THE TABLE HAS FOUR ENTRIES AND THE APP DRAWS THREE TABS** (agents-tracker-nx44.3). The
+ * `Machines` DESTINATION is deleted -- `ui/screens/PhoneScaffoldView.kt`'s [dev.swarm.phone.ui
+ * .screens.Destination] carries that argument -- and its pairing stays here because this table is
+ * the ARTIFACT's, not the app's: `docs/research/remote-control-design-directions.html` is
+ * owner-signed and draws four tabs, and `android/gate/tabbar_test.go` reads that block at test
+ * time and requires each glyph it finds to exist as a drawable AND to be bound by name in this
+ * file. Deleting the row would fail that join; editing the artifact is forbidden. What the bar
+ * renders is decided by the items its caller passes, which is the screen's business, so an unused
+ * pairing here costs one map entry and keeps the design join intact.
  */
 private val TAB_GLYPHS: Map<String, Int> = mapOf(
     "Inbox" to R.drawable.swarm_tab_inbox,
@@ -72,7 +82,8 @@ private fun tabGlyph(context: Context, label: CharSequence): Drawable? =
 /**
  * origin: .ptabs
  *
- * The bottom bar: four tabs, a 1 dp hairline along the top, and `--p-tabbg` behind them.
+ * The bottom bar: the tabs it is given, a 1 dp hairline along the top, and `--p-tabbg` behind
+ * them. (The artifact draws four; this app passes three -- see [TAB_GLYPHS].)
  *
  * `--p-tabbg` IS SPENT AS A RESOURCE, AND IT WAS NOT. The token was typed `effect` in
  * `tokens.json` -- so PB-TOK-6's converters produced no `<color>` and there was nothing to read --

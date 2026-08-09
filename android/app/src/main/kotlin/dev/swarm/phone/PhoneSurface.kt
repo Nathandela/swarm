@@ -49,9 +49,6 @@ import dev.swarm.phone.ui.screens.InboxTab
 import dev.swarm.phone.ui.screens.LaunchFieldId
 import dev.swarm.phone.ui.screens.LaunchPanel
 import dev.swarm.phone.ui.screens.LaunchPanelScreen
-import dev.swarm.phone.ui.screens.LinkPanel
-import dev.swarm.phone.ui.screens.LinkPanelScreen
-import dev.swarm.phone.ui.screens.MachinesPanelScreen
 import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.Presentation
@@ -62,7 +59,6 @@ import dev.swarm.phone.ui.screens.TranscriptScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.launchPanelView
-import dev.swarm.phone.ui.screens.linkPanelView
 import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
@@ -451,17 +447,18 @@ class PhoneSurface(
     /**
      * PB-SYNC-1's repair, and `App.Resync`'s FIRST CALLER (agents-tracker-upbo).
      *
-     * WHY IT IS HERE AND NOT ON THE LINK SECTION, which is where upbo sited it: that section draws
-     * four verdicts on the Machines destination, and the gap is felt on the screen where a
-     * conversation has records missing from it. The refusal it needs somewhere to render is the
+     * WHY IT IS HERE AND NOT ON THE LINK SECTION, which is where upbo sited it: that section drew
+     * four verdicts on the Machines destination -- both deleted by agents-tracker-nx44.3 -- and the
+     * gap is felt on the screen where a conversation has records missing from it. The refusal it needs somewhere to render is the
      * routed line this screen is already handed -- ErrClassRateLimited has a row in PB-APP-9's
      * table with its own remedy ("wait a moment before trying again"), so a rate-bounded press
      * lands there like every other refusal rather than needing a rule of its own.
      *
      * AND IT IS WHAT MAKES `StreamBadge.RESYNCING` REACHABLE. `App.Resync` marks `resyncAsked`
      * before it seals anything, `App.ResyncPending` reads it back, and until this control existed
-     * nothing in production set it -- so `LinkPanel` modelled a third badge value no user could
-     * produce.
+     * nothing in production set it -- so the third badge value was one no user could produce. The
+     * two readers of it now are `SyncStatus`'s detail sheet and the settings CONNECTION section,
+     * both of which count a repair in flight as a gap that has not closed yet.
      */
     private val resyncControl = actionButton(SLOT_LABEL, CtaKind.MORE) {
         Press(
@@ -560,10 +557,10 @@ class PhoneSurface(
     /**
      * The session whose DETAIL is open, or null while the Inbox tab is showing its list.
      *
-     * IT IS A SUB-STATE OF [Destination.INBOX] AND NOT A FIFTH DESTINATION, which is structural
-     * rather than aesthetic: the bar draws exactly four tabs from the labels `TriageInboxScreen`
-     * records and `Destination.forLabel` THROWS on a label it cannot place, so a fifth value would
-     * be a destination the bar cannot express and the lookup cannot produce. It also keeps the
+     * IT IS A SUB-STATE OF [Destination.INBOX] AND NOT A DESTINATION OF ITS OWN, which is
+     * structural rather than aesthetic: the bar draws exactly the labels `TriageInboxScreen`
+     * records and `Destination.forLabel` THROWS on a label it cannot place, so an extra value
+     * would be a destination the bar cannot express and the lookup cannot produce. It also keeps the
      * Inbox tab reading as selected while you are inside it, which is where you are.
      *
      * SWITCHING TABS PRESERVES IT. A user who checks the activity feed mid-session should come back
@@ -630,21 +627,18 @@ class PhoneSurface(
     private var detailOutcomeDrawn: String = ""
 
     /**
-     * Which of inventory C1.4's four destinations is on screen.
+     * Which destination is on screen.
      *
      * IT IS THE SURFACE'S AND NOT THE INBOX MODEL'S. `InboxScreen.tabs` carries a `selected` flag,
      * and it was written when the inbox was the only screen there was: it answers
      * `label == "Inbox"` for every list it builds. Reading it here would tell a user standing on
-     * Machines that they are in the Inbox, so the selection is this field and
+     * Activity that they are in the Inbox, so the selection is this field and
      * [dev.swarm.phone.ui.screens.phoneScaffoldView] takes it as a parameter.
      */
     private var destination = Destination.INBOX
 
     /** What the activity screen last drew, for [inboxDrawn]'s reason. */
     private var activityDrawn: ActivityPanel? = null
-
-    /** What the machines screen's link section last drew, for [inboxDrawn]'s reason. */
-    private var machinesDrawn: LinkPanel? = null
 
     /**
      * The destination the content host currently holds.
@@ -922,8 +916,8 @@ class PhoneSurface(
      *
      * WHAT IT REPLACES IS A LINE ON THE INBOX. The three facts were written to [status], a child
      * of [unrecomposedControls], which `triageInboxView` hosts UNDER its four Group sections --
-     * so `hostContent`'s `detachHostedViews` took them off screen on the way to Machines,
-     * Activity, Settings and into every session drill-down. The link dropping changed nothing on
+     * so `hostContent`'s `detachHostedViews` took them off screen on the way to Activity,
+     * Settings and into every session drill-down. The link dropping changed nothing on
      * screen for a user standing anywhere else, which is the moment PB-APP-8 exists for.
      */
     private val syncHost = FrameLayout(activity).apply {
@@ -1300,8 +1294,8 @@ class PhoneSurface(
                 freshness = bridge.machineFreshness(),
                 nowUnixMs = System.currentTimeMillis(),
                 // PB-APP-8 per channel, which is what the roster's single stale mark was a
-                // summary of. `LinkPanel` reads the same four and the sheet names the ones with
-                // holes in them.
+                // summary of. The sheet names the ones with holes in them; the settings CONNECTION
+                // section reads the same four and says only how many there are.
                 streams = bridge.streamViews(),
                 // PB-SYNC-7's hold, shown before anyone presses anything (agents-tracker-pxz8).
                 reconciled = reconciledOf(startup),
@@ -1723,8 +1717,8 @@ class PhoneSurface(
      * screen `TriageInboxScreen.promotions` compares against, and the whole claim its KDoc makes
      * is that a promotion happened "in front of the user" -- so the memo has to be what the user
      * SAW, not what was last drawn. Those are the same thing only while the inbox list is on
-     * screen. Without this line the memo froze for as long as the user was on Machines, Activity
-     * or Settings, or inside a drill-down, and every session that started asking during that
+     * screen. Without this line the memo froze for as long as the user was on Activity or
+     * Settings, or inside a drill-down, and every session that started asking during that
      * window was announced when they came back: a NEEDS_YOU two-pulse and a slab sweep for
      * transitions nobody was there for.
      *
@@ -1739,7 +1733,7 @@ class PhoneSurface(
      * louder. `android/gate/o4_sweepmemo_test.go` asserts both halves and perturbs each.
      *
      * @param bridge null on the branch where the phone core refused, which is the only reason
-     *  three of the four destinations can have nothing to draw.
+     *  a destination can have nothing to draw.
      * @param inbox null for the same reason.
      */
     private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
@@ -1751,7 +1745,6 @@ class PhoneSurface(
                 }
                 else -> drawDetail(open)
             }
-            Destination.MACHINES -> drawMachines(bridge)
             Destination.ACTIVITY -> drawActivity(bridge)
             Destination.SETTINGS -> drawSettings()
         }
@@ -1959,70 +1952,6 @@ class PhoneSurface(
     }
 
     /**
-     * PB-APP-5's machines screen, and **it draws nothing, which is a report rather than an
-     * omission.** [dev.swarm.phone.ui.screens.machinesPanelView] is built, composed from the kit
-     * and covered by its own suite; what is missing is the two facts it renders, and neither can
-     * be supplied from here without inventing it:
-     *
-     *  - **Presence.** `MachinesPanel` takes `MachinePane.presence`, which is `App.Presence` -- a
-     *    BLOCKING RELAY ROUND-TRIP with no timeout. android/unbound-verbs.tsv ledgers the verb
-     *    deliberately unbound in exactly these words: "this surface's render() is now driven by an
-     *    event stream -- so calling it per redraw would issue a relay RPC per journal record. It
-     *    needs a screen that polls it on its own cadence, off the main thread." [render] is that
-     *    render(), so wiring it here is the defect the ledger describes, spelled out in advance.
-     *  - **The paired device's name.** `MachinePane.pairedDeviceName` has NO bound accessor. The
-     *    string exists once, in Go (`mobile/pairing.go` sends `DeviceName: "swarm phone"`), and no
-     *    facade verb returns it. Typing it here would be a second copy of a Go constant rendered as
-     *    though the wire had carried it, which is ADR-007 B135's defect class and the one this
-     *    project has spent the most effort on.
-     *
-     * So the tab navigates, the bar stays, and the screen arrives with the two accessors.
-     *
-     * **WHAT IT DRAWS IN THE MEANTIME IS A SENTENCE, AND IT USED TO BE NOTHING.** A blank
-     * destination looked like the answer [SettingsSurface.render] and [renderUnavailable] give,
-     * and it is not the same case: those are ERROR BRANCHES, reached when something went wrong,
-     * while this is the STEADY STATE of a primary tab -- blank on every tap, for as long as the
-     * gap lasts. PB-DS-9 spends its longest argument on exactly that distinction and rules the
-     * other way: an empty section is still a section, because dropping it makes "there is nothing
-     * here" indistinguishable from "this failed to load". A blank primary destination reads as a
-     * crash. So the tab shows the kit's `emptyState` carrying [MachinesPanelScreen.UNAVAILABLE_COPY],
-     * which is the screen's own copy and says what is true of this phone without claiming anything
-     * about the machine.
-     *
-     * **AND ABOVE THAT SENTENCE IS NOW THE HALF OF THIS SCREEN THAT NEEDS NO RELAY**
-     * (agents-tracker-ah2). The two gaps above are both about verbs that must ask the relay or
-     * that have no accessor at all; PB-TIME-1's clock verdict and PB-APP-8's per-channel staleness
-     * are neither. `App.ClockVerdict` reads a mutex-guarded field, `App.StreamState` and
-     * `App.ResyncPending` read local core state, and none of the three costs a round trip -- so
-     * [dev.swarm.phone.ui.screens.LinkPanelScreen] renders what this phone knows about its own
-     * link while the machine's own details stay out of reach. Both models had been fully built and
-     * drawn by nothing, which is the same defect one level down from the one this tab was already
-     * carrying.
-     *
-     * THE SENTENCE MOVES UNDER THE SECTION AND IS OTHERWISE UNCHANGED. It is the caveat about what
-     * is missing, and a caveat above the facts it qualifies would be read as the whole screen.
-     */
-    private fun drawMachines(bridge: FacadeBridge?) {
-        // PULLED PER DRAW, NEVER LATCHED. Both accessors say why in their own KDoc: on Android the
-        // process is killed and rebuilt constantly, so a screen that opens after the measurement
-        // was never sent the event, and one that latched the event has nothing to clear it with.
-        val panel = bridge?.let { LinkPanelScreen.of(it.clockBanner(), it.streamViews()) }
-        // THE EQUALITY CHECK IS [drawActivity]'s, AND IT REPLACES AN UNCONDITIONAL EARLY RETURN.
-        // This tab used to draw once and never again, which was right for a constant sentence and
-        // is wrong the moment the content is live: a clock corrected or a stream repaired while
-        // the tab is on screen has to reach it.
-        if (panel == machinesDrawn && contentShows == Destination.MACHINES) return
-        machinesDrawn = panel
-        val unavailable = emptyState(activity, MachinesPanelScreen.UNAVAILABLE_COPY)
-        hostContent(
-            when (panel) {
-                null -> unavailable
-                else -> linkPanelView(activity, panel, below = unavailable)
-            },
-        )
-    }
-
-    /**
      * PB-APP-5's activity log, redrawn only when the journal has changed under it.
      *
      * THE WHOLE RETAINED LOG IS READ, and both arguments say so rather than picking a page size
@@ -2047,11 +1976,12 @@ class PhoneSurface(
         }
         if (panel == activityDrawn && contentShows == Destination.ACTIVITY) return
         activityDrawn = panel
-        // agents-tracker-j171: SOMETHING RATHER THAN NOTHING on the branch with no panel, for
-        // [drawMachines]' reason exactly -- a blank primary tab reads as a crash. `bridge == null`
-        // is reachable only from [renderUnavailable], which has already written PB-APP-9's routed
-        // failure onto [status]; this is the same sentence the Inbox tab already carries, not a
-        // second one invented here.
+        // agents-tracker-j171: SOMETHING RATHER THAN NOTHING on the branch with no panel, because
+        // a blank primary tab reads as a crash -- PB-DS-9's empty-section argument applied to a
+        // whole destination. (The deleted Machines tab carried the same reasoning and is where
+        // this comment used to point.) `bridge == null` is reachable only from [renderUnavailable],
+        // which has already written PB-APP-9's routed failure onto [status]; this is the same
+        // sentence the Inbox tab already carries, not a second one invented here.
         hostContent(
             panel?.let { activityPanelView(activity, it, status = statusSlot()) }
                 ?: emptyState(activity, status.text.toString()),
@@ -2727,7 +2657,7 @@ class PhoneSurface(
      *
      * WHAT IS NEW IS WHERE THE ANSWER LANDS. The outcome line is a child of
      * [unrecomposedControls], which is hosted at the bottom of the Inbox tab -- so a refusal
-     * produced by a control on Machines, Activity or a session detail was written to a view the
+     * produced by a control on Activity, Settings or a session detail was written to a view the
      * user could not see. Row 1's toast is shown over whatever screen is up, and the line KEEPS
      * the message it always had: a routed error frequently names a remedy ("try again once the
      * connection is back"), and a remedy that scrolls away in 3.2 seconds is worse than one that

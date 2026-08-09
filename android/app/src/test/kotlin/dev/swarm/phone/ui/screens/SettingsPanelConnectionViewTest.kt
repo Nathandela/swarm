@@ -55,8 +55,8 @@ class SettingsPanelConnectionViewTest {
         SettingsScreen(alerts = true, mentions = true),
         machine = "nathans-mbp",
         connection = SettingsPanelScreen.connectionOf(
-            machine = "nathans-mbp",
-            endpoint = "ep-1a2b3c4d",
+            machineId = "ep-1a2b3c4d",
+            machineName = "nathans-mbp",
             presence = presence,
             freshness = MachineFreshness(silent = silent, lastHeardUnixMs = 1_000L),
             streams = streams,

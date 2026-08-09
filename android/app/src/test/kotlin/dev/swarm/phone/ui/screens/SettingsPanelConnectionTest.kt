@@ -51,15 +51,15 @@ class SettingsPanelConnectionTest {
         }
 
     private fun connection(
-        machine: String = "nathans-mbp",
-        endpoint: String? = "ep-1a2b3c4d",
+        machineName: String = "nathans-mbp",
+        machineId: String = "ep-1a2b3c4d",
         presence: String = "online",
         freshness: MachineFreshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_000L),
         streams: List<StreamView> = streams(),
         clock: ClockBanner = ClockBanner.of(""),
     ) = SettingsPanelScreen.connectionOf(
-        machine = machine,
-        endpoint = endpoint,
+        machineId = machineId,
+        machineName = machineName,
         presence = presence,
         freshness = freshness,
         streams = streams,

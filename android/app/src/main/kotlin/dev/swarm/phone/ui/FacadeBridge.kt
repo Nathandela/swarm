@@ -341,6 +341,28 @@ class FacadeBridge(private val app: App) {
     fun machineName(): String = app.machineName()
 
     /**
+     * The RELAY's last word on whether the machine is reachable (PB-APP-5, agents-tracker-nx44.3).
+     *
+     * IT IS `App.MachinePresence` AND IT MAY NEVER BE `App.Presence`. That verb is a relay
+     * round-trip at the transport's 10 s call timeout, and this surface's render is driven by an
+     * event stream -- one RPC per journal record, on the main thread. `android/unbound-verbs.tsv`
+     * ledgers it barred for exactly that reason. This one is an O(1) read of a cache the relay
+     * goroutine fills on its own 15 s cadence, which is the arrangement that made the settings
+     * CONNECTION section landable at all.
+     *
+     * IT RETURNS THE STATE AND NOT THE READING'S AGE, which the facade also carries, and the
+     * reason is that the age is the WEAKER of the two qualifications available here. A cached
+     * opinion that cannot say how old it is renders staleness as liveness -- so Go resets the
+     * cache to `unknown` the moment the link drops (`presenceCache.forget`), which is the case an
+     * age would have had to catch. What is left is a reading that ages while the link is up and
+     * the poll keeps failing, and PB-APP-11 already requires the answer to that: the section
+     * renders `machineFreshness` beside this word, which is the machine's OWN authenticated stamp
+     * and the one thing the relay cannot fake. A fresh reading of a withholding relay is worth
+     * nothing; a stale reading beside a machine that is demonstrably speaking is corroborated.
+     */
+    fun machinePresence(): String = app.machinePresence().state
+
+    /**
      * The machines this phone can NAME, keyed by the endpoint id the roster namespaces their
      * sessions under (agents-tracker-ksvb.1). The inbox's scope chips read it.
      *

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -39,12 +40,14 @@ import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.denyChip
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.screens.ConnectionSection
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.PairedMachineRow
 import dev.swarm.phone.ui.screens.SettingsPanel
 import dev.swarm.phone.ui.screens.SettingsPanelScreen
 import dev.swarm.phone.ui.screens.SettingsRow
 import dev.swarm.phone.ui.screens.settingsPanelView
+import java.util.Date
 import swarmmobile.App
 import swarmmobile.Op
 import swarmmobile.PushPreference
@@ -395,7 +398,8 @@ class SettingsSurface(
                 host.addView(outcome)
             }
 
-            is PhoneStartup.Ready -> draw(read(startup.app), machineOf(startup.app))
+            is PhoneStartup.Ready ->
+                draw(read(startup.app), machineOf(startup.app), connectionOf(startup.app))
         }
     }
 
@@ -594,21 +598,82 @@ class SettingsSurface(
      * by design -- `phonecore` filters the durable blob on it -- so the name alone would go on
      * offering a `Replace this computer` control over a registration that has already ended.
      */
-    private fun machineOf(app: App): String? = try {
+    private fun machineOf(app: App): String? = endpointOf(app)?.let { id ->
+        // THE MACHINE'S OWN NAME WHERE IT PUBLISHED ONE (agents-tracker-ksvb.1). This row and
+        // the destructive `Replace <machine>?` question under it are the two places a person
+        // is asked to recognise their computer, and `ep-` plus four bytes of a hash is not
+        // something anyone recognises. `MachineLabel.of` keeps the id as the fallback, so a
+        // machine that published no hostname reads exactly as it did before.
+        //
+        // WHAT IS PINNED IS STILL THE ID. The endpoint id is what decides whether there IS a
+        // pairing to offer a replace over; the name only changes the word. A name read where the
+        // id was empty would put a Replace control over no pairing at all.
+        MachineLabel.of(machineNameOf(app), id)
+    }
+
+    /**
+     * The endpoint id this phone is pinned to, or null when it is pinned to none.
+     *
+     * EXTRACTED FROM [machineOf] BY agents-tracker-nx44.3 rather than copied: the CONNECTION
+     * section needs the ID as well as the label -- derivation row 11 gives the machine two cells,
+     * a name a person chose and an id the software derived -- and two `stateSummary` reads deciding
+     * independently whether there is a pairing at all is how one of them ends up drawing a section
+     * about a machine the other says is not there. The guard is unchanged and so is its reason: an
+     * unreadable state is not a pairing, which is the same composition `PairingSurface.isPinned`
+     * already makes.
+     */
+    private fun endpointOf(app: App): String? = try {
         app.stateSummary().takeIf { it.paired }?.machine?.takeIf { it.isNotEmpty() }
-            // THE MACHINE'S OWN NAME WHERE IT PUBLISHED ONE (agents-tracker-ksvb.1). This row and
-            // the destructive `Replace <machine>?` question under it are the two places a person
-            // is asked to recognise their computer, and `ep-` plus four bytes of a hash is not
-            // something anyone recognises. `MachineLabel.of` keeps the id as the fallback, so a
-            // machine that published no hostname reads exactly as it did before.
-            //
-            // WHAT IS PINNED IS STILL THE ID. The endpoint id above is what decides whether there
-            // IS a pairing to offer a replace over; the name only changes the word. A name read
-            // where the id was empty would put a Replace control over no pairing at all.
-            ?.let { MachineLabel.of(machineNameOf(app), it) }
     } catch (unreadable: Exception) {
         null
     }
+
+    /**
+     * The CONNECTION section (agents-tracker-nx44.3), or null on a phone with nothing to say about
+     * a link -- no pairing, or a state this phone cannot read.
+     *
+     * EVERY READ HERE IS LOCAL AND THAT IS WHAT MAKES IT SAFE FROM [render], which `PhoneSurface`
+     * calls on every journal event. `App.MachinePresence` is an O(1) read of a cache the relay
+     * goroutine fills on its own cadence (never `App.Presence`, which is a blocking round-trip
+     * android/unbound-verbs.tsv bars a render from); `App.MachineFreshness`, `App.StreamState`,
+     * `App.ResyncPending` and `App.ClockVerdict` read core state. [draw]'s equality check is what
+     * keeps the redraw itself off the switches.
+     *
+     * GUARDED WHOLE, for [machineOf]'s reason: a facade that refuses has told this section
+     * nothing, and a section drawn from nothing would print a presence word nobody supplied.
+     */
+    private fun connectionOf(app: App): ConnectionSection? {
+        val endpoint = endpointOf(app) ?: return null
+        return try {
+            val bridge = FacadeBridge(app)
+            SettingsPanelScreen.connectionOf(
+                // THE TWO FACTS, UNLABELLED. Which of them a person reads and whether the id gets
+                // a cell of its own is derivation row 11's question, and `connectionOf` answers it
+                // -- in a function the unit suite can run, which a surface holding a `swarmmobile
+                // .App` is not.
+                machineId = endpoint,
+                machineName = machineNameOf(app),
+                presence = bridge.machinePresence(),
+                freshness = bridge.machineFreshness(),
+                streams = bridge.streamViews(),
+                clock = bridge.clockBanner(),
+                formatTime = ::clockTime,
+            )
+        } catch (unreadable: Exception) {
+            null
+        }
+    }
+
+    /**
+     * A unix millisecond as the user's own clock reads it.
+     *
+     * THE FORMATTER IS THE PLATFORM'S AND THE SENTENCE IS THE MODEL'S. `DateFormat.getTimeFormat`
+     * carries the locale, the time zone and the 12/24-hour preference, none of which a screen
+     * model may be right about to be testable -- which is why `MachineFreshness.notice` takes this
+     * as a parameter instead of reading a clock.
+     */
+    private fun clockTime(unixMs: Long): String =
+        DateFormat.getTimeFormat(activity).format(Date(unixMs))
 
     /**
      * `App.MachineName`, guarded on its own so an unreadable name cannot take the PAIRING down
@@ -734,9 +799,9 @@ class SettingsSurface(
      * one would take the switch out from under the finger that just moved it. [SettingsPanel] is
      * a data class of data classes, so "has anything a user can see changed" is one comparison.
      */
-    private fun draw(next: SettingsScreen, machine: String?) {
+    private fun draw(next: SettingsScreen, machine: String?, connection: ConnectionSection?) {
         screen = next
-        val panel = SettingsPanelScreen.of(next, machine)
+        val panel = SettingsPanelScreen.of(next, machine, connection)
         outcome.visibility = if (outcome.text.isEmpty()) View.GONE else View.VISIBLE
         if (panel == drawn && host.childCount > 0) return
         drawn = panel
@@ -1112,7 +1177,7 @@ class SettingsSurface(
         // The line holds the LAST answer, and leaving it under a press in flight reads as this
         // press's -- [onReplace] clears it in the same place and for the same reason.
         outcome.text = ""
-        draw(next, machineOf(app))
+        draw(next, machineOf(app), connectionOf(app))
         dispatch.press(
             // THE CONTROL IS THE PANEL AND NOT THE SWITCH, which is the one way this press differs
             // from [onReplace]'s. `VerbDispatch.press` disables the control it is given and
@@ -1156,7 +1221,7 @@ class SettingsSurface(
                         // ever clear. Both the switch and the panel go back to the screen the tap
                         // started from.
                         restore(toggle, current)
-                        draw(current, machineOf(app))
+                        draw(current, machineOf(app), connectionOf(app))
                     },
                 )
             },

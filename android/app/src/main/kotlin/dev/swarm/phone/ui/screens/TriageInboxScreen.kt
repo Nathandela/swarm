@@ -254,8 +254,15 @@ object TriageInboxScreen {
         NEED_VOCABULARY[need] ?: need
     }
 
-    /** Inventory C1.4: `Inbox` (on) - `Machines` - `Activity` - `Settings`. */
-    private val TAB_LABELS: List<String> = listOf("Inbox", "Machines", "Activity", "Settings")
+    /**
+     * `Inbox` (on) - `Activity` - `Settings`.
+     *
+     * INVENTORY C1.4 DRAWS FOUR AND THIS APP HAS THREE (agents-tracker-nx44.3). The `Machines`
+     * destination is deleted -- see [Destination], which carries the argument -- and a label here
+     * with no destination behind it is what `Destination.forLabel` throws on, deliberately, so
+     * these two lists cannot drift apart quietly.
+     */
+    private val TAB_LABELS: List<String> = listOf("Inbox", "Activity", "Settings")
 
     /** The tab the inbox IS. */
     private const val INBOX_TAB = "Inbox"

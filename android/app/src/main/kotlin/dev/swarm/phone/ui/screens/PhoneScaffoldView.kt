@@ -73,20 +73,29 @@ object ScaffoldTag {
 }
 
 /**
- * Where a tab goes. Inventory C1.4: `Inbox` (on) - `Machines` - `Activity` - `Settings`.
+ * Where a tab goes: `Inbox` (on) - `Activity` - `Settings`.
  *
- * THE LABEL IS THE JOIN AND IT IS CHECKED RATHER THAN ASSUMED. `TriageInboxScreen` owns the four
- * tab labels as recorded copy, and this enum is the four places they lead; the two are separate
- * because one is copy and the other is navigation, and they are joined by [forLabel], which
- * REFUSES a label it cannot place. A weak key is right here for `TabBar`'s own recorded reason --
- * the alternative is an identity on every tab that each call site sets, which is the arrangement
- * that shipped four tabs with nothing behind them -- and the refusal is what stops the two copies
- * drifting silently: a fifth tab, or a renamed one, fails loudly at the first composition instead
- * of rendering a tab that quietly navigates nowhere.
+ * THREE, AND INVENTORY C1.4 DRAWS FOUR (agents-tracker-nx44.3). `Machines` is deleted rather than
+ * unwired: everything on that destination was either the four per-channel gap cards or a sentence
+ * saying this phone could not read its machine's details, and field test 3 (2026-08-09) is the
+ * record of an owner reading it and asking what the page was for. What it was actually for -- which
+ * computer am I attached to, and is what I am looking at current -- is the settings screen's
+ * CONNECTION section now. The artifact is owner-signed and still draws four tabs, so `TabBar`'s
+ * glyph table still binds the fourth (android/gate/tabbar_test.go joins every glyph the artifact
+ * draws to a drawable and to that binding); what is gone is the destination behind it.
+ *
+ * THE LABEL IS THE JOIN AND IT IS CHECKED RATHER THAN ASSUMED. `TriageInboxScreen` owns the tab
+ * labels as recorded copy, and this enum is the places they lead; the two are separate because one
+ * is copy and the other is navigation, and they are joined by [forLabel], which REFUSES a label it
+ * cannot place. A weak key is right here for `TabBar`'s own recorded reason -- the alternative is
+ * an identity on every tab that each call site sets, which is the arrangement that shipped four
+ * tabs with nothing behind them -- and the refusal is what stops the two copies drifting silently:
+ * a tab drawn without a destination fails loudly at the first composition instead of rendering a
+ * control that quietly goes nowhere. It is what would fire if the deleted label came back to the
+ * bar without a destination behind it.
  */
 enum class Destination(val label: String) {
     INBOX("Inbox"),
-    MACHINES("Machines"),
     ACTIVITY("Activity"),
     SETTINGS("Settings"),
     ;
@@ -100,8 +109,8 @@ enum class Destination(val label: String) {
          */
         fun forLabel(label: String): Destination = checkNotNull(entries.find { it.label == label }) {
             "PB-DS-9: the tab bar draws a tab labelled \"$label\" and there is no destination for " +
-                "it. Inventory C1.4's four tabs are this enum; a fifth would render as a control " +
-                "that goes nowhere."
+                "it. This enum is the destinations this app has; a tab outside it renders as a " +
+                "control that goes nowhere."
         }
     }
 }

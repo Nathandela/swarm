@@ -25,10 +25,10 @@ import org.robolectric.RobolectricTestRunner
  * makes inventory C1.4 a navigation control rather than a picture of one.
  *
  * WHY THERE IS A SCAFFOLD AT ALL, which is the one thing to read before extending this file. The
- * tab bar was composed INSIDE `triageInboxView`, and `machinesPanelView` and `activityPanelView`
+ * tab bar was composed INSIDE `triageInboxView`, and `activityPanelView` and `settingsPanelView`
  * compose none -- so a tab that merely swapped the screen would land the user on Machines with no
  * bar to come back with. The bar is therefore the WINDOW'S and not the inbox's: one bar, under
- * whichever of the four destinations is on screen. Derivation row 20 is the same shape read from
+ * whichever destination is on screen. Derivation row 20 is the same shape read from
  * the design -- the screen scaffold's padding is "bottom `screen_bottom` (or inset +
  * `tabbar_height`)", which puts the platform inset UNDER a bar that is `tabbar_height` tall -- and
  * row 19 is why the inset is the platform's rather than the mock's 76.
@@ -96,7 +96,7 @@ class PhoneScaffoldViewTest {
 
     private fun textOf(view: View?): String = (view as? TextView)?.text?.toString().orEmpty()
 
-    /** The four tabs, as the views a finger lands on. */
+    /** The tabs, as the views a finger lands on. */
     private fun View.tabs(): List<View> = allTagged(KitTag.TAB_LABEL).map { it.parent as View }
 
     // ---- the composition --------------------------------------------------
@@ -168,7 +168,7 @@ class PhoneScaffoldViewTest {
         val root = scaffold()
 
         assertEquals(
-            "the bar does not draw inventory C1.4's four tabs, so a destination has no way in",
+            "the bar does not draw every destination, so one of them has no way in",
             Destination.entries.map { it.label },
             root.allTagged(KitTag.TAB_LABEL).map { textOf(it) },
         )
@@ -186,7 +186,11 @@ class PhoneScaffoldViewTest {
         assertEquals(
             "the tab's handler was built from a captured variable rather than from its own tab, " +
                 "so every tab navigates to the same destination",
-            Destination.MACHINES,
+            // THE SECOND TAB, WHICHEVER IT IS. It was `Destination.MACHINES` until
+            // agents-tracker-nx44.3 folded that destination into the settings screen; what this
+            // test is about is that a tab reports ITSELF, so the expectation is read off the same
+            // ordering the bar is built from rather than named.
+            Destination.entries[1],
             chosen,
         )
     }
@@ -198,7 +202,7 @@ class PhoneScaffoldViewTest {
         for ((index, tab) in root.tabs().withIndex()) {
             assertTrue(
                 "the ${Destination.entries[index].label} tab has no click listener: `TabItem` " +
-                    "carries no tap handler, so the bar is four labels with nothing behind them",
+                    "carries no tap handler, so the bar is labels with nothing behind them",
                 tab.hasOnClickListeners(),
             )
         }
@@ -207,8 +211,8 @@ class PhoneScaffoldViewTest {
     @Test
     fun `the destination on screen is the one tab that reads as selected`() {
         // A bar whose selection came from the inbox model rather than from navigation renders the
-        // Inbox tab selected on all four screens -- which tells a user standing on Machines that
-        // they are somewhere else. The colours are the kit's (`--p-hero` against `--p-ink3`) and
+        // Inbox tab selected on every screen -- which tells a user standing on Activity that they
+        // are somewhere else. The colours are the kit's (`--p-hero` against `--p-ink3`) and
         // are asserted there; what this reads is the PARTITION, so it needs no constant of its own.
         for (destination in Destination.entries) {
             val inks = scaffold(destination = destination)
@@ -274,10 +278,10 @@ class PhoneScaffoldViewTest {
     }
 
     @Test
-    fun `the bar is the same four tabs on every destination`() {
-        // The structural fact the scaffold exists for: `machinesPanelView` and `activityPanelView`
-        // compose no bar of their own, so a bar that stayed inside the inbox would leave three of
-        // the four destinations with no way back.
+    fun `the bar is the same tabs on every destination`() {
+        // The structural fact the scaffold exists for: `activityPanelView` and the settings panel
+        // compose no bar of their own, so a bar that stayed inside the inbox would leave every
+        // other destination with no way back.
         for (destination in Destination.entries) {
             val root = scaffold(destination = destination, content = TextView(context))
 

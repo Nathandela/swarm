@@ -99,10 +99,7 @@ data class MachinePane(
      * where the fact goes for a reader this line no longer speaks to.
      */
     fun presenceExplanation(formatTime: (Long) -> String): String =
-        freshness.notice(formatTime)?.let { notice ->
-            "$notice The relay reports \"$presence\", which is the relay's word and not your " +
-                "machine's."
-        } ?: ""
+        explanationOf(presence, freshness, formatTime)
 
     /**
      * The sentence [presenceExplanation] no longer prints for a healthy machine, said once more
@@ -114,7 +111,7 @@ data class MachinePane(
      * renders nothing -- see the row that carries both.
      */
     val presenceAnnouncement: String
-        get() = "Your machine is $presence."
+        get() = announcementOf(presence)
 
     val killSwitchExplanation: String
         get() = if (killSwitchEngaged) {
@@ -127,6 +124,50 @@ data class MachinePane(
             // that is, in this state, reporting nothing wrong.
             "Remote control is on. Only the machine can switch it off."
         }
+
+    /**
+     * The two sentences this pane owns, reachable WITHOUT one (agents-tracker-nx44.3).
+     *
+     * WHY THEY MOVED HERE AND WHY THE PANE STILL SPENDS THEM. The Machines destination is deleted
+     * and the settings screen's CONNECTION section renders presence now -- from `App.MachinePresence`
+     * and `App.MachineFreshness`, and from neither a paired-device name nor a kill-switch state,
+     * which are the pane's other required fields. A section that constructed a whole [MachinePane]
+     * to reach one sentence would have to invent values for the fields it does not render, which is
+     * ADR-007 B135's defect class arriving through the back door; a section that re-worded the
+     * sentence would be the second copy of a measurement's meaning that PB-APP-11 exists to
+     * prevent, and the two would disagree the first time either moved.
+     *
+     * SO THE SENTENCE IS THE PANE'S AND THE PANE IS NOT REQUIRED TO SAY IT. Both members above
+     * delegate here, so there is exactly one wording and every caller reads it.
+     */
+    companion object {
+
+        /**
+         * What a phone may say about reachability given the relay's word and its OWN evidence.
+         *
+         * EMPTY IS A HEALTHY MACHINE (agents-tracker-ksvb.6): inside section 6.0's freshness
+         * budget there is nothing to report, and an unconditional sentence restating what the
+         * presence dot already says in colour is the always-on notice this app refuses everywhere
+         * else. [announcementOf] is where the fact goes for a reader the silence excludes.
+         *
+         * @param presence `App.MachinePresence`'s state, verbatim -- the RELAY's opinion.
+         * @param freshness the phone's own evidence, which is what decides whether the relay's
+         *  word is allowed to stand alone.
+         * @param formatTime an Android formatter carrying the user's locale and time zone, passed
+         *  through so this stays testable without one.
+         */
+        fun explanationOf(
+            presence: String,
+            freshness: MachineFreshness,
+            formatTime: (Long) -> String,
+        ): String = freshness.notice(formatTime)?.let { notice ->
+            "$notice The relay reports \"$presence\", which is the relay's word and not your " +
+                "machine's."
+        } ?: ""
+
+        /** What the presence mark announces where [explanationOf] has printed nothing. */
+        fun announcementOf(presence: String): String = "Your machine is $presence."
+    }
 }
 
 /** PB-APP-6's v1 builder: the three fields a launch spec carries from the handset. */
