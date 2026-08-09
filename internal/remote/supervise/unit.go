@@ -25,7 +25,10 @@ package supervise
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -193,6 +196,115 @@ func UnitPath(p Platform, stateDir string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(UnitDir(stateDir), name), nil
+}
+
+// InstalledExec is the program the unit installed for stateDir names, read from the FILE.
+// It reports ErrNotInstalled when there is no unit to read, which is the same answer
+// Ensure and Stop give for the same state dir.
+//
+// It exists because a unit is a CLAIM ABOUT A PATH and a path can stop being true
+// (agents-tracker-nx44.4). Nothing re-checked it because nothing could read it back: this
+// package could write a unit and never look at one. See StampedExec for why the check is a
+// parse rather than a re-render.
+func InstalledExec(stateDir string) (string, error) {
+	p, err := HostPlatform()
+	if err != nil {
+		return "", err
+	}
+	path, err := UnitPath(p, stateDir)
+	if err != nil {
+		return "", err
+	}
+	unit, err := os.ReadFile(path)
+	if err != nil {
+		// Same shape as requireUnit: an unreadable unit is treated as none, because every
+		// caller's next act is to install one.
+		return "", fmt.Errorf("%w at %s", ErrNotInstalled, path)
+	}
+	return StampedExec(p, unit)
+}
+
+// StampedExec is the program a rendered unit names.
+//
+// IT PARSES THE FILE AND DOES NOT RE-RENDER A SPEC. The file is what the supervisor is
+// actually holding, and the two can differ for one reason that matters: an operator who
+// hand-edits the installed unit to get a broken machine back. Answering with what this
+// process WOULD have written would report the path the operator just removed.
+//
+// A unit naming no program is an ERROR and never the empty string. An empty answer would
+// reach a caller as a path that merely is not executable, so the day this parse stops
+// matching the templates it would silently re-stamp and reload every unit on every pair,
+// which is the opposite of what a check exists for.
+func StampedExec(p Platform, unit []byte) (string, error) {
+	switch p {
+	case PlatformLaunchd:
+		return launchdExec(unit)
+	case PlatformSystemd:
+		return systemdExec(unit)
+	default:
+		return "", fmt.Errorf("supervise: unknown platform %q", p)
+	}
+}
+
+// launchdExec returns the first string of the plist's ProgramArguments array -- the program
+// launchd execs. Nothing is trimmed: a path padded with whitespace is one launchd cannot
+// run, and reporting it verbatim is what lets a caller notice.
+func launchdExec(unit []byte) (string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(unit))
+	key, inArgs := "", false
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("supervise: read launchd unit: %w", err)
+		}
+		el, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch el.Name.Local {
+		case "key":
+			var s string
+			if err := dec.DecodeElement(&s, &el); err != nil {
+				return "", fmt.Errorf("supervise: read launchd unit: %w", err)
+			}
+			key = strings.TrimSpace(s)
+		case "array":
+			inArgs = key == "ProgramArguments"
+		case "string":
+			if !inArgs {
+				continue
+			}
+			var s string
+			if err := dec.DecodeElement(&s, &el); err != nil {
+				return "", fmt.Errorf("supervise: read launchd unit: %w", err)
+			}
+			return s, nil
+		}
+	}
+	return "", errors.New("supervise: this launchd unit names no ProgramArguments program")
+}
+
+// systemdExec returns the unit's ExecStart value. systemd ignores whitespace around the
+// separator, so this does too -- and the VALUE is then taken verbatim, for launchdExec's
+// reason.
+func systemdExec(unit []byte) (string, error) {
+	for _, line := range strings.Split(string(unit), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != "ExecStart" {
+			continue
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			return value, nil
+		}
+	}
+	return "", errors.New("supervise: this systemd unit names no ExecStart program")
 }
 
 // xmlEscape renders a path as plist text. Nothing in a Spec is trusted to be
