@@ -1269,9 +1269,29 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 // already committed, and the operator is told rather than handed an exit status.
 func restampGatewayUnit(verb, stateDir string, sup supervise.Supervisor, stderr io.Writer) {
 	exe, err := supervise.InstalledExec(stateDir)
-	if err != nil || isExecutableFile(exe) {
-		// No unit to check (the caller's own ErrNotInstalled hint covers that), or the unit
-		// names a program that is right there.
+	switch {
+	case errors.Is(err, supervise.ErrNotInstalled):
+		// No unit to check; the caller's own ErrNotInstalled hint covers that machine.
+		return
+	case err != nil:
+		// StampedExec FAILS LOUDLY BY CONTRACT, and this was the one place that swallowed it
+		// (agents-tracker-2pnu F6). Its KDoc names this exact case -- "the day this parse stops
+		// matching the templates it would silently re-stamp and reload every unit on every
+		// pair, which is the opposite of what a check exists for" -- and the collapsed
+		// `err != nil` above made the opposite mistake instead: a unit that is right there and
+		// does not parse (a hand-edit, a truncated write, a template this build no longer
+		// matches) was indistinguishable from a healthy one, so the check said nothing.
+		//
+		// IT REPORTS AND DOES NOT RE-STAMP. The claim this repairs is "the stamped program is
+		// gone", and a file that cannot be read makes no claim to check -- booting out a job on
+		// a read failure would drop the connection of the phone being paired, which is the
+		// restraint the healthy-unit case already keeps.
+		fmt.Fprintf(stderr, "remote %s: this machine's gateway supervision unit could not be "+
+			"read, so whether it still names a program that exists is unknown -- if the gateway "+
+			"is not reaching your phone, run `swarm remote init` to re-stamp it: %v\n", verb, err)
+		return
+	case isExecutableFile(exe):
+		// The unit names a program that is right there.
 		return
 	}
 	fmt.Fprintf(stderr, "remote %s: the gateway supervision unit names %s, which is not an "+
