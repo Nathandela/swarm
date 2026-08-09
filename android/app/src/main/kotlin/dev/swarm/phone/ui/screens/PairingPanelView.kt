@@ -9,6 +9,7 @@ import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.pairingStep
 import dev.swarm.phone.ui.kit.readOnlyNote
+import dev.swarm.phone.ui.kit.screenColumn
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 
 /**
@@ -123,10 +124,10 @@ fun pairingPanelView(
     slots: PairingSlots,
     below: View? = null,
 ): View {
-    val column = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    // agents-tracker-nx44.1: row 18's own padding, `space_10` vertical x `space_24` horizontal --
+    // `screenColumn` is the kit factory that spends it, because this file is fenced against
+    // `R.dimen` and `setPadding` and cannot spend the row's cell itself.
+    val column = screenColumn(context)
 
     // Twelve of the fifteen steps have no recorded heading and get none; see [PairingPanel].
     panel.title?.let { title ->

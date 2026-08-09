@@ -15,6 +15,7 @@ import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.noticeDetail
+import dev.swarm.phone.ui.kit.screenColumn
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on, as drawn.
@@ -109,10 +110,9 @@ fun pairOnlyView(
     revokedDetail: String = "",
     copy: PairOnlyCopy = PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
 ): View {
-    val column = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
+    // agents-tracker-nx44.1: row 18's own padding, `space_10` vertical x `space_24` horizontal --
+    // `screenColumn` is the kit factory that spends it, on `pairingPanelView`'s column exactly.
+    val column = screenColumn(context)
 
     // DRAWN ONLY WHEN IT HAS SOMETHING TO SAY, which is `sessionDetailView`'s rule for its own
     // three notices: a blank warning line over a phone that has revoked nothing is a warning

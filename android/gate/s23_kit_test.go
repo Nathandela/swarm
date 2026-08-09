@@ -448,6 +448,32 @@ var s23Inbox = []s23Component{
 		Why: "Substrate's artifact has no badge at all -- it uses the live counter instead. " +
 			"§1.4 ships both and recolours this one from the mock's retired red to --p-att",
 	},
+	{
+		Factory: "screenColumn",
+		File:    "ScreenColumn.kt",
+		Derived: "#18 Pairing scaffold",
+		Why: "the pairing screen's and the pair-only screen's own outer column, row 18's " +
+			"`space_10` vertical x `space_24` horizontal padding. `swarm_space_24` has carried " +
+			"that cell since S22b with no caller (dimens.xml: \"24dp for its pairing-scaffold " +
+			"padding; neither appears in the Substrate artifact\"), and both screens built the " +
+			"column as a bare LinearLayout with none of it spent -- which s24_screens_test.go's " +
+			"fence made structural rather than an oversight: neither file may call R.dimen or " +
+			"setPadding itself. `sessionList`'s own row states the same argument one container " +
+			"over: \"a screen never types the 12 dp side padding or the gap between rows\".",
+	},
+	{
+		Factory: "ctaStack",
+		File:    "CtaButton.kt",
+		Origin:  ".acts2",
+		Why: "the CTA column's own gap, `.acts2 { gap: 7px }`, which PB-DS-1's ledger absorbs " +
+			"into swarm_space_8. ctaButton's own row records why it was left unspent when the " +
+			"button shipped: \"this slice ships the BUTTON and not the column it sits in ... " +
+			"the gap belongs to whoever builds the sheet\" -- and a container factory with no " +
+			"caller is the second spelling EmptyStateTest's KDoc argues against. " +
+			"PairingPanelView's control loop and SessionDetailView's take-control/stop/kill " +
+			"stack are that caller now, both stacking CtaButton.kt's own bloom-inset buttons " +
+			"with bare addView and zero gap.",
+	},
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1344,11 @@ var s23Spacing = []struct {
 	// puts the measured inset below it. Ledgering the 14 here would have required the bar to keep
 	// spending it, and the two together double the bar's bottom air on every handset.
 	{"TabBar.kt", ".ptabs div", "gap", 0, "swarm_space_4"},
+	// `.acts2 { gap: 7px }`, one of the two movers the scale absorbs UP rather than to the nearer
+	// step (dimens.xml: "7 sits between 6 and 8 and goes up"). ctaButton's own row spends `.acts2
+	// button`'s padding and deliberately not this -- "the gap belongs to whoever builds the
+	// sheet" -- so ctaStack is that container, over the same selector.
+	{"CtaButton.kt", ".acts2", "gap", 0, "swarm_space_8"},
 }
 
 func TestPBDS6_EveryKitSpacingIsTheLedgersStep(t *testing.T) {
@@ -1383,6 +1414,57 @@ func TestPBDS6_EveryKitSpacingIsTheLedgersStep(t *testing.T) {
 				"PhoneSurface's `PADDING = 24` in raw pixels.",
 				s.File, s.Dimen, s.Selector, s.Property, px)
 		}
+	}
+}
+
+// s23Row18Padding reads row 18's own padding cell -- "padding `space_10` vertical x `space_24`
+// horizontal" -- which s23DocPadding cannot: that reader's grammar is "padding `space_N` x
+// `space_N`" and row 18 states five paddings in one cell, so the axis is named on both sides to
+// stay unambiguous against the other four (title margins, body margin, well margin, waiting line).
+var s23Row18Padding = regexp.MustCompile(
+	"padding `space_([0-9]+)` vertical x `space_([0-9]+)` horizontal")
+
+// TestPBDS7_TheScreenColumnSpendsRow18sOwnPadding is agents-tracker-nx44.1's first item: the
+// pairing screen's and the pair-only screen's own outer column, `.pair`'s padding, joined to
+// `screenColumn` rather than trusted from the KDoc that cites it.
+func TestPBDS7_TheScreenColumnSpendsRow18sOwnPadding(t *testing.T) {
+	doc := readFileOrFail(t, filepath.Join(repoRoot(t), filepath.FromSlash(s23ComponentsDoc)), "PB-DS-7")
+	row, ok := s23FindRow(doc, "#18 Pairing scaffold")
+	if !ok {
+		t.Fatalf("PB-DS-7: no row 18 in %s, so screenColumn's padding is joined to nothing",
+			s23ComponentsDoc)
+	}
+	m := s23Row18Padding.FindStringSubmatch(row)
+	if m == nil {
+		t.Fatalf("PB-DS-7: row 18 states no padding of the form this reader knows: %q", row)
+	}
+	vertical, horizontal := "swarm_space_"+m[1], "swarm_space_"+m[2]
+
+	sources := s23KitSources(t)
+	src, ok := sources["ScreenColumn.kt"]
+	if !ok {
+		t.Fatalf("PB-DS-7: the kit has no ScreenColumn.kt, which is where screenColumn() lives")
+	}
+	code := kotlinCodeOnly(src)
+	for _, want := range []string{vertical, horizontal} {
+		if !strings.Contains(code, "R.dimen."+want) {
+			t.Errorf("PB-DS-7: ScreenColumn.kt never references R.dimen.%s, which row 18 states "+
+				"as its own padding -- a dimension not read from the scale is one typed at the "+
+				"call site", want)
+		}
+	}
+}
+
+// TestPBDS7_TheRow18ReaderIsSpecificToRow18sShape is that reader's negative control: row 8's
+// cell has no axis words and must not be read as row 18's, or a wording change in either row
+// could silently point this reader at the wrong cell's numbers.
+func TestPBDS7_TheRow18ReaderIsSpecificToRow18sShape(t *testing.T) {
+	m := s23Row18Padding.FindStringSubmatch("padding `space_10` vertical x `space_24` horizontal")
+	if m == nil || m[1] != "10" || m[2] != "24" {
+		t.Fatalf("the row-18 reader cannot parse the cell as the document writes it")
+	}
+	if s23Row18Padding.MatchString("padding `space_24` x `space_24`") {
+		t.Error("the row-18 reader also matches row 8's shape, which carries no axis words")
 	}
 }
 
