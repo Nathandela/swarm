@@ -251,8 +251,10 @@ android {
         minSdk = pinnedApiLevel("SWARM_ANDROID_MIN_SDK")
         targetSdk = pinnedApiLevel("SWARM_ANDROID_TARGET_SDK")
         // BUMP THIS ON EVERY UPLOAD. Google Play rejects a bundle whose versionCode already
-        // exists on any track. 1 through 11 are spent -- the internal-testing releases of
-        // 2026-08-02 through 2026-08-08, 11 being the Obsidian release 0.3.0. The rejection is
+        // exists on any track. 1 through 12 are spent or reserved -- the internal-testing
+        // releases of 2026-08-02 through 2026-08-09; 11 was the Obsidian release 0.3.0, and 12
+        // was stamped by the interaction-program merge with uncertain publish state, so 13
+        // skips past it rather than risk the collision. The rejection is
         // loud and harmless ("You've already submitted this
         // version of the app"), so a forgotten bump costs a round trip rather than a bad
         // release; treat that message as confirmation the PREVIOUS upload landed, not as a
@@ -263,8 +265,8 @@ android {
         // on, so a build from a branch behind main emits a LOWER code than one already
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
-        versionCode = 12
-        versionName = "0.4.0"
+        versionCode = 13
+        versionName = "0.4.1"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and
         // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
