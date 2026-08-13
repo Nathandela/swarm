@@ -1233,3 +1233,10 @@ not that anything moved.
 - `openApproval`'s scroll-into-view gap (recorded in M1.4's section above) is unaffected by this
   item: the tap action lands on the inbox, not on a session detail, so this item never reaches that
   code path at all.
+
+## M1.6 -- Channels spike
+
+Supported, yes -- three of the four requested observations reproduced against a real session
+(sidecar receipt, simultaneous terminal dialog, sidecar-allow proceeding the tool); the fourth
+(terminal-first race) was inconclusive within the timebox. Full findings, verbatim evidence, and
+promotion criteria in `docs/research/channels-spike.md`.
