@@ -10,7 +10,7 @@ rewrite an earlier section, and keep the run output verbatim.
 |---|---|---|---|
 | M0.1 | Co-presence: owner attach + phone `take_control` at once -- both streams live? | `dwwv.1.1` | settled, outcome A |
 | M0.2 | Render the running state on tool cards | `dwwv.1.2` | settled -- running now renders (tag + mono-line word), static; the card itself (glyph, colour, expand) stays M2.2's |
-| M0.3 | Unknown gateway action yields a sealed refusal, never a hang | `dwwv.1.3` | settled, guarantee held (pin); phone-side reply routing is structural, deferred to M1 |
+| M0.3 | Unknown gateway action yields a sealed refusal, never a hang | `dwwv.1.3` | settled, guarantee held (pin); on the phone the approve press latches no operation id so the refusal is never claimed -- mechanism ships, rendering open, deferred to M1 |
 | M0.4 | Hygiene (done at filing) | -- | done |
 
 ---
@@ -263,8 +263,16 @@ approval sheet:
   clears the operation from `a.inflight` (the `PendingOps` counter, `app.go:674,1356-1362`) and
   an `Event{Kind:"outcome", Stream:"reply", State: ctrl.Op, Message: ctrl.OperationID}` is
   emitted. Note what is NOT on `Event` (`mobile/types.go:50-58`): there is no `Error` field, so
-  `ctrl.Error` -- the refusal text `refuseCommand` sealed -- never crosses the gomobile boundary
-  at all.
+  `ctrl.Error` -- the refusal text `refuseCommand` sealed -- is dropped ON THE EVENT PATH.
+  It is NOT dropped from the facade, and an earlier draft of this section wrongly said it never
+  crossed the boundary at all (see the correction below). The reply itself is cached
+  VERB-AGNOSTICALLY: `MailboxRouter.apply` appends every `kindCommandReply` frame to the
+  `ReplyCache` (`internal/phonecore/snapshot.go:667-673`), an approve's gateway refusal included.
+  `App.Outcome(operationID)` (`mobile/app.go:1298-1315`) claims it BY KEY through
+  `Replies().TakeFor` (`snapshot.go:182-198`) and returns
+  `Outcome{Code: ErrorCode|Op, Message: ctrl.Error, Resolved: true}` (`outcomeOf`, :1342-1352).
+  So the refusal text does cross the gomobile boundary -- on the OUTCOME path. The event is only
+  the nudge that says "ask again".
 - On the Android side, `PhoneEvents.onEvent` (`PhoneEvents.kt:35-37,62-68`) receives that event
   and, BY DESIGN ("THE EVENT IS NOT READ... there is nothing to branch on"), does exactly one
   thing for ANY event: `main.post { sink?.invoke() }` -- a full redraw, with the event's Kind,
@@ -277,22 +285,42 @@ approval sheet:
 
 **Answer: neither.** The card does NOT silently vanish -- `PendingApproval` is correctly still
 true, since the daemon genuinely never resolved the question, so no false "accepted" is shown.
-But the refusal does NOT reach the sheet as a visible failure either: `ctrl.Error` is dropped
-before it leaves `mobile/relay.go`, the event that would prompt a redraw carries no error data
-by design, and there is no per-operation-id correlation on the Android side for an async reply
-(the one thing that exists, `leaseOp`/`rememberLease` at :2276-2303, is `take_control`-specific
-and does not generalize). The user sees a positive "sent" outcome line at press time (the local
-send DID succeed), then nothing: the card simply keeps showing as pending, indefinitely, with
-no indication their tap was ever refused.
+But the refusal does NOT reach the sheet as a visible failure either -- and the reason is much
+NARROWER than the event plane. `approvalAction` (`PhoneSurface.kt:2204-2210`) builds its `Press`
+with no `settle`, so the `*Op` that `App.Approve` returns (`mobile/commands.go:91,108`) is
+dropped on the floor and NO OPERATION ID IS EVER LATCHED for the press. With no id in hand
+nothing can ask `bridge.launchOutcome(...)` about it, so the sealed refusal sits in the reply
+cache unclaimed. The user sees a positive "sent" outcome line at press time (the local send DID
+succeed), then nothing: the card simply keeps showing as pending, indefinitely, with no
+indication their tap was ever refused.
 
-This is STRUCTURAL, not a few-line gap: closing it needs `ctrl.Error` (or at least the refusal
-fact) carried across the gomobile `Event` boundary, a per-operation-id correlation on the
-Android side generalized beyond `leaseOp`'s single case, and a decision about how the approval
-sheet specifically should render a failed-not-vanished state -- three design decisions, not a
-patch. Per this bead's instructions, nothing new is filed for it: the task names
-`handleApprove` as due for an M1 rework already, and this finding -- the async-reply half of
-the phone-side approve path is unwired end to end -- feeds directly into that rework rather
-than standing alone.
+THE CORRELATION MECHANISM ALREADY SHIPS, and an earlier draft of this section wrongly called
+it `take_control`-specific. Three verbs already resolve an async reply by operation id through
+the same facade method:
+
+- `renderLaunch` (`PhoneSurface.kt:2441-2455`) -- launch, polled per draw off `launchScreen.inFlight`.
+- `renderKillVerdict` (:2392-2413) -- kill.
+- `leaseVerdictFor` (:2363-2372) -- take_control, via `leaseOp`/`rememberLease` (:2276-2303).
+
+All three call `FacadeBridge.launchOutcome(operationId)` (`ui/FacadeBridge.kt:464-472`), whose
+doc line is "PB-SYNC-2: outcomes are claimed BY OPERATION ID, never by proximity", and
+`renderVerdicts`' own KDoc (:2374-2390) describes itself as "renderLaunch's PROGRAM ON THE OTHER
+TWO VERBS". `CommandVerdict.of` (`ui/CommandVerdict.kt:152-174`) is verb-agnostic BY
+CONSTRUCTION -- the accepted code is a PARAMETER exactly so no table has to know the verb -- and
+its `else` arm already handles a codeless gateway refusal: `refuseCommand` seals no `ErrorCode`
+(`internal/remotegw/command_loop.go:688-698`), so `outcomeOf` falls back to `ctrl.Op` =
+`protocol.OpError` = `"error"`, which maps to `REFUSED` carrying `outcome.message` -- and that
+message IS `ctrl.Error`.
+
+So the size of the gap is: the same three lines `takeControlOf` (:2276-2283) already writes -- a
+`settle` that latches `issued.operationID` -- plus a per-draw poll beside the other two, plus
+ONE genuine design question: how the approval sheet renders a failed-not-vanished state. The
+other two verbs answer on the outcome line and a toast; the sheet is D4.4's heaviest surface and
+its card is still correctly pending, so "toast it like a kill" is a decision to make rather than
+a pattern to copy. Per this bead's instructions nothing new is filed for it: the task names
+`handleApprove` as due for an M1 rework already, and this finding feeds directly into that
+rework. M1 does NOT have to re-derive the mechanism -- it exists, it is named above, and only
+the sheet's rendering is open.
 
 ### Outcome taken
 
@@ -301,9 +329,11 @@ than standing alone.
    and `agents-tracker-2pnu` F3 (both shipped in 0.9.0), and this test pins it under M0.3's own
    name so a regression in either upstream test does not go unnoticed here.
 2. **No production behavior changed** in `internal/remotegw`.
-3. **Phone-side gap documented, not fixed.** The async-reply-never-reaches-the-sheet gap above
-   is real but structural (three design decisions, not a few lines); it is left for M1's
-   `handleApprove` rework rather than patched here or filed as a new bead.
+3. **Phone-side gap documented, not fixed.** The approve press latches no operation id, so the
+   sealed refusal is never claimed and the sheet shows no failure. The correlation mechanism it
+   needs already ships for launch, kill and take_control; the only open design question is how
+   the approval sheet renders a failed-not-vanished state. Left for M1's `handleApprove` rework
+   rather than patched here or filed as a new bead.
 
 ### Tracker actions
 
@@ -317,10 +347,44 @@ than standing alone.
   negotiation OR a guaranteed refusal-reply for unknown actions" -- the latter is what shipped
   (nx44.4/2pnu F3) and is what this bead's test pins; no action negotiation is needed on top of
   it. What joyi's notes did NOT anticipate and this bead's read-only check found: the
-  guaranteed refusal-reply is a MACHINE-side guarantee only -- the phone-side reply routing
-  that would turn it into a visible failure on the approval sheet is unwired (see above). That
-  residual is NOT joyi's ADR ask; it feeds M1's `handleApprove` rework instead.
+  guaranteed refusal-reply is a MACHINE-side guarantee only -- on the phone the approve press
+  latches no operation id, so nothing ever claims the sealed refusal and the sheet shows no
+  failure (see above). That residual is NOT joyi's ADR ask; it feeds M1's `handleApprove` rework
+  instead, which inherits a shipped correlation mechanism and one open rendering decision.
 - `agents-tracker-dwwv.1.3` -- CLOSED (this section is its evidence).
+
+### Correction (adversarial review of wave M0, `agents-tracker-dwwv.7`)
+
+The Go-side half of this section survived tracing unchanged. The PHONE-side half above shipped
+with two falsifiable claims, both traced false by the wave's reviewer and both corrected in
+place; the sentences they replace are recorded here so the record is not silently rewritten.
+
+1. WAS: "there is no `Error` field [on `swarmmobile.Event`], so `ctrl.Error` ... never crosses
+   the gomobile boundary at all." The `Event` half is true (`mobile/types.go:50-58`); the
+   absolute is false. `outcomeOf` (`mobile/app.go:1342-1352`) carries `ctrl.Error` into
+   `Outcome.Message`, `App.Outcome` (:1298-1315) serves it after `Replies().TakeFor`, and
+   `FacadeBridge.launchOutcome` (`ui/FacadeBridge.kt:464-472`) reads it on the Kotlin side. The
+   refusal text crosses on the OUTCOME path; only the EVENT path drops it.
+2. WAS: "there is no per-operation-id correlation on the Android side for an async reply (the
+   one thing that exists, `leaseOp`/`rememberLease` at :2276-2303, is `take_control`-specific
+   and does not generalize)." False for three verbs -- `renderLaunch`, `renderKillVerdict` and
+   `leaseVerdictFor` all correlate by operation id through `bridge.launchOutcome`, and
+   `CommandVerdict.of` takes the accepted code as a parameter so it never knows the verb.
+   `ReplyCache` underneath caches every reply regardless of verb.
+
+Consequence for the CONCLUSION, which rested on those two claims: this is not "three design
+decisions, structural". Two of the three were already-shipped mechanisms. The gap is the
+unlatched operation id (a `settle` on `approvalAction`) plus one real design question (the
+sheet's failed-not-vanished rendering). The "no bead filed, hand to M1's `handleApprove`
+rework" call STANDS -- the rendering decision belongs with that rework and not beside it -- but
+it stands on a smaller item than the original text implied, and M1 inherits the mechanism
+rather than re-deriving it.
+
+Everything else in the M0.3 phone trace was re-traced and held: `Event` carries no `Error`
+field, `PhoneEvents.onEvent` discards the event by design, and `PendingApproval` is keyed on
+`Item.Resolved` whose only writer is `resolveLocked` on an `approval_resolved` record
+(`internal/phonecore/interaction.go:304-311`) -- so "no false accept, the card sits pending" is
+correct as written.
 
 ---
 

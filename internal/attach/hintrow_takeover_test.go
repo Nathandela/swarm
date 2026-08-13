@@ -1,17 +1,33 @@
 package attach
 
-// agents-tracker-nx44.7 -- the attach-time takeover note. A TUI attach and a paired
+// agents-tracker-nx44.7 -- the attach-time takeover note.
+//
+// THE PREMISE THIS FILE WAS FILED ON IS DISPROVED. It read: a TUI attach and a paired
 // device's take_control compete for the SAME single shim subscriber slot (hub.attach
 // evicts unconditionally), so the two states are mutually exclusive and no LIVE
-// "phone has control" indicator is possible inside an attach. What is honest is a
-// note on the reserved row saying this attach took the session FROM the phone,
-// sampled once before the dial that destroyed the answer.
+// "phone has control" indicator is possible inside an attach -- which is why the note
+// below is a one-shot sample taken before the dial "that destroyed the answer".
+// TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive
+// (internal/skeleton/copresence_test.go, evidence in docs/verification/mirror-m0.md)
+// proves the opposite: both live streams survive, in BOTH orders, and the phone's
+// control lease still reaches the PTY afterwards. Production runs two protocol Servers
+// over one coreAPI, each with its own lease map, and coreAPI.Attach subscribes to the
+// SHARED per-session tap, so the shim's single-subscriber slot is reached ONCE per
+// session; eviction is real only WITHIN one tier. The dial destroys nothing, and a
+// live co-presence indicator IS possible. See internal/tui/attach.go for the same
+// correction at the sampling site.
 //
-// ORCHESTRATOR RULING pinned here: the note goes LAST in the hint string. The ctrl+q
-// escape affordance is safety-critical and must survive a narrow terminal; the note
-// is informational and is the first thing to go.
+// THE STRINGS BELOW ARE STILL THE CURRENT CONTRACT and are pinned as such. The note
+// says "took over from phone", which co-presence makes false; replacing it is a design
+// change (a live indicator, not a sampled note) plus an authorized rewrite of these
+// assertions, tracked as agents-tracker-dwwv.3.1 (M2). Until that lands, these tests
+// describe what ships -- they are not a claim that what ships is right.
 //
-// RED today: hintText takes no takeover argument, so this file does not compile.
+// ORCHESTRATOR RULING pinned here, and unaffected by the above: the note goes LAST in
+// the hint string. The ctrl+q escape affordance is safety-critical and must survive a
+// narrow terminal; the note is informational and is the first thing to go.
+//
+// RED at filing time: hintText took no takeover argument, so this file did not compile.
 
 import (
 	"strings"
