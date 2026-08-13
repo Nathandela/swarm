@@ -452,6 +452,71 @@ func TestApproveInjection_TheResolutionLandsOnObservationAttributedToThePhone(t 
 	}
 }
 
+// TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner is M1.3's owner-side leg
+// of this same loop (bead agents-tracker-dwwv.2.3): the SAME recorded dialog, but this time the
+// OWNER types the deny key directly into the session through their own attach -- no approve ever
+// arrives, so `ap.applied` stays empty and noteInteractionStatus's owner branch fires instead of
+// the phone one.
+//
+// WHY THE DECISION IS answered_locally AND NOT denied, recorded here because a reader expecting
+// the deny key's own name would otherwise call this a bug. interaction-schema.md §3.6 (IS-RES-1)
+// reserves `allowed`/`denied` for a decision classified from the VERDICT the daemon itself
+// supplied -- true only on the phone path, where `ap.applied` records what the daemon typed
+// BEFORE it typed it. The owner path has no such source: the daemon observes only that the
+// session's interaction dimension LEFT the waiting state, never which button on the dialog was
+// pressed to cause it. §3.6 says this in so many words: "The four remaining values are
+// daemon-observed and carry no verdict."
+//
+// A hook that would supply that ground truth exists on paper: claude 2.1.231 ships a
+// PermissionDenied event, and M1.3 characterized it against the real, installed CLI --
+// interactive "No" (twice), a `permissions.deny` rule under `--permission-mode manual`, and the
+// same rule under `--permission-mode auto`. It never once fired for an interactive dialog in any
+// of the four runs. `strings` on the installed 2.1.231 binary confirms why: the event's only real
+// call site gates on `decisionReason.type=="classifier" && decisionReason.classifier=="auto-mode"`
+// -- a fully different code path from the TUI "No" a human presses -- and the binary's own
+// embedded schema names the event "Emitted when a tool call is auto-denied WITHOUT an
+// interactive permission prompt (e.g. auto-mode classifier, dontAsk mode, headless-agent
+// auto-deny, or a deny rule)". The full record, including the raw hook dumps from all four runs,
+// is docs/verification/mirror-m1.md's M1.3 section. There is therefore no ground truth to attach
+// on this path, and inventing one would be exactly the guess IS-TOOL-2 forbids.
+func TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner(t *testing.T) {
+	r := newInjectRig(t, bashDialogGrid, claudeApproval("req-terminal-deny"))
+	itemID := itemString(t, r.item, "item_id")
+
+	// The OWNER, not the phone: bytes typed straight into the session's PTY through the same
+	// attach a real terminal app would hold -- M1.1's recorded deny digit for this grid.
+	if err := r.att.Input([]byte("3")); err != nil {
+		t.Fatalf("owner input: %v", err)
+	}
+
+	// No approveInteraction call anywhere in this test -- the phone never touched this request,
+	// so nothing should resolve until the machine's own status observation says the dialog left.
+	r.assertNoResolutionYet(t)
+
+	// The machine's own observation: the session was waiting on the permission, and now is not
+	// -- exactly what a real claude session reports once its screen redraws past the dialog
+	// (M1.1's negative fixture, composerGrid, is that redraw).
+	r.sk.emitStatus(r.local, status.Status{
+		Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionPermission})
+	r.sk.emitStatus(r.local, status.Status{
+		Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
+
+	res := awaitResolution(t, r.sk, r.local, itemID)
+	if res["decision"] != "answered_locally" {
+		t.Errorf("decision = %v; want \"answered_locally\" (§3.6/IS-RES-1) -- the daemon never typed "+
+			"this request's answer itself, so it has no verdict to classify allowed/denied from, only "+
+			"the fact that the machine answered", res["decision"])
+	}
+	if res["by"] != "owner" {
+		t.Errorf("by = %v; want \"owner\" -- nobody typed this from a phone, and attributing it to "+
+			"\"phone\" would credit a tap that never arrived", res["by"])
+	}
+	if _, has := res["operation_id"]; has {
+		t.Errorf("operation_id = %v present on an owner resolution; §3.6 echoes it only when a phone "+
+			"ActionApprove drove the resolution", res["operation_id"])
+	}
+}
+
 // TestApproveInjection_AWatchdogNotesADialogThatDidNotMove. The honest failure mode of applying
 // by keystroke is that the keystroke lands and NOTHING happens -- a CLI version whose key map
 // moved, or a dialog that swallowed the byte. Silence there is the worst outcome: the phone's

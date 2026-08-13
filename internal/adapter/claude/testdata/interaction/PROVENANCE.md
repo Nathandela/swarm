@@ -32,7 +32,23 @@ same shapes and no new coverage. It stays available under `docs/verification/fix
 Recorded honestly rather than filled in from memory of the CLI's docs. Each is one recorded
 payload away from being supported, and none is guessed at meanwhile (IS-TOOL-2's posture):
 
-- **`PermissionDenied`** — never observed in any of S-B's ten runs.
+- **`PermissionDenied`** — never observed in any of S-B's ten runs, and Mirror M1.3
+  (`agents-tracker-dwwv.2.3`) went looking specifically, against the real, installed claude
+  2.1.231 (the same version M1.1's dialog fixtures were captured against): an interactive "No"
+  keystroke on a real recorded dialog (twice), a `permissions.deny` rule under
+  `--permission-mode manual`, and the same rule under `--permission-mode auto`. All four denied
+  the tool for real (confirmed by the marker file never being created and, in the rule runs, the
+  agent's own reply naming the block) and none produced a `PermissionDenied` hook body. `strings`
+  on the installed binary explains why: the event's one real call site gates on
+  `decisionReason.type=="classifier" && decisionReason.classifier=="auto-mode"`, and the binary's
+  own embedded schema names the event "Emitted when a tool call is auto-denied WITHOUT an
+  interactive permission prompt (e.g. auto-mode classifier, dontAsk mode, headless-agent
+  auto-deny, or a deny rule)" — a family of NON-interactive paths, not the TUI dialog's own
+  keystroke handling. `permissions.deny` is named in that description too, and did not reproduce
+  it on this CLI version either, so a deny RULE alone is not sufficient at 2.1.231 (or the
+  remaining trigger, `dontAsk` mode, is the one that actually carries it — untried). Full record,
+  including the verbatim hook dumps of all four runs: `docs/verification/mirror-m1.md`'s M1.3
+  section. Follow-up: `agents-tracker-hgyg`.
 - **A `Write` `PostToolUse`** — S-B captured Write's `PreToolUse` (`file_path`/`content`) only, so
   whether Write's response carries a `structuredPatch` is unobserved.
 - **`Grep`/`Glob`/`WebFetch` `tool_input`** — never captured, so §7's `search` and `fetch` action

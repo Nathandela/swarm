@@ -10,6 +10,7 @@ rewrite an earlier section, and keep the run output verbatim.
 |---|---|---|---|
 | M1.1 | Characterization fixture: the permission dialog's grid signature and accepted keys, version-stamped | `dwwv.2.1` | settled -- 5 recorded grids of claude 2.1.231, key map confirmed by side effects, recognizer shipped |
 | M1.2 | Apply-by-injection: the phone's answer is typed into the CLI's own dialog, gated on the live grid; the tap stops resolving | `dwwv.2.2` | settled -- injection primitive shipped, 5 refusal reasons, resolution moved to observation, 4 tests rewritten |
+| M1.3 | Resolution attribution: the `PermissionDenied` capture row, and which of the five daemon paths fires when the terminal answers | `dwwv.2.3` | settled -- PARTIAL by finding, not by omission: the hook does not fire on the path this item needs (four real captures + binary analysis), owner-path and phone-path attribution both verified correct as shipped, one new test, follow-up `agents-tracker-hgyg` filed |
 
 ---
 
@@ -572,3 +573,233 @@ carries none for any op), so protocol.md is the whole of the obligation.
 - No real-CLI run was spent on this item: M1.1's five runs recorded the key map and the grids,
   and every claim here is testable against those recordings. The end-to-end handset moment stays
   M1.7's exit criterion.
+
+---
+
+## M1.3 -- Resolution attribution: the PermissionDenied row, and which path answers the terminal
+
+### The question, and the premise it rests on
+
+The wave plan (`mirror-program.md` M1.3 row) named a concrete piece of work: add the claude
+adapter's sixth `capture=raw` hook row, `PermissionDenied`, so that a terminal-side deny -- the
+owner pressing "No" on the dialog M1.1 recorded -- produces `approval_resolved` with
+`decision: denied, by: owner` instead of the generic `answered_locally`. That instruction rests on
+a premise: that `PermissionDenied` is the event a real `claude` fires for exactly that keystroke.
+**The premise is false**, and the rest of this section is the evidence, because asserting that and
+moving on would be exactly the kind of claim this repo's own corpus discipline (IS-TOOL-2: "an
+unclassifiable call is `other`, never guessed at") exists to prevent.
+
+### Four real runs, cost-disciplined, against the installed 2.1.231
+
+Every run used the same instrument shape M1.1 already proved (`internal/smoke`'s `dialogSession`:
+predicate-driven waiting on a real PTY, real vt emulator, env stripped of `SWARM_*`/`CLAUDE*`),
+plus a hook command this item added temporarily and removed after use -- a `sh` script that `cat`s
+its own stdin (the CLI's raw hook body) to a dump file, wired via an inline `--settings` exactly
+like `claude.go`'s own `hookSettingsJSON` shape. It was never committed: spike-SB's own capture
+relay was thrown away after use for the same reason (`docs/verification/spike-SB.md`), and this
+one is documented here instead, verbatim, in its place.
+
+**Runs 1-2 -- the interactive dialog, denied for real.** `claude --permission-mode manual
+--settings <7 events wired>`, the Bash marker-file prompt M1.1 used, the dialog's own recorded
+deny digit (`3`) sent once the dialog rendered. Confirmed genuinely denied both times (no marker
+file at `/tmp/swarm-m13-denied.marker`). `UserPromptSubmit`, `PreToolUse` and `PermissionRequest`
+landed in the dump; `Notification`, `PermissionDenied` and `Stop` never did -- the second run added
+a poll-until-the-dump-file-stops-growing wait (10 s budget) specifically to rule out a race between
+the screen going idle and an async hook still landing, and the result did not change:
+
+    $ SWARM_REALCLI=1 go test -tags realcli -run TestCapturePermissionDenied -timeout 5m -v ./internal/smoke
+    dialog options: [❯ 1. Yes   2. Yes,mandealways allowpaccessttoytmp/ from this project   3. No]
+    sending deny digit "3"
+    hook dump (1943 bytes):
+        {...,"hook_event_name":"UserPromptSubmit","prompt":"Use the Bash tool to run exactly this command and nothing else: touch /tmp/swarm-m13-denied.marker"}
+        {...,"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"touch /tmp/swarm-m13-denied.marker","description":"Create marker file"},"tool_use_id":"toolu_01Fi1prVuYg6rT646kJHJtge"}
+        {...,"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"touch /tmp/swarm-m13-denied.marker",...},"permission_suggestions":[{"type":"addDirectories",...},{"type":"setMode","mode":"acceptEdits",...}]}
+    --- PASS: TestCapturePermissionDenied (10.86s)
+
+**Runs 3-4 -- a deterministic trigger, tried on purpose.** The CLI's own installed binary (below)
+names "a deny rule" as one of `PermissionDenied`'s triggers, and a rule match is deterministic
+where an interactive keystroke and a semantic classifier are not -- worth one more attempt each
+under `--permission-mode manual` and `--permission-mode auto` (the owner's own real global default,
+per M1.1's finding), with `"permissions":{"deny":["Bash(touch:*)"]}` in the same inline settings.
+Both genuinely blocked the command (no marker file; the agent's own `Stop` reply named the block in
+both) and neither produced a `PermissionDenied` body:
+
+    $ SWARM_REALCLI=1 go test -tags realcli -run TestCapturePermissionDeniedByRule -timeout 3m -v ./internal/smoke
+    argv: [claude --permission-mode manual ... "permissions":{"deny":["Bash(touch:*)"]} ...]
+    hook dump (1878 bytes): UserPromptSubmit, PreToolUse, Stop only
+    Stop: "last_assistant_message":"Permission denied — the tool call was blocked, not run. ..."
+    --- PASS: TestCapturePermissionDeniedByRule (33.64s)
+
+    $ SWARM_REALCLI=1 go test -tags realcli -run TestCapturePermissionDeniedByRule -timeout 3m -v ./internal/smoke
+    argv: [claude --permission-mode auto ... "permissions":{"deny":["Bash(touch:*)"]} ...]
+    hook dump (1915 bytes): UserPromptSubmit, PreToolUse, Stop only ("permission_mode":"auto" confirmed on both rows)
+    Stop: "last_assistant_message":"The command was denied by your permission settings (a deny rule is likely blocking `/tmp` writes or `touch`). ..."
+    --- PASS: TestCapturePermissionDeniedByRule (33.66s)
+
+Under the RULE runs `PermissionRequest` did not fire either -- the deny rule short-circuits before
+the dialog is even drawn, which is consistent with the CLI's own description below ("auto-denied
+WITHOUT an interactive permission prompt") but still did not reach `tgn` (see next).
+
+### Why: read off the installed binary, not inferred from its absence
+
+`strings` on the actual installed CLI (`/Users/Nathan/.local/share/claude/versions/2.1.231`, the
+same binary all four runs and M1.1's captures used) finds the dispatcher and its one real call
+site:
+
+    async function*tgn(e,t,r,n,o,i,s,a=Ng){
+      let l=o.getAppState(),c=o.agentId??o.session.id;
+      if(!Bz("PermissionDenied",l,c))return;
+      let u={...hg(o.session,Gt(),i,o),hook_event_name:"PermissionDenied",
+             tool_name:e,tool_input:r,tool_use_id:t,reason:n};
+      yield*V2({session:o.session,...})
+    }
+    ...
+    if(Y.decisionReason?.type==="classifier"&&Y.decisionReason.classifier==="auto-mode"){
+      let X=!1;
+      try{for await(let te of tgn(e.name,t,b,Y.decisionReason.reason??"Permission denied",n,z,n.abortController.signal))
+        if(te.retry)X=!0
+      }catch(te){...}
+    }
+
+and the event's own embedded schema description, verbatim:
+
+    "Emitted when a tool call is auto-denied without an interactive permission prompt (e.g.
+    auto-mode classifier, dontAsk mode, headless-agent auto-deny, or a deny rule). With a
+    permission prompt surface (stdio/SDK canUseTool), the 'ask' path surfaces via a can_use_tool
+    control_request and this event covers the 'deny' short-circuit. Without one (bare -p / SDK
+    query() with no canUseTool), 'ask' decisions are terminal, so this event also covers those
+    implicit denials."
+
+A HOOK-originated deny -- `claudeAdapter.Decision`'s `replyDeny`, the `{"behavior":"deny"}` a
+`PermissionRequest` hook can reply with (unused in production today, per
+`a1-integration.md` §8.7) -- is a THIRD path again: the binary calls a different function
+(`swn(...)`) for `decisionReason.type==="hook"`, not `tgn`. So of the three ways a claude tool call
+can end up denied -- a human's interactive "No", a hook's reply, and an automatic classifier/rule
+short-circuit -- `PermissionDenied` is wired to exactly the third, and this item's four runs prove
+the fourth listed trigger (a `permissions.deny` string match) does not reach it either at 2.1.231,
+leaving `dontAsk` mode and an actual headless-agent session as the two untried possibilities. The
+schema's own field list (`tool_name`, `tool_input`, `tool_use_id`, `reason`) is genuine and
+confirmed from the same source; it was never used to fabricate a fixture (see next section).
+
+### What was NOT built, and why that is the correct outcome and not a shortfall
+
+No `PermissionDenied` fixture was added to `internal/adapter/claude/testdata/interaction/`, and
+neither `claude.go`'s `hookEvents` nor `interaction.go`'s `Interactions()` gained a case for it.
+Two independent reasons, either one sufficient on its own:
+
+1. **No real body exists to shape against.** This repo's producer states its own rule in its file
+   header -- "EVERY FIELD READ HERE WAS OBSERVED IN A REAL CAPTURE" -- and IS-TOOL-2 forbids
+   guessing a shape from documentation. The field names above are genuine, but genuine-from-a-
+   decompiled-binary is not the same evidentiary class as a recorded capture, and this corpus has
+   never mixed the two (PROVENANCE.md's `reconstructed` provenance is reserved for a modified copy
+   of a REAL source, not a synthesized one). Building shaping code with no fixture to run it
+   against would also leave it untested, which the TDD mandate does not permit working around.
+2. **It would not change anything even if built.** `noteInteractionStatus` (`approval.go:295`) is
+   the ONLY place a terminal-side resolution is authored, and it is driven by the STATUS
+   TRANSITION (the session's interaction dimension leaving the waiting state), never by a specific
+   hook event. Nothing reads `Interactions()`'s output back into the pending approval's resolution
+   path today -- that plumbing (a marker parallel to `inject.go`'s `ap.applied`, set from a shaped
+   `PermissionDenied` item instead of from the daemon's own keystroke) does not exist, and building
+   it on top of an event that cannot be produced against the real CLI would be untestable scaffolding.
+
+`interaction-schema.md` §3.6's own rule (IS-RES-1) already says what the owner path is allowed to
+claim: *"The four remaining values [`cancelled`, `superseded`, `expired`, `answered_locally`] are
+daemon-observed and carry no verdict."* `answered_locally`/`by: owner` for a terminal deny is not a
+gap this item failed to close -- it is the spec's own honest answer to a question the daemon
+cannot see the answer to from a screen alone.
+
+Filed forward rather than dropped: `agents-tracker-hgyg` (P2, discovered-from `dwwv.2.3`) records
+the exact shaping work to do IF a real body is ever captured (a future claude version, `dontAsk`
+mode, or a genuine headless-agent session), and why not to build it speculatively before then.
+
+### Goal 2 -- tracing the allow path (and the deny path: it is the same path)
+
+`approval.go` has exactly five call sites of `resolveApprovalLocked`, matching IS-LIFE-2's five
+enumerated resolutions:
+
+| Line | Caller | Resolution |
+|---|---|---|
+| 151 | `openApprovalLocked` | `superseded` / `by: agent` |
+| 262 | `sweepExpiredApprovals` | `expired` / `by: daemon` |
+| **295** | **`noteInteractionStatus`** | **`answered_locally` / `by: owner`, OR `ap.applied` / `by: phone` when the daemon itself typed the answer** |
+| 326 | `sweepSessionInteractions` (orphan sweep) | `cancelled` / `by: agent` |
+| 463 | `approveInteraction`'s own expiry check | `expired` / `by: daemon` |
+
+Line 295 is the one and only path for BOTH a terminal allow and a terminal deny -- the mechanism
+has no way to tell them apart (previous section), so it does not try to. It already attributed
+`by: owner` correctly before this item (`TestApprovalResolved_TheDesktopAnsweringResolvesLocally`,
+`approval_r4_test.go`, pre-dates M1.2); no fix was needed, and none was made.
+
+### Goal 3 -- by: phone
+
+Already fully wired by M1.2: `approveInteraction` (`approval.go`) records `ap.applied`/`ap.appliedOp`
+on the pending tuple BEFORE typing (`"RECORDED BEFORE IT IS TYPED"`, its own comment explains the
+race this closes), and `noteInteractionStatus` reads it back to select `by: phone` over the
+`answered_locally`/`by: owner` default. Confirmed by reading the code (nothing to add) and by the
+existing `TestApproveInjection_TheResolutionLandsOnObservationAttributedToThePhone`
+(`approval_inject_test.go`, M1.2).
+
+### Goal 4 -- the new test, and its honestly-unexpected GREEN
+
+`TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner`
+(`internal/skeleton/approval_inject_test.go`) is this item's one new test: the SAME `newInjectRig`
+machinery M1.2 built (a real recorded claude grid, repainted into a real PTY, the real recognizer),
+but the OWNER's own attach types the recorded dialog's deny digit directly into the session --
+`r.att.Input([]byte("3"))` -- and `approveInteraction` (the phone path) is never called at all. It
+is fixture-driven exactly like its M1.2 neighbors, just of the owner leg the file did not yet cover
+rather than the phone one.
+
+It asserts `decision: answered_locally, by: owner, no operation_id` -- not `denied` -- for the
+reasons the sections above give in full. It is a PIN, not a RED-to-GREEN drive: the mechanism it
+exercises (`noteInteractionStatus`) was unchanged by this item, so it passed on its first run.
+Said plainly, matching M1.2's own precedent for `TestApproveInjection_AnAlreadyResolvedApprovalIsRefusedAndTypesNothing`:
+
+    $ go test ./internal/skeleton/ -run TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner -v
+    --- PASS: TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner (0.70s)
+    PASS
+
+    $ go test ./internal/skeleton/ -run TestApproveInjection -v
+    --- PASS: TestApproveInjection_AnAllowTypesTheRecordedDialogsAllowKeyIntoThePTY (3.86s)
+    --- PASS: TestApproveInjection_ADenyTypesTheRecordedDialogsDenyKeyIntoThePTY (0.66s)
+    --- PASS: TestApproveInjection_AGridThatNoLongerShowsTheDialogIsRefusedAndTypesNothing (0.67s)
+    --- PASS: TestApproveInjection_AnAlreadyResolvedApprovalIsRefusedAndTypesNothing (0.41s)
+    --- PASS: TestApproveInjection_ASecondTapBeforeTheFirstIsObservedTypesNothingMore (0.21s)
+    --- PASS: TestApproveInjection_ADecisionWithNoVerdictCannotBeTypedAndIsRefused (0.16s)
+    --- PASS: TestApproveInjection_TheResolutionLandsOnObservationAttributedToThePhone (0.69s)
+    --- PASS: TestApproveInjection_ATerminalSideDenyResolvesAnsweredLocallyByOwner (0.70s)
+    --- PASS: TestApproveInjection_AWatchdogNotesADialogThatDidNotMove (0.94s)
+    PASS
+    ok  	github.com/Nathandela/swarm/internal/skeleton	9.233s
+
+The "phone-injected allow -> resolved allowed by phone" half of this goal was already pinned before
+this item, by `TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone`'s leg 2
+(`interaction_chain_e2e_test.go`) and by `TestApproveInjection_AnAllowTypesTheRecordedDialogsAllowKeyIntoThePTY`
++ `TestApproveInjection_TheResolutionLandsOnObservationAttributedToThePhone` together (the allow leg
+of the same observation test the new deny test is the owner-side twin of).
+
+### Goal 5 -- the phone renderer
+
+No Kotlin change, and none needed: `TranscriptPanel.kt`'s `APPROVAL_RESOLVED` arm renders
+`joined(fields.decision, fields.by)` off the item's own JSON fields generically, with no
+allow/deny/owner/phone vocabulary hardcoded, and `TranscriptPanelTest.kt` already carries a
+`by: "phone"` case (`item("approval_resolved", body = """{"decision":"allowed","by":"phone"}""")`,
+line 340) asserting the rendered line contains `"phone"`. Confirmed by reading; nothing to change,
+nothing to run through Gradle.
+
+### Gates
+
+    $ go build ./...                                                            BUILD_OK
+    $ go vet ./...                                                              VET_OK
+    $ go test ./internal/skeleton/... ./internal/adapter/claude/...             EXIT:0
+    $ PATH="$HOME/go/bin:$PATH" golangci-lint run                               LINT_EXIT:0
+
+### What M1.4+ inherits
+
+- The owner-answered path (allow AND deny alike) resolves `answered_locally`/`by: owner`; there is
+  no daemon-side way to learn which button the owner pressed from the status transition alone, and
+  no code exists that tries to.
+- `agents-tracker-hgyg` carries the exact shaping work for `PermissionDenied` if a real body is
+  ever captured. Nothing should build toward it speculatively before then.
+- The temporary capture instrument used for this item's four real runs was never committed
+  (`internal/smoke/permdenied_capture_test.go`, deleted after use) -- its method is recorded here
+  in full instead, matching spike-SB's own precedent for a throwaway relay.
