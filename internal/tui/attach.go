@@ -62,11 +62,28 @@ type TerminalHandoff struct {
 // bubbletea-side adapter; cmd wires the dialer and terminal handoff.
 func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 	return func(s protocol.SessionView, readOnly bool) error {
-		// nx44.7: sampled ONCE, here, BEFORE the dial — the dial destroys the answer.
-		// A TUI attach and a phone's take_control contend for the SAME single shim
-		// subscriber slot, so the dial below unconditionally evicts the phone and the
-		// daemon's lease flips to us; re-reading it later would always say "no phone".
-		// The roster row is the last honest observation of who held the session.
+		// nx44.7, CORRECTED by M0.1 (docs/verification/mirror-m0.md). The dial below does
+		// NOT evict the phone, and in the assembled daemon it never did: production runs TWO
+		// protocol Servers over ONE coreAPI (internal/skeleton/serve.go -- owner d.srv on the
+		// main UDS, remote d.remoteSrv on remote.sock), each with its OWN lease map, and
+		// coreAPI.Attach subscribes to the SHARED per-session tap (internal/skeleton/api.go,
+		// tap.subscribe) rather than re-dialing the shim. The single-subscriber constraint is
+		// at the shim hub (internal/shim/server.go hub.attach) and the tap reaches it ONCE per
+		// session, on its first subscriber; every later attach -- owner attach, remote
+		// take_control, remote peek -- fans off that one upstream.
+		// TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive
+		// (internal/skeleton/copresence_test.go) proves both live streams survive in BOTH
+		// orders, and that the phone's control lease still reaches the PTY afterwards.
+		// Eviction is real only WITHIN one tier: a second OWNER attach supersedes the first on
+		// d.srv's lease map (internal/protocol/server.go attach, phase 2).
+		//
+		// So this flag does not mean "we took the session from the phone"; it means "a phone
+		// held control when this attach started". The reserved row it drives still SAYS "took
+		// over from phone", which is now false -- but rewording it changes that note's contract
+		// and the assertions pinning it (internal/attach/hintrow_takeover_test.go), and the
+		// honest replacement is a LIVE co-presence indicator rather than a one-shot sample. That
+		// is design work, deferred to M2 as agents-tracker-dwwv.3.1. Sampling once is kept
+		// meanwhile: the chrome carries one value for the life of the attach either way.
 		tookOver := s.RemoteControlled
 		sess, cleanup, err := dial(s.ID)
 		if err != nil {

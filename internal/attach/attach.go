@@ -66,12 +66,17 @@ type Config struct {
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
 	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
 	Name      string // session label rendered in the reserved-row hint
-	// TookOverRemote marks an attach that EVICTED a paired device's control lease, so
-	// the reserved row can say so. The caller samples it from the roster row BEFORE it
-	// dials: the dial itself destroys the answer (hub.attach evicts unconditionally,
-	// and the TUI attach and a phone take_control contend for the SAME single shim
-	// subscriber slot), so there is nothing live to re-read. One sample, carried for
-	// the life of the attach.
+	// TookOverRemote marks an attach that STARTED while a paired device held a control
+	// lease. Its name and the note it paints ("took over from phone") both claim an
+	// eviction, and M0.1 (docs/verification/mirror-m0.md) disproved that: an owner attach
+	// and a phone's take_control coexist on one session -- the two protocol Servers keep
+	// separate lease maps over ONE coreAPI, whose Attach subscribes to the shared
+	// per-session tap instead of re-dialing the shim, so the shim's single-subscriber slot
+	// is claimed once by the tap and both live streams survive
+	// (skeleton.TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive). The honest
+	// surface is a LIVE co-presence indicator, not a one-shot note; that is design work,
+	// deferred to M2 as agents-tracker-dwwv.3.1. Until then the caller still samples once
+	// before dialing and this value is carried for the life of the attach.
 	TookOverRemote bool
 }
 
@@ -542,10 +547,16 @@ func chromeHint(name string, detachKey byte, cols, rows int, tookOverRemote bool
 	return []byte(b.String())
 }
 
-// takeoverNote is the one-shot heads-up for an attach that evicted a paired device's
-// control lease. It names the surface, not the device: the daemon answers a bare
+// takeoverNote is the one-shot heads-up painted when a paired device held control as
+// this attach started. It names the surface, not the device: the daemon answers a bare
 // bool, and naming the device needs a deviceID accessor plus a registry lookup that
 // does not exist yet.
+//
+// STALE WORDING, deferred to M2 (agents-tracker-dwwv.3.1): "took over" asserts an
+// eviction that M0.1 disproved -- the phone keeps both its peek and its control lease
+// across an owner attach (docs/verification/mirror-m0.md). Rewording it is not a
+// one-liner: hintrow_takeover_test.go pins these strings as the note's contract, and the
+// honest replacement is a live indicator rather than a sampled note.
 const takeoverNote = "took over from phone"
 
 // hintText builds the reserved-row hint, truncated to fit cols columns: the session
