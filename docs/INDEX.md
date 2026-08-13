@@ -32,6 +32,7 @@
 - [ADR-009](adr/ADR-009-structured-chat-interaction.md) — the phone surface is a structured chat transcript, the terminal grid is retired
 - [ADR-010](adr/ADR-010-adapter-structured-capture.md) — structured interaction capture as an optional, additive adapter-contract extension
 - [ADR-011](adr/ADR-011-multi-device-epochs.md) — multi-device epochs: per-device sender ids, inbound keys, seq spaces
+- [ADR-013](adr/ADR-013-mirror-capture-architecture.md) — Mirror capture architecture: structure beside the sacred PTY, the held hook rejected on co-presence grounds, the phone's answer typed into the CLI's own dialog
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))

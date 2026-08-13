@@ -20,6 +20,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [010](ADR-010-adapter-structured-capture.md) | Structured interaction capture is an optional, additive extension of the frozen adapter contract | Accepted | 2026-08-07 |
 | [011](ADR-011-multi-device-epochs.md) | Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces | Accepted | 2026-08-07 |
 | [012](ADR-012-type-ladder-consolidation-phase-1.md) | Type ladder consolidation, phase 1 — safe merges | Accepted | 2026-08-09 |
+| [013](ADR-013-mirror-capture-architecture.md) | Mirror capture architecture — structure beside the PTY; the phone's answer typed into the CLI's own dialog | Accepted | 2026-08-13 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -33,7 +34,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number (the next is ADR-013; 011 was minted for multi-device epochs and 012 for the type-ladder consolidation).
+1. Next sequential number (the next FREE one is ADR-015: 013 was minted for the Mirror capture architecture, and `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

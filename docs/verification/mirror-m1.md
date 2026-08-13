@@ -13,6 +13,8 @@ rewrite an earlier section, and keep the run output verbatim.
 | M1.3 | Resolution attribution: the `PermissionDenied` capture row, and which of the five daemon paths fires when the terminal answers | `dwwv.2.3` | settled -- PARTIAL by finding, not by omission: the hook does not fire on the path this item needs (four real captures + binary analysis), owner-path and phone-path attribution both verified correct as shipped, one new test, follow-up `agents-tracker-hgyg` filed |
 | M1.4 | Approval sheet lives in session detail (it used to navigate out to the inbox); `App.Approve`'s answer settles like `kill` and `take_control` already do | `dwwv.2.4` | settled -- `approvalHost` re-parented between the inbox list and the session detail on `statusHost`'s own slot pattern, `openApproval` no longer navigates, settle wired with a calm refusal-only notice (M1.2's `ok` means APPLIED, not RESOLVED), 6 new/expanded test files, all gates green |
 | M1.5 | Approval push wake deep-links to the card: the notification's tap action | `dwwv.2.5` | settled -- PARTIAL by finding, not by omission: the wake envelope carries no session id (78-byte content-free constant, ADR-007 B20) so a direct deep-link to session detail is not honest; shipped a tap action that opens the app fresh on its default Inbox screen (`needs_input` first, PB-SEC-11's "reads nothing off the intent" boundary intact), 4 new tests, follow-up `agents-tracker-dwwv.3.2` filed for the envelope question |
+| M1.6 | Channels spike (timeboxed, flagged, non-release): `claude/channel/permission` relay | `dwwv.2.6` | settled -- supported, yes: three of the four observations reproduced against real sessions, the fourth (terminal-first race) inconclusive within the timebox; findings and seven promotion criteria in `docs/research/channels-spike.md` |
+| M1.7 | ADR-013 written: the architecture, the section 3 decision, the schema rulings, the GG-7 cross-check | `dwwv.2.7` | settled -- `docs/adr/ADR-013-mirror-capture-architecture.md`, both indexes updated; M1.2's GG-7 obligation cross-checked and found MET, no fix and no bead needed |
 
 ---
 
@@ -1240,3 +1242,30 @@ Supported, yes -- three of the four requested observations reproduced against a 
 (sidecar receipt, simultaneous terminal dialog, sidecar-allow proceeding the tool); the fourth
 (terminal-first race) was inconclusive within the timebox. Full findings, verbatim evidence, and
 promotion criteria in `docs/research/channels-spike.md`.
+
+---
+
+## M1.7 -- ADR-013: the architecture, written after the facts it records
+
+`docs/adr/ADR-013-mirror-capture-architecture.md` is the wave's decision record, and it is written
+from this file rather than ahead of it: the sacred-PTY rule and the per-CLI channel table (claude
+hooks plus the non-load-bearing transcript tail, opencode SSE, the AGY probe, the owner-ruled status
+card for everything else -- with Codex's app-server second-client topology marked explicitly as a
+GATED INTENTION riding on M4.0, not a made decision); co-presence as proven fact, citing
+`TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive` and its first-run GREEN, with R3's
+lease-as-plumbing/dead-as-UX consequence and `nx44.8`'s closure; the held hook rejected on
+co-presence grounds with mirror-program.md section 3's reasoning reproduced, the grid-gated
+injection as M1.2 shipped it (recorded key map, refusing recognizer, the stray-keystroke race and
+the one-seeded-view gate that closes it, `ok` means APPLIED, resolution by observation, the
+watchdog), and Channels as designated successor carrying M1.6's four hard blockers out of its seven
+promotion criteria plus the re-check signal; and the R1/R2 schema rulings with their reasoning
+(fold-by-ref already exists; `verification-metadata.xml` churn is a deliberate human-review gate).
+The item's cross-check is recorded in the ADR's Conformance section: **M1.2 met its GG-7
+obligation** -- protocol.md's `approve` section already carries the validate-then-APPLY sequence,
+the full refusal table and the `ok` means APPLIED sentence (lines 369-423 at `791852d`), and
+`git diff 24ef9b1..HEAD -- internal/wire` is empty across the whole wave, so the CI field-table
+drift check has nothing to diff. No row was missing, no correction was needed, and no bead was
+filed. Docs-only item: no test to write RED, and the gates were run as a formality
+(`go build ./...`, `go test ./...`, `go vet ./...`, `golangci-lint run` -- all exit 0). Both indexes
+updated (`docs/adr/README.md` row plus its next-free-number line, now ADR-015 because
+mirror-program.md M3.1 has reserved 014; `docs/INDEX.md` Decisions list).
