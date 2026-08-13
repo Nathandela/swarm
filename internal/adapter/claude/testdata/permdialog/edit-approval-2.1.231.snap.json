@@ -1,0 +1,616 @@
+{
+  "version": 1,
+  "cols": 100,
+  "rows": 30,
+  "altScreen": true,
+  "cursorX": 1,
+  "cursorY": 25,
+  "cursorVisible": false,
+  "title": "�",
+  "lines": [
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "Claude Code           ",
+          "width": 22
+        },
+        {
+          "text": "▝▜",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "█████",
+          "width": 5,
+          "fg": "#d77757",
+          "bg": "#000000"
+        },
+        {
+          "text": "▛▘",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Fixed MCP OAuth sign-in failing with a red… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "  ▘▘ ▝▝  ",
+          "width": 9,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Documented `claude remote-control --contin… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "Sonnet 5 with xhigh effort · Claude Max · ",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Added server-supplied Claude Code hook sup… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "nathan.delacretaz@gmail.com's Organization",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "/release-notes for more",
+          "width": 23,
+          "fg": "#999999",
+          "italic": true
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "/…/T/swarm-permdialog/edit/scratch",
+          "width": 34,
+          "fg": "#999999"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": "                                             ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯",
+          "width": 100,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "❯ ",
+          "width": 2,
+          "fg": "#505050",
+          "bg": "#373737"
+        },
+        {
+          "text": "Use the Edit tool (never Write, never Bash) to replace the word one with ONE in note.txt.",
+          "width": 89,
+          "fg": "#ffffff",
+          "bg": "#373737"
+        },
+        {
+          "text": "         ",
+          "width": 9,
+          "bg": "#373737"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "  ",
+          "width": 2
+        },
+        {
+          "text": "Searched for ",
+          "width": 13,
+          "fg": "#999999"
+        },
+        {
+          "text": "1",
+          "width": 1,
+          "fg": "#999999",
+          "bold": true
+        },
+        {
+          "text": " pattern, read ",
+          "width": 15,
+          "fg": "#999999"
+        },
+        {
+          "text": "1",
+          "width": 1,
+          "fg": "#999999",
+          "bold": true
+        },
+        {
+          "text": " file ",
+          "width": 6,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                              ",
+          "width": 62
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "⏺",
+          "width": 1,
+          "fg": "#999999"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Update",
+          "width": 6,
+          "bold": true
+        },
+        {
+          "text": "(note.txt)                                                                                  ",
+          "width": 92
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "────────────────────────────────────────────────────────────────────────────────────────────────────",
+          "width": 100,
+          "fg": "#99ccff"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Edit file",
+          "width": 9,
+          "fg": "#99ccff",
+          "bold": true
+        },
+        {
+          "text": "                                                                                          ",
+          "width": 90
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "note.txt",
+          "width": 8,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                                           ",
+          "width": 91
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+          "width": 100,
+          "fg": "#505050"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " 1 -",
+          "width": 4,
+          "fg": "#dc5a5a",
+          "bg": "#3d0100"
+        },
+        {
+          "text": "one                                                                                             ",
+          "width": 96,
+          "fg": "#f8f8f2",
+          "bg": "#3d0100"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " 1 +",
+          "width": 4,
+          "fg": "#51a0c8",
+          "bg": "#001b29"
+        },
+        {
+          "text": "ONE                                                                                             ",
+          "width": 96,
+          "fg": "#f8f8f2",
+          "bg": "#001b29"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " 2 ",
+          "width": 3,
+          "fg": "#f8f8f2",
+          "faint": true
+        },
+        {
+          "text": " two",
+          "width": 4,
+          "fg": "#f8f8f2"
+        },
+        {
+          "text": "                                                                                             ",
+          "width": 93
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " 3 ",
+          "width": 3,
+          "fg": "#f8f8f2",
+          "faint": true
+        },
+        {
+          "text": " three",
+          "width": 6,
+          "fg": "#f8f8f2"
+        },
+        {
+          "text": "                                                                                           ",
+          "width": 91
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " 4 ",
+          "width": 3,
+          "fg": "#f8f8f2",
+          "faint": true
+        },
+        {
+          "text": " four",
+          "width": 5,
+          "fg": "#f8f8f2"
+        },
+        {
+          "text": "                                                                                            ",
+          "width": 92
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+          "width": 100,
+          "fg": "#505050"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " Do you want to make this edit to ",
+          "width": 34
+        },
+        {
+          "text": "note.txt",
+          "width": 8,
+          "bold": true
+        },
+        {
+          "text": "?                                                         ",
+          "width": 58
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "❯",
+          "width": 1,
+          "fg": "#99ccff"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "1. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "Yes",
+          "width": 3,
+          "fg": "#99ccff"
+        },
+        {
+          "text": "                                                                                           ",
+          "width": 91
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   ",
+          "width": 3
+        },
+        {
+          "text": "2. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "Yes, allowiallOedits duringxthis session ",
+          "width": 41
+        },
+        {
+          "text": "(shift+tab)",
+          "width": 11,
+          "bold": true
+        },
+        {
+          "text": "                                          ",
+          "width": 42
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   ",
+          "width": 3
+        },
+        {
+          "text": "3. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "No                                                                                            ",
+          "width": 94
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Esc to cancel · Tab to amend",
+          "width": 28,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                       ",
+          "width": 71
+        }
+      ]
+    }
+  ]
+}

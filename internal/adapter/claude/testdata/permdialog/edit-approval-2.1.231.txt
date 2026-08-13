@@ -1,0 +1,30 @@
+│Claude Code           ▝▜█████▛▘                     │ Fixed MCP OAuth sign-in failing with a red… │
+│                        ▘▘ ▝▝                       │ Documented `claude remote-control --contin… │
+│     Sonnet 5 with xhigh effort · Claude Max ·      │ Added server-supplied Claude Code hook sup… │
+│     nathan.delacretaz@gmail.com's Organization     │ /release-notes for more                     │
+│         /…/T/swarm-permdialog/edit/scratch         │                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ Use the Edit tool (never Write, never Bash) to replace the word one with ONE in note.txt.
+
+  Searched for 1 pattern, read 1 file
+
+⏺ Update(note.txt)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Edit file
+ note.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1 -one
+ 1 +ONE
+ 2  two
+ 3  three
+ 4  four
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to note.txt?
+ ❯ 1. Yes
+   2. Yes, allowiallOedits duringxthis session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

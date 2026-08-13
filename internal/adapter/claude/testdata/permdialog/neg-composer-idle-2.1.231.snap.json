@@ -1,0 +1,676 @@
+{
+  "version": 1,
+  "cols": 100,
+  "rows": 30,
+  "altScreen": true,
+  "cursorX": 2,
+  "cursorY": 26,
+  "cursorVisible": true,
+  "title": "�",
+  "lines": [
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╭───",
+          "width": 4,
+          "fg": "#ff9933"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Claude Code",
+          "width": 11,
+          "fg": "#ff9933"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "v2.1.231",
+          "width": 8,
+          "fg": "#999999"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "─────────────────────────────────────────────────────────────────────────╮",
+          "width": 74,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                                                    ",
+          "width": 52
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Tips for getting started",
+          "width": 24,
+          "fg": "#ff9933",
+          "bold": true
+        },
+        {
+          "text": "                    ",
+          "width": 20
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                ",
+          "width": 16
+        },
+        {
+          "text": "Welcome back Nathan!",
+          "width": 20,
+          "bold": true
+        },
+        {
+          "text": "                ",
+          "width": 16
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Ask Claude to create a new app or clone a … ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                                                    ",
+          "width": 52
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "───────────────────────────────────────────",
+          "width": 43,
+          "fg": "#ff9933"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": " ▐",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "▛███▜",
+          "width": 5,
+          "fg": "#d77757",
+          "bg": "#000000"
+        },
+        {
+          "text": "▌",
+          "width": 1,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "What's new",
+          "width": 10,
+          "fg": "#ff9933",
+          "bold": true
+        },
+        {
+          "text": "                                  ",
+          "width": 34
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "▝▜",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "█████",
+          "width": 5,
+          "fg": "#d77757",
+          "bg": "#000000"
+        },
+        {
+          "text": "▛▘",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Fixed MCP OAuth sign-in failing with a red… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "  ▘▘ ▝▝  ",
+          "width": 9,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Documented `claude remote-control --contin… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "Sonnet 5 with xhigh effort · Claude Max · ",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Added server-supplied Claude Code hook sup… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "nathan.delacretaz@gmail.com's Organization",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "/release-notes for more",
+          "width": 23,
+          "fg": "#999999",
+          "italic": true
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "/…/T/swarm-permdialog/bash/scratch",
+          "width": 34,
+          "fg": "#999999"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": "                                             ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯",
+          "width": 100,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "❯ ",
+          "width": 2,
+          "fg": "#505050",
+          "bg": "#373737"
+        },
+        {
+          "text": "Use the Bash tool to run exactly this command and nothing else: touch /tmp/swarm-m1-one.marker",
+          "width": 94,
+          "fg": "#ffffff",
+          "bg": "#373737"
+        },
+        {
+          "text": "    ",
+          "width": 4,
+          "bg": "#373737"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "  ",
+          "width": 2
+        },
+        {
+          "text": "Ran ",
+          "width": 4,
+          "fg": "#999999"
+        },
+        {
+          "text": "1",
+          "width": 1,
+          "fg": "#999999",
+          "bold": true
+        },
+        {
+          "text": " shell command ",
+          "width": 15,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                              ",
+          "width": 78
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "⏺",
+          "width": 1,
+          "fg": "#ffffff"
+        },
+        {
+          "text": " Done.                                                                                             ",
+          "width": 99
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "✻",
+          "width": 1,
+          "fg": "#999999"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Crunched for 5s",
+          "width": 15,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                                   ",
+          "width": 83
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                  ",
+          "width": 82
+        },
+        {
+          "text": "◉ xhigh · /effort",
+          "width": 17,
+          "fg": "#999999"
+        },
+        {
+          "text": " ",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "────────────────────────────────────────────────────────────────────────────────────────────────────",
+          "width": 100,
+          "fg": "#888888"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "❯  Create marker file in tmp directory                                                              ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "────────────────────────────────────────────────────────────────────────────────────────────────────",
+          "width": 100,
+          "fg": "#888888"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "  ",
+          "width": 2
+        },
+        {
+          "text": "Sonnet 5 | Ctx: 6% | ",
+          "width": 21,
+          "fg": "#999999"
+        },
+        {
+          "text": "(no repo)",
+          "width": 9,
+          "fg": "#800000"
+        },
+        {
+          "text": " scratch",
+          "width": 8,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                            ",
+          "width": 60
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "  ",
+          "width": 2
+        },
+        {
+          "text": "⏸ manual mode on · ← 3 agents",
+          "width": 29,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                     ",
+          "width": 69
+        }
+      ]
+    }
+  ]
+}

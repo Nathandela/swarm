@@ -1,0 +1,687 @@
+{
+  "version": 1,
+  "cols": 100,
+  "rows": 30,
+  "altScreen": true,
+  "cursorX": 1,
+  "cursorY": 25,
+  "cursorVisible": false,
+  "title": "�",
+  "lines": [
+    {
+      "runs": [
+        {
+          "text": "╭───",
+          "width": 4,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "u",
+          "width": 1
+        },
+        {
+          "text": "Claude Code",
+          "width": 11,
+          "fg": "#ff9933"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "v2.1.231",
+          "width": 8,
+          "fg": "#999999"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "─────────────────────────────────────────────────────────────────────────╮",
+          "width": 74,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                                                    ",
+          "width": 52
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Tips for getting started",
+          "width": 24,
+          "fg": "#ff9933",
+          "bold": true
+        },
+        {
+          "text": "                    ",
+          "width": 20
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                ",
+          "width": 16
+        },
+        {
+          "text": "Welcome back Nathan!",
+          "width": 20,
+          "bold": true
+        },
+        {
+          "text": "                ",
+          "width": 16
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Ask Claude to create a new app or clone a … ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                                                    ",
+          "width": 52
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "───────────────────────────────────────────",
+          "width": 43,
+          "fg": "#ff9933"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": " ▐",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "▛███▜",
+          "width": 5,
+          "fg": "#d77757",
+          "bg": "#000000"
+        },
+        {
+          "text": "▌",
+          "width": 1,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "What's new",
+          "width": 10,
+          "fg": "#ff9933",
+          "bold": true
+        },
+        {
+          "text": "                                  ",
+          "width": 34
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "▝▜",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "█████",
+          "width": 5,
+          "fg": "#d77757",
+          "bg": "#000000"
+        },
+        {
+          "text": "▛▘",
+          "width": 2,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Fixed MCP OAuth sign-in failing with a red… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "                      ",
+          "width": 22
+        },
+        {
+          "text": "  ▘▘ ▝▝  ",
+          "width": 9,
+          "fg": "#d77757"
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Documented `claude remote-control --contin… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "Sonnet 5 with xhigh effort · Claude Max · ",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " Added server-supplied Claude Code hook sup… ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "nathan.delacretaz@gmail.com's Organization",
+          "width": 42,
+          "fg": "#999999"
+        },
+        {
+          "text": "     ",
+          "width": 5
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "/release-notes for more",
+          "width": 23,
+          "fg": "#999999",
+          "italic": true
+        },
+        {
+          "text": "                     ",
+          "width": 21
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "/…/T/swarm-permdialog/bash/scratch",
+          "width": 34,
+          "fg": "#999999"
+        },
+        {
+          "text": "         ",
+          "width": 9
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933",
+          "faint": true
+        },
+        {
+          "text": "                                             ",
+          "width": 45
+        },
+        {
+          "text": "│",
+          "width": 1,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯",
+          "width": 100,
+          "fg": "#ff9933"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "❯ ",
+          "width": 2,
+          "fg": "#505050",
+          "bg": "#373737"
+        },
+        {
+          "text": "Use the Bash tool to run exactly this command and nothing else: touch /tmp/swarm-m1-one.marker",
+          "width": 94,
+          "fg": "#ffffff",
+          "bg": "#373737"
+        },
+        {
+          "text": "    ",
+          "width": 4,
+          "bg": "#373737"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "⏺",
+          "width": 1,
+          "fg": "#999999"
+        },
+        {
+          "text": " Creating marker file                                                                              ",
+          "width": 99
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "  ⎿  $ touch /tmp/swarm-m1-one.marker",
+          "width": 37,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                               ",
+          "width": 63
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "────────────────────────────────────────────────────────────────────────────────────────────────────",
+          "width": 100,
+          "fg": "#99ccff"
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Bash command",
+          "width": 12,
+          "fg": "#99ccff",
+          "bold": true
+        },
+        {
+          "text": "                                                                                       ",
+          "width": 87
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   touch /tmp/swarm-m1-one.marker                                                                   ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   ",
+          "width": 3
+        },
+        {
+          "text": "Create marker file",
+          "width": 18,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                                               ",
+          "width": 79
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " Do you want to proceed?                                                                            ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "❯",
+          "width": 1,
+          "fg": "#99ccff"
+        },
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "1. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "Yes",
+          "width": 3,
+          "fg": "#99ccff"
+        },
+        {
+          "text": "                                                                                           ",
+          "width": 91
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   ",
+          "width": 3
+        },
+        {
+          "text": "2. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "Yes,mandealways allowpaccessttoy",
+          "width": 32
+        },
+        {
+          "text": "tmp",
+          "width": 3,
+          "bold": true
+        },
+        {
+          "text": "/ from this project                                        ",
+          "width": 59
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "   ",
+          "width": 3
+        },
+        {
+          "text": "3. ",
+          "width": 3,
+          "fg": "#999999"
+        },
+        {
+          "text": "No                                                                                            ",
+          "width": 94
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": "                                                                                                    ",
+          "width": 100
+        }
+      ]
+    },
+    {
+      "runs": [
+        {
+          "text": " ",
+          "width": 1
+        },
+        {
+          "text": "Esc to cancel · Tab to amend · ctrl+e to explain",
+          "width": 48,
+          "fg": "#999999"
+        },
+        {
+          "text": "                                                   ",
+          "width": 51
+        }
+      ]
+    }
+  ]
+}
