@@ -22,6 +22,8 @@ package adapter
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/Nathandela/swarm/internal/vt"
 )
 
 // Item kinds — interaction-schema.md §3, the AEAD-plaintext-bound discriminator.
@@ -277,6 +279,40 @@ type InteractionSource interface {
 // IS-APR-3 and IS-LIFE-6; ADR-009 (4)).
 type DecisionAction struct {
 	Reply json.RawMessage
+}
+
+// ApprovalApplier is the OPTIONAL interface an adapter implements when a pending
+// approval can be answered by TYPING INTO THE CLI'S OWN DIALOG — the apply path
+// mirror-program.md section 3 makes M1's primary one for Claude Code, after
+// rejecting the held-hook alternative on co-presence grounds (a hook held
+// undecided hides the terminal's own prompt).
+//
+// It is a PURE function of the rendered grid, which is what keeps it inside the
+// T-5 boundary while being callable from the daemon layer, where the session
+// tap's snapshots arrive.
+//
+// ABSENCE IS A SIGNAL, exactly as it is for InteractionSource (ADR-010 §5): an
+// adapter that does not implement this has no keystroke answer for its approvals,
+// which is the normal case rather than a defect — mirror-program.md's own table
+// answers Codex by native RPC and opencode over HTTP, and neither should ever be
+// typed at. The daemon refuses to apply rather than inventing a key.
+type ApprovalApplier interface {
+	// ApprovalKeys returns the keystrokes that answer the dialog CURRENTLY on
+	// snap with the given verdict (VerdictAllow | VerdictDeny), to be written to
+	// the session's PTY VERBATIM.
+	//
+	// ok is false for any grid the adapter cannot positively identify as a
+	// dialog it has a RECORDED key map for, and for a verdict that dialog has no
+	// key for. Both are refusals and never guesses: a key returned for the wrong
+	// screen is typed into whatever has focus, while a refusal only declines the
+	// phone's tap and leaves the terminal's own dialog untouched.
+	ApprovalKeys(snap *vt.Snap, verdict string) (keys string, ok bool)
+}
+
+// AsApprovalApplier reports whether a can answer its approvals by keystroke.
+func AsApprovalApplier(a Adapter) (ApprovalApplier, bool) {
+	ap, ok := a.(ApprovalApplier)
+	return ap, ok
 }
 
 // AsInteractionSource reports whether a implements the optional capture
