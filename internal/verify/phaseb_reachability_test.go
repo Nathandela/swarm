@@ -189,6 +189,15 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/design.ParseColor":         "called from within Derivation.Resolve (derive.go:192,202, allowed above) to parse each token's value -- deleting it breaks Resolve and therefore the PB-TOK-7 gate. Its exact grammar (hex, rgba(), transparent, strict rejection of the 3-digit shorthand) is separately pinned by TestPBTOK7_TheColourCodecRoundTrips.",
 	"github.com/Nathandela/swarm/internal/design.Mix":                "called from within Derivation.Resolve (derive.go:206, allowed above) to blend the parsed colours -- deleting it breaks Resolve for the same reason. Its premultiplied-alpha blend semantics are separately pinned by TestPBTOK7_MixingWithAColourBlendsRGBAndMixingWithTransparentScalesAlpha and TestPBTOK7_TheBlendCanActuallyFail.",
 
+	// ---- Mirror M1.1: recorded ahead of its caller, by design --------------------------------
+	// The permission-dialog recognizer is the grid half of M1.2's injection gate. M1.1's job is
+	// to RECORD it against a real CLI (internal/adapter/claude/testdata/permdialog, claude
+	// 2.1.231) and pin it with fixtures before any code can inject a keystroke on its word; M1.2
+	// is the wave item that calls it from skeleton's approve path. This row is therefore
+	// deliberately temporary, and the bidirectional arm above is what collects it: the day M1.2
+	// wires the call, leaving this row here FAILS this test.
+	"github.com/Nathandela/swarm/internal/adapter/claude.RecognizePermissionDialog": "Mirror M1.1 (bead agents-tracker-dwwv.2.1): recorded and fixture-pinned one wave ahead of M1.2's caller in internal/skeleton's approve path. Remove this row when M1.2 wires it -- the bidirectional arm fails if it is left behind.",
+
 	// ---- NOT ALLOWLISTED, DELIBERATELY -------------------------------------------------------
 	// internal/remote/transport's 16 symbols are ADR-007 B94's open defect. Listing them here
 	// would be the move this whole instrument exists to prevent: an exemption written to make a
