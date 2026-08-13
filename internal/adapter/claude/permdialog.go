@@ -53,6 +53,27 @@ var dialogTitles = map[string]string{
 	"Edit file":    VariantEdit,
 }
 
+// variantForAction maps the PENDING REQUEST's own interaction-schema.md §7 action
+// type to the dialog variant that request is answered on. It is the join that makes
+// the injection gate prove "the dialog on screen is THIS request's" rather than only
+// "some answerable dialog is on screen" (M1.8).
+//
+// IT IS FAIL-CLOSED. An action with no row here -- `read`, `search`, `fetch`,
+// IS-TOOL-2's `other`, or none at all -- matches no variant and is refused, which is
+// the same posture the recognizer takes towards a title it has no fixture for: this
+// package answers the screens it has RECORDED and declines the rest.
+//
+// `write` shares VariantEdit with `edit` on the reading that both tools propose the
+// same act on the same file. No fixture records a Write dialog's title, so if claude
+// titles that box anything but "Edit file" the recognizer refuses it one step
+// earlier and this row never fires -- the pairing can only ever be as permissive as
+// dialogTitles already is.
+var variantForAction = map[string]string{
+	"execute": VariantBash,
+	"edit":    VariantEdit,
+	"write":   VariantEdit,
+}
+
 // The option labels that carry the decision. Both are matched EXACTLY: the folder-trust
 // dialog's "Yes, I trust this folder" / "No, exit" are a different question with a
 // different consequence, and must not be answered with an approval's key map.
@@ -87,7 +108,8 @@ type PermissionDialog struct {
 }
 
 // ApprovalKeys makes this adapter an adapter.ApprovalApplier (Mirror M1.2): it answers the
-// dialog currently on snap with the keys that carry the given verdict's polarity.
+// dialog currently on snap with the keys that carry the given verdict's polarity, PROVIDED
+// that dialog is the one the pending request raised.
 //
 // It is the ONLY place the normalized verdict meets the recorded key map, and the join is
 // deliberately narrow. The verdict is what approvalFrom classified the CLI's own decision id
@@ -98,9 +120,22 @@ type PermissionDialog struct {
 // answerable options on the recorded dialog and `other` is IS-TOOL-2's posture for a decision
 // the adapter could place neither way, so answering it with the allow key would type a grant
 // nobody gave.
-func (claudeAdapter) ApprovalKeys(snap *vt.Snap, verdict string) (string, bool) {
+//
+// THE ACTION BIND (M1.8) is the second refusal and closes the CHAINED-DIALOG race. `swarm hook`
+// posts and exits without waiting for the daemon to shape its item, so a dialog is on the glass
+// before its own card exists: the owner answers dialog A at the terminal, claude raises B, and
+// A is still pending daemon-side because the session never left `permission` for anything to
+// observe. A phone approve for A arriving in that window passed the tuple check and the grid
+// gate alike, and typed A's verdict into B. Requiring the recognized variant to be the one this
+// request's action names removes the CROSS-TOOL case; Bash-after-Bash stays ambiguous, because
+// the recognizer reads a variant and not a command, and that residue is stated rather than
+// papered over.
+func (claudeAdapter) ApprovalKeys(snap *vt.Snap, verdict, action string) (string, bool) {
 	dlg, ok := RecognizePermissionDialog(snap)
 	if !ok {
+		return "", false
+	}
+	if want, ok := variantForAction[action]; !ok || want != dlg.Variant {
 		return "", false
 	}
 	switch verdict {

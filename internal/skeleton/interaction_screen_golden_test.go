@@ -108,7 +108,11 @@ func TestI1_TheScreensBytesAreTheFacadesBytes(t *testing.T) {
 	// M1.2 a phone approve is APPLIED by typing that dialog's own keys into this PTY
 	// (mirror-program.md section 3) -- an approve onto a session showing no dialog is refused.
 	// The adapter resolver is the real claude one for the same reason: it holds the key map.
-	dialog, cols, rows := gridScript(t, bashDialogGrid)
+	//
+	// It is the EDIT dialog because the corpus replayed below is the recorded EDIT permission,
+	// and since M1.8 the gate refuses to type a request's verdict into a dialog raised by a
+	// different tool. One screen, one request: until M1.8 nothing checked that they matched.
+	dialog, cols, rows := gridScript(t, editDialogGrid)
 	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
 	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {

@@ -70,7 +70,8 @@ var (
 	composerGrid   = recordedGrid{"neg-composer-idle-2.1.231", "manual mode on"}
 )
 
-// gridScript builds a fake-agent script that reproduces one recorded grid in a real PTY:
+// gridScript builds a fake-agent script that reproduces the given recorded grids in a real PTY,
+// one paint per grid:
 //
 //	print <ansi>   the snapshot rendered back to ANSI -- absolute CUP per row, no newlines --
 //	               so the emulator on the other side of the tap holds the RECORDED cells
@@ -78,21 +79,40 @@ var (
 //	               stdin, exactly as the real CLI blocks on its dialog. Whatever line it
 //	               eventually reads is echoed back as `got: <line>`, which is how a test sees
 //	               what did -- or did not -- reach the session's stdin.
-func gridScript(t *testing.T, g recordedGrid) (script string, cols, rows int) {
+//
+// MORE THAN ONE GRID is a session that answers one dialog and raises the NEXT one, which is what
+// a real turn does. The fake advances only when its `ask` reads a LINE, and the recorded keys
+// carry no Enter (each selects and submits on its own), so a caller wanting the second paint
+// flushes the line discipline itself -- `injectRig.readBack`'s bare newline, or an owner
+// attachment's Input. Every grid must be the same size: the PTY is sized once.
+func gridScript(t *testing.T, gs ...recordedGrid) (script string, cols, rows int) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(permDialogFixtures, g.fixture+".snap.json"))
-	if err != nil {
-		t.Fatalf("read recorded grid %s: %v", g.fixture, err)
+	if len(gs) == 0 {
+		t.Fatal("gridScript needs at least one recorded grid to paint")
 	}
-	snap, err := vt.DecodeSnapshot(raw)
-	if err != nil {
-		t.Fatalf("decode recorded grid %s: %v", g.fixture, err)
+	var b strings.Builder
+	for _, g := range gs {
+		raw, err := os.ReadFile(filepath.Join(permDialogFixtures, g.fixture+".snap.json"))
+		if err != nil {
+			t.Fatalf("read recorded grid %s: %v", g.fixture, err)
+		}
+		snap, err := vt.DecodeSnapshot(raw)
+		if err != nil {
+			t.Fatalf("decode recorded grid %s: %v", g.fixture, err)
+		}
+		ansi := vt.RenderSnapshotClipped(snap, 0, 0)
+		if strings.ContainsAny(string(ansi), "\r\n") {
+			t.Fatalf("the rendered grid carries a newline, which would split the one-line script directive")
+		}
+		if cols != 0 && (snap.Cols != cols || snap.Rows != rows) {
+			t.Fatalf("recorded grid %s is %dx%d; the ones before it are %dx%d, and one PTY has one size",
+				g.fixture, snap.Cols, snap.Rows, cols, rows)
+		}
+		cols, rows = snap.Cols, snap.Rows
+		b.WriteString("print " + string(ansi) + "\nask \x1b[" + strconv.Itoa(snap.Rows) + ";1H\n")
 	}
-	ansi := vt.RenderSnapshotClipped(snap, 0, 0)
-	if strings.ContainsAny(string(ansi), "\r\n") {
-		t.Fatalf("the rendered grid carries a newline, which would split the one-line script directive")
-	}
-	return "print " + string(ansi) + "\nask \x1b[" + strconv.Itoa(snap.Rows) + ";1H\nidle 600s\n", snap.Cols, snap.Rows
+	b.WriteString("idle 600s\n")
+	return b.String(), cols, rows
 }
 
 // launchFakeSized is launchFake with the terminal size the recorded grid was captured at. A
@@ -137,6 +157,17 @@ func claudeApproval(ref string) adapter.Interaction {
 			{ID: "deny", Label: "No", Verdict: adapter.VerdictDeny},
 		},
 	}
+}
+
+// claudeEditApproval is the same shape for an EDIT permission -- approvalFrom against
+// actionFor's `edit` rather than its `execute`. It exists because the request's tool now has to
+// name the dialog the daemon is allowed to type at (M1.8), so a test that pairs a request with
+// a grid has to pair it with the RIGHT one.
+func claudeEditApproval(ref string) adapter.Interaction {
+	in := claudeApproval(ref)
+	in.Summary = "Edit src/main.rs"
+	in.Action = adapter.ToolAction{Type: "edit", Path: "src/main.rs"}
+	return in
 }
 
 // openApprovalFrom captures one pending approval_request from a given shaped interaction and
@@ -298,7 +329,7 @@ func TestApproveInjection_AnAllowTypesTheRecordedDialogsAllowKeyIntoThePTY(t *te
 // byte, and a mapping that collapsed the two would refuse a tool the owner meant to allow (or,
 // far worse, run one the owner refused).
 func TestApproveInjection_ADenyTypesTheRecordedDialogsDenyKeyIntoThePTY(t *testing.T) {
-	r := newInjectRig(t, editDialogGrid, claudeApproval("req-deny"))
+	r := newInjectRig(t, editDialogGrid, claudeEditApproval("req-deny"))
 
 	if code, err := r.sk.approveInteraction(r.sk.api.endpointID, "op-deny",
 		approveFor(t, r.sk, r.local, r.item, "deny")); err != nil {
@@ -332,6 +363,38 @@ func TestApproveInjection_AGridThatNoLongerShowsTheDialogIsRefusedAndTypesNothin
 	if code != protocol.CodeStaleApproval {
 		t.Errorf("error_code = %q; want %q -- the card the phone holds is no longer the machine's "+
 			"state, which is exactly what stale_approval says to a retry policy (D10)", code, protocol.CodeStaleApproval)
+	}
+	r.assertNothingWasTyped(t)
+	r.assertNoResolutionYet(t)
+}
+
+// TestApproveInjection_ADialogRaisedByADIFFERENTToolIsRefusedAndTypesNothing is the CHAINED-DIALOG
+// race, and the review finding of 2026-08-13 (mirror-m1.md M1.8). The gate used to prove only that
+// AN answerable dialog was on screen, never that it was THIS request's.
+//
+// THE ROUTE. `hookclient.Post` is fire-and-forget -- it writes and closes without waiting for the
+// daemon to shape the item -- so a dialog is on the glass before its own card exists. The owner
+// answers dialog A at the terminal, claude raises dialog B immediately; A is still pending
+// daemon-side, because the interaction dimension never left `permission` and so nothing resolved
+// it. A phone approve for A arriving in that window passes the tuple check, passes the gate on
+// B's dialog, and types A's verdict into B -- running a tool the owner's card never named.
+//
+// Here A is the recorded BASH request and B is the recorded EDIT dialog on the live grid. The
+// refusal must be the GATE's, not the tuple's: every field of the approve is valid.
+func TestApproveInjection_ADialogRaisedByADIFFERENTToolIsRefusedAndTypesNothing(t *testing.T) {
+	r := newInjectRig(t, editDialogGrid, claudeApproval("req-crossed"))
+
+	code, err := r.sk.approveInteraction(r.sk.api.endpointID, "op-crossed",
+		approveFor(t, r.sk, r.local, r.item, "allow"))
+	if err == nil {
+		t.Fatal("an approve for a BASH permission was applied to a session whose grid shows the " +
+			"recorded EDIT dialog. The gate must prove the dialog on screen is THIS request's -- " +
+			"proving only that some answerable dialog is up answers whatever question happens to " +
+			"be on the glass, with a verdict the owner gave for a different one")
+	}
+	if code != protocol.CodeStaleApproval {
+		t.Errorf("error_code = %q; want %q -- the card the phone holds no longer matches the machine's "+
+			"screen, which is what stale_approval says to a retry policy (D10)", code, protocol.CodeStaleApproval)
 	}
 	r.assertNothingWasTyped(t)
 	r.assertNoResolutionYet(t)

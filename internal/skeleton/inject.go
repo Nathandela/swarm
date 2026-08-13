@@ -22,9 +22,19 @@ package skeleton
 // concurrent subscribers do not evict each other -- and needs no new shim protocol.
 //
 // WHY THE GRID READ AND THE WRITE SHARE ONE SUBSCRIPTION. The gate ("is the dialog still up?")
-// and the keystroke must not straddle a repaint. A tap subscription is SEEDED with the grid as
-// of the moment it joined and writes through that same handle, so the screen the recognizer
-// judged is the screen the keys are typed at, with no second dial in between.
+// and the keystroke go through ONE handle: a tap subscription is SEEDED with the grid as of the
+// moment it joined and writes back through that same handle, so no SECOND DIAL interleaves
+// between the read and the write.
+//
+// WHAT THAT DOES NOT BUY, said here rather than left to be inferred from the sentence above.
+// The seed is either the shim's snapshot fetched over the wire during the dial or this daemon's
+// MIRROR of a frame stream that arrives with transport latency, and sub.Input travels back over
+// the same wire. The screen the recognizer judged is therefore the screen as of the SEED and
+// not as of the write, so the terminal-answered-first race is NARROWED TO ONE TAP ROUND TRIP,
+// not closed -- and it cannot be closed from here, because this side owns neither the glass nor
+// the keyboard. What bounds the residue is M1.1's recording rather than this file: the keys
+// carry NO ENTER, so a digit that lands after the dialog has gone sits in the composer
+// un-submitted, visible and deletable, instead of being an answer the agent acts on.
 
 import (
 	"errors"
@@ -43,10 +53,14 @@ import (
 var injectWatchdogDelay = 5 * time.Second
 
 var (
-	// errNoDialog is the GATE's refusal: the live grid does not positively show a dialog the
-	// session's adapter has a recorded key map for. It is the terminal-answered-first race and
-	// the unknown-screen case alike, and both must refuse rather than type.
-	errNoDialog = errors.New("the session's screen does not show a permission dialog this CLI can be answered on")
+	// errNoDialog is the GATE's refusal: the live grid does not positively show THIS request's
+	// own dialog, as a screen the session's adapter has a recorded key map for. It covers the
+	// terminal-answered-first race, the unknown-screen case (a claude that moved off the
+	// recorded version), and the chained-dialog case where the screen shows an answerable
+	// dialog raised by a different tool than the request's (M1.8). All three must refuse rather
+	// than type, and the message names none of them: the owner's card is refused for the same
+	// reason in every case, and the daemon does not know which.
+	errNoDialog = errors.New("the session's screen does not show the permission dialog this request raised")
 	// errNoApplier is the CAPABILITY refusal: this session's CLI is not answered by keystroke at
 	// all (mirror-program.md's table answers Codex by native RPC and opencode over HTTP). It is
 	// absence, not breakage -- ADR-010 §5's posture -- and it carries no D10 code for
@@ -58,7 +72,7 @@ var (
 // the keys the session's adapter answers verdict with, off the grid that subscription was
 // SEEDED with. The subscription is returned OPEN so the caller can write those keys back
 // through the SAME handle; the caller closes it.
-func (d *Daemon) dialogTap(session, verdict string) (*tapSub, string, error) {
+func (d *Daemon) dialogTap(session, verdict, action string) (*tapSub, string, error) {
 	if d.api == nil {
 		return nil, "", fmt.Errorf("%w: this daemon has no session tap wired", errNoApplier)
 	}
@@ -83,7 +97,7 @@ func (d *Daemon) dialogTap(session, verdict string) (*tapSub, string, error) {
 		_ = sub.Close()
 		return nil, "", fmt.Errorf("%w: its screen could not be read (%v)", errNoDialog, err)
 	}
-	keys, ok := ap.ApprovalKeys(snap, verdict)
+	keys, ok := ap.ApprovalKeys(snap, verdict, action)
 	if !ok || keys == "" {
 		_ = sub.Close()
 		return nil, "", errNoDialog
@@ -94,8 +108,11 @@ func (d *Daemon) dialogTap(session, verdict string) (*tapSub, string, error) {
 // applyDecision types the dialog's own keys for verdict into the session's PTY. It is the whole
 // of "applying" a phone approval on this path: the recorded keys are complete answers, each
 // selecting its option AND submitting it, so nothing follows them -- no Enter, no second write.
-func (d *Daemon) applyDecision(session, verdict string) error {
-	sub, keys, err := d.dialogTap(session, verdict)
+//
+// action is the pending request's own ToolAction.Type and is carried all the way to the
+// adapter, which refuses a dialog that is not that request's (M1.8).
+func (d *Daemon) applyDecision(session, verdict, action string) error {
+	sub, keys, err := d.dialogTap(session, verdict, action)
 	if err != nil {
 		return err
 	}
@@ -108,8 +125,8 @@ func (d *Daemon) applyDecision(session, verdict string) error {
 
 // dialogStillOnGrid reports whether the session's screen STILL shows an answerable dialog. It
 // is the watchdog's read and writes nothing.
-func (d *Daemon) dialogStillOnGrid(session, verdict string) bool {
-	sub, _, err := d.dialogTap(session, verdict)
+func (d *Daemon) dialogStillOnGrid(session, verdict, action string) bool {
+	sub, _, err := d.dialogTap(session, verdict, action)
 	if err != nil {
 		return false
 	}
@@ -130,7 +147,7 @@ func (d *Daemon) dialogStillOnGrid(session, verdict string) bool {
 // only from observing the dialog leave (mirror-program.md section 3, step 3), and nothing has
 // been observed to leave. It also emits nothing at all when the request resolved in the
 // meantime, which is the normal case.
-func (d *Daemon) watchInjection(session, itemID, verdict string) {
+func (d *Daemon) watchInjection(session, itemID, verdict, action string) {
 	if injectWatchdogDelay <= 0 {
 		return
 	}
@@ -139,7 +156,7 @@ func (d *Daemon) watchInjection(session, itemID, verdict string) {
 		ap := d.approvals[session]
 		pending := ap != nil && ap.itemID == itemID
 		d.itemMu.Unlock()
-		if !pending || !d.dialogStillOnGrid(session, verdict) {
+		if !pending || !d.dialogStillOnGrid(session, verdict, action) {
 			return
 		}
 		d.offerAll(session, d.sessionStatusItem(session, time.Now().UTC()))

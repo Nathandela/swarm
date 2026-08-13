@@ -34,6 +34,11 @@ import (
 // daemon-side guess would get wrong: `cancel` is a refusal and nothing about the string says so.
 func approvalWithVerdicts(ref string) adapter.Interaction {
 	in := pendingApprovalInteraction(ref, "run rm -rf build")
+	// The action is the request's OWN tool, and since M1.8 it has to be: the daemon refuses to
+	// type into a dialog raised by a different tool than the one the card names. These arms run
+	// against the recorded BASH dialog, and the summary was always a command -- the inherited
+	// `write src/main.rs` action was the helper's own inconsistency, not a case under test.
+	in.Action = adapter.ToolAction{Type: "execute", Command: "rm -rf build"}
 	in.Decisions = []adapter.DecisionChoice{
 		{ID: "accept", Label: "Allow", Verdict: adapter.VerdictAllow},
 		{ID: "acceptWithExecpolicyAmendment", Label: "Allow and amend policy", Verdict: adapter.VerdictAllow},

@@ -69,3 +69,60 @@ func TestApprovalResolved_ARequestIsNotSupersededByItsOwnReAnnouncement(t *testi
 			"record's) but it does not open a different request", ap, firstID)
 	}
 }
+
+// TestApprovalRequest_AReAnnouncementDoesNotForgetAnAnswerAlreadyTyped is the review finding of
+// 2026-08-13 (mirror-m1.md M1.8), and it is the second half of the sentence the test above
+// starts. A re-announcement is by design NOT a supersede -- and yet openApprovalLocked replaced
+// the binding with a fresh pendingApproval on that same branch, dropping the two fields M1.2
+// added to it.
+//
+// WHAT THE DROP COSTS, both halves being ones M1.2 built on purpose:
+//
+//   - `applied`/`appliedOp` are what tell the OBSERVATION who answered. Forgetting them
+//     attributes the phone's own answer to `answered_locally` by `owner` -- a decision put in
+//     the mouth of somebody who never touched the keyboard.
+//   - `ap.applied != ""` is approveInteraction's second case, the one that refuses a
+//     re-delivered approve during the applied-but-unobserved window. Forgetting it reopens a
+//     SECOND keystroke into a dialog that has one answer left in it.
+//
+// IT IS LATENT FOR CLAUDE TODAY and pinned anyway: `approvalFrom` mints its Ref from
+// `prefix+tool+":"+ReceivedAtMs`, and ReceivedAtMs is stamped daemon-side per hook arrival, so
+// claude's re-announcement mints a NEW item_id and supersedes instead of folding. The first
+// adapter with a stable approval ref walks straight into it, and nothing about this daemon's
+// side of the contract says an adapter may not have one.
+func TestApprovalRequest_AReAnnouncementDoesNotForgetAnAnswerAlreadyTyped(t *testing.T) {
+	sk := assemble(t)
+	sk.captureInteractions("s-applied", newCaptureAdapter(pendingApprovalInteraction("req-1", "write src/main.rs")),
+		adapter.HookPayload{Event: "PermissionRequest"})
+	first := awaitItems(t, sk, "s-applied", 1)[0]
+	firstID := itemString(t, first, "item_id")
+
+	// The daemon has TYPED the phone's answer and is waiting to observe the dialog leave --
+	// exactly the state approveInteraction leaves behind between the keystroke and the record.
+	sk.itemMu.Lock()
+	ap := sk.approvals["s-applied"]
+	if ap == nil {
+		sk.itemMu.Unlock()
+		t.Fatal("the daemon holds no pending approval for the session it just journalled a card for")
+	}
+	ap.applied, ap.appliedOp = resolveAllowed, "op-typed"
+	sk.itemMu.Unlock()
+
+	// The SAME pending request, announced a second time under the SAME CLI ref.
+	sk.captureInteractions("s-applied", newCaptureAdapter(pendingApprovalInteraction("req-1", "write src/main.rs")),
+		adapter.HookPayload{Event: "Notification"})
+
+	sk.itemMu.Lock()
+	ap = sk.approvals["s-applied"]
+	sk.itemMu.Unlock()
+	if ap == nil || ap.itemID != firstID {
+		t.Fatalf("the re-announcement replaced the pending request %s with %v", firstID, ap)
+	}
+	if ap.applied != resolveAllowed || ap.appliedOp != "op-typed" {
+		t.Fatalf("after its own re-announcement the request records applied=%q appliedOp=%q; want "+
+			"%q/%q. The keystroke really was typed into the CLI's dialog, and a binding that forgets "+
+			"it attributes the phone's answer to an owner who never touched the keyboard AND reopens "+
+			"the second-keystroke window `ap.applied != \"\"` exists to close",
+			ap.applied, ap.appliedOp, resolveAllowed, "op-typed")
+	}
+}

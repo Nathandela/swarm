@@ -102,6 +102,14 @@ type pendingApproval struct {
 	shimStart int64     // ...both halves, because a REUSED pid is a mismatch (S3/F6)
 	hash      string    // the content hash the item shipped
 	expiresAt time.Time // the daemon's window; a phone countdown is display-only
+	// action is the request's own ToolAction.Type, as the ADAPTER classified it at capture
+	// (§7's read | edit | write | search | execute | fetch | other). It is held for ONE job:
+	// the injection gate hands it back to the adapter, which refuses to type into a dialog
+	// raised by a different action than this request's (M1.8). Without it the gate proves only
+	// that AN answerable dialog is on screen -- and a hook is fire-and-forget, so a dialog
+	// reaches the glass before its own card exists, which is the window in which a phone answer
+	// for the request just closed at the terminal would be typed into the one that replaced it.
+	action string
 	// decisions maps each id the card offered -- in the CLI's own vocabulary (§3.5) -- to the
 	// verdict the ADAPTER classified it as at capture (allow | deny | other). It is both the
 	// membership set an arriving decision is checked against and the only source for §3.6's
@@ -161,11 +169,23 @@ func (d *Daemon) openApprovalLocked(session string, it daemon.InteractionItem, i
 	for _, c := range in.Decisions {
 		ids[c.ID] = c.Verdict
 	}
-	d.approvals[session] = &pendingApproval{
+	next := &pendingApproval{
 		itemID: it.ItemID, turnID: it.TurnID,
 		shimPID: m.ShimPID, shimStart: m.ShimStartTime,
-		expiresAt: expires, decisions: ids,
+		expiresAt: expires, decisions: ids, action: in.Action.Type,
 	}
+	// THE RE-ANNOUNCEMENT CARRIES ITS OWN ANSWER FORWARD. The branch above is the same request
+	// announced again, and a fresh binding would drop the two fields the injection wrote onto
+	// it: `applied` is what tells the OBSERVATION the phone answered (forgetting it attributes
+	// the answer to an owner who never touched the keyboard), and `ap.applied != ""` is the
+	// case approveInteraction refuses a re-delivered approve on (forgetting it lets a SECOND
+	// key into a dialog that has one answer left in it). Latent for claude today -- its ref
+	// carries the hook's arrival instant, so a re-announcement mints a new item_id and
+	// supersedes -- and not a property of this daemon's side of the contract.
+	if ap := d.approvals[session]; ap != nil && ap.itemID == it.ItemID {
+		next.applied, next.appliedOp = ap.applied, ap.appliedOp
+	}
+	d.approvals[session] = next
 	return out
 }
 
@@ -414,6 +434,14 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 // then gone and a "1" lands in the composer as USER INPUT the agent will act on. So the live
 // grid must still positively show a dialog the session's adapter has a RECORDED key map for
 // (M1.1's fixtures), and anything else is a refusal.
+//
+// AND IT MUST BE THIS REQUEST'S DIALOG, not merely an answerable one (M1.8). The request's own
+// §7 action is carried down to the adapter, which refuses a variant that action does not name.
+// Without it the daemon answered whatever question was on the glass: a hook is fire-and-forget,
+// so a dialog reaches the screen before its card exists, and a phone answer for the request the
+// owner just closed at the terminal was typed into the one that replaced it. The bind is
+// PARTIAL and the residue is named rather than papered over -- two Bash dialogs in a row are
+// indistinguishable to a recognizer that reads a variant and not a command.
 func (d *Daemon) approveInteraction(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error) {
 	endpoint, local, ok := protocol.ParseID(req.Session)
 	if !ok {
@@ -503,11 +531,11 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	// instant the keys do -- the status engine may already be mid-sample -- and a resolution
 	// that arrived between the write and this note would be attributed to an owner who was
 	// never there.
-	itemID := ap.itemID
+	itemID, action := ap.itemID, ap.action
 	ap.applied, ap.appliedOp = decision, operationID
 	d.itemMu.Unlock()
 
-	if err := d.applyDecision(local, verdict); err != nil {
+	if err := d.applyDecision(local, verdict, action); err != nil {
 		d.clearAppliedNote(local, itemID)
 		if errors.Is(err, errNoDialog) {
 			// The terminal answered a beat earlier, or the screen is one no recorded key map
@@ -521,7 +549,7 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 		// not_authorized would send a correctly-paired owner off to re-pair a device that is fine.
 		return "", errIsLife4("approval %q could not be applied: %v", req.InteractionID, err)
 	}
-	d.watchInjection(local, itemID, verdict)
+	d.watchInjection(local, itemID, verdict, action)
 	return "", nil
 }
 

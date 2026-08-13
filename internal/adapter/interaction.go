@@ -301,12 +301,22 @@ type ApprovalApplier interface {
 	// snap with the given verdict (VerdictAllow | VerdictDeny), to be written to
 	// the session's PTY VERBATIM.
 	//
+	// action is the PENDING REQUEST'S own ToolAction.Type, as the adapter
+	// classified it at capture, and the adapter must refuse a dialog that is not
+	// THAT request's. Proving only that some answerable dialog is on screen is
+	// not enough: a hook is fire-and-forget, so a dialog reaches the glass before
+	// its own card exists, and an answer for the request the owner just closed at
+	// the terminal would otherwise be typed into the one that replaced it. Which
+	// screens belong to which action is per-CLI knowledge and therefore the
+	// adapter's, exactly like the key map.
+	//
 	// ok is false for any grid the adapter cannot positively identify as a
-	// dialog it has a RECORDED key map for, and for a verdict that dialog has no
-	// key for. Both are refusals and never guesses: a key returned for the wrong
+	// dialog it has a RECORDED key map for, for a dialog raised by a different
+	// action than the request's, and for a verdict that dialog has no key for.
+	// All three are refusals and never guesses: a key returned for the wrong
 	// screen is typed into whatever has focus, while a refusal only declines the
 	// phone's tap and leaves the terminal's own dialog untouched.
-	ApprovalKeys(snap *vt.Snap, verdict string) (keys string, ok bool)
+	ApprovalKeys(snap *vt.Snap, verdict, action string) (keys string, ok bool)
 }
 
 // AsApprovalApplier reports whether a can answer its approvals by keystroke.

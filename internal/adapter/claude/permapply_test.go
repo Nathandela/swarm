@@ -30,19 +30,60 @@ func applier(t *testing.T) adapter.ApprovalApplier {
 
 // TestApprovalKeys_TheAdapterAnswersARecognizedDialogWithItsRecordedKeys. The verdict is the
 // normalized polarity the adapter itself attached to the decision at capture; the keys are the
-// version-stamped observation M1.1 recorded off claude 2.1.231.
+// version-stamped observation M1.1 recorded off claude 2.1.231. The action is the pending
+// request's own ToolAction.Type, which must name the dialog on screen -- see
+// TestApprovalKeys_RefusesADialogThatIsNotTheRequestsOwnTool.
 func TestApprovalKeys_TheAdapterAnswersARecognizedDialogWithItsRecordedKeys(t *testing.T) {
 	ap := applier(t)
-	for _, fixture := range []string{"bash-approval-2.1.231", "edit-approval-2.1.231"} {
-		snap := loadPermGrid(t, fixture+".snap.json")
-		if got, ok := ap.ApprovalKeys(snap, adapter.VerdictAllow); !ok || got != "1" {
-			t.Errorf("%s: ApprovalKeys(allow) = %q,%v; want \"1\",true -- the recorded key that "+
-				"selects option 1 and submits it in one keystroke", fixture, got, ok)
+	for _, tc := range []struct{ fixture, action string }{
+		{"bash-approval-2.1.231", "execute"},
+		{"edit-approval-2.1.231", "edit"},
+		{"edit-approval-2.1.231", "write"},
+	} {
+		snap := loadPermGrid(t, tc.fixture+".snap.json")
+		if got, ok := ap.ApprovalKeys(snap, adapter.VerdictAllow, tc.action); !ok || got != "1" {
+			t.Errorf("%s/%s: ApprovalKeys(allow) = %q,%v; want \"1\",true -- the recorded key that "+
+				"selects option 1 and submits it in one keystroke", tc.fixture, tc.action, got, ok)
 		}
-		if got, ok := ap.ApprovalKeys(snap, adapter.VerdictDeny); !ok || got != "3" {
-			t.Errorf("%s: ApprovalKeys(deny) = %q,%v; want \"3\",true -- the recorded key that refuses "+
+		if got, ok := ap.ApprovalKeys(snap, adapter.VerdictDeny, tc.action); !ok || got != "3" {
+			t.Errorf("%s/%s: ApprovalKeys(deny) = %q,%v; want \"3\",true -- the recorded key that refuses "+
 				"the tool. It is ABSOLUTE: a live run answered 3 while option 1 was highlighted and "+
-				"the request was denied", fixture, got, ok)
+				"the request was denied", tc.fixture, tc.action, got, ok)
+		}
+	}
+}
+
+// TestApprovalKeys_RefusesADialogThatIsNotTheRequestsOwnTool is the review finding of
+// 2026-08-13 (mirror-m1.md M1.8): the grid gate proved that AN answerable dialog was on screen
+// and never that it was THIS request's dialog.
+//
+// THE ROUTE IT CLOSES. `hookclient.Post` is fire-and-forget, so a dialog raised at the terminal
+// is on the glass before its hook has been shaped into an item. The owner answers dialog A at
+// the keyboard, claude raises dialog B immediately; A is still pending daemon-side (the
+// interaction dimension never left `permission`, so nothing resolved it) and a phone approve
+// for A arriving in that window used to pass the tuple check, pass the gate on B's dialog, and
+// type A's verdict into B -- approving a tool the owner's card never named.
+//
+// IT IS A PARTIAL BIND AND SAYS SO. Bash-after-Bash stays ambiguous, because the recognizer
+// reads a variant and not a command. What it removes is the CROSS-TOOL case, which is the one
+// where the typed key answers a question of a different kind than the one the card showed.
+func TestApprovalKeys_RefusesADialogThatIsNotTheRequestsOwnTool(t *testing.T) {
+	ap := applier(t)
+	for _, tc := range []struct{ fixture, action, why string }{
+		{"bash-approval-2.1.231", "edit", "an Edit request answered on the Bash dialog runs a command"},
+		{"bash-approval-2.1.231", "write", "a Write request answered on the Bash dialog runs a command"},
+		{"edit-approval-2.1.231", "execute", "a Bash request answered on the Edit dialog writes a file"},
+		{"bash-approval-2.1.231", "read", "no recorded dialog is the Read tool's"},
+		{"bash-approval-2.1.231", "other", "IS-TOOL-2's unclassifiable action names no dialog at all"},
+		{"bash-approval-2.1.231", "", "an action the capture never carried names no dialog either"},
+	} {
+		snap := loadPermGrid(t, tc.fixture+".snap.json")
+		for _, verdict := range []string{adapter.VerdictAllow, adapter.VerdictDeny} {
+			if got, ok := ap.ApprovalKeys(snap, verdict, tc.action); ok {
+				t.Errorf("%s: ApprovalKeys(%s, action=%q) on %s returned %q. %s -- the gate must prove "+
+					"the dialog on screen is THIS request's, not merely that some answerable dialog is up",
+					tc.fixture, verdict, tc.action, tc.fixture, got, tc.why)
+			}
 		}
 	}
 }
@@ -58,13 +99,13 @@ func TestApprovalKeys_RefusesAGridThatIsNotARecognizedDialog(t *testing.T) {
 	} {
 		snap := loadPermGrid(t, fixture+".snap.json")
 		for _, verdict := range []string{adapter.VerdictAllow, adapter.VerdictDeny} {
-			if got, ok := ap.ApprovalKeys(snap, verdict); ok {
+			if got, ok := ap.ApprovalKeys(snap, verdict, "execute"); ok {
 				t.Errorf("%s: ApprovalKeys(%s) returned %q. That grid is not a tool approval, and a "+
 					"key typed at it presses a button nobody asked for", fixture, verdict, got)
 			}
 		}
 	}
-	if got, ok := ap.ApprovalKeys(nil, adapter.VerdictAllow); ok {
+	if got, ok := ap.ApprovalKeys(nil, adapter.VerdictAllow, "execute"); ok {
 		t.Errorf("ApprovalKeys(nil) returned %q; a missing grid is not evidence of a dialog", got)
 	}
 }
@@ -76,7 +117,7 @@ func TestApprovalKeys_RefusesAVerdictItHasNoKeyFor(t *testing.T) {
 	ap := applier(t)
 	snap := loadPermGrid(t, "bash-approval-2.1.231.snap.json")
 	for _, verdict := range []string{adapter.VerdictOther, "", "maybe"} {
-		if got, ok := ap.ApprovalKeys(snap, verdict); ok {
+		if got, ok := ap.ApprovalKeys(snap, verdict, "execute"); ok {
 			t.Errorf("ApprovalKeys(%q) returned %q; the recorded dialog offers exactly two answerable "+
 				"options and neither of them is %q", verdict, got, verdict)
 		}

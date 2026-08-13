@@ -92,7 +92,13 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 	// phone answer is APPLIED by typing that dialog's own keys into this PTY (mirror-program.md
 	// section 3): an approve onto a session showing no dialog is refused, not resolved. The
 	// adapter resolver is the real claude one for the same reason -- it holds the key map.
-	dialog, cols, rows := gridScript(t, bashDialogGrid)
+	//
+	// TWO grids, in the order this test's two legs raise them: the recorded EDIT dialog for the
+	// Edit permission of leg 2, then the recorded BASH dialog for the Bash permission of leg 3.
+	// Since M1.8 the gate refuses to type a request's verdict into a dialog raised by a
+	// DIFFERENT tool, so the screen has to move between the legs exactly as the real CLI's does
+	// -- which is what this session now models rather than assumes.
+	dialog, cols, rows := gridScript(t, editDialogGrid, bashDialogGrid)
 	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
 	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
@@ -263,6 +269,23 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 			"Resolved -- which is what ends its IS-LIFE-3 exemption -- and it must NOT delete the "+
 			"record, because a transcript that erases what it answered cannot show what was decided", got)
 	}
+
+	// ---- the screen moves on, exactly as the real CLI's does ----------------
+	// The fake advances to its next paint when its `ask` reads a LINE, and the key the daemon
+	// typed above carries no Enter (M1.1: each recorded key selects AND submits on its own). So
+	// the owner's own attachment supplies the terminator, and the session repaints the BASH
+	// dialog leg 3's request is raised against. Since M1.8 this is not decoration: the gate
+	// refuses to type a request's verdict into a dialog raised by a different tool, which is
+	// precisely the chained-dialog race it was added for.
+	att, err := rig.Owner().Attach(sessionID)
+	if err != nil {
+		t.Fatalf("owner attach: %v%s", err, rig.gatewayTail())
+	}
+	defer func() { _ = att.Detach() }()
+	if err := att.Input([]byte("\n")); err != nil {
+		t.Fatalf("flush the session's line discipline: %v", err)
+	}
+	awaitGrid(t, rig.sk, localID, bashDialogGrid.lastRow)
 
 	// ---- leg 3: the deny verdict, on a second recorded request --------------
 	// A different fixture, and deliberately the CARVE-OUT one: `touch approval-test.txt` names a
