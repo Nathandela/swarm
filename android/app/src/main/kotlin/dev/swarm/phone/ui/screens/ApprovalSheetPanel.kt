@@ -131,22 +131,31 @@ object ApprovalSheetScreen {
      * `App.Approve`'s `ok` changed meaning under M1.2: it now means the daemon TYPED the
      * dialog's keys, not that the card resolved. Resolution arrives later, by observation, as
      * an `approval_resolved` item [TranscriptScreen] already renders -- so a REFUSAL is the one
-     * answer this sheet has to say anything about at all, and every refusal the verb can carry
-     * (`stale_approval`'s four causes, `already_applied`, `no_dialog`, `invalid_field`'s two,
-     * `not_applicable`) is one fact from the phone's own side: the card it is holding is no
-     * longer something a tap here can act on -- mirror-m1.md M1.2, "no approval ... is pending
-     * ... Already resolved, expired, superseded, or never existed. All four are the same fact
-     * from the phone's side."
+     * answer this sheet has to say anything about at all.
      *
-     * IT IS CALM RATHER THAN AN ERROR, on purpose. The dominant real case is the ordinary one
-     * IS-LIFE-2 exists for -- the owner answered at the terminal, or a second tap raced the
+     * IT CLAIMS WHAT IS TRUE OF ALL FIVE REFUSAL REASONS AND NOT ONE CAUSE, which is the
+     * 2026-08-13 review's correction (mirror-m1.md M1.8). This string used to read "This
+     * approval was already answered", and one head string is shown for every refusal the verb
+     * can carry: `stale_approval` (four causes plus `already_applied`), `no_dialog`,
+     * `invalid_field`'s two, and the code-less `not_applicable`. "Already answered" is true of
+     * the first group and FALSE of the rest. The expensive one is `no_dialog`: the recognizer
+     * anchors on claude 2.1.231's recorded title and label strings and nothing checks the
+     * installed version at runtime, so the day claude auto-updates off that version EVERY tap
+     * refuses -- the CLI sits blocked at the terminal while the phone tells its owner the
+     * request was answered. The owner's next move depends on which of those two worlds they are
+     * in. So the sentence says only that the answer was not applied.
+     *
+     * IT IS STILL CALM RATHER THAN AN ERROR, on purpose. The dominant real case is the ordinary
+     * one IS-LIFE-2 exists for -- the owner answered at the terminal, or a second tap raced the
      * first one still crossing -- and a red "your machine refused" over a card that just got
-     * pre-empted by its own conversation reads as a fault nobody made. [CommandVerdict.sentence]
-     * carries the fact; the machine's own words follow underneath, in `noticeDetail`'s register,
-     * for whichever of the (many) codes this one was -- the same split
+     * pre-empted by its own conversation reads as a fault nobody made. It names the machine and
+     * not the verb, for [SessionDetailScreen.killNoticeFor]'s reason: "your machine did not end
+     * this session" is a fact about the session, where "kill failed" is a report about a button.
+     * [CommandVerdict.sentence] carries it; the machine's own words follow underneath, in
+     * `noticeDetail`'s register, saying WHICH of the codes this one was -- the same split
      * [SessionDetailScreen.killNoticeFor] and `killDetailFor` already draw.
      */
-    private const val ALREADY_ANSWERED = "This approval was already answered"
+    private const val NOT_APPLIED = "Your machine could not apply this answer"
 
     /**
      * The verdict's own sentence, or nothing while the daemon has APPLIED the tap or has not
@@ -158,7 +167,7 @@ object ApprovalSheetScreen {
      * gap before it lands would be a claim this phone is not yet in a position to make.
      */
     fun refusalNoticeFor(verdict: CommandVerdict): String =
-        if (verdict.refused) verdict.sentence(ALREADY_ANSWERED) else ""
+        if (verdict.refused) verdict.sentence(NOT_APPLIED) else ""
 
     /** The machine's own words beside [refusalNoticeFor], mono and tertiary, or empty. */
     fun refusalDetailFor(verdict: CommandVerdict): String =

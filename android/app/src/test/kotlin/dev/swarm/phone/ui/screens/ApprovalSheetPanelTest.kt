@@ -251,9 +251,21 @@ class ApprovalSheetPanelTest {
      * existed) plus M1.2's two new ones (`already_applied`, `no_dialog`) -- and every one of them
      * is the same fact from the phone's side, which is why one calm sentence covers all of them
      * rather than a table this side would have to keep in sync with the daemon's.
+     *
+     * WHAT THE SENTENCE MAY CLAIM changed with the 2026-08-13 review (mirror-m1.md M1.8). The
+     * assertion this replaces read, verbatim: `"the sheet's own sentence names no error and no
+     * verb -- a card the daemon refused to type into is, from here, simply one that was already
+     * answered", "This approval was already answered."`. That was true of the case it was
+     * written against and FALSE of three others the very same head string covers -- `no_dialog`,
+     * `unmappable_decision`, and the code-less `not_applicable`. The one that matters is
+     * `no_dialog`: the recognizer anchors on claude 2.1.231's recorded title and label strings,
+     * nothing checks the installed version at runtime, so the day claude auto-updates off that
+     * version every tap refuses, the CLI stays blocked -- and the phone told the owner it had
+     * been answered. The head now says what is true of ALL five, and `refusalDetailFor` still
+     * carries which one it was.
      */
     @Test
-    fun `a stale card reads as calmly answered, not as an error`() {
+    fun `a stale card reads calmly, and claims only that the machine did not apply it`() {
         val refused = verdictFor(
             code = "stale_approval",
             message = "approval \"i-1\" has already been answered from a phone; the machine is " +
@@ -262,9 +274,10 @@ class ApprovalSheetPanelTest {
 
         assertTrue(refused.refused)
         assertEquals(
-            "the sheet's own sentence names no error and no verb -- a card the daemon refused " +
-                "to type into is, from here, simply one that was already answered",
-            "This approval was already answered.",
+            "the sheet's own sentence names no error and no verb, and asserts no CAUSE -- one " +
+                "head string covers five refusal reasons, so it may only claim what is true of " +
+                "every one of them: the answer was not applied",
+            "Your machine could not apply this answer.",
             ApprovalSheetScreen.refusalNoticeFor(refused),
         )
         assertEquals(
@@ -276,12 +289,43 @@ class ApprovalSheetPanelTest {
         )
     }
 
+    /**
+     * THE VERSION-SKEW CASE, which is the one the old head string lied about most expensively:
+     * the daemon looked at the live grid and did not recognize a dialog it can answer. Nothing
+     * about it was "already answered" -- the CLI is still blocked, and the owner's next move
+     * depends on being told that.
+     */
+    @Test
+    fun `a dialog the machine could not recognize does not read as already answered`() {
+        val refused = verdictFor(
+            code = "stale_approval",
+            message = "approval \"i-1\" was not applied: the session's screen does not show the " +
+                "permission dialog this request raised",
+        )
+
+        assertEquals(
+            "the machine looked at the screen and did not know it; saying the approval was " +
+                "already answered sends the owner away from a CLI that is still waiting",
+            "Your machine could not apply this answer.",
+            ApprovalSheetScreen.refusalNoticeFor(refused),
+        )
+        assertFalse(
+            "no head string over a no_dialog refusal may assert the request was answered",
+            ApprovalSheetScreen.refusalNoticeFor(refused).contains("already"),
+        )
+        assertEquals(
+            "approval \"i-1\" was not applied: the session's screen does not show the permission " +
+                "dialog this request raised",
+            ApprovalSheetScreen.refusalDetailFor(refused),
+        )
+    }
+
     /** `invalid_field` (an offered decision the tuple did not name) reads the same calm way. */
     @Test
     fun `an invalid decision reads the same calm way, in the machine's own words`() {
         val refused = verdictFor(code = "invalid_field", message = "decision \"cancel\" was not offered")
 
-        assertEquals("This approval was already answered.", ApprovalSheetScreen.refusalNoticeFor(refused))
+        assertEquals("Your machine could not apply this answer.", ApprovalSheetScreen.refusalNoticeFor(refused))
         assertEquals("decision \"cancel\" was not offered", ApprovalSheetScreen.refusalDetailFor(refused))
     }
 
