@@ -102,6 +102,18 @@ data class TranscriptBlock(
      * decision.
      */
     val approval: Boolean = false,
+    /**
+     * Whether this is a `tool_run` still `in_progress` -- the block a reader cannot tell is
+     * still live from one that has already finished (agents-tracker-dwwv.1.2).
+     *
+     * `InteractionItem.status` (§2/§4) crossed the wire and was READ BY NOTHING: populated at
+     * `FacadeBridge.kt:120`, decoded nowhere in this screen. A completed tool and a running one
+     * rendered the identical row, and the mono well carried the same nothing either way. This is
+     * the flag [approval]'s own comment argues for a DIFFERENT reason -- IT IS ITS OWN FIELD AND
+     * NOT READ OFF [well]'s COPY, so a caller (a test, or M2's card) can ask "is this block still
+     * running" without re-parsing the sentence the screen wrote for a human.
+     */
+    val running: Boolean = false,
 )
 
 /** The transcript, as a pure function over the items the phone holds. */
@@ -153,6 +165,12 @@ object TranscriptScreen {
      */
     private const val DEGRADED = "from a newer version of swarm"
 
+    /** §4's one non-terminal status: the item is open and more records will follow. */
+    private const val STATUS_IN_PROGRESS = "in_progress"
+
+    /** The word a `tool_run` still `in_progress` leads its mono well with. See [TOOL_RUN]'s arm. */
+    private const val RUNNING = "running"
+
     fun of(items: List<InteractionItem>): TranscriptPanel = TranscriptPanel(
         heading = HEADING,
         // THE WIRE'S ORDER, KEPT. See the file KDoc: a conversation is read in the order it was
@@ -175,23 +193,47 @@ object TranscriptScreen {
             // and no marked span: this screen exists to read as the conversation, and a marker on
             // every second line would be a label on the thing the screen is made of. The user's
             // own lines are marked because they are the interjections.
+            //
+            // agents-tracker-dwwv.1.2 LEFT NO [running] HERE, ON PURPOSE. §2's envelope makes
+            // `status` generic to every kind, and a mid-stream `agent_message` COULD in principle
+            // carry `in_progress` before its terminal record's `stop_reason` (§3.2) arrives -- but
+            // no adapter emits that today (`internal/adapter/claude/interaction.go` always closes
+            // an agent_message `StatusCompleted` in the same record that carries its text), so
+            // there is no wire value to drive a test off yet. Marking it if one arrived would also
+            // reopen the paragraph just above: the agent's prose carries "no attribution and no
+            // marked span" as a stated design rule, and a running mark on flowing text is a design
+            // question -- what it looks like on a SENTENCE rather than on a tool's single line --
+            // that this bead leaves to M2's card work rather than guessing at.
             AGENT_MESSAGE -> TranscriptBlock(
                 itemId = item.itemId,
                 kind = item.kind,
                 line = item.text,
             )
 
-            TOOL_RUN -> TranscriptBlock(
-                itemId = item.itemId,
-                kind = item.kind,
-                // "Read src/main.rs" -- the adapter's tool and the action's own literal. An
-                // unclassified call (IS-TOOL-2) fills no literal and this is the tool alone.
-                line = phrase(fields.tool, fields.target),
-                emphasis = fields.target,
-                // IS-TOOL-3: the CLI's marker rides with the excerpt, verbatim, so the card never
-                // claims to hold output it only saw a marker for.
-                well = lines(fields.output, fields.marker),
-            )
+            TOOL_RUN -> {
+                // agents-tracker-dwwv.1.2: the one place `status` (§4) is read at all. `RUNNING`
+                // is deliberately NOT the wire's own word -- unlike a plan step's `in_progress`
+                // (shown verbatim, `plan_update` below), a lone tool_run has no sibling values
+                // beside it to read `in_progress` against, so the raw token would read as a
+                // stray label rather than a state. "running" is copy the screen supplies, on
+                // "You"'s precedent (see the file KDoc's three rules): the one word this row
+                // needs and the wire has none for.
+                val running = item.status == STATUS_IN_PROGRESS
+                TranscriptBlock(
+                    itemId = item.itemId,
+                    kind = item.kind,
+                    // "Read src/main.rs" -- the adapter's tool and the action's own literal. An
+                    // unclassified call (IS-TOOL-2) fills no literal and this is the tool alone.
+                    line = phrase(fields.tool, fields.target),
+                    emphasis = fields.target,
+                    // IS-TOOL-3: the CLI's marker rides with the excerpt, verbatim, so the card
+                    // never claims to hold output it only saw a marker for. RUNNING leads when
+                    // the item is still open, so a tool with no output yet still draws a well
+                    // saying so, rather than the empty one PB-DS-9's rule already refuses.
+                    well = lines(if (running) RUNNING else "", fields.output, fields.marker),
+                    running = running,
+                )
+            }
 
             FILE_CHANGE -> TranscriptBlock(
                 itemId = item.itemId,

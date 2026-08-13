@@ -59,6 +59,17 @@ object TranscriptTag {
      */
     const val APPROVAL = "transcript.approval"
 
+    /**
+     * The block a `tool_run` is still `in_progress` on (agents-tracker-dwwv.1.2).
+     *
+     * ITS OWN TAG FOR [APPROVAL]'s REASON, restated for this row: a single tag over both a
+     * running block and an ordinary one would let a test find either and assert the other's
+     * behaviour. What sets this block apart is drawn already -- [TranscriptTag.WELL] carries the
+     * word the panel wrote -- and the tag is what lets a reader, or M2's card, find the row
+     * without re-parsing that sentence.
+     */
+    const val RUNNING = "transcript.running"
+
     /** A tool's output or a file's diff, in the mono block every mono block in the app uses. */
     const val WELL = "transcript.well"
 
@@ -147,7 +158,9 @@ private fun rowFor(
     emphasis = block.emphasis,
 ).apply {
     if (!block.approval) {
-        tag = TranscriptTag.BLOCK
+        // agents-tracker-dwwv.1.2: a still-running tool_run is its own tag, same reasoning as
+        // APPROVAL below -- see [TranscriptTag.RUNNING].
+        tag = if (block.running) TranscriptTag.RUNNING else TranscriptTag.BLOCK
         return@apply
     }
     tag = TranscriptTag.APPROVAL

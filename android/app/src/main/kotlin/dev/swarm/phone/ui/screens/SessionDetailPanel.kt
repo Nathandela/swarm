@@ -43,8 +43,14 @@ import dev.swarm.phone.ui.UndeliveredLedger
  *
  * **Tool cards, which are now HALF here.** The mock draws structured cards per tool call, and
  * §3.3's `tool_run` is what one is made of -- [TranscriptPanel] renders it as a row plus a mono
- * well. What is still absent is the CARD: a bordered block with a tool glyph, a status and an
- * expandable body, for which the kit has no factory.
+ * well. Since agents-tracker-dwwv.1.2 that well also says when the tool is still `in_progress`:
+ * `InteractionItem.status` (populated `FacadeBridge.kt:120`) was read by nothing until this bead,
+ * and a running tool and a finished one rendered the identical block. The row now carries its own
+ * tag (`TranscriptTag.RUNNING`) and its mono line leads with the word "running", both STATIC --
+ * no pulse, no colour. What is still absent is the CARD: a bordered block with a tool glyph, an
+ * amber running mark and an expandable body, none of which the kit has a factory for yet.
+ * `docs/specifications/mirror-program.md` M2.2 owns it (`ui/kit/ToolCard.kt`), including the
+ * pulse this bead deliberately leaves out.
  */
 data class SessionDetailPanel(
     /** The drill-down header's title: the session the user opened, by the id the wire gave it. */

@@ -47,6 +47,7 @@ class TranscriptViewTest {
         emphasis: String? = null,
         well: String = "",
         approval: Boolean = false,
+        running: Boolean = false,
     ) = TranscriptBlock(
         itemId = itemId,
         kind = kind,
@@ -54,6 +55,7 @@ class TranscriptViewTest {
         emphasis = emphasis,
         well = well,
         approval = approval,
+        running = running,
     )
 
     private fun panel(blocks: List<TranscriptBlock> = listOf(block())) =
@@ -189,6 +191,47 @@ class TranscriptViewTest {
             "the approval block was dropped along with its destination, so the one item the " +
                 "machine is blocked on is missing from the conversation about it",
             textOf(card.kitRequire(KitTag.ACTIVITY_BODY)).isNotEmpty(),
+        )
+    }
+
+    /**
+     * agents-tracker-dwwv.1.2: the running marker, at the level only a view test can catch --
+     * `TranscriptPanelTest` says the model names the block running; this says the row that reads
+     * as a live tool is actually a DIFFERENT view from an ordinary one, the way `TranscriptTag.APPROVAL`
+     * already is for the one block a tap can answer, and that the word its own mono line carries
+     * reaches the glass.
+     */
+    @Test
+    fun `a running tool's row is tagged distinctly and its mono line carries the word`() {
+        val root = view(
+            panel(
+                listOf(
+                    block(kind = "tool_run", line = "Bash go test ./...", well = "running", running = true),
+                ),
+            ),
+        )
+
+        assertNotNull(
+            "a running tool_run is drawn as an ordinary block, so nothing on screen -- or in a " +
+                "test -- can tell a live tool from a finished one",
+            root.kitFind(TranscriptTag.RUNNING),
+        )
+        assertNull(
+            "the running block is ALSO tagged as an ordinary one, so a test finding either tag " +
+                "would see the same view twice",
+            root.kitFind(TranscriptTag.BLOCK),
+        )
+        assertEquals("running", textOf(root.kitFind(TranscriptTag.WELL)))
+    }
+
+    @Test
+    fun `a completed tool's row is an ordinary block, not tagged running`() {
+        val root = view(panel(listOf(block(kind = "tool_run", line = "Bash go test ./...", running = false))))
+
+        assertNotNull(root.kitFind(TranscriptTag.BLOCK))
+        assertNull(
+            "a finished tool is tagged as though it were still running",
+            root.kitFind(TranscriptTag.RUNNING),
         )
     }
 

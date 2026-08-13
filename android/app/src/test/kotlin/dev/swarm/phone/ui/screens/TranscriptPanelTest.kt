@@ -176,6 +176,50 @@ class TranscriptPanelTest {
         )
     }
 
+    // ---- agents-tracker-dwwv.1.2: the running marker ----------------------
+
+    @Test
+    fun `a tool still in_progress is named as running, and a completed one is not`() {
+        // `InteractionItem.status` (§4, populated FacadeBridge.kt:120) was read by nothing until
+        // this bead: a running tool and a finished one rendered the same block.
+        val running = blockOf(
+            item(
+                "tool_run",
+                body = """{"tool":"Bash","action":{"type":"execute","command":"go test ./..."}}""",
+                status = "in_progress",
+            ),
+        )
+        val completed = blockOf(
+            item(
+                "tool_run",
+                body = """{"tool":"Bash","action":{"type":"execute","command":"go test ./..."}}""",
+                status = "completed",
+            ),
+        )
+
+        assertTrue(
+            "an in_progress tool_run is not named as running, so a reader watching the " +
+                "transcript cannot tell a live tool from a finished one",
+            running.running,
+        )
+        assertTrue(
+            "the running block carries no marker in its mono line",
+            running.well.contains("running"),
+        )
+        assertFalse("a completed tool is still drawn as running", completed.running)
+        assertFalse(
+            "a completed tool's mono line carries the running marker",
+            completed.well.contains("running"),
+        )
+        assertEquals(
+            "a completed tool with no output of its own draws a well anyway, which is an empty " +
+                "recessed box saying \"we have nothing\" in the shape of \"the machine printed " +
+                "nothing\"",
+            "",
+            completed.well,
+        )
+    }
+
     // ---- file_change: the diff card --------------------------------------
 
     @Test

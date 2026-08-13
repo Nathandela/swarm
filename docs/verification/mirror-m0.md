@@ -9,7 +9,7 @@ rewrite an earlier section, and keep the run output verbatim.
 | # | Item | Bead | Status |
 |---|---|---|---|
 | M0.1 | Co-presence: owner attach + phone `take_control` at once -- both streams live? | `dwwv.1.1` | settled, outcome A |
-| M0.2 | Render the running state on tool cards | `dwwv.1.2` | pending |
+| M0.2 | Render the running state on tool cards | `dwwv.1.2` | settled -- running now renders (tag + mono-line word), static; the card itself (glyph, colour, expand) stays M2.2's |
 | M0.3 | Unknown gateway action yields a sealed refusal, never a hang | `dwwv.1.3` | settled, guarantee held (pin); phone-side reply routing is structural, deferred to M1 |
 | M0.4 | Hygiene (done at filing) | -- | done |
 
@@ -321,3 +321,137 @@ than standing alone.
   that would turn it into a visible failure on the approval sheet is unwired (see above). That
   residual is NOT joyi's ADR ask; it feeds M1's `handleApprove` rework instead.
 - `agents-tracker-dwwv.1.3` -- CLOSED (this section is its evidence).
+
+---
+
+## M0.2 -- Render the running state on tool cards
+
+### The gap
+
+`InteractionItem.status` (§4 of `docs/specifications/interaction-schema.md`, `in_progress` |
+`completed` | `failed` | `declined`) crosses the wire and is populated at
+`FacadeBridge.kt:120` -- and was read by nothing. `TranscriptPanel.blockFor`
+(`ui/screens/TranscriptPanel.kt:164-240` at the time this bead was filed) built a `tool_run`
+block from `tool`, `action`, `output_excerpt` and `truncation_marker` alone; a tool still running
+and a tool long finished produced the byte-identical `TranscriptBlock`. The acknowledged-gap
+comment at `SessionDetailPanel.kt:44-47` named the CARD as absent ("a bordered block with a tool
+glyph, a status and an expandable body") without naming that the underlying FACT never reached the
+model at all.
+
+### Design decisions taken, and why
+
+This screen package is fenced against choosing a colour, a dimension or a typeface at all
+(`s24_screens_test.go` / PB-DS-6), and every kit component with a coloured mark --
+`statusDot`'s four `status.Group`s, `presenceDot`'s three relay states, `syncPill`'s three link
+tones -- is bound to a CLOSED, documented vocabulary that is not this one; `PresenceDot.kt`'s own
+KDoc argues at length why borrowing one of them for an unrelated state ("the cheap implementation
+is the defect") is wrong twice over: semantically dishonest, and it drifts the moment the borrowed
+enum changes for its own reason. Adding a genuinely NEW coloured kit factory needs a `derived:`
+row in `docs/design/substrate-components.md` (`s23_kit_test.go`'s provenance fence) that does not
+exist for a running mark -- `docs/specifications/mirror-program.md` M2.2 is where one gets written,
+against `ui/kit/ToolCard.kt`. So the amber dot and the pulse are BOTH left to M2, not just the
+pulse: this bead ships the FACT, static and textual, through the two factories `tool_run` already
+draws through --
+
+- **Panel** (`TranscriptBlock.running: Boolean`): `TOOL_RUN`'s arm sets it from
+  `item.status == "in_progress"` and leads the mono well with the word `"running"` when it is
+  true -- copy the screen supplies (PB-DS-9), on the same footing as `"You"`, because a lone
+  `tool_run` has no sibling value beside it to read the wire's own `in_progress` token against the
+  way a `plan_update`'s steps do.
+- **View** (`TranscriptTag.RUNNING`): the row is tagged distinctly from `TranscriptTag.BLOCK`,
+  `TranscriptTag.APPROVAL`'s own precedent restated -- so a running block is findable without
+  re-parsing the sentence the panel wrote.
+
+`agent_message` was checked and deliberately left alone: `internal/adapter/claude/interaction.go`
+always closes an `agent_message` `StatusCompleted` in the same record that carries its text, so no
+adapter emits an `in_progress` one today and there is no wire value to test against. Marking one if
+it arrived would also reopen `AGENT_MESSAGE`'s own stated rule -- "no attribution and no marked
+span" -- on a SENTENCE rather than a tool's one line, which is a design question this bead does not
+answer.
+
+### RED (panel level -- `TranscriptPanelTest`, `TranscriptViewTest`)
+
+Compiling the two new tests against the pre-change model/view fails for the missing symbols, not a
+syntax error -- the RED this codebase's TDD convention treats as pinned:
+
+```
+> Task :app:compileDebugUnitTestKotlin
+e: file:///.../android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptPanelTest.kt:203:21 Unresolved reference 'running'.
+e: file:///.../android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptPanelTest.kt:209:77 Unresolved reference 'running'.
+e: file:///.../android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptViewTest.kt:58:9 No parameter with name 'running' found.
+e: file:///.../android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptViewTest.kt:217:40 Unresolved reference 'RUNNING'.
+e: file:///.../android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptViewTest.kt:234:40 Unresolved reference 'RUNNING'.
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+BUILD FAILED in 54s
+gradle exit status: 1
+```
+
+`TranscriptBlock.running` and `TranscriptTag.RUNNING` did not exist yet -- the right reason.
+
+### GREEN
+
+`scripts/o2-gradle-run.sh testDebugUnitTest --tests TranscriptPanelTest --tests TranscriptViewTest
+--tests SessionDetailPanelTest --tests TranscriptScreenGoldenTest`, `BUILD SUCCESSFUL`, four fresh
+result files:
+
+| Suite | tests | failures | errors |
+|---|---|---|---|
+| `TranscriptPanelTest` | 22 | 0 | 0 |
+| `TranscriptViewTest` | 9 | 0 | 0 |
+| `SessionDetailPanelTest` | 14 | 0 | 0 |
+| `TranscriptScreenGoldenTest` | 6 | 0 | 0 |
+
+New tests: `a tool still in_progress is named as running, and a completed one is not`
+(`TranscriptPanelTest`), `a running tool's row is tagged distinctly and its mono line carries the
+word` and `a completed tool's row is an ordinary block, not tagged running`
+(`TranscriptViewTest`).
+
+Then the full serialized lane, `scripts/o2-gradle-run.sh test` (both variants, no filter),
+`BUILD SUCCESSFUL in 4m 44s`, `61 actionable tasks`, mtimes newer than the run's own start
+(11:12:38 CEST):
+
+```
+testDebugUnitTest: 142 result files, 142 written in the last hour
+testReleaseUnitTest: 142 result files, 142 written in the last hour
+```
+
+Aggregated across every `TEST-*.xml` in each variant: `tests=1155 skipped=0 failures=0 errors=0`
+-- both `testDebugUnitTest` and `testReleaseUnitTest`. `android/app/libs/swarm.aar` was present
+before the run (`Aug 9 21:01`) and its mtime is unchanged after (test-only lane, no AAR rebuild
+triggered).
+
+### Go side
+
+- `go test ./android/gate/...` -- `ok` (6.585s). The source-scanning gates (`s24_screens_test.go`
+  PB-DS-6/PB-DS-11, `s23_kit_test.go` PB-DS-7) read these exact files and stayed green: the
+  screens package took no `R.color`, `R.dimen`, `setTextColor` or `setPadding` (verified by
+  inspection against `s24ScreenForbidden`'s list -- the diff adds only a `Boolean` field, two
+  `String` constants and one tag string).
+- `go build ./...`, `go vet ./...` -- clean.
+- `go test ./...` -- one pre-existing, unrelated failure:
+  `internal/hookclient.TestPost_RawBytesCrossTheWireVerbatim`, `bind: invalid argument` on a
+  `$TMPDIR`-rooted unix socket path -- an environmental macOS socket-path issue in a package this
+  bead's diff never touches (`git status` for this session is five Android files only). Every
+  other package is `ok`.
+- `PATH="$HOME/go/bin:$PATH" golangci-lint run` -- clean, no output.
+
+### Outcome taken
+
+1. **`TranscriptBlock.running: Boolean`** added, set in `TOOL_RUN`'s arm of `blockFor` from
+   `item.status == "in_progress"`; the mono well leads with the screen-authored word `"running"`
+   while it is true.
+2. **`TranscriptTag.RUNNING`** added; `rowFor` tags a running block with it instead of
+   `TranscriptTag.BLOCK`. `TranscriptTag.APPROVAL` and its click-wiring are untouched.
+3. **`SessionDetailPanel.kt:44-47`** rewritten to describe what ships (the fact renders, static,
+   tagged, textual) and to name what is still absent and where it is owned (`ui/kit/ToolCard.kt`,
+   M2.2 -- glyph, colour, expand/collapse, and the pulse this bead deliberately leaves out).
+4. **Deferred to M2, explicitly**: the amber/coloured dot itself (needs a new `derived:` kit
+   provenance row this bead has no design authority to write), the pulse animation (named
+   out-of-scope by this bead's own instructions), and any marker on `agent_message` (no producer
+   emits `in_progress` on one today, and marking prose reopens a stated design rule this bead does
+   not have the authority to revise).
+
+### Tracker actions
+
+- `agents-tracker-dwwv.1.2` -- CLOSED (this section is its evidence).
