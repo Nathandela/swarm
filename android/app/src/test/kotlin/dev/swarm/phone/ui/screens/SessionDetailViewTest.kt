@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
@@ -142,6 +143,7 @@ class SessionDetailViewTest {
         resync: View = TextView(context),
         acknowledge: View = TextView(context),
         composer: View = TextView(context),
+        approval: View = FrameLayout(context),
         onApproval: ((String) -> Unit)? = null,
     ): View = sessionDetailView(
         context = context,
@@ -153,6 +155,7 @@ class SessionDetailViewTest {
         resync = resync,
         acknowledge = acknowledge,
         composer = composer,
+        approval = approval,
         outcome = outcome,
         onBack = onBack,
         onApproval = onApproval,
@@ -481,6 +484,69 @@ class SessionDetailViewTest {
                 "thing in the conversation the machine is waiting on",
             view(panelWithApproval(), onApproval = null).kitFind(TranscriptTag.APPROVAL),
         )
+    }
+
+    /**
+     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-dwwv.2.4: the sheet that ANSWERS a pending
+     * approval is composed INSIDE this screen, beside the block that points at it -- not reached
+     * by leaving it.
+     *
+     * WHAT THIS REPLACES. `PhoneSurface.openApproval` used to call `closeSessionDetail()`: the
+     * only place the sheet was ever composed was under the inbox list, so answering a question
+     * this very screen had just shown meant navigating away from the conversation to find the
+     * card that answers it. `[approval]` is `PhoneSurface`'s `approvalHost` -- the SAME host the
+     * inbox list places, re-parented here on the same "one component, two hosts" pattern
+     * `statusSlot` already uses -- so there is no second composition, and no destination for a
+     * tap on the transcript's approval block to reach: the answer is already on this screen.
+     */
+    @Test
+    fun `the approval sheet is composed inside this screen -- there is nothing to navigate to`() {
+        val sheet = TextView(context)
+
+        val root = view(approval = sheet)
+
+        assertSame(
+            "the session detail does not place the approval host at all, so answering a pending " +
+                "approval still has nowhere to go but out of this screen",
+            sheet,
+            root.kitFind(DetailTag.APPROVAL),
+        )
+    }
+
+    /** The block that points at the sheet sits right above the sheet it points to. */
+    @Test
+    fun `the approval sheet sits directly under the block that points at it`() {
+        val root = view(panelWithApproval(), approval = TextView(context))
+        val order = root.compositionOrder()
+
+        assertTrue(
+            "the sheet is not on screen at all beside the block that names it",
+            order.contains(DetailTag.APPROVAL),
+        )
+        assertEquals(
+            "the sheet is the answer to the conversation that ends with the question -- it " +
+                "belongs directly after the transcript, not somewhere a reader has to hunt for it",
+            order.indexOf(DetailTag.TRANSCRIPT) + 1,
+            order.indexOf(DetailTag.APPROVAL),
+        )
+    }
+
+    /**
+     * The re-parenting the tag above proves is only useful if the same View instance survives a
+     * second composition -- `PhoneSurface` hands back the identical `approvalHost` on every draw,
+     * the way it already does for `takeControl` (see "a control re-composed after a redraw is not
+     * refused for having a parent").
+     */
+    @Test
+    fun `a re-parented approval host is not refused for still having a parent`() {
+        val host = TextView(context)
+        val panel = panel()
+        view(panel, approval = host)
+
+        (host.parent as? ViewGroup)?.removeView(host)
+        val second = view(panel, approval = host)
+
+        assertSame(host, second.kitFind(DetailTag.APPROVAL))
     }
 
     // ---- the composer, and the ledger it ships with (agents-tracker-hxv) ---

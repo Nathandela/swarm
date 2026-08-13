@@ -51,6 +51,20 @@ object SheetTag {
 
     /** One offered decision, labelled by `decisions[].label`. */
     const val ACTION = "approval.action"
+
+    /**
+     * `PhoneSurface.approvalHost`, tagged rather than left anonymous (agents-tracker-dwwv.2.4).
+     *
+     * IT IS THE HOST AND NOT THE SHEET. [SHEET] is only on screen while a panel composes one
+     * ([drawApproval]'s own rule -- no card rather than an empty one); this tag stays on the same
+     * `View` whether it currently holds a sheet or nothing, so a test can find the HOST itself --
+     * "is the one component still parented somewhere reachable" -- without needing a pending
+     * approval to fill it. It is what lets a Robolectric suite that can never build a real `App`
+     * still prove the host survives the reparenting `PhoneSurface.approvalSlot` does between the
+     * inbox list and the session detail, the same way `ScaffoldTag.STATUS` proves `statusHost`
+     * does.
+     */
+    const val HOST = "approval.host"
 }
 
 /**

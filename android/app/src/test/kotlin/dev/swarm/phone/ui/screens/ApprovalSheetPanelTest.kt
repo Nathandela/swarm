@@ -2,6 +2,8 @@ package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.ApprovalItem
+import dev.swarm.phone.ui.CommandVerdict
+import dev.swarm.phone.ui.OperationOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -201,6 +203,96 @@ class ApprovalSheetPanelTest {
                 "beside the session and the tapped decision's id",
             "01JQ0000000000000000000009",
             panel.itemId,
+        )
+    }
+
+    // ---- agents-tracker-dwwv.2.4: what the sheet says once the machine has answered a tap ----
+    //
+    // mirror-program.md M1.2 changed what `App.Approve`'s `ok` means: APPLIED, not RESOLVED.
+    // Resolution arrives later, by observation, as an `approval_resolved` item TranscriptScreen
+    // already renders -- so the one thing this sheet still has to say for itself is a REFUSAL,
+    // in the calm, honest register mirror-m1.md's own M1.2 section describes: "no approval ...
+    // is pending ... Already resolved, expired, superseded, or never existed. All four are the
+    // same fact from the phone's side."
+    //
+    // THE VERDICT IS BUILT THROUGH THE REAL FACTORY (the qx9m lesson): every case below goes
+    // through `CommandVerdict.of`, never a hand-assembled `CommandVerdict(...)`, so a change to
+    // that table is exercised here exactly as `PhoneSurface` would exercise it.
+
+    private fun verdictFor(code: String, message: String = "") = CommandVerdict.of(
+        OperationOutcome(operationId = "op-approve-1", code = code, message = message),
+        "op-approve-1",
+        accepted = CommandVerdict.ACCEPTED_OK,
+    )
+
+    @Test
+    fun `an approval nobody has answered yet says nothing`() {
+        assertEquals("", ApprovalSheetScreen.refusalNoticeFor(CommandVerdict.UNANSWERED))
+        assertEquals("", ApprovalSheetScreen.refusalDetailFor(CommandVerdict.UNANSWERED))
+    }
+
+    /**
+     * SILENT ON ACCEPTED, `SessionDetailScreen.killNoticeFor`'s own rule: `ok` is APPLIED and not
+     * RESOLVED, so there is nothing true to confirm yet. The `approval_resolved` item arriving is
+     * the confirmation -- a sentence invented here to fill the gap before it lands would claim
+     * something this phone is not yet in a position to know.
+     */
+    @Test
+    fun `an applied approval says nothing -- the resolution is the transcript's, not this sheet's`() {
+        val applied = verdictFor(code = CommandVerdict.ACCEPTED_OK)
+
+        assertTrue("an applied tap is not a refusal", applied.accepted)
+        assertEquals("", ApprovalSheetScreen.refusalNoticeFor(applied))
+        assertEquals("", ApprovalSheetScreen.refusalDetailFor(applied))
+    }
+
+    /**
+     * `stale_approval` covers four causes at once (already resolved, expired, superseded, never
+     * existed) plus M1.2's two new ones (`already_applied`, `no_dialog`) -- and every one of them
+     * is the same fact from the phone's side, which is why one calm sentence covers all of them
+     * rather than a table this side would have to keep in sync with the daemon's.
+     */
+    @Test
+    fun `a stale card reads as calmly answered, not as an error`() {
+        val refused = verdictFor(
+            code = "stale_approval",
+            message = "approval \"i-1\" has already been answered from a phone; the machine is " +
+                "waiting for its dialog to close",
+        )
+
+        assertTrue(refused.refused)
+        assertEquals(
+            "the sheet's own sentence names no error and no verb -- a card the daemon refused " +
+                "to type into is, from here, simply one that was already answered",
+            "This approval was already answered.",
+            ApprovalSheetScreen.refusalNoticeFor(refused),
+        )
+        assertEquals(
+            "the machine's own words are dropped rather than demoted to the detail cell every " +
+                "other refusal on this app carries them in (agents-tracker-ksvb.10's idiom)",
+            "approval \"i-1\" has already been answered from a phone; the machine is waiting for " +
+                "its dialog to close",
+            ApprovalSheetScreen.refusalDetailFor(refused),
+        )
+    }
+
+    /** `invalid_field` (an offered decision the tuple did not name) reads the same calm way. */
+    @Test
+    fun `an invalid decision reads the same calm way, in the machine's own words`() {
+        val refused = verdictFor(code = "invalid_field", message = "decision \"cancel\" was not offered")
+
+        assertEquals("This approval was already answered.", ApprovalSheetScreen.refusalNoticeFor(refused))
+        assertEquals("decision \"cancel\" was not offered", ApprovalSheetScreen.refusalDetailFor(refused))
+    }
+
+    @Test
+    fun `a refused approval is never offered as worth retrying`() {
+        val refused = verdictFor(code = "stale_approval", message = "no approval is pending")
+
+        assertFalse(
+            "waiting does not make a stale card answerable again, so the sentence must not " +
+                "suggest trying again",
+            ApprovalSheetScreen.refusalNoticeFor(refused).contains(CommandVerdict.RETRY_HINT.trim()),
         )
     }
 }

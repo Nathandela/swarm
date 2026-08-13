@@ -153,6 +153,19 @@ object DetailTag {
     const val TRANSCRIPT = "detail.transcript"
 
     /**
+     * ADR-009 (4)'s approval card, composed IN PLACE (agents-tracker-dwwv.2.4).
+     *
+     * IT USED TO BE REACHABLE ONLY BY LEAVING. The only host that ever composed the sheet was
+     * under the inbox list, so `PhoneSurface.openApproval` -- the tap on [TranscriptTag.APPROVAL]
+     * below -- called `closeSessionDetail()`: answering a question this very screen had just
+     * shown meant navigating away from the conversation to find the card that answers it. This
+     * tag is `PhoneSurface.approvalHost`, the SAME view the inbox list places, re-parented here
+     * on the pattern [ScaffoldTag.STATUS] already uses for `statusHost` -- one component,
+     * reparented to whichever screen the pending session is open on, never a second composition.
+     */
+    const val APPROVAL = "detail.approval"
+
+    /**
      * PB-APP-9: what the machine answered the two controls below.
      *
      * IT IS ON THIS SCREEN BECAUSE THIS SCREEN REPLACES THE ONE THAT CARRIED IT. `PhoneSurface`
@@ -202,7 +215,7 @@ object DetailTag {
      */
     val COMPOSITION: Set<String> = setOf(
         NAV, STALE, RESYNC, UNDELIVERED, UNDELIVERED_DETAIL, ACKNOWLEDGE, NOT_SENT, TRANSCRIPT,
-        OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP, COMPOSER,
+        APPROVAL, OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP, COMPOSER,
     )
 }
 
@@ -233,6 +246,11 @@ object DetailTag {
  * @param composer derivation row 9's bar. A slot rather than a construction for the reason every
  *  other control here is one, plus a second: the field holds what the user typed, so it is built
  *  once and re-parented, and a composition that built its own would empty it on every redraw.
+ * @param approval ADR-009 (4)'s card, IN PLACE (agents-tracker-dwwv.2.4). `PhoneSurface`'s
+ *  `approvalHost` -- the same view the inbox list places under its own column -- re-parented
+ *  here whenever this session is the one the phone holds a pending approval for. It is composed
+ *  unconditionally, the way [composer] is: empty while there is nothing pending, which draws no
+ *  height at all, so there is never a moment this screen has to add or remove the slot itself.
  * @param onBack where §4's chevron goes: back to the list this session was opened from.
  * @param onApproval where an approval block in the conversation goes when it is tapped, called with
  *  the block's `item_id` -- which IS the `interaction_id` a signed `ActionApprove` names (IS-APR-1).
@@ -250,6 +268,7 @@ fun sessionDetailView(
     resync: View,
     acknowledge: View,
     composer: View,
+    approval: View,
     outcome: String,
     onBack: () -> Unit,
     onApproval: ((String) -> Unit)? = null,
@@ -323,6 +342,14 @@ fun sessionDetailView(
     column.addView(
         transcriptView(context, panel.transcript, onApproval).apply { tag = DetailTag.TRANSCRIPT },
     )
+
+    // THE ANSWER, DIRECTLY UNDER THE QUESTION (agents-tracker-dwwv.2.4). The transcript's own
+    // approval block is a POINTER and not the decision -- TranscriptView's own words, "the
+    // transcript's job is to say that a decision is waiting and to get the reader to it; the
+    // sheet is where it is taken" -- and this is that pointer's destination, placed where a
+    // reader who has just read the block lands next rather than somewhere they have to leave
+    // this screen to find.
+    column.addView(approval.tagged(DetailTag.APPROVAL))
 
     // IT SITS WITH THE CONTROLS RATHER THAN WITH THE OTHER NOTICES, and the placement is the same
     // rule they follow: a notice goes above what it qualifies. The stale line qualifies the

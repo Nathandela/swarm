@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -715,6 +716,11 @@ class ScreenAirSweepTest {
             textField(context, "Type a line"),
             ctaButton(context, "Send line", CtaKind.APPROVE),
         ),
+        // EMPTY, DELIBERATELY: the sheet's own air is the "Approval sheet" destination's claim
+        // below (`approvalSheet()`), the same fixture `PhoneSurface.drawApproval` composes into
+        // this host when a session is blocked on one. A session detail with nothing pending is
+        // the common case, and an empty host sweeps to nothing rather than vacuously.
+        approval = FrameLayout(context),
         outcome = "The machine refused: remote control is disabled.",
         onBack = {},
     )

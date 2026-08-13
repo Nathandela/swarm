@@ -1,5 +1,6 @@
 package dev.swarm.phone
 
+import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -56,6 +57,7 @@ import dev.swarm.phone.ui.screens.Presentation
 import dev.swarm.phone.ui.screens.RevokeNotice
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
+import dev.swarm.phone.ui.screens.SheetTag
 import dev.swarm.phone.ui.screens.TranscriptScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
@@ -214,10 +216,29 @@ class PhoneSurface(
      * carry the same signed `ActionApprove` op every other approval card uses". The place on screen
      * where a user used to go to read what their machine was waiting for is where the question now
      * is, with the answer beside it.
+     *
+     * **IT IS NO LONGER A CAPTIVE CHILD OF ONE COLUMN, AND THAT IS agents-tracker-dwwv.2.4'S WHOLE
+     * MOVE.** Until this bead it was `addView`'d into [unrecomposedControls] at construction and
+     * never touched again, which put the inbox list in the ONE place a pending approval could be
+     * seen or answered: [detachHostedViews] takes the whole column off screen on the way into a
+     * session's detail, and this host went with it. So [openApproval] -- the tap on the same
+     * question inside the transcript this card answers -- had to CLOSE the detail to reach it,
+     * which is the defect the audit named by line: "tapping an approval row in the transcript
+     * calls openApproval ... which navigates OUT to the inbox where the sheet is parented."
+     *
+     * IT IS [approvalSlot]'S NOW, on [statusHost]'s own pattern: a screen tree is built before it
+     * is hosted, so a detach done at hosting time runs after the `addView` that would throw "the
+     * specified child already has a parent". [drawInbox] asks for the slot to keep the inbox entry
+     * point working; [drawDetail] asks for the same slot so the session detail can place it right
+     * under the transcript block that names it (`SessionDetailView.DetailTag.APPROVAL`) -- one
+     * component, tagged [dev.swarm.phone.ui.screens.SheetTag.HOST], reparented to whichever of the
+     * two screens the pending session is open on. [drawApproval] fills or empties its CHILDREN and
+     * never asks which of the two currently holds it.
      */
     private val approvalHost = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        tag = SheetTag.HOST
     }
 
     /** PB-APP-6's form, hosted for [approvalHost]'s reason: it is redrawn when its notice changes. */
@@ -784,6 +805,23 @@ class PhoneSurface(
     private var killOp: String = ""
 
     /**
+     * The approve this surface last issued, so its answer can be claimed by operation id
+     * (agents-tracker-dwwv.2.4), on [killOp]'s own reasoning -- including NO SESSION REMEMBERED
+     * BESIDE IT, for [killOp]'s own reason: PB-SYNC-2's operation id is already the whole of what
+     * claims this answer, and what it claims is a ONE-SHOT toast report rather than a standing
+     * per-session fact any screen redraws, so there is no proximity for a second field to guard.
+     *
+     * `App.Approve`'s `ok` means APPLIED, not RESOLVED (mirror-program.md M1.2): the answer this
+     * verdict claims is never a success to say out loud -- the `approval_resolved` item arriving
+     * later is the confirmation, and [ApprovalSheetScreen] is silent on accepted for exactly the
+     * reason [SessionDetailScreen.killNoticeFor] is silent on a kill that worked. What this DOES
+     * have to say something about is a REFUSAL: `already_applied`, `no_dialog` and the rest all
+     * mean the card this phone is holding is no longer one a tap here can act on, and
+     * [renderApprovalVerdict] is where that reaches the screen.
+     */
+    private var approveOp: String = ""
+
+    /**
      * The session whose Stop press resolved to NOT_SENT, or empty (agents-tracker-4lta).
      *
      * IT IS A PRESS AND NOT THE LINK. `SessionDetail.notSentNotice` was a function of `online`, so
@@ -809,6 +847,8 @@ class PhoneSurface(
     private var killSaid: String = ""
 
     private var leaseSaid: String = ""
+
+    private var approveSaid: String = ""
 
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
@@ -891,14 +931,18 @@ class PhoneSurface(
      * is also why `triageInboxView` must not air the slot itself: it cannot know that what arrives
      * is half bare lines and half composed screens. The air goes to the three that arrive with
      * none, where `ScreenAirSweepTest`'s window sweep is what holds it.
+     *
+     * **[approvalHost] IS NOT ADDED HERE ANY MORE (agents-tracker-dwwv.2.4).** It used to be a
+     * fixed child, `addView`'d once alongside the four below and never touched again -- which is
+     * exactly why it could never be reparented into a session's detail. [drawInbox] adds it back
+     * through [approvalSlot] on every draw that shows the list, at the same position this column
+     * always held it, so the inbox entry point is unchanged; what changed is that the same host
+     * can now leave.
      */
     private val unrecomposedControls = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-        for (child in listOf(
-            status, capabilityNotice, approvalHost,
-            launchHost, outcome,
-        )) {
+        for (child in listOf(status, capabilityNotice, launchHost, outcome)) {
             addView(child)
         }
         listOf(status, capabilityNotice, outcome).forEach { line -> line.screenAir() }
@@ -1728,6 +1772,20 @@ class PhoneSurface(
     }
 
     /**
+     * [approvalHost]'s host, detached from whatever held it last (agents-tracker-dwwv.2.4).
+     *
+     * [statusSlot]'s reason, spent on the second view this app moves between two screens: a
+     * screen tree is built before it is hosted, so the detach has to happen here, at request
+     * time, rather than inside whichever composition asks for it. [drawInbox] calls this to put
+     * the host back under the inbox list; [drawDetail] calls it to put the SAME host inside the
+     * session detail, right under the transcript block that answers to it.
+     */
+    private fun approvalSlot(): View {
+        (approvalHost.parent as? ViewGroup)?.removeView(approvalHost)
+        return approvalHost
+    }
+
+    /**
      * Draw the destination the user is on, and forget the inbox when it is not what they see.
      *
      * **THE CLEAR AT THE BOTTOM IS THE OTHER HALF OF [inboxDrawn]'s MEANING.** That field is the
@@ -1800,6 +1858,17 @@ class PhoneSurface(
         if (promoted.isNotEmpty()) Haptics.play(activity, Haptics.Signal.NEEDS_YOU)
         inboxDrawn = screen
         detailDrawn = null
+        // THE APPROVAL HOST COMES BACK HERE, AND ONLY HERE ON THIS BRANCH (agents-tracker-
+        // dwwv.2.4). It is [approvalSlot]'s and no longer [unrecomposedControls]'s fixed child, so
+        // every draw that shows the list re-claims it -- at the position between the capability
+        // notice and the launch form this column has always held it, found by the neighbour
+        // rather than by an index that would go stale the day a line above it is added or removed.
+        unrecomposedControls.addView(
+            approvalSlot(),
+            unrecomposedControls.indexOfChild(launchHost).let {
+                if (it < 0) unrecomposedControls.childCount else it
+            },
+        )
         hostContent(
             when (screen) {
                 null -> unrecomposedControls
@@ -1939,6 +2008,10 @@ class PhoneSurface(
                 // The field and Send used to hang under the triage inbox, which
                 // [detachHostedViews] takes off the window on the way in here.
                 composer = composer,
+                // THE SHEET, IN PLACE (agents-tracker-dwwv.2.4). The same host the inbox list
+                // places, re-parented here: answering the question this screen's own transcript
+                // just showed no longer means leaving it. See [approvalHost]'s own KDoc.
+                approval = approvalSlot(),
                 // PB-APP-9's routed line, which is a child of the column this screen replaces. It
                 // is handed in rather than left behind, because Stop and Kill reach a machine from
                 // here and a refusal with nowhere to land is a control that fails silently.
@@ -1951,21 +2024,33 @@ class PhoneSurface(
 
     /**
      * Where an approval block in the conversation goes when it is tapped: to the card that answers
-     * it, which is composed under the list ([approvalHost]).
+     * it, which is [approvalHost] -- composed on THIS SAME SCREEN now, directly under the
+     * transcript (`SessionDetailView.DetailTag.APPROVAL`).
      *
-     * IT IS A NAVIGATION AND NOT A SECOND COMPOSITION. Drawing a copy of the sheet inside the
-     * transcript would be two surfaces able to disagree about one pending item -- and one of them
-     * would be inside a scrolling conversation, which is where a decision is least legible.
+     * IT NO LONGER NAVIGATES, AND THAT IS agents-tracker-dwwv.2.4's WHOLE FIX. It used to call
+     * [closeSessionDetail], because the sheet was composed in exactly one place -- under the
+     * inbox list -- and leaving the drill-down was the only way to reach it: "tapping an approval
+     * row in the transcript calls openApproval ... which navigates OUT to the inbox where the
+     * sheet is parented", the defect as the audit that opened this bead found it. Answering an
+     * approval must never throw a reader out of the conversation they were just reading.
+     *
+     * IT SCROLLS RATHER THAN DOING NOTHING, which is [dev.swarm.phone.ui.screens.TranscriptTag]'s
+     * own words about the block this responds to: "the transcript's job is to say that a decision
+     * is waiting and to get the reader to it; the sheet is where it is taken." With the sheet on
+     * this same screen, "getting the reader to it" is a scroll and not a departure --
+     * `requestRectangleOnScreen` is the platform's own "bring this view into view", asked of
+     * whichever ancestor scrolls (`PhoneScaffoldView`'s `ScrollView`); it is a no-op wherever
+     * there is none, which is the honest answer when the sheet is already on screen.
      *
      * @param itemId the block's `item_id`, which IS the `interaction_id` (IS-APR-1). It is COMPARED
      *  rather than spent: the card is `pendingApproval(session)` and the tapped block belongs to
      *  that same session, so the only thing this id can still tell the surface is whether the
      *  question is the one being asked. A block whose approval resolved while the user was reading
-     *  (IS-LIFE-2) therefore navigates nowhere, instead of to a card about something else.
+     *  (IS-LIFE-2) therefore scrolls nowhere, instead of to a card about something else.
      */
     private fun openApproval(itemId: String) {
         if (approvalDrawn?.itemId != itemId) return
-        closeSessionDetail()
+        approvalHost.requestRectangleOnScreen(Rect(0, 0, approvalHost.width, approvalHost.height))
     }
 
     /**
@@ -2195,19 +2280,39 @@ class PhoneSurface(
      * `awaitConn` for a connection on that path and deliberately does not on the live one
      * (ADR-007 D7), and the two must not share a lane.
      *
-     * IT ADDS NO CONFIRMATION AND NO TOAST. The sheet IS the confirmation -- D4.4's heaviest
-     * surface, "reserved for the moment of decision" -- and a second dialog over a button the user
-     * pressed after reading the question would ask them to confirm the thing they just read. What
-     * the machine answers arrives the way every other verb's answer does, on the routed line, and
-     * the card leaving the screen is what an accepted decision looks like (IS-LIFE-2).
+     * IT ADDS NO CONFIRMATION DIALOG. The sheet IS the confirmation -- D4.4's heaviest surface,
+     * "reserved for the moment of decision" -- and a second dialog over a button the user pressed
+     * after reading the question would ask them to confirm the thing they just read.
+     *
+     * IT REMEMBERS THE OPERATION NOW (agents-tracker-dwwv.2.4), which is what [takeControlOf] and
+     * [kill] already do and this control never did. `App.Approve`'s `ok` stopped meaning RESOLVED
+     * under mirror-program.md M1.2: it means the daemon TYPED the dialog's keys, and the card does
+     * NOT leave the screen on its own -- `pendingApproval(session)` still names it, unresolved,
+     * until the `approval_resolved` item the daemon emits by OBSERVING the dialog leave finally
+     * arrives, which [TranscriptScreen] already renders. So a toast on acceptance would report a
+     * resolution nobody has seen yet; what this settle claims the operation id FOR is the one
+     * answer that is a fact right away -- a REFUSAL, `already_applied` foremost among them, which
+     * is exactly the safety net a second tap during that window needs. [renderApprovalVerdict] is
+     * where the claim is read back.
      */
     private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
         actionButton(decision.label, CtaKind.MORE) {
             Press(
                 SendPlane.COMMAND,
                 verb = { app -> app.approve(panel.sessionId, panel.itemId, decision.id) },
+                settle = { answer -> rememberApproval(answer) },
             )
         }
+
+    /**
+     * Latch the approve this surface issued, so [renderApprovalVerdict] can claim its answer by
+     * operation id (PB-SYNC-2) rather than resolving it by proximity. [rememberKill]'s own
+     * reasoning, spent on the third verb that never had a settle at all.
+     */
+    private fun rememberApproval(answer: Any?) {
+        val issued = answer as? Op ?: return
+        approveOp = issued.operationID
+    }
 
     /**
      * The keyboard's two controls, which were never part of the peek.
@@ -2387,6 +2492,7 @@ class PhoneSurface(
     private fun renderVerdicts(bridge: FacadeBridge) {
         renderKillVerdict(bridge)
         renderLeaseVerdict(bridge)
+        renderApprovalVerdict(bridge)
     }
 
     private fun renderKillVerdict(bridge: FacadeBridge) {
@@ -2428,6 +2534,35 @@ class PhoneSurface(
                 SessionDetailScreen.leaseDetailFor(confirmed = false, verdict),
             ),
         )
+    }
+
+    /**
+     * PB-APP-9 for the fourth verb this table now covers (agents-tracker-dwwv.2.4):
+     * [approveOp]'s own answer, claimed the same way [killOp]'s is.
+     *
+     * SILENT ON ACCEPTED, WHICH IS `ApprovalSheetScreen.refusalNoticeFor`'s OWN CLAUSE AND NOT A
+     * SECOND ONE HERE. `ok` means APPLIED under M1.2, not resolved -- the `approval_resolved`
+     * item is the confirmation, and it is [TranscriptScreen]'s to render, already, the moment it
+     * arrives. What this claims a REFUSAL for is the one thing the daemon can say about a tap
+     * that is a fact right away: the card the phone is holding is no longer one it can act on
+     * (`already_applied` foremost -- the exact race a second tap during the applied-but-not-yet-
+     * observed window would otherwise risk), and [ApprovalSheetScreen.refusalNoticeFor] is where
+     * the calm, honest sentence for that is written.
+     */
+    private fun renderApprovalVerdict(bridge: FacadeBridge) {
+        if (approveOp.isEmpty() || approveOp == approveSaid) return
+        val verdict = try {
+            CommandVerdict.of(bridge.launchOutcome(approveOp), approveOp, CommandVerdict.ACCEPTED_OK)
+        } catch (unreadable: Exception) {
+            // Unresolved is the honest state, and the next draw asks again.
+            return
+        }
+        if (!verdict.answered) return
+        approveSaid = approveOp
+        val notice = ApprovalSheetScreen.refusalNoticeFor(verdict)
+        if (notice.isNotEmpty()) {
+            say(PressFeedback.ofRefusal(notice, ApprovalSheetScreen.refusalDetailFor(verdict)))
+        }
     }
 
     /**

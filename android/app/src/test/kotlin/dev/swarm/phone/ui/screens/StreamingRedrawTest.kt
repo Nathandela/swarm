@@ -161,6 +161,7 @@ class StreamingRedrawTest {
                 resync = TextView(context),
                 acknowledge = TextView(context),
                 composer = TextView(context),
+                approval = TextView(context),
                 outcome = "",
                 onBack = {},
                 onApproval = onApproval,

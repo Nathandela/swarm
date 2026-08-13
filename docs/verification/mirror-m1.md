@@ -11,6 +11,7 @@ rewrite an earlier section, and keep the run output verbatim.
 | M1.1 | Characterization fixture: the permission dialog's grid signature and accepted keys, version-stamped | `dwwv.2.1` | settled -- 5 recorded grids of claude 2.1.231, key map confirmed by side effects, recognizer shipped |
 | M1.2 | Apply-by-injection: the phone's answer is typed into the CLI's own dialog, gated on the live grid; the tap stops resolving | `dwwv.2.2` | settled -- injection primitive shipped, 5 refusal reasons, resolution moved to observation, 4 tests rewritten |
 | M1.3 | Resolution attribution: the `PermissionDenied` capture row, and which of the five daemon paths fires when the terminal answers | `dwwv.2.3` | settled -- PARTIAL by finding, not by omission: the hook does not fire on the path this item needs (four real captures + binary analysis), owner-path and phone-path attribution both verified correct as shipped, one new test, follow-up `agents-tracker-hgyg` filed |
+| M1.4 | Approval sheet lives in session detail (it used to navigate out to the inbox); `App.Approve`'s answer settles like `kill` and `take_control` already do | `dwwv.2.4` | settled -- `approvalHost` re-parented between the inbox list and the session detail on `statusHost`'s own slot pattern, `openApproval` no longer navigates, settle wired with a calm refusal-only notice (M1.2's `ok` means APPLIED, not RESOLVED), 6 new/expanded test files, all gates green |
 
 ---
 
@@ -803,3 +804,240 @@ nothing to run through Gradle.
 - The temporary capture instrument used for this item's four real runs was never committed
   (`internal/smoke/permdenied_capture_test.go`, deleted after use) -- its method is recorded here
   in full instead, matching spike-SB's own precedent for a throwaway relay.
+
+---
+
+## M1.4 -- Approval sheet lives in session detail and settles on the op outcome
+
+### The question
+
+The M0/audit finding, re-verified against `cd648a7` (and against HEAD before this item's own
+changes, since M1.1-M1.3 landed between the audit and this item): tapping an approval row in the
+transcript called `openApproval` (`PhoneSurface.kt:1966-1969`), which called `closeSessionDetail()`
+-- navigating OUT to the inbox, the only place `approvalHost` was ever composed
+(`unrecomposedControls` at `:899`, hosted under `triageInboxView`'s `below:` at `:1813`).
+`approvalAction` (`:2204-2210`) sealed `App.Approve` with `Press`'s default settle, dropping the
+`Op` it returned -- unlike `takeControlOf` (`:2276`) and `kill` (`:2276` area,
+`settle = { answer -> rememberKill(answer) }`), which both remember their operation id so
+[CommandVerdict.of] can claim the machine's later answer.
+
+**Both findings confirmed as stated, and one thing changed underneath them since the audit.**
+M1.2 (`dwwv.2.2`) shipped between the audit and this item and changed what `App.Approve`'s `ok`
+means: APPLIED (the daemon typed the dialog's keys), not RESOLVED. Resolution now arrives only by
+observation, as an `approval_resolved` item -- which `TranscriptScreen`'s `APPROVAL_RESOLVED` arm
+already renders (confirmed unchanged, `TranscriptPanel.kt:258-265`). So "wire the settle" is no
+longer "toast on success" (M0's `CommandVerdict.of` idiom applied naively would have been wrong
+here): the one fact this settle has to say anything about is a REFUSAL, and M1.2's own refusal
+table (`already_applied`, `no_dialog`, `stale_approval`'s four other causes, `invalid_field`'s two,
+`not_applicable`) collapses to one honest phone-side sentence -- "the card is no longer something a
+tap here can act on" -- which the M1.2 evidence states in its own words: *"Already resolved,
+expired, superseded, or never existed. All four are the same fact from the phone's side."*
+
+### The design: one host, two hosts, on `statusHost`'s own pattern
+
+`approvalHost` was a **captive, permanent child** of `unrecomposedControls` -- `addView`'d once at
+construction, never touched again. That is structurally why it could only ever be reached from the
+inbox list: `hostContent`'s `detachHostedViews` takes the whole column off screen on the way into a
+session's drill-down, and the approval card went with it, with nowhere else to land.
+
+The fix is not a second composition (the sheet's own KDoc already rules that out: "IT IS A
+NAVIGATION AND NOT A SECOND COMPOSITION ... two surfaces able to disagree about one pending item").
+It is the pattern `PhoneSurface` already uses for `statusHost` (`statusSlot()`): a `View` built
+once, detached from whatever held it last and re-`addView`'d wherever the current draw wants it.
+
+- `approvalHost` is no longer one of `unrecomposedControls`'s fixed children.
+- `approvalSlot()` (new): detach-then-return, `statusSlot`'s own two lines.
+- `drawInbox` re-`addView`s it into `unrecomposedControls`, at the position between the capability
+  notice and the launch form the column always held it (found by `indexOfChild(launchHost)`, not a
+  literal index) -- the inbox entry point is unchanged.
+- `sessionDetailView` gains a new required parameter, `approval: View`, composed directly under the
+  transcript (`DetailTag.APPROVAL`, tag order `TRANSCRIPT, APPROVAL, OUTCOME, ...`) -- the sheet
+  sits right below the block that points at it, per `TranscriptView`'s own words: "the transcript's
+  job is to say that a decision is waiting and to get the reader to it; the sheet is where it is
+  taken."
+- `drawDetail` passes `approval = approvalSlot()`. `drawApproval` is unchanged: it only ever fills
+  or empties the host's CHILDREN and never asks which of the two screens currently holds it.
+- `openApproval` no longer calls `closeSessionDetail()`. The card is already on the same screen, so
+  there is nothing to navigate to; it calls `approvalHost.requestRectangleOnScreen(...)` instead --
+  the platform's own "scroll me into view", a no-op wherever there is no scrolling ancestor to ask.
+
+### Settle: `approvalAction` remembers the operation, on `kill`'s idiom and not `take_control`'s
+
+`kill`'s own KDoc is the closer precedent, not the lease's: an approval's answer is a **one-shot
+toast report about the operation**, not a standing per-session fact any screen redraws -- so
+`approveOp` carries no session alongside it, the same as `killOp` and unlike `leaseSession`.
+
+```kotlin
+private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
+    actionButton(decision.label, CtaKind.MORE) {
+        Press(
+            SendPlane.COMMAND,
+            verb = { app -> app.approve(panel.sessionId, panel.itemId, decision.id) },
+            settle = { answer -> rememberApproval(answer) },
+        )
+    }
+```
+
+`renderApprovalVerdict` (new, called from `renderVerdicts` beside kill's and the lease's) claims
+`approveOp`'s answer through the same `CommandVerdict.of(outcome, approveOp,
+CommandVerdict.ACCEPTED_OK)` idiom `renderKillVerdict` and `leaseVerdictFor` already use. Accepted
+(`ok` = APPLIED) says nothing -- `ApprovalSheetScreen.refusalNoticeFor`'s and
+`SessionDetailScreen.killNoticeFor`'s shared rule: a success nobody has observed the resolution of
+yet is not a claim this phone can honestly make. Refused reads a new, calm sentence:
+
+```kotlin
+private const val ALREADY_ANSWERED = "This approval was already answered"
+
+fun refusalNoticeFor(verdict: CommandVerdict): String =
+    if (verdict.refused) verdict.sentence(ALREADY_ANSWERED) else ""
+
+fun refusalDetailFor(verdict: CommandVerdict): String =
+    if (verdict.refused) verdict.reason else ""
+```
+
+"This approval was already answered." is deliberately one sentence for every refusal code the verb
+can carry (`stale_approval`, `invalid_field`, and `not_applicable`'s bare failure) rather than a
+table this side would have to keep in sync with the daemon's: the dominant real case behind all of
+them is the ordinary one IS-LIFE-2 exists for -- the owner answered at the terminal, or a second tap
+raced the first one still crossing -- and it reads as "answered", not as an error. The machine's
+own words follow underneath, verbatim, in the same demoted mono register `killDetailFor` already
+uses (`agents-tracker-ksvb.10`'s idiom), so nothing about the specific cause is lost, only led with
+calmly. `refusalNoticeFor` never appends `CommandVerdict.RETRY_HINT`: waiting does not make a stale
+card answerable again.
+
+### Ledger
+
+`android/unbound-verbs.tsv` unchanged. `App.Approve` was already bound (called from production
+Kotlin since I1); this item wires its existing settle, which is not a binding change.
+
+### Tests -- built through the real factories (the qx9m lesson), not hand-fed enums
+
+Every new `CommandVerdict` in the new tests is built through `CommandVerdict.of(OperationOutcome(...), opId,
+accepted = ...)`, never a hand-assembled `CommandVerdict(result = ..., reason = ..., retryable = ...)`
+literal -- `qx9m` shipped because "every unit test constructs the panel with an explicit
+`ScannerState`, so nothing asserted what a NEW INSTALL gets"; the same shortcut here would prove the
+copy function reads a field correctly and nothing about whether the real refusal table produces
+that field the way this test assumes. The session-detail approval fixture
+(`SessionDetailViewTest.panelWithApproval`, pre-existing, reused rather than duplicated) is built
+the same way: through `ApprovalItem.of`'s own decode over a real wire body, `TranscriptScreen.of`'s
+own fold, and `SessionDetailScreen.of`'s own assembly -- never a hand-built `TranscriptBlock`.
+
+**What is, and is not, reachable in Robolectric.** `PhoneSurfaceSyncSlotTest`'s own bound restated:
+`PhoneRuntime.phone()` answers `Unavailable` on every JVM run, so `renderReady` -- and with it
+`drawDetail`, `drawApproval` fed real data, and `openApproval`'s guard -- is out of reach through
+`PhoneActivity`. Every claim below is either (a) pushed to the view/model layer this JVM CAN build
+(`sessionDetailView` called directly, `ApprovalSheetScreen`'s pure functions), matching this
+codebase's own established answer to the same bound (`PhoneSurfaceSyncSlotTest`,
+`PhoneSurfaceNavigationTest`), or (b) the one structural fact about the reparenting itself that IS
+reachable on the `Unavailable` branch (`drawInbox` runs there; `drawDetail` does not).
+
+**New test file**: `android/app/src/test/kotlin/dev/swarm/phone/PhoneSurfaceApprovalSlotTest.kt`
+- `the approval host is on the inbox destination`
+- `the approval host survives navigating away from and back to the inbox`
+
+**Amended**: `android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailViewTest.kt`
+(new tests; existing tests' `view()` fixture gained a defaulted `approval` parameter, no existing
+assertion touched)
+- `the approval sheet is composed inside this screen -- there is nothing to navigate to`
+- `the approval sheet sits directly under the block that points at it`
+- `a re-parented approval host is not refused for still having a parent`
+
+**Amended**: `android/app/src/test/kotlin/dev/swarm/phone/ui/screens/ApprovalSheetPanelTest.kt`
+(new tests only)
+- `an approval nobody has answered yet says nothing`
+- `an applied approval says nothing -- the resolution is the transcript's, not this sheet's`
+- `a stale card reads as calmly answered, not as an error`
+- `an invalid decision reads the same calm way, in the machine's own words`
+- `a refused approval is never offered as worth retrying`
+
+**Fixture-only edits** (no assertion changed): `ScreenAirSweepTest.kt`'s `sessionDetail()` and
+`StreamingRedrawTest.kt`'s `host()` both call `sessionDetailView` directly and needed the new
+required `approval` argument; both pass an empty placeholder view, which is the honest common case
+(no pending approval) and, for the sweep suite, correct scoping -- the sheet's own air is already
+independently checked by that same file's `approvalSheet()` / `"Approval sheet"` destination entry.
+
+### RED, verbatim
+
+Compile-time RED (Kotlin): the four new/changed symbols referenced by the tests above did not
+exist yet, so `compileDebugUnitTestKotlin` failed the whole module before any test could run --
+the same shape of RED this repo's own Go evidence uses (M1.2: "the claude adapter is not an
+adapter.ApprovalApplier").
+
+    $ bash scripts/o2-gradle-run.sh testDebugUnitTest
+    > Task :app:compileDebugUnitTestKotlin
+    e: .../PhoneSurfaceApprovalSlotTest.kt:87:53 Unresolved reference 'HOST'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:230:46 Unresolved reference 'refusalNoticeFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:231:46 Unresolved reference 'refusalDetailFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:245:46 Unresolved reference 'refusalNoticeFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:246:46 Unresolved reference 'refusalDetailFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:268:33 Unresolved reference 'refusalNoticeFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:275:33 Unresolved reference 'refusalDetailFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:284:81 Unresolved reference 'refusalNoticeFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:285:81 Unresolved reference 'refusalDetailFor'.
+    e: .../ui/screens/ApprovalSheetPanelTest.kt:295:33 Unresolved reference 'refusalNoticeFor'.
+    e: .../ui/screens/SessionDetailViewTest.kt:158:9 No parameter with name 'approval' found.
+    e: .../ui/screens/SessionDetailViewTest.kt:512:36 Unresolved reference 'APPROVAL'.
+    e: .../ui/screens/SessionDetailViewTest.kt:524:38 Unresolved reference 'APPROVAL'.
+    e: .../ui/screens/SessionDetailViewTest.kt:530:37 Unresolved reference 'APPROVAL'.
+    e: .../ui/screens/SessionDetailViewTest.kt:549:51 Unresolved reference 'APPROVAL'.
+    > Task :app:compileDebugUnitTestKotlin FAILED
+    gradle exit status: 1
+
+After that RED, `SheetTag.HOST`, `ApprovalSheetScreen.refusalNoticeFor`/`refusalDetailFor`,
+`DetailTag.APPROVAL` and `sessionDetailView`'s `approval` parameter were written, which is when the
+compile error surfaced two MORE call sites naming `sessionDetailView` without the new required
+argument (`ScreenAirSweepTest.kt:719`, `StreamingRedrawTest.kt:166`) -- fixed as fixture-only edits
+per the section above.
+
+### GREEN, verbatim
+
+    $ bash scripts/o2-gradle-run.sh test
+    > Task :app:testDebugUnitTest
+    > Task :app:testReleaseUnitTest
+    > Task :app:test
+    BUILD SUCCESSFUL in 2m 53s
+    gradle exit status: 0
+    testDebugUnitTest: 143 result files, 143 written in the last hour
+    testReleaseUnitTest: 143 result files, 143 written in the last hour
+
+Aggregate JUnit XML counts, both variants (counted from the written files, not from Gradle's own
+summary): **1165 tests, 0 failures, 0 errors** -- debug and release identically.
+`android/app/libs/swarm.aar` mtime unchanged across the whole run (`Aug 9 21:01`, before and
+after): no Gradle lane conflict, no AAR rebuild.
+
+New/changed suites individually, from the written XML:
+
+    PhoneSurfaceApprovalSlotTest:                 tests=2  failures=0 errors=0
+    ui.screens.ApprovalSheetPanelTest:             tests=14 failures=0 errors=0
+    ui.screens.SessionDetailViewTest:              tests=24 failures=0 errors=0
+    ui.screens.ScreenAirSweepTest:                 tests=7  failures=0 errors=0
+    ui.screens.StreamingRedrawTest:                tests=3  failures=0 errors=0
+
+### Gates
+
+    $ go build ./...                                                            BUILD_OK
+    $ go vet ./...                                                              VET_OK
+    $ TMPDIR=/tmp go test ./...                                                 EXIT:0 (all packages ok)
+    $ TMPDIR=/tmp go test -race ./mobile/... ./internal/skeleton/... \
+        ./internal/hookclient/...                                              EXIT:0
+    $ go test ./android/gate/...                                               EXIT:0
+    $ PATH="$HOME/go/bin:$PATH" golangci-lint run                              LINT_EXIT:0
+    $ bash scripts/o2-gradle-run.sh test  (testDebugUnitTest + testReleaseUnitTest)  EXIT:0
+
+No Go source changed in this item (M1.2/M1.3 already shipped the daemon-side semantics this settle
+reads); the Go gates above confirm nothing regressed, not that anything moved.
+
+### What M1.5+ inherits
+
+- `App.Approve`'s settle is now claimed by operation id like `kill` and `take_control`; a future
+  item adding a fourth "applied" visual state (a spinner, a disabled sheet) beyond the silent
+  accepted case has `approveOp`/`approveSaid` to build on, and `renderApprovalVerdict`'s own KDoc
+  records why accepted is silent today.
+- `approvalHost`'s two-host pattern (`approvalSlot`) is the third view in this file to use
+  `statusHost`'s reparenting idiom (`statusSlot`, `approvalSlot`); a fourth view needing the same
+  treatment should read both rather than inventing a third variant.
+- `openApproval`'s scroll-into-view (`requestRectangleOnScreen`) is unverified by any automated
+  test -- Robolectric's bound on `renderReady` makes it unreachable through `PhoneActivity`, and
+  there is no lower-level seam that exercises it either. It is a single call to a stock platform
+  API with well-defined no-op behaviour absent a scrolling ancestor, recorded here as an honest gap
+  rather than a claimed one.

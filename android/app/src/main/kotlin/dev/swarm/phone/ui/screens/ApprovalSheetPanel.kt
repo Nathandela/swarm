@@ -2,6 +2,7 @@ package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.ApprovalItem
+import dev.swarm.phone.ui.CommandVerdict
 
 /**
  * The obsidian migration plan's phase O6.1: what the pull-quote approval sheet SAYS.
@@ -122,4 +123,44 @@ object ApprovalSheetScreen {
      * agent. A middle dot rather than a slash or a pipe: it separates without ranking.
      */
     private const val CONTEXT_SEPARATOR = " · "
+
+    /**
+     * What the screen says when the daemon refused to APPLY a tap (agents-tracker-dwwv.2.4,
+     * mirror-program.md M1.2).
+     *
+     * `App.Approve`'s `ok` changed meaning under M1.2: it now means the daemon TYPED the
+     * dialog's keys, not that the card resolved. Resolution arrives later, by observation, as
+     * an `approval_resolved` item [TranscriptScreen] already renders -- so a REFUSAL is the one
+     * answer this sheet has to say anything about at all, and every refusal the verb can carry
+     * (`stale_approval`'s four causes, `already_applied`, `no_dialog`, `invalid_field`'s two,
+     * `not_applicable`) is one fact from the phone's own side: the card it is holding is no
+     * longer something a tap here can act on -- mirror-m1.md M1.2, "no approval ... is pending
+     * ... Already resolved, expired, superseded, or never existed. All four are the same fact
+     * from the phone's side."
+     *
+     * IT IS CALM RATHER THAN AN ERROR, on purpose. The dominant real case is the ordinary one
+     * IS-LIFE-2 exists for -- the owner answered at the terminal, or a second tap raced the
+     * first one still crossing -- and a red "your machine refused" over a card that just got
+     * pre-empted by its own conversation reads as a fault nobody made. [CommandVerdict.sentence]
+     * carries the fact; the machine's own words follow underneath, in `noticeDetail`'s register,
+     * for whichever of the (many) codes this one was -- the same split
+     * [SessionDetailScreen.killNoticeFor] and `killDetailFor` already draw.
+     */
+    private const val ALREADY_ANSWERED = "This approval was already answered"
+
+    /**
+     * The verdict's own sentence, or nothing while the daemon has APPLIED the tap or has not
+     * answered it yet.
+     *
+     * SILENT ON ACCEPTED, FOR [SessionDetailScreen.killNoticeFor]'s REASON RESTATED HERE: an
+     * `ok` is APPLIED and not resolved, so there is nothing true to confirm yet -- the
+     * `approval_resolved` item arriving IS the confirmation, and a sentence invented to fill the
+     * gap before it lands would be a claim this phone is not yet in a position to make.
+     */
+    fun refusalNoticeFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.sentence(ALREADY_ANSWERED) else ""
+
+    /** The machine's own words beside [refusalNoticeFor], mono and tertiary, or empty. */
+    fun refusalDetailFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.reason else ""
 }
