@@ -908,6 +908,11 @@ uses (`agents-tracker-ksvb.10`'s idiom), so nothing about the specific cause is 
 calmly. `refusalNoticeFor` never appends `CommandVerdict.RETRY_HINT`: waiting does not make a stale
 card answerable again.
 
+> **Superseded by M1.8.** The one-sentence-for-every-code reasoning above holds; the SENTENCE does
+> not. "Already answered" is false for `no_dialog`, `unmappable_decision` and `not_applicable`, and
+> the head string shipped here was shown for all of them. It now reads "Your machine could not
+> apply this answer" -- see M1.8 for the version-skew case that makes the difference expensive.
+
 ### Ledger
 
 `android/unbound-verbs.tsv` unchanged. `App.Approve` was already bound (called from production
@@ -1256,7 +1261,7 @@ GATED INTENTION riding on M4.0, not a made decision); co-presence as proven fact
 lease-as-plumbing/dead-as-UX consequence and `nx44.8`'s closure; the held hook rejected on
 co-presence grounds with mirror-program.md section 3's reasoning reproduced, the grid-gated
 injection as M1.2 shipped it (recorded key map, refusing recognizer, the stray-keystroke race and
-the one-seeded-view gate that closes it, `ok` means APPLIED, resolution by observation, the
+the one-seeded-view gate, `ok` means APPLIED, resolution by observation, the
 watchdog), and Channels as designated successor carrying M1.6's four hard blockers out of its seven
 promotion criteria plus the re-check signal; and the R1/R2 schema rulings with their reasoning
 (fold-by-ref already exists; `verification-metadata.xml` churn is a deliberate human-review gate).
@@ -1269,3 +1274,257 @@ filed. Docs-only item: no test to write RED, and the gates were run as a formali
 (`go build ./...`, `go test ./...`, `go vet ./...`, `golangci-lint run` -- all exit 0). Both indexes
 updated (`docs/adr/README.md` row plus its next-free-number line, now ADR-015 because
 mirror-program.md M3.1 has reserved 014; `docs/INDEX.md` Decisions list).
+
+---
+
+## M1.8 -- The review's fixes: the gate binds to the request, and every sentence says what it can
+
+The adversarial review of 2026-08-13 returned FIX_FIRST on three items and left four INFO notes.
+This section records what each one turned into. Nothing about M1.2's mechanism was found wrong:
+the daemon still never types without a positively-recognized recorded dialog, still never resolves
+without observing the dialog leave, and still refuses a re-delivered approve during the
+applied-but-unobserved window. What the review found was a gate that proved slightly less than it
+was said to prove, and three sentences that claimed more than they held.
+
+### The gate binds to the request (MEDIUM, `20d5541`)
+
+**What was wrong.** `approveInteraction` validated the D7 tuple against `d.approvals[local]` and
+then called `d.applyDecision(local, verdict)`. Only the session id and the verdict crossed into
+`dialogTap` -> `ApprovalKeys(snap, verdict)`, so no variant, tool, summary or item identity ever
+met the recognized dialog. The gate's claim was "an answerable dialog is on screen", never "THIS
+request's dialog is on screen".
+
+**The route, traced end to end.** `hookclient.Post` is fire-and-forget -- it writes the hook body
+and closes without waiting for the daemon to shape an item -- so a dialog is on the glass before
+its own card exists. The owner answers dialog A at the terminal; claude raises dialog B
+immediately. A stays pending daemon-side, because the interaction dimension never leaves
+`permission` and so `noteInteractionStatus` observes nothing to resolve. A phone approve for A
+arriving in that window passed the tuple check (every field is still A's and still valid), passed
+the grid gate (B's dialog is answerable), and typed A's verdict into B. The window is bounded by
+hook-processing latency and closed by `openApprovalLocked`'s supersede once B's capture lands. It
+cannot fire in the couch scenario -- it needs a human at the keyboard concurrently -- which is why
+it is MEDIUM and not HIGH.
+
+**What ships.** The request's own interaction-schema.md §7 action is recorded on `pendingApproval`
+at capture (`openApprovalLocked` reads `in.Action.Type`) and carried through `applyDecision` ->
+`dialogTap` -> `ApprovalKeys(snap, verdict, action)`. The adapter refuses a recognized variant the
+action does not name:
+
+```go
+var variantForAction = map[string]string{
+	"execute": VariantBash,
+	"edit":    VariantEdit,
+	"write":   VariantEdit,
+}
+```
+
+Three properties of that shape were chosen rather than fallen into:
+
+- **The join is the ADAPTER's**, which is why the action goes down instead of the variant coming
+  up. Which screens belong to which action is per-CLI knowledge, exactly like the key map, and a
+  daemon that held this table would be reading a vocabulary §3.5 keeps the CLI's.
+- **It is fail-closed.** An action with no row -- `read`, `search`, `fetch`, IS-TOOL-2's `other`,
+  or none at all -- matches no variant and is refused. That is the same posture the recognizer
+  already takes towards a title it has no fixture for.
+- **`write` shares `VariantEdit` on the reading that both tools propose the same act on the same
+  file.** No fixture records a Write dialog's title, so if claude titles that box anything but
+  `Edit file` the recognizer refuses one step earlier and the row never fires. The pairing can only
+  ever be as permissive as `dialogTitles` already is.
+
+**It is a PARTIAL bind and the code says so.** Bash-after-Bash stays ambiguous, because the
+recognizer reads a variant and not a command. What is removed is the CROSS-TOOL case -- the one
+where the typed key answers a question of a different KIND than the card showed. The residue is
+stated in `ApprovalKeys`'s own comment rather than left for the next reader to discover.
+
+**RED, adapter half.** The signature carried `action` before it read it, so the failure is an
+assertion and not a compile error (twelve arms; three quoted):
+
+```
+--- FAIL: TestApprovalKeys_RefusesADialogThatIsNotTheRequestsOwnTool (0.00s)
+    permapply_test.go:83: bash-approval-2.1.231: ApprovalKeys(allow, action="edit") on bash-approval-2.1.231 returned "1". an Edit request answered on the Bash dialog runs a command -- the gate must prove the dialog on screen is THIS request's, not merely that some answerable dialog is up
+    permapply_test.go:83: edit-approval-2.1.231: ApprovalKeys(allow, action="execute") on edit-approval-2.1.231 returned "1". a Bash request answered on the Edit dialog writes a file -- the gate must prove the dialog on screen is THIS request's, not merely that some answerable dialog is up
+    permapply_test.go:83: bash-approval-2.1.231: ApprovalKeys(deny, action="other") on bash-approval-2.1.231 returned "3". IS-TOOL-2's unclassifiable action names no dialog at all -- the gate must prove the dialog on screen is THIS request's, not merely that some answerable dialog is up
+```
+
+**RED, daemon half.** A real PTY repainting the recorded EDIT grid, answered by the recorded BASH
+request, with every tuple field valid -- so the refusal can only be the gate's:
+
+```
+--- FAIL: TestApproveInjection_ADialogRaisedByADIFFERENTToolIsRefusedAndTypesNothing (3.74s)
+    approval_inject_test.go:390: an approve for a BASH permission was applied to a session whose grid shows the recorded EDIT dialog. The gate must prove the dialog on screen is THIS request's -- proving only that some answerable dialog is up answers whatever question happens to be on the glass, with a verdict the owner gave for a different one
+```
+
+Both green after the map. The daemon-side arm additionally asserts `assertNothingWasTyped` (the
+fake CLI reports an EMPTY stdin line, so the refusal really left the PTY untouched) and
+`assertNoResolutionYet`.
+
+**FOUR EXISTING TESTS RE-PAIRED, none weakened.** Every assertion is unchanged; what changed is
+that each was pairing a request with the WRONG dialog, which is what the bind now forbids. This is
+the bind doing something rather than a cost of it:
+
+| test | was | now |
+| --- | --- | --- |
+| `TestApproveInjection_ADenyTypesTheRecordedDialogsDenyKeyIntoThePTY` | `claudeApproval` (Bash, `execute`) on `editDialogGrid` | new `claudeEditApproval` (`edit`) on the same grid; still asserts stdin receives the recorded deny key `"3"` |
+| `approval_verdict_test.go`'s `approvalWithVerdicts` | inherited `ToolAction{Type: "write", Path: "src/main.rs"}` while its own summary read `run rm -rf build`, against the Bash grid | `ToolAction{Type: "execute", Command: "rm -rf build"}`, which is what the summary always said |
+| `TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval`, `TestI1_TheScreensBytesAreTheFacadesBytes` | painted `bashDialogGrid`, replayed the recorded EDIT permission | paint `editDialogGrid`: one screen, one request |
+| `TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone` | one Bash grid across an Edit leg and a Bash leg | paints BOTH, in the legs' own order |
+
+The chain test is the interesting one. `gridScript` now takes a variadic list of recorded grids and
+emits one `print`/`ask` pair per grid; the fake advances only when its `ask` reads a LINE, and the
+recorded keys carry no Enter, so the test flushes the line discipline through the OWNER'S OWN
+attachment between the legs and waits for the repaint with `awaitGrid`. The session's screen now
+moves between the two requests exactly as the real CLI's does -- which the single-grid version had
+been assuming.
+
+### The re-announcement keeps the answer already typed (INFO, `20d5541`)
+
+`openApprovalLocked` unconditionally replaced `d.approvals[session]` with a fresh
+`pendingApproval`, including on the branch its own comment describes as by design: the SAME request
+re-announced, which `itemIDLocked` folds under one item_id. The replacement dropped `applied` and
+`appliedOp`, and both are load-bearing:
+
+- `applied` is what tells the OBSERVATION that the phone answered. Forgetting it degrades the
+  resolution to `answered_locally` / `by: owner` -- a decision put in the mouth of somebody who
+  never touched the keyboard.
+- `ap.applied != ""` is `approveInteraction`'s second case, the one that refuses a re-delivered
+  approve during the applied-but-unobserved window. Forgetting it reopens a SECOND keystroke into a
+  dialog that has one answer left in it.
+
+It is NOT reachable for claude today, and the review traced why: `approvalFrom` builds `Ref` as
+`prefix + tool + ":" + ReceivedAtMs`, and `ReceivedAtMs` is stamped daemon-side per hook arrival
+(`serveHookInteractions`), so a re-announcement mints a new item_id and supersedes rather than
+folds. Nothing in this daemon's side of the contract says an adapter may not have a stable approval
+ref, so it is fixed rather than filed. Three lines, and a test that drives the state directly:
+
+```
+--- FAIL: TestApprovalRequest_AReAnnouncementDoesNotForgetAnAnswerAlreadyTyped (2.34s)
+    approval_rr_test.go:122: after its own re-announcement the request records applied="" appliedOp=""; want "allowed"/"op-typed". The keystroke really was typed into the CLI's dialog, and a binding that forgets it attributes the phone's answer to an owner who never touched the keyboard AND reopens the second-keystroke window `ap.applied != ""` exists to close
+```
+
+### The one sentence a refusal shows now claims only what is true of all five (MEDIUM, `5b3105b`)
+
+`refusalNoticeFor` renders ONE head string for every refused verdict, and `CommandVerdict.of` maps
+`stale_approval`, `invalid_field` and the code-less `not_applicable` all to `REFUSED`. The string
+was `"This approval was already answered"`, which is true of `stale_approval`'s causes and
+`already_applied` -- and false of `no_dialog`, `unmappable_decision` and `not_applicable`.
+
+**Why `no_dialog` is the one that matters.** The recognizer anchors on claude 2.1.231's recorded
+title strings (`Bash command` / `Edit file`) and the exact labels `Yes` / `No`; nothing checks the
+installed version at runtime, and the post-injection watchdog only fires after a SUCCESSFUL
+injection. So the day claude auto-updates off 2.1.231, every phone tap refuses `no_dialog`, the CLI
+stays blocked at the terminal -- and the phone tells its owner the request was already answered.
+The owner's next move differs completely between those two worlds.
+
+The head string is now `"Your machine could not apply this answer"`, which is true of all five
+reasons and asserts no cause. It names the MACHINE and not the verb, for `killNoticeFor`'s reason
+(`"Your machine did not end this session"` is a fact about the session; `"kill failed"` is a report
+about a button), and `refusalDetailFor` still prints the daemon's verbatim reason underneath in the
+mono register, which is where the specific cause has always lived. The card correctly stays
+PENDING either way; that was never in question.
+
+The daemon's own words for the `no_dialog` case were tightened in the same pass, because they are
+what the detail cell prints: `errNoDialog` now reads `"the session's screen does not show the
+permission dialog this request raised"`, which is true of all three causes it covers (nothing
+answerable on screen, a version whose strings moved, and M1.8's different-tool dialog) where the
+old text named only the first two.
+
+RED, off the JUnit XML (three arms; two are the re-worded existing assertions, one is the new
+version-skew arm):
+
+```
+a stale card reads calmly, and claims only that the machine did not apply it
+    org.junit.ComparisonFailure: the sheet's own sentence names no error and no verb, and asserts no CAUSE -- one head string covers five refusal reasons, so it may only claim what is true of every one of them: the answer was not applied expected:<[Your machine could not apply this answer].> but was:<[This approval was already answered].>
+a dialog the machine could not recognize does not read as already answered
+    org.junit.ComparisonFailure: the machine looked at the screen and did not know it; saying the approval was already answered sends the owner away from a CLI that is still waiting expected:<[Your machine could not apply this answer].> but was:<[This approval was already answered].>
+an invalid decision reads the same calm way, in the machine's own words
+    org.junit.ComparisonFailure: expected:<[Your machine could not apply this answer].> but was:<[This approval was already answered].>
+```
+
+The assertion the first arm replaces, verbatim: `"the sheet's own sentence names no error and no
+verb -- a card the daemon refused to type into is, from here, simply one that was already
+answered", "This approval was already answered."`. It was true of the case it was written against
+and false of three others the same head string covers.
+
+The review's optional follow-up -- emitting the watchdog's `session_status` note on a `no_dialog`
+refusal too, so a version-skew failure leaves a trace on the transcript -- was NOT taken tonight,
+on the review's own framing of it as optional. It is a behaviour change to a refusal path that
+currently writes nothing, and it belongs with a version-detection story rather than bolted to a
+copy fix.
+
+### Narrowed, not closed (MEDIUM, `7fabed9`)
+
+ADR-013 §3 stated *"The stray-keystroke race is closed by the gate"* and *"the screen the
+recognizer judged is the screen the keys are typed at"*; `inject.go`'s header said the gate and the
+keystroke *"must not straddle a repaint ... with no second dial in between"*. What the shared
+subscription actually guarantees is only that no SECOND DIAL intervenes. The seed is either the
+shim's snapshot fetched over the wire during the dial or `t.mirror.Snapshot()` -- the daemon's
+mirror of a frame stream that arrives with transport latency -- and `sub.Input` travels back over
+that same wire. The judged screen is the screen as of the SEED, not as of the write.
+
+All three sites now say the same true thing: the gate NARROWS the terminal-answered-first race to
+one tap round trip, the residual window is the transport latency between the mirror and the PTY,
+and the race is physically unclosable from the daemon side, which owns neither the glass nor the
+keyboard. Each also states what bounds the residue, which is the part worth having: M1.1's recorded
+keys carry NO ENTER, so a digit arriving after the dialog has gone lands in the composer
+un-submitted -- visible and deletable -- rather than as an answer the agent acts on.
+
+`docs/specifications/mirror-program.md` carried the same overclaim in two places (section 3 step 2,
+and section 6's risk row) and is corrected identically; step 2 additionally states the M1.8
+condition the gate now validates. This is the repo's own 2026-08-03 P0 lesson about comments
+written in the same commit as the code they describe, applied to itself.
+
+### The replay justification names the case that actually catches it (INFO, `7fabed9`)
+
+`handleApprove`'s header justified the absence of an `OperationClaimer` dedup with "a re-delivered
+approve finds the approval already resolved and is refused CodeStaleApproval by
+`approveInteraction`'s FIRST case". Under M1.2 the first case no longer catches a redelivery during
+the observation interval -- the tap resolves nothing, so the approval is still pending and
+`ap.applied != ""` (the second case) is what refuses it. The conclusion holds; the reason had
+drifted. The sentence now names both windows and says why their union is what makes the absent
+claimer safe rather than lucky. `protocol.md` was corrected for this in the same commit that opened
+the gap; the Go comment was not.
+
+### The three INFO notes that closed with no action
+
+- **Recognizer honesty probe.** The reviewer built unrecorded dialogs (`Write file`, `Fetch URL`,
+  `MCP tool`, case variants) in the exact box/option layout, with a control proving the same
+  synthetic layout IS recognized when the title is `Bash command`; every unrecorded variant
+  refused, as did a dialog scrolled above the bottom-12 region. Two cosmetic asymmetries recorded
+  for whoever touches `permdialog.go` next: `variantAbove` walks to the FIRST rule rather than the
+  outermost, and the allow row is first-wins while the deny row is last-wins. Neither is a shipping
+  hazard (the keys are read off the real option rows either way), and neither is touched here.
+- **Version skew, both directions.** New phone (0.5.0) against the released machine (v0.9.0) and
+  old phone (0.4.2) against the new machine both resolve, with no wire change to negotiate. The
+  code-less `not_applicable` refusal degrades VISIBLY, because `mobile/app.go`'s `outcomeOf` falls
+  back to `code = ctrl.Op = "error"`, which `CommandVerdict.of` sends to `REFUSED` -- so the sheet
+  speaks rather than staying silent, and it now speaks a sentence that is true of that case too.
+- **Focus 2 (no resolution on the accepted-tap path)** was re-enumerated across all six
+  `resolveApprovalLocked` call sites and found clean.
+
+### Gates
+
+`go build ./...`, `go vet ./...`, `PATH=$HOME/go/bin:$PATH golangci-lint run` -- all exit 0.
+`go test ./... -count=1` green except the named-ignorable `internal/hookclient`
+`TestPost_RawBytesCrossTheWireVerbatim` (`bind: invalid argument`), which passes with
+`TMPDIR=/tmp`. `go test -race -count=1 ./internal/skeleton/` ok 226.938s; `-race` on
+`./internal/adapter/...` and `./internal/protocol/...` ok. `go test ./android/gate/...` green.
+
+Android RE-EXECUTED rather than judged by exit code: lane checked free (`pgrep -f
+gradle-wrapper.jar` empty, no resident java), `scripts/o2-gradle-run.sh test --rerun-tasks`,
+**61/61 tasks executed, 8m08s, exit 0**. JUnit XML aggregated independently: **1170 tests / 0
+failures / 0 errors on BOTH variants** (1169 before this section; the one new test is
+`ApprovalSheetPanelTest`'s version-skew arm), results written 20:32:21 and 20:34:41 against a
+recorded start of 20:26:26. `android/app/libs/swarm.aar` mtime unchanged at Aug 9 21:01 before and
+after -- no gomobile rebuild rode along. `android/unbound-verbs.tsv` unchanged: no verb binding
+moved.
+
+### What this section did NOT do
+
+- The watchdog still writes nothing on a `no_dialog` REFUSAL, only on a dialog that did not move
+  after a successful injection. The review offered that as an explicit optional follow-up and it is
+  not taken here: it is a behaviour change to a path that currently emits nothing, and it belongs
+  with a version-detection story rather than bolted to a copy fix.
+- `variantAbove`'s first-rule walk and the allow/deny first-wins/last-wins asymmetry are left as
+  the review found them (cosmetic; the keys are read off the real option rows either way).
+- Nothing was added to `dialogTitles`. A new title requires a recorded fixture, which is M1.1's
+  standing rule and is what keeps `variantForAction` from being able to widen the gate on its own.
