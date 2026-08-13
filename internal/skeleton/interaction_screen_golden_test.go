@@ -48,6 +48,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/protocol"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
@@ -102,7 +104,13 @@ func TestI1_TheScreensBytesAreTheFacadesBytes(t *testing.T) {
 		return rig.Summary().Reconciled
 	})
 
-	sessionID := rig.LaunchOnMachine("print E2E_I1_SCREEN\nidle 600s\n")
+	// The session PAINTS a recorded claude permission dialog and blocks on it, because since
+	// M1.2 a phone approve is APPLIED by typing that dialog's own keys into this PTY
+	// (mirror-program.md section 3) -- an approve onto a session showing no dialog is refused.
+	// The adapter resolver is the real claude one for the same reason: it holds the key map.
+	dialog, cols, rows := gridScript(t, bashDialogGrid)
+	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
+	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
 		return rig.RosterHas(sessionID)
 	})
@@ -156,6 +164,12 @@ func TestI1_TheScreensBytesAreTheFacadesBytes(t *testing.T) {
 	}
 
 	// ---- the answer comes back, and the card leaves the pending set -----------
+	// The daemon TYPED the answer into the dialog and resolved nothing; §3.6's record lands on
+	// the machine's own observation that the dialog left the screen (M1.2). The op crosses a
+	// relay and a separate gateway process, so wait for the injection before driving that
+	// observation -- the other order resolves the card as answered_locally, a different path.
+	awaitApplied(t, rig.sk, localID)
+	dialogLeaves(rig.sk, localID)
 	awaitFacadeResolution(t, rig, sessionID, card.ItemID)
 	rig.Eventually("the answered card left the phone's pending set", func() bool {
 		return len(readPendingApprovals(t, rig)) == 0

@@ -23,6 +23,7 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // approveFor builds the approve a phone would send for the session's pending card: every field
@@ -69,12 +70,17 @@ func openApprovalOn(t *testing.T, sk *Daemon, session, ref string) map[string]an
 // TestApprove_AValidApproveIsAcceptedAndResolvesTheCard. The whole point of the tuple is that
 // there is an object to validate AGAINST; this is the arm that proves the object is real and
 // that a correct answer is not refused by the checks the next test exercises.
+//
+// M1.2 REWRITE. The session now shows a recorded permission dialog, because a valid approve is
+// APPLIED and not merely recorded: there has to be something to apply it to. And the resolution
+// no longer lands on the tap -- it lands when the daemon OBSERVES the dialog leave -- so the
+// observation is driven here rather than assumed. What is asserted about that record is
+// unchanged, and deliberately: the daemon typed the phone's answer itself, so `by: phone` and
+// the echoed operation_id are as true now as they were when the tap wrote them.
 func TestApprove_AValidApproveIsAcceptedAndResolvesTheCard(t *testing.T) {
-	sk := assemble(t)
-	m := launchFake(t, sk, "print APPROVE\nidle 60s\n")
-	item := openApprovalOn(t, sk, m.ID, "req-1")
+	r := newInjectRig(t, bashDialogGrid, claudeApproval("req-1"))
 
-	code, err := sk.approveInteraction(sk.api.endpointID, "op-1", approveFor(t, sk, m.ID, item, "accept"))
+	code, err := r.sk.approveInteraction(r.sk.api.endpointID, "op-1", approveFor(t, r.sk, r.local, r.item, "allow"))
 	if err != nil {
 		t.Fatalf("a correctly-bound approve was refused %q: %v. Every field was echoed verbatim off "+
 			"the item the daemon itself minted (IS-APR-2), so a refusal here means the daemon cannot "+
@@ -84,7 +90,13 @@ func TestApprove_AValidApproveIsAcceptedAndResolvesTheCard(t *testing.T) {
 		t.Errorf("an accepted approve carries error_code %q; a code is a REFUSAL reason (R-PROT.7)", code)
 	}
 
-	res := awaitResolution(t, sk, m.ID, itemString(t, item, "item_id"))
+	// The machine's own observation: the dialog the daemon just typed at has left the screen.
+	r.sk.emitStatus(r.local, status.Status{
+		Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionPermission})
+	r.sk.emitStatus(r.local, status.Status{
+		Process: status.ProcessRunning, Turn: status.TurnActive, Interaction: status.InteractionNone})
+
+	res := awaitResolution(t, r.sk, r.local, itemString(t, r.item, "item_id"))
 	if res["by"] != "phone" {
 		t.Errorf("by = %v; want \"phone\" -- §3.6 attributes a resolution driven by a phone "+
 			"ActionApprove to the phone", res["by"])

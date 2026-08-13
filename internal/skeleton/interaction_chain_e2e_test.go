@@ -45,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/adapter/fixtureio"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -87,7 +88,13 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 		return rig.Summary().Reconciled
 	})
 
-	sessionID := rig.LaunchOnMachine("print E2E_CLAUDE_CHAIN\nidle 600s\n")
+	// The session PAINTS a recorded claude permission dialog and blocks, because since M1.2 a
+	// phone answer is APPLIED by typing that dialog's own keys into this PTY (mirror-program.md
+	// section 3): an approve onto a session showing no dialog is refused, not resolved. The
+	// adapter resolver is the real claude one for the same reason -- it holds the key map.
+	dialog, cols, rows := gridScript(t, bashDialogGrid)
+	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
+	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
 		return rig.RosterHas(sessionID)
 	})
@@ -229,6 +236,10 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 		t.Fatalf("an approve echoed verbatim off the phone's own card was refused %q: %v%s",
 			code, err, rig.gatewayTail())
 	}
+	// M1.2: the daemon TYPED the answer into the dialog and resolved nothing. The record lands
+	// on the machine's own observation that the dialog left the screen, and carries the phone
+	// because the daemon knows which key it pressed.
+	dialogLeaves(rig.sk, localID)
 
 	resolved := awaitFacadeResolution(t, rig, sessionID, card.ItemID)
 	if resolved["decision"] != "allowed" {
@@ -287,6 +298,7 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 	if err != nil {
 		t.Fatalf("the deny was refused %q: %v%s", code, err, rig.gatewayTail())
 	}
+	dialogLeaves(rig.sk, localID)
 	denied := awaitFacadeResolution(t, rig, sessionID, second.ItemID)
 	if denied["decision"] != "denied" {
 		t.Fatalf("the resolution's decision = %v; want `denied`. `deny` is the CLI's own id and carries "+

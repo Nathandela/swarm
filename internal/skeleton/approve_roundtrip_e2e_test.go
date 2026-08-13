@@ -33,10 +33,33 @@ package skeleton
 
 import (
 	"testing"
+	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/protocol"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
+
+// awaitApplied blocks until the daemon has recorded that it typed a phone answer into this
+// session's dialog. It is the join point for a test whose approve travels asynchronously (over
+// the relay and a gateway process): driving the "dialog left the screen" observation before the
+// injection has happened would resolve the card as answered_locally, which is a different path.
+func awaitApplied(t *testing.T, sk *Daemon, session string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		sk.itemMu.Lock()
+		ap := sk.approvals[session]
+		applied := ap != nil && ap.applied != ""
+		sk.itemMu.Unlock()
+		if applied {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the daemon never applied a phone answer to session %s", session)
+}
 
 // TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval.
 func TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval(t *testing.T) {
@@ -47,7 +70,13 @@ func TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval(t *testing.T) {
 		return rig.Summary().Reconciled
 	})
 
-	sessionID := rig.LaunchOnMachine("print E2E_APPROVE_ROUNDTRIP\nidle 600s\n")
+	// Since M1.2 a phone answer is APPLIED and not merely recorded: the daemon types the
+	// dialog's own keys into this PTY (mirror-program.md section 3). So the session PAINTS a
+	// recorded claude permission dialog and blocks on it, and the adapter resolver is the real
+	// claude one -- the party that holds the recorded key map.
+	dialog, cols, rows := gridScript(t, bashDialogGrid)
+	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
+	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
 		return rig.RosterHas(sessionID)
 	})
@@ -91,6 +120,13 @@ func TestApproveRoundTripE2E_APhoneTapAnswersTheMachinesApproval(t *testing.T) {
 	}
 
 	// ---- the answer comes back ----------------------------------------------
+	// The op crosses the relay and a separate gateway process, so the daemon applies it whenever
+	// it arrives; wait for the injection, THEN let the machine observe the dialog leave. Driving
+	// the observation first would resolve the card as answered_locally -- a different path, and
+	// a green test for the wrong reason.
+	awaitApplied(t, rig.sk, localID)
+	dialogLeaves(rig.sk, localID)
+
 	resolved := awaitFacadeResolution(t, rig, sessionID, card.ItemID)
 	if resolved["decision"] != "allowed" {
 		t.Errorf("the resolution's decision = %v, want `allowed`. The chosen id `allow` carries "+

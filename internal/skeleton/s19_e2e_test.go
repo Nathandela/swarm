@@ -640,12 +640,20 @@ func (b *s19Buffer) String() string {
 // the roster the phone observes was populated by something the phone did not do.
 func (r *s19Rig) LaunchOnMachine(script string) string {
 	r.t.Helper()
+	return r.LaunchOnMachineSized(script, 80, 24)
+}
+
+// LaunchOnMachineSized is LaunchOnMachine at an explicit terminal size, for a test whose script
+// paints a recorded grid: a 100x30 capture replayed into an 80x24 PTY wraps, and a wrapped box
+// rule is not a box rule.
+func (r *s19Rig) LaunchOnMachineSized(script string, cols, rows int) string {
+	r.t.Helper()
 	id, _, err := r.owner.Launch(protocol.LaunchReq{
 		Agent:   "fake",
 		Cwd:     r.t.TempDir(),
 		Options: map[string]string{"script": r.script(script)},
-		Cols:    80,
-		Rows:    24,
+		Cols:    cols,
+		Rows:    rows,
 	})
 	if err != nil {
 		r.t.Fatalf("owner Launch: %v", err)

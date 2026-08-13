@@ -34,6 +34,7 @@ package claude
 import (
 	"strings"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/vt"
 )
 
@@ -83,6 +84,32 @@ type PermissionDialog struct {
 	Variant   string // VariantBash | VariantEdit
 	AllowKeys string // keystrokes that approve the request
 	DenyKeys  string // keystrokes that refuse it
+}
+
+// ApprovalKeys makes this adapter an adapter.ApprovalApplier (Mirror M1.2): it answers the
+// dialog currently on snap with the keys that carry the given verdict's polarity.
+//
+// It is the ONLY place the normalized verdict meets the recorded key map, and the join is
+// deliberately narrow. The verdict is what approvalFrom classified the CLI's own decision id
+// as at capture; the keys are what M1.1 recorded off the live dialog. Everything else -- allow
+// vs deny, which grid is a dialog at all -- is already decided by the two halves.
+//
+// A verdict outside allow|deny is REFUSED rather than folded into allow. There are exactly two
+// answerable options on the recorded dialog and `other` is IS-TOOL-2's posture for a decision
+// the adapter could place neither way, so answering it with the allow key would type a grant
+// nobody gave.
+func (claudeAdapter) ApprovalKeys(snap *vt.Snap, verdict string) (string, bool) {
+	dlg, ok := RecognizePermissionDialog(snap)
+	if !ok {
+		return "", false
+	}
+	switch verdict {
+	case adapter.VerdictAllow:
+		return dlg.AllowKeys, true
+	case adapter.VerdictDeny:
+		return dlg.DenyKeys, true
+	}
+	return "", false
 }
 
 // RecognizePermissionDialog reports whether snap shows a claude tool-approval dialog

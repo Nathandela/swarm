@@ -30,6 +30,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -106,6 +107,15 @@ type pendingApproval struct {
 	// membership set an arriving decision is checked against and the only source for §3.6's
 	// allowed/denied split, which is why it is one map and not a set beside a table.
 	decisions map[string]string
+	// applied is §3.6's resolution the DAEMON ITSELF typed into the session's dialog on the
+	// phone's behalf (Mirror M1.2), and appliedOp the phone's operation_id. They are recorded
+	// AT INJECTION and read by the OBSERVATION that resolves the request, which is the only
+	// thing that lets that record name who answered: a resolution seen after the daemon typed
+	// the phone's key is not the owner's `answered_locally`, and saying so would put a decision
+	// in the mouth of somebody who never touched the keyboard. Empty until a phone answer is
+	// applied, and cleared again if the injection is refused.
+	applied   string
+	appliedOp string
 }
 
 // openItem is one item the producer has journalled `in_progress` and not yet closed. It carries
@@ -273,7 +283,16 @@ func (d *Daemon) noteInteractionStatus(session string, cur status.Interaction) {
 	d.interacted[session] = cur
 	var out []json.RawMessage
 	if awaitingInput(prev) && !awaitingInput(cur) {
-		out = d.resolveApprovalLocked(session, resolveAnsweredLocally, byOwner, "")
+		// M1.2: this transition is ALSO the observation that a phone answer landed. When the
+		// daemon typed that answer itself, the dialog leaving is the phone's decision being
+		// applied -- so the record carries what was typed, `by: phone`, and the phone's own
+		// operation_id. It is the SAME observation either way; only the attribution differs,
+		// and only because the daemon has first-hand knowledge of what it pressed.
+		decision, by, operation := resolveAnsweredLocally, byOwner, ""
+		if ap := d.approvals[session]; ap != nil && ap.applied != "" {
+			decision, by, operation = ap.applied, byPhone, ap.appliedOp
+		}
+		out = d.resolveApprovalLocked(session, decision, by, operation)
 	}
 	d.itemMu.Unlock()
 	d.offerAll(session, out)
@@ -372,8 +391,9 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 // ---- IS-LIFE-4: validating an arriving approve -----------------------------
 
 // approveInteraction validates ONE arriving approve against the stored binding tuple and the
-// daemon's own clock, BEFORE any effect, and records the answer. A stale or mismatched approve
-// is refused with a code from D10's taxonomy and applies nothing (ADR-007 D7: "never translated
+// daemon's own clock, BEFORE any effect, and then APPLIES it: it types the session's own dialog
+// keys into the PTY the daemon owns (Mirror M1.2, inject.go). A stale or mismatched approve is
+// refused with a code from D10's taxonomy and applies nothing (ADR-007 D7: "never translated
 // into a blind keystroke").
 //
 // machine is the endpoint id the signed command tuple named (D4); operationID is the phone's
@@ -381,14 +401,19 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 // switch are checked BEFORE this by authorizeCommand and requireRemoteAuthz -- this is the
 // content check those cannot make, and it is the one D7 specifies.
 //
-// IT NOW HAS A WIRE ROUTE (W-APPROVE, docs/verification/a1c-approve-roundtrip.md), and the note
-// that used to stand here -- "opForAction refuses an approve one hop short of the daemon" -- is
-// the record of what was built to remove it: protocol.OpApprove + handleApprove, the
-// InteractionApprover seam coreAPI satisfies, remotegw's ActionApprove arm carrying the
-// ApproveReq in-envelope, and swarmmobile.App.Approve at the far end. What is still the
-// PRODUCER's and not this function's is APPLYING the decision -- writing the adapter's
-// DecisionAction back on the CLI's pending hook (ADR-010 §4). This remains the half neither the
-// route nor the application can define: the object to validate against.
+// IT NOW APPLIES, AND IT NO LONGER RESOLVES. Both halves of that sentence are the M1.2 change,
+// and they are one decision. The note that used to stand here -- "what is still the PRODUCER's
+// and not this function's is APPLYING the decision" -- described a function that dismissed the
+// card on every surface while the CLI stayed blocked on a dialog nobody had answered. The card
+// lied. So this now writes the dialog's recorded keys, and emits NOTHING: §3.6's record lands
+// when the daemon OBSERVES the dialog leave (noteInteractionStatus above), which is the only
+// evidence that anything happened. A dialog that does not move is surfaced by the watchdog.
+//
+// THE GATE BEFORE THE KEYSTROKE is what makes typing safe at all. Between the phone rendering
+// its card and the tap arriving, the owner may have answered at the terminal; the dialog is
+// then gone and a "1" lands in the composer as USER INPUT the agent will act on. So the live
+// grid must still positively show a dialog the session's adapter has a RECORDED key map for
+// (M1.1's fixtures), and anything else is a refusal.
 func (d *Daemon) approveInteraction(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error) {
 	endpoint, local, ok := protocol.ParseID(req.Session)
 	if !ok {
@@ -409,6 +434,16 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 		// from the phone's side: the card it is holding is no longer the machine's state.
 		d.itemMu.Unlock()
 		return protocol.CodeStaleApproval, errIsLife4("no approval %q is pending for session %q", req.InteractionID, req.Session)
+	case ap.applied != "":
+		// M1.2: an answer has already been TYPED for this request and the daemon is waiting for
+		// the observation that resolves it. This is the window a re-delivered approve arrives in
+		// -- the resolution no longer lands on the tap, so "already resolved" cannot catch it --
+		// and a second keystroke is exactly what must not happen: harmless while the dialog is
+		// still up, and a stray character in the composer the moment it goes.
+		d.itemMu.Unlock()
+		return protocol.CodeStaleApproval, errIsLife4(
+			"approval %q has already been answered from a phone; the machine is waiting for its dialog to close",
+			req.InteractionID)
 	case ap.shimPID != req.AgentInstance.ShimPID || ap.shimStart != req.AgentInstance.ShimStartTime:
 		d.itemMu.Unlock()
 		return protocol.CodeStaleApproval, errIsLife4("approve names agent instance {%d,%d}; the request was raised by {%d,%d}",
@@ -446,21 +481,58 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	// guessing at a vocabulary it does not own, which is the posture IS-TOOL-2 forbids for exactly
 	// this reason. Conformance obliges every offered decision to carry one.
 	//
-	// ponytail: ONE branch, on `deny`. §3.6 offers no third value for a remote answer, so `other`
-	// -- the escape hatch for a choice the adapter could place neither way -- lands in `allowed`
-	// with the rest. That is deliberate and it is the weaker half: `denied` is an assertion the
-	// owner REFUSED, and inventing one from an unclassified tap would be the guess the verdict
-	// exists to remove, while `allowed` here means only "answered from the phone, not refused".
-	// A verdict-less decision resolves the same way, which is what the conformance obligation is
-	// there to stop shipping.
+	// SINCE M1.2 THE VERDICT ALSO SELECTS THE KEYS, which closes the hole its own ponytail note
+	// used to record: `other` and a verdict-less decision used to resolve `allowed` with the
+	// rest, because §3.6 offers no third value. That is no longer a weaker reading, it is an
+	// UNANSWERABLE one -- the recorded dialog has exactly two answerable options and nothing says
+	// which of them a decision the adapter could place neither way belongs to. Typing one anyway
+	// would be precisely the guess the verdict exists to remove, so it is refused instead.
 	decision := resolveAllowed
-	if verdict == adapter.VerdictDeny {
+	switch verdict {
+	case adapter.VerdictAllow:
+	case adapter.VerdictDeny:
 		decision = resolveDenied
+	default:
+		d.itemMu.Unlock()
+		return protocol.CodeInvalidField, errIsLife4(
+			"decision %q of approval %q carries no grant/refuse verdict, so no key on the session's "+
+				"dialog answers it", req.Decision, req.InteractionID)
 	}
-	out := d.resolveApprovalLocked(local, decision, byPhone, operationID)
+
+	// RECORDED BEFORE IT IS TYPED. The observation that resolves this request can land the
+	// instant the keys do -- the status engine may already be mid-sample -- and a resolution
+	// that arrived between the write and this note would be attributed to an owner who was
+	// never there.
+	itemID := ap.itemID
+	ap.applied, ap.appliedOp = decision, operationID
 	d.itemMu.Unlock()
-	d.offerAll(local, out)
+
+	if err := d.applyDecision(local, verdict); err != nil {
+		d.clearAppliedNote(local, itemID)
+		if errors.Is(err, errNoDialog) {
+			// The terminal answered a beat earlier, or the screen is one no recorded key map
+			// covers. Either way the card the phone holds is no longer the machine's state,
+			// which is what stale_approval says to a retry policy. The card stays PENDING: the
+			// daemon refused to type, it did not decide anything.
+			return protocol.CodeStaleApproval, errIsLife4("approval %q was not applied: %v", req.InteractionID, err)
+		}
+		// A machine-side capability or transport failure. It carries NO code for
+		// ApproveInteraction's reason: none of D10's six describes one, and mapping it to
+		// not_authorized would send a correctly-paired owner off to re-pair a device that is fine.
+		return "", errIsLife4("approval %q could not be applied: %v", req.InteractionID, err)
+	}
+	d.watchInjection(local, itemID, verdict)
 	return "", nil
+}
+
+// clearAppliedNote drops the injection note from a session's pending approval, iff it is still
+// the same request. A refused injection typed nothing, so nothing may later be attributed to it.
+func (d *Daemon) clearAppliedNote(session, itemID string) {
+	d.itemMu.Lock()
+	if ap := d.approvals[session]; ap != nil && ap.itemID == itemID {
+		ap.applied, ap.appliedOp = "", ""
+	}
+	d.itemMu.Unlock()
 }
 
 // machineID is this daemon's stable federation endpoint id, or "" before the assembly wired one

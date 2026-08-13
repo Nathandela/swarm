@@ -388,16 +388,39 @@ from the sealed `RemoteCommand.approve` the phone appended. Three rules make it 
 - **The `decision` is deliberately UNSIGNED** (IS-LIFE-4). It rides inside the
   epoch-sealed frame — unforgeable by the relay, alterable only by the gateway, which is
   the documented D4/D5 owner-uid residual and not a new one.
-- **The daemon validates before any effect** and never translates an approve into a blind
-  keystroke (ADR-007 D7). The stored binding tuple (agent instance, content hash,
-  daemon-authoritative expiry) and the offered decision set are checked; a mismatch is
-  `stale_approval`, a decision the request never offered is `invalid_field`, and the card
-  is left pending in that case. On success exactly one `approval_resolved` is journalled
-  (IS-LIFE-2), attributed `by: phone` and echoing the phone's `operation_id`.
+- **The daemon validates before any effect, and then APPLIES the answer.** ADR-007 D7 forbids
+  translating an approve into a *blind* keystroke; Mirror M1.2 (mirror-program.md section 3)
+  is what makes it a sighted one. The stored binding tuple (agent instance, content hash,
+  daemon-authoritative expiry) and the offered decision set are checked first, and only then
+  does the daemon read the session's LIVE screen and — if the session's adapter still
+  recognizes a permission dialog it holds a **recorded** key map for — write that dialog's own
+  keys into the session's PTY through the shared session tap. The card is left pending on
+  every refusal below.
+
+  | refused because | code |
+  |---|---|
+  | the binding tuple, the expiry echo, or the daemon's own window does not match | `stale_approval` |
+  | an answer has already been typed for this request and is awaiting observation | `stale_approval` |
+  | the live screen no longer shows an answerable dialog (the terminal answered first) | `stale_approval` |
+  | the decision was never offered by the request | `invalid_field` |
+  | the decision's adapter-classified verdict is neither allow nor deny, so no key answers it | `invalid_field` |
+  | this session's CLI is not answered by keystroke at all, or its PTY is unreachable | *(no code)* |
+
+  The screen gate is the safety property, not a formality: between the phone rendering its
+  card and the tap arriving, the owner may have answered at the terminal, and a key typed at
+  a dismissed dialog lands in the composer as input the agent acts on.
+
+- **`ok` means APPLIED, not RESOLVED.** The daemon journals no `approval_resolved` on the op.
+  §3.6's record lands when the daemon OBSERVES the session leave the waiting state
+  (IS-LIFE-2's existing paths), and is attributed `by: phone` echoing the phone's
+  `operation_id` because the daemon typed that answer itself. A dialog still on screen a few
+  seconds after the keys were written is surfaced as a `session_status` item and never as a
+  resolution: a card may not claim an outcome nobody observed.
 
 `operation_id` is the phone-minted idempotency key of the OP and is never equal to
 `interaction_id`, which names the interaction (IS-APR-1). No replay dedup is needed: a
-re-delivered approve finds the approval already resolved and is refused `stale_approval`.
+re-delivered approve finds the approval already answered or already resolved, and is refused
+`stale_approval` either way.
 
 ### `terminal_subscribe` / `terminal_snapshot`
 
