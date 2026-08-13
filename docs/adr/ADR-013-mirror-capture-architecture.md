@@ -132,17 +132,27 @@ Four properties of that design are decisions in their own right:
   `false`, and a `false` refuses the injection rather than guessing. It is the **stricter reader of
   a screen the engine already classifies**, not a second opinion about it; the subset relation is
   pinned by `TestRecognizedDialog_IsPermissionToTheStatusEngineToo`, not asserted in prose.
-- **The stray-keystroke race is closed by the gate, and the gate is why the design is a gate at
-  all.** Between the phone rendering a card and the tap arriving, the owner may have answered at
-  the terminal. A key typed at a dismissed dialog lands in the composer as input the agent acts on.
-  So the injection is refused (`no_dialog`) when the live grid no longer shows an answerable
-  dialog, and refused (`already_applied`) when an answer has already been typed and is awaiting
-  observation — the hole the design itself opened, since "already resolved" no longer catches a
-  re-delivered approve during the observation interval. **The gate and the keystroke share one
-  seeded view**: the subscription is seeded with the grid as of the moment it joined and writes
-  through the same handle, so the screen the recognizer judged is the screen the keys are typed at,
-  and no second dial can slip a repaint between them. Every refusal leaves the card PENDING — the
-  daemon declined to type; it decided nothing.
+- **The stray-keystroke race is narrowed to one tap round trip by the gate, and the gate is why the
+  design is a gate at all.** Between the phone rendering a card and the tap arriving, the owner may
+  have answered at the terminal. A key typed at a dismissed dialog lands in the composer as input
+  the agent acts on. So the injection is refused (`no_dialog`) when the live grid no longer shows an
+  answerable dialog, refused (`already_applied`) when an answer has already been typed and is
+  awaiting observation — the hole the design itself opened, since "already resolved" no longer
+  catches a re-delivered approve during the observation interval — and refused when the recognized
+  dialog was raised by a **different tool** than the pending request's own (M1.8: the request's §7
+  action must name the variant on screen, so a chained `A answered, B raised` pair cannot be
+  answered with A's verdict). **The gate and the keystroke share one seeded view**: the subscription
+  is seeded with the grid as of the moment it joined and writes through the same handle, so no
+  SECOND DIAL can interleave between the read and the write.
+  **What that does not close, stated plainly.** The seed is either the shim's snapshot fetched over
+  the wire during the dial or the daemon's own mirror of a frame stream that arrives with transport
+  latency, and `sub.Input` travels back over the same wire. So the judged screen is the screen as of
+  the seed, not as of the write, and the terminal-answered-first race is narrowed to one tap round
+  trip rather than eliminated — it is physically unclosable from the daemon side, which owns neither
+  the glass nor the keyboard. The residual consequence is bounded by M1.1's own recording: the keys
+  carry **no Enter**, so a digit that arrives after the dialog has gone lands in the composer
+  un-submitted, where it is visible and deletable rather than acted on. Every refusal leaves the
+  card PENDING — the daemon declined to type; it decided nothing.
 - **A verdict outside allow/deny is refused, not guessed** (`unmappable_decision`). This reversed a
   prior test's conclusion on purpose: while the tap merely *recorded* an outcome, resolving `other`
   as allowed was defensible; once the answer is *applied*, typing the allow key would run something

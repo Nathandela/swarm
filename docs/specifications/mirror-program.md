@@ -82,9 +82,13 @@ Instead, M1 ships the spec's own fallback as the primary path (IS-LIFE-6 prompt-
 1. The dialog appears in the terminal exactly as today (the hook returns without a decision).
 2. The phone card's Allow/Deny maps to the dialog's accepted keys, injected by the daemon into
    the PTY it owns -- after validating (a) the approval tuple is still unresolved and (b) the live
-   VT grid still shows the permission dialog (the status engine already classifies
-   needs-approval). This gate closes the stray-keystroke race: if the terminal answered a beat
-   earlier, the injection is refused rather than typed into the composer.
+   VT grid still shows the permission dialog **this request raised** (the status engine already
+   classifies needs-approval; the recognized variant must be the one the request's own action
+   names -- M1.8). This gate NARROWS the stray-keystroke race to one tap round trip: if the
+   terminal answered a beat earlier, the injection is refused rather than typed into the composer.
+   It does not close it -- the judged grid is the daemon's mirror and the keystroke travels back
+   over the same wire -- and the residue is bounded by the recorded keys carrying no Enter, so a
+   late digit sits in the composer un-submitted rather than acting as an answer (ADR-013 §3).
 3. Resolution is emitted only by observation (subsequent hooks / grid transition), never by the
    tap -- the card cannot lie. A post-injection watchdog surfaces a non-transitioning dialog.
 4. First-answer-wins falls out by construction: both surfaces answer the same dialog.
@@ -202,8 +206,10 @@ honest status card -- nothing in between.
   before M4 depends on its outcome.
 - **Claude transcript tail** is internal-format and lagging: enrichment-only by design; a format
   change degrades detail, never the feed (M3.4 carries a tail-killed negative control).
-- **Stray-keystroke race on approvals**: closed by the grid-state gate + tuple check + watchdog
-  (section 3); the characterization fixture refuses unknown dialogs outright.
+- **Stray-keystroke race on approvals**: narrowed to one tap round trip by the grid-state gate +
+  tuple check + watchdog (section 3); the characterization fixture refuses unknown dialogs
+  outright, and the recorded keys carry no Enter, so the residue is an un-submitted digit in the
+  composer rather than a submitted answer.
 - **Throughput ceiling** (8 appends/s per target): adapter-side delta batching ships with the
   first streaming producer; measured before any further valve is added.
 - **Channels is a research preview**: spike stays flagged and non-release until the preview gate

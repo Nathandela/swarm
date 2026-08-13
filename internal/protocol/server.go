@@ -1505,9 +1505,15 @@ func (cc *clientConn) handlePushPrefs(c Control) {
 // place where the collision would apply a decision.
 //
 // It needs no OperationClaimer replay dedup, for handlePushPrefs's reason arrived at from the
-// other side: a re-delivered approve finds the approval already resolved and is refused
-// CodeStaleApproval by approveInteraction's first case, which is the correct answer to a
-// replay and fails closed by construction rather than by a second store.
+// other side: a re-delivered approve is refused CodeStaleApproval by approveInteraction, which
+// is the correct answer to a replay and fails closed by construction rather than by a second
+// store. WHICH of its cases catches the replay depends on when it arrives, and M1.2 added the
+// one that covers the gap the others left: the tap no longer resolves anything, so between the
+// keystroke and the observation that resolves the request the approval is still pending and
+// "already resolved" catches nothing -- `ap.applied != ""` catches it instead, and refuses the
+// second keystroke that would otherwise land in the composer the instant the dialog goes. After
+// the observation lands the first case (`ap == nil`) has it again. Both windows are covered,
+// which is what makes the absence of a claimer safe rather than lucky.
 func (cc *clientConn) handleApprove(c Control) {
 	ia, ok := cc.srv.d.(InteractionApprover)
 	if !ok {
