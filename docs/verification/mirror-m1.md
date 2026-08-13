@@ -12,6 +12,7 @@ rewrite an earlier section, and keep the run output verbatim.
 | M1.2 | Apply-by-injection: the phone's answer is typed into the CLI's own dialog, gated on the live grid; the tap stops resolving | `dwwv.2.2` | settled -- injection primitive shipped, 5 refusal reasons, resolution moved to observation, 4 tests rewritten |
 | M1.3 | Resolution attribution: the `PermissionDenied` capture row, and which of the five daemon paths fires when the terminal answers | `dwwv.2.3` | settled -- PARTIAL by finding, not by omission: the hook does not fire on the path this item needs (four real captures + binary analysis), owner-path and phone-path attribution both verified correct as shipped, one new test, follow-up `agents-tracker-hgyg` filed |
 | M1.4 | Approval sheet lives in session detail (it used to navigate out to the inbox); `App.Approve`'s answer settles like `kill` and `take_control` already do | `dwwv.2.4` | settled -- `approvalHost` re-parented between the inbox list and the session detail on `statusHost`'s own slot pattern, `openApproval` no longer navigates, settle wired with a calm refusal-only notice (M1.2's `ok` means APPLIED, not RESOLVED), 6 new/expanded test files, all gates green |
+| M1.5 | Approval push wake deep-links to the card: the notification's tap action | `dwwv.2.5` | settled -- PARTIAL by finding, not by omission: the wake envelope carries no session id (78-byte content-free constant, ADR-007 B20) so a direct deep-link to session detail is not honest; shipped a tap action that opens the app fresh on its default Inbox screen (`needs_input` first, PB-SEC-11's "reads nothing off the intent" boundary intact), 4 new tests, follow-up `agents-tracker-dwwv.3.2` filed for the envelope question |
 
 ---
 
@@ -1041,3 +1042,194 @@ reads); the Go gates above confirm nothing regressed, not that anything moved.
   there is no lower-level seam that exercises it either. It is a single call to a stock platform
   API with well-defined no-op behaviour absent a scrolling ancestor, recorded here as an honest gap
   rather than a claimed one.
+
+---
+
+## M1.5 -- Approval push wake deep-links to the card: the notification's tap action
+
+### The question
+
+M1.4 moved the approval sheet into session detail. This item's question, as posed: does an
+approval push notification, when tapped, open the app on that session's detail with the approval
+visible -- and if the wake does not carry enough to identify the session, what is the honest
+fallback that still lands the user one tap from the card.
+
+### Re-verified: what the envelope carries, and what the notification did on tap before this item
+
+**The envelope carries no session identity, and this is a design constraint, not a gap.**
+`internal/remotegw/push.go:484-496` (`sealWake`) builds the wake from `crypto.SealWake` over an
+**empty plaintext** -- `n.cfg.Seq.Next()`, `EpochID`, `IssuedAt`, both key ids left zero -- with
+no session id, no group, no count anywhere in it, and the KDoc above it is explicit: "the wake is a
+constant 78 bytes over an EMPTY plaintext ... The zero key ids are the part that is easy to get
+wrong and impossible to notice" (ADR-007 B20). `maybeWake` (`:272-357`) confirms the same wake
+fires for the interactions group as a whole, not approval_request specifically: "It fires for EVERY
+interaction record, not only approval_request ... because interaction-schema.md §10 forbids the
+gateway parsing an item". So there is no approval-specific signal to carry even in principle without
+the gateway parsing content it is forbidden to parse.
+
+`mobile/pushwake.go`'s `App.HandlePushWake` decodes this into a `WakeAlert{Text, ContentReady}` --
+two fields, neither identifying a session -- and the struct's own KDoc states the constraint as an
+invariant rather than a TODO: "It carries no session id, no machine id, no group and no count, **and
+it must not grow one**: every field here is provider-adjacent by construction". `WakeNotificationText`
+is a single package constant ("Swarm has an update for you."), argument-less, with no
+interpolation site for a session id (confirmed by the existing test `the notification strings offer
+nowhere to interpolate a session`, unchanged by this item).
+
+**What the tap did before this item: nothing.** `WakeNotifications.build` (`android/app/src/main/
+kotlin/dev/swarm/phone/push/WakeNotifications.kt`) called `Notification.Builder(...).setAutoCancel
+(true).build()` with no `setContentIntent`. `setAutoCancel` still dismisses the notification on
+tap, but with no content intent Android has nothing to launch -- a tapped wake vanished and opened
+the app on nothing. The KDoc above `build` said so as a stated decision at the time ("THERE IS NO
+ACTION ON IT, in either state"), not as an oversight; re-verifying it against a real handset was
+this item's starting question and the answer is: correct as read, and the thing this item exists to
+change. This closes a second re-verification the bead asked for: the notification did NOT do a
+"generic app open" -- it opened nothing at all.
+
+### The decision: since the envelope carries no session identity, growing it is out of scope here
+
+Per the item's own branching instruction, since the wake does not carry a session id, the envelope
+is not grown on this bead's authority -- that is a security-relevant wire-format change (ADR-007
+B20's own reasoning would have to be re-argued, not silently overridden by an Android-lane item) --
+and the fallback applies: route to the inbox with the approvals section surfaced, document the
+limit here, file the envelope question as a separate bead. `agents-tracker-dwwv.3.2` is filed under
+`agents-tracker-dwwv.3` (M2) for that question.
+
+**"Approvals surfaced" needed no new UI.** `TriageInbox.TRIAGE_ORDER` (`android/app/src/main/kotlin/
+dev/swarm/phone/ui/TriageInbox.kt:116-117`) already sorts `needs_input` -- the group an
+approval-blocked session sits in, per `push.go`'s own comment: "The category is needs_input because
+that is what an approval IS" -- first among the four triage sections, ahead of `working`,
+`ready_for_review` and `completed`. `PhoneSurface`'s own field defaults already land there:
+`destination = Destination.INBOX` (`:660`) and `detail: String? = null` (`:594`) are the class's
+initial values, so a **fresh** `PhoneSurface` shows the inbox with the needs-input section first and
+no drill-down open, with zero code written to make that true. The gap was never "the inbox doesn't
+surface approvals" -- it does, by construction -- the gap was that a tapped wake notification never
+reached that screen at all.
+
+### The routing shipped: a tap action that forces a fresh landing, reading nothing off the intent
+
+`PhoneActivity`'s own KDoc states a hard boundary, enforced by `android/gate/s18_sec11_exported_
+test.go` and by `PhoneActivityWindowTest.a_crafted_launch_intent_selects_nothing` (which drives a
+hostile intent -- a `swarm://` data URI plus `session`/`action`/`relay` extras -- and asserts the
+render is byte-identical to a plain launch): "IT READS NOTHING OFF THE INTENT. No extra, no data
+URI, no action beyond the one the filter matched. ... What is shown comes from persisted local state
+alone." `PhoneActivity` is `exported="true"` with a `LAUNCHER` filter -- "the single most reachable
+surface an Android app has" -- so an extra naming a destination would be exactly the shape that
+gate exists to reject, regardless of whether this item's own PendingIntent is the one carrying it.
+
+So the routing does not use an extra. `WakeNotifications.build` now calls `setContentIntent` with a
+`PendingIntent.getActivity` targeting `PhoneActivity` through an `Intent` that carries **no extra, no
+data URI, no custom action** -- only two task flags: `FLAG_ACTIVITY_NEW_TASK or
+FLAG_ACTIVITY_CLEAR_TASK`. That flag pair finishes whatever `PhoneActivity` instance is currently
+running and starts a brand-new one, which is constructed with `PhoneSurface`'s own default field
+values -- the same screen a plain launch renders. The mechanism is "make the destination the
+default" rather than "tell the Activity where to go": nothing new is read off the intent, so the
+existing `a_crafted_launch_intent_selects_nothing` gate needed no change and still passes.
+`FLAG_IMMUTABLE` is required on this app's minSdk-33 floor (`PendingIntent.getActivity` without a
+mutability flag throws on API 31+); `FLAG_UPDATE_CURRENT` lets a second wake arriving before the
+first is tapped refresh the saved `PendingIntent` in place under the same request code
+(`WakeNotifications.NOTIFICATION_ID`, already the single id every wake replaces under).
+
+**The cost, stated rather than hidden**: `FLAG_ACTIVITY_CLEAR_TASK` discards whatever local screen
+state the running `PhoneActivity` held -- an open session drill-down, unsent composer text, the
+settings panel -- if the user taps the notification while the app was already running in the
+background on a different screen. Given the alternative (an extra selecting the destination) is the
+exact attack `a_crafted_launch_intent_selects_nothing` polices, and given the task's own floor is
+"the user lands one tap from the card" rather than "no state is ever lost", this is the trade this
+item takes, on a single-Activity app where the task and the Activity are the same thing.
+
+`WakeNotifications.kt`'s KDoc above `build` is amended in place to state the new decision and why it
+does not conflict with PB-PUSH-4 ("IT OFFERS NO NOTIFICATION ACTION ... IN EITHER STATE" is kept,
+narrowed to the button row -- `Notification.Action` -- rather than the tap; "IT DOES OFFER A TAP
+ACTION NOW" is the new clause). `openAppPendingIntent`'s own KDoc carries the PB-SEC-11 argument in
+full, at the call site.
+
+### Tests: RED then GREEN
+
+Three new tests in `WakeNotificationTest.kt` (structural, over `WakeNotifications.build`) and one
+new test in `PhoneActivityWindowTest.kt` (behavioural, over the real `Activity`, on
+`a_crafted_launch_intent_selects_nothing`'s own idiom):
+
+- `the wake notification offers a tap action` -- `notification.contentIntent` is non-null.
+- `the tap action targets PhoneActivity and forces a fresh task` -- the `PendingIntent`'s saved
+  `Intent` (via `Shadows.shadowOf(...).savedIntent`) names `PhoneActivity` as its component and
+  carries `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TASK`.
+- `the tap intent carries no extras` -- the saved `Intent`'s `extras` is null or empty.
+- `the_wake_notification_tap_intent_renders_the_same_as_a_plain_launch` -- launches `PhoneActivity`
+  through the exact saved `Intent` the notification carries and asserts the rendered text is
+  identical to a plain `ActivityScenario.launch`, on `a_crafted_launch_intent_selects_nothing`'s own
+  comparison.
+
+RED, verbatim (`bash scripts/o2-gradle-run.sh testDebugUnitTest --tests
+"dev.swarm.phone.push.WakeNotificationTest" --tests "dev.swarm.phone.PhoneActivityWindowTest"`,
+against the tests with no implementation yet):
+
+    > Task :app:testDebugUnitTest
+
+    PhoneActivityWindowTest > the_wake_notification_tap_intent_renders_the_same_as_a_plain_launch FAILED
+        java.lang.NullPointerException at PhoneActivityWindowTest.kt:147
+
+    WakeNotificationTest > the tap intent carries no extras FAILED
+        java.lang.NullPointerException at WakeNotificationTest.kt:349
+
+    WakeNotificationTest > the wake notification offers a tap action FAILED
+        java.lang.AssertionError at WakeNotificationTest.kt:303
+
+    WakeNotificationTest > the tap action targets PhoneActivity and forces a fresh task FAILED
+        java.lang.NullPointerException at WakeNotificationTest.kt:324
+
+    16 tests completed, 4 failed
+    BUILD FAILED in 1m 7s
+    gradle exit status: 1
+
+All four failed on the missing `contentIntent` (null `PendingIntent` -> `AssertionError` on the
+existence check, `NullPointerException` on the three that unwrap it with `!!`) -- the right reason,
+not a compile error and not a test bug.
+
+GREEN, verbatim, same command, after `openAppPendingIntent` and the `setContentIntent` call were
+added:
+
+    > Task :app:testDebugUnitTest
+    BUILD SUCCESSFUL in 1m 5s
+    gradle exit status: 0
+    testDebugUnitTest: 2 result files, 2 written in the last hour
+
+### Gates
+
+    $ bash scripts/o2-gradle-run.sh testDebugUnitTest --tests \
+        "dev.swarm.phone.push.WakeNotificationTest" \
+        --tests "dev.swarm.phone.PhoneActivityWindowTest"                        EXIT:0 (16/16)
+    $ bash scripts/o2-gradle-run.sh test  (testDebugUnitTest + testReleaseUnitTest)  EXIT:0
+    $ go build ./...                                                              BUILD_OK
+    $ go vet ./...                                                                VET_OK
+    $ go test ./android/gate/...                                                  EXIT:0
+    $ PATH="$HOME/go/bin:$PATH" golangci-lint run                                 LINT_EXIT:0
+
+Aggregate JUnit XML counts, full android suite, both variants: **1169 tests total** (debug + release
+counted separately from the written files), **0 failures, 0 errors**. `android/app/libs/swarm.aar`
+mtime unchanged across the whole run (`Aug 9 21:01`, before and after this item's runs) -- no Go
+binding rebuild, consistent with a Kotlin-only change; no Gradle lane conflict (`pgrep -f
+gradle-wrapper.jar` empty before each run).
+
+New/changed suites individually, from the written XML:
+
+    push.WakeNotificationTest:                    tests=12 failures=0 errors=0
+    PhoneActivityWindowTest:                       tests=4  failures=0 errors=0
+
+No Go source changed in this item (`internal/remotegw/push.go` and `mobile/pushwake.go` were read,
+not written, to re-verify the envelope's contents); the Go gates above confirm nothing regressed,
+not that anything moved.
+
+### What M1.5+ inherits
+
+- The envelope question is filed and not answered: `agents-tracker-dwwv.3.2` (under `dwwv.3`, M2)
+  asks whether M2's chat-feel work changes the tradeoff enough to justify growing the wake envelope
+  with a session id (still AEAD-covered, still no group/count) so a tap can deep-link straight to
+  one session's detail. That needs an ADR if the answer is yes, per ADR-007 B20's own reasoning.
+- `FLAG_ACTIVITY_CLEAR_TASK`'s cost (dropped local screen state on a warm tap) is stated above and
+  unmitigated. A future item that wants to preserve state on a warm tap needs a different mechanism
+  than an intent extra, given `PhoneActivityWindowTest.a_crafted_launch_intent_selects_nothing`'s
+  fence -- persisted local state written by trusted in-process code (the `PermissionAsks.kt`
+  pattern) is the shape that survives it, not read directly off the intent.
+- `openApproval`'s scroll-into-view gap (recorded in M1.4's section above) is unaffected by this
+  item: the tap action lands on the inbox, not on a session detail, so this item never reaches that
+  code path at all.

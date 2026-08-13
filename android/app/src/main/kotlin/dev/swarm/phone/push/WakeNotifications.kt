@@ -3,7 +3,10 @@ package dev.swarm.phone.push
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import dev.swarm.phone.PhoneActivity
 import dev.swarm.phone.R
 
 /**
@@ -75,11 +78,23 @@ object WakeNotifications {
      *  decision 2): false on a phone awaiting its first grant, or on one whose keys a revoke
      *  purged.
      *
-     * THERE IS NO ACTION ON IT, in either state. An action opens a screen, and a tap that drove
-     * a content read from a process FCM woke is exactly the fetch PB-PUSH-4 exists to stop. The
+     * IT OFFERS NO NOTIFICATION ACTION (`Notification.Action`, the button row) IN EITHER STATE.
+     * A button opens a screen ARMED to do something -- approve, dismiss -- and a tap that drove a
+     * content read from a process FCM woke is exactly the fetch PB-PUSH-4 exists to stop. The
      * ready variant differs by SAYING more, which is the only thing that can be said honestly --
      * there is no session content anywhere on this path to render, because the wake is a
      * constant 78 bytes over an empty plaintext (ADR-007 B20).
+     *
+     * IT DOES OFFER A TAP ACTION NOW (agents-tracker-dwwv.2.5, M1.5), and that is a narrower
+     * thing than the button row above: [openAppPendingIntent] opens the app and nothing more --
+     * no verb, no fetch, no decrypt driven by the push. Before this it offered NONE either, so a
+     * tapped wake dismissed itself (`setAutoCancel`) and opened nothing at all. What it opens to
+     * is [dev.swarm.phone.PhoneSurface]'s own compiled-in default screen -- `Destination.INBOX`
+     * with no drill-down -- because the wake envelope carries no session id to open a DETAIL on
+     * (`swarmmobile.WakeAlert`'s own KDoc: "it must not grow one"), and `TriageInbox.TRIAGE_ORDER`
+     * already sorts `needs_input`, the group an approval's session sits in, first. That is the
+     * nearest honest destination: one tap from the card, never zero, and never a guess at which
+     * session to open.
      */
     fun build(context: Context, text: String, contentReady: Boolean): Notification =
         Notification.Builder(context, CHANNEL_ID)
@@ -88,7 +103,43 @@ object WakeNotifications {
             .setContentText(bodyFor(context, text, contentReady))
             .setVisibility(Notification.VISIBILITY_SECRET)
             .setAutoCancel(true)
+            .setContentIntent(openAppPendingIntent(context))
             .build()
+
+    /**
+     * The tap action: open [PhoneActivity] on a FRESH task, reading nothing off the Intent to
+     * get there.
+     *
+     * `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TASK` rather than an extra naming a
+     * destination, and that is PB-SEC-11 rather than a style choice: PhoneActivity's own KDoc
+     * states the boundary in the imperative -- "IT READS NOTHING OFF THE INTENT ... What is
+     * shown comes from persisted local state alone" -- and `PhoneActivityWindowTest
+     * .a_crafted_launch_intent_selects_nothing` enforces it by comparing a hostile intent's
+     * render against a plain launch's, byte for byte. An extra here would be exactly the shape
+     * that test exists to catch, so the mechanism is the task flags instead: CLEAR_TASK finishes
+     * whatever `PhoneActivity` instance is running and starts a new one, which is constructed
+     * with its own default field values (`destination = Destination.INBOX`, `detail = null`) --
+     * the same screen a plain launch renders, reached deterministically regardless of what the
+     * app had open when the wake arrived.
+     *
+     * `FLAG_IMMUTABLE` is not a hardening option on this app's minSdk 33 floor -- `PendingIntent
+     * .getActivity` without either mutability flag throws on API 31+, and `FLAG_UPDATE_CURRENT`
+     * is what lets a second wake arriving before the first is tapped refresh this PendingIntent's
+     * saved Intent (there is nothing to refresh here, since the Intent carries no per-wake data,
+     * but a stale duplicate lingering under the same request code is one Intent object doing no
+     * harm either way).
+     */
+    private fun openAppPendingIntent(context: Context): PendingIntent {
+        val intent = Intent(context, PhoneActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        return PendingIntent.getActivity(
+            context,
+            NOTIFICATION_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
     /**
      * The rendered line: the supplied constant, plus a second constant when the content key is

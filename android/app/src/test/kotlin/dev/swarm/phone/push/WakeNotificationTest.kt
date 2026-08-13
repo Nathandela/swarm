@@ -3,7 +3,9 @@ package dev.swarm.phone.push
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.PhoneActivity
 import dev.swarm.phone.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 /**
  * FAILING-FIRST (TDD RED, GG-5) for PB-PUSH-4: what the phone puts on the lock screen.
@@ -278,6 +281,78 @@ class WakeNotificationTest {
                 value.contains('%'),
             )
         }
+    }
+
+    // --- M1.5 (agents-tracker-dwwv.2.5): the tap action ----------------------
+
+    /**
+     * The notification used to offer NO tap action at all -- no `setContentIntent`, so a tapped
+     * wake `setAutoCancel(true)`'d itself and opened nothing. `swarmmobile.WakeAlert`'s own KDoc
+     * is why the tap cannot deep-link to one session: "It carries no session id ... and it must
+     * not grow one" -- the envelope is a constant 78 bytes over an empty plaintext (ADR-007 B20).
+     * What a tap CAN do is open the app, landing on [dev.swarm.phone.PhoneSurface]'s own default
+     * screen -- `Destination.INBOX` with no drill-down -- where `TriageInbox.TRIAGE_ORDER` already
+     * sorts `needs_input` (the group an approval's session sits in) first. That is the "approvals
+     * filter/sort surfaced" the item asks for: no new filter, the one the inbox already has,
+     * reached with the drill-down closed so it is the first thing on screen.
+     */
+    @Test
+    fun `the wake notification offers a tap action`() {
+        val notification = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+
+        assertNotNull(
+            "M1.5: the wake notification carries no contentIntent, so tapping it opens nothing " +
+                "-- the defect this item exists to close",
+            notification.contentIntent,
+        )
+    }
+
+    /**
+     * The tap action targets [dev.swarm.phone.PhoneActivity] and forces a FRESH task
+     * (`FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TASK`), which is what makes "opens on the
+     * inbox with approvals surfaced" true regardless of whatever screen the app was already on
+     * when the wake arrived: a fresh `PhoneSurface` starts at its own default field values
+     * (`destination = Destination.INBOX`, `detail = null`), and `PhoneActivity` reads nothing off
+     * the intent to override them -- its own KDoc: "IT READS NOTHING OFF THE INTENT ... What is
+     * shown comes from persisted local state alone". So this cannot be an extra without
+     * contradicting that boundary, and is the task flags instead.
+     */
+    @Test
+    fun `the tap action targets PhoneActivity and forces a fresh task`() {
+        val notification = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+
+        val tapIntent = shadowOf(notification.contentIntent!!).savedIntent
+        assertEquals(
+            "M1.5: the wake notification's tap action does not target PhoneActivity",
+            PhoneActivity::class.java.name,
+            tapIntent.component?.className,
+        )
+        val wantFlags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        assertEquals(
+            "M1.5: the wake notification's tap intent does not force a fresh task, so a tap " +
+                "while the app is already open on another screen would resume it there instead " +
+                "of on the inbox",
+            wantFlags,
+            tapIntent.flags and wantFlags,
+        )
+    }
+
+    /**
+     * PB-SEC-11's own fence, restated at the producer: the envelope this tap intent is built
+     * from carries no session id (see the test above), so there is nothing here for an extra to
+     * carry, and the intent must not carry one anyway -- `PhoneActivity` reads none.
+     */
+    @Test
+    fun `the tap intent carries no extras`() {
+        val notification = WakeNotifications.build(context, text = GENERIC, contentReady = false)
+
+        val tapIntent = shadowOf(notification.contentIntent!!).savedIntent
+        assertTrue(
+            "M1.5: the wake notification's tap intent carries extras, which PhoneActivity is " +
+                "documented to never read -- and there is no session id in the wake envelope for " +
+                "one to honestly carry",
+            tapIntent.extras == null || tapIntent.extras?.isEmpty == true,
+        )
     }
 
     private companion object {

@@ -126,6 +126,37 @@ class PhoneActivityWindowTest {
         )
     }
 
+    /**
+     * M1.5 (agents-tracker-dwwv.2.5): the tap intent [dev.swarm.phone.push.WakeNotifications]
+     * builds is deliberately as inert as the hostile one above -- no extra, no data URI, one
+     * component target and two task flags -- so what a tapped wake renders is exactly what a
+     * plain launch renders: [dev.swarm.phone.PhoneSurface]'s own default screen, `Destination
+     * .INBOX` with no drill-down, where the `needs_input` section (an approval's session's group)
+     * is already first. `WakeNotificationTest` asserts the intent's shape in isolation; this is
+     * the same join `a_crafted_launch_intent_selects_nothing` makes, run against the real intent
+     * the notification carries rather than a hostile stand-in.
+     */
+    @Test
+    fun the_wake_notification_tap_intent_renders_the_same_as_a_plain_launch() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val wake = dev.swarm.phone.push.WakeNotifications.build(
+            context,
+            text = "Swarm has an update for you.",
+            contentReady = false,
+        )
+        val tapIntent = org.robolectric.Shadows.shadowOf(wake.contentIntent!!).savedIntent
+
+        val plain = ActivityScenario.launch(PhoneActivity::class.java).use { it.renderedText() }
+        val fromTap = ActivityScenario.launch<PhoneActivity>(tapIntent).use { it.renderedText() }
+
+        assertEquals(
+            "M1.5: the wake notification's tap intent rendered something other than a plain " +
+                "launch, so tapping it does not land on the inbox's default, approvals-first view",
+            plain,
+            fromTap,
+        )
+    }
+
     private fun ActivityScenario<PhoneActivity>.renderedText(): String {
         var text = ""
         onActivity { activity ->
