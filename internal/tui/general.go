@@ -249,7 +249,11 @@ func (m generalModel) bannerLine() string {
 	if m.bannerText == "" || !time.Now().Before(m.bannerExpiry) {
 		return ""
 	}
-	return "  " + styleTitle.Render("● "+m.bannerText)
+	text := "● " + m.bannerText
+	if m.width > 2 {
+		text = clampCells(text, m.width-2)
+	}
+	return "  " + styleTitle.Render(text)
 }
 
 // bannerGroup reports whether a transition into g raises a notification banner.
@@ -770,6 +774,14 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	switch {
 	case m.confirm && s.ID == m.confirmID:
 		prompt := confirmPrompt(s)
+		// Preserve the bounded agent/status/elapsed fields on very narrow terminals.
+		// The bottom bar still says "y confirm   n cancel", so a one-cell question
+		// marker remains unambiguous when the full inline prompt cannot fit.
+		fullPrefixWidth := lipgloss.Width(prompt) + 1
+		minimumFullWidth := fullPrefixWidth + 2 + colAgent + colStatus + colElapsed
+		if m.width > 0 && m.width < minimumFullWidth {
+			prompt = "?"
+		}
 		prefix = styleError.Render(prompt) + " "
 		prefixWidth = lipgloss.Width(prompt) + 1
 	case selected:

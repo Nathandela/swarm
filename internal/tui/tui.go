@@ -869,10 +869,10 @@ func groupHeader(g status.Group) string {
 	}
 }
 
-var workingIconFrames = [...]string{"◐", "◓", "◑", "◒"}
+var workingIconFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // groupIcon is the leading glyph shown on each row of a group. Only Working is
-// animated; its quiet four-frame orbit advances on the existing one-second repaint.
+// animated; its Braille orbit advances on the existing one-second repaint.
 func groupIcon(g status.Group, frame uint64) string {
 	switch g {
 	case status.GroupNeedsInput:
@@ -974,7 +974,13 @@ func compactElapsed(d time.Duration) string {
 	case d < 24*time.Hour:
 		return itoa(int(d.Hours())) + "h"
 	default:
-		return itoa(int(d.Hours()/24)) + "d"
+		days := int(d.Hours() / 24)
+		// colElapsed includes one separator cell. Capping at four digits keeps even
+		// schema-v0 sessions with a zero LastActivity inside the five-cell token.
+		if days > 9999 {
+			days = 9999
+		}
+		return itoa(days) + "d"
 	}
 }
 

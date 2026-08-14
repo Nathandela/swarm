@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -34,6 +35,9 @@ func TestResponsiveRowsNeverExceedTerminalWidth(t *testing.T) {
 		time.Minute,
 	)
 	s.Name = "a very long discussion name that should grow on a wide terminal and clamp on a narrow one"
+	// Schema-v0 sessions migrate without LastActivity. Their derived elapsed age is
+	// deliberately enormous, so the fixed elapsed field must still stay bounded.
+	s.LastActivity = time.Time{}
 	s.RemoteControlled = true
 	s.SpawnedFrom = "parent-with-a-long-name"
 
@@ -52,17 +56,66 @@ func TestResponsiveRowsNeverExceedTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestResponsiveWholeBoardNeverExceedsPracticalTerminalWidth(t *testing.T) {
+	s := sWorking(
+		"endpoint/session",
+		"opencode",
+		"~/a/very/long/path/to/a/worktree/whose/text/must/not/wrap",
+		"A deliberately long summary that must remain on its own row",
+		time.Minute,
+	)
+	s.Name = "a deliberately long discussion name that must remain on its own row"
+
+	for _, width := range []int{36, 48, 72, 120, 160, 200} {
+		t.Run(itoa(width), func(t *testing.T) {
+			m := newModel(t, newFakeClient(s), detectMixed())
+			m, _ = m.Update(tea.WindowSizeMsg{Width: width, Height: testRows})
+			rm := m.(rootModel)
+			for _, confirm := range []bool{false, true} {
+				rm.general.confirm = confirm
+				rm.general.confirmID = s.ID
+				rm.general.bannerText = "a very long notification that also has to remain inside the board"
+				rm.general.bannerExpiry = time.Now().Add(time.Hour)
+				plain := stripANSI(rm.View().Content)
+				for lineNo, line := range strings.Split(plain, "\n") {
+					if got := lipgloss.Width(line); got > width {
+						t.Fatalf("line %d width = %d, terminal = %d, confirm=%v:\n%s", lineNo+1, got, width, confirm, line)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestWorkingIndicatorAdvancesOnExistingRepaint(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "building", time.Minute))
 	m := newModel(t, f, detectMixed())
 	before := lineContaining(view(m), "building")
-	if !strings.Contains(before, "◐") {
-		t.Fatalf("initial Working frame must preserve the current ◐ icon:\n%s", before)
+	if !strings.Contains(before, "⠋") {
+		t.Fatalf("initial Working frame must use the selected Braille icon ⠋:\n%s", before)
 	}
 
 	m = send(m, repaintMsg{})
 	after := lineContaining(view(m), "building")
-	if !strings.Contains(after, "◓") || strings.Contains(after, "◐") {
-		t.Fatalf("one existing repaint must advance Working to ◓:\n%s", after)
+	if !strings.Contains(after, "⠙") || strings.Contains(after, "⠋") {
+		t.Fatalf("one existing repaint must advance Working to ⠙:\n%s", after)
+	}
+}
+
+func TestWorkingIndicatorUsesFullBrailleLoop(t *testing.T) {
+	want := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	if len(workingIconFrames) != len(want) {
+		t.Fatalf("Working frame count = %d, want full %d-frame Braille loop", len(workingIconFrames), len(want))
+	}
+	for i, frame := range want {
+		if got := groupIcon(status.GroupWorking, uint64(i)); got != frame {
+			t.Fatalf("Working frame %d = %q, want %q", i, got, frame)
+		}
+		if width := lipgloss.Width(frame); width != 1 {
+			t.Fatalf("Working frame %q width = %d, want one terminal cell", frame, width)
+		}
+	}
+	if got := groupIcon(status.GroupWorking, uint64(len(want))); got != want[0] {
+		t.Fatalf("Working loop does not wrap: got %q, want %q", got, want[0])
 	}
 }

@@ -169,17 +169,17 @@
   <h2>1. Working indicator</h2>
   <p class="lede">Click an option to apply it to the responsive board below. The production cadence stays at one frame per second, reusing Swarm's existing elapsed-time repaint.</p>
   <div class="options" id="spinner-options">
-    <article class="option recommended selected" data-frames="◐◓◑◒">
+    <article class="option" data-frames="◐◓◑◒">
       <h3>Quiet orbit</h3>
       <div class="spinner-line"><span class="spinner">◐</span><span>codex is working</span></div>
       <div class="frames">◐ → ◓ → ◑ → ◒</div>
       <p>Keeps the current visual language and makes it gently rotate. Clear at 1 Hz, without looking like a loading screen.</p>
     </article>
-    <article class="option" data-frames="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏">
+    <article class="option recommended selected" data-frames="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏">
       <h3>Braille loop</h3>
       <div class="spinner-line"><span class="spinner">⠋</span><span>codex is working</span></div>
       <div class="frames">⠋ → ⠙ → ⠹ → ⠸ → …</div>
-      <p>More obviously animated and familiar from CLI installers, but visually busier beside many concurrent agents.</p>
+      <p>Distinctively swarmy and unmistakably alive. The full ten-frame loop stays inside one terminal cell and reuses Swarm's low-cost repaint.</p>
     </article>
     <article class="option" data-frames="◴◷◶◵">
       <h3>Clock hand</h3>
@@ -214,7 +214,7 @@
 
 <script>
   const spinnerCards = [...document.querySelectorAll('.option')];
-  let selectedFrames = [...spinnerCards[0].dataset.frames];
+  let selectedFrames = [...document.querySelector('.option.selected').dataset.frames];
   let frame = 0;
   let responsive = true;
 
@@ -237,8 +237,8 @@
 
   const rows = [
     { group: 'needs', icon: '●', name: 'db-migration-permission-review', agent: 'claude', path: '~/data/quanthome-api/services/database/migrations', status: 'needs input', age: '12m', summary: 'Permission: run the production database migration?' },
-    { group: 'working', icon: '◐', name: 'swarm responsive columns and animated working indicator', agent: 'codex', path: '~/data/swarm-worktrees/responsive-dashboard', status: 'working', age: '3m', summary: 'Implementing width allocation and golden coverage' },
-    { group: 'working', icon: '◐', name: 'Geneva portfolio valuation — source reconciliation', agent: 'agy', path: '~/data/samoa/area_value_analysis/fund_validation_2026_07', status: 'working', age: '41s', summary: 'Rechecking source-backed valuation assumptions' },
+    { group: 'working', icon: '⠋', name: 'swarm responsive columns and animated working indicator', agent: 'codex', path: '~/data/swarm-worktrees/responsive-dashboard', status: 'working', age: '3m', summary: 'Implementing width allocation and golden coverage' },
+    { group: 'working', icon: '⠋', name: 'Geneva portfolio valuation — source reconciliation', agent: 'agy', path: '~/data/samoa/area_value_analysis/fund_validation_2026_07', status: 'working', age: '41s', summary: 'Rechecking source-backed valuation assumptions' },
     { group: 'review', icon: '✓', name: 'soml-review', agent: 'claude', path: '~/data/mcp-soml', status: 'ready for review', age: '1h', summary: 'Turn finished, 14 files changed' }
   ];
 
