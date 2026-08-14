@@ -57,6 +57,10 @@ android/.kotlin/
 # class is already recorded (agents-tracker-62c). Observed untracked in a live status read.
 _releaseprobe-*/
 
+# Firebase client config for dev.swarm.phone (project swarm-8404f). Present locally so Wave R3
+# can apply the google-services plugin; stays out of the repo until R3 decides how config ships.
+android/app/google-services.json
+
 # PB-TOOL-3: release signing material is operator-supplied and never enters the repository.
 # local.properties additionally carries the machine's SDK path.
 *.jks
