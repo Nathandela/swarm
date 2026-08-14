@@ -54,7 +54,9 @@ type Config struct {
 // Metrics holds test-observable counters. All fields are safe for concurrent
 // use.
 type Metrics struct {
-	FramesDropped atomic.Int64
+	FramesDropped  atomic.Int64
+	VTParserFaults atomic.Int64
+	vtLastLog      atomic.Int64
 }
 
 // ExitInfo is the decoded exit.json side-file.

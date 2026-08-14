@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -35,7 +36,15 @@ const (
 	// on the chunked shim->daemon hop (mirrors the daemon->client snapshotChunkSize):
 	// a payload of MaxFrame-1 is the biggest wire.WriteFrame accepts.
 	snapshotChunkMax = wire.MaxFrame - 1
+	// vtParserLogInterval rate-limits diagnostics for a persistently malformed
+	// terminal stream. Every contained fault is still counted in Metrics.
+	vtParserLogInterval = 30 * time.Second
 )
+
+// testHookAfterPTYResize, when non-nil, runs after the PTY winsize change and
+// before the emulator resize. It is a test-only seam for proving that hub.feed
+// cannot interleave in that ordering window.
+var testHookAfterPTYResize func()
 
 // server owns the socket, the emulator/transcript pipeline, and the PTY master
 // for one session. Connections are served CONCURRENTLY (one goroutine each), so a
@@ -232,7 +241,15 @@ func (s *server) resize(cols, rows int) {
 	if cols < resizeMin || cols > resizeMax || rows < resizeMin || rows > resizeMax {
 		return
 	}
+	// The PTY resize delivers SIGWINCH and may immediately produce output. Hold
+	// the hub serialization point until the emulator has the same dimensions so
+	// drain cannot parse that output against the previous grid.
+	s.hub.mu.Lock()
+	defer s.hub.mu.Unlock()
 	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	if testHookAfterPTYResize != nil {
+		testHookAfterPTYResize()
+	}
 	s.hub.emu.Resize(cols, rows)
 }
 
@@ -366,7 +383,8 @@ type hub struct {
 // attach's snapshot+install and feed's publish+parse each run under one
 // single h.mu hold, so per-chunk snapshot-inclusion XOR frame-delivery is
 // preserved regardless of which half of feed the boundary falls in (S10).
-// defer h.mu.Unlock() so a parser panic in emu.Feed cannot leak the hub mutex.
+// defer h.mu.Unlock() keeps every exit path from leaking the hub mutex;
+// FeedChecked additionally contains upstream parser panics at the VT boundary.
 func (h *hub) feed(data []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -382,7 +400,16 @@ func (h *hub) feed(data []byte) {
 	// into its own frame buffer before writing) and emu.Feed's parser also only
 	// reads. WriteOwned's no-copy handoff is therefore safe here (R3.3.3).
 	_, _ = h.tr.WriteOwned(data)
-	h.emu.Feed(data)
+	if err := h.emu.FeedChecked(data); err != nil {
+		n := h.metrics.VTParserFaults.Add(1)
+		now := time.Now().UnixNano()
+		last := h.metrics.vtLastLog.Load()
+		if now-last >= int64(vtParserLogInterval) && h.metrics.vtLastLog.CompareAndSwap(last, now) {
+			// S9: logging must never stall the PTY drain. The rate limiter bounds
+			// this to one best-effort goroutine per interval.
+			go log.Printf("shim: terminal parser fault contained (%d total): %v", n, err)
+		}
+	}
 }
 
 // attach atomically snapshots the grid and installs a fresh subscriber, then

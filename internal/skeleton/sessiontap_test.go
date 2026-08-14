@@ -40,8 +40,11 @@ type fakeUpstream struct {
 	closedCh chan struct{}
 	once     sync.Once
 
-	mu     sync.Mutex
-	inputs [][]byte
+	mu          sync.Mutex
+	inputs      [][]byte
+	resizeCols  int
+	resizeRows  int
+	resizeCalls int
 }
 
 func newFakeUpstream(snap []byte) *fakeUpstream {
@@ -58,7 +61,14 @@ func (f *fakeUpstream) Input(p []byte) error {
 	return nil
 }
 
-func (f *fakeUpstream) Resize(int, int) error { return nil }
+func (f *fakeUpstream) Resize(cols, rows int) error {
+	f.mu.Lock()
+	f.resizeCols = cols
+	f.resizeRows = rows
+	f.resizeCalls++
+	f.mu.Unlock()
+	return nil
+}
 
 func (f *fakeUpstream) Close() error {
 	f.once.Do(func() {
@@ -80,8 +90,12 @@ func (f *fakeUpstream) isClosed() bool {
 // mustSnap builds a real, decodable vt snapshot whose grid contains text, so the
 // tap's mirror can seed from it exactly as it will from a live shim snapshot.
 func mustSnap(t *testing.T, text string) []byte {
+	return mustSnapSize(t, 80, 24, text)
+}
+
+func mustSnapSize(t *testing.T, cols, rows int, text string) []byte {
 	t.Helper()
-	e := vt.NewEmulator(80, 24)
+	e := vt.NewEmulator(cols, rows)
 	e.Feed([]byte(text))
 	b, err := e.Snapshot()
 	if err != nil {
@@ -89,6 +103,15 @@ func mustSnap(t *testing.T, text string) []byte {
 	}
 	e.Close()
 	return b
+}
+
+func snapshotDims(t *testing.T, snap []byte) (int, int) {
+	t.Helper()
+	s, err := vt.DecodeSnapshot(snap)
+	if err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	return s.Cols, s.Rows
 }
 
 // snapContains reports whether a decoded snapshot's flattened grid text contains sub.
@@ -190,6 +213,75 @@ func TestSessionTap_LateJoinerSeededFromMirror(t *testing.T) {
 
 	_ = a.Close()
 	_ = b.Close()
+}
+
+func TestSessionTap_ResizeKeepsMirrorInSyncBeforeNewSizeFrame(t *testing.T) {
+	up := newFakeUpstream(mustSnapSize(t, 80, 45, "SEED"))
+	mgr := newTapManager(func(string) (protocol.SessionStream, error) { return up, nil })
+
+	controller, err := mgr.subscribe("s1", readWrite)
+	if err != nil {
+		t.Fatalf("subscribe controller: %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close() })
+
+	if err := controller.Resize(80, 94); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	up.frames <- []byte("\x1b[1;94r\x1bM")
+	_ = recvFrame(t, controller) // pump feeds the mirror before fan-out
+
+	late, err := mgr.subscribe("s1", readOnly)
+	if err != nil {
+		t.Fatalf("late subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = late.Close() })
+	if cols, rows := snapshotDims(t, late.Snapshot()); cols != 80 || rows != 94 {
+		t.Fatalf("late snapshot dims = %dx%d, want 80x94", cols, rows)
+	}
+
+	up.mu.Lock()
+	calls, cols, rows := up.resizeCalls, up.resizeCols, up.resizeRows
+	up.mu.Unlock()
+	if calls != 1 || cols != 80 || rows != 94 {
+		t.Fatalf("upstream resize = %d call(s), last %dx%d; want 1 call, 80x94", calls, cols, rows)
+	}
+}
+
+func TestSessionTap_ShrinkContainsDelayedOldSizeFrame(t *testing.T) {
+	up := newFakeUpstream(mustSnapSize(t, 80, 94, "SEED"))
+	mgr := newTapManager(func(string) (protocol.SessionStream, error) { return up, nil })
+
+	controller, err := mgr.subscribe("s1", readWrite)
+	if err != nil {
+		t.Fatalf("subscribe controller: %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close() })
+
+	if err := controller.Resize(80, 45); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	// The shim protocol has no resize acknowledgement, so this old-size frame
+	// may already be buffered when the mirror shrinks.
+	up.frames <- []byte("\x1b[1;94r\x1bM")
+	_ = recvFrame(t, controller)
+	up.frames <- []byte("\x1b[r\x1b[HRECOVERED")
+	_ = recvFrame(t, controller)
+
+	late, err := mgr.subscribe("s1", readOnly)
+	if err != nil {
+		t.Fatalf("late subscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = late.Close() })
+	if cols, rows := snapshotDims(t, late.Snapshot()); cols != 80 || rows != 45 {
+		t.Fatalf("late snapshot dims = %dx%d, want 80x45", cols, rows)
+	}
+	if !snapContains(t, late.Snapshot(), "RECOVERED") {
+		t.Fatal("late snapshot missing output written after the delayed frame was contained")
+	}
+	if got := mgr.parserFaults.Load(); got != 1 {
+		t.Fatalf("tap parser faults = %d, want 1", got)
+	}
 }
 
 func TestSessionTap_LastCloseClosesUpstream(t *testing.T) {

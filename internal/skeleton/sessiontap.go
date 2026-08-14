@@ -38,7 +38,10 @@ package skeleton
 // the brief m.mu, preserving the no-head-of-line-blocking property (L1).
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/vt"
@@ -49,6 +52,11 @@ import (
 // backpressure (S9) is identical end to end: a wedged consumer is dropped, never
 // blocks the shared upstream or the other consumers.
 const tapSubQueueCap = 256
+
+// tapParserLogInterval bounds diagnostics from a persistently malformed
+// terminal stream. Every fault is counted, but at most one line per interval is
+// written and terminal payload bytes are never included.
+const tapParserLogInterval = 30 * time.Second
 
 // tapMode selects whether a subscriber may drive the session.
 type tapMode int
@@ -64,12 +72,26 @@ const (
 type tapManager struct {
 	dial func(id string) (protocol.SessionStream, error)
 
+	parserFaults  atomic.Uint64
+	parserLastLog atomic.Int64
+
 	mu   sync.Mutex
 	taps map[string]*tap
 }
 
 func newTapManager(dial func(id string) (protocol.SessionStream, error)) *tapManager {
 	return &tapManager{dial: dial, taps: map[string]*tap{}}
+}
+
+func (m *tapManager) noteParserFault(id string, err error) {
+	n := m.parserFaults.Add(1)
+	now := time.Now().UnixNano()
+	last := m.parserLastLog.Load()
+	if now-last >= int64(tapParserLogInterval) && m.parserLastLog.CompareAndSwap(last, now) {
+		// Keep diagnostic I/O off the tap pump: a stalled logger must not delay
+		// upstream frame consumption or subscriber fan-out.
+		go log.Printf("skeleton: terminal mirror parser fault contained for session %s (%d total): %v", id, n, err)
+	}
 }
 
 // subscribe returns a SessionStream sharing one upstream for id. The first caller
@@ -181,7 +203,9 @@ func (t *tap) pump() {
 	for frame := range frames {
 		t.mu.Lock()
 		if t.mirror != nil {
-			t.mirror.Feed(frame)
+			if err := t.mirror.FeedChecked(frame); err != nil {
+				t.mgr.noteParserFault(t.id, err)
+			}
 		}
 		for sub := range t.subs {
 			select {
@@ -299,14 +323,24 @@ func (s *tapSub) Input(p []byte) error {
 	return s.t.up.Input(p)
 }
 
-// Resize forwards to the shared upstream for a readWrite subscriber; a readOnly peek
-// drops it. (One shared upstream means the last readWrite resize wins, as with a
-// single lease today.)
+// Resize forwards to the shared upstream for a readWrite subscriber and updates
+// the daemon mirror in the same tap critical section. The lock serializes resize
+// with pump's frame feed and late-subscriber snapshots, preserving one coherent
+// grid size at every boundary. A readOnly peek drops resize. (One shared upstream
+// means the last readWrite resize wins, as with a single lease today.)
 func (s *tapSub) Resize(cols, rows int) error {
 	if s.mode != readWrite {
 		return nil
 	}
-	return s.t.up.Resize(cols, rows)
+	s.t.mu.Lock()
+	defer s.t.mu.Unlock()
+	if err := s.t.up.Resize(cols, rows); err != nil {
+		return err
+	}
+	if s.t.mirror != nil {
+		s.t.mirror.Resize(cols, rows)
+	}
+	return nil
 }
 
 // Close detaches this subscriber; the last detach closes the shared upstream.

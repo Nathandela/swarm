@@ -48,6 +48,12 @@ const SnapshotTextMax = 64
 // unbounded title. The Epic 6 reassembly cap is derived from this too.
 const SnapshotTitleMax = 256
 
+// ErrParserPanic reports that the pinned upstream VT parser panicked while
+// processing terminal output. Emulator contains the panic at its trust
+// boundary, restores the configured grid bounds, and remains usable. The
+// sentinel deliberately carries no terminal payload or recovered panic value.
+var ErrParserPanic = errors.New("vt: upstream parser panic contained")
+
 // Run is a maximal span of adjacent grapheme cells that share an identical style
 // (item 4.3): its Text is the spanned cells' content concatenated and its Width
 // is their widths summed. A single-cell run holds one grapheme, or a single
@@ -235,14 +241,37 @@ func (e *Emulator) Close() error {
 
 // Feed writes raw terminal bytes into the grid. Partial escape sequences and
 // multi-byte runes split across calls are buffered by the underlying parser.
-// A no-op after Close.
-func (e *Emulator) Feed(p []byte) {
+// A no-op after Close. Upstream parser panics are contained; callers that need
+// to observe them use FeedChecked.
+func (e *Emulator) Feed(p []byte) { _ = e.FeedChecked(p) }
+
+// FeedChecked is Feed with observable parser-fault containment. Terminal bytes
+// are untrusted: a malformed sequence or a frame produced for an older grid
+// size must not be able to terminate the daemon or shim. If the upstream parser
+// panics, FeedChecked restores both screen buffers and their scroll regions to
+// the wrapper's configured dimensions and returns ErrParserPanic. Neither the
+// terminal payload nor the recovered panic value escapes this boundary.
+func (e *Emulator) FeedChecked(p []byte) (err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.isClosed() {
-		return
+		return nil
 	}
-	_, _ = e.term.Write(p)
+	defer func() {
+		if recover() == nil {
+			return
+		}
+		err = ErrParserPanic
+		// x/vt's Resize resets both active/inactive screen scroll regions. Keep
+		// this repair best-effort and independently contained: terminal output
+		// must not escape this trust boundary even if upstream recovery changes.
+		func() {
+			defer func() { _ = recover() }()
+			e.term.Resize(e.cols, e.rows)
+		}()
+	}()
+	_, err = e.term.Write(p)
+	return err
 }
 
 // Resize changes the grid dimensions. A no-op after Close (in-band-resize
