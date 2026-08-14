@@ -21,7 +21,7 @@ import (
 func snapFrom(t testing.TB, feed []byte) *vt.Snap {
 	t.Helper()
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(feed)
 	b, err := emu.Snapshot()
 	if err != nil {

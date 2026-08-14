@@ -56,7 +56,7 @@ func equalArgv(a, b []string) bool {
 func renderGrid(t *testing.T, capture []byte) *vt.Snap {
 	t.Helper()
 	emu := vt.NewEmulator(100, 30)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture)
 	b, err := emu.Snapshot()
 	if err != nil {

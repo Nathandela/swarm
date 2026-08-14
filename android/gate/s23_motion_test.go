@@ -214,7 +214,7 @@ func animatorPermitted(line string, at int, id string) bool {
 		return true
 	}
 	c := before[len(before)-1]
-	return !(c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9'))
+	return c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9')
 }
 
 func animatorContains(haystack []string, want string) bool {

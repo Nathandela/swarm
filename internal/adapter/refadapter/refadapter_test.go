@@ -67,7 +67,7 @@ func TestReferenceAdapter_ExtractsFixtureConversationID(t *testing.T) {
 	a, fx := loadRef(t)
 
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(fx.PTYCapture)
 	b, err := emu.Snapshot()
 	if err != nil {
@@ -104,7 +104,7 @@ func TestReferenceAdapter_Capability(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
 	emu.Feed(fx.PTYCapture)
 	b, err := emu.Snapshot()
-	emu.Close()
+	_ = emu.Close()
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}

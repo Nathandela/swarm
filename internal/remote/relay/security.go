@@ -261,7 +261,7 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 		if !isLoopbackLiteral(u.Hostname()) {
 			return nil, ErrCleartextRefused
 		}
-		if !s.loopbackInRelease && !(s.AllowLoopbackCleartext && testing.Testing()) {
+		if !s.loopbackInRelease && (!s.AllowLoopbackCleartext || !testing.Testing()) {
 			return nil, ErrCleartextRefused
 		}
 		return nil, nil

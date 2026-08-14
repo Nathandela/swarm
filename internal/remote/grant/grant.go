@@ -71,13 +71,13 @@ func Save(registryDir, deviceID string, g *crypto.EpochGrant) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error
+	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename; cleans up on any error
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -94,7 +94,7 @@ func Save(registryDir, deviceID string, g *crypto.EpochGrant) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
 
@@ -116,7 +116,7 @@ func Delete(registryDir, deviceID string) error {
 		}
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
 

@@ -96,7 +96,7 @@ func TestHandshake_ClientDialReturnsIncompatibleVersion(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(netTimeout))
 		// Read the client's hello, then answer hello at a DIFFERENT version.
 		if _, _, err := wire.ReadFrame(conn); err != nil {

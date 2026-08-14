@@ -90,7 +90,7 @@ func waitFrameCount(t *testing.T, sink *frameSink, typ wire.Type, want int) {
 
 func TestHub_SupersedeTearsDownPriorSubscriber(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	h := &hub{emu: emu, tr: newHubTranscript(t), metrics: &Metrics{}}
 
 	conn1, sink1 := newDrainedConn(t)

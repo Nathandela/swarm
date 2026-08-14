@@ -136,7 +136,7 @@ func TestRotatesAtExactlyMaxBytesBoundary(t *testing.T) { // E3.1
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	payload := bytes.Repeat([]byte{'a'}, 16) // exactly MaxBytes in one Write
 	if n, err := w.Write(payload); err != nil || n != len(payload) {
@@ -169,7 +169,7 @@ func TestRotatesJustPastMaxBytesBoundary(t *testing.T) { // E3.1
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	first := bytes.Repeat([]byte{'a'}, 15) // MaxBytes-1: must NOT rotate yet
 	if _, err := w.Write(first); err != nil {
@@ -216,7 +216,7 @@ func TestRotationCapsTotalFilesAtMaxFiles(t *testing.T) { // E3.1
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Force 5 rotations (well past MaxFiles) plus a partial current generation.
 	for i := 0; i < 5; i++ {
@@ -249,7 +249,7 @@ func TestRotatedFileNamingConvention(t *testing.T) { // E3.1
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for _, gen := range [][]byte{[]byte("AAAA"), []byte("BBBB"), []byte("CCCC")} {
 		if _, err := w.Write(gen); err != nil {
@@ -303,7 +303,7 @@ func TestSpinnerCollapseCarriageReturnFrames(t *testing.T) { // E3.2
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	maxFrameLen := len(spinnerFrame(spinnerFixtureFrames - 1))
 	const collapseBudgetFrames = 3 // "a couple of frames' worth" (E3.2)
@@ -351,7 +351,7 @@ func TestSpinnerCollapseCursorHomeFrames(t *testing.T) { // E3.2
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	const frames = 10
 	for i := 0; i < frames; i++ {
@@ -380,7 +380,7 @@ func TestFrameWithEmbeddedNewlineIsNotTreatedAsRepaint(t *testing.T) { // E3.2
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	first := []byte("\rspinner-frame-0")          // pure repaint frame: \r, no \n
 	second := []byte("\rpartial\nrest-of-line\n") // starts with \r but contains \n: not a "carriage-return-only redraw"
@@ -419,7 +419,7 @@ func TestFileCreatedWithMode0600UnderPermissiveUmask(t *testing.T) { // E3.3
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestRotatedFilesInheritMode0600(t *testing.T) { // E3.3
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if _, err := w.Write([]byte("AAAA")); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -518,7 +518,7 @@ func TestWriteNeverErrorsWhenSinkFailsEveryCall(t *testing.T) { // E3.5
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	payload := []byte("this write can never reach disk")
 	n, err := w.Write(payload)
@@ -603,7 +603,7 @@ func TestConcurrentWritesWithSlowSinkNoDeadlock(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for i := 0; i < writesPerGoroutine; i++ {
-				if _, err := w.Write([]byte(fmt.Sprintf("g%d-%d\n", id, i))); err != nil {
+				if _, err := fmt.Fprintf(w, "g%d-%d\n", id, i); err != nil {
 					t.Errorf("goroutine %d write %d: %v", id, i, err)
 				}
 			}

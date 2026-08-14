@@ -67,11 +67,11 @@ func FuzzFeedSplitConsistency(f *testing.F) {
 		}
 
 		whole := NewEmulator(80, 24)
-		defer whole.Close()
+		defer func() { _ = whole.Close() }()
 		whole.Feed(data)
 
 		parts := NewEmulator(80, 24)
-		defer parts.Close()
+		defer func() { _ = parts.Close() }()
 		parts.Feed(data[:split])
 		parts.Feed(data[split:])
 

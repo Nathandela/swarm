@@ -37,7 +37,7 @@ func snapAtOffset(t *testing.T, capture []byte, n int) *vt.Snap {
 		n = len(capture)
 	}
 	emu := vt.NewEmulator(100, 30)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture[:n])
 	b, err := emu.Snapshot()
 	if err != nil {

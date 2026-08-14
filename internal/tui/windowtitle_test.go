@@ -12,7 +12,7 @@ import (
 // re-asserts it when the terminal is restored after an attach.
 func TestWindowTitleIsSwarm(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "compiling", time.Minute))
-	var m tea.Model = New(f, detectMixed())
+	m := New(f, detectMixed())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: testCols, Height: testRows})
 	if got := m.View().WindowTitle; got != "swarm" {
 		t.Fatalf("WindowTitle = %q, want %q", got, "swarm")

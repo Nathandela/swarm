@@ -24,12 +24,12 @@ import (
 
 func BenchmarkHubFeed(b *testing.B) {
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	tr, err := transcript.New(filepath.Join(b.TempDir(), "transcript.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	h := &hub{emu: emu, tr: tr, metrics: &Metrics{}}
 	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}
@@ -71,12 +71,12 @@ func BenchmarkHubFeed(b *testing.B) {
 // size (R2.2.4).
 func BenchmarkHubFeed_PublishLatency(b *testing.B) {
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	tr, err := transcript.New(filepath.Join(b.TempDir(), "transcript.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	h := &hub{emu: emu, tr: tr, metrics: &Metrics{}}
 	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}

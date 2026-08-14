@@ -35,7 +35,7 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 	if err := relaySrv.Start(ctx); err != nil {
 		t.Fatalf("relay start: %v", err)
 	}
-	defer relaySrv.Close()
+	defer func() { _ = relaySrv.Close() }()
 
 	// Real daemon with a remote socket + a paired phone in its registry.
 	sk, rsock := assembleWithRemote(t)
@@ -50,12 +50,12 @@ func TestFullStack_PhoneCommandOverRelayToDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("machine relay dial: %v", err)
 	}
-	defer machineRelay.Close()
+	defer func() { _ = machineRelay.Close() }()
 	phoneRelay, err := relay.Dial(ctx, relaySrv.URL(), relayAuth(pPub, pPriv))
 	if err != nil {
 		t.Fatalf("phone relay dial: %v", err)
 	}
-	defer phoneRelay.Close()
+	defer func() { _ = phoneRelay.Close() }()
 	// The machine authorizes the phone so the phone may append commands to the machine
 	// mailbox (relay-level pairing).
 	if err := machineRelay.AuthorizeDevice(ctx, pPub,

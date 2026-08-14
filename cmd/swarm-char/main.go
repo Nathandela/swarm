@@ -94,19 +94,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	argv := fs.Args()
 	if *cli == "" || *version == "" || *scenario == "" || len(argv) == 0 {
-		fmt.Fprintln(stderr, "usage: swarm-char -cli C -version V -scenario S [flags] -- program [args...]")
+		_, _ = fmt.Fprintln(stderr, "usage: swarm-char -cli C -version V -scenario S [flags] -- program [args...]")
 		return 2
 	}
 
 	c, r, err := resolveGeometry(*geometry, *cols, *rows)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
 
 	inputs, err := loadScriptedInput(*input)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -118,7 +118,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		var ok bool
 		ctor, ok = resolveAdapter(*adapterName)
 		if !ok {
-			fmt.Fprintf(stderr, "swarm-char: unknown -adapter %q (known: %s, %s)\n", *adapterName, adapterNone, strings.Join(knownAdapters(), ", "))
+			_, _ = fmt.Fprintf(stderr, "swarm-char: unknown -adapter %q (known: %s, %s)\n", *adapterName, adapterNone, strings.Join(knownAdapters(), ", "))
 			return 2
 		}
 	}
@@ -136,12 +136,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		HookSink: *hookSink,
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
 
 	if err := writeFixture(*out, fx, stdout); err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -153,15 +153,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// the characterization geometry (never a hardcoded refadapter or a fixed size).
 	entry, err := deriveCapability(ctor(fx), fx, c, r)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
 	capJSON, err := json.MarshalIndent(entry, "", "  ")
 	if err != nil {
-		fmt.Fprintln(stderr, "swarm-char: marshal capability:", err)
+		_, _ = fmt.Fprintln(stderr, "swarm-char: marshal capability:", err)
 		return 1
 	}
-	fmt.Fprintln(stderr, string(capJSON))
+	_, _ = fmt.Fprintln(stderr, string(capJSON))
 	return 0
 }
 

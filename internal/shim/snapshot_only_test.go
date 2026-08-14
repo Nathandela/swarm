@@ -69,10 +69,7 @@ func TestSnapshotReq_DoesNotSupersedeActiveAttach(t *testing.T) {
 	// the current accumulated output length, then require growth.
 	before := len(ctl.dataOut())
 	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if len(ctl.dataOut()) > before {
-			break
-		}
+	for len(ctl.dataOut()) <= before {
 		if time.Now().After(deadline) {
 			t.Fatal("controller stopped receiving live frames after a snapshot_req: the tap superseded the subscriber")
 		}

@@ -87,7 +87,7 @@ func TestLease_SecondAttachSupersedesWithHigherGeneration(t *testing.T) {
 		t.Fatalf("Attach B (supersede): %v", err)
 	}
 
-	if !(b.Generation() > a.Generation()) {
+	if b.Generation() <= a.Generation() {
 		t.Fatalf("supersede generations: B=%d not > A=%d", b.Generation(), a.Generation())
 	}
 	// Supersede re-attaches: a fresh stream is opened and the prior one released.

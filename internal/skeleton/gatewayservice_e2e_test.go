@@ -35,7 +35,7 @@ func TestGatewayServiceE2E_JournalOutAndCommandIn(t *testing.T) {
 	if err := relaySrv.Start(ctx); err != nil {
 		t.Fatalf("relay start: %v", err)
 	}
-	defer relaySrv.Close()
+	defer func() { _ = relaySrv.Close() }()
 
 	sk, rsock := assembleWithRemote(t)
 	ks := registerPhone(t, sk, device.CapFull)
@@ -51,12 +51,12 @@ func TestGatewayServiceE2E_JournalOutAndCommandIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("machine dial: %v", err)
 	}
-	defer machineRelay.Close()
+	defer func() { _ = machineRelay.Close() }()
 	phoneRelay, err := relay.Dial(ctx, relaySrv.URL(), relayAuth(pPub, pPriv))
 	if err != nil {
 		t.Fatalf("phone dial: %v", err)
 	}
-	defer phoneRelay.Close()
+	defer func() { _ = phoneRelay.Close() }()
 	if err := machineRelay.AuthorizeDevice(ctx, pPub,
 		e2eConsent(pPriv, relay.RoutingID(mPub))); err != nil {
 		t.Fatalf("machine authorize phone: %v", err)

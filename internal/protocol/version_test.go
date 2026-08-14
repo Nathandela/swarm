@@ -102,7 +102,7 @@ func TestHandshake_ClientBuildVersionEmptyWhenServerOmitsIt(t *testing.T) {
 		if aerr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(netTimeout))
 		if _, _, rerr := wire.ReadFrame(conn); rerr != nil {
 			return
@@ -115,7 +115,7 @@ func TestHandshake_ClientBuildVersionEmptyWhenServerOmitsIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial against an old-style server omitting build_version: %v, want success", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if c.BuildVersion() != "" {
 		t.Fatalf("Client.BuildVersion() = %q, want %q (server never reported one)", c.BuildVersion(), "")
 	}

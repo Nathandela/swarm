@@ -76,11 +76,11 @@ func TestMain(m *testing.M) {
 	hookprobeBin = filepath.Join(dir, "hookprobe")
 	if !build("swarm-fake-agent", "github.com/Nathandela/swarm/cmd/swarm-fake-agent") ||
 		!build("hookprobe", "github.com/Nathandela/swarm/cmd/swarm-char/hookprobe") {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
@@ -203,7 +203,7 @@ func TestCharacterize_HookSinkRecordsPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mktemp: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	sock := filepath.Join(dir, "h.sock")
 
 	fx, err := characterize(charSpec{
@@ -290,7 +290,7 @@ func TestCharacterize_HookSinkDoesNotHangOnOpenClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mktemp: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	sock := filepath.Join(dir, "h.sock")
 
 	// Misbehaving client: once the sink is up, connect and hold the connection
@@ -422,7 +422,7 @@ func TestRun_CLIWiresInputHooksAndSelectedAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mktemp: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	sock := filepath.Join(dir, "h.sock")
 	fixturePath := filepath.Join(t.TempDir(), "fx.json")
 	inputPath := writeScript(t, `200ms cli-driven-reply\n`) // <delay> <data>, \n escaped

@@ -85,7 +85,7 @@ func TestSurvival_WedgedConsumerDropsFramesGridAuthoritative(t *testing.T) {
 	// is fed every chunk before the (dropping) subscriber enqueue, so a fresh
 	// reconnect shows the flood well past one screenful. Disconnect the wedged
 	// client first (single connection at a time — v1 pin).
-	wedged.conn.Close()
+	_ = wedged.conn.Close()
 	fresh := dialShim(t, cfg.SocketPath)
 	fresh.startReader()
 	fresh.hello(shimwire.Version)

@@ -93,17 +93,17 @@ func Dial(socketPath string, clientVersion int) (net.Conn, error) {
 	out[0] = VersionProbeTag
 	binary.BigEndian.PutUint32(out[1:], uint32(clientVersion))
 	if _, err := conn.Write(out[:]); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	var in [4]byte
 	if _, err := io.ReadFull(conn, in[:]); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	daemonVersion := int(binary.BigEndian.Uint32(in[:]))
 	if daemonVersion != clientVersion {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: daemon speaks protocol v%d, client v%d; run `swarm daemon restart` "+
 			"(safe: your running sessions keep running and are reconnected — no live sessions are lost)",
 			ErrVersionSkew, daemonVersion, clientVersion)
@@ -184,7 +184,7 @@ func defaultSpawnDaemon(cfg ClientConfig) error {
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	startErr := cmd.Start()
-	logf.Close() // the child holds its own dup of the fd
+	_ = logf.Close() // the child holds its own dup of the fd
 	if startErr != nil {
 		return startErr
 	}
@@ -205,7 +205,7 @@ func openDaemonLog(path string) (*os.File, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return f, nil

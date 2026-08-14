@@ -31,7 +31,7 @@ func TestF5_OutOfRangeResizeIgnored(t *testing.T) {
 	c.writeControl(shimwire.Control{Type: shimwire.TypeResize, Cols: -5, Rows: -5})
 	c.writeControl(shimwire.Control{Type: shimwire.TypeResize, Cols: 100000, Rows: 100000})
 	c.writeControl(shimwire.Control{Type: shimwire.TypeResize, Cols: 0, Rows: 0})
-	c.conn.Close()
+	_ = c.conn.Close()
 
 	c2 := dialShim(t, cfg.SocketPath)
 	c2.startReader()

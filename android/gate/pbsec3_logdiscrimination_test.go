@@ -324,7 +324,7 @@ func TestPBSEC3_ACallTooLongToJoinIsReportedRatherThanSilentlyTruncated(t *testi
 	var b strings.Builder
 	b.WriteString("package synthetic\n\nLog.w(\n    TAG,\n")
 	for i := 0; i < 40; i++ {
-		b.WriteString(fmt.Sprintf("    \"filler %d\" +\n", i))
+		fmt.Fprintf(&b, "    \"filler %d\" +\n", i)
 	}
 	b.WriteString("    plaintext\n)\n")
 

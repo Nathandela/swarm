@@ -34,7 +34,7 @@ func TestSnapText_StripsAllControlBytes(t *testing.T) {
 			// Row 3: C1 controls — a valid NEL rune (U+0085) and raw C1 bytes
 			// (0x80, 0x9f) that arrive as invalid UTF-8; neither may leak.
 			{Runs: []Run{
-				{Text: "xy", Width: 1},
+				{Text: "x\u0085y", Width: 1},
 				{Text: string([]byte{'p', 0x80, 0x9f, 'q'}), Width: 1},
 			}},
 		},

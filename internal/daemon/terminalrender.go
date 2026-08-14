@@ -86,7 +86,7 @@ func RenderTerminal(ctx context.Context, session string, stream TerminalStream, 
 		cols, rows = initial.Cols, initial.Rows
 	}
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	if initial != nil {
 		emu.Feed(vt.RenderSnapshotClipped(initial, 0, 0)) // seed: repaint the initial grid, unclipped (v0.6 dropped the bare RenderSnapshot)
 	}

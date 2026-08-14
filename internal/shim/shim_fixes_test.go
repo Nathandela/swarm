@@ -354,7 +354,7 @@ func TestF3_WedgedTranscriptFlushTimesOut(t *testing.T) {
 			return
 		}
 		<-holderStop
-		rf.Close()
+		_ = rf.Close()
 	}()
 	defer close(holderStop)
 

@@ -55,7 +55,7 @@ func TestLeaseManager_TakeControlThenInputSameConn(t *testing.T) {
 	rcmd := protocol.RemoteCommand{DeviceCommandAuth: cmd, GateToken: gateToken, TTLSeconds: 3600}
 
 	mgr := remotegw.NewLeaseManager(rsock, 10*time.Second)
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 
 	// Begin dials ONE persistent conn for the session and establishes the lease. A nonzero
 	// generation means the lease is granted (attach opened the upstream stream).

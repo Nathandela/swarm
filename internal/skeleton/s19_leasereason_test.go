@@ -60,7 +60,7 @@ func TestS19_ARefusedLeaseReportsTheDaemonsReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial lease: %v", err)
 	}
-	defer lc.Close()
+	defer func() { _ = lc.Close() }()
 
 	gen, err := lc.AwaitLease(10 * time.Second)
 	if err == nil {

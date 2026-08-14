@@ -39,12 +39,12 @@ func benchDistribute(b *testing.B, numSubs int, sharedEndpoint bool) {
 	} else {
 		s = newServer(newStubDaemon())
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	conns := make([]*clientConn, numSubs)
 	for i := range conns {
 		serverSide, clientSide := net.Pipe()
-		defer clientSide.Close()
+		defer func() { _ = clientSide.Close() }()
 		epID := s.endpointID
 		if !sharedEndpoint {
 			epID = fmt.Sprintf("ep-%d", i)

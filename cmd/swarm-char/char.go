@@ -93,7 +93,7 @@ func characterize(spec charSpec) (adapter.Fixture, error) {
 	}
 
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 
 	// Bring the hook-collection sink up BEFORE the child so its socket is live
 	// the moment the CLI's first hook fires. Torn down after the child exits.
@@ -254,7 +254,7 @@ func (s *hookSink) acceptLoop() {
 // arrival time is stamped on receipt.
 func (s *hookSink) readConn(conn net.Conn) {
 	defer s.connWG.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for scanner.Scan() {
@@ -355,7 +355,7 @@ func buildGrid(capture []byte, cols, rows int) (*vt.Snap, error) {
 		rows = 24
 	}
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture)
 	b, err := emu.Snapshot()
 	if err != nil {

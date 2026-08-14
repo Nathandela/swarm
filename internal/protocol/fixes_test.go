@@ -467,7 +467,7 @@ func TestFix_ClientSynthesizesD8OnServerError(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(netTimeout))
 		if _, _, err := wire.ReadFrame(conn); err != nil {
 			return
@@ -570,7 +570,7 @@ func rawLeaseServer(t *testing.T, snapshotLen int, chunks [][]byte) string {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(netTimeout))
 		typ, payload, err := wire.ReadFrame(conn) // client hello
 		if err != nil || typ != wire.TControl {

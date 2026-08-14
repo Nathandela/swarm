@@ -281,9 +281,10 @@ func balancedArgList(src string, open int) (string, int, bool) {
 	for i := open; i < len(src); i++ {
 		switch c := src[i]; {
 		case inString:
-			if c == '\\' {
+			switch c {
+			case '\\':
 				i++
-			} else if c == '"' {
+			case '"':
 				inString = false
 			}
 		case c == '"':
@@ -326,9 +327,10 @@ func splitTopLevel(args string) []string {
 	for i := 0; i < len(args); i++ {
 		switch c := args[i]; {
 		case inString:
-			if c == '\\' {
+			switch c {
+			case '\\':
 				i++
-			} else if c == '"' {
+			case '"':
 				inString = false
 			}
 		case c == '"':

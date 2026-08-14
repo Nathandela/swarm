@@ -18,8 +18,8 @@ import (
 func main() {
 	if sink := os.Getenv("SWARM_CHAR_HOOK_SINK"); sink != "" {
 		if conn, err := net.Dial("unix", sink); err == nil {
-			fmt.Fprintln(conn, `{"event":"SessionStart","cwd":"/work"}`)
-			fmt.Fprintln(conn, `{"hook_event_name":"Stop","reason":"end_turn"}`)
+			_, _ = fmt.Fprintln(conn, `{"event":"SessionStart","cwd":"/work"}`)
+			_, _ = fmt.Fprintln(conn, `{"hook_event_name":"Stop","reason":"end_turn"}`)
 			_ = conn.Close()
 		} else {
 			fmt.Fprintln(os.Stderr, "hookprobe: dial sink:", err)

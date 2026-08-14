@@ -108,9 +108,9 @@ func (d *Daemon) RecordGatewayPresence(online bool) error {
 // status tick, which is not journalworthy.
 func journalRecordFor(prev persist.Meta, prevExists bool, next persist.Meta) (journal.Record, bool) {
 	switch {
-	case next.Status.Process == status.ProcessExited && !(prevExists && prev.Status.Process == status.ProcessExited):
+	case next.Status.Process == status.ProcessExited && (!prevExists || prev.Status.Process != status.ProcessExited):
 		return journal.Record{SessionID: next.ID, Type: journal.TypeExited, Agent: next.AgentType, Name: next.Name}, true
-	case next.Status.Process == status.ProcessLost && !(prevExists && prev.Status.Process == status.ProcessLost):
+	case next.Status.Process == status.ProcessLost && (!prevExists || prev.Status.Process != status.ProcessLost):
 		return journal.Record{SessionID: next.ID, Type: journal.TypeLost, Agent: next.AgentType, Name: next.Name}, true
 	case !prevExists && next.Status.Process == status.ProcessRunning:
 		return journal.Record{SessionID: next.ID, Type: journal.TypeLaunched, Agent: next.AgentType, Name: next.Name}, true

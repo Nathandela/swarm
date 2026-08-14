@@ -27,29 +27,29 @@ func dialShimHello(sock string) (net.Conn, shimwire.Caps, error) {
 	// signal/confirm paths also send it; it is harmless there (no attach follows).
 	hello, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true})
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, err
 	}
 	if err := wire.WriteFrame(conn, wire.TControl, hello); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, err
 	}
 	typ, payload, err := wire.ReadFrame(conn)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, err
 	}
 	if typ != wire.TControl {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, fmt.Errorf("shim handshake: got frame type %d, want control", typ)
 	}
 	ctrl, err := shimwire.Decode(payload)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, err
 	}
 	if ctrl.Type != shimwire.TypeHello {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, fmt.Errorf("shim handshake: got %q, want hello", ctrl.Type)
 	}
 	// The reconnect hello must compare WireVersion, not merely the reply type: a
@@ -57,7 +57,7 @@ func dialShimHello(sock string) (net.Conn, shimwire.Caps, error) {
 	// so reconcile marks it lost rather than driving it over a mismatched protocol
 	// (F9). The full compat matrix is E14.3; this is the single-version gate.
 	if ctrl.WireVersion != shimwire.Version {
-		conn.Close()
+		_ = conn.Close()
 		return nil, shimwire.Caps{}, fmt.Errorf("shim handshake: wire version %d, want %d", ctrl.WireVersion, shimwire.Version)
 	}
 	_ = conn.SetDeadline(time.Time{})
@@ -89,7 +89,7 @@ func signalShim(sock, sig string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSignal, Sig: sig})
 	if err != nil {

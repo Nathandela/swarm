@@ -76,7 +76,7 @@ func reassembleFromSink(t *testing.T, sink *frameSink) []byte {
 // reassemble byte-identical to the emulator's snapshot.
 func TestHubAttach_ChunksOversizedSnapshot(t *testing.T) {
 	emu := vt.NewEmulator(200, 50)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(heavyStyled(50, 200))
 	want, err := emu.Snapshot()
 	if err != nil {
@@ -103,7 +103,7 @@ func TestHubAttach_ChunksOversizedSnapshot(t *testing.T) {
 // did not advertise chunking gets exactly one bare TSnapshot frame, no preamble.
 func TestHubAttach_SingleFrameWhenNotNegotiated(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	h := &hub{emu: emu, tr: newHubTranscript(t), metrics: &Metrics{}}
 	conn, sink := newDrainedConn(t)
 	cw := &connWriter{conn: conn} // chunkSnapshot defaults false

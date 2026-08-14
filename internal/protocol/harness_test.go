@@ -176,7 +176,7 @@ func tmpSock(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("mkdir sock dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return filepath.Join(dir, "d.sock")
 }
 

@@ -27,7 +27,7 @@ func newFileSink(path string, cfg Config) (sink, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return &fileSink{

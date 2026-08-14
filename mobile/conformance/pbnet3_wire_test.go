@@ -242,7 +242,7 @@ func pbnet3FindForbidden(rt reflect.Type, forbidden map[reflect.Type]string, see
 		return path + " (" + name + ")"
 	}
 	switch rt.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Array, reflect.Chan, reflect.Map:
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Chan, reflect.Map:
 		return pbnet3FindForbidden(rt.Elem(), forbidden, seen, path+"[]", depth+1)
 	case reflect.Struct:
 		for i := 0; i < rt.NumField(); i++ {

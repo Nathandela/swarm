@@ -713,8 +713,8 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 	}
 
 	if len(spec.Argv) == 0 {
-		switch {
-		case spec.AgentType == "fake":
+		switch spec.AgentType {
+		case "fake":
 			if fakeAgentBin != "" {
 				spec.Argv = []string{fakeAgentBin, spec.Options["script"]}
 			}
@@ -837,7 +837,7 @@ func (a *coreAPI) SampleSnapshot(id string) ([]byte, error) {
 		return nil, err
 	}
 	if caps.SnapshotOnly {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		return protocol.SnapshotOnly(conn, caps)
 	}
 	stream, err := protocol.NewShimStream(conn, caps) // owns conn from here

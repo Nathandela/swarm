@@ -73,7 +73,7 @@ func assemble(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	sk, err := Serve(Config{
 		StateDir:           dir,
@@ -252,7 +252,7 @@ func TestSkeleton_TwoClientSupersede(t *testing.T) {
 		t.Fatalf("second Attach: %v", err)
 	}
 
-	if !(a2.Generation() > a1.Generation()) {
+	if a2.Generation() <= a1.Generation() {
 		t.Fatalf("supersede generation: a2=%d not > a1=%d (S2)", a2.Generation(), a1.Generation())
 	}
 

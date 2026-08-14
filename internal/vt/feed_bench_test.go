@@ -53,7 +53,7 @@ func genStyledFrame(cols, rows int) []byte {
 
 func benchFeed(b *testing.B, cols, rows int, payload []byte) {
 	e := NewEmulator(cols, rows)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	b.SetBytes(int64(len(payload)))
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -82,7 +82,7 @@ func BenchmarkFeed_Styled_200x50(b *testing.B) {
 // grid pre-filled by payload.
 func benchSnapshot(b *testing.B, cols, rows int, payload []byte) {
 	e := NewEmulator(cols, rows)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed(payload)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -105,7 +105,7 @@ func BenchmarkSnapshot_200x50(b *testing.B) {
 // produces for a grid pre-filled by payload.
 func benchDecodeSnapshot(b *testing.B, cols, rows int, payload []byte) {
 	e := NewEmulator(cols, rows)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed(payload)
 	snap, err := e.Snapshot()
 	if err != nil {

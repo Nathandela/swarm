@@ -37,7 +37,7 @@ func convScanHarness(t *testing.T) (d *Daemon, id string, transcriptPath string,
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	core, err := daemon.Open(daemon.Config{
 		StateDir:    dir,
@@ -221,7 +221,7 @@ func TestCaptureConversationID_EndSessionRaceDoesNotResurrectConvScan(t *testing
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	const id = "ended1"
 	store, err := persist.NewStore(dir)
@@ -317,7 +317,7 @@ func TestEndSession_CapturesConversationIDForShortLivedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	const id = "shortlived1"
 	store, err := persist.NewStore(dir)
@@ -368,7 +368,7 @@ func appendToFile(t *testing.T, path, s string) {
 	if err != nil {
 		t.Fatalf("append %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(s); err != nil {
 		t.Fatalf("append %s: %v", path, err)
 	}

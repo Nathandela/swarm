@@ -23,11 +23,11 @@ func acquireLock(path string) (*os.File, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, ErrAlreadyRunning
 		}
@@ -56,7 +56,7 @@ func bindSocket(path string) (net.Listener, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		l.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	return l, nil
@@ -87,7 +87,7 @@ func (d *Daemon) acceptLoop() {
 // reported. This bare-daemon handler runs only when no ConnHandler is supplied (the
 // assembled daemon demuxes the tag in internal/skeleton instead).
 func (d *Daemon) serveClient(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(helloIO))
 	var hdr [5]byte // VersionProbeTag + 4-byte version
 	if _, err := io.ReadFull(conn, hdr[:]); err != nil {

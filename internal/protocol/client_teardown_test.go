@@ -48,13 +48,13 @@ func TestClientTeardown_PeerCloseClosesEventsChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	c, err := Dial(sock, nil)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ch, err := c.Subscribe()
 	if err != nil {

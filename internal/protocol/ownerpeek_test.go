@@ -46,7 +46,7 @@ import (
 func peekTextSnapshot(t *testing.T, cols, rows int, lines ...string) []byte {
 	t.Helper()
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	var b []byte
 	for i, line := range lines {
 		b = append(b, []byte("\x1b["+itoa(i+1)+";1H")...) // CUP row i+1, col 1 (no scroll)
@@ -206,8 +206,8 @@ func (s *perSessionTapStub) TerminalTap(local string) (SessionStream, error) {
 	if snap, ok := s.snaps[local]; ok {
 		st.snap = snap
 	}
-	s.terminalTapStub.mu.Lock()
-	defer s.terminalTapStub.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.taps = append(s.taps, st)
 	return st, nil
 }

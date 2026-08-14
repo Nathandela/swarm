@@ -52,7 +52,7 @@ func TestVersionSkew_DetectsLegacyUntaggedDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "legacy.sock")
 
 	ln, err := net.Listen("unix", sock)
@@ -69,7 +69,7 @@ func TestVersionSkew_DetectsLegacyUntaggedDaemon(t *testing.T) {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				var hdr [4]byte
 				if _, rerr := io.ReadFull(conn, hdr[:]); rerr != nil {
 					return

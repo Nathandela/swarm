@@ -25,12 +25,12 @@ import (
 // connection reads EOF/error promptly instead of blocking forever.
 func TestHub_SupersededConnGetsEOF(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
-	t.Cleanup(func() { emu.Close() })
+	t.Cleanup(func() { _ = emu.Close() })
 	h := &hub{emu: emu, tr: newHubTranscript(t), metrics: &Metrics{}}
 
 	aServer, aClient := net.Pipe()
-	defer aServer.Close()
-	defer aClient.Close()
+	defer func() { _ = aServer.Close() }()
+	defer func() { _ = aClient.Close() }()
 	cwA := &connWriter{conn: aServer}
 	subA := h.attach(cwA)
 
@@ -40,8 +40,8 @@ func TestHub_SupersededConnGetsEOF(t *testing.T) {
 	}
 
 	bServer, bClient := net.Pipe()
-	defer bServer.Close()
-	defer bClient.Close()
+	defer func() { _ = bServer.Close() }()
+	defer func() { _ = bClient.Close() }()
 	go func() {
 		// Drain B's snapshot and any frames so its writer never wedges.
 		for {

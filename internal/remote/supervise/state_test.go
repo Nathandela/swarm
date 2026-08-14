@@ -264,7 +264,7 @@ func TestSupervisionSequence_RevokeQuiescenceRepair_NoCrashLoop(t *testing.T) {
 	first := strings.Index(got, "ensure")
 	stop := strings.Index(got, "stop")
 	last := strings.LastIndex(got, "ensure")
-	if !(first < stop && stop < last) {
+	if first >= stop || stop >= last {
 		t.Errorf("call order = %q; want ensure ... stop ... ensure, so no pre-revoke gateway survives into the new epoch", got)
 	}
 }

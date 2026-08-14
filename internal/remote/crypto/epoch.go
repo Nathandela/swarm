@@ -182,7 +182,7 @@ func (r *GrantReceiver) Accept(ks KeyStore, machinePub ed25519.PublicKey, g *Epo
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.seen && !(epochID > r.hiEpoch || (epochID == r.hiEpoch && grantSeq > r.hiSeq)) {
+	if r.seen && epochID <= r.hiEpoch && (epochID != r.hiEpoch || grantSeq <= r.hiSeq) {
 		return 0, 0, EpochKeys{}, ErrGrantReplay
 	}
 	r.hiEpoch, r.hiSeq, r.seen = epochID, grantSeq, true

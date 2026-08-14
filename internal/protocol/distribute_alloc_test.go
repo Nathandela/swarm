@@ -29,12 +29,12 @@ func TestDistributeAllocsPerEvent(t *testing.T) {
 	const allocBudget = 20
 
 	s := NewServer(newStubDaemon(), "ep-daemon") // production: one stable endpoint id
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	conns := make([]*clientConn, numSubs)
 	for i := range conns {
 		serverSide, clientSide := net.Pipe()
-		defer clientSide.Close()
+		defer func() { _ = clientSide.Close() }()
 		conns[i] = &clientConn{
 			endpointID: s.endpointID, // every connection shares the daemon's stable id
 			eventQ:     make(chan []byte, eventQueueCap),
@@ -74,11 +74,11 @@ func TestDistributeAllocsPerEvent(t *testing.T) {
 // change it.
 func TestDistributeSharedBranchDeliversNameToEverySubscriber(t *testing.T) {
 	s := NewServer(newStubDaemon(), "ep-daemon") // shared marshal-once branch (stable endpoint id)
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	makeConn := func() *clientConn {
 		serverSide, clientSide := net.Pipe()
-		t.Cleanup(func() { clientSide.Close() })
+		t.Cleanup(func() { _ = clientSide.Close() })
 		return &clientConn{
 			endpointID: s.endpointID, // both connections share the daemon's stable id
 			eventQ:     make(chan []byte, eventQueueCap),
@@ -119,11 +119,11 @@ func TestDistributeSharedBranchDeliversNameToEverySubscriber(t *testing.T) {
 // subscriber's shared payload.
 func TestDistributeFallbackNamespacesPerConnection(t *testing.T) {
 	s := newServer(newStubDaemon()) // fallback: no stable endpoint id (endpointID == "")
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	makeConn := func(epID string) *clientConn {
 		serverSide, clientSide := net.Pipe()
-		t.Cleanup(func() { clientSide.Close() })
+		t.Cleanup(func() { _ = clientSide.Close() })
 		return &clientConn{
 			endpointID: epID,
 			eventQ:     make(chan []byte, eventQueueCap),

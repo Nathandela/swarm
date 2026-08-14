@@ -317,13 +317,13 @@ func (r *Registry) persistLocked() (committed bool, err error) {
 		return false, err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error
+	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename; cleans up on any error
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return false, err
 	}
 	if err := tmp.Close(); err != nil {
@@ -348,7 +348,7 @@ var syncDir = func(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
 

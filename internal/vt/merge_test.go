@@ -15,7 +15,7 @@ import (
 // summed. "AAA" (red) then "BBB" + trailing blanks (default) is two runs.
 func TestBuildLine_MergesAdjacentSameStyleCells(t *testing.T) {
 	e := NewEmulator(10, 1)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed([]byte("\x1b[31mAAA\x1b[0mBBB"))
 	s := snapshotDecode(t, e)
 	runs := s.Lines[0].Runs
@@ -38,7 +38,7 @@ func TestBuildLine_MergesAdjacentSameStyleCells(t *testing.T) {
 // distinct runs (plus the trailing default blank run).
 func TestBuildLine_DoesNotMergeDifferentStyles(t *testing.T) {
 	e := NewEmulator(10, 1)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed([]byte("\x1b[31mA\x1b[32mB\x1b[0m"))
 	s := snapshotDecode(t, e)
 	runs := s.Lines[0].Runs
@@ -59,7 +59,7 @@ func TestBuildLine_DoesNotMergeDifferentStyles(t *testing.T) {
 // continuation preservation) so the row width invariant still holds.
 func TestBuildLine_MergesWideGraphemesPreservingWidth(t *testing.T) {
 	e := NewEmulator(10, 1)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed([]byte("\x1b[31m世界\x1b[0m"))
 	s := snapshotDecode(t, e)
 	runs := s.Lines[0].Runs
@@ -80,7 +80,7 @@ func TestBuildLine_MergesWideGraphemesPreservingWidth(t *testing.T) {
 // merging. This guards the consumers that read snapshot text.
 func TestBuildLine_MergedTextReconstructsLine(t *testing.T) {
 	e := NewEmulator(12, 1)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	e.Feed([]byte("\x1b[31mfoo\x1b[0m \x1b[1mbar\x1b[0m"))
 	s := snapshotDecode(t, e)
 

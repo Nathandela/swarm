@@ -38,7 +38,7 @@ func containsArg(argv []string, s string) bool {
 func renderGrid(t *testing.T, capture []byte) *vt.Snap {
 	t.Helper()
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture)
 	b, err := emu.Snapshot()
 	if err != nil {

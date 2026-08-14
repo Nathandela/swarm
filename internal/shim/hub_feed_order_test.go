@@ -57,12 +57,12 @@ func largeStyledPayload(cols, rows, reps int) []byte {
 // to it — the assertions below fail under that order.
 func TestHub_FeedPublishesBeforeParse(t *testing.T) {
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	tr, err := transcript.New(filepath.Join(t.TempDir(), "t.log"), transcript.Config{MaxBytes: 10 << 20, MaxFiles: 3})
 	if err != nil {
 		t.Fatalf("transcript.New: %v", err)
 	}
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	h := &hub{emu: emu, tr: tr, metrics: &Metrics{}}
 	sub := &subscriber{queue: make(chan []byte, subQueueCap), done: make(chan struct{})}

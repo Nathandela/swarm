@@ -57,8 +57,8 @@ func TestInteractionExtension_FrozenTypeShape(t *testing.T) {
 	// The extension is discovered by type assertion, never by an Adapter method:
 	// the frozen method set is unchanged (ADR-010 Non-goals).
 	var _ InteractionSource = captureAdapter{}
-	var _ func(Adapter) (InteractionSource, bool) = AsInteractionSource
-	var _ func(Adapter, Fixture) []error = CheckInteractionFixture
+	var _ func(Adapter) (InteractionSource, bool) = AsInteractionSource //nolint:staticcheck // QF1011: explicit type pins the exact signature; inferring it would silently drop the check
+	var _ func(Adapter, Fixture) []error = CheckInteractionFixture      //nolint:staticcheck // QF1011: explicit type pins the exact signature; inferring it would silently drop the check
 }
 
 // TestInteractionKindsAndStatuses_MatchTheSchema pins the wire vocabulary to

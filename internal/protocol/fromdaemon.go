@@ -169,18 +169,18 @@ type shimStream struct {
 func newShimStream(conn net.Conn, caps shimwire.Caps) (*shimStream, error) {
 	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeAttach})
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	if err := wire.WriteFrame(conn, wire.TControl, body); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(shimAttachTimeout))
 	snap, err := readSnapshot(conn, caps.SnapshotChunking)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	_ = conn.SetReadDeadline(time.Time{})
@@ -327,7 +327,7 @@ func (st *shimStream) Resize(cols, rows int) error {
 func (st *shimStream) Close() error {
 	st.closeOnce.Do(func() {
 		close(st.done)
-		st.conn.Close()
+		_ = st.conn.Close()
 	})
 	return nil
 }

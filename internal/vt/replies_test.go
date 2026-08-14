@@ -70,7 +70,7 @@ func waitForMatch(t *testing.T, sb *syncBuffer, re *regexp.Regexp) []byte {
 
 func TestSetReplyWriter_DSRCursorPositionReport(t *testing.T) {
 	e := NewEmulator(80, 24)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	var sb syncBuffer
 	e.SetReplyWriter(&sb)
 
@@ -88,7 +88,7 @@ func TestSetReplyWriter_DSRCursorPositionReport(t *testing.T) {
 
 func TestSetReplyWriter_DeviceAttributes(t *testing.T) {
 	e := NewEmulator(80, 24)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	var sb syncBuffer
 	e.SetReplyWriter(&sb)
 
@@ -104,7 +104,7 @@ func TestSetReplyWriter_BeforeAnyFeed(t *testing.T) {
 	// setting it on a fresh emulator and only then feeding a query must still
 	// deliver the reply.
 	e := NewEmulator(40, 10)
-	defer e.Close()
+	defer func() { _ = e.Close() }()
 	var sb syncBuffer
 	e.SetReplyWriter(&sb)
 	e.Feed([]byte("\x1b[6n"))

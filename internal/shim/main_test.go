@@ -347,11 +347,11 @@ func TestMain(m *testing.M) {
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "build fake agent:", err)
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
@@ -385,7 +385,7 @@ func newSocketPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("mktemp socket dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	p := filepath.Join(dir, "s")
 	if len(p) > 100 {
 		t.Fatalf("socket path too long (%d bytes): %s", len(p), p)
@@ -549,7 +549,7 @@ func dialShim(t *testing.T, socketPath string) *shimClient {
 		conn, err := net.Dial("unix", socketPath)
 		if err == nil {
 			c := &shimClient{t: t, conn: conn}
-			t.Cleanup(func() { conn.Close() })
+			t.Cleanup(func() { _ = conn.Close() })
 			return c
 		}
 		if time.Now().After(deadline) {

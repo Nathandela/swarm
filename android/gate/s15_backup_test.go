@@ -61,7 +61,7 @@ func parseXMLFile(t *testing.T, path, requirement string) *xmlNode {
 	if err != nil {
 		t.Fatalf("%s: cannot read %s: %v", requirement, mustRel(t, path), err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := xml.NewDecoder(f)
 	var root *xmlNode

@@ -46,7 +46,7 @@ func realDaemon(t *testing.T) *daemon.Daemon {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	cfg := daemon.Config{
 		StateDir:    dir,
 		SocketPath:  filepath.Join(dir, "daemon.sock"),
@@ -149,7 +149,7 @@ func TestIntegration_AttachRealSnapshotAndLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Attach: %v", err)
 	}
-	if !(b.Generation() > a.Generation()) {
+	if b.Generation() <= a.Generation() {
 		t.Errorf("supersede generation: B=%d not > A=%d", b.Generation(), a.Generation())
 	}
 

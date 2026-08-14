@@ -169,8 +169,8 @@ func runCatchTermAgent() {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(f, "%s\n", s)
-			f.Close()
+			_, _ = fmt.Fprintf(f, "%s\n", s)
+			_ = f.Close()
 		}
 	}()
 	select {} // only a KILL ends this
@@ -235,12 +235,12 @@ func TestMain(m *testing.M) {
 		build.Stderr = os.Stderr
 		if err := build.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "build", b.pkg, ":", err)
-			os.RemoveAll(dir)
+			_ = os.RemoveAll(dir)
 			os.Exit(1)
 		}
 	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 
@@ -276,7 +276,7 @@ func shortStateDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("mkdir state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 
@@ -430,7 +430,7 @@ func getMeta(t *testing.T, d *Daemon, id string) persist.Meta {
 func makeFinalSnapshot(t *testing.T, marker string) []byte {
 	t.Helper()
 	emu := vt.NewEmulator(80, 24)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed([]byte(marker))
 	b, err := emu.Snapshot()
 	if err != nil {

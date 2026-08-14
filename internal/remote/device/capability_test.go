@@ -98,7 +98,7 @@ func TestCapability_TextRoundTrip(t *testing.T) {
 func TestCapability_UnmarshalUnknownFailsClosed(t *testing.T) {
 	for _, bad := range []string{`"bogus"`, `"READ_ONLY"`, `"readonly"`, `"admin"`, `""`} {
 		t.Run(bad, func(t *testing.T) {
-			var c Capability = CapFull // seed with a non-zero value to expose silent no-writes
+			var c = CapFull // seed with a non-zero value to expose silent no-writes
 			err := json.Unmarshal([]byte(bad), &c)
 			if err == nil {
 				t.Fatalf("json.Unmarshal(%s) = nil error; want a decode error (fail-closed)", bad)

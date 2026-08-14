@@ -533,7 +533,7 @@ func aarClasses(t *testing.T, path string) []*classFile {
 			t.Fatalf("PB-BIND-7: open %s: %v", f.Name, err)
 		}
 		raw, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			t.Fatalf("PB-BIND-7: read %s: %v", f.Name, err)
 		}
@@ -561,7 +561,7 @@ func zipEntry(t *testing.T, path, want, requirement string) []byte {
 	if err != nil {
 		t.Fatalf("%s: %s is not a readable zip: %v", requirement, mustRel(t, path), err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	for _, f := range r.File {
 		if f.Name != want {
 			continue
@@ -570,7 +570,7 @@ func zipEntry(t *testing.T, path, want, requirement string) []byte {
 		if err != nil {
 			t.Fatalf("%s: open %s in %s: %v", requirement, want, mustRel(t, path), err)
 		}
-		defer rc.Close()
+		defer func() { _ = rc.Close() }()
 		b, err := io.ReadAll(rc)
 		if err != nil {
 			t.Fatalf("%s: read %s in %s: %v", requirement, want, mustRel(t, path), err)

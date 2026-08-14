@@ -223,7 +223,7 @@ func Open(cfg Config) (*Daemon, error) {
 	// restart transitions journal through the saveMeta choke point.
 	jrnl, err := journal.Open(filepath.Join(cfg.StateDir, "journal"))
 	if err != nil {
-		listener.Close()
+		_ = listener.Close()
 		_ = releaseLock(lockFile)
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func Open(cfg Config) (*Daemon, error) {
 		idempotency.Options{TTL: idempotencyTTL, MaxEntries: idempotencyMaxEntries})
 	if err != nil {
 		_ = jrnl.Close()
-		listener.Close()
+		_ = listener.Close()
 		_ = releaseLock(lockFile)
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func Open(cfg Config) (*Daemon, error) {
 	// fatal to Open: serving a blind, possibly-empty registry would silently drop
 	// live sessions (F4). Release everything acquired above before returning.
 	if err := d.reconcile(); err != nil {
-		d.listener.Close()
+		_ = d.listener.Close()
 		_ = d.journal.Close()
 		removePIDFile(cfg.StateDir)
 		_ = releaseLock(lockFile)
@@ -467,7 +467,7 @@ func (d *Daemon) Close() error {
 	close(d.stopCh)
 	d.mu.Unlock()
 
-	d.listener.Close() // unlinks the socket (clean shutdown)
+	_ = d.listener.Close() // unlinks the socket (clean shutdown)
 	d.wg.Wait()        // accept loop + supervisors drain on stopCh
 	_ = d.journal.Close()
 	// The idempotency store fsyncs every write, so dropping its handle loses nothing;
@@ -494,8 +494,8 @@ func (d *Daemon) abandon() {
 	if ul, ok := d.listener.(*net.UnixListener); ok {
 		ul.SetUnlinkOnClose(false)
 	}
-	d.listener.Close()
-	d.lockFile.Close() // release the flock as the OS would on process death
+	_ = d.listener.Close()
+	_ = d.lockFile.Close() // release the flock as the OS would on process death
 	// Every journal / idempotency write was fsync'd before its ack, so dropping these
 	// handles (as a kill -9 would) loses nothing already made durable. The idempotency
 	// store exposes no Close (internal/idempotency), so only the journal handle closes.
@@ -646,7 +646,7 @@ func (d *Daemon) logf(format string, args ...any) {
 	if err != nil {
 		return
 	}
-	fmt.Fprintf(f, "daemon: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(f, "daemon: "+format+"\n", args...)
 	_ = f.Close()
 }
 

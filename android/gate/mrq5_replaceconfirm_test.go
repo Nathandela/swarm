@@ -55,7 +55,7 @@ func mrq5Identifier(group string) string {
 		return r == '(' || r == ')' || r == ' ' || r == '\n' || r == '\t' || r == ','
 	})
 	end := strings.IndexFunc(trimmed, func(r rune) bool {
-		return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+		return r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9')
 	})
 	if end < 0 {
 		return trimmed

@@ -58,34 +58,34 @@ func Dial(socketPath string, caps []string) (*Client, error) {
 	}
 
 	if err := c.writeControl(Control{Op: OpHello, ProtocolVersion: Version, BuildVersion: version.Version, Capabilities: caps}); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(clientTimeout))
 	typ, payload, err := wire.ReadFrame(conn)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	if typ != wire.TControl {
-		conn.Close()
+		_ = conn.Close()
 		return nil, errors.New("protocol: handshake reply was not a control frame")
 	}
 	reply, err := DecodeControl(payload)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	if reply.Op == OpError {
-		conn.Close()
+		_ = conn.Close()
 		// The daemon rejected the handshake. Synthesize the D-8 guidance
 		// client-side rather than surfacing arbitrary daemon prose verbatim (F10).
 		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, d8ClientMessage())
 	}
 	if reply.Op != OpHello || reply.ProtocolVersion != Version {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: %s", ErrIncompatibleVersion, d8Message(reply.ProtocolVersion, Version))
 	}
 	c.endpointID = reply.EndpointID
@@ -370,7 +370,7 @@ func (c *Client) Attach(id string) (*Attachment, error) {
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.done)
-		c.conn.Close()
+		_ = c.conn.Close()
 	})
 	return nil
 }
@@ -714,7 +714,7 @@ func (c *Client) closeReadLoop() {
 	if ps != nil {
 		ps.deliverResult(PairingResult{Paired: false, Failure: PairFailConnectionLost})
 	}
-	c.Close()
+	_ = c.Close()
 }
 
 func (c *Client) clearAttachment(att *Attachment) {

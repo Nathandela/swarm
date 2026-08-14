@@ -32,7 +32,7 @@ func writeSecretFile(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
 
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()

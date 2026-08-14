@@ -111,7 +111,7 @@ func gateAssemble(t *testing.T) *skeleton.Daemon {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	sk, err := skeleton.Serve(skeleton.Config{
 		StateDir:     dir,
@@ -139,7 +139,7 @@ func gateLaunch50(t *testing.T, sk *skeleton.Daemon) {
 	if err != nil {
 		t.Fatalf("protocol.Dial: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// Real shims are setsid-detached and independent of the daemon by design (S1
 	// survival), so sk.Close() alone will NOT terminate them. SIGTERM every

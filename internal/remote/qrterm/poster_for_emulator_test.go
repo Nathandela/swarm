@@ -80,7 +80,7 @@ func TestWritePosterForEmulator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := png.Encode(f, img); err != nil {
 		t.Fatalf("png encode: %v", err)
 	}

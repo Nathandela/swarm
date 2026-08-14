@@ -13,8 +13,8 @@ import (
 
 func benchFrameRoundTrip(b *testing.B, payload []byte) {
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 
 	var readErr error
 	done := make(chan struct{})

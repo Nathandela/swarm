@@ -69,7 +69,7 @@ func (fs *fakeShim) serve() {
 }
 
 func (fs *fakeShim) handle(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	fs.mu.Lock()
 	fs.conns++
 	fs.mu.Unlock()

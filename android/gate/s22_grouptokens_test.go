@@ -101,48 +101,56 @@ func loadGroupTokenMap(t *testing.T) []groupTokenRow {
 func declaredGroups(t *testing.T) map[string]string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "internal", "status")
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("PB-TOK-8: parsing internal/status: %v", err)
+		t.Fatalf("PB-TOK-8: reading internal/status: %v", err)
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("PB-TOK-8: parsing internal/status/%s: %v", name, err)
+		}
+		files = append(files, file)
 	}
 
 	out := map[string]string{}
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				gd, ok := decl.(*ast.GenDecl)
-				if !ok || gd.Tok != token.CONST {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				for _, spec := range gd.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
+				ident, ok := vs.Type.(*ast.Ident)
+				if !ok || ident.Name != "Group" {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
 						continue
 					}
-					ident, ok := vs.Type.(*ast.Ident)
-					if !ok || ident.Name != "Group" {
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						t.Errorf("PB-TOK-8: Group constant %s is not a string literal, so this "+
+							"gate cannot read its wire value", name.Name)
 						continue
 					}
-					for i, name := range vs.Names {
-						if i >= len(vs.Values) {
-							continue
-						}
-						lit, ok := vs.Values[i].(*ast.BasicLit)
-						if !ok || lit.Kind != token.STRING {
-							t.Errorf("PB-TOK-8: Group constant %s is not a string literal, so this "+
-								"gate cannot read its wire value", name.Name)
-							continue
-						}
-						v, err := strconv.Unquote(lit.Value)
-						if err != nil {
-							t.Errorf("PB-TOK-8: Group constant %s: %v", name.Name, err)
-							continue
-						}
-						out[name.Name] = v
+					v, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Errorf("PB-TOK-8: Group constant %s: %v", name.Name, err)
+						continue
 					}
+					out[name.Name] = v
 				}
 			}
 		}

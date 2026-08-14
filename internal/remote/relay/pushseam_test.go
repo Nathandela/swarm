@@ -47,7 +47,7 @@ func TestPBPUSH1_PushSeamIsNamedForTheTransportItActuallyCarries(t *testing.T) {
 	// And the injection Option is the one production wiring uses.
 	srv, _, _, _ := startTestRelay(t, nil)
 	_ = srv
-	var _ Option = WithPushSink(sink)
+	_ = []Option{WithPushSink(sink)}
 }
 
 // TestPBPUSH1_NoExportedAPNsNameSurvivesTheRename is what makes the rename real. A type

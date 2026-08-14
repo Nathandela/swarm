@@ -27,7 +27,7 @@ func FuzzReferenceExtractConversationIDTotality(f *testing.F) {
 		emu := vt.NewEmulator(80, 24)
 		emu.Feed(feed)
 		b, err := emu.Snapshot()
-		emu.Close()
+		_ = emu.Close()
 		if err != nil {
 			t.Fatalf("snapshot: %v", err)
 		}

@@ -29,7 +29,7 @@ func TestLaunch_NameFieldRendersAfterDirectory(t *testing.T) {
 	if di < 0 || ni < 0 || ai < 0 {
 		t.Fatalf("launch form must render directory, name, and agent labels:\n%s", v)
 	}
-	if !(di < ni && ni < ai) {
+	if di >= ni || ni >= ai {
 		t.Fatalf("name must sit between directory and agent (dir=%d name=%d agent=%d):\n%s", di, ni, ai, v)
 	}
 }

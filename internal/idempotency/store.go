@@ -103,7 +103,7 @@ func (s *Store) replay() error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	for sc.Scan() {
@@ -304,7 +304,7 @@ var syncDir = func(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
 
@@ -325,20 +325,20 @@ func (s *Store) rewriteLocked(kept []Record) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename below succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename below succeeds
 	for _, rec := range kept {
 		if _, err := tmp.Write(append(mustMarshal(rec), '\n')); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return err
 		}
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	logPath := filepath.Join(s.dir, logFile)
 	if err := renameLog(tmpName, logPath); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err // rename never landed: s.f is still the valid pre-compaction handle
 	}
 	// Rename landed: logPath now names tmp's inode, and the OLD s.f names the unlinked

@@ -32,7 +32,7 @@ func (s *stubTerminalStream) Frames() <-chan []byte { return s.frames }
 func snapBytes(t *testing.T, cols, rows int, feed []byte) []byte {
 	t.Helper()
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	if feed != nil {
 		emu.Feed(feed)
 	}

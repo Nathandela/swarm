@@ -24,7 +24,7 @@ import (
 func driveReadSnapshotNegotiated(t *testing.T, negotiated bool, write func(net.Conn)) ([]byte, error) {
 	t.Helper()
 	cl, sv := net.Pipe()
-	t.Cleanup(func() { cl.Close(); sv.Close() })
+	t.Cleanup(func() { _ = cl.Close(); _ = sv.Close() })
 	_ = sv.SetReadDeadline(time.Now().Add(2 * time.Second))
 	go write(cl)
 	return readSnapshot(sv, negotiated)
@@ -71,7 +71,7 @@ func TestReadSnapshot_PreambleWithNegotiationStillAccepted(t *testing.T) {
 // positive pin (previously untested; C3 committee finding).
 func TestShimStream_TrailingChunkAfterExactCompletionIgnored(t *testing.T) {
 	cl, sv := net.Pipe()
-	t.Cleanup(func() { cl.Close(); sv.Close() })
+	t.Cleanup(func() { _ = cl.Close(); _ = sv.Close() })
 
 	want := []byte("exact-boundary-snapshot")
 	go func() {
@@ -90,7 +90,7 @@ func TestShimStream_TrailingChunkAfterExactCompletionIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newShimStream: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	if got := st.Snapshot(); string(got) != string(want) {
 		t.Fatalf("snapshot = %q, want %q", got, want)
 	}

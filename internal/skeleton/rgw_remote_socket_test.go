@@ -38,7 +38,7 @@ func assembleWithRemote(t *testing.T) (*Daemon, string) {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	rsock := filepath.Join(dir, "r.sock")
 	// Fix-pack 1b harness: remote launches are now confined to machine-configured cwd roots
 	// and FAIL CLOSED when none are set (R-POL.3/.7). Seed a remote-policy.json (loaded on

@@ -89,7 +89,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	}
 
 	emu := vt.NewEmulator(cfg.Cols, cfg.Rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 
 	tr, err := transcript.New(filepath.Join(cfg.SessionDir, TranscriptFile), cfg.TranscriptCfg)
 	if err != nil {
@@ -135,7 +135,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
 		sigStop()
-		listener.Close()
+		_ = listener.Close()
 		closeTranscript(tr)
 		return 0, fmt.Errorf("shim: start agent: %w", err)
 	}
@@ -209,7 +209,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	// reply write (freeing the ptyWriter lock), so neither the reply pump nor the
 	// drain can be stuck when we tear them down — even if a pathological
 	// out-of-group holder kept the slave open past the KILL.
-	ptmx.Close()
+	_ = ptmx.Close()
 	srv.ptyIn.close()
 	replies.close()
 	<-drainDone
@@ -281,7 +281,7 @@ func fsyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	return d.Sync()
 }
 
@@ -359,13 +359,13 @@ func writeFileAtomic(dir, name string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
+	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

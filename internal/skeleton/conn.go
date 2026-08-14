@@ -51,14 +51,14 @@ func (d *Daemon) handleConn(conn net.Conn) {
 	select {
 	case <-d.ready:
 	case <-d.closing:
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
 	var tag [1]byte
 	if _, err := io.ReadFull(conn, tag[:]); err != nil {
-		conn.Close() // empty / stalled / partial: bounded, never wedges the accept loop
+		_ = conn.Close() // empty / stalled / partial: bounded, never wedges the accept loop
 		return
 	}
 
@@ -74,7 +74,7 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Time{})
 		d.srv.ServeConn(prefixConn(conn, tag[0]))
 	default:
-		conn.Close() // not one of the three known first bytes
+		_ = conn.Close() // not one of the three known first bytes
 	}
 }
 
@@ -91,7 +91,7 @@ func (d *Daemon) handleConn(conn net.Conn) {
 // engine's token check is what stands between a local process and the owner's transcript, and
 // a capture that ran before it would be a second, unauthenticated write path into the journal.
 func (d *Daemon) serveHook(conn net.Conn, brace byte) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
 	r := io.MultiReader(bytes.NewReader([]byte{brace}), conn)
 	cb, err := decodeHookCallback(r)
@@ -117,7 +117,7 @@ func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 // keeps those daemon-internal probes working now that the socket speaks the full
 // client protocol.
 func serveVersionHandshake(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var payload [versionPayloadLen]byte
 	if _, err := io.ReadFull(conn, payload[:]); err != nil {
 		return

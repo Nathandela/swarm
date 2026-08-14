@@ -113,7 +113,7 @@ func listen(path string) (net.Listener, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		l.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	return l, nil
@@ -151,7 +151,7 @@ func (s *server) acceptLoop() {
 		s.mu.Lock()
 		if s.closing {
 			s.mu.Unlock()
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
 		s.conns[conn] = struct{}{}
@@ -181,7 +181,7 @@ func (s *server) serveConn(conn net.Conn) {
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	for {
@@ -364,7 +364,7 @@ func (s *server) shutdown(rep shimwire.Control) {
 	}
 	s.mu.Unlock()
 
-	s.listener.Close()
+	_ = s.listener.Close()
 	// net.UnixListener unlinks the socket on Close; remove it explicitly too so
 	// the session dir is left clean even if that ever changes (idempotent).
 	if s.socketPath != "" {
@@ -374,7 +374,7 @@ func (s *server) shutdown(rep shimwire.Control) {
 	// 3. Close every connection to unblock its parked reader, then join every
 	//    handler so Run never returns with a serveConn still running.
 	for _, c := range conns {
-		c.Close()
+		_ = c.Close()
 	}
 	s.handlers.Wait()
 }

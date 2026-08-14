@@ -115,7 +115,7 @@ func TestSocket_ResizeUpdatesEmulatorDims(t *testing.T) {
 	c.hello(shimwire.Version)
 	c.writeControl(shimwire.Control{Type: shimwire.TypeResize, Cols: 120, Rows: 40})
 	// Reconnect for a fresh snapshot (single connection at a time — v1 pin).
-	c.conn.Close()
+	_ = c.conn.Close()
 
 	c2 := dialShim(t, cfg.SocketPath)
 	c2.startReader()

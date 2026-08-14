@@ -33,7 +33,7 @@ func TestWriteOwnedDeliversToSink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	payload := []byte("owned chunk\n")
 	n, err := w.WriteOwned(payload)
@@ -69,7 +69,7 @@ func TestWriteOwnedTakesOwnershipWithoutCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	p := []byte("hello")
 	if _, err := w.WriteOwned(p); err != nil {
@@ -101,7 +101,7 @@ func TestWritePublicStillCopiesDefensively(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	p := []byte("hello")
 	if _, err := w.Write(p); err != nil {

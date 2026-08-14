@@ -368,7 +368,7 @@ func (s *Server) Close() error {
 	s.mu.Unlock()
 
 	if s.ln != nil {
-		s.ln.Close() // NewServer has no listener; the daemon owns the socket
+		_ = s.ln.Close() // NewServer has no listener; the daemon owns the socket
 	}
 	for _, cc := range conns {
 		cc.close()
@@ -408,7 +408,7 @@ func (s *Server) registerConn(conn net.Conn) *clientConn {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 		return nil
 	}
 	s.conns[cc] = struct{}{}
@@ -2106,8 +2106,8 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 	cc.srv.wg.Add(1)
 	go func() {
 		defer cc.srv.wg.Done()
-		defer cancel()    // stop the ctx-watcher below when the render loop returns
-		defer sub.Close() // read-only tap released on exit (drops this peek's upstream ref)
+		defer cancel()                     // stop the ctx-watcher below when the render loop returns
+		defer func() { _ = sub.Close() }() // read-only tap released on exit (drops this peek's upstream ref)
 		// Bind the render ctx to the connection lifetime: a dropped conn (or a superseding
 		// second peek) cancels the loop, which returns promptly on ctx.Done().
 		go func() {
@@ -2526,7 +2526,7 @@ func (cc *clientConn) cleanup() {
 func (cc *clientConn) close() {
 	cc.closeOnce.Do(func() {
 		close(cc.done)
-		cc.conn.Close()
+		_ = cc.conn.Close()
 	})
 }
 

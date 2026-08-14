@@ -16,7 +16,7 @@ var _ Client = (*fakeClient)(nil)
 func TestStub_NewAcceptsFakeClientNoDaemon(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "compiling", time.Minute))
 
-	var m tea.Model = New(f, detectMixed())
+	m := New(f, detectMixed())
 	if m == nil {
 		t.Fatal("New returned nil model")
 	}

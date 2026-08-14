@@ -57,7 +57,7 @@ func TestPolicy_MalformedConfigFailsClosed(t *testing.T) {
 	}
 
 	pol, err := loadRemoteLaunchPolicy(dir)
-	var _ protocol.LaunchPolicy = pol // pin: the loader returns exactly the interface the remote-tier server consults
+	_ = protocol.LaunchPolicy(pol) // pin: the loader returns exactly the interface the remote-tier server consults
 	if pol == nil {
 		t.Fatalf("malformed policy loaded a nil LaunchPolicy (err=%v); must fail closed to a deny-all policy, never nil", err)
 	}

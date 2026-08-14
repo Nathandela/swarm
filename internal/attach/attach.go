@@ -676,18 +676,18 @@ func (p *outParser) feed(b byte) {
 		default: // more intermediates
 		}
 	case ptStr:
-		switch {
-		case b == 0x07: // BEL terminates (OSC)
+		switch b {
+		case 0x07: // BEL terminates (OSC)
 			p.st = ptGround
-		case b == 0x1b: // possible ST (ESC \)
+		case 0x1b: // possible ST (ESC \)
 			p.st = ptStrEsc
 		default: // string payload
 		}
 	case ptStrEsc:
-		switch {
-		case b == '\\': // ST completes the string
+		switch b {
+		case '\\': // ST completes the string
 			p.st = ptGround
-		case b == 0x1b: // another ESC: keep awaiting '\'
+		case 0x1b: // another ESC: keep awaiting '\'
 			p.st = ptStrEsc
 		default: // ESC + other inside a string: treat as string body
 			p.st = ptStr

@@ -74,11 +74,11 @@ func TestFrozenTypeShape(t *testing.T) {
 	// ExtractConversationID's grid parameter is *vt.Snap — the emulator
 	// projection, the ONLY core type the boundary shares (E9.5 boundary: the
 	// adapter depends on the contract + vt, nothing else).
-	var _ func(*vt.Snap, []byte) (string, bool) = baseAdapter{}.ExtractConversationID
+	var _ func(*vt.Snap, []byte) (string, bool) = baseAdapter{}.ExtractConversationID //nolint:staticcheck // QF1011: explicit type pins the exact signature; inferring it would silently drop the check
 
 	// The core Detect function takes an Adapter and a HostProber (the frozen
 	// detection shape); a value receiver stub satisfies HostProber.
-	var _ func(Adapter, HostProber) Detection = Detect
+	var _ func(Adapter, HostProber) Detection = Detect //nolint:staticcheck // QF1011: explicit type pins the exact signature; inferring it would silently drop the check
 	var _ HostProber = fakeHostProber{}
 }
 

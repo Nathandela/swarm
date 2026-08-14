@@ -101,7 +101,7 @@ func mustSnapSize(t *testing.T, cols, rows int, text string) []byte {
 	if err != nil {
 		t.Fatalf("build snapshot: %v", err)
 	}
-	e.Close()
+	_ = e.Close()
 	return b
 }
 

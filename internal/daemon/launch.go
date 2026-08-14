@@ -375,7 +375,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	startErr := cmd.Start()
-	logf.Close() // the shim holds its own dup of the fd
+	_ = logf.Close() // the shim holds its own dup of the fd
 	if startErr != nil {
 		return nil, startErr
 	}

@@ -511,7 +511,7 @@ func TestRemotePeek_LargeGridClippedUnderMaxFrame(t *testing.T) {
 func peekGridSnapshot(t *testing.T, cols, rows int, fill string) []byte {
 	t.Helper()
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	var b []byte
 	for y := 0; y < rows; y++ {
 		b = append(b, []byte("\x1b["+itoa(y+1)+";1H")...) // CUP row y+1, col 1 (no scroll)

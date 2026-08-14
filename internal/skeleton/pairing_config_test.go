@@ -156,7 +156,7 @@ func assembleWithMachineIdentity(t *testing.T, seed func(stateDir string)) (*Dae
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	if seed != nil {
 		seed(dir)

@@ -73,7 +73,7 @@ func TestLeaseConn_WriteDataInAndDrainOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial lease: %v", err)
 	}
-	defer lc.Close()
+	defer func() { _ = lc.Close() }()
 
 	// The readLoop captures the OpLease grant: a nonzero generation means the lease is
 	// established (attach opened an upstream stream).

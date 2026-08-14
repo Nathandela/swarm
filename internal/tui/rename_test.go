@@ -30,7 +30,7 @@ func TestBoard_NameAndAgentAreSeparateColumns(t *testing.T) {
 	if name < 0 || agent < 0 || cwd < 0 {
 		t.Fatalf("row must show name, agent, and cwd columns:\n%s", row)
 	}
-	if !(name < agent && agent < cwd) {
+	if name >= agent || agent >= cwd {
 		t.Fatalf("columns out of order: want name(%d) < agent(%d) < cwd(%d):\n%s", name, agent, cwd, row)
 	}
 }
