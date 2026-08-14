@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>swarm — working indicator and responsive board</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #0d1013;
+      --panel: #14181d;
+      --panel-2: #101418;
+      --line: #262b31;
+      --text: #e7e4de;
+      --muted: #8a8f98;
+      --dim: #676d76;
+      --amber: #ffcf5f;
+      --blue: #5fafff;
+      --red: #ff5f5f;
+      --green: #5fd75f;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+    main { width: min(1160px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 80px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font: 700 30px/1.15 ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: -.04em; }
+    h1 span, .accent { color: var(--amber); }
+    h2 { margin: 52px 0 8px; font: 650 18px/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    h3 { font: 650 14px/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    .lede { max-width: 760px; color: var(--muted); }
+    code, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+
+    .options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+    .option {
+      position: relative;
+      min-height: 188px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+    }
+    .option:hover { transform: translateY(-2px); border-color: #3c4651; }
+    .option.selected { border-color: var(--blue); background: #151d25; }
+    .option.recommended::after {
+      content: "RECOMMENDED";
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      color: var(--blue);
+      font: 700 10px/1 ui-monospace, Menlo, monospace;
+      letter-spacing: .08em;
+    }
+    .spinner-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 54px;
+      margin: 20px 0 14px;
+      font: 14px/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace;
+    }
+    .spinner {
+      display: inline-grid;
+      width: 1ch;
+      place-items: center;
+      color: var(--blue);
+      font-size: 25px;
+      line-height: 1;
+    }
+    .option p { color: var(--muted); font-size: 13px; margin-bottom: 0; }
+    .frames { color: var(--dim); font: 12px/1.4 ui-monospace, Menlo, monospace; }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin: 18px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .controls label { display: flex; align-items: center; gap: 9px; }
+    input[type="range"] { accent-color: var(--amber); width: min(420px, 58vw); }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 11px;
+      color: var(--text);
+      background: var(--panel);
+      font: 12px ui-monospace, Menlo, monospace;
+      cursor: pointer;
+    }
+    button.active { color: #101418; background: var(--amber); border-color: var(--amber); }
+
+    .terminal-shell {
+      width: 100%;
+      overflow-x: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #090b0d;
+    }
+    .terminal {
+      width: 120ch;
+      max-width: none;
+      min-height: 370px;
+      overflow: hidden;
+      padding: 16px 0 12px;
+      border: 1px solid #242a30;
+      border-radius: 7px;
+      background: var(--panel-2);
+      box-shadow: 0 22px 60px #0007;
+      color: #d8d6d0;
+      font: 12.5px/1.55 ui-monospace, "SFMono-Regular", Menlo, monospace;
+      white-space: pre;
+    }
+    .titlebar { padding: 0 16px 10px; color: var(--dim); border-bottom: 1px solid #20252a; }
+    .screen { padding: 13px 0 0; }
+    .line { height: 1.55em; overflow: hidden; }
+    .line.header { display: flex; justify-content: space-between; }
+    .line.selected { background: #ffcf5f10; }
+    .line.group { margin-top: .8em; font-weight: 700; }
+    .amber { color: var(--amber); }
+    .blue { color: var(--blue); }
+    .red { color: var(--red); }
+    .green { color: var(--green); }
+    .grey, .dim { color: var(--dim); }
+    .strong { color: #eeeae2; font-weight: 700; }
+    .statusbar { margin-top: 19px; border-top: 1px solid #20252a; padding-top: 8px; }
+
+    .allocation {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .metric { padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+    .metric b { color: var(--amber); font: 650 18px ui-monospace, Menlo, monospace; }
+    .metric small { display: block; color: var(--muted); margin-top: 3px; }
+    .note { margin-top: 18px; padding: 14px 16px; border-left: 3px solid var(--amber); background: #ffcf5f0d; color: var(--muted); }
+
+    @media (max-width: 620px) {
+      main { width: min(100% - 20px, 1160px); padding-top: 28px; }
+      .terminal-shell { padding: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .option { transition: none; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1><span>$</span> swarm UI exploration</h1>
+  <p class="lede">Two small changes: a calm signal that an agent is actively working, and a board that spends the terminal width on the text you actually need to read.</p>
+
+  <h2>1. Working indicator</h2>
+  <p class="lede">Click an option to apply it to the responsive board below. The production cadence stays at one frame per second, reusing Swarm's existing elapsed-time repaint.</p>
+  <div class="options" id="spinner-options">
+    <article class="option recommended selected" data-frames="◐◓◑◒">
+      <h3>Quiet orbit</h3>
+      <div class="spinner-line"><span class="spinner">◐</span><span>codex is working</span></div>
+      <div class="frames">◐ → ◓ → ◑ → ◒</div>
+      <p>Keeps the current visual language and makes it gently rotate. Clear at 1 Hz, without looking like a loading screen.</p>
+    </article>
+    <article class="option" data-frames="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏">
+      <h3>Braille loop</h3>
+      <div class="spinner-line"><span class="spinner">⠋</span><span>codex is working</span></div>
+      <div class="frames">⠋ → ⠙ → ⠹ → ⠸ → …</div>
+      <p>More obviously animated and familiar from CLI installers, but visually busier beside many concurrent agents.</p>
+    </article>
+    <article class="option" data-frames="◴◷◶◵">
+      <h3>Clock hand</h3>
+      <div class="spinner-line"><span class="spinner">◴</span><span>codex is working</span></div>
+      <div class="frames">◴ → ◷ → ◶ → ◵</div>
+      <p>Reads directly as motion. Its heavier filled area makes the Working group slightly louder than today.</p>
+    </article>
+    <article class="option" data-frames="·oOо">
+      <h3>Soft pulse</h3>
+      <div class="spinner-line"><span class="spinner">·</span><span>codex is working</span></div>
+      <div class="frames">· → o → O → o</div>
+      <p>A breathing rather than rotating treatment. Subtle, but less semantically precise and uneven in some fonts.</p>
+    </article>
+  </div>
+
+  <h2>2. Full-width session board</h2>
+  <p class="lede">Drag the width. The name and path expand first; the summary gets the remaining room. Fixed semantic fields stay stable, and every row is clamped before it can wrap.</p>
+  <div class="controls">
+    <label>terminal width <input id="width" type="range" min="72" max="180" value="132"><strong id="width-value" class="mono">132 cols</strong></label>
+    <button id="responsive" class="active" type="button">responsive</button>
+    <button id="fixed" type="button">current fixed columns</button>
+  </div>
+  <div class="terminal-shell">
+    <div class="terminal" id="terminal">
+      <div class="titlebar">swarm — terminal preview</div>
+      <div class="screen" id="screen"></div>
+    </div>
+  </div>
+  <div class="allocation" id="allocation"></div>
+  <div class="note"><strong class="accent">Proposed behavior:</strong> fixed fields keep their readable maximums. The existing 120-column layout remains the baseline: 20 cells for name, 24 for path, and 40 for summary. Above that, 55% of every extra cell goes to the discussion name and 45% to the path; below it, the summary contracts first, then name and path.</div>
+</main>
+
+<script>
+  const spinnerCards = [...document.querySelectorAll('.option')];
+  let selectedFrames = [...spinnerCards[0].dataset.frames];
+  let frame = 0;
+  let responsive = true;
+
+  function advanceSpinners() {
+    frame++;
+    spinnerCards.forEach(card => {
+      const frames = [...card.dataset.frames];
+      card.querySelector('.spinner').textContent = frames[frame % frames.length];
+    });
+    renderBoard();
+  }
+  setInterval(advanceSpinners, 1000);
+
+  spinnerCards.forEach(card => card.addEventListener('click', () => {
+    spinnerCards.forEach(other => other.classList.toggle('selected', other === card));
+    selectedFrames = [...card.dataset.frames];
+    frame = 0;
+    renderBoard();
+  }));
+
+  const rows = [
+    { group: 'needs', icon: '●', name: 'db-migration-permission-review', agent: 'claude', path: '~/data/quanthome-api/services/database/migrations', status: 'needs input', age: '12m', summary: 'Permission: run the production database migration?' },
+    { group: 'working', icon: '◐', name: 'swarm responsive columns and animated working indicator', agent: 'codex', path: '~/data/swarm-worktrees/responsive-dashboard', status: 'working', age: '3m', summary: 'Implementing width allocation and golden coverage' },
+    { group: 'working', icon: '◐', name: 'Geneva portfolio valuation — source reconciliation', agent: 'agy', path: '~/data/samoa/area_value_analysis/fund_validation_2026_07', status: 'working', age: '41s', summary: 'Rechecking source-backed valuation assumptions' },
+    { group: 'review', icon: '✓', name: 'soml-review', agent: 'claude', path: '~/data/mcp-soml', status: 'ready for review', age: '1h', summary: 'Turn finished, 14 files changed' }
+  ];
+
+  const groupMeta = {
+    needs: ['NEEDS INPUT', 'red'],
+    working: ['WORKING', 'blue'],
+    review: ['READY FOR REVIEW', 'green']
+  };
+  const esc = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const clip = (value, width) => {
+    const chars = [...String(value)];
+    if (width <= 0) return '';
+    if (chars.length <= width) return String(value).padEnd(width);
+    return (width === 1 ? '…' : chars.slice(0, width - 1).join('') + '…');
+  };
+
+  function widths(cols) {
+    if (!responsive) return { name: 20, path: 24, summary: Math.max(0, cols - 80) };
+    // 2 prefix + 2 icon + 9 agent + 17 status + 6 elapsed = 36 fixed cells.
+    const fixed = 36;
+    const available = Math.max(0, cols - fixed);
+    let name = 20;
+    let path = 24;
+    let summary = available - name - path;
+    if (summary >= 40) {
+      let extra = summary - 40;
+      summary = 40;
+      let growName = Math.round(extra * .55);
+      let growPath = extra - growName;
+      if (name + growName > 54) {
+        growPath += name + growName - 54;
+        growName = 54 - name;
+      }
+      if (path + growPath > 58) {
+        summary += path + growPath - 58;
+        growPath = 58 - path;
+      }
+      name += growName;
+      path += growPath;
+    } else if (summary < 12) {
+      let deficit = 12 - summary;
+      summary = 12;
+      while (deficit > 0 && (name > 8 || path > 10)) {
+        if (name > 8) { name--; deficit--; }
+        if (deficit > 0 && path > 10) { path--; deficit--; }
+      }
+      const summaryShrink = Math.min(deficit, summary);
+      summary -= summaryShrink;
+      deficit -= summaryShrink;
+      while (deficit > 0 && (name > 0 || path > 0)) {
+        if (name > 0) { name--; deficit--; }
+        if (deficit > 0 && path > 0) { path--; deficit--; }
+      }
+    }
+    return { name, path, summary };
+  }
+
+  function renderBoard() {
+    const cols = Number(document.getElementById('width').value);
+    const terminal = document.getElementById('terminal');
+    const screen = document.getElementById('screen');
+    const w = widths(cols);
+    terminal.style.width = cols + 'ch';
+    document.getElementById('width-value').textContent = cols + ' cols';
+
+    let html = `<div class="line header"><span class="amber"><b>swarm</b></span><span class="dim">4 running · 1 needs you</span></div>`;
+    for (const group of ['needs', 'working', 'review']) {
+      const [label, cls] = groupMeta[group];
+      html += `<div class="line group ${cls}">  ${label}</div>`;
+      for (const row of rows.filter(item => item.group === group)) {
+        const icon = group === 'working' ? selectedFrames[frame % selectedFrames.length] : row.icon;
+        const selected = row.name.startsWith('swarm responsive');
+        html += `<div class="line${selected ? ' selected' : ''}">` +
+          `<span class="${selected ? 'amber' : 'dim'}">${selected ? '▌' : ' '}</span> ` +
+          `<span class="${cls}">${icon}</span> ` +
+          `<span class="strong">${esc(clip(row.name, w.name))}</span>` +
+          `<span class="dim">${esc(clip(row.agent, 9))}${esc(clip(row.path, w.path))}</span>` +
+          `<span class="${cls}">${esc(clip(row.status, 17))}</span>` +
+          `<span class="dim">${esc(clip(row.age, 6))}${esc(clip(row.summary, w.summary))}</span></div>`;
+      }
+    }
+    html += `<div class="line statusbar dim">  ↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   h handoff   ctrl+x kill   esc quit</div>`;
+    screen.innerHTML = html;
+
+    document.getElementById('allocation').innerHTML = [
+      ['discussion name', w.name], ['path', w.path], ['summary', w.summary], ['row budget', cols]
+    ].map(([label, value]) => `<div class="metric"><b>${value}</b> cells<small>${label}</small></div>`).join('');
+  }
+
+  document.getElementById('width').addEventListener('input', renderBoard);
+  document.getElementById('responsive').addEventListener('click', () => {
+    responsive = true;
+    document.getElementById('responsive').classList.add('active');
+    document.getElementById('fixed').classList.remove('active');
+    renderBoard();
+  });
+  document.getElementById('fixed').addEventListener('click', () => {
+    responsive = false;
+    document.getElementById('fixed').classList.add('active');
+    document.getElementById('responsive').classList.remove('active');
+    renderBoard();
+  });
+  renderBoard();
+</script>
+</body>
+</html>

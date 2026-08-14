@@ -11,8 +11,8 @@ import (
 
 // v0.5 rename — the board's leftmost column is the session NAME; the agent
 // (claude/codex) is its OWN separate column. 'e' on the selected row opens an
-// inline single-line edit of the name; type/backspace/paste build the buffer,
-// Enter commits a rename op end-to-end, Esc cancels.
+// inline single-line edit of the name; type/backspace/paste edit at a movable
+// rune-aware cursor, Enter commits a rename op end-to-end, Esc cancels.
 
 // A named row shows BOTH the name and the agent, as separate columns in that order.
 func TestBoard_NameAndAgentAreSeparateColumns(t *testing.T) {
@@ -72,6 +72,61 @@ func TestRename_InlineEditBackspace(t *testing.T) {
 	row := lineContaining(view(m), "building")
 	if !strings.Contains(row, "ab") || strings.Contains(row, "abc") {
 		t.Fatalf("backspace must drop the last rune (abc -> ab):\n%s", row)
+	}
+}
+
+// Left and Right move the insertion cursor so a missing character can be repaired
+// in place instead of rewriting the suffix.
+func TestRename_ArrowKeysEditInTheMiddle(t *testing.T) {
+	s := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute)
+	s.Name = "ac"
+	m := newModel(t, newFakeClient(s), detectMixed())
+
+	m = send(m, keyRune('e')) // cursor after "ac"
+	m = send(m, keyLeft)
+	if row := lineContaining(view(m), "building"); !strings.Contains(row, "a█c") {
+		t.Fatalf("Left must move the visible cursor between a and c:\n%s", row)
+	}
+	m = send(m, keyLeft)
+	m = send(m, keyRight)
+	m = send(m, keyRune('b'))
+
+	rm := m.(rootModel)
+	if rm.general.editBuf != "abc" || rm.general.editCursor != 2 {
+		t.Fatalf("middle insertion = %q at %d; want abc at 2", rm.general.editBuf, rm.general.editCursor)
+	}
+	if status := rm.generalStatus(); !strings.Contains(status, "←→ move cursor") {
+		t.Fatalf("rename status must advertise cursor navigation, got %q", status)
+	}
+}
+
+// Cursor movement and deletion are rune-aware: one Backspace removes one Unicode
+// code point, never one byte of its UTF-8 encoding.
+func TestRename_CursorEditingIsRuneAware(t *testing.T) {
+	s := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute)
+	s.Name = "aéc"
+	m := newModel(t, newFakeClient(s), detectMixed())
+
+	m = send(m, keyRune('e'))
+	m = send(m, keyLeft)      // a é | c
+	m = send(m, keyBackspace) // a | c
+	rm := m.(rootModel)
+	if rm.general.editBuf != "ac" || rm.general.editCursor != 1 {
+		t.Fatalf("Unicode backspace = %q at %d; want ac at 1", rm.general.editBuf, rm.general.editCursor)
+	}
+}
+
+func TestRename_PasteInsertsAtCursor(t *testing.T) {
+	s := sWorking("endpoint/s1", "claude", "~/Code/x", "building", time.Minute)
+	s.Name = "ac"
+	m := newModel(t, newFakeClient(s), detectMixed())
+
+	m = send(m, keyRune('e'))
+	m = send(m, keyLeft)
+	m = send(m, tea.PasteMsg{Content: "b\n"})
+	rm := m.(rootModel)
+	if rm.general.editBuf != "abc" || rm.general.editCursor != 2 {
+		t.Fatalf("paste-at-cursor = %q at %d; want abc at 2", rm.general.editBuf, rm.general.editCursor)
 	}
 }
 

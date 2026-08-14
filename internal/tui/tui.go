@@ -503,6 +503,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// re-emit rather than an empty cell diff — both are needed (see the F2 note
 		// on repaintInterval). Runs at repaintInterval and only on the general view.
 		m.repaintN++
+		m.general.spinnerFrame++
 		return m, tea.Batch(repaintTick(), tea.ClearScreen)
 
 	case pairPendingMsg:
@@ -574,7 +575,7 @@ func (m rootModel) generalStatus() string {
 		return "daemon connection lost - restart swarm"
 	}
 	if m.general.editing {
-		return "type new name   ⏎ save   esc cancel"
+		return "type new name   ←→ move cursor   ⏎ save   esc cancel"
 	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
@@ -868,13 +869,16 @@ func groupHeader(g status.Group) string {
 	}
 }
 
-// groupIcon is the leading glyph shown on each row of a group.
-func groupIcon(g status.Group) string {
+var workingIconFrames = [...]string{"◐", "◓", "◑", "◒"}
+
+// groupIcon is the leading glyph shown on each row of a group. Only Working is
+// animated; its quiet four-frame orbit advances on the existing one-second repaint.
+func groupIcon(g status.Group, frame uint64) string {
 	switch g {
 	case status.GroupNeedsInput:
 		return "●"
 	case status.GroupWorking:
-		return "◐"
+		return workingIconFrames[frame%uint64(len(workingIconFrames))]
 	case status.GroupReadyForReview:
 		return "✓"
 	default:

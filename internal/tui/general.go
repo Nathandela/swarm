@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -21,7 +22,10 @@ var groupOrder = []status.Group{
 	status.GroupCompleted,
 }
 
-// Row column widths for the general view (display cells).
+// Bounded row column widths for the general view (display cells). Agent, status,
+// and elapsed are semantic fields with known maximum values, so they never grow.
+// Name and cwd are the two flexible identity fields; rowColumnsFor gives them any
+// extra terminal width while keeping the 120-column layout as the baseline.
 const (
 	// colName is the session NAME column (the editable discussion name, v0.5). It is
 	// blank when a session carries no name — the separate agent column still
@@ -34,7 +38,20 @@ const (
 	colCwd     = 24
 	colStatus  = 17
 	colElapsed = 6
+
+	colSummaryBaseline = 40
+	colSummaryMin      = 12
+	colNameMin         = 8
+	colCwdMin          = 10
+	colNameMax         = 54
+	colCwdMax          = 58
 )
+
+type rowColumns struct {
+	name    int
+	cwd     int
+	summary int
+}
 
 // generalModel is the grouped session board: the general view.
 type generalModel struct {
@@ -51,6 +68,13 @@ type generalModel struct {
 	editing bool
 	editID  string
 	editBuf string
+	// editCursor is a rune index into editBuf. A rune index keeps arrow movement,
+	// insertion, and deletion safe for non-ASCII discussion names.
+	editCursor int
+
+	// spinnerFrame advances on the existing one-second general-view repaint. It
+	// animates Working without adding another timer or increasing idle redraws.
+	spinnerFrame uint64
 
 	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
 	bannerExpiry time.Time // when the banner stops rendering (auto-expiry)
@@ -293,6 +317,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editing = true
 			m.general.editID = s.ID
 			m.general.editBuf = s.Name
+			m.general.editCursor = utf8.RuneCountInString(s.Name)
 		}
 	case k.Text == "h":
 		// Inject the /swarm-handoff slash command into the selected session (ADR-010
@@ -353,9 +378,9 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateRename handles the inline single-line name edit (v0.5): Enter commits the
-// rename op, Esc cancels (the name reverts to its persisted value), Backspace drops
-// the last rune, and any printable key appends. The target is the session captured
-// when the edit opened (editID), not the live selection.
+// rename op, Esc cancels, Left/Right move a rune-aware insertion cursor, Backspace
+// deletes before that cursor, and printable text inserts there. The target is the
+// session captured when the edit opened (editID), not the live selection.
 func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case k.Code == tea.KeyEnter:
@@ -364,10 +389,18 @@ func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, renameCmd(m.client, id, name)
 	case k.Code == tea.KeyEsc:
 		m.general.closeEdit()
+	case k.Code == tea.KeyLeft:
+		if m.general.editCursor > 0 {
+			m.general.editCursor--
+		}
+	case k.Code == tea.KeyRight:
+		if m.general.editCursor < utf8.RuneCountInString(m.general.editBuf) {
+			m.general.editCursor++
+		}
 	case k.Code == tea.KeyBackspace:
-		m.general.editBuf = dropLast(m.general.editBuf)
+		m.general.deleteBeforeCursor()
 	case k.Text != "":
-		m.general.editBuf += k.Text
+		m.general.insertAtCursor(k.Text)
 	}
 	return m, nil
 }
@@ -377,15 +410,53 @@ func (m *generalModel) closeEdit() {
 	m.editing = false
 	m.editID = ""
 	m.editBuf = ""
+	m.editCursor = 0
 }
 
-// pasteEdit appends bracketed-paste content into the inline rename buffer, stripping
-// the CR/LF a single-line name must never carry (mirrors the launch form's paste).
+// pasteEdit inserts bracketed-paste content at the cursor, stripping the CR/LF a
+// single-line name must never carry (mirrors the launch form's paste).
 func (m *generalModel) pasteEdit(s string) {
 	if !m.editing {
 		return
 	}
-	m.editBuf += strings.NewReplacer("\r", "", "\n", "").Replace(s)
+	m.insertAtCursor(strings.NewReplacer("\r", "", "\n", "").Replace(s))
+}
+
+// insertAtCursor inserts text at editCursor and leaves the cursor after the new
+// runes. Converting to []rune is appropriate for a short, human-edited label and
+// makes it impossible to split UTF-8 while navigating.
+func (m *generalModel) insertAtCursor(text string) {
+	if text == "" {
+		return
+	}
+	runes := []rune(m.editBuf)
+	if m.editCursor < 0 {
+		m.editCursor = 0
+	}
+	if m.editCursor > len(runes) {
+		m.editCursor = len(runes)
+	}
+	inserted := []rune(text)
+	out := make([]rune, 0, len(runes)+len(inserted))
+	out = append(out, runes[:m.editCursor]...)
+	out = append(out, inserted...)
+	out = append(out, runes[m.editCursor:]...)
+	m.editBuf = string(out)
+	m.editCursor += len(inserted)
+}
+
+// deleteBeforeCursor removes the rune immediately left of the insertion cursor.
+func (m *generalModel) deleteBeforeCursor() {
+	runes := []rune(m.editBuf)
+	if m.editCursor <= 0 || len(runes) == 0 {
+		return
+	}
+	if m.editCursor > len(runes) {
+		m.editCursor = len(runes)
+	}
+	i := m.editCursor - 1
+	m.editBuf = string(append(runes[:i], runes[m.editCursor:]...))
+	m.editCursor = i
 }
 
 func isCtrlX(k tea.KeyPressMsg) bool {
@@ -608,56 +679,195 @@ func (m generalModel) header() string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
+// rowColumnsFor allocates the available row cells. At 120 columns the existing
+// 20/24/40 name/path/summary proportions are byte-for-byte stable. Wider windows
+// distribute their extra cells 55/45 to name and cwd (up to generous caps); narrow
+// windows consume summary room first, then contract name and cwd to safe minima.
+// prefixWidth is normally two cells, but expands for an inline kill/delete prompt,
+// which must be included in the same no-wrap budget.
+func rowColumnsFor(width, prefixWidth int) rowColumns {
+	if width <= 0 {
+		width = 120
+	}
+	if prefixWidth < 0 {
+		prefixWidth = 0
+	}
+	fixed := prefixWidth + 2 + colAgent + colStatus + colElapsed // icon+space + bounded fields
+	available := width - fixed
+	if available <= 0 {
+		return rowColumns{}
+	}
+
+	cols := rowColumns{name: colName, cwd: colCwd, summary: available - colName - colCwd}
+	if cols.summary >= colSummaryBaseline {
+		extra := cols.summary - colSummaryBaseline
+		cols.summary = colSummaryBaseline
+		growName := (extra*55 + 50) / 100
+		growCwd := extra - growName
+		if room := colNameMax - cols.name; growName > room {
+			growCwd += growName - room
+			growName = room
+		}
+		if room := colCwdMax - cols.cwd; growCwd > room {
+			cols.summary += growCwd - room
+			growCwd = room
+		}
+		cols.name += growName
+		cols.cwd += growCwd
+		return cols
+	}
+
+	if cols.summary >= colSummaryMin {
+		return cols
+	}
+	deficit := colSummaryMin - cols.summary
+	cols.summary = colSummaryMin
+	for deficit > 0 && (cols.name > colNameMin || cols.cwd > colCwdMin) {
+		if cols.name > colNameMin {
+			cols.name--
+			deficit--
+		}
+		if deficit > 0 && cols.cwd > colCwdMin {
+			cols.cwd--
+			deficit--
+		}
+	}
+	if deficit > 0 {
+		shrink := minInt(deficit, cols.summary)
+		cols.summary -= shrink
+		deficit -= shrink
+	}
+	for deficit > 0 && (cols.name > 0 || cols.cwd > 0) {
+		if cols.name > 0 {
+			cols.name--
+			deficit--
+		}
+		if deficit > 0 && cols.cwd > 0 {
+			cols.cwd--
+			deficit--
+		}
+	}
+	return cols
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // renderRow renders one session row: a 2-cell selection prefix (or the confirm
 // prompt), the group icon, then the five V-4 fields on one line.
 func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected bool) string {
 	gs := groupStyle(g)
-	icon := gs.Render(groupIcon(g))
+	icon := gs.Render(groupIcon(g, m.spinnerFrame))
+
+	// The confirm token is wider than the ordinary two-cell selection prefix. Resolve
+	// it first so responsive columns include its real width in the terminal budget.
+	var prefix string
+	var prefixWidth int
+	switch {
+	case m.confirm && s.ID == m.confirmID:
+		prompt := confirmPrompt(s)
+		prefix = styleError.Render(prompt) + " "
+		prefixWidth = lipgloss.Width(prompt) + 1
+	case selected:
+		prefix = styleAmber.Render("▌") + " "
+		prefixWidth = 2
+	default:
+		prefix = "  "
+		prefixWidth = 2
+	}
+	cols := rowColumnsFor(m.width, prefixWidth)
+
 	// Two identity columns (field test 4): the session NAME (bold, editable) then the
 	// agent CLI (dim) as its own column. Each is clamped one cell short of its column
 	// so padRight always leaves a separating space (no jamming, width discipline).
-	tail := padRight(compactElapsed(elapsedOf(s)), colElapsed) + s.Summary
+	tailText := s.Summary
 	if badge := lineageBadge(s, m.sessions); badge != "" {
-		tail += " " + badge
+		tailText += " " + badge
+	}
+	tailText = clampCells(tailText, cols.summary)
+	tail := styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed) + tailText)
+	if s.RemoteControlled {
+		marker := " " + remoteControlMarker
+		markerWidth := lipgloss.Width(marker)
+		if markerWidth > cols.summary {
+			marker = clampCells(marker, cols.summary)
+			tailText = ""
+		} else {
+			tailText = clampCells(tailText, cols.summary-markerWidth)
+		}
+		tail = styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+tailText) +
+			styleAmber.Render(marker)
 	}
 	fields := icon + " " +
-		styleAgent.Render(padRight(clampCells(m.nameCell(s), colName-1), colName)) +
+		styleAgent.Render(padRight(m.nameCell(s, cols.name), cols.name)) +
 		styleDim.Render(padRight(clampCells(s.Agent, colAgent-1), colAgent)) +
-		styleDim.Render(padRight(shortenCwd(s.Cwd), colCwd)) +
+		styleDim.Render(padRight(clampCells(shortenCwd(s.Cwd), cols.cwd-1), cols.cwd)) +
 		gs.Render(padRight(statusToken(g), colStatus)) +
-		styleDim.Render(tail)
-	// The remote-control marker is amber, not dim, and rides OUTSIDE the dim tail:
-	// it says someone else has the keyboard right now, which is the one thing on this
-	// row the owner must not have to hunt for. Absent unless the daemon stamped it.
-	if s.RemoteControlled {
-		fields += styleAmber.Render(" " + remoteControlMarker)
-	}
-
-	// The confirm prompt renders on the confirmID row (captured by identity), NOT the
-	// selected row, so a mid-confirm regroup/removal cannot paint the prompt onto a
-	// neighbor. When the target has been removed (confirmID matches no row) no row
-	// shows it.
-	var prefix string
-	switch {
-	case m.confirm && s.ID == m.confirmID:
-		prefix = styleError.Render(confirmPrompt(s)) + " "
-	case selected:
-		prefix = styleAmber.Render("▌") + " "
-	default:
-		prefix = "  "
-	}
+		tail
 	return prefix + fields
 }
 
-// nameCell is the text shown in the NAME column: the live inline-edit buffer plus a
-// cursor while THIS row is being renamed, else the session's name (blank when
-// unnamed — the agent column still identifies the row). The editing buffer is
-// clamped two cells short of the column so its cursor always fits within the width.
-func (m generalModel) nameCell(s protocol.SessionView) string {
-	if m.editing && s.ID == m.editID {
-		return clampCells(m.editBuf, colName-2) + "█"
+// nameCell is the text shown in the responsive NAME column. The inline editor keeps
+// the cursor visible even when a long name needs a viewport; ordinary names keep one
+// trailing separator cell before the agent column.
+func (m generalModel) nameCell(s protocol.SessionView, width int) string {
+	contentWidth := width - 1
+	if contentWidth <= 0 {
+		return ""
 	}
-	return s.Name
+	if m.editing && s.ID == m.editID {
+		return editViewport(m.editBuf, m.editCursor, contentWidth)
+	}
+	return clampCells(s.Name, contentWidth)
+}
+
+// editViewport renders text plus its insertion cursor within width display cells.
+// It shows the full prefix while it fits; once it does not, a rune-safe suffix keeps
+// the cursor pinned at the right edge. Text after the cursor fills any remaining room.
+func editViewport(text string, cursor, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	before := string(runes[:cursor])
+	after := string(runes[cursor:])
+	leftBudget := width - 1 // the block cursor itself occupies one cell
+	if lipgloss.Width(before) > leftBudget {
+		before = suffixCells(before, leftBudget)
+		after = ""
+	} else {
+		after = clampCells(after, leftBudget-lipgloss.Width(before))
+	}
+	return before + "█" + after
+}
+
+// suffixCells returns the longest rune-aligned suffix that fits within n display
+// cells. It complements clampCells for keeping an insertion cursor visible.
+func suffixCells(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	start, width := len(runes), 0
+	for start > 0 {
+		rw := lipgloss.Width(string(runes[start-1]))
+		if width+rw > n {
+			break
+		}
+		start--
+		width += rw
+	}
+	return string(runes[start:])
 }
 
 // confirmPrompt is the confirm-specific token shown on the selected row: "kill?"
