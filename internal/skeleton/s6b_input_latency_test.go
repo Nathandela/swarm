@@ -313,8 +313,8 @@ func s6bNewLatencyRig(t *testing.T) s6bLatencyRig {
 		svcCancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Error("gateway service did not stop within 5s of cancel")
+		case <-time.After(2 * time.Second):
+			t.Error("gateway service did not stop within 2s of cancel")
 		}
 	})
 

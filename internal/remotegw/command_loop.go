@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -601,7 +602,7 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		// Both outcomes are CONFIRMED to the phone (lease_confirm.go): silence is
 		// indistinguishable from a slow grant, which is how a keystroke gets sent against
 		// a lease that does not exist.
-		return b.confirmLease(ctx, rc, b.cfg.Leases.Begin(rc))
+		return b.confirmLease(ctx, rc, b.beginLeaseCtx(ctx, rc))
 	case protocol.OpTakeControlEnd:
 		// take_control_end has no signed Action constant; the daemon op string is its
 		// wire action. Tearing down the lease conn (End) is the phone's take_control_end.
@@ -655,13 +656,97 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	if err != nil {
 		return b.refuseCommand(ctx, rc, err)
 	}
-	reply, err := b.cfg.Forwarder.ForwardCommand(op, rc)
+	reply, err := b.forwardCtx(ctx, op, rc)
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
 	// Through the ONE serialised producer (lease_confirm.go): a second inline
 	// allocate -> append here would reintroduce the out-of-order hazard for this class.
 	return b.sealReply(ctx, reply)
+}
+
+// forwardCtx races Forwarder.ForwardCommand against ctx, so a command in flight when the
+// gateway shuts down no longer blocks Service.Run's shutdown WaitGroup for the call's own
+// timeout.
+//
+// CommandForwarder.ForwardCommand takes no context.Context (see the interface doc: adding
+// one would ripple its signature into every fake across the tree). Its production
+// implementation dials a fresh daemon connection per call and blocks on a fixed 10s
+// reply-read deadline, entirely independent of ctx. forward/applyPushPrefs reach it
+// SYNCHRONOUSLY, once per dispatched command, inside a single Run loop iteration, so
+// without this race a command in flight at the moment ctx is cancelled kept Service.Run
+// parked for however long that round trip took -- observed up to ~2.65s in practice,
+// comfortably under ForwardCommand's own 10s ceiling but past every caller's shutdown
+// bound.
+//
+// The abandoned call is left running to its own deadline; nothing here waits for or
+// consumes its outcome once ctx is gone. That is safe because handle's existing
+// crash-shaped recovery already covers it: the item was never consume()d, so a restart
+// re-serves it and the daemon's own two-phase idempotency (D6) suppresses the duplicate --
+// the same margin an actual process crash mid-call already relies on. Unlike beginLeaseCtx,
+// no self-cleanup is needed on the abandoned side: ForwardCommand's own `defer dc.Close()`
+// runs inside that goroutine regardless of who is still listening, so the daemon
+// connection it opened is never left dangling past that 10s ceiling.
+func (b *CommandBridge) forwardCtx(ctx context.Context, op string, rc protocol.RemoteCommand) (protocol.Control, error) {
+	type result struct {
+		reply protocol.Control
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		reply, err := b.cfg.Forwarder.ForwardCommand(op, rc)
+		done <- result{reply, err}
+	}()
+	select {
+	case res := <-done:
+		return res.reply, res.err
+	case <-ctx.Done():
+		return protocol.Control{}, ctx.Err()
+	}
+}
+
+// beginLeaseCtx races Leases.Begin against ctx, for the same reason forwardCtx races
+// ForwardCommand: LeaseRouter.Begin also takes no ctx and blocks on its own fixed
+// timeout (LeaseAwait, default 5s) independent of the caller's.
+//
+// Unlike forwardCtx's abandoned daemon round trip, a successful Begin here registers a
+// LIVE, PERSISTENT lease conn in the router (LeaseManager.conns) that does NOT self-close
+// -- it lives until End/Close/supersede. Left to complete after the caller has given up,
+// it could register the conn AFTER Service.Run's deferred leases.Close() already ran,
+// leaking the connection and its readLoop goroutine for good (not merely for a bounded
+// 10s, the way an abandoned ForwardCommand call is). The atomic CAS below makes the
+// caller's abandonment and the goroutine's completion mutually exclusive -- exactly one
+// side "wins" the claim -- so a Begin that finishes right as ctx cancels is either handed
+// to the caller intact or torn down by the goroutine itself, never both and never
+// neither.
+func (b *CommandBridge) beginLeaseCtx(ctx context.Context, rc protocol.RemoteCommand) error {
+	var claimed atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		err := b.cfg.Leases.Begin(rc)
+		if !claimed.CompareAndSwap(false, true) {
+			// The caller already gave up on ctx cancel; a successful Begin still
+			// registered a conn nobody now owns the teardown of. Close it directly
+			// rather than leave it outliving both the caller and the Service.
+			if err == nil {
+				b.cfg.Leases.End(rc.Session)
+			}
+			return
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		if claimed.CompareAndSwap(false, true) {
+			return ctx.Err()
+		}
+		// Begin already won the claim above and is about to send; take its real
+		// result rather than reporting ctx.Err() for a lease that was in fact
+		// granted.
+		return <-done
+	}
 }
 
 // refuseCommand answers a command this gateway cannot route -- an action with no arm, or one
@@ -734,7 +819,7 @@ func (b *CommandBridge) applyPushPrefs(ctx context.Context, rc protocol.RemoteCo
 	}
 	// The preference body stays HERE: it is the gateway's own durable custody (PB-PUSH-10) and
 	// the daemon only authorizes, so the frame forwarded carries the tuple and nothing else.
-	reply, err := b.cfg.Forwarder.ForwardCommand(op, protocol.RemoteCommand{DeviceCommandAuth: rc.DeviceCommandAuth})
+	reply, err := b.forwardCtx(ctx, op, protocol.RemoteCommand{DeviceCommandAuth: rc.DeviceCommandAuth})
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}

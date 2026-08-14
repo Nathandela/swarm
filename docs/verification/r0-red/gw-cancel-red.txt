@@ -1,0 +1,158 @@
+Wave R0, work package "gw-cancel" -- RED evidence for slow gateway shutdown.
+Command: go test -race -run TestPhonesim_LaunchE2E -count=10 -v ./internal/skeleton
+Date: 2026-08-14T20:31:31Z  HEAD: 8462aff
+
+Reproduction: 1-3 of every 10 -race runs violate the harness's 2s cleanup bound
+(phonesim_e2e_test.go:210-219, message at :217). Frequency varies run to run (flaky,
+load-dependent); when it fails, when it doesn't matches nothing else in the test, only
+timing. Confirmed failing on the CURRENT, unmodified tree (see run below); also failed 3/10
+and 2/10 in two earlier -count=10 stress runs during diagnosis.
+
+--- go test -race -run TestPhonesim_LaunchE2E -count=10 -v ./internal/skeleton (excerpt) ---
+
+=== RUN   TestPhonesim_LaunchE2E
+2026/08/14 22:31:00 skeleton: grid-tap snapshot failed for session eq5tl4behmnx3sic (1 total): daemon: session "eq5tl4behmnx3sic" shim identity no longer matches; not dialing
+    phonesim_e2e_test.go:217: service did not stop within 2s of cancel
+--- FAIL: TestPhonesim_LaunchE2E (7.18s)
+=== RUN   TestPhonesim_LaunchE2E
+--- PASS: TestPhonesim_LaunchE2E (1.44s)
+[... 8 more PASS ...]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	<total>
+
+(The "grid-tap snapshot failed ... shim identity no longer matches" line is the daemon's
+unrelated background engine-sampler (serve.go noteTapFailure) racing the fake session's
+teardown; it is cosmetic log noise, not a symptom of this bug -- see DIAGNOSIS RULED OUT.)
+
+--- DIAGNOSIS ---
+
+WHICH WAIT OUTLIVES CANCEL: Gateway.ForwardCommand's per-command daemon round-trip
+(internal/remotegw/gateway.go:327-363, the blocking reply read at gateway.go:363
+`return dc.readControl(10 * time.Second)`), reached through
+CommandBridge.forward -> routeCommand -> handle -> processBatch, all invoked
+SYNCHRONOUSLY and un-selected inside CommandBridge.Run's loop body
+(command_loop.go:406, inside the `for` loop between MailboxWait iterations).
+
+ForwardCommand's signature is `ForwardCommand(op string, rc protocol.RemoteCommand)
+(protocol.Control, error)` -- it takes NO context.Context. It dials a fresh daemon
+connection (gateway.go:328), writes the command (gateway.go:358), and blocks in
+dc.readControl using a bare 10-second time.Duration deadline (gateway.go:363) that is
+set on the net.Conn directly and has no relationship whatsoever to Service.Run's ctx.
+When Service.Run cancels its ctx (service.go:326-327) while CommandBridge.Run is mid-way
+through this call -- i.e. a mutating command (here: the test's OpLaunch) is in flight to
+the daemon at the moment of cancel -- nothing in the CommandBridge.Run loop notices the
+cancellation until this blocking read itself returns, either because the daemon finally
+replies or because the hardcoded 10s local deadline fires. The loop's own ctx checks
+(the `if err := ctx.Err(); err != nil` at command_loop.go:361/374/394, and MailboxWait's
+ctx-aware select) never run again until this synchronous forward() call unwinds, so
+Service.Run's `wg.Wait()` (service.go:358) is blocked for however long the in-flight
+daemon round-trip takes -- observed at ~2.6s in the two instrumented captures below,
+comfortably inside the hardcoded 10s ceiling but past both the 2s harness bound and, on
+a slower/more contended daemon, plausibly past the 5s bound the two later test copies
+widened to without diagnosis.
+
+Live proof (goroutine dump taken via a TEMPORARY instrumented copy of the cleanup block
+in phonesim_e2e_test.go, used only for this diagnosis and reverted afterward -- no
+production or checked-in test file was left modified): 2s after svcCancel() fired, the
+Service.Run goroutine is still parked in its shutdown WaitGroup.Wait, and the
+CommandBridge.Run goroutine it is waiting on is blocked reading the daemon's OpLaunch
+reply:
+
+goroutine 31 [sync.WaitGroup.Wait]:
+sync.runtime_SemacquireWaitGroup(0x59eb51f?, 0x10?)
+	/usr/local/Cellar/go/1.26.5/libexec/src/runtime/sema.go:114 +0x2e
+sync.(*WaitGroup).Wait(0xc00012a0f0)
+	/usr/local/Cellar/go/1.26.5/libexec/src/sync/waitgroup.go:206 +0xc5
+github.com/Nathandela/swarm/internal/remotegw.(*Service).Run(0xc0001b8180, {0x685bfe0, 0xc00054a0a0})
+	/Users/Nathan/Code/swarm/internal/remotegw/service.go:358 +0x745
+github.com/Nathandela/swarm/internal/skeleton.newPhonesimHarness.func7()
+	/Users/Nathan/Code/swarm/internal/skeleton/phonesim_e2e_test.go:211 +0x50
+created by github.com/Nathandela/swarm/internal/skeleton.newPhonesimHarness in goroutine 5
+	/Users/Nathan/Code/swarm/internal/skeleton/phonesim_e2e_test.go:211 +0x2bd7
+
+goroutine 54 [IO wait]:
+internal/poll.runtime_pollWait(0x52d02c00, 0x72)
+	/usr/local/Cellar/go/1.26.5/libexec/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0xc0006902a0, 0x72, 0x0)
+	/usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_poll_runtime.go:84 +0xb1
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0xc000690280, {0xc000580f6c, 0x4, 0x4})
+	/usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_unix.go:165 +0x499
+net.(*netFD).Read(0xc000690280, {0xc000580f6c, 0x4, 0x4})
+	/usr/local/Cellar/go/1.26.5/libexec/src/net/fd_posix.go:68 +0x4b
+net.(*conn).Read(0xc000502080, {0xc000580f6c, 0x4, 0x4})
+	/usr/local/Cellar/go/1.26.5/libexec/src/net/net.go:196 +0xad
+io.ReadAtLeast({0x52d03000, 0xc000502080}, {0xc000580f6c, 0x4, 0x4}, 0x4)
+	/usr/local/Cellar/go/1.26.5/libexec/src/io/io.go:335 +0xd1
+io.ReadFull(...)
+	/usr/local/Cellar/go/1.26.5/libexec/src/io/io.go:354
+github.com/Nathandela/swarm/internal/wire.ReadFrame({0x52d03000, 0xc000502080})
+	/Users/Nathan/Code/swarm/internal/wire/wire.go:87 +0x85
+github.com/Nathandela/swarm/internal/remotegw.(*daemonConn).readControl(_, _)
+	/Users/Nathan/Code/swarm/internal/remotegw/gateway.go:469 +0x117
+github.com/Nathandela/swarm/internal/remotegw.(*Gateway).ForwardCommand(_, {_, _}, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/gateway.go:363 +0x54b
+github.com/Nathandela/swarm/internal/remotegw.(*CommandBridge).forward(0xc000404360, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/command_loop.go:658 +0x1ba
+github.com/Nathandela/swarm/internal/remotegw.(*CommandBridge).routeCommand(0xc000404360, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/command_loop.go:647 +0x6ed
+github.com/Nathandela/swarm/internal/remotegw.(*CommandBridge).handle(0xc000404360, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/command_loop.go:507 +0x28f
+github.com/Nathandela/swarm/internal/remotegw.(*CommandBridge).processBatch(0xc000404360, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/command_loop.go:314 +0x138
+github.com/Nathandela/swarm/internal/remotegw.(*CommandBridge).Run(0xc000404360, ...)
+	/Users/Nathan/Code/swarm/internal/remotegw/command_loop.go:406 +0x714
+github.com/Nathandela/swarm/internal/remotegw.(*Service).Run.func4()
+	/Users/Nathan/Code/swarm/internal/remotegw/service.go:342 +0xb6
+created by github.com/Nathandela/swarm/internal/remotegw.(*Service).Run in goroutine 31
+	/Users/Nathan/Code/swarm/internal/remotegw/service.go:342 +0x4ea
+
+=== GWCANCEL DIAG [TestPhonesim_LaunchE2E] done fired late ===
+2.644080083s
+(a second instrumented capture on a separate run measured 2.649086583s to the same
+gateway.go:363 site, via daemon.(*Daemon).superviseLaunched instead of the protocol
+server frame -- same call site, same cause, two different repro runs.)
+
+DIAGNOSIS RULED OUT (all checked, all correctly ctx-bound, none reproduces the bug):
+  - Service.runJournal's reconnect timer (service.go:396): selects on ctx.Done(), and
+    the read loop it wraps (gateway.go:206, dc.readControl(time.Second)) rechecks
+    ctx.Err() at least once per second -- bounded, fine.
+  - CommandBridge.Run's MailboxWait + commandRetryDelay (command_loop.go:369-398): the
+    wait's own context is a child of Run's ctx (context.WithTimeout(ctx, ...)), and
+    relay.Conn.mailboxWait (relay/client.go:843-862) selects on ctx.Done() explicitly
+    and returns immediately on cancel; commandRetryDelay's timer also selects on
+    ctx.Done(). Not the culprit -- this is the ONE place in the loop that IS ctx-aware.
+  - TerminalWatcher.run / Close (terminal_watcher.go:135-171): mirrors runJournal,
+    selects on ctx.Done(); also inert for this specific test, since TestPhonesim_LaunchE2E
+    never issues a terminal_watch, so no RunTerminal goroutine is even running.
+  - lease.go:173 (LeaseConn.AwaitLease's `case <-time.After(timeout)`) and lease.go:238
+    (WriteDataIn's submitframe.Gap time.Sleep): both are on the take_control/keystroke
+    path, and TestPhonesim_LaunchE2E never takes control or sends input, so neither runs
+    at all here. lease.go:173 is a bounded LeaseAwait-timeout wait, not a cancel-vs-wait
+    race, but note it is likewise NOT selected on the Service ctx (AwaitLease takes only
+    a time.Duration) -- the same class of defect as ForwardCommand, on a different path,
+    outside this test's coverage.
+  - The "grid-tap snapshot failed" log line: daemon.serve.go's periodic engine sampler
+    (unrelated background goroutine, daemon-side, not part of remotegw.Service at all).
+    Its rate is loosely correlated with slower runs only because both are downstream of
+    general -race/CPU contention on the box, not causally connected to the shutdown path.
+
+ROOT CAUSE, restated precisely: CommandForwarder.ForwardCommand (command_loop.go:56-58)
+is a synchronous, non-cancellable interface call with no context.Context parameter.
+Gateway.ForwardCommand (its production implementation) hardcodes its own 10s daemon-reply
+deadline (gateway.go:363) independent of the caller's ctx. Every call site in
+CommandBridge.Run's synchronous per-item dispatch (forward, and by the same shape
+confirmLease -> LeaseConn.AwaitLease for take_control) can therefore block the whole
+gateway shutdown for up to that call's own timeout -- 10s for ForwardCommand,
+LeaseAwait (default 5s) for AwaitLease -- regardless of how promptly Service.Run's ctx
+was cancelled. The 2s bound is not wrong; the two widened 5s copies did not fix
+anything, they just made the flake rarer without removing the unbounded-by-ctx wait,
+and 5s does not even fully cover LeaseAwait's own 5s default plus network latency, let
+alone ForwardCommand's 10s.
+
+No production code was modified to capture this evidence. No test file was modified in
+the final state of the tree (a temporary instrumented copy of phonesim_e2e_test.go's
+cleanup block was used to capture the two goroutine-dump timings above, then reverted
+via `git checkout --`; a scratch TestMain diagnostic file was deleted). `git status` on
+internal/skeleton/ and internal/remotegw/ is clean.
