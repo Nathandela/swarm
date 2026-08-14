@@ -15,6 +15,7 @@
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
 - [Build plan](specifications/build-plan.md) — 15 ordered epics, contracts, gap resolutions, implementation guidelines (Gate 3-approved)
 - [Implementation goals](specifications/implementation-goals.md) — per-epic exit criteria, global goals, orchestration protocol (post audit-002)
+- [Remote Control implementation playbook](specifications/remote-control-product-playbook.md) — owner-approved self-host-first phone/terminal product contract, architecture, delivery waves, and release gates
 - [System invariants](invariants/system-invariants.md) — 12 safety + 3 liveness properties, each test-bound
 - [Interaction schema](specifications/interaction-schema.md) — normative interaction-item payload: eight kinds, delta semantics, approval lifecycle (Draft, binds on ADR-009 acceptance)
 
