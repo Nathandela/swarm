@@ -1,0 +1,162 @@
+RED evidence: overflow-test (Wave R0, PB-BIND-6)
+Date: 2026-08-14
+Test: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+File: mobile/conformance/robustness_test.go:166
+
+--------------------------------------------------------------------------------
+DIAGNOSIS
+--------------------------------------------------------------------------------
+
+The test claims to prove PB-BIND-6's drop-oldest overflow contract (mobile/events.go:42-53,
+58-72): flood the journal past CallbackQueueSize while the listener is wedged, then assert
+an overflow gets surfaced and the delivered count stays bounded.
+
+It is miswired and passes for the wrong reason:
+
+1. The flood at robustness_test.go:177-181 calls h.PushEvent with
+   Type: "group_transition" -- journal-family records that are gated by App.subscribed
+   (mobile/relay.go:770-773 for onJournal, :800-803 for onInteraction). The test never
+   calls App.SubscribeJournal (mobile/app.go:1011) to turn that gate on; it only calls
+   h.App.TerminalWatch(testSession) at :184, an unrelated action. The flood only reaches
+   the dispatcher because NewApp seeds subscribed: true by default (mobile/app.go:193).
+   The test is exercising that default, not the subscribe/gate wiring PB-BIND-6 depends
+   on for a real client (a client that has NOT subscribed).
+
+2. The upper-bound assertion at robustness_test.go:194,
+       if got := l.seen(); got > swarmmobile.CallbackQueueSize+emitted { ... }
+   compares against CallbackQueueSize + emitted = 256 + 512 = 768. But drop-oldest can
+   only ever REMOVE items from the queue before delivery (events.go:42-53) or COLLAPSE
+   consecutive drops into a single "overflow" marker event (events.go:58-72) -- neither
+   path can inflate the delivered count above roughly emitted + 1 (the one collapsed
+   overflow marker), i.e. ~513. The stated bound (768) is unreachable by construction:
+   this assertion can never fail, on a correct implementation or a broken one.
+
+--------------------------------------------------------------------------------
+EXPERIMENT: prove the vacuity by flipping the subscribed default
+--------------------------------------------------------------------------------
+
+Step 1 -- baseline, subscribed default unchanged (mobile/app.go:193 `subscribed: true`):
+
+  $ go test -race -run TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable ./mobile/conformance -v -timeout 60s
+
+  === RUN   TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (18.43s)
+  PASS
+  ok  	github.com/Nathandela/swarm/mobile/conformance	21.700s
+
+Step 2 -- temporarily flipped mobile/app.go:193 from `subscribed: true` to
+`subscribed: false` (the wiring the test SHOULD be exercising, since it never calls
+SubscribeJournal itself), same test, same command:
+
+  $ go test -race -run TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable ./mobile/conformance -v -timeout 60s
+
+  === RUN   TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+      robustness_test.go:191: timed out after 5s: no overflow was ever surfaced despite queueing twice the stated bound
+  --- FAIL: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (30.76s)
+  FAIL
+  FAIL	github.com/Nathandela/swarm/mobile/conformance	40.963s
+  FAIL
+
+With subscribed defaulted to false, none of the 512 flooded group_transition records ever
+reach the dispatcher (onJournal's `if !subscribed { return }` at relay.go:772 swallows all
+of them), so l.dropped() never becomes > 0 and the `eventually` poll at robustness_test.go:191
+times out. The test fails for a reason that has NOTHING to do with drop-oldest correctness --
+it fails because nothing was ever subscribed, i.e. it proves the test's PASS in Step 1 was
+contingent on the NewApp default, not on the app-level subscribe/gate contract PB-BIND-6
+sits behind.
+
+Step 3 -- reverted mobile/app.go:193 back to `subscribed: true` (git diff mobile/app.go
+clean, confirmed empty). Re-ran the original command to confirm the suite is back to green:
+
+  $ go test -race -run TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable ./mobile/conformance -v -timeout 60s
+
+  === RUN   TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (28.05s)
+  PASS
+  ok  	github.com/Nathandela/swarm/mobile/conformance	38.579s
+
+--------------------------------------------------------------------------------
+CONCLUSION
+--------------------------------------------------------------------------------
+
+TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable does not verify
+PB-BIND-6's drop-oldest/overflow-surfaced contract against the wiring a real subscribed
+client would use. It passes only because NewApp defaults subscribed to true and the test
+never subscribes or unsubscribes; and even when events do flow, its upper bound
+(CallbackQueueSize + emitted = 768) is unreachable by construction (max ~513 deliverable),
+so it could never catch an unbounded-delivery regression either. This corroborates
+docs/verification/remote-phaseB-traceability.md:108 ("PB-BIND-6 NOT MET -- drop-oldest
+stated in three places, enforced by none").
+
+This is a diagnosis only. The test itself was not modified as part of this run; git diff
+on mobile/app.go and mobile/conformance/robustness_test.go is clean.
+
+--------------------------------------------------------------------------------
+MUTATION CONTROL (2026-08-14, GREEN/implementer role)
+--------------------------------------------------------------------------------
+
+The test was rewired in mobile/conformance/robustness_test.go:
+  - it now calls h.App.SubscribeJournal() before the flood, exercising the real gate
+    instead of NewApp's subscribed-by-default value;
+  - it waits (via ReadJournal/NextCursor) for the WHOLE flood to have reached the
+    dispatcher's queue before releasing the blocked listener, so drop-oldest's cap has
+    already been fully applied and delivery below is not racing the tail of the flood
+    still arriving;
+  - the unreachable upper bound (CallbackQueueSize+emitted = 768) was replaced with
+    survivor assertions: dropped() > 0, delivered journal count <= CallbackQueueSize+1,
+    and a cursor-based old/new-half split (at most one surviving cursor may fall at or
+    below the flood's midpoint, and at least one must fall above it) -- i.e. drop-oldest
+    must retain the newest half and evict the oldest half, not the reverse.
+
+To prove those survivor assertions actually pin the drop-oldest CONTRACT (and are not
+themselves vacuous), mobile/events.go's dispatcher.emit was hand-mutated from drop-OLDEST
+to drop-NEWEST (discard the incoming event once the queue is at CallbackQueueSize, instead
+of evicting the queue's head):
+
+  --- a/mobile/events.go
+  +++ b/mobile/events.go
+  @@ func (d *dispatcher) emit(e *Event) {
+   	d.mu.Lock()
+  -	if len(d.queue) >= CallbackQueueSize {
+  -		d.queue = d.queue[1:]
+  -		d.dropped++
+  -	}
+  -	d.queue = append(d.queue, e)
+  +	if len(d.queue) >= CallbackQueueSize {
+  +		d.dropped++
+  +		d.mu.Unlock()
+  +		return
+  +	}
+  +	d.queue = append(d.queue, e)
+   	d.mu.Unlock()
+
+  $ go test -race -run TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable ./mobile/conformance -v -timeout 60s
+
+  === RUN   TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+      robustness_test.go:217: timed out after 5s: the newest emitted cursor was never delivered
+  --- FAIL: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (26.00s)
+  FAIL
+  FAIL	github.com/Nathandela/swarm/mobile/conformance	27.999s
+  FAIL
+
+Under drop-newest, the queue fills with the OLDEST ~256 cursors of the flood and every
+later push (including the final, newest cursor) is discarded on arrival, so the newest
+cursor is never delivered -- exactly the survivor property the rewritten test pins. The
+mutation was then reverted; `git diff mobile/events.go` is empty, confirmed clean.
+
+With the mutation reverted, the rewritten test passes repeatably:
+
+  $ go test -race -run TestPBBIND6 -count=5 ./mobile/conformance -v -timeout 180s
+  ...
+  --- PASS: TestPBBIND6_ConcurrentCallsAndRepeatedStartStop (0.47s)
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (20.75s)
+  --- PASS: TestPBBIND6_ConcurrentCallsAndRepeatedStartStop (0.16s)
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (20.92s)
+  --- PASS: TestPBBIND6_ConcurrentCallsAndRepeatedStartStop (0.15s)
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (19.64s)
+  --- PASS: TestPBBIND6_ConcurrentCallsAndRepeatedStartStop (0.18s)
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (19.19s)
+  --- PASS: TestPBBIND6_ConcurrentCallsAndRepeatedStartStop (0.14s)
+  --- PASS: TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable (18.41s)
+  PASS
+  ok  	github.com/Nathandela/swarm/mobile/conformance	103.392s

@@ -167,6 +167,13 @@ func TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable(t *testi
 	h := newHarness(t)
 	h.PushReconcile()
 
+	// The flood below is a journal-family record, and onJournal (relay.go) only forwards
+	// journal records to the dispatcher once the app has subscribed. Subscribe explicitly
+	// so this exercises that gate, rather than riding NewApp's subscribed-by-default value.
+	if err := h.App.SubscribeJournal(); err != nil {
+		t.Fatalf("SubscribeJournal: %v", err)
+	}
+
 	l := &blockingListener{release: make(chan struct{})}
 	if err := h.App.SetEventListener(l); err != nil {
 		t.Fatalf("SetEventListener: %v", err)
@@ -186,14 +193,56 @@ func TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable(t *testi
 	}
 	h.AwaitCommand(protocol.ActionTerminalWatch)
 
+	// Wait for onJournal to have applied every flood record before unblocking the listener.
+	// onJournal appends to a.journal and releases a.mu BEFORE calling a.events.emit, so
+	// NextCursor == emitted only proves emit() ran for cursors 1..emitted-1 and that
+	// emit(emitted) is at most in flight -- but records are applied in order by this one
+	// goroutine, so at most that single emit can still be outstanding and the queue is
+	// already at cap by the time this returns. Skipping this wait would let delivery below
+	// race the tail of the flood still arriving, making the survivor bound meaningless.
+	eventually(t, "the flood never fully reached the app's journal log", func() bool {
+		page, err := h.App.ReadJournal(0, 0)
+		if err != nil {
+			return false
+		}
+		next, err := page.NextCursor()
+		return err == nil && next == emitted
+	})
+
 	close(l.release)
 
 	eventually(t, "no overflow was ever surfaced despite queueing twice the stated bound", func() bool {
 		return l.dropped() > 0
 	})
-	if got := l.seen(); got > swarmmobile.CallbackQueueSize+emitted {
-		t.Errorf("the listener saw %d events for %d emitted with a %d-item queue; the bound is not "+
-			"being enforced", got, emitted, swarmmobile.CallbackQueueSize)
+	// The dispatcher delivers strictly in queue order, so the newest emitted cursor is
+	// necessarily the LAST thing it can ever deliver. Waiting for it here means every
+	// survivor assertion below reads a settled, fully-drained queue rather than a partial one.
+	eventually(t, "the newest emitted cursor was never delivered", func() bool {
+		cs := l.journalCursors()
+		return len(cs) > 0 && cs[len(cs)-1] == emitted
+	})
+
+	cursors := l.journalCursors()
+	if got := len(cursors); got > swarmmobile.CallbackQueueSize+1 {
+		t.Errorf("the listener saw %d journal events for a %d-item queue (plus at most one "+
+			"delivered before the callback blocked); drop-oldest is not bounding delivery", got,
+			swarmmobile.CallbackQueueSize)
+	}
+
+	// drop-oldest must retain the NEWEST half of the flood and evict the oldest half -- not
+	// the reverse, and not some other subset. The single event delivered before the callback
+	// blocked is the only cursor allowed to predate the midpoint. (The newest half surviving
+	// is already pinned above: cursors' last entry == emitted, which is > midpoint.)
+	const midpoint = emitted / 2
+	var oldHalf int
+	for _, c := range cursors {
+		if c <= midpoint {
+			oldHalf++
+		}
+	}
+	if oldHalf > 1 {
+		t.Errorf("PB-BIND-6: %d cursors <= %d survived the flood; drop-oldest must evict the "+
+			"OLDEST events first", oldHalf, midpoint)
 	}
 }
 
@@ -201,34 +250,41 @@ type blockingListener struct {
 	release chan struct{}
 	once    sync.Once
 
-	mu    sync.Mutex
-	n     int
-	drops int
+	mu      sync.Mutex
+	drops   int
+	cursors []int64
 }
 
 func (l *blockingListener) OnEvent(e *swarmmobile.Event) {
 	l.once.Do(func() { <-l.release })
 	l.mu.Lock()
-	l.n++
 	if e.Kind == "overflow" || e.Dropped > 0 {
 		l.drops += e.Dropped
 		if e.Dropped == 0 {
 			l.drops++
 		}
 	}
+	if e.Kind == "journal" {
+		l.cursors = append(l.cursors, e.Cursor)
+	}
 	l.mu.Unlock()
-}
-
-func (l *blockingListener) seen() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.n
 }
 
 func (l *blockingListener) dropped() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.drops
+}
+
+// journalCursors returns the Cursor of every "journal" event delivered so far, in delivery
+// order (which is queue order: FIFO except for the single event delivered before the
+// listener blocked).
+func (l *blockingListener) journalCursors() []int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]int64, len(l.cursors))
+	copy(out, l.cursors)
+	return out
 }
 
 // ---- S7 residuals ------------------------------------------------------------
