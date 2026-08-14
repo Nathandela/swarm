@@ -1,0 +1,102 @@
+Wave R0, work package "ci-workflows" -- RED evidence for four CI-pipeline defects.
+Date: 2026-08-14T20:27:43Z  HEAD: 8462aff
+No test to write for this package: RED is the recorded broken state of .github/workflows/ci.yml
+itself, verified both by reproducing locally and by reading the actual failing runs on
+github.com/Nathandela/swarm (main, run 31837056072, created 2026-08-14T20:15:21Z).
+
+=== Defect 1: test job never installs gomobile/gobind; mobile/bind_test.go hard-fails ===
+
+ci.yml:59-72 (job "test") runs `go test -race ./...` with no gomobile/gobind install step
+anywhere in that job. mobile/bind_test.go:251 calls toolPath(t, "gobind")
+(TestPBBIND2_NoExportedSymbolIsBindIllegal, bind_test.go:55) and toolPath's PATH/$GOPATH-bin
+fallback (bind_test.go:279-293) ends in a hard t.Fatalf when neither is found -- there is no
+t.Skip path. go.mod:42 already carries `tool golang.org/x/mobile/cmd/gobind`, and
+android/toolchain.env:59 pins SWARM_GOMOBILE_VERSION for the one job that DOES install the
+pair, at ci.yml:300-305 (job "android", steps "Install the pinned gomobile and gobind").
+The "test" job installs neither, so every push/PR run fails here.
+
+Actual CI log (run 31837056072, job "test (go test ./...)"):
+  --- FAIL: TestPBBIND2_NoExportedSymbolIsBindIllegal (0.33s)
+      bind_test.go:55: gobind not found on PATH or in $GOPATH/bin. requirements 2 pins it: `go install golang.org/x/mobile/cmd/gobind@latest`
+  --- FAIL: TestPBBIND2_GuardDetectsAKnownIllegalSurface (0.00s)
+      bind_test.go:82: gobind not found on PATH or in $GOPATH/bin. requirements 2 pins it: `go install golang.org/x/mobile/cmd/gobind@latest`
+
+Reproduced locally with PATH/GOPATH stripped so toolPath's fallback also misses (matching a
+fresh "test"-job runner, which has neither on PATH nor in $GOPATH/bin):
+  $ PATH="/usr/local/bin:/usr/bin:/bin" GOPATH=/tmp/empty-gopath \
+      go test -run '^TestPBBIND2_NoExportedSymbolIsBindIllegal$' -v ./mobile/...
+  === RUN   TestPBBIND2_NoExportedSymbolIsBindIllegal
+      bind_test.go:55: gobind not found on PATH or in $GOPATH/bin. requirements 2 pins it: `go install golang.org/x/mobile/cmd/gobind@latest`
+  --- FAIL: TestPBBIND2_NoExportedSymbolIsBindIllegal (0.73s)
+  FAIL
+  FAIL	github.com/Nathandela/swarm/mobile	2.518s
+
+=== Defect 2: lint job pins golangci-lint v1.64, whose binary predates Go 1.25 ===
+
+ci.yml:44-56 (job "lint") sets up Go 1.25 (ci.yml:52) then runs golangci-lint-action@v6 pinned
+to `version: v1.64` (ci.yml:56). That action resolves v1.64 to the latest 1.64.x release
+(1.64.8), whose published binary was built with go1.24.1 (confirmed: downloaded
+golangci-lint-1.64.8-darwin-arm64.tar.gz from the golangci/golangci-lint v1.64.8 GitHub
+release and ran --version: "golangci-lint has version 1.64.8 built with go1.24.1 ..."). Since
+go.mod:3 declares `go 1.25.0`, golangci-lint refuses to run at all -- it never reaches the
+linter set, so no .golangci config existing at the repo root (confirmed: no .golangci* file
+present) is moot; the gate has been erroring out before loading config, i.e. running zero
+linters, on every push/PR since go.mod moved to 1.25.0 (ADR-008).
+
+Actual CI log (run 31837056072, job "lint (golangci-lint)", step "Run golangci-lint"):
+  Error: can't load config: the Go language version (go1.24) used to build golangci-lint is lower than the targeted Go version (1.25.0)
+  Failed executing command with error: can't load config: the Go language version (go1.24) used to build golangci-lint is lower than the targeted Go version (1.25.0)
+  ##[error]golangci-lint exit with code 3
+
+Reproduced locally with the actual 1.64.8 release binary against this repo's go.mod:
+  $ /tmp/glcheck/golangci-lint-1.64.8-darwin-arm64/golangci-lint run ./...
+  Error: can't load config: the Go language version (go1.24) used to build golangci-lint is lower than the targeted Go version (1.25.0)
+  Failed executing command with error: can't load config: the Go language version (go1.24) used to build golangci-lint is lower than the targeted Go version (1.25.0)
+  $ echo $?
+  3
+
+=== Defect 3: build-darwin E1.2 assertion's allowlist regex is too narrow, not TAB-broken ===
+
+ci.yml:191-201 (job "build-darwin", step "Assert darwin binary links only system libraries
+(E1.2)") extracts each linked path with `awk '{print $1}'` and rejects anything not matching
+`^/usr/lib/(libSystem|libresolv)`. Verified directly: awk's default field-splitting already
+strips otool's leading TAB (confirmed via `od -c` on the awk output -- no tab byte reaches the
+grep), so the failure is NOT tab-indentation corrupting the match. The real defect is that the
+allowlist itself is too narrow: a plain `CGO_ENABLED=0 go build ./cmd/swarm` on darwin/arm64
+still links `/System/Library/Frameworks/CoreFoundation.framework/...` and
+`/System/Library/Frameworks/Security.framework/...` (Go's darwin runtime/crypto-x509 root-store
+path pulls these in regardless of cgo), and neither is covered by the `/usr/lib/(...)` prefix,
+so every darwin build now trips the "E1.2 violation" branch and `exit 1`.
+
+Actual CI log (run 31837056072, job "build-darwin (darwin/arm64)"):
+  	/usr/lib/libSystem.B.dylib (compatibility version 0.0.0, current version 0.0.0)
+  	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 0.0.0, current version 0.0.0)
+  	/System/Library/Frameworks/Security.framework/Versions/A/Security (compatibility version 0.0.0, current version 0.0.0)
+  E1.2 violation: binary links non-system dylibs:
+  /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+  /System/Library/Frameworks/Security.framework/Versions/A/Security
+
+Reproduced locally (same libs list, awk output confirmed tab-free via od -c):
+  $ GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/swarm-darwin-arm64 ./cmd/swarm
+  $ libs=$(otool -L /tmp/swarm-darwin-arm64 | tail -n +2 | awk '{print $1}')
+  $ echo "$libs" | grep -vE '^/usr/lib/(libSystem|libresolv)'
+  /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+  /System/Library/Frameworks/Security.framework/Versions/A/Security
+
+=== Defect 4: no release workflow at all; no branch protection; v0.10.2/v0.10.3 shipped red ===
+
+.github/workflows/ contains only ci.yml -- there is no separate release/publish workflow
+(confirmed: `ls .github/workflows/` lists exactly one file). ci.yml's only tag-time coupling
+is the "release-dryrun" job (ci.yml:209-268), which is `goreleaser release --snapshot ...
+--skip=publish`: it never publishes. `gh api repos/Nathandela/swarm/branches/main/protection`
+returns 404 "Branch not protected", so nothing prevents a red CI run from being tagged and
+published. Confirmed both v0.10.2 and v0.10.3 were tagged while their own tag's CI was
+failing:
+  $ gh api "repos/Nathandela/swarm/actions/runs?per_page=100" | jq -r \
+      '.workflow_runs[] | select(.head_branch|startswith("v0.10")) | "\(.head_branch) \(.conclusion) \(.created_at)"'
+  v0.10.3 failure 2026-08-14T15:59:58Z
+  v0.10.2 failure 2026-08-14T14:57:21Z
+  v0.10.1 failure 2026-08-14T13:39:37Z
+  v0.10.0 failure 2026-08-13T18:56:27Z
+
+Net: nothing in this repository's CI or branch settings would have stopped either publish.

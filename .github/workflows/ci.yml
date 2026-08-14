@@ -1,8 +1,14 @@
 name: CI
 
 on:
+  # No `tags:` filter: release.yml's own `push: tags: [v*]` trigger calls this workflow via
+  # workflow_call, so a bare push trigger here would run the whole matrix a second time,
+  # redundantly, for every tag push. `branches: ['**']` keeps every branch push triggering
+  # (unchanged behavior) while a tag-only push no longer double-fires this workflow.
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
 
 # ADR-008. GOTOOLCHAIN defaults to `auto`, which is why the previous `go-version: '1.24'`
 # pins never failed against a go.mod declaring 1.25.0: Go silently downloaded 1.25 and built
@@ -51,9 +57,13 @@ jobs:
         with:
           go-version: '1.25'
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v2.12.2: the golangci-lint release pinned to `go 1.25.0` (go.mod:3, ADR-008).
+        # v1.64's binary was built with go1.24.1, which refuses to run at all against a
+        # go 1.25.0 module ("the Go language version used to build golangci-lint is
+        # lower than the targeted Go version") -- exit 3 before any linter runs.
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v1.64
+          version: v2.12.2
 
   test:
     name: test (go test ./...)
@@ -64,6 +74,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+      # mobile/bind_test.go (PB-BIND-2) shells out to the real gobind binary and
+      # t.Fatalf's if it is not on PATH or in $GOPATH/bin -- there is no skip path.
+      # Installed exactly as the "android" job does: same pin (android/toolchain.env),
+      # same two `go install` commands.
+      - name: Install the pinned gomobile and gobind
+        run: |
+          . android/toolchain.env
+          go install "golang.org/x/mobile/cmd/gomobile@$SWARM_GOMOBILE_VERSION"
+          go install "golang.org/x/mobile/cmd/gobind@$SWARM_GOMOBILE_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Vet (GG-4)
         run: go vet ./...
       - name: Run tests
@@ -192,7 +212,13 @@ jobs:
         run: |
           otool -L swarm-darwin-${{ matrix.goarch }}
           libs=$(otool -L swarm-darwin-${{ matrix.goarch }} | tail -n +2 | awk '{print $1}')
-          bad=$(echo "$libs" | grep -vE '^/usr/lib/(libSystem|libresolv)' || true)
+          # Allowlist covers libSystem/libresolv plus the two Frameworks a plain
+          # CGO_ENABLED=0 build legitimately links on darwin (Go's runtime and
+          # crypto/x509 root-store path pull these in regardless of cgo) --
+          # confirmed against a real `go build ./cmd/swarm` on darwin/arm64.
+          # `[[:space:]]*` tolerates a leading-whitespace otool line either way;
+          # anything else here is still a genuine E1.2 violation.
+          bad=$(echo "$libs" | grep -vE '^[[:space:]]*(/usr/lib/(libSystem|libresolv)|/System/Library/Frameworks/(CoreFoundation|Security)\.framework/)' || true)
           if [ -n "$bad" ]; then
             echo "E1.2 violation: binary links non-system dylibs:"
             echo "$bad"
