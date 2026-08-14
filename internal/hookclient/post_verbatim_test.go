@@ -27,13 +27,13 @@ func TestPost_RawBytesCrossTheWireVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdir temp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	sock := filepath.Join(sockDir, "hook.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	decoded := make(chan engine.Callback, 1)
 	errc := make(chan error, 1)
@@ -43,7 +43,7 @@ func TestPost_RawBytesCrossTheWireVerbatim(t *testing.T) {
 			errc <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		cb, err := Decode(conn)
 		if err != nil {
 			errc <- err

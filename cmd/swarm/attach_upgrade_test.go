@@ -69,7 +69,7 @@ func TestAttachDialer_AttachesAfterAutoUpgrade(t *testing.T) {
 		}
 	})
 	if cl, ok := reconnect.(interface{ Close() error }); ok {
-		defer cl.Close()
+		defer func() { _ = cl.Close() }()
 	}
 	_ = longLived.Close()
 

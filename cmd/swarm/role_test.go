@@ -58,7 +58,7 @@ func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, session
 	if err != nil {
 		t.Fatalf("mktemp socket dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 
 	data, err := json.Marshal(shimLaunchConfig{
 		SessionID:  "role-test",

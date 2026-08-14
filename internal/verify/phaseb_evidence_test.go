@@ -31,6 +31,7 @@ import (
 // traceRow matches one row of the generated per-requirement table:
 //
 //	| PB-APP-2 | S16 | shipped | `docs/verification/remote-phaseB-s16-evidence.md` |
+//
 // The DERIVATION cell sits between Status and Evidence (ADR-007 B129) and is deliberately
 // skipped rather than captured: this guard is about the evidence citation, and a parser that
 // silently read the wrong cell is how it would die. It DID die that way for one run while the

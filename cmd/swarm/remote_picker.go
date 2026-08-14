@@ -31,7 +31,7 @@ const remoteRevokeNoTTYMsg = "remote revoke: not a terminal; run `swarm remote r
 // but the refusal.
 func runRemoteRevokeInteractive(stdin io.Reader, stdout, stderr io.Writer) int {
 	if !revokeStdioIsTTY(stdin, stdout) {
-		fmt.Fprint(stderr, remoteRevokeNoTTYMsg)
+		_, _ = fmt.Fprint(stderr, remoteRevokeNoTTYMsg)
 		return 2
 	}
 	return runRemoteRevokePicker(stdin, stdout, stderr)
@@ -61,33 +61,33 @@ func revokeStdioIsTTY(stdin io.Reader, stdout io.Writer) bool {
 func runRemoteRevokePicker(stdin io.Reader, stdout, stderr io.Writer) int {
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	devices, err := client.ListDevices()
 	if err != nil {
-		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
 	if len(devices) == 0 {
-		fmt.Fprintln(stderr, "remote revoke: no paired devices")
+		_, _ = fmt.Fprintln(stderr, "remote revoke: no paired devices")
 		return 1
 	}
 
 	chosen, ok := pickDevice(devices, stdin, stdout)
 	if !ok {
-		fmt.Fprintln(stderr, "aborted")
+		_, _ = fmt.Fprintln(stderr, "aborted")
 		return 1
 	}
 
 	// Outside the picker, plain stdout — consistent with runRemotePair's own
 	// "Device: %s\n" line before its confirm prompt.
-	fmt.Fprintf(stdout, "Device: %s\n", chosen.Name)
-	fmt.Fprintf(stdout, "revoke %q (%s)? [y/N]: ", chosen.Name, deviceIDShort(chosen.DeviceID))
+	_, _ = fmt.Fprintf(stdout, "Device: %s\n", chosen.Name)
+	_, _ = fmt.Fprintf(stdout, "revoke %q (%s)? [y/N]: ", chosen.Name, deviceIDShort(chosen.DeviceID))
 	if !readYesNo(stdin) {
-		fmt.Fprintln(stderr, "aborted")
+		_, _ = fmt.Fprintln(stderr, "aborted")
 		return 1
 	}
 

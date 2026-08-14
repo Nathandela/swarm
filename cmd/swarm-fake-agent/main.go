@@ -28,7 +28,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		script = f
 	}
 

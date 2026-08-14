@@ -146,7 +146,7 @@ func TestPBBIND1_GomobileBindProducesAnAAR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open produced AAR: %v", err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	want := "jni/arm64-v8a/libgojni.so"
 	for _, f := range zr.File {
 		if f.Name == want {

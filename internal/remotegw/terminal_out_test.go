@@ -157,7 +157,7 @@ func serveFakeTerminalDaemon(t *testing.T, ln net.Listener, endpointID string, s
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 
 	typ, body, err := wire.ReadFrame(conn)
@@ -203,7 +203,7 @@ func serveFakeTerminalDaemonThenEnd(t *testing.T, ln net.Listener, endpointID st
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 
 	typ, body, err := wire.ReadFrame(conn)
@@ -244,13 +244,13 @@ func TestGatewayRunTerminal_BlanksPhoneOnDaemonEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	snaps := []protocol.TerminalSnapshot{{Session: "s1", Lines: []string{"hello"}, Cols: 80, Rows: 24}}
 	go serveFakeTerminalDaemonThenEnd(t, ln, "m", snaps)
@@ -302,13 +302,13 @@ func TestGatewayRunTerminal_SubscribesAndForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	gotSub := make(chan protocol.Control, 1)
 	snaps := []protocol.TerminalSnapshot{{Session: "s1", Lines: []string{"hello"}, Cols: 80, Rows: 24}}

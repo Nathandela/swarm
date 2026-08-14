@@ -338,20 +338,20 @@ func TestS11Sever_LeaseManagerFiresWhenTheDaemonDies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	const gen uint64 = 9
 	d := &s11LeaseDaemon{}
 	go d.serve(ln, gen)
 
 	m := NewLeaseManager(sock, 3*time.Second)
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	severed := make(chan SeveredLease, 4)
 	m.OnSever(func(s SeveredLease) { severed <- s })
@@ -399,13 +399,13 @@ func TestS11Sever_FiresOnceAndOnlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	d := &s11LeaseDaemon{}
 	go d.serve(ln, 5)

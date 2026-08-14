@@ -325,8 +325,8 @@ func anyMatch(samples []statusSample, pred func(status.Status) bool) bool {
 	return firstIndex(samples, pred) >= 0
 }
 
-func isActive(s status.Status) bool  { return s.Turn == status.TurnActive }
-func isIdle(s status.Status) bool    { return s.Turn == status.TurnIdle }
+func isActive(s status.Status) bool { return s.Turn == status.TurnActive }
+func isIdle(s status.Status) bool   { return s.Turn == status.TurnIdle }
 
 // TestE2E_ReplayProductionPath_AgyOpencode is R-G1: drives the REAL assembled
 // stack (registry -> composeLaunchSpec -> daemon/shim -> engine grid rules ->

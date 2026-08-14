@@ -67,7 +67,7 @@ func TestDeliverEpochGrant_AuthorizesAndAppendsBootstrap(t *testing.T) {
 	if err := relaySrv.Start(ctx); err != nil {
 		t.Fatalf("relay start: %v", err)
 	}
-	defer relaySrv.Close()
+	defer func() { _ = relaySrv.Close() }()
 
 	machineRelay, _, _ := dialRelayClient(t, ctx, relaySrv.URL())
 	deviceRelay, devicePub, devicePriv := dialRelayClient(t, ctx, relaySrv.URL())

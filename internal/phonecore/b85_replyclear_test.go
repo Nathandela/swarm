@@ -95,11 +95,11 @@ func gapTheReplyBucket(t *testing.T, c *Core, r *MailboxRouter, b Bucket) uint64
 		t.Fatalf("drive the gapped reply: %v", err)
 	}
 	if !r.StreamStale(StreamReply) {
-		t.Fatalf("precondition: a reply-bucket gap did not stale the reply channel, so this test "+
+		t.Fatalf("precondition: a reply-bucket gap did not stale the reply channel, so this test " +
 			"cannot measure whether the flag SURVIVES (PB-SYNC-1)")
 	}
 	if !c.State().StaleStreams[StreamReply] {
-		t.Fatalf("precondition: the reply channel's stale flag was not COMMITTED, so nothing "+
+		t.Fatalf("precondition: the reply channel's stale flag was not COMMITTED, so nothing " +
 			"survives a process death to be cleared later (PB-SYNC-3)")
 	}
 	return 4

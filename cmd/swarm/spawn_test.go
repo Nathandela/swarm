@@ -264,8 +264,8 @@ func TestRunSpawn_DirDefaultsToCallerCwd(t *testing.T) {
 // every human-run spawn fail.
 func TestRunSpawn_NoSessionEnvSendsNoLineage(t *testing.T) {
 	useTempStateDir(t)
-	t.Setenv(hookclient.EnvSessionID, "") // registers the restore...
-	os.Unsetenv(hookclient.EnvSessionID)  // ...then genuinely unset it
+	t.Setenv(hookclient.EnvSessionID, "")    // registers the restore...
+	_ = os.Unsetenv(hookclient.EnvSessionID) // ...then genuinely unset it
 
 	client := newFakeSpawnClient()
 	var stdout, stderr bytes.Buffer

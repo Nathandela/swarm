@@ -26,7 +26,7 @@ func fakeReferenceBinDir(t *testing.T, convID string) string {
 	if err != nil {
 		t.Fatalf("bin dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	script := "#!/bin/sh\n" +
 		"# Fake reference-cli (Epic 11 B2 capture test): print the conv-id marker the\n" +
 		"# reference adapter extracts from the transcript, then idle.\n" +

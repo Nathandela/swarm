@@ -57,7 +57,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *cli == "" {
-		fmt.Fprintln(stderr, "spawn: --cli is required: swarm spawn --cli <agent> (--prompt t | --handoff f | --delegate f)")
+		_, _ = fmt.Fprintln(stderr, "spawn: --cli is required: swarm spawn --cli <agent> (--prompt t | --handoff f | --delegate f)")
 		return 2
 	}
 	sources := 0
@@ -67,7 +67,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		}
 	}
 	if sources != 1 {
-		fmt.Fprintln(stderr, "spawn: need exactly one of --prompt, --handoff or --delegate")
+		_, _ = fmt.Fprintln(stderr, "spawn: need exactly one of --prompt, --handoff or --delegate")
 		return 2
 	}
 
@@ -75,7 +75,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if cwd == "" {
 		wd, err := os.Getwd()
 		if err != nil {
-			fmt.Fprintf(stderr, "spawn: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 			return 1
 		}
 		cwd = wd
@@ -85,7 +85,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	// launching the child in the wrong place or refusing a real directory.
 	cwd, err := filepath.Abs(cwd)
 	if err != nil {
-		fmt.Fprintf(stderr, "spawn: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 		return 1
 	}
 
@@ -101,7 +101,7 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if doc != "" {
 		dest, err = copyHandoff(doc)
 		if err != nil {
-			fmt.Fprintf(stderr, "spawn: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 			return 1
 		}
 		// The prompt is a POINTER at the copied document, never its body (A4).
@@ -133,13 +133,13 @@ func runSpawn(args []string, c agentClient, stdout, stderr io.Writer) int {
 		// A refused launch must not strand its handoff copy: retries against a
 		// full daemon would otherwise accumulate documents no session references.
 		if dest != "" {
-			os.Remove(dest)
+			_ = os.Remove(dest)
 		}
-		fmt.Fprintf(stderr, "spawn: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawn: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, id)
-	fmt.Fprintf(stderr, "spawned %s (%s)\n", canonical, id)
+	_, _ = fmt.Fprintln(stdout, id)
+	_, _ = fmt.Fprintf(stderr, "spawned %s (%s)\n", canonical, id)
 	return 0
 }
 
@@ -175,7 +175,7 @@ func copyHandoff(src string) (string, error) {
 	// so the destination is forced absolute even under a relative state-dir knob.
 	dest, err := filepath.Abs(f.Name())
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return "", err
 	}
 	_, err = f.Write(body)

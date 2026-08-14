@@ -31,8 +31,8 @@ import (
 const shortCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 const (
-	shortCodeTagLen    = 3  // public: names the rendezvous, 15 bits
-	shortCodeSecretLen = 7  // secret: never leaves the two screens, 35 bits
+	shortCodeTagLen    = 3 // public: names the rendezvous, 15 bits
+	shortCodeSecretLen = 7 // secret: never leaves the two screens, 35 bits
 	shortCodeLen       = shortCodeTagLen + shortCodeSecretLen
 	shortCodeIDSalt    = "swarm-remote/1 short-code-id"
 	shortCodePSKSalt   = "swarm-remote/1 short-code-psk"

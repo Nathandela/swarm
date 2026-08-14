@@ -97,7 +97,7 @@ func TestH7S5_DotFlankedBusyRowShapes(t *testing.T) {
 func feedUntilRow(t *testing.T, capture []byte, want string) (*vt.Snap, int) {
 	t.Helper()
 	emu := vt.NewEmulator(captureCols, captureRows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	const step = 256
 	for off := 0; off < len(capture); off += step {
 		end := off + step

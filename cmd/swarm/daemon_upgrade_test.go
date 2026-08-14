@@ -86,7 +86,7 @@ func TestDaemonRestarter_RestartsRealDaemonAndReconnects(t *testing.T) {
 		}
 	})
 	if cl, ok := client.(interface{ Close() error }); ok {
-		defer cl.Close()
+		defer func() { _ = cl.Close() }()
 	}
 
 	// The reconnected client speaks the full protocol against the replacement.

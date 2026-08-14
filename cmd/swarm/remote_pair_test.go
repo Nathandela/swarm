@@ -126,12 +126,16 @@ func (h *scriptedPairingHost) List() []persist.Meta { return nil }
 func (h *scriptedPairingHost) Launch(daemon.LaunchSpec) (persist.Meta, error) {
 	return persist.Meta{}, errors.New("scriptedPairingHost: launch not implemented")
 }
-func (h *scriptedPairingHost) Kill(string) error   { return errors.New("scriptedPairingHost: kill not implemented") }
+func (h *scriptedPairingHost) Kill(string) error {
+	return errors.New("scriptedPairingHost: kill not implemented")
+}
 func (h *scriptedPairingHost) Rename(string, string) error {
 	// DaemonAPI grew Rename on main (v0.5) after this stub's line forked; pairing tests never rename.
 	return errors.New("scriptedPairingHost: rename not implemented")
 }
-func (h *scriptedPairingHost) Delete(string) error { return errors.New("scriptedPairingHost: delete not implemented") }
+func (h *scriptedPairingHost) Delete(string) error {
+	return errors.New("scriptedPairingHost: delete not implemented")
+}
 func (h *scriptedPairingHost) Attach(string) (protocol.SessionStream, error) {
 	return nil, errors.New("scriptedPairingHost: attach not implemented")
 }
@@ -190,12 +194,12 @@ func startFakePairingDaemon(t *testing.T, stateDir string, host *scriptedPairing
 func serveFakePairingConn(srv *protocol.Server, conn net.Conn) {
 	var tag [1]byte
 	if _, err := io.ReadFull(conn, tag[:]); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	switch tag[0] {
 	case daemon.VersionProbeTag:
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var payload [4]byte
 		if _, err := io.ReadFull(conn, payload[:]); err != nil {
 			return
@@ -206,7 +210,7 @@ func serveFakePairingConn(srv *protocol.Server, conn net.Conn) {
 	case 0x00:
 		srv.ServeConn(withPrefix(conn, 0x00))
 	default:
-		conn.Close()
+		_ = conn.Close()
 	}
 }
 

@@ -40,7 +40,7 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 	if err := srv.Start(ctx); err != nil {
 		t.Fatalf("relay start: %v", err)
 	}
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	mPub, mPriv, _ := ed25519.GenerateKey(nil)
 	pPub, pPriv, _ := ed25519.GenerateKey(nil)
@@ -49,12 +49,12 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("phone dial: %v", err)
 	}
-	defer phone.Close()
+	defer func() { _ = phone.Close() }()
 	machine, err := relay.Dial(ctx, srv.URL(), relayAuthFor(mPub, mPriv))
 	if err != nil {
 		t.Fatalf("machine dial: %v", err)
 	}
-	defer machine.Close()
+	defer func() { _ = machine.Close() }()
 
 	// The phone authorizes the machine's relay-auth key, so the machine may append to
 	// the phone's mailbox (relay-level pairing, R-REL.11), carrying the machine's signed

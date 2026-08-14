@@ -81,7 +81,7 @@ func (g *Gateway) Resync(ctx context.Context, from uint64) error {
 	if err != nil {
 		return err
 	}
-	defer dc.Close()
+	defer func() { _ = dc.Close() }()
 	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalRead, EndpointID: dc.endpointID, Cursor: from}); err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer dc.Close()
+	defer func() { _ = dc.Close() }()
 
 	// The endpoint id the daemon just assigned is the machine id the phone pairs against --
 	// the same id every record below is namespaced with. Stamp the sink with it BEFORE the
@@ -243,7 +243,7 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 	if err != nil {
 		return err
 	}
-	defer dc.Close()
+	defer func() { _ = dc.Close() }()
 
 	if err := dc.writeControl(protocol.Control{Op: protocol.OpTerminalSubscribe, EndpointID: dc.endpointID, SessionID: session}); err != nil {
 		return err
@@ -329,7 +329,7 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	if err != nil {
 		return protocol.Control{}, err
 	}
-	defer dc.Close()
+	defer func() { _ = dc.Close() }()
 
 	cmd := rc.DeviceCommandAuth
 	sessionID := rc.Session
@@ -440,16 +440,16 @@ func dialDaemon(socketPath string, caps ...string) (*daemonConn, error) {
 	}
 	d := &daemonConn{conn: conn}
 	if err := d.writeControl(protocol.Control{Op: protocol.OpHello, ProtocolVersion: protocol.Version, Capabilities: caps}); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	rep, err := d.readControl(5 * time.Second)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	if rep.Op != protocol.OpHello {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("gateway: hello reply op %q, want %q", rep.Op, protocol.OpHello)
 	}
 	d.endpointID = rep.EndpointID

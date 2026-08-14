@@ -33,8 +33,8 @@ import (
 //     but the end-of-session OpDetach — never a TDataOut, never a TSnapshot chunk;
 //   - the LOCAL controller STILL receives the raw TDataOut (suppression is remote-only).
 func TestRemotePump_SuppressesRawOutput(t *testing.T) {
-	stub := newStubDaemon() // authzFn nil => take_control is accepted; kill switch ON; ops fresh
-	ownerSock := serveStub(t, stub)   // owner (local) tier
+	stub := newStubDaemon()            // authzFn nil => take_control is accepted; kill switch ON; ops fresh
+	ownerSock := serveStub(t, stub)    // owner (local) tier
 	remoteSock := serveRemote(t, stub) // remote tier (s.remoteTier == true)
 
 	// LOCAL controller: owner-tier attach establishes a lease + pump (stream index 0).

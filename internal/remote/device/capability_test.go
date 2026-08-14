@@ -30,11 +30,11 @@ import (
 // An unknown/zero-invalid Capability -> NOTHING (fail-closed).
 func TestCapability_AllowsTruthTable(t *testing.T) {
 	cases := []struct {
-		name       string
-		cap        Capability
-		read       bool
-		approve    bool
-		control    bool
+		name    string
+		cap     Capability
+		read    bool
+		approve bool
+		control bool
 	}{
 		{"read_only", CapReadOnly, true, false, false},
 		{"read_approve", CapReadApprove, true, true, false},

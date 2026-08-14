@@ -89,7 +89,7 @@ func TestCounterSequencesDriveEngineAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv interaction: %v", err)
 	}
-	if !(cbTurn.Sequence == 1 && cbInter.Sequence == 2) {
+	if cbTurn.Sequence != 1 || cbInter.Sequence != 2 {
 		t.Fatalf("counter sequences = (%d, %d), want (1, 2)", cbTurn.Sequence, cbInter.Sequence)
 	}
 

@@ -126,7 +126,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "version", "--version":
 		return runVersion(stdout)
 	default:
-		fmt.Fprint(stderr, usage)
+		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
 }
@@ -138,7 +138,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 // reports to a connecting client (internal/protocol's Control.BuildVersion),
 // so a client can tell it is talking to a different-build daemon.
 func runVersion(stdout io.Writer) int {
-	fmt.Fprintf(stdout, "swarm %s (%s)\n", version.Version, runtime.Version())
+	_, _ = fmt.Fprintf(stdout, "swarm %s (%s)\n", version.Version, runtime.Version())
 	return 0
 }
 
@@ -154,21 +154,21 @@ func runVersion(stdout io.Writer) int {
 func runTUI(stdout, stderr io.Writer) int {
 	out, ok := interactiveTTY(stdout, os.Stdin)
 	if !ok {
-		fmt.Fprintln(stderr, "swarm: not a terminal; the TUI needs an interactive terminal")
+		_, _ = fmt.Fprintln(stderr, "swarm: not a terminal; the TUI needs an interactive terminal")
 		return 1
 	}
 
 	cc, err := clientConfig()
 	if err != nil {
-		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
 	}
 	client, err := dialClient([]string{"attach", "subscribe"})
 	if err != nil {
-		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// prog is captured by the attach runner's terminal handoff; it is assigned just
 	// before Run, so the closures see the live program when an attach fires.
@@ -182,7 +182,7 @@ func runTUI(stdout, stderr io.Writer) int {
 
 	prog = tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(out))
 	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrInterrupted) {
-		fmt.Fprintf(stderr, "swarm: tui: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: tui: %v\n", err)
 		return 1
 	}
 	return 0
@@ -467,12 +467,12 @@ func runDaemon(args []string, _, stderr io.Writer) int {
 	}
 	cfg, ok := skeletonConfigFromEnv()
 	if !ok {
-		fmt.Fprintln(stderr, "daemon: not implemented")
+		_, _ = fmt.Fprintln(stderr, "daemon: not implemented")
 		return 1
 	}
 	d, err := skeleton.Serve(cfg)
 	if err != nil {
-		fmt.Fprintf(stderr, "daemon: serve: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "daemon: serve: %v\n", err)
 		return 1
 	}
 	// Serve until a termination signal, then Close cleanly (running shims are
@@ -512,11 +512,11 @@ func skeletonConfigFromEnv() (skeleton.Config, bool) {
 func runDaemonRestart(stderr io.Writer) int {
 	cc, err := clientConfig()
 	if err != nil {
-		fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "daemon restart: %v\n", err)
 		return 1
 	}
 	if err := daemon.Restart(cc); err != nil {
-		fmt.Fprintf(stderr, "daemon restart: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "daemon restart: %v\n", err)
 		return 1
 	}
 	return 0
@@ -552,22 +552,22 @@ func runShim(args []string, _, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "path to the JSON launch config")
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprint(stderr, shimUsage)
+		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
 	}
 	if *configPath == "" {
-		fmt.Fprint(stderr, shimUsage)
+		_, _ = fmt.Fprint(stderr, shimUsage)
 		return 2
 	}
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "shim: read config: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "shim: read config: %v\n", err)
 		return 2
 	}
 	var lc shimLaunchConfig
 	if err := json.Unmarshal(data, &lc); err != nil {
-		fmt.Fprintf(stderr, "shim: parse config: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "shim: parse config: %v\n", err)
 		return 2
 	}
 
@@ -577,7 +577,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	// unexpected failure is fatal.
 	code, reexeced, err := ensureSession()
 	if err != nil {
-		fmt.Fprintf(stderr, "shim: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
 		return 1
 	}
 	if reexeced {
@@ -598,7 +598,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 	}
 	exit, err := shim.Run(cfg)
 	if err != nil {
-		fmt.Fprintf(stderr, "shim: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
 		if exit == 0 {
 			return 1 // a setup failure with no agent exit code to report
 		}
@@ -674,7 +674,7 @@ func reexecWithSetsid() (int, error) {
 // reserved-key guard, the same dimensions.
 func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "hook: not implemented")
+		_, _ = fmt.Fprintln(stderr, "hook: not implemented")
 		return 1
 	}
 	body := readHookBody(stdin)
@@ -684,7 +684,7 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 	}
 	cb, err := hookclient.FromEnv(os.Getenv, args[0], payload)
 	if err != nil {
-		fmt.Fprintf(stderr, "hook: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
 	}
 	if hookclient.CapturesRaw(os.Getenv, args[0]) && json.Valid(body) {
@@ -696,7 +696,7 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 		cb.Raw = body
 	}
 	if err := hookclient.Post(os.Getenv(hookclient.EnvSocket), cb); err != nil {
-		fmt.Fprintf(stderr, "hook: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
 	}
 	return 0

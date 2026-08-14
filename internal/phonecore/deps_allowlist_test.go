@@ -88,7 +88,7 @@ func readAllowlist(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("open allowlist: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	allowed := make(map[string]bool)
 	sc := bufio.NewScanner(f)

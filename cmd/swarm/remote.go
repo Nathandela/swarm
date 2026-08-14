@@ -53,7 +53,7 @@ const remoteUsage = `usage: swarm remote <command>
 // switch, and the `status` read are wired.
 func runRemote(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, remoteUsage)
+		_, _ = fmt.Fprint(stderr, remoteUsage)
 		return 2
 	}
 	switch args[0] {
@@ -74,7 +74,7 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 	case "status":
 		return runRemoteStatus(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "remote: unknown remote command %q\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "remote: unknown remote command %q\n", args[0])
 		return 2
 	}
 }
@@ -152,12 +152,12 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	}
 	if *relayURL != "" {
 		if err := validateRelayURL(*relayURL); err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 	}
 	if err := validateRelayPin(*relayURL, *relayPin); err != nil {
-		fmt.Fprintf(stderr, "remote init: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 		return 1
 	}
 
@@ -165,14 +165,14 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	if stateDir == "" {
 		var err error
 		if stateDir, err = persist.DefaultDir(); err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 	}
 
 	remoteDir := filepath.Join(stateDir, "remote")
 	if err := os.MkdirAll(remoteDir, 0o700); err != nil {
-		fmt.Fprintf(stderr, "remote init: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 		return 1
 	}
 	path := filepath.Join(remoteDir, remoteIdentityFile)
@@ -182,7 +182,7 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 		// Identity already provisioned: load it rather than rotating (idempotent).
 		id, err = machineid.Load(path)
 		if err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 	} else if os.IsNotExist(err) {
@@ -192,15 +192,15 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 		}
 		id, err = machineid.Generate(hostname)
 		if err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 		if err := id.Save(path); err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 	} else {
-		fmt.Fprintf(stderr, "remote init: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 		return 1
 	}
 
@@ -209,7 +209,7 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			RelayURL: *relayURL,
 			SPKIPin:  strings.TrimSpace(*relayPin),
 		}); err != nil {
-			fmt.Fprintf(stderr, "remote init: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
 	}
@@ -230,7 +230,7 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 		ensureGatewayRunning("init", stderr)
 	}
 
-	fmt.Fprintln(stdout, id.String())
+	_, _ = fmt.Fprintln(stdout, id.String())
 	return 0
 }
 
@@ -261,7 +261,7 @@ func pairedDeviceCount(stateDir string) int {
 // otherwise learn about it only when a paired phone receives nothing.
 func installGatewayUnit(stateDir string, stderr io.Writer) bool {
 	warn := func(err error) {
-		fmt.Fprintf(stderr, "remote init: no gateway supervision unit installed (%v); "+
+		_, _ = fmt.Fprintf(stderr, "remote init: no gateway supervision unit installed (%v); "+
 			"the gateway will not start on its own\n", err)
 	}
 
@@ -516,23 +516,23 @@ const remoteRevokeUsage = `usage: swarm remote revoke <device-id>
 func runRemoteDevices(_ []string, stdout, stderr io.Writer) int {
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote devices: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote devices: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	devices, err := client.ListDevices()
 	if err != nil {
-		fmt.Fprintf(stderr, "remote devices: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote devices: %v\n", err)
 		return 1
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "DEVICE ID\tNAME\tCAPABILITY\tPAIRED AT")
+	_, _ = fmt.Fprintln(tw, "DEVICE ID\tNAME\tCAPABILITY\tPAIRED AT")
 	for _, d := range devices {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", d.DeviceID, d.Name, d.Capability, d.PairedAt.Format(timeFormat))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", d.DeviceID, d.Name, d.Capability, d.PairedAt.Format(timeFormat))
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	// PB-STATE-10: this listing is the recovery's "identify the stranded device" step,
 	// and an operator who has just read a device id has to be told what to do with it --
 	// otherwise the next step is reachable only by already knowing the verb.
@@ -541,7 +541,7 @@ func runRemoteDevices(_ []string, stdout, stderr io.Writer) int {
 	// anything parsing the listing, which is what a device id printed for the purpose of
 	// being copied invites.
 	if len(devices) > 0 {
-		fmt.Fprintln(stderr, "to unregister one: swarm remote revoke <device-id>")
+		_, _ = fmt.Fprintln(stderr, "to unregister one: swarm remote revoke <device-id>")
 	}
 	return 0
 }
@@ -562,19 +562,19 @@ func runRemoteSetControl(enabled bool, stdout, stderr io.Writer) int {
 	}
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
+		_, _ = fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.SetRemoteControl(enabled); err != nil {
-		fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
+		_, _ = fmt.Fprintf(stderr, "remote %s: %v\n", verb, err)
 		return 1
 	}
 	if enabled {
-		fmt.Fprintln(stdout, "remote control enabled")
+		_, _ = fmt.Fprintln(stdout, "remote control enabled")
 	} else {
-		fmt.Fprintln(stdout, "remote control disabled")
+		_, _ = fmt.Fprintln(stdout, "remote control disabled")
 	}
 	return 0
 }
@@ -591,17 +591,17 @@ func runRemoteRevoke(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		return runRemoteRevokeInteractive(stdin, stdout, stderr)
 	}
 	if len(args) != 1 {
-		fmt.Fprint(stderr, remoteRevokeUsage)
+		_, _ = fmt.Fprint(stderr, remoteRevokeUsage)
 		return 2
 	}
 	deviceID := args[0]
 
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	return performRevoke(client, deviceID, stdout, stderr)
 }
@@ -643,27 +643,27 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	routingID := deviceRoutingID(stateDir, deviceID)
 
 	if err := client.RevokeDevice(deviceID); err != nil {
-		fmt.Fprintf(stderr, "remote revoke: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
 		return 1
 	}
 	stopGatewayIfQuiescent(stderr)
 	purge, purgeErr := purgeRelayState(stateDir, routingID)
 	purgeOutboundCustody(stateDir, stderr)
 
-	fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
+	_, _ = fmt.Fprintf(stdout, "revoked device %s\n", deviceID)
 	if purge == relayPurgeDone {
-		fmt.Fprintln(stdout, "relay state purged: its mailbox, its push token and its route are gone from the relay")
+		_, _ = fmt.Fprintln(stdout, "relay state purged: its mailbox, its push token and its route are gone from the relay")
 	}
 	// PB-STATE-10: the revoke is the MIDDLE of a four-step recovery, not the end of a
 	// job. An owner who stops here has a machine with no device and a handset that
 	// still cannot pair, because nothing told them there was another step.
-	fmt.Fprintln(stdout, "run `swarm remote pair` to pair a device again")
+	_, _ = fmt.Fprintln(stdout, "run `swarm remote pair` to pair a device again")
 
 	switch purge {
 	case relayPurgeRefused:
-		fmt.Fprintf(stderr, "remote revoke: the relay REFUSED to purge this device's relay-side state: %v\n", purgeErr)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay REFUSED to purge this device's relay-side state: %v\n", purgeErr)
 	case relayPurgePending:
-		fmt.Fprintf(stderr, "remote revoke: the relay was not reached, so its half of this revocation is "+
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay was not reached, so its half of this revocation is "+
 			"PENDING: %v\n", purgeErr)
 	default:
 		return 0
@@ -676,7 +676,7 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	// "no such device" (internal/protocol/server.go handleDeviceRevoke, owner tier). The
 	// upgrade path is D9's own: persist the routing id and drain it on the machine's next
 	// relay connection, which is the gateway's connect and this CLI's own dial.
-	fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
+	_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
 		"push wake and its route (routing id %s). Nothing retries it, and this verb cannot re-address "+
 		"the device: the local record naming that routing id is already gone.\n", routingID)
 	return 1
@@ -788,7 +788,7 @@ func withMachineRelay(stateDir string, fn func(context.Context, *relay.Client) e
 	if err != nil {
 		return err
 	}
-	defer cl.Close()
+	defer func() { _ = cl.Close() }()
 	return fn(ctx, cl)
 }
 
@@ -884,7 +884,7 @@ func authorizeAtRelay(stateDir, deviceID string, stderr io.Writer) {
 		return cl.AuthorizeDevice(ctx, ed25519.PublicKey(rec.RelayAuthPub), rec.ConsentSig)
 	})
 	if err != nil && !errors.Is(err, errRelayNotProvisioned) {
-		fmt.Fprintf(stderr, "remote pair: the device is paired, but the machine could not open its "+
+		_, _ = fmt.Fprintf(stderr, "remote pair: the device is paired, but the machine could not open its "+
 			"relay route: %v\n", err)
 	}
 }
@@ -908,7 +908,7 @@ func purgeOutboundCustody(stateDir string, stderr io.Writer) {
 		err = ob.Purge()
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but the machine still holds "+
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the device is revoked, but the machine still holds "+
 			"undelivered outbound frames sealed under the rotated epoch (%s): %v\n", path, err)
 	}
 }
@@ -934,23 +934,23 @@ const remoteRegrantUsage = `usage: swarm remote regrant <device-id>
 // changes nothing on the handset.
 func runRemoteRegrant(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprint(stderr, remoteRegrantUsage)
+		_, _ = fmt.Fprint(stderr, remoteRegrantUsage)
 		return 2
 	}
 	deviceID := args[0]
 
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote regrant: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote regrant: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.RegrantDevice(deviceID); err != nil {
-		fmt.Fprintf(stderr, "remote regrant: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote regrant: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "re-granted device %s\n", deviceID)
+	_, _ = fmt.Fprintf(stdout, "re-granted device %s\n", deviceID)
 	restartGatewayForDelivery(stderr)
 	return 0
 }
@@ -972,7 +972,7 @@ func restartGatewayForDelivery(stderr io.Writer) {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "remote regrant: the grant was re-issued, but its gateway was not "+
+		_, _ = fmt.Fprintf(stderr, "remote regrant: the grant was re-issued, but its gateway was not "+
 			"restarted, so nothing will deliver it: %v\n", err)
 	}
 }
@@ -995,14 +995,14 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 	client, err := dialClient([]string{protocol.CapPairing})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote pair: %v\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	sess, err := client.StartPairing(protocol.PairStartReq{Capability: *capability})
 	if err != nil {
-		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote pair: %v\n", err)
 		return 1
 	}
 	defer sess.Close()
@@ -1015,9 +1015,9 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// symbol is the LAST thing on screen when this blocks on Pending() below. A terminal
 	// scrolls, so every row printed after the symbol pushes its top — the upper finder
 	// patterns a scanner needs to lock onto — off a 24-row screen. See printPairingQR.
-	fmt.Fprintf(stdout, "rendezvous: %s\n", sess.RendezvousID)
+	_, _ = fmt.Fprintf(stdout, "rendezvous: %s\n", sess.RendezvousID)
 	if sess.ExpiresAt != nil {
-		fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
+		_, _ = fmt.Fprintf(stdout, "expires: %s\n", sess.ExpiresAt.Format(timeFormat))
 	}
 	// The relay address, SPELLED (agents-tracker-3fkm): the phone's first-run prompt asks
 	// for it once, and it otherwise lives only inside the payload and the symbol -- places a
@@ -1025,7 +1025,7 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// is not a decodable payload (an older daemon, a scripted test host): a line this verb
 	// cannot vouch for is worse than no line.
 	if qp, err := pairing.DecodeQR(sess.QR); err == nil {
-		fmt.Fprintf(stdout, "relay: %s\n", qp.RelayURL)
+		_, _ = fmt.Fprintf(stdout, "relay: %s\n", qp.RelayURL)
 	}
 
 	// The PNG spelling of the same symbol (F3, ADR-007 B141). BEST-EFFORT: a failure to
@@ -1038,9 +1038,9 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 		if err := os.MkdirAll(remoteDir, 0o700); err == nil {
 			if p, err := writePairingPNG(sess.QR, remoteDir, sess.RendezvousID); err == nil {
 				pngPath = p
-				defer os.Remove(p)
+				defer func() { _ = os.Remove(p) }()
 			} else {
-				fmt.Fprintf(stderr, "remote pair: QR image not written (%v); the terminal symbol and codes still work\n", err)
+				_, _ = fmt.Fprintf(stderr, "remote pair: QR image not written (%v); the terminal symbol and codes still work\n", err)
 			}
 		}
 	}
@@ -1066,12 +1066,12 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	select {
 	case pending = <-sess.Pending():
 	case <-sess.Result():
-		fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
-		fmt.Fprintln(stderr, "remote pair: pairing ended before the device connected")
+		_, _ = fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
+		_, _ = fmt.Fprintln(stderr, "remote pair: pairing ended before the device connected")
 		return 1
 	case <-expired:
-		fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
-		fmt.Fprintln(stderr, "remote pair: the pairing window closed before the device connected; "+
+		_, _ = fmt.Fprintln(stdout) // terminate printPairingQR's last, deliberately unterminated row
+		_, _ = fmt.Fprintln(stderr, "remote pair: the pairing window closed before the device connected; "+
 			"the code above is dead, so run `swarm remote pair` again for a fresh one")
 		return 1
 	}
@@ -1079,21 +1079,21 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// The scan is over: the phone has connected, so the symbol may now be displaced. This
 	// newline is the one printPairingQR left off its last row — spending it here rather
 	// than there is what lets the symbol have the whole viewport (see printPairingQR).
-	fmt.Fprintln(stdout)
+	_, _ = fmt.Fprintln(stdout)
 
 	// The independent second gate (ADR D3): the operator verifies the SAS emoji against
 	// the phone's screen and allows or denies at the desktop.
-	fmt.Fprintf(stdout, "Device: %s\n", pending.DeviceName)
+	_, _ = fmt.Fprintf(stdout, "Device: %s\n", pending.DeviceName)
 	// sonnet#4: echo the capability tier being granted so the operator sees the authority
 	// they are about to hand this device (default "full") before allowing -- the SAS proves
 	// WHICH phone, this line proves WHAT it may do.
-	fmt.Fprintf(stdout, "Capability to grant: %s\n", *capability)
-	fmt.Fprintf(stdout, "Verify these emoji match your phone: %s\n", strings.Join(pending.SAS, " "))
-	fmt.Fprint(stdout, "Allow this device? [y/N]: ")
+	_, _ = fmt.Fprintf(stdout, "Capability to grant: %s\n", *capability)
+	_, _ = fmt.Fprintf(stdout, "Verify these emoji match your phone: %s\n", strings.Join(pending.SAS, " "))
+	_, _ = fmt.Fprint(stdout, "Allow this device? [y/N]: ")
 
 	allow := readYesNo(stdin)
 	if err := sess.Confirm(allow); err != nil {
-		fmt.Fprintf(stderr, "remote pair: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "remote pair: %v\n", err)
 		return 1
 	}
 
@@ -1115,7 +1115,7 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if name == "" {
 		name = res.DeviceID
 	}
-	fmt.Fprintf(stdout, "paired %s\n", name)
+	_, _ = fmt.Fprintf(stdout, "paired %s\n", name)
 
 	// PB-STATE-10 / ADR-007 B22: open this device's relay route NOW rather than at whatever
 	// moment a supervised gateway happens to boot. It is also what lifts the relay ban a
@@ -1175,14 +1175,14 @@ var pairFailureLines = map[protocol.PairFailure]string{
 // the whole reason the gate exists. Everything else is a diagnostic and goes to stderr.
 func reportPairFailure(cause protocol.PairFailure, stdout, stderr io.Writer) {
 	if cause == protocol.PairFailDeclined {
-		fmt.Fprintln(stdout, "pairing declined")
+		_, _ = fmt.Fprintln(stdout, "pairing declined")
 		return
 	}
 	line, ok := pairFailureLines[cause]
 	if !ok {
 		line = pairFailureLines[protocol.PairFailInternal]
 	}
-	fmt.Fprintln(stderr, line)
+	_, _ = fmt.Fprintln(stderr, line)
 }
 
 // ensureGatewayRunning activates this machine's gateway, for the verb that asked: the
@@ -1199,7 +1199,7 @@ func reportPairFailure(cause protocol.PairFailure, stdout, stderr io.Writer) {
 // quiet is the symptom, and the operator gets the cause on stderr.
 func ensureGatewayRunning(verb string, stderr io.Writer) {
 	warn := func(err error) {
-		fmt.Fprintf(stderr, "remote %s: the gateway was not started: %v\n", verb, err)
+		_, _ = fmt.Fprintf(stderr, "remote %s: the gateway was not started: %v\n", verb, err)
 	}
 
 	stateDir := os.Getenv(daemon.EnvStateDir)
@@ -1222,7 +1222,7 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 	// the enrollment is durable -- but the operator is handed the one step that fixes it
 	// now, rather than discovering it as a phone that pairs and then goes quiet.
 	if sock := gatewaySocket(stateDir); sock != "" && !remoteSocketServed(sock) {
-		fmt.Fprintf(stderr, "remote %s: nothing is serving the remote socket at %s, so the gateway "+
+		_, _ = fmt.Fprintf(stderr, "remote %s: nothing is serving the remote socket at %s, so the gateway "+
 			"cannot reach the daemon and will be restarted until it can. The running daemon chose "+
 			"its listener before this machine was provisioned for remote -- run `swarm daemon "+
 			"restart` to pick it up.\n", verb, sock)
@@ -1236,7 +1236,7 @@ func ensureGatewayRunning(verb string, stderr io.Writer) {
 	switch err := sup.Ensure(); {
 	case err == nil:
 	case errors.Is(err, supervise.ErrNotInstalled):
-		fmt.Fprintf(stderr, "remote %s: this machine has no gateway supervision unit, so "+
+		_, _ = fmt.Fprintf(stderr, "remote %s: this machine has no gateway supervision unit, so "+
 			"the paired device will receive nothing. Run `swarm remote init` to install one.\n", verb)
 	default:
 		warn(err)
@@ -1286,7 +1286,7 @@ func restampGatewayUnit(verb, stateDir string, sup supervise.Supervisor, stderr 
 		// gone", and a file that cannot be read makes no claim to check -- booting out a job on
 		// a read failure would drop the connection of the phone being paired, which is the
 		// restraint the healthy-unit case already keeps.
-		fmt.Fprintf(stderr, "remote %s: this machine's gateway supervision unit could not be "+
+		_, _ = fmt.Fprintf(stderr, "remote %s: this machine's gateway supervision unit could not be "+
 			"read, so whether it still names a program that exists is unknown -- if the gateway "+
 			"is not reaching your phone, run `swarm remote init` to re-stamp it: %v\n", verb, err)
 		return
@@ -1294,7 +1294,7 @@ func restampGatewayUnit(verb, stateDir string, sup supervise.Supervisor, stderr 
 		// The unit names a program that is right there.
 		return
 	}
-	fmt.Fprintf(stderr, "remote %s: the gateway supervision unit names %s, which is not an "+
+	_, _ = fmt.Fprintf(stderr, "remote %s: the gateway supervision unit names %s, which is not an "+
 		"executable file any more -- an upgrade that moved it leaves the supervisor exec'ing a "+
 		"path that is gone, which is a gateway that never starts. Re-stamping the unit and "+
 		"reloading it.\n", verb, exe)
@@ -1302,7 +1302,7 @@ func restampGatewayUnit(verb, stateDir string, sup supervise.Supervisor, stderr 
 		return
 	}
 	if err := sup.Stop(); err != nil && !errors.Is(err, supervise.ErrNotInstalled) {
-		fmt.Fprintf(stderr, "remote %s: the re-stamped unit was written, but the old job was not "+
+		_, _ = fmt.Fprintf(stderr, "remote %s: the re-stamped unit was written, but the old job was not "+
 			"stopped, so the supervisor may still be holding the unit it loaded first: %v\n", verb, err)
 	}
 }
@@ -1335,7 +1335,7 @@ func stopGatewayIfQuiescent(stderr io.Writer) {
 		err = sup.Stop()
 	}
 	if err != nil && !errors.Is(err, supervise.ErrNotInstalled) {
-		fmt.Fprintf(stderr, "remote revoke: the device is revoked, but its gateway was not "+
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the device is revoked, but its gateway was not "+
 			"stopped: %v\n", err)
 	}
 }
@@ -1390,31 +1390,31 @@ func printPairingQR(stdout io.Writer, shortCode, pngPath, payload string) {
 	// from a daemon that predates it, and then this line does not print -- a prompt with
 	// nothing to type is worse than the old output.
 	if shortCode != "" {
-		fmt.Fprintf(stdout, "Type this code on your phone to pair: %s\n", shortCode)
+		_, _ = fmt.Fprintf(stdout, "Type this code on your phone to pair: %s\n", shortCode)
 	}
 	// The image is the PROMISED scan target (F3): the terminal symbol depends on font
 	// metrics this product does not control. ABOVE the symbol, like everything else -- a
 	// row printed after it scrolls its finder patterns off a 24-row screen.
 	if pngPath != "" {
-		fmt.Fprintf(stdout, "Or scan the QR image at: %s\n", pngPath)
+		_, _ = fmt.Fprintf(stdout, "Or scan the QR image at: %s\n", pngPath)
 	}
 	if r, err := renderPairingQR(payload, cols, rows); err == nil {
 		// The payload stays available for manual entry (PB-PAIR-2), WRAPPED to the terminal
 		// width — a line long enough to reflow would displace the symbol — and printed
 		// ABOVE it, where it costs the symbol no rows.
-		fmt.Fprintln(stdout, "Or paste this full code:")
+		_, _ = fmt.Fprintln(stdout, "Or paste this full code:")
 		for _, line := range chunkLines(payload, cols) {
-			fmt.Fprintln(stdout, line)
+			_, _ = fmt.Fprintln(stdout, line)
 		}
-		fmt.Fprintln(stdout, "Scan this QR on your phone to pair:")
-		fmt.Fprint(stdout, r.Text)
+		_, _ = fmt.Fprintln(stdout, "Scan this QR on your phone to pair:")
+		_, _ = fmt.Fprint(stdout, r.Text)
 		return
 	}
-	fmt.Fprintln(stdout, qrFallbackReason(payload, cols, rows))
-	fmt.Fprintln(stdout, "Or paste this full code:")
+	_, _ = fmt.Fprintln(stdout, qrFallbackReason(payload, cols, rows))
+	_, _ = fmt.Fprintln(stdout, "Or paste this full code:")
 	// UNWRAPPED here: there is no symbol above to protect, and manual entry wants one
 	// unbroken token to read or copy.
-	fmt.Fprintln(stdout, payload)
+	_, _ = fmt.Fprintln(stdout, payload)
 }
 
 // qrFallbackReason names why no symbol was drawn. Three causes land here and they are
@@ -1543,7 +1543,7 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 	if stateDir == "" {
 		var err error
 		if stateDir, err = persist.DefaultDir(); err != nil {
-			fmt.Fprintf(stderr, "remote status: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "remote status: %v\n", err)
 			return 1
 		}
 	}
@@ -1554,11 +1554,11 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 	hasRelay := statFileExists(filepath.Join(remoteDir, remoteRelayFile))
 	switch {
 	case hasIdentity && hasRelay:
-		fmt.Fprintln(stdout, "configuration: initialized (identity + relay)")
+		_, _ = fmt.Fprintln(stdout, "configuration: initialized (identity + relay)")
 	case hasIdentity:
-		fmt.Fprintln(stdout, "configuration: initialized (identity; no relay configured)")
+		_, _ = fmt.Fprintln(stdout, "configuration: initialized (identity; no relay configured)")
 	default:
-		fmt.Fprintln(stdout, "configuration: not initialized (run swarm remote init)")
+		_, _ = fmt.Fprintln(stdout, "configuration: not initialized (run swarm remote init)")
 	}
 
 	// 2. Durable manual kill-switch override from <stateDir>/remote-state.json (A4): the
@@ -1575,23 +1575,23 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 	// WINS over device presence; otherwise it is device-derived.
 	switch {
 	case manualOff:
-		fmt.Fprintln(stdout, "remote control: OFF (manual override)")
+		_, _ = fmt.Fprintln(stdout, "remote control: OFF (manual override)")
 	case listErr != nil:
-		fmt.Fprintln(stdout, "remote control: unknown (daemon unreachable)")
+		_, _ = fmt.Fprintln(stdout, "remote control: unknown (daemon unreachable)")
 	case len(devices) > 0:
-		fmt.Fprintln(stdout, "remote control: ON (device-derived)")
+		_, _ = fmt.Fprintln(stdout, "remote control: ON (device-derived)")
 	default:
-		fmt.Fprintln(stdout, "remote control: OFF (device-derived; no devices paired)")
+		_, _ = fmt.Fprintln(stdout, "remote control: OFF (device-derived; no devices paired)")
 	}
 
 	// Roster.
 	if listErr != nil {
-		fmt.Fprintf(stdout, "paired devices: unavailable (%v)\n", listErr)
+		_, _ = fmt.Fprintf(stdout, "paired devices: unavailable (%v)\n", listErr)
 		return 0
 	}
-	fmt.Fprintf(stdout, "paired devices (%d):\n", len(devices))
+	_, _ = fmt.Fprintf(stdout, "paired devices (%d):\n", len(devices))
 	for _, d := range devices {
-		fmt.Fprintf(stdout, "  %s  %s\n", d.DeviceID, d.Name)
+		_, _ = fmt.Fprintf(stdout, "  %s  %s\n", d.DeviceID, d.Name)
 	}
 	return 0
 }
@@ -1604,7 +1604,7 @@ func statusListDevices() ([]protocol.DeviceView, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	return client.ListDevices()
 }
 

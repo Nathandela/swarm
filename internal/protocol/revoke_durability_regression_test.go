@@ -101,8 +101,8 @@ func TestProtocol_RevokeSeversLiveLease_OnCommittedDurabilityError(t *testing.T)
 	exp := time.Now().Add(time.Minute)
 	rcA.writeControl(Control{
 		Op: OpDeviceRevoke, EndpointID: repA.EndpointID,
-		OperationID:    "devA:01JREVOKEBDUR0000000000",
-		DeviceID:       "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		OperationID: "devA:01JREVOKEBDUR0000000000",
+		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
 		TargetDeviceID: "devB",
 	})
 	// Finding 3 (round-6, codex#3 + sonnet#2): the device IS durably revoked AND severed, but the

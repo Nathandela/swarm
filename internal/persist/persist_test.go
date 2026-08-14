@@ -386,8 +386,8 @@ func TestDefaultDirUsesXDGStateHome(t *testing.T) {
 func TestDefaultDirFallsBackWithoutXDG(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_STATE_HOME", "") // registers restore of the original value
-	os.Unsetenv("XDG_STATE_HOME")  // genuinely unset for this test; cleanup still restores
+	t.Setenv("XDG_STATE_HOME", "")    // registers restore of the original value
+	_ = os.Unsetenv("XDG_STATE_HOME") // genuinely unset for this test; cleanup still restores
 	got, err := DefaultDir()
 	if err != nil {
 		t.Fatalf("DefaultDir error: %v", err)

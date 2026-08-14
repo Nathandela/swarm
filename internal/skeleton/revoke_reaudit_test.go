@@ -191,7 +191,7 @@ func TestRevokeDevice_SurfacesGrantDeleteError(t *testing.T) {
 // the single-device slot yet has no deliverable bootstrap grant. Serve's startup reconcile
 // must clear it, while leaving a fully-paired device (sidecar present) untouched.
 func TestServe_ReconcilesDeviceWithoutGrantSidecar(t *testing.T) {
-	orphan := validDeviceRecord(t)   // no sidecar: not fully paired
+	orphan := validDeviceRecord(t)    // no sidecar: not fully paired
 	withGrant := validDeviceRecord(t) // sidecar present: fully paired (control)
 
 	sk, err := assembleWithMachineIdentity(t, func(stateDir string) {

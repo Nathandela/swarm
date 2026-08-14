@@ -75,7 +75,7 @@ func TestWriteOwnedTakesOwnershipWithoutCopy(t *testing.T) {
 	if _, err := w.WriteOwned(p); err != nil {
 		t.Fatalf("WriteOwned: %v", err)
 	}
-	p[0] = 'X' // mutate the backing array before the gated sink.Write reads it
+	p[0] = 'X'  // mutate the backing array before the gated sink.Write reads it
 	close(gate) // release the gated sink now that the mutation has landed
 
 	if !waitFor(2*time.Second, func() bool { return fs.lockedLen() >= len("hello") }) {

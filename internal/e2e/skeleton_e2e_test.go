@@ -74,7 +74,7 @@ func newDaemonEnv(t *testing.T) daemonEnv {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return daemonEnv{
 		stateDir: dir,
 		sock:     filepath.Join(dir, "d.sock"),

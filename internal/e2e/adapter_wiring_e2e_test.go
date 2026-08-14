@@ -30,7 +30,7 @@ func fakeClaudeBinDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("bin dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	script := "#!/bin/sh\n" +
 		"# Fake claude (Epic 11 FIX 4 wiring test): drive status via the real swarm hook\n" +
 		"# path, then idle so the session stays running.\n" +

@@ -118,7 +118,7 @@ func nextSequence(path string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("hookclient: open sequence file %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return 0, fmt.Errorf("hookclient: lock sequence file %s: %w", path, err)
@@ -156,7 +156,7 @@ func Post(socketPath string, cb engine.Callback) error {
 	if err != nil {
 		return fmt.Errorf("hookclient: dial %s: %w", socketPath, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	// SetEscapeHTML(false): Callback.Raw is an untrusted CLI body carried for the
 	// shaper. Default HTML escaping rewrites <, > and & inside it (6 bytes each),
 	// so a body near the ingest cap could expand past a transport limit and take

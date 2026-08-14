@@ -90,7 +90,7 @@ func installTargets() []installTarget {
 // the agents-specific usage and is misuse (exit 2).
 func runAgents(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "install" {
-		fmt.Fprint(stderr, agentsUsage)
+		_, _ = fmt.Fprint(stderr, agentsUsage)
 		return misuseExit
 	}
 	return runAgentsInstall(args[1:], stdout, stderr)
@@ -109,37 +109,37 @@ func runAgentsInstall(args []string, stdout, stderr io.Writer) int {
 		return misuseExit
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "agents install: unexpected argument %q\n", fs.Arg(0))
+		_, _ = fmt.Fprintf(stderr, "agents install: unexpected argument %q\n", fs.Arg(0))
 		return misuseExit
 	}
 
 	home, err := agentsInstallHome()
 	if err != nil {
-		fmt.Fprintf(stderr, "agents install: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "agents install: %v\n", err)
 		return 1
 	}
 	for _, t := range installTargets() {
 		if t.relDir == "" {
-			fmt.Fprintf(stdout, "%s: skipped: no known command convention\n", t.cli)
+			_, _ = fmt.Fprintf(stdout, "%s: skipped: no known command convention\n", t.cli)
 			continue
 		}
 		dir := filepath.Join(home, t.relDir)
 		docs, err := renderCommandDocs(t)
 		if err != nil {
-			fmt.Fprintf(stderr, "agents install: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "agents install: %v\n", err)
 			return 1
 		}
 		for _, v := range commandVariants() {
 			path := filepath.Join(dir, "swarm-"+v.Slug+".md")
 			if *dryRun {
-				fmt.Fprintf(stdout, "would write %s\n", path)
+				_, _ = fmt.Fprintf(stdout, "would write %s\n", path)
 				continue
 			}
 			if err := writeCommandFile(dir, path, docs[v.Slug]); err != nil {
-				fmt.Fprintf(stderr, "agents install: %v\n", err)
+				_, _ = fmt.Fprintf(stderr, "agents install: %v\n", err)
 				return 1
 			}
-			fmt.Fprintf(stdout, "wrote %s\n", path)
+			_, _ = fmt.Fprintf(stdout, "wrote %s\n", path)
 		}
 	}
 	return 0

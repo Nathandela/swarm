@@ -120,9 +120,9 @@ func TestRegistry_AddRejectsInvalidCapability(t *testing.T) {
 func TestRegistry_OpenRejectsCorruptFile(t *testing.T) {
 	full32 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" // 32 zero bytes, base64
 	cases := map[string]string{
-		"truncated_json":    `{"schema_version":1,"devices":[{`,
+		"truncated_json":     `{"schema_version":1,"devices":[{`,
 		"unknown_capability": `{"schema_version":1,"devices":[{"device_id":"x","command_sign_pub":"` + full32 + `","capability":"superuser"}]}`,
-		"short_key":         `{"schema_version":1,"devices":[{"device_id":"x","command_sign_pub":"AAAA","capability":"full"}]}`,
+		"short_key":          `{"schema_version":1,"devices":[{"device_id":"x","command_sign_pub":"AAAA","capability":"full"}]}`,
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

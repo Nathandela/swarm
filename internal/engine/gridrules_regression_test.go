@@ -50,7 +50,7 @@ func TestGridRulesRegressionFreeze_ClaudeAndCodexFixtures(t *testing.T) {
 			rules := parseGridRules(a.SignalSources())
 
 			emu := vt.NewEmulator(100, 30)
-			defer emu.Close()
+			defer func() { _ = emu.Close() }()
 			for i, b := range loaded.PTYCapture {
 				emu.Feed([]byte{b})
 				snap := decodeSnap(t, emu)

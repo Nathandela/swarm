@@ -153,13 +153,13 @@ func (s *Store) Save(m Meta) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on any error path
+	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename; cleans up on any error path
 	if _, err := writeTemp(tmp, data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

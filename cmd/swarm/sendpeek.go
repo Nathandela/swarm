@@ -31,7 +31,7 @@ const misuseExit = 2
 func runSend(args []string, c agentClient, stdout, stderr io.Writer) int {
 	id, rest, ok := takeSessionID(args)
 	if !ok {
-		fmt.Fprintln(stderr, "send: need a session id first: swarm send <session> (--text s [--no-submit] | --key name)")
+		_, _ = fmt.Fprintln(stderr, "send: need a session id first: swarm send <session> (--text s [--no-submit] | --key name)")
 		return misuseExit
 	}
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
@@ -43,25 +43,25 @@ func runSend(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return misuseExit
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "send: unexpected argument %q; the message goes in --text\n", fs.Arg(0))
+		_, _ = fmt.Fprintf(stderr, "send: unexpected argument %q; the message goes in --text\n", fs.Arg(0))
 		return misuseExit
 	}
 
 	var req protocol.SendInputReq
 	switch {
 	case (*text == "") == (*key == ""):
-		fmt.Fprintln(stderr, "send: need exactly one of --text or --key")
+		_, _ = fmt.Fprintln(stderr, "send: need exactly one of --text or --key")
 		return misuseExit
 	case *key != "":
 		if *noSubmit {
-			fmt.Fprintln(stderr, "send: --no-submit only applies to --text")
+			_, _ = fmt.Fprintln(stderr, "send: --no-submit only applies to --text")
 			return misuseExit
 		}
 		// The daemon owns the name -> bytes mapping; validating against the same closed
 		// vocabulary (protocol.KeySequence) keeps the verb from carrying a second copy of
 		// the list that could drift from it.
 		if _, known := protocol.KeySequence(*key); !known {
-			fmt.Fprintf(stderr, "send: unknown --key %q: want enter, esc, ctrl-c, tab, up or down\n", *key)
+			_, _ = fmt.Fprintf(stderr, "send: unknown --key %q: want enter, esc, ctrl-c, tab, up or down\n", *key)
 			return misuseExit
 		}
 		req.Key = *key
@@ -70,7 +70,7 @@ func runSend(args []string, c agentClient, stdout, stderr io.Writer) int {
 	}
 
 	if err := c.SendInput(id, req); err != nil {
-		fmt.Fprintf(stderr, "send: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "send: %v\n", err)
 		return 1
 	}
 	return 0
@@ -84,7 +84,7 @@ func runSend(args []string, c agentClient, stdout, stderr io.Writer) int {
 func runPeek(args []string, c agentClient, stdout, stderr io.Writer) int {
 	id, rest, ok := takeSessionID(args)
 	if !ok {
-		fmt.Fprintln(stderr, "peek: need a session id first: swarm peek <session> [--lines N]")
+		_, _ = fmt.Fprintln(stderr, "peek: need a session id first: swarm peek <session> [--lines N]")
 		return misuseExit
 	}
 	fs := flag.NewFlagSet("peek", flag.ContinueOnError)
@@ -94,7 +94,7 @@ func runPeek(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return misuseExit
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "peek: unexpected argument %q\n", fs.Arg(0))
+		_, _ = fmt.Fprintf(stderr, "peek: unexpected argument %q\n", fs.Arg(0))
 		return misuseExit
 	}
 	// The zero default means "the whole screen", so an EXPLICIT --lines 0 is misuse and
@@ -106,17 +106,17 @@ func runPeek(args []string, c agentClient, stdout, stderr io.Writer) int {
 		}
 	})
 	if explicit && *lines <= 0 {
-		fmt.Fprintf(stderr, "peek: --lines must be a positive count, got %d\n", *lines)
+		_, _ = fmt.Fprintf(stderr, "peek: --lines must be a positive count, got %d\n", *lines)
 		return misuseExit
 	}
 
 	snap, err := c.TerminalSnapshot(id)
 	if err != nil {
-		fmt.Fprintf(stderr, "peek: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "peek: %v\n", err)
 		return 1
 	}
 	if snap == nil {
-		fmt.Fprintln(stderr, "peek: the daemon returned no snapshot")
+		_, _ = fmt.Fprintln(stderr, "peek: the daemon returned no snapshot")
 		return 1
 	}
 	out := snap.Lines
@@ -124,7 +124,7 @@ func runPeek(args []string, c agentClient, stdout, stderr io.Writer) int {
 		out = out[len(out)-*lines:]
 	}
 	for _, line := range out {
-		fmt.Fprintln(stdout, line)
+		_, _ = fmt.Fprintln(stdout, line)
 	}
 	return 0
 }

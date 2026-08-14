@@ -71,8 +71,10 @@ func newRemoteJournalStub() *remoteJournalStub {
 	return s
 }
 
-func (r *remoteJournalStub) RemoteControlEnabled() bool                    { return r.enabled.Load() }
-func (r *remoteJournalStub) JournalReadFrom(uint64) (JournalResume, error) { return JournalResume{}, nil }
+func (r *remoteJournalStub) RemoteControlEnabled() bool { return r.enabled.Load() }
+func (r *remoteJournalStub) JournalReadFrom(uint64) (JournalResume, error) {
+	return JournalResume{}, nil
+}
 func (r *remoteJournalStub) JournalSubscribe() (<-chan JournalRecord, func()) {
 	return r.source, func() {}
 }

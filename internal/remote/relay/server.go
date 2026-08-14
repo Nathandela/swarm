@@ -192,7 +192,7 @@ type Server struct {
 	// not a tombstone because rendezvous_create carries no requireAuth, so a permanent
 	// entry is one an unauthenticated stranger can mint at will — a fix that traded the
 	// hijack below for memory exhaustion would not be a fix. See burnRendezvous.
-	burned map[string]time.Time
+	burned     map[string]time.Time
 	conns      map[*serverConn]struct{}
 	authRate   map[string]*rateWindow // pre-signature auth_init attempts, keyed by TRANSPORT SOURCE (ConnPerMin)
 	opsRate    map[string]*rateWindow // state-touching ops: pre-signature keyed by source, post-signature keyed by "rid:"+rid (OpsPerMin)

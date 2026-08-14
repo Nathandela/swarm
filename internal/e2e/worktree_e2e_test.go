@@ -140,7 +140,7 @@ func newGitRepoE2E(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	runGitE2E(t, dir, "init", "-q")
 	runGitE2E(t, dir, "config", "user.email", "test@example.com")
 	runGitE2E(t, dir, "config", "user.name", "test")

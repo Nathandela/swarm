@@ -106,8 +106,8 @@ func (p *cutProxy) handle(client net.Conn) {
 		_ = client.Close()
 		return
 	}
-	defer client.Close()
-	defer backend.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = backend.Close() }()
 	go func() { _, _ = io.Copy(backend, client) }()
 
 	buf := make([]byte, 32*1024)
@@ -146,7 +146,7 @@ func startTestRelay(t *testing.T, ctx context.Context, appendPerMin int) (*relay
 	if err := srv.Start(ctx); err != nil {
 		t.Fatalf("relay start: %v", err)
 	}
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { _ = srv.Close() })
 
 	pPub, pPriv, _ := ed25519.GenerateKey(nil)
 	mPub, mPriv, _ := ed25519.GenerateKey(nil)
@@ -154,7 +154,7 @@ func startTestRelay(t *testing.T, ctx context.Context, appendPerMin int) (*relay
 	if err != nil {
 		t.Fatalf("phone dial: %v", err)
 	}
-	t.Cleanup(func() { phone.Close() })
+	t.Cleanup(func() { _ = phone.Close() })
 	if err := phone.AuthorizeDevice(ctx, mPub,
 		e2eConsent(mPriv, relay.RoutingID(pPub))); err != nil {
 		t.Fatalf("authorize device: %v", err)
@@ -188,7 +188,7 @@ func TestAppendReply_IsTheRelaysOwnTestimonyAboutItsOwnStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("machine dial through the cut proxy: %v", err)
 	}
-	defer machine.Close()
+	defer func() { _ = machine.Close() }()
 
 	// (1) DELIVERY UNKNOWN: cut after the relay commits, before the reply is read.
 	proxy.Arm()
@@ -214,7 +214,7 @@ func TestAppendReply_IsTheRelaysOwnTestimonyAboutItsOwnStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("machine re-dial: %v", err)
 	}
-	defer machine2.Close()
+	defer func() { _ = machine2.Close() }()
 	items, err := phone.MailboxRead(ctx, 0)
 	if err != nil {
 		t.Fatalf("mailbox read after the cut: %v", err)
@@ -354,7 +354,7 @@ func TestRelaySink_DeliveryUnknownNeverReusesASeqForDifferentPlaintext(t *testin
 		t.Fatalf("the severed append surfaced a refusal sentinel (%v); the harness is not exercising "+
 			"the delivery-unknown case", errB)
 	}
-	machine.Close()
+	_ = machine.Close()
 
 	// Recovery, exactly as production does it: a restarted gateway replays its outbox, then
 	// the journal bridge re-delivers from the cursor that never advanced (B), then life goes on.
@@ -362,7 +362,7 @@ func TestRelaySink_DeliveryUnknownNeverReusesASeqForDifferentPlaintext(t *testin
 	if err != nil {
 		t.Fatalf("machine re-dial: %v", err)
 	}
-	defer machine2.Close()
+	defer func() { _ = machine2.Close() }()
 	sink2 := newSink(machine2)
 	if err := sink2.Replay(); err != nil {
 		t.Fatalf("outbox replay after the cut: %v", err)

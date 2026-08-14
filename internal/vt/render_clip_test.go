@@ -45,7 +45,7 @@ func parityCells() []Run {
 	return []Run{
 		{Text: "a", Width: 1}, {Text: "b", Width: 1}, {Text: "界", Width: 2}, // default, incl wide
 		red("c", 1), red("d", 1), red("世", 2), red("é", 1), // red, incl wide + combining
-		{Text: "f", Width: 1, Bold: true},           // bold singleton
+		{Text: "f", Width: 1, Bold: true},            // bold singleton
 		{Text: " ", Width: 1}, {Text: " ", Width: 1}, // trailing default blanks
 	}
 }

@@ -177,7 +177,7 @@ func TestRenderSnapshot_StripsC1ControlRunes(t *testing.T) {
 	s := &Snap{
 		Version: SnapshotVersion, Cols: 8, Rows: 1, CursorVisible: true,
 		Lines: []Line{{Runs: []Run{
-			{Text: "a\u009b31mb", Width: 1},  // UTF-8 C1 CSI injection
+			{Text: "a\u009b31mb", Width: 1},       // UTF-8 C1 CSI injection
 			{Text: "\u009d52;c\u009cc", Width: 1}, // UTF-8 C1 OSC + ST
 		}}},
 	}

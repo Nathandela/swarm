@@ -141,7 +141,7 @@ func (w *TerminalWatcher) Close() error {
 	w.closed = true
 	w.watches = make(map[string]*watchHandle)
 	w.mu.Unlock()
-	w.cancel() // cancels w.ctx -> every watch ctx -> every RunTerminal
+	w.cancel()  // cancels w.ctx -> every watch ctx -> every RunTerminal
 	w.wg.Wait() // join every goroutine (each closes its done via run's defer)
 	return nil
 }

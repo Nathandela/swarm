@@ -77,7 +77,7 @@ type r3pArrival struct {
 func r3pLeaseConn(t *testing.T) (*LeaseConn, <-chan r3pArrival) {
 	t.Helper()
 	gwSide, daemonSide := net.Pipe()
-	t.Cleanup(func() { gwSide.Close(); daemonSide.Close() })
+	t.Cleanup(func() { _ = gwSide.Close(); _ = daemonSide.Close() })
 
 	arrivals := make(chan r3pArrival, 8)
 	go func() {

@@ -52,7 +52,7 @@ func startSmokeDaemon(t *testing.T, swarmBin, fakeAgentBin string) []string {
 	if err != nil {
 		t.Fatalf("state dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "d.sock")
 	env := []string{
 		"SWARM_DAEMON_STATE=" + dir,
@@ -174,7 +174,7 @@ func TestTUI_RejectsRedirectedStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open devnull: %v", err)
 	}
-	defer devnull.Close()
+	defer func() { _ = devnull.Close() }()
 
 	var stderr bytes.Buffer
 	cmd := exec.Command(swarmBin) // no args -> the TUI role

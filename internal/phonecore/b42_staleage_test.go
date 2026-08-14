@@ -114,8 +114,8 @@ func TestB42StaleAge_AlreadyAppliedFramesKeepTheirAck(t *testing.T) {
 		t.Fatalf("redelivery = %v, want crypto.ErrStaleSeq", err)
 	}
 	if !rcpt.Acked {
-		t.Errorf("an already-applied frame was not acked. Its content is durable, so the ack "+
-			"destroys nothing -- and without it the phone re-reads the same item for the whole "+
+		t.Errorf("an already-applied frame was not acked. Its content is durable, so the ack " +
+			"destroys nothing -- and without it the phone re-reads the same item for the whole " +
 			"retention window while the relay mailbox never compacts (PB-SYNC-6).")
 	}
 	if len(ack.acked) != 2 {
@@ -156,7 +156,7 @@ func TestB42StaleAge_CorrectingTheClockRecoversTheFrame(t *testing.T) {
 			"content that was always intact", err)
 	}
 	if !rcpt.Acked {
-		t.Errorf("the recovered frame was not acked; it is applied and durable now, so the "+
+		t.Errorf("the recovered frame was not acked; it is applied and durable now, so the " +
 			"relay's copy must be released")
 	}
 	if r.Replies().Len() != 1 {

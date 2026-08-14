@@ -53,8 +53,8 @@ func TestMachinePayload_SignPubRoundTrip(t *testing.T) {
 		Hostname:            "test-machine.local",
 		MachineRoutingID:    []byte("machine-routing-id-0001"),
 		MachineRelayAuthPub: []byte("machine-relay-auth-pub-ed25519!!"), // 32B, distinct
-		RecipientPub:        []byte("machine-recipient-x25519-pub-32b"),  // 31B, distinct
-		MachineSignPub:      fillMachineSignPub(),                        // 32B, distinct sentinel
+		RecipientPub:        []byte("machine-recipient-x25519-pub-32b"), // 31B, distinct
+		MachineSignPub:      fillMachineSignPub(),                       // 32B, distinct sentinel
 		EpochID:             9,
 	}
 

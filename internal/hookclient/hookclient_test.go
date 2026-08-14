@@ -100,13 +100,13 @@ func TestPostRoundTripAppliesStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mkdir temp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	sock := filepath.Join(sockDir, "d.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	rec := &localRecorder{}
 	e := engine.New(engine.Config{
@@ -125,7 +125,7 @@ func TestPostRoundTripAppliesStatus(t *testing.T) {
 			applied <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		cb, err := Decode(conn)
 		if err != nil {
 			applied <- err

@@ -38,7 +38,7 @@ func snapAtOffset(t *testing.T, capture []byte, n int) *vt.Snap {
 		n = 0
 	}
 	emu := vt.NewEmulator(100, 30)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture[:n])
 	return decodeSnap(t, emu)
 }
@@ -62,7 +62,7 @@ func replayFixture(t *testing.T, capture []byte, rules gridRules, fineSpans [][2
 	}
 	t.Helper()
 	emu := vt.NewEmulator(100, 30)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 
 	inFine := func(off int) bool {
 		for _, sp := range fineSpans {

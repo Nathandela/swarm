@@ -57,7 +57,7 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 
 	sessions, err := c.List()
 	if err != nil {
-		fmt.Fprintf(stderr, "ls: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "ls: %v\n", err)
 		return 1
 	}
 
@@ -66,18 +66,18 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 			sessions = []protocol.SessionView{} // an empty roster is [], never null
 		}
 		if err := writeJSON(stdout, sessions); err != nil {
-			fmt.Fprintf(stderr, "ls: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "ls: %v\n", err)
 			return 1
 		}
 		return 0
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tAGENT\tGROUP\tNAME")
+	_, _ = fmt.Fprintln(tw, "ID\tAGENT\tGROUP\tNAME")
 	for _, s := range sessions {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.ID, s.Agent, s.Group, s.Name)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.ID, s.Agent, s.Group, s.Name)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	return 0
 }
 
@@ -95,14 +95,14 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "watch: need exactly one session id: swarm watch <session>")
+		_, _ = fmt.Fprintln(stderr, "watch: need exactly one session id: swarm watch <session>")
 		return 1
 	}
 	id := fs.Arg(0)
 
 	matcher, err := parseWatchUntil(*until)
 	if err != nil {
-		fmt.Fprintf(stderr, "watch: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "watch: %v\n", err)
 		return 1
 	}
 
@@ -110,19 +110,19 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 	// between the snapshot and the stream.
 	events, err := c.Subscribe()
 	if err != nil {
-		fmt.Fprintf(stderr, "watch: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "watch: %v\n", err)
 		return 1
 	}
 	sessions, err := c.List()
 	if err != nil {
-		fmt.Fprintf(stderr, "watch: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "watch: %v\n", err)
 		return 1
 	}
 	current, ok := findSession(sessions, id)
 	if !ok {
 		// A typo'd or already-deleted id fails fast; blocking until the timeout would
 		// be indistinguishable from "the session is still working".
-		fmt.Fprintf(stderr, "watch: no such session %q\n", id)
+		_, _ = fmt.Fprintf(stderr, "watch: no such session %q\n", id)
 		return 1
 	}
 	if matcher.matchesSnapshot(current) {
@@ -134,7 +134,7 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 		select {
 		case ev, open := <-events:
 			if !open {
-				fmt.Fprintln(stderr, "watch: the daemon closed the event stream")
+				_, _ = fmt.Fprintln(stderr, "watch: the daemon closed the event stream")
 				return 1
 			}
 			if ev.Session.ID != id || !matcher.matchesEvent(ev.Session) {
@@ -142,7 +142,7 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 			}
 			return printView(stdout, stderr, ev.Session)
 		case <-deadline:
-			fmt.Fprintf(stderr, "watch: timeout after %s waiting for %s to reach %q\n", *timeout, id, *until)
+			_, _ = fmt.Fprintf(stderr, "watch: timeout after %s waiting for %s to reach %q\n", *timeout, id, *until)
 			return watchTimeoutExit
 		}
 	}
@@ -151,16 +151,16 @@ func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 // runKill is `swarm kill <session>`: the one-line OpKill wrapper (A4).
 func runKill(args []string, c agentClient, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "kill: need exactly one session id: swarm kill <session>")
+		_, _ = fmt.Fprintln(stderr, "kill: need exactly one session id: swarm kill <session>")
 		return 1
 	}
 	id := args[0]
 
 	if err := c.Kill(id); err != nil {
-		fmt.Fprintf(stderr, "kill: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "kill: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "killed %s\n", id)
+	_, _ = fmt.Fprintf(stdout, "killed %s\n", id)
 	return 0
 }
 
@@ -206,7 +206,7 @@ func findSession(sessions []protocol.SessionView, id string) (protocol.SessionVi
 // printView writes the one SessionView a matching watch reports on stdout.
 func printView(stdout, stderr io.Writer, v protocol.SessionView) int {
 	if err := writeJSON(stdout, v); err != nil {
-		fmt.Fprintf(stderr, "watch: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "watch: %v\n", err)
 		return 1
 	}
 	return 0
@@ -228,14 +228,14 @@ func writeJSON(stdout io.Writer, v any) error {
 func dispatchAgentVerb(run func([]string, agentClient, io.Writer, io.Writer) int, args, caps []string, stdout, stderr io.Writer) int {
 	cc, err := clientConfig()
 	if err != nil {
-		fmt.Fprintf(stderr, "swarm: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
 	}
 	client, err := protocol.Dial(cc.SocketPath, caps)
 	if err != nil {
-		fmt.Fprintf(stderr, "swarm: %v (no daemon running? start swarm first)\n", err)
+		_, _ = fmt.Fprintf(stderr, "swarm: %v (no daemon running? start swarm first)\n", err)
 		return 1
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	return run(args, client, stdout, stderr)
 }

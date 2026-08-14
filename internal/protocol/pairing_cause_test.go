@@ -232,7 +232,7 @@ func TestPairingSession_FailClosedPathsNameTheirCause(t *testing.T) {
 func TestPairingResult_UnknownCauseIsNormalized(t *testing.T) {
 	for _, hostile := range []string{
 		"not-a-cause",
-		"\x1b]0;pwned\a",             // OSC title-set: terminal injection if it were ever printed
+		"\x1b]0;pwned\a",              // OSC title-set: terminal injection if it were ever printed
 		"declined\ndevice_id=devEvil", // a second directive smuggled behind a newline
 		string(make([]byte, 4096)),
 	} {

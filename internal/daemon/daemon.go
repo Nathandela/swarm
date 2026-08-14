@@ -468,7 +468,7 @@ func (d *Daemon) Close() error {
 	d.mu.Unlock()
 
 	_ = d.listener.Close() // unlinks the socket (clean shutdown)
-	d.wg.Wait()        // accept loop + supervisors drain on stopCh
+	d.wg.Wait()            // accept loop + supervisors drain on stopCh
 	_ = d.journal.Close()
 	// The idempotency store fsyncs every write, so dropping its handle loses nothing;
 	// it exposes no Close (internal/idempotency), so the fd is released on GC.

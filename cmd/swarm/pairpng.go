@@ -66,12 +66,12 @@ func writePairingPNG(payload, dir, rendezvousID string) (string, error) {
 		return "", err
 	}
 	if err := png.Encode(f, img); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", err
 	}
 	return path, nil

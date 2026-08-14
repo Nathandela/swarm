@@ -66,7 +66,7 @@ func TestSSKL_ClaudeIdleScreenIsNotAPermission(t *testing.T) {
 func snapOfCapture(t *testing.T, capture []byte, cols, rows int) *vt.Snap {
 	t.Helper()
 	emu := vt.NewEmulator(cols, rows)
-	defer emu.Close()
+	defer func() { _ = emu.Close() }()
 	emu.Feed(capture)
 	return decodeSnap(t, emu)
 }

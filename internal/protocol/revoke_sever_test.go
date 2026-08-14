@@ -162,8 +162,8 @@ func TestProtocol_RevokeSeversLiveControlLease(t *testing.T) {
 	exp := time.Now().Add(time.Minute)
 	rcA.writeControl(Control{
 		Op: OpDeviceRevoke, EndpointID: repA.EndpointID,
-		OperationID:    "devA:01JREVOKEB000000000000",
-		DeviceID:       "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		OperationID: "devA:01JREVOKEB000000000000",
+		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
 		TargetDeviceID: "devB",
 	})
 	if got := nextControl(t, rcA); got.Op != OpOK {
@@ -218,8 +218,8 @@ func TestProtocol_RevokeSeversLivePeek(t *testing.T) {
 	exp := time.Now().Add(time.Minute)
 	rcA.writeControl(Control{
 		Op: OpDeviceRevoke, EndpointID: repA.EndpointID,
-		OperationID:    "devA:01JREVOKEPEEK0000000000",
-		DeviceID:       "devA", DeviceSig: "sig", ExpiresAt: &exp,
+		OperationID: "devA:01JREVOKEPEEK0000000000",
+		DeviceID:    "devA", DeviceSig: "sig", ExpiresAt: &exp,
 		TargetDeviceID: "devB",
 	})
 	if got := nextControl(t, rcA); got.Op != OpOK {
