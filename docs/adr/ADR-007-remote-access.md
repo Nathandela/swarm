@@ -67,9 +67,13 @@ Approval binds an immutable `(machine, session, agent-instance{shim_pid, shim_st
 
 ### D8. Launch authority
 
+> **D8 AMENDED BY B144 (2026-08-14):** the Phase-2 launch-execution deferral is lifted; every restriction below is retained.
+
 Remote launch is the highest-privilege verb (RCE). Authorization is evaluated **before** any argv composition or cwd stat: kill switch on? cwd within a machine-configured allowed root (checked and handed to the shim as the same fully-resolved real path — no check-on-resolved/use-on-original gap)? device capability permits launch? `dangerously-skip-permissions` and full-access options are refused from remote, hard-coded; `Options` are allowlisted (not just `Env` dropped — audit-003 m2); no phone-supplied env (env comes from daemon policy — also the correct fix for the ADR-006 billing-env class); worktree isolation by default; per-device capability policy (read-only / read+approve / full); an explicit phone confirm. Live launch execution is Phase 2; the builder + policy enforcement + crash-recovery are Phase 1.
 
 ### D9. Relay: untrusted, with a full account/routing lifecycle
+
+> **D9 AMENDED BY ADR-015 (2026-08-14), indexed at B144:** push custody and the APNs token op leave the relay; the closing TLS sentence is reaffirmed by ADR-016 and the revocation-cleanup clause restated by ADR-018.
 
 The relay authenticates connections by an Ed25519 relay-auth signed challenge (it never learns the X25519 identity keys), stores per-device ciphertext mailboxes with its own untrusted storage cursor (distinct from the authenticated seq the device trusts), forwards push wakes to APNs with a generic outer payload and ciphertext only, tracks presence and emits a "machine went silent" wake on gateway drop (laptop sleep is a first-class phone state, N-7), and persists to an embedded transactional store (bbolt) holding only ciphertext + routing metadata. It defines: machine registration + routing-id derivation/proof, device authorization scoped to paired routes, an APNs push-token registration/refresh/deletion op, device de-authorization + mailbox purge on revocation (a revoked device keeps neither connectivity nor a drainable pre-rotation mailbox; an offline-at-revoke machine defers the purge to reconnect), duplicate-connection resolution, and day-one rate limits/quotas on every endpoint. TLS is metadata defense only — E2EE confidentiality does not depend on it.
 
@@ -79,9 +83,13 @@ A durable kill-switch flag: when off, the daemon refuses every remote-origin op 
 
 ### D11. Metadata exposure (honesty)
 
+> **D11 AMENDED BY ADR-015 (2026-08-14), indexed at B144:** "Apple sees push routing and timing" becomes Google plus the Swarm-operated push gateway.
+
 E2EE hides payloads, not metadata. The relay sees which machines and devices exist, connection/presence timing, message sizes and cadence, and push timing; Apple sees push routing and timing. This exposure is documented, retention is bounded (mailbox purge after ack + a cap; presence not persisted), logs carry no bodies, and the "managed hosting leaks nothing" claim is withdrawn.
 
 ### D12. Platform and distribution
+
+> **D12 AMENDED BY ADR-015 (2026-08-14), indexed at B144:** Play-Store Android is the first client; the blind-push-gateway deferral is discharged, not restated.
 
 Native SwiftUI, iOS-first; an Apple developer account ($99/yr) for APNs + NSE is a hard Phase-0 dependency. All protocol/crypto/state logic lives in a gomobile-ready Go phone-core (tested against itself on the build machine); the SwiftUI layer is a thin shell compiled on-device later. A mandatory pre-production Xcode/device gate (archive, gomobile bind, entitlements, killed-app push, NSE timeout, biometric cancel, Keychain-after-reboot) precedes any real-world use — "Go core + uncompiled iOS source complete" is not "shipped," and the on-device key-custody + biometric surface is an aggregated deferred residual risk retired only at that gate. Live Activities and an Android thin client are later. The blind-push-gateway seam (relay cannot hold the APNs signing key if the app is ever distributed) is a conscious deferral, moot for the personal-only build (open question 6).
 
@@ -273,6 +281,8 @@ divergence, empty-binding error). Tracked under the remote-control epic.
 for v1; refines the D9/D10 hardening ordering. No crypto-layer change (the frozen layer
 is untouched by this amendment).
 
+> **ITEM 1 AMENDED BY ADR-015 (2026-08-14), indexed at B144:** iOS is no longer the active target; the gomobile-bind-safe core is kept on its own merits.
+
 **1. Client: iOS AND Android, both first-class (amends D12).** D12's "Native SwiftUI,
 iOS-first ... an Android thin client is later" is replaced. The gomobile-ready Go
 phone-core (unchanged in role) is the single shared core: it binds to an iOS xcframework
@@ -296,6 +306,8 @@ lands, remote input stays fail-closed. The v1 input UX is the already-designed *
 peek + take-control** screen (design §8), NOT the chat/voice composer, which remains Phase
 2 (gated on spike S-A). D8 live launch execution likewise stays Phase 2; v1 launch is the
 builder + policy + crash-recovery path already scoped to Phase 1.
+
+> **THE CLOSING D8 CLAUSE ABOVE IS AMENDED BY B144 (2026-08-14):** live launch execution is no longer Phase 2; the rest of item 2 stands.
 
 **3. Safety hardening moves into Phase A, alongside the input backend (refines D9/D10
 ordering).** Because remote input is the highest-blast-radius capability — keystrokes into
@@ -8609,3 +8621,96 @@ picks it up rather than half-built now.
 **NEEDS OWNER REVIEW.** This entry and its copy have not been read by Nathan; they are written
 to unblock the tracked issue, not as a ruling. If the wording in `SettingsScreen.kt` is wrong,
 the fix is that sentence -- not this record of why one exists.
+
+## B144. Playbook adoption: push gateway, Web-PKI default, supported phone launch, Android-first (2026-08-14)
+**Line-number note, because this pass moved them.** The R1 annotation pass inserted six in-place markers into this document — above D8 (`:70`), D9 (`:76`), D11 (`:86`), D12 (`:92`), the 2026-07-23 amendment's item 1 (`:284`) and item 2's closing D8 clause (`:310`) — twelve inserted lines in total. Any `ADR-007:<line>` citation written before 2026-08-14 that targets a line at or beyond the old line 70 is therefore short by up to twelve: **+2** for old lines 70-73, **+4** for 74-81, **+6** for 82-85, **+8** for 86-275, **+10** for 276-299, **+12** from old line 300 onward. The four Wave R1 records were re-verified citation by citation against the post-annotation file, and the two documents this wave also edited were repaired in the same pass — `ADR-011-multi-device-epochs.md` (thirteen `ADR-007:<line>` citations, twelve of them shifted; only D6's `recipient_key_id` clause at `:60` sits before the first insertion point) and `ADR-009-structured-chat-interaction.md` (eleven citations, ten of them shifted — nine of the ten were written in a prefix-less `(line NNN-NNN)` form that a grep for `ADR-007:` does not find, eight in its **Amends** header block and one in its spec-amendment obligations, which is why an earlier repair pass reported only one). **The rule for everything else, stated rather than enumerated, because an enumeration of this reads as exhaustive and was not:** every citation of an ADR-007 line written before 2026-08-14 and living outside the Wave R1 set is stale by the offsets above and was deliberately **not** renumbered, because a repo-wide renumber is a larger change than the one being recorded here and would churn code comments for a documentation pass. As of this entry that set is, in full: `docs/adr/ADR-010-adapter-structured-capture.md:75` (the `<= 8` appends/s budget, `:786-788` → `:798-800` — an Accepted ADR, not a runbook), `docs/specifications/remote-phaseB-requirements.md`, `docs/operations/sideload.md:16` (B132, `:7665` → `:7677`), `docs/ops/play-closed-testing-application.md:558` (B133, `:7748` → `:7760`), and the Go and test files under `internal/remotegw/` and `internal/remote/relay/` (`:461` → `:475` for "unusable for live typing"; `:760` → `:774` for B7's heading). A reader who finds one of those landing a few lines short of its quoted text should apply the offset above rather than conclude the citation is wrong. New citations into this file should carry a short verbatim anchor quote beside the number, so that the next insertion cannot silently invalidate them.
+
+**What this entry is.** `docs/specifications/remote-control-product-playbook.md` was approved by the
+owner and its §3 table (`:91-98`) names six decision changes that must land in the decision records
+"before or in the first code commit that depends on them" (`:84-85`). Four of the six are large enough
+to own a document and were minted as ADR-015 through ADR-018. This entry is the ADR-007 side of that
+landing: it is a **pointer index** for the four, plus the one §3 row that is small enough to be an
+amendment rather than an ADR and is therefore decided **here**. The in-place markers at D8 (`:68-72`),
+D9 (`:78`), D11 (`:88`), D12 (`:94`), the 2026-07-23 amendment's item 1 (`:286-296`) and item 2's
+closing D8 clause (`:307-308`) point at this entry and at the ADR that carries each change.
+
+### (a) The four pointers — what moved, and where the reasoning lives
+
+- **Push custody leaves the relay — `ADR-015-push-gateway-split.md`.** D9's "forwards push wakes to
+  APNs" and its "APNs push-token registration/refresh/deletion op" (`:78`), D11's "Apple sees push
+  routing and timing" (`:88`), and D12's blind-push-gateway deferral — "moot for the personal-only
+  build" (`:94`) — are amended there, not here. P1 (`ADR-015:47`) removes the relay's push credential,
+  token map and transport; P11 (`ADR-015:104`) moves B32's join key and the metadata disclosure with
+  it; P12 (`ADR-015:116`) defines the per-pairing `push_transport` migration. D12's deferral was
+  granted on a premise that expires at Play distribution, and ADR-015 discharges it rather than
+  restating it.
+- **The 2026-07-23 client ruling — same ADR.** Item 1's "iOS AND Android, both first-class"
+  (`:286-296`) is amended by P3 (`ADR-015:51`): Play-Store Android is the first client and iOS/APNs is
+  "not the active target". The gomobile-bind-safe phone-core surface that item 1 justified is **kept
+  on its own merits** — it is the seam Android binds through — and no one may "simplify" the core
+  boundary now that one binding is active.
+- **Relay TLS — `ADR-016-web-pki-relay-tls.md`.** D9's closing sentence, "TLS is metadata defense only
+  — E2EE confidentiality does not depend on it" (`:78`), is **reaffirmed** rather than amended
+  (`ADR-016:6`): it is the premise every W-ruling rests on. What is re-scoped is the pinning chain this
+  ADR accumulated — B33, B34, B45, B48, B54, B57/B58 and B13's pin-channel clause, enumerated at
+  `ADR-016:6` — from the default policy to an expert one (W1, `ADR-016:44`), with the pin consulted if
+  and only if the policy is `pinned_spki` (W3, `ADR-016:92`) and a compatibility window that keeps
+  un-migrated handsets alive (W9, `ADR-016:170`).
+- **Terminal fallback — `ADR-017-terminal-fallback-capability.md`.** The carve-out is ADR-009's and
+  ADR-013's to receive; ADR-017 lists every amended sentence by quotation (`ADR-017:8-18`). The part
+  that touches this document is only that D7's live-only input rule and the 2026-07-24 Decision 1
+  keystroke transport are **inherited unchanged** by the control generation (T6, `ADR-017:108`), and
+  that the phone still never authors an approving keystroke (T6's closing bullet).
+- **Multi-machine — `ADR-018-multi-machine-pairings.md`.** RC-D8 (`playbook:78`) puts N machines on one
+  phone in the first complete product and leaves N phones on one machine to ADR-011. MM1
+  (`ADR-018:39`) freezes the machine-side single-device model by name, so nothing in this ADR's
+  registry, grant format or lease router moves; MM9 (`ADR-018:93`) records that ADR-011 gains a scope
+  marker under its header block and an appended scope note, and nothing else.
+
+### (b) The one decision this entry carries itself: D8's Phase-2 deferral is lifted
+
+D8's closing sentence — "Live launch execution is Phase 2; the builder + policy enforcement +
+crash-recovery are Phase 1" (`:72`) — and the 2026-07-23 amendment's restatement of it — "D8 live
+launch execution likewise stays Phase 2" (`:307-308`) — are **lifted**. Phone launch is a supported
+RCE-class action in the first complete product (`playbook:98`, RC-D9 at `playbook:79`, wave R5 at
+`playbook:768-785`).
+
+**What "supported" means, precisely.** Launch is a semantic operation over a **machine-authored
+preset** at a **signed preset revision**, never argv from the phone: `swarm remote init` publishes
+presets carrying a stable opaque id, provider, canonical allowed workspace/worktree root, fixed
+environment policy and allowlisted options (`playbook:215-218`); the phone chooses a preset and an
+initial prompt and supplies nothing else (`playbook:217-218`); the ops are `launch_presets` and
+`session_launch(machine, operation_id, profile, preset_id, preset_revision, initial_prompt?,
+expires_at)` (`playbook:414-416`); and **a changed revision receives `stale_preset` instead of
+silently launching different policy** (`playbook:447-448`). The daemon re-resolves and authorizes the
+preset before composing argv and hands the shim the same resolved path (`playbook:221-222`). The op's **delivery vocabulary** is not decided here: ADR-017 T9 (`ADR-017:158`) rules that `session_launch` uses the same six composer delivery states — `draft`, `pending`, `sent`, `refused`, `uncertain`, `outcome_unknown` — so a user meets one delivery model across the product, and a `stale_preset` refusal is named in that vocabulary rather than in a second one.
+
+**Every D8 restriction is retained, and this entry lifts a phasing clause and nothing else.** Kill
+switch on; cwd within a machine-configured allowed root, checked and handed to the shim as the same
+fully-resolved real path; device capability permits launch; `dangerously-skip-permissions` and
+full-access options refused from remote, hard-coded; `Options` allowlisted rather than merely `Env`
+dropped; no phone-supplied env; worktree isolation by default; the per-device capability tier
+(read-only / read+approve / full); and an explicit phone confirm (`:72`, restated as release gates at
+`playbook:212-213`, `:219-220`, `:780-781`). Two-phase reservation and operation-status reconciliation
+stay D6's, so a network retry never spawns a second process (`playbook:223-225`), and the physical
+handset matrix runs disallowed roots/options and launch crash recovery on real hardware
+(`playbook:907-908`).
+
+**The biometric residue in D8's neighbourhood is dead text, not a live gate.** D8's "explicit phone
+confirm" survives as a *confirmation*, but any reading of it — or of D7's gate tokens — as PB-SEC-2's
+per-use biometric tier is superseded: B59 (`:2814`) is already marked "SUPERSEDED BY B133" with
+"PB-SEC-2 is VOID" (`:2816`), and B133 (`:7760`) removed all phone-side user authentication when it
+moved the trust boundary to the wire. A launch confirm is a UI confirmation of a signed operation, and
+nothing in this entry reintroduces a biometric gate.
+
+### (c) NEEDS OWNER REVIEW — the Status line
+
+This ADR's Status is still "Proposed (design lock for the remote-control epic `agents-tracker-5h5`;
+ratifies to Accepted at Phase-1 close…)" (`:3`), and Phase 1 closed long ago. **Proposed here: ratify
+to Accepted with the open gates named in the Status line itself** — at minimum the physical-handset
+gate, which `playbook:912` requires be "rewritten to current product decisions and then executed",
+PB-E2E-5 (no real provider, real handset run has happened;
+`cmd/swarm-relay/main.go:75-77`), and the four Wave R1 records below, which are themselves marked
+"pending owner sign-off". That change is **not** made in this pass: the Status line is the owner's,
+and B144 records the proposal rather than executing it. The four companion ADRs carry the same
+pending-sign-off status and ratify together or not at all.

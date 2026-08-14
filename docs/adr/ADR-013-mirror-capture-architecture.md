@@ -52,6 +52,8 @@ pipeline. No new transport, no new plane.
 | AGY | probe for the Gemini-line hook set (per-chunk `AfterModel`) or an ACP surface; wire if present | undecided by construction — a timeboxed probe (M5.2), not a commitment |
 | anything else | none | **status card, by owner ruling.** No pseudo-chat sliced from the grid, ever |
 
+> **THE "anything else" ROW ABOVE IS AMENDED BY ADR-017 (2026-08-14):** its third column becomes "honest status card **plus** the sanitized terminal fallback"; *no pseudo-chat sliced from the grid, ever* is untouched and re-affirmed. See the amendment at the end of this file.
+
 **The honest limit, stated once and not worked around**: interactive Claude Code exposes no
 mid-generation assistant text by any mechanism — hooks carry final text at `Stop`, `stream-json` is
 headless-only, and the transcript file lags. On Claude the feed is alive through tool cards and
@@ -216,6 +218,9 @@ Deliberately excluded; a future agent should read an attempt at any of these as 
 
 - No terminal rendering anywhere in the phone app (ADR-009's ruling stands), and no pseudo-chat
   sliced from the VT grid for a CLI with no structured source. The honest status card is the answer.
+
+  > **AMENDED BY ADR-017 (2026-08-14):** the first clause is re-scoped to `structured_chat` sessions; the second clause and the no-scraping rule stand verbatim.
+
 - No multi-tenant relay. The transport stays the existing sealed outbound-only design.
 - No new shim protocol, wire field, op or error code for injection — M1.2 added none, and the GG-7
   drift check has nothing to diff (see Conformance below).
@@ -304,4 +309,40 @@ Obligations this ADR creates, all landing in later waves:
 On numbering: 013 is a single allocation, not one of the 007/008/009/010 twin pairs — those came
 from parallel lines minting independently, and this one was reserved by mirror-program.md §2 before
 it was written. `docs/specifications/mirror-program.md` M3.1 has likewise reserved **014** for paged
-interaction history, so the next free number is 015 once that one lands.
+interaction history. The next free number is tracked in docs/adr/README.md (019 as of 2026-08-14, the Wave R1 records having spent 015-018).
+
+## Amendment 2026-08-14 — honest status plus terminal fallback (ADR-017)
+
+**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off).
+**Source**: `docs/adr/ADR-017-terminal-fallback-capability.md`, which quotes each amended sentence of
+this ADR verbatim (`ADR-017:12-13`); the direction is RC-D5
+(`docs/specifications/remote-control-product-playbook.md:75`) and §3.1's closing instruction to
+"replace 'status card only' with 'honest status plus terminal fallback' for incomplete providers,
+while retaining the rule that terminal scraping never produces structured interaction items"
+(`:118-120`).
+
+**Decision 1's "anything else" row.** "| anything else | none | **status card, by owner ruling.** No
+pseudo-chat sliced from the grid, ever |" (`:53`): the third column becomes **"honest status card plus
+the ADR-017 terminal fallback"**. A provider with no complete structured source, whose capability
+record says `terminal_fallback=true`, opens into the machine-sanitized snapshot presented as a
+terminal, with an honest header naming the missing capability; a provider with `terminal_fallback=false`
+keeps the status card. The status card is not deleted — it becomes one of three destinations rather
+than the only alternative to chat.
+
+**The second half of that row is untouched and re-affirmed: no pseudo-chat sliced from the grid,
+ever.** Nothing here weakens the evidence the row was protecting — S-A is PARTIAL, FAIL on overlay
+transitions, DEGRADED on truncated tool output, `tool_input` never recovered at all (`:20-21`) — and
+**terminal scraping still never produces interaction items** (`:18-21`). No content is promoted from a
+fallback surface into structured chat: not a scraped user message, not a parsed tool result, not a
+heuristic status, not the last line of a completion. An adapter earns `structured_chat` only by
+satisfying the complete-chat contract, and a session degraded mid-life keeps its accepted items
+read-only at the exact boundary rather than backfilling from the grid (ADR-017 T10, `ADR-017:177`).
+
+**Non-goals (`:219-220`).** "No terminal rendering anywhere in the phone app (ADR-009's ruling
+stands)" is re-scoped to `structured_chat` sessions, exactly as ADR-009's own decision 1 is
+(ADR-017 T1, `ADR-017:36`). The rest of that bullet — no pseudo-chat sliced from the VT grid for a CLI
+with no structured source — stands verbatim, as does the ban on the phone authoring a keystroke and
+R3's rule that there is no visible take-control in the chat path (`:81-84`): the control ceremony
+ADR-017 introduces exists only on a fallback screen, which is never a structured session's screen.
+What does not change at all is this ADR's own subject — the PTY stays byte-exact and untouched, and
+the fallback reads the trusted renderer's output, downstream of the tap.

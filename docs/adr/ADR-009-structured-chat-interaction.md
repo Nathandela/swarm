@@ -2,14 +2,14 @@
 
 **Status**: Accepted (owner sign-off 2026-08-07)
 **Date**: 2026-08-07
-**Amends**: ADR-007-remote-access.md — the 2026-07-23 amendment's item 2 (line 295-297), item 4's
-**binding screen set** (line 309-313) and item 4's phasing clause (line 318-320); the 2026-07-24
-amendment's **Decision 2** (line 437-445), narrowed in role, not withdrawn, and that amendment's
-**GG-7 clause** (line 450-453), narrowed by (8). **Settles** the open question B133 left unanswered
-(line 7923-7934). **Leaves intact**: D7 (line 62-66) in full — including its rule that an approve
+**Amends**: ADR-007-remote-access.md — the 2026-07-23 amendment's item 2 (`ADR-007:305-307`, "The v1 input UX is the already-designed **terminal peek + take-control** screen"), item 4's
+**binding screen set** (`ADR-007:321-325`, "the eight screens") and item 4's phasing clause (`ADR-007:330-332`, "Phase-2+ screens per the design's own §9 phasing"); the 2026-07-24
+amendment's **Decision 2** (`ADR-007:449-457`, "terminal renderer: server-side VT render"), narrowed in role, not withdrawn, and that amendment's
+**GG-7 clause** (`ADR-007:462-465`, "the input channel adds NO new GG-7-covered `Control` fields"), narrowed by (8). **Settles** the open question B133 left unanswered
+(`ADR-007:7935-7946`, "One open question, recorded and NOT answered here"). **Leaves intact**: D7 (`ADR-007:62-66`) in full — including its rule that an approve
 carries its own signature and is *never translated into a blind keystroke*, which (4) now honours on
 the fallback path too — B43's withdrawal of the offline queue, the 2026-07-24 **Decision 1**
-keystroke transport (line 399-420), Decision G (line 474-486), and B133's trust boundary and SAS
+keystroke transport (`ADR-007:411-432`, "travel as **sealed mailbox envelopes**"), Decision G (`ADR-007:486-498`), and B133's trust boundary and SAS
 ruling.
 
 **Companions** (drafted alongside, not restated here): `docs/adr/ADR-010-adapter-structured-capture.md`
@@ -46,6 +46,8 @@ me to say yes.
 
 ## Decision
 
+> **DECISION 1's "No terminal emulation and no raw grid anywhere in the app." IS RE-SCOPED — NOT REPEALED — BY ADR-017 (2026-08-14):** it is the rule for `structured_chat` sessions; `terminal_fallback` sessions may render the machine-sanitized snapshot. See the amendment at the end of this file.
+
 **1. The phone's only session surface is a structured chat transcript.** A transcript of interaction
 items — user and agent messages, tool-run cards, file-change diffs, plan updates — plus tappable
 approval cards. **No terminal emulation and no raw grid anywhere in the app.** ADR-007's item 2 is
@@ -67,6 +69,8 @@ the **prompt-card fallback** in (4). Both are machine-side, so **no snapshot fra
 a phone**: `TerminalSnapshot` and `terminal_watch` stay on the wire unchanged — no protocol change,
 nothing deleted — but no phone surface issues a watch, and the machine→phone append budget in (7) is
 spent by the journal alone. What is deleted is the phone *rendering a grid to a human*.
+
+> **DECISION 2's "no snapshot frames are appended to a phone" CLAUSE IS RE-SCOPED — NOT REPEALED — BY ADR-017 (2026-08-14):** a `terminal_fallback` surface is appended snapshot frames under `TerminalViewV1`; no structured surface ever is, and the wire half of the sentence is not amended at all. Everything else in decision 2 stands verbatim. See the amendment at the end of this file.
 
 **3. The terminal well is deleted at the end of slice I1.** I1 is this program's first
 implementation slice. The I-numbering is the interaction program's own and is deliberately not the
@@ -177,7 +181,7 @@ what the phone rendered and what the user tapped. The daemon is the enforcer, an
 `ContentKey` and reads an already-ordered raw byte stream — so `expected_turn` cannot ride raw
 `TDataIn`, and the composer send is the control op of (5) instead. This **narrows** the 2026-07-24
 Decision 1 GG-7 clause ("the input channel adds NO new GG-7-covered `Control` fields",
-`ADR-007-remote-access.md:450-453`): the composer-send op and its `expected_turn` field take a
+`ADR-007-remote-access.md:462-465`): the composer-send op and its `expected_turn` field take a
 `protocol.md` field-table row in the commit that adds them. The narrowing is confined to this one
 op; keystroke framing, resize and `take_control` keep the clause as written.
 
@@ -215,7 +219,7 @@ adversary, phone trusted, SAS as the sole human-in-the-loop step — is unchange
 These are enumerated so they cannot be discovered late as drift (implementation-goals.md GG-7,
 orchestration protocol step 6):
 
-- **ADR-007 item 4's binding screen set** (line 309-313) and `docs/research/remote-control-design.md`
+- **ADR-007 item 4's binding screen set** (`ADR-007:321-325`) and `docs/research/remote-control-design.md`
   §8 name the eight screens the exported surface "must feed **exactly**", terminal peek among them.
   Amending only the phasing clause would leave the retired screen bound. The set is restated as:
   pairing/onboarding, triage inbox, session detail, **chat transcript**, machines, approval card,
@@ -370,3 +374,56 @@ worse than shipping a small grid that never lies about what it shows. The spikes
 way. This is recorded as a decision, with its date and its evidence, so the next agent to read
 `PeekPanel.kt` and find it deleted meets a ruling instead of a gap — and so nobody restores a grid
 to the phone believing they are fixing a regression.
+
+## Amendment 2026-08-14 — terminal fallback for incomplete providers (ADR-017)
+
+**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off).
+**Source**: `docs/adr/ADR-017-terminal-fallback-capability.md`, which quotes each amended sentence of
+this ADR verbatim (`ADR-017:10-11`); the direction is RC-D5 (`docs/specifications/remote-control-product-playbook.md:75`)
+and §3.1 (`:110-120`).
+
+**Decision 1 is re-scoped, not repealed.** "**No terminal emulation and no raw grid anywhere in the
+app.**" (`:53`) becomes the rule for **`structured_chat`** sessions, which keep this ADR exactly as
+written — transcript of interaction items, tool cards, approval cards, composer, no terminal surface,
+no visible take-control ceremony (ADR-017 T1, `ADR-017:36`). A **`terminal_fallback`** session — one
+whose daemon-authored capability record says the provider does not meet the complete-chat contract —
+may render the machine-sanitized snapshot the trusted renderer already produces, presented as what it
+is. A session that is neither keeps the honest status card. The routing is the daemon's, never the
+user's, and there is no route to the fallback from a healthy structured session.
+
+**What stays forbidden, unchanged.** Raw PTY bytes never reach the phone. ANSI, OSC and every other
+control sequence never reach the phone. No VT parser crosses the gomobile boundary and none is written
+for Android. Decision 2 (`:61-71`) survives in full except one clause: "**no snapshot frames are
+appended to a phone**" (`:68-69`) now excepts a fallback surface, which is appended snapshots under
+`TerminalViewV1` (ADR-017 T4, `ADR-017:88`) — the wire half of that same sentence is not amended at
+all, and `internal/daemon/terminalrender.go` remains the security choke point with `vt.SnapText` the
+sanitizer. **Nothing is promoted from a fallback into structured chat**: terminal scraping never
+produces interaction items, no scraped message, parsed tool result or heuristic status becomes an
+item, and an adapter earns `structured_chat` only by satisfying the capability contract (ADR-017 T10,
+`ADR-017:177`).
+
+**The composer's delivery states are extended, not replaced.** (6)'s visible `pending → sent →
+refused` vocabulary and its ruling that "A send that cannot get a lease is shown refused, not silently
+swallowed" (`:123-126`) are kept and widened to six states — `draft`, `pending`, `sent`, `refused`,
+`uncertain`, `outcome_unknown` (ADR-017 T9, `ADR-017:158`; `playbook:246-262`). `uncertain` and
+`outcome_unknown` are the failure directions (6) did not enumerate, and neither is ever automatically
+replayed: the no-offline-queue rule of (5) and B43 is unchanged, and `outcome_unknown` resolves only
+by the user deliberately creating a new operation. The same vocabulary governs `session_launch`, so
+the product has one delivery model rather than two. The interaction-schema shapes this obliges
+(IS-LIFE-5's `expected_input_revision`, the one-active-turn rule, the six states) are owed to
+`docs/specifications/interaction-schema.md` and are not defined here.
+
+**Editorial, non-substantive.** This ADR carries eleven ADR-007 line citations and **ten of them were
+stale** after Wave R1's in-place markers; all ten are repaired, and each load-bearing one now carries
+a short verbatim anchor quote so the next insertion into ADR-007 cannot silently invalidate it. Eight
+were in the **Amends** header block and one more in the spec-amendment obligations, all written in the
+prefix-less `(line NNN-NNN)` form that a grep for `ADR-007:` does not find — which is why an earlier
+repair pass saw only one of them. Header block: item 2 `295-297`→`:305-307`, item 4's binding screen
+set `309-313`→`:321-325`, item 4's phasing clause `318-320`→`:330-332`, Decision 2
+`437-445`→`:449-457`, the GG-7 clause `450-453`→`:462-465`, B133's open question
+`7923-7934`→`:7935-7946`, Decision 1 `399-420`→`:411-432`, and Decision G `474-486`→`:486-498`; only
+D7 `62-66` was already correct, because it sits before the first insertion point. Obligations list:
+the same binding screen set, `309-313`→`:321-325`. And decision (8)'s in-body citation of the GG-7
+clause, `ADR-007:450-453`→`:462-465`, which was the one the earlier pass found. The offset table, and
+the reason the rest of the repository was left un-renumbered, are at `ADR-007:8626` (B144's
+line-number note). No decision text moved.

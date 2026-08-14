@@ -24,6 +24,9 @@ Non-goals, ruled by the owner 2026-08-13:
 
 - No terminal rendering anywhere in the app (ADR-009 obsidian ruling stands). CLIs without a
   structured event source keep the status card. No pseudo-chat sliced from the VT grid.
+
+  > **AMENDED BY ADR-017 (2026-08-14):** sentence one is re-scoped to `structured_chat` sessions; sentence two gains the capability-routed sanitized terminal fallback; sentence three stands verbatim.
+
 - No multi-tenant relay. The transport stays the existing sealed outbound-only design.
 
 Owner rulings adopted with the direction:
@@ -58,6 +61,8 @@ scrape the terminal for structure. Mirror keeps the two planes separate:
 | opencode | `opencode serve` + SSE `/event`; the TUI is already just a client of the same server | full: part deltas, tool parts, observable permissions, native message injection |
 | AGY | probe for the Gemini-line hook set (per-chunk `AfterModel`) or an ACP surface; wire if present | unknown until probed |
 | anything else | none | status card (ruled) |
+
+> **THE "anything else" ROW ABOVE IS AMENDED BY ADR-017 (2026-08-14):** its fidelity column becomes "honest status card **plus** capability-routed sanitized terminal fallback"; no pseudo-chat sliced from the grid, ever.
 
 **Inbound (phone -> machine)** is always a signed device op the daemon applies locally: composer
 text and approval keys are injected into the PTY the daemon already owns (Claude), or delivered as
@@ -186,8 +191,12 @@ Release: machine v0.11.0. Exit: the demo moment on a Codex session, prose stream
 | M5.4 | Phone-presence in the TUI: throttled foreground ping, "phone is watching" in attach chrome | completes the co-presence story both ways |
 | M5.5 | Status-card polish for non-chat sessions; composer hidden there | honest, not empty |
 
+> **M5.2 AND M5.5 ARE AMENDED BY ADR-017 (2026-08-14):** M5.2's "else the status card stands" becomes "else AGY advertises `structured_chat=false`, `terminal_fallback=true`" (its "no pseudo-chat, ruled" note is untouched); M5.5's "composer hidden there" becomes structural — a fallback session has no structured composer, because it has no message sink.
+
 Release: machine v0.12.0, app 0.7.0. Exit: every session in the inbox opens into a live chat or an
 honest status card -- nothing in between.
+
+> **THE M5 EXIT ABOVE IS AMENDED BY ADR-017 (2026-08-14):** it gains a third destination — a live chat, a capability-routed terminal fallback, or an honest status card, nothing in between.
 
 ## 5. Release train
 
