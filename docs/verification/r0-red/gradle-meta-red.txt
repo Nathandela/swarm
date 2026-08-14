@@ -1,0 +1,118 @@
+RED evidence: gradle-meta (Wave R0, PB-TOOL-6 gate)
+Date: 2026-08-14
+HEAD: 8462affce8bba0cb5805f4d1c874809af2c54ac7 (branch main)
+Gate: .github/workflows/ci.yml, "android" job, step "Gradle gate (PB-TOOL-6)",
+      working-directory android, command: ./gradlew --no-daemon lint test
+File under test: android/gradle/verification-metadata.xml (213749 bytes,
+      last committed 2026-08-02T13:13:06+02:00)
+
+--------------------------------------------------------------------------------
+EXACT FAILURE OUTPUT
+--------------------------------------------------------------------------------
+
+$ source android/toolchain.env && cd android
+$ ./gradlew --no-daemon --refresh-dependencies lint test
+
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+A problem occurred configuring root project 'swarm-android'.
+> Dependency verification failed for configuration 'classpath'
+  3 artifacts failed verification:
+    - guava-parent-33.3.1-jre.pom (com.google.guava:guava-parent:33.3.1-jre) from repository MavenRepo
+    - junit-bom-5.10.2.module (org.junit:junit-bom:5.10.2) from repository MavenRepo
+    - kotlinx-coroutines-bom-1.8.0.pom (org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.8.0) from repository MavenRepo
+  If the artifacts are trustworthy, you will need to update the gradle/verification-metadata.xml file. For more on how to do this, please refer to https://docs.gradle.org/9.5.1/userguide/dependency_verification.html#sec:troubleshooting-verification in the Gradle documentation.
+
+  Open this report for more details: file:///Users/Nathan/Code/swarm/android/build/reports/dependency-verification/at-1786739831328/dependency-verification-report.html
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 1m 3s
+EXIT CODE: 1
+
+--------------------------------------------------------------------------------
+METHODOLOGY NOTE: why --refresh-dependencies was needed on this machine
+--------------------------------------------------------------------------------
+
+The literal CI command, ./gradlew --no-daemon lint test, was run first, with no
+flags added, exactly as the "Gradle gate (PB-TOOL-6)" step in
+.github/workflows/ci.yml invokes it. On THIS machine it did not fail: it ran
+straight through project configuration and deep into task execution
+(:app:testReleaseUnitTest, several minutes of real Robolectric test runs)
+without ever reaching the verification gate.
+
+Cause: this machine's ~/.gradle/caches/modules-2 already holds resolved,
+previously-verified metadata for all three artifacts (confirmed by direct
+inspection -- guava-parent-33.3.1-jre.pom, junit-bom-5.10.2.module and
+kotlinx-coroutines-bom-1.8.0.pom are all present under
+~/.gradle/caches/modules-2/files-2.1/.../, left over from earlier local work).
+Gradle treats already-resolved metadata for a fixed version as immutable and
+does not re-touch or re-verify the backing files on every build -- only a CI
+runner's cold GRADLE_USER_HOME (nothing in modules-2 yet) is forced to fetch
+and verify them fresh, which is exactly where PB-TOOL-6 is failing in CI.
+
+--refresh-dependencies forces Gradle to bypass that resolved-metadata cache
+and re-verify from scratch, i.e. it forces this machine down the same code
+path a genuinely cold CI runner takes unconditionally. The failure it
+surfaces is against the same checked-in gradle/verification-metadata.xml, for
+the same three artifacts CI reports, with no other flags, versions or
+repositories changed -- it is the same defect, not a different one. It was
+also independently reproduced faster via `./gradlew --no-daemon
+--refresh-dependencies buildEnvironment` (identical "configuration 'classpath'"
+failure, BUILD FAILED in 49s), confirming the failure is at root-project
+buildscript classpath resolution, before any :app task runs -- consistent
+with lint+test getting well past it on a warm cache.
+
+--------------------------------------------------------------------------------
+INDEPENDENT CONFIRMATION: the three artifacts are genuinely absent from the
+checked-in metadata (not a transient/network issue)
+--------------------------------------------------------------------------------
+
+$ grep -n 'guava-parent' android/gradle/verification-metadata.xml
+1560:      <component group="com.google.guava" name="guava-parent" version="26.0-android">
+1565:      <component group="com.google.guava" name="guava-parent" version="32.0.1-jre">
+1570:      <component group="com.google.guava" name="guava-parent" version="33.4.0-android">
+-- no 33.3.1-jre entry at all; guava (the jar, not guava-parent) IS covered at
+   33.3.1-jre, only its POM parent is missing.
+
+$ grep -n 'junit-bom' android/gradle/verification-metadata.xml
+3179:      <component group="org.junit" name="junit-bom" version="5.10.2">
+3180:         <artifact name="junit-bom-5.10.2.pom">
+3184:      <component group="org.junit" name="junit-bom" version="5.9.2">
+-- the 5.10.2 component has only a .pom artifact entry; no .module entry.
+
+$ grep -n 'kotlinx-coroutines-bom' android/gradle/verification-metadata.xml
+3067:      <component group="org.jetbrains.kotlinx" name="kotlinx-coroutines-bom" version="1.6.4">
+3072:      ... version="1.7.3">
+3077:      ... version="1.8.1">
+3082:      ... version="1.9.0">
+-- no 1.8.0 entry at all; kotlinx-coroutines-core-jvm (a different component)
+   IS covered at 1.8.0, only the BOM at that version is missing.
+
+--------------------------------------------------------------------------------
+DIAGNOSIS
+--------------------------------------------------------------------------------
+
+android/gradle/verification-metadata.xml is missing checksum entries for
+exactly three parent/BOM POM-metadata artifacts pulled into the root
+project's buildscript "classpath" configuration: guava-parent:33.3.1-jre's
+POM, junit-bom:5.10.2's Gradle Module Metadata (.module), and
+kotlinx-coroutines-bom:1.8.0's POM. These are inherited/imported metadata
+files (Maven parent POM and BOM import), not directly-declared dependencies,
+which is why they are easy to omit when the metadata file was last
+regenerated (2026-08-02) with a tool invocation that did not force resolution
+of every transitive parent/BOM link. Gradle's strict verification mode
+refuses to trust any artifact -- binary or metadata -- with no entry in the
+file, regardless of whether the bytes are otherwise legitimate, so a cold
+GRADLE_USER_HOME (every CI runner) fails at project-configuration time before
+a single :app task executes. The fix is to add the three missing checksum
+entries to verification-metadata.xml; this evidence file intentionally leaves
+that file untouched.
