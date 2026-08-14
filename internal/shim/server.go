@@ -7,6 +7,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/transcript"
@@ -246,11 +247,36 @@ func (s *server) resize(cols, rows int) {
 	// drain cannot parse that output against the previous grid.
 	s.hub.mu.Lock()
 	defer s.hub.mu.Unlock()
-	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	_ = setWinsize(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if testHookAfterPTYResize != nil {
 		testHookAfterPTYResize()
 	}
 	s.hub.emu.Resize(cols, rows)
+}
+
+// setWinsize issues the TIOCSWINSZ ioctl that pty.Setsize would, but through
+// f.SyscallConn().Control instead of pty.Setsize's own f.Fd(): Control routes
+// through internal/poll's ref-counted fdMutex (the same guard that makes
+// Read/Write safe against a concurrent Close), so this can never race a
+// concurrent ptmx.Close() the way Fd() does, and once f is closed Control
+// fails outright instead of ioctl'ing a possibly fd-reused descriptor. See
+// close_resize_race_test.go.
+func setWinsize(f *os.File, ws *pty.Winsize) error {
+	sc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ioctlErr error
+	if err := sc.Control(func(fd uintptr) {
+		//nolint:gosec // unsafe pointer required for the ioctl syscall, mirrors pty.Setsize
+		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(ws)))
+		if errno != 0 {
+			ioctlErr = errno
+		}
+	}); err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 // onSignal terminates the session process group. kill is immediate; term sends

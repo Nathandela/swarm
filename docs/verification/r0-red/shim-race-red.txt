@@ -1,0 +1,79 @@
+Wave R0, work package "shim-race" -- RED evidence for the shim PTY close-vs-resize race.
+Command: go test -race -run TestCloseVsResizeRace -count=5 -v ./internal/shim
+Date: 2026-08-14T20:25:30Z  HEAD: 8462aff
+
+Diagnosis: shim.go's finalization calls ptmx.Close() (shim.go:212) before srv.shutdown(...)
+(shim.go:231) closes/joins every live serveConn handler. A client resize still in flight
+calls server.(*server).resize (server.go:240), which calls pty.Setsize -> ioctl -> ptmx.Fd()
+(server.go:249) on the SAME *os.File with no synchronization against that Close. CI already
+observed this in the wild as a DATA RACE between shim.go:212's Close and server.go:249's Fd,
+on TestF5_OutOfRangeResizeIgnored. TestCloseVsResizeRace (close_resize_race_test.go) pins the
+same two production call sites -- s.resize(...) and ptmx.Close() -- released from one shared
+start barrier with nothing ordering the Fd read against the Close write, so it reliably
+reproduces the same race deterministically pre-fix. No production code was modified.
+
+--- go test -race -run TestCloseVsResizeRace -count=5 -v ./internal/shim ---
+
+=== RUN   TestCloseVsResizeRace
+==================
+WARNING: DATA RACE
+Write at 0x00c000018130 by goroutine 20:
+  internal/poll.(*FD).destroy()
+      /usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_unix.go:84 +0xcc
+  internal/poll.(*FD).decref()
+      /usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_mutex.go:213 +0x36
+  internal/poll.(*FD).Close()
+      /usr/local/Cellar/go/1.26.5/libexec/src/internal/poll/fd_unix.go:105 +0x7c
+  os.(*file).close()
+      /usr/local/Cellar/go/1.26.5/libexec/src/os/file_unix.go:315 +0x93
+  os.(*File).Close()
+      /usr/local/Cellar/go/1.26.5/libexec/src/os/file_posix.go:24 +0xa4
+  github.com/Nathandela/swarm/internal/shim.TestCloseVsResizeRace.func4()
+      /Users/Nathan/Code/swarm/internal/shim/close_resize_race_test.go:47 +0xa5
+
+Previous read at 0x00c000018130 by goroutine 19:
+  os.(*File).fd()
+      /usr/local/Cellar/go/1.26.5/libexec/src/os/file_unix.go:84 +0x9c
+  os.(*File).Fd()
+      /usr/local/Cellar/go/1.26.5/libexec/src/os/file.go:723 +0x36
+  github.com/creack/pty.ioctl()
+      /Users/Nathan/go/pkg/mod/github.com/creack/pty@v1.1.24/ioctl.go:9 +0x34
+  github.com/creack/pty.Setsize()
+      /Users/Nathan/go/pkg/mod/github.com/creack/pty@v1.1.24/winsize_unix.go:23 +0x185
+  github.com/Nathandela/swarm/internal/shim.(*server).resize()
+      /Users/Nathan/Code/swarm/internal/shim/server.go:249 +0xff
+  github.com/Nathandela/swarm/internal/shim.TestCloseVsResizeRace.func3()
+      /Users/Nathan/Code/swarm/internal/shim/close_resize_race_test.go:42 +0x9a
+
+Goroutine 20 (running) created at:
+  github.com/Nathandela/swarm/internal/shim.TestCloseVsResizeRace()
+      /Users/Nathan/Code/swarm/internal/shim/close_resize_race_test.go:44 +0x65c
+  testing.tRunner()
+      /usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2101 +0x38
+
+Goroutine 19 (running) created at:
+  github.com/Nathandela/swarm/internal/shim.TestCloseVsResizeRace()
+      /Users/Nathan/Code/swarm/internal/shim/close_resize_race_test.go:39 +0x56c
+  testing.tRunner()
+      /usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2036 +0x21c
+  testing.(*T).Run.gowrap1()
+      /usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2101 +0x38
+==================
+    testing.go:1712: race detected during execution of test
+--- FAIL: TestCloseVsResizeRace (0.06s)
+=== RUN   TestCloseVsResizeRace
+--- PASS: TestCloseVsResizeRace (0.01s)
+=== RUN   TestCloseVsResizeRace
+--- PASS: TestCloseVsResizeRace (0.01s)
+=== RUN   TestCloseVsResizeRace
+--- PASS: TestCloseVsResizeRace (0.06s)
+=== RUN   TestCloseVsResizeRace
+--- PASS: TestCloseVsResizeRace (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	3.279s
+FAIL
+
+go test exit status: 1 (data race detected -- fails the -count=5 invocation, confirmed
+reproducible across multiple repeated invocations of this exact command, not a one-off flake)
