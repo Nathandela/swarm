@@ -157,6 +157,10 @@ homebrew_casks:
     repository:
       owner: Nathandela
       name: homebrew-swarm
+      # CI's GITHUB_TOKEN is scoped to the triggering repo only; pushing the cask
+      # to the tap repo needs the fine-grained PAT stored as this repo secret
+      # (Contents: read-write on homebrew-swarm alone). release.yml passes it in.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/Nathandela/swarm"
     description: "Every coding agent on your machine, in one keyboard-driven terminal view"
     # F1: swarm is unsigned/unnotarized. Homebrew preserves the

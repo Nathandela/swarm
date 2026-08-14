@@ -47,4 +47,8 @@ jobs:
       - name: Publish release (goreleaser)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT (Contents: read-write on Nathandela/homebrew-swarm only);
+          # GITHUB_TOKEN cannot push the cask to a different repo. Referenced by
+          # .goreleaser.yaml homebrew_casks.repository.token.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         run: goreleaser release --clean
