@@ -87,7 +87,7 @@ func TestResponsiveWholeBoardNeverExceedsPracticalTerminalWidth(t *testing.T) {
 	}
 }
 
-func TestWorkingIndicatorAdvancesOnExistingRepaint(t *testing.T) {
+func TestWorkingIndicatorAdvancesOnlyOnAnimationTick(t *testing.T) {
 	f := newFakeClient(sWorking("endpoint/s1", "codex", "~/Code/x", "building", time.Minute))
 	m := newModel(t, f, detectMixed())
 	before := lineContaining(view(m), "building")
@@ -96,9 +96,29 @@ func TestWorkingIndicatorAdvancesOnExistingRepaint(t *testing.T) {
 	}
 
 	m = send(m, repaintMsg{})
+	afterRepaint := lineContaining(view(m), "building")
+	if !strings.Contains(afterRepaint, "⠋") {
+		t.Fatalf("the one-second elapsed repaint must not add an animation jump:\n%s", afterRepaint)
+	}
+
+	repaintN := m.(rootModel).repaintN
+	m2, cmd := m.Update(workingAnimationMsg{})
+	if cmd == nil {
+		t.Fatal("a Working animation tick on the general board must re-arm its 90 ms timer")
+	}
+	m = m2
+	if got := m.(rootModel).repaintN; got != repaintN {
+		t.Fatalf("Working animation changed full-repaint nonce from %d to %d; glyph ticks must stay cell-diff only", repaintN, got)
+	}
 	after := lineContaining(view(m), "building")
 	if !strings.Contains(after, "⠙") || strings.Contains(after, "⠋") {
-		t.Fatalf("one existing repaint must advance Working to ⠙:\n%s", after)
+		t.Fatalf("one animation tick must advance Working to ⠙:\n%s", after)
+	}
+}
+
+func TestWorkingAnimationIntervalIsNinetyMilliseconds(t *testing.T) {
+	if workingAnimationInterval != 90*time.Millisecond {
+		t.Fatalf("workingAnimationInterval = %s, want the selected 90ms cadence", workingAnimationInterval)
 	}
 }
 

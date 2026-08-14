@@ -109,7 +109,7 @@
       font: 700 10px/1 ui-monospace, "SFMono-Regular", Menlo, monospace;
       letter-spacing: .08em;
     }
-    .timing-card.recommended::after { content: "START HERE"; color: var(--blue); }
+    .timing-card.recommended::after { content: "FINAL CHOICE"; color: var(--blue); }
     .timing-card.baseline::after { content: "CURRENT"; color: var(--amber); }
     .timing-card p { margin: 12px 0 0; color: var(--muted); font: 13px/1.5 Inter, system-ui, sans-serif; }
 
@@ -189,7 +189,7 @@
   <p class="lede">The glyph is settled; this isolates the missing decision: how quickly each Braille frame should advance. Every option runs the same ten-frame loop, so only cadence changes.</p>
 
   <div class="decision-bar">
-    <div class="decision-copy"><strong id="selection-label">Selected: 80 ms/frame</strong><br><span id="selection-detail">0.80 seconds per loop · 12.5 frames/second</span></div>
+    <div class="decision-copy"><strong id="selection-label">Selected: 90 ms/frame</strong><br><span id="selection-detail">0.90 seconds per loop · 11.1 frames/second</span></div>
     <div class="controls">
       <button class="control primary" id="play-pause" type="button">pause</button>
       <button class="control" id="restart" type="button">restart together</button>
@@ -204,11 +204,18 @@
       <p>Very fluid, but always asking for attention. Better for short operations than an agent that may work for minutes.</p>
     </article>
 
-    <article class="timing-card recommended selected" role="button" tabindex="0" aria-pressed="true" data-ms="80">
+    <article class="timing-card" role="button" tabindex="0" aria-pressed="false" data-ms="80">
       <h3>80 ms · fluid</h3>
       <div class="terminal-row"><span class="selection">▌</span><span class="glyph">⠋</span><span class="name">swarm motion timing</span><span class="agent">codex</span><span class="status">working</span></div>
       <div class="metrics"><div class="metric"><b>80 ms</b><small>per frame</small></div><div class="metric"><b>0.80 s</b><small>full loop</small></div><div class="metric"><b>12.5</b><small>frames/sec</small></div></div>
       <p>Continuous and lively without becoming a visual alarm. The strongest starting point for a natural CLI-spinner feel.</p>
+    </article>
+
+    <article class="timing-card recommended selected" role="button" tabindex="0" aria-pressed="true" data-ms="90">
+      <h3>90 ms · fluid-balanced</h3>
+      <div class="terminal-row"><span class="selection">▌</span><span class="glyph">⠋</span><span class="name">swarm motion timing</span><span class="agent">codex</span><span class="status">working</span></div>
+      <div class="metrics"><div class="metric"><b>90 ms</b><small>per frame</small></div><div class="metric"><b>0.90 s</b><small>full loop</small></div><div class="metric"><b>11.1</b><small>frames/sec</small></div></div>
+      <p>The final choice: fluid continuity with a touch more composure than 80 ms, completing each Braille orbit in 0.90 seconds.</p>
     </article>
 
     <article class="timing-card" role="button" tabindex="0" aria-pressed="false" data-ms="100">
@@ -251,15 +258,15 @@
   <p class="lede">Use the slider after choosing the closest card. Restarting aligns every option to the same first frame for a clean comparison.</p>
   <div class="custom-lab">
     <div class="slider-wrap">
-      <div class="slider-head"><h3>Custom cadence</h3><span class="slider-value" id="custom-value">80 ms</span></div>
-      <input id="custom-range" type="range" min="40" max="300" step="5" value="80" aria-label="Custom Braille animation timing in milliseconds per frame">
+      <div class="slider-head"><h3>Custom cadence</h3><span class="slider-value" id="custom-value">90 ms</span></div>
+      <input id="custom-range" type="range" min="40" max="300" step="5" value="90" aria-label="Custom Braille animation timing in milliseconds per frame">
       <div class="range-labels"><span>40 ms · intense</span><span>300 ms · stepped</span></div>
-      <p class="lede" id="custom-detail">0.80 seconds per full loop · 12.5 frames/second</p>
+      <p class="lede" id="custom-detail">0.90 seconds per full loop · 11.1 frames/second</p>
     </div>
     <div class="terminal-row"><span class="selection">▌</span><span class="glyph" id="custom-glyph">⠋</span><span class="name">custom cadence preview</span><span class="agent">codex</span><span class="status">working</span></div>
   </div>
 
-  <div class="note"><strong class="accent">Implementation note:</strong> v0.10.2 ties animation to the existing one-second board repaint. Any selected sub-second cadence will need a lightweight animation tick while the general board is visible, stopped when Swarm leaves that view.</div>
+  <div class="note"><strong class="accent">Implementation note:</strong> main now advances the Working glyph on a lightweight 90 ms tick while the general board is visible, stopping it off-board, after connection loss, or when no agents are Working. The one-second elapsed-time repaint remains separate.</div>
 </main>
 
 <script>

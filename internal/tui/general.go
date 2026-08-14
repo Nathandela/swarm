@@ -72,8 +72,8 @@ type generalModel struct {
 	// insertion, and deletion safe for non-ASCII discussion names.
 	editCursor int
 
-	// spinnerFrame advances on the existing one-second general-view repaint. It
-	// animates Working without adding another timer or increasing idle redraws.
+	// spinnerFrame advances on the dedicated 90 ms Working animation tick. The
+	// router runs that tick only while this board is visible and has a Working row.
 	spinnerFrame uint64
 
 	bannerText   string    // transient V-5 notification ("<agent> needs input"), "" when none
@@ -101,6 +101,17 @@ const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
 	return generalModel{sessions: sessions}
+}
+
+// hasWorking reports whether the board currently has anything to animate. Keeping
+// this check allocation-free lets the router avoid an 11 Hz timer on idle boards.
+func (m generalModel) hasWorking() bool {
+	for _, s := range m.sessions {
+		if s.Group == status.GroupWorking {
+			return true
+		}
+	}
+	return false
 }
 
 // selected returns the currently-selected session, or (zero, false) when the
@@ -289,6 +300,7 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.general.setBanner("session has ended - r resume, ctrl+x delete")
 			}
 			if m.attachRunner != nil {
+				m.screen = screenAttach
 				// Only running rows reach here, so the passthrough is always read-write.
 				return m, runAttach(m.attachRunner, s, false)
 			}

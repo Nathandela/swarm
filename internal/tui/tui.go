@@ -94,6 +94,10 @@ type connectionLostMsg struct{ from <-chan protocol.Event }
 // column (see repaintTick).
 type repaintMsg struct{}
 
+// workingAnimationMsg advances the one-cell Braille glyph independently of the
+// slower full-board elapsed repaint.
+type workingAnimationMsg struct{}
+
 // launchResultMsg carries the outcome of an async launch/resume so a FAILURE is
 // surfaced to the user (the transient banner) instead of silently discarded (B1),
 // and a SUCCESS carries the daemon-returned session id + agent so the router can
@@ -152,6 +156,14 @@ func repaintTick() tea.Cmd {
 	return tea.Tick(repaintInterval, func(time.Time) tea.Msg { return repaintMsg{} })
 }
 
+// workingAnimationInterval is the user-selected midpoint between the Fluid and
+// Balanced motion studies: ten frames complete one loop in 900 ms.
+const workingAnimationInterval = 90 * time.Millisecond
+
+func workingAnimationTick() tea.Cmd {
+	return tea.Tick(workingAnimationInterval, func(time.Time) tea.Msg { return workingAnimationMsg{} })
+}
+
 // rootModel is the screen router: the only tea.Model, holding the three
 // sub-models and the shared client/size state.
 type rootModel struct {
@@ -173,8 +185,11 @@ type rootModel struct {
 	detectGen uint64      // latest dispatched detection generation; a detectMsg with an older gen is stale
 
 	events   <-chan protocol.Event
-	repaintN int  // repaint nonce: bumped each tick to force a full re-emit (see View)
-	ticking  bool // whether a repaint tick is in flight (only on the general view)
+	repaintN int  // repaint nonce: bumped each elapsed tick to force a full re-emit (see View)
+	ticking  bool // whether an elapsed repaint tick is in flight (only on the general view)
+	// animatingWorking guards the faster glyph-only timer. At most one tick is in
+	// flight, and it lapses off-board, after connection loss, or with no Working row.
+	animatingWorking bool
 
 	// connectionLost is PERSISTENT (unlike the transient V-5 banner): once the
 	// daemon connection is gone for good, the roster is frozen forever for the
@@ -219,6 +234,7 @@ func New(c Client, detect DetectFunc, opts ...Option) tea.Model {
 		ticking:       true, // Init arms the first repaint tick
 		clientVersion: version.Version,
 	}
+	m.animatingWorking = m.general.hasWorking()
 	// The daemon's build version rides the hello handshake. The narrow tui.Client
 	// interface stays free of it (Attach-style optional surface): the production
 	// *protocol.Client reports it; a fake that does not simply yields no notice.
@@ -254,6 +270,9 @@ func boundedList(c Client) []protocol.SessionView {
 // or the launch form; its result is cached via detectMsg (V-2/L1).
 func (m rootModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{waitForEvent(m.events), repaintTick(), detectCmd(m.detect, m.detectGen)}
+	if m.animatingWorking {
+		cmds = append(cmds, workingAnimationTick())
+	}
 	if m.shouldAutoUpgrade() {
 		// An older daemon than this client: kick the auto-restart through Update, which
 		// owns model mutation (the banner + once-per-process guard live there).
@@ -304,7 +323,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// into needs_input/ready_for_review, prints a notification banner (V-5).
 		// Re-arm the stream so the next event is delivered too.
 		banner := m.general.apply(msg.ev.Session)
-		return m, tea.Batch(banner, waitForEvent(m.events))
+		return m, tea.Batch(banner, waitForEvent(m.events), m.armWorkingAnimation())
 
 	case connectionLostMsg:
 		// Stale-source guard (deployment-committee 3/3): ignore a loss reported on a
@@ -339,6 +358,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id != "" {
 			s := protocol.SessionView{ID: msg.id, Agent: msg.agent, Name: msg.name}
 			if m.attachRunner != nil {
+				m.screen = screenAttach
 				return m, runAttach(m.attachRunner, s, false)
 			}
 			m.attach = attachModel{session: s, hasSession: true, width: m.width}
@@ -390,6 +410,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == screenGeneral && !m.ticking {
 			m.ticking = true
 			cmds = append(cmds, repaintTick())
+		}
+		if cmd := m.armWorkingAnimation(); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
 
@@ -503,8 +526,19 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// re-emit rather than an empty cell diff — both are needed (see the F2 note
 		// on repaintInterval). Runs at repaintInterval and only on the general view.
 		m.repaintN++
-		m.general.spinnerFrame++
 		return m, tea.Batch(repaintTick(), tea.ClearScreen)
+
+	case workingAnimationMsg:
+		if !m.shouldAnimateWorking() {
+			m.animatingWorking = false
+			return m, nil
+		}
+		// Unlike the elapsed repaint, the glyph changes the frame content itself.
+		// Let Bubble Tea emit its tiny cell diff; a full-screen clear here would turn
+		// smooth 90 ms motion into visible flicker.
+		m.general.spinnerFrame++
+		m.animatingWorking = true
+		return m, workingAnimationTick()
 
 	case pairPendingMsg:
 		// The daemon pushed a pair_pending (SAS gate): open the pairing-confirm
@@ -778,16 +812,37 @@ func (m rootModel) composeBoard(body, status string) string {
 	return strings.Join(append(lines, tail...), "\n")
 }
 
-// enterGeneral switches to the general view and restarts the repaint timer if it
-// has lapsed. The timer runs only on the general view (N-3); guarding on ticking
-// keeps at most one tick in flight across repeated screen switches.
+// enterGeneral switches to the general view and restarts any elapsed/animation
+// timer that lapsed off-board. Both guards keep at most one tick of each kind in
+// flight across repeated screen switches.
 func (m *rootModel) enterGeneral() tea.Cmd {
 	m.screen = screenGeneral
-	if m.ticking {
+	var cmds []tea.Cmd
+	if !m.ticking {
+		m.ticking = true
+		cmds = append(cmds, repaintTick())
+	}
+	if cmd := m.armWorkingAnimation(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+// shouldAnimateWorking is the lifecycle policy for the fast timer. A disconnected
+// roster must not imply live work, and an idle/off-board model has no visible glyph.
+func (m rootModel) shouldAnimateWorking() bool {
+	return !m.connectionLost && m.screen == screenGeneral && m.general.hasWorking()
+}
+
+// armWorkingAnimation schedules the first tick of a chain when needed. It never
+// clears an in-flight guard: if the board briefly leaves and returns before that
+// tick lands, the existing tick resumes the chain without creating a duplicate.
+func (m *rootModel) armWorkingAnimation() tea.Cmd {
+	if !m.shouldAnimateWorking() || m.animatingWorking {
 		return nil
 	}
-	m.ticking = true
-	return repaintTick()
+	m.animatingWorking = true
+	return workingAnimationTick()
 }
 
 // ---------------------------------------------------------------------------
