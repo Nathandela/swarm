@@ -2,7 +2,7 @@
 
 - **Status:** Owner-approved product direction; implementation plan, not yet an implementation claim
 - **Decision date:** 2026-08-14
-- **Tracker:** `swarm-e9w`
+- **Tracker:** `agents-tracker-hggx` (epic; waves R0-R9 are `agents-tracker-hggx.1` through `.10`)
 - **Audience:** implementers, reviewers, release operators, and physical-handset testers
 - **Review:** revised after independent Terra implementation review and Sol architecture/security
   review
