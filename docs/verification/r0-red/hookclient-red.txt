@@ -1,0 +1,125 @@
+RED evidence: hookclient (Wave R0, ADR-010 raw-passthrough)
+Date: 2026-08-14
+Test: TestPost_RawBytesCrossTheWireVerbatim
+File: internal/hookclient/post_verbatim_test.go:20
+Command: go test -race -run TestPost_RawBytesCrossTheWireVerbatim -count=3 ./internal/hookclient
+
+--------------------------------------------------------------------------------
+EXACT FAILURE OUTPUT (default macOS TMPDIR, as CI's darwin lane runs it)
+--------------------------------------------------------------------------------
+
+$ echo "TMPDIR=$TMPDIR"
+TMPDIR=/var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/
+
+$ go test -race -run TestPost_RawBytesCrossTheWireVerbatim -count=3 -v ./internal/hookclient
+
+=== RUN   TestPost_RawBytesCrossTheWireVerbatim
+    post_verbatim_test.go:26: listen: listen unix /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/TestPost_RawBytesCrossTheWireVerbatim133463894/001/hook.sock: bind: invalid argument
+--- FAIL: TestPost_RawBytesCrossTheWireVerbatim (0.10s)
+=== RUN   TestPost_RawBytesCrossTheWireVerbatim
+    post_verbatim_test.go:26: listen: listen unix /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/TestPost_RawBytesCrossTheWireVerbatim426174868/001/hook.sock: bind: invalid argument
+--- FAIL: TestPost_RawBytesCrossTheWireVerbatim (0.00s)
+=== RUN   TestPost_RawBytesCrossTheWireVerbatim
+    post_verbatim_test.go:26: listen: listen unix /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/TestPost_RawBytesCrossTheWireVerbatim2276930843/001/hook.sock: bind: invalid argument
+--- FAIL: TestPost_RawBytesCrossTheWireVerbatim (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/hookclient	4.105s
+FAIL
+
+The failure is thrown at post_verbatim_test.go:26, inside the test's OWN setup
+(`net.Listen("unix", sock)`), which runs before Post or Decode is ever called.
+This is not an assertion failure on out.Raw vs raw (line 55-57) -- the test
+never reaches that comparison.
+
+--------------------------------------------------------------------------------
+DIAGNOSIS
+--------------------------------------------------------------------------------
+
+The failing path is unix-domain-socket bind, not JSON wire encoding.
+
+1. `sockaddr_un.sun_path` on Darwin is a fixed `char[104]` buffer (including the
+   NUL terminator), giving ~103 usable bytes for the path. The offending path
+
+     /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/TestPost_RawBytesCrossTheWireVerbatim133463894/001/hook.sock
+
+   is 110 bytes -- confirmed by measurement (`len(path) == 110`). `bind: invalid
+   argument` (EINVAL) is exactly the errno macOS's bind(2) returns for an
+   oversized sun_path. This is a well-known Darwin AF_UNIX limitation, not
+   anything under the socket contents' control.
+
+2. The 110-byte path comes entirely from `t.TempDir()` (post_verbatim_test.go:23):
+   Go's `t.TempDir()` embeds the full test name in the directory it creates
+   (`$TMPDIR/<TestName><random>/001/`), and this test's name --
+   "TestPost_RawBytesCrossTheWireVerbatim" -- is 38 characters, which combined
+   with macOS's per-user `/var/folders/.../T/` TMPDIR (itself already ~40-50
+   bytes) reliably blows past the 104-byte limit. CI's darwin lane inherits the
+   same launchd-assigned per-user TMPDIR, so this reproduces there identically
+   -- it is not specific to this machine.
+
+3. THIS EXACT FAILURE MODE, and its fix, are already known and documented in
+   the SAME PACKAGE. internal/hookclient/hookclient_test.go:97-99
+   (TestPostRoundTripAppliesStatus) has:
+
+     // Short socket dir: t.TempDir() embeds the test name and blows past macOS's
+     // 104-byte sun_path limit, so bind under a short os.MkdirTemp prefix instead.
+     sockDir, err := os.MkdirTemp("", "sw")
+
+   post_verbatim_test.go does not follow this established pattern; it calls
+   `filepath.Join(t.TempDir(), "hook.sock")` directly (line 23), which is the
+   exact anti-pattern the sibling test's comment warns against.
+
+--------------------------------------------------------------------------------
+EXPERIMENT: isolate the rig defect from the production code under test
+--------------------------------------------------------------------------------
+
+Step 1 -- reproduce with default (long, launchd-assigned) TMPDIR: FAILS, as
+captured above (3/3 runs, `bind: invalid argument`, never reaches Post/Decode).
+
+Step 2 -- same test, same command, only TMPDIR shortened to rule out any
+change to production code:
+
+  $ TMPDIR=/tmp go test -race -run TestPost_RawBytesCrossTheWireVerbatim -count=3 -v ./internal/hookclient
+
+  === RUN   TestPost_RawBytesCrossTheWireVerbatim
+  --- PASS: TestPost_RawBytesCrossTheWireVerbatim (0.02s)
+  === RUN   TestPost_RawBytesCrossTheWireVerbatim
+  --- PASS: TestPost_RawBytesCrossTheWireVerbatim (0.00s)
+  === RUN   TestPost_RawBytesCrossTheWireVerbatim
+  --- PASS: TestPost_RawBytesCrossTheWireVerbatim (0.00s)
+  PASS
+  ok  	github.com/Nathandela/swarm/internal/hookclient	1.905s
+
+No production file was touched between Step 1 and Step 2 (git diff clean
+throughout this run) -- only the OS-level TMPDIR the test's own `t.TempDir()`
+resolves against changed. With a short socket path, Post's real encode
+(SetEscapeHTML(false), hookclient.go:160-170) and Decode's real JSON decode
+round-trip the `<`, `>`, `&`-bearing Bash command byte-for-byte, exactly as
+ADR-010 section 6 requires: the `<done>` bytes in raw survive `json.Marshal`'s
+default HTML-escaping being switched off, so `out.Raw` equals `raw` verbatim.
+
+--------------------------------------------------------------------------------
+CONCLUSION
+--------------------------------------------------------------------------------
+
+Ground truth: the test rig is stale, not production. hookclient.Post already
+carries the ADR-010 fix (`e.SetEscapeHTML(false)` at hookclient.go:167,
+predating this test per its own doc comment at hookclient.go:160-164) and
+verbatim-crosses raw bytes containing `<`, `>`, `&` whenever the transport
+socket can actually bind. TestPost_RawBytesCrossTheWireVerbatim never reaches
+its own assertion (post_verbatim_test.go:55-57) on the CI darwin lane: it dies
+earlier, in its own fixture, because `filepath.Join(t.TempDir(), "hook.sock")`
+(line 23) produces a >104-byte path that Darwin's AF_UNIX bind(2) rejects
+before any encoding logic runs. The package already carries the correct
+workaround pattern for this exact defect (hookclient_test.go:97-99,
+`os.MkdirTemp("", "sw")`); post_verbatim_test.go simply does not use it.
+
+The test's ASSERTION (raw bytes must cross verbatim) is correct and matches
+ADR-010; only its socket-path construction is broken on Darwin. No production
+code change can make `net.Listen("unix", <110-byte path>)` succeed -- there is
+nothing for a GREEN implementer to fix in internal/hookclient/hookclient.go.
+The fix belongs in the test's fixture (swap `t.TempDir()` for a short
+`os.MkdirTemp("", "sw")`-style prefix, matching hookclient_test.go:97-104).
+
+Per the HARD RULE ("if you believe the TEST is wrong, return status escalate;
+do NOT fix anything"), this diagnosis is reported without modifying
+post_verbatim_test.go or any production file. git diff is clean.

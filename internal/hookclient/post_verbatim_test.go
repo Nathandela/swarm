@@ -3,6 +3,7 @@ package hookclient
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -20,7 +21,14 @@ import (
 func TestPost_RawBytesCrossTheWireVerbatim(t *testing.T) {
 	raw := json.RawMessage(`{"tool_name":"Bash","tool_input":{"command":"grep -c a b && echo <done>"}}`)
 
-	sock := filepath.Join(t.TempDir(), "hook.sock")
+	// Short socket dir: t.TempDir() embeds the test name and blows past macOS's
+	// 104-byte sun_path limit, so bind under a short os.MkdirTemp prefix instead.
+	sockDir, err := os.MkdirTemp("", "sw")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "hook.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
