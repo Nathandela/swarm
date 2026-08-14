@@ -28,6 +28,8 @@ import (
 	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/parser"
 	xvt "github.com/charmbracelet/x/vt"
 )
 
@@ -108,6 +110,9 @@ type Emulator struct {
 	closing   chan struct{} // closed by Close; isClosed does a lock-free receive on it
 	drainDone chan struct{} // closed when the reply-drain goroutine exits
 	closeOnce sync.Once
+
+	guard       *ansi.Parser // shadow parser for the CSI-parameter guard; see clampCsiParams
+	guardDigits int          // consecutive digits seen in the CSI parameter currently being scanned
 }
 
 // isClosed reports whether Close has run. It never blocks and never touches mu,
@@ -149,6 +154,8 @@ func (s *replySink) set(w io.Writer) {
 
 // NewEmulator creates an emulator with a cols x rows grid.
 func NewEmulator(cols, rows int) *Emulator {
+	guard := ansi.NewParser()
+	guard.SetDataSize(64) // guard never reads OSC/DCS payload bytes; just bound its buffer
 	e := &Emulator{
 		term:      xvt.NewEmulator(cols, rows),
 		cols:      cols,
@@ -156,6 +163,7 @@ func NewEmulator(cols, rows int) *Emulator {
 		visible:   true, // DECTCEM defaults to set (cursor shown)
 		closing:   make(chan struct{}),
 		drainDone: make(chan struct{}),
+		guard:     guard,
 	}
 	// These callbacks fire synchronously inside term.Write, which only runs
 	// while Feed holds e.mu, so the writes below need no extra locking.
@@ -270,8 +278,84 @@ func (e *Emulator) FeedChecked(p []byte) (err error) {
 			e.term.Resize(e.cols, e.rows)
 		}()
 	}()
-	_, err = e.term.Write(p)
+	_, err = e.term.Write(e.clampCsiParams(p))
 	return err
+}
+
+// csiParamDigitCap bounds how many consecutive digits of a single CSI
+// numeric parameter clampCsiParams will forward to the pinned upstream
+// parser. Some of its CSI handlers loop `for range n` over an
+// attacker-controlled parameter with no bound tied to the grid size — CHT
+// and CBT's tab-stop traversal is the confirmed case (see
+// docs/verification/r0-red/vt-fuzz-red.txt), reached via a single Feed call
+// spinning for an attacker-chosen, effectively unbounded amount of wall time
+// while holding e.mu. No real terminal parameter (grid dimension, repeat
+// count, tab count) needs more than a few digits; five is generous headroom
+// above any real value while keeping a worst-case loop capped at 99999
+// iterations, negligible wall time even for a naive O(n) handler per
+// sequence. The cap bounds cost per sequence, not per input: a Feed of many
+// repeated max-cap sequences still costs O(input size), same as any other
+// byte the parser processes, so a large-enough burst still takes a
+// correspondingly large-but-bounded amount of time. That is a size-bounded
+// cost like any other parsing work, not the original unbounded-in-a-single-
+// call hang, so it is left as is.
+const csiParamDigitCap = 5
+
+// clampCsiParams returns p with the digits of any CSI parameter beyond
+// csiParamDigitCap removed, so no numeric parameter reaching the upstream
+// parser exceeds the cap regardless of how large the original was. It
+// returns p itself, unmodified, when nothing needs clamping (the common
+// case).
+//
+// e.guard is a private ansi.Parser driven alongside the real one, byte for
+// byte, purely to track escape-sequence state (it is never written to or
+// read from anywhere else). Because it uses the same parser table as the
+// upstream parser, and its state persists on the Emulator across calls, a
+// parameter split across two Feed calls is recognized and clamped exactly
+// as the upstream parser would recognize it whole — this is what makes the
+// clamp agree with FuzzFeedSplitConsistency's byte-split invariance for any
+// split point, not just splits outside an escape sequence.
+//
+// Only bytes the guard classifies as ParamAction digits are ever dropped.
+// Bytes it classifies as IgnoreAction (e.g. the DEL padding byte, 0x7F,
+// which the upstream parser also does not let interrupt a parameter's
+// digits) leave the count untouched, matching the upstream parser's own
+// accumulation. Every other byte — printable text, OSC/DCS payloads, CSI
+// separators and final bytes — passes through unchanged and resets the
+// count, since it can only appear where a new parameter's digits could
+// start.
+func (e *Emulator) clampCsiParams(p []byte) []byte {
+	var out []byte
+	dropped := false // tracks whether any byte has been dropped; out alone cannot
+	// serve as that sentinel, since a drop at i == 0 makes append(nil, p[:0]...)
+	// itself evaluate to nil.
+	for i, b := range p {
+		action := e.guard.Advance(b)
+		drop := false
+		switch {
+		case action == parser.ParamAction && b >= '0' && b <= '9':
+			e.guardDigits++
+			drop = e.guardDigits > csiParamDigitCap
+		case action == parser.IgnoreAction:
+			// digit count unchanged: DEL padding does not break a parameter.
+		default:
+			e.guardDigits = 0
+		}
+		if drop {
+			if !dropped {
+				dropped = true
+				out = append(make([]byte, 0, len(p)), p[:i]...) // branch off a copy on the first drop
+			}
+			continue
+		}
+		if dropped {
+			out = append(out, b)
+		}
+	}
+	if !dropped {
+		return p
+	}
+	return out
 }
 
 // Resize changes the grid dimensions. A no-op after Close (in-band-resize

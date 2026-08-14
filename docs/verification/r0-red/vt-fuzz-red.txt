@@ -1,0 +1,198 @@
+Wave R0, work package "vt-fuzz" -- RED evidence for FuzzFeedSplitConsistency (internal/vt).
+Date: 2026-08-14T20:33:55Z  HEAD: 8462aff
+
+NOTE ON THE NAMED CRASHER: the assignment named crasher file
+testdata/fuzz/FuzzFeedSplitConsistency/40bbd74be321ed98. That file does not exist anywhere in
+this checkout: not in the working tree, not in any commit (`git log --all` / `git grep` over
+every commit found nothing), and it did not appear after a 75s and a 150s local fuzz run seeded
+from the existing corpus (429 cached "interesting" entries at $GOCACHE/fuzz, none a crasher).
+Re-fuzzing from that same corpus DID reproduce a genuine, reproducible failure of this fuzz
+target under a different hash, testdata/fuzz/FuzzFeedSplitConsistency/f364535b992c8aef (written
+to disk by `go test -fuzz`, included below). That is the RED captured here. Its failure mode
+is NOT the divergent-whole-vs-split-snapshot property named in the assignment brief -- it is a
+hang, a class fuzz_test.go's own header explicitly and separately declares as always-failing
+("Panics and deadlocks always fail. See docs/adr/ADR-005 'Known limitations'."), independent of
+the grapheme-cluster/malformed-UTF-8 scoping. See Diagnosis below.
+
+--- go test -run '^$' -fuzz '^FuzzFeedSplitConsistency$' -fuzztime=150s ./internal/vt ---
+(truncated to the tail; full run gathered baseline coverage from the 429-entry corpus, then
+fuzzed with 8 workers)
+
+fuzz: elapsed: 15s, execs: 5987 (172/sec), new interesting: 4 (total: 433)
+fuzz: elapsed: 16s, execs: 5987 (0/sec), new interesting: 4 (total: 433)
+--- FAIL: FuzzFeedSplitConsistency (15.93s)
+    fuzzing process hung or terminated unexpectedly while minimizing: EOF
+    Failing input written to testdata/fuzz/FuzzFeedSplitConsistency/f364535b992c8aef
+    To re-run:
+    go test -run=FuzzFeedSplitConsistency/f364535b992c8aef
+FAIL
+exit status 1
+FAIL	github.com/Nathandela/swarm/internal/vt	17.029s
+
+--- crasher contents: testdata/fuzz/FuzzFeedSplitConsistency/f364535b992c8aef ---
+go test fuzz v1
+[]byte("\x1b[12\x7f00000000000I")
+uint(104)
+
+--- go test -run 'FuzzFeedSplitConsistency/f364535b992c8aef' ./internal/vt (generous -timeout=120s) ---
+The property assertion itself does NOT fail -- whole and split converge to the same snapshot.
+The bug is that a single Feed call over this 17-byte input takes ~10-20 real seconds (see the
+timing table in Diagnosis), which is what go's fuzz minimizer's own internal worker-liveness
+check reports as "hung":
+
+=== RUN   FuzzFeedSplitConsistency
+=== RUN   FuzzFeedSplitConsistency/f364535b992c8aef
+--- PASS: FuzzFeedSplitConsistency (22.66s)
+    --- PASS: FuzzFeedSplitConsistency/f364535b992c8aef (22.64s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/vt	23.454s
+
+--- go test -run 'FuzzFeedSplitConsistency/f364535b992c8aef' -timeout=5s -v ./internal/vt (deterministic RED) ---
+This is the reproducible, deterministic failing command: any timeout below the input's natural
+run time (~10-20s locally; unbounded for a slightly longer digit run, see Diagnosis) fails
+solidly. -race not used for this run: the bug is a single-goroutine unbounded loop, not a data
+race, and -race's overhead only pushes the natural run time higher.
+
+=== RUN   FuzzFeedSplitConsistency
+=== RUN   FuzzFeedSplitConsistency/f364535b992c8aef
+panic: test timed out after 5s
+
+goroutine 36 [running]:
+testing.(*M).startAlarm.func1()
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2802 +0x354
+created by time.goFunc
+	/usr/local/Cellar/go/1.26.5/libexec/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.runFuzzTests({0x5b4d318, 0x5bca7c0}, {0x5b9e8c0, 0x1, 0x1b?}, {0x592ab6a?, 0x27?, 0x5ba9e00?})
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:538 +0x8e9
+testing.(*M).Run(0x3ddfdbb18460)
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2444 +0x6ec
+main.main()
+	_testmain.go:162 +0x9b
+
+goroutine 22 [chan receive]:
+testing.(*F).Fuzz.func1({0x5b49640, 0x3ddfdbb96008}, {{0x0, 0x0}, {0x3ddfdbaac000, 0x37}, {0x0, 0x0, 0x0}, {0x3ddfdbaa80a0, ...}, ...})
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:343 +0x67b
+testing.(*F).Fuzz(0x3ddfdbb96008, {0x5afe5c0, 0x5b469a8})
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:408 +0xab8
+github.com/Nathandela/swarm/internal/vt.FuzzFeedSplitConsistency(0x3ddfdbb96008)
+	/Users/Nathan/Code/swarm/internal/vt/fuzz_test.go:63 +0x385
+testing.fRunner(0x3ddfdbb96008, 0x5b46778)
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:738 +0xb9
+created by testing.runFuzzTests in goroutine 1
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:537 +0x8d3
+
+goroutine 33 [runnable]:
+github.com/charmbracelet/ultraviolet.TabStops.Find({{0x3ddfdba100a0, 0xa, 0xa}, 0x8, 0x50}, 0x0?, 0x16?)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/ultraviolet@v0.0.0-20260303162955-0b88c25f3fff/tabstop.go:91 +0xfd
+github.com/charmbracelet/ultraviolet.TabStops.Next(...)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/ultraviolet@v0.0.0-20260303162955-0b88c25f3fff/tabstop.go:64
+github.com/charmbracelet/x/vt.(*Emulator).nextTab(0x3ddfdbaf6008, 0x6592e000)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/csi_cursor.go:14 +0xd7
+github.com/charmbracelet/x/vt.(*Emulator).registerDefaultCsiHandlers.func10({0x3ddfdbafe100?, 0x3ddfdbaa0420?, 0x49?})
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/handlers.go:539 +0x45
+github.com/charmbracelet/x/vt.(*handlers).handleCsi(0x575e0bc?, 0x5bcb8e0?, {0x3ddfdbafe100, 0x1, 0x1})
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/handlers.go:136 +0x83
+github.com/charmbracelet/x/vt.(*Emulator).handleCsi(0x3ddfdbaf6008, 0x49, {0x3ddfdbafe100, 0x1, 0x1})
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/csi.go:13 +0x50
+github.com/charmbracelet/x/ansi.(*Parser).performAction(0x58f9573?, 0x80?, 0x47?, 0xa8?)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/ansi@v0.11.7/parser.go:375 +0x4f0
+github.com/charmbracelet/x/ansi.(*Parser).advance(0x3ddfdbacdae0, 0x49?)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/ansi@v0.11.7/parser.go:234 +0xed
+github.com/charmbracelet/x/ansi.(*Parser).Advance(0x574127e?, 0xa0?)
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/ansi@v0.11.7/parser.go:166 +0x27
+github.com/charmbracelet/x/vt.(*Emulator).Write(0x3ddfdbaf6008, {0x3ddfdbab4018, 0x11, 0x0?})
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/emulator.go:276 +0x7e
+github.com/Nathandela/swarm/internal/vt.(*Emulator).FeedChecked(0x3ddfdbac8000, {0x3ddfdbab4018, 0x11, 0x18})
+	/Users/Nathan/Code/swarm/internal/vt/emulator.go:273 +0x115
+github.com/Nathandela/swarm/internal/vt.(*Emulator).Feed(...)
+	/Users/Nathan/Code/swarm/internal/vt/emulator.go:246
+github.com/Nathandela/swarm/internal/vt.FuzzFeedSplitConsistency.func1(0x3ddfdbae2008, {0x3ddfdbab4018, 0x11, 0x18}, 0x0?)
+	/Users/Nathan/Code/swarm/internal/vt/fuzz_test.go:71 +0xc5
+reflect.Value.call({0x5afe5c0?, 0x5b469a8?, 0x13?}, {0x591e4f1, 0x4}, {0x3ddfdba90240, 0x3, 0x4?})
+	/usr/local/Cellar/go/1.26.5/libexec/src/reflect/value.go:586 +0xf0c
+reflect.Value.Call({0x5afe5c0?, 0x5b469a8?, 0x582e580?}, {0x3ddfdba90240?, 0x5b458a0?, 0x3ddfdbaf0000?})
+	/usr/local/Cellar/go/1.26.5/libexec/src/reflect/value.go:369 +0xb9
+testing.(*F).Fuzz.func1.1(0x3ddfdbae2008?)
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:341 +0x365
+testing.tRunner(0x3ddfdbae2008, 0x3ddfdbae6000)
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2036 +0xea
+created by testing.(*F).Fuzz.func1 in goroutine 22
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/fuzz.go:328 +0x668
+
+goroutine 49 [select]:
+io.(*pipe).read(0x3ddfdba90060, {0x3ddfdbabd000, 0x1000, 0x1?})
+	/usr/local/Cellar/go/1.26.5/libexec/src/io/pipe.go:57 +0xa7
+io.(*PipeReader).Read(...)
+	/usr/local/Cellar/go/1.26.5/libexec/src/io/pipe.go:134
+github.com/charmbracelet/x/vt.(*Emulator).Read(0x0?, {0x3ddfdbabd000?, 0x0?, 0x0?})
+	/Users/Nathan/go/pkg/mod/github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b/emulator.go:256 +0x45
+github.com/Nathandela/swarm/internal/vt.NewEmulator.func3()
+	/Users/Nathan/Code/swarm/internal/vt/emulator.go:192 +0x89
+created by github.com/Nathandela/swarm/internal/vt.NewEmulator in goroutine 33
+	/Users/Nathan/Code/swarm/internal/vt/emulator.go:188 +0x2b4
+FAIL	github.com/Nathandela/swarm/internal/vt	6.165s
+FAIL
+
+Diagnosis:
+
+This is NOT a split-boundary buffering bug (no partial escape or partial UTF-8 sequence is
+involved). whole.Feed(data) alone -- with no split at all -- reproduces the same multi-second
+stall; a throwaway probe (single Feed calls timed directly, deleted after use, no production or
+test file left behind) measured wall time by CSI parameter digit count for
+"\x1b[12" + <n zeros> + "I" (a plain CSI CHT -- Cursor Horizontal Tabulation, final byte 'I'):
+
+    5 zeros  ->    5ms       6 zeros ->   58ms
+    7 zeros  ->  1.08s       8 zeros ->  8.6s
+    11 zeros -> ~9-15s
+
+Growth is ~linear in the CSI parameter's numeric VALUE (roughly 10x per extra digit), which is
+exponential in the number of digit characters typed -- because the digits "12" followed by k
+zeros parse as the literal integer 12 * 10^k. Removing the \x7f (DEL) byte from the crasher does
+not change the timing (9.48s vs 9.33s for 11 zeros), so DEL is incidental, not causal.
+
+Root cause is in the vendored github.com/charmbracelet/x/vt@v0.0.0-20260713092006-0d683c34c74b,
+not in this package's wrapper. Its CSI 'I' (CHT) handler is:
+
+    // handlers.go:536
+    e.RegisterCsiHandler('I', func(params ansi.Params) bool {
+        n, _, _ := params.Param(0, 1)
+        e.nextTab(n)
+        return true
+    })
+
+    // csi_cursor.go:9
+    func (e *Emulator) nextTab(n int) {
+        x, y := e.scr.CursorPosition()
+        scroll := e.scr.ScrollRegion()
+        for range n {
+            ts := e.tabstops.Next(x)
+            if ts < x {
+                break
+            }
+            x = ts
+        }
+        ...
+    }
+
+`n` is the raw CSI parameter value from untrusted PTY bytes, with no upper clamp. Once x reaches
+the rightmost tab stop, charmbracelet/ultraviolet's TabStops.Next(x) keeps returning a value that
+is never less than x (see the goroutine 33 stack above: stuck inside TabStops.Find/Next, called
+from nextTab, called from the registered 'I' handler), so the `ts < x` early-exit never fires and
+the loop runs the full, attacker-controlled `n` iterations regardless of the 80-column grid. A
+single ~20-byte escape sequence (e.g. "\x1b[99999999999999999999I") is enough to make a Feed call
+that a shim must process synchronously (Emulator.FeedChecked holds e.mu for the call's duration,
+per emulator.go's own concurrency-model doc) spin for an attacker-chosen, effectively unbounded
+amount of wall time -- freezing that session's Feed/Snapshot/Resize/Close, since FeedChecked's own
+panic-recovery boundary (emulator.go:254 doc: "a malformed sequence ... must not be able to
+terminate the daemon or shim") has no defense against a slow-but-not-panicking loop. CBT (final
+byte 'Z', prevTab in csi_cursor.go) constructs its loop the same way and is presumably the same
+class of bug, though not exercised by this specific crasher.
+
+The fuzz property's own contract already treats this correctly: fuzz_test.go's header states
+"Panics and deadlocks always fail" as an unconditional rule, layered on top of (not gated by) the
+grapheme-cluster/malformed-UTF-8 whole-vs-split scoping. A multi-second-to-unbounded stall on a
+single Feed call is exactly that class of failure; the whole-vs-split snapshot comparison itself
+is a red herring here -- both sides eventually agree, they just take too long (or, for a longer
+digit run, effectively forever) to get there. No fix applied.
