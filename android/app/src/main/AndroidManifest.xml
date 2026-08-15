@@ -9,6 +9,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- O6 haptics (ui/kit/Haptics.kt drives Vibrator/VibratorManager directly). VIBRATE is a
+         normal install-time permission: no runtime prompt, so PermissionStateResolver is not
+         involved. Without it every vibrate call is a MissingPermission lint error and a
+         SecurityException at runtime on enforcing devices. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- PB-RUN-5. Without it the boot receiver below is declared and never invoked, which is
          silent rather than broken. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />

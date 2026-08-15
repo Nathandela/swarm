@@ -176,6 +176,11 @@ object Haptics {
      */
     internal fun effectFor(vibrator: Vibrator, rhythm: Rhythm): VibrationEffect {
         val primitives = rhythm.beats.map { it.primitive }.toIntArray()
+        // WrongConstant is a false positive here: every Beat.primitive in RHYTHMS is a
+        // VibrationEffect.Composition.PRIMITIVE_* constant, but lint cannot trace the
+        // set through map/toIntArray/spread and the @IntDef typedef is not public API
+        // to annotate Beat.primitive with.
+        @Suppress("WrongConstant")
         if (!vibrator.areAllPrimitivesSupported(*primitives)) {
             return VibrationEffect.createWaveform(rhythm.timings, rhythm.amplitudes, NO_REPEAT)
         }
