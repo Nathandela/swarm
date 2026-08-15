@@ -92,6 +92,17 @@ var pbpush3Producers = map[string]string{
 		"short push means the machine went silent. " +
 		"covered-by: TestPBPUSH3_ThePresenceSweepIsTheSameSizeOnTheChannelAsAWake",
 
+	"internal/pushgw/fcmsender.go:(*fcmSenderAdapter).Send": "PRODUCER -- the Swarm push gateway's " +
+		"own FCM submission (ADR-015; NOT the relay channel: the gateway is a separate HTTPS " +
+		"service and this fence quantifies over the PROVIDER, which both feed). Its shape is " +
+		"settled at ADMISSION, upstream of Send: readWakeBody refuses any body that is not " +
+		"exactly wakeSize = 74 bytes (WakeV1, push-gateway-api.md PG-WAKE-2/PG-TR-3), and the " +
+		"handler forwards the admitted envelope byte-identical, so this producer can only ever " +
+		"put a constant 74 bytes in front of the provider or nothing. " +
+		"covered-by: TestSubmitWake_LengthTable (internal/pushgw: every non-74 length refused " +
+		"before the provider is called), with TestSubmitWake_ForwardsByteIdenticalEnvelopeNeverOpeningIt " +
+		"pinning the pass-through.",
+
 	"internal/remote/relay/server.go:(*Server).deliverPush": "FUNNEL, not a producer -- the point " +
 		"where both relay producers converge before the sink. It constructs nothing and forwards the " +
 		"payload it was handed, on a background goroutine. Listed because the matcher sees it and a " +

@@ -104,6 +104,9 @@ func startTestRelayOpts(t *testing.T, mut func(*Config), extra ...Option) (*Serv
 	t.Helper()
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
+	// The default is off-until-configured (see TestDefaultConfig_AdminListenIsOffUntilConfigured);
+	// the fixture opts in on an ephemeral port so every relay in the parallel suite gets its own.
+	cfg.AdminListen = "127.0.0.1:0"
 	cfg.TLSMode = "off"
 	cfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
 	if mut != nil {

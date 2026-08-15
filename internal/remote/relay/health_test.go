@@ -32,7 +32,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -64,18 +63,17 @@ func getAdmin(t *testing.T, srv *Server, path string) (int, string) {
 // Defaults.
 // ---------------------------------------------------------------------------
 
-func TestDefaultConfig_AdminListenIsLoopback(t *testing.T) {
-	got := DefaultConfig().AdminListen
-	if got == "" {
-		t.Fatalf("DefaultConfig().AdminListen is empty, want a safe loopback default so health/readiness serve out of the box")
-	}
-	host, _, err := net.SplitHostPort(got)
-	if err != nil {
-		t.Fatalf("DefaultConfig().AdminListen %q: SplitHostPort: %v", got, err)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		t.Fatalf("DefaultConfig().AdminListen %q is not loopback-only; the health surface must never be reachable off-host by default", got)
+// RULING 2026-08-15 (R2 audit): the default is OFF, not a loopback port. A fixed default
+// port collides every in-process relay (the CI failure of run 31878474771: every DefaultConfig
+// test relay bound 127.0.0.1:9441), ":0" hands a file-based operator a random undiscoverable
+// port, and empty gives the one honest omission semantic: no admin surface until configured,
+// with runHealthcheck's clean "admin_listen is not set" message. Out-of-the-box serving is the
+// deployment bundle's job: deploy/relay/relay.config.example sets the documented port and the
+// Compose healthcheck rides it. Non-loopback refusal for CONFIGURED values stays pinned by
+// TestStart_RefusesNonLoopbackAdminListen.
+func TestDefaultConfig_AdminListenIsOffUntilConfigured(t *testing.T) {
+	if got := DefaultConfig().AdminListen; got != "" {
+		t.Fatalf("DefaultConfig().AdminListen = %q, want empty: the admin surface is off until a config sets it (a fixed default port collides parallel relays; ':0' is an undiscoverable trap)", got)
 	}
 }
 

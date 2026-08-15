@@ -131,7 +131,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Listen:           "127.0.0.1:0",
-		AdminListen:      "127.0.0.1:9441",
+		AdminListen:      "", // off unless configured; deploy/relay/relay.config.example sets the documented port
 		TLSMode:          "off",
 		DBPath:           "relay.db",
 		HandshakeTimeout: 30 * time.Second,
