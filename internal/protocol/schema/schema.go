@@ -83,6 +83,14 @@ type Control struct {
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 
 	SendInput *SendInputReq `json:"send_input,omitempty"` // owner-tier one-shot steering message, carried on send_input (ADR-010 A2)
+
+	// BodyVersion is the per-op body-version tag the R1 refusal-ops vocabulary requires
+	// (playbook §6.3, ADR-017 T5): the phone binds every session_launch/composer_send/
+	// operation_status/turn_interrupt/terminal_control_begin/terminal_control_end to the
+	// profile version it read from RemoteProfileV1. There is no body version 0: a Control
+	// that omits this key is refused identically to a wrong version, never treated as an
+	// implicit "version 1".
+	BodyVersion int `json:"body_version,omitempty"`
 }
 
 // SendInputReq is one owner-tier steering message (ADR-010 Amendment 1 A2), carried in

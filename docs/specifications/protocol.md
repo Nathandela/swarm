@@ -93,6 +93,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `remote_control`   | `*bool`           | `remote_set_control`: the DESIRED remote-control master state (true=on, false=manual off), owner-tier only (A4) |
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 | `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
+| `body_version`     | int                 | R1 refusal-ops (`session_launch`/`composer_send`/`operation_status`/`turn_interrupt`/`terminal_control_begin`/`terminal_control_end`): the profile version the phone bound this op to (`RemoteProfileV1.accepted_body_versions`); there is no version `0` (Wave R1 skeleton, playbook §6.3) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -199,8 +200,11 @@ and unrelated secrets are dropped.
 > remote-tier op, `session_launch(machine, operation_id, profile, preset_id, preset_revision,
 > initial_prompt?, expires_at)`: on the remote tier a preset id, resolved daemon-side against a
 > signed preset revision, replaces free `cwd`/`options`/`env` — never argv or environment supplied
-> by the phone. This paragraph is a pointer, not a field addition; `session_launch`'s own wire
-> table lands in the commit that implements it (GG-7).
+> by the phone. This paragraph is a pointer, not a field addition; `session_launch`'s
+> refusal-only skeleton (its op name, the shared mutating-op device-auth fields, and
+> `body_version`) is documented below under "Control-op vocabulary"; the preset-body table
+> (`profile`, `preset_id`, `preset_revision`, `initial_prompt`, `expires_at`) lands with the
+> commit that implements the real handler (GG-7).
 
 ## The `TerminalSnapshot` message
 
@@ -386,7 +390,10 @@ daemon replies with `error` and forwards nothing.
 > supported RCE-class action in the first complete product (B144, RC-D9): the remote-tier
 > counterpart is `session_launch`, a preset-based op arriving with the R1/R5 skeleton, sharing
 > ADR-017 T9's six-state delivery vocabulary (`draft`/`pending`/`sent`/`refused`/`uncertain`/
-> `outcome_unknown`) with `composer_send` rather than this op's plain `ok`/`error` reply.
+> `outcome_unknown`) with `composer_send` rather than this op's plain `ok`/`error` reply. The
+> Wave R1 refusal-only skeleton of both ops (this commit) answers plain `error`/
+> `op_not_implemented` in the meantime — see the `session_launch` / `composer_send` / ...
+> section below; T9's six-state vocabulary lands with the real handler.
 
 ### `kill`
 
@@ -521,6 +528,55 @@ from the sealed `RemoteCommand.approve` the phone appended. Three rules make it 
 re-delivered approve finds the approval already answered or already resolved, and is refused
 `stale_approval` either way.
 
+### `session_launch` / `composer_send` / `operation_status` / `turn_interrupt` / `terminal_control_begin` / `terminal_control_end`
+
+The Wave R1 "refusal-ops" skeleton (playbook §6.3, ADR-017 T5, ADR-007 B144): six signed
+remote-tier ops landing as **refusal-only** daemon handlers ahead of their real business
+logic. Five are MUTATING (`session_launch`, `composer_send`, `turn_interrupt`,
+`terminal_control_begin`, `terminal_control_end`); `operation_status` is a READ, on
+`push_prefs`'s own precedent — it cannot start, stop or type into anything, so a read-only
+paired device may still poll the status of its own pending operation.
+
+Each carries the usual mutating-op device-auth fields (`operation_id`, `device_id`,
+`device_sig`, `expires_at`) plus `body_version`, and runs through the SAME
+`requireRemoteAuthz` choke point as `kill`/`delete`/`launch`/`approve` (kill switch,
+`operation_id`, device signature, capability) **before** any op-specific reply — a forged
+signature or a missing device field is refused `not_authorized`/`invalid_field` and never
+reaches the refusal below. `session_launch` and `operation_status` name no session instance
+yet and sign over `OperationSessionSentinel` (`"@op"`, `LaunchSessionSentinel`'s sibling)
+rather than a `session_id`; the other four sign over the `session_id` they target.
+
+Once authorized, the daemon checks `body_version` against the one version this machine
+currently accepts (`schema.CurrentProfileVersion`, shared across the whole R1 companion
+set, `RemoteProfileV1` above): a mismatch — including an absent (`0`) `body_version`, which
+is never treated as an implicit "version 1" — is refused `invalid_field` naming the
+accepted version. Only once **both** hold does the daemon reply `error` with
+`op_not_implemented`, naming the op in its `error` text: a name this build recognises
+(mapped in `actionClass`, `internal/skeleton/deviceauth.go`) but has not yet built a real
+handler for — distinguishable from the plain "unknown op" `error` an unrecognised action
+still gets.
+
+The gateway forwards all six to the daemon **unchanged** (`opForAction`, Op == Action,
+mirroring `kill`/`delete`/`approve`/`push_prefs`) rather than refusing any of them locally:
+only the daemon holds the device registry `requireRemoteAuthz` authorizes against, and the
+gateway is a blind conduit.
+
+`terminal_input` and `terminal_control_keepalive` (ADR-017 T4/T6) are **deliberately
+excluded** from this vocabulary and from `actionClass`: they ride only the E2EE frame's own
+authenticated sender/sequence and a confirmed control generation, never a per-frame
+signature — the same exception the existing lease input frame already takes. Both stay on
+the generic unmapped-action `error`, never `op_not_implemented`.
+
+Each op's own body (`composer_send`'s text, `session_launch`'s preset id, ...) and its real
+handler are a later slice's amendment obligation (GG-7 applies again when they land); this
+skeleton carries only the one field every one of the six needs to refuse a version mismatch
+honestly, and `body_version` is not yet bound into the device signature via `content_hash`.
+Also outstanding: `SessionCapabilities` (ADR-017 T2, `RemoteProfileV1` above) already has a
+producer (`internal/skeleton/capability.go`) but no daemon-side consumer, so today's
+`op_not_implemented` refusal for `terminal_control_begin`/`terminal_control_end` runs
+without the T2 per-session capability gate (`terminal_fallback`) and `turn_interrupt`
+without T6's `interrupt` gate — wiring that lookup in belongs to each op's own real handler.
+
 ### `terminal_subscribe` / `terminal_snapshot`
 
 Terminal peek (A7 renderer slice B), mirroring the
@@ -531,9 +587,12 @@ op).
 > AMENDED BY ADR-017 (2026-08-15): the new capability-routed fallback is gated by the ADR-017 T2
 > per-session capability record — a `terminal_fallback` session may open `TerminalViewV1`'s
 > streaming and control-generation ops (`terminal_control_begin`/`terminal_input`/
-> `terminal_control_end`, ADR-017 T4/T6; the watch/unwatch op's wire name lands with the R1
-> skeleton commit, since ADR-017 itself uses `terminal_watch` for both this section's legacy body
-> and the new fallback stream) only when its daemon-authored `terminal_fallback` capability is
+> `terminal_control_end`, ADR-017 T4/T6 — `terminal_control_begin`/`terminal_control_end` land
+> as this commit's refusal-only skeleton, documented below under "Control-op vocabulary";
+> `terminal_input` stays deliberately unmapped per T6, see that section; the watch/unwatch op's
+> wire name lands with a later R1 skeleton commit, since ADR-017 itself uses `terminal_watch` for
+> both this section's legacy body and the new fallback stream) only when its daemon-authored
+> `terminal_fallback` capability is
 > true, and every `structured_chat` session has no route to it at all (T2 rule 4). This section's
 > `terminal_subscribe`/`terminal_snapshot` pair is NOT gated by the capability record — it stays
 > on the wire unchanged and un-deleted, reachable only under the legacy remote profile (ADR-017

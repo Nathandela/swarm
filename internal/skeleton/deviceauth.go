@@ -16,10 +16,22 @@ import (
 // action the daemon does not recognise is refused, never silently treated as a read.
 func actionClass(action string) (device.Action, bool) {
 	switch action {
-	case protocol.ActionLaunch, protocol.ActionKill, protocol.ActionDelete, protocol.ActionDeviceRevoke, protocol.ActionTakeControl:
+	case protocol.ActionLaunch, protocol.ActionKill, protocol.ActionDelete, protocol.ActionDeviceRevoke, protocol.ActionTakeControl,
+		protocol.ActionSessionLaunch, protocol.ActionComposerSend, protocol.ActionTurnInterrupt,
+		protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
+		// The five R1 refusal-ops control-class actions (Wave R1 skeleton, playbook §6.3):
+		// each starts, steers, or ends something, so they take the same class as
+		// launch/kill/delete rather than a new one. Their daemon handlers are refusal-only
+		// today (handleRefusalOp), but the capability GATE is real now, ahead of the
+		// handler that will use it.
 		return device.ActionControl, true
 	case protocol.ActionApprove:
 		return device.ActionApprove, true
+	case protocol.ActionOperationStatus:
+		// READ, on ActionPushPrefs's own precedent below: it cannot start, stop or type
+		// into anything, and a control-class mapping would leave a read-only paired phone
+		// unable to poll the status of its own pending operation.
+		return device.ActionRead, true
 	case protocol.ActionPushPrefs:
 		// READ, and the choice is not obvious: a push preference does mutate machine-side
 		// state, which argues for the control class. But it cannot start, stop or type into

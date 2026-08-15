@@ -1,0 +1,55 @@
+=== RED evidence: slice refusal-ops (Wave R1 capability skeleton) ===
+Date: 2026-08-15T07:26:29Z
+Role: RED (contract-test writer)
+
+Command: go test -race ./internal/protocol/...
+---
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/r1_refusalops_test.go:84:22: undefined: OpSessionLaunch
+internal/protocol/r1_refusalops_test.go:84:39: undefined: ActionSessionLaunch
+internal/protocol/r1_refusalops_test.go:85:21: undefined: OpComposerSend
+internal/protocol/r1_refusalops_test.go:85:37: undefined: ActionComposerSend
+internal/protocol/r1_refusalops_test.go:86:24: undefined: OpOperationStatus
+internal/protocol/r1_refusalops_test.go:86:43: undefined: ActionOperationStatus
+internal/protocol/r1_refusalops_test.go:87:22: undefined: OpTurnInterrupt
+internal/protocol/r1_refusalops_test.go:87:39: undefined: ActionTurnInterrupt
+internal/protocol/r1_refusalops_test.go:88:30: undefined: OpTerminalControlBegin
+internal/protocol/r1_refusalops_test.go:88:54: undefined: ActionTerminalControlBegin
+internal/protocol/r1_refusalops_test.go:88:54: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+ok  	github.com/Nathandela/swarm/internal/protocol/schema	1.811s
+FAIL
+
+Command: go test -race ./internal/remotegw/...
+---
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/r1_refusalops_test.go:76:13: undefined: protocol.ActionSessionLaunch
+internal/remotegw/r1_refusalops_test.go:76:43: undefined: protocol.OpSessionLaunch
+internal/remotegw/r1_refusalops_test.go:77:13: undefined: protocol.ActionComposerSend
+internal/remotegw/r1_refusalops_test.go:77:42: undefined: protocol.OpComposerSend
+internal/remotegw/r1_refusalops_test.go:78:13: undefined: protocol.ActionOperationStatus
+internal/remotegw/r1_refusalops_test.go:78:45: undefined: protocol.OpOperationStatus
+internal/remotegw/r1_refusalops_test.go:79:13: undefined: protocol.ActionTurnInterrupt
+internal/remotegw/r1_refusalops_test.go:79:43: undefined: protocol.OpTurnInterrupt
+internal/remotegw/r1_refusalops_test.go:80:13: undefined: protocol.ActionTerminalControlBegin
+internal/remotegw/r1_refusalops_test.go:80:50: undefined: protocol.OpTerminalControlBegin
+internal/remotegw/r1_refusalops_test.go:80:50: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+Command: go test -race ./internal/skeleton/...
+---
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/r1_refusalops_deviceauth_test.go:56:13: undefined: protocol.ActionSessionLaunch
+internal/skeleton/r1_refusalops_deviceauth_test.go:56:43: undefined: protocol.OperationSessionSentinel
+internal/skeleton/r1_refusalops_deviceauth_test.go:57:13: undefined: protocol.ActionComposerSend
+internal/skeleton/r1_refusalops_deviceauth_test.go:58:13: undefined: protocol.ActionOperationStatus
+internal/skeleton/r1_refusalops_deviceauth_test.go:58:45: undefined: protocol.OperationSessionSentinel
+internal/skeleton/r1_refusalops_deviceauth_test.go:59:13: undefined: protocol.ActionTurnInterrupt
+internal/skeleton/r1_refusalops_deviceauth_test.go:60:13: undefined: protocol.ActionTerminalControlBegin
+internal/skeleton/r1_refusalops_deviceauth_test.go:61:13: undefined: protocol.ActionTerminalControlEnd
+internal/skeleton/r1_refusalops_deviceauth_test.go:101:38: undefined: protocol.ActionOperationStatus
+internal/skeleton/r1_refusalops_deviceauth_test.go:101:82: undefined: protocol.OperationSessionSentinel
+internal/skeleton/r1_refusalops_deviceauth_test.go:101:82: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL

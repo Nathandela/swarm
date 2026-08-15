@@ -32,12 +32,13 @@ type (
 
 // Refusal-reason taxonomy (R-PROT.7); ErrorCode.Transient reports retryability.
 const (
-	CodePolicy        = schema.CodePolicy
-	CodeKillSwitch    = schema.CodeKillSwitch
-	CodeRateLimit     = schema.CodeRateLimit
-	CodeStaleApproval = schema.CodeStaleApproval
-	CodeNotAuthorized = schema.CodeNotAuthorized
-	CodeInvalidField  = schema.CodeInvalidField
+	CodePolicy         = schema.CodePolicy
+	CodeKillSwitch     = schema.CodeKillSwitch
+	CodeRateLimit      = schema.CodeRateLimit
+	CodeStaleApproval  = schema.CodeStaleApproval
+	CodeNotAuthorized  = schema.CodeNotAuthorized
+	CodeInvalidField   = schema.CodeInvalidField
+	CodeNotImplemented = schema.CodeNotImplemented
 )
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9), and
@@ -54,7 +55,17 @@ const (
 	ActionPushPrefs       = schema.ActionPushPrefs
 	ActionJournalResync   = schema.ActionJournalResync
 
-	LaunchSessionSentinel = schema.LaunchSessionSentinel
+	// The R1 "refusal-ops" semantic vocabulary (playbook §6.3, ADR-017 T5, ADR-007 B144);
+	// see schema.ActionSessionLaunch's doc comment for the full contract.
+	ActionSessionLaunch        = schema.ActionSessionLaunch
+	ActionComposerSend         = schema.ActionComposerSend
+	ActionOperationStatus      = schema.ActionOperationStatus
+	ActionTurnInterrupt        = schema.ActionTurnInterrupt
+	ActionTerminalControlBegin = schema.ActionTerminalControlBegin
+	ActionTerminalControlEnd   = schema.ActionTerminalControlEnd
+
+	LaunchSessionSentinel    = schema.LaunchSessionSentinel
+	OperationSessionSentinel = schema.OperationSessionSentinel
 )
 
 // JournalReseed is the machine->phone journal repair frame (PB-SYNC-2 / PB-SYNC-8), aliased

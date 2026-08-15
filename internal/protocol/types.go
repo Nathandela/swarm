@@ -127,6 +127,20 @@ const (
 	// requireRemoteAuthz like kill, launch, device_revoke and take_control, because D4 admits
 	// no remote-class mutating op without a valid device signature.
 	OpApprove = "approve"
+
+	// The R1 "refusal-ops" semantic op vocabulary (playbook §6.3, ADR-017 T5, ADR-007
+	// B144): each is MAPPED (via actionClass) and dispatched behind requireRemoteAuthz
+	// exactly like kill/delete/launch/approve, but currently answers only the sealed,
+	// stable op_not_implemented refusal (CodeNotImplemented) -- the real handler does
+	// not exist yet. Op and Action share the same string for each, mirroring kill/
+	// delete/approve/push_prefs. See handleRefusalOp and schema.ActionSessionLaunch's
+	// doc comment for the full contract.
+	OpSessionLaunch        = "session_launch"
+	OpComposerSend         = "composer_send"
+	OpOperationStatus      = "operation_status"
+	OpTurnInterrupt        = "turn_interrupt"
+	OpTerminalControlBegin = "terminal_control_begin"
+	OpTerminalControlEnd   = "terminal_control_end"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

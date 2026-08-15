@@ -1,0 +1,180 @@
+=== RED evidence: slice machine-manager (Wave R1 capability skeleton) ===
+Date: 2026-08-15T08:07:23Z
+Role: RED (contract-test writer)
+Scope: ADR-018 MM2/MM3/MM4, playbook 6.4 -- MachineClient/MachineManager seam over the
+       EXISTING internal/phonecore.Core surface, plus the SingleMachineAdapter/
+       SingleMachineManager compatibility pair (MM4). Zero behavior change to the shipping
+       single-machine path: Core, Resume, mobile.App and the wire protocol are untouched by
+       this slice. mobile.App exports nothing new (not imported by this change at all).
+
+Baseline check: `go build ./...` and `go vet` succeed with
+internal/phonecore/r1_machinemanager_test.go removed -- the failure below is caused solely
+by the undefined symbols this slice's tests introduce, not a pre-existing break.
+
+Command: go test -race ./internal/phonecore/...
+---
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/r1_machinemanager_test.go:90:4: undefined: MachineClient
+internal/phonecore/r1_machinemanager_test.go:90:23: undefined: SingleMachineAdapter
+internal/phonecore/r1_machinemanager_test.go:91:4: undefined: MachineManager
+internal/phonecore/r1_machinemanager_test.go:91:23: undefined: SingleMachineManager
+internal/phonecore/r1_machinemanager_test.go:101:22: undefined: Event
+internal/phonecore/r1_machinemanager_test.go:102:13: undefined: NewSingleMachineAdapter
+internal/phonecore/r1_machinemanager_test.go:144:13: undefined: NewSingleMachineAdapter
+internal/phonecore/r1_machinemanager_test.go:144:59: undefined: Event
+internal/phonecore/r1_machinemanager_test.go:145:13: undefined: NewSingleMachineManager
+internal/phonecore/r1_machinemanager_test.go:148:10: undefined: MachineDescriptor
+internal/phonecore/r1_machinemanager_test.go:148:10: too many errors
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+Symbols the GREEN slice must add (all in package phonecore, minimal-churn per the assigned
+scope of "internal/phonecore or a new subpackage"):
+
+  type Event struct { Kind, Stream, SessionID, State, Message string; Cursor int64; Dropped int }
+  type MachineClient interface {
+      ID() string
+      Start() error
+      Stop() error
+      Running() bool
+      Core() *Core
+      Events() <-chan Event
+  }
+  type MachineDescriptor struct { ID, DisplayName string }
+  type MachineEvent struct { MachineID string; Event }
+  type MachineManager interface {
+      List() []MachineDescriptor
+      Select(id string) (MachineClient, error)
+      Add(d MachineDescriptor, c MachineClient) error
+      Remove(id string) error
+      Events() <-chan MachineEvent
+      ConnectionCap() int
+      Close() error
+  }
+  type SingleMachineAdapter struct{ ... }
+  func NewSingleMachineAdapter(id string, core *Core, events <-chan Event) *SingleMachineAdapter
+  type SingleMachineManager struct{ ... }
+  func NewSingleMachineManager(displayName string, adapter *SingleMachineAdapter) *SingleMachineManager
+  var ErrMachineNotFound error
+  var ErrMultiMachineNotImplemented error
+
+Four behaviors pinned (internal/phonecore/r1_machinemanager_test.go):
+  1. TestSingleMachineAdapter_ConformsAndWrapsCoreUnchanged -- adapter conformance: ID(),
+     Core() returns the exact wrapped pointer, Start/Stop/Running is an idempotent
+     bookkeeping flag only.
+  2. TestSingleMachineManager_OneEntryListsAndSelects -- List()/Select() over the sole
+     compatibility-adapter entry; unknown id refuses with ErrMachineNotFound;
+     ConnectionCap() == 1.
+  3. TestSingleMachineManager_AggregateStreamRelaysCoreEventsUnchanged -- MM3's aggregate
+     stream relays the single client's own events in order, every field byte-for-byte
+     unchanged, qualified only with MachineID.
+  4. TestSingleMachineManager_MutatingOpsRefuseUntilR4 -- a second Add and a Remove of the
+     sole entry both refuse with the SAME stable ErrMultiMachineNotImplemented (errors.Is
+     checkable), and neither partially mutates the registry. State migration to a real
+     N-entry registry is MM6/R4 (bd agents-tracker-hggx.5), not this slice.
+
+=== RED addendum: shutdown/fail-open-Stop regression slice ===
+Date: 2026-08-15
+Role: GREEN (addressing reviewer BLOCKING/LOW findings on the first GREEN pass)
+File: internal/phonecore/r1_machinemanager_shutdown_test.go
+Symbols added since the section above: Close() error on MachineManager (now folded into the
+symbol list above), plus SingleMachineAdapter.Stop's now-fail-closed contract and
+SingleMachineManager.relay's m.events-closing behavior. No new exported symbols.
+
+RED is captured by MUTATION rather than by removing the (already GREEN-passing) production
+code wholesale, because these three behaviors are regressions against code that already
+compiles and mostly works -- each mutation below reverts exactly the production line(s) the
+fix touches, reproducing the reviewer's own probe output verbatim, then the mutation is
+reverted (confirmed via diff against the pre-mutation file, byte-identical).
+
+--- Mutation 1: goroutine leak (relay had no shutdown) ---
+Reverted relay() to the pre-fix leaking form:
+    func (m *SingleMachineManager) relay() {
+        for e := range m.adapter.Events() {
+            if m.adapter.stopped() { continue }
+            m.events <- MachineEvent{MachineID: m.descriptor.ID, Event: e}
+        }
+    }
+Command: go test -race -count=1 -run 'TestSingleMachineManager_CloseStopsRelayGoroutine' -v ./internal/phonecore/...
+---
+=== RUN   TestSingleMachineManager_CloseStopsRelayGoroutine
+    r1_machinemanager_shutdown_test.go:53: goroutines after closing 20 managers = 22; want <= baseline 2 (relay leaked)
+--- FAIL: TestSingleMachineManager_CloseStopsRelayGoroutine (2.47s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	3.559s
+FAIL
+---
+Pins: TestSingleMachineManager_CloseStopsRelayGoroutine.
+
+--- Mutation 2: fail-open Stop, not-yet-dequeued events ---
+Deleted the `if m.adapter.stopped() { continue }` guard at the top of relay's outer case.
+Command: go test -race -count=1 -run 'TestSingleMachineAdapter_StopHaltsAggregateRelay' -v ./internal/phonecore/...
+---
+=== RUN   TestSingleMachineAdapter_StopHaltsAggregateRelay
+    r1_machinemanager_shutdown_test.go:113: event sent after Stop reached the aggregate stream unchanged: {MachineID:m1 Event:{Kind:after-stop Stream: SessionID: State: Message: Cursor:0 Dropped:0}}
+--- FAIL: TestSingleMachineAdapter_StopHaltsAggregateRelay (0.04s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.092s
+FAIL
+---
+Pins: TestSingleMachineAdapter_StopHaltsAggregateRelay.
+
+--- Mutation 3: m.events never closed (LOW finding) ---
+Removed `defer close(m.events)` from the top of relay().
+Command: go test -race -count=1 -run 'TestSingleMachineManager_CloseClosesAggregateStream' -v ./internal/phonecore/...
+---
+=== RUN   TestSingleMachineManager_CloseClosesAggregateStream
+    r1_machinemanager_shutdown_test.go:78: ranging over Events() after Close never terminated: m.events was not closed
+--- FAIL: TestSingleMachineManager_CloseClosesAggregateStream (2.05s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	3.172s
+FAIL
+---
+Pins: TestSingleMachineManager_CloseClosesAggregateStream (new test, added with this
+addendum, closing the LOW-severity finding that Close() leaves range-style consumers of
+Events() blocked forever).
+
+--- Mutation 4: residual fail-open window, event already parked in relay's inner send ---
+This is the BLOCKING finding that Mutation 2's fix (the outer stopped() check alone) does not
+close: an event already dequeued and parked in relay's inner `m.events <- ...` send when Stop
+runs still crosses the aggregate stream, because the outer check only runs at loop re-entry.
+Reproduced against the CURRENT (pre-stopSignal-fix) production code as it stood after Mutation
+2's guard was restored -- i.e. this is RED against the code that shipped in the first GREEN
+pass, not an further artificial mutation:
+    select {
+    case m.events <- MachineEvent{MachineID: m.descriptor.ID, Event: e}:
+    case <-m.done:
+        return
+    }
+(no third case abandoning a parked send on Stop).
+Command: go test -race -count=1 -run 'TestSingleMachineAdapter_StopAbandonsEventParkedInRelay' -v ./internal/phonecore/...
+---
+=== RUN   TestSingleMachineAdapter_StopAbandonsEventParkedInRelay
+    r1_machinemanager_shutdown_test.go:81: event parked in relay before Stop still crossed the aggregate stream after Stop returned: {MachineID:m1 Event:{Kind:in-flight Stream: SessionID: State: Message: Cursor:0 Dropped:0}}
+--- FAIL: TestSingleMachineAdapter_StopAbandonsEventParkedInRelay (0.27s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.456s
+FAIL
+---
+Pins: TestSingleMachineAdapter_StopAbandonsEventParkedInRelay (new test, added with this
+addendum -- parks relay in the inner send with nobody reading manager.Events() BEFORE calling
+Stop, unlike TestSingleMachineAdapter_StopHaltsAggregateRelay which always drains first).
+
+Fix landed: SingleMachineAdapter gained a stopCh field (closed by Stop if not already
+stopped, reset to nil by Start) exposed via the package-private stopSignal() accessor; relay's
+inner select gained a third case `case <-m.adapter.stopSignal(): continue` so a parked send is
+abandoned the instant Stop closes the signal, and relay now `defer close(m.events)`s on every
+exit path. All four mutations above were re-verified to pass after reverting to the fixed
+source (confirmed byte-identical to the fixed file via diff after every mutation/revert
+cycle), and go test -race -count=5 on all four regression tests plus the four original
+behaviors showed no flakiness.
+
+--- CORRECTION 2026-08-15 (post-review, appended; original text above unmodified) ---
+Mutation 2's recorded clean FAIL predates the stopSignal mechanism and no longer holds
+against the shipped code: with the outer stopped() guard deleted, the suite fails only
+probabilistically (~3/30 at -race -count=30) because the inner stopSignal select is the
+fail-closed gate and the outer guard is an optimisation narrowing the window. The guard is
+therefore NOT deterministically pinned by that mutation. The Start()-reset fail-open the
+reviewer proved (redundant Start orphaning a parked relay's stop channel) is now fixed in
+Start (state-gated reset) and pinned deterministically by
+TestSingleMachineAdapter_RedundantStartDoesNotOrphanTheStopSignal.

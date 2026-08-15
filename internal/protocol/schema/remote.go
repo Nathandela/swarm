@@ -32,6 +32,13 @@ const (
 	CodeStaleApproval ErrorCode = "stale_approval"
 	CodeNotAuthorized ErrorCode = "not_authorized"
 	CodeInvalidField  ErrorCode = "invalid_field"
+	// CodeNotImplemented is the SEALED, STABLE refusal a Wave R1 semantic op (playbook
+	// §6.3, ADR-017 T5) answers once it is authorized but has no real handler yet: a name
+	// the daemon KNOWS (mapped in actionClass, reachable past requireRemoteAuthz) rather
+	// than a name it has never heard of. Distinct from CodeNotAuthorized (the signature/
+	// capability gate failed) and CodeInvalidField (a structural or body-version failure);
+	// "recognised, not yet served" is a different fact from either.
+	CodeNotImplemented ErrorCode = "op_not_implemented"
 )
 
 // Transient reports whether a refusal is worth retrying: only rate_limit is
@@ -132,7 +139,39 @@ const (
 	// notifications it has no way to silence. ADR-007 B20 records the consequence that the
 	// capability check therefore cannot refuse this verb; the SIGNATURE is its gate.
 	ActionPushPrefs = "push_prefs"
+
+	// The R1 "refusal-ops" semantic vocabulary (playbook §6.3, ADR-017 T5, ADR-007 B144):
+	// six signed actions landing as refusal-only daemon handlers ahead of their real
+	// business logic. Each is MAPPED in actionClass (internal/skeleton/deviceauth.go) --
+	// a name the daemon KNOWS but has not yet built a handler for -- rather than left
+	// unmapped, so it stays distinguishable from a name the daemon has never heard of.
+	//
+	// terminal_input and terminal_control_keepalive are DELIBERATELY EXCLUDED from this
+	// set and from actionClass (ADR-017 T6): they ride only the E2EE frame's
+	// authenticated sender/sequence and a confirmed control generation, never a
+	// per-frame signature, the same exception the existing lease input frame already
+	// takes.
+	//
+	// push_prefs's "push-pairing shapes" sibling (push_address/submit_capability/
+	// machine_revoke_capability/wake_key, ADR-015 P7) is OUT OF SCOPE here: it lives
+	// inside the pairing exchange transcript, before any device-signing key exists, not
+	// on this signed-command path at all.
+	ActionSessionLaunch        = "session_launch"
+	ActionComposerSend         = "composer_send"
+	ActionOperationStatus      = "operation_status"
+	ActionTurnInterrupt        = "turn_interrupt"
+	ActionTerminalControlBegin = "terminal_control_begin"
+	ActionTerminalControlEnd   = "terminal_control_end"
 )
+
+// OperationSessionSentinel is LaunchSessionSentinel's sibling for the wider R1
+// semantic-op vocabulary: the canonical Session value signed over an op that names no
+// session instance (session_launch, which creates one; operation_status, which names
+// none). crypto.Command.Canonical refuses an empty Session, so every signed action needs
+// a non-empty value even when it targets nothing yet. Distinct from LaunchSessionSentinel
+// so the two wire shapes' signed tuples can never be conflated, and contains no "/" so it
+// can never collide with a namespaced session id.
+const OperationSessionSentinel = "@op"
 
 // PushPrefs is the machine-authoritative record of which push categories may wake the
 // paired device (PB-PUSH-8, PB-PUSH-10). The two toggles are exactly PB-APP-7's coarse
@@ -222,4 +261,13 @@ type RemoteCommand struct {
 	// make the reseed carry more or fewer events than needed -- the roster it replaces the
 	// cache with is complete either way.
 	ResyncCursor uint64 `json:"resync_cursor,omitempty"`
+	// BodyVersion binds this command to the R1 profile version the phone selected
+	// (RemoteProfileV1.AcceptedBodyVersions, ADR-017 T5 / playbook §6.3: "every durable
+	// semantic mutation binds the selected profile ... signs a canonical hash of its full
+	// body"). It rides UNCHANGED from here through the gateway to Control.BodyVersion --
+	// the gateway is a blind conduit and does not alter it. NOT YET content-hash bound (a
+	// compromised gateway could alter it in flight); that gap closes as each R1 op's real
+	// body lands and folds BodyVersion into ContentHash. There is no body version 0: an
+	// absent value is refused identically to a wrong one.
+	BodyVersion int `json:"body_version,omitempty"`
 }
