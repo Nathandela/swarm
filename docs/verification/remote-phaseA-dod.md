@@ -1,5 +1,7 @@
 # Phase A — Definition of Done (validation goals, audit-committee-aligned)
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 Locked 2026-07-23. Phase A = the swarm remote **machine backend + control plane +
 full-input backend + safety hardening**, proven end-to-end by `cmd/phonesim` WITHOUT any
 mobile app. This document is the measuring stick: Phase A is DONE only when every slice

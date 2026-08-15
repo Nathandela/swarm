@@ -1,5 +1,7 @@
 # Epic 14 — Evidence
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 **Epic**: Integration Verification (`agents-tracker-54z`) — the whole-system proof.
 **Built as a two-wave swarm** (package-disjoint agents, orchestrator-integrated).
 

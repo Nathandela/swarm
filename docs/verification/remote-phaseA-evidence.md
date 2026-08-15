@@ -1,5 +1,7 @@
 # Phase A — DoD Walk / Evidence (2026-07-24)
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 The measuring stick is `docs/verification/remote-phaseA-dod.md`. This file walks every A1-A8
 criterion to the test/artifact that demonstrates it (DoD §3.1), so the end-of-phase
 `/audit-committee` (DoD §3.3) has the map. Standing gates: `go build/vet/test ./...` green with
