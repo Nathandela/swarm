@@ -180,6 +180,12 @@ type SessionView struct {
 	// existed, so the released 0.8.0 gateway -- which relays these frames verbatim
 	// and is untouched by this change -- sees no new bytes.
 	RemoteControlled bool `json:"remote_controlled,omitempty"`
+	// Capabilities is the daemon-authored per-session capability record (ADR-017 T2): a
+	// pointer with omitempty, so an absent record (an older daemon, or a session the
+	// daemon has not stamped yet) is wire-distinguishable from a stamped record that says
+	// structured_chat=false. The phone renders from this record and infers nothing from
+	// whether a transcript happens to be empty (T2 rule 3).
+	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
 }
 
 // DeviceView is one paired-device row (R-DEV.1), carried on the device_list

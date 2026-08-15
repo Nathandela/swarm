@@ -1,0 +1,66 @@
+=== RED evidence: slice profile-caps (Wave R1 capability skeleton) ===
+Date: 2026-08-15T04:39:33Z
+Role: RED (contract-test writer)
+
+Command: go test -race ./internal/protocol/schema/...
+---
+# github.com/Nathandela/swarm/internal/protocol/schema [github.com/Nathandela/swarm/internal/protocol/schema.test]
+internal/protocol/schema/capability_test.go:44:32: undefined: SessionCapabilities
+internal/protocol/schema/capability_test.go:45:9: undefined: SessionCapabilities
+internal/protocol/schema/capability_test.go:69:10: undefined: SessionCapabilities
+internal/protocol/schema/capability_test.go:101:70: unknown field Capabilities in struct literal of type SessionView
+internal/protocol/schema/capability_test.go:122:10: got.Capabilities undefined (type SessionView has no field or method Capabilities)
+internal/protocol/schema/capability_test.go:125:11: got.Capabilities undefined (type SessionView has no field or method Capabilities)
+internal/protocol/schema/capability_test.go:126:69: got.Capabilities undefined (type SessionView has no field or method Capabilities)
+internal/protocol/schema/capability_test.go:138:11: undefined: SessionCapabilities
+internal/protocol/schema/capability_test.go:141:11: undefined: SessionCapabilities
+internal/protocol/schema/profile_test.go:46:26: undefined: RemoteProfileV1
+internal/protocol/schema/capability_test.go:141:11: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol/schema [build failed]
+FAIL
+
+Command: go test -race ./internal/remotegw/...
+---
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/profile_test.go:26:29: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:27:18: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:38:103: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:50:3: unknown field Profile in struct literal of type RelayConfig
+internal/remotegw/profile_test.go:72:20: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:109:61: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:116:20: undefined: protocol.RemoteProfileV1
+internal/remotegw/profile_test.go:123:46: undefined: protocol.RemoteProfileV1
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+Command: go test -race ./internal/phonecore/...
+---
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/profile_test.go:26:41: undefined: protocol.RemoteProfileV1
+internal/phonecore/profile_test.go:27:18: undefined: protocol.RemoteProfileV1
+internal/phonecore/profile_test.go:44:6: rec.Profile undefined (type protocol.ReconcileRecord has no field or method Profile)
+internal/phonecore/profile_test.go:58:28: got.Profile undefined (type schema.ReconcileRecord has no field or method Profile)
+internal/phonecore/profile_test.go:58:41: rec.Profile undefined (type protocol.ReconcileRecord has no field or method Profile)
+internal/phonecore/profile_test.go:59:90: got.Profile undefined (type schema.ReconcileRecord has no field or method Profile)
+internal/phonecore/profile_test.go:59:103: rec.Profile undefined (type protocol.ReconcileRecord has no field or method Profile)
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+Command: go test -race ./internal/skeleton/...
+---
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/capability_test.go:50:11: undefined: deriveSessionCapabilities
+internal/skeleton/capability_test.go:78:10: undefined: deriveSessionCapabilities
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+Command: go test -race ./internal/daemon/...
+---
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/structuredgap_test.go:39:8: undefined: StructuredGapEvent
+internal/daemon/structuredgap_test.go:53:13: undefined: journal.TypeStructuredGap
+internal/daemon/structuredgap_test.go:54:63: undefined: journal.TypeStructuredGap
+internal/daemon/structuredgap_test.go:70:10: d.EmitStructuredGap undefined (type *Daemon has no field or method EmitStructuredGap)
+internal/daemon/structuredgap_test.go:71:21: undefined: ErrStructuredGapUnimplemented
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL

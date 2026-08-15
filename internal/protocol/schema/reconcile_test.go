@@ -31,14 +31,21 @@ package schema
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+// wireZeroProfile is the committed JSON of the zero-value RemoteProfileV1 (no field
+// carries omitempty, so a Profile that was never set still serializes in full -- see
+// profile_test.go). testReconcileRecord below leaves Profile unset, so every
+// pre-ADR-017 wire-shape const in this file gained this exact suffix.
+const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0}`
 
 // wireReconcileRecord is the committed JSON of the record below. The framed form (the
 // same bytes with a leading kind discriminator) is pinned identically on both sides of
 // the wire: internal/remotegw/reconcile_test.go (producer) and
 // internal/phonecore/reconcile_test.go (consumer).
-const wireReconcileRecord = `{"machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000}`
+const wireReconcileRecord = `{"machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000,"profile":` + wireZeroProfile + `}`
 
 // testReconcileRecord is the record those bytes encode.
 func testReconcileRecord() ReconcileRecord {
@@ -78,7 +85,7 @@ func TestReconcileRecord_ZeroAuthoritiesAreExplicitOnTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal zero record: %v", err)
 	}
-	const want = `{"machine":"","epoch_id":0,"inbound_high_water":0,"journal_ceiling":0,"reply_ceiling":0,"grant_epoch":0,"grant_seq":0,"issued_at":0}`
+	want := `{"machine":"","epoch_id":0,"inbound_high_water":0,"journal_ceiling":0,"reply_ceiling":0,"grant_epoch":0,"grant_seq":0,"issued_at":0,"profile":` + wireZeroProfile + `}`
 	if string(got) != want {
 		t.Fatalf("zero reconcile record =\n  %s\nwant\n  %s\n(no authority field may be omitempty)", got, want)
 	}
@@ -91,7 +98,9 @@ func TestReconcileRecord_DecodesFromTheCommittedBytes(t *testing.T) {
 	if err := json.Unmarshal([]byte(wireReconcileRecord), &got); err != nil {
 		t.Fatalf("unmarshal committed bytes: %v", err)
 	}
-	if got != testReconcileRecord() {
+	// ReconcileRecord now carries a Profile field with a slice and a map, so it is not
+	// comparable with == -- reflect.DeepEqual is the correct (and only) equality check.
+	if !reflect.DeepEqual(got, testReconcileRecord()) {
 		t.Fatalf("decoded record = %+v; want %+v", got, testReconcileRecord())
 	}
 }

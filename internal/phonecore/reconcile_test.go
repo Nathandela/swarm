@@ -26,6 +26,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,13 +34,18 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
 
+// wireZeroProfile is the committed JSON of the zero-value RemoteProfileV1 (no field
+// carries omitempty). wantReconcileRecord below leaves Profile unset, so every wire-shape
+// const in this file gained this exact suffix (ADR-017 T5).
+const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0}`
+
 // wireReconcileFrame is the committed sealed plaintext of a reconcile frame: the kind
 // discriminator plus the schema.ReconcileRecord fields. It is byte-identical to what
 // the gateway seals (internal/remotegw/reconcile_test.go pins the producer side against
 // this same literal) and to the record schema itself
 // (internal/protocol/schema/reconcile_test.go). These tests decode the LITERAL, not the
 // production frame type, so a rename or reorder in Go cannot silently move the wire.
-const wireReconcileFrame = `{"kind":"reconcile","machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000}`
+const wireReconcileFrame = `{"kind":"reconcile","machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000,"profile":` + wireZeroProfile + `}`
 
 // wantReconcileRecord is the record those bytes carry.
 func wantReconcileRecord() protocol.ReconcileRecord {
@@ -111,7 +117,9 @@ func TestMailboxDemux_ReconcileRoutedNotJournaled(t *testing.T) {
 	if !ok {
 		t.Fatalf("Reconciled() reports no record; the router dropped the reconcile frame")
 	}
-	if got != wantReconcileRecord() {
+	// ReconcileRecord now carries a Profile field with a slice and a map, so it is not
+	// comparable with == -- reflect.DeepEqual is the correct (and only) equality check.
+	if !reflect.DeepEqual(got, wantReconcileRecord()) {
 		t.Fatalf("reconciled record = %+v; want %+v (every authority verbatim)", got, wantReconcileRecord())
 	}
 	if n := len(router.Sessions().List()); n != 0 {

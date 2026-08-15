@@ -119,13 +119,21 @@ needs; the daemon-internal payload is not carried, with the single exception of
 | ------------ | ----------------- | ----------------------------------------------------------------------- |
 | `cursor`     | uint64            | the record's monotonic journal cursor; ordering is this and nothing else. Deliberately unset (`0`) on a roster record, which is a set member and not a point in the stream (PB-SYNC-8) |
 | `session_id` | string            | namespaced session id the record is about; absent on a session-neutral record (`presence`) |
-| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` |
+| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` |
 | `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
 | `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
 | `item`       | `json.RawMessage` | the interaction item object, carried ONLY when `type` is `interaction` — one unit of the phone's chat transcript (ADR-009, `interaction-schema.md` §1/§2, IS-LAYER-1). Opaque on the wire: the gateway forwards it and parses no item (§10), and the item's own `kind` discriminator stays inside it (IS-LAYER-2) |
 
 Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
 that predates one of them serializes byte-identically to what earlier builds wrote.
+
+`structured_gap` is the daemon-authored capability-degrade event of ADR-017 T2 rule 2
+(`internal/journal.TypeStructuredGap`, `internal/daemon.StructuredGapEvent{TS, Reason}`).
+Its wire carriage on `JournalRecord` is not yet defined: emission is presently a stub
+(`Daemon.EmitStructuredGap` returns `ErrStructuredGapUnimplemented`) pending the
+spool-boundary detection that would trigger it, so no `structured_gap` record reaches the
+wire yet. The type value is reserved here so a future emitting slice adds no new entry to
+this vocabulary, only a carriage field.
 
 This table's header column reads **`Field`**, not `JSON key`, and that is
 deliberate rather than a style slip: GG-7's bidirectional drift check
@@ -161,6 +169,7 @@ alongside the group.
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
+| `capabilities`  | `*SessionCapabilities` | daemon-authored per-session capability record (ADR-017 T2), absent on an older daemon or a session not yet stamped -- see "The `SessionCapabilities` record" below. Shares its wire name with `Control.capabilities` (the hello negotiated-capability list); the two are unrelated fields of unrelated messages that happen to share a name, and the GG-7 drift check treats the key as documented once it has one row |
 
 ## The `LaunchReq` message
 
@@ -208,6 +217,76 @@ hostile PTY bytes never reach the network-facing sidecar. The phone displays
 | `lines`     | []string   | sanitized plain-text grid rows, top to bottom      |
 | `cols`      | int        | grid width the snapshot was rendered at            |
 | `rows`      | int        | grid height the snapshot was rendered at           |
+
+## The `SessionCapabilities` record
+
+`SessionCapabilities` is the daemon-authored, per-session-instance capability record of
+ADR-017 T2 / playbook §6.2, carried nested under `SessionView.capabilities` (documented
+above). It is authored once at session launch and is immutable for the life of the
+instance; the only mutation path afterward is the degrade-only `SetStructuredChat`, which
+also cannot be observed on the wire as anything but a fresh `SessionView` row.
+
+This table's header reads **`Field`**, not `JSON key`, for the reason `JournalRecord`'s
+does (see that section): `SessionCapabilities` is not one of the four types GG-7's
+bidirectional check reflects, so a `JSON key`-headed table here would fail the check's
+reverse direction. Keeping it in step with `internal/protocol/schema.SessionCapabilities`
+is a procedural obligation carried by that type's Go doc comments.
+
+| Field               | Go type | Meaning                                                              |
+| -------------------- | ------- | --------------------------------------------------------------------- |
+| `provider`           | string  | adapter identity: `claude`, `codex`, `opencode`, `agy`, ...            |
+| `provider_version`    | string  | the DETECTED version of the installed CLI, never a configured/assumed one |
+| `adapter_revision`    | string  | the revision of the Swarm adapter that produced the record            |
+| `structured_chat`     | bool    | true only when every T3 complete-chat row passes against `provider_version` |
+| `terminal_fallback`   | bool    | whether the sanitized `TerminalViewV1` surface may be offered at all  |
+| `interrupt`           | bool    | whether a semantic interrupt reaches the session's current turn       |
+
+## The `ReconcileRecord` message
+
+`ReconcileRecord` is the machine → phone reconcile record (PB-SYNC-7): the wire carrier of
+the three rollback authorities PB-STATE-4 names, plus the sealed `RemoteProfileV1`
+(ADR-017 T5, below). It rides the existing machine → phone sealed mailbox stream as an
+ordinary plaintext with a `"kind":"reconcile"` discriminator (`internal/remotegw` seals
+it, `internal/phonecore` demuxes it) -- no new mailbox frame kind, `internal/remote/crypto`
+untouched. No field carries `omitempty`: a legitimately-zero or -empty authority must stay
+distinguishable on the wire from a producer that never published the field.
+
+This table's header reads **`Field`**, not `JSON key`, for `JournalRecord`'s reason:
+`ReconcileRecord` is not one of the four GG-7-reflected types.
+
+| Field                 | Go type            | Meaning                                                              |
+| ---------------------- | ------------------- | ----------------------------------------------------------------------- |
+| `machine`              | string              | endpoint id the authorities belong to                                 |
+| `epoch_id`              | uint32              | epoch the content key (and both seq buckets) belong to                |
+| `inbound_high_water`    | uint64              | the gateway's durable inbound accepted high-water (PB-GW-1)           |
+| `journal_ceiling`       | uint64              | highest seq issued on the shared journal/terminal bucket               |
+| `reply_ceiling`         | uint64              | highest seq issued on the command-reply bucket                        |
+| `grant_epoch`           | uint32              | the daemon's grant-issuance epoch                                     |
+| `grant_seq`             | uint64              | the daemon's grant-issuance seq                                       |
+| `issued_at`             | int64               | unix millis, the same value the envelope header carries               |
+| `profile`               | `RemoteProfileV1`   | the machine's sealed remote semantic profile (ADR-017 T5), below      |
+
+## The `RemoteProfileV1` record
+
+The asynchronous E2EE mailbox has no local `hello`, so `RemoteProfileV1` is the sealed,
+machine-authored substitute: it names the accepted action/body versions, the
+interaction-schema version, the `TerminalView` version and the session-capability record
+version the machine currently accepts. It is nested, verbatim, under `ReconcileRecord.profile`
+above -- one shared struct further R1 (and later) decision records may also add fields to,
+with the profile *version* as the compatibility unit (ADR-017 T5). No field carries
+`omitempty`, for the same reason as `ReconcileRecord`'s own fields.
+
+This table's header reads **`Field`**, not `JSON key`, for `JournalRecord`'s reason:
+`RemoteProfileV1` is not one of the four GG-7-reflected types.
+
+| Field                        | Go type          | Meaning                                                        |
+| ----------------------------- | ----------------- | ------------------------------------------------------------------ |
+| `version`                     | int               | the profile version -- the compatibility unit companion ADRs add fields under |
+| `accepted_actions`            | []string          | semantic op names the machine currently accepts                |
+| `accepted_body_versions`      | map[string]int    | per-action accepted body version                                |
+| `interaction_schema_version`  | int               | the `interaction-schema.md` version the machine speaks          |
+| `terminal_view_version`       | int               | the `TerminalViewV1` version (ADR-017 T4) the machine speaks     |
+| `capability_record_version`   | int               | the `SessionCapabilities` record version (ADR-017 T2) the machine speaks |
 
 ## Control-op vocabulary
 

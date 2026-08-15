@@ -42,17 +42,18 @@ type ReconcileSource interface {
 // RelayConfig configures a RelaySink.
 type RelayConfig struct {
 	Appender       MailboxAppender
-	Target         string            // the phone's relay routing id (mailbox target)
-	Machine        string            // this machine's endpoint id, stamped on the reconcile record
-	EpochID        uint32            // the current epoch the content key belongs to
-	Key            crypto.ContentKey // K_epoch content key the phone also holds (R-CRY.11)
-	RecipientKeyID [8]byte           // routing key id of the phone (recipient)
-	SenderKeyID    [8]byte           // routing key id of this machine (sender)
-	Now            func() time.Time  // envelope issued-at clock (nil => time.Now)
-	AppendTimeout  time.Duration     // per-append upper bound (nil/0 => defaultAppendTimeout)
-	Seq            SeqSource         // durable outbound seq high-water (nil => in-memory, non-durable)
-	Authorities    ReconcileSource   // rollback authorities for the reconcile record (nil => bootstrap disabled)
-	Outbox         Outbox            // durable outbound journal custody, PB-GW-8 (nil => in-memory)
+	Target         string                   // the phone's relay routing id (mailbox target)
+	Machine        string                   // this machine's endpoint id, stamped on the reconcile record
+	EpochID        uint32                   // the current epoch the content key belongs to
+	Key            crypto.ContentKey        // K_epoch content key the phone also holds (R-CRY.11)
+	RecipientKeyID [8]byte                  // routing key id of the phone (recipient)
+	SenderKeyID    [8]byte                  // routing key id of this machine (sender)
+	Now            func() time.Time         // envelope issued-at clock (nil => time.Now)
+	AppendTimeout  time.Duration            // per-append upper bound (nil/0 => defaultAppendTimeout)
+	Seq            SeqSource                // durable outbound seq high-water (nil => in-memory, non-durable)
+	Authorities    ReconcileSource          // rollback authorities for the reconcile record (nil => bootstrap disabled)
+	Outbox         Outbox                   // durable outbound journal custody, PB-GW-8 (nil => in-memory)
+	Profile        protocol.RemoteProfileV1 // sealed onto every reconcile record verbatim (ADR-017 T5)
 }
 
 // defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
@@ -361,6 +362,7 @@ func (s *RelaySink) authorities() (protocol.ReconcileRecord, error) {
 		ReplyCeiling:     reply,
 		GrantEpoch:       grantEpoch,
 		GrantSeq:         grantSeq,
+		Profile:          s.cfg.Profile,
 	}, nil
 }
 

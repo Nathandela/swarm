@@ -33,4 +33,13 @@ type ReconcileRecord struct {
 	GrantEpoch       uint32 `json:"grant_epoch"`        // (c) the daemon's grant-issuance epoch
 	GrantSeq         uint64 `json:"grant_seq"`          // (c) the daemon's grant-issuance seq
 	IssuedAt         int64  `json:"issued_at"`          // unix millis, the SAME value the envelope header carries
+
+	// Profile is the machine's sealed RemoteProfileV1 (ADR-017 T5), riding this EXISTING
+	// record rather than a new mailbox frame kind. It carries no omitempty for the same
+	// reason as every authority above: a struct-typed field is never "empty" to
+	// encoding/json anyway (omitempty would be a silent no-op here), but the tag is kept
+	// off deliberately so a reader never mistakes it for a field that may legitimately be
+	// absent -- enforced as a source-level convention by
+	// TestReconcileRecord_ProfileFieldTag_NoOmitempty.
+	Profile RemoteProfileV1 `json:"profile"`
 }

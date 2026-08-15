@@ -157,17 +157,19 @@ const (
 // the daemon, the shim and the VT emulator into the bound Android app
 // (docs/specifications/remote-phaseB-requirements.md 4.2, ADR-007 Decision 2).
 type (
-	Control          = schema.Control
-	TerminalSnapshot = schema.TerminalSnapshot
-	ApproveReq       = schema.ApproveReq
-	AgentInstanceRef = schema.AgentInstanceRef
-	SessionView      = schema.SessionView
-	DeviceView       = schema.DeviceView
-	PolicyView       = schema.PolicyView
-	PairingControl   = schema.PairingControl
-	LaunchReq        = schema.LaunchReq
-	ReconcileRecord  = schema.ReconcileRecord
-	SendInputReq     = schema.SendInputReq
+	Control             = schema.Control
+	TerminalSnapshot    = schema.TerminalSnapshot
+	ApproveReq          = schema.ApproveReq
+	AgentInstanceRef    = schema.AgentInstanceRef
+	SessionView         = schema.SessionView
+	DeviceView          = schema.DeviceView
+	PolicyView          = schema.PolicyView
+	PairingControl      = schema.PairingControl
+	LaunchReq           = schema.LaunchReq
+	ReconcileRecord     = schema.ReconcileRecord
+	SendInputReq        = schema.SendInputReq
+	RemoteProfileV1     = schema.RemoteProfileV1
+	SessionCapabilities = schema.SessionCapabilities
 )
 
 // The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no

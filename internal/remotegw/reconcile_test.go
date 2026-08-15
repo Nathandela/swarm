@@ -40,11 +40,16 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
 
+// wireZeroProfile is the committed JSON of the zero-value RemoteProfileV1 (no field
+// carries omitempty). newReconcileSink below configures no Profile, so every wire-shape
+// const in this file gained this exact suffix (ADR-017 T5).
+const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0}`
+
 // wireReconcileFrame is the committed sealed plaintext, byte-identical to the shape the
 // phone decoder demuxes (pinned independently in internal/phonecore/reconcile_test.go
 // and internal/protocol/schema/reconcile_test.go). Same discipline as
 // TestRelaySink_ForwardsTerminalSnapshot: the bytes are the contract.
-const wireReconcileFrame = `{"kind":"reconcile","machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000}`
+const wireReconcileFrame = `{"kind":"reconcile","machine":"m1","epoch_id":7,"inbound_high_water":42,"journal_ceiling":3,"reply_ceiling":5,"grant_epoch":7,"grant_seq":2,"issued_at":1700000000000,"profile":` + wireZeroProfile + `}`
 
 // stubReconcileSource is a fixed set of authorities, or a uniform failure.
 type stubReconcileSource struct {

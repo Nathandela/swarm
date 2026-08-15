@@ -11,6 +11,7 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -103,7 +104,9 @@ func TestService_PublishesTheReconcileRecordFromItsOwnDurableState(t *testing.T)
 	if got.Kind != kindReconcile {
 		t.Fatalf("first frame of the run has kind %q; want %q", got.Kind, kindReconcile)
 	}
-	if got.ReconcileRecord != want {
+	// ReconcileRecord now carries a Profile field with a slice and a map, so it is not
+	// comparable with == -- reflect.DeepEqual is the correct (and only) equality check.
+	if !reflect.DeepEqual(got.ReconcileRecord, want) {
 		t.Fatalf("published reconcile record =\n  %+v\nwant\n  %+v\n(every authority must be read from the runtime's own durable state, never fabricated)",
 			got.ReconcileRecord, want)
 	}

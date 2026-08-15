@@ -59,6 +59,12 @@ const (
 	// (which owns the meta store) populates these; the journal package itself never
 	// manufactures a roster record.
 	TypeRoster RecordType = "roster"
+	// TypeStructuredGap is the daemon-authored capability-degrade event of ADR-017 T2
+	// rule 2: an unrecoverable shim/daemon spool or cursor gap emits an exact boundary,
+	// disables structured_chat for the session instance, and forbids a fabricated
+	// completion. Its body is daemon.StructuredGapEvent, riding this record family exactly
+	// as InteractionItem rides TypeInteraction -- no new mailbox frame kind.
+	TypeStructuredGap RecordType = "structured_gap"
 )
 
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by
