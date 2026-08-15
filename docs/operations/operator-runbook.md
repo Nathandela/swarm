@@ -335,6 +335,12 @@ chmod 0600 "$SWARM_DAEMON_STATE/remote-policy.json"
 
 - **Backup and restore of the relay store**, disk-full behaviour, log rotation, health checks,
   resource limits, cross-version compatibility — returned to Phase C by the §6.18 scope correction.
+  > **AMENDED (wave R2, playbook §6.5):** backup and restore now have both an implementation and a
+  > runbook — `swarm-relay backup`/`swarm-relay restore`, documented in
+  > `docs/operations/relay-runbook.md` §11 and, for the systemd deployment,
+  > `docs/operations/relay-vps-deploy.md` §13. Disk-full behaviour for the backup path is covered
+  > there too; the rest of this bullet's list (log rotation, health checks, resource limits,
+  > cross-version compatibility) is unaffected.
 - **Re-pinning a fleet after a relay key rotation** — target state, arrives with wave R2
   (`ADR-016:5`): under the future default `webpki` policy there will be no pin to re-issue, since
   rotation becomes ordinary certificate renewal verified against platform trust roots. Under the

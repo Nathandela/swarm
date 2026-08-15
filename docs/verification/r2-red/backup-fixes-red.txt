@@ -1,0 +1,127 @@
+=== RED evidence: R2 work package "backup", post-review fixes (playbook 6.5) ===
+Date: 2026-08-15T08:17:01Z (compile failure) / 2026-08-15T08:25:00Z (runtime captures below)
+Role: BUILDER (backup/restore for the relay's bbolt store)
+
+Six review findings, tests written first in internal/remote/relay/backup_test.go.
+First, the combined compile failure (the backupCreate seam needed widening
+from io.WriteCloser to a new syncWriteCloser interface with Sync, and
+errBackupTruncated did not exist yet):
+
+Command: go vet ./internal/remote/relay/...
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/backup_test.go:122:36: undefined: syncWriteCloser
+internal/remote/relay/backup_test.go:151:2: undefined: syncWriteCloser
+internal/remote/relay/backup_test.go:362:21: undefined: errBackupTruncated
+internal/remote/relay/backup_test.go:526:2: undefined: syncWriteCloser
+internal/remote/relay/backup_test.go:554:36: undefined: syncWriteCloser
+
+To get genuine per-test runtime RED (not just a blanket compile failure) for
+the five behavioral fixes, backup.go was given TEMPORARY stub definitions of
+syncWriteCloser and errBackupTruncated (widening backupCreate's return type
+but changing no behavior otherwise -- no truncation guard, no tx.Check, no
+Sync() call in Backup, no stale-.tmp removal, no checkStoreNotLocked change),
+just enough to unblock the build. Each new test was then run individually
+against that unfixed behavior. The stubs were removed immediately after this
+capture, before any real implementation.
+
+--- BLOCKING: SIGBUS on a truncated backup ---
+Command: go test ./internal/remote/relay/... -run TestRestore_RejectsTruncatedBackup -v
+=== RUN   TestRestore_RejectsTruncatedBackup
+--- FAIL: TestRestore_RejectsTruncatedBackup (4.26s)
+panic: assertion failed: Page expected to be: 44, but self identifies as 0 [recovered, repanicked]
+
+goroutine 20 [running]:
+testing.tRunner.func1.2({0x42ba380, 0x9e150bbe340})
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:1977 +0x349
+panic({0x42ba380?, 0x9e150bbe340?})
+	/usr/local/Cellar/go/1.26.5/libexec/src/runtime/panic.go:860 +0x13a
+go.etcd.io/bbolt._assert(...)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/db.go:1389
+go.etcd.io/bbolt.(*page).fastCheck(0x4d891000, 0x2c)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/page.go:57 +0x1c6
+go.etcd.io/bbolt.(*Tx).page(0x9e150a09910?, 0x9e150a09978?)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/tx.go:541 +0x7a
+go.etcd.io/bbolt.(*Bucket).pageNode(0x0?, 0x0?)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/bucket.go:748 +0x85
+go.etcd.io/bbolt.(*Cursor).search(0x9e150a09a60, {0x4381584, 0x5, 0x5}, 0x430b360?)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/cursor.go:281 +0x45
+go.etcd.io/bbolt.(*Cursor).seek(0x9e150a09a60, {0x4381584?, 0x3a80601?, 0xd8?})
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/cursor.go:159 +0x2e
+go.etcd.io/bbolt.(*Bucket).Bucket(0x9e150b3bdd8, {0x4381584, 0x5, 0x0?})
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/bucket.go:105 +0xad
+go.etcd.io/bbolt.(*Tx).Bucket(...)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/tx.go:103
+github.com/Nathandela/swarm/internal/remote/relay.validateBackup.func2(0x9e150b3bdc0)
+	/Users/Nathan/Code/swarm/internal/remote/relay/backup.go:181 +0x85
+go.etcd.io/bbolt.(*DB).View(0x9e150992850?, 0x4369378)
+	/Users/Nathan/go/pkg/mod/go.etcd.io/bbolt@v1.3.11/db.go:917 +0x6c
+github.com/Nathandela/swarm/internal/remote/relay.validateBackup({0x9e150992850, 0x6e})
+	/Users/Nathan/Code/swarm/internal/remote/relay/backup.go:179 +0x1c5
+github.com/Nathandela/swarm/internal/remote/relay.Restore({0x9e150992a10, 0x6a}, {0x9e150992850, 0x6e})
+	/Users/Nathan/Code/swarm/internal/remote/relay/backup.go:116 +0x69
+github.com/Nathandela/swarm/internal/remote/relay.TestRestore_RejectsTruncatedBackup(0x9e1509f26c8)
+	/Users/Nathan/Code/swarm/internal/remote/relay/backup_test.go:358 +0x568
+testing.tRunner(0x9e1509f26c8, 0x4368f20)
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/usr/local/Cellar/go/1.26.5/libexec/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	5.550s
+FAIL
+
+This run happened to surface as a Go-level assertion panic rather than a raw
+SIGBUS (this particular truncation offset left the OS's page-rounded mmap
+tail zero-filled rather than genuinely unmapped, so bbolt read zeroed
+"page 44" instead of faulting on unmapped memory outright) -- but the process
+still dies: "[recovered, repanicked]" is testing.tRunner deliberately
+re-panicking past its own recovery to crash the whole binary, exactly the
+"operator's restore process dies mid-command" failure the finding reports.
+The reviewer's own reproduction (truncating to exactly half of a 24576-byte
+backup) got the harder SIGBUS instead; both are the same underlying defect
+(meta.pgid exceeds the pages the truncated file's mmap actually covers) and
+both are equally fatal to the calling process.
+
+--- Corrupted backups restore silently ---
+Command: go test ./internal/remote/relay/... -run TestRestore_RejectsBackupWithCorruptedKeyOrder -v
+=== RUN   TestRestore_RejectsBackupWithCorruptedKeyOrder
+    backup_test.go:431: Restore accepted a backup with a corrupted B+tree key order, want a consistency-check error
+--- FAIL: TestRestore_RejectsBackupWithCorruptedKeyOrder (0.07s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.967s
+FAIL
+(An earlier version of this test seeded its 64 probe keys via 64 separate
+st.putToken calls/transactions; bbolt's copy-on-write left stale leftover
+copies of the target key string in freed-but-unoverwritten pages, so the
+uniqueness precondition failed ("probe key appears 2 time(s)"). Fixed by
+seeding all 64 keys in ONE transaction before this capture.)
+
+--- Backup never fsyncs before rename ---
+Command: go test ./internal/remote/relay/... -run TestBackup_SyncsOutputBeforeRenamingIntoPlace -v
+=== RUN   TestBackup_SyncsOutputBeforeRenamingIntoPlace
+    backup_test.go:583: Backup did not fsync its output before renaming it into place
+--- FAIL: TestBackup_SyncsOutputBeforeRenamingIntoPlace (0.03s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.890s
+FAIL
+
+--- Stale .tmp permanently blocks later backups ---
+Command: go test ./internal/remote/relay/... -run TestBackup_StaleTempFileDoesNotBlockNextBackup -v
+=== RUN   TestBackup_StaleTempFileDoesNotBlockNextBackup
+    backup_test.go:515: Backup with a stale .tmp already at the destination: relay: create backup file: open /var/folders/.../backup.db.tmp: file exists, want it to proceed
+--- FAIL: TestBackup_StaleTempFileDoesNotBlockNextBackup (0.08s)
+FAIL
+
+--- checkStoreNotLocked may initialize a zero-length dbPath as a side effect ---
+Command: go test ./internal/remote/relay/... -run TestRestore_LeavesZeroLengthDBPathUntouchedWhenBackupInvalid -v
+=== RUN   TestRestore_LeavesZeroLengthDBPathUntouchedWhenBackupInvalid
+    backup_test.go:492: Restore's own lock-check probe initialized the zero-length dbPath into a real bbolt file (now 16384 bytes) even though the overall restore failed and must leave it untouched
+--- FAIL: TestRestore_LeavesZeroLengthDBPathUntouchedWhenBackupInvalid (0.04s)
+
+--- Coverage gap: restore-safety promise never asserted against an EXISTING dbPath ---
+Command: go test ./internal/remote/relay/... -run TestRestore_LeavesExistingStoreUntouchedOnInvalidBackup -v
+=== RUN   TestRestore_LeavesExistingStoreUntouchedOnInvalidBackup
+--- PASS: TestRestore_LeavesExistingStoreUntouchedOnInvalidBackup (0.06s)
+This one already passes against the pre-fix code -- it closes a coverage
+gap (the promise was never asserted against an existing store), not a
+behavior gap, so no implementation change was needed for it specifically.

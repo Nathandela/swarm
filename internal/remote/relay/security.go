@@ -272,6 +272,14 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 	}
 }
 
+// Resolve is the exported form of resolve: it decides whether rawURL may be
+// dialed under this policy and, if so, with what TLS configuration (nil means
+// plain ws://). It exists so a diagnostic caller (`swarm relay doctor`,
+// playbook 4.1/6.5) can build and report the EXACT policy a real dial would
+// apply -- name, pin state, cleartext refusal -- without duplicating this
+// type's decisions in cmd/swarm.
+func (s Security) Resolve(rawURL string) (*tls.Config, error) { return s.resolve(rawURL) }
+
 // pinned reports whether this policy names a peer it will accept.
 func (s Security) pinned() bool {
 	return len(s.PinnedCert) > 0 || len(s.PinnedSPKISHA256) > 0

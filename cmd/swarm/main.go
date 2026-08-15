@@ -107,6 +107,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stderr)
 	case "remote":
 		return runRemote(args[1:], stdout, stderr)
+	case "relay":
+		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
 		return dispatchAgentVerb(runSpawn, args[1:], nil, stdout, stderr)
 	case "ls":

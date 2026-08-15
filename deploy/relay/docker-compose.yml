@@ -1,0 +1,107 @@
+# docker-compose.yml -- swarm-relay + Caddy (deploy/relay bundle, playbook 6.5).
+#
+# Run from this directory (deploy/relay/):
+#
+#   cp relay.config.example relay.config   # edit db_path/admin_listen only if you changed
+#                                           # the defaults below; they already agree
+#   cp Caddyfile Caddyfile.local           # then edit relay.example.com to your real domain
+#   docker compose build                   # builds swarm-relay from ../.. (repo root) via
+#                                           # ./Dockerfile's own multi-stage build
+#   docker compose up -d
+#
+# TOPOLOGY: caddy joins swarm-relay's own network namespace
+# (`network_mode: "service:swarm-relay"`) instead of a separate bridge network reached by
+# service-name DNS. Deliberate, not the tutorial-default choice: it means caddy sees
+# 127.0.0.1 exactly as swarm-relay's own process does, so ./Caddyfile's
+# `reverse_proxy 127.0.0.1:9440` and ./relay.config.example's `listen`/`admin_listen` (both
+# 127.0.0.1) work COMPLETELY UNCHANGED from the bare-VPS systemd deployment
+# docs/operations/relay-vps-deploy.md documents -- the relay's public ws:// listener and its
+# health/readiness admin surface both stay genuinely loopback-bound inside this one shared
+# network namespace, not merely "unpublished to the host". Because network_mode: service:X
+# makes caddy share swarm-relay's network stack rather than get one of its own, a container in
+# that mode cannot declare `ports:` itself (Docker error: "conflicting options: port publishing
+# and the container type network mode"); publishing host 80/443 is therefore declared on the
+# swarm-relay SERVICE below even though swarm-relay's own process never listens on either --
+# caddy's listeners, sharing that same namespace, are what host traffic actually reaches.
+#
+# No image below is tagged "latest". swarm-relay pins RELAY_VERSION (bump it on upgrade, see
+# docs/operations/relay-vps-deploy.md); caddy and busybox pin explicit stable tags.
+
+services:
+  # ONE-SHOT, then exits. The named volume Docker creates for swarm-relay-data starts
+  # root-owned, and the relay image's distroless final stage (./Dockerfile) runs as a fixed
+  # non-root uid (65532, nonroot) with no shell of its own to chown anything -- this fixes
+  # ownership once, before swarm-relay ever starts. swarm-relay's depends_on below waits for
+  # this to complete successfully.
+  relay-init:
+    image: busybox:1.36
+    command: ["chown", "-R", "65532:65532", "/var/lib/swarm-relay"]
+    volumes:
+      - swarm-relay-data:/var/lib/swarm-relay
+    restart: "no"
+
+  swarm-relay:
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    image: ghcr.io/nathandela/swarm-relay:${RELAY_VERSION:-v0.10.3}
+    container_name: swarm-relay
+    restart: unless-stopped
+    depends_on:
+      relay-init:
+        condition: service_completed_successfully
+    ports:
+      - "80:80" # caddy's ACME HTTP-01 challenge (shared network namespace, see TOPOLOGY above)
+      - "443:443" # caddy's wss:// listener
+    volumes:
+      - swarm-relay-data:/var/lib/swarm-relay
+      - ./relay.config:/etc/swarm-relay/relay.config:ro
+    command: ["--config", "/etc/swarm-relay/relay.config"]
+    # (c): wired to the relay's own /healthz+/readyz via the `healthcheck` subcommand --
+    # distroless has no shell/curl/wget, so the binary checks itself rather than an external
+    # tool reaching into the container. Both endpoints live on admin_listen (loopback-only,
+    # never the public ws:// port); see relay.config.example's admin_listen comment.
+    healthcheck:
+      test: ["CMD", "/swarm-relay", "healthcheck", "--config", "/etc/swarm-relay/relay.config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          pids: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: swarm-relay-caddy
+    restart: unless-stopped
+    network_mode: "service:swarm-relay" # see TOPOLOGY above
+    depends_on:
+      swarm-relay:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # ACME account key + issued certificates -- must persist
+      - caddy-config:/config # Caddy's autosave config state
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  swarm-relay-data: # bbolt store (relay.db) + the generated operator secret
+  caddy-data:
+  caddy-config:

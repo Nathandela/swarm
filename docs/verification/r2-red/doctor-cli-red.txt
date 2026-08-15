@@ -1,0 +1,24 @@
+======================================================================
+R2 doctor (playbook 4.1/6.5) - cmd/swarm `swarm relay doctor` CLI - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.2 (R2-B swarm relay doctor: diagnostic
+      capability, ephemeral route, DNS/TLS/WSS/storage results)
+role: BUILDER (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15T07:50:22Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new file: cmd/swarm/relay_doctor_test.go
+edited: cmd/swarm/main.go (added `case "relay": return runRelay(...)` dispatch)
+command: go test ./cmd/swarm/... -run TestRelayDoctor 2>&1
+======================================================================
+
+### COMPILE-LEVEL RED: runRelay (and therefore the `swarm relay doctor`
+### subcommand) does not exist yet.
+
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/main.go:111:10: undefined: runRelay
+cmd/swarm/relay_doctor_test.go:66:10: undefined: runRelay
+cmd/swarm/relay_doctor_test.go:89:10: undefined: runRelay
+cmd/swarm/relay_doctor_test.go:110:10: undefined: runRelay
+cmd/swarm/relay_doctor_test.go:126:14: undefined: runRelay
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

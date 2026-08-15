@@ -1,0 +1,48 @@
+=== RED evidence: doctor review-3 fixes -- three-state (ok/fail/skip) doctor
+    steps (R2 review MEDIUM, doc-vs-behavior) + local-file misattribution fix
+    (R2 review LOW) ===
+Date: 2026-08-15T00:00:00Z
+Role: RED (contract-test writer)
+Scope: playbook 4.1/6.5, hggx.3.2. cmd/swarm/relay.go, cmd/swarm/relay_doctor_test.go.
+
+Reviewer findings under test:
+  1. MEDIUM: docs/operations/relay-runbook.md section 12 promises "Omit
+     --operator-secret-file to run every step except the mailbox round-trip
+     and storage checks -- useful when you only have network access to the
+     relay, not its host." doctorCheckMailboxAndStorage's skip() instead
+     returned doctorStep{..., false, ...} for BOTH steps, which printed
+     "fail" and made runRelayDoctor exit 1 -- an operator following the
+     documented network-only workflow got a red run on a healthy relay.
+  2. LOW (misattribution): an empty/whitespace-only --operator-secret-file
+     made MintDiagnosticCapability return ErrDiagnosticsDisabled, which the
+     CLI printed verbatim ("...no operator secret configured"), blaming the
+     RELAY's configuration for a purely local, client-side file problem.
+
+relay_doctor_test.go changed FIRST:
+  - TestRelayDoctor_MailboxStepFailsCleanlyWithoutOperatorSecretFile REPLACED
+    by TestRelayDoctor_MailboxAndStorageStepsSkipWithoutOperatorSecretFile:
+    asserts exit code 0 and status "skip" (not "fail") on both steps when
+    --operator-secret-file is omitted.
+  - New TestRelayDoctor_MailboxStepFailsWhenOperatorSecretFileIsUnreadable:
+    the flag WAS given and is broken -- asserts "fail" (not "skip") and a
+    nonzero exit code, so omission and breakage stay distinguishable.
+  - New TestRelayDoctor_MailboxStepNamesTheLocalFileWhenOperatorSecretFileIsEmpty:
+    asserts the relay's own "no operator secret configured" text is absent
+    from an empty-local-file failure.
+None of this compiles yet: relay.go's doctorStep is still the two-state
+(bool ok) shape, its call into relay.MintDiagnosticCapability still has the
+OLD 2-argument signature (the diag.go identity-binding fix landed first, in
+the same wave, and changed that signature to 3 args), and doctorStepStatus's
+"skip" case is never produced.
+
+Baseline check: cmd/swarm built clean against the OLD 2-arg
+MintDiagnosticCapability immediately before diag.go's signature changed
+earlier in this same RED/GREEN cycle; the failure below is the accumulated
+effect of both outstanding fixes, not a pre-existing break.
+
+Command: go vet ./cmd/swarm/...
+# github.com/Nathandela/swarm/cmd/swarm
+# [github.com/Nathandela/swarm/cmd/swarm]
+vet: cmd/swarm/relay.go:352:90: not enough arguments in call to relay.MintDiagnosticCapability
+	have ([]byte, time.Time)
+	want ([]byte, time.Time, string)

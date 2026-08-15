@@ -42,6 +42,12 @@ type Quotas struct {
 	// push_trigger keep their own dedicated windows above. A value <= 0 means
 	// unlimited.
 	OpsPerMin int `json:"ops_per_min"`
+	// DiskFreeMinBytes is the low-disk alarm threshold (playbook 6.5): /readyz
+	// on the admin listener refuses (503) once free space on the DBPath
+	// filesystem falls below this many bytes, and the relay logs one bounded
+	// warning per transition into the low state (never once per poll). A value
+	// <= 0 disables the check.
+	DiskFreeMinBytes int64 `json:"disk_free_min_bytes"`
 }
 
 // Config is the relay's on-disk configuration (R-REL.9). cmd/swarm-relay reads
@@ -54,6 +60,23 @@ type Config struct {
 	TLSMode string `json:"tls_mode"`
 	// DBPath is the bbolt persistence file.
 	DBPath string `json:"db_path"`
+	// AdminListen is the TCP listen address for the health/readiness admin
+	// surface (playbook 6.5: /healthz, /readyz) -- a SEPARATE port from Listen,
+	// never the public one. Start REFUSES a non-loopback value: the doctor
+	// rule ("the normal public protocol gains no privileged unauthenticated
+	// endpoint") applies to health too, so this is not a flag that can turn
+	// off the loopback restriction, only one that names which loopback
+	// address/port to use. Empty disables admin serving entirely.
+	AdminListen string `json:"admin_listen"`
+	// OperatorSecretFile is the path to the generated high-entropy relay
+	// operator secret (playbook 6.5: "for diagnostic/admin authority"). If the
+	// file does not yet exist, the relay generates one at boot and persists it
+	// here at 0600 (EnsureOperatorSecret); if it exists, the existing secret is
+	// reused. The secret is NEVER logged. It is not a substitute for Web-PKI
+	// server authentication (playbook 6.5) -- the future `swarm relay doctor`
+	// capability (a separate R2 slice) is its consumer. Empty disables
+	// generation entirely, matching PushCredentials' opt-in shape.
+	OperatorSecretFile string `json:"operator_secret_file"`
 	// PushCredentials is the path to a Google service-account JSON document. Set, the
 	// shipped binary constructs the FCM sender (internal/remote/push) and injects it via
 	// WithPushSink; EMPTY, the relay runs with NO push transport at all, which is a
@@ -62,6 +85,17 @@ type Config struct {
 	// running push-less because a credential moved is precisely the failure an operator
 	// only learns about from a user who missed a hand-off.
 	PushCredentials string `json:"push_credentials"`
+
+	// TrustedProxies lists CIDRs whose connections are a trusted reverse proxy,
+	// never a client (playbook 6.5). Default empty means today's behavior
+	// unchanged: every per-source quota keys off the raw TCP peer address. When
+	// the peer that reached the relay falls inside one of these CIDRs, the
+	// relay instead keys quotas off the client address recovered from the LAST
+	// (rightmost) X-Forwarded-For hop -- the one hop that proxy itself
+	// appended -- so a Caddy-in-front-of-a-loopback-relay deployment
+	// (docs/operations/relay-vps-deploy.md) stops collapsing every real client
+	// into Caddy's one shared bucket. See resolveSourceAddr.
+	TrustedProxies []string `json:"trusted_proxies"`
 
 	// HandshakeTimeout bounds a read on a connection that has not yet
 	// authenticated or joined a rendezvous: an idle socket that completes the ws
@@ -97,6 +131,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Listen:           "127.0.0.1:0",
+		AdminListen:      "127.0.0.1:9441",
 		TLSMode:          "off",
 		DBPath:           "relay.db",
 		HandshakeTimeout: 30 * time.Second,
@@ -124,6 +159,10 @@ func DefaultConfig() Config {
 			PushPerMin:      600,
 			ConnPerMin:      600,
 			OpsPerMin:       600,
+			// ponytail: generous default (1 GiB) -- enough headroom on any real VPS
+			// disk that a legitimate operator never trips it, low enough that it
+			// still fires well before bbolt writes start failing outright. Tunable.
+			DiskFreeMinBytes: 1024 * 1024 * 1024,
 		},
 	}
 }

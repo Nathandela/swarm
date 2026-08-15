@@ -31,6 +31,7 @@ and can read:
 | **Per-item sender routing id**, since ADR-007 B27/B28 | mailbox item record | With the item |
 | **Push trigger timing** | push rate window | Not persisted |
 | **The device's push token** — see §2 | `bucketTokens` | Until deleted or the device is revoked |
+| **The real client's external IP**, when the relay sits behind a configured trusted reverse proxy | in-memory quota maps (`authRate`, `opsRate`), keyed by `serverConn.sourceKey` | Not persisted, not logged; reaped when the last connection sharing that key disconnects |
 
 It does **not** hold, and cannot read: session names, hostnames, agent names, Group labels,
 terminal output, keystrokes, or any command body. Those are sealed under keys the relay never sees.
@@ -44,6 +45,18 @@ Logs carry no bodies.
 > content key. A self-hosted relay operator is already trusted with one machine's metadata; pairing
 > multiple machines to the same relay extends that trust to the fact that they are the same
 > owner's. A user who does not want the inference splits the pairings across relays.
+
+> **AMENDED (2026-08-15, R2 "proxy-quota", playbook 6.5):** the client-IP row above is new. Before
+> this work package, a Caddy-fronted relay saw every client's transport peer as `127.0.0.1` — no
+> client IP was ever derivable, by design. `trusted_proxies` (config, default empty) changes that:
+> when the TCP peer that reached the relay is in that list, the relay recovers the real client's
+> address from the rightmost `X-Forwarded-For` hop and uses it in place of the peer address to key
+> `max_concurrent_connections_per_source` / `conn_per_min` — otherwise every real client behind one
+> proxy would collapse into one shared quota bucket. The recovered address lives only in the
+> in-memory `authRate`/`opsRate` maps for as long as a connection from it is open; it is never
+> written to `relay.db`, never logged, and `removeConn`'s existing per-source-key reaping deletes
+> the map entry the moment the last connection sharing it disconnects — the same reaping every
+> other `sourceKey` already gets, not a new retention path.
 
 ### 1a. The push token is a NEW durable device identifier at rest in an untrusted store — LEGACY
 

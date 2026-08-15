@@ -5,9 +5,15 @@ that a phone on the same LAN can talk to. **Production deployment, VPS provision
 publishing, TLS renewal automation, backup/restore, log rotation and health checks are Phase C**
 (§6.18 scope correction) and are deliberately absent.
 
+> **AMENDED (wave R2, playbook §6.5):** backup/restore is no longer absent — it shipped with R2.
+> `swarm-relay backup`/`swarm-relay restore` exist now; see §11. Everything else this paragraph
+> lists as Phase C (VPS provisioning, TLS renewal automation, log rotation, health checks) is still
+> exactly as absent from this document as it always was — only backup/restore graduated out.
+
 Every numbered step below was executed on 2026-07-26 against this tree; the transcript is in
 `docs/verification/remote-phaseB-s20-evidence.md`. Where a step **could not** be executed here it
-says so at the step rather than reading as verified.
+says so at the step rather than reading as verified. §11 (backup/restore) is a separate, later
+addition and says so at its own head rather than being folded into that transcript's date.
 
 > **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** This
 > document stands up a relay with a self-signed certificate and an SPKI pin. Once R2 ships, that
@@ -346,6 +352,189 @@ kill %2 %1     # terminator, then relay
 ```
 
 `swarm-relay` closes its store on `SIGINT`/`SIGTERM`. A clean run leaves an empty log.
+
+---
+
+## 11. Backup and restore the store
+
+**Added by wave R2 (playbook §6.5), 2026-08-15 — not part of the §0-§10 transcript above.**
+`swarm-relay` is a subcommand-dispatching binary now: `backup` and `restore` sit alongside the
+no-subcommand serve behaviour every earlier section uses, reading `db_path` from the same
+`--config` file.
+
+```bash
+# Stop the relay first (§10) -- see "why STOP THE RELAY FIRST" below.
+./swarm-relay backup --config relay.json /path/to/relay-2026-08-15.db
+
+# ... time passes, the store is lost or corrupted ...
+
+./swarm-relay restore --config relay.json /path/to/relay-2026-08-15.db
+# Now start the relay again (§5) against the restored file.
+```
+
+**The subcommand must come before `--config`, not after.** `./swarm-relay --config relay.json
+backup <dest>` — flags first — is a usage error, not a backup: `swarm-relay` with no subcommand
+serves (that is exactly the shape `deploy/relay/swarm-relay.service`'s `ExecStart` uses, since
+serving needs no subcommand), so `--config relay.json` alone parses as "boot and serve," and a
+`backup`/`<dest>` typed after it is now rejected rather than silently ignored.
+
+**Why STOP THE RELAY FIRST.** bbolt gives exactly one process exclusive use of a store file at a
+time — `Open` takes an OS-level `flock` for as long as the handle stays open, which is the relay's
+entire run (`internal/remote/relay/store.go`'s `openStore`, `Options{Timeout: 0}`, waits forever
+for it). `backup` and `restore` each probe that same lock, but with a short, bounded timeout
+instead of waiting forever, so running either against a **live** relay fails cleanly and fast —
+`relay: store is locked by a running relay` — rather than hanging your terminal or, worse, copying
+a file mid-write. This is not a defect to route around: two OS processes were never going to share
+one bbolt file, and a clean, immediate refusal is the honest behaviour when they try.
+
+**What "consistent hot snapshot" means here.** `backup` does not `cp` the store file. It opens a
+**read-only bbolt transaction** and calls `Tx.WriteTo` — bbolt's own documented mechanism for
+producing a self-contained snapshot as of one transaction. That is what "hot" refers to: no
+explicit flush, checkpoint, or graceful-shutdown step is needed beyond not having the relay hold
+the file open, because bbolt's on-disk format is always internally consistent, even after a hard
+kill. `backup` fsyncs the temp file before renaming it into place, so a crash or power loss
+**immediately after** a "successful" backup cannot leave a truncated file at the destination
+either — and the destination directory is fsynced too, once the rename lands, so the directory
+entry itself is not lost to that same crash. `restore` does the same on its own side (temp file
+fsynced before rename, directory fsynced after).
+
+**A stale or concurrent temp file never blocks or corrupts a backup.** `backup` writes to a
+uniquely-named temp file in the destination directory (`os.CreateTemp`, not a fixed `<dest>.tmp`)
+before renaming it over `<dest>`, so a `.tmp`-shaped leftover from a previous killed `backup` is
+simply irrelevant to the next one — no manual cleanup step, and no `file exists` error to work
+around. The unique name also means two `backup` runs overlapping the same destination (nothing
+serializes them; the source's read-only lock is shared) can never collide on the same temp file, so
+neither can silently clobber the other's in-flight write.
+
+**What `restore` checks before it touches anything.** In order: (1) the destination `db_path` is
+not currently locked (the check above); (2) the candidate backup's own bbolt metadata — BOTH of
+bbolt's meta pages, not just the first, since which one is active depends on which page the last
+commit's transaction id landed on — is checked against its actual file size, refusing a
+**truncated** file (an interrupted `scp`/`rsync`, or any copy that stopped early) before ever
+memory-mapping it — opening a truncated bbolt file behaves correctly right up until something reads
+a page past where the file was cut, which can crash the process outright rather than return an
+error, so this check runs first and never touches the file beyond plain, bounded reads; (3) the
+file opens as a valid bbolt database **with every bucket the
+relay's store requires present**; (4) bbolt's own consistency check (`Tx.Check`) walks the whole
+B+tree — key ordering, page reachability, double-frees — catching a backup taken by some other
+tool or file-level corruption that (2) and (3) alone would miss. **Caveat:** bbolt has no per-page
+checksum over the opaque bytes it stores, so (4) cannot detect a corruption confined entirely to
+already-opaque ciphertext content (a single flipped bit deep inside one envelope, say) — only
+structural damage to the store itself. Only once all four pass does `restore` write the restored
+content into place, through a temp file in the destination's own directory renamed over the
+original — so a failure at any point (including a disk-full write, or any of checks 1-4 failing)
+leaves the previous file, if any, untouched rather than half-overwritten, whether that previous
+file held real data or was itself empty.
+
+**Restore compatibility.** A backup taken at the relay's current on-disk schema restores and
+serves: every mailbox item, the storage cursor it was assigned, and the pairing graph
+(`authorize_device` grants) are all present and usable immediately after `restore`, proven by
+`TestRestore_RoundTripSeedBackupWipeRestoreServe` (`internal/remote/relay/backup_test.go`) — seed a
+store through a real relay, back it up, wipe the live file, restore, and read the seeded item back
+out through a freshly started relay.
+
+**Restore is a revocation rollback — re-revoke anything revoked after the backup.** `restore`
+replaces the *entire* store, and the revocation state (`swarm remote revoke`'s deleted pairing edge
+and its ADR-007 B47 retired-ceremony tombstone) lives in that same store — there is nowhere else
+honest to put it without the relay holding more than opaque ciphertext. Restoring a backup taken
+**before** a revoke therefore undoes that revoke: the deleted pairing edge comes back, the tombstone
+that refuses a replayed consent comes back with it removed, and a grantee that kept its old consent
+bytes — or simply still holds the pairing — is accepted again, without the phone ever being asked.
+This is inherent to any point-in-time restore, not a defect in `backup`/`restore` themselves, and it
+is pinned as a test (`TestRestore_RollsBackARevocationPerformedAfterTheBackup`,
+`internal/remote/relay/backup_revocation_rollback_test.go`) so it stays a recorded decision. **If you
+restore a backup, treat every revocation performed after that backup was taken as undone** and
+re-run `swarm remote revoke` for each one — this matters most for a lost or stolen phone, where the
+whole point of the revoke was to keep it out.
+
+**Disk-full behaviour.** A write failure partway through `backup` (disk full, quota, or any other
+write error) is a clean error, and never leaves a corrupt or partial file at the destination path —
+the temp file it was writing into is removed and the real destination is untouched. Exercised by
+`TestBackup_DiskFullLeavesNoPartialFile`, which fails the underlying write deterministically via an
+injectable writer seam (`backupCreate`) rather than a real full disk: this host has no simple
+per-test tmpfs or disk quota available without elevated privileges, and a fault-injected write
+failure exercises exactly the code path a real `ENOSPC` would hit.
+
+---
+
+## 12. `swarm relay doctor`: diagnose a deployment end to end
+
+**Added by wave R2 (playbook §6.5), 2026-08-15 — not part of the §0-§10 transcript above.**
+`swarm relay doctor <wss-url>` (a `swarm`-binary subcommand, not `swarm-relay`) runs every check
+§§6-10 above walk through by hand — DNS resolution, the TCP+TLS handshake under the EXACT policy a
+real machine dial applies (reporting which policy that was), the WebSocket upgrade, protocol
+version compatibility, an authenticated mailbox round-trip, and the relay's own storage health —
+in one command, against a relay that is already running:
+
+```bash
+swarm relay doctor --relay-pin "$(cat relay.pin.b64)" \
+  --operator-secret-file operator.secret \
+  wss://relay.example.com
+```
+
+Omit `--relay-pin` to dial under system trust roots (the ADR-016 `webpki` policy
+`docs/operations/relay-vps-deploy.md` §11 steers toward); pass it to reproduce exactly what a
+machine on the expert `pinned_spki` policy does — §3/§8a above compute the same value.
+
+`--operator-secret-file` must point at the SAME file `operator_secret_file` names in the relay's
+own config (`docs/operations/relay-vps-deploy.md` §14b) — the doctor reads it **locally** and
+**mints** a short-lived (≤ 5 min), single-use\* diagnostic capability itself. There is no network
+call that hands one out, so `swarm relay doctor` adds **no privileged unauthenticated endpoint**
+to the public protocol (playbook §6.5) — this is the doctor rule §14a and §14b of the VPS deploy
+doc already reference. Presenting that capability over the relay's ordinary authenticated
+connection surface (`diag_open`) unlocks a new SCOPED op family — `diag_open`/`diag_status`/
+`diag_append`/`diag_read`/`diag_close` — that can only create, use, and delete the **caller's own**
+ephemeral diagnostic route: it can never read a real mailbox and never enumerates a routing id
+(`internal/remote/relay/diag.go`; the adversarial fences are in `internal/remote/relay/diag_test.go`).
+`diag_status` reports the SAME store-writable/free-disk verdict `/readyz` reports (§14a) — it exists
+because a remote operator running this CLI typically has no `admin_listen` access, only the public
+`wss://` one. Omit `--operator-secret-file` to run every step except the mailbox round-trip and
+storage checks — useful when you only have network access to the relay, not its host. Both report
+`skip`, not `fail`, when the flag is simply omitted, and a `skip` does not turn the exit code
+nonzero — this is a legitimate, exit-`0` diagnostic run, not a degraded one. A flag that **was**
+given but turns out broken (an unreadable or empty `--operator-secret-file`, a wrong secret, an
+unreachable relay) still reports `fail` on both steps and a nonzero exit: the operator asked for the
+check and it did not run.
+
+\* "Single-use" is enforced in the relay process's memory only (`Server.diagUsedNonces`); a restart
+forgets every spent capability. The blast radius of a post-restart replay is a fresh, empty,
+per-connection diagnostic route — never real mailbox content — so this is accepted rather than made
+durable; see the comment on `DiagnosticCapabilityTTL` in `internal/remote/relay/diag.go`. Each minted
+capability is also bound to the ONE relay-auth identity `swarm relay doctor` generates for that run
+(`RoutingID`-keyed) — an endpoint the capability is ever shown to (a typo'd URL, a hijacked DNS
+record) cannot replay it against the real relay under an identity of its own, since it never holds
+that ephemeral identity's private key.
+
+Each of the six steps prints its own `ok`/`fail`/`skip` line with an actionable remedy; the command
+exits `0` unless a step actually **fails** — a `skip`ped step (only Mailbox round-trip and Storage,
+and only when `--operator-secret-file` is omitted) does not affect the exit code:
+
+```
+DNS resolution       ok   relay.example.com -> 203.0.113.7
+TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
+WebSocket upgrade     ok   101 Switching Protocols
+Protocol version     ok   negotiated version 1
+Mailbox round-trip    ok   32 bytes round-tripped through an ephemeral, single-use diagnostic route
+Storage              ok   store writable; 42817728512 bytes free (>= 1073741824)
+```
+
+Network-only (`--operator-secret-file` omitted), against the same healthy relay, still exits `0`:
+
+```
+DNS resolution       ok   relay.example.com -> 203.0.113.7
+TCP+TLS              ok   policy: system trust roots; issuer="R3" not-after=2026-11-01T00:00:00Z
+WebSocket upgrade     ok   101 Switching Protocols
+Protocol version     ok   negotiated version 1
+Mailbox round-trip    skip no --operator-secret-file given; pass the relay's operator secret file...
+Storage               skip skipped: no --operator-secret-file given; pass the relay's operator...
+```
+
+A `TCP+TLS` failure under system trust roots is a **real** certificate problem (expired, wrong SAN,
+untrusted issuer, or — most often — ACME never having issued; see §12's troubleshooting list in
+`relay-vps-deploy.md`) — never a false failure from the doctor itself: this step builds and reports
+the SAME `tls.Config` a real machine dial resolves via `relay.Security.Resolve`
+(`cmd/swarm/relay.go`), naming the server it verifies against exactly as a real dial would rather
+than aborting on a bare config before certificate validation ever runs.
 
 ---
 

@@ -1,0 +1,18 @@
+# Keeps the Docker build context (all of it uploaded to the daemon, not just what a
+# Dockerfile COPYs) small and -- more importantly -- keeps real secrets out of it
+# entirely. deploy/relay/Dockerfile's builder stage does `COPY . .` because swarm-relay's
+# module needs the whole tree to build; without this file that COPY would also land
+# secrets/ (a real, gitignored credential -- see secrets/.gitignore) inside a cached
+# image layer on whatever machine runs the build, which `docker history`/`docker save`
+# would then expose regardless of what the final stage actually copies out of the builder.
+
+secrets/
+.git/
+.claude/worktrees/
+android/
+dist/
+*.db
+*.test
+# Operator-created local files the compose header instructs; never build-context material.
+deploy/relay/relay.config
+deploy/relay/Caddyfile.local

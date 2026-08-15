@@ -73,3 +73,7 @@ local.properties
 
 # local agent scratch -- plans and red-run evidence; snippets are embedded in docs/verification
 .claude/tmp/
+
+# Operator-created relay deployment files (docker-compose.yml header instructs creating them)
+deploy/relay/relay.config
+deploy/relay/Caddyfile.local

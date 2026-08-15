@@ -92,6 +92,16 @@ func (m *mockAPNs) all() []recordedPush {
 // the clock.
 func startTestRelay(t *testing.T, mut func(*Config)) (*Server, Config, *mockAPNs, *fakeClock) {
 	t.Helper()
+	return startTestRelayOpts(t, mut)
+}
+
+// startTestRelayOpts is startTestRelay with room for EXTRA Options (e.g.
+// WithOperatorSecret for the R2 doctor capability suite), so those tests need
+// not duplicate this whole fixture. Every existing startTestRelay caller is
+// unaffected: this is the same construction with nothing appended when extra
+// is empty.
+func startTestRelayOpts(t *testing.T, mut func(*Config), extra ...Option) (*Server, Config, *mockAPNs, *fakeClock) {
+	t.Helper()
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"
 	cfg.TLSMode = "off"
@@ -101,7 +111,8 @@ func startTestRelay(t *testing.T, mut func(*Config)) (*Server, Config, *mockAPNs
 	}
 	apns := &mockAPNs{}
 	clk := newFakeClock()
-	srv, err := New(cfg, WithClock(clk), WithPushSink(apns))
+	opts := append([]Option{WithClock(clk), WithPushSink(apns)}, extra...)
+	srv, err := New(cfg, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

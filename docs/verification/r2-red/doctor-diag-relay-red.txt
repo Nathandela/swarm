@@ -1,0 +1,35 @@
+======================================================================
+R2 doctor (playbook 4.1/6.5) - relay package diagnostic capability - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.2 (R2-B swarm relay doctor: diagnostic
+      capability, ephemeral route, DNS/TLS/WSS/storage results)
+role: BUILDER (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15T07:44:07Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new file: internal/remote/relay/diag_test.go
+edited (additive): internal/remote/relay/harness_test.go (startTestRelayOpts)
+command: go test ./internal/remote/relay/... 2>&1
+======================================================================
+
+### COMPILE-LEVEL RED: MintDiagnosticCapability, parseDiagCap,
+### WithOperatorSecret, ErrDiagnosticsDisabled, ErrDiagnosticCapabilityInvalid,
+### ErrDiagRouteNotOpen, maxDiagItems, and Client.DiagOpen/DiagAppend/
+### DiagRead/DiagClose do not exist yet. `go build ./internal/remote/relay/...`
+### (production code only) is clean; the failure is confined to the new test
+### file referencing the not-yet-implemented diag_test.go surface, exactly as
+### harness_test.go's own header documents this package's RED convention.
+
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/diag_test.go:33:47: undefined: WithOperatorSecret
+internal/remote/relay/diag_test.go:41:16: undefined: MintDiagnosticCapability
+internal/remote/relay/diag_test.go:45:26: undefined: parseDiagCap
+internal/remote/relay/diag_test.go:58:15: undefined: MintDiagnosticCapability
+internal/remote/relay/diag_test.go:58:74: undefined: ErrDiagnosticsDisabled
+internal/remote/relay/diag_test.go:65:16: undefined: MintDiagnosticCapability
+internal/remote/relay/diag_test.go:69:18: undefined: parseDiagCap
+internal/remote/relay/diag_test.go:69:103: undefined: ErrDiagnosticCapabilityInvalid
+internal/remote/relay/diag_test.go:76:16: undefined: MintDiagnosticCapability
+internal/remote/relay/diag_test.go:82:18: undefined: parseDiagCap
+internal/remote/relay/diag_test.go:82:18: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL

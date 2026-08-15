@@ -1,0 +1,53 @@
+=== RED evidence: R2 work package "backup", CLI-level dispatch (playbook 6.5) ===
+Date: 2026-08-15T08:07:06Z
+Role: BUILDER (backup/restore for the relay's bbolt store)
+
+Context: cmd/swarm-relay/main.go's run() subcommand dispatch (the "backup"/
+"restore" cases routing to runBackup/runRestore) and the tests in
+main_test.go that exercise it already existed in the working tree with no
+recorded failing-first run -- a documented review gap. This file captures
+that run retroactively and honestly: run()'s dispatch was temporarily
+stripped of its "backup"/"restore" cases (the "healthcheck" case, part of a
+different work package, was left in place) to reproduce the pre-implementation
+state, the five named tests were run, and the dispatch was restored
+immediately after. No other file was touched for this capture.
+
+Command: go test ./cmd/swarm-relay/... -run 'TestRun_BackupSubcommand|TestRun_RestoreSubcommand' -v
+(run against cmd/swarm-relay/main.go with the "backup"/"restore" switch cases
+in run() removed -- runBackup/runRestore remained defined but unreached)
+
+=== RUN   TestRun_BackupSubcommandRoundTrips
+    main_test.go:210: run backup: swarm-relay: --config is required
+--- FAIL: TestRun_BackupSubcommandRoundTrips (0.05s)
+=== RUN   TestRun_BackupSubcommandRequiresConfigFlag
+--- PASS: TestRun_BackupSubcommandRequiresConfigFlag (0.00s)
+=== RUN   TestRun_BackupSubcommandRequiresDestination
+--- PASS: TestRun_BackupSubcommandRequiresDestination (0.00s)
+=== RUN   TestRun_RestoreSubcommandRoundTrips
+    main_test.go:271: run restore: swarm-relay: --config is required
+--- FAIL: TestRun_RestoreSubcommandRoundTrips (0.03s)
+=== RUN   TestRun_RestoreSubcommandRequiresConfigFlag
+--- PASS: TestRun_RestoreSubcommandRequiresConfigFlag (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm-relay	0.933s
+FAIL
+
+Note on the three "PASS" rows: with dispatch absent, args[0] is "backup"/
+"restore" -- a non-flag token -- so flag.FlagSet.Parse (which does not
+support interspersed positional args) stops immediately and --config is
+never consumed, independently producing a usage error. The two
+"RequiresConfigFlag"/"RequiresDestination" tests only assert "an error is
+returned", which this coincidentally satisfies without the dispatch/
+runBackup/runRestore wiring under test -- a pre-existing weakness in those
+two tests' assertions, left as-is (never weaken or rewrite a test to make a
+result look better). The two RoundTrip tests are the ones that actually
+exercise the wiring, and they fail for the right reason above: without
+dispatch, "backup"/"restore" subcommand invocations silently fall through to
+runServe and go looking for --config that was never given a chance to parse,
+never reaching relay.Backup/relay.Restore at all -- the same class of bug the
+review's "silent success on a backup command" finding reports, just caught
+here at parse time instead of hanging until ctx expiry.
+
+Immediately after this capture, the two switch cases were restored in
+cmd/swarm-relay/main.go and the same command was re-run to confirm a clean
+PASS (see the GREEN verification tail in the session's final report).

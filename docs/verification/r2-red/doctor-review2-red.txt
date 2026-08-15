@@ -1,0 +1,98 @@
+=== RED evidence: R2 doctor work package, second review round (hggx.3) ===
+Date: 2026-08-15T09:07:59Z
+Role: BUILDER (fixing reviewer findings: MEDIUM storage step, LOW relay-pin
+attribution, LOW DNS doubled-prefix/schemeless-URL)
+
+--- Part 1: internal/remote/relay -- diag_status (the storage step's wire op) ---
+
+Command: go test ./internal/remote/relay/... -run 'TestDiag_Status' -v
+(production code for DiagStatus/handleDiagStatus/checkStorage temporarily
+reverted to /tmp so the failure is genuine; diag_test.go's new assertions are
+exactly as committed)
+
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/server.go:815:14: sc.handleDiagStatus undefined (type *serverConn has no field or method handleDiagStatus)
+internal/remote/relay/diag_test.go:304:24: party.cl.DiagStatus undefined (type *Client has no field or method DiagStatus)
+internal/remote/relay/diag_test.go:440:26: party.cl.DiagStatus undefined (type *Client has no field or method DiagStatus)
+internal/remote/relay/diag_test.go:478:26: party.cl.DiagStatus undefined (type *Client has no field or method DiagStatus)
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+--- Part 2: cmd/swarm -- the doctor CLI's six findings, against the OLD relay.go ---
+
+Command: go test ./cmd/swarm/... -run 'TestRelayDoctor|TestDoctorCheckDNS' -v
+(relay.go untouched at this point; only relay_doctor_test.go's new/extended
+assertions are new -- every failure below is a real behavioral gap, not a
+compile error, since these tests call only pre-existing exported surface)
+
+=== RUN   TestRelayDoctor_AllStepsOkWithOperatorSecret
+    relay_doctor_test.go:141: doctor output missing step "Storage"; got:
+        DNS resolution       ok   127.0.0.1 -> 127.0.0.1
+        TCP+TLS              ok   policy: cleartext (loopback exemption) (no TLS on this hop)
+        WebSocket upgrade    ok   101 Switching Protocols
+        Protocol version     ok   negotiated version 1
+        Mailbox round-trip   ok   32 bytes round-tripped through an ephemeral, single-use diagnostic route
+--- FAIL: TestRelayDoctor_AllStepsOkWithOperatorSecret (0.14s)
+=== RUN   TestRelayDoctor_MailboxStepFailsCleanlyWithoutOperatorSecretFile
+    relay_doctor_test.go:173: doctor output has no line for step "Storage"; got:
+        DNS resolution       ok   127.0.0.1 -> 127.0.0.1
+        TCP+TLS              ok   policy: cleartext (loopback exemption) (no TLS on this hop)
+        WebSocket upgrade    ok   101 Switching Protocols
+        Protocol version     ok   negotiated version 1
+        Mailbox round-trip   fail no --operator-secret-file given; pass the relay's operator secret file to mint a diagnostic capability (docs/operations/relay-runbook.md §12)
+--- FAIL: TestRelayDoctor_MailboxStepFailsCleanlyWithoutOperatorSecretFile (0.04s)
+=== RUN   TestRelayDoctor_FailsCleanlyOnAnUnreachableRelay
+--- PASS: TestRelayDoctor_FailsCleanlyOnAnUnreachableRelay (0.00s)
+=== RUN   TestRelayDoctor_RequiresExactlyOneURLArgument
+--- PASS: TestRelayDoctor_RequiresExactlyOneURLArgument (0.00s)
+=== RUN   TestRelayDoctor_AllStepsOkOverARealWSSListener
+    relay_doctor_test.go:297: doctor output has no line for step "Storage"; got:
+        DNS resolution       ok   127.0.0.1 -> 127.0.0.1
+        TCP+TLS              ok   policy: pinned certificate (operator-configured); issuer="" not-after=2084-01-29T16:00:00Z
+        WebSocket upgrade    ok   101 Switching Protocols
+        Protocol version     ok   negotiated version 1
+        Mailbox round-trip   ok   32 bytes round-tripped through an ephemeral, single-use diagnostic route
+--- FAIL: TestRelayDoctor_AllStepsOkOverARealWSSListener (0.10s)
+=== RUN   TestRelayDoctor_StorageStepFailsWhenDiskIsLow
+    relay_doctor_test.go:320: runRelay doctor against a low-disk relay exited 0, want nonzero. stdout=DNS resolution       ok   127.0.0.1 -> 127.0.0.1
+        TCP+TLS              ok   policy: cleartext (loopback exemption) (no TLS on this hop)
+        WebSocket upgrade    ok   101 Switching Protocols
+        Protocol version     ok   negotiated version 1
+        Mailbox round-trip   ok   32 bytes round-tripped through an ephemeral, single-use diagnostic route
+--- FAIL: TestRelayDoctor_StorageStepFailsWhenDiskIsLow (0.04s)
+=== RUN   TestDoctorCheckDNS_FailureIsNotDoubled
+    relay_doctor_test.go:343: DNS failure detail has a doubled prefix: "lookup this-host-should-not-resolve.invalid: lookup this-host-should-not-resolve.invalid: no such host (check the DNS record for this host)"
+--- FAIL: TestDoctorCheckDNS_FailureIsNotDoubled (0.03s)
+=== RUN   TestRelayDoctor_SchemelessURLNamesTheFix
+    relay_doctor_test.go:359: a schemeless url's failure must suggest adding wss://; got:
+        DNS resolution       fail lookup : lookup : no such host (check the DNS record for this host)
+        TCP+TLS              fail transport policy: relay: unsupported url scheme ""
+        WebSocket upgrade    fail relay: unsupported url scheme ""
+        Protocol version     fail skipped: no connection
+        Mailbox round-trip   fail no --operator-secret-file given; pass the relay's operator secret file to mint a diagnostic capability (docs/operations/relay-runbook.md §12)
+    relay_doctor_test.go:362: schemeless url fell through to the empty-host DNS failure instead of naming the missing scheme; got:
+        DNS resolution       fail lookup : lookup : no such host (check the DNS record for this host)
+        TCP+TLS              fail transport policy: relay: unsupported url scheme ""
+        WebSocket upgrade    fail relay: unsupported url scheme ""
+        Protocol version     fail skipped: no connection
+        Mailbox round-trip   fail no --operator-secret-file given; pass the relay's operator secret file to mint a diagnostic capability (docs/operations/relay-runbook.md §12)
+--- FAIL: TestRelayDoctor_SchemelessURLNamesTheFix (0.00s)
+=== RUN   TestRelayDoctor_MalformedRelayPinNamesTheFlagNotAFile
+    relay_doctor_test.go:378: malformed --relay-pin error must not blame relay.json (the operator never used that file); got: relay doctor: relay.json: relay_spki_pin is not base64 of a 32-byte SHA-256 digest (see the relay runbook, section 3): relay: Security.PinnedSPKISHA256 must be a 32-byte SHA-256 digest
+    relay_doctor_test.go:381: malformed --relay-pin error must name the flag that was actually wrong; got: relay doctor: relay.json: relay_spki_pin is not base64 of a 32-byte SHA-256 digest (see the relay runbook, section 3): relay: Security.PinnedSPKISHA256 must be a 32-byte SHA-256 digest
+--- FAIL: TestRelayDoctor_MalformedRelayPinNamesTheFlagNotAFile (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	1.522s
+FAIL
+
+=== Findings this RED covers ===
+MEDIUM: doctor prints no storage result (5 new/updated FAILs above: the
+  Storage step is absent, and the low-disk scenario the finding names
+  verbatim passes clean).
+LOW: malformed --relay-pin blames relay.json instead of the flag.
+LOW: DNS failure has a doubled "lookup X: lookup X:" prefix, and a
+  schemeless URL falls through to an opaque empty-host DNS failure instead
+  of naming the missing scheme.
+INFO items (single-use durability comment honesty; diag_open vs
+  diag_status disclosure) are comment/doc-only and covered by inspection,
+  not RED evidence.

@@ -15,6 +15,11 @@ adds backups, log rotation, health checks, or monitoring. It stands the relay up
 certificate and documents what `PB-OPS-1`'s acceptance criteria actually asks for: a `wss://` URL
 fed to `swarm remote init`.
 
+> **AMENDED (wave R2, playbook §6.5):** backup/restore graduated out of that Phase C list — see
+> §13. The rest of the footnote's list (log rotation, health checks, TLS renewal automation beyond
+> Caddy's own ACME default, resource limits, cross-version compatibility) is unaffected and still
+> absent from this document.
+
 > **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** This
 > paragraph previously named "a `wss://` URL and an SPKI pin" as the two things this document
 > produces, because the pin is, as of today, still the only relay TLS policy that exists. Once R2
@@ -118,15 +123,20 @@ ship is both the documentation and the thing that boots. The shipped values alre
 Caddyfile (§7) and the systemd unit (§5) respectively — you should not need to change either
 unless you have a reason to.
 
-Read the `_comment_quotas` note in that file before you tighten any quota: this deployment topology
-(Caddy proxying to a loopback relay) collapses every client's per-source rate window into one
-shared bucket, because the relay keys rate limits off the raw TCP peer address it accepts
-(`defaultSourceKey`, `internal/remote/relay/server.go`) and `cmd/swarm-relay` never installs an
-`X-Forwarded-For`-aware override. Harmless at v1's single-machine-plus-single-phone scope; a
-reason to revisit before fronting genuinely independent clients through this same proxy.
-> AMENDED BY ADR-018 (2026-08-15): R4 fires exactly this revisit — its exit runs two machines
-> through one organization relay, so the shared per-source bucket stops being harmless; the R2
-> trusted-proxy work (playbook 6.5) keys quotas by the validated forwarded address.
+Read the `_comment_quotas` note in that file before you tighten any quota. Without more, this
+deployment topology (Caddy proxying to a loopback relay) would collapse every client's per-source
+rate window into one shared bucket, because the relay keys rate limits off the raw TCP peer
+address it accepts (`defaultSourceKey`, `internal/remote/relay/server.go`). The shipped
+`relay.config.example`'s `trusted_proxies: ["127.0.0.1/32"]` closes that: with Caddy's own address
+listed there, the relay instead derives the per-source key from the last (rightmost)
+`X-Forwarded-For` hop Caddy appends, so `max_concurrent_connections_per_source` and `conn_per_min`
+bind per real client again, not per shared Caddy bucket (R2 `playbook 6.5`, the trusted-proxy work
+ADR-018 names below). Clearing `trusted_proxies` reverts to the collapsed-bucket behavior — only
+do that if this relay has no reverse proxy in front of it at all.
+> AMENDED BY ADR-018 (2026-08-15): R4 fires the revisit this section used to defer — its exit runs
+> two machines through one organization relay, where a shared per-source bucket would no longer be
+> harmless. The R2 trusted-proxy work above (playbook 6.5) is what keys quotas by the validated
+> forwarded address instead.
 
 ```bash
 sudo chmod 0644 /etc/swarm-relay/relay.config
@@ -491,11 +501,125 @@ Caddy is stripping or mishandling the handshake. In rough order of likelihood:
 
 ---
 
+## 13. Backup and restore
+
+**Added by wave R2 (playbook §6.5), 2026-08-15.** The relay binary itself supports `backup` and
+`restore` subcommands (`docs/operations/relay-runbook.md` §11 has the full mechanism and
+guarantees — read that first if you have not). On this systemd-managed deployment, the operator
+step is stopping the service around the backup/restore call, since a running relay holds its store
+file's OS lock for as long as the unit is up:
+
+```bash
+# Backup: brief stop, snapshot, restart. mailbox delivery pauses for the stop's duration; nothing
+# is lost -- a paused gateway/phone resumes from its own cursor once the relay is back.
+sudo systemctl stop swarm-relay
+sudo -u swarm-relay /opt/swarm-relay/bin/swarm-relay backup \
+  --config /etc/swarm-relay/relay.config /var/backups/swarm-relay/relay-$(date +%F).db
+sudo systemctl start swarm-relay
+
+# Restore: the service must already be stopped -- `restore` refuses otherwise (relay-runbook.md §11).
+sudo systemctl stop swarm-relay
+sudo -u swarm-relay /opt/swarm-relay/bin/swarm-relay restore \
+  --config /etc/swarm-relay/relay.config /var/backups/swarm-relay/relay-2026-08-15.db
+sudo systemctl start swarm-relay
+```
+
+Run as `swarm-relay` (the `sudo -u`), not root: the store file and its directory are owned by that
+user (`WorkingDirectory=/var/lib/swarm-relay` in the unit, §5), and a root-owned backup or a
+root-written restore leaves permissions the service can no longer open on its next start. The
+destination directory (`/var/backups/swarm-relay` above) needs to exist and be writable by that
+user before the first backup; it is not created by anything in §3.
+
+**Restore undoes revocations performed after the backup.** `restore` replaces the whole store,
+revocation state included — relay-runbook.md §11 has the full explanation and a pinned test. If you
+restore a backup, re-run `swarm remote revoke` for anything that was revoked after that backup was
+taken, especially after recovering from a lost or stolen phone.
+
+---
+
+## 14. Docker Compose alternative
+
+**Added by wave R2 (playbook §6.5), 2026-08-15.** Steps 1-12 above stand the relay up directly on
+a systemd-managed VPS. `deploy/relay/Dockerfile` and `deploy/relay/docker-compose.yml` package the
+same two processes — swarm-relay and Caddy — as containers instead, with persistent named volumes
+for the bbolt store and Caddy's ACME state, a Docker `HEALTHCHECK` wired to the relay's own
+`/healthz`/`/readyz` (§14a), `restart: unless-stopped`, memory/pids resource limits, and
+`json-file` log rotation. Nothing about the relay's own protocol or TLS story changes: Caddy is
+still the entire TLS story (the intro above), and the relay still authenticates nothing at the
+transport layer.
+
+```bash
+cd deploy/relay
+cp relay.config.example relay.config   # the shipped defaults already match the compose
+                                        # topology's listen/admin_listen addresses
+# edit relay.example.com in ./Caddyfile to your real domain (same requirement as §7)
+docker compose build
+docker compose up -d
+docker compose ps                      # swarm-relay should read "healthy"
+```
+
+Read `deploy/relay/docker-compose.yml`'s own header comment before changing the topology: Caddy
+joins swarm-relay's network namespace on purpose (`network_mode: "service:swarm-relay"`), which is
+what lets the unmodified `Caddyfile` and `relay.config.example` — written for the bare-VPS
+`127.0.0.1` topology above — work here with no address changed.
+
+§§1-2, 6-12's steps for cross-compiling (the image build replaces this), DNS, the SPKI pin (if you
+have not migrated to `webpki`, ADR-016), and machine provisioning are identical either way — only
+how the two processes are packaged and supervised differs.
+
+### 14a. Health and readiness endpoints
+
+**Added by wave R2 (playbook §6.5), 2026-08-15.** The relay serves `/healthz` (process up) and
+`/readyz` (bbolt store writable, public listener accepting, free disk above
+`quotas.disk_free_min_bytes`) on `admin_listen` — a SEPARATE, loopback-only port from the public
+`listen` address, refused outright by `Start` if pointed anywhere else
+(`internal/remote/relay/health.go`). This is not new attack surface on the public protocol: the
+doctor rule (playbook §6.5, `swarm relay doctor`) — no privileged unauthenticated endpoint on the
+public listener — applies to health too, and `admin_listen` is exactly as unreachable from outside
+as the systemd deployment's own `listen` address is. Under Docker Compose, the `HEALTHCHECK`
+directive execs `swarm-relay healthcheck --config ...` (distroless has no shell/curl/wget for an
+external probe to use) which reads `admin_listen` straight out of the same config file and GETs its
+`/readyz`; the same subcommand doubles as a manual check on the systemd deployment:
+
+```bash
+sudo -u swarm-relay /opt/swarm-relay/bin/swarm-relay healthcheck --config /etc/swarm-relay/relay.config
+```
+
+Falling below `quotas.disk_free_min_bytes` (1 GiB shipped default) fails `/readyz` and logs one
+bounded warning per transition into the low state — never once per poll, since an orchestrator
+healthcheck hits this every few seconds for the container's whole life.
+
+### 14b. The generated operator secret
+
+**Added by wave R2 (playbook §6.5), 2026-08-15.** If `operator_secret_file` is set (the shipped
+example points it at the same state directory/named volume as `db_path`) and the file does not yet
+exist, the relay generates a high-entropy secret at first boot and persists it there at `0600`. It
+is diagnostic/admin authority for the `swarm relay doctor` capability — **not** a substitute for
+Web-PKI server authentication (playbook §6.5) — and is never logged. Leave `operator_secret_file`
+out of your config entirely to keep diagnostics disabled. `docs/operations/relay-runbook.md` §12
+has the doctor command itself — run it once you've deployed to prove DNS/TCP+TLS/WebSocket/protocol/
+mailbox/storage all work end to end, rather than trusting §§8-10 above in isolation. The storage
+step (`diag_status`) reports the SAME store-writable/free-disk verdict `/readyz` reports above, over
+the public `wss://` connection, for an operator who has no `admin_listen` access to this host.
+
+---
+
 ## What this deliberately does not cover
 
 Per `docs/specifications/remote-phaseB-requirements.md:664`: **backup/restore, log rotation,
 health checks and monitoring, TLS renewal automation beyond Caddy's own default behavior, resource
-limits, and cross-version compatibility are all Phase C.** This runbook gets a relay reachable over
+limits, and cross-version compatibility are all Phase C.**
+
+> **AMENDED (wave R2, playbook §6.5):** backup/restore shipped — see §13. The relay itself now
+> serves `/healthz`/`/readyz` and a disk-space alarm on any deployment that sets `admin_listen`
+> (`relay.config.example` does) — see §14a. Resource limits, `json-file` log rotation, and an
+> orchestrator that actually RESTARTS the container on a failed check ship through the Docker
+> Compose bundle specifically — see §14. The bare-VPS systemd unit (§5) restarts on process crash
+> (`Restart=on-failure`) but is not wired to this readiness signal. TLS renewal automation beyond
+> Caddy's own default behavior and cross-version compatibility are still Phase C / a separate R2
+> slice and still absent here.
+
+This runbook gets a relay reachable over
 real `wss://` and documents what `swarm remote init` needs — nothing here should be read as a claim
 of production operability beyond that.
 

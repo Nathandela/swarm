@@ -1,0 +1,38 @@
+======================================================================
+R2 bundle (playbook 6.5) - health/readiness + operator secret - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.1 (R2-A OCI image + Compose/Caddy bundle +
+      health endpoints + operator secret)
+role: BUILDER (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15T07:36:56Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new files (ADDITIVE ONLY):
+  internal/remote/relay/health_test.go
+  internal/remote/relay/operatorsecret_test.go
+command: go test ./internal/remote/relay/... 2>&1
+======================================================================
+
+### COMPILE-LEVEL RED: undefined symbols are the frozen contract the
+### implementation must supply -- Config.AdminListen, Quotas.DiskFreeMinBytes,
+### (*Server).AdminURL, (*Server).listening, WithDiskFreeFunc,
+### EnsureOperatorSecret, Config.OperatorSecretFile. No existing test or
+### non-test source file is modified (git status confirms below).
+
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/health_test.go:46:14: srv.AdminURL undefined (type *Server has no field or method AdminURL)
+internal/remote/relay/health_test.go:68:25: DefaultConfig().AdminListen undefined (type Config has no field or method AdminListen)
+internal/remote/relay/health_test.go:83:32: DefaultConfig().Quotas.DiskFreeMinBytes undefined (type Quotas has no field or method DiskFreeMinBytes)
+internal/remote/relay/health_test.go:97:6: cfg.AdminListen undefined (type Config has no field or method AdminListen)
+internal/remote/relay/health_test.go:105:151: cfg.AdminListen undefined (type Config has no field or method AdminListen)
+internal/remote/relay/health_test.go:114:5: c.AdminListen undefined (type *Config has no field or method AdminListen)
+internal/remote/relay/health_test.go:116:16: srv.AdminURL undefined (type *Server has no field or method AdminURL)
+internal/remote/relay/health_test.go:166:6: srv.listening undefined (type *Server has no field or method listening)
+internal/remote/relay/health_test.go:171:6: srv.listening undefined (type *Server has no field or method listening)
+internal/remote/relay/health_test.go:180:12: c.Quotas.DiskFreeMinBytes undefined (type Quotas has no field or method DiskFreeMinBytes)
+internal/remote/relay/health_test.go:180:12: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+---- git status (additive-only check) ----
+?? internal/remote/relay/health_test.go
+?? internal/remote/relay/operatorsecret_test.go

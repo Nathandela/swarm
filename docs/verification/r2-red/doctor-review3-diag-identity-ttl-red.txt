@@ -1,0 +1,63 @@
+=== RED evidence: doctor review-3 fixes -- diagnostic capability identity binding
+    (R2 review LOW, design) + route TTL enforcement (R2 review LOW-MEDIUM) ===
+Date: 2026-08-15T00:00:00Z
+Role: RED (contract-test writer)
+Scope: playbook 4.1/6.5, hggx.3.2. internal/remote/relay/diag.go,
+       internal/remote/relay/server.go (serverConn.diagExpiresAt).
+
+Reviewer findings under test:
+  1. LOW-MEDIUM: DiagnosticCapabilityTTL bounded only diag_open -- once
+     sc.diagOpen was set, diag_append/diag_read/diag_status had no expiry for
+     the rest of the connection. Probe: open a route, advance the clock 100x
+     the TTL, diag_status still answered.
+  2. LOW (design): signDiagCap's MAC covers only (context, nonce, issued_at)
+     -- a pure unaudienced bearer token, replayable against the real relay
+     under a throwaway identity by any endpoint the capability was ever shown
+     to (typo'd URL, hijacked DNS).
+
+diag_test.go changed FIRST, to the new contract:
+  - MintDiagnosticCapability(secret, now, rid) -- an added identity-binding
+    parameter, rid the caller's RoutingID(pub).
+  - parseDiagCap returns (nonce, issuedAt, rid, err) -- one more value.
+  - New tests: TestDiag_CapabilityBoundToADifferentIdentityIsRefused,
+    TestDiag_RouteOpsAreRefusedOnceTheCapabilityTTLPasses,
+    TestDiag_RouteExpiresRelativeToCapabilityIssuedAtNotOpenTime.
+  - TestDiag_CapabilityIsSingleUse rewritten to replay from the SAME identity
+    (a second connection under one routing id, per
+    TestRelay_DuplicateConnectionResolved) so it cannot be conflated with the
+    new identity-binding check.
+None of this compiles against the current diag.go/server.go: MintDiagnosticCapability
+and parseDiagCap still have their OLD two/three-value shapes, and sc.diagExpiresAt
+does not exist yet.
+
+Baseline check: `go build ./...` was green immediately before this file changed
+(package compiled under the pre-existing 2-arg/3-return signatures) -- the
+failure below is caused solely by the new contract diag_test.go now demands.
+
+Command: go vet ./internal/remote/relay/...
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/diag_test.go:54:66: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:58:34: assignment mismatch: 4 variables but parseDiagCap returns 3 values
+internal/remote/relay/diag_test.go:74:57: too many arguments in call to MintDiagnosticCapability
+	have (nil, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:81:66: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:85:21: assignment mismatch: 4 variables but parseDiagCap returns 3 values
+internal/remote/relay/diag_test.go:92:66: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:98:21: assignment mismatch: 4 variables but parseDiagCap returns 3 values
+internal/remote/relay/diag_test.go:113:72: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:164:72: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:194:72: too many arguments in call to MintDiagnosticCapability
+	have ([]byte, "time".Time, string)
+	want ([]byte, "time".Time)
+internal/remote/relay/diag_test.go:194:72: too many errors

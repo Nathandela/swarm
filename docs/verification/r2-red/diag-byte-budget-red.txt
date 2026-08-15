@@ -1,0 +1,35 @@
+======================================================================
+R2 doctor review fix (MEDIUM) - handleDiagAppend total-bytes cap - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.2 (R2-B swarm relay doctor: diagnostic
+      capability, ephemeral route, DNS/TLS/WSS/storage results)
+role: BUILDER (TDD Phase 1 + Red, GG-5) - addressing reviewer finding MEDIUM
+finding: handleDiagAppend enforces maxDiagItems (32) but no per-connection
+      byte ceiling, and handleDiagRead returns every item in ONE unpaged
+      reply (internal/remote/relay/diag.go:219,250). The sibling mailbox
+      handlers guard exactly this (server.go:1123 refuses an over-size
+      envelope at append; store.go:205 pages mailbox_read under
+      mailboxPageByteBudget). Proven by the reviewer's probe: two 600 KiB
+      diag_appends are ACCEPTED, and the subsequent DiagRead fails with
+      "relay: connection closed" -- the read connection is torn.
+date: 2026-08-15T08:21:20Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+edited (additive): internal/remote/relay/diag_test.go
+  (TestDiag_AppendRefusesWhenTotalBytesWouldExceedThePageBudget)
+command: go test ./internal/remote/relay/... -run TestDiag_AppendRefusesWhenTotalBytesWouldExceedThePageBudget -v 2>&1
+======================================================================
+
+### BEHAVIORAL RED (not a compile failure): the test compiles clean against
+### the existing exported surface (Client.DiagOpen/DiagAppend/DiagRead, all
+### already implemented). It fails because handleDiagAppend has no total-
+### bytes ceiling yet: the second 600 KiB append is accepted (err == nil)
+### instead of being refused with ErrQuotaExceeded, reproducing the
+### reviewer's proof under the package's own harness rather than a live
+### probe binary.
+
+=== RUN   TestDiag_AppendRefusesWhenTotalBytesWouldExceedThePageBudget
+    diag_test.go:380: second 600 KiB append (pushes the connection's total past the page budget): got <nil>, want ErrQuotaExceeded
+--- FAIL: TestDiag_AppendRefusesWhenTotalBytesWouldExceedThePageBudget (0.16s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	1.121s
+FAIL

@@ -1,0 +1,46 @@
+======================================================================
+R2 doctor review fixes (H-1/H-2/coverage-gap) - cmd/swarm TCP+TLS step - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.2 (R2-B swarm relay doctor: diagnostic
+      capability, ephemeral route, DNS/TLS/WSS/storage results)
+role: BUILDER (TDD Phase 1 + Red, GG-5) - addressing reviewer findings H-1, H-2,
+      and the BLOCKING ROOT CAUSE coverage gap
+findings addressed:
+  H-1: doctorCheckTCPTLS calls tls.Client(conn, tlsCfg) with a config that never
+       has ServerName set (security.go's tlsConfig() never sets it; the real
+       dial path only works because http.Transport fills ServerName from the
+       request URL). Proven by the reviewer's probe: a real TLS listener under
+       the unpinned/system-trust-roots policy fails with "tls: either
+       ServerName or InsecureSkipVerify must be specified in the tls.Config" --
+       a config-precondition abort BEFORE certificate validation ever runs.
+  H-2: doctorCheckTCPTLS dials u.Host directly; a portless wss:// URL (the
+       exact form relay-vps-deploy.md's own examples use) has no port, and
+       DialContext fails with "missing port in address" before TLS.
+  BLOCKING ROOT CAUSE: all four existing CLI tests in relay_doctor_test.go
+       dial only a loopback plain-ws:// relay or a closed port -- the doctor's
+       TLS branch had never executed.
+date: 2026-08-15T08:23:33Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+edited (additive): cmd/swarm/relay_doctor_test.go
+  - startDoctorTestRelayTLS: fronts the real loopback relay with a genuine TLS
+    listener (self-signed cert via httptest.NewTLSServer)
+  - doctorStepStatus: parses a named step's status column instead of a bare
+    substring match (also fixes the LOW weak-assertion finding at the old
+    TestRelayDoctor_MailboxStepFailsCleanlyWithoutOperatorSecretFile)
+  - TestDoctorHostPort_DerivesDefaultPortWhenURLOmitsOne (H-2)
+  - TestDoctorCheckTCPTLS_UnpinnedSystemTrustRootsReachesCertificateValidation (H-1)
+  - TestDoctorCheckTCPTLS_PinnedPolicySucceedsAgainstSelfSignedCert (H-1 no-regression)
+  - TestRelayDoctor_AllStepsOkOverARealWSSListener (coverage gap, full CLI over wss://)
+command: go test ./cmd/swarm/... -run 'TestDoctor|TestRelayDoctor' -v 2>&1
+======================================================================
+
+### COMPILE-LEVEL RED: doctorHostPort does not exist yet, and doctorCheckTCPTLS
+### still takes a string hostport rather than *url.URL (needed to read
+### u.Hostname() for ServerName and u.Scheme for the default-port derivation).
+
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/relay_doctor_test.go:201:15: undefined: doctorHostPort
+cmd/swarm/relay_doctor_test.go:224:50: cannot use u (variable of type *url.URL) as string value in argument to doctorCheckTCPTLS
+cmd/swarm/relay_doctor_test.go:244:50: cannot use u (variable of type *url.URL) as string value in argument to doctorCheckTCPTLS
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL

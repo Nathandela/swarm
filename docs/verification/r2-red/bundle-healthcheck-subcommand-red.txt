@@ -1,0 +1,35 @@
+======================================================================
+R2 bundle (playbook 6.5) - swarm-relay healthcheck subcommand - RED RUN
+epic: agents-tracker-hggx (R2 self-hosted relay productization)
+bead: agents-tracker-hggx.3.1 (R2-A OCI image + Compose/Caddy bundle +
+      health endpoints + operator secret)
+role: BUILDER (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15T07:54:29Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new test funcs (ADDITIVE ONLY) in cmd/swarm-relay/main_test.go:
+  TestRun_HealthcheckSubcommandSucceedsWhenReady
+  TestRun_HealthcheckSubcommandFailsWhenNotReady
+  TestRun_HealthcheckSubcommandRequiresConfigFlag
+  TestRun_HealthcheckSubcommandRejectsConfigWithNoAdminListen
+command: go test ./cmd/swarm-relay/... -run Healthcheck -v 2>&1
+======================================================================
+
+### BEHAVIORAL RED: 'healthcheck' is not a registered subcommand yet, so
+### run() falls through to runServe, whose flag.Parse stops at the first
+### non-flag arg ('healthcheck') and never sees --config -- the failure
+### below is exactly that, not a test bug. The distroless final stage
+### (deploy/relay/Dockerfile) has no shell/curl/wget, so this subcommand
+### -- not an external tool -- is what Docker's HEALTHCHECK execs.
+
+=== RUN   TestRun_HealthcheckSubcommandSucceedsWhenReady
+    main_test.go:317: run healthcheck against a ready relay: swarm-relay: --config is required, want nil
+--- FAIL: TestRun_HealthcheckSubcommandSucceedsWhenReady (0.07s)
+=== RUN   TestRun_HealthcheckSubcommandFailsWhenNotReady
+--- PASS: TestRun_HealthcheckSubcommandFailsWhenNotReady (0.03s)
+=== RUN   TestRun_HealthcheckSubcommandRequiresConfigFlag
+--- PASS: TestRun_HealthcheckSubcommandRequiresConfigFlag (0.00s)
+=== RUN   TestRun_HealthcheckSubcommandRejectsConfigWithNoAdminListen
+--- PASS: TestRun_HealthcheckSubcommandRejectsConfigWithNoAdminListen (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm-relay	1.478s
+FAIL

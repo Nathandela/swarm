@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,8 +26,27 @@ import (
 // 0 so in-process tests stay manual; the shipped binary must run the loop.
 const defaultSweepInterval = 30 * time.Second
 
-// run parses argv, loads the config, and serves until ctx is canceled.
+// run dispatches to the backup/restore/healthcheck subcommands (playbook 6.5)
+// or, with no subcommand given, serves exactly as before -- every existing
+// invocation of this binary passes only flags, never a bare first argument, so
+// routing on args[0] cannot mistake a real deployment's args for a subcommand
+// name.
 func run(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "backup":
+			return runBackup(args[1:])
+		case "restore":
+			return runRestore(args[1:])
+		case "healthcheck":
+			return runHealthcheck(args[1:])
+		}
+	}
+	return runServe(ctx, args)
+}
+
+// runServe parses argv, loads the config, and serves until ctx is canceled.
+func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("swarm-relay", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	cfgPath := fs.String("config", "", "path to the relay config file (required)")
@@ -35,6 +55,9 @@ func run(ctx context.Context, args []string) error {
 	}
 	if *cfgPath == "" {
 		return errors.New("swarm-relay: --config is required")
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		return fmt.Errorf("swarm-relay: unexpected argument(s) %v -- a subcommand (backup/restore/healthcheck) must come before flags, not after", rest)
 	}
 	cfg, err := relay.LoadConfig(*cfgPath)
 	if err != nil {
@@ -46,9 +69,16 @@ func run(ctx context.Context, args []string) error {
 	if cfg.SweepInterval <= 0 {
 		cfg.SweepInterval = defaultSweepInterval
 	}
+	operatorSecret, err := ensureOperatorSecret(cfg)
+	if err != nil {
+		return err
+	}
 	opts, err := pushOptions(cfg)
 	if err != nil {
 		return err
+	}
+	if operatorSecret != "" {
+		opts = append(opts, relay.WithOperatorSecret([]byte(operatorSecret)))
 	}
 	srv, err := relay.New(cfg, opts...)
 	if err != nil {
@@ -59,6 +89,110 @@ func run(ctx context.Context, args []string) error {
 	}
 	<-ctx.Done()
 	return srv.Close()
+}
+
+// runBackup implements `swarm-relay backup --config <path> <dest>`: a
+// consistent snapshot of the relay's bbolt store (playbook 6.5, relay.Backup).
+// The store path comes from the same config file --config already reads for
+// serving, so a backup always targets the db_path a running relay would use.
+func runBackup(args []string) error {
+	fs := flag.NewFlagSet("swarm-relay backup", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfgPath := fs.String("config", "", "path to the relay config file (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cfgPath == "" {
+		return errors.New("swarm-relay backup: --config is required")
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return errors.New("swarm-relay backup: exactly one destination path is required")
+	}
+	cfg, err := relay.LoadConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	return relay.Backup(cfg.DBPath, rest[0])
+}
+
+// runRestore implements `swarm-relay restore --config <path> <backup>`: it
+// refuses while the relay holds the store open and validates the backup opens
+// with every required bucket before replacing anything (relay.Restore).
+func runRestore(args []string) error {
+	fs := flag.NewFlagSet("swarm-relay restore", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfgPath := fs.String("config", "", "path to the relay config file (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cfgPath == "" {
+		return errors.New("swarm-relay restore: --config is required")
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return errors.New("swarm-relay restore: exactly one backup path is required")
+	}
+	cfg, err := relay.LoadConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	return relay.Restore(cfg.DBPath, rest[0])
+}
+
+// healthcheckTimeout bounds the round-trip `swarm-relay healthcheck` makes
+// against admin_listen's /readyz. Generous for a loopback call, short enough
+// that a wedged relay fails the Docker HEALTHCHECK promptly rather than
+// hanging it.
+const healthcheckTimeout = 5 * time.Second
+
+// runHealthcheck implements `swarm-relay healthcheck --config <path>`: the
+// Docker HEALTHCHECK entry point (deploy/relay/Dockerfile, playbook 6.5). The
+// distroless final stage has no shell, curl, or wget, so this subcommand --
+// reusing the same binary and config the relay itself boots from -- is what
+// Docker execs instead. A non-nil error (including any non-200 from /readyz)
+// is a failed healthcheck; Docker restarts the container on repeated failures.
+func runHealthcheck(args []string) error {
+	fs := flag.NewFlagSet("swarm-relay healthcheck", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfgPath := fs.String("config", "", "path to the relay config file (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cfgPath == "" {
+		return errors.New("swarm-relay healthcheck: --config is required")
+	}
+	cfg, err := relay.LoadConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	if cfg.AdminListen == "" {
+		return errors.New("swarm-relay healthcheck: admin_listen is not set in the config; there is no /readyz to ask")
+	}
+	client := &http.Client{Timeout: healthcheckTimeout}
+	resp, err := client.Get("http://" + cfg.AdminListen + "/readyz")
+	if err != nil {
+		return fmt.Errorf("swarm-relay healthcheck: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("swarm-relay healthcheck: /readyz returned %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	return nil
+}
+
+// ensureOperatorSecret generates and persists the R2 operator secret
+// (playbook 6.5) at cfg.OperatorSecretFile if the config names one -- unset is
+// a normal, supported boot with no operator secret, the same opt-in shape
+// pushOptions gives push_credentials. The returned secret feeds
+// relay.WithOperatorSecret so the doctor capability (a separate R2 slice) can
+// use it; it is NEVER logged by this binary -- callers must not wrap the
+// return value in a log statement.
+func ensureOperatorSecret(cfg relay.Config) (string, error) {
+	if cfg.OperatorSecretFile == "" {
+		return "", nil
+	}
+	return relay.EnsureOperatorSecret(cfg.OperatorSecretFile)
 }
 
 // pushOptions builds the push transport the relay serves with, or none.

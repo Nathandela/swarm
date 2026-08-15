@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,11 +46,18 @@ func WithLogWriter(w io.Writer) Option {
 }
 
 // WithSourceKeyFunc installs the pre-authentication source-key deriver. The relay
-// evaluates it ONCE per accepted connection (passing that connection's transport
-// RemoteAddr) and uses the result to key every PRE-SIGNATURE rate window —
-// auth_init and the unauthenticated rendezvous ops — instead of any client-
-// presented (and still unproven) relay-auth pubkey (ADR-007 amendment 2026-07-20,
-// remediating R1-H1/H2). A nil fn keeps the default (the IP host of RemoteAddr).
+// evaluates it ONCE per accepted connection and uses the result to key every
+// PRE-SIGNATURE rate window — auth_init and the unauthenticated rendezvous ops —
+// instead of any client-presented (and still unproven) relay-auth pubkey (ADR-007
+// amendment 2026-07-20, remediating R1-H1/H2). A nil fn keeps the default (the IP
+// host of RemoteAddr).
+//
+// The value passed in is that connection's transport RemoteAddr UNLESS
+// trusted_proxies is configured and the peer matches it (playbook 6.5, R2
+// "proxy-quota"): then it is the validated client address recovered from
+// X-Forwarded-For instead, which typically carries NO port. A custom fn doing
+// SplitHostPort should not assume a port is always present; see
+// resolveSourceAddr.
 func WithSourceKeyFunc(fn func(remoteAddr string) string) Option {
 	return func(s *Server) {
 		if fn != nil {
@@ -94,6 +102,19 @@ const (
 	// over-estimate of the real JSON cost, so the true reply is always smaller than
 	// this budget, and the headroom absorbs the wrapper and framing (CR-4).
 	mailboxPageByteBudget = MaxFrame - 8192
+	// maxRequestHeaderBytes bounds http.Server.MaxHeaderBytes, replacing
+	// net/http's DefaultMaxHeaderBytes (1 MiB). Reviewer finding, R2
+	// "proxy-quota" (BLOCKING): net/http retains a header-parsing buffer up to
+	// that bound on EVERY connection, BEFORE any relay code runs — before auth,
+	// before serveConn's MaxConcurrentConnections admission check. Behind the
+	// shipped trusted-proxy topology (relay.config.example ships trusted_proxies
+	// on by default), the request headers include an X-Forwarded-For a real
+	// internet client controls end-to-end, so the 1 MiB default is an
+	// unauthenticated, per-connection allocation amplifier. 32 KiB is generous
+	// for any legitimate websocket handshake (Sec-WebSocket-*, cookies, and a
+	// realistic X-Forwarded-For chain of a handful of hops) while cutting the
+	// worst case by 32x.
+	maxRequestHeaderBytes = 32 << 10
 )
 
 // rateWindow is a fixed one-minute window evaluated on the injected clock.
@@ -161,6 +182,35 @@ type Server struct {
 	ln      net.Listener
 	httpSrv *http.Server
 	url     string
+	// listening reports whether ln is currently accepting (set true once Start's
+	// net.Listen succeeds, false from Close onward). /readyz reads it directly
+	// (CR-style admission-control pattern already used elsewhere in this file).
+	listening atomic.Bool
+
+	// The admin surface (playbook 6.5): /healthz + /readyz on a SEPARATE
+	// loopback-only listener, never the public one.
+	adminLn    net.Listener
+	adminSrv   *http.Server
+	adminURL   string
+	diskFreeFn func() (uint64, error)
+	// diskLowWarned is guarded by mu (below) and makes the low-disk log warning
+	// edge-triggered rather than once-per-/readyz-poll.
+	diskLowWarned bool
+
+	// operatorSecret is the R2 diagnostic/admin-authority secret (playbook 6.5),
+	// installed via WithOperatorSecret. nil/empty means diagnostics are
+	// disabled. NEVER logged.
+	operatorSecret []byte
+	// diagUsedNonces is a minted diagnostic capability's nonce -> the instant its
+	// TTL window closes: single-use enforcement (playbook 6.5, "capability TTL
+	// <= 5 min, single-use"). A window, not a permanent record, exactly like
+	// `burned` below and for the same reason -- purged lazily in spendDiagNonce
+	// (diag.go). Guarded by mu.
+	//
+	// IN-MEMORY ONLY, so a relay restart forgets every spent nonce (see
+	// DiagnosticCapabilityTTL's comment in diag.go for the honest blast-radius
+	// accounting -- it is small, not zero).
+	diagUsedNonces map[string]time.Time
 
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
@@ -199,34 +249,50 @@ type Server struct {
 	appendRate map[string]*rateWindow
 	pushRate   map[string]*rateWindow
 
-	// sourceKeyFn derives a connection's pre-authentication rate key from its
-	// transport RemoteAddr. It is evaluated ONCE per accepted connection. The
-	// default strips the port so all connections from one IP host collapse to a
-	// single source (ADR-007 amendment 2026-07-20). A pubkey the client presents
-	// in auth_init is NEVER a rate key: it is unproven until a signature verifies.
+	// sourceKeyFn derives a connection's pre-authentication rate key. It is
+	// evaluated ONCE per accepted connection, from its transport RemoteAddr
+	// UNCHANGED, or — with trusted_proxies configured and the peer matching —
+	// from the validated X-Forwarded-For-derived client address instead (see
+	// trustedProxies below and resolveSourceAddr). The default strips the port
+	// so all connections from one IP host collapse to a single source (ADR-007
+	// amendment 2026-07-20); a forwarded address typically has no port to strip.
+	// A pubkey the client presents in auth_init is NEVER a rate key: it is
+	// unproven until a signature verifies.
 	sourceKeyFn func(remoteAddr string) string
+
+	// trustedProxies is cfg.TrustedProxies, parsed once at New (playbook 6.5,
+	// R2 "proxy-quota"). Empty (the default) keeps sourceKeyFn's input exactly
+	// r.RemoteAddr, today's behavior; see resolveSourceAddr.
+	trustedProxies []*net.IPNet
 }
 
 // New constructs a relay over cfg.DBPath. It opens the persistence store; call
 // Start to bind the listener.
 func New(cfg Config, opts ...Option) (*Server, error) {
 	s := &Server{
-		cfg:         cfg,
-		clk:         realClock{},
-		logger:      log.New(io.Discard, "", 0),
-		sessions:    make(map[string]*serverConn),
-		waits:       make(map[string]*pendingWait),
-		presence:    make(map[string]*presenceEntry),
-		tokens:      make(map[string]string),
-		rendezvous:  make(map[string]*rdvSlot),
-		burned:      make(map[string]time.Time),
-		conns:       make(map[*serverConn]struct{}),
-		authRate:    make(map[string]*rateWindow),
-		opsRate:     make(map[string]*rateWindow),
-		appendRate:  make(map[string]*rateWindow),
-		pushRate:    make(map[string]*rateWindow),
-		sourceKeyFn: defaultSourceKey,
+		cfg:            cfg,
+		clk:            realClock{},
+		logger:         log.New(io.Discard, "", 0),
+		sessions:       make(map[string]*serverConn),
+		waits:          make(map[string]*pendingWait),
+		presence:       make(map[string]*presenceEntry),
+		tokens:         make(map[string]string),
+		rendezvous:     make(map[string]*rdvSlot),
+		burned:         make(map[string]time.Time),
+		conns:          make(map[*serverConn]struct{}),
+		authRate:       make(map[string]*rateWindow),
+		opsRate:        make(map[string]*rateWindow),
+		appendRate:     make(map[string]*rateWindow),
+		pushRate:       make(map[string]*rateWindow),
+		sourceKeyFn:    defaultSourceKey,
+		diagUsedNonces: make(map[string]time.Time),
 	}
+	s.diskFreeFn = defaultDiskFreeFn(cfg.DBPath)
+	trustedProxies, err := parseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	s.trustedProxies = trustedProxies
 	for _, o := range opts {
 		o(s)
 	}
@@ -252,17 +318,25 @@ func New(cfg Config, opts ...Option) (*Server, error) {
 // Start binds the listener and begins serving. The relay lives until Close (or
 // ctx cancellation).
 func (s *Server) Start(ctx context.Context) error {
+	// Bind the admin surface FIRST: a rejected/failed admin bind must never
+	// leave the public listener open with nothing left to close it.
+	if err := s.startAdmin(); err != nil {
+		return err
+	}
+
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
+		s.closeAdmin()
 		return err
 	}
 	s.ln = ln
 	s.url = "ws://" + ln.Addr().String()
+	s.listening.Store(true)
 	s.baseCtx, s.baseCancel = context.WithCancel(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleHTTP)
-	s.httpSrv = &http.Server{Handler: mux}
+	s.httpSrv = &http.Server{Handler: mux, MaxHeaderBytes: maxRequestHeaderBytes}
 	go func() { _ = s.httpSrv.Serve(ln) }()
 
 	// CR-3: when a sweep interval is configured, run the clock-driven maintenance
@@ -321,9 +395,11 @@ func (s *Server) Close() error {
 			sc.cancel()
 			_ = sc.ws.CloseNow()
 		}
+		s.listening.Store(false)
 		if s.httpSrv != nil {
 			_ = s.httpSrv.Close()
 		}
+		s.closeAdmin()
 		if s.ln != nil {
 			_ = s.ln.Close()
 		}
@@ -349,7 +425,22 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(MaxFrame + 64)
-	s.serveConn(ws, r.RemoteAddr)
+	// playbook 6.5, R2 "proxy-quota": resolved to the X-Forwarded-For-derived
+	// client address ONLY when r.RemoteAddr is a configured trusted proxy;
+	// otherwise identical to r.RemoteAddr, today's behavior.
+	//
+	// r.Header.Values, NOT r.Header.Get: Get returns only the FIRST
+	// X-Forwarded-For header LINE. An add-header-style proxy (HAProxy's
+	// default `option forwardfor`) emits the client's original header as a
+	// SEPARATE second line rather than merging into it, so Get alone would
+	// read only the client-controlled first line and never see the entry the
+	// trusted proxy itself appended -- exactly the bucket a client could then
+	// choose per connection. Joining every line with "," before splitting on
+	// "," keeps resolveSourceAddr's rightmost-hop rule correct regardless of
+	// whether the trusted proxy merges into one line or adds a new one.
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	sourceAddr := resolveSourceAddr(r.RemoteAddr, xff, s.trustedProxies)
+	s.serveConn(ws, sourceAddr)
 }
 
 // serverConn is one live connection's server-side state.
@@ -361,7 +452,9 @@ type serverConn struct {
 	wmu    sync.Mutex
 
 	// sourceKey is this connection's pre-authentication rate key, derived ONCE at
-	// accept time from its transport RemoteAddr (never from a presented pubkey).
+	// accept time (never from a presented pubkey) from its transport RemoteAddr,
+	// or — behind a configured trusted proxy — from the validated forwarded
+	// client address instead; see sourceKeyFn.
 	sourceKey string
 	// acceptedAt is when this connection was accepted, anchoring the CUMULATIVE
 	// handshake deadline in readFrame (CR-1 slice 2): unlike a per-read idle
@@ -401,6 +494,31 @@ type serverConn struct {
 	// still read s.clk, so the two never disagree about whether a slot is alive — this one
 	// only decides when to stop waiting on a socket.
 	rdvDeadline time.Time
+
+	// diagOpen/diagItems/diagCursor/diagExpiresAt are this connection's
+	// ephemeral diagnostic route (R2 doctor, playbook 4.1/6.5), unlocked by a
+	// valid diag_open capability. It is state private to THIS connection --
+	// entirely separate from the real mailbox store and from
+	// bucketPairs/bucketConsents -- so the scoped diag_* ops can never read a
+	// real mailbox or name another routing id: there is no target/rid
+	// parameter anywhere in their wire shape. It dies with the connection;
+	// nothing here is durable.
+	diagOpen   bool
+	diagItems  []Item
+	diagCursor uint64
+	// diagExpiresAt is the instant THIS route's capability TTL closes --
+	// issuedAt + DiagnosticCapabilityTTL, stamped once at diag_open (R2 review
+	// LOW-MEDIUM) -- checked by diagRouteLive (diag.go) on every subsequent
+	// diag_append/diag_read/diag_status/diag_close, so the TTL bounds the
+	// WHOLE route rather than just the moment it opens.
+	diagExpiresAt time.Time
+	// diagItemsBytes is the running estimated-serialized-size total of diagItems
+	// (R2 review MEDIUM), the same per-item cost store.readItemsPage estimates.
+	// handleDiagRead returns every item in ONE reply with no pagination to fall
+	// back on, so this is checked against mailboxPageByteBudget at append time --
+	// the read reply can then never exceed what mailbox_read's own page budget
+	// already proves fits under MaxFrame.
+	diagItemsBytes int
 }
 
 // attachRendezvousLocked binds sc to a rendezvous it has just created or claimed, giving
@@ -711,6 +829,16 @@ func (sc *serverConn) dispatch(tag MsgType, payload []byte) error {
 			return sc.handleRendezvousRecv(payload)
 		case "rendezvous_complete":
 			return sc.handleRendezvousComplete(payload)
+		case "diag_open":
+			return sc.handleDiagOpen(payload)
+		case "diag_status":
+			return sc.handleDiagStatus(payload)
+		case "diag_append":
+			return sc.handleDiagAppend(payload)
+		case "diag_read":
+			return sc.handleDiagRead(payload)
+		case "diag_close":
+			return sc.handleDiagClose(payload)
 		default:
 			return sc.replyErr(codeBadRequest)
 		}

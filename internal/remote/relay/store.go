@@ -73,7 +73,7 @@ func openStore(path string) (*store, error) {
 		return nil, err
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketItems, bucketSeq, bucketPairs, bucketRevoked, bucketTokens, bucketConsents, bucketRetired} {
+		for _, b := range requiredBuckets {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -87,6 +87,13 @@ func openStore(path string) (*store, error) {
 }
 
 func (s *store) close() error { return s.db.Close() }
+
+// healthCheck proves the store is open and writable (playbook 6.5's /readyz
+// bbolt check): a real read-write transaction that touches nothing. A closed or
+// otherwise unusable bolt.DB returns an error here instead of panicking.
+func (s *store) healthCheck() error {
+	return s.db.Update(func(tx *bolt.Tx) error { return nil })
+}
 
 // isRecord reports whether v is an item record this store wrote (see recordV1).
 func isRecord(v []byte) bool { return len(v) >= recordHead && v[0] == recordV1 }

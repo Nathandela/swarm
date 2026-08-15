@@ -1,0 +1,29 @@
+=== RED evidence: R2 work package "backup", flags-before-subcommand fix (playbook 6.5) ===
+Date: 2026-08-15T08:15:26Z
+Role: BUILDER (backup/restore for the relay's bbolt store)
+
+Finding: `swarm-relay --config <cfg> backup <dest>` (flags before the
+subcommand -- the exact ordering deploy/relay/swarm-relay.service's
+ExecStart uses) started a relay instead of backing up, produced no backup
+file, and returned nil (exit 0). run()'s dispatch only inspects args[0], so
+"--config" fell through to runServe, which parsed --config, ignored the
+leftover "backup"/<dest> positional arguments (fs.Args() was never checked),
+and served until ctx was canceled.
+
+Test written first: TestRun_RejectsSubcommandPlacedAfterFlags
+(cmd/swarm-relay/main_test.go), before runServe rejected unexpected
+positional args.
+
+Command: go build ./cmd/swarm-relay/... && go test ./cmd/swarm-relay/... -run 'TestRun_RejectsSubcommandPlacedAfterFlags' -v
+
+=== RUN   TestRun_RejectsSubcommandPlacedAfterFlags
+    main_test.go:311: run with a subcommand placed after --config returned nil, want a usage error
+--- FAIL: TestRun_RejectsSubcommandPlacedAfterFlags (2.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm-relay	2.898s
+FAIL
+
+The 2.01s is the test's own 2-second context timeout elapsing -- run()
+actually served for the full timeout window and only then returned nil via
+`<-ctx.Done(); return srv.Close()`, matching the reviewer's own probe exactly
+("served until ctx expiry, err = <nil>, no file at dest").

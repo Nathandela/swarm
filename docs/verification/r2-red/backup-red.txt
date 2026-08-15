@@ -1,0 +1,19 @@
+=== RED evidence: R2 work package "backup" (playbook 6.5 self-hosted relay productization) ===
+Date: 2026-08-15T09:40:00Z
+Role: BUILDER (backup/restore for the relay's bbolt store)
+
+Command: go test -race ./internal/remote/relay/...
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/backup_test.go:56:12: undefined: Backup
+internal/remote/relay/backup_test.go:86:8: undefined: Backup
+internal/remote/relay/backup_test.go:87:21: undefined: ErrRelayRunning
+internal/remote/relay/backup_test.go:99:9: undefined: Backup
+internal/remote/relay/backup_test.go:121:10: undefined: backupCreate
+internal/remote/relay/backup_test.go:122:2: undefined: backupCreate
+internal/remote/relay/backup_test.go:129:21: undefined: backupCreate
+internal/remote/relay/backup_test.go:132:9: undefined: Backup
+internal/remote/relay/backup_test.go:190:12: undefined: Backup
+internal/remote/relay/backup_test.go:199:12: undefined: Restore
+internal/remote/relay/backup_test.go:199:12: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL

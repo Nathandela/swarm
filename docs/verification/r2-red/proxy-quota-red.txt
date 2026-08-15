@@ -1,0 +1,217 @@
+=== RED evidence: R2 work package "proxy-quota" (playbook 6.5 self-hosted relay productization) ===
+
+--------------------------------------------------------------------------------
+ROUND 1 -- initial feature (trusted_proxies config + resolveSourceAddr existing)
+Date: 2026-08-15T07:42:00Z
+Role: BUILDER (trusted-proxy source identity for per-source quotas)
+
+Command: go test -race ./internal/remote/relay/...
+# github.com/Nathandela/swarm/internal/remote/relay [github.com/Nathandela/swarm/internal/remote/relay.test]
+internal/remote/relay/trustedproxy_test.go:89:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:93:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:104:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:112:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:116:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:125:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:129:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:137:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:141:7: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:142:7: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:142:7: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remote/relay [build failed]
+FAIL
+
+Full (uncapped) list of RED symbols, via `go vet -gcflags="-e" ./internal/remote/relay/...`
+(the compiler's default 10-error cutoff above truncates before reaching every
+line; nothing here is hidden, only cut off):
+internal/remote/relay/trustedproxy_test.go:89:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:93:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:104:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:112:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:116:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:125:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:129:9: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:137:18: undefined: parseTrustedProxies
+internal/remote/relay/trustedproxy_test.go:141:7: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:142:7: undefined: resolveSourceAddr
+internal/remote/relay/trustedproxy_test.go:154:28: DefaultConfig().TrustedProxies undefined (type Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:164:6: cfg.TrustedProxies undefined (type Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:217:7: cfg.TrustedProxies undefined (type *Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:252:7: cfg.TrustedProxies undefined (type *Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:300:13: cfg.TrustedProxies undefined (type Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:307:27: cfg.TrustedProxies undefined (type Config has no field or method TrustedProxies)
+internal/remote/relay/trustedproxy_test.go:318:55: cfg.TrustedProxies undefined (type Config has no field or method TrustedProxies)
+
+COMPILE-LEVEL RED, confined entirely to trustedproxy_test.go: Config.TrustedProxies,
+parseTrustedProxies and resolveSourceAddr do not exist yet, so the relay package's
+test binary fails to build. (This checkout is shared with sibling R2 work packages
+landing concurrently -- backup/health/operator-secret/disk-space -- whose own
+RED/GREEN cycles are unrelated and, as of this capture, already GREEN; nothing
+above originates outside trustedproxy_test.go.)
+
+KNOWN DEFECT IN THIS ROUND'S CAPTURE (flagged by review, not fixed retroactively):
+every line number above is stale relative to trustedproxy_test.go as it reads
+TODAY -- it was captured before several later edits inserted lines at
+different points in the same file (the CanonicalizesTextualIPVariants test
+added in Round 3 among them). The offset is NOT uniform: it is +11 for the
+early symbols (89->100, 93->104, 112->123) and grows to +76 by line 154
+(->230), so no single delta corrects the whole list. The symbols, order, and
+relative structure still match 1:1 with the current file, so the capture is
+genuine, just not line-exact for the file as currently committed. Superseded,
+for exactness, by Round 2 below, which recaptures against the file as it stood
+after this round's fixes were added; this round's raw transcript is left
+unedited rather than hand-patched, so the "what happened" record stays honest
+even though the line numbers here are stale.
+
+Once the symbols exist as bare stubs, the four end-to-end adversarial tests
+(TestRelay_UntrustedPeerXFFSpoofIgnored_BucketIsPeerAddr,
+TestRelay_TrustedProxy_SpoofedExtraHopsCannotChooseArbitraryBucket,
+TestRelay_TrustedProxy_TwoClientsGetTwoBuckets,
+TestRelay_ComposeDefaultConfigSetsLoopbackProxyCIDR) go behaviorally RED next:
+serveConn/handleHTTP never consult X-Forwarded-For, so every per-source quota
+still keys off the raw TCP peer regardless of trusted_proxies, and the shipped
+deploy/relay/relay.config.example carries no trusted_proxies key at all.
+
+--------------------------------------------------------------------------------
+ROUND 2 -- reviewer findings fix-up: duplicate XFF header lines + hop validation
+Date: 2026-08-15T08:01:48Z (real UTC, unlike Round 1's mislabelled local-CEST
+stamp above, corrected on review)
+Role: BUILDER (addressing reviewer findings on the proxy-quota work package)
+
+Findings addressed by these tests (see review, not reproduced here in full):
+  BLOCKING: server.go read only r.Header.Get("X-Forwarded-For"), the FIRST
+    header line -- a client sending X-Forwarded-For as two separate header
+    lines through a trusted peer fully controlled the quota bucket.
+  BLOCKING: resolveSourceAddr never validated the extracted hop is an IP --
+    it returned whatever string sat rightmost, unbounded save for
+    http.Server MaxHeaderBytes (~1MB), straight into sourceKeyFn.
+
+This capture is a RUNTIME/behavioral RED (the package already builds and the
+Round-1 tests already pass at this point), not a compile-level RED: the three
+tests below are new in this round, added to trustedproxy_test.go BEFORE any
+implementation fix, and fail against the code as committed at Round 1.
+
+Command: go test -race ./internal/remote/relay -run 'TestResolveSourceAddr_NonIPHopFallsBackToPeer|TestResolveSourceAddr_HostPortHopIsUnwrappedBeforeValidation|TestRelay_TrustedProxy_DuplicateXFFHeaderLinesUseRightmostAcrossAllLines' -v
+
+=== RUN   TestResolveSourceAddr_NonIPHopFallsBackToPeer
+    trustedproxy_test.go:176: resolveSourceAddr with a non-IP rightmost hop = "not-an-ip", want the peer address as the fail-safe fallback: an unvalidated hop must never become the quota bucket key
+--- FAIL: TestResolveSourceAddr_NonIPHopFallsBackToPeer (0.00s)
+=== RUN   TestResolveSourceAddr_HostPortHopIsUnwrappedBeforeValidation
+    trustedproxy_test.go:192: resolveSourceAddr("198.51.100.7:4444") = "198.51.100.7:4444", want the bare IP "198.51.100.7"
+--- FAIL: TestResolveSourceAddr_HostPortHopIsUnwrappedBeforeValidation (0.00s)
+=== RUN   TestRelay_TrustedProxy_DuplicateXFFHeaderLinesUseRightmostAcrossAllLines
+    trustedproxy_test.go:372: a connection beyond MaxConcurrentConnectionsPerSource=2 was served despite sharing the same rightmost hop (198.51.100.7) as the other 2, spread across TWO X-Forwarded-For header LINES: only the first line was read, so a distinct first-line value bought a fresh bucket per connection -- exactly the spoofable-quota-bucket defect
+--- FAIL: TestRelay_TrustedProxy_DuplicateXFFHeaderLinesUseRightmostAcrossAllLines (0.13s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	1.458s
+FAIL
+
+All three fail for the intended reason:
+  - the two resolveSourceAddr unit tests show the pre-fix function returning an
+    unvalidated string (a literal non-IP, and an unstripped "IP:port" pair)
+    straight through as the bucket key;
+  - the end-to-end test reproduces the reviewer's probe exactly (capN=2,
+    trusted_proxies=["127.0.0.1/32"], two X-Forwarded-For header lines per
+    dial): a THIRD connection is admitted against the cap because
+    r.Header.Get only ever sees the first line's attacker-controlled value.
+
+Line numbers above are exact for trustedproxy_test.go as committed at the
+point of this capture (after adding these three tests, before any
+implementation change in trustedproxy.go/server.go).
+
+--------------------------------------------------------------------------------
+ROUND 3 -- reviewer finding fix-up: IP canonicalization (quota-evasion vector)
+Date: 2026-08-15T08:59:10Z
+Role: BUILDER (addressing reviewer BLOCKING finding on the proxy-quota work package)
+
+Finding addressed by this test (see review, not reproduced here in full):
+  BLOCKING: resolveSourceAddr validated the rightmost hop with
+    net.ParseIP(client) and then discarded the parse, returning the raw
+    header text unchanged. Distinct textual spellings of the same host
+    ("198.51.100.7" vs "::ffff:198.51.100.7"; "2001:DB8::1" vs
+    "2001:db8:0:0:0:0:0:1") therefore land in DIFFERENT quota buckets,
+    letting a party able to reach a trusted peer mint unbounded buckets for
+    a single host and defeat MaxConcurrentConnectionsPerSource/ConnPerMin
+    outright, not merely relabel them.
+
+This test (TestResolveSourceAddr_CanonicalizesTextualIPVariants) was added to
+trustedproxy_test.go in the same commit as Rounds 1-2's tests but was not
+separately captured RED before now; this round closes that gap. Captured
+against the code as it stood after Round 2's fixes, before the
+net.ParseIP-canonicalization fix in trustedproxy.go.
+
+Command: go test -race -count=1 ./internal/remote/relay -run 'TestResolveSourceAddr_CanonicalizesTextualIPVariants' -v
+
+=== RUN   TestResolveSourceAddr_CanonicalizesTextualIPVariants
+    trustedproxy_test.go:215: resolveSourceAddr("198.51.100.7") = "198.51.100.7" but resolveSourceAddr("::ffff:198.51.100.7") = "::ffff:198.51.100.7": two spellings of the same host must share one quota bucket
+--- FAIL: TestResolveSourceAddr_CanonicalizesTextualIPVariants (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	1.479s
+FAIL
+
+Fails for the intended reason: resolveSourceAddr returns the raw XFF header
+text ("::ffff:198.51.100.7") rather than the canonical form net.IP.String()
+would produce for the same host, so the IPv4-mapped spelling and the plain
+IPv4 spelling of the identical address diverge into two bucket keys. The
+second assertion pair in the same test (compressed vs expanded IPv6) is not
+reached because t.Fatalf on the first pair halts the test -- both pairs
+exercise the identical code path (the final `return client` at
+trustedproxy.go:90 as it stood at this capture), so this single failure is
+representative of both.
+
+Fix: parse the validated hop once and return ip.String() instead of the raw
+header text (trustedproxy.go, `return client` -> `return ip.String()`).
+
+--------------------------------------------------------------------------------
+ROUND 4 -- reviewer finding fix-up: pre-auth allocation DoS on the XFF path
+Date: 2026-08-15T09:18:30Z
+Role: BUILDER (addressing reviewer BLOCKING finding on the proxy-quota work package)
+
+Finding addressed by these two tests (see review, not reproduced here in full):
+  BLOCKING: server.go:425 `xff := strings.Join(r.Header.Values("X-Forwarded-For"),
+    ",")` followed by trustedproxy.go:84 `hops := strings.Split(xff, ",")` does
+    O(header-size) allocation on an attacker-sized header, on the trusted-proxy
+    path, BEFORE authentication and BEFORE serveConn's MaxConcurrentConnections
+    admission check. s.httpSrv sets no MaxHeaderBytes, so net/http's 1 MiB
+    default applies. Reviewer's throwaway probe measured a ~900 KB
+    X-Forwarded-For header (450k comma-separated junk hops + a valid rightmost
+    hop) through a trusted peer costing ~12.8 MB of allocation per connection,
+    unauthenticated -- reachable because relay.config.example now ships
+    trusted_proxies=["127.0.0.1/32"] on by default and Caddy forwards a
+    client-supplied X-Forwarded-For verbatim. Before this work package the
+    header was never parsed at all, so this is an entirely new surface.
+  Requirement: bound the rightmost-hop extraction to O(1) allocation, and set
+    http.Server.MaxHeaderBytes to a sane bound (the durable fix, since
+    net/http's own ~1 MiB retained header buffer survives the Split fix alone).
+
+Command: go test -race -count=1 ./internal/remote/relay -run 'TestResolveSourceAddr_LargeXFFExtractionIsBoundedNotProportional|TestServer_OversizedForwardedHeaderRejectedBeforeUpgrade' -v
+
+=== RUN   TestResolveSourceAddr_LargeXFFExtractionIsBoundedNotProportional
+    trustedproxy_test.go:507: resolveSourceAddr allocated 3203136 bytes extracting the rightmost hop from a 1600012-byte X-Forwarded-For value, want under 4096 bytes (O(1), not proportional to header size): strings.Split(xff, ",") materializes one slice element per comma-separated hop, so an attacker-sized header on the trusted-proxy path costs allocation proportional to its length -- pre-authentication, before serveConn's MaxConcurrentConnections admission check ever runs
+--- FAIL: TestResolveSourceAddr_LargeXFFExtractionIsBoundedNotProportional (0.09s)
+=== RUN   TestServer_OversizedForwardedHeaderRejectedBeforeUpgrade
+    trustedproxy_test.go:532: dial with a 200012-byte X-Forwarded-For header succeeded; want the relay's own http.Server.MaxHeaderBytes bound to refuse it before any websocket upgrade or admission check runs
+--- FAIL: TestServer_OversizedForwardedHeaderRejectedBeforeUpgrade (0.12s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	1.578s
+FAIL
+
+Both fail for the intended reason:
+  - the allocation test measures resolveSourceAddr's own extraction in
+    isolation (runtime.MemStats TotalAlloc delta around one call): with the
+    pre-fix `strings.Split(xff, ",")`, extracting the rightmost hop from a
+    1.6 MB xff string (200,000 fabricated leftmost hops + the real one)
+    allocates ~3.2 MB -- 2x the input, one slice element per comma -- against
+    a 4096-byte O(1) bound;
+  - the end-to-end test dials with a 200 KB X-Forwarded-For header (well
+    under net/http's 1 MiB DefaultMaxHeaderBytes, so a pass here would prove
+    nothing about a relay-owned bound) and the dial SUCCEEDS, because
+    s.httpSrv sets no MaxHeaderBytes of its own and 200 KB clears the 1 MiB
+    default with room to spare.
+
+Fix: trustedproxy.go replaces `strings.Split(xff, ",")` + last-element index
+with `strings.LastIndexByte(xff, ',')` + a subslice (same rightmost segment,
+zero extra allocation instead of one slice header per hop). server.go sets
+`s.httpSrv.MaxHeaderBytes = maxRequestHeaderBytes` (32 KiB, a new const),
+replacing net/http's 1 MiB default so the retained parse buffer itself is
+bounded regardless of how the header is later processed.
