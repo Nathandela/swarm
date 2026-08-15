@@ -40,6 +40,10 @@ func TestPresence_TransitionsAndSilentPush(t *testing.T) {
 	if err := machine.Close(); err != nil {
 		t.Fatalf("machine.Close: %v", err)
 	}
+	// The gateway is down once the RELAY says so, not once the client's Close
+	// returns; the two are unordered, and every clock advance below is measured
+	// from the drop the relay recorded (see awaitGatewayDrop).
+	awaitGatewayDrop(t, srv, machineRID)
 
 	// Before the bound elapses, no silent push yet. After the bound + a sweep on
 	// the injected clock, presence is offline and exactly one silent push fired.

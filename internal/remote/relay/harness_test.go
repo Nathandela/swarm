@@ -114,6 +114,32 @@ func startTestRelay(t *testing.T, mut func(*Config)) (*Server, Config, *mockAPNs
 	return srv, cfg, apns, clk
 }
 
+// awaitGatewayDrop blocks until the relay has OBSERVED rid's session drop, i.e.
+// until removeConn has cleared the presence entry and stamped disconnectedAt.
+//
+// A client's Close returning is NOT that observation and never could be: the
+// relay learns of a drop on the connection's own read goroutine, which is
+// unordered against the client returning from Close. A test that closes and then
+// drives a sweep from its own goroutine is therefore asserting against a presence
+// entry the relay may still consider connected — the sweep skips it (correctly:
+// a connected machine is online), and the entry is then stamped with the clock as
+// it stands AFTER the test's Advance, so the elapsed-since-drop the next sweep
+// measures is short by exactly the advance. Sequencing the sweep after this
+// observation is what makes the drop happen-before the elapsed-time question.
+//
+// The wall-clock poll here is a synchronization point, not a settle: every TTL
+// DECISION under test still reads the injected fakeClock, and the condition is
+// the server's own state rather than an elapsed duration.
+func awaitGatewayDrop(t *testing.T, s *Server, rid string) {
+	t.Helper()
+	waitUntil(t, testDeadline, "the relay to observe the gateway drop", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		p := s.presence[rid]
+		return p != nil && !p.connected
+	})
+}
+
 // newRelayAuthKey returns a fresh Ed25519 relay-auth keypair (the only key a
 // party ever discloses to the untrusted relay, R-CRY.3 / R-REL.2).
 func newRelayAuthKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
