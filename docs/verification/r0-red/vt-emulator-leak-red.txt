@@ -1,0 +1,102 @@
+vt-hang (Wave R0) -- RED evidence: internal/vt.Emulator is never garbage collected
+Recorded: 2026-08-15T03:41:20Z  host: darwin/arm64 16 GB  go: go1.26.5
+Tree: HEAD c016fa4 + the CSI-parameter clamp of this change.
+
+== 1. What CI actually reported ==
+
+  FuzzFeedSplitConsistency ... fuzzing process hung or terminated unexpectedly
+
+Reproduced here 3 times out of 3, at 180s per round, with minimization disabled
+so the culprit input is preserved verbatim:
+
+  round 1: exit status 2, input 53b17c2cb64fd22c (740 B, a REP burst)
+  round 2: exit status 2, input 6d5bb8570a2f04ce (766 B, a REP burst)
+  round 3: exit status 2, input 1c8c4cc7da8ad67d (747 B, a REP burst)
+
+None of the three reproduces on its own: replayed as a single seed each takes
+12-20 ms in Feed. Exit status 2 is a Go RUNTIME abort, not a test failure, and
+it is not a CPU hang -- it is the heap.
+
+== 2. Feed cost is fine; retention is not ==
+
+Per input, on a fresh 80x24 emulator (probe, before the fix):
+
+  input                bytes   Feed        allocated   retained after runtime.GC()
+  9a137ac3cf228ec2      513    19.7ms      11.9 MB     12.0 MB
+  53b17c2cb64fd22c      513    17.3ms      11.8 MB     23.7 MB  (cumulative)
+  6d5bb8570a2f04ce      528    13.5ms      11.5 MB     35.1 MB  (cumulative)
+  1c8c4cc7da8ad67d      520    12.1ms      11.2 MB     46.1 MB  (cumulative)
+
+The "retained" column is cumulative across the four probes: nothing is ever
+freed. Isolated, with an explicit Close and two forced GCs between rounds:
+
+  create + Feed(REP burst) + Close, 5 at a time:
+    baseline  0.3 MB
+    after  5  171.2 MB      after 20  684.1 MB
+    after 10  342.2 MB      after 25  855.0 MB
+    after 15  513.1 MB      after 30  1026.0 MB   (34.2 MB per emulator, linear)
+
+  create + Close, no Feed at all, 25 at a time:
+    after  25  +112.4 MB    after  75  +112.4 MB
+    after  50  +112.4 MB    after 100  +112.4 MB  (4.5 MB per emulator, linear)
+
+Goroutine count stays at 2 throughout, so this is not a goroutine leak: Close
+does stop the reply drain. inuse_space profile of the 1026 MB:
+
+  825.92MB 83.16%  slices.Clone[...ultraviolet.Cell]  <- x/vt Scrollback.Push
+  120.04MB 12.09%  ansi.(*Parser).SetDataSize         <- x/vt's 4MB parser buffer, x30
+   33.00MB  3.32%  x/vt.(*Emulator).handlePrint
+    9.59MB  0.97%  ultraviolet.NewBuffer
+
+i.e. thirty whole emulators, every one of them closed and unreferenced.
+
+== 3. Under the fuzz harness's access pattern ==
+
+Stress mimicking a fuzz worker (the fuzz body, 8 goroutines, REP-burst inputs,
+both emulators Closed every iteration), on a 16 GB machine:
+
+  10s  iters=417   HeapAlloc= 9746 MB
+  20s  iters=761   HeapAlloc=17635 MB
+  30s  iters=989   HeapAlloc=22985 MB
+  40s  iters=1137  HeapAlloc=26262 MB
+  50s  iters=1889  HeapAlloc=43727 MB
+  60s  iters=2068  HeapAlloc=47771 MB
+
+2068 iterations x 2 emulators x ~12 MB = ~50 GB, which is the whole of
+HeapAlloc: nothing is ever collected. That is what kills the fuzz worker.
+
+== 4. Cause ==
+
+NewEmulator does both of these:
+
+  e.term.SetCallbacks(xvt.Callbacks{
+      Title:            func(s string) { e.title = s },
+      CursorVisibility: func(v bool) { e.visible = v },
+  })
+  ...
+  runtime.SetFinalizer(e, func(e *Emulator) { _ = e.term.Close() })
+
+The callback closures capture e, so e -> e.term -> Callbacks -> closure -> e is
+a reference CYCLE, and e carries a finalizer. runtime.SetFinalizer documents
+exactly this: "If a cyclic structure includes a block with a finalizer, that
+cycle is not guaranteed to be garbage collected and the finalizer is not
+guaranteed to run, because there is no ordering that respects the dependencies."
+The Go GC therefore never collects any Emulator and never runs the finalizer.
+
+Confirmed by removing the SetFinalizer line and nothing else: the 1026.0 MB
+figure above becomes 0.3 MB, flat across all 30 rounds, and the no-Feed variant
+becomes 0.3 MB flat across all 100.
+
+== 5. The new regression tests, failing first ==
+
+$ go test -run 'TestEmulator_ClosedEmulatorIsReclaimed|TestEmulator_ManyClosedEmulatorsDoNotAccumulate' -v ./internal/vt
+
+=== RUN   TestEmulator_ClosedEmulatorIsReclaimed
+    lifetime_test.go:51: a closed Emulator was still reachable after 5 GC cycles: it and its scrollback leak for the lifetime of the process
+--- FAIL: TestEmulator_ClosedEmulatorIsReclaimed (0.02s)
+=== RUN   TestEmulator_ManyClosedEmulatorsDoNotAccumulate
+    lifetime_test.go:85: live heap grew 376 MB across 32 create/Feed/Close cycles (bound 64 MB): closed emulators are being retained
+--- FAIL: TestEmulator_ManyClosedEmulatorsDoNotAccumulate (0.58s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/vt	1.279s
+FAIL

@@ -1,0 +1,62 @@
+vt-hang (Wave R0) -- RED evidence for the C0-in-CSI-parameter escapes
+Recorded: 2026-08-15T03:14:07Z  host: darwin/arm64  go: go1.26.5
+Tree: HEAD eaeb282 + the delivered clampCsiParams (csiParamDigitCap = 3,
+csiPrivateParamDigitCap = 5) BEFORE the ExecuteAction handling in this change.
+
+== 1. Timing reproduction of the hang, straight through Feed (80x24) ==
+
+Probe: feed each input to a fresh Emulator and time the single Feed call.
+Floor for reference: the cheapest per-byte work this wrapper can do that still
+touches the whole grid and the scrollback is one LF per byte.
+
+    floor: 2049 LF                            2049 bytes  25.992042ms
+    REP burst, no C0 (clamped, current fix)   2049 bytes  73.782083ms
+    C0 splits an unmarked REP count             18 bytes  3.729837834s   <-- BLOCKER 1
+      "X\x1b[" + strings.Repeat("9\x00", 7) + "b"
+    C0 splits an unmarked CHT count             21 bytes  5.588531667s   <-- BLOCKER 1
+      "\x1b[" + strings.Repeat("9\x00", 9) + "I"
+    C0 strips the private marker, burst x64    641 bytes  2.55637725s    <-- BLOCKER 2
+      "X" + strings.Repeat("\x1b[?99999\x00b", 64)
+    C0 strips the private marker                11 bytes  35.19825ms     <-- BLOCKER 2
+      "X\x1b[?99999\x00b"
+    C0 strips the marker after an intermediate  12 bytes  30.761583ms    <-- BLOCKER 2 (variant
+      "X\x1b[?99999 \x00b"                                                   not in the review)
+    C0 strips the marker, 8-bit CSI             10 bytes  28.289541ms    <-- BLOCKER 2
+      "X\x9b?99999\x00b"
+
+Each additional "9\x00" pair multiplies blocker 1's cost by ten, so ~25 bytes is
+minutes: the original unbounded-in-a-single-call hang, still reachable.
+Blocker 2 costs 3.7ms per input byte, the same magnitude as the pre-fix numbers
+(513 B -> 2.51 s, 2049 B -> 10.2 s) that identified the hang in the first place.
+
+== 2. The new regression tests, failing first ==
+
+$ go test -run 'TestClampCsiParams|TestFeed_Repeat|TestFeed_LongCsi' ./internal/vt
+
+--- FAIL: TestClampCsiParams_ForwardedParamsAreBounded (0.05s)
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_splits_an_unmarked_REP_count (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x1b[9\x009\x009\x009\x009\x009\x009\x00b"...) forwarded CSI cmd 0x62 (prefix '\x00', final 'b') parameter[0] = 9999999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_splits_an_unmarked_CHT_count (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("\x1b[9\x009\x009\x009\x009\x009\x009\x009\x009\x00I"...) forwarded CSI cmd 0x49 (prefix '\x00', final 'I') parameter[0] = 999999999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_strips_the_private_marker (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x1b[?99999\x00b"...) forwarded CSI cmd 0x62 (prefix '\x00', final 'b') parameter[0] = 99999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_strips_the_marker,_burst (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x1b[?99999\x00b\x1b[?99999\x00b\x1b[?99999\x00b\x1b[?99999\x00b\x1b[?9999"...) forwarded CSI cmd 0x62 (prefix '\x00', final 'b') parameter[0] = 99999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_strips_marker_after_an_intermediate (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x1b[?99999 \x00b"...) forwarded CSI cmd 0x62 (prefix '\x00', final 'b') parameter[0] = 99999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/C0_strips_the_marker,_8-bit_CSI (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x9b?99999\x00b"...) forwarded CSI cmd 0x62 (prefix '\x00', final 'b') parameter[0] = 99999; upstream may iterate that many times, bound is 999
+    --- FAIL: TestClampCsiParams_ForwardedParamsAreBounded/every_C0_that_self-loops_in_a_parameter_list (0.00s)
+        csi_clamp_test.go:156: clampCsiParams("X\x1b[?99\x009\x019\x029\x039\x049\x059\x069\a9\b9\t9\n9\v9\f9\r9\x0e9\x0f9\x109\x119\x129\x139\x149"...) forwarded CSI cmd 0x7f (prefix '\x00', final '\x7f') parameter[0] = 1073741823; upstream may iterate that many times, bound is 999
+--- FAIL: TestClampCsiParams_Table (0.02s)
+    --- FAIL: TestClampCsiParams_Table/a_C0_inside_a_parameter_does_not_restart_the_digit_count (0.00s)
+        csi_clamp_test.go:421: feeds ["\x1b[9\x009\x009\x009\x009b"] clamped to "\x1b[9\x009\x009\x009\x009b", want "\x1b[9\x009\x009\x00\x00\x00b"
+    --- FAIL: TestClampCsiParams_Table/a_C0_inside_a_parameter,_split_across_calls (0.00s)
+        csi_clamp_test.go:421: feeds ["\x1b[9\x009" "\x009\x009b"] clamped to "\x1b[9\x009\x009\x009b", want "\x1b[9\x009\x00\x00\x00b"
+    --- FAIL: TestClampCsiParams_Table/a_C0_inside_a_marked_parameter_list_is_dropped (0.00s)
+        csi_clamp_test.go:421: feeds ["\x1b[?99999\x00b"] clamped to "\x1b[?99999\x00b", want "\x1b[?99999b"
+    --- FAIL: TestClampCsiParams_Table/a_C0_after_a_marked_sequence's_intermediate_byte_is_dropped (0.00s)
+        csi_clamp_test.go:421: feeds ["\x1b[?99999 \x00b"] clamped to "\x1b[?99999 \x00b", want "\x1b[?99999 b"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/vt	0.864s
+FAIL

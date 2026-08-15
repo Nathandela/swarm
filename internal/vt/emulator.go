@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"image/color"
 	"io"
-	"runtime"
 	"strings"
 	"sync"
 	"unicode"
@@ -111,8 +110,9 @@ type Emulator struct {
 	drainDone chan struct{} // closed when the reply-drain goroutine exits
 	closeOnce sync.Once
 
-	guard       *ansi.Parser // shadow parser for the CSI-parameter guard; see clampCsiParams
-	guardDigits int          // consecutive digits seen in the CSI parameter currently being scanned
+	guard        *ansi.Parser // shadow parser for the CSI-parameter guard; see clampCsiParams
+	guardDigits  int          // consecutive digits seen in the CSI parameter currently being scanned
+	guardPrivate bool         // the CSI being scanned carries a private-parameter marker (?, >, <, =)
 }
 
 // isClosed reports whether Close has run. It never blocks and never touches mu,
@@ -184,14 +184,23 @@ func NewEmulator(cols, rows int) *Emulator {
 	// so this wrapper never calls term.Close() while the drain goroutine might
 	// be blocked in term.Read() — see Close below and ADR-005 "Known
 	// limitations". The goroutine captures e (via e.reply), so e stays reachable
-	// for as long as the goroutine runs. The finalizer is a best-effort fallback
-	// for the path where Close is never called: it can run only once the
-	// goroutine has already exited on its own (e.g. term.Read errored) and e has
-	// become unreachable, closing the inner terminal that would otherwise leak.
-	// It is not a substitute for Close — a goroutine parked forever in term.Read
-	// keeps e alive and the finalizer never fires. By the time Close returns, the
-	// drain goroutine has exited, so a later finalizer run never overlaps it
-	// either.
+	// for as long as the goroutine runs; Close waits for it to exit, which is
+	// what makes a closed Emulator collectable.
+	//
+	// There is deliberately NO runtime.SetFinalizer here. One used to close the
+	// inner terminal as a fallback for callers that never call Close, and it
+	// leaked every Emulator ever built, scrollback included, for the lifetime of
+	// the process — the cause of the fuzz worker aborting under CI's bounded
+	// run (docs/verification/r0-red/vt-emulator-leak-red.txt). The
+	// SetCallbacks closures just above capture e, so e -> e.term -> Callbacks ->
+	// closure -> e is a reference cycle, and runtime.SetFinalizer's contract is
+	// that a cycle containing a finalized object is never collected and its
+	// finalizer never runs. The fallback could not have worked in any case: it
+	// required e to be unreachable, which for a never-closed Emulator cannot
+	// happen while the drain goroutine is parked in term.Read holding e. Closing
+	// the inner terminal only closes an io.Pipe, which owns no OS resource the
+	// GC would not reclaim on its own, so nothing is lost by not doing it.
+	// Callers must call Close; every one in this repo does.
 	term := e.term
 	go func() {
 		defer close(e.drainDone)
@@ -206,7 +215,6 @@ func NewEmulator(cols, rows int) *Emulator {
 			}
 		}
 	}()
-	runtime.SetFinalizer(e, func(e *Emulator) { _ = e.term.Close() })
 	return e
 }
 
@@ -284,26 +292,95 @@ func (e *Emulator) FeedChecked(p []byte) (err error) {
 
 // csiParamDigitCap bounds how many consecutive digits of a single CSI
 // numeric parameter clampCsiParams will forward to the pinned upstream
-// parser. Some of its CSI handlers loop `for range n` over an
-// attacker-controlled parameter with no bound tied to the grid size — CHT
-// and CBT's tab-stop traversal is the confirmed case (see
-// docs/verification/r0-red/vt-fuzz-red.txt), reached via a single Feed call
-// spinning for an attacker-chosen, effectively unbounded amount of wall time
-// while holding e.mu. No real terminal parameter (grid dimension, repeat
-// count, tab count) needs more than a few digits; five is generous headroom
-// above any real value while keeping a worst-case loop capped at 99999
-// iterations, negligible wall time even for a naive O(n) handler per
-// sequence. The cap bounds cost per sequence, not per input: a Feed of many
-// repeated max-cap sequences still costs O(input size), same as any other
-// byte the parser processes, so a large-enough burst still takes a
-// correspondingly large-but-bounded amount of time. That is a size-bounded
-// cost like any other parsing work, not the original unbounded-in-a-single-
-// call hang, so it is left as is.
-const csiParamDigitCap = 5
+// parser when the sequence carries no private-parameter marker. Some of its
+// CSI handlers loop `for range n` over an attacker-controlled parameter with
+// no bound tied to the grid size, so a single Feed call can spin for an
+// attacker-chosen amount of wall time while holding e.mu: CHT and CBT's
+// tab-stop traversal (docs/verification/r0-red/vt-fuzz-red.txt) and — far
+// more expensive per iteration — REP, whose count is turned into that many
+// full print operations, each of which can wrap the line, scroll the screen
+// and push a row into the 10000-line scrollback.
+//
+// Three digits is the cap because it is the value that keeps the worst
+// handler within a small constant factor, per input byte, of what ordinary
+// terminal output already costs. The floor is a single LF: one full-screen
+// scroll plus a scrollback push, ~19us measured on the pinned upstream with
+// the scrollback saturated, i.e. ~19us per input byte. Measured against that
+// floor, on a burst of nothing but maximal REP sequences (80x24 grid):
+//
+//	cap   sequence      per byte fed    2049-byte burst
+//	5     CSI 99999 b   ~5ms            10.2s
+//	4     CSI 9999 b    ~0.4ms          ~1s
+//	3     CSI 999 b     ~40us           81ms
+//
+// So five digits is ~260x the floor per byte — that is the hang, and CI's
+// bounded fuzz run found it because FuzzFeedSplitConsistency feeds every
+// input twice, into two emulators. Four digits is still ~20x. Three digits
+// is ~2x, which is as close to the floor as this wrapper can get without
+// changing what upstream does per scrolled line.
+//
+// Three digits is above every parameter this emulator gives meaning to that
+// is not a mode number: grid coordinates and counts (CUP/HVP, CUU..CPL,
+// HPA/VPA, DECSTBM/DECSLRM, ICH/DCH/ECH, IL/DL/SU/SD, CHT/CBT, REP) are all
+// clamped upstream to the grid or the scroll region, and no terminal this
+// wrapper drives approaches 999 rows or columns; SGR attributes and color
+// components stop at 255; unmarked SM/RM mode numbers stop at 21. Mode
+// numbers that do need more digits (1049, 2004, 2026, ...) are only ever
+// reachable behind a private marker, which is what csiPrivateParamDigitCap
+// covers.
+//
+// The cap bounds cost per sequence, not per input: a Feed of many repeated
+// max-cap sequences still costs O(input size), same as any other byte the
+// parser processes — and now within a small constant factor of what the
+// same number of bytes of plain text or newlines costs. That is a
+// size-bounded cost like any other parsing work, not the original
+// unbounded-in-a-single-call hang, so it is left as is.
+const csiParamDigitCap = 3
 
-// clampCsiParams returns p with the digits of any CSI parameter beyond
-// csiParamDigitCap removed, so no numeric parameter reaching the upstream
-// parser exceeds the cap regardless of how large the original was. It
+// csiPrivateParamDigitCap is the relaxed digit cap clampCsiParams applies to
+// the parameters of a CSI (or DCS) that carries a private-parameter marker —
+// '?', '>', '<' or '=', the bytes the parser table reports as PrefixAction,
+// only ever at the start of a parameter list. Every marked sequence the
+// pinned upstream handles is a selector rather than a count: private mode
+// set/reset/report (DECSET/DECRST/DECRQM), device-status and device-attribute
+// queries. Their parameter names a mode, it is never iterated over, so the
+// handler is an O(1) lookup no matter how large the value is, and clamping it
+// to three digits would instead break real sequences — alternate screen
+// (?1049), bracketed paste (?2004), synchronized output (?2026) are all four
+// digits. Five keeps the pre-existing headroom for those while still bounding
+// the digits a hostile stream can accumulate.
+//
+// That premise holds only while the marker survives all the way to dispatch:
+// upstream keys its handler table on the whole command word, prefix included,
+// so a sequence that loses its prefix on the way lands on the UNMARKED handler
+// with digits that were forwarded under this relaxed cap — `CSI ? 99999 NUL b`
+// reaching REP with a count of 99999. clampCsiParams enforces the premise by
+// dropping the one class of byte that can strip a marker mid-sequence; see
+// inCsiParamScope.
+const csiPrivateParamDigitCap = 5
+
+// inCsiParamScope reports whether the guard is inside the parameter or
+// intermediate portion of a CSI: per the pinned parser table
+// (x/ansi parser/transition_table.go, Csi_param and Csi_intermediate) these are
+// the only two states in which a C0 control byte is an ExecuteAction that loops
+// back to the same state instead of ending the sequence. Both properties of
+// that self-loop matter to clampCsiParams, because upstream's performAction
+// case for ExecuteAction is `p.cmd = int(b)` plus the Execute callback:
+//
+//   - it never touches p.params, so the digit runs either side of the C0 are
+//     concatenated into one parameter, and
+//   - it overwrites the whole command word, private-parameter marker included.
+//
+// C0 and C1 bytes that leave the sequence (0x18 CAN, 0x1A SUB, 0x80-0x9F) move
+// the guard out of these states and are none of clampCsiParams' business: they
+// abort the CSI, so it never dispatches at all.
+func inCsiParamScope(s parser.State) bool {
+	return s == parser.CsiParamState || s == parser.CsiIntermediateState
+}
+
+// clampCsiParams returns p with the digits of any CSI parameter beyond the
+// applicable cap removed, so no numeric parameter reaching the upstream
+// parser exceeds that cap regardless of how large the original was. It
 // returns p itself, unmodified, when nothing needs clamping (the common
 // case).
 //
@@ -316,14 +393,30 @@ const csiParamDigitCap = 5
 // clamp agree with FuzzFeedSplitConsistency's byte-split invariance for any
 // split point, not just splits outside an escape sequence.
 //
-// Only bytes the guard classifies as ParamAction digits are ever dropped.
-// Bytes it classifies as IgnoreAction (e.g. the DEL padding byte, 0x7F,
-// which the upstream parser also does not let interrupt a parameter's
-// digits) leave the count untouched, matching the upstream parser's own
-// accumulation. Every other byte — printable text, OSC/DCS payloads, CSI
-// separators and final bytes — passes through unchanged and resets the
-// count, since it can only appear where a new parameter's digits could
-// start.
+// Two classes of byte are dropped, and no others:
+//
+//   - ParamAction digits past the applicable cap, which is the clamp itself;
+//     and
+//   - C0 controls inside the parameter list of a private-marked CSI
+//     (inCsiParamScope), because upstream would strip the marker there and
+//     dispatch the over-cap digits to the unmarked handler.
+//
+// The digit count runs through every byte upstream's own accumulation runs
+// through, and is reset by every byte that ends a parameter for upstream.
+// IgnoreAction bytes (the DEL padding byte 0x7F, and a stray marker byte
+// 0x3C-0x3F inside a parameter list) and the C0 controls above are all
+// pass-through for p.params, so they leave the count untouched — resetting
+// on them is what let `CSI 9 NUL 9 NUL 9 NUL 9 b` restart the guard's count
+// on every C0 while upstream concatenated the digits into 9999. Every other
+// byte — printable text, OSC/DCS payloads, CSI separators and final bytes —
+// passes through unchanged and resets the count, since it can only appear
+// where a new parameter's digits could start.
+//
+// Which cap applies is decided the same way, from guard state alone:
+// PrefixAction marks the sequence private for the rest of its parameter
+// list, and ClearAction — which the parser emits on the ESC and on the CSI
+// introducer of every new sequence, so on every entry into a parameter
+// state — clears that mark again.
 func (e *Emulator) clampCsiParams(p []byte) []byte {
 	var out []byte
 	dropped := false // tracks whether any byte has been dropped; out alone cannot
@@ -333,12 +426,30 @@ func (e *Emulator) clampCsiParams(p []byte) []byte {
 		action := e.guard.Advance(b)
 		drop := false
 		switch {
+		case action == parser.PrefixAction:
+			e.guardDigits, e.guardPrivate = 0, true
+		case action == parser.ClearAction:
+			e.guardDigits, e.guardPrivate = 0, false
 		case action == parser.ParamAction && b >= '0' && b <= '9':
 			e.guardDigits++
-			drop = e.guardDigits > csiParamDigitCap
+			limit := csiParamDigitCap
+			if e.guardPrivate {
+				limit = csiPrivateParamDigitCap
+			}
+			drop = e.guardDigits > limit
 		case action == parser.IgnoreAction:
 			// digit count unchanged: DEL padding does not break a parameter.
+		case action == parser.ExecuteAction && inCsiParamScope(e.guard.State()):
+			// A C0 control inside a CSI parameter list. It does not break the
+			// parameter upstream is accumulating, so the digit count runs
+			// through it — but it does wipe the command word, so inside a
+			// private-marked sequence it has to be dropped to keep the marker
+			// the relaxed cap depends on. Outside one there is nothing to
+			// protect: those digits are already held to csiParamDigitCap.
+			drop = e.guardPrivate
 		default:
+			// Separators and final bytes end a parameter but not the private
+			// marker's scope, which lasts until the next sequence's ClearAction.
 			e.guardDigits = 0
 		}
 		if drop {

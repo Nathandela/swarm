@@ -250,6 +250,11 @@ func TestPBTOOL6_EveryCheckedInKotlinTestActuallyRan(t *testing.T) {
 			"is green when it runs nothing", mustRel(t, results))
 	}
 
+	// Keyed by FULLY-QUALIFIED class name, which is what the XML's name= attribute
+	// carries. Simple names happen to be unique across this module today, but nothing
+	// enforces that: two packages may legally hold same-named suites, and under a
+	// simple-name map the report from one would vouch for the other, which never ran.
+	// Keying on the qualified name costs nothing and removes that failure mode.
 	reported := map[string]int{}
 	for _, r := range reports {
 		body, err := os.ReadFile(r)
@@ -260,29 +265,95 @@ func TestPBTOOL6_EveryCheckedInKotlinTestActuallyRan(t *testing.T) {
 		if m == nil {
 			continue
 		}
-		cls := m[1]
-		if i := strings.LastIndex(cls, "."); i >= 0 {
-			cls = cls[i+1:]
-		}
 		n := 0
 		for _, c := range m[2] {
 			n = n*10 + int(c-'0')
 		}
-		reported[cls] = n
+		reported[m[1]] = n
 	}
 
 	for _, f := range kotlinTestFiles(t, filepath.Join(appModule(t), "src", "test", "kotlin")) {
-		cls := strings.TrimSuffix(filepath.Base(f), ".kt")
-		n, ok := reported[cls]
-		if !ok {
-			t.Errorf("PB-TOOL-6: %s is checked in but produced no JUnit report; it is not "+
-				"in a source set Gradle compiles, so it never ran", mustRel(t, f))
+		classes := kotlinTestClasses(t, f)
+		if len(classes) == 0 {
+			t.Errorf("PB-TOOL-6: %s is named like a suite but declares no top-level class "+
+				"holding an @Test, so there is nothing for Gradle to run", mustRel(t, f))
 			continue
 		}
-		if n == 0 {
-			t.Errorf("PB-TOOL-6: %s ran 0 tests", mustRel(t, f))
+		for _, cls := range classes {
+			n, ok := reported[cls]
+			if !ok {
+				t.Errorf("PB-TOOL-6: %s declares %s but it produced no JUnit report; it is "+
+					"not in a source set Gradle compiles, so it never ran", mustRel(t, f), cls)
+				continue
+			}
+			if n == 0 {
+				t.Errorf("PB-TOOL-6: %s: %s ran 0 tests", mustRel(t, f), cls)
+			}
 		}
 	}
+}
+
+// kotlinTestClasses returns the fully-qualified name of every top-level class in
+// one Kotlin file that holds at least one test annotation.
+//
+// WHY THIS EXISTS RATHER THAN A FILENAME. The check above used to derive the class
+// from the file's base name, which is a JAVA rule that Kotlin does not have: a .kt
+// file may declare any number of top-level classes under any names. Four checked-in
+// suites -- ConnectionAndErrorTest.kt, MachineAndLaunchTest.kt, PairingFlowTest.kt
+// and SessionScreensTest.kt -- group two or three suites each (ConnectionBannerTest,
+// ErrorRoutingTest, ...), so no report is ever emitted under the file's own name and
+// the gate reported four compiled, running, passing files as never having run.
+//
+// It is STRICTER than the rule it replaces, not looser. The filename rule checked at
+// most one class per file and was blind to the other nine in those four files; this
+// requires a report, with a non-zero test count, for EVERY top-level class a file
+// declares that carries at least one test annotation. A file whose second class
+// silently stops running now fails, where before only the first one was ever looked
+// for. A class carrying no test annotation at all is not demanded, because JUnit
+// would not run it either.
+//
+// The annotation is matched by regexp, not by a "@Test" substring: Kotlin permits the
+// fully-qualified form, and PairingFlowTest.kt writes `@org.junit.Test`. A substring
+// rule silently dropped that suite -- the demanded set came to 142 against 143 emitted
+// reports, and the one suite the gate stopped watching was the one it could least
+// afford to lose, since a file whose OTHER classes still report keeps the gate green.
+// The pattern accepts @Test and any qualified prefix while the trailing \b rejects
+// @ParameterizedTest, @TestFactory and @Testable.
+//
+// Top-level only, by the `^class` anchor: a nested class is compiled and run as part
+// of its enclosing suite, and JUnit 4 reports it under the enclosing name unless the
+// file opts into a runner like Enclosed -- which nothing in this module does, and
+// which TestPBTOOL6_GradleGateIsGreen would surface as a failure if it did.
+func kotlinTestClasses(t *testing.T, file string) []string {
+	t.Helper()
+	body, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("PB-TOOL-6: cannot read %s: %v", mustRel(t, file), err)
+	}
+	src := string(body)
+
+	pkg := ""
+	if m := regexp.MustCompile(`(?m)^package\s+([\w.]+)`).FindStringSubmatch(src); m != nil {
+		pkg = m[1] + "."
+	}
+
+	decl := regexp.MustCompile(`(?m)^(?:(?:public|internal|private|open|final)\s+)*class\s+(\w+)`)
+	testAnno := regexp.MustCompile(`@(?:[\w.]+\.)?Test\b`)
+	locs := decl.FindAllStringSubmatchIndex(src, -1)
+	var out []string
+	for i, loc := range locs {
+		end := len(src)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		// The class body runs to the next top-level declaration. An abstract or
+		// sealed base is excluded by the modifier list above; JUnit does not run one.
+		if !testAnno.MatchString(src[loc[0]:end]) {
+			continue
+		}
+		out = append(out, pkg+src[loc[2]:loc[3]])
+	}
+	return out
 }
 
 // TestPBTOOL3_DebugAPKBuildsAndIsSigned.
