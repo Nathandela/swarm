@@ -147,6 +147,10 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remotegw.Service.CommandBridge": "as Service.Gateway.",
 	"github.com/Nathandela/swarm/internal/remotegw.Service.PushNotifier":  "as Service.Gateway.",
 
+	// ---- internal/remote/relay: R2 bundle test seams ---------------------------------------
+	"github.com/Nathandela/swarm/internal/remote/relay.Server.AdminURL":  "accessor for the ephemeral admin listen address; the health/doctor suites dial it, production reads admin_listen from its own config.",
+	"github.com/Nathandela/swarm/internal/remote/relay.WithDiskFreeFunc": "disk-space injection seam for the low-disk /readyz test; production uses the real statfs path.",
+
 	// ---- internal/remote/relay: deliberately test-only, already fenced --------------------
 	// client.go says of Dial: "NO production caller may reach it, which internal/remote/
 	// transport's productiondial_test.go enforces at the call site." This agrees with that
