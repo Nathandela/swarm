@@ -9,7 +9,7 @@
 - [Relay runbook](operations/relay-runbook.md) — standing up a TLS-terminated relay for the handset demonstration, and the certificate-renewal hazard (PB-OPS-1, PB-OPS-5)
 - [Operator runbook](operations/operator-runbook.md) — install, pair, revoke, kill switch, device loss, push configuration (PB-OPS-2)
 - [Metadata disclosure](operations/metadata-disclosure.md) — what the relay operator and the push provider actually observe (PB-OPS-3)
-- [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the deferred PB-E2E-5 gate a human with a device follows (ADR-007 B31)
+- [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
 
 ## The plan
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
@@ -17,6 +17,7 @@
 - [Implementation goals](specifications/implementation-goals.md) — per-epic exit criteria, global goals, orchestration protocol (post audit-002)
 - [Remote Control implementation playbook](specifications/remote-control-product-playbook.md) — owner-approved self-host-first phone/terminal product contract, architecture, delivery waves, and release gates
 - [System invariants](invariants/system-invariants.md) — 12 safety + 3 liveness properties, each test-bound
+- [Push gateway API](specifications/push-gateway-api.md) — the ADR-015 gateway contract: five operations, WakeV1, wake obligations, relay+gateway collusion threat model (Draft, binds at R3)
 - [Interaction schema](specifications/interaction-schema.md) — normative interaction-item payload: eight kinds, delta semantics, approval lifecycle (Draft, binds on ADR-009 acceptance)
 
 ## Design reference
