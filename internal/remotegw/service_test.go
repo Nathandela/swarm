@@ -170,3 +170,101 @@ func TestService_CommandLoopDrainsQueuedCommand(t *testing.T) {
 		t.Fatalf("reply decode: %v", err)
 	}
 }
+
+// --- ADR-015 P9/P12: PushGateway wiring at the Service seam --------------------------
+
+// TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter pins the production
+// wiring the R3 GREEN review found missing: with cfg.PushGateway set, PushConfig.Pusher
+// (PushNotifier's send seam) is a *TransportRouter over the relay's own PushTriggerer,
+// not the relay pusher directly -- so selection between legacy_relay and gateway becomes
+// exclusive (P12) the moment a pairing migrates, rather than never becoming reachable at
+// all because nothing in cmd/swarm-remote ever constructed the router.
+func TestNewService_PushGatewayConfiguredWrapsPusherInTransportRouter(t *testing.T) {
+	mb := &pushCapableMailbox{}
+	svc := NewService(ServiceConfig{
+		Relay: mb,
+		PushGateway: &PushGatewayConfig{
+			GatewayURL:       "https://push.example.com",
+			SubmitCapability: "test-cap",
+			Address:          testPushAddress(0xF0),
+		},
+	})
+	router, ok := svc.notifier.cfg.Pusher.(*TransportRouter)
+	if !ok {
+		t.Fatalf("PushConfig.Pusher = %T, want *TransportRouter when PushGateway is configured", svc.notifier.cfg.Pusher)
+	}
+	if router.Legacy != PushTriggerer(mb) {
+		t.Fatal("TransportRouter.Legacy is not the relay's own PushTriggerer -- a rollback to " +
+			"legacy_relay would silently stop firing push_trigger at all")
+	}
+	if svc.wakeMachine == nil {
+		t.Fatal("Service.wakeMachine is nil despite PushGateway being configured")
+	}
+}
+
+// TestNewService_NoPushGatewayLeavesThePusherUntouched pins the other half: the default
+// (PushGateway nil, every pairing until it migrates) must be BYTE-FOR-BYTE today's
+// behaviour -- the relay's PushTriggerer wired directly, no TransportRouter in the way.
+func TestNewService_NoPushGatewayLeavesThePusherUntouched(t *testing.T) {
+	mb := &pushCapableMailbox{}
+	svc := NewService(ServiceConfig{Relay: mb})
+	if _, ok := svc.notifier.cfg.Pusher.(*TransportRouter); ok {
+		t.Fatal("PushConfig.Pusher is a *TransportRouter with no PushGateway configured, want the legacy path untouched")
+	}
+	if svc.notifier.cfg.Pusher != PushTriggerer(mb) {
+		t.Fatalf("PushConfig.Pusher = %v, want the relay client directly", svc.notifier.cfg.Pusher)
+	}
+	if svc.wakeMachine != nil {
+		t.Fatal("Service.wakeMachine is non-nil with no PushGateway configured")
+	}
+}
+
+// TestService_RedrivePendingWakeObligationsIsANoOpWithoutPushGateway pins that calling
+// the redrive hook on an unmigrated (legacy_relay-only) service is safe and cheap, since
+// cmd/swarm-remote calls it unconditionally at startup.
+func TestService_RedrivePendingWakeObligationsIsANoOpWithoutPushGateway(t *testing.T) {
+	svc := NewService(ServiceConfig{Relay: &pushCapableMailbox{}})
+	if err := svc.RedrivePendingWakeObligations(context.Background()); err != nil {
+		t.Fatalf("RedrivePendingWakeObligations with no PushGateway configured: %v", err)
+	}
+}
+
+// TestService_RedrivePendingWakeObligationsSubmitsAPendingObligationAtStartup is the
+// PG-OBL-8 half: an obligation left non-terminal by whatever wrote the durable stores
+// (standing in for a previous process instance) is re-driven the moment this one calls
+// the hook, without needing an unrelated trigger to land first.
+func TestService_RedrivePendingWakeObligationsSubmitsAPendingObligationAtStartup(t *testing.T) {
+	obligations := newFakeObligationStore()
+	addr := testPushAddress(0xF1)
+	env, err := SealWakeV1(testWakeKey(), addr, 1, time.Now())
+	if err != nil {
+		t.Fatalf("SealWakeV1: %v", err)
+	}
+	if err := obligations.Put(WakeObligation{
+		Address: addr, WakeSeq: 1, Envelope: env,
+		IssuedAt: time.Now(), ExpiresAt: time.Now().Add(WakeV1Expiry), State: ObligationPending,
+	}); err != nil {
+		t.Fatalf("seed a pending obligation: %v", err)
+	}
+
+	sub := &fakeSubmitter{}
+	svc := NewService(ServiceConfig{
+		Relay:   &pushCapableMailbox{},
+		WakeKey: testWakeKey(),
+		PushGateway: &PushGatewayConfig{
+			GatewayURL: "https://push.example.com", SubmitCapability: "cap", Address: addr,
+			Obligations: obligations,
+		},
+	})
+	// The service's own machine talks HTTP; swap its Submitter for the fake so this test
+	// exercises the redrive PATH, not a real network call.
+	svc.wakeMachine.cfg.Submitter = sub
+
+	if err := svc.RedrivePendingWakeObligations(context.Background()); err != nil {
+		t.Fatalf("RedrivePendingWakeObligations: %v", err)
+	}
+	if got := len(sub.all()); got != 1 {
+		t.Fatalf("wake submissions after redrive = %d, want 1: PG-OBL-8's restart re-drive must not "+
+			"wait for an unrelated trigger", got)
+	}
+}

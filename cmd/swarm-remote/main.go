@@ -35,6 +35,7 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 	return remotegw.ServiceConfig{
 		DaemonSocket:   p.DaemonSocket,
 		Relay:          mailbox,
+		Profile:        p.Profile,
 		PhoneTarget:    p.PhoneTarget,
 		Key:            p.Key,
 		WakeKey:        p.WakeKey,
@@ -50,6 +51,7 @@ func serviceConfigFromParams(p gatewayParams, mailbox remotegw.Mailbox) remotegw
 		Inbound:        p.Inbound,
 		StateDir:       p.StateDir,
 		DeviceID:       p.DeviceID,
+		PushGateway:    p.PushGateway,
 	}
 }
 
@@ -143,6 +145,15 @@ func runGeneration(ctx context.Context, p gatewayParams) (progressed bool, err e
 	}
 
 	svc := remotegw.NewService(serviceConfigFromParams(p, client))
+	// ADR-015 P9/P12, PG-OBL-8: re-drive whatever non-terminal wake obligation this
+	// process finds durable, once per generation (a no-op when the pairing has not
+	// migrated off legacy_relay). Riding every redial rather than only the true process
+	// start also gives PG-OBL-9's ongoing retry a free ride until a proper backoff driver
+	// lands (bd issue agents-tracker-hggx.4.3) -- Drive is idempotent-safe to call again
+	// on an obligation that already resolved, so this costs nothing on the common path.
+	if err := svc.RedrivePendingWakeObligations(ctx); err != nil {
+		report("push gateway: redrive pending wake obligation", err)
+	}
 	// ADR-007 B114's other half: give the stored degraded state a reader. The watcher is
 	// JOINED rather than left to a deferred cancel, so this function cannot outlive it.
 	wctx, stopWatch := context.WithCancel(ctx)

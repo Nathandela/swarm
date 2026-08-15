@@ -126,3 +126,54 @@ func TestRelaySink_ReconcileWithNoProfileSealsTheZeroValue(t *testing.T) {
 		t.Fatalf("sealed profile = %+v; want the zero value", got.Profile)
 	}
 }
+
+// TestRelaySink_ReconcileWithOnlyRelayTLSPolicyConfiguredSealsThatHalfHonestly is ADR-016
+// "profile"'s STRENGTHENING of the test above, not a replacement of it: the assertion
+// above stays true (an entirely unconfigured Profile still seals as the whole zero value,
+// still a wiring gap for the R1 fields this ADR does not own -- AcceptedActions,
+// InteractionSchemaVersion and the rest have "no production caller yet",
+// schema/profile.go's own words). What changes is that "unconfigured" is no longer a
+// single all-or-nothing fact once ADR-016 becomes the profile's first REAL publisher: a
+// machine that has run `swarm remote init` always has SOME relay TLS policy (webpki is the
+// default, W1), so the relay-TLS third of the profile is populated on every real machine
+// while the rest of the struct legitimately waits on its own R1 wiring.
+//
+// A test that only ever asked "is the whole profile zero" could not see that distinction:
+// it would report a profile carrying a real, machine-configured policy as indistinguishable
+// from one that never configured anything. That is the "strengthening, not weakening" this
+// ADR's RED phase is required to leave behind -- the zero-value check keeps every byte of
+// its old meaning, and this test adds the byte-level claim it could not make on its own.
+func TestRelaySink_ReconcileWithOnlyRelayTLSPolicyConfiguredSealsThatHalfHonestly(t *testing.T) {
+	key := reconcileTestKey()
+	app := &fakeAppender{}
+	// Deliberately only the ADR-016 fields: the rest of RemoteProfileV1 stays the zero
+	// value, exactly as it does on a real machine today (no production caller for
+	// AcceptedActions etc. yet).
+	half := protocol.RemoteProfileV1{
+		RelayTLSPolicy: "webpki",
+		RelayHost:      "swarm-relay.example.com",
+	}
+	sink := newProfileSink(app, key, testAuthorities, half)
+
+	if err := sink.Reconcile(); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	_, plain := openPlaintext(t, key, app.envs[0])
+	var got struct {
+		Profile protocol.RemoteProfileV1 `json:"profile"`
+	}
+	if err := json.Unmarshal(plain, &got); err != nil {
+		t.Fatalf("decode reconcile plaintext: %v", err)
+	}
+	if got.Profile.RelayTLSPolicy != "webpki" || got.Profile.RelayHost != "swarm-relay.example.com" {
+		t.Fatalf("the configured relay-TLS half did not seal honestly: got %+v, want policy=webpki "+
+			"host=swarm-relay.example.com", got.Profile)
+	}
+	// The UNCONFIGURED half stays genuinely zero -- this is not "the whole profile got
+	// filled in because ONE field was set", which would be the opposite defect (a producer
+	// fabricating authority it was never given).
+	if got.Profile.Version != 0 || len(got.Profile.AcceptedActions) != 0 || got.Profile.InteractionSchemaVersion != 0 {
+		t.Fatalf("fields ADR-016 does not own were non-zero: %+v (a real relay-TLS publisher "+
+			"must not fabricate authority over fields it was never configured with)", got.Profile)
+	}
+}

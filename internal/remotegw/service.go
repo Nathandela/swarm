@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 )
@@ -26,6 +27,12 @@ type ServiceConfig struct {
 	// authority is the same fail-closed refusal of mutating ops as no record at all. Callers
 	// that assemble a Service for real traffic MUST set it (and GrantSeq).
 	Machine string
+	// Profile is the machine's sealed RemoteProfileV1 (ADR-017 T5), threaded straight into
+	// RelayConfig.Profile so it reaches every reconcile record this runtime seals. Before
+	// this field existed RelayConfig.Profile was reachable from nowhere but a test --
+	// exactly B34's "a fence guarding a path production did not take" shape, one layer up
+	// (ADR-016 "profile" wiring gap).
+	Profile protocol.RemoteProfileV1
 	Key     crypto.ContentKey // the epoch content key shared with the phone
 	// WakeKey is the CONTENT-FREE key the push trigger seals its wakes under (PB-KEY-2,
 	// PB-PUSH-0). It reaches the sidecar either way -- machineid.unmarshal already reads
@@ -70,6 +77,12 @@ type ServiceConfig struct {
 	// construction. Nil => in-memory (resets on restart), which leaves the replay guard
 	// blind after a restart -- production always wires the file.
 	Inbound InboundState
+	// PushGateway configures the ADR-015 P9 wake-obligation machine as an alternative to
+	// the legacy relay push_trigger transport (ADR-015 P12). Nil (the default) means this
+	// pairing has not migrated: the push path is exactly what it is today, byte-for-byte
+	// unchanged -- Pusher is the relay client discovered from cfg.Relay, with no
+	// TransportRouter in front of it at all.
+	PushGateway *PushGatewayConfig
 	// Post-revocation confidentiality (codex#1): the epoch key + phone target are fixed for
 	// this process's lifetime, so after the owner revokes the paired device (rotating the
 	// epoch key) a still-running gateway would reconnect and reseal epoch frames to the
@@ -78,6 +91,44 @@ type ServiceConfig struct {
 	// check (unit tests that do not provision a registry).
 	StateDir string // state dir whose <StateDir>/devices registry is re-read on reconnect
 	DeviceID string // this gateway's paired device; its removal triggers a graceful exit
+}
+
+// PushGatewayConfig configures the ADR-015 P9 wake-obligation machine for one pairing.
+//
+// TODO(pairing-conveyance): GatewayURL, SubmitCapability and Address are, for this wave,
+// sourced from static machine configuration (cmd/swarm-remote/config.go's optional
+// push-gateway.json) rather than the real PG-MIG-2 per-pairing conveyance -- the phone
+// allocating an address and handing it to this machine over an authenticated
+// pairing-update. THE SAME IS TRUE OF THE WAKE KEY: ServiceConfig.WakeKey (fed into
+// WakeObligationConfig below, not a field on this struct) is sourced from
+// id.EpochKeys().WakeKey, epoch material, rather than ADR-015 P7's phone-generated,
+// per-pairing key conveyed inside that same pairing transcript and DELIBERATELY not
+// epoch material -- precisely so an ADR-011 M5 epoch rotation does not invalidate a push
+// binding. Left sourced from epoch material, an epoch rotation silently breaks every
+// WakeV1 tag on this pairing with nothing failing on the machine: the mirror image of
+// the half-migration P8 delta 2 exists to forbid. That conveyance, and ADR-018's
+// eventual N-pairings widening, are a later slice; see pushtransport.go's own
+// TODO(pairing-conveyance) on TransportStore, which this config feeds. This wave's
+// contract does not change when that lands.
+type PushGatewayConfig struct {
+	GatewayURL       string // the push gateway's base URL, e.g. https://push.example.com
+	SubmitCapability string // this pairing's submit capability (spec §2.2)
+	Address          PushAddress
+	// Transport is the durable push_transport selection (PG-MIG-1). Nil => in-memory,
+	// which defaults to legacy_relay (PG-MIG-1/2's starting state) and is not durable
+	// across a restart -- production wires the file.
+	Transport TransportStore
+	// Obligations is the durable wake-obligation custody (PG-OBL-1). Nil => in-memory,
+	// which loses every non-terminal obligation across a restart -- production wires the
+	// file.
+	Obligations ObligationStore
+	// WakeSeq is the durable, per-pairing wake_seq coordinate (PG-WAKE-16). It is
+	// DELIBERATELY separate from ServiceConfig.PushSeq (the legacy 78-byte wake's seq):
+	// the two are different wire objects with different receivers, and sharing a counter
+	// would have them stale-drop each other exactly as PushSeq's own doc comment already
+	// argues for JournalSeq vs PushSeq. Nil => in-memory, which restarts at 1 and would
+	// have the phone's persisted high-water reject every wake after a restart.
+	WakeSeq SeqSource
 }
 
 // ErrDeviceRevoked is returned by Run when the gateway's paired device is no longer in the
@@ -120,6 +171,11 @@ type Service struct {
 	bridge   *CommandBridge
 	leases   *LeaseManager
 	watchers *TerminalWatcher
+	// wakeMachine/wakeObligations are set only when cfg.PushGateway is configured, and
+	// exist so RedrivePendingWakeObligations (PG-OBL-8) has something to re-drive at
+	// startup without reaching back into cfg.
+	wakeMachine     *WakeObligationMachine
+	wakeObligations ObligationStore
 }
 
 // NewService builds a runtime over cfg. It wires a RelaySink onto a Gateway for the
@@ -155,6 +211,7 @@ func NewService(cfg ServiceConfig) *Service {
 		Now:            cfg.Now,
 		Seq:            cfg.JournalSeq,
 		Outbox:         cfg.Outbox,
+		Profile:        cfg.Profile,
 		// PB-SYNC-7 wired for real: WITHOUT an authority source the sink publishes no
 		// reconcile record, and a phone that fails closed on RequireReconciled then refuses
 		// every mutating op FOREVER with nothing in the tree failing -- the permanent brick
@@ -179,6 +236,39 @@ func NewService(cfg ServiceConfig) *Service {
 	var pusher PushTriggerer
 	if pt, ok := cfg.Relay.(PushTriggerer); ok {
 		pusher = pt
+	}
+	// ADR-015 P9/P12: when this pairing has migrated (cfg.PushGateway set), the push path
+	// is a TransportRouter in front of the legacy relay pusher discovered above, so
+	// selection stays EXCLUSIVE (P12) and legacy_relay keeps working byte-for-byte should
+	// the pairing roll back. cfg.PushGateway == nil (every pairing until it migrates)
+	// leaves `pusher` exactly as it always has been -- no router, no obligation machine.
+	var wakeMachine *WakeObligationMachine
+	var wakeObligations ObligationStore
+	if cfg.PushGateway != nil {
+		wakeObligations = cfg.PushGateway.Obligations
+		if wakeObligations == nil {
+			wakeObligations, _ = OpenObligationStore("") // in-memory, cannot error
+		}
+		transport := cfg.PushGateway.Transport
+		if transport == nil {
+			transport, _ = OpenTransportStore("") // in-memory, cannot error; defaults legacy_relay
+		}
+		wakeSeq := cfg.PushGateway.WakeSeq
+		if wakeSeq == nil {
+			wakeSeq, _ = OpenSeqSource("") // in-memory, cannot error
+		}
+		wakeMachine = NewWakeObligationMachine(WakeObligationConfig{
+			Store: wakeObligations,
+			Submitter: &HTTPWakeSubmitter{
+				BaseURL:          cfg.PushGateway.GatewayURL,
+				SubmitCapability: cfg.PushGateway.SubmitCapability,
+			},
+			WakeKey: cfg.WakeKey,
+			Address: cfg.PushGateway.Address,
+			Seq:     wakeSeq,
+			Now:     cfg.Now,
+		})
+		pusher = &TransportRouter{Transport: transport, Legacy: pusher, Gateway: wakeMachine}
 	}
 	notifier := NewPushNotifier(sink, PushConfig{
 		Pusher:  pusher,
@@ -218,7 +308,43 @@ func NewService(cfg ServiceConfig) *Service {
 		Prefs:       cfg.PushPrefs,
 		Resync:      gw,
 	})
-	return &Service{cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers}
+	return &Service{
+		cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers,
+		wakeMachine: wakeMachine, wakeObligations: wakeObligations,
+	}
+}
+
+// RedrivePendingWakeObligations re-drives every non-terminal wake obligation this process
+// finds durable at startup (PG-OBL-8): an obligation left in_flight or pending by a crash
+// -- or by a Trigger that coalesced into a live obligation Drive never got to run for --
+// is retried here rather than waiting for an unrelated future trigger to happen to land on
+// the same address before the obligation's five-minute expiry. It is a no-op when this
+// pairing has not migrated off legacy_relay (cfg.PushGateway unset).
+//
+// This is deliberately the SIMPLEST re-drive shape that satisfies PG-OBL-8's "on restart,
+// load and re-drive every non-terminal obligation": one pass over Pending() at startup,
+// not a scheduled loop. PG-OBL-9's ongoing backoff-until-expiry retry -- for the case
+// where a retryable failure happens and NEITHER a restart nor any other trigger arrives
+// before expiry -- is tracked as a follow-up (bd issue agents-tracker-hggx.4.3) rather
+// than built here.
+func (s *Service) RedrivePendingWakeObligations(ctx context.Context) error {
+	if s.wakeMachine == nil || s.wakeObligations == nil {
+		return nil
+	}
+	pending, err := s.wakeObligations.Pending()
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	// This wave's scope is one pairing (one address) per Service (see PushGatewayConfig's
+	// TODO), so wakeMachine.Drive -- which drives its own configured Address -- is the
+	// whole redrive regardless of how many non-terminal records Pending() reports; a
+	// future ADR-018 N-pairings widening is what would make this iterate distinct
+	// addresses. A redrive failure here must not stop the rest of gateway startup
+	// (PG-OBL-3's failure-isolation applies at boot exactly as it does live).
+	return s.wakeMachine.Drive(ctx)
 }
 
 // gatewayAuthorities is the PRODUCTION ReconcileSource: each authority is read from the

@@ -112,6 +112,16 @@ var pbpush3Producers = map[string]string{
 		"sink boundary (`s.push.Push`). Everything that reaches the provider passes through this one " +
 		"call, which is why the channel test measures RAW PROVIDER BYTES downstream of it rather than " +
 		"the PushPayload struct here.",
+
+	"internal/remotegw/pushtransport.go:(*TransportRouter).PushTrigger": "FUNNEL, not a producer -- " +
+		"routes one already-built envelope to exactly one transport per the durable push_transport " +
+		"selection (PG-MIG-1). Its legacy_relay case constructs nothing and forwards maybeWake's " +
+		"env argument (the already-sealed, constant 78-byte wake) unchanged to r.Legacy.PushTrigger, " +
+		"the same relay.Client.PushTrigger hop this ledger's second entry already covers from the " +
+		"far side. The gateway case drives WakeObligationMachine.Trigger/Drive instead, a wholly " +
+		"separate HTTPS channel the fcmSenderAdapter.Send entry above covers; foreground_only sends " +
+		"nothing. Listed because the matcher sees the PushTrigger() call here and a routing hop that " +
+		"is invisible to the ledger is a hop nobody rechecks.",
 }
 
 // pbpush3ModuleRoot locates the module root so the scan covers EVERY package. A rule enforced

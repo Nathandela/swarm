@@ -8,10 +8,15 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
+	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
@@ -33,8 +38,12 @@ type gatewayParams struct {
 	// (ADR-007 B34). It is a resolved VALUE rather than a flag the dial re-derives, so
 	// the policy cannot differ between assembly and dial.
 	RelaySecurity relay.Security
-	PhoneTarget   string
-	Key           crypto.ContentKey
+	// Profile is ADR-016 "profile"'s first real publisher: the machine's relay TLS policy,
+	// host and pin, built from the SAME relaycfg.Config the dial policy above reads, and
+	// carried into remotegw.ServiceConfig.Profile so every reconcile record publishes it.
+	Profile     protocol.RemoteProfileV1
+	PhoneTarget string
+	Key         crypto.ContentKey
 	// WakeKey is the content-free key the push trigger seals its wakes under (PB-PUSH-0).
 	// machineid.Load already materialises it in this process -- marshal/unmarshal read one
 	// buffer holding both signing privates, the content key AND this -- so resolving it
@@ -92,6 +101,11 @@ type gatewayParams struct {
 	// with the key it accompanies rather than looked up later.
 	DeviceConsentSig []byte
 	Grant            *crypto.EpochGrant
+
+	// PushGateway configures the ADR-015 P9/P12 wake-obligation machine (nil => this
+	// pairing has not migrated off legacy_relay, which is every pairing until the
+	// optional push-gateway.json below exists). See loadPushGatewayConfig's TODO.
+	PushGateway *remotegw.PushGatewayConfig
 }
 
 // resolveGatewayParams loads the machine identity, relay URL, and the single
@@ -115,6 +129,21 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	relaySecurity, err := relayCfg.Security()
 	if err != nil {
 		return gatewayParams{}, err
+	}
+	// ADR-016 "profile": the FIRST real publisher of RelayTLSPolicy/RelayHost/RelaySPKIPin,
+	// built from the same relaycfg.Config the transport policy above came from. Pin() is
+	// the ONE decoder of relayCfg.SPKIPin (relaycfg's own invariant), so it is reused here
+	// rather than a second base64 decode.
+	relayPin, err := relayCfg.Pin()
+	if err != nil {
+		return gatewayParams{}, err
+	}
+	profile := protocol.RemoteProfileV1{
+		RelayTLSPolicy: relayCfg.TLSPolicy,
+		RelaySPKIPin:   relayPin,
+	}
+	if u, uerr := url.Parse(relayCfg.RelayURL); uerr == nil {
+		profile.RelayHost = u.Hostname()
 	}
 
 	reg, err := device.Open(filepath.Join(stateDir, "devices"))
@@ -178,11 +207,19 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, fmt.Errorf("open inbound state: %w", err)
 	}
+	// ADR-015 P9/P12: an OPTIONAL migration off legacy_relay. Absent (every pairing until
+	// it migrates) leaves PushGateway nil, which NewService reads as "wire the push path
+	// exactly as it is today". See loadPushGatewayConfig's TODO(pairing-conveyance).
+	pushGateway, err := resolvePushGatewayConfig(remoteDir)
+	if err != nil {
+		return gatewayParams{}, err
+	}
 
 	return gatewayParams{
 		DaemonSocket:  daemonSocket,
 		RelayURL:      relayCfg.RelayURL,
 		RelaySecurity: relaySecurity,
+		Profile:       profile,
 		RelayAuth: relay.ClientAuth{
 			RelayAuthPub: id.RelayAuthPublic(),
 			// The MACHINE identity is a software key with no custody gate, so it never
@@ -214,6 +251,7 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 		DeviceRelayAuthPub: ed25519.PublicKey(rec.RelayAuthPub),
 		DeviceConsentSig:   rec.ConsentSig,
 		Grant:              sealedGrant,
+		PushGateway:        pushGateway,
 		StateDir:           stateDir,
 		DeviceID:           rec.DeviceID,
 	}, nil
@@ -235,4 +273,104 @@ func loadRelayConfig(stateDir string) (relaycfg.Config, error) {
 		return relaycfg.Config{}, fmt.Errorf("relay.json present but relay_url is empty")
 	}
 	return cfg, nil
+}
+
+// pushGatewayFile is <StateDir>/remote/push-gateway.json's shape: the SCAFFOLD this wave
+// provides for ADR-015 P9/P12's gateway-url/submit-capability/push-address plumbing.
+//
+// TODO(pairing-conveyance): this file stands in for PG-MIG-2's real per-pairing
+// conveyance -- Android gateway registration, address allocation, an authenticated
+// pairing-update acknowledgement, and a successful gateway test wake, ending in the
+// atomic push_transport transition (internal/remotegw/pushtransport.go's own
+// TODO(pairing-conveyance)). Until that slice lands, nothing in this tree WRITES this
+// file; an operator (or a future migration tool) provisions it by hand. Its presence
+// alone does not flip push_transport to gateway -- OpenTransportStore still starts at
+// legacy_relay (PG-MIG-1) until something calls SetTransport, which this wave does not
+// do either. This is deliberately just plumbing, not a migration trigger.
+type pushGatewayFile struct {
+	GatewayURL       string `json:"gateway_url"`
+	SubmitCapability string `json:"submit_capability"`
+	// PushAddress is PG-ALLOC-1's 16 opaque bytes, hex-encoded (32 hex characters).
+	PushAddress string `json:"push_address"`
+}
+
+// validateGatewayURL fails closed on a gateway_url that would otherwise reach
+// HTTPWakeSubmitter.SubmitWake only to be refused THERE as a plain (therefore
+// unconditionally retryable, see wakesubmitter.go's header) error -- turning a bad
+// config into a push path that silently retries forever without ever delivering,
+// instead of a startup refusal (PG-TR-1's https-only check is otherwise enforced only
+// per request, never at load). It also rejects a path, query or fragment: SubmitWake
+// builds the request URL as TrimRight(BaseURL, "/") + "/v1/wakes", so an operator who
+// already included the spec's /v1 prefix in gateway_url would silently get
+// /v1/v1/wakes with no error anywhere.
+func validateGatewayURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("gateway_url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("gateway_url must use https (PG-TR-1), got %q", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("gateway_url has no host: %q", raw)
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("gateway_url must be a bare origin with no path, query or fragment "+
+			"-- SubmitWake appends /v1/wakes itself -- got %q", raw)
+	}
+	return nil
+}
+
+// resolvePushGatewayConfig reads the optional push-gateway.json and, only if present,
+// opens the three durable stores the wake-obligation machine needs (a dedicated wake_seq
+// file, distinct from PushSeq -- see remotegw.PushGatewayConfig.WakeSeq's doc comment for
+// why sharing one would be wrong). A missing file returns (nil, nil): this is NOT an
+// error, it is every pairing's state until it migrates.
+func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, error) {
+	path := filepath.Join(remoteDir, "push-gateway.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read push-gateway.json: %w", err)
+	}
+	var f pushGatewayFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("parse push-gateway.json: %w", err)
+	}
+	if f.GatewayURL == "" || f.SubmitCapability == "" || f.PushAddress == "" {
+		return nil, fmt.Errorf("push-gateway.json present but missing a required field " +
+			"(gateway_url, submit_capability, push_address)")
+	}
+	if err := validateGatewayURL(f.GatewayURL); err != nil {
+		return nil, fmt.Errorf("push-gateway.json: %w", err)
+	}
+	raw, err := hex.DecodeString(f.PushAddress)
+	var addr remotegw.PushAddress
+	if err != nil || len(raw) != len(addr) {
+		return nil, fmt.Errorf("push-gateway.json: push_address must be %d hex-encoded bytes", len(addr))
+	}
+	copy(addr[:], raw)
+
+	wakeSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-wake.seq"))
+	if err != nil {
+		return nil, fmt.Errorf("open outbound wake seq: %w", err)
+	}
+	obligations, err := remotegw.OpenObligationStore(filepath.Join(remoteDir, "wake-obligations.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open wake-obligation store: %w", err)
+	}
+	transport, err := remotegw.OpenTransportStore(filepath.Join(remoteDir, "push-transport.json"))
+	if err != nil {
+		return nil, fmt.Errorf("open push-transport store: %w", err)
+	}
+	return &remotegw.PushGatewayConfig{
+		GatewayURL:       f.GatewayURL,
+		SubmitCapability: f.SubmitCapability,
+		Address:          addr,
+		Transport:        transport,
+		Obligations:      obligations,
+		WakeSeq:          wakeSeq,
+	}, nil
 }

@@ -40,6 +40,16 @@ type PushTriggerer interface {
 	PushTrigger(ctx context.Context, target string, env []byte) error
 }
 
+// obligationPreAppender is an OPTIONAL capability of PushConfig.Pusher (ADR-015 P9,
+// PG-OBL-2): a Pusher that must durably record its intent to wake BEFORE the mailbox
+// record announcing it is published implements it. *TransportRouter is the only
+// implementation (pushtransport.go), and only its gateway leg does real work --
+// legacy_relay's ordering guarantee is already "publish then push" (unaffected: see
+// Event below), and foreground_only has nothing durable to record.
+type obligationPreAppender interface {
+	PreAppendObligation() error
+}
+
 // PushConfig configures a PushNotifier.
 //
 // It carries a WakeKey and NO content key, and that is PB-PUSH-0's "the content key is
@@ -189,11 +199,34 @@ func (n *PushNotifier) Snapshot(roster []protocol.JournalRecord, cursor uint64) 
 // gates its durable cursor on this error, so returning a push failure would stall the
 // journal on a relay push outage -- turning a lost convenience into a stalled bridge. The
 // failure is surfaced through Err() instead, which is what keeps it from being silent.
+//
+// preAppendObligation runs FIRST, ahead of the publish, and is the one exception to
+// "wake follows publish": it is not the wake itself (no network call, no phone-visible
+// effect), only the gateway transport's durable local record of intent to send one
+// (PG-OBL-2). See preAppendObligation's doc for why this ordering is safe against a
+// failed append.
+//
+// GATEWAY-LEG QUALIFICATION: for a gateway-transport pairing specifically, "a failed
+// append suppresses it entirely" is true of the WAKE (send() is still gated on inner.Event
+// succeeding) but no longer true of the DURABLE OBLIGATION -- preAppendObligation already
+// wrote one before inner.Event ran. A failed append therefore leaves a durable pending
+// obligation for a record that was never published; a later trigger on the same address or
+// RedrivePendingWakeObligations will still submit it, so the phone is woken to reconcile a
+// record that does not exist. This is harmless by construction (the wake carries an empty,
+// locator-free plaintext -- crypto.SealWake -- so the phone's reconcile simply finds
+// nothing new) and is the forced consequence of PG-OBL-2's "obligation before publish"
+// ordering, not an oversight.
 func (n *PushNotifier) Event(rec protocol.JournalRecord) error {
+	// One prefsCache for this call: wouldWakeNow's peek and maybeWake's immediate-path
+	// commit gate on the SAME preference read for the SAME record, so they share it rather
+	// than each paying a separate LoadPrefs() (and, on failure, a separate setErr). See
+	// prefsCache's doc for why the deferred-wake timer below does NOT get this cache.
+	cache := &prefsCache{}
+	n.preAppendObligation(rec, cache)
 	if err := n.inner.Event(rec); err != nil {
 		return err
 	}
-	n.maybeWake(rec)
+	n.maybeWake(rec, cache)
 	return nil
 }
 
@@ -258,6 +291,83 @@ func (n *PushNotifier) setErr(err error) {
 // in which every push goes out unfiltered.
 var errNoPushPrefs = errors.New("remotegw: push suppressed: no preference custody configured")
 
+// preAppendObligation durably records (TransportRouter.PreAppendObligation ->
+// WakeObligationMachine.Trigger) the wake this Event call is about to publish, BEFORE
+// the mailbox append -- PG-OBL-2, for a gateway-transport pairing only. A Trigger
+// failure is reported through Err() and otherwise swallowed: PG-OBL-3 forbids a
+// push-path failure from ever blocking or failing the mailbox record, and maybeWake's
+// own send() (moments later, after the publish) makes its own Trigger+Drive attempt
+// regardless -- harmlessly coalescing into whatever this call managed to append, or
+// minting fresh if it appended nothing at all.
+func (n *PushNotifier) preAppendObligation(rec protocol.JournalRecord, cache *prefsCache) {
+	pre, ok := n.cfg.Pusher.(obligationPreAppender)
+	if !ok || !n.wouldWakeNow(rec, cache) {
+		return
+	}
+	if err := pre.PreAppendObligation(); err != nil {
+		n.setErr(err)
+	}
+}
+
+// wouldWakeNow reports, WITHOUT mutating any bookkeeping (lastGroup/lastWake/deferred),
+// whether rec would cause maybeWake to send an IMMEDIATE (non-deferred) wake once the
+// publish it is about to gate on succeeds. It exists only to drive preAppendObligation,
+// and it must be EXACT: a false positive would durably record an obligation for a wake
+// PG-OBL-7 requires never exist ("a suppressed trigger creates NO obligation"), and a
+// false negative reopens the crash gap PG-OBL-2 exists to close.
+//
+// It deliberately mirrors maybeWake's gating rather than sharing code with it, because
+// maybeWake's version COMMITS (isTransition/claimWindow mutate state) and this one must
+// not: gateway.go's deliver forwards a FAILED record for redelivery with the identical
+// rec ("forward first, advance the cursor only after the sink acks", deliver's own
+// comment), and committing transition/window state before knowing the publish actually
+// succeeded would silently suppress the retry's wake.
+//
+// WHAT ACTUALLY SERIALISES, STATED PRECISELY: Event calls themselves are serialised by
+// RunJournal's single read loop, so no OTHER Event call can land between this peek and
+// maybeWake's own commit moments later. That does NOT cover the deferred-wake timer
+// goroutine (maybeWake's send() closure, ADR-010 §4(b)): it runs on its own goroutine and
+// mutates lastWake via claimDeferred independently of the read loop, so it CAN interleave
+// between this peek and the commit. The exposure is narrow and self-healing rather than
+// absent: at worst this peek sees claimWindow as available (predicting an immediate wake)
+// when the timer's claimDeferred races in first and the commit defers instead -- which
+// durably records an obligation for a trigger PG-OBL-7 says must create none. The timer's
+// OWN send(), moments later, Triggers+Drives the same address, so the extra obligation
+// coalesces into a real wake rather than sitting unresolved: it costs one redundant local
+// write, not a leaked or duplicated wake.
+//
+// A DEFERRED wake (window-suppressed interaction) is deliberately reported as false: its
+// own timer runs long after this publish already succeeded, is not durable, and is not
+// the crash gap PG-OBL-2 names -- pre-appending for it would durably record an
+// obligation for a send this process has not committed to (the preference is re-checked
+// at send, ADR-010 §4(b)), which trades a small window for a worse one.
+func (n *PushNotifier) wouldWakeNow(rec protocol.JournalRecord, cache *prefsCache) bool {
+	if n.cfg.Pusher == nil {
+		return false
+	}
+	category := rec.Group
+	if rec.Type == recordTypeInteraction {
+		category = status.GroupNeedsInput
+	} else {
+		if rec.Group == "" || !isWakeWorthy(rec.Group) {
+			return false
+		}
+		n.mu.Lock()
+		prev, seen := n.lastGroup[rec.SessionID]
+		n.mu.Unlock()
+		if seen && prev == rec.Group {
+			return false
+		}
+	}
+	if !n.categoryEnabled(category, cache) {
+		return false
+	}
+	n.mu.Lock()
+	last, seen := n.lastWake[rec.SessionID]
+	n.mu.Unlock()
+	return !seen || n.now().Sub(last) >= n.window
+}
+
 // maybeWake decides whether this record is a hand-off worth waking the phone for and, if
 // so, sends the wake -- now, or at the end of the window that suppressed it. It never
 // returns an error: see Event.
@@ -268,7 +378,15 @@ var errNoPushPrefs = errors.New("remotegw: push suppressed: no preference custod
 // The deferred wake is not a new producer -- same seal, same empty plaintext, same constant
 // 78 bytes -- and keeping its one PushTrigger call inside this function keeps that ledger
 // accurate rather than merely quiet.
-func (n *PushNotifier) maybeWake(rec protocol.JournalRecord) {
+//
+// NOTE, NOT A DISCLOSURE: send always seals the LEGACY 78-byte envelope (sealWake,
+// consuming cfg.Seq) before calling Pusher.PushTrigger, even for a `gateway` or
+// `foreground_only` pairing whose TransportRouter discards that envelope outright
+// (pushtransport.go: only legacy_relay's leg ever forwards it). The sealed bytes never
+// leave this process, so nothing is exposed -- but it does mean cfg.Seq (PushSeq)
+// advances, and a seal is spent, for every wake a migrated pairing never actually sends
+// over legacy_relay. Do not read PushSeq's value as a count of legacy wakes sent.
+func (n *PushNotifier) maybeWake(rec protocol.JournalRecord, cache *prefsCache) {
 	send := func() {
 		env, err := n.sealWake()
 		if err != nil {
@@ -323,7 +441,9 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord) {
 	if n.cfg.Pusher == nil {
 		return
 	}
-	if !n.categoryEnabled(category) {
+	// cache carries wouldWakeNow's already-loaded preference forward for this SAME record
+	// (Event's peek and this commit, moments later): reused here rather than reloaded.
+	if !n.categoryEnabled(category, cache) {
 		return
 	}
 	remaining, ok := n.claimWindow(rec.SessionID)
@@ -349,7 +469,10 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord) {
 				// either way: a dropped wake must still release the single timer arm, or one
 				// preference flip wedges the deferral path shut for every session after it.
 				owed := n.claimDeferred()
-				if owed && n.categoryEnabled(status.GroupNeedsInput) {
+				// nil cache: this runs up to n.window later, on its own goroutine, and MUST
+				// re-read the preference fresh rather than reuse Event's cache from send time
+				// (the whole point of "re-read AT SEND" above).
+				if owed && n.categoryEnabled(status.GroupNeedsInput, nil) {
 					send()
 				}
 			})
@@ -440,6 +563,23 @@ func isWakeWorthy(g status.Group) bool {
 	}
 }
 
+// prefsCache memoizes a single LoadPrefs() call across preAppendObligation's peek
+// (wouldWakeNow) and maybeWake's immediate-path commit for the SAME Event call, so the
+// two no longer pay two separate reads -- and, on failure, two separate setErr calls --
+// for what is gating the identical record. Both calls compute the same category for the
+// same rec (wouldWakeNow's peek does not mutate the state maybeWake's commit reads), so
+// the cached PREFERENCE is valid to reuse regardless of which category each call checks.
+//
+// It must NOT be threaded into the deferred-wake timer's own categoryEnabled call
+// (maybeWake's send() closure): that read happens up to n.window later, on a separate
+// goroutine, and ADR-010 §4(b) requires it be a FRESH read at send time, not this call's.
+// A nil *prefsCache always loads fresh and caches nothing, which is what that call passes.
+type prefsCache struct {
+	prefs  PushPrefs
+	err    error
+	loaded bool
+}
+
 // categoryEnabled reports whether the user's preference permits waking for this group, and
 // suppresses on ANY doubt.
 //
@@ -449,20 +589,36 @@ func isWakeWorthy(g status.Group) bool {
 // suppresses for the same reason -- the user is looking at a settings screen, and sending
 // anyway contradicts a setting that may well say "off" while leaking exactly what the
 // setting exists to withhold.
-func (n *PushNotifier) categoryEnabled(g status.Group) bool {
+func (n *PushNotifier) categoryEnabled(g status.Group, cache *prefsCache) bool {
 	if n.cfg.Prefs == nil {
 		n.setErr(errNoPushPrefs)
 		return false
 	}
-	prefs, err := n.cfg.Prefs.LoadPrefs()
+	prefs, err := n.loadPrefs(cache)
 	if err != nil {
-		n.setErr(err)
 		return false
 	}
 	if g == status.GroupNeedsInput {
 		return prefs.NeedsInput
 	}
 	return prefs.Finished
+}
+
+// loadPrefs returns the current preference, via cache when one is given and already
+// loaded. A load failure is recorded through setErr exactly once -- at the point it
+// actually happened -- regardless of how many callers subsequently share the cache.
+func (n *PushNotifier) loadPrefs(cache *prefsCache) (PushPrefs, error) {
+	if cache != nil && cache.loaded {
+		return cache.prefs, cache.err
+	}
+	prefs, err := n.cfg.Prefs.LoadPrefs()
+	if err != nil {
+		n.setErr(err)
+	}
+	if cache != nil {
+		cache.prefs, cache.err, cache.loaded = prefs, err, true
+	}
+	return prefs, err
 }
 
 // sealWake builds the content-free wake: an EMPTY plaintext under the wake key, carrying a

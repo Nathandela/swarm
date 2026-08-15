@@ -1,0 +1,201 @@
+======================================================================
+R3 wake-obligation machine (swarm-remote side) - conformance suite RED RUN
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-hggx.4 (Wave R3, machine side: the wake-obligation machine on
+      swarm-remote, ADR-015 P9/P12 + docs/specifications/push-gateway-api.md §6)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new files (ADDITIVE ONLY, package internal/remotegw):
+  internal/remotegw/wakev1_test.go          (WakeV1 shape, canonical AAD, mutation matrix)
+  internal/remotegw/obligation_test.go      (obligation record, durability, coalescing,
+                                              5-boundary crash-injection matrix, the real
+                                              file-backed ObligationStore)
+  internal/remotegw/wakesubmitter_test.go   (httptest gateway double, POST /v1/wakes,
+                                              full §4/§6.4 non-2xx mapping, byte-identical
+                                              retry, PG-ERR-1 fallback, transport failure)
+  internal/remotegw/pushtransport_test.go   (TransportStore durability/atomicity,
+                                              TransportRouter exclusive delivery)
+no existing test or non-test source file is modified by this work. internal/remotegw/
+push.go (PushNotifier, the wake-key-only per-session 30s coalescer) is UNTOUCHED and
+UNTESTED-AGAINST-HERE by design: TransportRouter is a drop-in PushTriggerer, so the
+legacy_relay path survives through push.go exactly as it is today (P12); no new test in
+this run exercises push.go itself.
+command: go test ./internal/remotegw/... 2>&1
+======================================================================
+
+### A NOTE ON THE PACKAGE'S OWN STATE, SO THE "undefined" LIST BELOW IS READ CORRECTLY.
+### internal/remotegw currently carries TWO files with a PRE-EXISTING, UNRELATED compile
+### break from concurrent uncommitted work on a different bead (the R1 RemoteProfileV1
+### skeleton, commit 65d0cf8's follow-on): internal/remotegw/profile_test.go and
+### internal/remotegw/r2_adr016_profile_wiring_test.go both reference
+### protocol.RemoteProfileV1.RelayTLSPolicy, a field that does not exist in the current
+### internal/protocol/types.go. This was confirmed BEFORE this run by removing this
+### wave's four new files entirely (`mv ... /tmp` and re-running `go vet`) and observing
+### the identical "unknown field RelayTLSPolicy" failure -- i.e. it is not caused by, and
+### is not fixed by, anything in this bead. Neither file is touched by this change (see
+### "no existing ... file is modified" above); this note exists only so a reader does not
+### mistake that pre-existing, unrelated break for evidence about the tests below.
+
+### COMPILE-LEVEL RED: undefined symbols are the frozen contract the implementation must
+### supply. package internal/remotegw today has no WakeV1/obligation/submitter/transport
+### surface at all, so every reference below is undefined -- this is the SAME shape as
+### docs/verification/r3-red/pushgw-red.txt's RED run for the sibling internal/pushgw
+### lane, and is captured the same way.
+
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/obligation_test.go:125:15: undefined: PushAddress
+internal/remotegw/obligation_test.go:125:27: undefined: WakeObligation
+internal/remotegw/obligation_test.go:126:15: undefined: ObligationState
+internal/remotegw/obligation_test.go:127:13: undefined: WakeObligation
+internal/remotegw/obligation_test.go:134:38: undefined: WakeObligation
+internal/remotegw/obligation_test.go:145:40: undefined: PushAddress
+internal/remotegw/obligation_test.go:145:54: undefined: WakeObligation
+internal/remotegw/obligation_test.go:152:44: undefined: WakeObligation
+internal/remotegw/obligation_test.go:231:8: undefined: PushAddress
+internal/remotegw/obligation_test.go:236:9: undefined: WakeObligationMachine
+internal/remotegw/obligation_test.go:152:44: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+(go's per-package error cap truncates at 10; the full undefined-symbol surface these four
+files require of GREEN -- enumerated once, in the doc comment at the top of each _test.go
+file, so GREEN has one place to read the contract rather than reconstructing it from
+compiler output -- is:
+
+  wakev1_test.go:        PushAddress, WakeV1Size, WakeV1Type, WakeV1Expiry, SealWakeV1
+  obligation_test.go:    WakeObligation, ObligationState + its 5 constants, ObligationStore,
+                          OpenObligationStore, WakeSubmitError, WakeSubmitter,
+                          WakeObligationConfig, WakeObligationMachine,
+                          NewWakeObligationMachine, .Trigger, .Drive
+  wakesubmitter_test.go: HTTPWakeSubmitter (+ the same obligation/WakeV1 surface above)
+  pushtransport_test.go: PushTransport + its 3 constants, TransportStore,
+                          OpenTransportStore, TransportRouter (+ gatewayObligationTrigger,
+                          an unexported interface the file itself declares, satisfied by
+                          *WakeObligationMachine)
+)
+
+---- verification that the test files themselves are bug-free (not shown by the
+     truncated "too many errors" compiler output above) ----
+
+Exactly as pushgw-red.txt records for the sibling lane: a throwaway, zero-logic stub
+implementation of every undefined symbol above (internal/remotegw/zzz_scratch_stub.go,
+deleted immediately after this check, never committed, never part of the diff) was built
+temporarily so `go vet`/`go test` could compile the whole suite past the cascading
+"undefined" errors. Because this package ALSO carries the pre-existing, unrelated
+RelayTLSPolicy break described above, verifying against the stub additionally required
+setting the two affected files aside for the duration of the check ONLY:
+
+  mv internal/remotegw/profile_test.go internal/remotegw/r2_adr016_profile_wiring_test.go /tmp/wip_setaside/
+  ... stub verification below ...
+  mv /tmp/wip_setaside/*.go internal/remotegw/
+
+This is a plain filesystem move (no git operation touches either file), confirmed
+byte-identical on restore (`git diff --stat internal/remotegw/profile_test.go` reports
+the same 51-insertion diff before and after; `git status` shows the same M/?? it showed
+before this run started). Nothing about those two files' content or state is part of
+this bead's evidence.
+
+$ go vet ./internal/remotegw/...   (against the throwaway stub, the two unrelated files set aside)
+(no output -- clean: no unreachable code, no shadowing, no format-string mismatches, no
+composite-literal issues in any of the four new files)
+
+$ go test ./internal/remotegw/... -run '<the four files' Test funcs>' -v   (same stub)
+31 top-level Test funcs run (11 of them table/subtests under
+TestWakeObligation_SubmitOutcomeMapping and TestHTTPWakeSubmitter_BodylessResponseFallsBackOnStatus),
+27 top-level FAIL, 4 top-level PASS, 0 PANIC, 0 test-file runtime errors. Representative
+FAILs (every one below is a real, legible assertion failure against the do-nothing stub --
+"not implemented yet", never a nil-pointer panic or a compile-shaped surprise):
+
+    obligation_test.go:268: store.Get after Trigger: ok=false err=<nil>, want a durably persisted obligation
+    obligation_test.go:306: obligation state AT SUBMIT TIME = "", want "in_flight": ...
+    obligation_test.go:326: SeqSource.Next() called 0 times after two triggers on one live obligation, want 1: ...
+    obligation_test.go:458: recovered obligation ok=false state="", want a fresh pending record
+    obligation_test.go:562: Drive succeeded despite the injected crash on the delivered write -- ...
+    pushtransport_test.go:126: Transport after reopen = "legacy_relay", want "gateway"
+    pushtransport_test.go:168: SetTransport accepted an unrecognised value, want a refusal ...
+    pushtransport_test.go:200: OpenTransportStore over a corrupt file returned nil error, want a fail-closed refusal
+    pushtransport_test.go:230: legacy relay pusher called 0 times, want 1
+    wakesubmitter_test.go:128: gateway saw 0 requests, want 1
+    wakesubmitter_test.go:191: obligation vanished; PG-OBL-3 forbids a failure hiding the record  (x11 subtests)
+    wakesubmitter_test.go:295: SubmitWake err = <nil> (<nil>), want a *WakeSubmitError even with no parseable body  (x4 subtests)
+    wakesubmitter_test.go:318: SubmitWake against a closed server returned nil, want a transport error
+    wakev1_test.go:139: version byte = 0x0, want 0x1
+    wakev1_test.go:173: independently reconstructed AAD failed to open the sealed envelope: ...
+    wakev1_test.go:202: control: the UNMUTATED envelope must open cleanly: ...
+    wakev1_test.go:252: two seals of identical (address, seq, issued_at) produced the SAME nonce
+    [... every other FAIL is the same shape: a specific, legible mismatch against the
+         zero-value/no-op stub, none of them a panic ...]
+
+One test-file bug WAS caught and fixed by this stub run, exactly the role pushgw-red.txt
+records for its own equivalent step:
+TestHTTPWakeSubmitter_RequestShapeMatchesTheSpec's fixture envelope was a hand-typed
+string literal that was 70 bytes, not the pinned WakeV1Size of 74 -- fixed to a
+length-safe `make([]byte, WakeV1Size)` construction before this document's final RED
+capture was taken.
+
+The 4 PASSes are all DOCUMENTED, NAMED fences -- the same category
+TestPBPUSH0_PushConfigCarriesNoContentKey already names in this package
+(push_trigger_test.go:465-477, "NOT A RED TEST beyond the compile step") -- and each
+carries that same annotation in its own doc comment so a later reader does not mistake it
+for a real RED-to-GREEN transition:
+
+  TestWakeV1_TypeByteIsDistinctFromMailboxAndLegacyWake        -- a constant-value fence
+  TestWakeV1_AADIsNotTheMailboxHeaderAADRenamed                 -- a negative crypto
+                                                                    assertion: garbage
+                                                                    bytes fail an AEAD
+                                                                    tag check for the same
+                                                                    reason a correct
+                                                                    implementation would
+  TestTransportStore_DefaultsToLegacyRelay                     -- a single-default-value
+                                                                    fence; its SIBLING
+                                                                    tests in the same file
+                                                                    (reopen, rejection,
+                                                                    corruption) are what
+                                                                    discriminate
+  TestTransportRouter_ForegroundOnlyFiresNothing               -- an all-negative
+                                                                    ("nothing was called")
+                                                                    assertion, paired with
+                                                                    POSITIVE-control
+                                                                    siblings
+                                                                    (...LegacyRelayUsesOnly...,
+                                                                    ...GatewayTransportNever...)
+                                                                    that DO discriminate
+
+The stub file was deleted, and the two unrelated set-aside files restored, before this
+document's compile-level RED run above was captured; neither is part of this diff.
+
+---- design decision this RED run pins, recorded here rather than only in code comments ----
+
+The spec's own header (push-gateway-api.md Precedence clause) leaves one thing open:
+whether a non-2xx wake-submit refusal is unconditionally retryable (ADR-015 P9's literal
+text) or terminates the obligation for the specific refusals section 6.4 marks
+`retryable=false` (the spec's own `abandoned` state, itself an unresolved divergence per
+its §14.1 row 7 / §13.8). This task's instructions are explicit that the RED suite must
+pin the THREE-WAY mapping (retryable / abandoned / terminal) section 6.4 already states,
+so wakesubmitter_test.go's TestWakeObligation_SubmitOutcomeMapping tests the FULL table --
+`ObligationAbandoned` is a real terminal state in this suite's contract, not something
+left to a future ruling. obligation_test.go's file header records this choice explicitly
+so a reader of the code, not only of this evidence file, sees the same note.
+
+---- addendum, 2026-08-15: PG-OBL-2 deferred-wake residual (R3 punch-list review) ----
+
+The GREEN implementation that followed this RED run (agents-tracker-hggx.4.2, PG-OBL-2:
+obligation append must precede mailbox publish for gateway-transport pairings) closed the
+crash gap for every IMMEDIATE wake, but a narrower instance of the same gap survives by
+design in the DEFERRED path (ADR-010 section 4(b)). PushNotifier.wouldWakeNow
+(internal/remotegw/push.go) deliberately reports false for a window-suppressed
+interaction wake, so preAppendObligation records no durable obligation for it: the
+mailbox record is published immediately and the obligation is appended only when the
+single deferral timer fires, up to 30s later, via maybeWake's send(). A crash inside that
+window publishes an event with no durable obligation announcing it -- literally PG-OBL-2's
+original "a crash in that gap publishes an event the phone is never told about," just
+narrower than the case that was fixed.
+
+This is not an oversight: pre-appending an obligation at trigger time for the deferred
+case would durably record intent to send a wake this process has not committed to, since
+the timer re-reads the push preference AT SEND (PB-PUSH-8) and may decide not to send at
+all. Trading the crash-window gap for a false-obligation risk on every preference flip
+was judged the worse trade. It is nonetheless a real, accepted deviation from PG-OBL-2's
+"before or atomically with" requirement, not a closed gap, and is tracked as a distinct
+follow-up: bd issue agents-tracker-hggx.4.4.
