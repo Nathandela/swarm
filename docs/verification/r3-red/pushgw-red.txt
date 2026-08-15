@@ -1,0 +1,200 @@
+======================================================================
+R3 push gateway - conformance suite RED RUN
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-hggx.4.1 (R3-G push gateway service (cmd + package)
+      implementing docs/specifications/push-gateway-api.md)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-15T00:00:00Z
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new files (ADDITIVE ONLY, new package internal/pushgw):
+  internal/pushgw/doc.go                (package marker, zero symbols/logic)
+  internal/pushgw/helpers_test.go       (shared harness: fakes, signing, WakeV1 builder)
+  internal/pushgw/register_test.go      (POST /v1/installations)
+  internal/pushgw/rotate_test.go        (PUT .../token, PG-AUTH-1..5 matrix)
+  internal/pushgw/allocate_test.go      (POST .../addresses)
+  internal/pushgw/revoke_test.go        (DELETE /v1/addresses/{addr}, both credentials)
+  internal/pushgw/wake_test.go          (POST /v1/wakes, WakeV1 shape + forwarding)
+  internal/pushgw/errors_test.go        (version_unsupported, PG-ERR-2 secrecy)
+  internal/pushgw/quotas_test.go        (PG-Q-1..3)
+  internal/pushgw/retention_test.go     (§8.1 three rows, fake clock)
+  internal/pushgw/logging_test.go       (PG-TEST-9 log/trace exclusion)
+  internal/pushgw/storage_test.go       (bbolt raw-byte inspection, PG-AUTH-7/PG-RET-5)
+  internal/pushgw/fcmwiring_test.go     (real internal/remote/push sender wired, vs loopback fake FCM)
+no existing test or non-test source file is modified (git status confirms below;
+the unrelated M/?? entries belong to other concurrent work on other beads).
+command: go test ./internal/pushgw/... 2>&1
+======================================================================
+
+### COMPILE-LEVEL RED: undefined symbols are the frozen contract the
+### implementation must supply -- Config, Server, NewServer, QuotaConfig, RateLimit,
+### WakeSender, AttestationVerifier, VerdictBinding, NewFCMSender, ErrUnregistered,
+### ErrUnavailable, ErrRefused, ErrAttestationUnavailable. package pushgw today is
+### doc.go alone (a package marker, zero symbols) so every pushgw.* reference below
+### is undefined.
+
+# github.com/Nathandela/swarm/internal/pushgw_test [github.com/Nathandela/swarm/internal/pushgw.test]
+internal/pushgw/helpers_test.go:104:14: undefined: pushgw.WakeSender
+internal/pushgw/helpers_test.go:114:60: undefined: pushgw.VerdictBinding
+internal/pushgw/helpers_test.go:123:81: undefined: pushgw.VerdictBinding
+internal/pushgw/helpers_test.go:130:90: undefined: pushgw.VerdictBinding
+internal/pushgw/helpers_test.go:136:14: undefined: pushgw.AttestationVerifier
+internal/pushgw/helpers_test.go:144:17: undefined: pushgw.Server
+internal/pushgw/helpers_test.go:156:33: undefined: pushgw.QuotaConfig
+internal/pushgw/helpers_test.go:168:51: undefined: pushgw.Config
+internal/pushgw/allocate_test.go:72:38: undefined: pushgw.Config
+internal/pushgw/fcmwiring_test.go:125:38: undefined: pushgw.Config
+internal/pushgw/fcmwiring_test.go:125:38: too many errors
+FAIL	github.com/Nathandela/swarm/internal/pushgw [build failed]
+FAIL
+
+---- verification that the test files themselves are bug-free (not shown by the
+     truncated "too many errors" compiler output above) ----
+
+A throwaway, zero-logic stub implementation of every undefined symbol above
+(internal/pushgw/zzz_scratch_stub.go, deleted immediately after this check, never
+committed) was built temporarily so `go vet ./internal/pushgw/...` could compile the
+whole suite past the cascading "undefined type" errors. Result: `go vet` reported
+ZERO findings (one real bug it caught and this suite fixed before RED capture:
+wake_test.go's seventy-three-byte case sliced an unaddressable [74]byte return value
+directly -- fixed by binding it to a local first). `go test ./internal/pushgw/...`
+against that same stub then RAN every test (the stub's ServeHTTP always answers 200
+with an empty body, so every test fails on its own assertion, exactly as a
+do-nothing implementation should): 58 top-level FAILs, 0 PASS, 0 panics, 0 test-file
+runtime errors -- see the transcript below. This is evidence the suite's failures at
+real RED are entirely the intended "implementation does not exist yet," not a bug in
+the tests. The stub file was deleted before this document's compile-level RED run
+above was captured, and is not part of the diff.
+
+$ go vet ./internal/pushgw/...   (against the throwaway stub)
+(no output -- clean)
+
+$ go test ./internal/pushgw/...  (against the throwaway stub)
+--- FAIL: TestAllocate_HappyPath_ReturnsUnboundTripleWithTenMinuteWindow (0.03s)
+    allocate_test.go:23: status = 200, want 201; body=
+[... 56 more FAILs, same shape: every assertion legibly fails against a
+     do-nothing 200-OK stub; TestRevoke_OwnerSignature_RetryAfterAlreadyGone
+     correctly reports SKIP, not FAIL (see revoke_test.go's file header) ...]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/pushgw	2.182s
+FAIL
+
+---- git status (additive-only check, internal/pushgw only) ----
+?? internal/pushgw/
+(the repository's other M/?? entries at the time of this run belong to unrelated,
+concurrently in-progress beads and were not touched by this one)
+======================================================================
+
+======================================================================
+R3 push gateway - SECOND RED CAPTURE, reviewer-fix round
+role: GREEN responding to reviewer findings on bead agents-tracker-hggx.4.1
+date: 2026-08-15 (same session as the original RED capture above)
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+
+WHY THIS SECTION EXISTS. A prior GREEN pass had already implemented the full package
+(internal/pushgw + cmd/swarm-pushgw) and made the original RED run above green, without a
+second RED capture at each fix -- MEDIUM finding "(GG-5, project TDD discipline)" on this
+round's review correctly flags that the file above is stale relative to the delivered
+suite: config_test.go and the register-idempotency tests (register_test.go:262,284,329) are
+never mentioned in it. THAT GAP IS NOT CLOSED BY THIS SECTION: this package's whole history
+before this round was never committed to git (internal/pushgw/ and cmd/swarm-pushgw/ are
+both untracked -- `git status --porcelain` shows only `?? internal/pushgw/` and
+`?? cmd/swarm-pushgw/`), so there is no prior commit to diff against and no way to
+mechanically reconstruct which of the already-passing tests were ever driven RED-first.
+Recorded here rather than silently patched over: the honest state is "unknown" for that
+earlier work, not "verified."
+
+WHAT THIS SECTION DOES COVER, HONESTLY: every test added IN THIS ROUND to address the
+review's findings. For the four that assert new or changed gateway BEHAVIOR, the
+implementation was mechanically reverted to its pre-fix shape (a scoped, single-hunk edit
+each time, restored immediately after capture -- never left in the tree) and the new test
+was run to confirm it fails for the right reason before the fix was reapplied. The
+remaining new tests exercise EXISTING, already-correct code paths (cross-scheme capability
+rejection, cmd/swarm-pushgw's flag validation and TLS wiring) and are additive coverage, not
+fix-driven -- they are listed for completeness, not offered as red/green pairs.
+
+--- 1. TestStorage_RevocationTombstoneNeverRetainsTheAddress (storage_test.go) ---
+Fix: BLOCKING/HIGH finding (PG-REV-2, PG-RET-2, section 8.2 minimization). Reverted
+revoke.go's putTombstone call back to keying by pushAddress (the pre-fix shape); reapplied
+verbatim after capture.
+
+$ go test ./internal/pushgw/... -run TestStorage_RevocationTombstoneNeverRetainsTheAddress -v
+=== RUN   TestStorage_RevocationTombstoneNeverRetainsTheAddress
+    storage_test.go:119: bbolt file contains the raw push_address (revoked via machine capability) (32768 bytes total)
+--- FAIL: TestStorage_RevocationTombstoneNeverRetainsTheAddress (0.22s)
+FAIL
+
+--- 2. TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported (errors_test.go) ---
+Fix: LOW finding (PG-TR-2, section 3's note on version_unsupported). Reverted server.go's
+router default branch back to unconditionally answering errVersionUnsupported; reapplied
+verbatim after capture.
+
+$ go test ./internal/pushgw/... -run TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported -v
+=== RUN   TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported
+=== RUN   TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported/get-on-wakes
+    errors_test.go:65: known-version unmatched route answered version_unsupported: body="{\"code\":\"version_unsupported\",\"message\":\"unknown API version\",\"retryable\":false}\n"
+=== RUN   TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported/unknown-subpath
+    errors_test.go:65: known-version unmatched route answered version_unsupported: body="{\"code\":\"version_unsupported\",\"message\":\"unknown API version\",\"retryable\":false}\n"
+=== RUN   TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported/wrong-method-on-token
+    errors_test.go:65: known-version unmatched route answered version_unsupported: body="{\"code\":\"version_unsupported\",\"message\":\"unknown API version\",\"retryable\":false}\n"
+--- FAIL: TestUnknownRoute_KnownVersion_Returns404WithoutVersionUnsupported (0.08s)
+    --- FAIL: .../get-on-wakes (0.02s)
+    --- FAIL: .../unknown-subpath (0.00s)
+    --- FAIL: .../wrong-method-on-token (0.00s)
+FAIL
+
+--- 3. TestRotateToken_MalformedNonce_Returns401 (rotate_test.go) ---
+Fix: LOW finding (PG-AUTH-1, Swarm-Nonce format). Disabled auth.go's noncePattern check
+(`if false && ...`); reverted after capture.
+
+$ go test ./internal/pushgw/... -run TestRotateToken_MalformedNonce_Returns401 -v
+=== RUN   TestRotateToken_MalformedNonce_Returns401
+    rotate_test.go:226: status = 204, want 401; body=
+--- FAIL: TestRotateToken_MalformedNonce_Returns401 (0.14s)
+FAIL
+
+--- 4. TestSubmitWake_StaleUnregisteredVerdict_DoesNotKillAConcurrentlyRotatedToken (wake_test.go) ---
+Fix: LOW finding (PG-ROT-2 race). Reverted storage.go's markInstallationTokenDeadIfCurrent
+back to an unconditional write (compare-and-set removed); reverted after capture.
+
+$ go test ./internal/pushgw/... -run TestSubmitWake_StaleUnregisteredVerdict_DoesNotKillAConcurrentlyRotatedToken -v
+=== RUN   TestSubmitWake_StaleUnregisteredVerdict_DoesNotKillAConcurrentlyRotatedToken
+    wake_test.go:136: status = 410, want 200; body={"code":"push_token_unregistered","message":"the provider reports this token is no longer registered","retryable":false}
+--- FAIL: TestSubmitWake_StaleUnregisteredVerdict_DoesNotKillAConcurrentlyRotatedToken (0.24s)
+FAIL
+
+--- Additive coverage, not fix-driven (existing, already-correct behavior) ---
+  internal/pushgw/wake_test.go   TestSubmitWake_MachineRevokeCapabilityPresentedAsSubmit_Returns401        (PG-AUTH-8/9)
+  internal/pushgw/revoke_test.go TestRevoke_SubmitCapabilityPresentedAsMachineRevoke_Returns401            (PG-AUTH-8/9)
+  cmd/swarm-pushgw/main_test.go  11 new tests: fail-fast flag validation (missing -db, the
+                                  TLS/-insecure-http gate, malformed -trusted-proxies,
+                                  unreadable -fcm-credentials), a real boot+shutdown in
+                                  plain-HTTP mode, a real boot+shutdown in TLS mode with a
+                                  LIVE handshake proving MinVersion is pinned at TLS 1.3
+                                  (a client offering at most TLS 1.2 is refused), and the
+                                  notImplementedAttestor/devSender fail-closed contracts.
+                                  cmd/swarm-pushgw had zero test files before this round.
+
+--- Post-capture verification: every temporary revert above was undone before this run ---
+$ go build ./...                                                    -> clean
+$ go vet ./internal/pushgw/... ./cmd/swarm-pushgw/...                -> clean
+$ go test -race -count=1 ./internal/pushgw/... ./cmd/swarm-pushgw/...
+ok  	github.com/Nathandela/swarm/internal/pushgw	10.876s
+ok  	github.com/Nathandela/swarm/cmd/swarm-pushgw	2.682s
+$ gofmt -l internal/pushgw/*.go cmd/swarm-pushgw/*.go               -> clean (no output)
+
+---- git status (internal/pushgw + cmd/swarm-pushgw, additive-only check) ----
+?? cmd/swarm-pushgw/
+?? internal/pushgw/
+(both trees remain untracked; no other package was touched by this round -- verified by
+`git status` scoped to internal/remotegw, internal/remote/relay, internal/phonecore,
+mobile/, android/, which report no changes from this session)
+======================================================================
+
+--- PUNCH-LIST ROUND 2026-08-15 (appended) ---
+The security-review punch list (blocking unbound-deadline bypass, revoke atomicity, four
+MEDIUMs, three LOWs) was applied in a fix round whose failing-first evidence was established
+by the REVIEWER, not a RED agent: the verifier re-ran the original escape probe (200
+provider_accepted pre-fix), then mutation-tested the new guard out of wake.go and observed
+both the probe and the new test go red, restoring wake.go byte-identical afterwards. Carried
+forward: revoke atomicity rests on bbolt's transaction guarantee, verified by inspection,
+not crash-injected.
