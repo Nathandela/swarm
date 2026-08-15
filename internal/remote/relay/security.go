@@ -386,6 +386,7 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 	if s.pinned() {
 		pinnedDER := append([]byte(nil), s.PinnedCert...)
 		pinnedSPKI := append([]byte(nil), s.PinnedSPKISHA256...)
+		obs := s.observer
 		// Verification is replaced, not disabled: the presented chain must contain
 		// exactly the pinned certificate or exactly the pinned public key, so an
 		// equally self-signed impostor is refused where a bare InsecureSkipVerify
@@ -394,6 +395,11 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: true, //nolint:gosec // replaced by the pin check below
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				// ADR-016 W3 review fix: B48's capture is not scoped to the unverified
+				// pairing dial -- "Conn.PeerSPKI records the presented SPKI on every
+				// dial it owns, unchanged" -- so it is recorded here too, before the
+				// pin comparison below can refuse, so a mismatch is still observed.
+				obs.record(rawCerts)
 				for _, raw := range rawCerts {
 					if len(pinnedDER) > 0 && bytes.Equal(raw, pinnedDER) {
 						return nil
@@ -418,13 +424,24 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			},
 		}, nil
 	}
+	obs := s.observer
 	switch s.trustRootSource() {
 	case TrustRootsEmbedded:
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(EmbeddedTrustRoots()) {
 			return nil, errors.New("relay: embedded trust roots are unusable")
 		}
-		return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
+		return &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    pool,
+			// ADR-016 W3 review fix: recording only -- Go's own chain verification
+			// against RootCAs already ran before this hook is called, so returning nil
+			// here changes nothing about the verdict.
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				obs.record(rawCerts)
+				return nil
+			},
+		}, nil
 	case TrustRootsPlatformDelegate:
 		// ABSENCE FAILS CLOSED (ADR-016 W2): no verifier installed is refused exactly like
 		// TrustRootsPinned with no pin, decided here rather than lazily inside the
@@ -439,13 +456,26 @@ func (s Security) tlsConfig(host string) (*tls.Config, error) {
 			//nolint:gosec // W2: chain trust is delegated below; Go still checks hostname+validity itself
 			InsecureSkipVerify: true,
 			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				// ADR-016 W3 review fix: recorded before the delegate is even asked, so
+				// a rejection still leaves an observation behind (B48's capture, as the
+				// pinned branch above does).
+				obs.record(rawCerts)
 				return verifyPlatformDelegate(verifier, host, rawCerts)
 			},
 		}, nil
 	case TrustRootsPinned:
 		return nil, ErrPinRequired
 	default:
-		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+		return &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			// ADR-016 W3 review fix: recording only, exactly as the embedded-roots
+			// branch above -- Go's own verification against the system pool already ran
+			// before this hook is called.
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				obs.record(rawCerts)
+				return nil
+			},
+		}, nil
 	}
 }
 

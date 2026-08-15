@@ -19,17 +19,17 @@
 #
 # The backend address must match "listen" in relay.config.example exactly.
 #
-# AMENDED BY ADR-016 (2026-08-15), target state -- arrives with wave R2 (ADR-016:5): once R2
-# ships, `reuse_private_keys` becomes EXPERT-ONLY, not load-bearing for every deployment, because
-# the DEFAULT relay TLS policy will be `webpki` -- ordinary Web PKI hostname validation against
-# this certificate, no pin configured or consulted at all -- and under that policy Caddy's own
-# documented default ("a new key is created for every new certificate to mitigate pinning and
-# reduce the scope of key compromise") is correct again; this directive will buy a default
-# deployment nothing and may simply be dropped. UNTIL R2 SHIPS, THERE IS NO `--relay-tls-policy`
-# FLAG AND THE PIN BELOW IS THE WHOLE OF RELAY TLS VERIFICATION -- keep this directive
-# unconditionally. After R2, keep it only if you have chosen the expert `pinned_spki` policy for
-# this relay, or while a paired device has not yet migrated off a compatibility pin (ADR-016 W9)
-# -- in either case the paragraph below still applies:
+# AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (ADR-016:5): `reuse_private_keys` is now
+# EXPERT-ONLY, not load-bearing for every deployment, because the DEFAULT relay TLS policy is
+# `webpki` -- ordinary Web PKI hostname validation against this certificate, no pin configured or
+# consulted at all -- and under that policy Caddy's own documented default ("a new key is created
+# for every new certificate to mitigate pinning and reduce the scope of key compromise") is
+# correct again; this directive buys a default `webpki` deployment nothing and may be dropped once
+# no paired device is still inside the compatibility window (below). Keep this directive if you
+# have chosen the expert `pinned_spki` policy for this relay (`--relay-tls-policy pinned_spki
+# --relay-pin`), or while a paired device has not yet migrated off a `webpki` machine's
+# compatibility pin (`--relay-pin-compat`, ADR-016 W9) -- in either case the paragraph below still
+# applies:
 #
 # `reuse_private_keys` IS LOAD-BEARING TODAY AND IS NOT A PERFORMANCE SETTING.
 # `swarm remote init --relay-pin` records the SPKI hash, the phone persists it

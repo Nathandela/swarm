@@ -15,20 +15,19 @@ Every numbered step below was executed on 2026-07-26 against this tree; the tran
 says so at the step rather than reading as verified. §11 (backup/restore) is a separate, later
 addition and says so at its own head rather than being folded into that transcript's date.
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** This
-> document stands up a relay with a self-signed certificate and an SPKI pin. Once R2 ships, that
-> becomes the **expert `pinned_spki` policy** — the right choice for a self-signed or IP-literal
-> relay, never the default — and the new **default** relay TLS policy will be `webpki`: ordinary
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):** This document stands up
+> a relay with a self-signed certificate and an SPKI pin — that is now the **expert `pinned_spki`
+> policy** (`--relay-tls-policy pinned_spki --relay-pin`), the right choice for a self-signed or
+> IP-literal relay, never the default. The **default** relay TLS policy is now `webpki`: ordinary
 > Web PKI hostname validation against a real reverse proxy and a publicly trusted certificate, with
-> no pin configured or consulted at all (documented for that state in
-> `docs/operations/relay-vps-deploy.md`). **Today, before R2 ships, there is no
-> `--relay-tls-policy` flag and the pin below is the whole of relay TLS verification on Android —
-> read what follows as current, normal practice, not an expert appendix.** Once R2 ships, read it
-> as the **expert appendix**: every step below about issuing, computing, provisioning, verifying
-> and renewing an SPKI pin will apply only when you have deliberately chosen
-> `--relay-tls-policy pinned_spki`, and a machine that has adopted `webpki` will still need to keep
-> publishing a compatibility pin while any paired device has not migrated off it (ADR-016 W9) —
-> `swarm remote init` refuses a pinless `webpki` profile until every paired device acknowledges.
+> no pin configured or consulted at all (documented for that flow in
+> `docs/operations/relay-vps-deploy.md`). **Read what follows as the expert appendix**: every step
+> below about issuing, computing, provisioning, verifying and renewing an SPKI pin applies only
+> when you have deliberately chosen `--relay-tls-policy pinned_spki`, and a machine that has
+> adopted `webpki` should still keep publishing a compatibility pin while any paired device has not
+> migrated off it (ADR-016 W9) — **the gate that would refuse a pinless `webpki` profile until
+> every paired device acknowledges is not built yet** (tracked: bd agents-tracker-hggx.3.5.3), so
+> publish `--relay-pin-compat` explicitly rather than relying on a refusal that does not exist.
 > **Neither policy checks revocation.** `webpki` means chains to a trusted root, name matches,
 > inside validity — and not that the certificate is unrevoked; a pin admits its one key forever,
 > checking revocation even less. The honest mitigation is short certificate lifetimes (ADR-016 W2).
@@ -166,13 +165,14 @@ what all three machine dial paths read.
 > **The handset gets its pin from pairing, and only from pairing.** `TrustRootSourceFor` makes
 > Android pinning-only, so a handset that holds no pin refuses a `wss://` dial with
 > `relay.ErrPinRequired` — but that is the state *before* pairing, not a permanent one.
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):**
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):**
 > `TrustRootSourceFor("android")` still returns `TrustRootsPinned` — ADR-016 keeps it as the
-> no-verifier floor — but once R2 ships and a machine has adopted the default `webpki` policy, a
-> platform-delegated verifier is installed and Android is no longer pin-only in effect. **Today,
-> before R2 ships, `pinned_spki` in all but name is the only policy there is**, so this paragraph
-> and the pin channel it describes are simply how pairing works; once R2 ships they describe the
-> expert `pinned_spki` policy specifically. The pin
+> no-verifier floor — but a machine that has adopted the default `webpki` policy has a
+> platform-delegated verifier installed, and Android is no longer pin-only in effect for it. **This
+> LAN runbook's own setup is the expert `pinned_spki` policy specifically** — a self-signed
+> certificate is exactly what W6 assigns to it — so this paragraph and the pin channel it describes
+> are how a `pinned_spki` pairing works; a `webpki` machine's pairing is described in
+> `docs/operations/relay-vps-deploy.md` instead. The pin
 > travels to the phone in the pairing exchange's msg2 as `MachinePayload.RelaySPKIPin`
 > (`internal/remote/pairing/pairing.go`), fed from this machine's `relay.json`
 > (`internal/skeleton/pairing_config.go`); the phone persists it (`internal/phonecore/state.go`,
@@ -243,13 +243,11 @@ Expect `HTTP/1.1 101 Switching Protocols` and `accept ok: True`.
 Conscrypt APEX, and which never carried user or enterprise CAs. There is no fallback path: an
 unpinned dial on a pinning-only platform is refused before a packet is sent.
 
-> AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`): "the pin is
-> the whole of relay TLS verification" is true **today**, while `TrustRootsPinned` is Android's
-> only trust-root source. Once R2 ships, ADR-016 gives Android a fourth source,
-> `TrustRootsPlatformDelegate`, used under the default `webpki` policy — the platform's own trust
-> manager plus Go's own hostname check, with no pin involved at all. Until then the sentence above
-> is unconditionally true; from R2 on it is scoped to the expert `pinned_spki` policy this document
-> configures.
+> AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`): "the pin is the whole of
+> relay TLS verification" remains true for `TrustRootsPinned`, but ADR-016 gives Android a fourth
+> trust-root source, `TrustRootsPlatformDelegate`, used under the default `webpki` policy — the
+> platform's own trust manager plus Go's own hostname check, with no pin involved at all. The
+> sentence above is scoped to the expert `pinned_spki` policy this document configures.
 
 That makes certificate renewal a **product-availability event**, not a maintenance chore. Two
 rules, and they only work together:
@@ -291,9 +289,16 @@ every paired handset is about to go offline.
 **And so is the machine, which is new.** Now that §4a provisions a pin the gateway, the CLI and the
 pairing rendezvous all honour, a rotated key takes the *machine* down alongside the handsets: the
 sidecar exits on a failed dial and `swarm remote revoke` cannot reach the relay to purge anything.
-A rotation therefore needs `swarm remote init --relay-pin <new value>` re-run on the machine, and
-the machine can be repaired locally where a handset cannot — which is an argument for §8b, not a
-reason to relax it.
+A rotation therefore needs `swarm remote init --relay-url <this relay's URL> --relay-pin <new
+value>` re-run on the machine, and the machine can be repaired locally where a handset cannot —
+which is an argument for §8b, not a reason to relax it.
+
+> **CORRECTED 2026-08-15.** This paragraph previously named `swarm remote init --relay-pin <new
+> value>` alone. That exact command exits 1: `validateRelayPin` (`cmd/swarm/remote.go`) refuses
+> `--relay-pin` without `--relay-url` — a pin names the certificate a relay must present, so
+> there is nothing for it to apply to with no URL given. `--relay-url` must be repeated with the
+> relay's existing address; `--relay-tls-policy` does not need repeating, since `--relay-pin`
+> alone still infers `pinned_spki` (ADR-016 W1's one surviving legacy inference).
 
 Both halves are pinned by test rather than left as prose —
 `internal/remote/transport/pin_renewal_test.go`:
@@ -316,16 +321,16 @@ must still draw in an 80x24 terminal at QR version 6. A 32-byte pin is ~43 base6
 pushes the symbol to version 7, which no 24-row terminal can show. **This is not a one-line
 change**, and it is recorded as an open item rather than described here as a procedure.
 
-> AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`): the
-> QR-channel gap above still holds — the pin is still never in the QR — but "no channel for it
-> today" will no longer be the whole story once ADR-016 W5 ships. **Until then, this section's
-> opening sentence stands exactly as written: there is no channel, full stop.** Once R2 ships, W5
-> will add an authenticated current/next pin overlap (`PinnedSPKISHA256Next`, to be provisioned
-> with `--relay-pin-next`, a flag that does not exist yet): each paired phone will echo the pin set
-> it holds on reconcile, and only after every device has acknowledged will the relay's key actually
-> rotate. Re-pairing every device will no longer be required for a *planned* rotation on the expert
-> policy; it will remain the only recovery for an unplanned one (compromise, a missed overlap
-> window).
+> AMENDED BY ADR-016 (2026-08-15): the QR-channel gap above still holds — the pin is still never
+> in the QR — but "no channel for it today" will no longer be the whole story once ADR-016 W5
+> ships. **W5 is not built yet** (tracked: bd agents-tracker-hggx.3.5.1) — this section's opening
+> sentence stands exactly as written: there is no channel, full stop, and `--relay-pin-next` is
+> still a flag that does not exist. When W5 lands it will add an authenticated current/next pin
+> overlap (`PinnedSPKISHA256Next`, provisioned with `--relay-pin-next`): each paired phone will
+> echo the pin set it holds on reconcile, and only after every device has acknowledged will the
+> relay's key actually rotate. Re-pairing every device will no longer be required for a *planned*
+> rotation on the expert policy; it will remain the only recovery for an unplanned one (compromise,
+> a missed overlap window).
 
 **NOT EXECUTED HERE:** every claim in §8 about ACME clients is about `certbot`'s documented
 default, not about a run against Let's Encrypt. This project has no ACME account, no public DNS

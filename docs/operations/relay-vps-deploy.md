@@ -20,17 +20,20 @@ fed to `swarm remote init`.
 > Caddy's own ACME default, resource limits, cross-version compatibility) is unaffected and still
 > absent from this document.
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** This
-> paragraph previously named "a `wss://` URL and an SPKI pin" as the two things this document
-> produces, because the pin is, as of today, still the only relay TLS policy that exists. Once R2
-> ships, ADR-016 makes `webpki` the **default** policy — this document's own Caddy/ACME setup is
-> exactly that default's normal shape, a publicly trusted certificate on a real domain — needing no
-> pin configured or consulted at all. **Until then, §11's command below with `--relay-pin` is the
-> only provisioning path; there is no `--relay-tls-policy` flag yet.** Once R2 ships, §9, §9a and
-> §11's pin material remain needed in two cases that use it **differently**, and the two are not
-> the same policy: the **expert `pinned_spki` policy** (`--relay-pin`), or a `webpki` machine still
-> inside the ADR-016 **compatibility window** (`--relay-pin-compat`, §11) while a paired device has
-> not yet migrated off its pin.
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):** This paragraph previously
+> named "a `wss://` URL and an SPKI pin" as the two things this document produces, because the pin
+> was, at the time, still the only relay TLS policy that existed. ADR-016 now makes `webpki` the
+> **default** policy — this document's own Caddy/ACME setup is exactly that default's normal shape,
+> a publicly trusted certificate on a real domain — needing no pin configured or consulted at all:
+> `swarm remote init --relay-url wss://<your-domain> ...` with no `--relay-tls-policy` flag now
+> writes a `webpki` profile. §9, §9a and §11's pin material remain needed in two cases that use it
+> **differently**, and the two are not the same policy: the **expert `pinned_spki` policy**
+> (`--relay-tls-policy pinned_spki --relay-pin`), or a `webpki` machine still inside the ADR-016
+> **compatibility window** (`--relay-pin-compat`, §11) while a paired device has not yet migrated
+> off its pin. **The per-device acknowledgement gate that would refuse a pinless `webpki` profile
+> until every paired device has migrated is not built yet** (tracked: bd
+> agents-tracker-hggx.3.5.3) — publish `--relay-pin-compat` explicitly during the compatibility
+> window rather than relying on a refusal that does not exist yet.
 
 **Revocation is not checked.** `webpki` means the chain leads to a trusted root, the name matches,
 and the certificate is inside its validity window — and **not** that it has not been revoked.
@@ -261,14 +264,13 @@ request — a `502 Bad Gateway` instead means Caddy can't reach `127.0.0.1:9440`
 
 ## 9. Compute the SPKI pin — from the live endpoint
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** §9, §9a
-> and §11's SPKI computation below feeds today's only provisioning path (`--relay-pin`). Once R2
-> ships it will feed the **expert `pinned_spki` policy** (`--relay-pin`) **or** the ADR-016
-> compatibility window on `webpki` (`--relay-pin-compat`, §11) — two different flags with two
-> different meanings, never the same command — and once the **default** `webpki` policy exists
-> with no compatibility window open, none of this section will be needed: no pin to compute, no
-> pin to recover, no `--relay-pin` or `--relay-pin-compat` flag at `swarm remote init`. **Until R2
-> ships, this section is not optional — read on.**
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):** §9, §9a and §11's SPKI
+> computation below feeds the **expert `pinned_spki` policy** (`--relay-pin`) **or** the ADR-016
+> compatibility window on the **default** `webpki` policy (`--relay-pin-compat`, §11) — two
+> different flags with two different meanings, never the same command. Once you close the
+> compatibility window (§11) on a `webpki` machine, none of this section is needed any longer: no
+> pin to compute, no pin to recover, no `--relay-pin` or `--relay-pin-compat` flag at `swarm remote
+> init`. **Until then, this section is not optional — read on.**
 
 Unlike the LAN runbook's self-signed certificate, there is no local `relay.crt` file in this
 topology — Caddy manages the certificate and its private key itself. Compute the pin the same way
@@ -416,32 +418,20 @@ swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
 )"
 ```
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`).** Neither
-> `--relay-tls-policy` nor `--relay-pin-compat` nor `--relay-pin-next` exists on
-> `cmd/swarm/remote.go` today — `--relay-url` and `--relay-pin` above are the whole of it, and the
-> command above, with a pin, is the whole of relay TLS verification today (ADR-007 B33), exactly
-> as `docs/operations/relay-runbook.md` §4a and §8 describe. Once R2 ships:
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`).** `--relay-pin` with no
+> `--relay-tls-policy` — exactly the command above — keeps its exact meaning under ADR-016 W1's
+> legacy inference: it selects the **expert `pinned_spki` policy**, spelled explicitly as
+> `--relay-tls-policy pinned_spki --relay-pin`. Nothing above requires you to change it. The
+> **default** flow, needing nothing to compute and nothing to pin, is now:
 >
 > ```bash
 > swarm remote init --relay-url wss://relay.example.com --relay-tls-policy webpki
 > ```
 >
-> becomes the default-flow command, with nothing to compute and nothing to pin. The **expert
-> `pinned_spki` policy** will keep today's SPKI pin from §9, spelled
-> `--relay-tls-policy pinned_spki --relay-pin`:
->
-> ```bash
-> swarm remote init --relay-url wss://relay.example.com --relay-tls-policy pinned_spki --relay-pin "$(
->   openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
->     openssl x509 -pubkey -noout |
->     openssl pkey -pubin -outform der |
->     openssl dgst -sha256 -binary | openssl base64
-> )"
-> ```
->
-> And a machine inside the ADR-016 **compatibility window** (W9) will be **not** on `pinned_spki`
-> — it will be on `webpki` and publish the same SPKI value as a **compatibility pin**, so an
-> un-migrated build keeps working while a migrated build stops consulting the pin (W3):
+> (also the default with the flag omitted entirely). And a machine inside the ADR-016
+> **compatibility window** (W9) is **not** on `pinned_spki` — it is on `webpki` and publishes the
+> same SPKI value as a **compatibility pin**, so an un-migrated build keeps working while a
+> migrated build stops consulting the pin (W3):
 >
 > ```bash
 > swarm remote init --relay-url wss://relay.example.com \
@@ -453,10 +443,12 @@ swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
 >   )"
 > ```
 >
-> `--relay-pin` will be mandatory under `pinned_spki` and refused under `webpki`;
-> `--relay-pin-compat` will be legal only under `webpki` (ADR-016 W1). `--relay-pin` with no
-> `--relay-tls-policy` — exactly the command above — keeps its exact present meaning once R2 ships
-> (ADR-016 W1's legacy inference), so nothing above requires you to act before R2 arrives.
+> `--relay-pin` is mandatory under `pinned_spki` and refused under `webpki`; `--relay-pin-compat`
+> is legal only under `webpki` (ADR-016 W1). `--relay-pin-next` (W5, expert-policy key rotation)
+> is not built yet (tracked: bd agents-tracker-hggx.3.5.1). **The gate that would refuse a pinless
+> `webpki` profile until every paired device has acknowledged the migration is not built yet
+> either** (tracked: bd agents-tracker-hggx.3.5.3) — publish `--relay-pin-compat` explicitly
+> during the compatibility window rather than relying on a refusal that does not exist yet.
 
 Every one of these commands writes `<stateDir>/remote/relay.json` (`internal/remote/relaycfg`) at
 0600, read by all three machine-side dial paths. Constraints enforced by `cmd/swarm/remote.go`
@@ -626,15 +618,14 @@ of production operability beyond that.
 **The handset is provisioned by pairing, not by this document, and that is sufficient.** This
 runbook configures the **machine** — exactly as the LAN runbook's §4a does.
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** The
-> paragraph this replaces described the pin as something every phone gets from pairing, which is
-> exactly what happens **today**, and continues to happen under the expert `pinned_spki` policy (or
-> the compatibility window) once R2 ships: the machine's published payload still carries the pin,
-> the phone still persists it (`relay_spki_pin`) and dials with it thereafter, and the QR still has
-> no pin field of its own — by design, unchanged from before (ADR-007 B33/B34, ADR-016 W7). Once R2
-> ships, a machine that adopts the new **default** `webpki` policy instead publishes
-> `relay_tls_policy` and `relay_host` in `MachinePayload`, with no `RelaySPKIPin` round trip because
-> there is no pin to carry.
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):** The paragraph this
+> replaces described the pin as something every phone gets from pairing, which remains exactly
+> true under the expert `pinned_spki` policy (or the compatibility window): the machine's
+> published payload still carries the pin, the phone still persists it (`relay_spki_pin`) and
+> dials with it thereafter, and the QR still has no pin field of its own — by design, unchanged
+> from before (ADR-007 B33/B34, ADR-016 W7). A machine that adopts the **default** `webpki` policy
+> instead publishes `relay_tls_policy` and `relay_host` in `MachinePayload`, with no
+> `RelaySPKIPin` round trip because there is no pin to carry.
 
 The one thing that has **no** channel is changing a pin a handset already holds under the expert
 policy — see §9a, whose third step is re-pairing for exactly this reason.
