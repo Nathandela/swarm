@@ -313,7 +313,7 @@ interaction history. The next free number is tracked in docs/adr/README.md (019 
 
 ## Amendment 2026-08-14 — honest status plus terminal fallback (ADR-017)
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off).
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook).
 **Source**: `docs/adr/ADR-017-terminal-fallback-capability.md`, which quotes each amended sentence of
 this ADR verbatim (`ADR-017:12-13`); the direction is RC-D5
 (`docs/specifications/remote-control-product-playbook.md:75`) and §3.1's closing instruction to

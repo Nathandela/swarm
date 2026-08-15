@@ -377,7 +377,7 @@ to the phone believing they are fixing a regression.
 
 ## Amendment 2026-08-14 — terminal fallback for incomplete providers (ADR-017)
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off).
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook).
 **Source**: `docs/adr/ADR-017-terminal-fallback-capability.md`, which quotes each amended sentence of
 this ADR verbatim (`ADR-017:10-11`); the direction is RC-D5 (`docs/specifications/remote-control-product-playbook.md:75`)
 and §3.1 (`:110-120`).

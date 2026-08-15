@@ -1,6 +1,6 @@
 # ADR-017: Capability-driven terminal fallback — the sanitized terminal returns, for the sessions that cannot be chat, and for nothing else
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off)
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook)
 **Date**: 2026-08-14
 
 **Source of the direction**: [docs/specifications/remote-control-product-playbook.md](../specifications/remote-control-product-playbook.md) — RC-D4 and RC-D5 (lines 74-75), §3.1 (lines 103-120), §4.5 (lines 248-262), §4.7 (lines 276-293), §6.2 (lines 384-399), §6.3 (lines 401-472), §7 (lines 578-598), and the Wave R8 exit (lines 812-827). The playbook is the plan; this ADR is the rule.

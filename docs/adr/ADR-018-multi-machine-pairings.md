@@ -1,6 +1,6 @@
 # ADR-018: Multi-machine pairings — one phone, N independent single-device relationships
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off)
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook)
 **Date**: 2026-08-14
 **Source**: [docs/specifications/remote-control-product-playbook.md](../specifications/remote-control-product-playbook.md) RC-D8 (`:78`), §3.4 (`:165-170`), §4.2 (`:194-208`), §4.9 (`:315-334`), §6.4 (`:474-488`), §12 Android state (`:937-947`), wave R4 (`:751-766`), §11.2 (`:905-906`).
 **Relates to**: [ADR-011](ADR-011-multi-device-epochs.md) (multi-**device** epochs) — this ADR adds a scope marker under its header block and an appended scope note at the end of it (MM9), and takes nothing from it. Nothing in ADR-011 is superseded, weakened, partially adopted, or brought forward.

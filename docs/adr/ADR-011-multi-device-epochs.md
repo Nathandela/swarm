@@ -130,7 +130,7 @@ This ADR exists because ADR-007 named the missing primitive in three places (C6,
 
 ## Amendment 2026-08-14 — scope note (ADR-018)
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off).
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook).
 **Source**: `docs/adr/ADR-018-multi-machine-pairings.md` MM9 (`ADR-018:93`), which states this
 relationship from the other side and asks for exactly this note plus the one-line scope marker
 under the header block above, and nothing else.

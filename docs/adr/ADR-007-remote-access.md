@@ -1,6 +1,6 @@
 # ADR-007: Remote access — identity, pairing, two-scheme crypto, relay trust, journal, launch authority
 
-**Status**: Proposed (design lock for the remote-control epic `agents-tracker-5h5`; ratifies to Accepted at Phase-1 close. Feeds the implementation plan of record `.claude/tmp/remote-control-implementation-plan.md`, coverage-audited in `docs/verification/audit-003-remote-control-plan.md`.)
+**Status**: Accepted with named open gates (owner sign-off 2026-08-15, per B144(c): the physical-handset gate / PB-E2E-5 remains unrun, and the Wave R1 records ADR-015..018 govern the amendments their waves implement. Originally Proposed as the design lock for the remote-control epic `agents-tracker-5h5`, "ratifies to Accepted at Phase-1 close"; the epic itself is superseded by `agents-tracker-hggx` and the plan of record is `docs/specifications/remote-control-product-playbook.md`. Historical: fed `.claude/tmp/remote-control-implementation-plan.md`, coverage-audited in `docs/verification/audit-003-remote-control-plan.md`.)
 **Date**: 2026-07-18
 
 ## Context

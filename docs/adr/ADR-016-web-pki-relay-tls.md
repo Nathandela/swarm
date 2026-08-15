@@ -1,6 +1,6 @@
 # ADR-016: Web PKI is the default relay TLS policy — the pin becomes an expert policy with an authenticated rotation
 
-**Status**: Proposed (drafted 2026-08-14 from the owner-approved playbook; pending owner sign-off)
+**Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook)
 **Date**: 2026-08-14
 **Locks**: RC-D10 (`docs/specifications/remote-control-product-playbook.md:80`) and its §3.3 mandate (`:151-163`); delivered in wave R2 (`:716`).
 **Amends**: `ADR-007-remote-access.md` B33 (`:1858-1879`, "The relay pin is over the SPKI, and key reuse is part of the pin"), B34 (`:1881-1911`, "The transport-security policy has no production caller (PB-NET-2)"), B45 (`:2300-2346`, "the pairing dial runs UNVERIFIED TLS; the pin cannot bootstrap itself"), B48 (`:2401-2432`, "B45's ruling is INCOMPLETE and is amended"), B54 (`:2610-2634`, "the machine's published payload is authoritative on every completed pairing"), B57/B58 (`:2732-2813`, "`paired` is published before the pin is durable, and `relay_untrusted` is terminal" / "B57 is a SHIPPING BLOCKER: the first pairing on Android is a coin toss"), and B13's pin-channel clause (`:1010-1031`, "The QR carries the relay URL; `MachineStaticPub` is NOT pinned in v1; the relay URL ceiling"). It **reaffirms** D9's closing sentence at `ADR-007-remote-access.md:78` — *"TLS is metadata defense only — E2EE confidentiality does not depend on it"* — which is the premise every ruling below rests on, not a casualty of them.
