@@ -36,6 +36,7 @@
 /swarm-char
 /swarm-fake-agent
 /swarm-publish
+/swarm-pushgw
 
 # Android (S13)
 android/.gradle/

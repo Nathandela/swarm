@@ -111,6 +111,27 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Rekey":          "Noise rekey, reachable only on a session the shipped mailbox tier does not open.",
 	"github.com/Nathandela/swarm/internal/remote/crypto.NoiseSession.Suite":          "as NoiseSession.Rekey.",
 
+	// ---- internal/phonecore: the ADR-018 MM4 seam, wired by R4 ---------------------------
+	// The MachineClient/MachineManager compatibility adapter landed in the R1 skeleton
+	// (agents-tracker-hggx.2) deliberately unwired: mobile.App keeps its direct Core until
+	// R4's transactional migration makes the manager the production path. Bidirectionality
+	// is the point -- the R4 slice that wires these MUST delete every row below.
+	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineAdapter":            "ADR-018 MM4 skeleton; production caller arrives with R4's migration (agents-tracker-hggx.5).",
+	"github.com/Nathandela/swarm/internal/phonecore.NewSingleMachineManager":            "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.Core":          "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.Events":        "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.ID":            "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.Running":       "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.Start":         "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineAdapter.Stop":          "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Add":           "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Close":         "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.ConnectionCap": "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Events":        "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.List":          "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Remove":        "as NewSingleMachineAdapter.",
+	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Select":        "as NewSingleMachineAdapter.",
+
 	// ---- internal/remotegw: openers and test seams ---------------------------------------
 	"github.com/Nathandela/swarm/internal/remotegw.OpenCommandEnvelope":      "inverse of the seal, used by the harnesses that assert what the gateway emitted.",
 	"github.com/Nathandela/swarm/internal/remotegw.OpenInputFrame":           "as OpenCommandEnvelope.",
