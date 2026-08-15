@@ -36,12 +36,43 @@ const Dir = "remote"
 // dial paths read.
 const FileName = "relay.json"
 
+// The two relay TLS policies ADR-016 W1 names on the wire. A policy is its own value in
+// every durable and wire artifact that carries the pin -- never derived from the pin's
+// presence or absence.
+const (
+	// PolicyWebPKI verifies the relay's certificate chain against the platform's trust
+	// roots and matches the hostname. It is the default (Omitted, it is webpki).
+	PolicyWebPKI = "webpki"
+	// PolicyPinnedSPKI replaces chain and name verification with the SPKI pin set: the
+	// expert, opt-in policy.
+	PolicyPinnedSPKI = "pinned_spki"
+)
+
 // Config is the content of relay.json.
 type Config struct {
 	// RelayURL is the relay both this machine and the phone dial. It is ONE field
 	// serving both, because it is also what `swarm remote pair` puts in the QR verbatim
 	// (PB-PAIR-7), so a machine reachable only over loopback cannot pair a handset.
 	RelayURL string `json:"relay_url"`
+	// TLSPolicy is ADR-016 W1's named relay TLS policy (PolicyWebPKI or PolicyPinnedSPKI),
+	// authored by `swarm remote init --relay-tls-policy` and published to the phone
+	// verbatim (pairing.MachinePayload.RelayTLSPolicy, RemoteProfileV1.RelayTLSPolicy).
+	//
+	// IT IS INDEPENDENT OF SPKIPin AND NEVER DERIVED FROM IT: a pin's presence never
+	// implies pinned_spki and a pin's absence never implies webpki -- W9's migration
+	// ladder needs a webpki machine that ALSO publishes a compatibility pin, which is
+	// inexpressible under a derivation rule. Empty is the legacy shape: a relay.json
+	// written before this field existed, decoded here as "no policy stated" rather than
+	// silently promoted to pinned_spki because a pin happens to be present.
+	//
+	// IT ALSO SCOPES THE MACHINE'S OWN DIAL, per W3's single rule stated once and applying
+	// everywhere Security.PinnedSPKISHA256 gets populated from a (policy, pin) pair, not
+	// only on the phone: "a pin is consulted if and only if the effective relay TLS policy
+	// is pinned_spki... not by anything." See Security() below. W2's "Desktop is unchanged"
+	// is a narrower claim than that -- it is about the machine's TRUST-ROOT SOURCE
+	// (TrustRootsSystem, never the platform delegate), not about whether a compatibility
+	// pin is consulted, and does not license skipping this scoping machine-side.
+	TLSPolicy string `json:"relay_tls_policy,omitempty"`
 	// SPKIPin is base64 of SHA-256 over the relay certificate's SubjectPublicKeyInfo --
 	// exactly what docs/operations/relay-runbook.md section 3 produces:
 	//
@@ -103,13 +134,27 @@ func Save(stateDir string, cfg Config) error {
 // enforces. An operator who configured a pin has stated they want a verified peer, and
 // cleartext cannot present one; admitting the dial anyway would leave a configured
 // security control doing nothing, which is the exact defect class B34 records.
+//
+// ADR-016 W3's SINGLE RULE APPLIES HERE TOO: a pin is consulted if and only if the
+// effective policy is pinned_spki, "not by anything" -- and this machine's own dial is one
+// of the things. TLSPolicy == "" is the legacy shape (a relay.json predating this field, or
+// one an operator configured before ever typing --relay-tls-policy) and is read as
+// pinned_spki here, the same inference cmd/swarm's own CLI applies to a bare --relay-pin:
+// it is what a machine that pinned before this ADR shipped is already doing, and reading an
+// absent field as an authenticated webpki claim would silently un-pin it. Only an EXPLICIT
+// webpki policy withdraws consultation -- exactly the shape W9's compatibility window needs:
+// a machine on `webpki --relay-pin-compat <spki>` verifies its OWN dial against the
+// platform's trust roots, and the compatibility pin is carried for un-migrated PHONES only,
+// never consulted by the machine that published it.
 func (c Config) Security() (relay.Security, error) {
 	pin, err := c.Pin()
 	if err != nil {
 		return relay.Security{}, err
 	}
 	sec := relay.MachineSecurity()
-	sec.PinnedSPKISHA256 = pin
+	if c.TLSPolicy != PolicyWebPKI {
+		sec.PinnedSPKISHA256 = pin
+	}
 	return sec, nil
 }
 

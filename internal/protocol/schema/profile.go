@@ -32,4 +32,14 @@ type RemoteProfileV1 struct {
 	InteractionSchemaVersion int            `json:"interaction_schema_version"`
 	TerminalViewVersion      int            `json:"terminal_view_version"`
 	CapabilityRecordVersion  int            `json:"capability_record_version"`
+	// The three ADR-016 W1 fields: the machine's authoritative relay TLS policy, joining
+	// this same R1 profile version rather than bumping it (ADR-016:194). RelayTLSPolicy and
+	// RelaySPKIPin are INDEPENDENT -- a pin's presence never implies pinned_spki and a
+	// pin's absence never implies webpki -- and none of the three carries omitempty: this
+	// struct rides EVERY reconcile, and an absent key must stay distinguishable from a
+	// legitimately-zero one (W9 step 6's compatibility-pin withdrawal depends on exactly
+	// that distinction being resolvable).
+	RelayTLSPolicy string `json:"relay_tls_policy"`
+	RelayHost      string `json:"relay_host"`
+	RelaySPKIPin   []byte `json:"relay_spki_pin"`
 }

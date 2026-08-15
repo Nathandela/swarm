@@ -291,6 +291,9 @@ This table's header reads **`Field`**, not `JSON key`, for `JournalRecord`'s rea
 | `interaction_schema_version`  | int               | the `interaction-schema.md` version the machine speaks          |
 | `terminal_view_version`       | int               | the `TerminalViewV1` version (ADR-017 T4) the machine speaks     |
 | `capability_record_version`   | int               | the `SessionCapabilities` record version (ADR-017 T2) the machine speaks |
+| `relay_tls_policy`            | string            | ADR-016 W1: `webpki` or `pinned_spki`, the machine's authoritative relay TLS policy; independent of the pin field below, never derived from it |
+| `relay_host`                  | string            | ADR-016 W1/W4: the hostname the machine itself dials, checked by the phone's migration probe against the relay URL it already holds |
+| `relay_spki_pin`              | []byte            | ADR-016 W1/W9: the SHA-256 SPKI pin, retained and republished across policy changes; consulted only when the effective policy is `pinned_spki` (ADR-016 W3) |
 
 ## Control-op vocabulary
 
