@@ -245,7 +245,14 @@ direction *pays* PB-SEC-14 rather than trading against it.
 Each is a behaviour change wearing a comment change's clothes.
 
 1. **What severs a lease on backgrounding**, now that biometric-freshness expiry is gone
-   (`internal/phonecore/lease.go:52,198`).
+   (`internal/phonecore/lease.go:52,198`). **RESOLVED 2026-08-15 (ADR-017 T7/T8), scoped to the
+   terminal-fallback control generation** — the lease this item cites (`TakeControlTTL`,
+   `lease.go:57`) is, per ADR-017 T1/T2, currently the only lease-bearing surface, so the ruling
+   covers this citation exactly rather than lease-severance generally: the horizon is
+   re-derived rather than re-cited (freshness is no longer part of its justification), and app
+   backgrounding is a first-class severance trigger, listed beside leaving the fallback screen,
+   transport loss, horizon expiry, kill switch, device revocation, and session replacement
+   (`ADR-017:138-148`).
 2. **What sets `contentReady = false`**, now that "unless the user has authenticated" has no producer.
 3. **On revoke/unpair**: is the wake tier purged too? Is the content tier recoverable without a
    re-grant? Are watermarks and the op-queue carried across? `PB-KEY-7`'s `PurgeKeys` mechanism

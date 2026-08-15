@@ -1,5 +1,7 @@
 # Remote Control — Consolidated Review + Remaining-Work Map (2026-07-22)
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 Four-agent independent review of the full remote-control state at HEAD `b9cee19`
 (37 commits landed 2026-07-20 on top of the prior handoff at `2aa8187`). Panel:
 opus (relay hardening re-audit + first gateway review), opus (pairing / device /

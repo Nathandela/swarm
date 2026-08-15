@@ -12,8 +12,26 @@ section's own footnote is explicit about what stays out: *"Returned to Phase C: 
 backup/restore, disk-full behavior, log rotation, health checks, TLS renewal automation, resource
 limits, and cross-version compatibility"* (`remote-phaseB-requirements.md:664`). Nothing below
 adds backups, log rotation, health checks, or monitoring. It stands the relay up behind a real
-certificate and documents the two things `PB-OPS-1`'s acceptance criteria actually asks for: a
-`wss://` URL and an SPKI pin, both fed to `swarm remote init`.
+certificate and documents what `PB-OPS-1`'s acceptance criteria actually asks for: a `wss://` URL
+fed to `swarm remote init`.
+
+> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** This
+> paragraph previously named "a `wss://` URL and an SPKI pin" as the two things this document
+> produces, because the pin is, as of today, still the only relay TLS policy that exists. Once R2
+> ships, ADR-016 makes `webpki` the **default** policy — this document's own Caddy/ACME setup is
+> exactly that default's normal shape, a publicly trusted certificate on a real domain — needing no
+> pin configured or consulted at all. **Until then, §11's command below with `--relay-pin` is the
+> only provisioning path; there is no `--relay-tls-policy` flag yet.** Once R2 ships, §9, §9a and
+> §11's pin material remain needed in two cases that use it **differently**, and the two are not
+> the same policy: the **expert `pinned_spki` policy** (`--relay-pin`), or a `webpki` machine still
+> inside the ADR-016 **compatibility window** (`--relay-pin-compat`, §11) while a paired device has
+> not yet migrated off its pin.
+
+**Revocation is not checked.** `webpki` means the chain leads to a trusted root, the name matches,
+and the certificate is inside its validity window — and **not** that it has not been revoked.
+Neither the platform's default trust manager nor Go's own verifier performs an OCSP/CRL check; the
+honest mitigation is short certificate lifetimes, which this deployment's ACME renewal cadence
+already gives (ADR-016 W2).
 
 **Why there are two processes.** `swarm-relay` serves **plain `ws://` only** — confirmed directly
 in `internal/remote/relay/server.go`: `Start` does `s.url = "ws://" + ln.Addr().String()`
@@ -106,45 +124,36 @@ shared bucket, because the relay keys rate limits off the raw TCP peer address i
 (`defaultSourceKey`, `internal/remote/relay/server.go`) and `cmd/swarm-relay` never installs an
 `X-Forwarded-For`-aware override. Harmless at v1's single-machine-plus-single-phone scope; a
 reason to revisit before fronting genuinely independent clients through this same proxy.
+> AMENDED BY ADR-018 (2026-08-15): R4 fires exactly this revisit — its exit runs two machines
+> through one organization relay, so the shared per-source bucket stops being harmless; the R2
+> trusted-proxy work (playbook 6.5) keys quotas by the validated forwarded address.
 
 ```bash
 sudo chmod 0644 /etc/swarm-relay/relay.config
 ```
 
 `0644` is deliberate and safe **for this file**: it holds addresses, timeouts and quotas, no
-secret. Leave `push_credentials` empty, as shipped, unless you have provisioned your own FCM
-service account.
+secret. **The shipped example carries no `push_credentials` key at all.** ADR-015 moves push off
+the relay entirely — the relay's target design ships with no push credential, no token map and no
+push transport; Android registers with the Swarm-operated push gateway and `swarm-remote` submits
+the wake directly. A pairing whose `push_transport` has not yet migrated from `legacy_relay` to
+`gateway` (playbook §12) still needs the legacy relay-hosted transport — add `push_credentials`
+back to your copy of the config; see §4a if that is your situation.
 
-### 4a. If you do set `push_credentials`, the file it points at is a private key
+### 4a. Legacy only: `push_credentials` during the ADR-015 compatibility window
 
-`0644` does not carry over. The Google service-account JSON that `push_credentials` names contains
-an RSA private key: anyone who can read it can send push as your Google project, and against this
-relay's own store — which holds a push token per routing id in the clear
-(`docs/operations/metadata-disclosure.md`) — that means waking any handset paired to it. Do not put
-it in `/etc/swarm-relay/relay.config`'s directory with the config's permissions.
+> AMENDED BY ADR-015 (2026-08-15): push moves to the Swarm-operated gateway — the relay's target
+> design carries no push credential at all. What follows is the legacy relay-hosted transport, kept
+> only for a pairing whose `push_transport` has not yet migrated from `legacy_relay` to `gateway`
+> (playbook §12). Do not provision it for a new deployment.
 
-```bash
-sudo install -o root -g swarm-relay -m 0640 /path/to/service-account.json \
-  /etc/swarm-relay/push-credentials.json
-```
-
-`root:swarm-relay 0640` gives the relay exactly what it needs and nothing more: the unit runs as
-`User=swarm-relay` (§5) and only ever reads this file (`os.ReadFile` at boot,
-`cmd/swarm-relay/main.go`), so group-read is sufficient, `root` keeps ownership so the service
-account cannot rewrite its own credential, and no other user on the VPS can read it at all.
-`ProtectSystem=strict` in the unit already makes `/etc` read-only to the process regardless.
-
-A mode too restrictive to read is **not** a silent failure: a `push_credentials` that is set but
-unreadable fails the boot outright (`pushOptions` returns the `os.ReadFile` error and
-`swarm-relay` exits nonzero), so you find out from `systemctl status swarm-relay` immediately
-rather than from a hand-off nobody was woken for. An *empty* `push_credentials` is the different,
-supported case that boots with no push at all (PB-PUSH-5).
-
-**If you do set `push_credentials`, the file it points at is a private key and must not be
-world-readable.** It is a Google service-account document; anyone who can read it can send push
-messages as your project. `ProtectSystem=strict` (§5) keeps the relay from writing to `/etc`, but
-it does nothing to stop another local user reading a `0644` file there. Install it owned by root,
-readable only by the service's group:
+If you are still inside that window and do set `push_credentials`, the file it points at is a
+private key: the Google service-account JSON contains an RSA private key, and anyone who can read
+it can send push as your Google project — against this relay's own store, which (during the legacy
+transport) holds a push token per routing id in the clear
+(`docs/operations/metadata-disclosure.md`), that means waking any handset paired to it. Install it
+owned by root, readable only by the service's group, and shred the world-readable copy you `scp`'d
+up:
 
 ```bash
 sudo install -o root -g swarm-relay -m 0640 /tmp/push-credentials.json \
@@ -152,10 +161,16 @@ sudo install -o root -g swarm-relay -m 0640 /tmp/push-credentials.json \
 shred -u /tmp/push-credentials.json    # the copy you scp'd up, which landed 0644
 ```
 
-Then point `push_credentials` at `/etc/swarm-relay/push-credentials.json`. The relay reads it once
-at boot as the `swarm-relay` user, so group-read is all it needs. A path that is set but unreadable
-fails the boot on purpose (`cmd/swarm-relay/main.go`, `pushOptions`) — so a permissions mistake here
-is loud at `systemctl start`, not a silent loss of push weeks later.
+`root:swarm-relay 0640` gives the relay exactly what it needs and nothing more: the unit runs as
+`User=swarm-relay` (§5) and only ever reads this file at boot (`os.ReadFile`,
+`cmd/swarm-relay/main.go`), so group-read is sufficient, `root` keeps ownership so the service
+account cannot rewrite its own credential, and `ProtectSystem=strict` in the unit already makes
+`/etc` read-only to the process regardless. A mode too restrictive to read is **not** a silent
+failure: a `push_credentials` that is set but unreadable fails the boot outright (`pushOptions`
+returns the `os.ReadFile` error), so you find out from `systemctl status swarm-relay` immediately
+rather than from a hand-off nobody was woken for.
+
+Then point `push_credentials` at `/etc/swarm-relay/push-credentials.json`.
 
 ## 5. Install the systemd unit and start the relay
 
@@ -235,6 +250,15 @@ request — a `502 Bad Gateway` instead means Caddy can't reach `127.0.0.1:9440`
 (see §12).
 
 ## 9. Compute the SPKI pin — from the live endpoint
+
+> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** §9, §9a
+> and §11's SPKI computation below feeds today's only provisioning path (`--relay-pin`). Once R2
+> ships it will feed the **expert `pinned_spki` policy** (`--relay-pin`) **or** the ADR-016
+> compatibility window on `webpki` (`--relay-pin-compat`, §11) — two different flags with two
+> different meanings, never the same command — and once the **default** `webpki` policy exists
+> with no compatibility window open, none of this section will be needed: no pin to compute, no
+> pin to recover, no `--relay-pin` or `--relay-pin-compat` flag at `swarm remote init`. **Until R2
+> ships, this section is not optional — read on.**
 
 Unlike the LAN runbook's self-signed certificate, there is no local `relay.crt` file in this
 topology — Caddy manages the certificate and its private key itself. Compute the pin the same way
@@ -382,16 +406,60 @@ swarm remote init --relay-url wss://relay.example.com --relay-pin "$(
 )"
 ```
 
-This writes `<stateDir>/remote/relay.json` (`internal/remote/relaycfg`) at 0600, read by all three
-machine-side dial paths. Two hard constraints, both enforced by `cmd/swarm/remote.go` before
-anything is written to disk:
+> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`).** Neither
+> `--relay-tls-policy` nor `--relay-pin-compat` nor `--relay-pin-next` exists on
+> `cmd/swarm/remote.go` today — `--relay-url` and `--relay-pin` above are the whole of it, and the
+> command above, with a pin, is the whole of relay TLS verification today (ADR-007 B33), exactly
+> as `docs/operations/relay-runbook.md` §4a and §8 describe. Once R2 ships:
+>
+> ```bash
+> swarm remote init --relay-url wss://relay.example.com --relay-tls-policy webpki
+> ```
+>
+> becomes the default-flow command, with nothing to compute and nothing to pin. The **expert
+> `pinned_spki` policy** will keep today's SPKI pin from §9, spelled
+> `--relay-tls-policy pinned_spki --relay-pin`:
+>
+> ```bash
+> swarm remote init --relay-url wss://relay.example.com --relay-tls-policy pinned_spki --relay-pin "$(
+>   openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+>     openssl x509 -pubkey -noout |
+>     openssl pkey -pubin -outform der |
+>     openssl dgst -sha256 -binary | openssl base64
+> )"
+> ```
+>
+> And a machine inside the ADR-016 **compatibility window** (W9) will be **not** on `pinned_spki`
+> — it will be on `webpki` and publish the same SPKI value as a **compatibility pin**, so an
+> un-migrated build keeps working while a migrated build stops consulting the pin (W3):
+>
+> ```bash
+> swarm remote init --relay-url wss://relay.example.com \
+>   --relay-tls-policy webpki --relay-pin-compat "$(
+>     openssl s_client -connect relay.example.com:443 -servername relay.example.com </dev/null 2>/dev/null |
+>       openssl x509 -pubkey -noout |
+>       openssl pkey -pubin -outform der |
+>       openssl dgst -sha256 -binary | openssl base64
+>   )"
+> ```
+>
+> `--relay-pin` will be mandatory under `pinned_spki` and refused under `webpki`;
+> `--relay-pin-compat` will be legal only under `webpki` (ADR-016 W1). `--relay-pin` with no
+> `--relay-tls-policy` — exactly the command above — keeps its exact present meaning once R2 ships
+> (ADR-016 W1's legacy inference), so nothing above requires you to act before R2 arrives.
+
+Every one of these commands writes `<stateDir>/remote/relay.json` (`internal/remote/relaycfg`) at
+0600, read by all three machine-side dial paths. Constraints enforced by `cmd/swarm/remote.go`
+before anything is written to disk, today:
 
 - **`--relay-url` is capped at 39 characters** (`pairing.MaxRelayURLLen`) because it rides verbatim
   into the pairing QR, which is why the domain in this doc's examples is kept short.
   `wss://relay.example.com` is 23 characters; omit an explicit `:443` (the default for `wss://`) to
   keep every character you can.
-- **A pin is refused outright on a `ws://` URL** (`validateRelayPin`) — cleartext presents no
-  certificate, so a pin on it could never be checked.
+- **`--relay-pin` is refused outright on a `ws://` URL** (`validateRelayPin`) — cleartext presents
+  no certificate, so a pin on it could never be checked. Once R2 ships, the same refusal extends to
+  the `webpki` policy, where a compatibility pin is `--relay-pin-compat`, a different flag with a
+  different meaning (ADR-016 W9).
 
 ## 12. Troubleshooting: the WebSocket upgrade doesn't pass through the proxy
 
@@ -428,16 +496,21 @@ Caddy is stripping or mishandling the handshake. In rough order of likelihood:
 Per `docs/specifications/remote-phaseB-requirements.md:664`: **backup/restore, log rotation,
 health checks and monitoring, TLS renewal automation beyond Caddy's own default behavior, resource
 limits, and cross-version compatibility are all Phase C.** This runbook gets a relay reachable over
-real `wss://` and documents the URL/pin pair `swarm remote init` needs — nothing here should be
-read as a claim of production operability beyond that.
+real `wss://` and documents what `swarm remote init` needs — nothing here should be read as a claim
+of production operability beyond that.
 
 **The handset is provisioned by pairing, not by this document, and that is sufficient.** This
-runbook configures the **machine** — exactly as the LAN runbook's §4a does. The phone gets the
-relay URL and the pin from the pairing exchange itself: the pin rides msg2 as
-`MachinePayload.RelaySPKIPin`, the phone persists it (state schema v7, `relay_spki_pin`) and dials
-with it thereafter. So a handset pairing against a relay deployed this way works with no further
-setup; the QR having no pin field is by design and is not a blocker (ADR-007 B33/B34, and B45 for
-why the unpinned pairing dial is permitted).
+runbook configures the **machine** — exactly as the LAN runbook's §4a does.
 
-The one thing that has **no** channel is changing a pin a handset already holds — see §9a, whose
-third step is re-pairing for exactly this reason.
+> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** The
+> paragraph this replaces described the pin as something every phone gets from pairing, which is
+> exactly what happens **today**, and continues to happen under the expert `pinned_spki` policy (or
+> the compatibility window) once R2 ships: the machine's published payload still carries the pin,
+> the phone still persists it (`relay_spki_pin`) and dials with it thereafter, and the QR still has
+> no pin field of its own — by design, unchanged from before (ADR-007 B33/B34, ADR-016 W7). Once R2
+> ships, a machine that adopts the new **default** `webpki` policy instead publishes
+> `relay_tls_policy` and `relay_host` in `MachinePayload`, with no `RelaySPKIPin` round trip because
+> there is no pin to carry.
+
+The one thing that has **no** channel is changing a pin a handset already holds under the expert
+policy — see §9a, whose third step is re-pairing for exactly this reason.

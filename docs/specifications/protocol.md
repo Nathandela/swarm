@@ -185,6 +185,14 @@ and unrelated secrets are dropped.
 | `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
 | `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 
+> AMENDED BY ADR-007 B144 (2026-08-15): `LaunchReq` above is the owner-tier form's request — free
+> `cwd`, `options`, `env`. B144's preset model arrives with the R1/R5 skeleton as a **separate**
+> remote-tier op, `session_launch(machine, operation_id, profile, preset_id, preset_revision,
+> initial_prompt?, expires_at)`: on the remote tier a preset id, resolved daemon-side against a
+> signed preset revision, replaces free `cwd`/`options`/`env` — never argv or environment supplied
+> by the phone. This paragraph is a pointer, not a field addition; `session_launch`'s own wire
+> table lands in the commit that implements it (GG-7).
+
 ## The `TerminalSnapshot` message
 
 `TerminalSnapshot` is one **server-rendered, sanitized terminal snapshot** (A7
@@ -240,6 +248,12 @@ gated purely by the negotiated `policy` capability and a `PolicyDescriber`
 backend (no `requireRemoteAuthz` choke point). An unnegotiated capability or an
 unsupporting backend replies `error`.
 
+> AMENDED BY ADR-007 B144 (2026-08-15): the allowed-cwd-root policy above stands today; B144's
+> preset model — `swarm remote init`-published presets carrying provider, allowed
+> workspace/worktree root and a fixed environment policy — arrives with the R1/R5 skeleton and is
+> what `launch_presets` will expose. `policy_query` is not superseded by it, since a preset is
+> resolved and authorized daemon-side, not chosen freely against this policy read.
+
 ### `device_revoke`
 
 Remote-tier control-plane MUTATING op (slice A3.2): removes a paired device from
@@ -288,6 +302,12 @@ The client sends `launch` with a `launch` request. After server-side revalidatio
 the daemon launches the session and replies with `launch` carrying the new
 `session` view (whose `id` is the namespaced session id). On a rejected field the
 daemon replies with `error` and forwards nothing.
+
+> AMENDED BY ADR-007 B144 (2026-08-15): `launch` above is owner-tier only. Phone launch is a
+> supported RCE-class action in the first complete product (B144, RC-D9): the remote-tier
+> counterpart is `session_launch`, a preset-based op arriving with the R1/R5 skeleton, sharing
+> ADR-017 T9's six-state delivery vocabulary (`draft`/`pending`/`sent`/`refused`/`uncertain`/
+> `outcome_unknown`) with `composer_send` rather than this op's plain `ok`/`error` reply.
 
 ### `kill`
 
@@ -428,6 +448,17 @@ Terminal peek (A7 renderer slice B), mirroring the
 `journal_subscribe`/`journal_event` streaming pair. Unlike `take_control`, the peek
 is **read-only** and works BEFORE any control session exists (no lease, no signed
 op).
+
+> AMENDED BY ADR-017 (2026-08-15): the new capability-routed fallback is gated by the ADR-017 T2
+> per-session capability record — a `terminal_fallback` session may open `TerminalViewV1`'s
+> streaming and control-generation ops (`terminal_control_begin`/`terminal_input`/
+> `terminal_control_end`, ADR-017 T4/T6; the watch/unwatch op's wire name lands with the R1
+> skeleton commit, since ADR-017 itself uses `terminal_watch` for both this section's legacy body
+> and the new fallback stream) only when its daemon-authored `terminal_fallback` capability is
+> true, and every `structured_chat` session has no route to it at all (T2 rule 4). This section's
+> `terminal_subscribe`/`terminal_snapshot` pair is NOT gated by the capability record — it stays
+> on the wire unchanged and un-deleted, reachable only under the legacy remote profile (ADR-017
+> T4).
 
 **Authorization is per tier** (ADR-010 A3). A **remote-tier** peek keeps its full
 gate: the remote-control kill switch (checked at subscribe time, on every render tick

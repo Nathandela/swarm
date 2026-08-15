@@ -197,6 +197,10 @@ the exact shell/invocation that ran `bundleRelease`.
 
 ## 7. What happens next (out of scope here)
 
+> AMENDED BY ADR-015 (2026-08-15): the Play closed-testing track named below is now the release
+> path (Play-Store Android is the first client, not a deferred distribution option); the task
+> split itself is unchanged.
+
 Creating the app in Play Console (which enrolls it in the mandatory Play App Signing automatically)
 and uploading this AAB to a closed-testing track is `agents-tracker-2qm`, not this task. Before that upload, re-check
 Play's current target API level requirement — `docs/ops/play-closed-testing-application.md`

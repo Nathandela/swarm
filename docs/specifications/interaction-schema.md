@@ -16,8 +16,11 @@ those documents own the decisions, and neither is restated here.
 
 An **interaction item** is one durable, replayable unit of a conversation: a message, a tool
 run, a file change, an approval, a plan revision, a status marker. The phone renders a
-transcript of items and nothing else — there is no terminal emulation and no raw grid on the
-phone (ADR-009). Items are produced on the machine, adjacent to the sanitization choke point
+transcript of items and nothing else.
+
+> AMENDED BY ADR-017 (2026-08-15): the no-grid rule is re-scoped to `structured_chat` sessions, not repealed. For a `structured_chat` session there is no terminal emulation and no raw grid on the phone (ADR-009), unamended. A `terminal_fallback` session (ADR-017 T1-T4 — incomplete providers, plus a version-skewed Claude or Codex build per T3's *Version skew* row; never a healthy `structured_chat` session, T2 rule 4) may render the machine-sanitized `TerminalViewV1` snapshot instead — never raw PTY bytes, never a VT parser on the phone — and never promotes anything it shows into this transcript (ADR-017 T10).
+
+Items are produced on the machine, adjacent to the sanitization choke point
 in `internal/daemon/terminalrender.go`; raw PTY bytes never reach the phone.
 
 ---
@@ -304,6 +307,12 @@ append. With the terminal well deleted and no phone surface issuing a `terminal_
 frames are appended at all (ADR-009 (2)), so the transcript inherits the whole of the budget the
 peek used to spend.
 
+> AMENDED BY ADR-017 (2026-08-15): re-scoped, not repealed — for a `structured_chat` session
+> this paragraph still holds exactly as written. A `terminal_fallback` session's `TerminalViewV1`
+> stream spends from the same combined budget the peek used to spend, under the same coalescing
+> sink (ADR-017 "What does NOT change," append budget), so on that session the transcript no
+> longer has the whole budget to itself.
+
 - **IS-DELTA-1** (Ubiquitous) An `agent_message` record's `text` SHALL be the increment appended
   since the previous record of that `item_id`. A consumer reconstructs by concatenation in
   cursor order.
@@ -444,3 +453,5 @@ Stated so no implementation slice reads a payload schema as licence to move a bo
   (ADR-007 D5); the gateway seals and forwards, and parses no item.
 - **Single device.** `SenderKeyID = 0` on the wire is unchanged. Multi-device is ADR-011,
   decided separately and implemented post-v1.
+
+  > AMENDED BY ADR-018 (2026-08-15): "single device" names the phone-per-machine axis (ADR-011's N devices on one machine), not the machine axis. Multi-machine — one phone, N independent machine pairings — is ADR-018 and is in scope for the first complete remote product; each pairing is its own `SenderKeyID = 0` relationship, and none of them is a second device against any single pairing's epoch.

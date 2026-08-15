@@ -1,5 +1,7 @@
 # Audit 003: Remote-Control Implementation Plan — Committee Report
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 Target: `.claude/tmp/remote-control-implementation-plan.md` (173 requirements, the plan of record for
 epic `agents-tracker-5h5`). Committee: GPT-5.6 sol (codex, read-only repo access), Gemini 3.5 Flash
 (agy, brief+plan inlined), Sonnet (source-verified), Opus (source-verified, security focus). All four

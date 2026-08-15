@@ -19,10 +19,21 @@
 #
 # The backend address must match "listen" in relay.config.example exactly.
 #
-# `reuse_private_keys` IS LOAD-BEARING AND IS NOT A PERFORMANCE SETTING. Caddy's documented
-# default is the opposite: "a new key is created for every new certificate to mitigate
-# pinning". This deployment pins. `swarm remote init --relay-pin` records the SPKI hash, the
-# phone persists it (internal/phonecore/state.go, relay_spki_pin) and dials with
+# AMENDED BY ADR-016 (2026-08-15), target state -- arrives with wave R2 (ADR-016:5): once R2
+# ships, `reuse_private_keys` becomes EXPERT-ONLY, not load-bearing for every deployment, because
+# the DEFAULT relay TLS policy will be `webpki` -- ordinary Web PKI hostname validation against
+# this certificate, no pin configured or consulted at all -- and under that policy Caddy's own
+# documented default ("a new key is created for every new certificate to mitigate pinning and
+# reduce the scope of key compromise") is correct again; this directive will buy a default
+# deployment nothing and may simply be dropped. UNTIL R2 SHIPS, THERE IS NO `--relay-tls-policy`
+# FLAG AND THE PIN BELOW IS THE WHOLE OF RELAY TLS VERIFICATION -- keep this directive
+# unconditionally. After R2, keep it only if you have chosen the expert `pinned_spki` policy for
+# this relay, or while a paired device has not yet migrated off a compatibility pin (ADR-016 W9)
+# -- in either case the paragraph below still applies:
+#
+# `reuse_private_keys` IS LOAD-BEARING TODAY AND IS NOT A PERFORMANCE SETTING.
+# `swarm remote init --relay-pin` records the SPKI hash, the phone persists it
+# (internal/phonecore/state.go, relay_spki_pin) and dials with
 # PinnedSPKISHA256 forever after (mobile/relay.go). Without this directive, the first ACME
 # renewal -- roughly 60 days after deployment, unattended -- presents a new key, the SPKI
 # changes, and BOTH the phone and the machine start failing with ErrPinMismatch at once. The

@@ -1,5 +1,7 @@
 # Phase B residuals — consolidated, in the Phase A closure style
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 **Scope: PB-DOC-3.** *"Residuals recorded in the Phase A closure style: what, why,
 adversary-reachable or not."*
 

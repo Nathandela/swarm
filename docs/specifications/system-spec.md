@@ -72,11 +72,15 @@ Derived view groups:
 ### Sessions (S)
 
 - **S-1** (Event) WHEN the user submits the launch form, the daemon SHALL spawn a shim which execs the agent CLI in a fresh PTY in the requested working directory, with adapter-composed **argv arrays only** (no shell interpretation of any user-supplied field), in its own process group.
+
+  > See ADR-007 B144 (2026-08-15): this is the owner-tier form-driven launch. A phone-initiated remote launch is a separate operation over a daemon-authored preset (`session_launch`), never free cwd/argv/env from the phone.
 - **S-2** (Ubiquitous) Each session SHALL persist: id, agent type, working directory, launch options, captured environment, created-at, status dimensions, last-activity, shim PID + start time, agent-native conversation id when the adapter exposes one, exit code when ended, `schema_version`.
 - **S-3** (Optional, later epic) WHERE the worktree toggle was enabled at launch, the daemon SHALL create a git worktree under `.swarm/worktrees/<id>` (validated id; error if not a git repo; named branch `swarm/<id>`), and SHALL tear it down (`git worktree remove` + prune) when the session is deleted.
 - **S-4** (Event) WHEN the user kills a session, the shim SHALL signal the agent's **process group** (SIGTERM, grace, SIGKILL) so descendant processes (MCP servers, shells) do not leak; outcome recorded.
 - **S-5** (Ubiquitous) The shim SHALL maintain the session's VT grid (emulated screen: cells, cursor, alternate-screen, modes) and an append-only transcript with a size cap and rotation; repeated redraw frames (spinners) SHALL be collapsed before hitting disk.
 - **S-6** (Ubiquitous) The launch RPC SHALL carry the client's environment (allowlist-filtered); the shim SHALL spawn the agent with that environment, never the daemon's inherited one.
+
+  > AMENDED BY ADR-007 B144 (2026-08-15): owner tier only. The remote tier's `session_launch` composes environment from daemon-authored launch-preset policy, never a phone-supplied env.
 - **S-7** (Ubiquitous) The daemon SHALL enforce a configurable max concurrent session count and reject launches over it with a clear inline error.
 
 ### Client protocol (P) (ADR-002)
@@ -102,6 +106,8 @@ Derived view groups:
 - **L-1** (Ubiquitous) The launch form SHALL collect: working directory (free text, `~` expansion), agent (from detected CLIs), model/options rendered from the adapter's **declarative options schema**, optional initial prompt, worktree toggle (when the epic ships).
 - **L-2** (Ubiquitous) The agent picker SHALL offer only CLIs detected on PATH (with version check against the adapter's supported range); supported-but-missing CLIs appear greyed with an install hint.
 - **L-3** (Unwanted) IF the working directory does not exist or is not a directory, THEN the form SHALL show an inline error and refuse to launch (and the daemon re-validates, P-6).
+
+> See ADR-007 B144 (2026-08-15): L-1..L-3 describe the owner-tier form. A phone-initiated remote launch chooses a daemon-authored preset and an initial prompt (`launch_presets`, `session_launch`) and supplies no free cwd/argv/env; its exit criteria are the playbook waves (implementation-goals.md Epic 15).
 
 ### Attach (A)
 
@@ -142,7 +148,9 @@ Derived view groups:
 - **F-1** The protocol SHALL be versioned and capability-negotiated from the first release; messages carry an endpoint id and namespaced session ids so multi-daemon clients need no schema break.
 - **F-2** Remote transport (mobile, relay, multi-machine) is **not** claimed v1-ready: it requires its own ADR covering identity, pairing/auth, E2EE/relay trust, reconnect cursors, and idempotency. v1's obligation is only: no UDS-specific assumptions in message schemas. (That ADR now exists — ADR-007 — and its threat model, decided in B133, is recorded below.)
 
-  **Remote threat model (added per ADR-007 B133, 2026-07-31).** The trust boundary is the wire between the phone and the machine. The declared adversary is the relay, the network path, FCM/Google (which reads every push payload it carries), and any MITM between the endpoints; the phone and whoever holds it are trusted, exactly as the machine and its owner-uid user are. There is **no phone-side user authentication** — no biometric, PIN, per-use gate or content lock; the pairing-time SAS comparison is the only human-in-the-loop security step in the product, and it is what defeats a relay MITM. The two-tier wake/content key split is kept as a transport defence: FCM reads the push payload, so the push path holds the content-free wake key only, and that rule is enforced at the **sender**, in the gateway. Stated without gloss: on Android `FirebaseMessagingService` runs in the app process, so the phone-side half of the tier boundary was only ever Keystore auth-gating plus code discipline, not OS isolation — with auth-gating removed, **code discipline is the only phone-side enforcement**, and the defence the split rests on is the sender-side rule. Accepted residual risk (B133): a stolen unlocked phone gives its holder full control of agents that edit code on the machine; the only surviving mitigation is `swarm remote off` / device revoke, issued from the machine, which makes that kill switch load-bearing in a way it was not.
+  > AMENDED BY ADR-018 (2026-08-15): multi-machine ships in the first complete remote product (RC-D8), not a further deferral within V2 as earlier remote planning had cut it; this line's v1 boundary is unaffected — remote transport, multi-machine included, stays outside the terminal app's v1.
+
+  **Remote threat model (added per ADR-007 B133, 2026-07-31; the adversary list amended by ADR-015, 2026-08-15).** The trust boundary is the wire between the phone and the machine. The declared adversary is the relay, the network path, FCM/Google (which reads every push payload it carries), the Swarm-operated push gateway (ADR-015 P4 — a colluding relay and gateway are held in scope together, playbook §11.3), and any MITM between the endpoints; the phone and whoever holds it are trusted, exactly as the machine and its owner-uid user are. There is **no phone-side user authentication** — no biometric, PIN, per-use gate or content lock; the pairing-time SAS comparison is the only human-in-the-loop security step in the product, and it is what defeats a relay MITM. The two-tier wake/content key split is kept as a transport defence: FCM reads the push payload, so the push path holds the content-free wake key only, and that rule is enforced at the **sender**, in the machine-side remote gateway (`swarm-remote`), never the Swarm push gateway. Stated without gloss: on Android `FirebaseMessagingService` runs in the app process, so the phone-side half of the tier boundary was only ever Keystore auth-gating plus code discipline, not OS isolation — with auth-gating removed, **code discipline is the only phone-side enforcement**, and the defence the split rests on is the sender-side rule. Accepted residual risk (B133): a stolen unlocked phone gives its holder full control of agents that edit code on the machine; the only surviving mitigation is `swarm remote off` / device revoke, issued from the machine, which makes that kill switch load-bearing in a way it was not.
 
 ## Architecture diagrams
 
@@ -257,4 +265,6 @@ sequenceDiagram
 
 ## Out of scope (v1)
 
-OS notifications (v1.x), mobile/remote transport + auth (V2, ADR-007), multi-machine (V2), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate).
+OS notifications (v1.x), mobile/remote transport + auth (V2, ADR-007), multi-machine (V2, ADR-018), Windows, mouse passthrough, observer attach mode, session sharing, sandboxing, keep-awake (v1.x candidate).
+
+> AMENDED BY ADR-018 (2026-08-15): multi-machine is in scope for V2's first complete remote product (RC-D8); it is not a further-deferred phase within V2, which is how earlier remote planning (`remote-phaseB-requirements.md` §5) had it.

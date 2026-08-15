@@ -1,5 +1,7 @@
 # Remote Control v1 — Work Breakdown (locked 2026-07-23)
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 Dependency-ordered plan to reach "drive and type into a real session from a phone."
 Governed by ADR-007 (+ its 2026-07-23 amendment). Sizes: S = day, M = few days,
 L = 1-2 weeks, XL = multi-week.

@@ -99,6 +99,8 @@ Goal: the approved look (ui-preview.html), keyboard-complete, event-live.
 - E7.3 Status-event → row update reflected ≤500 ms against a stub daemon (client half of the L1 ≤1 s composite; server half in E10.7; composition asserted at E14).
 - E7.4 Full keyboard map tested: ↑/↓/j/k, Enter, Esc, `n`, Ctrl+X with confirm — Ctrl+X kills running sessions, deletes completed/lost ones, and the confirm prompt states which (R-3).
 - E7.5 Launch form: free-text cwd with `~` expansion; invalid cwd → launch refused with inline error (L-3); agent picker greys both not-installed AND out-of-supported-version-range CLIs with install/upgrade hint (L-2); options rendered from declarative adapter schema; initial prompt field; worktree toggle placeholder.
+
+  > See ADR-007 B144 (2026-08-15): this is the owner-tier form. Remote (phone-initiated) launch is preset-based (`launch_presets`/`session_launch`), and its exit criteria live in the playbook waves under Epic 15, not here.
 - E7.6 First-paint test asserts p95 < 100 ms with 50 sessions listed; fails if exceeded (N-1).
 - E7.7 All TUI unit tests run against a protocol stub — no live daemon required.
 
@@ -172,6 +174,8 @@ Requirements live in `docs/specifications/remote-phaseB-requirements.md` (143 ac
 owned one-to-one by `remote-phaseB-manifest.tsv`. **These criteria were written while the epic was
 still open and deliberately include ones the tree fails today** — an exit criterion authored to match
 what was already built grades its own homework.
+
+> AMENDED BY ADR-007 B144 (2026-08-15): live launch execution is no longer Phase 2. Remote launch's own exit criteria are not restated here — they live in `docs/specifications/remote-control-product-playbook.md`'s wave R5, alongside the ADR-015/016/017/018 companion waves.
 
 - E15.1 **Every one of the 143 active requirements has an evidence file that NAMES IT.**
   `scripts/phaseb-traceability.py` reports *asserted shipped* and *measured evidenced* separately

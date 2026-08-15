@@ -3,9 +3,10 @@
 **Scope: PB-OPS-3.** ADR-007 D11 states the rule this document obeys: *"the exposure is
 documented, retention is bounded, logs carry no bodies, and the 'managed hosting leaks nothing'
 claim is withdrawn."* D11 also forbids claiming **less** exposure than exists, which is why several
-entries below (§1a, §2b, §2c, §3) are corrections to earlier, more flattering statements rather
-than new findings. That they keep being needed is itself the point: each was found by someone
-re-deriving a claim this document already made, and none was found by re-reading it.
+entries below (§1a, §2b, §2c, §3, §4) are corrections to earlier, more flattering statements rather
+than new findings — §3 (2026-08-15, ADR-015) adds the gateway as a party this document previously
+had no occasion to name at all. That they keep being needed is itself the point: each was found by
+someone re-deriving a claim this document already made, and none was found by re-reading it.
 
 E2EE hides payloads. It hides none of the following.
 
@@ -35,7 +36,23 @@ It does **not** hold, and cannot read: session names, hostnames, agent names, Gr
 terminal output, keystrokes, or any command body. Those are sealed under keys the relay never sees.
 Logs carry no bodies.
 
-### 1a. The push token is a NEW durable device identifier at rest in an untrusted store
+> **AMENDED BY ADR-018 (2026-08-15):** Multi-machine pairing (wave R4) widens what the first row
+> above discloses. Two machine pairings that share one relay put two routing ids behind the same
+> handset's connection, presence and timing pattern, so that relay can infer the two machines are
+> co-owned — a designed disclosure, not an incident (`ADR-018:123`). It stays inside the scope
+> above: still routing ids, timing and presence, never content, and each mailbox keeps its own
+> content key. A self-hosted relay operator is already trusted with one machine's metadata; pairing
+> multiple machines to the same relay extends that trust to the fact that they are the same
+> owner's. A user who does not want the inference splits the pairings across relays.
+
+### 1a. The push token is a NEW durable device identifier at rest in an untrusted store — LEGACY
+
+> **AMENDED BY ADR-015 (2026-08-15):** Push moves to the Swarm-operated gateway (§3). Once a pairing
+> migrates its `push_transport` from `legacy_relay` to `gateway` (playbook §12), the relay holds no
+> provider-issued device identifier at all — the three properties below become properties of the
+> gateway's installation record instead, keyed by the opaque push address rather than the routing
+> id, and are restated at §3. What follows describes the legacy relay-hosted transport, which a
+> pairing keeps only for the length of the compatibility window.
 
 This is the correction. The relay's store was documented as holding "only ciphertext + routing
 metadata". Making push tokens survive a relay restart (PB-PUSH-6) added something else: a
@@ -69,6 +86,13 @@ table above, and nothing in the system tells the user they did.
 
 ## 2. The push provider (Google, via FCM v1)
 
+> AMENDED BY ADR-015 (2026-08-15): this section, §2b and §2c describe the **legacy relay-hosted
+> transport**'s fixed 78-byte header — the one the relay still produces during a pairing's
+> `push_transport` compatibility window (§1a). The target gateway design (§3) replaces it with a
+> 74-byte `WakeV1` object (ADR-015 P8) and removes the relay's second producer (P10), leaving one
+> producer where §2c below counts three. R3 builds that transport; until it ships, what follows is
+> what Google observes today, against the legacy transport only.
+
 The provider observes **the token, the timing, the size, and two cleartext header fields** — and
 PB-PUSH-3 records in as many words that the shorter "token, timing, size" claim was **false for the
 obvious implementation**, which is why it is enforced rather than asserted. It was still
@@ -100,16 +124,20 @@ So the provider observes, per wake:
 
 | What | Detail |
 |---|---|
-| **The device's FCM registration token** | A durable, device-specific identifier. Also held by the relay (§1a). |
+| **The device's FCM registration token** | A durable, device-specific identifier. Also held by the relay during the legacy transport (§1a) — the target design moves this to the gateway (§3, ADR-015). |
 | **Timing** | Every wake, as delivered. Transitions are coalesced per session, so this is a lower bound on activity, not a transcript. |
-| **Size** | Constant 78 bytes, and constant across every producer into the channel. See §2c, which also records the part of that separation size was not the whole of. |
+| **Size** | Constant 78 bytes on the **legacy transport** this section describes, and constant across every producer into that channel — see §2c. The target design moves the constant to 74 bytes with one producer (ADR-015 P8/P10). |
 | **A cleartext monotonic wake counter** | `seq`, 8 bytes at a fixed offset in the cleartext header. See §2b. |
 | **A cleartext millisecond timestamp** | `issued_at`, the sending machine's clock. See §2b. |
+| **The opaque push address** — **target design only**, not on the legacy transport this section otherwise describes | `WakeV1`'s routing coordinate, cleartext at a fixed header offset (ADR-015 P8 delta 1). The legacy header carries none — two zeroed key-id fields instead. §3 records what this field, stable per machine pairing, lets the gateway and FCM infer together. |
 | **That the message is data-only and high priority** | Delivery-class metadata, not content. |
 
-It does **not** observe: session names, hostnames, agent names, Group labels, which machine, which
-device, how many sessions exist, or what changed. The payload's plaintext is empty — there is
-nothing inside it to name anything.
+It does **not** observe, on the legacy transport this section describes: session names, hostnames,
+agent names, Group labels, which device, how many sessions exist, or what changed. The payload's
+plaintext is empty — there is nothing inside it to name anything. **"Which machine" is struck from
+this list deliberately**: it held only while the header carried no address to observe. The target
+`WakeV1` design's opaque push address (row above, §3) is a stable per-pairing identifier, so under
+that design the provider *can* tell which machine, not merely which device.
 
 The list above is what the payload does not name. It is **not** a claim that the payload is
 information-free; §2b and §2c are the two ways it is not.
@@ -205,16 +233,29 @@ handed over as a constant byte pattern, but it does not make the two indistingui
 needs either a key the relay must not hold, or dropping the sweep's push entirely — and the sweep's
 push is already refused at the receiver (`phonecore.AcceptWake` cannot authenticate it, so
 `SwarmMessagingService` renders nothing), so what it costs today is a wakeup and a provider-visible
-event with no user-visible result. **Both remedies are decisions above the relay seam and neither is
-taken here.**
+event with no user-visible result. **Both remedies are decisions above the relay seam.**
 
-### 2d. Nothing here has ever run against Google
+> AMENDED BY ADR-015 (2026-08-15): "Both remedies are decisions above the relay seam" — one now
+> is taken: ADR-015 P10 takes the second branch, the relay loses its push transport, so it has no
+> producer left to separate. The residual closes by removal of its subject, not by a new fence
+> (§3 describes the target design). **Also note the term collision this table introduces**: "The
+> gateway's wake" row above names `internal/remotegw`, the machine-side push-trigger caller — not
+> the Swarm push gateway of §3, an external HTTPS service ADR-015 adds. The two share a word and
+> nothing else.
 
-There is no Google account, no Firebase project and no `google-services.json` in this project. The
-FCM sender is fully implemented and tested against a fake endpoint. **No claim in this section is
-evidence that a wake was ever delivered**, and none is a measurement of what Google's
-infrastructure retains — it is a statement of what this system *sends*. PB-E2E-5 (physical handset,
-real provider) is deferred.
+### 2d. Nothing has been delivered against Google yet, but the Firebase project now exists
+
+> **AMENDED BY ADR-015 (2026-08-15):** "There is no Google account, no Firebase project" is corrected
+> rather than left to rot: Firebase project `swarm-8404f` exists, the Android app `dev.swarm.phone`
+> was registered on 2026-08-14, the FCM v1 API is enabled, and the sender/project number is
+> `733314021126`. What has **not** changed: no production token has been collected, the Google
+> Services plugin is not applied to a shipping build, and `google-services.json` is present locally
+> only and deliberately untracked.
+
+The FCM sender is fully implemented and tested against a fake endpoint. **No claim in this section
+is evidence that a wake was ever delivered**, and none is a measurement of what Google's
+infrastructure retains — every delivery claim here is a design commitment, not evidence. PB-E2E-5
+(physical handset, real provider) is deferred.
 
 Running with push unconfigured is supported and removes the provider from the picture entirely
 (PB-PUSH-5); the cost is that a backgrounded handset learns about a transition when it next
@@ -222,7 +263,57 @@ connects.
 
 ---
 
-## 3. Anyone on the network path
+## 3. The Swarm push gateway
+
+> **AMENDED BY ADR-015 (2026-08-15):** New party, new section. ADR-015 splits the FCM sender off the
+> relay entirely: Swarm operates a small versioned HTTPS gateway that Android registers with and
+> that `swarm-remote` submits wakes to. It sits beside §1 (the relay, which after migration holds
+> no push credential of its own) and §2 (the provider), and it is a **named party in the adversary
+> set** — the fourth, after the relay operator, Google, and whoever runs the network path (§4). A
+> colluding relay-and-gateway pair still cannot decrypt content or forge a command (playbook
+> §11.3); what the gateway alone can observe is fixed and disclosed below.
+
+| What | Where | Retention |
+|---|---|---|
+| **The opaque, gateway-minted push address** — a stable per-pairing routing coordinate, carried in the wake's cleartext header | Registration/allocation records | Until the address is revoked |
+| **The submit-source IP** — the machine running `swarm-remote`, not the handset | Delivery diagnostics | 7 days |
+| **Wake timing** | Delivery diagnostics | 7 days |
+| **A fixed or padded wake size** | Not persisted beyond the request | Not persisted |
+| **The FCM delivery outcome** (accepted / refused / `UNREGISTERED`) | Delivery diagnostics | 7 days |
+| **The FCM token, the installation public key and hashed capability verifiers** — the join key that used to live at the relay (§1a); the token is encrypted at rest and excluded from logs and traces | Installation records | 180-day inactivity expiry |
+| **An unbound allocation** — a pending pairing that has not yet completed | Allocation records | Ten minutes, or immediately on a failed pairing |
+
+**The join key travels with the same three properties §1a named, against the opaque push address
+rather than the routing id — a rewrite of subject, not a new finding, except where the rewritten
+subject's own answer changes.** It is **readable by the gateway itself, and cannot be otherwise**:
+the gateway must hand the token to FCM, so it cannot be opaque to itself. **Unlike the legacy
+relay-hosted store §1a describes, this is where the subject's answer changes**: the gateway's copy
+**is encrypted at rest and excluded from logs and traces** (ADR-015 P11, playbook §6.6:531). It is
+**correlatable with delivery diagnostics by push address** — the same address indexes both — so
+an operator of the gateway (Swarm, not a self-hoster) can tie one installation's push identity to
+its wake cadence. And it is **the same identifier the push provider holds**, the join key between
+two parties whose views are otherwise disjoint. That is an auditability property, not a
+confidentiality one.
+
+It does **not** hold, and cannot receive: a relay URL, relay-auth key, pairing secret, content key,
+device command key, daemon credential, or the wake key itself. A compromised gateway can spam,
+suppress or correlate wakes; it cannot mint a wake authenticator, submit a command, or read a
+conversation.
+
+**One handset, several machines, one correlation the token alone did not give.** Under multi-machine
+pairing, one phone presents one FCM token but a distinct opaque push address per machine. The
+gateway and FCM can therefore count and separate a handset's machines from each other — an
+inference the token alone did not support. The address stays opaque and gateway-minted, names no
+machine the provider can otherwise resolve, the plaintext stays empty, and the size stays one
+pinned constant.
+
+---
+
+## 4. Anyone on the network path
+
+> AMENDED BY ADR-015 (2026-08-15): this section was **§3** before the gateway section above was
+> inserted. `docs/verification/remote-phaseB-s20-evidence.md` cites it by the old number as dated
+> evidence and is correctly left unedited by convention — read its "§3" as this section.
 
 TLS between the phone and the relay hides the routing metadata of §1 from a passive observer, which
 is the whole reason PB-NET-2 refuses cleartext outside the loopback carve-out. Two limits:

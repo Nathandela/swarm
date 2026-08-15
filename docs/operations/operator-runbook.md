@@ -94,6 +94,21 @@ literal**, and B34 makes it **carry the operator's SPKI pin from `relay.json`**.
 `TestPBOPS5_TheGatewayHonoursTheConfiguredPin` and
 `TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON`. **Configure the pin; it is enforced.**
 
+> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** "Configure
+> the pin; it is enforced" remains exactly true **today** — there is no `--relay-tls-policy` flag
+> yet, and the pin is the whole of relay TLS verification. Once R2 ships, the pin becomes the
+> **expert** `pinned_spki` policy, opt in via `--relay-tls-policy pinned_spki --relay-pin ...`, and
+> the new **default** policy will be `webpki` — ordinary Web PKI hostname validation against a real
+> certificate, no pin configured or consulted at all. Even then, a machine that has adopted
+> `webpki` must keep publishing a compatibility pin (`--relay-pin-compat`) while any paired device
+> has not yet migrated off it (ADR-016 W9) — `swarm remote init` refuses a pinless `webpki` profile
+> until every paired device acknowledges. See `docs/operations/relay-vps-deploy.md` for the target
+> default flow and `docs/operations/relay-runbook.md` for when the expert policy will still be the
+> right choice (self-signed or IP-literal relays). **`webpki` means chains to a trusted root, name
+> matches, inside validity — and not that the certificate is unrevoked.** Neither the platform
+> default trust manager nor Go's own verifier checks OCSP/CRL; the honest mitigation is short
+> certificate lifetimes (ADR-016 W2).
+
 **`relay.json` is read once, at sidecar start.** `swarm-remote` redials the relay on ADR-007
 §6.0's backoff when the link drops (PB-NET-4) rather than exiting for the supervisor to restart
 it, so an edit here takes effect when you restart the unit — not on the next network blip.
@@ -238,8 +253,17 @@ still trusted but has lost its grant; it is not part of the loss procedure.
 
 ## 6. Push configuration
 
-Push is configured **at the relay**, not on the machine, by pointing `push_credentials` at a Google
-service-account JSON document:
+> **AMENDED BY ADR-015 (2026-08-15):** This section previously said, without qualification, "Push is
+> configured at the relay, not on the machine." That described the only transport that existed.
+> ADR-015 moves the FCM sender off the relay entirely: `swarm-relay` ships with no push credential,
+> no token map and no push transport; Android registers directly with the Swarm-operated push
+> gateway; `swarm-remote` submits the wake to the gateway itself. What follows is the **legacy**
+> relay-hosted transport, which a pairing keeps only for the length of its `push_transport`
+> compatibility window (playbook §12) before migrating to `gateway`. A new deployment should not
+> configure `push_credentials` at all.
+
+Push was configured **at the relay**, in this legacy transport, by pointing `push_credentials` at a
+Google service-account JSON document:
 
 ```json
 { "listen": "127.0.0.1:9440", "db_path": "relay.db",
@@ -257,10 +281,15 @@ Three states, and the middle one is the one to know about:
 The fail-closed middle row is deliberate: a relay that looked healthy while push was silently dead
 would be discovered by a user who missed a hand-off, hours later, with nothing connecting the two.
 
-> **NOT EXECUTED HERE, and this bounds every push claim in this repository.** There is no Google
-> account, no Firebase project and no `google-services.json` in this project. The FCM sender has
-> **never run against Google**. Nothing in the test suite is evidence that a wake would be
-> delivered to a handset; the tests drive a fake endpoint. PB-E2E-5 stays deferred.
+> **NOT EXECUTED HERE, and this bounds every push claim in this repository.**
+> AMENDED BY ADR-015 (2026-08-15): "There is no Google account, no Firebase project" is corrected —
+> Firebase project `swarm-8404f` exists, the Android app `dev.swarm.phone` was registered on
+> 2026-08-14, the FCM v1 API is enabled, the sender/project number is `733314021126`, and
+> `google-services.json` is present locally, deliberately untracked. What has **not** changed: the
+> FCM sender has **never run against Google**, no production token has been collected, and the
+> Google Services plugin is not applied to a shipping build. Nothing in the test suite is evidence
+> that a wake would be delivered to a handset; the tests drive a fake endpoint. PB-E2E-5 stays
+> deferred.
 
 Per-category push preferences (`push_prefs`) are set from the phone and are signed, machine-
 authoritative and durable. A preference set while the handset is backgrounded — the normal state —
@@ -268,11 +297,59 @@ authoritative and durable. A preference set while the handset is backgrounded �
 on screen while the machine keeps the old one until they toggle again. Recorded in the S16
 residuals; there is no operator action for it.
 
-## 7. What has no runbook, because it has no implementation
+## 7. Launch policy configuration
+
+> **AMENDED BY ADR-007 B144 (2026-08-15):** the Phase-2 deferral on phone-initiated launch is
+> lifted. Live launch execution is a supported RCE-class action, not a restriction listed in §8.
+
+A phone-initiated launch is refused unless its resolved cwd equals, or lies within, an
+operator-configured root. There is no default allow: a missing or malformed policy file fails
+**closed** to deny-all.
+
+```bash
+cat > "$SWARM_DAEMON_STATE/remote-policy.json" <<'JSON'
+{ "version": 1, "allowed_cwd_roots": ["/home/you/code/project-a", "/home/you/code/project-b"] }
+JSON
+chmod 0600 "$SWARM_DAEMON_STATE/remote-policy.json"
+```
+
+- **Today's mechanism is this file, hand-authored.** There is no `swarm remote` subcommand that
+  writes it yet; `internal/skeleton/remote_policy.go` loads `<stateDir>/remote-policy.json` on
+  assembly start (`R-POL.7`, fail-closed on missing or malformed) and exposes the roots on the
+  `policy_query` reply (`R-POL.3`, `docs/specifications/protocol.md`) so the phone can show them
+  before a launch is attempted.
+- **A resolved cwd equal to, or nested under, one of `allowed_cwd_roots` is admitted; everything
+  else is refused** — checked against the same fully-resolved real path the daemon hands the shim.
+- **B144 lifted the phasing, not the restrictions.** Kill switch on; device capability permits
+  launch; `dangerously-skip-permissions` and full-access options refused from remote, hard-coded;
+  no phone-supplied env; worktree isolation by default; an explicit phone confirm — all still
+  apply. This section configures only which roots a launch may resolve into.
+- **Presets arrive with wave R5.** B144's supported shape beyond the roots above is a
+  machine-authored preset at a signed revision — opaque preset id, provider, canonical allowed
+  workspace/worktree root, fixed environment policy, allowlisted options — with `launch_presets`
+  and `session_launch` replacing free cwd/argv/env from the phone, and a changed revision refused
+  as `stale_preset` rather than silently launching different policy. Until R5 ships,
+  `allowed_cwd_roots` above is the whole of the launch policy surface.
+
+## 8. What has no runbook, because it has no implementation
 
 - **Backup and restore of the relay store**, disk-full behaviour, log rotation, health checks,
   resource limits, cross-version compatibility — returned to Phase C by the §6.18 scope correction.
-- **Re-pinning a fleet after a relay key rotation** — the pairing QR has no pin field and no room
-  for one at its current size budget. Relay runbook §8c.
-- **Multi-device and multi-machine** — v1 is single-machine and single-device by ADR-007 B1.
-  Pairing refuses a second device outright.
+- **Re-pinning a fleet after a relay key rotation** — target state, arrives with wave R2
+  (`ADR-016:5`): under the future default `webpki` policy there will be no pin to re-issue, since
+  rotation becomes ordinary certificate renewal verified against platform trust roots. Under the
+  expert `pinned_spki` policy the pairing QR will still carry no pin field, but ADR-016 will give
+  that policy an authenticated current/next pin overlap (`--relay-pin-next`) that will not require
+  re-pairing every device on a planned rotation — see relay runbook §8c. **Today**, before R2
+  ships, the pin is the only relay TLS policy there is, and a fleet-wide key rotation has no
+  channel of its own yet — every paired handset is re-paired, per relay runbook §8c.
+- **Multi-device** — v1 stays single-device by ADR-007 B1. ADR-018 MM1 freezes `Registry.AddSole`
+  and `BeginPairing`'s fast-reject by name, so pairing still refuses a second device outright.
+  > AMENDED BY ADR-018 (2026-08-15): this used to be one bullet, "multi-device and multi-machine",
+  > conflating two claims with different fates. Multi-device is the one still deferred; see the
+  > next bullet for multi-machine.
+- **Multi-machine** — no longer deferred. ADR-018/RC-D8 puts N independent machine pairings on one
+  phone in the first complete product (wave R4); the machine-side single-device model above is
+  unchanged (the daemon still believes it is paired to one phone). This runbook still documents a
+  single-machine flow because the phone-side client-state work (`MachineManager`, ADR-018 MM3)
+  has not shipped yet.

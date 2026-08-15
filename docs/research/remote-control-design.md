@@ -1,5 +1,7 @@
 # Remote Control: Research and Design Proposal (v2, post-audit)
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 Status: research synthesis for the V2 remote-control epic, revised against the audit
 committee's findings (docs/verification/audit-002-remote-control-design.md). Feeds ADR-007,
 which system-spec.md F-2 requires before any implementation. Sources: two codebase surveys,

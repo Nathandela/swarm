@@ -57,9 +57,14 @@ frame, every control, and the mark, at token fidelity:
    read target, same arrangement Substrate's directions HTML used).
 2. **Every screen, rebuilt**: Pair-only, Pairing (camera + QR reticle + code fallback + SAS
    compare + numbered guidance), Triage Inbox (all three sections, scope chips, stale notice),
-   Approval sheet over the inbox, Session Detail (transcript, stop/kill), Terminal Peek
+   Approval sheet over the inbox, Session Detail (transcript, stop/kill), Terminal Fallback
    (amber-phosphor), Machines, Activity, Settings (toggles, paired devices, legal), Launch
    form, plus the Toast and Push-banner moments. Same live content across frames.
+
+   > AMENDED BY ADR-017 (2026-08-15, terminal-fallback-capability.md — distinct from this plan's own
+   > ADR-009): re-labeled from "Terminal Peek". The frame is the capability-routed fallback surface
+   > for `terminal_fallback` sessions only (incomplete providers, ADR-017 T1) — never a universal
+   > per-session screen, and never shown for a healthy `structured_chat` session.
 3. **The component sheet, every kit primitive in every state**: CtaButton (approve / deny /
    open-session / disabled), DenyChip, FilterChip (selected/idle), Toggle (on/off/disabled),
    StatusDot x4 Groups, PresenceDot x3, Badge, Toast, MonoWell, TextField (idle/focused —
@@ -140,8 +145,9 @@ frame, every control, and the mark, at token fidelity:
 1. Bundle JetBrains Mono (Regular + Medium), wire into the mono type styles; `tnum zero calt`
    font features on all machine-data styles. `--p-mono` token updates (one value change
    through the pipeline).
-2. Verify the box-drawing defect dies: the terminal peek frame aligns (the recorded 18%
-   fallback-width mismatch), asserted with a measured-width test.
+2. Verify the box-drawing defect dies: the terminal-fallback frame aligns (the recorded 18%
+   fallback-width mismatch), asserted with a measured-width test. (Re-labeled from "terminal peek"
+   per ADR-017, 2026-08-15 — incomplete-provider sessions only.)
 3. Display weight/tracking values already live via O2; this phase visually verifies the 19
    styles against the maquette.
 4. **Exit**: gates green; APK size delta recorded (two weights, subset if needed); evidence.

@@ -1,5 +1,7 @@
 # Phase B requirement traceability
 
+> Historical — superseded by the playbook (docs/specifications/remote-control-product-playbook.md) and the Wave R1 records ADR-015..018 / ADR-007 B144 (2026-08-15)
+
 **GENERATED — do not edit by hand.** Regenerate with
 `python3 scripts/phaseb-traceability.py docs/verification/remote-phaseB-traceability.md`
 — the path is an argument, not a `>` redirect, which would truncate this file before

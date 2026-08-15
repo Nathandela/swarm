@@ -8,8 +8,7 @@
   "_comment_db_path": "Path to the relay's bbolt persistence file (mailbox items, push tokens, pairing/consent state). Must be on writable storage that survives a reboot -- point it at the systemd unit's StateDirectory (deploy/relay/swarm-relay.service sets StateDirectory=swarm-relay, i.e. /var/lib/swarm-relay).",
   "db_path": "/var/lib/swarm-relay/relay.db",
 
-  "_comment_push_credentials": "Path to a Google service-account JSON document for FCM push. OPTIONAL: empty is a SUPPORTED configuration (PB-PUSH-5) -- the relay boots with no push transport, push_trigger calls are dropped, and every other path is unaffected. A path that IS set but unreadable or invalid fails the boot on purpose, so a moved credential is never a silent, later-discovered outage. This project has never wired this to a real Google account (cmd/swarm-relay/main.go's pushOptions doc says so outright) -- leave this empty unless you have provisioned your own FCM service account. THE FILE IT NAMES IS A PRIVATE KEY: anyone who can read it can send push as your Google project, so unlike this config it must NOT be world-readable. Install it root:swarm-relay 0640, per docs/operations/relay-vps-deploy.md section 4.",
-  "push_credentials": "",
+  "_comment_push_gateway": "AMENDED BY ADR-015 (2026-08-15): push moves off the relay to a Swarm-operated gateway -- Android registers with the gateway directly and swarm-remote submits the wake. The relay's own push transport (a push_credentials key naming a Google service-account JSON document) is the LEGACY path, retained only for a pairing whose push_transport has not yet migrated from legacy_relay to gateway (playbook section 12). It is not shown in this example because a new deployment should not configure it. If you are still inside that compatibility window, see docs/operations/relay-vps-deploy.md section 4a for the field and its file-permission requirements, and docs/operations/metadata-disclosure.md sections 1a/2 for what it discloses.",
 
   "_comment_handshake_timeout": "Nanoseconds (time.Duration marshals as an int64 count of nanoseconds). Bounds how long an UNAUTHENTICATED connection may sit idle before the relay closes it (slowloris defense). 30000000000 = 30s, the shipped default.",
   "handshake_timeout": 30000000000,
@@ -46,13 +45,13 @@
     "_comment_mailbox_max_items": "Per-mailbox depth cap: an append past this many un-acked items is refused (not dropped) until the device drains. Bounds unbounded growth from a device that never reads; capacity recovers on ack.",
     "mailbox_max_items": 10000,
 
-    "_comment_push_per_min": "Push triggers per target routing id per minute.",
+    "_comment_push_per_min": "Push triggers per target routing id per minute. AMENDED BY ADR-015 (2026-08-15): this quota governs the legacy relay-hosted push transport only -- the Swarm-operated gateway enforces its own per-address and per-source quotas once a pairing migrates (playbook section 12).",
     "push_per_min": 600,
 
     "_comment_conn_per_min": "Pre-authentication auth_init attempts per transport source per minute. See the Caddy note above.",
     "conn_per_min": 600,
 
-    "_comment_ops_per_min": "Per-source cap on every other state-touching op (auth_resp, authorize_device, mailbox_read/ack, token_register/delete, presence, device_revoke, the rendezvous ops). mailbox_append and push_trigger keep their own dedicated windows above.",
+    "_comment_ops_per_min": "Per-source cap on every other state-touching op (auth_resp, authorize_device, mailbox_read/ack, token_register/delete, presence, device_revoke, the rendezvous ops). mailbox_append and push_trigger keep their own dedicated windows above. AMENDED BY ADR-015 (2026-08-15): token_register/delete and push_trigger are the legacy relay-hosted push ops -- they stay on the schedule of the push_transport compatibility window (playbook section 12) and leave the protocol once every pairing has migrated to the gateway.",
     "ops_per_min": 600
   }
 }
