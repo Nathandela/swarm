@@ -1,0 +1,169 @@
+2026-08-15 -- RED evidence for ADR-016 (Web PKI relay TLS), reviewer follow-up fixes.
+go version: go1.26.5 darwin/amd64 (per `go version` in this environment)
+Repo: github.com/Nathandela/swarm
+
+This captures the failing-first state for the reviewer findings fixed in this pass, plus a note
+on the three pre-existing tests the reviewer flagged as missing RED evidence from the round that
+introduced them (they were already correctly implemented and green before this pass touched
+anything; producing genuine RED for them now would require reverting already-correct production
+code, which was not done -- see the note at the end of this file).
+
+====================================================================================================
+FINDING 1 (HIGH, reproduced): Conn.PeerSPKI() stayed empty on a VERIFIED dial. tlsConfig's
+unverifiedTLS branch (security.go) was the ONLY branch that ever called observer.record -- the
+pinned, platform-delegate and system-default branches built a *tls.Config with no recording hook
+at all. So mobile/pairing.go's pairingDial's VERIFIED attempt, when it succeeded, left
+checkRelayPin(machinePin, nil) comparing against nothing: a pinned_spki machine's published pin
+was never consulted whenever the presented certificate happened to verify.
+
+New regression test: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch
+  (internal/remote/relay/r2_adr016_w3_peerspki_test.go)
+  - White-box (package relay): calls Security.tlsConfig(host) directly for the system-default,
+    platform-delegate, pinned-matching and pinned-mismatched branches, invokes the returned
+    VerifyPeerCertificate hook with a minted certificate, and asserts the B48 observer recorded
+    something on every branch -- including the mismatched-pin case, proving recording is not
+    conditioned on the dial's own verdict.
+
+RED evidence: docs/verification/r2-red/webpki-7-w3-peerspki-red.txt
+  $ go test ./internal/remote/relay/ -run TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch -v
+  All four subtests FAIL with "observer recorded nothing" / "built a *tls.Config with no
+  VerifyPeerCertificate hook" -- undefined behaviour, not a compile error, matching this repo's RED
+  convention for a logic gap rather than a missing symbol.
+
+Fix: security.go's tlsConfig now records into the B48 observer on the pinned, platform-delegate,
+embedded and system-default branches, not only the unverified (pairing) branch. Verified GREEN by
+the same test, plus the full internal/remote/relay suite (-race).
+
+Companion inversion: mobile/r2_adr016_w3_pairingdial_test.go's
+TestADR016W3_PairingDialUsesTheVerifiedAttemptWhenAPlatformDelegateTrustsTheChain used to assert
+PeerSPKI() EMPTY on a successful verified dial -- enshrining the regression, per the reviewer's
+own reproduction. Inverted to assert non-empty. New end-to-end test added in the same file,
+TestADR016W3_AMismatchedPinStillRefusesOnTheVerifiedPath, reproduces the reviewer's own scenario
+directly (trusting delegate + self-signed relay + a pinned_spki MachinePayload whose pin does not
+match) and asserts checkRelayPin now refuses. Both PASS after the security.go fix (verified via
+`go test ./mobile/... -run TestADR016W3 -v`); no separate RED capture needed since they exercise
+the SAME already-RED-proven mechanism as Finding 1's regression test above.
+
+====================================================================================================
+FINDING 2 (HIGH, spec drift): mobile/pairing.go's pairingDial fell back to
+relay.PairingSecurity() (fully unverified TLS) whenever the VERIFIED attempt returned ANY error,
+for ANY host. An on-path attacker needed only present a certificate that fails verification (any
+self-signed cert) to force the fallback -- against every machine regardless of its published
+policy, including an ordinary webpki machine with no pin at all (whose empty pin then compares
+against nothing). This defeated the headline property ADR-016 W3 says it "recovers by name".
+
+Fix: pairingDial's fallback is now scoped to origins ADR-016 W6 already assigns to the expert
+policy -- IP-literal / private / LAN destinations (originIsPrivate, the same classifier the
+confirm sheet already renders). A public DNS-named destination whose verified attempt fails is
+refused outright, not silently retried unverified.
+
+New regression tests (mobile/r2_adr016_w3_pairingdial_test.go):
+  - TestADR016W3_PairingDialDoesNotFallBackForAPublicHost
+  - TestADR016W3_PairingDialStillFallsBackForAPrivateHost
+  Both use a new package variable, relayDialRawSecure (mobile/pairing.go), overridden only by
+  tests, so the two-attempt shape can be proven without a live network dial or a way to fake DNS
+  for a "public" hostname -- the same seam shape applyRelayTLSPolicy's injected probe already
+  uses for the same reason.
+
+RED evidence: docs/verification/r2-red/webpki-8-w3-pairingdial-fallback-red.txt
+  $ go vet ./mobile/...
+  vet: mobile/r2_adr016_w3_pairingdial_test.go:158:10: undefined: relayDialRawSecure
+  (undefined symbol -- the seam did not exist yet; RED for the right reason.)
+
+Verified GREEN after adding the package variable and the origin gate: all four
+TestADR016W3_PairingDial* tests pass, plus the full mobile suite (-race).
+
+====================================================================================================
+FINDING 3 (MEDIUM): applyRelayTLSPolicy (mobile/relay.go) had no short-circuit for "the phone
+already holds the advertised policy and pin" -- every reconcile from a steady-state webpki
+machine opened a fresh probe TLS dial and re-sealed durable phone state. The probe ran
+synchronously on the drain goroutine with no dedicated deadline.
+
+New regression tests (mobile/r2_adr016_w9_test.go):
+  - TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp
+  - TestADR016W9_AlreadyOnTheAdvertisedPinnedSPKIPolicyIsANoOp
+
+RED evidence: docs/verification/r2-red/webpki-9-w9-ladder-noop-red.txt
+  $ go test ./mobile/... -run 'TestADR016W9_AlreadyOnTheAdvertised' -v
+  TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp FAILS: "the probe was called; this case
+  must not attempt to prove anything" -- the injected probe stub calls t.Fatalf if invoked at all,
+  so this is RED for the right reason (unwanted side effect actually happening), not a syntax
+  error.
+
+Fix: applyRelayTLSPolicy now returns nil immediately, before any probe or Mutate, when
+State.RelayTLSPolicy and State.RelaySPKIPin already equal the profile's. probeWebPKI now wraps
+its own bounded context (relay.DefaultDialTimeout) rather than inheriting the drain goroutine's
+open-ended one. Verified GREEN: all TestADR016W9_* tests pass, plus the full mobile suite (-race).
+
+====================================================================================================
+FINDING 4 (LOW): applyRelayTLSPolicy's pinned_spki branch adopted ANY non-"webpki" policy string
+verbatim into durable state (e.g. a future "PINNED_SPKI" or "webpki " typo), so the state file
+could carry a value no writer ever validated.
+
+New regression test: TestADR016W9_AnUnrecognisedPolicyStringIsRefusedNotAdoptedVerbatim
+  (mobile/r2_adr016_w9_test.go) -- publishes RelayTLSPolicy = "PINNED_SPKI" (wrong case) with a
+  pin, and asserts the phone's working pinned_spki state is left untouched rather than
+  overwritten.
+
+Fix: applyRelayTLSPolicy now refuses any RelayTLSPolicy value that is neither "webpki" nor
+"pinned_spki", mirroring cmd/swarm/remote.go's resolveRelayTLSPolicy CLI-boundary validation.
+Verified GREEN alongside Finding 3's tests (same file, same test run).
+
+====================================================================================================
+FINDING 5 (MEDIUM/LOW): android/.../RelayTrust.kt stamped swarm-relaytrust/untrusted on EVERY
+exception from checkServerTrusted, contradicting the file's own doc comment ("a failure for a
+reason that is not 'untrusted' maps to 'unavailable'"). Empirically (verified against this repo's
+pinned Android/Robolectric jar, not merely reasoned about): X509TrustManagerExtensions wraps
+EVERY failure of its reflective delegate call -- a genuine untrusted-chain refusal AND a delegate
+the platform could not even invoke -- in a CertificateException, so a bare `catch
+(e: CertificateException)` cannot separate the two; the distinguishing signal is whether the
+cause is itself in the java.security.cert domain.
+
+New regression test (android/app/src/test/kotlin/dev/swarm/phone/relay/RelayTrustImplTest.kt):
+  a_non_certificate_failure_is_refused_with_the_unavailable_token_not_untrusted
+  Uses a trust manager whose checkServerTrusted(X509Certificate[], String, String) overload is
+  declared on a private nested class (reflectively locatable but not invokable -- confirmed via a
+  throwaway diagnostic test, since removed, that printed the real exception's class/cause: a
+  genuine untrusted chain surfaces with a CertPathValidatorException cause; this fixture's failure
+  surfaces with an IllegalAccessException cause, the SAME outer CertificateException type either
+  way).
+
+RED evidence: docs/verification/r2-red/webpki-10-w8-relaytrust-unavailable-red.txt
+  $ . android/toolchain.env && ./gradlew :app:testDebugUnitTest --tests
+    "dev.swarm.phone.relay.RelayTrustImplTest"
+  a_non_certificate_failure_is_refused_with_the_unavailable_token_not_untrusted FAILS with a real
+  AssertionError (message contained swarm-relaytrust/untrusted, not /unavailable) -- RED for the
+  right reason, not a compile error.
+
+Fix: RelayTrust.kt's checkServerTrusted catch block now inspects the caught CertificateException's
+cause: a cause inside java.security.cert (or none) is a real verdict (swarm-relaytrust/untrusted);
+any other cause (e.g. IllegalAccessException, IllegalArgumentException) is Android's own plumbing
+failing to reach the verifier (swarm-relaytrust/unavailable). Verified GREEN: all 4 tests in
+RelayTrustImplTest pass, plus the full `:app:testDebugUnitTest` suite.
+
+====================================================================================================
+NOT RE-IMPLEMENTED IN THIS PASS (already tracked, per the reviewer's own "untracked scope"
+finding -- beads now exist and are readable via `bd show`):
+  - W5 expert pin rotation (PinnedSPKISHA256Next, --relay-pin-next, per-device ack for
+    promotion): bd agents-tracker-hggx.3.5.1
+  - W8 failure vocabulary (relay_name_mismatch / relay_cert_expired / relay_trust_unavailable
+    classification in Go, `swarm relay doctor` policy awareness): bd agents-tracker-hggx.3.5.2
+  - W9 swarm remote init acknowledgement gate for pinless promotion, swarm remote status
+    blocking-device list: bd agents-tracker-hggx.3.5.3
+  docs/operations/{operator-runbook,relay-runbook,relay-vps-deploy}.md and
+  deploy/relay/Caddyfile were swept in this pass to stop stating "there is no --relay-tls-policy
+  flag" (now false -- the flag shipped and is enforced) and to name the above three bead ids
+  explicitly wherever they described behaviour those beads still owe, rather than leaving a
+  forward-looking claim that now reads as a false present-tense one.
+
+====================================================================================================
+NOTE on three pre-existing tests the reviewer named as missing RED evidence
+(TestADR016W9_APinnedSPKIAdvertisementWithNoPinIsRefusedNotAdopted,
+TestADR016W9_AnUnparsableRelayURLRefusesTheMigrationRatherThanSkippingTheHostCheck, and both
+tests then in mobile/r2_adr016_w3_pairingdial_test.go): all three were already correctly
+implemented and green when this pass started (confirmed by running them before making any
+change). Reverting the already-correct production code they guard, purely to re-derive a RED
+transcript for record-keeping, was judged not worth the risk of that revert itself introducing an
+error -- the two mobile/r2_adr016_w3_pairingdial_test.go tests were, in any case, REPLACED by this
+pass's Finding 1/2 fixes (one assertion inverted, one file's whole fallback mechanism changed), so
+their current RED history is superseded by webpki-7 and webpki-8 above.

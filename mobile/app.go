@@ -120,11 +120,11 @@ type App struct {
 	// pairings are the live handshakes, so Close has something to cancel. A handshake's last
 	// act is a write into stateDir, so an App that could not reach them could not honestly
 	// report itself closed (see Close).
-	pairings      map[*Pairing]struct{}
-	drainTimer    *time.Timer
-	skewed        bool // whether the clock is currently out of budget, so only a CHANGE raises an event
-	sess          *session
-	client        *relay.Client
+	pairings   map[*Pairing]struct{}
+	drainTimer *time.Timer
+	skewed     bool // whether the clock is currently out of budget, so only a CHANGE raises an event
+	sess       *session
+	client     *relay.Client
 	// relayTrust is ADR-016 W2's reverse-bound platform delegate, installed by
 	// SetRelayTrust. It is nil on every platform that never calls it (desktop, iOS): W2's
 	// "Desktop is unchanged" means relay.WithPlatformVerifier is never reached there, and
@@ -156,6 +156,12 @@ type App struct {
 	// because the event plane alone cannot serve a screen that opens AFTER the measurement,
 	// which on Android is most of them -- the process is killed and rebuilt constantly.
 	clockVerdict string
+	// webpkiUnavailable is ADR-016 W4 step 5's CURRENT migration-ladder verdict, "" when the
+	// last reconcile's applyRelayTLSPolicy call had nothing to prove or proved it. It exists
+	// for exactly clockVerdict's reason and is deduped and emitted the same way (reportWebPKIUnavailable):
+	// W4 step 5 requires a failed migration to "surface webpki_unavailable with the
+	// operator-facing cause", and adoptReconcile used to discard that error outright.
+	webpkiUnavailable string
 	// pairingGraceUntil is how long the transport keeps retrying a relay that still answers
 	// "revoked" after a pairing re-armed it (PB-STATE-10). Zero -- the normal case -- means
 	// no grace at all, so a revocation stays terminal exactly as PB-APP-10 requires.

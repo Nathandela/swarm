@@ -79,6 +79,14 @@ func hookSink(t *testing.T) (sock string, next func() engine.Callback) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("no hook callback reached the socket")
 			return engine.Callback{}
+		case <-t.Context().Done():
+			// The test this sink belongs to has already completed -- e.g. a caller
+			// (assertNothingArrivesAt, r6_hookwiring_test.go) that gave up waiting on
+			// this func in a detached goroutine before the socket was ever expected to
+			// receive anything. Touching t past this point (even t.Fatal) panics the
+			// whole binary ("Fail in goroutine after Test has completed"); returning
+			// silently is the only safe outcome for an abandoned caller.
+			return engine.Callback{}
 		}
 	}
 }

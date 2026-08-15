@@ -93,17 +93,99 @@ class RelayTrustImplTest {
     """.trimIndent()
 
     /** A real X509TrustManagerExtensions over a trust store holding ONLY caCert. */
-    private fun trustingExtensions(): X509TrustManagerExtensions {
+    private fun trustingExtensions(): X509TrustManagerExtensions = trustManagerFor(caCert)
+
+    /**
+     * ADR-016 punch-list LOW finding (Kotlin hostname matching): fresh fixtures, a
+     * SEPARATE throwaway CA from caCert above so this file's two existing trust stores stay
+     * untouched. wildcardLeafCert carries `DNS:*.example.com`; ipLeafCert carries
+     * `IP:203.0.113.7` and no dNSName SAN at all -- generated once with
+     * `openssl ecparam ... -genkey` the same way the file's own doc comment describes for
+     * the fixtures above, no relationship to any real host or service.
+     */
+    private val ca2Cert = """
+        -----BEGIN CERTIFICATE-----
+        MIIBhzCCAS2gAwIBAgIUXT93WBwbvtMGG8AXQIlaGn369e4wCgYIKoZIzj0EAwIw
+        GTEXMBUGA1UEAwwOc3dhcm0tdGVzdC1jYTIwHhcNMjYwODE1MTM0NDI4WhcNMzYw
+        ODEyMTM0NDI4WjAZMRcwFQYDVQQDDA5zd2FybS10ZXN0LWNhMjBZMBMGByqGSM49
+        AgEGCCqGSM49AwEHA0IABP2ZrN1uTL4gU+Jo5oZkeH5eqLQiA7hgbf2aPe6mWbH2
+        /3E4XRWb6vwiPpQZ/uobkXkuMtxDV290W10Xfo2Q8a6jUzBRMB0GA1UdDgQWBBTa
+        dJoR4Z62n5u/x48VAwvuzKutazAfBgNVHSMEGDAWgBTadJoR4Z62n5u/x48VAwvu
+        zKutazAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQD2Opjxe1V1
+        DWfcpopfwg37RZsNbxhJoTCLUHnr2xq6PQIgVEkhnUYsU01mZMgSGTeVkNCdprkL
+        rS4wXit7N6DItOg=
+        -----END CERTIFICATE-----
+    """.trimIndent()
+
+    private val wildcardLeafCert = """
+        -----BEGIN CERTIFICATE-----
+        MIIBrDCCAVGgAwIBAgIUFsjuzVJfYWsd15OzzgTD0ut7i6cwCgYIKoZIzj0EAwIw
+        GTEXMBUGA1UEAwwOc3dhcm0tdGVzdC1jYTIwHhcNMjYwODE1MTM0NDI5WhcNMzYw
+        ODEyMTM0NDI5WjAfMR0wGwYDVQQDDBR3aWxkY2FyZC5leGFtcGxlLmNvbTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHzqg2qZP6xGxtrCgToPHcGoBRsnve8k0def
+        I0HNlKncLzwz58l3xyXlIPf8hfbe3CvIL+2KdwrSA/KzqAgx4iKjcTBvMBgGA1Ud
+        EQQRMA+CDSouZXhhbXBsZS5jb20wEwYDVR0lBAwwCgYIKwYBBQUHAwEwHQYDVR0O
+        BBYEFBCHWV8E4lqyh2QtQ1y0h+E+rJnhMB8GA1UdIwQYMBaAFNp0mhHhnrafm7/H
+        jxUDC+7Mq61rMAoGCCqGSM49BAMCA0kAMEYCIQDcj843o1Xz0vPbRfkMTuOXFYSz
+        NveRPIarW8DE4B2OEgIhAOcN/4mO9lLZB0kxnXqSuEYXQ/l5GxnUlFp1DJkHh1Mm
+        -----END CERTIFICATE-----
+    """.trimIndent()
+
+    private val ipLeafCert = """
+        -----BEGIN CERTIFICATE-----
+        MIIBmTCCAT+gAwIBAgIUFsjuzVJfYWsd15OzzgTD0ut7i6gwCgYIKoZIzj0EAwIw
+        GTEXMBUGA1UEAwwOc3dhcm0tdGVzdC1jYTIwHhcNMjYwODE1MTM0NDI5WhcNMzYw
+        ODEyMTM0NDI5WjAWMRQwEgYDVQQDDAsyMDMuMC4xMTMuNzBZMBMGByqGSM49AgEG
+        CCqGSM49AwEHA0IABGigenv+37XyrgMNc8wCMrmUvUPlWin4Q2YJCoKBwzXTnL9u
+        e3+Wf7Qse3QA23x11yBlX085F1uKtUsJJ+ZWP26jaDBmMA8GA1UdEQQIMAaHBMsA
+        cQcwEwYDVR0lBAwwCgYIKwYBBQUHAwEwHQYDVR0OBBYEFPrSIiz4JzHV0FTPodJS
+        xXMC+7RiMB8GA1UdIwQYMBaAFNp0mhHhnrafm7/HjxUDC+7Mq61rMAoGCCqGSM49
+        BAMCA0gAMEUCIQDOs66IA7oCyjMugvVOcwF83C47Zj+ktPSTuXZHlCRCmAIgSkFq
+        gg895C/A6rXw1bBrSm1nK/1rRtREOWuQLAGc6TE=
+        -----END CERTIFICATE-----
+    """.trimIndent()
+
+    /** A real X509TrustManagerExtensions over a trust store holding ONLY the given CA PEM. */
+    private fun trustManagerFor(caPem: String): X509TrustManagerExtensions {
         val ks = KeyStore.getInstance(KeyStore.getDefaultType())
         ks.load(null, null)
         val cf = CertificateFactory.getInstance("X.509")
-        val ca = cf.generateCertificate(ByteArrayInputStream(caCert.toByteArray())) as X509Certificate
+        val ca = cf.generateCertificate(ByteArrayInputStream(caPem.toByteArray())) as X509Certificate
         ks.setCertificateEntry("swarm-test-ca", ca)
 
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
         tmf.init(ks)
         val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
         return X509TrustManagerExtensions(tm)
+    }
+
+    @Test
+    fun a_wildcard_certificate_admits_a_differently_cased_host() {
+        val impl = RelayTrustImpl(trustManagerFor(ca2Cert))
+        // Must not throw: matchesHostname lowercases before stripping the wildcard suffix,
+        // so a mixed-case host still matches *.example.com the same way Go's own
+        // case-insensitive VerifyHostname does.
+        impl.verifyRelayChain("Sub.Example.com", wildcardLeafCert.toByteArray())
+    }
+
+    @Test
+    fun an_ip_literal_host_is_admitted_by_a_matching_ipaddress_san() {
+        val impl = RelayTrustImpl(trustManagerFor(ca2Cert))
+        // Must not throw: the certificate carries only an iPAddress SAN (no dNSName at
+        // all), which x509.Certificate.VerifyHostname accepts on the Go side and this
+        // Kotlin check must too.
+        impl.verifyRelayChain("203.0.113.7", ipLeafCert.toByteArray())
+    }
+
+    @Test
+    fun an_ip_literal_host_is_refused_when_no_ipaddress_san_matches() {
+        val impl = RelayTrustImpl(trustManagerFor(ca2Cert))
+        val thrown = assertThrows(Exception::class.java) {
+            impl.verifyRelayChain("203.0.113.99", ipLeafCert.toByteArray())
+        }
+        assert(thrown.message?.contains("swarm-relaytrust/untrusted") == true) {
+            "expected the untrusted verdict token for an IP host with no matching SAN, got: ${thrown.message}"
+        }
     }
 
     @Test
@@ -137,6 +219,64 @@ class RelayTrustImplTest {
         val impl = RelayTrustImpl(trustingExtensions())
         assertThrows(Exception::class.java) {
             impl.verifyRelayChain("a-different-host.example.com", leafCert.toByteArray())
+        }
+    }
+
+    /**
+     * ADR-016 W2 review-round fix: "swarm-relaytrust/unavailable ... never a security
+     * accusation" must cover every way `checkServerTrusted` can fail that is not itself a
+     * trust verdict about the peer. Before this fix the catch block downstream of
+     * `checkServerTrusted` stamped `swarm-relaytrust/untrusted` on every failure regardless of
+     * cause, contradicting this file's own doc comment two dozen lines up.
+     *
+     * `X509TrustManagerExtensions` reaches its delegate REFLECTIVELY and wraps every failure
+     * of that call in a `CertificateException`, genuine trust refusal or not -- verified
+     * empirically against this exact Android/Robolectric jar (a diagnostic run, not a
+     * comment's assertion): a delegate that CANNOT be reflectively invoked (this test's
+     * `checkServerTrusted(X509Certificate[], String, String)` overload is declared on a
+     * private nested class, which the platform's reflection cannot access) surfaces as
+     * `CertificateException("Failed to call checkServerTrusted", cause = IllegalAccessException)`
+     * -- the SAME exception type a genuine untrusted chain surfaces as (that one instead
+     * carries a `CertPathValidatorException` cause; see `an_untrusted_chain_is_refused_...`
+     * above). A `catch (e: CertificateException)` alone therefore cannot separate the two;
+     * this proves the fix reads the CAUSE's own domain to tell them apart.
+     */
+    private class ThrowingTrustManager : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+
+        // The exact reflective signature android.net.http.X509TrustManagerExtensions locates
+        // and delegates to (Conscrypt's own convention, shared with the desktop JDK's own
+        // trust manager -- the reason trustingExtensions() above, built from a plain
+        // TrustManagerFactory, already exercises this delegate path rather than the 2-arg
+        // fallback). PUBLIC on a PRIVATE nested class: the platform locates the method (it is
+        // public) but cannot INVOKE it (the enclosing class is not), which is exactly the
+        // "delegate could not be consulted" fault this test means to exercise -- not a chain
+        // or certificate problem at all.
+        @Suppress("unused")
+        fun checkServerTrusted(
+            chain: Array<X509Certificate>,
+            authType: String,
+            host: String,
+        ): List<X509Certificate> {
+            throw IllegalArgumentException("unreachable: reflection cannot call this method")
+        }
+    }
+
+    @Test
+    fun a_non_certificate_failure_is_refused_with_the_unavailable_token_not_untrusted() {
+        val impl = RelayTrustImpl(X509TrustManagerExtensions(ThrowingTrustManager()))
+        val thrown = assertThrows(Exception::class.java) {
+            impl.verifyRelayChain("swarm-relay.example.com", leafCert.toByteArray())
+        }
+        assert(thrown.message?.contains("swarm-relaytrust/unavailable") == true) {
+            "expected the unavailable verdict token (a configuration fault, never a security " +
+                "accusation) for a non-CertificateException failure, got: ${thrown.message}"
+        }
+        assert(thrown.message?.contains("swarm-relaytrust/untrusted") != true) {
+            "the unavailable verdict must never ALSO read as the untrusted (security) verdict: " +
+                "${thrown.message}"
         }
     }
 }

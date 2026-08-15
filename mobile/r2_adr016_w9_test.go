@@ -231,6 +231,129 @@ func TestADR016W9_APinnedSPKIAdvertisementWithNoPinIsRefusedNotAdopted(t *testin
 	}
 }
 
+// TestADR016W9_AnUnrecognisedPolicyStringIsRefusedNotAdoptedVerbatim is the review-round
+// LOW fix: the pinned_spki branch used to adopt ANY non-"webpki" string verbatim into
+// durable state ("PINNED_SPKI", "webpki " with trailing whitespace, or a future typo), so a
+// misbehaving or future machine build could write an unaudited literal into phone-state.json.
+// W1 names exactly two policy values; anything else is refused, the same way
+// resolveRelayTLSPolicy already refuses it at the CLI boundary (cmd/swarm/remote.go).
+func TestADR016W9_AnUnrecognisedPolicyStringIsRefusedNotAdoptedVerbatim(t *testing.T) {
+	pin := []byte("32-byte-sha256-digest-of-spki!!")
+	a := w9App(t, "wss://swarm-relay.example.com:8443")
+	w9Seed(t, a, "pinned_spki", pin)
+
+	profile := schema.RemoteProfileV1{
+		RelayTLSPolicy: "PINNED_SPKI", // wrong case: not one of the two named values
+		RelayHost:      "swarm-relay.example.com",
+		RelaySPKIPin:   []byte("some-other-pin-entirely-32-bytes"),
+	}
+	err := a.applyRelayTLSPolicy(context.Background(), profile, neverCalledProbe(t))
+	if err == nil {
+		t.Fatalf("applyRelayTLSPolicy admitted an unrecognised policy string %q", profile.RelayTLSPolicy)
+	}
+	got := a.core.State()
+	if got.RelayTLSPolicy != "pinned_spki" || string(got.RelaySPKIPin) != string(pin) {
+		t.Fatalf("state after refusal = policy %q pin %x; want the working state UNCHANGED (%q, %x)",
+			got.RelayTLSPolicy, got.RelaySPKIPin, "pinned_spki", pin)
+	}
+}
+
+// TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp is the review-round fix for "the
+// migration ladder re-runs forever": a phone that already holds the advertised policy AND
+// pin must not open a fresh probe dial or re-seal durable state on every single reconcile
+// from a steady-state webpki machine -- the probe runs on the drain goroutine and a slow or
+// black-holed relay would otherwise block message draining on every reconcile, forever.
+func TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp(t *testing.T) {
+	a := w9App(t, "wss://swarm-relay.example.com:8443")
+	pin := []byte("compat-pin-still-published-in-window!!!")
+	w9Seed(t, a, "webpki", pin)
+
+	profile := schema.RemoteProfileV1{
+		RelayTLSPolicy: "webpki",
+		RelayHost:      "swarm-relay.example.com",
+		RelaySPKIPin:   pin,
+	}
+	if err := a.applyRelayTLSPolicy(context.Background(), profile, neverCalledProbe(t)); err != nil {
+		t.Fatalf("applyRelayTLSPolicy already-migrated no-op: %v", err)
+	}
+}
+
+// TestADR016W9_AlreadyOnTheAdvertisedPinnedSPKIPolicyIsANoOp is the same guard's other
+// starting state: a phone already on pinned_spki with the exact published pin must not
+// re-Mutate durable state every reconcile either.
+func TestADR016W9_AlreadyOnTheAdvertisedPinnedSPKIPolicyIsANoOp(t *testing.T) {
+	a := w9App(t, "wss://swarm-relay.example.com:8443")
+	pin := []byte("32-byte-sha256-digest-of-spki!!")
+	w9Seed(t, a, "pinned_spki", pin)
+
+	profile := schema.RemoteProfileV1{
+		RelayTLSPolicy: "pinned_spki",
+		RelayHost:      "swarm-relay.example.com",
+		RelaySPKIPin:   pin,
+	}
+	if err := a.applyRelayTLSPolicy(context.Background(), profile, neverCalledProbe(t)); err != nil {
+		t.Fatalf("applyRelayTLSPolicy already-migrated no-op: %v", err)
+	}
+}
+
+// TestADR016W9_ANoOpPolicyAndPinDoesNotSkipTheHostCheck is the webpki punch-list's LOW
+// ordering finding: the review-round no-op short-circuit above used to run BEFORE the host
+// check, so a webpki profile naming a DIFFERENT relay_host was silently accepted as a no-op
+// whenever policy and pin already matched, instead of being refused as stale_profile (W4
+// step 2). The short-circuit must never let a destination-changing profile through.
+func TestADR016W9_ANoOpPolicyAndPinDoesNotSkipTheHostCheck(t *testing.T) {
+	a := w9App(t, "wss://swarm-relay.example.com:8443")
+	pin := []byte("compat-pin-still-published-in-window!!!")
+	w9Seed(t, a, "webpki", pin)
+
+	profile := schema.RemoteProfileV1{
+		RelayTLSPolicy: "webpki",
+		RelayHost:      "a-different-relay.example.com", // NOT this phone's own host
+		RelaySPKIPin:   pin,                             // policy+pin already match
+	}
+	err := a.applyRelayTLSPolicy(context.Background(), profile, neverCalledProbe(t))
+	if err == nil {
+		t.Fatalf("applyRelayTLSPolicy admitted a profile naming a different relay host as a " +
+			"no-op because policy and pin already matched; the host check must run first")
+	}
+	if got := a.core.State().RelayTLSPolicy; got != "webpki" {
+		t.Fatalf("RelayTLSPolicy = %q after the refusal, want unchanged", got)
+	}
+}
+
+// TestADR016W9_CompatibilityPinWithdrawalIsUnobservableOnAMigratedHandset is ADR-016's own
+// Conformance table row for W9 step 6 (ADR-016:274): "A machine that stops publishing the
+// compatibility pin produces no observable change on a migrated handset." A phone already
+// on webpki must treat a profile that still names ITS OWN host and webpki, but a DIFFERENT
+// (or withdrawn) pin, as a no-op too -- W3's single rule is that a webpki phone never reads
+// the pin at all, so a change to a value it never consults cannot be observable. Comparing
+// pins in this branch would instead re-open a probe dial on every withdrawal, which is the
+// exact regression the review-round no-op fix (TestADR016W9_AlreadyOnTheAdvertisedWebPKI
+// PolicyIsANoOp) was meant to close.
+func TestADR016W9_CompatibilityPinWithdrawalIsUnobservableOnAMigratedHandset(t *testing.T) {
+	a := w9App(t, "wss://swarm-relay.example.com:8443")
+	oldPin := []byte("compat-pin-still-published-in-window!!!")
+	w9Seed(t, a, "webpki", oldPin)
+
+	profile := schema.RemoteProfileV1{
+		RelayTLSPolicy: "webpki",
+		RelayHost:      "swarm-relay.example.com", // this phone's own host, unchanged
+		RelaySPKIPin:   nil,                       // the compatibility pin has been withdrawn
+	}
+	if err := a.applyRelayTLSPolicy(context.Background(), profile, neverCalledProbe(t)); err != nil {
+		t.Fatalf("applyRelayTLSPolicy on a compat-pin withdrawal: %v", err)
+	}
+	got := a.core.State()
+	if got.RelayTLSPolicy != "webpki" {
+		t.Fatalf("RelayTLSPolicy = %q after a compat-pin withdrawal, want unchanged %q", got.RelayTLSPolicy, "webpki")
+	}
+	if string(got.RelaySPKIPin) != string(oldPin) {
+		t.Fatalf("RelaySPKIPin = %x after a compat-pin withdrawal, want the phone's own stored "+
+			"%x UNCHANGED -- W3 never reads it, so an unread value's withdrawal must be silent",
+			got.RelaySPKIPin, oldPin)
+	}
+}
+
 // TestADR016W9_AnUnparsableRelayURLRefusesTheMigrationRatherThanSkippingTheHostCheck is W4
 // step 2 applied to the phone's OWN destination: relayURLHost returning "" for a relay URL
 // this phone cannot parse must not silently disable the host check and prove whatever host

@@ -1,0 +1,17 @@
+=== RUN   TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch
+=== RUN   TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/system_default
+    r2_adr016_w3_peerspki_test.go:101: branch "system default" built a *tls.Config with no VerifyPeerCertificate hook; PeerSPKI can never be recorded on this branch
+=== RUN   TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/platform_delegate
+    r2_adr016_w3_peerspki_test.go:106: branch "platform delegate": observer recorded nothing; Conn.PeerSPKI() would stay empty on a verified dial, exactly the regression ADR-016 W3 requires the capture to survive on every policy
+=== RUN   TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/pinned_(matching)
+    r2_adr016_w3_peerspki_test.go:106: branch "pinned (matching)": observer recorded nothing; Conn.PeerSPKI() would stay empty on a verified dial, exactly the regression ADR-016 W3 requires the capture to survive on every policy
+=== RUN   TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/pinned_(mismatched)
+    r2_adr016_w3_peerspki_test.go:106: branch "pinned (mismatched)": observer recorded nothing; Conn.PeerSPKI() would stay empty on a verified dial, exactly the regression ADR-016 W3 requires the capture to survive on every policy
+--- FAIL: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch (0.02s)
+    --- FAIL: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/system_default (0.00s)
+    --- FAIL: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/platform_delegate (0.00s)
+    --- FAIL: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/pinned_(matching) (0.00s)
+    --- FAIL: TestADR016W3_PeerSPKIIsRecordedOnEveryVerifiedBranch/pinned_(mismatched) (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.897s
+FAIL

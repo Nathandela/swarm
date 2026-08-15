@@ -231,6 +231,28 @@ const (
 	// stale (rearmAfterPairing).
 	connRelayUntrusted = "relay_untrusted"
 	connRelayInsecure  = "relay_insecure"
+
+	// connRelayTrustUnavailable is ADR-016 W8's `relay_trust_unavailable`: "no platform
+	// verifier answered ... an APP fault, not a relay fault. Never a security accusation."
+	//
+	// IT IS DISTINCT FROM connRelayUntrusted ON PURPOSE, and the webpki punch list's own
+	// reproduction is why: a handset that has migrated to webpki and then starts with no
+	// RelayTrust installed (Android's PhoneRuntime.installRelayTrust swallows every
+	// exception it can raise, so SetRelayTrust is simply never called) resolves to
+	// TrustRootsPinned with no pin -- handsetSecurity never populates one under webpki
+	// (effectiveStatePin) -- and relay.DialSecure fails PRE-HANDSHAKE with ErrPinRequired,
+	// exactly the same sentinel a genuinely-pinned phone with no pin gets. Reading BOTH as
+	// connRelayUntrusted told this user "not the relay your machine published" for a fault
+	// that is entirely this handset's own, which is the accusation W8 forbids by name.
+	// relayTrustUnavailable (below) is what tells the two apart.
+	//
+	// The relay's own token, relay.RelayTrustUnavailable ("swarm-relaytrust/unavailable"),
+	// reaches here too when Kotlin's RelayTrust delegate IS installed but itself fails to
+	// consult the platform verifier (RelayTrustImpl's own second verdict) -- both are the
+	// SAME "no platform verifier answered" fault, ADR-016's Conformance table's own row:
+	// "No platform verifier | ErrPinRequired | relay_trust_unavailable | distinct copy from
+	// a security verdict."
+	connRelayTrustUnavailable = "relay_trust_unavailable"
 )
 
 // transportEndsPairing reports whether a transport state means this handset can no longer act as
@@ -351,8 +373,8 @@ func (a *App) run(ctx context.Context) {
 			// the same reason: they survive a retry only while a pairing is in flight (B58),
 			// and overwriting them with "reconnecting" there would put the spinner back over
 			// the one screen that says what is actually wrong.
-			if s := a.currentConn(); s != connRevoked &&
-				s != connRelayUntrusted && s != connRelayInsecure {
+			if s := a.currentConn(); s != connRevoked && s != connRelayUntrusted &&
+				s != connRelayInsecure && s != connRelayTrustUnavailable {
 				a.setConn(connReconnecting)
 			}
 			select {
@@ -405,6 +427,20 @@ func (a *App) run(ctx context.Context) {
 					continue
 				}
 				a.recordUnpaired()
+				a.setClient(nil)
+				return
+			case a.relayTrustUnavailable(err):
+				// ADR-016 W8's own Conformance row: "No platform verifier | ErrPinRequired |
+				// relay_trust_unavailable | distinct copy from a security verdict." Checked
+				// BEFORE the generic ErrPinRequired arm below, which this would otherwise
+				// also match -- see relayTrustUnavailable's own doc for why the same
+				// sentinel needs telling apart by cause rather than by identity alone.
+				a.setConn(connRelayTrustUnavailable)
+				// Same B58 non-terminal-during-pairing rule as the arm below: the ordinary
+				// first pairing on a handset with no delegate installed yet must survive.
+				if a.pairingInFlight() || a.withinPairingGrace() {
+					continue
+				}
 				a.setClient(nil)
 				return
 			case errors.Is(err, relay.ErrPinMismatch),
@@ -471,11 +507,12 @@ func (a *App) run(ctx context.Context) {
 	a.setConn(connOffline)
 }
 
-// handsetSecurity is the transport policy EVERY dial this handset makes runs under
-// (PB-NET-2, ADR-007 B34/B37). It is the default policy -- TLS verified against the
-// platform's stated trust roots, cleartext refused, the decision re-asked on every
-// redirect hop -- plus the loopback carve-out, which is honoured only inside a test
-// binary and is therefore inert in the shipped .so.
+// handsetSecurity is the transport policy EVERY session dial this handset makes runs
+// under (PB-NET-2, ADR-007 B34/B37, ADR-016 W2/W3) -- POST-ADR-016, updated from this
+// comment's own pre-ADR-016 text, which described a pinning-only world this build no
+// longer ships. It starts from the platform's default trust-root source, cleartext
+// refused, the decision re-asked on every redirect hop -- plus the loopback carve-out,
+// which is honoured only inside a test binary and is therefore inert in the shipped .so.
 //
 // SO A RELEASE HANDSET REFUSES CLEARTEXT OUTRIGHT, which is the point: auth_init carries
 // the phone's full relay-auth public key, and a passive observer who reads it can revoke
@@ -487,40 +524,54 @@ func (a *App) run(ctx context.Context) {
 // handset, so a ws://127.0.0.1 relay is never a legitimate destination, and a QR that
 // named one would be pointing the phone at something already running on it.
 //
-// THE PIN COMES FROM PAIRING AND IS PERSISTED (ADR-007 B33/B34). State.RelaySPKIPin is
-// written by pin() from pairing.MachinePayload -- the one authenticated channel that can
-// carry it, since the QR has no room for 43 base64 characters and every later frame
-// already rides the connection the pin exists to protect. Reading it here is what makes it
-// load-bearing: a pin that is carried, persisted and never consulted is exactly the fence
-// guarding an untaken path that B34 records.
+// THE PIN IS SCOPED BY POLICY (ADR-016 W3's single rule, applied through
+// effectiveStatePin below): consulted verbatim under pinned_spki (and under the unset
+// legacy policy, which reads as pinned_spki for a pre-ADR-016 machine's payload), withheld
+// entirely under webpki. State.RelaySPKIPin is still written by pin() from
+// pairing.MachinePayload regardless of policy (B54's verbatim adoption), so a webpki phone
+// carries a pin it never reads here -- deliberate (W4.4), not a bug, and the reason any
+// diagnostic that prints the pin must print the policy beside it or it teaches the wrong
+// lesson.
 //
-// WHAT A USER SEES, in the three states a handset can be in:
+// THE PLATFORM DELEGATE is layered in by withPlatformTrust below, if SetRelayTrust ever
+// installed one (ADR-016 W2): on Android this is what lets TrustRootsPlatformDelegate
+// replace the pinning-only floor under webpki, reaching the Conscrypt APEX store Go
+// itself cannot see. A pin present in relay.Security still outranks it (security.go's own
+// precedence), so a pinned_spki handset's session dial is unaffected by whether a
+// delegate is installed at all -- this only ever matters for a webpki handset.
 //
-//   - PAIRED, PIN HELD. The pin replaces name and chain verification, so the operator's
-//     self-signed relay is reachable and an impostor holding any other key is refused with
+// WHAT A USER SEES, in the states a handset can be in:
+//
+//   - PAIRED, PINNED_SPKI (or a legacy machine whose payload carries no policy field).
+//     The pin replaces name and chain verification, so the operator's self-signed relay is
+//     reachable and an impostor holding any other key is refused with
 //     relay.ErrPinMismatch however well-issued its certificate is.
-//   - PAIRED BEFORE THE MACHINE PUBLISHED A PIN, or paired with a machine that publishes
-//     none. No pin is applied. On a pinning-only platform -- which is every Android
-//     handset (relay.TrustRootSourceFor) -- the wss:// dial is refused with
-//     relay.ErrPinRequired rather than falling back to an unverified connection. That
-//     refusal IS residual 1.9's resolution: fail closed, do not dial unpinned.
+//   - PAIRED, WEBPKI (the default). No pin is applied. Chain trust comes from the
+//     platform's own roots, plus the Android delegate above when one is installed; every
+//     platform independently checks the leaf's hostname and validity window
+//     (VerifyHostname, security.go) regardless of what the delegate answers. A handset
+//     that reaches Android with NO delegate installed is not read as "nothing pinned" --
+//     see relayTrustUnavailable (mobile/relaytrust.go), which is what keeps that app fault
+//     from reaching the user as connRelayUntrusted's security accusation.
+//   - PAIRED, PINNED_SPKI, BEFORE THE MACHINE PUBLISHED A PIN (or paired with a machine
+//     that publishes none while itself holding pinned_spki). No pin is applied and, on a
+//     handset with no platform delegate available, the wss:// dial is refused with
+//     relay.ErrPinRequired rather than falling back to an unverified connection -- fail
+//     closed, never dial unpinned.
 //   - NEVER PAIRED. There is no relay URL to dial until a QR supplies one, and the pairing
-//     dial itself cannot be pinned -- see below.
+//     dial runs under a DIFFERENT policy entirely -- see below.
 //
-// THE PAIRING DIAL IS NOT COVERED BY THIS PIN AND CANNOT BE. It is the dial that FETCHES
-// the pin, so nothing on the handset can know it beforehand; mobile/pairing.go's join()
-// runs under the same policy with State.RelaySPKIPin still empty. What protects that
-// exchange is not TLS: the payload is a Noise handshake the operator confirms by comparing
-// a SAS, so a hostile terminator sees routing metadata and no pinned material.
-//
-// AND THAT LEAVES A BOOTSTRAP THIS WIRING DOES NOT CLOSE, stated here rather than
-// discovered later. On a pinning-only platform an unpinned wss:// dial is not merely
-// unverified, it is REFUSED (Security.tlsConfig returns ErrPinRequired before any packet).
-// The pairing dial is unpinned by construction, so on an Android handset it is refused, so
-// the pin never arrives -- the phone cannot pair over wss:// at all, and the pin it would
-// have learned is unreachable. Residual 1.9 is therefore NOT resolved by consulting the
-// pin here; closing it needs a decision about what policy the PAIRING dial runs under,
-// which is a security decision and not a call-site change. Recorded, not papered over.
+// THE PAIRING DIAL DOES NOT RUN UNDER THIS FUNCTION, and that is what closes the bootstrap
+// this comment used to record as unresolved ("residual 1.9"). mobile/pairing.go's
+// pairingDial is its own policy: under webpki it is an ordinary VERIFIED dial (ADR-016
+// W3) -- there is no pin to fetch, so the old deadlock does not exist for this policy at
+// all. Against a private/self-signed destination (W3's amendment; pinned_spki's own
+// population) B45's exemption still lets an unpinned pairing dial complete against a
+// machine no CA has issued for, and B48's capture-then-compare then authenticates what
+// msg2 actually delivers -- a Noise handshake the operator confirms by comparing a SAS,
+// so a hostile terminator on that dial sees routing metadata and no pinned material
+// either way. This function governs the SESSION dial only, reached after a pin (if any)
+// is already durable.
 func (a *App) handsetSecurity() relay.Security {
 	sec := relay.Security{AllowLoopbackCleartext: true}
 	st := a.core.State()
@@ -583,6 +634,17 @@ func (a *App) applyRelayTLSPolicy(ctx context.Context, profile schema.RemoteProf
 		return nil
 	}
 	if profile.RelayTLSPolicy != "webpki" {
+		if profile.RelayTLSPolicy != "pinned_spki" {
+			// W1 names exactly two policy values. A machine (or a future bug) publishing
+			// anything else is refused, not adopted verbatim into durable state: a future
+			// reader that positively matches "pinned_spki" rather than treating anything
+			// unrecognised as "consult the pin" would otherwise misbehave silently, and
+			// the state file would carry a value no writer ever validated.
+			return classed(ErrClassInvalidRequest, fmt.Errorf(
+				"swarmmobile: relay profile names an unrecognised policy %q; refused rather than "+
+					"adopted (the two named values are \"webpki\" and \"pinned_spki\")",
+				profile.RelayTLSPolicy))
+		}
 		if len(profile.RelaySPKIPin) == 0 {
 			// W1's own rule makes this combination impossible from a legitimate machine:
 			// --relay-pin is MANDATORY under pinned_spki. Adopting it anyway would wipe a
@@ -593,6 +655,14 @@ func (a *App) applyRelayTLSPolicy(ctx context.Context, profile schema.RemoteProf
 				"swarmmobile: relay profile names policy %q with no pin; refused rather than "+
 					"adopted (a legitimate machine never publishes this combination)", profile.RelayTLSPolicy))
 		}
+		// REVIEW-ROUND FIX: a phone already on pinned_spki with this EXACT pin is a NO-OP,
+		// so a steady-state pinned_spki machine does not re-Mutate durable state on every
+		// reconcile. Pin equality is part of THIS check, unlike the webpki no-op below: a
+		// pinned_spki phone's pin is the whole defense (W3), so a ROTATED pin (W5) must
+		// still be adopted rather than short-circuited away.
+		if st := a.core.State(); st.RelayTLSPolicy == "pinned_spki" && bytes.Equal(st.RelaySPKIPin, profile.RelaySPKIPin) {
+			return nil
+		}
 		// B54's reverse direction: adopted verbatim, unconditionally -- reverting to the
 		// expert policy proves nothing, so no probe is needed.
 		return a.core.Mutate(func(st *phonecore.State) {
@@ -600,7 +670,11 @@ func (a *App) applyRelayTLSPolicy(ctx context.Context, profile schema.RemoteProf
 			st.RelaySPKIPin = profile.RelaySPKIPin
 		})
 	}
-	// W4 step 2: check identity of destination BEFORE proving anything against it. Classed
+	// W4 step 2: check identity of destination BEFORE proving anything against it, and
+	// BEFORE the no-op short-circuit below -- a mismatched host must refuse as stale_profile
+	// even when this phone's own policy and pin already happen to equal the profile's
+	// (the webpki punch list's LOW ordering finding: the short-circuit used to run first and
+	// silently admitted a destination-changing profile as a no-op). Classed
 	// ErrClassInvalidRequest (PB-APP-9): the machine's own published profile conflicts with
 	// the destination this phone already holds, which is a re-pairing question and not a
 	// request this phone can satisfy by retrying.
@@ -622,6 +696,18 @@ func (a *App) applyRelayTLSPolicy(ctx context.Context, profile schema.RemoteProf
 			"swarmmobile: relay profile names host %q, this phone holds %q; "+
 				"refused as stale_profile (a profile that changes the destination is a re-pairing "+
 				"question, not a TLS migration)", profile.RelayHost, host))
+	}
+	// REVIEW-ROUND FIX, now AFTER the host check above: a phone already on webpki against
+	// the correct host is a NO-OP, so a steady-state webpki machine does not re-open a probe
+	// dial (see probeWebPKI) on every reconcile. POLICY ONLY, deliberately not the pin: W3's
+	// single rule is that a webpki phone never reads the pin at all, so a profile that
+	// withdraws or rotates the W9 compatibility pin changes nothing this phone consults, and
+	// must therefore produce NO OBSERVABLE CHANGE here -- ADR-016's own Conformance table
+	// for W9 step 6 (line 274): "no observable change on a migrated handset." Comparing pins
+	// here as well would reopen a probe dial on every withdrawal, exactly the regression
+	// the no-op fix above was written to close, one rung up.
+	if st := a.core.State(); st.RelayTLSPolicy == "webpki" {
+		return nil
 	}
 	// W4 step 3: PROVE on a separate connection before touching durable state. Classed
 	// ErrClassOffline (PB-APP-9): a failed probe is the transport refusing or failing to
@@ -890,11 +976,43 @@ func (a *App) adoptReconcile(ctx context.Context) {
 	// profile (W4.1: "a relay-supplied or unauthenticated hint is ignored"). LastProfile
 	// reads back exactly what the Reconcile call three lines up just adopted -- it takes no
 	// parameters, so there is no way to reach this with a profile that check did not pass.
-	// A failure here is not reported: applyRelayTLSPolicy's own failure branch already
-	// leaves durable state exactly as it was (W4 step 5), and adoptReconcile runs on the
-	// drain goroutine with no screen open on this path (the same reasoning recordUnpaired's
-	// swallowed error gives).
-	_ = a.applyRelayTLSPolicy(ctx, a.core.LastProfile(), a.probeWebPKI)
+	//
+	// THE ERROR IS SURFACED, NOT DISCARDED (the webpki punch list's W4.5 finding).
+	// applyRelayTLSPolicy's own failure branch already leaves durable state exactly as it
+	// was (W4 step 5) -- the SECURITY half of the ruling never depended on this call being
+	// reported, which is why a bare `_ = ...` here shipped without an obvious defect -- but
+	// the USER-FACING half of the same ruling is "surfaces webpki_unavailable with the
+	// operator-facing cause", and nothing did that. reportWebPKIUnavailable is the
+	// pull-and-event surface for it, in exactly the shape reportSkew already gives
+	// PB-TIME-1: adoptReconcile still runs on the drain goroutine with no screen
+	// necessarily open on this exact call, so a PUSH-only surface would still lose an
+	// event raised while nothing was listening.
+	a.reportWebPKIUnavailable(a.applyRelayTLSPolicy(ctx, a.core.LastProfile(), a.probeWebPKI))
+}
+
+// reportWebPKIUnavailable is ADR-016 W4 step 5's surfacing half, mirroring reportSkew's
+// own shape for App.ClockVerdict: cause is applyRelayTLSPolicy's own return from THIS
+// reconcile (nil when the ladder had nothing to prove or proved it). Only a CHANGE is
+// emitted and the verdict is not latched -- a machine stuck on a failing probe would
+// otherwise raise an event on every single reconcile, and a later reconcile that succeeds
+// (or has nothing to prove) must clear the verdict rather than leave a stale banner up.
+func (a *App) reportWebPKIUnavailable(cause error) {
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	a.mu.Lock()
+	changed := a.webpkiUnavailable != msg
+	a.webpkiUnavailable = msg
+	a.mu.Unlock()
+	if !changed {
+		return
+	}
+	if msg == "" {
+		a.events.emit(&Event{Kind: "connection", Stream: "webpki", State: "available"})
+		return
+	}
+	a.events.emit(&Event{Kind: "connection", Stream: "webpki", State: "webpki_unavailable", Message: msg})
 }
 
 // probeWebPKI is W4 step 3's real dial: relay_host already matched a.relayURL (the caller
@@ -903,6 +1021,13 @@ func (a *App) adoptReconcile(ctx context.Context) {
 // Android once SetRelayTrust installed one (W2), the system trust store elsewhere -- on a
 // connection separate from the live pinned one, which this never touches.
 func (a *App) probeWebPKI(ctx context.Context, _ string) error {
+	// REVIEW-ROUND FIX: bounded on ITS OWN deadline rather than inheriting whatever the
+	// drain goroutine's ctx happens to carry -- this runs on that goroutine synchronously,
+	// so an unbounded probe would block message draining for as long as the relay stays
+	// silent. relay.DefaultDialTimeout is the same bound DialRawSecure's own connect phase
+	// already applies; this makes it explicit rather than incidental.
+	ctx, cancel := context.WithTimeout(ctx, relay.DefaultDialTimeout)
+	defer cancel()
 	sec := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
 	conn, err := relay.DialRawSecure(ctx, a.relayURL, sec)
 	if err != nil {

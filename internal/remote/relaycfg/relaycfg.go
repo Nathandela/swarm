@@ -183,3 +183,23 @@ func (c Config) Pin() ([]byte, error) {
 	}
 	return pin, nil
 }
+
+// HasPin reports whether a pin is configured at all, without touching its base64 form --
+// the predicate callers outside this package are allowed (TestPBOPS5 fences direct
+// SPKIPin reads to this package so there is exactly one decoder and one presence rule).
+func (c Config) HasPin() bool { return c.SPKIPin != "" }
+
+// PinBase64 re-encodes the VALIDATED pin for carry-forward into a fresh Config (W9's
+// compatibility pin surviving a flagless re-run). Returning the decoded pin's canonical
+// encoding, rather than the raw field, means a malformed stored value fails here instead
+// of being copied forward verbatim.
+func (c Config) PinBase64() (string, error) {
+	pin, err := c.Pin()
+	if err != nil {
+		return "", err
+	}
+	if pin == nil {
+		return "", nil
+	}
+	return base64.StdEncoding.EncodeToString(pin), nil
+}

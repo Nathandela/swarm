@@ -462,6 +462,13 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 	return nil
 }
 
+// relayDialRawSecure reaches relay.DialRawSecure through a package variable so a test can
+// observe -- or fake -- pairingDial's two-attempt shape without a live network dial or a way
+// to fake DNS for a "public" hostname. Production code never assigns it; it is overridden
+// only inside a test binary (mobile/r2_adr016_w3_pairingdial_test.go), the same seam shape
+// applyRelayTLSPolicy's injected probe already uses for the same reason.
+var relayDialRawSecure = relay.DialRawSecure
+
 // pairingDial is ADR-016 W3's mechanism for the ONE dial B45 exempts from verification. It
 // ATTEMPTS AN ORDINARY VERIFIED DIAL FIRST -- the platform delegate on Android (W2) once
 // SetRelayTrust installed one, the system trust store elsewhere -- because that is what
@@ -470,30 +477,44 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 // case -- a webpki machine reachable without interference -- the verified attempt succeeds
 // and PairingSecurity is never reached at all.
 //
-// IT FALLS BACK TO B45's UNVERIFIED POLICY only when the verified attempt itself fails, for
-// the reason the ADR's own "obstacle" section states and does not repeal: a self-signed
-// pinned_spki relay (W6, expert/opt-in) can never pass verified TLS, and the QR carries no
-// policy field to distinguish that case in advance (W7 -- no byte of QR budget is spent by
-// this ADR). Without a fallback, a fresh phone could never pair with an expert-policy
-// machine over wss:// at all -- B45's original deadlock, one layer up.
+// IT FALLS BACK TO B45's UNVERIFIED POLICY only when the verified attempt itself fails AND
+// the destination is one W6 already assigns to the expert policy: an IP-literal or otherwise
+// private/LAN origin (originIsPrivate -- the same classifier the confirm sheet renders).
+// A self-signed pinned_spki relay (W6, expert/opt-in) can never pass verified TLS, and the
+// QR carries no policy field to distinguish that case in advance (W7 -- no byte of QR budget
+// is spent by this ADR), so the fallback still exists or a fresh phone could never pair with
+// an expert-policy machine over wss:// at all -- B45's original deadlock, one layer up.
 //
-// THE RESIDUAL THIS LEAVES IS NAMED HERE RATHER THAN PAPERED OVER, in this codebase's own
+// THE SCOPE IS THE FIX, not a nicety. An earlier version of this function fell back on ANY
+// verified failure, for ANY host: an on-path attacker needed only present a certificate that
+// fails verification -- any self-signed cert -- to force B45's unverified policy on EVERY
+// machine, including an ordinary webpki one with no pin at all, defeating the exact property
+// W3 says this ADR "recovers by name" (a wrong or expired published pin then compared nothing,
+// since a webpki machine publishes none). Scoping the fallback to W6's own population closes
+// that: a public DNS-named destination whose verified attempt fails is refused outright, and
+// the residual below is real only for the private/self-signed population that already chose
+// to be pinned.
+//
+// THE RESIDUAL THAT REMAINS is named here rather than papered over, in this codebase's own
 // convention (see handsetSecurity's "AND THAT LEAVES A BOOTSTRAP THIS WIRING DOES NOT
-// CLOSE"): an on-path attacker who can present ANY certificate that fails verification
-// forces the same fallback a legitimate pinned_spki machine relies on. The fallback dial is
-// authenticated exactly as it always was under B45/B48 -- the Noise handshake, the
-// capture-then-compare against the machine's own published pin (scoped to pinned_spki by
-// W3), and the SAS the operator compares -- so this is a strict improvement over the prior
-// unconditional-unverified dial (the attacker's cost rises from "be on the path" to
-// "additionally present a certificate that verification will reject") and not a complete
-// closure of it. Closing it fully needs the phone to know the target's policy before the
-// first byte, which nothing before pairing carries.
+// CLOSE"): an on-path attacker on the SAME private network as a legitimate pinned_spki relay
+// can still force the fallback by presenting any certificate that fails verification. The
+// fallback dial is authenticated exactly as it always was under B45/B48 -- the Noise
+// handshake, the capture-then-compare against the machine's own published pin (scoped to
+// pinned_spki by W3), and the SAS the operator compares -- so this is a strict improvement
+// over the prior unconditional-unverified dial and not a complete closure of it. Closing it
+// fully needs the phone to know the target's policy before the first byte, which nothing
+// before pairing carries.
 func (a *App) pairingDial(ctx context.Context, relayURL string) (*relay.Conn, error) {
 	verified := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
-	if conn, err := relay.DialRawSecure(ctx, relayURL, verified); err == nil {
+	conn, err := relayDialRawSecure(ctx, relayURL, verified)
+	if err == nil {
 		return conn, nil
 	}
-	return relay.DialRawSecure(ctx, relayURL, relay.PairingSecurity())
+	if !originIsPrivate(relayURL) {
+		return nil, err
+	}
+	return relayDialRawSecure(ctx, relayURL, relay.PairingSecurity())
 }
 
 // join dials the confirmed destination and drives the device half of the handshake. base

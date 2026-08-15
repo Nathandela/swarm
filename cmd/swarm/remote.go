@@ -158,16 +158,6 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	relayTLSPolicyEffective, relaySPKIPinEffective, err := resolveRelayTLSPolicy(
-		*relayURL, *relayTLSPolicy, *relayPin, *relayPinCompat)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
-		return 1
-	}
-	if err := validateRelayPin(*relayURL, relaySPKIPinEffective); err != nil {
-		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
-		return 1
-	}
 
 	stateDir := os.Getenv(daemon.EnvStateDir)
 	if stateDir == "" {
@@ -176,6 +166,20 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
 		}
+	}
+
+	relayTLSPolicyEffective, relaySPKIPinEffective, relayTLSWarning, err := resolveRelayTLSPolicy(
+		stateDir, *relayURL, *relayTLSPolicy, *relayPin, *relayPinCompat)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
+		return 1
+	}
+	if err := validateRelayPin(*relayURL, relaySPKIPinEffective); err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
+		return 1
+	}
+	if relayTLSWarning != "" {
+		_, _ = fmt.Fprintf(stderr, "remote init: warning: %s\n", relayTLSWarning)
 	}
 
 	remoteDir := filepath.Join(stateDir, "remote")
@@ -480,57 +484,148 @@ func validateRelayURL(raw string) error {
 }
 
 // resolveRelayTLSPolicy applies ADR-016 W1's policy/pin independence, its one surviving
-// legacy inference, and W6's pre-write IP-literal refusal under webpki. It returns the
-// policy to persist and the SPKI pin that ends up in relay.json's ONE relay_spki_pin field
-// -- W1's "two spellings for one digest": --relay-pin under pinned_spki, --relay-pin-compat
-// under webpki.
+// legacy inference, W6's pre-write IP-literal refusal under webpki, and W6's own "nothing
+// demotes a policy silently" rule applied to an OMITTED flag rather than a mistyped one
+// (the webpki punch list's HIGH finding). It returns the policy to persist, the SPKI pin
+// that ends up in relay.json's ONE relay_spki_pin field -- W1's "two spellings for one
+// digest": --relay-pin under pinned_spki, --relay-pin-compat under webpki -- and a
+// non-fatal warning for a webpki policy naming an obviously-private DNS suffix.
+//
+// The "nothing demotes a policy silently" guard fires for BOTH the explicit pinned_spki
+// shape and the legacy shape relaycfg.Config.Security itself treats as pinned (TLSPolicy ==
+// "" with a pin set) -- the legacy shape is the ONLY population that can exist on disk before
+// anyone has ever typed --relay-tls-policy. It is skipped when relayURL == "", since that is
+// exactly the invocation that never reaches relaycfg.Save (runRemoteInit only writes
+// relay.json when a URL is given), so the bare, flagless `swarm remote init` -- the
+// documented identity/gateway repair path -- stays available on an already-pinned machine.
+// A relay.json that exists but fails to parse is propagated as a refusal rather than
+// discarded, per relaycfg.Load's own fail-closed contract.
 //
 // Every refusal happens here, before any filesystem write, mirroring validateRelayURL and
 // validateRelayPin's own contract.
-func resolveRelayTLSPolicy(relayURL, policyFlag, pin, pinCompat string) (policy, effectivePin string, err error) {
+func resolveRelayTLSPolicy(stateDir, relayURL, policyFlag, pin, pinCompat string) (policy, effectivePin, warning string, err error) {
 	switch policyFlag {
 	case "":
 		// The one legacy inference W1 keeps, over the FLAG only: an operator's existing
 		// --relay-pin invocation keeps its exact present meaning. Omitted entirely, the
-		// default is webpki.
-		if pin != "" {
+		// default is webpki -- UNLESS this machine is ALREADY provisioned as pinned_spki,
+		// in which case defaulting here would demote it with no flag typed at all. `swarm
+		// remote init` is documented as idempotent, so a re-run with the destination
+		// carried forward and nothing else typed is exactly the shape a real operator
+		// reaches for; W1 already refuses a MISTYPED flag that would do this ("a single
+		// flag would let one mistyped invocation move a machine between trust models in
+		// silence" -- ADR-016:62), and an omitted one reaches the identical outcome through
+		// the default rather than a typo. Load is a READ, so a fresh machine's first
+		// `remote init` (nothing on disk yet) is unaffected.
+		switch {
+		case pin != "":
 			policy = relaycfg.PolicyPinnedSPKI
-		} else {
+		case relayURL == "":
+			// No --relay-url means relaycfg.Save (runRemoteInit, below) is never reached on
+			// THIS invocation, so there is nothing here that could demote an existing pin.
+			// Skipping the disk check keeps the bare, flagless `swarm remote init` --
+			// runRemoteInit's own documented identity/gateway repair path, the only
+			// supported way to restart a down gateway -- available on an already-pinned
+			// machine.
 			policy = relaycfg.PolicyWebPKI
+		default:
+			existing, found, loadErr := relaycfg.Load(stateDir)
+			if loadErr != nil {
+				// relaycfg.Load's own contract: a file that exists but fails to parse IS an
+				// error, "so a corrupt provisioning fails closed rather than silently
+				// reverting to unconfigured." Discarding it here would let a truncated or
+				// half-written relay.json be silently replaced by a fresh webpki one.
+				return "", "", "", fmt.Errorf(
+					"reading the existing %s before choosing a default --relay-tls-policy: %w",
+					relaycfg.FileName, loadErr)
+			}
+			// The re-verification round's BLOCKING finding: this guard used to enumerate
+			// the "already pinned" population as two exact-equality shapes (TLSPolicy ==
+			// "pinned_spki", or the legacy TLSPolicy == "" with a pin set). But
+			// relaycfg.Config.Security's OWN predicate is broader than either --
+			// `if c.TLSPolicy != PolicyWebPKI { sec.PinnedSPKISHA256 = pin }` pins the
+			// machine's REAL dials for ANY value that is not the literal "webpki", legacy
+			// shape included. An unrecognised or wrong-cased policy string (a hand-edited
+			// relay.json -- operator-runbook.md's own documented `printf` repair path --
+			// or an N/N-1 downgrade reading a newer build's policy string) therefore PINS
+			// the machine while the two-shape guard read it as unpinned. Matching
+			// Security's own condition, rather than re-deriving it as a shape enumeration,
+			// is what keeps the two from drifting apart again.
+			if found && existing.TLSPolicy != relaycfg.PolicyWebPKI &&
+				(existing.TLSPolicy != "" || existing.HasPin()) {
+				shape := fmt.Sprintf("relay_tls_policy %q", existing.TLSPolicy)
+				if existing.TLSPolicy == "" {
+					shape = "no relay_tls_policy field (the legacy shape)"
+				}
+				return "", "", "", fmt.Errorf(
+					"--relay-tls-policy was omitted, but this machine's %s already carries "+
+						"a pinning trust model (%s); relaycfg.Config.Security reads "+
+						"anything other than %q as pinned, so defaulting to %q here would "+
+						"silently move it off the pin (ADR-016 W6: nothing demotes a policy "+
+						"silently). Pass --relay-tls-policy pinned_spki --relay-pin <pin> to "+
+						"keep the pin unchanged, or --relay-tls-policy webpki "+
+						"--relay-pin-compat <pin> to make the move to webpki deliberate",
+					relaycfg.FileName, shape, relaycfg.PolicyWebPKI, relaycfg.PolicyWebPKI)
+			}
+			policy = relaycfg.PolicyWebPKI
+			// W9's compatibility pin is withdrawn only by the DELIBERATE act step 6
+			// names -- typing --relay-tls-policy webpki with no --relay-pin-compat --
+			// never by omission (the re-verification round's MEDIUM finding): a flagless
+			// re-run against the SAME relay now carries an already-published
+			// compatibility pin forward instead of dropping it, so re-running the
+			// documented idempotent provisioning command does not itself un-migrate every
+			// phone that has not yet moved off it (B58's "every dial refused" case,
+			// reached this time by typing nothing rather than a policy demotion). A
+			// changed --relay-url names a different relay, so its old pin is not carried.
+			// NOTE: equality on RelayURL is deliberate and EXACT -- validateRelayURL
+			// refuses to normalise, so a trailing slash names a different destination
+			// and its pin is not carried (the re-verification round's LOW: same
+			// omission shape, reached through cosmetic URL drift; carried verbatim
+			// into the QR, so exactness wins over convenience).
+			if pinCompat == "" && found && existing.TLSPolicy == relaycfg.PolicyWebPKI &&
+				existing.HasPin() && existing.RelayURL == relayURL {
+				carried, carryErr := existing.PinBase64()
+				if carryErr != nil {
+					return "", "", "", fmt.Errorf("carrying the compatibility pin forward: %w", carryErr)
+				}
+				pinCompat = carried
+			}
 		}
 	case relaycfg.PolicyWebPKI, relaycfg.PolicyPinnedSPKI:
 		policy = policyFlag
 	default:
-		return "", "", fmt.Errorf("--relay-tls-policy %q is neither %q nor %q",
+		return "", "", "", fmt.Errorf("--relay-tls-policy %q is neither %q nor %q",
 			policyFlag, relaycfg.PolicyWebPKI, relaycfg.PolicyPinnedSPKI)
 	}
 
 	switch policy {
 	case relaycfg.PolicyPinnedSPKI:
 		if pinCompat != "" {
-			return "", "", fmt.Errorf("--relay-pin-compat is legal only under --relay-tls-policy " +
+			return "", "", "", fmt.Errorf("--relay-pin-compat is legal only under --relay-tls-policy " +
 				"webpki; under pinned_spki the pin IS the verification and --relay-pin is its one " +
 				"spelling")
 		}
 		if pin == "" {
-			return "", "", fmt.Errorf("--relay-tls-policy pinned_spki requires --relay-pin: under " +
+			return "", "", "", fmt.Errorf("--relay-tls-policy pinned_spki requires --relay-pin: under " +
 				"this policy the pin is the whole of verification, and none is configured")
 		}
 		effectivePin = pin
 	case relaycfg.PolicyWebPKI:
 		if pin != "" {
-			return "", "", fmt.Errorf("--relay-pin is refused under --relay-tls-policy webpki (the " +
+			return "", "", "", fmt.Errorf("--relay-pin is refused under --relay-tls-policy webpki (the " +
 				"default); use --relay-pin-compat instead to publish a compatibility pin for " +
 				"handsets that predate ADR-016")
 		}
 		effectivePin = pinCompat
 		if relayURL != "" {
-			if err := refuseIPLiteralUnderWebPKI(relayURL); err != nil {
-				return "", "", err
+			w, err := refuseIPLiteralUnderWebPKI(relayURL)
+			if err != nil {
+				return "", "", "", err
 			}
+			warning = w
 		}
 	}
-	return policy, effectivePin, nil
+	return policy, effectivePin, warning, nil
 }
 
 // refuseIPLiteralUnderWebPKI is ADR-016 W6: a webpki policy dialing an IP-literal wss://
@@ -538,17 +633,43 @@ func resolveRelayTLSPolicy(relayURL, policyFlag, pin, pinCompat string) (policy,
 // public-CA path for an IP literal, and a policy that cannot succeed must not be written.
 // Cleartext ws:// is untouched: the loopback carve-out is a separate, existing question
 // this ADR leaves alone.
-func refuseIPLiteralUnderWebPKI(rawURL string) error {
+//
+// A DNS name with an obviously-private suffix (.local, .localhost, .home.arpa) is WARNED
+// about, not refused: unlike an IP literal it is a name webpki CAN in principle serve (an
+// operator's own internal CA, a split-horizon zone), so writing it is not necessarily a
+// mistake. What the warning names is the residual ADR-016 W3's amendment records:
+// mobile/pairing.go's originIsPrivate classifies these SAME suffixes as private, so a
+// webpki machine on one of them still reaches B45's unverified pairing fallback whenever
+// the verified attempt fails -- Noise+SAS remain the content roots, but the pairing dial's
+// TLS is not the property W3 recovers for this population.
+func refuseIPLiteralUnderWebPKI(rawURL string) (warning string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "wss" {
-		return nil
+		return "", nil
 	}
-	if net.ParseIP(u.Hostname()) != nil {
-		return fmt.Errorf("--relay-url %q names an IP-literal host; --relay-tls-policy webpki (the "+
+	host := u.Hostname()
+	if net.ParseIP(host) != nil {
+		return "", fmt.Errorf("--relay-url %q names an IP-literal host; --relay-tls-policy webpki (the "+
 			"default) cannot succeed against one -- there is no ordinary public-CA path for an IP "+
 			"literal. Use --relay-tls-policy pinned_spki with --relay-pin instead", rawURL)
 	}
-	return nil
+	if isObviouslyPrivateDNSSuffix(host) {
+		return fmt.Sprintf("--relay-url %q names %q, a suffix that only resolves on a private "+
+			"network; a phone pairing against it still falls back to the unverified pairing dial "+
+			"whenever the verified attempt fails (ADR-016 W3's amendment), so consider "+
+			"--relay-tls-policy pinned_spki with --relay-pin instead", rawURL, host), nil
+	}
+	return "", nil
+}
+
+// isObviouslyPrivateDNSSuffix mirrors the DNS-suffix half of mobile/pairing.go's
+// originIsPrivate (the classifier the phone's own pairing-dial fallback and confirm sheet
+// use) -- the same suffixes, so the CLI's warning and the phone's actual behaviour never
+// name two different populations.
+func isObviouslyPrivateDNSSuffix(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host == "localhost" || strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".home.arpa")
 }
 
 // validateRelayPin checks the effective SPKI pin BEFORE any filesystem work, so a rejected

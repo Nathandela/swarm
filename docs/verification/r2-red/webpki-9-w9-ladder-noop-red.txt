@@ -1,0 +1,11 @@
+=== RUN   TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp
+    r2_adr016_w9_test.go:65: the probe was called; this case must not attempt to prove anything
+--- FAIL: TestADR016W9_AlreadyOnTheAdvertisedWebPKIPolicyIsANoOp (0.01s)
+=== RUN   TestADR016W9_AlreadyOnTheAdvertisedPinnedSPKIPolicyIsANoOp
+--- PASS: TestADR016W9_AlreadyOnTheAdvertisedPinnedSPKIPolicyIsANoOp (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	0.836s
+testing: warning: no tests to run
+PASS
+ok  	github.com/Nathandela/swarm/mobile/conformance	1.053s [no tests to run]
+FAIL

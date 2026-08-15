@@ -1,0 +1,451 @@
+2026-08-15 -- RED evidence for the webpki punch-list follow-up fixes (findings against main,
+ADR-016 Web PKI relay TLS).
+go version: go1.26.5 darwin/amd64
+Repo: github.com/Nathandela/swarm
+
+Note on the test run below: `go test ./cmd/swarm/...` cannot compile at HEAD because a
+CONCURRENT, unrelated lane (R6, bd agents-tracker-hggx.7) has an untracked, in-progress
+RED-phase test file, cmd/swarm/r6_hookwiring_test.go, referencing hookclient/shim symbols that
+do not exist yet. That file is not touched by this pass (out of scope: internal/hookclient and
+internal/shim are explicitly not owned here). To capture genuine RED/GREEN for THIS pass's own
+change without disturbing the concurrent lane's in-flight file, the run below was taken against
+an isolated rsync copy of the repository (excluding .git, android, dist, e2e2session) with that
+one file (and the other R6 RED-phase files under internal/hookclient, internal/shim,
+internal/skeleton, internal/daemon) removed from the COPY ONLY -- the working tree at
+/Users/Nathan/Code/swarm was never modified for this purpose. The final verification run at the
+end of this pass re-confirms GREEN the same way once R6's own lane has had a chance to land.
+
+====================================================================================================
+FINDING 1 (HIGH): resolveRelayTLSPolicy (cmd/swarm/remote.go) defaulted an omitted
+--relay-tls-policy to webpki unconditionally, with no regard for what was already on disk.
+Re-running the documented, idempotent `swarm remote init --relay-url <url>` on an
+already-pinned_spki machine silently rewrote relay.json to webpki, exit 0, no warning.
+
+New regression test: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnAlreadyPinnedMachine
+  (cmd/swarm/r2_adr016_w1_test.go) -- the reviewer's own two-invocation reproduction: `remote
+  init --relay-url ... --relay-pin <spki>` then a second `remote init --relay-url ...` with no
+  policy flag, asserting the second call refuses (nonzero exit, naming
+  --relay-tls-policy webpki --relay-pin-compat as the deliberate route) and relay.json is
+  untouched.
+
+RED evidence (isolated copy, see note above):
+  $ go test ./cmd/swarm/... -run TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnAlreadyPinnedMachine -v
+  --- FAIL: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnAlreadyPinnedMachine (0.04s)
+      r2_adr016_w1_test.go:183: re-running remote init with no --relay-tls-policy silently
+      demoted an already-pinned machine to webpki (stdout="machineid.Identity{...}\n"); it must
+      refuse, not rewrite
+  RED for the right reason: the second call actually rewrote relay.json to webpki and exited 0,
+  reproducing the reviewer's finding exactly, not a compile/syntax failure.
+
+Fix: resolveRelayTLSPolicy now takes stateDir and, when the flag is omitted and no --relay-pin
+was given (the branch that would otherwise default to webpki), loads the existing relaycfg.Config
+and refuses -- before any write -- if it is already pinned_spki, naming
+--relay-tls-policy pinned_spki --relay-pin <pin> (keep the pin) and
+--relay-tls-policy webpki --relay-pin-compat <pin> (the deliberate route to webpki) in the
+message. Verified GREEN by the same test, plus the full TestADR016W1_* suite (-race).
+
+====================================================================================================
+FINDING 2 (MEDIUM, B45/W3 scope -- not strict-TDD per the punch-list's own scoping, applied and
+verified GREEN directly): the private-host residual the prior review round's own fix left (a
+webpki machine on a private DNS name still reaches B45's unverified pairing fallback) was named
+only in a code comment, not recorded against W3 itself, and no test proved the SUCCESS-path
+complement to the existing "public host refuses on a failed verified attempt" test.
+
+  (a) docs/adr/ADR-016-web-pki-relay-tls.md gains a dated AMENDMENT box under W3, naming the
+      residual, the two populations it does and does not cover, and the tests that prove the
+      public-host population is NOT exempted.
+  (b) New test, mobile/r2_adr016_w3_pairingdial_test.go:
+      TestADR016W3_PairingDialUsesTheVerifiedDialForAWebPKIMachineOnAPublicHost -- a webpki
+      machine on a public host whose verified attempt SUCCEEDS completes through exactly one
+      dial (the fallback is never even attempted). Verified GREEN immediately (documents
+      already-correct behaviour introduced by the prior round's own fix; no production change).
+  (c) refuseIPLiteralUnderWebPKI (cmd/swarm/remote.go) now also WARNS (does not refuse -- the
+      write still succeeds) when --relay-url names an obviously-private DNS suffix (.local,
+      .localhost, .home.arpa -- the same suffixes mobile/pairing.go's originIsPrivate already
+      classifies as private) under webpki, naming the residual from (a). New test:
+      TestADR016W1_WebPKIWarnsButAdmitsAnObviouslyPrivateDNSSuffix
+      (cmd/swarm/r2_adr016_w1_test.go). Verified GREEN: both new tests pass, plus the full
+      TestADR016W3_PairingDial* and TestADR016W1_* suites (-race).
+
+====================================================================================================
+FINDING 5 (LOW, ordering): applyRelayTLSPolicy's (policy, pin) no-op short-circuit (added by
+the prior review round) ran BEFORE the W4 step 2 host check, so a webpki profile naming a
+DIFFERENT relay_host was silently accepted as a no-op whenever policy and pin already matched,
+instead of being refused as stale_profile. The same short-circuit also compared PINS for the
+webpki case, so a machine withdrawing (or rotating) its W9 compatibility pin re-opened a fresh
+probe dial on an already-migrated handset -- observable, which ADR-016's own Conformance table
+(line 274) forbids for W9 step 6: "produces no observable change on a migrated handset."
+
+New regression tests (mobile/r2_adr016_w9_test.go):
+  - TestADR016W9_ANoOpPolicyAndPinDoesNotSkipTheHostCheck
+  - TestADR016W9_CompatibilityPinWithdrawalIsUnobservableOnAMigratedHandset
+
+RED evidence (isolated copy, see note above):
+  $ go test ./mobile/... -run 'TestADR016W9_ANoOpPolicyAndPinDoesNotSkipTheHostCheck|TestADR016W9_CompatibilityPinWithdrawalIsUnobservableOnAMigratedHandset' -v
+  --- FAIL: TestADR016W9_ANoOpPolicyAndPinDoesNotSkipTheHostCheck
+      applyRelayTLSPolicy admitted a profile naming a different relay host as a no-op because
+      policy and pin already matched; the host check must run first
+  --- FAIL: TestADR016W9_CompatibilityPinWithdrawalIsUnobservableOnAMigratedHandset
+      the probe was called; this case must not attempt to prove anything
+  Both RED for the right reason: an unwanted side effect actually happening (an admitted stale
+  host / an unwanted probe dial), not a syntax error.
+
+Fix: the no-op short-circuit is now split. The pinned_spki branch keeps its own (policy, pin)
+equality check where it already sat (pin rotation must still be adopted, never short-circuited).
+The webpki branch's no-op check now runs AFTER the host check and compares POLICY ONLY --
+"webpki phone, matching host" is a no-op regardless of what pin the profile carries, because W3's
+single rule is that a webpki phone never reads the pin at all, so a change to a value it never
+consults cannot be observable. Verified GREEN: both new tests plus the full TestADR016W9_* and
+TestADR016W1_* suites (-race).
+
+====================================================================================================
+FINDING 3 (MEDIUM, W4.5 surfacing): adoptReconcile (mobile/relay.go) discarded
+applyRelayTLSPolicy's own return value outright (`_ = a.applyRelayTLSPolicy(...)`). W4 step 5
+requires a failed migration to "surface webpki_unavailable with the operator-facing cause" --
+the security half of the ruling held (durable state is never weakened on failure, proven by the
+existing TestADR016W9_FailedProbeRetainsThePinAndSurfacesTheFailure), but the user-facing half
+never fired.
+
+New production surface: App.reportWebPKIUnavailable (mobile/relay.go) plus App.webpkiUnavailable
+(mobile/app.go), mirroring reportSkew/App.ClockVerdict's own pull-surface-plus-deduped-event
+shape for PB-TIME-1. adoptReconcile now threads applyRelayTLSPolicy's real return value into it
+instead of discarding it.
+
+New regression tests (mobile/r2_review_w4dot5_relaytrust_test.go):
+  - TestADR016W4dot5_FailedProbeSurfacesWebPKIUnavailableWithTheCause
+  - TestADR016W4dot5_ASuccessfulReconcileClearsAPriorWebPKIUnavailableVerdict
+  - TestADR016W4dot5_RepeatedIdenticalFailuresDoNotSpamEvents
+
+RED evidence: reportWebPKIUnavailable and App.webpkiUnavailable did not exist before this fix,
+so the RED here is the established convention this repo already uses for a genuinely new
+capability (see FINDING 2 in webpki-review-fixes-red.txt: "undefined symbol -- the seam did not
+exist yet; RED for the right reason") -- `go vet ./mobile/...` on the test file alone, before the
+production additions, reports `undefined: reportWebPKIUnavailable` / `undefined: webpkiUnavailable`.
+Verified GREEN after adding both: all three tests pass, plus the full mobile suite (-race).
+
+====================================================================================================
+FINDING 4 (MEDIUM, relay_trust_unavailable): a handset that migrated to webpki and then starts
+with no RelayTrust installed (Android's PhoneRuntime.installRelayTrust swallows every exception
+it can raise, by design, so SetRelayTrust is simply never called) resolves through
+TrustRootsPinned with no pin (handsetSecurity/effectiveStatePin withhold the pin under webpki)
+and fails PRE-HANDSHAKE with relay.ErrPinRequired -- mapped, before this fix, to
+connRelayUntrusted identically to a genuinely untrusted relay. W8 forbids presenting an app fault
+as a security accusation by name; the Kotlin side already stamps swarm-relaytrust/unavailable
+correctly (RelayTrustImpl) and the token was already exported (swarmmobile.RelayTrustUnavailable,
+mobile/relaytrust.go), but nothing on the Go side ever read it back into a distinct state.
+
+New production surface: App.relayTrustUnavailable (mobile/relaytrust.go), a classifier over the
+dial error that returns true either for the Kotlin-stamped RelayTrustUnavailable token (reached
+when a delegate WAS installed and consulted but itself failed) or for a bare ErrPinRequired on a
+webpki phone with a.relayTrust == nil (reached when no delegate was ever installed at all -- the
+"startup" case the finding names, ADR-016's own Conformance row: "No platform verifier |
+ErrPinRequired | relay_trust_unavailable | distinct copy from a security verdict"). A new
+connection state, connRelayTrustUnavailable ("relay_trust_unavailable", app-fault wording), is
+checked in App.run's dial-error switch BEFORE the generic ErrPinRequired arm, and is added to the
+same "must not be overwritten by the reconnecting spinner" list connRelayUntrusted/
+connRelayInsecure already sit on.
+
+New regression test (mobile/r2_review_w4dot5_relaytrust_test.go):
+  - TestADR016W8_RelayTrustUnavailableStaysDistinctFromRelayUntrusted -- four cases: webpki + no
+    delegate (must classify as relay_trust_unavailable), pinned_spki + genuinely no pin (must
+    stay relay_untrusted -- a real security-adjacent state), webpki + a delegate installed (must
+    not over-fire), and the literal Kotlin token wrapped as a live dial would wrap it (must
+    classify regardless of this phone's own policy).
+
+RED evidence: relayTrustUnavailable and connRelayTrustUnavailable did not exist before this fix,
+same convention as Finding 3 above -- `undefined: relayTrustUnavailable`. Verified GREEN after
+adding both: the test passes, plus the full mobile suite (-race).
+
+====================================================================================================
+FINDING 6 (LOW, Kotlin hostname): RelayTrust.kt's independent hostname check
+(verifyHostnameCoversLeaf/matchesHostname) was stricter than Go's x509.Certificate.VerifyHostname
+in two ways that break otherwise-valid deployments, Android-only: (a) only dNSName SAN entries
+(type 2) were considered, so a certificate with an iPAddress SAN -- which Go's VerifyHostname
+accepts -- was refused; (b) matchesHostname's wildcard branch stripped the suffix with the
+case-SENSITIVE host.removeSuffix(suffix) BEFORE its ignoreCase endsWith guard, so
+wss://Relay.Example.com against a *.example.com certificate passed Go and failed Kotlin. Both
+fail CLOSED (not a hole), but both make an otherwise-valid relay undialable on Android only.
+
+New regression tests (android/app/src/test/kotlin/dev/swarm/phone/relay/RelayTrustImplTest.kt),
+against two freshly-generated fixtures (a throwaway CA plus a *.example.com wildcard leaf and a
+203.0.113.7-only iPAddress-SAN leaf, no dNSName at all -- openssl ecparam, same style as the
+file's existing fixtures):
+  - a_wildcard_certificate_admits_a_differently_cased_host
+  - an_ip_literal_host_is_admitted_by_a_matching_ipaddress_san
+  - an_ip_literal_host_is_refused_when_no_ipaddress_san_matches (negative control: an IP host
+    with NO matching SAN must still refuse)
+
+RED evidence (scoped edit-and-restore on the two functions, not a git revert -- this file's
+accumulated diff from HEAD also carries the prior review round's OWN fix, which a blind revert
+would have undone too):
+  $ . android/toolchain.env && android/gradlew --project-dir android :app:testDebugUnitTest --tests "dev.swarm.phone.relay.RelayTrustImplTest"
+  RelayTrustImplTest > a_wildcard_certificate_admits_a_differently_cased_host FAILED
+  RelayTrustImplTest > an_ip_literal_host_is_admitted_by_a_matching_ipaddress_san FAILED
+  7 tests completed, 2 failed
+  RED for the right reason: exactly the two new tests fail against the pre-fix logic: the other
+  five (including the negative control, an_ip_literal_host_is_refused_when_no_ipaddress_san_matches,
+  which does not depend on the fix) stay green.
+
+Fix: verifyHostnameCoversLeaf now branches on isIPLiteral(host) (a syntactic-only check -- no
+java.net.InetAddress.getByName, which would trigger a real DNS lookup for an ordinary hostname on
+this synchronous verification path): an IP-literal host is matched against iPAddress SAN entries
+(type 7) exactly; anything else against dNSName SAN entries (type 2) via matchesHostname.
+matchesHostname now lowercases both pattern and host BEFORE any comparison, including before the
+wildcard suffix strip. Verified GREEN: all 7 RelayTrustImplTest cases pass (test-results XML:
+tests="7" failures="0" errors="0"), plus the full `:app:testDebugUnitTest` suite.
+
+====================================================================================================
+FINDING 7 (LOW, stale comments -- doc-only, no test surface):
+  (a) mobile/relay.go's handsetSecurity doc comment still enumerated three pre-ADR-016 handset
+      states, still asserted the wss:// dial is unconditionally refused with ErrPinRequired on a
+      pinning-only platform (now false under webpki with a platform delegate installed), and still
+      closed with "Residual 1.9 is therefore NOT resolved ... Recorded, not papered over" -- which
+      the pairing-dial mechanism ADR-016 W2/W3 actually ship falsifies (the pairing dial is
+      verified under webpki, or B45's exemption + B48's capture-then-compare covers the expert
+      population; handsetSecurity itself was never the resolution path and the comment's own
+      framing was the defect). Rewritten to state the POST-ADR-016 states, the platform-delegate
+      layering, and why the pairing dial (not this function) is what actually closes the old
+      bootstrap gap.
+  (b) docs/operations/operator-runbook.md:346-353 still read "target state, arrives with wave R2"
+      and "Today, before R2 ships, the pin is the only relay TLS policy there is" -- both false at
+      HEAD (R2 shipped; webpki is the default). Corrected with a dated CORRECTED box in this same
+      file's own established style (see the AMENDED box at :97-111), naming precisely what HAS
+      shipped (the webpki default) and what has NOT (W5's pin-rotation channel, bd
+      agents-tracker-hggx.3.5.1) so the two halves of the original claim are not conflated.
+Verified: both are prose-only; `golangci-lint run` over the ADR-016 package set and the full
+mobile/cmd suites (already run above) are unaffected by either edit.
+
+====================================================================================================
+RE-VERIFICATION ROUND (2026-08-15): an adversarial re-audit of the FINDING 1 fix above found
+three further defects in the SAME three lines (cmd/swarm/remote.go's resolveRelayTLSPolicy,
+the disk-check guard). go version: go1.26.5 darwin/amd64.
+
+RE-VERIFICATION FINDING A (HIGH, unresolved variant of FINDING 1): the guard keyed on exact
+string equality against relaycfg.PolicyPinnedSPKI, but the population that actually exists on
+disk before anyone has ever typed --relay-tls-policy is the LEGACY shape -- relay_spki_pin set,
+no relay_tls_policy key -- which relaycfg.Config.Security itself reads as pinned ("TLSPolicy ==
+"" is the legacy shape ... and is read as pinned_spki here ... Only an EXPLICIT webpki policy
+withdraws consultation"). The guard never fired for it, so the ONLY population that can exist
+before this ADR's flags were ever used was still silently demoted at exit 0.
+
+New regression test: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteALegacyPinnedMachine
+  (cmd/swarm/r2_adr016_w1_test.go) -- seeds the legacy shape directly via relaycfg.Save (not
+  through the CLI, which always writes an explicit policy), then re-runs `remote init
+  --relay-url ...` with no policy flag.
+
+RED evidence:
+  $ go test ./cmd/swarm/... -run TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteALegacyPinnedMachine -v
+  --- FAIL: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteALegacyPinnedMachine (0.05s)
+      r2_adr016_w1_test.go:228: re-running remote init with no --relay-tls-policy silently
+      demoted a LEGACY pinned machine (relay_spki_pin set, no relay_tls_policy field) to
+      webpki (stdout="machineid.Identity{...}\n"); it must refuse, not rewrite
+  RED for the right reason: the run actually rewrote relay.json's legacy shape to webpki and
+  exited 0, reproducing the re-audit's exact finding.
+
+RE-VERIFICATION FINDING B (BLOCKING, new defect the FINDING 1 fix introduced): the guard ran
+UNCONDITIONALLY, including when --relay-url is empty -- exactly the invocation that never
+reaches relaycfg.Save (runRemoteInit only writes relay.json when a URL is given), so nothing
+on that call could ever demote anything. Refusing it anyway killed the bare, flagless `swarm
+remote init` on every pinned_spki machine: the documented idempotent identity/gateway repair
+path runRemoteInit's own comment names as the ONLY supported way to restart a down gateway.
+The refusal's own remedy does not work without a URL either (--relay-pin is refused by
+validateRelayPin with no --relay-url), so every no-URL invocation on a pinned machine failed
+except the no-op --relay-tls-policy webpki, which writes nothing.
+
+New regression test: TestADR016W1_BareReRunOnAPinnedMachineStillProvisionsTheIdentity
+  (cmd/swarm/r2_adr016_w1_test.go) -- pins a machine, then re-runs `remote init` with NO flags
+  at all and asserts exit 0, the same identity printed, and relay.json unchanged.
+
+RED evidence (against the FINDING-A fix alone, before the relayURL == "" short-circuit):
+  $ go test ./cmd/swarm/... -run TestADR016W1_BareReRunOnAPinnedMachineStillProvisionsTheIdentity -v
+  --- FAIL: TestADR016W1_BareReRunOnAPinnedMachineStillProvisionsTheIdentity (0.01s)
+      r2_adr016_w1_test.go:269: bare `remote init` (no flags) on an already-pinned machine was
+      refused: exit=1 stderr=remote init: --relay-tls-policy was omitted, but this machine is
+      already provisioned as "pinned_spki"; defaulting to "webpki" would silently move it off
+      the pin ... -- it writes nothing to relay.json and must remain available
+  RED for the right reason: the guard refused a call that writes nothing, reproducing the
+  re-audit's exact finding.
+
+RE-VERIFICATION FINDING C (BLOCKING-adjacent, MEDIUM, same three lines): the guard's disk read
+was `existing, found, _ := relaycfg.Load(stateDir)`, discarding Load's error. Load's own
+contract is the opposite: "a file that exists but cannot be read or parsed IS an error, so a
+corrupt provisioning fails closed rather than silently reverting to unconfigured." A relay.json
+truncated by an interrupted write or a disk-full save was silently treated as "nothing on disk"
+and overwritten with a fresh webpki config at exit 0, with no diagnostic.
+
+New regression test: TestADR016W1_ReRunWithCorruptRelayJSONRefusesRatherThanSilentlyOverwriting
+  (cmd/swarm/r2_adr016_w1_test.go) -- seeds a truncated relay.json (`{"relay_url": `) directly
+  on disk, then re-runs `remote init --relay-url ...` and asserts refusal with the original
+  bytes untouched.
+
+RED evidence:
+  $ go test ./cmd/swarm/... -run TestADR016W1_ReRunWithCorruptRelayJSONRefusesRatherThanSilentlyOverwriting -v
+  --- FAIL: TestADR016W1_ReRunWithCorruptRelayJSONRefusesRatherThanSilentlyOverwriting (0.02s)
+      r2_adr016_w1_test.go:309: remote init silently overwrote a CORRUPT relay.json
+      (stdout="machineid.Identity{...}\n"); relaycfg.Load's parse error must fail the run
+      closed, not be discarded
+  RED for the right reason: the corrupt file was actually replaced with a valid webpki
+  relay.json at exit 0.
+
+Fix (single edit to resolveRelayTLSPolicy's case "" branch, cmd/swarm/remote.go): the disk
+check is now a three-way switch --
+  (1) --relay-pin given: infer pinned_spki, as before (unaffected).
+  (2) relayURL == "": skip the disk check entirely and default to webpki -- this is exactly
+      the branch that never writes, so there is nothing to protect.
+  (3) otherwise: relaycfg.Load's error is propagated as a refusal (not discarded), and the
+      "already pinned" predicate is `found && (existing.TLSPolicy == PolicyPinnedSPKI ||
+      (existing.TLSPolicy == "" && existing.SPKIPin != ""))` -- catching both the explicit
+      pinned_spki shape and the legacy shape relaycfg.Config.Security itself treats as pinned.
+      The refusal message names which shape was found (explicit vs. legacy) and keeps the same
+      two deliberate routes (--relay-tls-policy pinned_spki --relay-pin <pin>, or
+      --relay-tls-policy webpki --relay-pin-compat <pin>).
+
+Verified GREEN: all three new tests pass, plus the full TestADR016W1_* suite (12 cases,
+including the original FINDING 1 reproduction, the IP-literal refusal, and the private-suffix
+warning):
+  $ go test ./cmd/swarm/... -run 'TestADR016W1_' -v
+  ok  	github.com/Nathandela/swarm/cmd/swarm	1.483s   (12/12 PASS)
+Also verified: `go build ./...`, `go vet ./cmd/swarm/...`,
+`go test -race -count=1 ./cmd/swarm ./cmd/swarm-remote ./internal/remote/relaycfg` (all ok),
+`go test -race -count=1 -run 'ADR016|WebPKI|RelayTrust|Profile' ./internal/phonecore ./mobile`
+(both ok), `golangci-lint run ./cmd/swarm/... ./internal/remote/relaycfg/...` -> 0 issues.
+No Kotlin file touched by this round, so the prior round's Gradle GREEN evidence stands
+unchanged.
+
+====================================================================================================
+SECOND RE-VERIFICATION ROUND (2026-08-15): a fresh adversarial re-audit, reproducing everything
+from source rather than taking the prior round's report on trust, confirmed FINDING 1's original
+HIGH and all three RE-VERIFICATION FINDINGS (A/B/C) above fixed, then found one new BLOCKING
+defect and two new MEDIUM findings in the SAME code, plus one LOW in the already-shipped
+mobile/relaytrust.go classifier and one pre-existing LOW doc/code mismatch. go version:
+go1.26.5 darwin/amd64.
+
+BLOCKING (residual silent-demotion path, cmd/swarm/remote.go:542-546 pre-fix): the guard's
+"already pinned" predicate enumerated two exact-equality shapes (TLSPolicy == "pinned_spki", or
+the legacy TLSPolicy == "" with a pin), but relaycfg.Config.Security's own predicate is broader --
+`if c.TLSPolicy != PolicyWebPKI { sec.PinnedSPKISHA256 = pin }` pins the machine's REAL dials for
+ANY value that is not the literal "webpki". A relay.json carrying an unrecognised or wrong-cased
+policy string (a hand-edited relay.json -- operator-runbook.md's own documented `printf` repair
+path -- or an N/N-1 downgrade reading a newer build's policy string) alongside a real pin was
+therefore pinned by Security() while the two-shape guard read it as unpinned, reproducing FINDING
+1's exact silent-demotion shape on a population the enumeration missed.
+
+New regression test: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnUnrecognisedPinnedPolicy
+  (cmd/swarm/r2_adr016_w1_test.go) -- seeds relay.json with TLSPolicy "Pinned_SPKI" (wrong case)
+  and a real pin, then re-runs `remote init --relay-url ...` with no policy flag.
+
+RED evidence:
+  $ go test ./cmd/swarm/... -run TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnUnrecognisedPinnedPolicy -v
+  --- FAIL: TestADR016W1_ReRunWithoutPolicyFlagRefusesToDemoteAnUnrecognisedPinnedPolicy (0.04s)
+      r2_adr016_w1_test.go:397: re-running remote init with no --relay-tls-policy silently
+      demoted a machine carrying an UNRECOGNISED pinned policy (stdout="machineid.Identity{...}");
+      relaycfg.Config.Security reads anything other than "webpki" as pinned, so the guard must too
+  RED for the right reason: the run actually rewrote relay.json's unrecognised-policy shape to
+  webpki and exited 0.
+
+Fix: the two-shape enumeration is replaced by one condition that mirrors Security's own predicate
+exactly -- `found && existing.TLSPolicy != relaycfg.PolicyWebPKI && existing.SPKIPin != ""` --
+subsuming both the explicit pinned_spki shape and the legacy shape, and catching everything else
+too. Verified GREEN by the new test, plus the full TestADR016W1_* suite (-race).
+
+MEDIUM (W9 compatibility pin withdrawn by omission, cmd/swarm/remote.go:520-566): the flagless
+re-run path dropped an already-published W9 compatibility pin whenever --relay-pin-compat was not
+re-typed, even against an UNCHANGED relay -- not a TLS downgrade (webpki verification is
+untouched), but the same omission shape FINDING 1 closed one rung up, and B58's "every dial
+refused" case reached this time by typing nothing rather than a policy demotion.
+
+New regression tests (cmd/swarm/r2_adr016_w1_test.go):
+  - TestADR016W1_ReRunWithoutPolicyFlagCarriesForwardTheExistingCompatibilityPin -- a flagless
+    re-run against the SAME relay must carry the existing compatibility pin forward.
+  - TestADR016W1_ExplicitWebPKIWithNoCompatPinWithdrawsAnExistingCompatibilityPin -- a control:
+    the DELIBERATE route (typing --relay-tls-policy webpki explicitly with no
+    --relay-pin-compat) must still withdraw the pin, proving the carry-forward fix did not also
+    disable W9 step 6's actual withdrawal mechanism.
+
+RED evidence:
+  $ go test ./cmd/swarm/... -run 'TestADR016W1_ReRunWithoutPolicyFlagCarriesForwardTheExistingCompatibilityPin|TestADR016W1_ExplicitWebPKIWithNoCompatPinWithdrawsAnExistingCompatibilityPin' -v
+  --- FAIL: TestADR016W1_ReRunWithoutPolicyFlagCarriesForwardTheExistingCompatibilityPin (0.02s)
+      r2_adr016_w1_test.go:450: SPKIPin = "", want the compatibility pin
+      "cGluLWJ5dGVzLXBpbi1ieXRlcy1waW4tYnl0ZXMtcDE=" carried forward, not dropped
+  --- PASS: TestADR016W1_ExplicitWebPKIWithNoCompatPinWithdrawsAnExistingCompatibilityPin (0.02s)
+  RED for the right reason on the carry-forward test (the pin was actually dropped); the control
+  test already passed at baseline, confirming it is not a false negative once the fix lands.
+
+Fix: within the omitted-flag, not-already-pinned branch, when --relay-pin-compat is empty AND the
+existing on-disk config is already webpki with a pin AND --relay-url is unchanged from the
+existing relay_url, the existing SPKIPin is carried forward as the effective compatibility pin
+before falling through to the switch that writes it. A changed --relay-url (a different relay)
+does not carry the old pin forward. Verified GREEN: both new tests pass, plus the full
+TestADR016W1_* suite (-race).
+
+MEDIUM (spec drift, docs-only): the omitted-flag refusal above is a new operator-visible exit-1
+outcome with no ADR entry, and W6's own text (ADR-016:135) states "nothing demotes a policy
+silently" only in the pinned direction. Fix: a dated AMENDMENT (2026-08-15) under ADR-016 W6
+records the refusal, the guard's predicate, its scope (skipped when --relay-url is empty; a
+corrupt relay.json fails closed), the compatibility-pin carry-forward, and names the seven tests
+that bind it. operator-runbook.md section 2 gains one paragraph, appended to the existing AMENDED
+box, warning an operator who hand-writes relay.json (as that section's own printf example does)
+that a later flagless `remote init` now refuses rather than silently adopting webpki over
+whatever was written -- including an unrecognised value. cmd/swarm/r2_adr016_w1_test.go's own
+header comment ("over the FLAG only, never over stored state") gained a clause: the demotion
+guard DOES read stored state now, but only to refuse, never to select a policy the operator did
+not type. Doc-only; no test surface.
+
+LOW (mobile/relaytrust.go:88-104, already-shipped classifier): relayTrustUnavailable matched the
+RelayTrustUnavailable token anywhere in err.Error(), but RelayTrust.kt wraps peer-controlled text
+alongside its verdict token (a path-validation failure's message carries the presented
+certificate's own DN; SANs are interpolated verbatim). A hostile relay could therefore embed the
+literal string "swarm-relaytrust/unavailable" inside its own certificate's DN on a genuinely
+UNTRUSTED chain and flip a real relay_untrusted verdict into the relay_trust_unavailable app-fault
+state -- copy/state only (both arms of the dial loop end the connection identically), but exactly
+the substitution W8 forbids by name.
+
+New regression test: TestADR016W8_UntrustedTokenWinsOverAnAttackerEmbeddedUnavailableToken
+  (mobile/r2_review_w4dot5_relaytrust_test.go) -- an error stamped with the RelayTrustUntrusted
+  prefix (Kotlin's real verdict) whose wrapped certificate DN also happens to contain the
+  RelayTrustUnavailable token's literal text.
+
+RED evidence:
+  $ go test ./mobile/... -run TestADR016W8_UntrustedTokenWinsOverAnAttackerEmbeddedUnavailableToken -v
+  --- FAIL: TestADR016W8_UntrustedTokenWinsOverAnAttackerEmbeddedUnavailableToken (0.01s)
+      r2_review_w4dot5_relaytrust_test.go:197: a hostile relay embedding the
+      RelayTrustUnavailable token inside its own certificate must not flip a genuine
+      RelayTrustUntrusted verdict into the relay_trust_unavailable app-fault classification
+  RED for the right reason: the classifier actually returned true (misclassified) before the fix.
+
+Fix: relayTrustUnavailable now checks for the RelayTrustUntrusted token FIRST and returns false
+immediately if present, before checking for RelayTrustUnavailable -- the untrusted token wins
+when both appear in the same wrapped error. Verified GREEN: the new test passes, plus the full
+TestADR016W8_* suite (-race), which also confirms case 4 (the bare unavailable token, no
+untrusted token present) still classifies correctly.
+
+LOW (pre-existing, doc vs code, not this round's regression): docs/operations/relay-runbook.md:292
+told the operator a relay key rotation "needs `swarm remote init --relay-pin <new value>` re-run
+on the machine". That exact command exits 1: validateRelayPin (cmd/swarm/remote.go) refuses
+--relay-pin without --relay-url. Fixed with a dated CORRECTED note adding --relay-url to the
+command and explaining why (a pin names the certificate a relay must present, so there is nothing
+for it to apply to with no URL given) and why --relay-tls-policy need not be repeated (the one
+surviving legacy inference: --relay-pin alone still selects pinned_spki). Doc-only; no test
+surface, but the corrected command was verified against the fixed binary: `remote init --relay-url
+<url> --relay-pin <pin>` on an already-pinned_spki machine exits 0 (TestADR016W1_
+RelayPinWithNoPolicyFlagInfersPinnedSPKI already covers the underlying mechanics).
+
+Full re-verification, all green:
+  $ go build ./...                                                                    -> ok
+  $ go vet ./cmd/swarm/... ./cmd/swarm-remote/... ./internal/remote/relaycfg/... ./mobile/...  -> ok
+  $ go test ./cmd/swarm/... -run 'TestADR016W1_' -v                                    -> 15/15 PASS
+  $ go test -race -count=1 ./cmd/swarm ./cmd/swarm-remote ./internal/remote/relaycfg   -> ok
+  $ go test -race -count=1 -run 'ADR016|WebPKI|RelayTrust|Profile' ./internal/phonecore ./mobile -> ok
+  $ golangci-lint run ./cmd/swarm/... ./internal/remote/relaycfg/... ./mobile/...       -> 0 issues
+No Kotlin file touched by this round (no finding required it), so the prior round's Gradle GREEN
+evidence stands unchanged.
+
+--- CORRECTION 2026-08-15 (appended; the claim above was inaccurate) ---
+"Full re-verification, all green" did not include internal/remote/relay, whose
+TestPBOPS5_OnlyRelayCfgDecodesThePin fence was RED against the round's guard (three direct
+SPKIPin reads in cmd/swarm/remote.go). Resolved by relaycfg.HasPin()/PinBase64() accessors so
+presence and carry-forward never touch the base64 form outside the one decoding package. The
+residual policy-without-pin demotion the third-round verifier reproduced is closed by widening
+the guard to the policy axis (TestADR016W1_ReRunRefusesToDemoteAPolicyStoredWithoutAPin, whose
+own first run failed on a wrong seed path - the rig seeded <state>/relay.json where Load reads
+<state>/remote/relay.json - then passed against the widened guard).

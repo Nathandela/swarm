@@ -2,6 +2,8 @@ package dev.swarm.phone.relay
 
 import android.net.http.X509TrustManagerExtensions
 import java.io.ByteArrayInputStream
+import java.security.cert.CertPathValidatorException
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import swarmmobile.RelayTrust
@@ -59,8 +61,35 @@ class RelayTrustImpl(private val extensions: X509TrustManagerExtensions) : Relay
             // (and Conscrypt's implementation) only consult it as a hint for chain building, and
             // the actual leaf key algorithm is read from the certificate itself.
             extensions.checkServerTrusted(chain.toTypedArray(), "RSA", host)
-        } catch (e: Exception) {
+        } catch (e: CertificateException) {
+            // X509TrustManagerExtensions reaches its DELEGATE reflectively, and wraps EVERY
+            // failure of that call -- a genuine trust refusal from the delegate AND a failure
+            // to invoke the delegate at all (access, provider, initialisation) -- in a
+            // CertificateException, so this type alone does not separate the two: verified
+            // empirically, an untrusted chain surfaces with a java.security.cert cause (a
+            // CertPathValidatorException, here), while a delegate the platform could not even
+            // call (e.g. an IllegalAccessException) surfaces with the SAME exception type and
+            // a fixed "Failed to call checkServerTrusted" message. The cause's own domain is
+            // therefore the signal: a cause inside java.security.cert (or none at all) is a
+            // real verdict about the peer; anything else is Android's own plumbing failing to
+            // reach the verifier, which W8 forbids presenting as a security accusation.
+            val cause = e.cause
+            if (cause != null && cause !is CertificateException && cause !is CertPathValidatorException) {
+                throw Exception(
+                    "swarm-relaytrust/unavailable: the platform trust manager could not be " +
+                        "consulted: ${e.message}: ${cause.message}",
+                    e,
+                )
+            }
             throw Exception("swarm-relaytrust/untrusted: ${e.message}", e)
+        } catch (e: Exception) {
+            // Any OTHER exception type reaching here is not even a CertificateException --
+            // never a trust verdict about the peer, and W8 forbids presenting it as one.
+            throw Exception(
+                "swarm-relaytrust/unavailable: checkServerTrusted failed for a reason that is " +
+                    "not a trust verdict: ${e.message}",
+                e,
+            )
         }
 
         // KOTLIN'S OWN HOSTNAME CHECK, explicit and independent of whatever
@@ -76,38 +105,73 @@ class RelayTrustImpl(private val extensions: X509TrustManagerExtensions) : Relay
 }
 
 /**
- * verifyHostnameCoversLeaf refuses unless one of the leaf's dNSName SAN entries covers
- * host, case-insensitively, with ordinary single-label wildcard matching
- * (`*.example.com` covers `swarm-relay.example.com`, not `a.b.example.com`). It is the
- * same shape `x509.Certificate.VerifyHostname` checks on the Go side, kept independent
- * so a certificate mis-scoped for a different name is refused however this device's
- * default `TrustManagerFactory` happens to be implemented.
+ * verifyHostnameCoversLeaf refuses unless the leaf's SANs cover host, mirroring
+ * `x509.Certificate.VerifyHostname` on the Go side: an IP-literal host is matched against
+ * `iPAddress` SAN entries (type 7) EXACTLY -- the ADR-016 W6 development population, an
+ * IP literal a `pinned_spki` relay may legitimately present -- and any other host is
+ * matched against `dNSName` SAN entries (type 2), case-insensitively, with ordinary
+ * single-label wildcard matching (`*.example.com` covers `swarm-relay.example.com`, not
+ * `a.b.example.com`). Kept independent of `checkServerTrusted`'s own hostname handling so
+ * a certificate mis-scoped for a different name is refused however this device's default
+ * `TrustManagerFactory` happens to be implemented.
  */
 private fun verifyHostnameCoversLeaf(host: String, leaf: X509Certificate) {
-    val dnsNames = try {
+    val sans = try {
         leaf.subjectAlternativeNames
     } catch (e: Exception) {
         null
-    }?.mapNotNull { entry ->
-        val type = (entry.getOrNull(0) as? Number)?.toInt()
-        val value = entry.getOrNull(1) as? String
-        if (type == 2 && value != null) value else null
     } ?: emptyList()
 
-    if (dnsNames.none { matchesHostname(it, host) }) {
+    val dnsNames = sanValues(sans, type = 2)
+    val covered = if (isIPLiteral(host)) {
+        sanValues(sans, type = 7).any { it == host }
+    } else {
+        dnsNames.any { matchesHostname(it, host) }
+    }
+    if (!covered) {
         throw Exception(
             "swarm-relaytrust/untrusted: the certificate's SANs ($dnsNames) do not cover host $host",
         )
     }
 }
 
+/** sanValues extracts every SAN entry of the given GeneralName type (RFC 5280 numbering). */
+private fun sanValues(sans: Collection<List<*>>, type: Int): List<String> =
+    sans.mapNotNull { entry ->
+        val entryType = (entry.getOrNull(0) as? Number)?.toInt()
+        val value = entry.getOrNull(1) as? String
+        if (entryType == type && value != null) value else null
+    }
+
+/**
+ * isIPLiteral is a SYNTACTIC check only, deliberately: this runs inside a TLS verification
+ * callback and must never trigger a DNS lookup -- `java.net.InetAddress.getByName` would,
+ * for anything that is not already a literal, which is precisely the wrong failure mode on
+ * this path (blocking, and the ordinary case is a genuine hostname). An IPv6 literal always
+ * contains ':', which no valid DNS label may (RFC 1123); an IPv4 literal is dotted-quad
+ * decimal. A string this loosely matches but is not actually a valid address simply matches
+ * no real `iPAddress` SAN below, so looseness here costs nothing.
+ */
+private fun isIPLiteral(host: String): Boolean = host.contains(':') || ipv4Literal.matches(host)
+
+private val ipv4Literal = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+
+/**
+ * matchesHostname is dNSName-only (see verifyHostnameCoversLeaf for the iPAddress half).
+ * Both pattern and host are lowercased BEFORE any comparison, including before the
+ * wildcard suffix is stripped -- `host.removeSuffix(suffix)` is itself case-sensitive, so
+ * comparing the two in their original case let a differently-cased host (`Relay.Example.com`
+ * against a `*.example.com` SAN) fail here while passing Go's own case-insensitive
+ * `VerifyHostname`.
+ */
 private fun matchesHostname(pattern: String, host: String): Boolean {
-    if (pattern.equals(host, ignoreCase = true)) return true
-    if (pattern.startsWith("*.")) {
-        val suffix = pattern.substring(1) // ".example.com"
-        val label = host.removeSuffix(suffix)
-        return label != host && label.isNotEmpty() && !label.contains('.') &&
-            host.endsWith(suffix, ignoreCase = true)
+    val p = pattern.lowercase()
+    val h = host.lowercase()
+    if (p == h) return true
+    if (p.startsWith("*.")) {
+        val suffix = p.substring(1) // ".example.com"
+        val label = h.removeSuffix(suffix)
+        return label != h && label.isNotEmpty() && !label.contains('.') && h.endsWith(suffix)
     }
     return false
 }

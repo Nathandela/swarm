@@ -94,20 +94,27 @@ literal**, and B34 makes it **carry the operator's SPKI pin from `relay.json`**.
 `TestPBOPS5_TheGatewayHonoursTheConfiguredPin` and
 `TestPBOPS5_TheGatewayResolvesItsPinFromRelayJSON`. **Configure the pin; it is enforced.**
 
-> **AMENDED BY ADR-016 (2026-08-15), target state — arrives with wave R2 (`ADR-016:5`):** "Configure
-> the pin; it is enforced" remains exactly true **today** — there is no `--relay-tls-policy` flag
-> yet, and the pin is the whole of relay TLS verification. Once R2 ships, the pin becomes the
-> **expert** `pinned_spki` policy, opt in via `--relay-tls-policy pinned_spki --relay-pin ...`, and
-> the new **default** policy will be `webpki` — ordinary Web PKI hostname validation against a real
-> certificate, no pin configured or consulted at all. Even then, a machine that has adopted
-> `webpki` must keep publishing a compatibility pin (`--relay-pin-compat`) while any paired device
-> has not yet migrated off it (ADR-016 W9) — `swarm remote init` refuses a pinless `webpki` profile
-> until every paired device acknowledges. See `docs/operations/relay-vps-deploy.md` for the target
-> default flow and `docs/operations/relay-runbook.md` for when the expert policy will still be the
-> right choice (self-signed or IP-literal relays). **`webpki` means chains to a trusted root, name
-> matches, inside validity — and not that the certificate is unrevoked.** Neither the platform
-> default trust manager nor Go's own verifier checks OCSP/CRL; the honest mitigation is short
-> certificate lifetimes (ADR-016 W2).
+> **AMENDED BY ADR-016 (2026-08-15), landed with wave R2 (`ADR-016:5`):** "Configure the pin; it is
+> enforced" is now the description of the **expert** `pinned_spki` policy, opt in via
+> `--relay-tls-policy pinned_spki --relay-pin ...`. The **default** policy is now `webpki` —
+> ordinary Web PKI hostname validation against a real certificate, no pin configured or consulted
+> at all. A machine that has adopted `webpki` should keep publishing a compatibility pin
+> (`--relay-pin-compat`) while any paired device has not yet migrated off it (ADR-016 W9) — **the
+> per-device acknowledgement gate that would REFUSE a pinless `webpki` profile until every paired
+> device has migrated is not built yet** (tracked: bd agents-tracker-hggx.3.5.3); until it lands,
+> `swarm remote init --relay-tls-policy webpki` with no `--relay-pin-compat` writes the pinless
+> profile immediately, and an un-migrated Android build then refuses every dial (ADR-007 B58) —
+> publish the compatibility pin explicitly until that gate exists. See
+> `docs/operations/relay-vps-deploy.md` for the default flow and `docs/operations/relay-runbook.md`
+> for when the expert policy is still the right choice (self-signed or IP-literal relays).
+> **`webpki` means chains to a trusted root, name matches, inside validity — and not that the
+> certificate is unrevoked.** Neither the platform default trust manager nor Go's own verifier
+> checks OCSP/CRL; the honest mitigation is short certificate lifetimes (ADR-016 W2).
+> **If you hand-write `relay.json` (as the block above does) onto a machine that already has a
+> `relay_tls_policy` set, a later `swarm remote init --relay-url ...` with `--relay-tls-policy`
+> omitted now refuses rather than silently adopting `webpki` over whatever you wrote — including
+> when the value you hand-wrote is not `pinned_spki` or `webpki` verbatim (ADR-016 W6's amendment);
+> pass `--relay-tls-policy` explicitly to move it deliberately.**
 
 **`relay.json` is read once, at sidecar start.** `swarm-remote` redials the relay on ADR-007
 §6.0's backoff when the link drops (PB-NET-4) rather than exiting for the supervisor to restart
@@ -341,14 +348,18 @@ chmod 0600 "$SWARM_DAEMON_STATE/remote-policy.json"
   > `docs/operations/relay-vps-deploy.md` §13. Disk-full behaviour for the backup path is covered
   > there too; the rest of this bullet's list (log rotation, health checks, resource limits,
   > cross-version compatibility) is unaffected.
-- **Re-pinning a fleet after a relay key rotation** — target state, arrives with wave R2
-  (`ADR-016:5`): under the future default `webpki` policy there will be no pin to re-issue, since
-  rotation becomes ordinary certificate renewal verified against platform trust roots. Under the
-  expert `pinned_spki` policy the pairing QR will still carry no pin field, but ADR-016 will give
-  that policy an authenticated current/next pin overlap (`--relay-pin-next`) that will not require
-  re-pairing every device on a planned rotation — see relay runbook §8c. **Today**, before R2
-  ships, the pin is the only relay TLS policy there is, and a fleet-wide key rotation has no
-  channel of its own yet — every paired handset is re-paired, per relay runbook §8c.
+- **Re-pinning a fleet after a relay key rotation** — partially resolved, landed with wave R2
+  (`ADR-016:5`).
+  > **CORRECTED 2026-08-15.** This bullet previously read "target state, arrives with wave R2" and
+  > "Today, before R2 ships, the pin is the only relay TLS policy there is" — both now false in the
+  > direction that undersells what shipped. R2 has landed: the default policy is `webpki`, and
+  > under it there is no pin to re-issue at all, since rotation is ordinary certificate renewal
+  > verified against platform trust roots. **What has NOT shipped is W5's rotation channel for the
+  > expert `pinned_spki` policy** (tracked: bd agents-tracker-hggx.3.5.1) — the pairing QR still
+  > carries no pin field, and ADR-016 W5's authenticated current/next pin overlap
+  > (`--relay-pin-next`) is not yet built. Under `pinned_spki` today a fleet-wide key rotation
+  > therefore still has no channel of its own: every paired handset is re-paired, per relay runbook
+  > §8c, exactly as before this ADR.
 - **Multi-device** — v1 stays single-device by ADR-007 B1. ADR-018 MM1 freezes `Registry.AddSole`
   and `BeginPairing`'s fast-reject by name, so pairing still refuses a second device outright.
   > AMENDED BY ADR-018 (2026-08-15): this used to be one bullet, "multi-device and multi-machine",

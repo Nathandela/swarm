@@ -544,6 +544,29 @@ type shimLaunchConfig struct {
 	Cols       int      `json:"cols"`
 	Rows       int      `json:"rows"`
 	GraceMS    int      `json:"grace_ms"`
+	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
+	// old, pre-R6 launch config with no such key) disables it entirely (requirement
+	// 7's compat), leaving shim.Run's behavior exactly what it is today.
+	HookSocketPath string `json:"hook_socket_path"`
+}
+
+// shimConfigFromLaunch maps a decoded launch config onto shim.Config -- the pure
+// translation runShim itself used to build inline, extracted so it is testable
+// without running a real shim process (setsid, a real agent, ...).
+func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
+	return shim.Config{
+		SessionID:      lc.SessionID,
+		Argv:           lc.Argv,
+		Cwd:            lc.Cwd,
+		Env:            lc.Env,
+		SocketPath:     lc.SocketPath,
+		SessionDir:     lc.SessionDir,
+		Cols:           lc.Cols,
+		Rows:           lc.Rows,
+		TranscriptCfg:  transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
+		GraceTimeout:   time.Duration(lc.GraceMS) * time.Millisecond,
+		HookSocketPath: lc.HookSocketPath,
+	}
 }
 
 // runShim parses --config, detaches from any controlling terminal, and runs the
@@ -586,18 +609,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return code
 	}
 
-	cfg := shim.Config{
-		SessionID:     lc.SessionID,
-		Argv:          lc.Argv,
-		Cwd:           lc.Cwd,
-		Env:           lc.Env,
-		SocketPath:    lc.SocketPath,
-		SessionDir:    lc.SessionDir,
-		Cols:          lc.Cols,
-		Rows:          lc.Rows,
-		TranscriptCfg: transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:  time.Duration(lc.GraceMS) * time.Millisecond,
-	}
+	cfg := shimConfigFromLaunch(lc)
 	exit, err := shim.Run(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
@@ -697,7 +709,11 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 		// unparseable body is dropped and the status post goes on exactly as before.
 		cb.Raw = body
 	}
-	if err := hookclient.Post(os.Getenv(hookclient.EnvSocket), cb); err != nil {
+	// PostSmart (requirement 7): prefers the per-session shim hook socket when the
+	// daemon injected one, retrying a reachable-but-silent shim before falling back
+	// to the daemon socket -- honest about which path served, and unchanged from
+	// today's bare Post when EnvHookSocket is unset (every pre-R6 shim).
+	if _, err := hookclient.PostSmart(os.Getenv(hookclient.EnvHookSocket), os.Getenv(hookclient.EnvSocket), cb); err != nil {
 		_, _ = fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
 	}

@@ -1,0 +1,3 @@
+# github.com/Nathandela/swarm/mobile
+# [github.com/Nathandela/swarm/mobile]
+vet: mobile/r2_adr016_w3_pairingdial_test.go:158:10: undefined: relayDialRawSecure
