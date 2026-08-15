@@ -1,0 +1,12 @@
+{
+ "method": "item/fileChange/requestApproval",
+ "id": 0,
+ "params": {
+  "threadId": "01a00335-9a50-79e2-8253-e08861d67c4d",
+  "turnId": "01a00335-d9d8-7d72-8682-775ad560a74c",
+  "itemId": "exec-29bcdedd-84f6-423c-931d-0f0433cc3328",
+  "startedAtMs": 1786760259641,
+  "reason": null,
+  "grantRoot": null
+ }
+}

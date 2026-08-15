@@ -346,3 +346,26 @@ R3's rule that there is no visible take-control in the chat path (`:81-84`): the
 ADR-017 introduces exists only on a fallback screen, which is never a structured session's screen.
 What does not change at all is this ADR's own subject — the PTY stays byte-exact and untouched, and
 the fallback reads the trusted renderer's output, downstream of the tap.
+
+## Amendment 2026-08-15 — the M4.0 Codex gate ran and PASSED; decision 1's Codex row hardens from gated intention to decision
+
+**Status**: Accepted (owner-signed program, playbook wave R1; evidence
+`docs/verification/r1-codex-gate.md`, fixtures `docs/verification/r1-codex-fixtures/`).
+**Amends**: decision 1's Codex table row ("GATED INTENTION, NOT A MADE DECISION") and Conformance
+obligation 3, which required this amendment pass or fail.
+
+Against the installed `codex-cli 0.147.0`, all five legs passed: app-server as a supervised child
+on a unix socket; the real TUI attached and driving a thread; a second JSON-RPC client receiving
+the same thread's items live (586 `item/agentMessage/delta` frames in one turn) without disturbing
+TUI ownership; `turn/start`, `turn/steer` (same `turnId`, steer text honored), `turn/interrupt`
+(`turn/completed` with `status: interrupted`), and an `item/fileChange/requestApproval` answered by
+the observer over RPC — the TUI's dialog closed with **no keystroke ever sent to the terminal**,
+which discharges the "no keystroke is ever injected on a codex session" rule empirically.
+
+Two of the plan's mechanical assumptions were wrong and bind R7's implementation instead:
+`--listen unix://PATH` serves a **WebSocket** endpoint (HTTP upgrade on `GET /rpc`, then JSON-RPC
+as WS text frames — raw JSON-lines gets silence), and `codex app-server proxy --sock` is not the
+bridge. `thread/resume` refuses until the thread's first turn exists, so the R7 shim should own
+`thread/start` itself and hand the thread id to the TUI attach — which also matches RC-D1.
+`turn/steer` carries a native `expectedTurnId`; the composer's expected-turn precondition rides it
+rather than being reinvented. app-server writes nothing to stdout/stderr; supervision is by socket.
