@@ -60,6 +60,22 @@ func controlSessionLiveAt(t *testing.T, signedExp time.Duration, ttlSeconds int,
 	if got := nextControl(t, rc); got.Op != OpLease || got.Generation == 0 {
 		t.Fatalf("take_control refused: op %q code %q gen %d; want an OpLease grant", got.Op, got.ErrorCode, got.Generation)
 	}
+	// BARRIER — the OpLease grant is NOT a sync point for the expiry stamp. The grant is
+	// written by the pump goroutine that attach starts (server.go, attach Phase 4), while
+	// handleTakeControl stamps controlSession.expiry from cc.srv.now() only AFTER attach
+	// returns, on the connection's serve goroutine. So observing the grant leaves the two
+	// racing: under scheduling latency the rig could advance the clock to base+probe BEFORE
+	// the server read it, and the server then legitimately clamped at (base+probe)+30m —
+	// a keystroke at base+31m reached and the assertion below failed while the R7 clamp was
+	// working exactly as specified (observed on CI ubuntu, run 31864351201).
+	//
+	// A second control op fixes it with the frame loop rather than a delay: cc.serve() reads
+	// and dispatches frames sequentially, so the reply to this OpList can only be produced
+	// after handleTakeControl has RETURNED — i.e. after the expiry was stamped at the frozen
+	// base. Seeing the reply is therefore proof the stamp is done, and every clock instant
+	// below is read from the one frozen base.
+	rc.writeControl(Control{Op: OpList, EndpointID: rep.EndpointID})
+	syncControlOp(t, rc, OpList)
 
 	// Advance the server clock to the probe instant, then send a keystroke and sync.
 	serverNowNS.Store(base.Add(probe).UnixNano())
