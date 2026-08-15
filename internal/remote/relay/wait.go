@@ -159,6 +159,24 @@ func (sc *serverConn) replyWait(b waitReplyBody) error {
 	return sc.reply(MsgWaitReply, b)
 }
 
+// concludeWait ends a served wait: it frees the client's single wait slot BEFORE
+// the reply reaches the wire, then replies.
+//
+// The order is load-bearing. A client that reads this reply sends its NEXT wait
+// immediately, and that wait is admitted on the connection's request loop — a
+// different goroutine from this one. Releasing after the write, even one
+// statement later in a defer, leaves a window in which the slot is logically free
+// but still registered, and the next wait loses the race and is refused with
+// wait_in_progress: a spurious refusal for a client that broke no rule. Releasing
+// first closes the window by construction rather than by timing.
+//
+// No lock is held across the write: releaseWait takes and drops s.mu, and only
+// then does replyWait touch the socket.
+func (sc *serverConn) concludeWait(w *pendingWait, b waitReplyBody) {
+	sc.s.releaseWait(w)
+	_ = sc.replyWait(b)
+}
+
 // handleMailboxWait admits a wait and hands it to its own goroutine. Everything
 // that can refuse the wait is decided HERE, on the connection's request loop, so
 // a refusal is immediate and no refused wait ever parks anything.
@@ -231,6 +249,10 @@ func (sc *serverConn) handleMailboxWaitCancel(payload []byte) error {
 // holds no lock while parked, so an append, a presence query or another client's
 // traffic is served normally alongside it.
 func (sc *serverConn) serveWait(w *pendingWait) {
+	// The backstop for the paths that conclude WITHOUT a reply (the connection is
+	// gone). Every replying path releases the slot first, through concludeWait, and
+	// releaseWaitLocked is a no-op once the slot is free, so this defer never
+	// double-releases nor evicts a successor's registration.
 	defer sc.s.releaseWait(w)
 
 	ceiling := sc.s.cfg.MaxServerWait
@@ -245,21 +267,21 @@ func (sc *serverConn) serveWait(w *pendingWait) {
 		// metered ops per batch, which §6.0's 240/min drain budget cannot absorb.
 		items, hasMore, err := sc.s.st.readItemsPage(w.rid, w.cursor, defaultMailboxPageItems, mailboxPageByteBudget)
 		if err != nil {
-			_ = sc.replyWait(waitReplyBody{WaitID: w.id, Code: codeBadRequest})
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Code: codeBadRequest})
 			return
 		}
 		if len(items) > 0 {
-			_ = sc.replyWait(waitReplyBody{WaitID: w.id, Items: items, HasMore: hasMore})
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Items: items, HasMore: hasMore})
 			return
 		}
 		select {
 		case <-w.wake:
 			switch waitReason(w.reason.Load()) {
 			case waitSuperseded:
-				_ = sc.replyWait(waitReplyBody{WaitID: w.id, Code: codeDuplicateConn})
+				sc.concludeWait(w, waitReplyBody{WaitID: w.id, Code: codeDuplicateConn})
 				return
 			case waitCancelled:
-				_ = sc.replyWait(waitReplyBody{WaitID: w.id})
+				sc.concludeWait(w, waitReplyBody{WaitID: w.id})
 				return
 			}
 			// waitItems: loop and re-read. A wake that finds nothing (the item was
@@ -267,7 +289,7 @@ func (sc *serverConn) serveWait(w *pendingWait) {
 		case <-timer.C:
 			// Bounded: a clean empty page at the ceiling, never a socket held open
 			// until an intermediary kills it.
-			_ = sc.replyWait(waitReplyBody{WaitID: w.id})
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id})
 			return
 		case <-sc.ctx.Done():
 			// The connection is gone (close, revoke severance, server shutdown).
