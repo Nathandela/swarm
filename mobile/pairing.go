@@ -462,6 +462,40 @@ func (p *Pairing) ConfirmOrigin(origin string) (err error) {
 	return nil
 }
 
+// pairingDial is ADR-016 W3's mechanism for the ONE dial B45 exempts from verification. It
+// ATTEMPTS AN ORDINARY VERIFIED DIAL FIRST -- the platform delegate on Android (W2) once
+// SetRelayTrust installed one, the system trust store elsewhere -- because that is what
+// recovers the property B48 recorded B45 as giving up: "interception cost returns from
+// 'be on the path' to 'hold a valid certificate for the operator's name'". For the ordinary
+// case -- a webpki machine reachable without interference -- the verified attempt succeeds
+// and PairingSecurity is never reached at all.
+//
+// IT FALLS BACK TO B45's UNVERIFIED POLICY only when the verified attempt itself fails, for
+// the reason the ADR's own "obstacle" section states and does not repeal: a self-signed
+// pinned_spki relay (W6, expert/opt-in) can never pass verified TLS, and the QR carries no
+// policy field to distinguish that case in advance (W7 -- no byte of QR budget is spent by
+// this ADR). Without a fallback, a fresh phone could never pair with an expert-policy
+// machine over wss:// at all -- B45's original deadlock, one layer up.
+//
+// THE RESIDUAL THIS LEAVES IS NAMED HERE RATHER THAN PAPERED OVER, in this codebase's own
+// convention (see handsetSecurity's "AND THAT LEAVES A BOOTSTRAP THIS WIRING DOES NOT
+// CLOSE"): an on-path attacker who can present ANY certificate that fails verification
+// forces the same fallback a legitimate pinned_spki machine relies on. The fallback dial is
+// authenticated exactly as it always was under B45/B48 -- the Noise handshake, the
+// capture-then-compare against the machine's own published pin (scoped to pinned_spki by
+// W3), and the SAS the operator compares -- so this is a strict improvement over the prior
+// unconditional-unverified dial (the attacker's cost rises from "be on the path" to
+// "additionally present a certificate that verification will reject") and not a complete
+// closure of it. Closing it fully needs the phone to know the target's policy before the
+// first byte, which nothing before pairing carries.
+func (a *App) pairingDial(ctx context.Context, relayURL string) (*relay.Conn, error) {
+	verified := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
+	if conn, err := relay.DialRawSecure(ctx, relayURL, verified); err == nil {
+		return conn, nil
+	}
+	return relay.DialRawSecure(ctx, relayURL, relay.PairingSecurity())
+}
+
 // join dials the confirmed destination and drives the device half of the handshake. base
 // carries the cancellation ConfirmOrigin installed; the deadline below is layered on it.
 func (p *Pairing) join(base context.Context) {
@@ -484,17 +518,15 @@ func (p *Pairing) join(base context.Context) {
 	// matters for the same reason BeginPairing no longer dials at all -- a connection is
 	// already a disclosure (ADR-007 B37).
 	//
-	// relay.PairingSecurity, and this is the ONE dial in the product that uses it
-	// (ADR-007 B45). The pin cannot be applied here -- this is the dial that FETCHES it --
-	// and on a pinning-only platform an unpinned wss:// dial is refused rather than merely
-	// unverified, so under any other policy a handset could never pair over wss:// at all.
-	// What guards this exchange is the Noise handshake and the SAS the operator compares,
-	// not the relay's certificate. Cleartext is refused here exactly as everywhere else.
+	// ADR-016 W3: an ordinary VERIFIED dial first, falling back to relay.PairingSecurity --
+	// this is still the ONE dial in the product that ever reaches it (ADR-007 B45) -- only
+	// when the verified attempt itself fails. See pairingDial's own doc comment for the
+	// mechanism and its named residual.
 	//
 	// Every dial AFTER this one is pinned (App.handsetSecurity), and that scope is fenced:
-	// see mobile/b45_pairingscope_test.go, which fails if this policy becomes reachable
-	// from the session dial.
-	conn, err := relay.DialRawSecure(ctx, payload.RelayURL, relay.PairingSecurity())
+	// see mobile/b45_pairingscope_test.go, which fails if PairingSecurity becomes reachable
+	// from the session dial or from any file but this one.
+	conn, err := app.pairingDial(ctx, payload.RelayURL)
 	if err != nil {
 		// THE STAGE IS THE CLASSIFICATION (agents-tracker-n4vs): nothing has crossed the
 		// wire yet, so whatever the dial's own error says -- refused, no route, a connect
@@ -560,7 +592,7 @@ func (p *Pairing) join(base context.Context) {
 		// before the SAS gate below, so an operator is never asked to compare a code for a
 		// connection already known to be terminated.
 		VerifyMachine: func(m pairing.MachinePayload) error {
-			return checkRelayPin(m.RelaySPKIPin, conn.PeerSPKI())
+			return checkRelayPin(effectiveRelayPin(m), conn.PeerSPKI())
 		},
 		// PB-PAIR-4's DURABLE COMMIT, and the whole meaning of the acknowledgement this phone
 		// is about to send. It runs on the machine's authenticated acceptance and BEFORE that
@@ -971,6 +1003,13 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		// relay, made over the one channel this design trusts for exactly that. An absent pin
 		// is part of the statement, not a gap in it.
 		st.RelaySPKIPin = out.Machine.RelaySPKIPin
+		// ADR-016 W1/B54: RelayTLSPolicy is adopted VERBATIM beside the pin, including its
+		// absence -- a legacy machine payload (no policy field) leaves the phone reading ""
+		// exactly like effectiveRelayPin/handsetSecurity already treat that as "consult the
+		// pin", today's behaviour unchanged. It is a SEPARATE assignment rather than folded
+		// into the pin's, on W1's own instruction: the two fields are independent and never
+		// derived from one another.
+		st.RelayTLSPolicy = out.Machine.RelayTLSPolicy
 		// THE MACHINE'S HUMAN NAME (agents-tracker-ksvb.1), and pairing is the seam DeviceName's
 		// own doc reserved for it four screens up: "if a screen ever needs the name the MACHINE
 		// holds -- which an owner can rename -- that is a different verb carrying a fact the wire

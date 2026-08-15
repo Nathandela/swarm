@@ -1,0 +1,41 @@
+=== RED evidence: ADR-016 W2 (Go enforces VerifyHostname+validity itself; RelayTrust fail-closed) ===
+Date: 2026-08-15T10:27:42Z
+Role: RED (contract-test writer, bd agents-tracker-hggx.3.5)
+
+Command: go vet ./internal/remote/relay/...
+---
+# github.com/Nathandela/swarm/internal/remote/relay_test
+# [github.com/Nathandela/swarm/internal/remote/relay_test]
+vet: internal/remote/relay/r2_adr016_w2_test.go:88:47: undefined: relay.PlatformVerifier
+
+Command: go vet ./mobile/... (RelayTrust interface + bind-surface direction test)
+---
+# github.com/Nathandela/swarm/mobile
+# [github.com/Nathandela/swarm/mobile]
+vet: mobile/r2_adr016_w3_test.go:45:32: unknown field RelayTLSPolicy in struct literal of type pairing.MachinePayload
+
+NOTE: mobile/r2_adr016_w2_relaytrust_test.go parses the facade's Go SOURCE (go/ast), the same
+technique mobile/s14_custody_test.go uses for KeyCustody, so it carries no compile-time
+reference to a `RelayTrust` symbol and the package still BUILDS -- the mobile/... go vet run
+above is masked by w3_test.go's compile-fail (both live in the same package/test binary,
+compiled together). Isolated run below (w3/w9 files held aside) shows the real RED: three
+RUNTIME test failures, all for the right reason (no RelayTrust interface in the facade; no
+Kotlin implementation file yet).
+
+Command: go test -run TestADR016W2 -v ./mobile/...
+---
+=== RUN   TestADR016W2_RelayTrustInterfaceExistsWithTheOutboundChainShape
+    r2_adr016_w2_relaytrust_test.go:61: ADR-016 W2: the facade declares no exported RelayTrust interface. Go calls Kotlin's X509TrustManagerExtensions through this reverse-bound seam; without it WithPlatformVerifier has nothing to receive from Android
+--- FAIL: TestADR016W2_RelayTrustInterfaceExistsWithTheOutboundChainShape (0.25s)
+=== RUN   TestADR016W2_RelayTrustParameterCarriesTheChainOutbound
+    r2_adr016_w2_relaytrust_test.go:131: RelayTrust has no []byte parameter; W2's outbound chain crossing is missing
+--- FAIL: TestADR016W2_RelayTrustParameterCarriesTheChainOutbound (0.23s)
+=== RUN   TestADR016W2_VerdictTokensAgreeAcrossTheLanguageBoundary
+    r2_adr016_w2_relaytrust_test.go:149: ADR-016 W2: the Kotlin RelayTrust implementation is not at /Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/relay/RelayTrust.kt: open /Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/relay/RelayTrust.kt: no such file or directory
+--- FAIL: TestADR016W2_VerdictTokensAgreeAcrossTheLanguageBoundary (0.22s)
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	1.467s
+testing: warning: no tests to run
+PASS
+ok  	github.com/Nathandela/swarm/mobile/conformance	(cached) [no tests to run]
+FAIL

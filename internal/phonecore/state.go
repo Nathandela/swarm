@@ -141,7 +141,20 @@ import (
 // constant is one past the higher of the two, both narratives are kept verbatim because each
 // still states the failure its own bump was for, and the pinned v12 literal in state_test.go
 // is what makes the union mechanical.
-const StateSchemaVersion = 12
+//
+// v13 adds relay_tls_policy, ADR-016 W1's named relay TLS policy ("webpki" or
+// "pinned_spki"), independent of relay_spki_pin (W1's own mutation control: a pin's
+// presence must never imply pinned_spki and a pin's absence must never imply webpki --
+// see W4.4/W9 below). The bump is required for v7's own reason one field over: a build one
+// version back drops the policy and reads the retained pin as the whole of verification
+// again (W3's "consulted iff pinned_spki" collapses to "consulted", the exact defect this
+// ADR exists to retire) on a handset that believes it migrated to webpki.
+//
+// THE COMMIT NEVER CLEARS relay_spki_pin (ADR-016 W4.4): a webpki phone retains the pin it
+// was last paired or migrated with, and simply stops reading it. So this bump adds a field;
+// it does not remove or reinterpret one, and the v12 fixture's pin survives unchanged into
+// v13's.
+const StateSchemaVersion = 13
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -213,6 +226,18 @@ type State struct {
 	// willing to reach the machine through, and it must survive a restart because pairing
 	// is the ONE authenticated moment it can be learned.
 	RelaySPKIPin []byte
+	// RelayTLSPolicy is ADR-016 W1's named relay TLS policy ("webpki" or "pinned_spki"),
+	// adopted verbatim from the machine's authenticated statement about its own relay --
+	// at pairing (B54) or through the W4/W9 migration ladder. Empty means a phone that has
+	// never learned one (pre-ADR-016, or paired before this field existed).
+	//
+	// IT IS INDEPENDENT OF RelaySPKIPin ABOVE, IN BOTH DIRECTIONS (W1's mutation control,
+	// W4.4). Setting one never touches the other: a webpki phone RETAINS whatever pin it
+	// holds and simply stops reading it (W3's single rule, "a pin is consulted if and only
+	// if the effective relay TLS policy is pinned_spki") -- clearing it on migration would
+	// leave nothing to fall back to if the machine ever reverts, and would fight B54's
+	// verbatim-adoption rule the next time a reconcile republishes an absence.
+	RelayTLSPolicy string
 	// Disowned records that the OWNER ENDED this registration -- the revoke behind "Replace
 	// this computer" (PB-KEY-7's trigger, ADR-007 B133). Every coordinate above says what the
 	// pairing pinned; this is the only one that says the pairing is over, and without it "is
@@ -493,6 +518,10 @@ type stateFile struct {
 	MachineSignPub      []byte `json:"machine_sign_pub,omitempty"`
 	MachineRelayAuthPub []byte `json:"machine_relay_auth_pub,omitempty"`
 	RelaySPKIPin        []byte `json:"relay_spki_pin,omitempty"`
+	// RelayTLSPolicy is ADR-016 W1's named policy (see State.RelayTLSPolicy). Omitempty for
+	// the same reason RelaySPKIPin is: absent means a phone that has never learned one, and
+	// writing an empty string would claim a policy was stated when none was.
+	RelayTLSPolicy string `json:"relay_tls_policy,omitempty"`
 	// Disowned is the revoke's durable verdict (see State.Disowned). It is cleartext beside
 	// the machine id rather than inside a container because the two are read together: the
 	// coordinate says which registration this is and this says whether it is still one, and a
@@ -1276,6 +1305,7 @@ func (s *fileStore) load() error {
 		MachineSignPub:      f.MachineSignPub,
 		MachineRelayAuthPub: f.MachineRelayAuthPub,
 		RelaySPKIPin:        f.RelaySPKIPin,
+		RelayTLSPolicy:      f.RelayTLSPolicy,
 		Disowned:            f.Disowned,
 		RoutingID:           f.RoutingID,
 		EpochID:             f.EpochID,
@@ -1510,6 +1540,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		MachineSignPub:      st.MachineSignPub,
 		MachineRelayAuthPub: st.MachineRelayAuthPub,
 		RelaySPKIPin:        st.RelaySPKIPin,
+		RelayTLSPolicy:      st.RelayTLSPolicy,
 		Disowned:            st.Disowned,
 		RoutingID:           st.RoutingID,
 		EpochID:             st.EpochID,

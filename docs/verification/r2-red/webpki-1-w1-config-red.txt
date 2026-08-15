@@ -1,0 +1,33 @@
+=== RED evidence: ADR-016 W1 (policy/pin independence: config, pairing payload, durable state, CLI) ===
+Date: 2026-08-15T10:27:00Z
+Role: RED (contract-test writer, bd agents-tracker-hggx.3.5)
+
+Command: go vet ./internal/remote/relaycfg/...
+---
+# github.com/Nathandela/swarm/internal/remote/relaycfg_test
+# [github.com/Nathandela/swarm/internal/remote/relaycfg_test]
+vet: internal/remote/relaycfg/r2_adr016_w1_test.go:36:23: undefined: relaycfg.PolicyPinnedSPKI
+
+Command: go vet ./internal/remote/pairing/...
+---
+# github.com/Nathandela/swarm/internal/remote/pairing
+# [github.com/Nathandela/swarm/internal/remote/pairing]
+vet: internal/remote/pairing/r2_adr016_w1_test.go:38:3: unknown field RelayTLSPolicy in struct literal of type MachinePayload
+
+Command: go vet ./internal/phonecore/...
+---
+# github.com/Nathandela/swarm/internal/phonecore
+# [github.com/Nathandela/swarm/internal/phonecore]
+vet: internal/phonecore/r2_adr016_w1_test.go:43:5: s.RelayTLSPolicy undefined (type *State has no field or method RelayTLSPolicy)
+
+Command: go vet ./internal/skeleton/...
+---
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r2_adr016_w1_test.go:40:72: unknown field TLSPolicy in struct literal of type relaycfg.Config
+
+Command: go vet ./cmd/swarm/...
+---
+# github.com/Nathandela/swarm/cmd/swarm
+# [github.com/Nathandela/swarm/cmd/swarm]
+vet: cmd/swarm/r2_adr016_w1_test.go:47:9: cfg.TLSPolicy undefined (type relaycfg.Config has no field or method TLSPolicy)

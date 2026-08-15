@@ -1,0 +1,25 @@
+=== RED evidence: ADR-016 W3 (a pin is consulted IFF effective policy is pinned_spki) ===
+Date: 2026-08-15T10:28:36Z
+Role: RED (contract-test writer, bd agents-tracker-hggx.3.5)
+
+mobile/r2_adr016_w3_test.go pins two call sites: effectiveRelayPin (the pairing-dial
+scoping DeviceVerifyFunc's closure must use) and handsetSecurity (the session-dial
+scoping) -- neither exists yet, and MachinePayload/phonecore.State carry no
+RelayTLSPolicy field yet either (W1's own RED, isolated separately in
+webpki-1-w1-config-red.txt). Isolated run below (w2/w9 mobile files held aside).
+
+Command: go test -run TestADR016W3 -v ./mobile/...
+---
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+./r2_adr016_w3_test.go:45:32: unknown field RelayTLSPolicy in struct literal of type pairing.MachinePayload
+./r2_adr016_w3_test.go:46:11: undefined: effectiveRelayPin
+./r2_adr016_w3_test.go:63:35: unknown field RelayTLSPolicy in struct literal of type pairing.MachinePayload
+./r2_adr016_w3_test.go:64:26: undefined: effectiveRelayPin
+./r2_adr016_w3_test.go:69:39: unknown field RelayTLSPolicy in struct literal of type pairing.MachinePayload
+./r2_adr016_w3_test.go:70:26: undefined: effectiveRelayPin
+./r2_adr016_w3_test.go:100:8: st.RelayTLSPolicy undefined (type *phonecore.State has no field or method RelayTLSPolicy)
+FAIL	github.com/Nathandela/swarm/mobile [build failed]
+testing: warning: no tests to run
+PASS
+ok  	github.com/Nathandela/swarm/mobile/conformance	(cached) [no tests to run]
+FAIL

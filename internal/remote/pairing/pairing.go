@@ -249,7 +249,18 @@ type MachinePayload struct {
 	// PAIRING dial that carries it, only every dial after it. The pairing dial's own
 	// protection is the cleartext refusal and the consent signature below.
 	RelaySPKIPin []byte
-	EpochID      uint32
+	// RelayTLSPolicy is ADR-016 W1's named relay TLS policy ("webpki" or
+	// "pinned_spki"), carried VERBATIM from relaycfg.Config.TLSPolicy. It is
+	// INDEPENDENT of RelaySPKIPin above -- a pin's presence never implies
+	// pinned_spki and a pin's absence never implies webpki -- and empty means a
+	// legacy machine build that predates this field, not a policy of "".
+	RelayTLSPolicy string
+	// RelayHost is "the hostname the machine itself dials" (W1), derived from
+	// RelayURL rather than asserted separately -- the phone's W4 migration probe
+	// checks a republished profile still names the SAME destination before trusting
+	// it. Empty on a legacy payload, exactly like RelayTLSPolicy.
+	RelayHost string
+	EpochID   uint32
 }
 
 // DevicePayload is the device's authenticated msg3 handshake payload (R-PAIR.3;
@@ -1071,9 +1082,10 @@ func readField(b []byte) (field, rest []byte, ok bool) {
 }
 
 // encodeMachinePayload serialises the msg2 machine payload (R-PAIR.3 + A14 +
-// enrollment keystone + S19's endpoint id + B34's relay SPKI pin): the seven
-// length-prefixed byte fields followed by the 4-byte big-endian epoch id. Each added field rides BEFORE the
-// epoch trailer, so the epoch-trailer contract is undisturbed.
+// enrollment keystone + S19's endpoint id + B34's relay SPKI pin + ADR-016 W1's TLS
+// policy/host): the nine length-prefixed byte fields followed by the 4-byte big-endian
+// epoch id. Each added field rides BEFORE the epoch trailer, so the epoch-trailer
+// contract is undisturbed.
 func encodeMachinePayload(p MachinePayload) []byte {
 	var b []byte
 	b = appendField(b, []byte(p.Hostname))
@@ -1083,6 +1095,8 @@ func encodeMachinePayload(p MachinePayload) []byte {
 	b = appendField(b, p.MachineSignPub)
 	b = appendField(b, []byte(p.MachineEndpointID))
 	b = appendField(b, p.RelaySPKIPin)
+	b = appendField(b, []byte(p.RelayTLSPolicy))
+	b = appendField(b, []byte(p.RelayHost))
 	b = binary.BigEndian.AppendUint32(b, p.EpochID)
 	return b
 }
@@ -1115,6 +1129,24 @@ func decodeMachinePayload(b []byte) (MachinePayload, error) {
 	p.MachineEndpointID = string(endpoint)
 	if p.RelaySPKIPin, b, ok = readField(b); !ok {
 		return MachinePayload{}, errMalformedPayload
+	}
+	// ADR-016 W9's N/N-1 requirement: "No policy field means pinned_spki with whatever pin
+	// the payload carries, i.e. today's behaviour exactly." RelayTLSPolicy and RelayHost are
+	// ADDITIVE -- a pre-ADR-016 machine's msg2 ends here, with exactly the 4-byte epoch
+	// trailer left, and requiring the two newer fields unconditionally would refuse every
+	// such payload as malformed instead of decoding it with an empty policy and host. Only a
+	// payload that actually wrote them (encodeMachinePayload's two extra appendField calls)
+	// has anything left to read at this point.
+	if len(b) != 4 {
+		var policy, relayHost []byte
+		if policy, b, ok = readField(b); !ok {
+			return MachinePayload{}, errMalformedPayload
+		}
+		p.RelayTLSPolicy = string(policy)
+		if relayHost, b, ok = readField(b); !ok {
+			return MachinePayload{}, errMalformedPayload
+		}
+		p.RelayHost = string(relayHost)
 	}
 	if len(b) != 4 {
 		return MachinePayload{}, errMalformedPayload

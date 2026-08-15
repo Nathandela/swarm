@@ -119,6 +119,11 @@ var requiredScreenElements = []string{
 	// constant and a wire fact behind one element, which is how a screen ends up rendering the
 	// first while believing it has the second.
 	"machine_name",
+
+	// ADDED BY ADR-016 W2, additively and for the same reason "callbacks" (PB-BIND-6) is
+	// here: a platform-wiring verb the Android app calls once at startup, not a control a
+	// person presses, but an entry point all the same and one no other element covers.
+	"platform_trust", // ADR-016 W2: installs the Android RelayTrust chain-trust delegate
 }
 
 type coverageRow struct {

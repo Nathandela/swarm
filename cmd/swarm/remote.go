@@ -146,7 +146,9 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("remote init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	relayURL := fs.String("relay-url", "", "relay server URL for remote pairing")
-	relayPin := fs.String("relay-pin", "", "base64 SHA-256 of the relay certificate's SubjectPublicKeyInfo (see the relay runbook)")
+	relayPin := fs.String("relay-pin", "", "base64 SHA-256 of the relay certificate's SubjectPublicKeyInfo (see the relay runbook); mandatory under --relay-tls-policy pinned_spki, refused under webpki")
+	relayTLSPolicy := fs.String("relay-tls-policy", "", "relay TLS verification policy: webpki (default) or pinned_spki (ADR-016)")
+	relayPinCompat := fs.String("relay-pin-compat", "", "W9 compatibility SPKI pin published alongside --relay-tls-policy webpki, for handsets that predate ADR-016")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -156,7 +158,13 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	if err := validateRelayPin(*relayURL, *relayPin); err != nil {
+	relayTLSPolicyEffective, relaySPKIPinEffective, err := resolveRelayTLSPolicy(
+		*relayURL, *relayTLSPolicy, *relayPin, *relayPinCompat)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
+		return 1
+	}
+	if err := validateRelayPin(*relayURL, relaySPKIPinEffective); err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 		return 1
 	}
@@ -206,8 +214,9 @@ func runRemoteInit(args []string, stdout, stderr io.Writer) int {
 
 	if *relayURL != "" {
 		if err := relaycfg.Save(stateDir, relaycfg.Config{
-			RelayURL: *relayURL,
-			SPKIPin:  strings.TrimSpace(*relayPin),
+			RelayURL:  *relayURL,
+			TLSPolicy: relayTLSPolicyEffective,
+			SPKIPin:   strings.TrimSpace(relaySPKIPinEffective),
 		}); err != nil {
 			_, _ = fmt.Fprintf(stderr, "remote init: %v\n", err)
 			return 1
@@ -470,10 +479,85 @@ func validateRelayURL(raw string) error {
 	return nil
 }
 
-// validateRelayPin checks `--relay-pin` BEFORE any filesystem work, so a rejected run
-// provisions nothing (the same contract validateRelayURL has).
+// resolveRelayTLSPolicy applies ADR-016 W1's policy/pin independence, its one surviving
+// legacy inference, and W6's pre-write IP-literal refusal under webpki. It returns the
+// policy to persist and the SPKI pin that ends up in relay.json's ONE relay_spki_pin field
+// -- W1's "two spellings for one digest": --relay-pin under pinned_spki, --relay-pin-compat
+// under webpki.
 //
-// The three refusals are the three ways this flag is silently useless:
+// Every refusal happens here, before any filesystem write, mirroring validateRelayURL and
+// validateRelayPin's own contract.
+func resolveRelayTLSPolicy(relayURL, policyFlag, pin, pinCompat string) (policy, effectivePin string, err error) {
+	switch policyFlag {
+	case "":
+		// The one legacy inference W1 keeps, over the FLAG only: an operator's existing
+		// --relay-pin invocation keeps its exact present meaning. Omitted entirely, the
+		// default is webpki.
+		if pin != "" {
+			policy = relaycfg.PolicyPinnedSPKI
+		} else {
+			policy = relaycfg.PolicyWebPKI
+		}
+	case relaycfg.PolicyWebPKI, relaycfg.PolicyPinnedSPKI:
+		policy = policyFlag
+	default:
+		return "", "", fmt.Errorf("--relay-tls-policy %q is neither %q nor %q",
+			policyFlag, relaycfg.PolicyWebPKI, relaycfg.PolicyPinnedSPKI)
+	}
+
+	switch policy {
+	case relaycfg.PolicyPinnedSPKI:
+		if pinCompat != "" {
+			return "", "", fmt.Errorf("--relay-pin-compat is legal only under --relay-tls-policy " +
+				"webpki; under pinned_spki the pin IS the verification and --relay-pin is its one " +
+				"spelling")
+		}
+		if pin == "" {
+			return "", "", fmt.Errorf("--relay-tls-policy pinned_spki requires --relay-pin: under " +
+				"this policy the pin is the whole of verification, and none is configured")
+		}
+		effectivePin = pin
+	case relaycfg.PolicyWebPKI:
+		if pin != "" {
+			return "", "", fmt.Errorf("--relay-pin is refused under --relay-tls-policy webpki (the " +
+				"default); use --relay-pin-compat instead to publish a compatibility pin for " +
+				"handsets that predate ADR-016")
+		}
+		effectivePin = pinCompat
+		if relayURL != "" {
+			if err := refuseIPLiteralUnderWebPKI(relayURL); err != nil {
+				return "", "", err
+			}
+		}
+	}
+	return policy, effectivePin, nil
+}
+
+// refuseIPLiteralUnderWebPKI is ADR-016 W6: a webpki policy dialing an IP-literal wss://
+// host is refused before any write -- this deployment's ACME topology has no ordinary
+// public-CA path for an IP literal, and a policy that cannot succeed must not be written.
+// Cleartext ws:// is untouched: the loopback carve-out is a separate, existing question
+// this ADR leaves alone.
+func refuseIPLiteralUnderWebPKI(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "wss" {
+		return nil
+	}
+	if net.ParseIP(u.Hostname()) != nil {
+		return fmt.Errorf("--relay-url %q names an IP-literal host; --relay-tls-policy webpki (the "+
+			"default) cannot succeed against one -- there is no ordinary public-CA path for an IP "+
+			"literal. Use --relay-tls-policy pinned_spki with --relay-pin instead", rawURL)
+	}
+	return nil
+}
+
+// validateRelayPin checks the effective SPKI pin BEFORE any filesystem work, so a rejected
+// run provisions nothing (the same contract validateRelayURL has).
+//
+// pin is resolveRelayTLSPolicy's EFFECTIVE pin -- --relay-pin under pinned_spki,
+// --relay-pin-compat under webpki -- since both end up in relay.json's one relay_spki_pin
+// field and must satisfy the same three checks, the three ways an unusable pin is silently
+// useless:
 //
 //   - A pin with no --relay-url has nothing to pin. relay.json is written as a unit, so
 //     the pin would either be dropped or land beside no destination.

@@ -109,6 +109,8 @@ func s15MachineRelayPub() []byte { return s15Filled(0xC3) }
 
 func s15RelaySPKIPin() []byte { return s15Filled(0xD4) }
 
+const s15RelayTLSPolicy = "pinned_spki"
+
 func s15Filled(first byte) []byte {
 	b := make([]byte, 32)
 	for i := range b {
@@ -142,6 +144,7 @@ func s15State() State {
 		MachineSignPub:      s15MachineSignPub(),
 		MachineRelayAuthPub: s15MachineRelayPub(),
 		RelaySPKIPin:        s15RelaySPKIPin(),
+		RelayTLSPolicy:      s15RelayTLSPolicy,
 		RoutingID:           s15RoutingID,
 		EpochID:             s15EpochID,
 		SendSeq:             map[uint32]uint64{s15EpochID: s15SendCeiling},
@@ -304,6 +307,11 @@ func s15Inventory() []s15Tier {
 			why: "a hash of a public key from a public certificate; it is a REFUSAL criterion, not a " +
 				"secret, and the wake path must apply it with no user present -- a pin behind the " +
 				"content seal would leave a locked handset dialling unpinned or not at all"},
+		{field: "RelayTLSPolicy", needles: s15Str(s15RelayTLSPolicy),
+			why: "ADR-016 W1's named relay TLS policy, beside the pin it scopes: the wake path applies " +
+				"it (W3, effectiveRelayPin/handsetSecurity) with no user present, so it must be readable " +
+				"exactly like RelaySPKIPin above -- a policy behind the content seal would leave a locked " +
+				"handset unable to tell which of its two verification modes to run"},
 		{field: "RoutingID", needles: s15Str(s15RoutingID),
 			why: "this phone's own relay routing id, derived from the relay-auth public key; the wake " +
 				"path must state it with no user present"},

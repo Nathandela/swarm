@@ -1,0 +1,29 @@
+=== RED evidence: ADR-016 W4/W9 migration ladder (advertise+prove+commit; fail retains pin; downgrade does not un-migrate; old machine leaves phone unchanged) ===
+Date: 2026-08-15T10:28:52Z
+Role: RED (contract-test writer, bd agents-tracker-hggx.3.5)
+
+mobile/r2_adr016_w9_test.go pins App.applyRelayTLSPolicy (the ladder's state machine:
+no-op on an absent advertisement, B54-verbatim adoption of a pinned_spki rollback,
+stale_profile refusal on a host mismatch, and probe-then-commit-or-retain under
+webpki), plus the RemoteProfileV1/State fields W1's own RED already names. Isolated
+run below (w2/w3 mobile files held aside).
+
+Command: go test -run TestADR016W9 -v ./mobile/...
+---
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+./r2_adr016_w9_test.go:56:6: st.RelayTLSPolicy undefined (type *phonecore.State has no field or method RelayTLSPolicy)
+./r2_adr016_w9_test.go:77:14: a.applyRelayTLSPolicy undefined (type *App has no field or method applyRelayTLSPolicy)
+./r2_adr016_w9_test.go:81:9: got.RelayTLSPolicy undefined (type phonecore.State has no field or method RelayTLSPolicy)
+./r2_adr016_w9_test.go:93:14: a.applyRelayTLSPolicy undefined (type *App has no field or method applyRelayTLSPolicy)
+./r2_adr016_w9_test.go:96:27: a.core.State().RelayTLSPolicy undefined (type phonecore.State has no field or method RelayTLSPolicy)
+./r2_adr016_w9_test.go:111:3: unknown field RelayTLSPolicy in struct literal of type schema.RemoteProfileV1
+./r2_adr016_w9_test.go:112:3: unknown field RelayHost in struct literal of type schema.RemoteProfileV1
+./r2_adr016_w9_test.go:113:3: unknown field RelaySPKIPin in struct literal of type schema.RemoteProfileV1
+./r2_adr016_w9_test.go:123:14: a.applyRelayTLSPolicy undefined (type *App has no field or method applyRelayTLSPolicy)
+./r2_adr016_w9_test.go:130:9: got.RelayTLSPolicy undefined (type phonecore.State has no field or method RelayTLSPolicy)
+./r2_adr016_w9_test.go:130:9: too many errors
+FAIL	github.com/Nathandela/swarm/mobile [build failed]
+testing: warning: no tests to run
+PASS
+ok  	github.com/Nathandela/swarm/mobile/conformance	0.905s [no tests to run]
+FAIL

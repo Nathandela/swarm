@@ -70,6 +70,14 @@ type Core struct {
 	st     State
 	grants *crypto.GrantReceiver
 
+	// lastProfile is the RemoteProfileV1 carried by the most recently SUCCESSFUL Reconcile
+	// call (ADR-016 W4.1: "a relay-supplied or unauthenticated hint is ignored"). It is set
+	// ONLY inside Reconcile, next to the machine/epoch match that record already passed, so
+	// LastProfile can never hand a caller a profile that check refused -- unlike reading
+	// router.reconcileRecord() again, whose own field comment says only "a record has
+	// ARRIVED", independent of whether Reconcile ever accepted it.
+	lastProfile schema.RemoteProfileV1
+
 	// rebindMu serialises ONE rebind's read of the durable state with its application to the
 	// derived components. mu cannot do that job: it is released between the two, and every
 	// component rebind feeds takes its own lock, so holding mu across them would put mu above
@@ -605,11 +613,25 @@ func (c *Core) Reconcile() error {
 		return err
 	}
 	c.grants = crypto.NewGrantReceiverAt(st.GrantEpoch, st.GrantSeq)
+	c.lastProfile = rec.Profile
 	c.mu.Unlock()
 
 	c.seq.SeedFrom(rec.InboundHighWater)
 	c.router.adopt(st, bucket, reply, rec)
 	return nil
+}
+
+// LastProfile returns the RemoteProfileV1 the most recently SUCCESSFUL Reconcile call
+// adopted (ADR-016 W4.1). It takes no parameters and reads only what Reconcile itself just
+// stored, so there is no way to call it with an unauthenticated or relay-sourced profile --
+// the migration ladder (App.applyRelayTLSPolicy) has nothing else to pass. Before any
+// reconcile has ever succeeded, or when the machine has published no relay policy at all,
+// this is the zero value, which applyRelayTLSPolicy already treats as "no advertisement":
+// the same no-op an old machine's profile-less reconcile produces.
+func (c *Core) LastProfile() schema.RemoteProfileV1 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastProfile
 }
 
 // commitReceive is the WHOLE receive transaction (PB-STATE-7), in ONE durable Save: the

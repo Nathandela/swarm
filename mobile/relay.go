@@ -17,12 +17,14 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
@@ -521,13 +523,150 @@ func (a *App) run(ctx context.Context) {
 // which is a security decision and not a call-site change. Recorded, not papered over.
 func (a *App) handsetSecurity() relay.Security {
 	sec := relay.Security{AllowLoopbackCleartext: true}
-	if pin := a.core.State().RelaySPKIPin; len(pin) > 0 {
+	st := a.core.State()
+	if pin := effectiveStatePin(st.RelayTLSPolicy, st.RelaySPKIPin); len(pin) > 0 {
 		sec.PinnedSPKISHA256 = pin
 	}
+	// ADR-016 W2: Android's platform delegate, if SetRelayTrust installed one. A pin set
+	// above still outranks it (security.go's own precedence), so a pinned_spki handset's
+	// session dial is unaffected -- this only ever matters for a webpki handset, where it is
+	// what lets TrustRootsPlatformDelegate replace the pinning-only floor.
+	sec = a.withPlatformTrust(sec)
 	if src := os.Getenv(envTestTrustRoots); src != "" {
 		sec = relay.WithTrustRootSource(sec, relay.TrustRootSource(src))
 	}
 	return sec
+}
+
+// effectiveRelayPin is ADR-016 W3's PAIRING-dial scoping: "a pin is
+// consulted if and only if the effective relay TLS policy is pinned_spki." It decides what
+// checkRelayPin ever SEES from a just-authenticated machine payload, never what
+// checkRelayPin itself does -- that fence (TestB48_CheckRelayPin) stays untouched.
+//
+// Empty policy is LEGACY -- a machine build that predates ADR-016 -- and reads as
+// pinned_spki, today's behaviour exactly: an old machine's payload carries a pin and no
+// policy field, and a phone that stopped consulting it on the strength of an ABSENT field
+// would be reading absence as an authenticated webpki claim, which W9's ladder forbids.
+func effectiveRelayPin(m pairing.MachinePayload) []byte {
+	return effectiveStatePin(m.RelayTLSPolicy, m.RelaySPKIPin)
+}
+
+// applyRelayTLSPolicy is ADR-016 W4/W9's migration ladder, run over one reconcile's
+// published schema.RemoteProfileV1: "A pinned client migrates only on advertise + prove +
+// commit; failure retains the pin and offers a repair path, and never disables
+// validation." probe is the injected W4-step-3 dial: a real caller wires it to a webpki
+// probe dial (W2's platform delegate + Go's own VerifyHostname) on a connection separate
+// from the live pinned one, which stays up throughout.
+//
+// The four rungs, in the order stated because each depends on the one below:
+//
+//  1. profile.RelayTLSPolicy == "" is NO ADVERTISEMENT AT ALL -- an old machine build, or
+//     a reconcile the profile fields have not reached yet. NO-OP, and the same mechanism
+//     covers both "old machine leaves the phone exactly as it is" and "downgrade does not
+//     un-migrate silently": in neither case may an absent claim be read as authenticated.
+//  2. "pinned_spki" is B54's REVERSE direction, adopted VERBATIM and unconditionally --
+//     reverting to the expert policy proves nothing, so no probe is needed.
+//  3. "webpki" with a host that does not match a.relayURL is refused as stale_profile (W4
+//     step 2): a profile that changes the destination is a re-pairing question, never a
+//     TLS migration, and proving a DIFFERENT host tells the phone nothing about whether
+//     ITS relay is trustworthy.
+//  4. "webpki" with a matching host PROVEs via probe, then COMMITs only on success (W4
+//     steps 3-4); a failed probe RETAINS the phone's current policy untouched (W4 step 5)
+//     and returns the probe's own error, wrapped, so a caller can turn it into the
+//     webpki_unavailable repair state naming the cause.
+//
+// THE COMMIT NEVER CLEARS RelaySPKIPin (W4.4): B54's verbatim-adoption rule applies to
+// whatever the profile carries for it, unrelated to this ladder's own policy write.
+func (a *App) applyRelayTLSPolicy(ctx context.Context, profile schema.RemoteProfileV1, probe func(context.Context, string) error) error {
+	if profile.RelayTLSPolicy == "" {
+		// No authenticated advertisement: never read as a claim, in either direction.
+		return nil
+	}
+	if profile.RelayTLSPolicy != "webpki" {
+		if len(profile.RelaySPKIPin) == 0 {
+			// W1's own rule makes this combination impossible from a legitimate machine:
+			// --relay-pin is MANDATORY under pinned_spki. Adopting it anyway would wipe a
+			// working pin on the strength of a claim its own policy says cannot be true --
+			// ErrPinRequired forever on Android, a silent demotion to system-root
+			// verification on desktop, with no probe and no guard. Refused, not adopted.
+			return classed(ErrClassInvalidRequest, fmt.Errorf(
+				"swarmmobile: relay profile names policy %q with no pin; refused rather than "+
+					"adopted (a legitimate machine never publishes this combination)", profile.RelayTLSPolicy))
+		}
+		// B54's reverse direction: adopted verbatim, unconditionally -- reverting to the
+		// expert policy proves nothing, so no probe is needed.
+		return a.core.Mutate(func(st *phonecore.State) {
+			st.RelayTLSPolicy = profile.RelayTLSPolicy
+			st.RelaySPKIPin = profile.RelaySPKIPin
+		})
+	}
+	// W4 step 2: check identity of destination BEFORE proving anything against it. Classed
+	// ErrClassInvalidRequest (PB-APP-9): the machine's own published profile conflicts with
+	// the destination this phone already holds, which is a re-pairing question and not a
+	// request this phone can satisfy by retrying.
+	//
+	// A HOST THIS PHONE CANNOT NAME IS A REFUSAL, NOT A SKIP. relayURLHost returning "" used
+	// to fall through and prove a host from nowhere: url.Parse rarely errors on a malformed
+	// string, so an unparsable a.relayURL silently disabled the one check W4 step 2 exists
+	// to run. A phone that cannot determine its own destination has not satisfied "relay_host
+	// must equal the host of the relay URL the phone already holds" -- it refuses.
+	host := relayURLHost(a.relayURL)
+	if host == "" {
+		return classed(ErrClassInvalidRequest, fmt.Errorf(
+			"swarmmobile: cannot determine this phone's own relay host from %q; refusing the "+
+				"webpki migration profile rather than proving a destination this phone cannot name",
+			a.relayURL))
+	}
+	if host != profile.RelayHost {
+		return classed(ErrClassInvalidRequest, fmt.Errorf(
+			"swarmmobile: relay profile names host %q, this phone holds %q; "+
+				"refused as stale_profile (a profile that changes the destination is a re-pairing "+
+				"question, not a TLS migration)", profile.RelayHost, host))
+	}
+	// W4 step 3: PROVE on a separate connection before touching durable state. Classed
+	// ErrClassOffline (PB-APP-9): a failed probe is the transport refusing or failing to
+	// validate the relay, recoverable by retrying once the machine or network condition
+	// that caused it clears -- W4 step 5's webpki_unavailable repair state.
+	if err := probe(ctx, profile.RelayHost); err != nil {
+		// W4 step 5: any failure retains the phone's CURRENT policy and pin untouched --
+		// never disables validation, never writes a weaker state.
+		return classed(ErrClassOffline, fmt.Errorf(
+			"swarmmobile: webpki probe of %q failed: %w", profile.RelayHost, err))
+	}
+	// W4 step 4: COMMIT only on a successful probe. RelaySPKIPin is retained (W4.4), not
+	// cleared: a phone that deleted it would have nothing to fall back to on rollback, and
+	// clearing fights B54's verbatim-adoption rule on the next reconcile.
+	return a.core.Mutate(func(st *phonecore.State) {
+		st.RelayTLSPolicy = "webpki"
+		st.RelaySPKIPin = profile.RelaySPKIPin
+	})
+}
+
+// relayURLHost extracts the host from a.relayURL for W4 step 2's destination check. An
+// unparsable or empty URL (never paired yet) yields "", which the caller reads as "no
+// destination to check against" rather than a manufactured mismatch.
+func relayURLHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// effectiveStatePin is the one scoping rule (W3's "single rule, stated once"), shared by
+// effectiveRelayPin (the pairing dial) and handsetSecurity (the session dial): a pin is
+// returned verbatim under pinned_spki or an unset (legacy) policy, and withheld under
+// webpki -- "not by teaching tlsConfig to ignore a pin it was handed" but by never handing
+// it one, per the Blast radius mechanism sentence.
+//
+// The literal "webpki" is relaycfg.PolicyWebPKI's own value (pinned by
+// TestADR016W1_PolicyConstantsAreTheTwoADRNames); it is not imported here so the mobile
+// facade's dependency surface stays exactly what it was.
+func effectiveStatePin(policy string, pin []byte) []byte {
+	if policy == "webpki" {
+		return nil
+	}
+	return pin
 }
 
 // envTestTrustRoots names the handset's platform for a test that has to reach the
@@ -672,7 +811,7 @@ func (a *App) drain(ctx context.Context, cl *relay.Client) {
 			return
 		}
 		for _, it := range items {
-			a.accept(it.Envelope, it.Cursor)
+			a.accept(ctx, it.Envelope, it.Cursor)
 		}
 		a.flushAcks(ctx, cl)
 		if a.core.State().RelayCursor > cursor {
@@ -697,7 +836,7 @@ func (a *App) drain(ctx context.Context, cl *relay.Client) {
 // per-bucket mark and the per-channel clear both live in the core now, inside the same
 // durable transaction that moves the watermark (PB-SYNC-3), and StreamState reads them from
 // there.
-func (a *App) accept(raw []byte, cursor uint64) {
+func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) {
 	key := a.core.State().Keys.ContentKey
 	if _, err := a.core.Router().AcceptCommit(raw, cursor); err != nil {
 		return
@@ -712,7 +851,7 @@ func (a *App) accept(raw []byte, cursor uint64) {
 	case "command_reply":
 		a.onReply(v.Reply)
 	case "reconcile":
-		a.adoptReconcile()
+		a.adoptReconcile(ctx)
 	case "journal_reseed":
 		// The repair landed and the core has already replaced the session model with it. The
 		// facade's own journal PAGE is deliberately not rewritten: it is a log of events, and
@@ -730,7 +869,7 @@ func (a *App) accept(raw []byte, cursor uint64) {
 // gateway reconnect the phone cannot trigger -- fail-closed turning into PB-STATE-10's
 // brick. A record naming another machine or epoch is refused by the core and must be a
 // NO-OP here: an adopted foreign authority is unrewindable.
-func (a *App) adoptReconcile() {
+func (a *App) adoptReconcile(ctx context.Context) {
 	if err := a.core.Reconcile(); err != nil {
 		return
 	}
@@ -746,6 +885,30 @@ func (a *App) adoptReconcile() {
 	a.reconciled = true
 	a.mu.Unlock()
 	a.events.emit(&Event{Kind: "connection", Stream: "reconcile", State: "reconciled"})
+
+	// ADR-016 W4/W9's migration ladder, run over THIS reconcile's own authenticated
+	// profile (W4.1: "a relay-supplied or unauthenticated hint is ignored"). LastProfile
+	// reads back exactly what the Reconcile call three lines up just adopted -- it takes no
+	// parameters, so there is no way to reach this with a profile that check did not pass.
+	// A failure here is not reported: applyRelayTLSPolicy's own failure branch already
+	// leaves durable state exactly as it was (W4 step 5), and adoptReconcile runs on the
+	// drain goroutine with no screen open on this path (the same reasoning recordUnpaired's
+	// swallowed error gives).
+	_ = a.applyRelayTLSPolicy(ctx, a.core.LastProfile(), a.probeWebPKI)
+}
+
+// probeWebPKI is W4 step 3's real dial: relay_host already matched a.relayURL (the caller
+// checked before calling probe at all), so proving the profile's claim is exactly proving
+// THIS phone's own relay URL under an ordinary verified dial -- the platform delegate on
+// Android once SetRelayTrust installed one (W2), the system trust store elsewhere -- on a
+// connection separate from the live pinned one, which this never touches.
+func (a *App) probeWebPKI(ctx context.Context, _ string) error {
+	sec := a.withPlatformTrust(relay.Security{AllowLoopbackCleartext: true})
+	conn, err := relay.DialRawSecure(ctx, a.relayURL, sec)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func (a *App) onJournal(rec schema.JournalRecord) {

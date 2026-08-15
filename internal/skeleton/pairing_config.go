@@ -2,6 +2,7 @@ package skeleton
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -98,6 +99,14 @@ func loadPairingConfig(stateDir string) (*pairingConfig, error) {
 		// endpoint to dial.
 		cfg.RelayURL = relayCfg.RelayURL
 		cfg.NewRendezvous = relayRendezvousFactory(relayCfg.RelayURL, sec)
+		// ADR-016 W1: the policy is carried verbatim, independent of the pin above -- never
+		// derived from whether a pin is configured -- and RelayHost is derived from the
+		// same RelayURL rather than a separate config field, since it is already "the
+		// hostname the machine itself dials".
+		cfg.RelayTLSPolicy = relayCfg.TLSPolicy
+		if u, uerr := url.Parse(relayCfg.RelayURL); uerr == nil {
+			cfg.RelayHost = u.Hostname()
+		}
 	}
 
 	return cfg, nil

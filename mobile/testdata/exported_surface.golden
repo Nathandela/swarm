@@ -22,6 +22,8 @@ const ErrClassUnknown
 const ErrClassUnreconciled
 const KeyCustodyAuthRequired
 const KeyCustodyKeyInvalidated
+const RelayTrustUnavailable
+const RelayTrustUntrusted
 const WakeNotificationText
 field Config.MachineID string
 field Config.RelayURL string
@@ -102,6 +104,7 @@ func NewApp(*Config, KeyCustody) (*App, error)
 ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
+ifacemethod RelayTrust.VerifyRelayChain(string, []byte) error
 method App.Approve(string, string, string) (*Op, error)
 method App.BeginPairing(string) (*Pairing, error)
 method App.BeginPairingWithCode(string, string) (*Pairing, error)
@@ -145,6 +148,7 @@ method App.SendInput(string, []byte) error
 method App.Session(string) (*Session, error)
 method App.SetEventListener(EventListener) error
 method App.SetPushPreference(*PushPreference) (*Op, error)
+method App.SetRelayTrust(RelayTrust) error
 method App.Start() error
 method App.StateSummary() (*StateSummary, error)
 method App.Stop() error
@@ -194,6 +198,7 @@ type Outcome struct
 type Pairing struct
 type PushPreference struct
 type QRPayload struct
+type RelayTrust interface
 type Session struct
 type SessionList struct
 type Snapshot struct

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Transport-security sentinels (PB-NET-2). Both are decided BEFORE any packet is
@@ -55,7 +57,29 @@ const (
 	// supply Security.PinnedSPKISHA256 or Security.PinnedCert, or the dial is
 	// refused.
 	TrustRootsPinned TrustRootSource = "pinned"
+	// TrustRootsPlatformDelegate delegates the CHAIN trust decision to a platform verifier
+	// installed by WithPlatformVerifier (ADR-016 W2: Android's X509TrustManagerExtensions,
+	// over the reverse-bound RelayTrust seam). Go still enforces hostname and validity
+	// itself, on the leaf, independent of the delegate's answer -- "neither half alone
+	// admits a peer". No verifier installed selects this source anyway and then refuses
+	// with ErrPinRequired: absence fails closed, exactly like TrustRootsPinned with no pin,
+	// and never falls back to Go's own (wrong, on Android) system pool.
+	TrustRootsPlatformDelegate TrustRootSource = "platform-delegate"
 )
+
+// PlatformVerifier is the Go-side shape of ADR-016 W2's reverse-bound RelayTrust seam: Go
+// calls it, a platform (Kotlin's X509TrustManagerExtensions) implements it. mobile's
+// gomobile-bound RelayTrust interface satisfies this structurally, with the SAME method
+// name, so no adapter type is needed at the boundary.
+//
+// It is asked about CHAIN trust only. Go keeps the hostname and validity checks for itself
+// (VerifyPeerCertificate, below): a verifier that approves everything still cannot admit a
+// certificate whose SAN does not cover the configured host.
+type PlatformVerifier interface {
+	// VerifyRelayChain reports whether the presented certificate chain -- PEM-encoded,
+	// leaf first -- is trusted for host. A non-nil error refuses the peer.
+	VerifyRelayChain(host string, pemChain []byte) error
+}
 
 // TrustRootSourceFor returns the trust-root source for a GOOS.
 //
@@ -152,6 +176,15 @@ type Security struct {
 	// pinning-only refusal that residual 1.9's whole resolution rests on had therefore
 	// never been executed by anything.
 	trustRoots TrustRootSource
+	// platformVerifier and platformVerifierSet are ADR-016 W2's delegate, installed ONLY
+	// by WithPlatformVerifier -- a PRODUCTION constructor, unlike WithTrustRootSource,
+	// because it is how Android wires a real RelayTrust implementation into a release
+	// build. The bool is separate from a nil check on the interface: WithPlatformVerifier
+	// may be called with a nil verifier (Kotlin never registered one, or registration
+	// failed) and the delegate policy must still be SELECTED, so it can refuse with
+	// ErrPinRequired rather than silently falling back to TrustRootsPinned's floor.
+	platformVerifier    PlatformVerifier
+	platformVerifierSet bool
 }
 
 // PairingSecurity is the policy the HANDSET's pairing rendezvous dials under, and the only
@@ -198,9 +231,35 @@ func WithTrustRootSource(sec Security, src TrustRootSource) Security {
 	return sec
 }
 
-// trustRootSource is the source this policy verifies against: the platform's, unless a test
-// binary has overridden it.
+// WithPlatformVerifier installs v as sec's ADR-016 W2 platform trust delegate and selects
+// TrustRootsPlatformDelegate as its trust-root source.
+//
+// UNLIKE WithTrustRootSource, THIS IS A PRODUCTION CONSTRUCTOR: it is not gated by
+// testing.Testing(), because it is how Android wires a real RelayTrust implementation into
+// a release build, and gating it the same way WithTrustRootSource is gated would make that
+// wiring impossible outside a test binary. That is deliberate and named in the Blast
+// radius: "WithPlatformVerifier is a different function precisely so that fence is not
+// loosened to make room for a production caller" -- WithTrustRootSource's own test-only
+// fence is untouched.
+//
+// v may be nil: Kotlin never registered a verifier, or registration failed. The delegate
+// policy is still selected, and tlsConfig then refuses with ErrPinRequired -- absence
+// fails closed, exactly like TrustRootsPinned with no pin, and never falls back to Go's
+// own (wrong, on Android) system pool.
+func WithPlatformVerifier(sec Security, v PlatformVerifier) Security {
+	sec.platformVerifier = v
+	sec.platformVerifierSet = true
+	return sec
+}
+
+// trustRootSource is the source this policy verifies against: the platform delegate when
+// WithPlatformVerifier installed one (production, unconditional), the platform's own
+// source unless a test binary has overridden it (WithTrustRootSource), or otherwise the
+// platform's stated source.
 func (s Security) trustRootSource() TrustRootSource {
+	if s.platformVerifierSet {
+		return TrustRootsPlatformDelegate
+	}
 	if s.trustRoots != "" && testing.Testing() {
 		return s.trustRoots
 	}
@@ -266,7 +325,7 @@ func (s Security) resolve(rawURL string) (*tls.Config, error) {
 		}
 		return nil, nil
 	case "wss", "https":
-		return s.tlsConfig()
+		return s.tlsConfig(u.Hostname())
 	default:
 		return nil, fmt.Errorf("relay: unsupported url scheme %q", u.Scheme)
 	}
@@ -294,8 +353,10 @@ func (s Security) pin() ([]byte, error) {
 	return s.PinnedSPKISHA256, nil
 }
 
-// tlsConfig builds the verification policy for an encrypted dial.
-func (s Security) tlsConfig() (*tls.Config, error) {
+// tlsConfig builds the verification policy for an encrypted dial. host is the configured
+// hostname (the URL's, not the certificate's): ADR-016 W2's platform-delegate branch needs
+// it to run Go's own VerifyHostname independent of the delegate's answer.
+func (s Security) tlsConfig(host string) (*tls.Config, error) {
 	if _, err := s.pin(); err != nil {
 		return nil, err
 	}
@@ -364,11 +425,63 @@ func (s Security) tlsConfig() (*tls.Config, error) {
 			return nil, errors.New("relay: embedded trust roots are unusable")
 		}
 		return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}, nil
+	case TrustRootsPlatformDelegate:
+		// ABSENCE FAILS CLOSED (ADR-016 W2): no verifier installed is refused exactly like
+		// TrustRootsPinned with no pin, decided here rather than lazily inside the
+		// handshake callback -- the same "before any packet" discipline every other
+		// refusal in this file follows.
+		if s.platformVerifier == nil {
+			return nil, ErrPinRequired
+		}
+		verifier := s.platformVerifier
+		return &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			//nolint:gosec // W2: chain trust is delegated below; Go still checks hostname+validity itself
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				return verifyPlatformDelegate(verifier, host, rawCerts)
+			},
+		}, nil
 	case TrustRootsPinned:
 		return nil, ErrPinRequired
 	default:
 		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
 	}
+}
+
+// verifyPlatformDelegate is ADR-016 W2's mechanism, stated once: "Go still checks the name
+// itself, on the leaf ... plus a NotBefore/NotAfter check against the Go clock ... Both
+// halves must pass. Neither is sufficient." Go's own checks run first and independently of
+// the delegate's answer, so a verifier that approves everything still cannot admit a
+// certificate whose SAN does not cover the configured host or that is outside its validity
+// window.
+func verifyPlatformDelegate(verifier PlatformVerifier, host string, rawCerts [][]byte) error {
+	if len(rawCerts) == 0 {
+		return errors.New("relay: no certificate presented")
+	}
+	leaf, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("relay: unparsable certificate: %w", err)
+	}
+	if err := leaf.VerifyHostname(host); err != nil {
+		return err
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return x509.CertificateInvalidError{Cert: leaf, Reason: x509.Expired}
+	}
+	return verifier.VerifyRelayChain(host, pemChain(rawCerts))
+}
+
+// pemChain PEM-encodes a presented certificate chain, leaf first -- the shape the
+// RelayTrust seam crosses gomobile with, since gomobile cannot bind [][]byte and
+// CertificateFactory.generateCertificates consumes PEM directly.
+func pemChain(rawCerts [][]byte) []byte {
+	var buf bytes.Buffer
+	for _, raw := range rawCerts {
+		_ = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: raw})
+	}
+	return buf.Bytes()
 }
 
 // spkiObserver records the SHA-256 SubjectPublicKeyInfo digest of the leaf certificate a

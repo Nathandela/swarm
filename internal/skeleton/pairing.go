@@ -72,6 +72,15 @@ type pairingConfig struct {
 	// from relay.json and carried VERBATIM into MachinePayload (ADR-007 B33/B34). Empty
 	// means no pin is configured; this daemon neither derives nor validates one.
 	RelaySPKIPin []byte
+	// RelayTLSPolicy is ADR-016 W1's named policy, read from relaycfg.Config.TLSPolicy and
+	// carried VERBATIM into MachinePayload.RelayTLSPolicy. Independent of RelaySPKIPin --
+	// never derived from whether a pin is configured.
+	RelayTLSPolicy string
+	// RelayHost is "the hostname the machine itself dials" (W1), derived from RelayURL's
+	// own host rather than a separate config field, and carried into
+	// MachinePayload.RelayHost so the phone's W4 migration probe can confirm a republished
+	// profile still names the same destination.
+	RelayHost string
 
 	// EndpointID is the daemon's federation endpoint id, carried into MachinePayload so
 	// the paired phone can NAME the machine it just paired with (S19). Every mutating
@@ -266,6 +275,8 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 			MachineSignPub:      cfg.SignPub,
 			MachineEndpointID:   cfg.EndpointID,
 			RelaySPKIPin:        cfg.RelaySPKIPin,
+			RelayTLSPolicy:      cfg.RelayTLSPolicy,
+			RelayHost:           cfg.RelayHost,
 			EpochID:             cfg.EpochID,
 		},
 	}

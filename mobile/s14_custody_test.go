@@ -33,7 +33,18 @@ import (
 //
 // PB-BIND-4's own guard cannot cover this: entryPoints() is funcs and methods only, so an
 // ifacemethod is invisible to it. That gap is the reason this test exists.
+//
+// RelayTrust IS A NAMED, DELIBERATE EXEMPTION (ADR-016 W2), not a loosening of B8. B8 bans
+// KEY MATERIAL crossing outbound; RelayTrust.VerifyRelayChain's []byte parameter is a
+// PEM-encoded server certificate chain, which "is public by construction" the instant the
+// TLS handshake presents it -- a network observer already saw every byte in the clear.
+// "The direction rule is different from KeyCustody's and the difference is the point"
+// (ADR-016 W2). The exemption is scoped to this ONE interface by name, so any future
+// reverse-bound interface still trips this fence until it is reviewed and named here too.
 func TestS14_TheCustodySeamIsInboundOnly(t *testing.T) {
+	// relayTrustOutboundChainException is ADR-016 W2's one named carve-out from B8's
+	// inbound-only rule -- see the doc comment above.
+	const relayTrustOutboundChainException = "RelayTrust"
 	src := loadFacade(t)
 
 	found := map[string]string{}
@@ -63,7 +74,7 @@ func TestS14_TheCustodySeamIsInboundOnly(t *testing.T) {
 						}
 						name := ts.Name.Name + "." + mn.Name
 						found[name] = ts.Name.Name
-						if ft.Params == nil {
+						if ft.Params == nil || ts.Name.Name == relayTrustOutboundChainException {
 							continue
 						}
 						for _, p := range ft.Params.List {

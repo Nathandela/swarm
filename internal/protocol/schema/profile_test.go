@@ -23,6 +23,35 @@ package schema
 //	}
 //	ReconcileRecord gains: Profile RemoteProfileV1 `json:"profile"` (no omitempty)
 //
+// ADR-016 W1 (FAILING FIRST, RED phase, bd agents-tracker-hggx.3.5) EXTENDS this seam
+// rather than adding a second one, per this file's own comment above CurrentProfileVersion:
+// "ADR-016 is the currently known co-owner: it adds relay_tls_policy, relay_host and the
+// pin set to this same struct (ADR-016:194) ... their GG-7 field-table obligation is
+// ADR-016's own". Three fields join RemoteProfileV1, additive, NO omitempty (the same rule
+// this file's header gives for every other field -- "an absent key must stay
+// distinguishable from a legitimately-zero one"):
+//
+//	RelayTLSPolicy string `json:"relay_tls_policy"`
+//	RelayHost      string `json:"relay_host"`
+//	RelaySPKIPin   []byte `json:"relay_spki_pin"`
+//
+// RelaySPKIPin carries no omitempty EVEN THOUGH MachinePayload's and phonecore.State's own
+// copies of this same coordinate do (both are `,omitempty`): those two are single-shot
+// pairing-time and restart-time artifacts where "the key is absent" already reads
+// correctly as "no pin published". RemoteProfileV1 is different -- it rides EVERY
+// reconcile, on an EXISTING pairing, and it is the channel W4/W9's migration ladder polls
+// for a change. An `omitempty` RelaySPKIPin would make "the machine stopped publishing a
+// pin" (W9 step 6, the intended end state) byte-identical to "this reconcile record is
+// silent on the pin, nothing changed" -- exactly the ambiguity ReconcileRecord's own
+// header forbids for every field here, and precisely the ambiguity W9 step 6 depends on
+// being resolvable ("no observable change on a migrated handset" must be a comparison
+// against an explicit absence, not an inference from a missing key).
+//
+// GG-7: this struct's field table lives in docs/specifications/protocol.md under "The
+// RemoteProfileV1 record", with the header "Field" (RemoteProfileV1 is not one of the four
+// GG-7-reflected types walked by wireJSONTags/protocolmd_bidi_test.go), so the three new
+// rows are added there in this same change.
+//
 // WHY Profile MAY NOT CARRY omitempty, stated because the reason is easy to miss for a
 // struct-typed field: encoding/json never treats a non-pointer struct as "empty", so
 // `omitempty` on Profile would be a silent no-op on THIS type today -- but reconcile.go's
@@ -40,8 +69,10 @@ import (
 )
 
 // wireRemoteProfileV1 is the committed JSON of testRemoteProfile below. Map keys marshal
-// in sorted order (encoding/json), so "kill" precedes "launch".
-const wireRemoteProfileV1 = `{"version":1,"accepted_actions":["launch","kill"],"accepted_body_versions":{"kill":1,"launch":2},"interaction_schema_version":1,"terminal_view_version":1,"capability_record_version":1}`
+// in sorted order (encoding/json), so "kill" precedes "launch". The three ADR-016 fields
+// ride LAST, appended in field-declaration order, matching RemoteCommand's own convention
+// of adding new fields at the end of the struct rather than reordering.
+const wireRemoteProfileV1 = `{"version":1,"accepted_actions":["launch","kill"],"accepted_body_versions":{"kill":1,"launch":2},"interaction_schema_version":1,"terminal_view_version":1,"capability_record_version":1,"relay_tls_policy":"webpki","relay_host":"swarm-relay.example.com","relay_spki_pin":"MzItYnl0ZS1zaGEyNTYtZGlnZXN0LW9mLXNwa2khIQ=="}`
 
 func testRemoteProfile() RemoteProfileV1 {
 	return RemoteProfileV1{
@@ -51,6 +82,9 @@ func testRemoteProfile() RemoteProfileV1 {
 		InteractionSchemaVersion: 1,
 		TerminalViewVersion:      1,
 		CapabilityRecordVersion:  1,
+		RelayTLSPolicy:           "webpki",
+		RelayHost:                "swarm-relay.example.com",
+		RelaySPKIPin:             []byte("32-byte-sha256-digest-of-spki!!"),
 	}
 }
 
@@ -125,5 +159,80 @@ func TestReconcileRecord_ProfileFieldTag_NoOmitempty(t *testing.T) {
 	}
 	if tag := f.Tag.Get("json"); tag != "profile" {
 		t.Fatalf("Profile json tag = %q; want exactly %q (omitempty is prohibited on every ReconcileRecord field, Profile included -- reconcile.go's rule)", tag, "profile")
+	}
+}
+
+// TestRemoteProfileV1_RelayTLSFieldsAreIndependent is ADR-016 W1's Conformance-table
+// mutation control, at the profile layer: a policy with no pin, and a pin with no policy,
+// each round-trip verbatim -- neither is inferred from the other, and RelaySPKIPin's
+// json.RawMessage-style presence (a non-nil zero-length slice differs from nil under
+// encoding/json only via omitempty, which this field does NOT carry) still distinguishes
+// "no pin" (nil) from an explicitly empty one is not claimed here; what IS pinned is that
+// setting one field never mutates the other.
+func TestADR016W1_RemoteProfileV1_RelayTLSFieldsAreIndependent(t *testing.T) {
+	webpkiNoPin := RemoteProfileV1{Version: 1, RelayTLSPolicy: "webpki", RelayHost: "swarm-relay.example.com"}
+	b, err := json.Marshal(webpkiNoPin)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got RemoteProfileV1
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.RelayTLSPolicy != "webpki" || got.RelayHost != "swarm-relay.example.com" {
+		t.Errorf("got %+v, want policy=webpki host=swarm-relay.example.com", got)
+	}
+	if len(got.RelaySPKIPin) != 0 {
+		t.Errorf("RelaySPKIPin = %x, want empty: a webpki profile with no pin configured must not "+
+			"manufacture one on decode", got.RelaySPKIPin)
+	}
+
+	pinnedNoPolicy := RemoteProfileV1{Version: 1, RelaySPKIPin: []byte("a-configured-pin-of-some-length")}
+	b2, err := json.Marshal(pinnedNoPolicy)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got2 RemoteProfileV1
+	if err := json.Unmarshal(b2, &got2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got2.RelayTLSPolicy != "" {
+		t.Errorf("RelayTLSPolicy = %q, want empty: a pin's presence must never imply pinned_spki "+
+			"(W1's mutation control)", got2.RelayTLSPolicy)
+	}
+	if string(got2.RelaySPKIPin) != string(pinnedNoPolicy.RelaySPKIPin) {
+		t.Errorf("RelaySPKIPin = %x, want %x", got2.RelaySPKIPin, pinnedNoPolicy.RelaySPKIPin)
+	}
+}
+
+// TestADR016W1_RemoteProfileV1_NoFieldCarriesOmitempty extends
+// TestReconcileRecord_ProfileFieldTag_NoOmitempty's discipline onto the three new fields,
+// for the reason this file's header now states: RemoteProfileV1 rides every reconcile, and
+// an omitted key must never be confused with an explicit zero value on ANY field, the new
+// ones included.
+func TestADR016W1_RemoteProfileV1_NoFieldCarriesOmitempty(t *testing.T) {
+	ty := reflect.TypeOf(RemoteProfileV1{})
+	for _, name := range []string{"RelayTLSPolicy", "RelayHost", "RelaySPKIPin"} {
+		f, ok := ty.FieldByName(name)
+		if !ok {
+			t.Fatalf("RemoteProfileV1 has no %s field", name)
+		}
+		tag := f.Tag.Get("json")
+		if tag == "" || tag != name2wireTag(name) {
+			t.Errorf("%s json tag = %q, want exactly %q (no omitempty)", name, tag, name2wireTag(name))
+		}
+	}
+}
+
+func name2wireTag(goName string) string {
+	switch goName {
+	case "RelayTLSPolicy":
+		return "relay_tls_policy"
+	case "RelayHost":
+		return "relay_host"
+	case "RelaySPKIPin":
+		return "relay_spki_pin"
+	default:
+		return ""
 	}
 }

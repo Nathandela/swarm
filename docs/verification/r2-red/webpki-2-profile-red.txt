@@ -1,0 +1,32 @@
+=== RED evidence: ADR-016 profile (RemoteProfileV1 relay TLS fields + first real publisher) ===
+Date: 2026-08-15T10:27:09Z
+Role: RED (contract-test writer, bd agents-tracker-hggx.3.5)
+
+Command: go vet ./internal/protocol/schema/...
+---
+# github.com/Nathandela/swarm/internal/protocol/schema
+# [github.com/Nathandela/swarm/internal/protocol/schema]
+vet: internal/protocol/schema/profile_test.go:85:3: unknown field RelayTLSPolicy in struct literal of type RemoteProfileV1
+
+Command: go vet ./internal/remotegw/...
+---
+# github.com/Nathandela/swarm/internal/remotegw
+# [github.com/Nathandela/swarm/internal/remotegw]
+vet: internal/remotegw/obligation_test.go:125:15: undefined: PushAddress
+
+Command: go vet ./cmd/swarm-remote/...
+---
+# github.com/Nathandela/swarm/cmd/swarm-remote
+# [github.com/Nathandela/swarm/cmd/swarm-remote]
+vet: cmd/swarm-remote/r2_adr016_profile_test.go:34:23: undefined: relaycfg.PolicyWebPKI
+
+NOTE on internal/remotegw: obligation_test.go (untracked, pre-existing R3/push-gateway WIP
+unrelated to this ADR) fails the package compile first ("undefined: PushAddress"), which
+masks go vet's per-package single-error report for this file's own additions
+(r2_adr016_profile_wiring_test.go, profile_test.go's new
+TestRelaySink_ReconcileWithOnlyRelayTLSPolicyConfiguredSealsThatHalfHonestly). Confirmed by
+source inspection (not by a second, isolated compiler error) that both are independently RED
+for the right reason: internal/remotegw/service.go's ServiceConfig struct has no Profile
+field (grep -n "Profile" internal/remotegw/service.go: zero matches), and
+internal/remotegw/relaysink.go:365 is RelayConfig's only production-adjacent Profile
+reference, never reached from ServiceConfig/NewService.

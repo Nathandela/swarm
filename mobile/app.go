@@ -125,6 +125,11 @@ type App struct {
 	skewed        bool // whether the clock is currently out of budget, so only a CHANGE raises an event
 	sess          *session
 	client        *relay.Client
+	// relayTrust is ADR-016 W2's reverse-bound platform delegate, installed by
+	// SetRelayTrust. It is nil on every platform that never calls it (desktop, iOS): W2's
+	// "Desktop is unchanged" means relay.WithPlatformVerifier is never reached there, and
+	// every dial keeps resolving relay.TrustRootSourceFor(runtime.GOOS) exactly as before.
+	relayTrust    RelayTrust
 	machineTarget string
 	machinePub    ed25519.PublicKey
 	connState     string
@@ -1040,6 +1045,26 @@ func (a *App) SetEventListener(l EventListener) (err error) {
 		return err
 	}
 	a.events.setListener(l)
+	return nil
+}
+
+// SetRelayTrust installs ADR-016 W2's platform trust delegate, in the same shape
+// SetEventListener installs its callback sink: an already-constructed App accepts it, rather
+// than NewApp growing a parameter, so the mobile bind surface gains nothing beyond the
+// RelayTrust interface itself. Android's PhoneRuntime calls this once, right after
+// Swarmmobile.newApp, with a RelayTrustImpl over a real X509TrustManagerExtensions; desktop
+// and iOS never call it, and relayTrust stays nil there.
+//
+// It takes effect on every dial made AFTER this returns: the pairing dial's verified-first
+// attempt and the session dial's handsetSecurity both read a.relayTrust at dial time.
+func (a *App) SetRelayTrust(t RelayTrust) (err error) {
+	defer barrier(&err)
+	if _, err = a.ready(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.relayTrust = t
+	a.mu.Unlock()
 	return nil
 }
 

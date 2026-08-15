@@ -2,6 +2,7 @@ package dev.swarm.phone
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.http.X509TrustManagerExtensions
 import dev.swarm.phone.keys.AndroidKeyInfoReader
 import dev.swarm.phone.keys.AndroidKeystoreAlgorithms
 import dev.swarm.phone.keys.AndroidKeystoreProvisioner
@@ -19,6 +20,7 @@ import dev.swarm.phone.keys.KeystoreKekProvider
 import dev.swarm.phone.keys.KeystoreKeyCustody
 import dev.swarm.phone.keys.PersistentCustodyBacking
 import dev.swarm.phone.keys.SealedStore
+import dev.swarm.phone.relay.RelayTrustImpl
 import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.SwarmErrorTokens
@@ -26,6 +28,9 @@ import swarmmobile.App
 import swarmmobile.Config
 import swarmmobile.Swarmmobile
 import java.io.File
+import java.security.KeyStore
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
 /**
  * Phase B slice S16 -- the one place the app builds a phone.
@@ -242,7 +247,34 @@ class PhoneRuntime(private val context: Context) {
             // resume exists to preserve.
             machineID = ""
         }
-        return Swarmmobile.newApp(config, KeystoreKeyCustody(store))
+        val app = Swarmmobile.newApp(config, KeystoreKeyCustody(store))
+        installRelayTrust(app)
+        return app
+    }
+
+    /**
+     * ADR-016 W2's production wiring: install a real [RelayTrustImpl] over the DEFAULT
+     * [TrustManagerFactory] -- the platform's own verifier, reading the Conscrypt APEX store
+     * Go itself cannot see (`security.go`'s own reasoning for `TrustRootsPinned`).
+     *
+     * BEST-EFFORT, NOT A STARTUP GATE. A failure here (no default trust manager on this
+     * device) is exactly `RelayTrust`'s own "registration failed" case its doc comment
+     * names: the delegate policy stays selected with none installed, so every dial without a
+     * pin refuses with `ErrPinRequired` -- Android's PRE-ADR-016 floor, unchanged, not a
+     * regression this construction step could introduce. A handset that cannot build a
+     * `TrustManagerFactory` has no screen this app could show either way; failing app
+     * construction over it would brick a phone that a `pinned_spki` machine's pairing QR
+     * could still reach.
+     */
+    private fun installRelayTrust(app: App) {
+        try {
+            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            tmf.init(null as KeyStore?)
+            val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
+            app.setRelayTrust(RelayTrustImpl(X509TrustManagerExtensions(tm)))
+        } catch (e: Exception) {
+            // Swallowed deliberately -- see the doc comment above.
+        }
     }
 
     /**
