@@ -910,6 +910,16 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 		return protocol.OpApprove, nil
 	case protocol.ActionPushPrefs:
 		return protocol.OpPushPrefs, nil
+	case protocol.ActionSessionLaunch, protocol.ActionComposerSend, protocol.ActionOperationStatus,
+		protocol.ActionTurnInterrupt, protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
+		// The R1 refusal-ops vocabulary (Wave R1 skeleton, playbook §6.3): forwarded to the
+		// daemon like kill/delete/approve/push_prefs, Op == Action, never gateway-locally
+		// refused -- only the daemon holds the device registry requireRemoteAuthz
+		// authorizes against. terminal_input / terminal_control_keepalive (ADR-017 T6) are
+		// deliberately NOT added here: they ride only the E2EE frame's own sender/sequence
+		// and a confirmed control generation, never a signed action, so they fall to the
+		// default arm's generic refusal below exactly like any other unrecognised action.
+		return rc.Action, nil
 	default:
 		return "", fmt.Errorf("remotegw: unsupported command action %q", rc.Action)
 	}

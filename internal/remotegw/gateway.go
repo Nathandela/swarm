@@ -344,6 +344,7 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 		ExpiresAt:   &exp,
 		Launch:      rc.Launch,
 		Approve:     rc.Approve,
+		BodyVersion: rc.BodyVersion,
 	}
 	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
 	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to
