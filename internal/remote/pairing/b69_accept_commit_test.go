@@ -46,8 +46,11 @@ const acceptStallWindow = 2 * time.Second
 const legBudget = 20 * time.Second
 
 // machineAcceptanceSend is the ordinal of the acceptance frame among the MACHINE's own
-// sends. Machine.Pair writes exactly two: msg2 (pairing.go:376) and the decision
-// (pairing.go:489, via sendDecision). The second one is the acceptance.
+// sends. On the accept path Machine.Pair writes exactly two: msg2 (pairing.go:531) and the
+// decision (pairing.go:661, via sendDecision). The second one is the acceptance. msg4 and
+// the acknowledgement are RECEIVES on this end, so the push-binding conveyance that now
+// rides inside msg4 adds no machine send. The test asserts this total rather than trusting
+// it -- see sendCount.
 const machineAcceptanceSend = 2
 
 // stalledAcceptRendezvous is the MACHINE end of a rendezvous, ctx-faithful the way
@@ -64,9 +67,18 @@ const machineAcceptanceSend = 2
 type stalledAcceptRendezvous struct {
 	*fakeRendezvous
 
-	mu        sync.Mutex
-	sends     int
-	forwarded bool
+	mu    sync.Mutex
+	sends int
+
+	// forwarded CLOSES once the acceptance frame has been handed to the phone. It is a
+	// signal, not a flag, because the instant the frame is enqueued the phone can run to
+	// completion -- receive, pin, return its outcome -- while this goroutine has not yet
+	// been scheduled to record that the send happened. Sampling a bool there is a read of
+	// a fact that is true but not yet published: the phone-pinned assertion passes and the
+	// forwarded assertion then fails in the same breath, which is the self-contradiction
+	// CI reported (run 31966331009, a docs-only commit). Waiting for the signal removes the
+	// window without touching the assertion: a frame that never forwards never closes it.
+	forwarded chan struct{}
 }
 
 var _ RendezvousTransport = (*stalledAcceptRendezvous)(nil)
@@ -84,10 +96,8 @@ func (s *stalledAcceptRendezvous) Send(ctx context.Context, msg []byte) error {
 		return err
 	}
 	if n == machineAcceptanceSend {
-		s.mu.Lock()
-		s.forwarded = true
-		s.mu.Unlock()
-		<-ctx.Done() // the bytes are with the phone; the clock then runs out mid-call
+		close(s.forwarded) // sends only ever rise, so this ordinal is reached exactly once
+		<-ctx.Done()       // the bytes are with the phone; the clock then runs out mid-call
 	}
 	return nil
 }
@@ -99,10 +109,25 @@ func (s *stalledAcceptRendezvous) Complete(ctx context.Context, id string) error
 	return s.fakeRendezvous.Complete(ctx, id)
 }
 
-func (s *stalledAcceptRendezvous) acceptanceForwarded() bool {
+// awaitAcceptanceForwarded reports whether the acceptance frame reached the phone, waiting
+// up to d for the send to be published. Unforwarded is still unforwarded: nothing closes
+// the signal but a delivered acceptance, so a genuinely missing frame fails after d.
+func (s *stalledAcceptRendezvous) awaitAcceptanceForwarded(d time.Duration) bool {
+	select {
+	case <-s.forwarded:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// sendCount is how many frames the MACHINE wrote. It guards machineAcceptanceSend: if a
+// later wave adds a machine-side frame, the stall marker silently moves to the wrong one
+// and this test stops testing what it names, so the count is asserted rather than trusted.
+func (s *stalledAcceptRendezvous) sendCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.forwarded
+	return s.sends
 }
 
 // TestB69_TheDeadlineCannotCancelTheCommitOnceAcceptanceIsOnTheWire is PB-PAIR-4's symmetry
@@ -122,7 +147,7 @@ func TestB69_TheDeadlineCannotCancelTheCommitOnceAcceptanceIsOnTheWire(t *testin
 	dp.DeviceSAS = shippedDeviceSAS(make(chan struct{}, 1), matched)
 
 	mEndRaw, dEnd := newRendezvousPipe()
-	mEnd := &stalledAcceptRendezvous{fakeRendezvous: mEndRaw}
+	mEnd := &stalledAcceptRendezvous{fakeRendezvous: mEndRaw, forwarded: make(chan struct{})}
 
 	// The DAEMON's window, in production's own shape.
 	pairCtx, cancelPair := context.WithTimeout(context.Background(), acceptStallWindow)
@@ -161,7 +186,7 @@ func TestB69_TheDeadlineCannotCancelTheCommitOnceAcceptanceIsOnTheWire(t *testin
 			"claims: it needs a handset that HAS been told yes, which is what makes the machine's "+
 			"commit non-optional", phone.out, phone.err)
 	}
-	if !mEnd.acceptanceForwarded() {
+	if !mEnd.awaitAcceptanceForwarded(legBudget) {
 		t.Fatal("the acceptance frame was never forwarded, so the ordering under test never happened")
 	}
 
@@ -177,6 +202,15 @@ func TestB69_TheDeadlineCannotCancelTheCommitOnceAcceptanceIsOnTheWire(t *testin
 		}
 	case <-time.After(legBudget):
 		t.Fatal("Machine.Pair never returned")
+	}
+
+	// The acceptance must have been the frame that was stalled. Machine.Pair writes msg2 and
+	// then the decision and nothing else on this path, so a different total means the ordinal
+	// above no longer names the acceptance and the ordering under test was never built.
+	if got := mEnd.sendCount(); got != machineAcceptanceSend {
+		t.Fatalf("the machine wrote %d frames, not %d: machineAcceptanceSend no longer names the "+
+			"acceptance, so the stall was applied to some other frame. Re-derive the ordinal from "+
+			"Machine.Pair's sends before trusting this test again", got, machineAcceptanceSend)
 	}
 
 	// The commit must actually RUN detached -- not have its failure ignored. An unburned

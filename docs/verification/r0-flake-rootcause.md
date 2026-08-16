@@ -255,3 +255,151 @@ cross-surface change that needs its own slice. Filed as `agents-tracker-9ewk`.
   whose turn already closed carries no `turn_id`). It is documented behaviour of the turn model
   (IS-ENV-1) and changing it is a spec decision needing an ADR, not a flake fix. Recorded here as
   a known consequence of a mixed-transport session, not as something this work altered.
+
+---
+
+# 2026-08-16 — B69 in `internal/remote/pairing`: the rig read a fact that was true but not yet published
+
+CI run `31966331009` failed `TestB69_TheDeadlineCannotCancelTheCommitOnceAcceptanceIsOnTheWire`
+on a DOCS-ONLY commit, so nothing in the product could have caused it. The failure was
+self-contradictory on its face:
+
+```
+b69_accept_commit_test.go: the acceptance frame was never forwarded, so the ordering under
+                           test never happened
+```
+
+That check sits AFTER the phone-pinned assertion, which passed. The phone can only pin on an
+acceptance it received, so the acceptance HAD crossed — and the rig that forwarded it said it
+never did.
+
+## Root cause — `internal/remote/pairing/b69_accept_commit_test.go:83` (`stalledAcceptRendezvous.Send`, pre-fix)
+
+Pure rig, no product involvement. The wrapper delivered the frame and only afterwards recorded
+that it had:
+
+```go
+if err := s.fakeRendezvous.Send(ctx, msg); err != nil { return err }
+if n == machineAcceptanceSend {
+    s.mu.Lock(); s.forwarded = true; s.mu.Unlock()   // <-- published HERE
+    <-ctx.Done()
+}
+```
+
+`fakeRendezvous.Send` (`harness_test.go:114`) hands the frame to a 16-deep buffered channel. The
+instant that channel send returns, the phone goroutine is runnable with the acceptance in hand,
+and the whole rest of the phone leg — decrypt, `sendAck`, pin, build `DeviceOutcome` — is
+in-memory microseconds. So there is a window in which:
+
+1. the machine goroutine has enqueued the frame but has NOT yet reached `s.forwarded = true`;
+2. the phone runs to completion and sends its outcome;
+3. the main goroutine receives that outcome, asserts "the phone pinned" (green), and samples
+   `forwarded` — still false.
+
+The bool was never wrong, only unpublished. Any preemption of the machine goroutine in those few
+instructions produces exactly the CI message, and CI starvation (loaded runner, `-race`, packages
+in parallel) supplies preemptions at arbitrary instructions.
+
+## The other hypothesis, checked and EXCLUDED
+
+The R3/ADR-015 waves changed `pairing.go` around msg4 (push-binding conveyance, `RevokePushBinding`),
+so `machineAcceptanceSend = 2` could in principle have gone stale, pinning the stall to the wrong
+frame. It has not: on the accept path `Machine.Pair` writes exactly two frames — msg2
+(`internal/remote/pairing/pairing.go:531`) and the decision (`pairing.go:661` via `sendDecision`,
+`pairing.go:867`). msg4 and the ack are RECEIVES on this end (`recvConsent`, `recvAck`); the
+push-binding work rides inside msg4 and adds no machine send. The ordinal is still correct.
+
+It is now ASSERTED rather than assumed (see the fix), because a future machine-side frame would
+move the stall to the wrong write and this test would silently stop testing what it names.
+
+The starvation hypothesis on `acceptStallWindow` (2 s) was also excluded: if that deadline expired
+before the acceptance send, the machine would fail closed with no acceptance and the phone would
+park forever on `context.Background()`, failing at `legBudget` with "the phone leg never resolved"
+— a different, loud message, not the one CI reported.
+
+## Proof by injection
+
+The window is a handful of instructions, so it was widened deterministically — a `time.Sleep(50ms)`
+between the underlying `Send` and the flag write, standing in for the machine goroutine losing its
+P at that point. Injection present, pre-fix rig:
+
+```
+GOMAXPROCS=1 go test -race -count=10 -run TestB69_... ./internal/remote/pairing/
+--- FAIL: ... (0.03s) b69_accept_commit_test.go:170: the acceptance frame was never
+    forwarded, so the ordering under test never happened      [10 of 10 runs]
+```
+
+10/10 red, with the phone-pinned assertion passing first every time — the CI symptom exactly,
+including its self-contradiction.
+
+Baseline for contrast: the same test, same starvation, WITHOUT the injection ran
+`-count=200` green (`ok ... 404.815s`). The window is real but narrow, which is why it only ever
+appeared on a loaded runner.
+
+## The fix — synchronisation only, no assertion touched
+
+`forwarded` became a signal instead of a sampled flag: a `chan struct{}` closed on the acceptance
+send, and the test WAITS for it (bounded by the existing `legBudget`) instead of reading it at
+whatever instant the phone happened to finish.
+
+The assertion is unchanged in strength and in message. Nothing closes that channel but a delivered
+acceptance, so a frame that genuinely never forwards still fails — it just fails after the bound
+rather than before the fact was published.
+
+Added alongside it, a guard on the excluded hypothesis: after `Machine.Pair` returns, the test
+asserts the machine wrote exactly `machineAcceptanceSend` frames. If a later wave adds a
+machine-side frame, this fails with an instruction to re-derive the ordinal, instead of stalling
+some other write and quietly testing nothing.
+
+## Proof the fix closes it
+
+Same injection, same starvation, fixed rig:
+
+```
+GOMAXPROCS=1 go test -race -count=10 -run TestB69_... ./internal/remote/pairing/
+ok  github.com/Nathandela/swarm/internal/remote/pairing  21.892s      [10 of 10 runs]
+```
+
+10/10 red before, 10/10 green after, under the identical injection.
+
+Non-vacuity of the new wait, proven by a second injection (`machineAcceptanceSend` temporarily set
+to `3`, so the stall marker never fires and the acceptance is never marked forwarded):
+
+```
+--- FAIL: TestB69_... (20.03s) b69_accept_commit_test.go:187: the acceptance frame was never
+    forwarded, so the ordering under test never happened
+```
+
+The wait still fails on a genuinely unforwarded frame, with the same message. Both injections were
+removed; the file contains no `TEMPORARY` markers and no sleeps.
+
+## Gate results (2026-08-16, HEAD `c753bcb` + this change, injections removed)
+
+| gate | result |
+| --- | --- |
+| `go build ./...` | OK |
+| `go vet ./internal/remote/pairing/` | OK |
+| `golangci-lint run ./internal/remote/pairing/...` | `0 issues.` |
+| `go test -race -count=1 ./internal/remote/pairing/` | `ok  github.com/Nathandela/swarm/internal/remote/pairing  21.195s` |
+| `GOMAXPROCS=1 go test -race -count=25 -run TestB69_...` | `ok ... 51.888s` — 25/25 green |
+| same, with 8 spinning CPU hogs alongside | `ok ... 52.116s` — 25/25 green |
+
+## Clean stress
+
+Post-fix, injections removed:
+
+- `GOMAXPROCS=1 go test -race -count=25 -run TestB69_...` — 25/25 green (`ok ... 51.888s`).
+- The same 25 runs again with eight spinning CPU hogs alongside, to reproduce the runner
+  contention that made the window observable in the first place — 25/25 green (`ok ... 52.116s`).
+- Pre-fix baseline for the record: `-count=200` under `GOMAXPROCS=1` was green
+  (`ok ... 404.815s`), which is why this only ever showed up on CI and never locally.
+
+## What was NOT changed
+
+- No assertion was weakened, deleted, or re-aimed. The forwarded check has the same meaning and
+  the same failure text; it is only synchronised with the goroutine that establishes the fact.
+- No production code was touched. The whole diff is `b69_accept_commit_test.go`.
+- `acceptStallWindow` was left at 2 s. It is the deadline production hands `Machine.Pair`, and the
+  test's value comes from handing production its own shape (the point the header makes against
+  b52's vacuous 2 s). Its starvation failure mode is loud and distinct, so widening it would buy
+  nothing and cost the test's fidelity.
