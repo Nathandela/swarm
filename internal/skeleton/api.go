@@ -625,6 +625,14 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 // (real agent argv composed through the registry adapter, resume validated and
 // composed from the source's conversation id) and forwards it to the core.
 func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
+	// The launch ENVIRONMENT is resolved before argv, because argv depends on it: the
+	// adapter's argv[0] is a bare binary name resolved against the AGENT's own PATH
+	// (lookPathIn). A remote/preset launch carries no client env by design (ADR-007 D8
+	// forbids a phone-supplied one), so without daemon policy filling it there is no
+	// PATH to search and no production provider can ever resolve -- round-4 review
+	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
+	// hands the shim, so the binary this resolves is the binary the agent runs.
+	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
 	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
 	if err != nil {
 		return persist.Meta{}, err

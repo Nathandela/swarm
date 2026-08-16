@@ -910,12 +910,31 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 		return protocol.OpApprove, nil
 	case protocol.ActionPushPrefs:
 		return protocol.OpPushPrefs, nil
-	case protocol.ActionSessionLaunch, protocol.ActionComposerSend, protocol.ActionOperationStatus,
+	case protocol.ActionSessionLaunch:
+		// Wave R5: the real session_launch. Launch's and approve's own rule, inherited: a
+		// session_launch whose SessionLaunch body was stripped in transit must NOT be
+		// forwarded as a bodyless frame -- it would reach the daemon as a launch naming no
+		// preset, and the user would be told their preset is invalid by a frame that
+		// merely lost its payload. The gateway stays a blind conduit for the body's
+		// CONTENT: every refusal decision (kill switch, tier, unknown/stale preset,
+		// roots, options) is machine-side, behind requireRemoteAuthz.
+		if rc.SessionLaunch == nil {
+			return "", errors.New("remotegw: session_launch command missing its preset body in-envelope")
+		}
+		return protocol.OpSessionLaunch, nil
+	case protocol.ActionLaunchPresets:
+		// Wave R5: the signed read of the machine-authored preset list, forwarded like
+		// every semantic op (Op == Action) -- only the daemon holds the device registry
+		// and the preset custody.
+		return protocol.OpLaunchPresets, nil
+	case protocol.ActionComposerSend, protocol.ActionOperationStatus,
 		protocol.ActionTurnInterrupt, protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
 		// The R1 refusal-ops vocabulary (Wave R1 skeleton, playbook §6.3): forwarded to the
 		// daemon like kill/delete/approve/push_prefs, Op == Action, never gateway-locally
 		// refused -- only the daemon holds the device registry requireRemoteAuthz
-		// authorizes against. terminal_input / terminal_control_keepalive (ADR-017 T6) are
+		// authorizes against. (session_launch moved to its own arm above when Wave R5 gave
+		// it a body; operation_status carries only subject_operation_id and needs no body
+		// gate.) terminal_input / terminal_control_keepalive (ADR-017 T6) are
 		// deliberately NOT added here: they ride only the E2EE frame's own sender/sequence
 		// and a confirmed control generation, never a signed action, so they fall to the
 		// default arm's generic refusal below exactly like any other unrecognised action.

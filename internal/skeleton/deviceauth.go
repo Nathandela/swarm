@@ -32,6 +32,12 @@ func actionClass(action string) (device.Action, bool) {
 		// into anything, and a control-class mapping would leave a read-only paired phone
 		// unable to poll the status of its own pending operation.
 		return device.ActionRead, true
+	case protocol.ActionLaunchPresets:
+		// READ (Wave R5): listing what COULD be launched starts nothing, and a read-only
+		// paired phone rendering the preset list honestly (with its launch affordance
+		// denied by tier) is better UX than a list that refuses to exist. The launch
+		// itself is session_launch, control-class above.
+		return device.ActionRead, true
 	case protocol.ActionPushPrefs:
 		// READ, and the choice is not obvious: a push preference does mutate machine-side
 		// state, which argues for the control class. But it cannot start, stop or type into

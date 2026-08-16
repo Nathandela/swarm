@@ -1,0 +1,99 @@
+== R5 round-2 RED evidence ==
+date: 2026-08-16T16:21:32Z  HEAD: f8338e1
+
+-- go vet (compile-RED probes) --
+--- ./internal/protocol
+# github.com/Nathandela/swarm/internal/protocol
+# [github.com/Nathandela/swarm/internal/protocol]
+vet: internal/protocol/r5_round2_test.go:117:17: undefined: schema.OperationStatusContentHash
+--- ./internal/skeleton
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r5_launchpresets_test.go:200:16: a.DeviceCapability undefined (type *coreAPI has no field or method DeviceCapability)
+--- ./mobile
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+mobile/r5_round2_test.go:32:17: a.LaunchCapability undefined (type *App has no field or method LaunchCapability)
+mobile/r5_round2_test.go:44:3: unknown field DeviceCapability in struct literal of type schema.Control
+mobile/r5_round2_test.go:47:16: a.LaunchCapability undefined (type *App has no field or method LaunchCapability)
+mobile/r5_round2_test.go:56:64: unknown field DeviceCapability in struct literal of type schema.Control
+mobile/r5_round2_test.go:57:17: a.LaunchCapability undefined (type *App has no field or method LaunchCapability)
+mobile/r5_round2_test.go:63:17: a.LaunchCapability undefined (type *App has no field or method LaunchCapability)
+--- ./internal/daemon
+--- ./internal/remotegw
+--- ./cmd/swarm
+
+-- behavioral RED: internal/daemon (run BEFORE the fix) --
+--- FAIL: TestR5Round2_PhantomRetireCompensatesPreLaunchSideEffect (1.39s)
+    r5_round2_test.go:116: PreDelete compensated 0 side effects, want exactly 1 (the phantom's): dropReserved erases the meta, so an uncompensated PreLaunch side effect -- the worktree -- leaks permanently (rollbackReserved's own stated rule)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	4.620s
+FAIL
+
+-- behavioral RED: cmd/swarm --
+--- FAIL: TestR5Round2_PresetsRemoveWithdrawsTheAuthoring (0.01s)
+    r5_round2_test.go:46: presets remove exit = 2, want 0; stderr="remote presets: unknown command \"remove\"\nusage: swarm remote presets <command>\n\n  swarm remote presets add --name <display> --agent <provider> --root <dir>\n        author a launch preset (mints a stable opaque id; the root is stored\n        as its canonical, symlink-resolved real path)\n  swarm remote presets list\n        list the authored presets (id, name, provider, canonical root, revision)\n"
+--- FAIL: TestR5Round2_PresetsEditReauthorsInPlaceAndChangesTheRevision (0.01s)
+    r5_round2_test.go:92: presets edit exit = 2, want 0; stderr="remote presets: unknown command \"edit\"\nusage: swarm remote presets <command>\n\n  swarm remote presets add --name <display> --agent <provider> --root <dir>\n        author a launch preset (mints a stable opaque id; the root is stored\n        as its canonical, symlink-resolved real path)\n  swarm remote presets list\n        list the authored presets (id, name, provider, canonical root, revision)\n"
+--- FAIL: TestR5Round2_PresetsAddRefusesAnUnregisteredAgent (0.00s)
+    r5_round2_test.go:135: presets add with an unregistered agent exited 0; want a refusal at setup time (presets.go's own principle: a preset nobody can launch is a setup error surfaced at setup time, not at the phone's confirm)
+--- FAIL: TestR5Round2_PresetsUsageNamesTheLifecycleVerbs (0.00s)
+    r5_round2_test.go:162: presets usage does not name "remove":
+        usage: swarm remote presets <command>
+        
+          swarm remote presets add --name <display> --agent <provider> --root <dir>
+                author a launch preset (mints a stable opaque id; the root is stored
+                as its canonical, symlink-resolved real path)
+          swarm remote presets list
+                list the authored presets (id, name, provider, canonical root, revision)
+    r5_round2_test.go:162: presets usage does not name "edit":
+        usage: swarm remote presets <command>
+        
+          swarm remote presets add --name <display> --agent <provider> --root <dir>
+                author a launch preset (mints a stable opaque id; the root is stored
+                as its canonical, symlink-resolved real path)
+          swarm remote presets list
+                list the authored presets (id, name, provider, canonical root, revision)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	1.188s
+FAIL
+
+-- internal/remotegw (fence, PASSES at RED by design) --
+=== RUN   TestR5Round2_SessionLaunchRedeliveryBoundedToOneReforward
+    r5_round2_test.go:79: poll err = cursor 1: persist inbound seq 1: remotegw test: gateway process died at this boundary
+    r5_round2_test.go:79: poll err = cursor 5: open frame: crypto: stale or reordered sequence number
+    r5_round2_test.go:79: poll err = cursor 5: open frame: crypto: stale or reordered sequence number
+        cursor 9: open frame: crypto: stale or reordered sequence number
+--- PASS: TestR5Round2_SessionLaunchRedeliveryBoundedToOneReforward (0.01s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remotegw	0.980s
+
+== Round-2 RED notes ==
+
+Scope: the review fix-pack of bead agents-tracker-hggx.6 round 2 (BLOCKER 1 phantom
+worktree leak; MAJOR 1 flag-shaped prompt; MAJOR 2 unbound operation_status subject;
+MAJOR 3 preset lifecycle verbs + agent validation; MEDIUM 1 untested skeleton half
+incl. the activity-log chmod gap; MEDIUM 2 gateway redelivery coverage for
+session_launch; the launch_presets device_capability tier source for BLOCKER 3).
+
+RED classification, verified above:
+ - internal/protocol: COMPILE-RED (undefined schema.OperationStatusContentHash;
+   behind it Control.DeviceCapability and the DeviceCapabilitySource seam).
+ - internal/skeleton: COMPILE-RED (coreAPI.DeviceCapability undefined; behind it the
+   whole previously-untested launchpresets.go fence, including the behavioral
+   activity-log chmod assertion).
+ - mobile: COMPILE-RED (App.LaunchCapability undefined; schema.Control has no
+   DeviceCapability field).
+ - internal/daemon: BEHAVIORAL RED -- TestR5Round2_PhantomRetireCompensatesPreLaunchSideEffect
+   fails "PreDelete compensated 0 side effects, want exactly 1" (the exact leak the
+   review proved with its temporary probe). The no-hook control test passes at RED
+   (the retire itself already worked).
+ - cmd/swarm: BEHAVIORAL RED -- remove/edit answer `unknown command` (exit 2), an
+   unregistered --agent authors cleanly (exit 0), usage names neither verb.
+ - internal/remotegw: TestR5Round2_SessionLaunchRedeliveryBoundedToOneReforward is a
+   COVERAGE FENCE and PASSES at RED by design (the labelled-fence convention of the
+   R4/JVM-suite precedent): the reviewed gap was missing coverage on the one op whose
+   redelivery can spawn a process, not broken gateway behavior. Its assertions
+   (exactly one re-forward, same operation_id, body intact, window closes) now pin
+   that behavior against regression.
+
+No existing test file was modified; every RED file is additive.

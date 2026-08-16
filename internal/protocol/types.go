@@ -135,12 +135,21 @@ const (
 	// not exist yet. Op and Action share the same string for each, mirroring kill/
 	// delete/approve/push_prefs. See handleRefusalOp and schema.ActionSessionLaunch's
 	// doc comment for the full contract.
+	// Wave R5 (ADR-007 B144(b)): session_launch and operation_status now have REAL
+	// handlers (handleSessionLaunch / handleOperationStatus) behind the same
+	// requireRemoteAuthz choke point; the remaining four still answer the sealed
+	// op_not_implemented refusal via handleRefusalOp.
 	OpSessionLaunch        = "session_launch"
 	OpComposerSend         = "composer_send"
 	OpOperationStatus      = "operation_status"
 	OpTurnInterrupt        = "turn_interrupt"
 	OpTerminalControlBegin = "terminal_control_begin"
 	OpTerminalControlEnd   = "terminal_control_end"
+
+	// OpLaunchPresets is the signed READ of the machine-authored launch-preset list
+	// (Wave R5, playbook "launch_presets"): Op == Action like every mapped sibling,
+	// answered with Control.Presets + Control.PresetPolicyRevision.
+	OpLaunchPresets = "launch_presets"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

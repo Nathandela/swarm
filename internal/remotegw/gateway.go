@@ -345,6 +345,11 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 		Launch:      rc.Launch,
 		Approve:     rc.Approve,
 		BodyVersion: rc.BodyVersion,
+		// Wave R5: the session_launch preset body rides across unchanged (its content is
+		// bound by the phone's signature via SessionLaunchContentHash), and
+		// operation_status's query subject is copied onto its Control coordinate.
+		SessionLaunch:      rc.SessionLaunch,
+		SubjectOperationID: rc.SubjectOperationID,
 	}
 	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
 	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to

@@ -1,0 +1,31 @@
+Wave R5 round-3 review fix-pack — Android-side RED evidence (TDD failing-first, GG-5)
+bead: agents-tracker-hggx.6 | date: 2026-08-16 | HEAD f8338e1 (working tree)
+
+Finding under fix (D3-class MAJOR, code-traced in review): the FETCH PRESETS verb's
+machine refusal is silently swallowed — PhoneSurface latched `presetOp` forever, so
+the resolved launch sentence overwrote the fetch refusal on the shared delivery line
+in the same render pass, every pass; and when a fetch refusal DID render it wore the
+LAUNCH verb's copy ("not authorized to launch sessions") for a verb the user did not
+press.
+
+New RED file (ADDITIVE): android/app/src/test/kotlin/dev/swarm/phone/ui/screens/
+LaunchPresetRound3Test.kt — 3 tests pinning the fetch verb's OWN notice copy
+(`LaunchPresetScreen.fetchNoticeFor`). The surface half (one-shot presetOp claim,
+fetch refusal riding fetchNoticeFor) is pinned source-level by the Go gate
+android/gate/r5_round3_ui_test.go, RED-recorded in go-red-round3.txt §3.
+
+Gradle lane COMPILE-RED (script /tmp/r5r3_androidunit_red.sh: --no-daemon
+--rerun-tasks --no-build-cache, JAVA_HOME=openjdk@21, ANDROID_HOME=
+/usr/local/share/android-commandlinetools):
+
+  start 2026-08-16T17:15:44Z, end 17:17:24Z, BUILD FAILED in 1m 40s, exit 1
+  > Task :app:compileDebugUnitTestKotlin FAILED — 3 errors, every root the missing
+    round-3 symbol:
+  e: .../LaunchPresetRound3Test.kt:31:44 Unresolved reference 'fetchNoticeFor'.
+  e: .../LaunchPresetRound3Test.kt:55:40 Unresolved reference 'fetchNoticeFor'.
+  e: .../LaunchPresetRound3Test.kt:66:40 Unresolved reference 'fetchNoticeFor'.
+
+AAR mtime check: app/libs/swarm.aar mtime Aug 16 18:34 (local; the round-2 rebuild)
+— PREDATES this RED run and is untouched by round 3 (no mobile/ Go surface change in
+this fix-pack). No test-result XML was deleted. Full log preserved session-local at
+/tmp/r5r3_androidunit_red.log; the lines above are verbatim excerpts.

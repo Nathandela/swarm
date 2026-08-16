@@ -49,9 +49,13 @@ import dev.swarm.phone.ui.screens.Destination
 import dev.swarm.phone.ui.screens.GlobalInboxRowModel
 import dev.swarm.phone.ui.screens.InboxScreen
 import dev.swarm.phone.ui.screens.InboxTab
+import dev.swarm.phone.ui.screens.LaunchDeliveryNotice
 import dev.swarm.phone.ui.screens.LaunchFieldId
 import dev.swarm.phone.ui.screens.LaunchPanel
 import dev.swarm.phone.ui.screens.LaunchPanelScreen
+import dev.swarm.phone.ui.screens.LaunchPresetPanel
+import dev.swarm.phone.ui.screens.LaunchPresetScreen
+import dev.swarm.phone.ui.screens.PresetRowModel
 import dev.swarm.phone.ui.screens.MachinesDestination
 import dev.swarm.phone.ui.screens.MachinesPanel
 import dev.swarm.phone.ui.screens.MachinesPanelScreen
@@ -68,6 +72,7 @@ import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
 import dev.swarm.phone.ui.screens.globalInboxView
 import dev.swarm.phone.ui.screens.launchPanelView
+import dev.swarm.phone.ui.screens.launchPresetView
 import dev.swarm.phone.ui.screens.machinesPanelView
 import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
@@ -866,6 +871,57 @@ class PhoneSurface(
     private var launchRefusal: String = ""
 
     /**
+     * Wave R5's preset flow state (round 2; the R4 latch idiom of [leaseOp]/[killOp]):
+     *
+     *  - [presetOp] is the in-flight session_launch, claimed BY OPERATION ID (PB-SYNC-2), and
+     *    [presetDelivery] its resolved sentence -- [LaunchPresetScreen.noticeFor] of the claimed
+     *    outcome's [LaunchPresetScreen.noticeStateFor] state. The claim is ONE-SHOT (round 3):
+     *    presetOp clears once a landed outcome has rendered, because a latched op re-claims its
+     *    stale sentence every pass and silently overwrites the fetch verb's refusal (D3).
+     *  - [presetRefreshOp] is the in-flight launch_presets read. Claiming ITS outcome is what
+     *    adopts the machine's list and this phone's stamped tier into the facade cache
+     *    (`mobile/app.go Outcome` -> `adoptPresets`), so [renderPresetFlow] keeps claiming it
+     *    until an answer lands; a wire refusal of the read lands on the same delivery line.
+     *  - [presetDrawn] is the redraw guard ([launchDrawn]'s reason: this section redraws inside
+     *    the same host as the launch form's live fields).
+     */
+    private var presetOp: String = ""
+    private var presetDelivery: String = ""
+
+    /**
+     * The FETCH PRESETS verb's own resolved refusal, or empty (round 4, review MEDIUM 3).
+     *
+     * A FIELD OF ITS OWN, which is the fix. Round 3 gave the fetch verb its own COPY but both
+     * verbs still wrote [presetDelivery], and the launch block's write is unconditional while
+     * `presetOp` is set -- cleared only once the outcome lands NON-PENDING. So for the entire
+     * in-flight window of any launch, every fetch refusal was overwritten by "The launch is on
+     * its way to the machine and has not resolved yet.": the fetch control refused in silence,
+     * which is the D3 defect class this wave exists to keep out. Two verbs, two slots.
+     */
+    private var presetFetchDelivery: String = ""
+    private var presetRefreshOp: String = ""
+    private var presetDrawn: LaunchPresetPanel? = null
+
+    /** The last [FacadeBridge.launchPresetFlow] snapshot, read at render and spent at draw. */
+    private var presetFlow: FacadeBridge.LaunchPresetFlow? = null
+
+    /**
+     * The FETCH_PRESETS control: one signed launch_presets read. The operation id is latched so
+     * [renderPresetFlow] can claim the reply -- which is the adoption moment for both the list
+     * and this phone's machine-stamped tier.
+     */
+    private val fetchPresets = actionButton(LaunchPresetScreen.FETCH_LABEL, CtaKind.MORE) {
+        // The previous fetch's refusal is taken off screen by the press that retries it: a
+        // sentence must never outlive the attempt it reports (the leaseRefusedFor rule).
+        presetFetchDelivery = ""
+        Press(
+            SendPlane.COMMAND,
+            verb = { app -> app.refreshLaunchPresets() },
+            settle = { answer -> (answer as? Op)?.let { presetRefreshOp = it.operationID } },
+        )
+    }
+
+    /**
      * The take_control this surface issued, and the session it was issued for.
      *
      * BOTH, because the target is re-derived from the triage inbox on every draw: a lease
@@ -1496,6 +1552,7 @@ class PhoneSurface(
         // way to get its first session, which is section 1's "launches" with no subject again.
         launch.enable(true)
         renderLaunch(bridge)
+        renderPresetFlow(bridge)
         drawLaunch()
 
         if (session.isEmpty()) {
@@ -2778,10 +2835,27 @@ class PhoneSurface(
      * this runs on every journal event.
      */
     private fun drawLaunch() {
+        val presets = presetPanelOnScreen()
         val panel = launchPanelOnScreen()
-        if (panel == launchDrawn) return
+        if (panel == launchDrawn && presets == presetDrawn) return
         launchDrawn = panel
+        presetDrawn = presets
         launchHost.removeAllViews()
+        // Wave R5 round 2: the preset flow is the REMOTE launch UX (playbook 4.3) and sits
+        // first; the free-form form below it remains the PB-APP-6 surface this slice does not
+        // retire. The fetch control is a long-lived view this surface owns ([launch]'s reason),
+        // detached here so the redraw can re-home it.
+        presets?.let { p ->
+            (fetchPresets.parent as? ViewGroup)?.removeView(fetchPresets)
+            launchHost.addView(
+                launchPresetView(
+                    context = activity,
+                    panel = p,
+                    fetch = fetchPresets,
+                    onSelect = ::confirmPresetLaunch,
+                ),
+            )
+        }
         launchHost.addView(
             launchPanelView(
                 context = activity,
@@ -2789,6 +2863,21 @@ class PhoneSurface(
                 fieldFor = ::launchField,
                 submit = launch,
             ),
+        )
+    }
+
+    /**
+     * The preset flow as it stands: the last [FacadeBridge.launchPresetFlow] snapshot resolved
+     * to its panel, or null before any bridge has answered (the failed-core branch draws no
+     * section rather than a section made of guesses).
+     */
+    private fun presetPanelOnScreen(): LaunchPresetPanel? = presetFlow?.let { flow ->
+        LaunchPresetPanel(
+            availability = flow.availability,
+            availabilityNotice = LaunchPresetScreen.noticeFor(flow.availability),
+            rows = flow.rows,
+            deliveryNotice = presetDelivery,
+            fetchNotice = presetFetchDelivery,
         )
     }
 
@@ -3030,6 +3119,115 @@ class PhoneSurface(
         // does not, had no test. It is `LaunchPanelScreen.noticeFor`, and `LaunchPanelScreenTest`
         // is where both branches are asserted.
         launchAnswer = launchScreen.resolve(answer)
+    }
+
+    /**
+     * Wave R5's preset flow, per draw (round 2): read the snapshot the section renders from, and
+     * claim the two in-flight operations BY ID (PB-SYNC-2).
+     *
+     * CLAIMING THE REFRESH IS THE ADOPTION MOMENT: `App.Outcome` folds a claimed launch_presets
+     * reply into the preset cache and the machine-stamped tier (`adoptPresets`), so until this
+     * claims it the snapshot below still renders the pre-refresh world. A wire refusal of the
+     * read lands on the same delivery line as the confirm's -- a fetch that was refused out
+     * loud, never a list that silently stays empty.
+     */
+    private fun renderPresetFlow(bridge: FacadeBridge) {
+        if (presetRefreshOp.isNotEmpty()) {
+            val refreshed = try {
+                bridge.launchOutcome(presetRefreshOp)
+            } catch (unreadable: Exception) {
+                null // unresolved is the honest state; keep claiming on the next draw
+            }
+            when {
+                refreshed == null || refreshed.code.isEmpty() -> {} // not landed yet
+                refreshed.code == "launch_presets" -> { // adopted (reply op == success)
+                    presetRefreshOp = ""
+                    presetFetchDelivery = "" // a fetch that worked leaves no refusal behind it
+                }
+                else -> {
+                    // ROUND 3 (review D3 MAJOR): the fetch verb's OWN copy -- a refused READ
+                    // must not claim a launch was refused. ROUND 4 (review MEDIUM 3): written to
+                    // the fetch verb's OWN slot, so the launch block below cannot overwrite it
+                    // for the duration of a pending launch.
+                    presetFetchDelivery = LaunchPresetScreen.fetchNoticeFor(
+                        LaunchPresetScreen.noticeStateFor(refreshed.code),
+                        refreshed.message,
+                    )
+                    presetRefreshOp = ""
+                }
+            }
+        }
+        if (presetOp.isNotEmpty()) {
+            val outcome = try {
+                bridge.launchOutcome(presetOp)
+            } catch (unreadable: Exception) {
+                null
+            }
+            if (outcome != null) {
+                val state = LaunchPresetScreen.noticeStateFor(outcome.code)
+                presetDelivery = LaunchPresetScreen.noticeFor(
+                    state,
+                    if (state == LaunchDeliveryNotice.REFUSED) outcome.message else "",
+                )
+                // ROUND 3 (review D3 MAJOR): the claim is ONE-SHOT once the outcome has
+                // landed. `App.Outcome` is a persistent map, so a latched presetOp re-claimed
+                // the resolved launch on EVERY pass and its stale sentence unconditionally
+                // overwrote whatever the fetch verb had just written on this shared line --
+                // a machine refusal of FETCH PRESETS was silently swallowed forever.
+                if (state != LaunchDeliveryNotice.PENDING) presetOp = ""
+            }
+        }
+        presetFlow = try {
+            bridge.launchPresetFlow()
+        } catch (unreadable: Exception) {
+            null // a core that cannot answer draws no preset section rather than an invented one
+        }
+    }
+
+    /**
+     * A preset row was tapped (SELECT_PRESET): the ADR-007 D8 explicit confirm, as a sheet over
+     * EXACTLY the tapped row. The five playbook facts plus the echoed revision come from
+     * [LaunchPresetScreen.confirmationFor]; the prompt box is the phone's ONE free-text
+     * contribution; CONFIRM_LAUNCH issues the signed session_launch AT THE DISPLAYED REVISION
+     * (echo, never derive), and CANCEL_LAUNCH is a named control, not a gesture.
+     */
+    private fun confirmPresetLaunch(row: PresetRowModel) {
+        val prompt = field(LaunchPresetScreen.PROMPT_HINT)
+        val sheet = LaunchPresetScreen.confirmationFor(
+            preset = row,
+            machineName = presetFlow?.machineLabel.orEmpty(),
+            worktreeIsolation = row.worktree,
+            promptPresent = false, // presence is decided at confirm time from the box below
+        )
+        val facts = listOf(
+            sheet.machineName,
+            sheet.provider,
+            sheet.workspacePath,
+            sheet.worktreeBehavior,
+            "Preset revision " + sheet.presetRevision,
+        ).filter { it.isNotEmpty() }.joinToString("\n")
+        val body = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(notice(activity, facts).screenAir())
+            addView(prompt.screenAir())
+        }
+        AlertDialog.Builder(activity)
+            .setTitle(LaunchPresetScreen.HEADING)
+            .setView(body)
+            .setPositiveButton(LaunchPresetScreen.CONFIRM_LABEL) { _, _ ->
+                press(launchHost) {
+                    presetDelivery = ""
+                    Press(
+                        SendPlane.COMMAND,
+                        verb = { app ->
+                            app.sessionLaunch(row.id, row.revision, prompt.text.toString())
+                        },
+                        settle = { answer -> (answer as? Op)?.let { presetOp = it.operationID } },
+                    )
+                }
+            }
+            .setNegativeButton(LaunchPresetScreen.CANCEL_LABEL, null)
+            .show()
     }
 
     /** What the user typed into the launch form, with nothing supplied on their behalf. */

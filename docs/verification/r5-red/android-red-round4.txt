@@ -1,0 +1,51 @@
+Wave R5 round-4 review fix-pack — Android-side RED evidence (TDD failing-first, GG-5)
+bead: agents-tracker-hggx.6 | date: 2026-08-16 | HEAD f8338e1 (working tree)
+
+Findings under fix, phone side:
+
+MEDIUM 3 (D3 class, narrowed by round 3 and NOT closed): the FETCH PRESETS refusal is
+still swallowed for the duration of any in-flight launch. `PhoneSurface.renderPresetFlow`
+writes the fetch refusal to `presetDelivery` first (:3131) and the launch block overwrites
+that same field unconditionally whenever `presetOp` is non-empty (:3147), clearing the
+claim only on a NON-PENDING outcome (:3156). So for the whole pending window of any
+launch, every fetch refusal is replaced by "The launch is on its way to the machine and
+has not resolved yet." Round 3 removed the FOREVER swallow; the window remained. Root
+cause: two verbs, one `LaunchPresetTag.DELIVERY` line, launch always winning.
+
+MAJOR 2 (phone half): the machine now answers an undecidable launch with the stable
+`outcome_unknown` code. `LaunchPresetScreen.noticeStateFor` had no arm for it, so it fell
+through to REFUSED — telling the user the machine turned away a launch that may be
+running. `LaunchDeliveryNotice.OUTCOME_UNKNOWN` has existed since round 1 with nothing
+reaching it.
+
+New RED files (ADDITIVE):
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/LaunchPresetRound4Test.kt
+    — 3 tests (the `outcome_unknown` mapping; the fetch slot surviving an in-flight
+      launch; the fetch slot defaulting empty)
+  android/gate/r5_round4_ui_test.go
+    — 3 source-level surface pins, RED-recorded in go-red-round4.txt §4 (the gate idiom
+      for PhoneSurface behaviour the JVM suite cannot reach)
+
+=============================================================================
+Gradle lane COMPILE-RED
+=============================================================================
+script /tmp/r5r4_androidunit_red.sh — JAVA_HOME=/usr/local/opt/openjdk@21/libexec/
+openjdk.jdk/Contents/Home, ANDROID_HOME=/usr/local/share/android-commandlinetools,
+./gradlew --no-daemon --rerun-tasks --no-build-cache :app:testDebugUnitTest
+
+start 2026-08-16T17:48:13Z
+
+> Task :app:compileDebugUnitTestKotlin
+e: .../LaunchPresetRound4Test.kt:63:13 No parameter with name 'fetchNotice' found.
+e: .../LaunchPresetRound4Test.kt:70:19 Unresolved reference 'fetchNotice'.
+e: .../LaunchPresetRound4Test.kt:75:19 Unresolved reference 'fetchNotice'.
+e: .../LaunchPresetRound4Test.kt:92:19 Unresolved reference 'fetchNotice'.
+> Task :app:compileDebugUnitTestKotlin FAILED
+
+BUILD FAILED in 1m 38s
+gradle exit: 1
+end 2026-08-16T17:49:52Z
+
+The missing `LaunchPresetPanel.fetchNotice` IS the finding: one slot for two verbs.
+(The `outcome_unknown` mapping test compiles and is behaviourally RED behind the same
+compile failure; it goes green with the `noticeStateFor` arm.)

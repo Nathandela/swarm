@@ -154,6 +154,14 @@ var requiredScreenElements = []string{
 	"machines.connection_health", // ADR-018 MM5/MM8: one row's degradation degrades that row only
 	"machines.stale_age",         // ADR-018 MM3: a parked row visibly shows its last-sync age
 	"machines.recovery",          // ADR-018 MM8: recovery screens routed per machine
+
+	// ADDED BY WAVE R5 (ADR-007 B144(b), bead agents-tracker-hggx.6), additively and for
+	// the reason S16's block states. mobile/r5_launchpresets_test.go states the case for
+	// each and hard-codes them there too, so this list and that one keep meeting in the
+	// middle. The phone SELECTS and CONFIRMS a machine-authored preset; it never composes
+	// argv, cwd, env, or options -- these two elements are that whole surface.
+	"launch.presets", // playbook 4.3: the machine-published preset list the selection screen renders
+	"launch.confirm", // playbook 4.3: one signed session_launch at the confirmed revision
 }
 
 type coverageRow struct {

@@ -94,6 +94,12 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `terminal`         | `*TerminalSnapshot` | server-rendered terminal snapshot, carried on `terminal_snapshot` (A7 slice B) |
 | `send_input`       | `*SendInputReq`     | `send_input`: one owner-tier steering message for `session_id`, owner-tier only (ADR-010 A2) |
 | `body_version`     | int                 | R1 refusal-ops (`session_launch`/`composer_send`/`operation_status`/`turn_interrupt`/`terminal_control_begin`/`terminal_control_end`): the profile version the phone bound this op to (`RemoteProfileV1.accepted_body_versions`); there is no version `0` (Wave R1 skeleton, playbook §6.3) |
+| `session_launch`   | `*SessionLaunchReq` | Wave R5 `session_launch` body: the phone's confirmed machine-authored preset selection (`preset_id`, `preset_revision`, `initial_prompt`, cosmetic `cols`/`rows`), bound into the device signature via `SessionLaunchContentHash` (ADR-007 B144(b)) |
+| `presets`          | `[]LaunchPresetView` | Wave R5 `launch_presets` reply: exactly the machine-authored preset list — empty custody answers empty, never an invented default (ADR-007 B135) |
+| `preset_policy_revision` | string        | Wave R5 `launch_presets` reply: the revision of the preset policy that produced `presets`, the staleness coordinate operators correlate `stale_preset` refusals against |
+| `subject_operation_id` | string          | Wave R5 `operation_status`: the operation being ASKED ABOUT — distinct from the query's own `operation_id` exactly as `interaction_id` is (ADR-007 D7) |
+| `operation_outcome` | `*OperationOutcomeView` | Wave R5 `operation_status` reply: `applied` (authoritative, with the session id), `outcome_unknown` (honest undecidability), or `unknown_operation` (no record; never invented) |
+| `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -533,6 +539,14 @@ re-delivered approve finds the approval already answered or already resolved, an
 
 ### `session_launch` / `composer_send` / `operation_status` / `turn_interrupt` / `terminal_control_begin` / `terminal_control_end`
 
+> AMENDED BY WAVE R5 (2026-08-16, ADR-007 B144(b)): `session_launch` and
+> `operation_status` now have REAL handlers and no longer answer `op_not_implemented`;
+> see "`session_launch` / `launch_presets` / `operation_status` (Wave R5)" below. The
+> choke-point ordering this section pins (authz first, then `body_version`, then the
+> op-specific reply) is inherited by the real handlers unchanged. `composer_send`,
+> `turn_interrupt`, `terminal_control_begin` and `terminal_control_end` remain
+> refusal-only exactly as described here.
+
 The Wave R1 "refusal-ops" skeleton (playbook §6.3, ADR-017 T5, ADR-007 B144): six signed
 remote-tier ops landing as **refusal-only** daemon handlers ahead of their real business
 logic. Five are MUTATING (`session_launch`, `composer_send`, `turn_interrupt`,
@@ -579,6 +593,66 @@ producer (`internal/skeleton/capability.go`) but no daemon-side consumer, so tod
 `op_not_implemented` refusal for `terminal_control_begin`/`terminal_control_end` runs
 without the T2 per-session capability gate (`terminal_fallback`) and `turn_interrupt`
 without T6's `interrupt` gate — wiring that lookup in belongs to each op's own real handler.
+
+### `session_launch` / `launch_presets` / `operation_status` (Wave R5)
+
+The phone remote-launch vocabulary (ADR-007 B144(b), D8 restrictions retained in full;
+playbook "Wave R5"). All three are session-less and sign over `OperationSessionSentinel`.
+
+**`launch_presets`** is the signed READ of the machine-authored preset list: the reply
+carries `presets` (`LaunchPresetView`: opaque `id`, `display_name`, `agent`, canonical
+symlink-resolved `root`, allowlisted `options`, `worktree` default, content-bound
+`revision`) plus `preset_policy_revision` and `device_capability` (the signer's own
+registry-pinned tier, stated by the machine so the phone can render its tier-denied
+launch state honestly; empty when the backend exposes no capability seam). Empty custody
+answers an empty list — never an invented default (ADR-007 B135). Presets are
+MACHINE-AUTHORED (`swarm remote presets add/list/edit/remove`); nothing in one ever comes
+from a phone.
+
+**`session_launch`** resolves ONLY a machine-authored preset at the signed revision. The
+body (`Control.session_launch`) is bound into the device signature via
+`SessionLaunchContentHash(preset_id, preset_revision, initial_prompt)`, so a gateway
+cannot re-point a valid signature at a different preset or prompt. After the shared
+authz + `body_version` gates, refusals fire in order and all BEFORE any argv composition:
+missing body → `invalid_field`; an id this machine never authored → **`unknown_preset`**
+(remedy: re-list); a right id at a changed revision → **`stale_preset`** (playbook:447-448
+— never silently launching different policy; remedy: re-confirm); a preset carrying a
+hard-forbidden option value → `policy` (the SAME hard-coded remote denylist free-form
+launch rides, R-POL.4); a root outside the machine-configured allowed roots → `policy`
+(the SAME `LaunchPolicy` seam, R-POL.3, fail-closed absent). The composed spec comes from
+the resolved preset alone — resolved root as cwd, preset options copied, NO client env
+ever — and carries the signed `operation_id` so the daemon's EXISTING two-phase
+idempotent reservation engages: a network retry of the same `operation_id` converges on
+the one session and never spawns a second process. Success replies op `session_launch`
+with the launched `session` view; both the applied launch and every semantic refusal are
+recorded on the D10 activity log.
+
+The agent ENVIRONMENT of that spec is daemon policy, which is ADR-007 D8's other half:
+the phone supplies none, and the daemon fills it from its OWN process environment through
+the same normative allowlist a local launch is filtered by (`persist.FilterEnv` — PATH,
+HOME, SHELL, TERM, the locale family, venv/conda, the two provider credentials; everything
+else dropped). The daemon process is the user's machine environment, so ADR-006's
+billing-inheritance rule holds one level up, and there is no configuration surface for a
+phone to reach.
+
+One reply is neither success nor refusal: **`outcome_unknown`** (ADR-017 T9's delivery
+vocabulary, the same state `operation_status` reports). It is the answer when the signed
+`operation_id` is already IN FLIGHT under another driver — a redelivery racing its
+original — and its outcome cannot be decided yet: the daemon will neither claim the
+in-flight reservation as an applied session (it can still roll back) nor drive a second
+process for it. The phone renders it as undecidable and sends the user to the session list
+rather than reporting either a created session or a refusal.
+
+**`operation_status`** is the reconciliation READ: `subject_operation_id` names the
+asked-about op and is BOUND into the device signature via
+`OperationStatusContentHash(subject_operation_id)` (round-2: unbound, a compromised
+gateway could re-point a valid signature at another operation id and read back that
+operation's namespaced session id — and the op is READ class, so any paired tier could).
+The reply's `operation_outcome` is `applied` (authoritative, with the
+session id), `outcome_unknown` (a launch that died mid-flight and cannot be proven —
+never silent), or `unknown_operation` (no record; never invented). The read has no side
+effect and never authorizes a retry (playbook:449): re-sending the SAME signed
+`session_launch` operation id is the one re-driver.
 
 ### `terminal_subscribe` / `terminal_snapshot`
 

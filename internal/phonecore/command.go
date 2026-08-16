@@ -217,6 +217,39 @@ func SealLaunchEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd s
 	})
 }
 
+// SealSessionLaunchEnvelope seals a signed session_launch command together with its
+// preset-selection body (Wave R5), mirroring SealLaunchEnvelope: the body rides beside
+// the signed tuple so the gateway can forward it, and the command's ContentHash must be
+// schema.SessionLaunchContentHash(req), which the daemon recomputes from the forwarded
+// body -- a relay or gateway that alters the preset id, revision or prompt breaks the
+// signature. BodyVersion is bound to the one profile version this phone read
+// (schema.CurrentProfileVersion): the daemon refuses any other, absent included. seq
+// must be unique per epoch.
+func SealSessionLaunchEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, req *schema.SessionLaunchReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			SessionLaunch:     req,
+			BodyVersion:       schema.CurrentProfileVersion,
+		},
+	})
+}
+
+// SealLaunchPresetsEnvelope seals the signed launch_presets read (Wave R5): the
+// machine-authored preset list request. Signed (unlike terminal_watch/journal_resync)
+// because the custody lives daemon-side behind the one authorization plane; carries no
+// body of its own, only the R1 body-version binding. seq must be unique per epoch.
+func SealLaunchPresetsEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			BodyVersion:       schema.CurrentProfileVersion,
+		},
+	})
+}
+
 // OpenControlReply opens a daemon reply Control the gateway sealed and returned via the
 // phone's mailbox (the response half of the command round-trip). Fail-closed on a
 // malformed/wrong-key envelope or non-Control plaintext.

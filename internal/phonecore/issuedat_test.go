@@ -91,15 +91,31 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealApproveEnvelope: %v", err)
 	}
+	// Wave R5's session_launch and launch_presets (bead agents-tracker-hggx.6): the ninth
+	// and tenth producers, added the day they were declared -- the sweep below fired on
+	// both, which is the fence doing exactly what its own comment promises. An unstamped
+	// session_launch would be the user's only remote way to CREATE a session, refused
+	// forever with nothing logged.
+	sessionLaunch, err := SealSessionLaunchEnvelope(key, epoch, seq.Next(), auth,
+		&schema.SessionLaunchReq{PresetID: "preset-api", PresetRevision: "rev-1"})
+	if err != nil {
+		t.Fatalf("SealSessionLaunchEnvelope: %v", err)
+	}
+	presetsList, err := SealLaunchPresetsEnvelope(key, epoch, seq.Next(), auth)
+	if err != nil {
+		t.Fatalf("SealLaunchPresetsEnvelope: %v", err)
+	}
 	return map[string][]byte{
-		"SealInputData":           data,
-		"SealInputResize":         resize,
-		"SealCommandEnvelope":     cmd,
-		"SealTakeControlEnvelope": take,
-		"SealLaunchEnvelope":      lau,
-		"SealResyncEnvelope":      resync,
-		"SealPushPrefsEnvelope":   prefs,
-		"SealApproveEnvelope":     approve,
+		"SealInputData":             data,
+		"SealInputResize":           resize,
+		"SealCommandEnvelope":       cmd,
+		"SealTakeControlEnvelope":   take,
+		"SealLaunchEnvelope":        lau,
+		"SealResyncEnvelope":        resync,
+		"SealPushPrefsEnvelope":     prefs,
+		"SealApproveEnvelope":       approve,
+		"SealSessionLaunchEnvelope": sessionLaunch,
+		"SealLaunchPresetsEnvelope": presetsList,
 	}
 }
 

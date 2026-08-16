@@ -715,6 +715,10 @@ type commandBody struct {
 	// covers the body's content_hash and the envelope carries the body -- and for the same
 	// reason the derivation is phonecore's (SignApprove), not this package's.
 	approve *schema.ApproveReq
+	// sessionLaunch is Wave R5's preset confirmation body. Launch's own shape: the body
+	// rides beside the signed tuple (SealSessionLaunchEnvelope) and is bound into the
+	// signature via ContentHash = schema.SessionLaunchContentHash(it).
+	sessionLaunch *schema.SessionLaunchReq
 }
 
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
@@ -832,6 +836,15 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	switch {
 	case body.launch != nil:
 		env, err = phonecore.SealLaunchEnvelope(sc.key, sc.epoch, seq, cmd, body.launch)
+	case body.sessionLaunch != nil:
+		// Wave R5: the preset confirmation rides beside the signed tuple with its
+		// body-version binding, exactly as the free-form launch spec does.
+		env, err = phonecore.SealSessionLaunchEnvelope(sc.key, sc.epoch, seq, cmd, body.sessionLaunch)
+	case action == opLaunchPresets:
+		// Wave R5: the signed preset-list read carries no body of its own, but MUST
+		// carry the body-version binding a bare SealCommandEnvelope omits -- the daemon
+		// refuses an absent body_version identically to a wrong one.
+		env, err = phonecore.SealLaunchPresetsEnvelope(sc.key, sc.epoch, seq, cmd)
 	case body.prefs != nil:
 		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
 	case body.approve != nil:

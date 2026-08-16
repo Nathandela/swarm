@@ -91,6 +91,33 @@ type Control struct {
 	// that omits this key is refused identically to a wrong version, never treated as an
 	// implicit "version 1".
 	BodyVersion int `json:"body_version,omitempty"`
+
+	// Wave R5 launch-preset additive fields (ADR-007 B144(b), playbook "Wave R5").
+	// SessionLaunch is the session_launch body: the phone's confirmed preset selection,
+	// bound into the device signature via SessionLaunchContentHash.
+	SessionLaunch *SessionLaunchReq `json:"session_launch,omitempty"`
+	// Presets + PresetPolicyRevision ride the launch_presets reply: exactly the
+	// machine-authored list (empty custody answers empty, never an invented default,
+	// ADR-007 B135) plus the revision of the policy that produced it.
+	Presets              []LaunchPresetView `json:"presets,omitempty"`
+	PresetPolicyRevision string             `json:"preset_policy_revision,omitempty"`
+	// SubjectOperationID is operation_status's QUERY SUBJECT -- the operation being
+	// asked about -- distinct from the query's own OperationID exactly as ADR-007 D7
+	// separates operation_id from interaction_id: the asking op and the asked-about op
+	// are different coordinates.
+	SubjectOperationID string `json:"subject_operation_id,omitempty"`
+	// OperationOutcome rides the operation_status reply: applied (authoritative, with
+	// the session id), outcome_unknown (honest undecidability), or unknown_operation
+	// (no record; never invented).
+	OperationOutcome *OperationOutcomeView `json:"operation_outcome,omitempty"`
+	// DeviceCapability rides the launch_presets reply: the SIGNING device's own
+	// authorization tier ("full"/"read_only"/"read_approve") as pinned machine-side in
+	// the device registry at enrollment (round-2 fix-pack). It is the phone's only
+	// honest wire source for its own tier -- capability is never read FROM the wire
+	// (deviceauth's rule), but nothing forbade the machine STATING it, and without it
+	// the launch screen's tier-denied state had no data source. Empty when the backend
+	// exposes no capability seam: absent fact, never an invented tier.
+	DeviceCapability string `json:"device_capability,omitempty"`
 }
 
 // SendInputReq is one owner-tier steering message (ADR-010 Amendment 1 A2), carried in

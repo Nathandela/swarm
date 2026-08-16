@@ -93,6 +93,15 @@ func TestR1RefusalOps_ForwardedToDaemonNeverGatewayLocallyRefused(t *testing.T) 
 				},
 				BodyVersion: schema.CurrentProfileVersion,
 			}
+			if o.action == protocol.ActionSessionLaunch {
+				// SUPERSEDED BY WAVE R5 for this one row (pre-recorded in
+				// docs/verification/r5-red/go-red.txt §3): session_launch now carries a
+				// real preset body, and the gateway inherits launch's and approve's
+				// stripped-body rule (r5_launchroute_test.go pins the refusal). The
+				// forward-not-refuse assertion below is unchanged -- it now holds for a
+				// WELL-FORMED session_launch, exactly as it does for launch and approve.
+				cmd.SessionLaunch = &schema.SessionLaunchReq{PresetID: "preset-api", PresetRevision: "rev-1"}
+			}
 			mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealAt(t, key, 1, 1, cmd)}}}
 			fwd := &recordingForwarder{reply: protocol.Control{
 				Op: protocol.OpError, ErrorCode: protocol.CodeNotImplemented, Error: o.action + ": not implemented yet",
@@ -172,6 +181,12 @@ func TestR1RefusalOps_TerminalInputAndKeepaliveStayUnmappedGenericRefusal(t *tes
 // op_not_implemented answer is a pure function of an unchanging input -- the SECOND answer is
 // the SAME refusal as the first, not a different one and not a replay rejection. Mirrors
 // TestCrashMatrix_MutationDuplicateBoundedToOneRedelivery (inbound_crash_matrix_test.go).
+//
+// RETARGETED BY WAVE R5 (pre-recorded in docs/verification/r5-red/go-red.txt §3): the
+// driving action moved from session_launch -- whose real handler landed, so its answer is
+// no longer the stateless op_not_implemented this test's premise names -- to
+// composer_send, which remains refusal-only. Every assertion is unchanged; the premise
+// ("a stateless refusal redelivers identically") is simply kept true of the op chosen.
 func TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal(t *testing.T) {
 	key := inboundKey(97)
 	const epoch uint32 = 3
@@ -179,7 +194,7 @@ func TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal(t *testing.T) {
 	rl := &retainingRelay{}
 	cmd := protocol.RemoteCommand{
 		DeviceCommandAuth: protocol.DeviceCommandAuth{
-			Action: protocol.ActionSessionLaunch, OperationID: "op-launch-crash", DeviceID: "d1", Sig: "device-signature",
+			Action: protocol.ActionComposerSend, OperationID: "op-launch-crash", DeviceID: "d1", Sig: "device-signature",
 		},
 		BodyVersion: schema.CurrentProfileVersion,
 	}
@@ -192,7 +207,7 @@ func TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal(t *testing.T) {
 		}
 		fwd := &recordingForwarder{reply: protocol.Control{
 			Op: protocol.OpError, ErrorCode: protocol.CodeNotImplemented,
-			Error: protocol.ActionSessionLaunch + ": not implemented yet",
+			Error: protocol.ActionComposerSend + ": not implemented yet",
 		}}
 		b := NewCommandBridge(CommandBridgeConfig{
 			Mailbox: rl, Forwarder: fwd, Key: key, EpochID: epoch, ReplyTarget: "phone", Inbound: st,

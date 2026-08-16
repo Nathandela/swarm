@@ -1,0 +1,96 @@
+======================================================================
+R5 phone remote launch -- Android screen-model RED RUN (gradle lane)
+epic: agents-tracker-hggx / bead: agents-tracker-hggx.6 (Wave R5,
+      deliverable 4's phone half: preset selection + confirmation UX --
+      every affordance nameable by the screen model, every stable
+      refusal code a nameable state, first-run/denial resolver states,
+      Obsidian design system via the existing fence)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-16
+new files (ADDITIVE ONLY):
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/LaunchPresetScreenTest.kt
+      (the frozen JVM contract: LaunchPresetScreen.launchAvailabilityFor
+      availability matrix [full+online+killSwitchOn+presets -> AVAILABLE;
+      read_only/read_approve -> TIER_FORBIDS; offline wins; kill switch
+      off its own denial; zero presets -> NO_PRESETS whose copy names
+      `swarm remote presets`], PresetRowModel carrying the displayed
+      revision the confirm signs, confirmationFor with the five
+      playbook-4.3 facts [machineName, provider, workspacePath,
+      worktreeBehavior, hasInitialPrompt] plus the echoed presetRevision,
+      noticeFor with DISTINCT copy per stable refusal [STALE_PRESET,
+      UNKNOWN_PRESET, KILL_SWITCH, NOT_AUTHORIZED, OFFLINE] and an
+      OUTCOME_UNKNOWN notice that never claims success or failure)
+  android/gate/r5_launch_ui_test.go (Go gate, runtime RED -- captured
+      in go-red.txt: LaunchPresetScreen.kt does not exist)
+No existing Kotlin production or test source is modified. LaunchPanel.kt
+(Phase B S24's free-form agent+cwd form) is deliberately untouched: R5's
+phone never supplies a filesystem path, so the preset flow is a NEW
+model and the free-form form's retirement from the remote surface is the
+GREEN slice's explicit decision, recorded there. The Obsidian fence is
+NOT duplicated: android/gate/s24_screens_test.go's PB-DS-11/PB-DS-6
+sweeps cover all production Kotlin, so LaunchPresetScreen.kt is inside
+the existing fence the moment it exists.
+
+environment (the CI android job's discipline):
+  JAVA_HOME=/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HOME=/usr/local/share/android-commandlinetools
+  script file: /tmp/r5_red_androidunit.sh
+  command: ./gradlew --no-daemon --rerun-tasks --no-build-cache
+           :app:compileDebugUnitTestKotlin
+  == start: 2026-08-16T14:44:20Z
+  == end:   BUILD FAILED in 1m 38s, script exit 1
+             (21 actionable tasks: 21 executed)
+  android/app/libs/swarm.aar mtime: Aug 16 13:51 local (11:51 UTC) --
+  PREDATES the run's start (14:44 UTC / 16:44 local), so this lane did
+  not rebuild the AAR; :app:requireSwarmAar only asserted its presence.
+  android/app/build/test-results/* mtimes: Aug 16 16:19 local (14:19
+  UTC), from an earlier unrelated run -- ALSO PREDATING this run's
+  start. No test task executed here and no test-result XML is claimed
+  by this run (a compile-RED produces none by definition).
+
+### COMPILE-LEVEL RED, the exact convention of the repo's Go RED runs
+### (r4-red/android-red.txt precedent): every root error is an
+### unresolved R5 contract symbol; the type-inference lines are
+### cascades of the same unresolved model types inside lambda
+### receivers. 31 errors total; unresolved-reference census:
+###    11 LaunchPresetScreen
+###     8 LaunchDeliveryNotice
+###     6 LaunchAvailability
+###     1 PresetRowModel
+### The full root-error list:
+
+e: .../LaunchPresetScreenTest.kt:45:13 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:46:13 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:57:17 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:58:17 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:70:13 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:71:13 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:80:13 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:81:13 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:90:13 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:91:13 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:95:20 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:95:49 Unresolved reference 'LaunchAvailability'.
+e: .../LaunchPresetScreenTest.kt:104:25 Unresolved reference 'PresetRowModel'.
+e: .../LaunchPresetScreenTest.kt:114:21 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:136:22 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:136:51 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:140:27 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:140:56 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:146:22 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:146:51 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:159:22 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: .../LaunchPresetScreenTest.kt:160:13 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:161:13 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:162:13 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:163:13 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:164:13 Unresolved reference 'LaunchDeliveryNotice'.
+e: .../LaunchPresetScreenTest.kt:166:32 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: .../LaunchPresetScreenTest.kt:166:32 Cannot infer type for type parameter 'R'. Specify it explicitly.
+e: .../LaunchPresetScreenTest.kt:166:36 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: .../LaunchPresetScreenTest.kt:166:38 Unresolved reference 'LaunchPresetScreen'.
+e: .../LaunchPresetScreenTest.kt:170:23 Cannot infer type for type parameter 'T'. Specify it explicitly.
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+BUILD FAILED in 1m 38s
+======================================================================

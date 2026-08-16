@@ -42,6 +42,7 @@ const remoteUsage = `usage: swarm remote <command>
   swarm remote revoke    revoke a paired device
   swarm remote regrant   re-issue a paired device's epoch grant
   swarm remote pair      pair a new device
+  swarm remote presets   author the machine's launch presets (add/list)
   swarm remote off       disable remote control
   swarm remote on        enable remote control
   swarm remote status    show remote control status
@@ -67,6 +68,8 @@ func runRemote(args []string, stdout, stderr io.Writer) int {
 		return runRemoteRegrant(args[1:], stdout, stderr)
 	case "pair":
 		return runRemotePair(args[1:], os.Stdin, stdout, stderr)
+	case "presets":
+		return runRemotePresets(args[1:], stdout, stderr)
 	case "off":
 		return runRemoteSetControl(false, stdout, stderr)
 	case "on":

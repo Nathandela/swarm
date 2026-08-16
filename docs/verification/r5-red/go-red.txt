@@ -1,0 +1,224 @@
+======================================================================
+R5 phone remote launch -- Go-side FAILING-FIRST (RED) EVIDENCE
+epic: agents-tracker-hggx / bead: agents-tracker-hggx.6 (Wave R5)
+role: RED (contract-test writer, TDD Phase 1 + Red, GG-5)
+date: 2026-08-16 (14:40-14:47 UTC)
+HEAD: f8338e1 (the R6 slice is concurrently uncommitted in the working
+      tree; see BASELINE below -- it is green and unaffected)
+Go:   go1.26.5 (darwin/amd64); PATH="$HOME/go/bin:$PATH"
+======================================================================
+
+SCOPE (playbook "Wave R5" :768-785; ADR-007 B144(b) -- D8's Phase-2
+launch-execution deferral LIFTED, every restriction retained). Owned
+files only: internal/daemon (launch policy surfaces), internal/protocol
+(the session_launch/launch_presets/operation_status handlers behind the
+requireRemoteAuthz choke point), internal/remotegw (routing for the new
+op), cmd/swarm (authoring UX), mobile/ (facade), android/ (screen
+model; its gradle lane is android-red.txt beside this file).
+internal/pushgw, internal/shim's spool/hook code, and the R4 registry
+internals are untouched.
+
+NEW FILES (ADDITIVE ONLY -- no existing test or production source of
+any wave is modified):
+
+  internal/daemon/r5_launchpreset_test.go
+      Deliverable 1, machine side: LaunchPreset custody (Save/Load,
+      0600, missing-file == zero presets), PresetRevision as the
+      deterministic content binding, ResolveLaunchPreset with the
+      ErrUnknownPreset / ErrStalePreset sentinels, and
+      LaunchSpecForPreset composing the daemon spec from the preset
+      alone (symlink-resolved root as Cwd, nil ClientEnv always, copied
+      options, signed operation_id + initial prompt carried,
+      unresolvable root refused before any spec exists).
+  internal/daemon/r5_launchfault_test.go
+      Deliverables 2+3: (*Daemon).OperationOutcome -- the read-only
+      operation-status reconciliation surface (applied/outcome_unknown,
+      ok=false for an id never seen) -- layered on the EXISTING
+      launchProbe seam and idempotent reservation. Fault matrix: crash
+      between reserve and spawn (outcome_unknown, never silent; replay
+      re-drives to exactly one process), crash after spawn before
+      confirm (replay ADOPTS the one live shim -- same session id, same
+      PID, one session), concurrent double-driver of one operation_id
+      (exactly one process, both callers converge), and the read
+      surface having no side effect (status never authorizes a retry).
+  internal/protocol/r5_sessionlaunch_test.go
+      Deliverables 2+4, daemon boundary: the REAL handlers replacing
+      the Wave R1 op_not_implemented stub. Refusals BEFORE argv
+      composition (observable as zero backend Launch calls): kill
+      switch (kill_switch, preset source never consulted), forged key /
+      revoked pairing / read-only+read_approve tier (not_authorized at
+      the one authenticator choke point), missing body (invalid_field),
+      unknown preset (NEW stable code unknown_preset), changed revision
+      (NEW stable code stale_preset, naming the preset), forbidden
+      preset option (policy, the SAME hard-coded remote denylist),
+      preset root outside allowed roots (policy, the SAME R-POL.3
+      seam). Success path: SessionLaunchContentHash binds the signed
+      tuple to preset id+revision+prompt; the spec is composed from the
+      resolved preset alone with the signed operation_id and no client
+      env. launch_presets answers machine-authored ids + policy
+      revision (empty custody answers empty, never a default).
+      operation_status answers applied/outcome_unknown/
+      unknown_operation and never calls Launch. Activity log (D10):
+      one record for the applied launch, one for the refusal.
+  internal/remotegw/r5_launchroute_test.go
+      Gateway sliver: opForAction arm for ActionLaunchPresets ->
+      OpLaunchPresets ("launch_presets"); a session_launch WITHOUT its
+      SessionLaunch body refused at the gateway (the launch/approve
+      stripped-body precedent); the body rides the mapping unchanged;
+      the fail-closed unknown-action default re-asserted beside the
+      new arms.
+  cmd/swarm/r5_presets_test.go
+      Deliverable 1, terminal side: `swarm remote presets add/list` --
+      minted stable opaque preset- id + printed revision, canonical
+      (symlink-resolved) root stored and listed, nonexistent root
+      refused at authoring time naming the path, explicit "no presets"
+      empty state, usage naming the verb. NO undefined Go symbols:
+      this package fails BEHAVIORALLY (the verb does not exist).
+  mobile/r5_launchpresets_test.go
+      Deliverables 2+4, facade: App.SessionLaunch(presetID, revision,
+      prompt) live-only (offline target refused ErrClassOffline before
+      anything is composed or sealed; PendingOpCount stays 0), empty
+      preset id / revision refused ErrClassInvalidRequest before
+      signing, App.LaunchPresets() returning only machine-published
+      presets (empty when none -- no invented defaults), and the
+      PB-BIND-3 screen_coverage.tsv rows (launch.presets /
+      launch.confirm) tracing the new surface.
+  android/gate/r5_launch_ui_test.go + LaunchPresetScreenTest.kt
+      Deliverable 4, phone UX -- see android-red.txt.
+
+BASELINE (nothing else in the tree is broken by, or blamed on, this
+slice): with the six Go files above temporarily removed,
+  $ go vet ./internal/daemon/ ./internal/protocol/ ./internal/remotegw/ \
+        ./cmd/swarm/ ./mobile/ ./android/gate/
+  exit 0, no output.
+And `go build ./...` over the whole tree (R6's uncommitted work
+included) exits 0 before and after this slice: test files do not enter
+the build. `go vet ./...` across the WHOLE repository with the new
+files in place fails in EXACTLY the four compile-RED packages below
+and nowhere else.
+
+======================================================================
+1. COMPILE-RED (the named R5 seams do not exist) -- the repo's
+   established convention (r6-red/spool-red.txt, r4-red/go-red.txt):
+   undefined symbols ARE the frozen contract.
+======================================================================
+
+$ go test -count=1 -run NoSuchTestR5 ./internal/daemon/
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/r5_launchpreset_test.go:44:40: undefined: LaunchPreset
+internal/daemon/r5_launchfault_test.go:67:15: d.OperationOutcome undefined (type *Daemon has no field or method OperationOutcome)
+internal/daemon/r5_launchfault_test.go:72:18: undefined: OpStateApplied
+internal/daemon/r5_launchfault_test.go:73:79: undefined: OpStateApplied
+internal/daemon/r5_launchfault_test.go:87:18: d.OperationOutcome undefined (type *Daemon has no field or method OperationOutcome)
+internal/daemon/r5_launchfault_test.go:127:16: d2.OperationOutcome undefined (type *Daemon has no field or method OperationOutcome)
+internal/daemon/r5_launchfault_test.go:132:18: undefined: OpStateOutcomeUnknown
+internal/daemon/r5_launchfault_test.go:134:85: undefined: OpStateOutcomeUnknown
+internal/daemon/r5_launchfault_test.go:139:22: d2.OperationOutcome undefined (type *Daemon has no field or method OperationOutcome)
+internal/daemon/r5_launchfault_test.go:154:19: d2.OperationOutcome undefined (type *Daemon has no field or method OperationOutcome)
+internal/daemon/r5_launchfault_test.go:154:19: too many errors
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+    (r5_launchpreset_test.go's remaining seams -- SaveLaunchPresets,
+    LoadLaunchPresets, launchPresetsPath, PresetRevision,
+    ResolveLaunchPreset, ErrUnknownPreset, ErrStalePreset,
+    LaunchSpecForPreset -- sit behind the first undefined type and
+    surface as GREEN adds LaunchPreset.)
+
+$ go test -count=1 -run NoSuchTestR5 ./internal/protocol/
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/r5_sessionlaunch_test.go:75:21: undefined: schema.LaunchPresetView
+internal/protocol/r5_sessionlaunch_test.go:78:30: undefined: schema.OperationOutcomeView
+internal/protocol/r5_sessionlaunch_test.go:80:21: undefined: schema.ActivityRecord
+internal/protocol/r5_sessionlaunch_test.go:83:37: undefined: schema.LaunchPresetView
+internal/protocol/r5_sessionlaunch_test.go:99:50: undefined: schema.LaunchPresetView
+internal/protocol/r5_sessionlaunch_test.go:105:65: undefined: schema.LaunchPresetView
+internal/protocol/r5_sessionlaunch_test.go:122:63: undefined: schema.OperationOutcomeView
+internal/protocol/r5_sessionlaunch_test.go:129:53: undefined: schema.ActivityRecord
+internal/protocol/r5_sessionlaunch_test.go:141:48: undefined: schema.ActivityRecord
+internal/protocol/r5_sessionlaunch_test.go:153:51: undefined: schema.LaunchPresetView
+internal/protocol/r5_sessionlaunch_test.go:153:51: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+    (Behind these: schema.SessionLaunchReq, SessionLaunchContentHash,
+    CodeUnknownPreset, CodeStalePreset, OutcomeApplied/OutcomeUnknown/
+    OutcomeUnknownOperation, Control.SessionLaunch/Presets/
+    PresetPolicyRevision/OperationOutcome/SubjectOperationID,
+    OpLaunchPresets/ActionLaunchPresets, and the protocol seams
+    ErrUnknownPreset/ErrStalePreset + the LaunchPresetSource /
+    OperationStatusSource / ActivityRecorder backend interfaces.)
+
+$ go test -count=1 -run NoSuchTestR5 ./internal/remotegw/
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/r5_launchroute_test.go:39:64: undefined: protocol.ActionLaunchPresets
+internal/remotegw/r5_launchroute_test.go:45:20: undefined: protocol.OpLaunchPresets
+internal/remotegw/r5_launchroute_test.go:46:70: undefined: protocol.OpLaunchPresets
+internal/remotegw/r5_launchroute_test.go:48:14: undefined: protocol.OpLaunchPresets
+internal/remotegw/r5_launchroute_test.go:49:91: undefined: protocol.OpLaunchPresets
+internal/remotegw/r5_launchroute_test.go:59:3: unknown field SessionLaunch in struct literal of type protocol.RemoteCommand
+internal/remotegw/r5_launchroute_test.go:74:3: unknown field SessionLaunch in struct literal of type protocol.RemoteCommand
+internal/remotegw/r5_launchroute_test.go:74:26: undefined: schema.SessionLaunchReq
+internal/remotegw/r5_launchroute_test.go:86:8: rc.SessionLaunch undefined (type protocol.RemoteCommand has no field or method SessionLaunch)
+internal/remotegw/r5_launchroute_test.go:87:6: rc.SessionLaunch undefined (type protocol.RemoteCommand has no field or method SessionLaunch)
+internal/remotegw/r5_launchroute_test.go:87:6: too many errors
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+
+$ go vet ./mobile/
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+mobile/r5_launchpresets_test.go:51:15: a.SessionLaunch undefined (type *App has no field or method SessionLaunch)
+mobile/r5_launchpresets_test.go:82:16: a.SessionLaunch undefined (type *App has no field or method SessionLaunch)
+mobile/r5_launchpresets_test.go:100:17: a.LaunchPresets undefined (type *App has no field or method LaunchPresets)
+    (TestR5Facade_ScreenCoverageNamesTheLaunchPresetSurface fails
+    BEHAVIORALLY once the package compiles: screen_coverage.tsv has no
+    launch.presets / launch.confirm rows today.)
+
+======================================================================
+2. BEHAVIORAL RED (packages that compile; the failure is the missing
+   feature, not a syntax error)
+======================================================================
+
+$ go test -count=1 -run 'TestR5PresetsCLI' ./cmd/swarm/
+--- FAIL: TestR5PresetsCLI_UsageNamesTheVerb (0.00s)
+    r5_presets_test.go:52: `swarm remote` usage does not mention the presets verb:
+        usage: swarm remote <command>
+        [... the eight existing verbs; no presets line ...]
+--- FAIL: TestR5PresetsCLI_AddThenListRoundTrip (0.00s)
+    r5_presets_test.go:64: presets add exit = 2, want 0; stderr="remote: unknown remote command \"presets\"\n"
+--- FAIL: TestR5PresetsCLI_AddRefusesNonexistentRoot (0.00s)
+    r5_presets_test.go:102: refusal stderr "remote: unknown remote command \"presets\"\n" does not name the offending root "/var/folders/.../never-created"
+    r5_presets_test.go:107: presets list after refused add: exit 2
+--- FAIL: TestR5PresetsCLI_AddStoresTheCanonicalRoot (0.00s)
+    r5_presets_test.go:130: presets add via symlink exit = 2; stderr="remote: unknown remote command \"presets\"\n"
+--- FAIL: TestR5PresetsCLI_ListEmptyStateIsExplicit (0.00s)
+    r5_presets_test.go:143: presets list on a fresh machine exit = 2, want 0; stderr="remote: unknown remote command \"presets\"\n"
+FAIL	github.com/Nathandela/swarm/cmd/swarm	1.259s
+    RIGHT REASON: every failure is `unknown remote command "presets"`
+    -- the authoring verb does not exist. No assertion failed for a
+    test-bug reason.
+
+$ go test -count=1 -run 'TestR5_' ./android/gate/
+--- FAIL: TestR5_LaunchPresetScreenModelExistsAndNamesEveryAffordance (0.00s)
+    r5_launch_ui_test.go:56: R5's launch flow has no screen model: open .../ui/screens/LaunchPresetScreen.kt: no such file or directory. [...]
+FAIL	github.com/Nathandela/swarm/android/gate	0.848s
+    RIGHT REASON: the screen model file does not exist.
+    TestR5_LaunchPresetScreenModelHasItsJVMSuite PASSES at RED time BY
+    DESIGN and is labelled so in-file (the R4/s16 fence convention):
+    the RED slice itself checks in LaunchPresetScreenTest.kt, and the
+    existence check exists so the compile-RED Kotlin suite cannot be
+    deleted to green the gradle lane.
+
+======================================================================
+3. SUPERSESSION NOTE (recorded now so GREEN cannot look like a weaken)
+======================================================================
+
+internal/protocol/r1_refusalops_test.go and internal/remotegw/
+r1_refusalops_test.go pin session_launch and operation_status to the
+STABLE op_not_implemented refusal "until the real handler exists".
+The R5 GREEN slice IS that real handler: the R1 rows for those two ops
+(and only those) are superseded by implementation, exactly as the R1
+files' own headers anticipate. Their choke-point assertions (forged
+signature stopped at requireRemoteAuthz, missing device fields
+invalid_field, body-version gate, the operation-session sentinel) are
+NOT superseded -- r5_sessionlaunch_test.go re-asserts each against the
+real handler, so the GREEN edit to the R1 tests may only retarget the
+expected code away from op_not_implemented, never delete an ordering
+assertion. composer_send / turn_interrupt / terminal_control_begin /
+terminal_control_end remain refusal-only and their R1 rows stand.
+======================================================================

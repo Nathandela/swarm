@@ -162,6 +162,15 @@ type App struct {
 	journal       []JournalEntry
 	needs         map[string]string
 	inflight      map[string]bool
+	// presets is the machine-published launch-preset cache (Wave R5): the last
+	// launch_presets reply adopted via adoptPresets. Empty until the machine answers a
+	// RefreshLaunchPresets -- never seeded with an invented default (ADR-007 B135).
+	presets []PresetInfo
+	// launchCapability is this device's own authorization tier as the machine last
+	// STATED it on a launch_presets reply (device_capability, round-2 fix-pack) --
+	// the launch screen's only honest source for its tier-denied state. "" until the
+	// machine has answered one: the screens' first-run state, never a guess.
+	launchCapability string
 	// resyncAt are the resync attempt times PER STREAM, the state §6.0's rate bound is
 	// enforced against. Per stream because a shared budget lets the two repairable channels
 	// starve each other, and one shared-bucket gap stales both at once.
@@ -1381,6 +1390,9 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 		_ = core.RecordOutcome(ctrl)
 	}
 	if ctrl, ok := core.State().OpOutcomes[operationID]; ok {
+		// Wave R5: a launch_presets reply claimed here is also the moment its list
+		// becomes the machine-published preset cache LaunchPresets renders.
+		a.adoptPresets(ctrl)
 		a.resolve(operationID)
 		return outcomeOf(ctrl), nil
 	}

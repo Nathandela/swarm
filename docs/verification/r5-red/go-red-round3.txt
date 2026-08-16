@@ -1,0 +1,56 @@
+Wave R5 round-3 review fix-pack — Go-side RED evidence (TDD failing-first, GG-5)
+bead: agents-tracker-hggx.6 | date: 2026-08-16 (17:15 UTC) | HEAD f8338e1 (working tree)
+
+Findings under fix (from the recorded round-3 review):
+  MAJOR 1  OperationOutcome answers a FALSE AUTHORITATIVE "applied" for the phase-1
+           reservation shape (present, Running, ShimPID==0) — the exact shape
+           resolveReplay calls a PHANTOM.
+  MAJOR 2  A replayed/redelivered signed session_launch spawns a SECOND process once
+           the operation's session row was deliberately Deleted (no terminal phase on
+           the idempotency record, so resolveReplay re-drives).
+  LOW      A launch that definitively applied and was then deleted reads back
+           outcome_unknown ("may create a second session" about a completed launch).
+  MEDIUM   LaunchPreset.Options cannot be authored by the shipped setup UX (always
+           nil in production; preset-path R-POL.4 loop unreachable).
+
+New RED files (ADDITIVE; no existing test or production source touched at RED time):
+  internal/daemon/r5_round3_test.go   — 4 tests
+  cmd/swarm/r5_round3_test.go         — 3 tests
+
+RED classification and verbatim roots:
+
+1) internal/daemon — COMPILE-RED
+   $ go vet ./internal/daemon/ ./cmd/swarm/          (2026-08-16T17:15:11Z)
+   # github.com/Nathandela/swarm/internal/daemon
+   vet: internal/daemon/r5_round3_test.go:120:22: undefined: ErrLaunchOpConsumed
+   vet exit: 1
+   (Behind the missing sentinel: the terminal-phase record on launch success, the
+   refused re-drive of a completed+deleted operation, the ShimPID!=0 usable rule,
+   and the applied answer for a completed record surviving Delete. The review's own
+   probes — deleted after verification — proved both MAJORs behaviorally on this
+   HEAD: OperationOutcome ok=true state="applied" at phaseReserved; and
+   Launch→Delete→Launch(same op) produced a new session id + new shim pid with the
+   second agent's pidfile actually written.)
+
+2) cmd/swarm — BEHAVIORAL RED (package compiles; the flag does not exist)
+   $ go test -count=1 -run 'TestR5Round3' ./cmd/swarm/   (2026-08-16T17:15:20Z)
+   --- FAIL: TestR5Round3_PresetsAddAuthorsOptions
+       presets add --option exit = 2, want 0; stderr="flag provided but not defined: -option ..."
+   --- FAIL: TestR5Round3_PresetsEditReplacesOptionsAndKeepsThemWithoutTheFlag
+       presets add exit = 2; stderr="flag provided but not defined: -option ..."
+   --- FAIL: TestR5Round3_PresetsMalformedOptionRefusesAtAuthoringTime
+       refusal for --option "modelopus" ... "flag provided but not defined: -option ..."
+   FAIL github.com/Nathandela/swarm/cmd/swarm 1.331s
+
+3) android/gate — BEHAVIORAL RED (source pins over PhoneSurface.kt / LaunchPresetScreen.kt)
+   $ go test -count=1 -run 'TestR5Round3' ./android/gate/   (2026-08-16T17:15:24Z)
+   --- FAIL: TestR5Round3_LaunchClaimIsOneShotSoItCannotSwallowALaterRefusal
+       PhoneSurface.kt never clears presetOp ...
+   --- FAIL: TestR5Round3_FetchRefusalRidesTheFetchVerbsOwnCopy
+       PhoneSurface.kt renders the fetch verb's wire refusal through the LAUNCH verb's
+       notice vocabulary (or not at all) ... LaunchPresetScreen.kt has no fetchNoticeFor
+   FAIL github.com/Nathandela/swarm/android/gate 0.847s
+
+No assertion anywhere was weakened; every RED file is additive. The full RED
+terminal output is preserved in /tmp/r5r3_red_vet.txt and /tmp/r5r3_red_go.txt
+(session-local); the lines above are verbatim excerpts.

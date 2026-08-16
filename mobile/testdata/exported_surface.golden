@@ -71,6 +71,12 @@ field Outcome.Code string
 field Outcome.Message string
 field Outcome.OperationID string
 field Outcome.Resolved bool
+field PresetInfo.DisplayName string
+field PresetInfo.ID string
+field PresetInfo.Provider string
+field PresetInfo.Revision string
+field PresetInfo.WorkspacePath string
+field PresetInfo.Worktree bool
 field PushPreference.Alerts bool
 field PushPreference.Mentions bool
 field PushWakeDrops.Expired int64
@@ -149,6 +155,8 @@ method App.IsRunning() (bool, error)
 method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
+method App.LaunchCapability() (string, error)
+method App.LaunchPresets() (*PresetList, error)
 method App.MachineFreshness() (*Freshness, error)
 method App.MachineName() (string, error)
 method App.MachinePresence() (*MachinePresence, error)
@@ -165,6 +173,7 @@ method App.PurgeKeys() error
 method App.PushPreference() (*PushPreference, error)
 method App.ReadJournal(int64, int) (*JournalPage, error)
 method App.ReadTranscript(string, int64, int) (*TranscriptPage, error)
+method App.RefreshLaunchPresets() (*Op, error)
 method App.RegisterPushToken(string) error
 method App.ReleaseControl(string) (*Op, error)
 method App.Resize(string, int, int) error
@@ -175,6 +184,7 @@ method App.Roster() (*SessionList, error)
 method App.SelectMachine(string) error
 method App.SendInput(string, []byte) error
 method App.Session(string) (*Session, error)
+method App.SessionLaunch(string, string, string) (*Op, error)
 method App.SetEventListener(EventListener) error
 method App.SetPushPreference(*PushPreference) (*Op, error)
 method App.SetRelayTrust(RelayTrust) error
@@ -208,6 +218,8 @@ method Pairing.OriginIsPrivate() (bool, error)
 method Pairing.RejectSAS() error
 method Pairing.SAS() (string, error)
 method Pairing.State() (string, error)
+method PresetList.At(int) (*PresetInfo, error)
+method PresetList.Count() (int, error)
 method SessionList.At(int) (*Session, error)
 method SessionList.Count() (int, error)
 method SessionList.Stale() (bool, error)
@@ -235,6 +247,8 @@ type MachinePresence struct
 type Op struct
 type Outcome struct
 type Pairing struct
+type PresetInfo struct
+type PresetList struct
 type PushPreference struct
 type PushWakeDrops struct
 type QRPayload struct

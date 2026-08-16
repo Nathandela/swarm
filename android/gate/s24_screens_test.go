@@ -1243,6 +1243,19 @@ var s24ScreenComponents = map[string]map[string]string{
 		"denyChip":       "the per-row phone-side Forget (playbook 4.9), destructive polarity",
 		"notice":         "§4 Notice line -- ADR-018's cap sentence, the add form's limits, a broken row's own fault",
 	},
+	// Wave R5's preset launch flow (round 2; bead agents-tracker-hggx.6, playbook 4.3): the
+	// REMOTE launch UX, composed above the free-form form in the same launch host. Like the
+	// launch form it has no mock inventory entry -- what binds it is the reuse rule, and every
+	// sentence it draws is LaunchPresetScreen's (the availability denial with its named reason,
+	// and the confirm verb's claimed delivery/refusal line -- the D3 lesson: visible success AND
+	// visible refusal). The fetch control is supplied by the surface (launchPanelView's `submit`
+	// arrangement) so it is not claimed here.
+	"dev/swarm/phone/ui/screens/LaunchPresetView.kt": {
+		"sectionLabel": "C1.3 `.plabel` -- the New session heading",
+		"sessionList":  "`.prows` -- the machine-authored preset rows' container",
+		"settingsRow":  "derivation row 15 -- one per preset, the row IS the select control",
+		"notice":       "§4 Notice line -- the availability's named denial, and the launch verb's claimed answer",
+	},
 	// THE AGGREGATE INBOX (inbox.global), the switcher's one destination. `emptyState` is row 8's
 	// and it is load-bearing on THIS screen above all: an aggregate list that draws nothing when
 	// no pairing holds a session is indistinguishable from an aggregate list that failed to read

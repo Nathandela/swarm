@@ -23,6 +23,30 @@ import (
 // concurrent-session cap; the message names the cap value (S-7).
 var ErrMaxSessions = errors.New("daemon: max sessions reached")
 
+// ErrLaunchOpConsumed refuses a REPLAYED signed launch whose operation already
+// applied definitively (the idempotency record reached PhaseCompleted) and whose
+// session is no longer usable -- deliberately DELETED (round 3, review MAJOR 2) or
+// since gone LOST (round 4, review LOW 4). Without the terminal phase, resolveReplay
+// could not tell either apart from a crash that left no usable session (W1) and
+// re-drove -- spawning a SECOND agent under a signature that stays valid for the whole
+// command-validity window, on a redelivery the gateway is PINNED to perform. A
+// completed record is the machine's own proof the launch happened; what became of the
+// session afterwards is a separate fact, and the one re-driver must not undo it.
+var ErrLaunchOpConsumed = errors.New("daemon: launch operation already applied; its session is no longer usable")
+
+// ErrLaunchOutcomeUnknown is the UNDECIDABLE answer to a replayed signed launch whose
+// operation is still IN FLIGHT under another driver (round 4, review MAJOR 2): the
+// record's session exists but is a phase-1 reservation with no recorded process
+// (ShimPID == 0), which the winner can still roll back (newHookToken, spawnShim,
+// procStartTimeFn, the second saveMeta) or fail at waitShimServing.
+//
+// The loser must be answered neither "applied" (round 3 fixed exactly that lie for the
+// status READ and left it on the primary launch reply, where the phone renders it as
+// "the session was created on the machine") nor by RE-DRIVING (a second live process
+// under one signed operation). Undecidable is the true answer, and ADR-017 T9 already
+// has a name for it: outcome_unknown.
+var ErrLaunchOutcomeUnknown = errors.New("daemon: launch operation is still in flight; its outcome cannot be decided yet")
+
 // procStartTimeFn is the seam for reading a just-spawned shim's process-start-time
 // in launch; tests override it to inject a post-spawn identity-read failure (F2).
 var procStartTimeFn = processStartTime
@@ -221,6 +245,11 @@ func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT
 // cleanup, modelling a crash whose orphan/phantom reconcile later resolves.
 func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error) {
+	// The launch ENVIRONMENT is resolved ONCE here, so the persisted meta and the env
+	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
+	// half; see PolicyEnv). spec is a value copy, so this is local to this launch.
+	spec.ClientEnv = PolicyEnv(spec.ClientEnv)
+
 	// Cap check + id reservation, atomically, BEFORE any spawn (S-7): the rejected
 	// launch must grow nothing and spawn nothing.
 	d.mu.Lock()
@@ -240,7 +269,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		Name:          spec.Name, // user-provided label (P2); "" falls back to the agent name at display
 		Cwd:           spec.Cwd,
 		LaunchOptions: spec.Options,
-		Env:           persist.FilterEnv(spec.ClientEnv),
+		Env:           PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
 		CreatedAt:     now,
 		LastActivity:  now,
 		ResumedFrom:   spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
@@ -270,7 +299,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			// (W3) session means the prior attempt crashed mid-launch and left no usable
 			// session, so re-point the key at THIS fresh reservation and re-drive rather
 			// than poison the key (W1) or return the dead corpse as success (W3).
-			redrive, cached, rerr := d.resolveReplay(spec.OperationID, id)
+			redrive, stale, staleMeta, cached, rerr := d.resolveReplay(spec.OperationID, id)
 			if rerr != nil {
 				d.dropReserved(id)
 				return persist.Meta{}, rerr
@@ -278,6 +307,28 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			if !redrive {
 				d.dropReserved(id)
 				return cached, nil
+			}
+			if stale != "" {
+				// R5: the prior attempt's PHANTOM reservation (LOST, ShimPID==0 -- a
+				// reserve that never recorded a process) is retired now that its OWN
+				// operation re-drives past it. Left in place it would sit in every
+				// roster beside the re-driven session forever -- two rows for one
+				// signed operation, one of them a corpse ("at most one process" must
+				// also read as "one session per operation" to the lists both tiers
+				// converge on). Restricted to ShimPID==0: a lost session that once
+				// recorded a real shim keeps its row (and its session dir) as the
+				// operator-visible evidence reconcile left.
+				//
+				// Retired through rollbackReserved, NOT a bare dropReserved (round-2
+				// review, BLOCKER 1): the phantom's meta was persisted AFTER the prior
+				// run's PreLaunch succeeded (this function orders PreLaunch before the
+				// phase-1 saveMeta), so its side effect -- Epic 12's git worktree --
+				// exists and must be compensated by PreDelete over the PERSISTED meta
+				// before the row is erased forever; rollbackReserved's own doc states
+				// the rule. preLaunchOK is inferred from the CURRENT config: the hook
+				// set is the daemon assembly's and does not change across the restart
+				// that created the phantom.
+				d.rollbackReserved(stale, staleMeta, d.cfg.PreLaunch != nil)
 			}
 			// ponytail: the re-drive spawns a fresh session under the same operation_id.
 			// SAFETY CEILING (window W4, NOT "no worse" than before): if the lost session
@@ -409,6 +460,19 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			return m, err
 		}
 	}
+	// Terminal record (round 3, review MAJOR 2): the launch definitively applied, so
+	// the operation's idempotency record is completed durably. This is what lets a
+	// replay arriving AFTER the session was deliberately deleted refuse
+	// (ErrLaunchOpConsumed) instead of re-driving a second process, and what lets
+	// OperationOutcome answer that shape authoritatively. A failure to record it only
+	// degrades to the pre-round-3 replay semantics, so it is logged, never fatal to
+	// the live launch it describes. A crash BEFORE this line leaves the record
+	// prepared -- the existing W1/W3 replay semantics, disclosed in r5-launch.md.
+	if spec.OperationID != "" {
+		if cerr := d.idem.Complete(spec.OperationID, nil); cerr != nil {
+			d.logf("launch %s: record applied outcome for %s: %v", id, spec.OperationID, cerr)
+		}
+	}
 	return m, nil
 }
 
@@ -431,7 +495,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		SessionID:      id,
 		Argv:           spec.Argv,
 		Cwd:            spec.Cwd,
-		Env:            injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
+		Env:            injectHookEnv(PolicyEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
 		SocketPath:     sock,
 		SessionDir:     dir,
 		Cols:           spec.Cols,
@@ -587,27 +651,95 @@ func (d *Daemon) rollbackReserved(id string, m persist.Meta, preLaunchOK bool) {
 	d.dropReserved(id)
 }
 
-// resolveReplay decides a replayed launch (Prepare returned existed) under d.mu.
-// If the operation_id's recorded session is present and NOT lost, the prior launch
-// left a usable session and its meta is returned (redrive=false) for an idempotent
-// success. If that session is MISSING (W1) or LOST (W3), the record is re-pointed
-// at freshID (this call's reservation) and redrive=true is returned, so the caller
-// drives a fresh spawn under the SAME operation_id — never poisoning the key or
-// returning a corpse. Re-reading the record under d.mu makes concurrent re-drivers
-// converge on one winner: the loser observes the winner's reservation (Running) and
-// returns it instead of spawning again. Reads d.sessions directly (not d.Get) since
-// d.mu is already held.
-func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, cached persist.Meta, err error) {
+// resolveReplay decides a replayed launch (Prepare returned existed) under d.mu, in
+// four outcomes:
+//
+//   - IDEMPOTENT SUCCESS (redrive=false, err=nil): the recorded session is present, not
+//     lost, and has a RECORDED PROCESS (ShimPID != 0). Its meta is returned.
+//   - UNDECIDABLE (ErrLaunchOutcomeUnknown, round 4): the recorded session is present
+//     and not lost but has NO recorded process — the winner's phase-1 reservation, seen
+//     by a concurrent driver. Neither an authoritative success nor a re-drive is true.
+//   - CONSUMED (ErrLaunchOpConsumed, round 3 + round 4): the record is COMPLETED and its
+//     session is gone (deleted) or LOST. The launch definitively applied; re-driving
+//     would spawn a second process for it.
+//   - RE-DRIVE (redrive=true): the record is mid-flight (W1 missing / W3 lost) with no
+//     terminal phase. The record is re-pointed at freshID (this call's reservation) so
+//     the caller drives a fresh spawn under the SAME operation_id — never poisoning the
+//     key or returning a corpse.
+//
+// Re-reading the record under d.mu makes concurrent re-drivers converge on one winner.
+// Reads d.sessions directly (not d.Get) since d.mu is already held.
+//
+// stale (R5) names the prior LOST reservation the re-drive supersedes, but only when
+// it is a PHANTOM — ShimPID==0, a reserve that never recorded a process — so the
+// caller can retire the corpse row its own operation replaced. A lost session that
+// once held a real shim is never named here (its row and session dir stay).
+// staleMeta is the phantom's PERSISTED meta, returned so the caller can compensate
+// the phantom's PreLaunch side effect (round-2 BLOCKER 1): once the row is dropped
+// no Delete() can ever reach this meta again, so the worktree teardown needs it NOW.
+func (d *Daemon) resolveReplay(opID, freshID string) (redrive bool, stale string, staleMeta, cached persist.Meta, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	rec, _ := d.idem.Get(opID)
-	if s, ok := d.sessions[rec.SessionID]; ok && s.meta.Status.Process != status.ProcessLost {
-		return false, s.meta, nil // live (or already-exited) session: idempotent success
+	if s, ok := d.sessions[rec.SessionID]; ok {
+		if s.meta.Status.Process != status.ProcessLost {
+			// ROUND 4, review MAJOR 2: the SAME phantom rule the status read applies
+			// (OperationOutcome's ShimPID!=0 clause), now on the primary launch reply.
+			// A present, Running session with NO recorded process is the winner's phase-1
+			// reservation, and this call is the concurrent loser (or the gateway's PINNED
+			// crash-shaped redelivery racing the in-flight original). Returning that meta
+			// is an AUTHORITATIVE success -- the wire replies OpSessionLaunch, which the
+			// phone renders as "the session was created on the machine" -- for a launch
+			// the winner can still roll back (newHookToken, spawnShim, procStartTimeFn,
+			// the second saveMeta) or fail at waitShimServing. Re-driving instead would
+			// put a SECOND live process under one signed operation. Neither: the honest
+			// answer is undecidable, and the caller's replay of the operation once the
+			// winner has settled resolves it either way.
+			if s.meta.ShimPID == 0 {
+				return false, "", persist.Meta{}, persist.Meta{},
+					fmt.Errorf("%w: operation %q reserved session %s", ErrLaunchOutcomeUnknown, opID, rec.SessionID)
+			}
+			// Adoption completes the record too (round 3): a replay that returns a
+			// PROVEN-SPAWNED session has resolved the operation as definitively as a
+			// confirmed launch, so its later deliberate Delete must also refuse the
+			// re-drive below rather than reopen the second-process window.
+			if rec.Phase != idempotency.PhaseCompleted {
+				if cerr := d.idem.Complete(opID, nil); cerr != nil {
+					d.logf("replay %s: record applied outcome: %v", opID, cerr)
+				}
+			}
+			return false, "", persist.Meta{}, s.meta, nil // live (or already-exited) session: idempotent success
+		}
+		// ROUND 4, review LOW 4: the terminal-record rule applies to the LOST branch
+		// exactly as it does to the row-MISSING branch below. A COMPLETED record is the
+		// machine's own proof that the launch applied; the session going LOST afterwards
+		// is a later fact about the PROCESS (reconcile could not re-identify its shim),
+		// never evidence the launch did not happen. Re-driving it spawns a second agent
+		// for an operation that already applied -- under a signature valid for the whole
+		// command-validity window, on a redelivery the gateway is pinned to perform.
+		// The W3 crash re-driver is untouched: a launch that died mid-flight never
+		// reached PhaseCompleted (resolveStaleLaunches fails those records on Open), so
+		// prepared/executing records pointing at LOST sessions still re-drive below.
+		if rec.Phase == idempotency.PhaseCompleted {
+			return false, "", persist.Meta{}, persist.Meta{},
+				fmt.Errorf("%w: operation %q launched session %s", ErrLaunchOpConsumed, opID, rec.SessionID)
+		}
+		if s.meta.ShimPID == 0 {
+			stale = rec.SessionID // phantom reservation: retire once the re-drive is committed
+			staleMeta = s.meta
+		}
+	} else if rec.Phase == idempotency.PhaseCompleted {
+		// The launch APPLIED (terminal record) and its session row is gone: the only
+		// path that removes a row without a crash is Delete, a deliberate user verb.
+		// Re-driving here is the review's proven second-process window (MAJOR 2);
+		// refuse instead, naming the operation and the session it launched.
+		return false, "", persist.Meta{}, persist.Meta{},
+			fmt.Errorf("%w: operation %q launched session %s", ErrLaunchOpConsumed, opID, rec.SessionID)
 	}
 	if _, rerr := d.idem.Redrive(opID, "launch", freshID); rerr != nil {
-		return false, persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: redrive: %w", opID, rerr)
+		return false, "", persist.Meta{}, persist.Meta{}, fmt.Errorf("daemon: idempotent launch %q: redrive: %w", opID, rerr)
 	}
-	return true, persist.Meta{}, nil
+	return true, stale, staleMeta, persist.Meta{}, nil
 }
 
 // resolveStaleLaunches sweeps launch idempotency records still in flight

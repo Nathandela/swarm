@@ -64,9 +64,77 @@ const (
 	ActionTerminalControlBegin = schema.ActionTerminalControlBegin
 	ActionTerminalControlEnd   = schema.ActionTerminalControlEnd
 
+	// ActionLaunchPresets is the Wave R5 signed read of the machine-authored preset
+	// list; see schema.ActionLaunchPresets for the contract.
+	ActionLaunchPresets = schema.ActionLaunchPresets
+
 	LaunchSessionSentinel    = schema.LaunchSessionSentinel
 	OperationSessionSentinel = schema.OperationSessionSentinel
 )
+
+// Stable preset refusal codes (Wave R5), re-exported beside their siblings above.
+const (
+	CodeUnknownPreset = schema.CodeUnknownPreset
+	CodeStalePreset   = schema.CodeStalePreset
+)
+
+// SessionLaunchContentHash re-exports the canonical session_launch content binding for
+// LaunchContentHash's reason (see types.go): signer and verifier must compute the SAME
+// bytes, so there is exactly one implementation, in the daemon-free schema package.
+var SessionLaunchContentHash = schema.SessionLaunchContentHash
+
+// ErrUnknownPreset / ErrStalePreset are the LaunchPresetSource sentinels (Wave R5):
+// an id this machine never authored resolves to ErrUnknownPreset (stable code
+// unknown_preset), and a right id at a changed revision resolves to ErrStalePreset
+// (stable code stale_preset, playbook:447-448) -- both decided machine-side BEFORE
+// any argv composition, never trusted from the phone.
+var (
+	ErrUnknownPreset = errors.New("protocol: unknown launch preset")
+	ErrStalePreset   = errors.New("protocol: stale launch preset revision")
+)
+
+// LaunchPresetSource is the optional interface a remote-tier DaemonAPI implements to
+// expose the MACHINE-AUTHORED launch presets (Wave R5, ADR-007 B144(b)). Fail-closed
+// absent, mirroring LaunchPolicy: a backend that does not implement it refuses every
+// session_launch / launch_presets with CodePolicy rather than inventing an empty
+// custody it does not hold.
+type LaunchPresetSource interface {
+	// LaunchPresetList returns exactly the machine-authored presets plus the preset
+	// policy revision. An empty custody answers an empty list -- never a fabricated
+	// default (ADR-007 B135).
+	LaunchPresetList() ([]schema.LaunchPresetView, string)
+	// ResolveLaunchPreset resolves one preset by id at the phone-confirmed revision.
+	// ErrUnknownPreset / ErrStalePreset per the sentinel contract above; any other
+	// error is a machine-side policy refusal (e.g. an unresolvable preset root).
+	ResolveLaunchPreset(id, revision string) (schema.LaunchPresetView, error)
+}
+
+// OperationStatusSource is the optional interface a DaemonAPI implements to serve the
+// operation_status reconciliation read (Wave R5): applied is authoritative with its
+// session id, outcome_unknown is honest undecidability, and ok=false is an id the
+// machine has no record of (answered unknown_operation, never invented). The read has
+// NO side effect -- operation_status never authorizes a retry (playbook:449).
+type OperationStatusSource interface {
+	RemoteOperationOutcome(operationID string) (schema.OperationOutcomeView, bool)
+}
+
+// ActivityRecorder is the optional interface a DaemonAPI implements to receive the
+// ADR-007 D10 activity log: every remote-originated mutation -- and its refusal -- is
+// recorded, so the terminal owner can audit what a paired phone did on this machine.
+type ActivityRecorder interface {
+	RecordRemoteActivity(rec schema.ActivityRecord)
+}
+
+// DeviceCapabilitySource is the optional interface a DaemonAPI implements to STATE a
+// paired device's registry-pinned authorization tier (round-2 fix-pack). The
+// launch_presets reply stamps it for the authenticated signer, giving the phone its
+// only honest wire source for the launch screen's tier-denied state. Direction
+// matters: capability is never read FROM the wire (skeleton deviceauth's rule); this
+// is the machine stating a fact it owns. ok=false -- unknown device, no registry --
+// leaves the field empty: an absent fact, never an invented tier.
+type DeviceCapabilitySource interface {
+	DeviceCapability(deviceID string) (string, bool)
+}
 
 // JournalReseed is the machine->phone journal repair frame (PB-SYNC-2 / PB-SYNC-8), aliased
 // from the daemon-free wire package so the phone's bound closure never reaches this one.

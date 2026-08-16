@@ -17,7 +17,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
-	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/version"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -1117,15 +1116,21 @@ func (cc *clientConn) handleControl(c Control) {
 	case OpApprove:
 		cc.handleApprove(c)
 	case OpSessionLaunch:
-		// Names no session instance yet (it creates one): pinned to OperationSessionSentinel
-		// UNCONDITIONALLY, mirroring handleLaunch's unconditional LaunchSessionSentinel --
-		// never derived from the wire c.SessionID.
-		cc.handleRefusalOp(c, ActionSessionLaunch, OperationSessionSentinel)
+		// The REAL Wave R5 handler. Names no session instance yet (it creates one): the
+		// authz subject is pinned to OperationSessionSentinel UNCONDITIONALLY inside the
+		// handler, mirroring handleLaunch's unconditional LaunchSessionSentinel -- never
+		// derived from the wire c.SessionID.
+		cc.handleSessionLaunch(c)
 	case OpComposerSend:
 		cc.handleRefusalOp(c, ActionComposerSend, c.SessionID)
 	case OpOperationStatus:
-		// Names no session instance: pinned like session_launch above.
-		cc.handleRefusalOp(c, ActionOperationStatus, OperationSessionSentinel)
+		// The REAL Wave R5 handler. Names no session instance: pinned like
+		// session_launch above.
+		cc.handleOperationStatus(c)
+	case OpLaunchPresets:
+		// Wave R5: the signed read of the machine-authored preset list. Session-less,
+		// pinned to the operation sentinel like its two siblings above.
+		cc.handleLaunchPresets(c)
 	case OpTurnInterrupt:
 		cc.handleRefusalOp(c, ActionTurnInterrupt, c.SessionID)
 	case OpTerminalControlBegin:
@@ -1566,21 +1571,22 @@ func (cc *clientConn) handleApprove(c Control) {
 // ride -- so a forged signature or a missing device field is refused before the op is
 // ever distinguished from an unimplemented one. `session` is the caller's choice, PINNED
 // per op at each handleControl switch arm exactly like handleLaunch pins
-// LaunchSessionSentinel: OperationSessionSentinel for the two session-less ops
-// (session_launch, operation_status), the wire session_id for the other four -- never
-// derived here from c.SessionID, so a session-less op's authz subject can never be
-// steered by an arbitrary wire value. Only once authorized does it check the body version
-// the phone bound this op to -- schema.CurrentProfileVersion is the sole accepted value
-// across the whole R1 companion set (profile.go's "taken once across the R1 set") -- and
-// only once BOTH hold does it answer the sealed, stable op_not_implemented refusal,
-// because the real handler does not exist yet.
+// LaunchSessionSentinel -- never derived here from c.SessionID, so a session-less op's
+// authz subject can never be steered by an arbitrary wire value. Only once authorized
+// does it check the body version the phone bound this op to -- schema.CurrentProfileVersion
+// is the sole accepted value across the whole R1 companion set (profile.go's "taken once
+// across the R1 set") -- and only once BOTH hold does it answer the sealed, stable
+// op_not_implemented refusal, because the real handler does not exist yet.
+//
+// Wave R5 removed session_launch and operation_status from this dispatch: their real
+// handlers (remote_launch.go) inherit the choke-point ordering unchanged and are pinned
+// by r5_sessionlaunch_test.go. composer_send / turn_interrupt / terminal_control_begin /
+// terminal_control_end remain refusal-only here.
 func (cc *clientConn) handleRefusalOp(c Control, action, session string) {
 	if !cc.requireRemoteAuthz(c, action, session, nil) {
 		return
 	}
-	if c.BodyVersion != schema.CurrentProfileVersion {
-		cc.replyErrorCode(c.Op+": body_version "+strconv.Itoa(c.BodyVersion)+
-			" not accepted, this machine accepts "+strconv.Itoa(schema.CurrentProfileVersion), CodeInvalidField)
+	if !cc.requireBodyVersion(c) {
 		return
 	}
 	cc.replyErrorCode(c.Op+": not implemented yet", CodeNotImplemented)

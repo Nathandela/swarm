@@ -1,0 +1,153 @@
+Wave R5 round-4 review fix-pack — Go-side RED evidence (TDD failing-first, GG-5)
+bead: agents-tracker-hggx.6 | date: 2026-08-16 | HEAD f8338e1 (working tree)
+
+Findings under fix (from the recorded round-4 review):
+  BLOCKER 1  The remote launch path cannot launch ANY real provider. remote_launch.go
+             composes ClientEnv: nil (correct per ADR-007 D8), and both argv0 resolution
+             (skeleton lookPathIn reads PATH from that env alone) and the agent's own
+             environment (daemon spawnShim: injectHookEnv(persist.FilterEnv(nil), ...))
+             then have nothing. D8's deny half shipped; its daemon-policy half did not
+             exist. The r5-launch.md end-to-end claim was false as written.
+  MAJOR 2    The concurrent double-driver's LOSER is handed the winner's phase-1
+             reservation (present, Running, ShimPID==0, no process) as an AUTHORITATIVE
+             idempotent success on the PRIMARY LAUNCH REPLY. Round 3 fixed exactly this
+             lie for the status read and left it here.
+  LOW 4      A COMPLETED operation whose session went LOST still re-drove (second agent
+             under one signed operation) and still read back outcome_unknown; round 3's
+             terminal-record rule covered only the session-row-MISSING branch.
+  (MEDIUM 3 is Android-side; see android-red-round4.txt.)
+
+New RED files (ADDITIVE at RED time; no existing test or production source touched):
+  internal/daemon/r5_round4_test.go    — 4 tests
+  internal/skeleton/r5_round4_test.go  — 2 tests
+  internal/protocol/r5_round4_test.go  — 2 tests
+  android/gate/r5_round4_ui_test.go    — 3 tests (surface pins for MEDIUM 3)
+
+=============================================================================
+1) COMPILE-RED — internal/daemon, internal/protocol
+=============================================================================
+$ PATH=$HOME/go/bin:$PATH go vet ./internal/daemon/ ./internal/skeleton/ \
+      ./internal/protocol/ ./android/gate/            (2026-08-16T17:47:33Z)
+# github.com/Nathandela/swarm/internal/daemon
+# [github.com/Nathandela/swarm/internal/daemon]
+vet: internal/daemon/r5_round4_test.go:141:21: undefined: ErrLaunchOutcomeUnknown
+# github.com/Nathandela/swarm/internal/protocol
+# [github.com/Nathandela/swarm/internal/protocol]
+vet: internal/protocol/r5_round4_test.go:33:34: undefined: daemon.ErrLaunchOutcomeUnknown
+
+(internal/skeleton and android/gate COMPILED at RED time — their RED is behavioral,
+recorded in §2 and §4.)
+
+=============================================================================
+2) BEHAVIORAL RED — internal/skeleton (BLOCKER 1, the orchestrator's proof bar)
+=============================================================================
+The proof bar as stated: the REAL assembled DaemonAPI (skeleton coreAPI.Launch), a
+production-shaped preset spec, nil ClientEnv, a fake agent binary on the DAEMON's PATH.
+
+$ PATH=$HOME/go/bin:$PATH go test ./internal/skeleton/ -run TestR5Round4 -count=1
+--- FAIL: TestR5Round4_RemoteLaunchOfAProductionPresetResolvesOnTheDaemonsOwnPath (1.89s)
+    r5_round4_test.go:85: remote-shaped launch of a production preset refused: launch:
+        resolve claude binary: agent binary "claude" not found on the agent PATH
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.256s
+
+That is the reviewer's probe message reproduced VERBATIM through production code, with
+the binary present and executable on the daemon's own PATH.
+
+(TestR5Round4_ProductionLaunchStillFailsClearlyWhenTheBinaryIsAbsent passed at RED time:
+it is the guard that the fix must not turn a missing provider into a silent success.)
+
+=============================================================================
+3) BEHAVIORAL RED — internal/daemon + internal/protocol
+=============================================================================
+The sentinels alone were added first (ErrLaunchOutcomeUnknown, schema.CodeOutcomeUnknown
+— declarations only, no logic), so the compile-RED above resolves into the behavioral
+RED the findings are actually about.
+
+$ PATH=$HOME/go/bin:$PATH go test ./internal/daemon/ -run TestR5Round4 -count=1
+                                                       (2026-08-16T17:50:23Z)
+--- FAIL: TestR5Round4_NilClientEnvGetsTheDaemonPolicyEnvironment (1.22s)
+    r5_round4_test.go:64: launch env = [], want it to carry the daemon's own
+        "PATH=/usr/local/Cellar/go/1.26.5/libexec/bin:...": with ClientEnv nil the agent
+        got persist.FilterEnv(nil) -- an EMPTY environment, so no bare adapter argv0
+        could ever resolve and no real provider could run (ADR-007 D8: env comes from
+        daemon policy)
+    r5_round4_test.go:70: launch env = [], want it to carry the daemon's
+        HOME="/Users/Nathan": an agent CLI with no HOME cannot find its own credentials
+        or config
+--- FAIL: TestR5Round4_ConcurrentLoserIsAnsweredUndecidablyNotPhantomApplied (0.04s)
+    r5_round4_test.go:136: resolveReplay for the in-flight reservation = (redrive false,
+        cached "yi6trltspir7guqp" shim 0, err nil): the loser receives the WINNER's
+        phase-1 meta as an authoritative idempotent success, and the winner's launch can
+        still roll back -- an APPLIED reply naming a session that never existed
+--- FAIL: TestR5Round4_CompletedRecordWhoseSessionWentLostIsAppliedAndRefusesTheRedrive (0.32s)
+    r5_round4_test.go:203: OperationOutcome = {State:outcome_unknown SessionID:}, want
+        applied naming 6evvufpfswx62kku: the terminal record is PROOF the launch
+        happened; the session going LOST is a later fact about the PROCESS ...
+    r5_round4_test.go:213: replay of the COMPLETED operation spawned a NEW session
+        "5ktgpibyljtte5nz" (shim 36679) because its session had gone LOST; the terminal
+        record must refuse the re-drive on this branch too
+FAIL	github.com/Nathandela/swarm/internal/daemon	5.897s
+
+(redrive=false / err=nil / cachedShimPID=0 is the reviewer's probe result, reproduced.)
+
+(TestR5Round4_ClientSuppliedEnvIsStillTheOneUsed passed at RED time: the guard that the
+daemon-policy fill is a FALLBACK and must not re-point a local launch's environment.)
+
+$ PATH=$HOME/go/bin:$PATH go test ./internal/protocol/ -run TestR5Round4 -count=1
+--- FAIL: TestR5Round4_UndecidableLaunchRepliesOutcomeUnknownNotAFlatRefusal (0.02s)
+    r5_round4_test.go:49: undecidable launch reply code = "policy", want
+        "outcome_unknown": replied as a generic policy refusal the phone tells the user
+        the machine REFUSED a launch that may be running (ADR-017 T9's delivery
+        vocabulary names this state, and it is not 'refused')
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.779s
+
+=============================================================================
+4) BEHAVIORAL RED — android/gate (MEDIUM 3, surface half)
+=============================================================================
+$ PATH=$HOME/go/bin:$PATH go test ./android/gate/ -run TestR5Round4 -count=1
+--- FAIL: TestR5Round4_FetchVerbHasItsOwnSurfaceSlot (0.00s)
+    r5_round4_ui_test.go:44: PhoneSurface.kt has no dedicated fetch-notice field: the
+        fetch refusal and the launch delivery still share one slot, so every fetch
+        refusal is overwritten for the whole in-flight window of any launch (D3: a
+        primary control refusing in silence)
+--- FAIL: TestR5Round4_FetchNoticeIsDrawnAsItsOwnLine (0.00s)
+    r5_round4_ui_test.go:65: LaunchPresetPanel has no fetchNotice field: the drawn panel
+        still has one slot for two verbs
+--- FAIL: TestR5Round4_SurfaceFeedsTheFetchSlotIntoThePanel (0.00s)
+    r5_round4_ui_test.go:84: presetPanelOnScreen does not hand the fetch slot to the
+        panel; the surface holds the fetch refusal and the screen never receives it
+FAIL	github.com/Nathandela/swarm/android/gate	0.953s
+
+NOTE ON ONE TIGHTENED ASSERTION (disclosed, RED-phase): the first run of
+TestR5Round4_FetchNoticeIsDrawnAsItsOwnLine passed its panel check on the substring
+"fetchNotice", which the round-3 function `fetchNoticeFor` already satisfied in the same
+file. The assertion was tightened to the regexp `val fetchNotice\b` and re-run RED
+(r5_round4_ui_test.go:65 above). Strengthened, never weakened.
+
+=============================================================================
+5) ONE PRE-EXISTING TEST AMENDED (fully disclosed)
+=============================================================================
+internal/daemon/r5_launchfault_test.go
+  TestR5Fault_DoubleDriver_ConcurrentSameOperationID_ExactlyOneProcess
+
+It required BOTH concurrent drivers to return a session ("both drivers of one operation
+id must converge on the single winner, not error out"). That requirement is the round-1
+encoding of MAJOR 2: inside the winner's phase-1 window the only thing to converge ON is
+a reservation with NO PROCESS, and returning it replies OpSessionLaunch, which the phone
+renders as "the session was created on the machine". After the fix it failed:
+
+  --- FAIL: TestR5Fault_DoubleDriver_ConcurrentSameOperationID_ExactlyOneProcess (0.20s)
+      r5_launchfault_test.go:249: driver 1 failed: daemon: launch operation is still in
+      flight; its outcome cannot be decided yet: operation "devA:01JDOUBLE" reserved
+      session jxvigxcl6gtljys3 (both drivers ... must converge on the single winner, not
+      error out)
+
+The test was amended to the corrected contract, STRENGTHENED on the load-bearing axis:
+  - unchanged: one session row, exactly one agent process, applied status at the end;
+  - ADDED: a driver that returns a session must return one with ShimPID != 0 (the
+    assertion the defect slipped past);
+  - ADDED: a driver that returns no session may fail ONLY with ErrLaunchOutcomeUnknown
+    (never any other error, never silently).
+Which of the two the loser gets is genuinely timing-dependent, so both are accepted --
+but only those two, and neither may be a phantom. Verified non-flaky: -count=6 with and
+without -race, green in both.

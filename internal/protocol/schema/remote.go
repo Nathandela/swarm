@@ -261,6 +261,21 @@ type RemoteCommand struct {
 	// make the reseed carry more or fewer events than needed -- the roster it replaces the
 	// cache with is complete either way.
 	ResyncCursor uint64 `json:"resync_cursor,omitempty"`
+	// SessionLaunch is the session_launch body (Wave R5): the phone's confirmed preset
+	// selection. It rides beside the signed tuple under launch's own rule -- the body is
+	// bound into the signature via ContentHash = SessionLaunchContentHash(SessionLaunch),
+	// which the daemon recomputes from the forwarded body, so a gateway that alters the
+	// preset id, revision or prompt breaks the signature.
+	SessionLaunch *SessionLaunchReq `json:"session_launch,omitempty"`
+	// SubjectOperationID is operation_status's query subject (the asked-about op), copied
+	// by the gateway onto Control.SubjectOperationID. It IS bound into the signature
+	// (round-2 fix-pack, MAJOR 2): ContentHash = OperationStatusContentHash(subject),
+	// recomputed daemon-side from this forwarded field, so a gateway that re-points a
+	// valid signature at another operation id breaks it. The earlier reading ("the worst
+	// a swapped subject yields is the honest outcome of a different op this device
+	// already owns the ids of") was wrong across devices: operation_status is READ class,
+	// so ANY paired tier could read back another operation's namespaced session id.
+	SubjectOperationID string `json:"subject_operation_id,omitempty"`
 	// BodyVersion binds this command to the R1 profile version the phone selected
 	// (RemoteProfileV1.AcceptedBodyVersions, ADR-017 T5 / playbook §6.3: "every durable
 	// semantic mutation binds the selected profile ... signs a canonical hash of its full

@@ -3,7 +3,10 @@ package dev.swarm.phone.ui
 import dev.swarm.phone.keys.ConnectionState
 import dev.swarm.phone.ui.screens.GlobalInboxRowModel
 import dev.swarm.phone.ui.screens.GlobalInboxScreen
+import dev.swarm.phone.ui.screens.LaunchAvailability
+import dev.swarm.phone.ui.screens.LaunchPresetScreen
 import dev.swarm.phone.ui.screens.MachineRowModel
+import dev.swarm.phone.ui.screens.PresetRowModel
 import swarmmobile.App
 import swarmmobile.Session
 import swarmmobile.Snapshot
@@ -520,6 +523,56 @@ class FacadeBridge(private val app: App) {
      * by the Go side, so a screen with a live App never has to be the one that gets it right.
      */
     fun routeFacadeError(message: String): RoutedError = ErrorRouter.route(app.errorClass(message))
+
+    /**
+     * Wave R5's preset launch snapshot (round 2; launch.presets): the machine-published rows AND
+     * the availability verdict they were resolved under, together -- [machines]' one-read rule.
+     * The DECISION is [LaunchPresetScreen.launchAvailabilityFor]'s (the model the JVM suite
+     * drives); this seam only feeds it facts the facade carries:
+     *
+     *  - `online` is the transport state [sessionLease] already reads;
+     *  - `tier` is `App.LaunchCapability` -- the machine's own registry-pinned word for THIS
+     *    device, stamped on its last launch_presets reply, "" until one arrived (the model's
+     *    first-run FETCHING state; never a value invented at this seam);
+     *  - `killSwitchOn` is the negation of [killSwitchEngaged]'s fact;
+     *  - the rows are `App.LaunchPresets` verbatim: what the machine published and nothing else
+     *    (ADR-007 B135), each row carrying the REVISION the confirm must echo.
+     */
+    fun launchPresetFlow(): LaunchPresetFlow {
+        val list = app.launchPresets()
+        val rows = (0 until list.count()).map { index ->
+            val p = list.at(index)
+            PresetRowModel(
+                id = p.getID(),
+                displayName = p.getDisplayName(),
+                provider = p.getProvider(),
+                workspacePath = p.getWorkspacePath(),
+                revision = p.getRevision(),
+                worktree = p.getWorktree(),
+            )
+        }
+        return LaunchPresetFlow(
+            rows = rows,
+            availability = LaunchPresetScreen.launchAvailabilityFor(
+                online = isOnline(),
+                tier = app.launchCapability(),
+                killSwitchOn = !app.killSwitchEngaged(),
+                presetCount = rows.size,
+            ),
+            machineLabel = MachineLabel.of(
+                app.machineName(),
+                app.stateSummary().takeIf { it.paired }?.machine.orEmpty(),
+            ),
+        )
+    }
+
+    /** The preset rows and the availability they were resolved under, together -- see [launchPresetFlow]. */
+    data class LaunchPresetFlow(
+        val rows: List<PresetRowModel>,
+        val availability: LaunchAvailability,
+        /** What to call the machine on the confirm sheet: [MachineLabel.of]'s name-else-id. */
+        val machineLabel: String,
+    )
 
     /** PB-SYNC-2: outcomes are claimed BY OPERATION ID, never by proximity. */
     fun launchOutcome(operationId: String): OperationOutcome {

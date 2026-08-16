@@ -69,24 +69,37 @@ import (
 )
 
 // r1Op names one new semantic op under test: its wire Op string, its signed Action string,
-// and whether it binds an existing session instance (composer_send / turn_interrupt /
+// whether it binds an existing session instance (composer_send / turn_interrupt /
 // terminal_control_begin / terminal_control_end) or none (session_launch creates one;
-// operation_status names none).
+// operation_status names none), and the code an AUTHORIZED, correctly-versioned frame of
+// this shape now answers.
+//
+// SUPERSESSION (Wave R5, pre-recorded in docs/verification/r5-red/go-red.txt §3): the R5
+// GREEN slice IS the real handler for session_launch and operation_status, exactly as this
+// file's header anticipated. For those two ops -- and only those -- wantCode is retargeted
+// away from op_not_implemented to what the REAL handler answers this same frame (which
+// carries no session_launch body and no subject_operation_id): the structural
+// invalid_field refusal, refused AFTER the same authz + body-version gates. Every
+// choke-point ordering assertion (authz first, tuple count, sentinel pinning, the
+// missing-fields and body-version gates) is inherited unchanged and still asserted below.
 type r1Op struct {
-	name    string
-	op      string
-	action  string
-	session bool
+	name     string
+	op       string
+	action   string
+	session  bool
+	wantCode ErrorCode
 }
 
 func r1Ops() []r1Op {
 	return []r1Op{
-		{"session_launch", OpSessionLaunch, ActionSessionLaunch, false},
-		{"composer_send", OpComposerSend, ActionComposerSend, true},
-		{"operation_status", OpOperationStatus, ActionOperationStatus, false},
-		{"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true},
-		{"terminal_control_begin", OpTerminalControlBegin, ActionTerminalControlBegin, true},
-		{"terminal_control_end", OpTerminalControlEnd, ActionTerminalControlEnd, true},
+		// Implemented by Wave R5: the frame below (bodyless, subject-less) is refused
+		// invalid_field by the REAL handler once authorized and version-checked.
+		{"session_launch", OpSessionLaunch, ActionSessionLaunch, false, CodeInvalidField},
+		{"composer_send", OpComposerSend, ActionComposerSend, true, CodeNotImplemented},
+		{"operation_status", OpOperationStatus, ActionOperationStatus, false, CodeInvalidField},
+		{"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true, CodeNotImplemented},
+		{"terminal_control_begin", OpTerminalControlBegin, ActionTerminalControlBegin, true, CodeNotImplemented},
+		{"terminal_control_end", OpTerminalControlEnd, ActionTerminalControlEnd, true, CodeNotImplemented},
 	}
 }
 
@@ -111,10 +124,10 @@ func TestR1RefusalOps_AuthorizedCommandGetsStableNotImplementedRefusal(t *testin
 				BodyVersion: schema.CurrentProfileVersion,
 			})
 			got := rc.readControl()
-			if got.Op != OpError || got.ErrorCode != CodeNotImplemented {
-				t.Fatalf("%s = op %q code %q, want error/op_not_implemented: a name this build "+
-					"recognises but does not yet serve must answer its OWN stable code -- never a "+
-					"silent hang, and never the generic unknown-op refusal", o.name, got.Op, got.ErrorCode)
+			if got.Op != OpError || got.ErrorCode != o.wantCode {
+				t.Fatalf("%s = op %q code %q, want error/%s: a name this build recognises must "+
+					"answer its OWN stable code -- never a silent hang, and never the generic "+
+					"unknown-op refusal", o.name, got.Op, got.ErrorCode, o.wantCode)
 			}
 			if !strings.Contains(got.Error, o.name) {
 				t.Errorf("%s refusal text = %q, want it to name the op", o.name, got.Error)
@@ -263,8 +276,8 @@ func TestR1RefusalOps_SessionlessOpsPinTheOperationSentinelRegardlessOfWireSessi
 					BodyVersion: schema.CurrentProfileVersion,
 				})
 				got := rc.readControl()
-				if got.Op != OpError || got.ErrorCode != CodeNotImplemented {
-					t.Fatalf("%s wire=%q = op %q code %q, want error/op_not_implemented", o.name, wireSessionID, got.Op, got.ErrorCode)
+				if got.Op != OpError || got.ErrorCode != o.wantCode {
+					t.Fatalf("%s wire=%q = op %q code %q, want error/%s", o.name, wireSessionID, got.Op, got.ErrorCode, o.wantCode)
 				}
 				tuples := stub.authorizedTuples()
 				if len(tuples) != 1 {
