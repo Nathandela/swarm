@@ -40,8 +40,12 @@ import (
 // l1Bound is the functional propagation window this suite waits within. The spec's
 // L1 is ≤1 s and E10.7 asserts the ≤500 ms server half precisely; here the concern
 // is only that the wiring PROPAGATES at all, so the window is generous to absorb
-// the subprocess + roster-poll cadence without making the test flaky.
-const l1Bound = 3 * time.Second
+// the subprocess + roster-poll cadence without making the test flaky. R6 added the
+// shim spool to the hook path (fsync + a 250 ms drain tick, hookdrainloop.go), which
+// under CI CPU starvation pushed a hook-driven settle past the old 3 s calibration
+// (run 31922714796); the width buys robustness only -- latency is asserted where
+// latency is the subject.
+const l1Bound = 10 * time.Second
 
 // readHookToken reads a launched session's per-session hook token out of the
 // daemon-written shim-launch.json (the 0600 config in the session dir, whose env
