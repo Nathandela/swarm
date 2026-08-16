@@ -108,6 +108,14 @@ var (
 	// It is distinct from ErrPairingDeclined for the same reason ErrAcceptUnacknowledged is:
 	// the machine said yes. What failed is this device's own ability to remember it.
 	ErrNotCommitted = errors.New("pairing: the device could not durably commit the acceptance; nothing acknowledged and nothing pinned (PB-PAIR-4)")
+	// ErrNoPushRevoke refuses, BEFORE msg4, a device that would convey a push binding with
+	// no way to take it back. msg4 RELEASES the wake key and both gateway capabilities to
+	// the peer irrevocably -- from that instant the peer holds a working triple for a live
+	// address whatever either side decides -- so a caller with no RevokePushBinding arm is a
+	// caller who cannot honour PG-ALLOC-3's failed-pairing arm on any of the non-accept
+	// exits below. Refusing here costs a pairing that has released nothing; the alternative
+	// costs an address the phone can no longer sever.
+	ErrNoPushRevoke = errors.New("pairing: DeviceParams.PushBinding is set without RevokePushBinding; a binding released in msg4 must be revocable on every non-accept outcome (PG-ALLOC-3)")
 )
 
 // RendezvousTransport is the pairing package's seam onto the relay rendezvous
@@ -305,6 +313,27 @@ type DevicePayload struct {
 	ConsentDeferred bool
 }
 
+// PushBinding is the per-pairing push-wake record the DEVICE conveys to the machine
+// inside the authenticated pairing transcript (ADR-015 P7, playbook 3.2). The phone mints
+// the wake key, receives the allocation triple from the push gateway, and hands all of it
+// to the machine at the one authenticated moment the two ends meet -- there is no other
+// channel, and the scope forbids inventing one.
+//
+// IT RIDES THE POST-SAS LEG (msg4), NEVER msg3, for ADR-007 B52's reason verbatim: msg3 is
+// released before the SAS exists, so a secret carried there is released to whoever is on
+// the wire before either operator has compared anything. The wake key and both
+// capabilities are exactly such secrets.
+type PushBinding struct {
+	WakeKey                 []byte // 32 bytes, phone-generated per pairing (ADR-015 P7)
+	PushAddress             []byte // 16 opaque gateway-minted bytes (PG-ALLOC-1)
+	SubmitCapability        string // base64url, shown once by the gateway (PG-AUTH-6)
+	MachineRevokeCapability string // base64url, distinct from submit (PG-AUTH-9)
+	// CapabilityRecordVersion is the SessionCapabilities record version this phone
+	// consumes (ADR-017 T2 / RemoteProfileV1's capability_record_version), declared by
+	// the consumer at pairing.
+	CapabilityRecordVersion int
+}
+
 // MachineParams configures one machine-side (Noise XXpsk0 responder) pairing.
 type MachineParams struct {
 	Static       *crypto.NoiseStatic // machine Noise-static handle (identity)
@@ -328,6 +357,51 @@ type DeviceParams struct {
 	VerifyMachine    DeviceVerifyFunc    // optional; checks the authenticated msg2 payload (ADR-007 B48)
 	Consent          DeviceConsentFunc   // MANDATORY (ADR-007 B38); signs the route consent carried in msg4
 	Commit           DeviceCommitFunc    // the durable commit the acknowledgement attests (PB-PAIR-4; nil => this device holds nothing durable)
+	// PushBinding is the push-wake record this device conveys in msg4, beside the consent
+	// (ADR-015 P7). Nil means none: a pre-R3 build, or a phone whose gateway registration
+	// was refused and is honestly foreground-only -- the machine then sees the P12
+	// legacy_relay state, and the msg4 bytes are exactly the pre-R3 encoding.
+	//
+	// MIXED-VERSION OBLIGATION (recorded for the facade slice that wires this field): a
+	// pre-R3 MACHINE has no decodeConsentFrame -- it stores the whole framed blob as
+	// DevicePayload.ConsentSig, pairing "succeeds", and the failure surfaces only much
+	// later at relay authorization (ParseConsent), with no diagnosis pointing at this
+	// field. Nothing in the msg2 machine payload currently tells the device whether the
+	// peer understands the frame, so the wiring slice MUST gate setting PushBinding on a
+	// machine-side capability signal (a msg2 payload field) rather than discover the
+	// mismatch on a mixed-version pair; until that signal exists, set this only for a
+	// machine known to be R3-or-later. P12's legacy_relay window covers the same pairs
+	// from the transport side.
+	//
+	// NON-ACCEPT OBLIGATION (round-3 review, BLOCKING; STRUCTURAL since round 4). msg4
+	// RELEASES this record -- the wake key, the submit capability and the machine-revoke
+	// capability, all live at the gateway -- BEFORE the machine's decision arrives. On
+	// EVERY non-accept outcome after that release (ErrPairingDeclined, a decision that
+	// never arrives, ErrNotCommitted, a failed acknowledgement send) the peer this device
+	// just authenticated retains a working capability triple for a live address while this
+	// phone believes the pairing failed.
+	//
+	// That obligation used to be discharged by this comment, which is to say by whoever
+	// read it. It is now RevokePushBinding below, which RunDevice invokes on every one of
+	// those exits, and which a caller cannot decline by omission (ErrNoPushRevoke).
+	PushBinding *PushBinding
+
+	// RevokePushBinding is PG-ALLOC-3's failed-pairing arm, and it is MANDATORY whenever
+	// PushBinding is set. RunDevice calls it exactly once on every non-accept return below
+	// the msg4 consent send, and never on a pairing that succeeded.
+	//
+	// WHAT IT MUST DO: revoke the allocated address at the gateway with the INSTALLATION key
+	// (phonecore's GatewayClient.RevokeAddress -- which kills both capabilities and orphans
+	// the wake key) and discard the local half. The client behaviour is pinned by
+	// TestR3A_PairingFailureDeletesTheAllocationImmediately; this field is the wiring that
+	// calls it.
+	//
+	// It takes no argument and returns nothing on purpose. The caller already holds the
+	// binding it just handed in, and there is nothing RunDevice could do with a failure that
+	// the caller cannot do better: this leg has already failed, and a revoke that could not
+	// reach the gateway is the caller's own retry to own (the allocation expires unbound at
+	// PG-ALLOC-3's horizon either way).
+	RevokePushBinding func()
 }
 
 // MachineOutcome is the machine's result on an affirmatively-confirmed pairing
@@ -337,6 +411,11 @@ type MachineOutcome struct {
 	SAS          [6]string
 	DeviceStatic []byte // pinned device Noise-static public key
 	Device       DevicePayload
+	// PushBinding is the push-wake record the device conveyed in msg4 (ADR-015 P7), the
+	// record the machine must persist BEFORE confirming pairing (playbook 3.2). Nil when
+	// the device conveyed none -- the P12 legacy_relay state -- and never a zero-valued
+	// record a machine might persist as real.
+	PushBinding *PushBinding
 	// RendezvousUnburned records a rendezvous burn that did not finish on a pairing that
 	// otherwise SUCCEEDED, and it is nil on every healthy pairing.
 	//
@@ -552,8 +631,8 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 	// NOTHING after msg3 reached this machine, so it accepted and enrolled devices whose
 	// operator had REFUSED the SAS, spending PB-STATE-10's single-device slot on a pairing
 	// the user declined.
-	consent, err := recvConsent(ctx, sess, rt)
-	if err != nil || len(consent) == 0 {
+	consentFrame, err := recvConsent(ctx, sess, rt)
+	if err != nil || len(consentFrame) == 0 {
 		declineAndBurn(ctx, sess, rt, label)
 		if err != nil {
 			return nil, fmt.Errorf("pairing: recv relay-route consent: %w", err)
@@ -561,6 +640,17 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		// A zero-length msg4 is the device's well-formed ABORT: its operator refused the
 		// SAS, or it could not sign. Same meaning, same path, and answered rather than
 		// left to a timeout.
+		return nil, ErrNoConsent
+	}
+	// msg4 carries the consent alone (the pre-R3 encoding, verbatim) or the consent plus
+	// the push binding (ADR-015 P7) under the framed encoding. Both decode here; a framed
+	// msg4 that does not parse is refused rather than guessed at.
+	consent, pushBinding, err := decodeConsentFrame(consentFrame)
+	if err != nil || len(consent) == 0 {
+		declineAndBurn(ctx, sess, rt, label)
+		if err != nil {
+			return nil, fmt.Errorf("pairing: decode relay-route consent: %w", err)
+		}
 		return nil, ErrNoConsent
 	}
 	devPayload.ConsentSig = consent
@@ -608,6 +698,7 @@ func (m *Machine) Pair(ctx context.Context, rt RendezvousTransport) (*MachineOut
 		SAS:                sas,
 		DeviceStatic:       deviceStatic,
 		Device:             devPayload,
+		PushBinding:        pushBinding,
 		RendezvousUnburned: burnSlot(ctx, rt, label),
 	}, nil
 }
@@ -858,6 +949,12 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	if p.Limiter != nil && !p.Limiter.Allow() {
 		return nil, ErrRateLimited
 	}
+	// A binding this device could not take back must never be released. Refused HERE --
+	// before the rendezvous, before any handshake, and a very long way before msg4 -- so the
+	// refusal costs a pairing that has disclosed nothing (see ErrNoPushRevoke).
+	if p.PushBinding != nil && p.RevokePushBinding == nil {
+		return nil, ErrNoPushRevoke
+	}
 
 	label := rendezvousLabel(p.RendezvousID)
 	if err := rt.Claim(ctx, label); err != nil {
@@ -983,8 +1080,38 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// the rendezvous while the operator was still comparing, in which case its decision is
 	// already waiting below and ErrPairingDeclined is the honest cause, not a transport
 	// error naming a symptom.
-	sendErr := sendConsent(ctx, sess, rt, consent)
+	//
+	// The push binding rides HERE, beside the consent, and nowhere earlier (ADR-015 P7,
+	// ADR-007 B52): msg4 is the first leg released after this device's operator compared
+	// the SAS, and the binding is secret-bearing -- see encodeConsentFrame. THIS LINE IS
+	// ALSO THE RELEASE POINT: from here on the machine holds the wake key and both gateway
+	// capabilities whatever it decides, so every non-accept exit below owes the revoke on
+	// DeviceParams.RevokePushBinding (the NON-ACCEPT OBLIGATION).
+	sendErr := sendConsent(ctx, sess, rt, encodeConsentFrame(consent, p.PushBinding))
 
+	// EVERYTHING PAST THE RELEASE IS ONE CALL WITH ONE ERROR EXIT, and that shape is the
+	// obligation rather than a tidiness: the tail has five separate non-accept returns
+	// (recv, decrypt, decline, commit, ack), and a revoke written at each of them is four
+	// chances to add a sixth return and forget. Here it cannot be forgotten -- if the tail
+	// failed and this device released a binding, the binding is revoked.
+	out, err := p.finishAfterConsent(ctx, sess, rt, sendErr, sas, machineStatic, machPayload)
+	if err != nil && p.PushBinding != nil {
+		p.RevokePushBinding()
+	}
+	return out, err
+}
+
+// finishAfterConsent is RunDevice's tail, from the msg4 release to the acknowledgement. It
+// is split out for exactly one reason: see its caller.
+func (p DeviceParams) finishAfterConsent(
+	ctx context.Context,
+	sess *crypto.NoiseSession,
+	rt RendezvousTransport,
+	sendErr error,
+	sas [6]string,
+	machineStatic []byte,
+	machPayload MachinePayload,
+) (*DeviceOutcome, error) {
 	// Wait for the machine's authenticated decision (R-PAIR.5). No machine static
 	// is pinned unless the machine affirmatively accepts; a decline / timeout on
 	// the machine side surfaces here as ErrPairingDeclined with no pin.
@@ -1033,14 +1160,117 @@ func RunDevice(ctx context.Context, p DeviceParams, rt RendezvousTransport) (*De
 	// commit above rather than changed: where this device knows its acknowledgement did not
 	// leave, the machine will not have it either, so refusing to report a pairing is the two
 	// legs agreeing about the ceremony. What this device durably wrote a moment ago is the
-	// harmless residual -- it names a machine that claims nothing, spends no single-device
-	// slot, needs no revoke, and is overwritten by the re-pair the failure asks for. The same
-	// residual the send already had whenever it REPORTED success and the relay dropped the
-	// frame anyway, which it does when the peer has detached or its inbox is full.
+	// benign part of the residual -- it names a machine that claims nothing, spends no
+	// single-device slot, and is overwritten by the re-pair the failure asks for; the send
+	// already had that residual whenever it REPORTED success and the relay dropped the frame
+	// anyway, which it does when the peer has detached or its inbox is full.
+	//
+	// SINCE msg4 CAN CARRY A PUSH BINDING, "needs no revoke" STOPPED BEING TRUE HERE (and on
+	// every other non-accept path in this function): the machine already holds the wake key
+	// and both gateway capabilities from msg4, and those do not evaporate with this
+	// pairing's failure. Every error return here therefore reaches
+	// DeviceParams.RevokePushBinding through the caller's single exit.
 	if err := sendAck(ctx, sess, rt); err != nil {
 		return nil, fmt.Errorf("pairing: acknowledge acceptance: %w", err)
 	}
 	return out, nil
+}
+
+// consentFrameMagic prefixes a msg4 plaintext that carries a push binding beside the
+// consent (ADR-015 P7). A binding-less msg4 stays the raw consent signature, byte-identical
+// to the pre-R3 encoding, so a pre-R3 machine and a binding-less device interoperate
+// unchanged (P12). The magic is long enough that a raw Ed25519 signature starting with it
+// is not a realistic collision, and the frame rides the authenticated Noise transport, so
+// only the device this machine just authenticated can have produced it either way.
+const consentFrameMagic = "swarm-pair-push-binding-v1\x00"
+
+// encodeConsentFrame builds the msg4 plaintext: the consent verbatim when there is no
+// binding, or magic || len-prefixed consent || len-prefixed binding when there is one.
+func encodeConsentFrame(consent []byte, b *PushBinding) []byte {
+	if b == nil {
+		return consent
+	}
+	out := []byte(consentFrameMagic)
+	out = appendField(out, consent)
+	out = appendField(out, encodePushBinding(b))
+	return out
+}
+
+// decodeConsentFrame is the machine half: a frame without the magic is the pre-R3
+// encoding (the whole plaintext IS the consent, no binding); a frame with it must parse
+// exactly.
+func decodeConsentFrame(frame []byte) (consent []byte, b *PushBinding, err error) {
+	rest, ok := bytesCutPrefix(frame, []byte(consentFrameMagic))
+	if !ok {
+		return frame, nil, nil
+	}
+	var bindingBytes []byte
+	if consent, rest, ok = readField(rest); !ok {
+		return nil, nil, errMalformedPayload
+	}
+	if bindingBytes, rest, ok = readField(rest); !ok || len(rest) != 0 {
+		return nil, nil, errMalformedPayload
+	}
+	if b, err = decodePushBinding(bindingBytes); err != nil {
+		return nil, nil, err
+	}
+	return consent, b, nil
+}
+
+// bytesCutPrefix is bytes.CutPrefix, local so this file's import set stays as it was.
+func bytesCutPrefix(b, prefix []byte) ([]byte, bool) {
+	if len(b) < len(prefix) || string(b[:len(prefix)]) != string(prefix) {
+		return b, false
+	}
+	return b[len(prefix):], true
+}
+
+// encodePushBinding serialises the five-field binding: four length-prefixed byte fields
+// followed by the 4-byte big-endian capability record version, the same shape every other
+// payload in this file uses (F11 -- no splicing).
+func encodePushBinding(b *PushBinding) []byte {
+	var out []byte
+	out = appendField(out, b.WakeKey)
+	out = appendField(out, b.PushAddress)
+	out = appendField(out, []byte(b.SubmitCapability))
+	out = appendField(out, []byte(b.MachineRevokeCapability))
+	return binary.BigEndian.AppendUint32(out, uint32(b.CapabilityRecordVersion))
+}
+
+// decodePushBinding is the inverse of encodePushBinding.
+func decodePushBinding(raw []byte) (*PushBinding, error) {
+	var b PushBinding
+	var ok bool
+	if b.WakeKey, raw, ok = readField(raw); !ok {
+		return nil, errMalformedPayload
+	}
+	if b.PushAddress, raw, ok = readField(raw); !ok {
+		return nil, errMalformedPayload
+	}
+	var submit, revoke []byte
+	if submit, raw, ok = readField(raw); !ok {
+		return nil, errMalformedPayload
+	}
+	if revoke, raw, ok = readField(raw); !ok {
+		return nil, errMalformedPayload
+	}
+	if len(raw) != 4 {
+		return nil, errMalformedPayload
+	}
+	b.SubmitCapability = string(submit)
+	b.MachineRevokeCapability = string(revoke)
+	b.CapabilityRecordVersion = int(binary.BigEndian.Uint32(raw))
+	// FIELD LENGTHS ARE PART OF THE SHAPE. MachineOutcome.PushBinding promises "never a
+	// zero-valued record a machine might persist as real", and the machine persists this
+	// record BEFORE confirming pairing: a nil or short WakeKey copied into
+	// crypto.WakeKey's [32]byte silently becomes an all-zero or low-entropy wake key, and
+	// an empty address or capability is a record no gateway ever issued. Refusing with
+	// errMalformedPayload rides the frame's existing decline-and-burn path.
+	if len(b.WakeKey) != 32 || len(b.PushAddress) != 16 ||
+		b.SubmitCapability == "" || b.MachineRevokeCapability == "" {
+		return nil, errMalformedPayload
+	}
+	return &b, nil
 }
 
 // decisionAccept / decisionDecline are the single-byte machine-side pairing

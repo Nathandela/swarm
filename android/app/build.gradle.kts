@@ -4,6 +4,27 @@ plugins {
 }
 
 // ---------------------------------------------------------------------------
+// R3 (ADR-015) / PB-PUSH-9: FCM production receipt for dev.swarm.phone.
+//
+// android/app/google-services.json is the production Firebase config. It is GITIGNORED at
+// exactly that path (.gitignore records why) and exists only on machines an operator
+// provisioned: committing it is forbidden (hard rule 6), and a FABRICATED one is worse than
+// none -- it produces an app that initialises against a project nobody owns and fails only
+// on a real handset.
+//
+// CI clones the repository, so every CI build runs with the file ABSENT -- and the Google
+// plugin fails any build whose config file is missing. The only honest wiring is therefore
+// CONDITIONAL: apply com.google.gms.google-services exactly when the local gitignored config
+// exists. Do NOT "fix" this into an unconditional apply; that breaks the plugin-absent CI
+// shape (.github/workflows/ci.yml's android job materialises no config and still runs
+// `gradlew --no-daemon lint test` and `:app:assembleDebug`), which android/gate's R3A fences
+// pin. The plugin VERSION is pinned in the root build script.
+// ---------------------------------------------------------------------------
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+// ---------------------------------------------------------------------------
 // PB-TOOL-1 / PB-RUN-1: every SDK level comes from the checked-in pin.
 //
 // The build states no version number of its own. android/supported-versions.tsv records the
@@ -284,6 +305,28 @@ android {
         // the same instrumentation every Android project uses, and a bespoke runner is one more
         // thing between the requirement and the app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // -------------------------------------------------------------------
+        // ADR-015 R3: the PUSH GATEWAY ENDPOINT, as operator configuration.
+        //
+        // It is read through operatorSetting -- a Gradle property or an environment
+        // variable -- which is the same mechanism PB-TOOL-3's release signing material
+        // already crosses on, and for the same reason: the value belongs to whoever runs
+        // the deployment, not to the repository. It is deliberately NOT a Kotlin constant:
+        // an endpoint spelled in source is one no operator can change without a code edit,
+        // and one every fork inherits.
+        //
+        // THE DEFAULT IS EMPTY AND THAT IS A REAL STATE, not a placeholder. A build with no
+        // gateway configured -- every CI build, every checkout without the operator's
+        // settings -- produces a phone the facade reports as honestly foreground-only
+        // (swarmmobile's errNoPushGateway), exactly as a build without google-services.json
+        // produces one with no Firebase project. A fabricated default would instead point
+        // the app at a host nobody owns and fail only on a real handset.
+        //
+        // resValue rather than buildConfigField: this module does not enable the buildConfig
+        // feature, and a string resource is read by the same Context every other configured
+        // value on this side is.
+        resValue("string", "swarm_push_gateway_url", operatorSetting("SWARM_PUSH_GATEWAY_URL") ?: "")
     }
 
     signingConfigs {
@@ -361,23 +404,19 @@ kotlin {
 }
 
 // ---------------------------------------------------------------------------
-// PB-PUSH-9 / PB-E2E-5: THIS BUILD IS NOT WIRED FOR REAL FCM DELIVERY, and that is recorded
-// here rather than in an evidence file because here is where the build is read.
+// PB-PUSH-9 / PB-E2E-5: how a build of this module comes to receive real FCM.
 //
 // firebase-messaging below is what lets dev.swarm.phone.push.SwarmMessagingService compile and
 // what the manifest's MESSAGING_EVENT filter resolves against. It is NOT enough to receive a
 // message: FirebaseMessagingService is only ever invoked if FirebaseApp initialises, and
-// FirebaseApp initialises from a google-services.json processed by the com.google.gms
-// .google-services plugin -- which is deliberately NOT applied.
+// FirebaseApp initialises from a google-services.json processed by the google-services plugin
+// -- which R3 applies CONDITIONALLY, at the top of this file, exactly when the operator's
+// gitignored config is present. A checkout without it (every CI runner) builds an APK that
+// installs, runs, registers no token with FCM and receives no wake, with PushTokens'
+// IllegalStateException guard reporting the degraded state loudly (PB-PUSH-5).
 //
-// THERE IS NO GOOGLE ACCOUNT IN THIS PROJECT, so that file cannot exist and must not be faked:
-// a fabricated one produces an app that initialises against a project id nobody owns, which
-// fails at runtime on a real handset and nowhere else. So an APK built from this module
-// installs, runs, registers no token with FCM and receives no wake -- while every source-level
-// gate and every Go conformance test stays green.
-//
-// Closing that is PB-E2E-5 (real FCM delivery, real Doze, a real handset), which is DEFERRED
-// under section 13. Slice S17 does not close it and claims no part of it.
+// PB-E2E-5's exit (real FCM delivery, real Doze, a real handset) is still PHYSICAL-HANDSET
+// evidence: nothing about this wiring may be cited for background delivery.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

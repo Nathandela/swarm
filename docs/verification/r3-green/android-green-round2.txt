@@ -1,0 +1,226 @@
+======================================================================
+R3 Android/phone slice - GREEN EVIDENCE (round 2: review-finding fixes)
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-ai3p (Wave R3, Android/phone side)
+role: GREEN round 2 (TDD, GG-5), against the review findings raised on
+      round 1 (docs/verification/r3-green/android-green.txt)
+date: 2026-08-16 (UTC; runs stamped below)
+HEAD: 3d0810b (working tree; this role commits nothing)
+go:   go1.26.5 darwin/amd64
+======================================================================
+
+1. FAILING-FIRST (RED) FOR EVERY BEHAVIORAL FIX
+
+New test files (added, nothing existing modified; the round-1 RED files
+are untouched so their evidenced line numbers stay stable):
+  internal/phonecore/r3ar2_review_test.go        (3 tests)
+  internal/remote/pairing/r3ar2_pushbinding_test.go (2 tests)
+
+RED run 2026-08-16T05:03:07Z, HEAD 3d0810b, before any fix -- all five
+failed for exactly the finding each states:
+  TestR3AR2_EnsurePushRegistration_ConcurrentFirstRunsMintOneInstallation
+    "4 racing first runs put 4 register POSTs on the wire, want exactly
+    1"; three distinct orphaned installation ids printed.
+  TestR3AR2_DropPushBinding_ReAdoptionCannotRewindTheCoordinate
+    "the captured seq-9 envelope after forget+re-adopt: got <nil>, want
+    ErrWakeReplay (the drop walked the coordinate back)".
+  TestR3AR2_AcceptWakeV1_AFutureDatedWakeIsRefused
+    "a wake issued an hour in the future: got <nil>, want ErrWakeExpired
+    (two-sided bound)".
+  TestR3AR2_DecodePushBinding_RefusesAZeroValuedOrShortRecord
+    all six malformed variants decoded cleanly (all-empty record,
+    3-byte key + 1-byte address, 31-byte key, 15-byte address, each
+    empty capability).
+  TestR3AR2_DecodeConsentFrame_RefusesAnEmptyBindingBesideTheConsent
+    "a frame carrying an all-empty binding decoded cleanly".
+The review's MEDIUM asked the existing five-minute test to gain a
+future-dated arm; it lives as the separate TestR3AR2_ test above so the
+round-1 RED file's evidenced line numbers stay byte-stable.
+
+2. THE FIXES (file:line, minimum surface, no assertion weakened)
+
+BLOCKING 1 - registration race:
+  internal/phonecore/core.go:65-74 -- new Core.regMu with the lock-order
+    argument (regMu never taken while holding mu; mu never held across
+    the network call).
+  internal/phonecore/pushbinding.go:269-274 -- EnsurePushRegistration
+    now runs its WHOLE read-decide-network-write sequence under regMu:
+    a racer behind a first registration finds the durable id written and
+    ROTATES, never mints a second installation.
+
+BLOCKING 2 - drop-then-readopt replay window:
+  internal/phonecore/pushbinding.go:224-231 -- DropPushBinding clears
+    the KEY and leaves the row as a keyless tombstone: the per-address
+    high-water survives the forget, durably.
+  internal/phonecore/pushbinding.go:336-340 -- AcceptWakeV1 treats a
+    keyless tombstone as ErrNoWakeKey (the waiting verdict), counted.
+  internal/phonecore/pushbinding.go:205-209 -- AdoptPushBinding's
+    re-adopt (live OR dropped) keeps the high-water; comment states the
+    tombstone contract.
+
+BLOCKING 3 - pairing decoder validates no lengths:
+  internal/remote/pairing/pairing.go:1188-1197 -- decodePushBinding now
+    requires len(WakeKey)==32, len(PushAddress)==16 and both
+    capabilities non-empty, refusing with errMalformedPayload (the
+    frame's existing decline-and-burn path). MachineOutcome.PushBinding
+    "never a zero-valued record" is now enforced, not promised.
+
+MEDIUM - one-sided freshness bound:
+  internal/phonecore/pushbinding.go:56-62 -- wakeV1MaxFutureSkew = 2m
+    (matches PG-AUTH-3's 120s allowance), with the capture-window
+    rationale.
+  internal/phonecore/pushbinding.go:352-357 -- the issued_at check is
+    two-sided: age > WakeV1MaxAge OR age < -wakeV1MaxFutureSkew refuses
+    with ErrWakeExpired, counted, coordinate unmoved.
+
+MEDIUM - msg4 re-framing has no negotiation:
+  internal/remote/pairing/pairing.go:357-367 -- the MIXED-VERSION
+    OBLIGATION is recorded on DeviceParams.PushBinding: a pre-R3
+    machine stores the framed blob as ConsentSig and fails only at
+    relay authorization, so the facade slice MUST gate setting
+    PushBinding on a machine-side capability signal (a msg2 payload
+    field); until then it may be set only for machines known
+    R3-or-later. OPEN OBLIGATION for the wiring slice (with the P12
+    legacy_relay row covering the same pairs transport-side).
+
+MEDIUM-LOW - scope 4 honesty (recorded, deliberately NOT implemented
+here; the round-1 wording "both revocation paths (all 5 RED tests
+green)" claims the tested surface only):
+  OPEN OBLIGATION (ADR-015 P6): a ForgetMachine that pairs
+    GatewayClient.RevokeAddress with DropPushBinding under a persisted
+    deletion tombstone retried until success or the 180-day expiry does
+    NOT exist yet -- a forget performed offline currently drops the
+    local half and leaves the address live at the gateway.
+  OPEN OBLIGATION: HonorMachineRevoke has no producer in this slice --
+    nothing yet tells the phone a machine revoked. Both belong to the
+    facade slice and should be filed as issues by the epic owner.
+
+LOW - DropSink's production target:
+  android/app/src/main/kotlin/dev/swarm/phone/push/WakeReceiptPolicy.kt
+    (DropSink doc) -- named explicitly: authoritative counting lives in
+    Go (AcceptWakeV1 counts every refusal; Core.WakeDrops() is a getter
+    with no incrementer to wire to); production hands a NO-OP reporter
+    or local observer; wiring anything that increments the core counter
+    again double-counts. Round 1's "Production wires this to the core's
+    durable WakeDrops counter" prose is retired by this change.
+
+LOW - hand-maintained requestHash field set:
+  internal/phonecore/gatewayclient.go:139-167 -- registrationRequestHash
+    now takes the registerBody VALUE Register marshals onto the wire
+    (token blanked), re-read as a map so key ordering matches pushgw's
+    own requestHash map-canonicalization; gatewayclient.go:170-188 --
+    Register builds one rb, hashes it, then sets the verdict token into
+    the same rb for the wire body. A field added to registerBody now
+    flows into both derivations or neither.
+
+LOW - the "exactly one pinned constant" wording:
+  internal/phonecore/pushbinding.go:42-49 -- TWO COPIES, PINNED BY TEST
+    recorded at the receiver's constant block: remotegw carries the
+    producer's copies, r3a_wakev1_test.go opening the real producer's
+    seal is what fails if either side moves alone. The twin comment on
+    internal/remotegw's block is OUTSIDE this slice's ownership
+    (machine side); recorded here as the remaining half.
+
+VERY LOW - per-refusal container re-seal:
+  internal/phonecore/pushbinding.go:367-376 -- countWakeDropLocked no
+    longer persists per refusal: the count is in-memory-first and
+    reaches disk with the next real state change (every adopt, drop,
+    revoke or accepted wake persists the whole container, Drops
+    included). No test asserted per-refusal durability of the counter,
+    and the refusal itself stands either way; what this removes is an
+    attacker-driveable full re-seal + fsync of the wake-key container
+    per unverifiable FCM message.
+
+Ledger fallout of the fixes (documented procedures, no assertion
+weakened):
+  docs/verification/s18-log-sinks.tsv -- regenerated via the gate's own
+    -update-logscan after the DropSink doc comment shifted
+    WakeReceiptPolicy.kt's one Log.w from :70 to :74. Same call, same
+    reviewer note; line number only.
+
+3. GO GATES (all green, run after all fixes)
+
+$ go build ./...                                        OK
+$ go vet ./...                                          OK (whole repo)
+$ PATH="$HOME/go/bin:$PATH" golangci-lint run           exit 0
+$ go test -race -count=1 ./internal/phonecore/ ./internal/remote/pairing/
+    ok internal/phonecore 20.7s ; ok internal/remote/pairing 18.6s
+$ go test -race -count=1 ./mobile/...
+    ok mobile 28.3s ; ok mobile/conformance 193.2s
+$ go test -race -count=1 ./android/gate/                ok 44.3s
+    (first run FAILED on the stale :70 census row; regenerated by the
+    documented -update-logscan procedure, then green)
+$ go test -race -count=1 ./internal/verify/             ok 32.1s
+$ go test -count=1 -run TestB94 ./internal/verify/      ok (root set
+    untouched; no b94 row added or removed in round 2)
+$ go test -count=1 -run TestR3AR2 ./internal/phonecore/ ./internal/remote/pairing/
+    ok (all five round-2 tests green)
+
+4. GRADLE RUNS (discipline verbatim: script files, --no-daemon, AAR
+   mtime printed before AND after, XML freshness vs a recorded start
+   marker, test-results never deleted)
+
+4.1 Dependency locks: NO round-2 change. verification-metadata.xml
+  still carries exactly round 1's +26 lines / four coordinates;
+  android/app/gradle.lockfile unchanged. Round 2 adds ZERO coordinates.
+
+4.2 Unit-test lane (plugin PRESENT locally), /tmp/r3ar2_gradle_test.sh
+  sourcing android/toolchain.env (JAVA_HOME=/usr/local/opt/openjdk@21):
+    ./gradlew --no-daemon test --rerun-tasks --no-build-cache
+    == start: 2026-08-16T05:16:19Z
+    BUILD SUCCESSFUL in 6m 48s      63 actionable tasks: 63 executed
+    == gradle exit: 0
+    == aar mtime before AND after: Aug 16 06:34:15 2026 (identical --
+       the AAR round 1's androidgate lane rebuilt; nothing swapped
+       mid-build)
+    == test-result XMLs newer than the recorded start: 292
+    Both R3 suites 4/4, zero failures, debug AND release, fresh:
+      TEST-dev.swarm.phone.push.PushRegistrationRoutingTest.xml
+        (debug 07:21:10, release 07:23:08 local = 05:21/05:23Z)
+      TEST-dev.swarm.phone.push.WakeReceiptPolicyTest.xml (same)
+    An earlier identical run (05:08-05:15Z, also fully green) was
+    VOIDED by this role because a comment-only doc fix landed in
+    WakeReceiptPolicyTest.kt after its compile step; this rerun covers
+    the final tree. Discipline notes: script file, no test-results
+    deletion, --rerun-tasks --no-build-cache.
+
+4.3 CI android-job shape, PLUGIN-ABSENT (google-services.json moved OUT
+  of the tree for the duration, restored after; never copied inside),
+  /tmp/r3ar2_ci_shape.sh:
+    == start: 2026-08-16T05:23:47Z
+    == google-services.json ABSENT: yes
+    ./gradlew --no-daemon lint test          BUILD SUCCESSFUL in 5m 48s
+    ./gradlew --no-daemon :app:assembleDebug BUILD SUCCESSFUL in 37s
+    == google-services.json RESTORED: yes (mtime untouched, never
+       staged, never copied inside the tree)
+    == aar mtime before AND after: Aug 16 06:34:15 2026 (identical)
+    == test-result XMLs newer than the recorded start: 292 (the absent
+       plugin changes the task graph, so the test tasks re-executed
+       rather than reporting up-to-date)
+    == end: 2026-08-16T05:30:14Z
+
+4.4 Tagged androidgate lane (the CI android job's final step), run LAST
+  because it rebuilds the AAR by design, /tmp/r3ar2_androidgate.sh:
+    go test -tags androidgate -timeout 60m -count=1 ./android/gate/...
+    == start: 2026-08-16T05:30:58Z (aar before: Aug 16 06:34:15 2026)
+    == end:   2026-08-16T05:39:35Z (aar after:  Aug 16 07:31:22 local
+       -- the lane REBUILDS the AAR by design; every gradle-evidence
+       run above completed by 05:30:14Z, so nothing is voided, and the
+       rebuilt AAR carries this round's phonecore fixes)
+    Result: every assertion passed EXCEPT exactly one, the SAME
+    pre-existing host condition round 1's section 3.4 documents:
+      --- FAIL: TestPBTOOL3_ReleaseBuildRefusesWithNoOperatorKeystore
+    This operator machine's ~/.gradle/gradle.properties carries the
+    four SWARM_RELEASE_* entries and the keystore exists, so
+    :app:assembleRelease legitimately succeeds SIGNED regardless of the
+    scrubbed env; on CI (no gradle.properties) the refusal holds.
+    Nothing in round 2 touches signing or the release path.
+
+5. WHAT THIS FILE DOES NOT CLAIM
+  - Everything round 1's section 4 disclaims (physical-handset exit,
+    facade wiring, degraded-push Settings copy) still holds.
+  - The two OPEN OBLIGATIONS of section 2 (P6 durable dual-revocation
+    with a deletion tombstone; the HonorMachineRevoke producer) and the
+    msg4 capability-signal gate are NAMED deferrals for the facade
+    slice, not delivered work.
+======================================================================

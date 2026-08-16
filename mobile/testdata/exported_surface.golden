@@ -26,6 +26,7 @@ const RelayTrustUnavailable
 const RelayTrustUntrusted
 const WakeNotificationText
 field Config.MachineID string
+field Config.PushGatewayURL string
 field Config.RelayURL string
 field Config.StateDir string
 field Event.Cursor int64
@@ -58,6 +59,14 @@ field Outcome.OperationID string
 field Outcome.Resolved bool
 field PushPreference.Alerts bool
 field PushPreference.Mentions bool
+field PushWakeDrops.Expired int64
+field PushWakeDrops.Malformed int64
+field PushWakeDrops.NoKey int64
+field PushWakeDrops.PeerClockAhead int64
+field PushWakeDrops.Replay int64
+field PushWakeDrops.Revoked int64
+field PushWakeDrops.Total int64
+field PushWakeDrops.Unauthenticated int64
 field QRPayload.HasStaticPub bool
 field QRPayload.RelayURL string
 field QRPayload.RendezvousID string
@@ -113,6 +122,7 @@ method App.ClockVerdict() (string, error)
 method App.Close() error
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
+method App.EnsurePushRegistration(string) error
 method App.ErrorClass(string) (string, error)
 method App.HandlePushWake(string) (*WakeAlert, error)
 method App.InstallContentKey([]byte) error
@@ -160,6 +170,7 @@ method App.TerminalWatch(string) error
 method App.UndeliveredInputs() (*UndeliveredList, error)
 method App.UnlockContent() error
 method App.UnsubscribeJournal() error
+method App.WakeDropCounts() (*PushWakeDrops, error)
 method JournalPage.At(int) (*JournalEntry, error)
 method JournalPage.Count() (int, error)
 method JournalPage.NextCursor() (int64, error)
@@ -197,6 +208,7 @@ type Op struct
 type Outcome struct
 type Pairing struct
 type PushPreference struct
+type PushWakeDrops struct
 type QRPayload struct
 type RelayTrust interface
 type Session struct

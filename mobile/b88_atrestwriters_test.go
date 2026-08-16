@@ -87,6 +87,12 @@ var permittedAtRestWriters = map[string]string{
 		"three sealed containers plus PB-STATE-9's pinned cleartext list. The writer the S15 census drives.",
 	filepath.Join("internal", "phonecore", "keycustody.go"): "device.key: the sealed device-key container -- " +
 		"public keys in the clear, Content/Wake blobs sealed under their own KEKs. Constructed by the census via Resume.",
+	filepath.Join("internal", "phonecore", "pushbinding.go"): "push-state.sealed: Wave R3's push-binding container " +
+		"(ADR-015 P6/P7) -- the installation id, the per-pairing wake keys with their per-address high-waters, the " +
+		"machine-revoked address set and the refused-wake counter. AT-REST FORM: the WHOLE container is ONE sealed " +
+		"blob under the WAKE tier KEK (it holds wake keys, so cleartext is not an option, and the wake tier is the " +
+		"one a push-woken process can open with the content tier locked, PB-KEY-2). No cleartext field exists in the " +
+		"file. Constructed by the census via Resume, like the two writers above.",
 	filepath.Join("mobile", "pairing.go"): "pairing-attempt: PB-PAIR-4's durable pairing state, one label from a " +
 		"closed set (paired, sas_mismatch, different_machine, ...). CLEARTEXT and outside the census -- carries no key " +
 		"material and no session content, so PB-SEC-1 is not engaged (ADR-007 B88).",

@@ -189,6 +189,59 @@ var logSinkNotes = []logSinkNote{
 		Note: pushTokensNote,
 	},
 	{
+		File: pushTokensPath,
+		Call: `Log.w(TAG, "push gateway registration failed; this phone holds no gateway " + ` +
+			`"installation and will not receive background wakes until a later attempt " + ` +
+			`"succeeds", refused)`,
+		Note: "R3's THIRD arm of the same graceful-and-loud degradation, reviewed on its own " +
+			"because it is a different failure with a different scope (the per-call keying's " +
+			"whole point): static prose plus the caught Throwable from the push GATEWAY " +
+			"registration. What reaches it is one of three states, and none of them puts a " +
+			"secret on this line -- no gateway configured for this build, no attestation " +
+			"provider configured, or a gateway that refused. The token is a PARAMETER of the " +
+			"enclosing function and is deliberately not interpolated; the facade's error " +
+			"messages are static prose with an error class token, and PG-ERR-2 forbids the " +
+			"gateway's own bodies from carrying a token, capability, envelope, signature or " +
+			"attestation token, so the flattened cause carries none either. What it " +
+			"distinguishes is a phone that will not receive background wakes from one that " +
+			"will, which is invisible on both sides otherwise.",
+	},
+	{
+		File: filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
+			"phone", "push", "SwarmMessagingService.kt"),
+		Call: `Log.w(TAG, "wake refused; durable drop counters total=${counts.getTotal()} " + ` +
+			`"peer_clock_ahead=${counts.getPeerClockAhead()} " + ` +
+			`"unauthenticated=${counts.getUnauthenticated()} replay=${counts.getReplay()} " + ` +
+			`"expired=${counts.getExpired()} no_key=${counts.getNoKey()} " + ` +
+			`"revoked=${counts.getRevoked()} malformed=${counts.getMalformed()}")`,
+		Note: "EIGHT COUNTERS AND NOTHING ELSE, on the drop path of the FCM receipt. Every " +
+			"interpolated value is a monotonic uint64 the Go core keeps in its sealed push " +
+			"container; the wake PAYLOAD, its push address, its wake key, its sequence number " +
+			"and its issued_at are none of them in scope at this line -- the verdict reached " +
+			"Kotlin as a sealed object carrying no fields at all (WakeVerdict.Dropped), and " +
+			"the counters are read back through a bound accessor that returns only these " +
+			"integers. WHY IT EXISTS: a machine whose clock runs ahead has 100% of its wakes " +
+			"correctly refused forever (it re-sends the SAME sealed bytes on every retry, " +
+			"PG-WAKE-12), and against a bare total that is indistinguishable from somebody " +
+			"forging wakes -- opposite remedies, and no other surface reaches an operator " +
+			"from a process that wakes, refuses and dies. What a reader of the buffer learns " +
+			"is HOW MANY wakes this phone refused and in which category, which is a fact " +
+			"about this handset's health and not about any session, machine or pairing.",
+	},
+	{
+		File: filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
+			"phone", "push", "WakeReceiptPolicy.kt"),
+		Call: `Log.w(TAG, "wake verdict handling failed; nothing rendered", t)`,
+		Note: "The total-and-quiet backstop of R3's verdict policy: static prose plus the " +
+			"caught Throwable, on the one path where rendering the accepted wake's generic " +
+			"notification itself failed. No wake payload, key, address or verdict detail is " +
+			"in scope at this line -- the verdict arrived as a sealed Kotlin type carrying " +
+			"only the core's constant text and a boolean, and the exception is the " +
+			"notification framework's own. What it distinguishes, in a process with no user " +
+			"present, is a wake that was refused (renders nothing by design, no log) from a " +
+			"wake that was accepted and could not be shown.",
+	},
+	{
 		File: qrScannerPath,
 		Call: `Log.i( TAG, "analysis ${image.width}x${image.height} stride=${plane.rowStride} " + ` +
 			`"rotation=${image.imageInfo.rotationDegrees}", )`,

@@ -1,10 +1,11 @@
 package dev.swarm.phone.push
 
-import android.app.NotificationManager
+import android.util.Log
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dev.swarm.phone.PhoneStartup
 import dev.swarm.phone.SwarmApplication
+import swarmmobile.App
 
 /**
  * Phase B slice S17 -- the OS entry point for push, and the only way an FCM message reaches
@@ -57,12 +58,16 @@ class SwarmMessagingService : FirebaseMessagingService() {
     }
 
     /**
-     * Verify in the core, then render exactly what it allows.
+     * Verify in the core, then hand the VERDICT to [WakeReceiptPolicy] -- the one tested copy
+     * of what a verdict entitles this app to do (R3: "an unverifiable wake is dropped and
+     * counted, never acted on"; a refusal arrives here ALREADY counted by the core's durable
+     * counter, which is why the sink below reports the core's numbers rather than keeping its
+     * own).
      *
-     * A REFUSED WAKE RENDERS NOTHING, which is why the failure path returns rather than falling
-     * through to a generic notification: an unparseable payload, a forgery, a replay and a wake
-     * past its TTL are all cases where the only party that could have told this app to notify
-     * the user did not.
+     * A REFUSED WAKE RENDERS NOTHING, and that decision is the policy's, not this file's: an
+     * unparseable payload, a forgery, a replay and a wake past its TTL are all cases where the
+     * only party that could have told this app to notify the user did not. An inline second
+     * copy of that rule is the copy that drifts toward rendering anyway.
      *
      * A phone that cannot be built renders nothing either. There is no user present and no
      * screen to report to, so the alternative is a lock-screen line about a wake this app was
@@ -71,15 +76,46 @@ class SwarmMessagingService : FirebaseMessagingService() {
     private fun renderWake(payload: String) {
         val startup = (application as SwarmApplication).phoneRuntime.phone()
         if (startup !is PhoneStartup.Ready) return
-        val alert = try {
-            startup.app.handlePushWake(payload)
+        val verdict = try {
+            val alert = startup.app.handlePushWake(payload)
+            WakeVerdict.Accepted(alert.getText(), alert.getContentReady())
         } catch (refused: Exception) {
-            return
+            WakeVerdict.Dropped
         }
-        WakeNotifications.ensureChannel(this)
-        getSystemService(NotificationManager::class.java).notify(
-            WakeNotifications.NOTIFICATION_ID,
-            WakeNotifications.build(this, alert.getText(), alert.getContentReady()),
-        )
+        WakeReceiptPolicy.handle(this, verdict, DiagnosedByTheCore(startup.app))
+    }
+
+    /**
+     * The production [WakeReceiptPolicy.DropSink]. It COUNTS NOTHING -- authoritative counting
+     * is the Go core's (AcceptWakeV1 advances the durable counter on every refusal before the
+     * verdict ever reaches Kotlin), and anything counting again here would double-count every
+     * drop. What it does is REPORT the core's own breakdown, which is the only surface an
+     * operator can reach from a process that wakes, refuses and dies.
+     *
+     * WHY THE BREAKDOWN AND NOT THE TOTAL. A machine whose clock runs ahead of this phone's
+     * has 100% of its wakes correctly refused, permanently -- the machine stamps issued_at
+     * from its own clock and re-sends the SAME sealed bytes on every retry (PG-WAKE-12) -- and
+     * against a single total that is indistinguishable from somebody forging wakes at this
+     * address. The two have opposite remedies: fix a clock on a machine the owner controls, or
+     * do not trust the sender. `peer_clock_ahead` versus `unauthenticated` is the whole of
+     * that distinction, and without it a dead wake path looks like an attack (or an attack
+     * looks like a clock).
+     *
+     * IT PRINTS COUNTERS AND NOTHING ELSE: no address, no key, no sequence number, no
+     * timestamp. PB-SEC-3's inventory records the line.
+     */
+    private class DiagnosedByTheCore(private val app: App) : WakeReceiptPolicy.DropSink {
+        override fun dropped() {
+            val counts = app.wakeDropCounts()
+            Log.w(TAG, "wake refused; durable drop counters total=${counts.getTotal()} " +
+                "peer_clock_ahead=${counts.getPeerClockAhead()} " +
+                "unauthenticated=${counts.getUnauthenticated()} replay=${counts.getReplay()} " +
+                "expired=${counts.getExpired()} no_key=${counts.getNoKey()} " +
+                "revoked=${counts.getRevoked()} malformed=${counts.getMalformed()}")
+        }
+    }
+
+    private companion object {
+        const val TAG = "SwarmPush"
     }
 }

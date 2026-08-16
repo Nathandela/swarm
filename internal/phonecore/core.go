@@ -56,6 +56,36 @@ type Core struct {
 	ks    crypto.KeyStore
 	ack   Acker
 
+	// push is Wave R3's durable push-binding custody (pushbinding.go): the installation
+	// identity, the per-address wake keys and high-waters, the machine-revoked address
+	// set and the refused-wake counter, sealed under the WAKE tier KEK in its own
+	// container beside the pinned State schema. Guarded by mu, like st.
+	push *pushStore
+
+	// regMu serialises EnsurePushRegistration END TO END: the durable-id read, the
+	// register-or-rotate network round trip, and the write back. mu cannot do that job --
+	// it must never be held across a network call -- and without this lock two concurrent
+	// first runs (SwarmApplication.onCreate's getToken and SwarmMessagingService.onNewToken
+	// arrive on different threads) both see no installation and both Register under
+	// DISTINCT idempotency keys: PG-REG-2 does not bind across them, and the loser's
+	// installation is durably orphaned holding a live FCM token for 180 days. LOCK ORDER:
+	// regMu is taken with mu released and never while holding mu; the body takes mu
+	// briefly on either side of the network call. The current FCM token is read INSIDE
+	// regMu, at act time, from the caller's TokenSource -- a token snapshot taken before
+	// the lock can be older than the one a caller ahead in the queue just installed, and
+	// no phone-side rule can order two opaque token strings after the fact.
+	regMu sync.Mutex
+
+	// wakeDropPersisted latches after the FIRST refused wake this process persisted, and
+	// wakeDropsUnpersisted counts the refusals since the last SUCCESSFUL write. Together
+	// they are countWakeDropLocked's write budget: the first refusal of a process persists
+	// (the wake-drop-die FCM receipt only ever has one), and thereafter one write per
+	// wakeDropPersistEvery refusals -- so the durable counter converges in a long-lived
+	// foreground process instead of standing at 1 forever, while the attacker-driveable
+	// re-seal cost stays bounded. Both guarded by mu, like push.
+	wakeDropPersisted    bool
+	wakeDropsUnpersisted uint64
+
 	seq    *Sequencer
 	router *MailboxRouter
 	ops    *OpQueue
@@ -116,10 +146,19 @@ func Resume(cfg Config) (*Core, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The push-binding container opens under the wake KEK for the reason the wake key
+	// tier does: a push arrives with nobody present, and the receiver must read its
+	// per-address keys and high-waters with the content tier locked. openKeyStore has
+	// already refused a real Dir with no sealers, so this cannot write in the clear.
+	push, err := openPushStore(cfg.Dir, cfg.WakeSealer)
+	if err != nil {
+		return nil, err
+	}
 	c := &Core{
 		store:  store,
 		ks:     ks,
 		ack:    cfg.Ack,
+		push:   push,
 		seq:    &Sequencer{},
 		ops:    NewOpQueue(0),
 		leases: NewLeaseState(),

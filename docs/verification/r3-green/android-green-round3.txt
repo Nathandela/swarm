@@ -1,0 +1,255 @@
+======================================================================
+R3 Android/phone slice - GREEN EVIDENCE (round 3: review-finding fixes)
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-ai3p (Wave R3, Android/phone side)
+role: GREEN round 3 (TDD, GG-5), against the review findings raised on
+      round 2 (docs/verification/r3-green/android-green-round2.txt)
+date: 2026-08-16 (UTC; runs stamped below)
+HEAD: 3d0810b (working tree; this role commits nothing)
+======================================================================
+
+1. FAILING-FIRST (RED) FOR EVERY BEHAVIORAL FIX
+
+New test files (added; the round-1/2 RED files' line numbers stay
+stable -- the ONLY edit to them is mechanical, see section 2 fix B):
+  internal/phonecore/r3ar3_fix_test.go           (2 tests)
+  internal/phonecore/r3ar3_tokenrecency_test.go  (3 tests)
+  mobile/r3ar3_wakev1route_test.go               (2 tests)
+  android/gate/r3ar3_receiptwiring_test.go       (1 fence)
+
+RED run 1 (behavioral), 2026-08-16T06:05:58Z, before any fix -- each
+failed for exactly the finding it states:
+  TestR3AR3_WakeDrops_ARefusedWakeSurvivesProcessDeath
+    "WakeDrops after process death = 0, want 1 (the refused wake was
+    counted only in memory; the wake-drop-die process is the scenario
+    the counter exists for)"
+  TestR3AR3_AdoptPushBinding_AFreshKeyReAdoptResetsTheCoordinate
+    "the new pairing's seq 1 after a fresh-key re-adopt: ...
+    ErrWakeReplay (the stale coordinate outlived the key it guarded)"
+  TestR3AR3_HandlePushWake_RoutesTheWakeV1EnvelopeToTheV1Receiver
+    "swarm/invalid-request: crypto: unknown envelope type (the shipped
+    receipt does not reach the v1 receiver)" -- the legacy parser ate
+    the WakeV1 envelope.
+  TestR3AR3_HandlePushWake_AV1WakeForAnUnknownAddressIsTheWaitingClass
+    surfaced as swarm/invalid-request, want swarm/awaiting-key; and
+    WakeDrops = 0, want 1.
+  TestR3AR3_TheMessagingServiceRoutesItsVerdictThroughWakeReceiptPolicy
+    all three arms: no WakeReceiptPolicy.handle call, no WakeVerdict
+    translation, inline .notify( still present.
+
+RED run 2 (seam), 2026-08-16T06:07:45Z: r3ar3_tokenrecency_test.go is
+compile-RED by design -- `undefined: TokenSource` (go vet, package
+phonecore) -- because the stale-rotation fix is a seam change no
+behavioral probe against the old string seam can express (no phone-side
+rule orders two opaque token strings; see fix B).
+
+2. THE FIXES (file:line, minimum surface, no assertion weakened)
+
+A. BLOCKING - WakeDrops never reached disk in the FCM topology:
+  internal/phonecore/pushbinding.go:541 (countWakeDropLocked) -- the
+    FIRST refused wake of a process persists the container once; later
+    refusals are in-memory-first and ride the next real state change.
+    Durable in the wake-drop-die process, cost capped at ONE re-seal +
+    fsync per process lifetime (an attacker already pays a process
+    spawn per unverifiable message).
+  internal/phonecore/core.go:84 -- the per-process latch
+    (wakeDropPersisted, guarded by mu); persist failure leaves it unset
+    so the next refusal retries, and never changes the verdict.
+
+B. BLOCKING - rotation ordering could install a stale token durably:
+  internal/phonecore/pushbinding.go:326 -- the seam CHANGES SHAPE:
+    EnsurePushRegistration now takes a TokenSource and reads the
+    CURRENT token INSIDE regMu, at act time. Rationale recorded on the
+    type: two opaque token strings cannot be ordered by any phone-side
+    rule, so any snapshot taken before the lock can be installed by a
+    caller that merely acted later than it read. Android callers hold
+    exactly this source (FirebaseMessaging.getToken answers the
+    current token; onNewToken's argument is only the change hint).
+  internal/phonecore/pushbinding.go:110,434 -- LastFCMToken persisted
+    beside InstallationID on every accepted register/rotate;
+    Core.PushFCMToken() makes staleness detectable at the seam.
+  internal/phonecore/core.go:77 -- regMu comment extended with the
+    read-inside-the-lock rule.
+  Probe as permanent test: r3ar3_tokenrecency_test.go
+    (..._AQueuedCallCannotInstallAStaleToken) holds caller A's PUT
+    mid-flight with a held transport, rotates the source, queues caller
+    B, and asserts the wire ENDS on the newest token, the durable
+    record follows it, and the REAL pushgw forwards a subsequent wake
+    to the newest token.
+  MECHANICAL FALLOUT, disclosed: the five pre-existing call sites in
+    r3a_installation_test.go (4) and r3ar2_review_test.go (1) now wrap
+    their literal in staticToken(...). Single-line regex edit, zero
+    assertions touched, zero line-number drift (verified: the files'
+    line counts are unchanged).
+
+C. BLOCKING - msg4 releases the capability triple before the decision:
+  internal/remote/pairing/pairing.go:368-382 -- the NON-ACCEPT
+    OBLIGATION recorded on DeviceParams.PushBinding: on EVERY
+    non-accept outcome after msg4 (ErrPairingDeclined, ErrNotCommitted,
+    failed ack send) the caller MUST run PG-ALLOC-3's failed-pairing
+    arm -- GatewayClient.RevokeAddress with the installation key (kills
+    both capabilities, orphans the wake key) -- and the field must not
+    ship a production producer without that wiring.
+  internal/remote/pairing/pairing.go:1059-1061 -- the sendConsent line
+    is named as THE RELEASE POINT, pointing every non-accept exit at
+    the obligation.
+  internal/remote/pairing/pairing.go:1117-1122 -- the stale ack-failure
+    comment corrected: "needs no revoke" stopped being true the moment
+    msg4 could carry a binding; the durable-commit residual stays
+    benign, the capability triple does not.
+  (Comment-only by review instruction: "record the obligation at the
+    seam and correct the stale comment". The client behavior it points
+    at is already pinned by TestR3A_PairingFailureDeletesTheAllocation-
+    Immediately; the WIRING that calls it belongs to the facade slice.)
+
+D. MEDIUM - per-call Idempotency-Key, no backoff:
+  internal/phonecore/gatewayclient.go:99 -- registerBackoff: 250ms then
+    500ms between the three attempts, selecting on ctx.Done.
+  internal/phonecore/gatewayclient.go:197,227 -- Register split into
+    prepareRegister (attest once, mint the key+body pair) and
+    registerPrepared (POST loop; a run where EVERY attempt lost its
+    response returns errRegisterOutcomeUnknown:109 -- a definitive
+    refusal never wears that wrapper).
+  internal/phonecore/pushbinding.go:115,337 -- the prepared pair is
+    persisted (PendingRegister) BEFORE the first POST; the NEXT call
+    replays it verbatim (same key, byte-identical body -- pushgw's
+    cache is keyed on both), adopting the installation a maybe-
+    processed POST minted instead of orphaning it for 180 days.
+    Definitive refusal clears the pair (PG-AUTH-13: a refused
+    attestation still enrolls nothing durable -- re-verified by the
+    round-1 test). A pending pair resolved under a token that moved is
+    followed by one ordinary rotate.
+  Beyond-the-window honesty: past pushgw's 10-minute retention a
+    processed-and-lost POST is still an orphan; that is the window the
+    reviewer named, and no client-side fix can shrink it further.
+
+E. MEDIUM - production reachability (the receipt half is now wired;
+   the remainder stays disclosed, see section 4):
+  mobile/pushwake.go:114-129 -- HandlePushWake, the ONE verb
+    SwarmMessagingService calls, routes by wire shape: a 74-byte
+    payload goes to Core.AcceptWakeV1 (per-pairing key, 5m bound,
+    durable per-address coordinate), everything else stays on the
+    legacy epoch path (P12). Scope 3's hard requirement -- "FCM message
+    receipt must verify the WakeV1 envelope with the pairing's wake key
+    before acting" -- is now true of the shipped path; a v1 wake
+    arriving before any binding lands is the WAITING class and counted.
+  internal/phonecore/pushbinding.go:52-56 -- WakeV1Size exported for
+    exactly that one routing decision (same pinned copy, not a third).
+  android/app/.../push/SwarmMessagingService.kt:82,91 -- the service
+    translates the core's answer into WakeVerdict and hands it to
+    WakeReceiptPolicy.handle (the tested drop/render policy now HAS its
+    production caller); rendering moved out of the service; the
+    production DropSink is the documented no-op (counting is the core's
+    durable WakeDrops -- anything else double-counts).
+  android/gate/r3ar3_receiptwiring_test.go -- source-level fence: the
+    service must route through the policy and never notify inline.
+
+F. LOW - fresh-key re-adopt inherited the old high-water:
+  internal/phonecore/pushbinding.go:233-271 (AdoptPushBinding),
+  :274-291 (DropPushBinding), :139 (WakeKeyHash), :224 (wakeKeyHash) --
+    the coordinate follows the KEY: same key (live, or a tombstone
+    recognised by its retained SHA-256) keeps the high-water (the
+    r3ar2 contract, re-run green); a different key resets it, because
+    captures under the old key cannot open under the new one and the
+    retained coordinate only killed the re-pair silently. The hash
+    opens nothing; it lives in the same sealed container the key did.
+    No migration concern: the container format has never shipped.
+
+3. GO GATES (all green, run after all fixes)
+
+$ go build ./...                                          OK
+$ go vet ./...                                            exit 0
+$ PATH="$HOME/go/bin:$PATH" golangci-lint run             exit 0
+$ go test -race -count=1 ./internal/phonecore/ ./internal/remote/pairing/
+    ok phonecore 25.5s ; ok pairing 19.1s
+$ go test -race -count=1 ./mobile/ ./android/gate/ ./internal/verify/
+    ok mobile 40.6s ; ok android/gate 59.9s ; ok internal/verify 33.8s
+$ go test -race -count=1 ./mobile/conformance/            ok 202.5s
+$ go test -count=1 -run TestB94 ./internal/verify/        ok -- root
+    set untouched; NO new allowlist row needed: TokenSource is a type,
+    WakeV1Size a const, PushFCMToken a method on the already-reachable
+    Core; every new gatewayclient symbol is unexported.
+
+4. WHAT ROUND 3 DELIBERATELY DOES NOT CLAIM (for the epic owner)
+
+  - Registration-client production wiring (a GatewayClient built with
+    an Android Keystore InstallationSigner, a Play Integrity
+    AttestFunc and a configured gateway base URL, called from the
+    PushTokens entry points with a FirebaseMessaging-backed
+    TokenSource) still does not exist -- none of that infrastructure
+    is configured in this repo yet, and inventing placeholder config
+    would violate the no-simulated-production rule. The seam is now
+    the shape that wiring needs (TokenSource), and PushRegistration-
+    Routing remains the agreed vocabulary. Belongs to the facade
+    slice; needs a bd issue beside the four the round-3 review already
+    listed for the caller ((a) ForgetMachine's gateway arm, (b)
+    HonorMachineRevoke's producer, (c) the msg2 capability signal
+    gating DeviceParams.PushBinding, (d) remotegw's twin-constants
+    comment).
+  - Pairing-conveyance production wiring is explicitly BLOCKED on (c),
+    and the msg4 NON-ACCEPT OBLIGATION (fix C) is part of the same
+    wiring's contract.
+  - Everything rounds 1-2 disclaimed (physical handset, real FCM,
+    Doze, biometric prompt) stands.
+
+5. GRADLE RUNS (discipline verbatim: script files, --no-daemon
+   test --rerun-tasks --no-build-cache, JAVA_HOME via toolchain.env,
+   test-results never deleted, AAR mtime printed before AND after,
+   XML freshness vs recorded start markers)
+
+5.1 Dependency locks: ZERO round-3 change. No new coordinate;
+  verification-metadata.xml and gradle.lockfile untouched by round 3
+  (still exactly round 1's four google-services/firebase build-classpath
+  coordinates).
+
+5.2 Unit-test lane (plugin PRESENT), /tmp/r3ar3_gradle_test.sh
+  sourcing android/toolchain.env:
+    ./gradlew --no-daemon test --rerun-tasks --no-build-cache
+    == start: 2026-08-16T06:16:47Z (recovered from the run's marker
+       file /tmp/r3ar3_start_marker; the head of the piped log was
+       truncated by the invoking tail)
+    BUILD SUCCESSFUL in 7m 13s      63 actionable tasks: 63 executed
+    == gradle exit: 0
+    == aar mtime before AND after: Aug 16 07:31:22 2026 (identical --
+       round 2's androidgate rebuild; nothing swapped mid-build)
+    == test-result XMLs newer than the recorded start: 292
+    == end: 2026-08-16T06:24:03Z
+    Both R3 suites 4/4, zero failures, debug AND release, fresh:
+      TEST-dev.swarm.phone.push.PushRegistrationRoutingTest.xml
+        tests=4 failures=0 (debug 06:20:53Z; release 06:24Z local 08:24)
+      TEST-dev.swarm.phone.push.WakeReceiptPolicyTest.xml
+        tests=4 failures=0 (same runs)
+    Discipline: script file, no test-results deletion, --rerun-tasks
+    --no-build-cache, XML freshness against the run's own marker.
+
+5.3 CI android-job shape, PLUGIN-ABSENT (google-services.json moved
+  OUT of the tree for the duration, restored after, never copied
+  inside, never staged), /tmp/r3ar3_ci_shape.sh:
+    == start: 2026-08-16T06:24:36Z
+    == aar mtime before: Aug 16 07:31:22 2026
+    == google-services.json ABSENT: yes
+    ./gradlew --no-daemon lint test          exit 0 (BUILD SUCCESSFUL)
+    ./gradlew --no-daemon :app:assembleDebug exit 0 (BUILD SUCCESSFUL)
+    == google-services.json RESTORED: yes (mtime Aug 14 22:00:22 2026,
+       untouched; verified gitignored and unstaged after the run)
+    == aar mtime after:  Aug 16 07:31:22 2026 (identical)
+    == test-result XMLs newer than the recorded start: 292
+    == end: 2026-08-16T06:31:28Z
+
+5.4 Tagged androidgate lane (the CI android job's final step), run
+  LAST because it rebuilds the AAR by design, /tmp/r3ar3_androidgate.sh:
+    go test -tags androidgate -timeout 60m -count=1 ./android/gate/...
+    == start: 2026-08-16T06:31:50Z (aar before: Aug 16 07:31:22 2026)
+    == end:   2026-08-16T06:40:43Z (aar after:  Aug 16 08:32:15 local
+       -- the lane REBUILDS the AAR; every gradle-evidence run above
+       completed by 06:31:28Z, so nothing is voided, and the rebuilt
+       AAR carries round 3's HandlePushWake WakeV1 routing)
+    Result: every assertion passed EXCEPT exactly one, the SAME
+    pre-existing host condition rounds 1 and 2 both document:
+      --- FAIL: TestPBTOOL3_ReleaseBuildRefusesWithNoOperatorKeystore
+    This operator machine's ~/.gradle/gradle.properties carries the
+    four SWARM_RELEASE_* entries and the keystore exists, so
+    :app:assembleRelease legitimately succeeds SIGNED regardless of
+    the scrubbed env; on CI (no gradle.properties) the refusal holds.
+    Nothing in round 3 touches signing or the release path; the
+    failure count is 1, same as both prior rounds.

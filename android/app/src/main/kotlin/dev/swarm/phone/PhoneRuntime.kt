@@ -242,6 +242,13 @@ class PhoneRuntime(private val context: Context) {
         val config = Config().apply {
             stateDir = coreDir.path
             relayURL = rememberedRelay()
+            // ADR-015 R3's push gateway, from the build's operator settings (see
+            // app/build.gradle.kts). It rides Config for relayURL's exact reason: the phone
+            // core has no durable field for either, so the endpoint must be supplied at
+            // construction. Empty is a real state and not an error -- a build with no
+            // gateway configured is honestly foreground-only, and the facade says so by
+            // name rather than reporting a push path that does not exist.
+            pushGatewayURL = configuredPushGateway()
             // "" adopts whatever the durable blob describes (PB-STATE-1/-2). Naming a machine
             // here would override the coordinate the phone resumed, which is the one thing a
             // resume exists to preserve.
@@ -430,6 +437,19 @@ class PhoneRuntime(private val context: Context) {
             throw KeyCustodyException.KeyPermanentlyInvalidated(KeyTier.CONTENT)
         }
     }
+
+    /**
+     * The push gateway this build was configured with, or empty.
+     *
+     * It is a GENERATED STRING RESOURCE (`swarm_push_gateway_url`, written by
+     * `app/build.gradle.kts` from the `SWARM_PUSH_GATEWAY_URL` operator setting) and not a
+     * remembered file like the relay URL, because the two coordinates are learned differently:
+     * the relay is per-pairing and arrives in a scanned QR, while the gateway is one
+     * deployment-wide endpoint owned by the same operator who supplies `google-services.json`.
+     * Keeping it in a runtime file would invent a setting nothing writes.
+     */
+    private fun configuredPushGateway(): String =
+        context.getString(R.string.swarm_push_gateway_url).trim()
 
     private fun rememberedRelay(): String {
         val file = File(runtimeDir, RELAY_FILE)

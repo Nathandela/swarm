@@ -1,0 +1,202 @@
+======================================================================
+R3 Android/phone slice - GREEN EVIDENCE (round 1)
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-ai3p (Wave R3, Android/phone side: installation
+      registration client, P7 wake-key pairing conveyance, WakeV1
+      production receipt + google-services wiring, both revocation
+      paths -- phone half)
+role: GREEN (TDD Phase 3, GG-5), against the RED inventory in
+      docs/verification/r3-red/android-red.txt (2026-08-16, HEAD 3d0810b)
+date: 2026-08-16 (UTC; runs stamped below)
+HEAD: 3d0810b (working tree; this role commits nothing)
+go:   go1.26.5 darwin/amd64
+======================================================================
+
+1. WHAT GREEN ADDED (production surface; no RED assertion weakened)
+
+Go, phone core:
+  internal/phonecore/gatewayclient.go   (new) -- the stdlib-only gateway
+    client: InstallationSigner:40 / AttestFunc:49 / PushAddress:53 /
+    EncodePushAddress:57 / PushRegistration:62 / PushAllocation:72 /
+    ErrAttestationRefused:82 / NewGatewayClient:112 / Register:163
+    (PG-REG-2 same-key byte-identical retry; PG-AUTH-11 requestHash via
+    the same map-canonicalization the gateway recomputes) / RotateToken:241
+    / AllocateAddress:259 / RevokeAddress:305 (owner arm, PG-AUTH-1
+    signature over swarm-pg-v1|METHOD|path|body_sha256|nonce|expiry) /
+    doSigned:317 / gatewayError:366 (403 attestation_invalid ->
+    ErrAttestationRefused; 401 -> the unexported unauthorized sentinel
+    EnsurePushRegistration's re-register fallback keys on).
+  internal/phonecore/pushbinding.go     (new) -- WakeV1MaxAge=5m:35 /
+    NewPairingWakeKey:67 / the sealed push-state container
+    (openPushStore:109, push-state.sealed, WHOLE container sealed under
+    the WAKE tier KEK; fails closed on an unopenable blob) /
+    AdoptPushBinding:180 / DropPushBinding:202 / HonorMachineRevoke:212
+    (durable revoked-address set, re-adopt refused with
+    ErrPushAddressRevoked) / WakeDrops:226 / PushInstallationID:234 /
+    EnsurePushRegistration:245 (register-or-rotate, 401 -> fresh
+    Register, durable id) / AcceptWakeV1:292 (PG-WAKE-13's five steps,
+    step-3-before-4, per-address high-water persisted BEFORE return,
+    every refusal counted) / openWakeV1:346 (canonical AAD of spec 5.3,
+    byte-compatible with remotegw.SealWakeV1 -- proven by the RED tests
+    opening the real producer's seal).
+  internal/phonecore/core.go            -- Core.push field + Resume opens
+    the push store under cfg.WakeSealer (dir=="" stays memory-only).
+
+Go, pairing conveyance (extends the EXISTING transcript; no parallel
+channel; post-SAS leg per ADR-007 B52):
+  internal/remote/pairing/pairing.go -- PushBinding:318 (five fields);
+    DeviceParams.PushBinding:356; MachineOutcome.PushBinding:370;
+    msg4 framed encoding consentFrameMagic:1099 / encodeConsentFrame:1103
+    / decodeConsentFrame:1116 / encode/decodePushBinding:1145+. A
+    binding-less device sends the PRE-R3 msg4 bytes verbatim (P12:
+    nil -> nil), so every legacy pairing test passed unchanged.
+
+Kotlin (dev.swarm.phone.push):
+  PushRegistrationRouting.kt (new) -- Action{REGISTER,ROTATE,REFRESH} +
+    decide(previous,current); null and "" both route REGISTER.
+  WakeReceiptPolicy.kt (new) -- sealed WakeVerdict{Dropped,
+    Accepted(text,contentReady)}; WakeReceiptPolicy.handle renders the
+    EXISTING WakeNotifications channel/constant on Accepted, calls
+    DropSink.dropped() exactly once on Dropped, never throws. NO new UI
+    affordance (hard rule 5): the accepted path is the existing generic
+    notification, the dropped path renders nothing.
+
+Gradle/CI (scope 3):
+  android/build.gradle.kts -- pins com.google.gms.google-services 4.4.4
+    on the root classpath, apply false.
+  android/app/build.gradle.kts -- CONDITIONAL apply keyed on
+    file("google-services.json").exists(), with the gitignored/CI
+    plugin-absent rationale in prose; the stale "deliberately NOT
+    applied" record is retired in the same change (the PB-PUSH-9 block
+    now describes the conditional wiring).
+  android/app/src/main/kotlin/.../PushTokens.kt -- comment-only update of
+    the guard's rationale (behavior unchanged; plugin-absent builds still
+    log-and-degrade per PB-PUSH-5).
+
+Ledgers the fences demanded (their own documented procedure, no
+assertion weakened):
+  mobile/b88_atrestwriters_test.go -- pushbinding.go enumerated with its
+    settled at-rest form (one sealed blob under the wake KEK).
+  internal/verify/phaseb_reachability_test.go -- NewGatewayClient and
+    NewPairingWakeKey ledgered in b94Allowed (facade slice wires them and
+    must delete the rows). Root set NOT widened.
+  android/gate/s18_sec3_logscan_test.go + docs/verification/
+    s18-log-sinks.tsv -- per-call reviewer note for WakeReceiptPolicy's
+    one Log.w, artifact regenerated via -update-logscan.
+  android/dependency-inventory.tsv -- three build-classpath rows for the
+    google-services plugin closure (section 3 below).
+  internal/phonecore/r3a_installation_test.go:147 -- the RED fixture's
+    r3aSigner.PublicKey moved from deprecated elliptic.Marshal to the
+    byte-identical crypto/ecdh Bytes() (staticcheck SA1019); wire
+    contract and every assertion unchanged.
+
+2. GO GATES (all green)
+
+$ go build ./...                                        OK
+$ go vet ./...                                          OK (whole repo)
+$ PATH="$HOME/go/bin:$PATH" golangci-lint run           exit 0
+$ go test -race -count=1 ./internal/remote/pairing/ ./internal/phonecore/
+    ok internal/remote/pairing 18.6s ; ok internal/phonecore 20.8s
+$ go test -race -count=1 ./mobile/...
+    ok mobile 31.3s ; ok mobile/conformance 208.1s
+$ go test -race -count=1 ./android/gate/                ok 50.3s
+$ go test -race -count=1 ./internal/verify/             ok 41.9s
+$ go test -count=1 -run TestB94 ./internal/verify/      ok (ledgered, root
+    set untouched)
+$ go test -count=1 -run 'R3A' ./internal/phonecore/     ok (all 5+9+5 RED
+    tests green against the REAL in-process pushgw.Server)
+$ go test -count=1 -run 'R3A' ./mobile/                 ok (3 conveyance
+    tests green through the real NewMachine+RunDevice handshake)
+$ go test -count=1 -run 'TestR3A' ./android/gate/       ok (3 behavioral
+    REDs green + 2 live fences still green)
+
+3. GRADLE RUNS (discipline verbatim: script files, --no-daemon, AAR
+   mtime printed, XML freshness checked, test-results never deleted)
+
+3.1 Dependency verification metadata (the review gate):
+  /tmp/r3a_green_meta.sh: ./gradlew --no-daemon
+  --write-verification-metadata sha256 help -> BUILD SUCCESSFUL.
+  android/gradle/verification-metadata.xml diff: +26 lines, EXACTLY these
+  coordinates (list for review):
+    com.google.gms:google-services:4.4.4                  (jar + module)
+    com.google.gms.google-services:
+      com.google.gms.google-services.gradle.plugin:4.4.4  (marker pom)
+    com.google.android.gms:strict-version-matcher-plugin:1.2.4 (jar+module)
+    org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.7.10        (pom only; a
+      transitive POM of google-services -- the 1.8.20 jar entry already
+      present is untouched)
+  android/app/gradle.lockfile: UNCHANGED (the plugin classpath is the
+  root's; no :app configuration changed). AAR mtime before/after the
+  metadata run: Aug 15 14:00:59 2026, identical.
+
+3.2 Kotlin unit-test lane (plugin PRESENT locally), script
+  /tmp/r3a_green_gradle.sh sourcing android/toolchain.env
+  (JAVA_HOME=/usr/local/opt/openjdk@21):
+    ./gradlew --no-daemon test --rerun-tasks --no-build-cache
+    == start:  2026-08-16T04:12:48Z   (marker file /tmp/r3a_green_start_marker)
+    BUILD SUCCESSFUL in 8m 24s        63 actionable tasks: 63 executed
+    == gradle exit: 0
+    == aar mtime after: Aug 15 14:00:59 2026 app/libs/swarm.aar
+       (identical to the value printed before the run and to the RED
+       run's; nothing swapped mid-build)
+    == test-result XMLs newer than the recorded start: 292
+  The two RED suites ran and passed in BOTH variants, fresh XMLs:
+    TEST-dev.swarm.phone.push.PushRegistrationRoutingTest.xml
+      tests="4" failures="0" errors="0"  (debug 06:19:01, release 06:21:12
+      local = 04:19/04:21Z)
+    TEST-dev.swarm.phone.push.WakeReceiptPolicyTest.xml
+      tests="4" failures="0" errors="0"  (same freshness)
+
+3.3 CI android job, PLUGIN-ABSENT (the exact invocations ci.yml runs,
+  with android/app/google-services.json moved OUT of the repository tree
+  for the duration and restored after -- never copied anywhere inside
+  it), script /tmp/r3a_ci_shape.sh:
+    == start: 2026-08-16T04:24:45Z
+    == aar mtime before: Aug 15 14:00:59 2026
+    == google-services.json ABSENT: yes
+    ./gradlew --no-daemon lint test          BUILD SUCCESSFUL in 6m 11s
+    ./gradlew --no-daemon :app:assembleDebug BUILD SUCCESSFUL in 1m 50s
+    == google-services.json RESTORED: yes
+    == gradle exit: 0
+    == aar mtime after: Aug 15 14:00:59 2026 (identical)
+    == test-result XMLs newer than the recorded start: 292
+    == end: 2026-08-16T04:32:48Z
+  So the conditional wiring keeps the plugin-absent CI shape green for
+  lint, test AND assembleDebug, and the plugin-present local shape green
+  for the same tasks (3.2).
+
+3.4 Tagged androidgate lane, /tmp/r3a_androidgate.sh:
+    $ go test -tags androidgate -timeout 60m -count=1 ./android/gate/...
+    == start: 2026-08-16T04:33:10Z   (aar mtime before: Aug 15 14:00:59 2026)
+    == end:   2026-08-16T04:44:34Z   (aar mtime after:  Aug 16 06:34:15 local
+       -- the lane REBUILDS the AAR by design; every gradle-evidence run
+       above completed before 04:33Z, so nothing is voided, and the rebuilt
+       AAR now carries this slice's phonecore code)
+    Result: every assertion passed EXCEPT exactly one, and that one is a
+    HOST CONDITION, not a regression:
+      --- FAIL: TestPBTOOL3_ReleaseBuildRefusesWithNoOperatorKeystore
+    The test unsets the four SWARM_RELEASE_* ENVIRONMENT variables and
+    expects `:app:assembleRelease` to refuse -- but this machine is the
+    OPERATOR's: ~/.gradle/gradle.properties carries all four
+    SWARM_RELEASE_* entries and the keystore file exists at the
+    configured path, `findProperty` reads gradle.properties regardless
+    of the env (scrubbedEnv keeps HOME by its own design comment), so
+    the release build legitimately succeeds SIGNED with the operator's
+    real material -- the captured build log shows validateSigningRelease
+    and packageRelease green. Nothing in this slice touches signing or
+    the release path; on CI (no gradle.properties) the refusal holds.
+    Pre-existing on any operator-configured host; recorded here rather
+    than "fixed" by mutating the operator's signing config.
+
+4. WHAT THIS FILE DOES NOT CLAIM
+  - R3's EXIT stays physical-handset only (playbook :745-748): nothing
+    here is evidence of background/Doze/standby/battery-saver delivery,
+    and no fake endpoint or emulator counts.
+  - The facade wiring (mobile.App verbs for registration, allocation,
+    conveyance and WakeV1 receipt; DropSink -> Core.WakeDrops) is the
+    next slice; b94Allowed rows and the WakeReceiptPolicy DropSink note
+    record the obligation.
+  - The degraded-push "foreground updates only" Settings copy is still
+    deferred with the screen-model/first-run-resolver obligation from
+    the RED evidence.
+======================================================================

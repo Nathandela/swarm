@@ -59,9 +59,11 @@ object PushTokens {
      */
     fun requestInitialToken(context: Context): Boolean {
         // GUARDED, and this is not defensive padding. FirebaseMessaging.getInstance() throws
-        // IllegalStateException when no default FirebaseApp exists -- which is the DELIBERATE
-        // state of this module: build.gradle.kts does not apply the google-services plugin and
-        // says so, because there is no Firebase project here (PB-E2E-5, deferred).
+        // IllegalStateException when no default FirebaseApp exists -- the DELIBERATE state of
+        // every build from a checkout without the operator's gitignored google-services.json:
+        // build.gradle.kts applies the google-services plugin only when that config exists
+        // locally (R3, ADR-015), so a plugin-absent build -- every CI build -- has no
+        // FirebaseApp at all.
         //
         // Unguarded, this call sits in Application.onCreate, so the throw is an uncaught
         // exception on the main thread at launch: the app dies before any screen exists, on
@@ -116,7 +118,42 @@ object PushTokens {
             // caught rather than allowed to propagate because both callers are background
             // callbacks with no user present: an exception out of onNewToken, or out of a
             // Firebase listener, takes the process down on an event the user did not cause.
-            return
+        }
+
+        // ADR-015 R3: the SECOND registration this token event owes, and the one that had no
+        // Android caller at all until now.
+        //
+        // WHY BOTH AND NOT ONE. `registerPushToken` above hands the token to the RELAY, which
+        // is the pre-gateway wake path (P12 keeps it until the migration retires it).
+        // `ensurePushRegistration` hands it to the PUSH GATEWAY, which is the path that owns
+        // this phone's durable installation identity and every per-pairing address under it.
+        // They are different servers holding different state; a phone that told only one of
+        // them is unreachable on the other, and the gateway is the side where the silence is
+        // total -- an installation that never registered receives no WakeV1 ever, and nothing
+        // on either end reports it.
+        //
+        // IT RIDES THIS FUNNEL rather than getting its own entry point, for the reason this
+        // file's doc already gives: the initial getToken and a rotation are the same fact by
+        // two routes, and a second copy of "hand it to the phone" is a second place for the
+        // ordering to be got wrong. The Go verb decides which of REGISTER / ROTATE / REFRESH
+        // this event is, from durable state, under a lock that serialises concurrent callers
+        // (PushRegistrationRouting is the same decision table, named for the Kotlin side).
+        //
+        // IT DOES NOT RUN ON THE MAIN THREAD. Both callers are background callbacks --
+        // onNewToken is delivered on a Firebase worker, and the initial fetch's listener
+        // arrives off `onCreate` -- and the verb makes a network round trip bounded at 30s.
+        try {
+            app.ensurePushRegistration(token)
+        } catch (refused: Exception) {
+            // GRACEFUL AND LOUD (PB-PUSH-5). Caught for the same reason as the relay leg
+            // above -- an exception out of a background callback takes the process down --
+            // and LOGGED because the states behind it are all "this phone will not receive
+            // background wakes": no gateway configured for this build, no attestation
+            // provider, or a gateway that refused. Silence here is a phone that looks
+            // healthy and is not.
+            Log.w(TAG, "push gateway registration failed; this phone holds no gateway " +
+                "installation and will not receive background wakes until a later attempt " +
+                "succeeds", refused)
         }
     }
 

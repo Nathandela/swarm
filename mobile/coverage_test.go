@@ -124,6 +124,21 @@ var requiredScreenElements = []string{
 	// here: a platform-wiring verb the Android app calls once at startup, not a control a
 	// person presses, but an entry point all the same and one no other element covers.
 	"platform_trust", // ADR-016 W2: installs the Android RelayTrust chain-trust delegate
+
+	// ADDED BY ADR-015 WAVE R3 ROUND 4, additively and for the same reason S16's block
+	// states. Both are entry points no other element covers, and both are the kind this list
+	// exists to make undeletable -- a verb the shipped app must reach, whose absence is
+	// invisible from Go.
+	//
+	// push.gateway_registration is a DIFFERENT server from push.token_register: that row is
+	// the relay's token, this one is the gateway installation ADR-015 makes every WakeV1
+	// depend on. A phone that told only the relay is silently unreachable by the new path.
+	//
+	// push.drop_diagnosis is not a control a person presses; it is what an operator reads
+	// when the wake path is dead, and its whole content is the distinction between a machine
+	// clock running ahead (every wake correctly refused, forever) and forged wakes.
+	"push.gateway_registration",
+	"push.drop_diagnosis",
 }
 
 type coverageRow struct {

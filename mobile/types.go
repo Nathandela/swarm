@@ -21,11 +21,14 @@ var errNoReceiver = classed(ErrClassInternal,
 // Config assembles an App. StateDir is the phone's private state directory (device keys
 // plus the one durable state blob); RelayURL is the relay to dial; MachineID is the
 // machine endpoint id whose durable coordinates this app resumes ("" adopts whatever the
-// blob describes).
+// blob describes); PushGatewayURL is the ADR-015 push gateway this installation registers
+// with, empty on a build with none configured -- a phone that is then honestly
+// foreground-only rather than one that reports a push path it does not have.
 type Config struct {
-	StateDir  string
-	RelayURL  string
-	MachineID string
+	StateDir       string
+	RelayURL       string
+	MachineID      string
+	PushGatewayURL string
 }
 
 // EventListener receives asynchronous events from the Go core. OnEvent runs on a Go

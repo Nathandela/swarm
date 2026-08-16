@@ -132,6 +132,23 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Remove":        "as NewSingleMachineAdapter.",
 	"github.com/Nathandela/swarm/internal/phonecore.SingleMachineManager.Select":        "as NewSingleMachineAdapter.",
 
+	// ---- internal/phonecore: the ADR-015 R3 push seams ------------------------------------
+	// NewGatewayClient's row is GONE because the symbol is now REACHABLE: mobile's
+	// App.EnsurePushRegistration builds the client over the durable installation key
+	// (mobile/pushgateway.go), and Android's PushTokens.register calls that verb from the one
+	// funnel both token moments already reach. The fence was bidirectional and this is the
+	// direction it was pointing.
+	//
+	// NewPairingWakeKey stays, and its reason is now a NAMED PARKED GATE rather than "a
+	// follow-up": minting the key is the first step of the pairing conveyance, and conveying
+	// the binding in msg4 is blocked on a machine-side capability signal that does not exist
+	// (pairing.DeviceParams.PushBinding's MIXED-VERSION OBLIGATION -- without it, a pre-R3
+	// machine stores the whole framed blob as a consent signature and the pairing fails much
+	// later at relay authorization with nothing pointing here). Wiring the mint without the
+	// conveyance would allocate a gateway address every pairing and convey none of them,
+	// which is PG-ALLOC-3 orphans by the pairing.
+	"github.com/Nathandela/swarm/internal/phonecore.NewPairingWakeKey": "ADR-015 P7; the pairing conveyance that mints it is gated on the msg2 machine-capability signal (agents-tracker-hggx.2.1). The slice that adds that signal MUST delete this row.",
+
 	// ---- internal/remotegw: openers and test seams ---------------------------------------
 	"github.com/Nathandela/swarm/internal/remotegw.OpenCommandEnvelope":      "inverse of the seal, used by the harnesses that assert what the gateway emitted.",
 	"github.com/Nathandela/swarm/internal/remotegw.OpenInputFrame":           "as OpenCommandEnvelope.",

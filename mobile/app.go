@@ -78,6 +78,17 @@ type App struct {
 	core *phonecore.Core
 
 	relayURL string
+	// pushGatewayURL is the ADR-015 push gateway this phone registers its installation
+	// with, empty on a build with none configured (pushgateway.go). It crosses on Config
+	// for relayURL's exact reason: the phone core's durable state has no field for either,
+	// and the Android side supplies both at construction.
+	pushGatewayURL string
+	// pushToken is the NEWEST provider token any caller has handed
+	// EnsurePushRegistration, and pushClient is the gateway client built over the durable
+	// installation key. Both are guarded by mu; see pushgateway.go for why the token is
+	// stored at arrival and read at act time.
+	pushToken  string
+	pushClient *phonecore.GatewayClient
 	// stateDir is the phone's private state directory. The core owns phone-state.json and
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).
@@ -195,17 +206,18 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 				"rest is sealed under the Android Keystore, and there is no cleartext fallback"))
 	}
 	a := &App{
-		relayURL:    cfg.RelayURL,
-		stateDir:    cfg.StateDir,
-		events:      newDispatcher(),
-		coalesce:    phonecore.NewInputCoalescer(time.Now),
-		presence:    newPresenceCache(time.Now),
-		connState:   "offline",
-		subscribed:  true,
-		needs:       map[string]string{},
-		inflight:    map[string]bool{},
-		resyncAt:    map[string][]time.Time{},
-		resyncAsked: map[string]bool{},
+		relayURL:       cfg.RelayURL,
+		pushGatewayURL: cfg.PushGatewayURL,
+		stateDir:       cfg.StateDir,
+		events:         newDispatcher(),
+		coalesce:       phonecore.NewInputCoalescer(time.Now),
+		presence:       newPresenceCache(time.Now),
+		connState:      "offline",
+		subscribed:     true,
+		needs:          map[string]string{},
+		inflight:       map[string]bool{},
+		resyncAt:       map[string][]time.Time{},
+		resyncAsked:    map[string]bool{},
 	}
 	core, err := phonecore.Resume(phonecore.Config{
 		Dir:     cfg.StateDir,
