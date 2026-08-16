@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -49,6 +50,19 @@ type Config struct {
 	TranscriptCfg transcript.Config
 	GraceTimeout  time.Duration // TERM->KILL grace on the signal op
 	Metrics       *Metrics      // optional, test-observable counters
+
+	// HookSocketPath is the per-session hook UDS (playbook §6.1): a second listener,
+	// independent of SocketPath's PTY/control plane. Empty disables it entirely --
+	// no listener is bound and no HookSpoolFile is ever created, so an old-shim
+	// launch config that never sets this field runs exactly as it does today.
+	HookSocketPath string
+	// HookSpoolMaxBytes bounds the hook spool; 0 means hookSpoolDefaultMaxBytes.
+	HookSpoolMaxBytes int
+	// HookToken, when non-empty, gates the hook socket's DRAIN verb (a connection
+	// must present the same value in HookDrainRequest.Token). "" disables the check
+	// entirely -- the compat default, matching HookSocketPath's own "unset means
+	// disabled" convention. POST needs no token of its own; see hooksocket.go.
+	HookToken string
 }
 
 // Metrics holds test-observable counters. All fields are safe for concurrent
@@ -140,6 +154,32 @@ func Run(cfg Config) (agentExit int, err error) {
 		return 0, fmt.Errorf("shim: start agent: %w", err)
 	}
 
+	// The hook socket (playbook §6.1): a second, independent listener over its own
+	// durable spool. Bound only after the agent is spawned -- unlike the control
+	// socket, nothing needs to attach to it before the agent can produce its first
+	// hook event, and binding it here keeps this path off the PTY-spawn critical
+	// window entirely (ADR-013's sacred rule: the PTY plane is untouched by any of
+	// this). HookSocketPath=="" disables it entirely -- no listener, no spool file
+	// (requirement 7's compat). A setup failure here (disk full, an unbindable
+	// path) degrades to no hook socket for this session rather than aborting the
+	// run: playbook 6.1's "disk-full ... lets the agent continue locally" applies
+	// exactly as much to spool OPEN as to a later spool WRITE -- the PTY plane is
+	// never at this channel's mercy either way.
+	var hookSrv *hookServer
+	if cfg.HookSocketPath != "" {
+		// A dedicated local error, deliberately never assigned to the named return
+		// `err` above: every path below this point sets Run's own return values
+		// explicitly, so this could never actually leak -- but using Run's own named
+		// `err` as scratch space here was a latent trap for the next edit that adds
+		// an early `return` relying on it.
+		var hsErr error
+		hookSrv, hsErr = newSessionHookServer(cfg)
+		if hsErr != nil {
+			log.Printf("shim: hook socket unavailable for this session: %v", hsErr)
+			hookSrv = nil
+		}
+	}
+
 	srv := newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
 	// Route emulator query replies (DSR/DA/...) back into the PTY master so the
 	// agent receives them on stdin. A bounded async pump does the actual writes,
@@ -170,6 +210,14 @@ func Run(cfg Config) (agentExit int, err error) {
 		defer close(acceptDone)
 		srv.acceptLoop()
 	}()
+	var hookAcceptDone chan struct{}
+	if hookSrv != nil {
+		hookAcceptDone = make(chan struct{})
+		go func() {
+			defer close(hookAcceptDone)
+			hookSrv.acceptLoop()
+		}()
+	}
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
@@ -230,6 +278,10 @@ func Run(cfg Config) (agentExit int, err error) {
 	// tear the socket down.
 	srv.shutdown(exitReport(exitCode, exitSignal))
 	<-acceptDone
+	if hookSrv != nil {
+		hookSrv.shutdown()
+		<-hookAcceptDone
+	}
 
 	return exitCode, persistErr
 }

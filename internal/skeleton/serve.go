@@ -142,6 +142,22 @@ type Daemon struct {
 	interacted map[string]status.Interaction
 	adapterFor func(agentType string) (adapter.Adapter, bool)
 
+	// hookSeq is ingestHookBytes's own idempotency guard (hookdrain.go, R6 review
+	// fix-pack BLOCKER 1): the bounded, durable SET of hook callback Sequences fully
+	// ingested per session -- a membership test, not a high-water gate, because a hook
+	// sequence carries no causal order (internal/engine, agents-tracker-707). Rides
+	// itemMu like every other per-session ingest-side map above.
+	hookSeq map[string]*hookSeen
+
+	// capStore is the daemon-authored per-session capability record store (ADR-017 T2 /
+	// playbook §6.2; capability.go).
+	capStore sessionCapabilityStore
+
+	// drains holds the per-session hook-spool drain loops (hookdrainloop.go): the
+	// production caller of HookDrainer, started from registerSession and stopped by
+	// endSession/Close.
+	drains hookDrainState
+
 	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
 	// read a session's snapshot is OBSERVABLE rather than a silent heuristic death
 	// (R1.2.6 — the pre-1.2 oversized-snapshot bug failed exactly here). tapLastLog
@@ -173,6 +189,10 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.sampleFn = d.sampleGrid // the per-session grid sample (overridable in tests)
 	d.initInteractions()      // the ADR-010 §7 append floor + the adapter resolver (interaction.go)
+	// The capability store's durable home: one 0600 record per session dir, so an
+	// ADR-017 T2 rule 2 degrade outlives the incarnation that authored it
+	// (capability.go). Set before anything can register a record.
+	d.capStore.dir = cfg.StateDir
 
 	// Build the status engine BEFORE opening the core: daemon.Open runs reconcile
 	// synchronously and, for every reconnected running session, fires OnSessionStart
@@ -337,6 +357,11 @@ func Serve(cfg Config) (*Daemon, error) {
 	go func() { defer d.tapWG.Done(); d.tapGrids(ctx) }() // shim->engine output tap (seam b)
 	go d.releaseInteractions(ctx)                         // ADR-010 §7's append floor clock (interaction.go)
 
+	// Every session reconcile reconnected got its engine registration during
+	// daemon.Open, before d.core existed to read its hook channel from; start their
+	// drain loops now (hookdrainloop.go).
+	d.startHookDrainsForRunning()
+
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
 	return d, nil
@@ -365,6 +390,11 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// the staleness guard can downgrade a now-idle session. Folding the status into
 	// RegisterSession closes the register->seed gap an early hook could fall into.
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+	// The structured-capture channel's daemon half (playbook §6.1, hookdrainloop.go):
+	// one drain loop per session with a shim-owned hook spool. Started here rather than
+	// only at launch so a session whose shim OUTLIVED this daemon -- the case the whole
+	// spool exists for -- is drained from the moment reconcile adopts it.
+	d.startHookDrain(m.ID)
 }
 
 // registryAdapter is the production adapter resolver behind d.adapterFor: the ONE table
@@ -402,6 +432,7 @@ func (d *Daemon) endSession(id string) {
 	// never nested (no deadlock). Uses the Final variant (not captureConversationID):
 	// this call always sees an already-terminal status, so the tap path's
 	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
+	d.stopHookDrain(id) // the session's spool has no more producer (hookdrainloop.go)
 	d.captureConversationIDFinal(id)
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)
@@ -745,18 +776,56 @@ func (d *Daemon) Core() *daemon.Daemon { return d.core }
 func (d *Daemon) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closing)
-		d.cancel()         // stops tapGrids + engine.Run: no NEW grid samples/captures start
-		d.tapWG.Wait()     // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
-		d.sampleWG.Wait()  // drain in-flight grid samples (bounded by shim timeouts)
-		d.captureWG.Wait() // drain in-flight conversation-id captures
-		_ = d.core.Close() // stops accepting new connections; releases the lock
-		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
+		d.cancel()                   // stops tapGrids + engine.Run: no NEW grid samples/captures start
+		d.tapWG.Wait()               // tapGrids returned: no more sampleWG/captureWG.Add can race the Wait (F7)
+		d.sampleWG.Wait()            // drain in-flight grid samples (bounded by shim timeouts)
+		d.captureWG.Wait()           // drain in-flight conversation-id captures
+		d.stopHookDrains()           // join every hook-spool drain loop BEFORE the core it applies through goes away
+		d.drainPendingInteractions() // flush anything the append floor is still holding (below)
+		_ = d.core.Close()           // stops accepting new connections; releases the lock
+		_ = d.srv.Close()            // disconnects clients; drains the per-connection loops
 		if d.remoteSrv != nil {
 			_ = d.remoteSrv.Close() // tears down the remote-tier listener + its connections
 		}
 		d.api.close() // stops the roster poller
 	})
 	return nil
+}
+
+// drainPendingInteractionsTimeout bounds drainPendingInteractions so a wedged Append
+// (e.g. a stalled disk) cannot hang Close forever.
+const drainPendingInteractionsTimeout = 5 * time.Second
+
+// drainPendingInteractions flushes every item the append floor (ADR-010 §7,
+// interaction.go) is still holding when the daemon closes. releaseInteractions' own
+// ticker is what normally drives this, but it is cancelled (with the rest of Close's
+// ctx-scoped work) just above, and Flush releases at most one item per call, spaced
+// by the floor's own window -- so without this, a session's already-ingested item
+// offered less than one window before Close would be silently lost. Playbook §6.1's
+// "daemon unavailability neither fails a provider hook nor loses an accepted item"
+// applies exactly as much to a graceful shutdown as to a crash, and
+// TestHookDrainer_RestartMidDrain_ResumesExactlyOnceWithNoDuplicateOrLoss
+// (r6_hookdrain_test.go) pins exactly this: a daemon incarnation that Closes with
+// items still in flight must not lose them out from under the NEXT incarnation
+// reading the same on-disk journal.
+//
+// A deadline that passes with items still pending is logged (not silently dropped):
+// an operator can see a shutdown that genuinely could not flush everything in time,
+// rather than the loss being indistinguishable from a clean exit.
+func (d *Daemon) drainPendingInteractions() {
+	if d.items == nil {
+		return
+	}
+	deadline := time.Now().Add(drainPendingInteractionsTimeout)
+	for d.items.Pending() > 0 && time.Now().Before(deadline) {
+		if err := d.items.Flush(); err != nil {
+			log.Printf("skeleton: flush pending interaction item at close: %v", err)
+		}
+		time.Sleep(remotegw.DefaultAppendWindow)
+	}
+	if n := d.items.Pending(); n > 0 {
+		log.Printf("skeleton: close deadline reached with %d pending interaction item(s) still unflushed", n)
+	}
 }
 
 // reconcilePairedDevices clears, at startup (single-threaded, before close(d.ready), so no pairing

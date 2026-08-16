@@ -1,0 +1,401 @@
+================================================================================
+R6 REVIEW FIX-PACK, ROUND 1 -- FAILING-FIRST (RED) EVIDENCE
+================================================================================
+
+GG-5's evidenced failing-first run for every test ADDED or STRENGTHENED in response
+to the rejecting reviewer's punch list. Captured against the delivered R6 slice
+BEFORE any of its fixes were written.
+
+Captured : 2026-08-15 (UTC)
+HEAD     : 1f9db7c ("complete the webpki closure: the four files its commit left
+           behind") -- the R6 slice itself is uncommitted in the working tree
+Go       : go1.25 (darwin/arm64)
+Gates    : PATH="$HOME/go/bin:$PATH"
+
+SUPERSESSION NOTE -- docs/verification/r6-red/spool-red.txt
+----------------------------------------------------------
+spool-red.txt is the RED evidence for the ORIGINAL R6 slice and remains valid for
+the seven test files it enumerates. It is now PARTIALLY SUPERSEDED, on two counts,
+both raised by the reviewer as LOW 11:
+
+  1. Its file list is INACCURATE as delivered. internal/shim/r6_gapfix_test.go and
+     internal/skeleton/r6_gapfix_test.go were written AFTER that slice went green,
+     as regression pins for probe-confirmed defects (their own headers say so), and
+     spool-red.txt contains no occurrence of "gapfix". Their failing-first runs are
+     therefore NOT covered there. The subset of them this fix-pack strengthened is
+     covered HERE (sections B and C below); the remainder stay honestly labelled as
+     post-green regression pins.
+  2. TestHookSpool_AcceptedNotYetAckedWindowIsAlreadyDurable, which spool-red.txt
+     covers, has been RENAMED (not weakened) to
+     TestHookSpool_AcceptedNotYetAckedWindow_RecordIsAlreadyVisibleToASecondHandle.
+     Section A.2 below is the probe proving why: the old name overclaimed, and the
+     property it named is now pinned by a NEW test alongside it.
+
+The pre-authorized removal spool-red.txt records at its lines 209-211
+(TestEmitStructuredGap_IsAStubThatAppendsNothing) is untouched by this round and
+was already found clean by the reviewer.
+
+STAGING NOTE
+------------
+Three of the packages below RED as compile failures first (section 0): the tests
+name production seams that do not exist yet, which is this slice's established
+convention. To get a BEHAVIOURAL failing-first run for every finding -- rather than
+letting a compile error mask the defect the test is actually about -- the seams were
+then added as inert stubs ONLY (a var indirection for the fsync; the launch-config
+fields left unwritten; SessionHookChannel reading them). No behaviour was fixed
+before the runs in sections A-D were captured.
+
+================================================================================
+0. COMPILE-FAIL RED (the named seams do not exist)
+================================================================================
+
+$ go vet ./internal/shim/
+# github.com/Nathandela/swarm/internal/shim
+# [github.com/Nathandela/swarm/internal/shim]
+vet: internal/shim/r6_fixpack_test.go:34:10: undefined: hookSpoolSync
+
+$ go vet ./internal/skeleton/
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r6_fixpack_test.go:177:22: sk.Core().SessionHookChannel undefined (type *daemon.Daemon has no field or method SessionHookChannel)
+
+$ go vet ./internal/daemon/
+# github.com/Nathandela/swarm/internal/daemon
+# [github.com/Nathandela/swarm/internal/daemon]
+vet: internal/daemon/r6_hookchannel_test.go:33:119: too many arguments in call to injectHookEnv
+	have ([]string, string, string, string, string, string, nil)
+	want ([]string, string, string, string, string, []string)
+
+================================================================================
+A. internal/shim
+================================================================================
+
+A.1 MEDIUM 7 -- ReadFrom hands back records on the FAR side of the gap
+---------------------------------------------------------------------
+NEW: TestHookSpool_ReadFromNeverReturnsARecordAtOrPastTheGapBoundary
+     (internal/shim/r6_fixpack_test.go)
+
+$ go test -count=1 -run TestHookSpool_ReadFromNeverReturnsARecordAtOrPastTheGapBoundary ./internal/shim/
+--- FAIL: TestHookSpool_ReadFromNeverReturnsARecordAtOrPastTheGapBoundary (0.07s)
+    r6_fixpack_test.go:148: ReadFrom returned record seq=4 at/past the reported boundary 2 -- ADR-017 forbids handing back the far side of a hole as if it were applicable (recs=[{Seq:4 Body:[123 34 110 34 58 48 125]} {Seq:5 Body:[123 34 110 34 58 48 125]}])
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	1.715s
+
+A.2 MEDIUM 5 -- fsync-before-ack is not test-enforced (the reviewer's own probe,
+    reproduced)
+-------------------------------------------------------------------------------
+NEW: TestHookSpool_AppendFsyncsExactlyOncePerAcceptedRecord
+     TestHookSpool_ARefusedAppendNeverClaimsADurableCommit
+     TestHookSocket_AckIsNeverWrittenBeforeTheAppendFsync
+     (internal/shim/r6_fixpack_test.go)
+
+The defect is UNOBSERVABILITY, not ordering, so the failing-first run is a mutation:
+the fsync in HookSpool.Append is deleted, and the existing suite is asked whether it
+notices. It does not.
+
+    --- TEMPORARY MUTATION applied to internal/shim/hookspool.go (Append) ---
+    -	if err := hookSpoolSync(s.f); err != nil {
+    -		return 0, fmt.Errorf("shim: fsync hook spool: %w", err)
+    -	}
+    +	// TEMPORARY MUTATION (reviewer's MEDIUM 5 probe): fsync deleted.
+
+$ go test -count=1 -run 'TestHookSpool_AcceptedNotYetAckedWindow_RecordIsAlreadyVisibleToASecondHandle|TestHookSocket_PostIsAckedAfterDurableAccept|TestHookSpool_SurvivesReopenAfterAppend_TheCoreR6Guarantee' ./internal/shim/
+ok  	github.com/Nathandela/swarm/internal/shim	1.421s      <-- THE DEFECT: all three
+                                                                 pass with no fsync at
+                                                                 all (a second handle
+                                                                 reads the page cache)
+
+$ go test -count=1 -run 'TestHookSpool_AppendFsyncsExactlyOncePerAcceptedRecord|TestHookSocket_AckIsNeverWrittenBeforeTheAppendFsync' ./internal/shim/
+--- FAIL: TestHookSpool_AppendFsyncsExactlyOncePerAcceptedRecord (0.01s)
+    r6_fixpack_test.go:65: Append fsynced 0 time(s) for 3 accepted records, want exactly 3 -- a durably ACCEPTED record must be committed before Append returns (playbook 6.1)
+--- FAIL: TestHookSocket_AckIsNeverWrittenBeforeTheAppendFsync (0.03s)
+    r6_fixpack_test.go:105: the shim acked a post after 0 fsync(s): the ack is the client's only durability signal and must never precede the commit
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	1.166s
+
+    --- MUTATION REVERTED ---
+
+A.3 LOW 10 -- partial permission coverage
+-----------------------------------------
+NEW: TestHookSpool_FoldFloorSidecarIsOwnerOnly0600
+     TestHookSocket_SocketFileIsOwnerOnly0600
+     (internal/shim/r6_fixpack_test.go)
+
+These two PASS on first run: hooks.spool.floor lands 0600 via os.CreateTemp and the
+hook socket is chmod'ed 0600 by listen(). They are recorded here honestly as
+CHARACTERIZATION pins with no failing-first run of their own -- the reviewer's own
+framing ("all happen to land 0600 ... the regression risk is real if anyone swaps
+the writer"). No production change accompanies them.
+
+================================================================================
+B. internal/skeleton -- the two BLOCKERS
+================================================================================
+
+B.1 BLOCKER 1 + 1b -- structured_chat RESURRECTS across a daemon restart
+------------------------------------------------------------------------
+STRENGTHENED: TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded
+              (was ...ReportsStructuredGapOnlyOnce; internal/skeleton/r6_gapfix_test.go)
+              -- it built the exact restart+reconcile scenario and then asserted only
+              the structured_gap COUNT, never reading the capability record back.
+STRENGTHENED: TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay
+              (internal/skeleton/r6_hookdrain_test.go) -- its one-wayness claim named
+              "a daemon restart's reconcile" but re-registered on the SAME live object.
+
+$ go test -count=1 -run 'TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded|TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay' ./internal/skeleton/
+--- FAIL: TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded (0.54s)
+    r6_gapfix_test.go:335: StructuredChat = true on a FRESH daemon incarnation whose session carries a still-proven, still-present spool gap -- ADR-017 T2 rule 2 ('it cannot upgrade a fallback session in place'), inverted: the degrade must be DURABLE, not die with the process that authored it
+--- FAIL: TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay (0.53s)
+    r6_hookdrain_test.go:556: StructuredChat = true after a daemon RESTART re-registered the launch-time record — the degrade must be durable, not die with the incarnation that authored it (ADR-017 T2 rule 2)
+FAIL
+
+B.2 BLOCKER 2 + 2b -- the drain fold is not idempotent under daemon crash
+-------------------------------------------------------------------------
+STRENGTHENED: TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem
+              (internal/skeleton/r6_gapfix_test.go) -- it modelled the crash by
+              rewinding the cursor file but kept the SAME *Daemon and SAME
+              HookDrainer alive across both drains, exercising precisely the
+              in-memory guard the crash it is named for destroys. The second drain
+              now runs against a genuinely NEW Daemon over the same state dir.
+
+$ go test -count=1 -run TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem ./internal/skeleton/
+--- FAIL: TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem (0.18s)
+    r6_gapfix_test.go:147: redelivery DrainOnce against a FRESH daemon applied=1 skipped=0, want applied=0 skipped=1 (a duplicate, rejected -- not a second apply); the per-session ingest high-water mark must be durable, not an in-memory map the crash takes with it
+FAIL
+
+B.3 MEDIUM 8 -- a second, different boundary is never emitted
+-------------------------------------------------------------
+NEW: TestHookDrainer_ASecondDifferentBoundaryIsStillReported
+     (internal/skeleton/r6_fixpack_test.go)
+
+$ go test -count=1 -run TestHookDrainer_ASecondDifferentBoundaryIsStillReported ./internal/skeleton/
+--- FAIL: TestHookDrainer_ASecondDifferentBoundaryIsStillReported (2.33s)
+    r6_fixpack_test.go:107: journal holds 1 structured_gap record(s) after TWO genuinely different proven boundaries, want 2 -- a process-local first-report latch swallows every boundary after the first
+FAIL
+
+B.4 LOW 10 -- fold cursor / gap sidecar permissions
+---------------------------------------------------
+NEW: TestPersistHookCursor_IsOwnerOnly0600 (internal/skeleton/r6_fixpack_test.go).
+PASSES on first run, for the same os.CreateTemp reason as A.3; recorded honestly as
+a characterization pin, not a failing-first one.
+
+================================================================================
+C. HIGH 3 + HIGH 4 -- the channel is inert in production
+================================================================================
+
+NEW: internal/daemon/r6_hookchannel_test.go
+     TestInjectHookEnv_CarriesTheShimHookSocket
+     TestNewHookDrainToken_RandomPerSession
+     TestLaunch_MintsTheHookChannelAndPersistsItWithTheLaunchConfig
+     TestSessionHookChannel_AbsentForAPreR6LaunchConfig
+NEW: internal/skeleton/r6_fixpack_test.go
+     TestLaunchedSession_HookPostedToTheShimSocketReachesTheDaemon
+     TestLaunchedSession_DrainWithoutTheMintedTokenIsRefused
+
+$ go test -count=1 -run 'TestInjectHookEnv_CarriesTheShimHookSocket|TestLaunch_MintsTheHookChannelAndPersistsItWithTheLaunchConfig|TestSessionHookChannel_AbsentForAPreR6LaunchConfig|TestNewHookDrainToken_RandomPerSession' ./internal/daemon/
+--- FAIL: TestLaunch_MintsTheHookChannelAndPersistsItWithTheLaunchConfig (1.10s)
+    r6_hookchannel_test.go:64: SessionHookChannel(q2776k3jplcop7q2) not found after a launch
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	3.534s
+
+$ go test -count=1 -run TestLaunchedSession_ ./internal/skeleton/
+--- FAIL: TestLaunchedSession_HookPostedToTheShimSocketReachesTheDaemon (2.95s)
+    r6_fixpack_test.go:179: SessionHookChannel(sixcwfnxmo5xv4vf) = ({SocketPath: DrainToken: CursorPath:}, false); a launched session must carry a shim-owned hook socket
+--- FAIL: TestLaunchedSession_DrainWithoutTheMintedTokenIsRefused (0.16s)
+    r6_fixpack_test.go:225: SessionHookChannel(kcru4n3zivuyiqbg) = ({SocketPath: DrainToken: CursorPath:}, false)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.046s
+
+(TestInjectHookEnv_CarriesTheShimHookSocket and TestNewHookDrainToken_RandomPerSession
+pass at this point only because the staging step above had already added the inert
+parameter and the token minter; their true failing-first state is the compile error
+in section 0, which names both.)
+
+================================================================================
+D. LOW 9 -- "honest about which path served" is API-only
+================================================================================
+
+NEW: TestRunHook_FallbackDespiteAConfiguredShimSocketIsReported
+     TestRunHook_ShimServedPathStaysQuiet
+     (cmd/swarm/r6_hookwiring_test.go)
+
+$ go test -run 'TestRunHook_(FallbackDespiteAConfiguredShimSocketIsReported|ShimServedPathStaysQuiet)' -count=1 ./cmd/swarm/
+--- FAIL: TestRunHook_FallbackDespiteAConfiguredShimSocketIsReported (0.01s)
+    r6_hookwiring_test.go:255: runHook said nothing about which path served (stderr=""); a post that fell back to the daemon despite a configured shim socket is exactly the partial-upgrade state requirement 7 asks to be honest about
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	1.206s
+
+================================================================================
+E. FINDINGS WITH NO FAILING-FIRST RUN, STATED HONESTLY
+================================================================================
+
+MEDIUM 6 (the spool file's CREATION is not durable: MkdirAll + O_CREATE with no
+fsyncDir, so a power loss after the very first acked post can lose the file's
+directory entry entirely). There is no portable way to assert a directory fsync from
+a Go test -- an unsynced directory entry is indistinguishable from a synced one until
+the machine actually loses power. The fix is by inspection and by symmetry with
+Compact, which already fsyncs the directory after its rename. No test claims to
+prove it, and none is written that would pass either way.
+
+HIGH 4's documentation half is likewise not a test: the reviewer's point is that
+0600/0700 filesystem permissions are the PRIMARY control on this socket and the
+DRAIN token is defence-in-depth, and that the comments must not present the token as
+the mitigation. That correction lands in internal/shim/hooksocket.go and
+internal/shim/hookspool.go prose. What IS tested is that the token now exists and is
+enforced end to end (section C).
+
+
+================================================================================
+R6 REVIEW FIX-PACK, ROUND 2 -- FAILING-FIRST (RED) EVIDENCE
+================================================================================
+
+GG-5's evidenced failing-first run for every test ADDED in response to the SECOND
+rejecting review (the one whose four findings -- BLOCKER 1, BLOCKER 2, MEDIUM 3,
+LOW 4 -- were each proven by a throwaway probe against the round-1 fix-pack).
+Captured BEFORE any round-2 fix was written.
+
+Captured : 2026-08-16 (UTC)
+HEAD     : 1f9db7c -- the R6 slice and both fix-packs are uncommitted in the tree
+Go       : go1.25 (darwin/arm64)
+New tests: internal/skeleton/r6_round2_test.go   (8 tests)
+           internal/shim/r6_round2_test.go       (3 tests)
+
+STAGING NOTE
+------------
+Three of the round-2 tests exercise API that did not exist at all
+(shim.ReadHookSpoolFile, HookDrainer.SetSpoolPath, HookDrainer.DrainFromSpoolFile),
+so their first run was a COMPILE failure:
+
+  $ go vet ./internal/skeleton/ ./internal/shim/
+  # github.com/Nathandela/swarm/internal/shim
+  vet: internal/shim/r6_round2_test.go:33:30: undefined: ReadHookSpoolFile
+  # github.com/Nathandela/swarm/internal/skeleton
+  vet: internal/skeleton/r6_round2_test.go:182:5: hd.SetSpoolPath undefined
+       (type *HookDrainer has no field or method SetSpoolPath)
+
+A compile error is a weak RED -- it proves the symbol is absent, not that the
+BEHAVIOR is. So the three signatures were introduced as explicit no-op stubs
+(commented "RED-PHASE STUB ... replaced once the failing run is evidenced") and the
+suites re-run, so that EVERY round-2 test below fails on its own assertion. The
+stubs were replaced by the real implementations immediately afterwards; nothing in
+the delivered tree contains one.
+
+--------------------------------------------------------------------------------
+A. internal/shim -- R2-BLOCKER 2, the socket-independent spool reader
+--------------------------------------------------------------------------------
+
+$ go test -count=1 -run 'TestReadHookSpoolFile' ./internal/shim/
+
+--- FAIL: TestReadHookSpoolFile_ReadsAckedRecordsWithNoLiveShim (0.04s)
+    r6_round2_test.go:41: ReadHookSpoolFile(after=1) = [], want the records at seq 2 and 3
+--- FAIL: TestReadHookSpoolFile_ReportsATornTailAndNeverReturnsPastIt (0.02s)
+    r6_round2_test.go:80: ReadHookSpoolFile over a torn tail: gap=false boundary=0, want gap at 2
+--- FAIL: TestReadHookSpoolFile_MissingFileIsAnErrorNotAnEmptyRead (0.00s)
+    r6_round2_test.go:91: ReadHookSpoolFile over a nonexistent spool returned nil error; a missing file must not read as a clean, empty spool
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	1.633s
+
+--------------------------------------------------------------------------------
+B. internal/skeleton -- all four round-2 findings
+--------------------------------------------------------------------------------
+
+$ go test -count=1 -timeout 480s -run '<the eight round-2 tests>' ./internal/skeleton/
+
+--- FAIL: TestHookDrainer_TwoDistinctEventsSpooledOutOfSequenceOrder_BothShapeJournalItems (2.01s)
+    r6_round2_test.go:92: DrainOnce applied=1 skipped=1 over two DISTINCT acked
+    events whose sequences arrived out of order, want applied=2 skipped=0 -- a
+    sequence carries no causal order (internal/engine, agents-tracker-707), so a
+    per-session monotone high-water gate silently drops the lower-sequenced sibling
+--- FAIL: TestServeHook_LowerSequencedSiblingAfterAStop_IsStillIngestedOnTheLivePath (10.07s)
+    r6_round2_test.go:125: journal holds 1 interaction item(s) for s-r2-b after 10s, want >= 2
+--- FAIL: TestHookDrainer_AppliesAckedRecordsFromTheSpoolFileAfterTheShimIsGone (0.08s)
+    r6_round2_test.go:192: DrainFromSpoolFile applied=0 skipped=0, want applied=1
+    skipped=0 -- a durably acked record must be recoverable straight from
+    hooks.spool once its shim is gone
+--- FAIL: TestStopHookDrain_FinalDrainRecoversAnItemAckedInTheLastInterval (10.12s)
+    r6_round2_test.go:250: journal holds 0 interaction item(s) for s-r2-d after 10s, want >= 1
+--- FAIL: TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker (0.02s)
+    r6_round2_test.go:298: StructuredChat = true for a session carrying the durable
+    structured-degraded marker -- ADR-017 T2 rule 2 inverted on the READ path: the
+    marker is the proof, and nothing may read past it
+--- FAIL: TestIngestHookBytes_UnauthenticatedSessionIDNeverReachesTheFilesystemOrTheSeenSet (0.02s)
+    r6_round2_test.go:330: hookSeqPath("../../../etc/passwd") = "/etc/passwd/hook.applied",
+    want "" -- an unauthenticated session id must never reach filepath.Join
+--- FAIL: TestHookSeenSet_IsAMembershipTestNotAHighWaterGate_AndSurvivesARestart (0.03s)
+    r6_round2_test.go:373: seq 3 reported as already ingested merely because 7 was --
+    the guard must be a MEMBERSHIP test, not a monotone high-water gate: a sequence
+    carries no causal order
+--- FAIL: TestHookSeenSet_StaysBounded (164.77s)
+    r6_round2_test.go:429: an odd sequence just below the most recent mark reads as
+    ingested; eviction must not swallow the live window
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	188.150s
+
+NOTE on the traversal line above: the reviewer's LOW 4 was stated as a POSSIBLE
+arbitrary read. The failing run resolves it concretely -- an unauthenticated POST
+carrying session_id="../../../etc/passwd" reached os.ReadFile("/etc/passwd/hook.applied"),
+because filepath.Join cleans "..". The fix validates the id as a single path segment
+before it is ever joined, and never caches a lookup miss, so an id that authenticates
+nowhere takes neither a file read nor a map slot.
+
+NOTE on TestHookSeenSet_StaysBounded's 164s RED runtime: the failing run marked
+10,000 sequences, each with its own fsync'd atomic write. The delivered test marks
+400 (bound = 256 above-floor entries), which is enough for eviction to engage several
+times over and runs in a few seconds.
+
+--------------------------------------------------------------------------------
+C. FINDINGS WITH NO FAILING-FIRST RUN, STATED HONESTLY
+--------------------------------------------------------------------------------
+
+The bounded seen-set's OVERFLOW behavior (the floor advancing to the lowest retained
+above-floor sequence, which assumes everything below it was seen) is asserted only in
+the direction that matters -- the live window is never swallowed. The residual it
+admits is documented at hookSeen.add rather than tested: past 256 sequences ingested
+with a permanent hole below every one of them, the structure degrades back to the
+round-1 high-water assumption. No test pins that degraded corner, because pinning it
+would be pinning the very behavior the round-2 fix exists to remove.
+
+The residual loss window that survives R2-BLOCKER 2 is likewise documented, not
+tested: if the DAEMON dies while a session is running, and the session then ends
+while the daemon is still down, the restarted daemon finds a retired session that its
+engine will not register, so nothing authenticates a replay of that spool. That is a
+structural limit of the ack contract (a callback must authenticate against a live
+engine session), not a hole the final drain could close, and it needs both failures
+at once rather than the every-time loss the reviewer proved 5/5.
+
+
+--------------------------------------------------------------------------------
+D. internal/skeleton -- R2-BLOCKER 2 through the PRODUCTION launch path
+--------------------------------------------------------------------------------
+
+Added after section B, during the round-2 fixer's own re-verification pass: section
+B's final-drain pin (TestStopHookDrain_FinalDrainRecoversAnItemAckedInTheLastInterval)
+drives startHookDrain/stopHookDrain directly over a hand-written shim-launch.json,
+while the reviewer measured the loss 5/5 through a REAL Launch -> real spawned shim ->
+real Kill. The gap between those two shapes is exactly what the finding was about
+(a well-tested library whose production caller does not run), so the production shape
+is pinned too:
+
+  internal/skeleton/r6_round2_test.go
+  TestLaunchedSession_HookAckedJustBeforeTheAgentIsReaped_SurvivesSessionEnd
+
+RED METHOD, stated plainly: the round-2 fix was already in the tree when this test was
+written, so its failing-first run is a NEGATIVE CONTROL rather than a pre-fix run --
+the single line stopHookDrain added (hd.FinalDrain()) was disabled, restoring round-1
+behavior exactly, and the test run against it. The file was restored byte-identically
+afterwards (md5 d279b14e6dd97a66d23a529488077381 before and after) and nothing in the
+delivered tree carries the revert.
+
+$ go test -count=1 -run 'TestLaunchedSession_HookAckedJustBeforeTheAgentIsReaped_SurvivesSessionEnd' ./internal/skeleton/
+
+--- FAIL: TestLaunchedSession_HookAckedJustBeforeTheAgentIsReaped_SurvivesSessionEnd (13.72s)
+    r6_round2_test.go:296: journal holds 1 interaction item(s) for gb3oxrvht4hfzfzv
+    after 10s, want >= 2
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	14.745s
+
+The first item (the warm-up hook, carried by the daemon's own 250ms drain loop) is
+there; the second -- durably ACKED by the shim milliseconds before the agent was
+reaped -- is not, and its bytes are still on disk in the session's hooks.spool. That
+is the reviewer's 5/5 loss reproduced through the same path they measured it on.
+
+With the final drain restored, the same run is green (4.5s).

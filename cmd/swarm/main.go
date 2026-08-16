@@ -544,6 +544,49 @@ type shimLaunchConfig struct {
 	Cols       int      `json:"cols"`
 	Rows       int      `json:"rows"`
 	GraceMS    int      `json:"grace_ms"`
+	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1); "" (an
+	// old, pre-R6 launch config with no such key) disables it entirely (requirement
+	// 7's compat), leaving shim.Run's behavior exactly what it is today.
+	HookSocketPath string `json:"hook_socket_path"`
+	// HookDrainToken gates the hook socket's DRAIN verb (R6 review fix-pack,
+	// SECURITY HIGH): a DEDICATED per-session secret, distinct from lc.Env's own
+	// hookclient.EnvToken -- the POST-side token, which necessarily reaches the
+	// agent's own environment to authenticate a live hook post. DRAIN is both
+	// destructive (FoldSeq compacts on the caller's say-so) and read-everything, so
+	// gating it with the SAME secret the agent process (and every hook script or
+	// child it spawns) already holds would let the least-trusted party in the
+	// system fold away or read the whole spool. "" (an old launch config with no
+	// such key, or one a future wave has not yet wired to mint a value here) is the
+	// shim's own "no token configured" compat default -- DRAIN's check does not run
+	// at all, exactly HookSocketPath's "unset means disabled" convention.
+	HookDrainToken string `json:"hook_drain_token"`
+}
+
+// shimConfigFromLaunch maps a decoded launch config onto shim.Config -- the pure
+// translation runShim itself used to build inline, extracted so it is testable
+// without running a real shim process (setsid, a real agent, ...).
+//
+// HookToken is lc.HookDrainToken VERBATIM -- deliberately NOT derived from lc.Env
+// (R6 review fix-pack, SECURITY HIGH: the shimLaunchConfig field's own doc explains
+// why). Minting that dedicated per-session value and threading it into the launch
+// config is the daemon's own launch/spawn wiring, out of this file's owned scope;
+// an old (or not-yet-updated) launch config carrying no such field yields "", the
+// shim's compat default of "no token configured".
+func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
+	return shim.Config{
+		SessionID:      lc.SessionID,
+		Argv:           lc.Argv,
+		Cwd:            lc.Cwd,
+		Env:            lc.Env,
+		SocketPath:     lc.SocketPath,
+		SessionDir:     lc.SessionDir,
+		Cols:           lc.Cols,
+		Rows:           lc.Rows,
+		TranscriptCfg:  transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
+		GraceTimeout:   time.Duration(lc.GraceMS) * time.Millisecond,
+		HookSocketPath: lc.HookSocketPath,
+		HookToken:      lc.HookDrainToken,
+	}
 }
 
 // runShim parses --config, detaches from any controlling terminal, and runs the
@@ -586,18 +629,7 @@ func runShim(args []string, _, stderr io.Writer) int {
 		return code
 	}
 
-	cfg := shim.Config{
-		SessionID:     lc.SessionID,
-		Argv:          lc.Argv,
-		Cwd:           lc.Cwd,
-		Env:           lc.Env,
-		SocketPath:    lc.SocketPath,
-		SessionDir:    lc.SessionDir,
-		Cols:          lc.Cols,
-		Rows:          lc.Rows,
-		TranscriptCfg: transcript.Config{MaxBytes: 8 << 20, MaxFiles: 3},
-		GraceTimeout:  time.Duration(lc.GraceMS) * time.Millisecond,
-	}
+	cfg := shimConfigFromLaunch(lc)
 	exit, err := shim.Run(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shim: %v\n", err)
@@ -697,9 +729,26 @@ func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 		// unparseable body is dropped and the status post goes on exactly as before.
 		cb.Raw = body
 	}
-	if err := hookclient.Post(os.Getenv(hookclient.EnvSocket), cb); err != nil {
+	// PostSmart (requirement 7): prefers the per-session shim hook socket when the
+	// daemon injected one, retrying a reachable-but-silent shim before falling back
+	// to the daemon socket -- honest about which path served, and unchanged from
+	// today's bare Post when EnvHookSocket is unset (every pre-R6 shim).
+	hookSock := os.Getenv(hookclient.EnvHookSocket)
+	path, err := hookclient.PostSmart(hookSock, os.Getenv(hookclient.EnvSocket), cb)
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "hook: %v\n", err)
 		return 1
+	}
+	// R6 review fix-pack round 1 (LOW 9): requirement 7's "honest about which path
+	// served" was API-only -- PostSmart returned the path and this call discarded it,
+	// so an operator debugging a partial upgrade had nothing to look at. ONE case earns
+	// a line: a shim hook socket WAS configured and the daemon carried the post anyway,
+	// which is precisely the mid-upgrade state (an old shim, or a shim whose socket
+	// went away) and precisely the state in which the spool's survival boundary is not
+	// in play. The ordinary shim-served path stays silent: this CLI runs once per hook,
+	// inside the agent's own output.
+	if hookSock != "" && path != hookclient.HookPathShim {
+		_, _ = fmt.Fprintf(stderr, "hook: shim hook socket %s did not carry this post; served by the %s socket instead\n", hookSock, path)
 	}
 	return 0
 }

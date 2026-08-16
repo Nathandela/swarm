@@ -34,7 +34,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"time"
 	"unicode/utf8"
@@ -42,7 +41,6 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/engine"
-	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/remotegw"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -152,11 +150,17 @@ func (d *Daemon) releaseInteractions(ctx context.Context) {
 // non-capture row shapes nothing because the SHAPER finds nothing in it, which is where
 // ADR-010 §5 puts that judgement -- measured: the guard cost two existing tests (§4).
 func (d *Daemon) serveHookInteractions(cb engine.Callback) {
-	m, ok := d.core.Get(cb.SessionID)
-	if !ok {
-		return
+	// The session's agent type comes from the core's own launch record when the
+	// daemon has one; a callback for a session the core does not know about (a
+	// drain replaying a spool the launch-time wiring has not yet threaded through,
+	// R6) falls back to the empty string, which registryAdapter (production)
+	// resolves to nothing -- the SAME "no capture" outcome an early return here
+	// would give, with no behavior change for any session the core DOES know.
+	var agentType string
+	if m, ok := d.core.Get(cb.SessionID); ok {
+		agentType = m.AgentType
 	}
-	ad, ok := d.resolveAdapter(m.AgentType)
+	ad, ok := d.resolveAdapter(agentType)
 	if !ok {
 		return
 	}
@@ -337,6 +341,7 @@ func (d *Daemon) forgetInteractions(sessionID string) {
 	delete(d.approvals, sessionID)
 	delete(d.openItems, sessionID)
 	delete(d.interacted, sessionID)
+	delete(d.hookSeq, sessionID) // R6: ingestHookBytes's per-session dedup high-water mark
 	prefix := sessionID + "\x00"
 	for k := range d.itemIDs {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
@@ -730,12 +735,3 @@ func newItemID() string {
 // daemon opens and closes (IS-ENV-1) and needs the same "unique, orderable, no coordination"
 // property, with no reason to be a second format.
 func newTurnID() string { return newItemID() }
-
-// ---- the hook body ---------------------------------------------------------
-
-// decodeHookCallback reads one callback off a hook connection under hookBodyLimit. The captured
-// body rides INSIDE the callback (Callback.Raw, ADR-010 §6), so the decode is ordinary -- there
-// is nothing to preserve alongside it.
-func decodeHookCallback(r io.Reader) (engine.Callback, error) {
-	return hookclient.Decode(io.LimitReader(r, hookBodyLimit))
-}

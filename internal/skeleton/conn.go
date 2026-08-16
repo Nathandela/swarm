@@ -3,8 +3,8 @@ package skeleton
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
-	"log"
 	"net"
 	"time"
 
@@ -94,19 +94,24 @@ func (d *Daemon) serveHook(conn net.Conn, brace byte) {
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetReadDeadline(time.Now().Add(demuxReadTimeout))
 	r := io.MultiReader(bytes.NewReader([]byte{brace}), conn)
-	cb, err := decodeHookCallback(r)
-	if err != nil {
+	// R6 REVIEW FIX-PACK (MEDIUM): a json.Decoder over the body (the ORIGINAL
+	// pre-R6 shape, via decodeHookCallback/hookclient.Decode) returns the INSTANT
+	// one complete JSON value is parsed -- it never waits for the peer to close.
+	// io.ReadAll here would instead block until EOF, which every real client
+	// (hookclient.Post closes immediately after writing) never triggers today, but
+	// would silently drop the event after demuxReadTimeout for any peer that wrote
+	// a well-formed callback and then held the connection open.
+	var raw json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(r, hookBodyLimit)).Decode(&raw); err != nil {
 		return
 	}
-	if err := d.eng.HandleCallback(cb); err != nil {
-		// The engine authenticates; a rejection is expected pre-Epic-11. Returning is
-		// load-bearing for the capture below: a body the engine refused must never be
-		// shaped into an item, or the capture becomes a second, unauthenticated write
-		// path into the journal (the rule this function's own header states).
-		log.Printf("skeleton: hook callback rejected for session %s event %s: %v", cb.SessionID, cb.Event, err)
-		return
-	}
-	d.serveHookInteractions(cb)
+	// ingestHookBytes (hookdrain.go) is this decode+authenticate+capture chain,
+	// factored out so the live hook socket and HookDrainer's replay path can never
+	// diverge in behavior: it decodes, authenticates via the engine (S6/G5, logging
+	// a rejection so a session's signal going dead is never silent), and -- only
+	// once that succeeds, load-bearing so a body the engine refused is never shaped
+	// into an item -- offers it to the interaction producer.
+	_ = d.ingestHookBytes(raw)
 }
 
 // serveVersionHandshake answers the daemon's version handshake with the daemon's

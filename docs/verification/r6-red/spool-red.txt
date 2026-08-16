@@ -1,0 +1,242 @@
+=== RED evidence: slice spool (Wave R6 foundation, structured-capture survival boundary) ===
+Date: 2026-08-15T00:00:00Z
+Role: RED (contract-test writer)
+Bead: agents-tracker-hggx.7 (R6 Claude complete chat)
+Scope: playbook §6.1's shim-owned durable hook spool + daemon-restart reconstruction, ADR-017
+       T2 rule 2 (structured_gap capability degrade), and requirement 7's shim-socket/daemon-
+       socket compatibility fallback. Owned files only: internal/shim, internal/hookclient,
+       cmd/swarm (hook subcommand + shim env wiring), internal/skeleton (ingest/drain side),
+       internal/daemon (structured_gap emission). internal/phonecore, mobile/, android/, and
+       internal/remote/** are untouched by this slice.
+
+Baseline check: with every new file below temporarily removed, `go build ./...` and
+`go vet ./internal/shim/...` succeed. The failures captured here are caused solely by the
+undefined symbols and struct fields this slice's tests introduce, not a pre-existing break.
+`go vet ./...` across the WHOLE repository was also run with the new files in place: the ONLY
+packages it reports as failing are the four listed below (internal/shim, internal/hookclient,
+cmd/swarm, internal/skeleton) — nothing else in the tree regressed.
+
+New test files (all additive; no existing file was modified):
+  internal/shim/r6_hookspool_test.go     -- (1) fsync-before-ack, (5) bounds, (6) ownership
+  internal/shim/r6_hooksocket_test.go    -- (1)/(5)/(7) over the live hook socket + drain wire
+  internal/shim/r6_gap_test.go           -- (4) gap honesty (shim-local + PTY-survives)
+  internal/hookclient/r6_shimpost_test.go -- (1) client retry-on-no-ack, (7) compat fallback
+  internal/skeleton/r6_hookdrain_test.go -- (2) daemon-down/restart-mid-drain, (3) daemon-
+                                             restart reconstruction, (4) gap -> structured_gap
+                                             + one-way capability degrade (daemon side)
+  internal/daemon/r6_structuredgap_test.go -- (4) real (non-stub) structured_gap emission
+  cmd/swarm/r6_hookwiring_test.go        -- (7) runHook transport selection + shim env wiring
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' ./internal/shim/...
+-----------------------------------------------------------------------------
+# github.com/Nathandela/swarm/internal/shim [github.com/Nathandela/swarm/internal/shim.test]
+internal/shim/r6_gap_test.go:35:55: undefined: HookSpool
+internal/shim/r6_gap_test.go:65:37: undefined: HookSpoolFile
+internal/shim/r6_gap_test.go:66:12: undefined: OpenHookSpool
+internal/shim/r6_gap_test.go:79:13: undefined: OpenHookSpool
+internal/shim/r6_gap_test.go:104:37: undefined: HookSpoolFile
+internal/shim/r6_gap_test.go:105:12: undefined: OpenHookSpool
+internal/shim/r6_gap_test.go:115:13: undefined: OpenHookSpool
+internal/shim/r6_gap_test.go:141:22: cfg.HookSocketPath undefined (type Config has no field or method HookSocketPath)
+internal/shim/r6_hooksocket_test.go:286:68: undefined: HookDrainResponse
+internal/shim/r6_hookspool_test.go:79:50: undefined: HookSpool
+internal/shim/r6_gap_test.go:141:22: too many errors
+FAIL	github.com/Nathandela/swarm/internal/shim [build failed]
+FAIL
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' ./internal/hookclient/...
+-----------------------------------------------------------------------------
+# github.com/Nathandela/swarm/internal/hookclient [github.com/Nathandela/swarm/internal/hookclient.test]
+internal/hookclient/r6_shimpost_test.go:118:16: undefined: PostToShim
+internal/hookclient/r6_shimpost_test.go:140:16: undefined: PostToShim
+internal/hookclient/r6_shimpost_test.go:150:16: undefined: PostToShim
+internal/hookclient/r6_shimpost_test.go:168:15: undefined: PostToShim
+internal/hookclient/r6_shimpost_test.go:250:15: undefined: PostSmart
+internal/hookclient/r6_shimpost_test.go:254:13: undefined: HookPathDaemon
+internal/hookclient/r6_shimpost_test.go:255:125: undefined: HookPathDaemon
+internal/hookclient/r6_shimpost_test.go:270:15: undefined: PostSmart
+internal/hookclient/r6_shimpost_test.go:274:13: undefined: HookPathDaemon
+internal/hookclient/r6_shimpost_test.go:275:94: undefined: HookPathDaemon
+internal/hookclient/r6_shimpost_test.go:275:94: too many errors
+FAIL	github.com/Nathandela/swarm/internal/hookclient [build failed]
+FAIL
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' ./cmd/swarm/...
+-----------------------------------------------------------------------------
+# github.com/Nathandela/swarm/cmd/swarm [github.com/Nathandela/swarm/cmd/swarm.test]
+cmd/swarm/r6_hookwiring_test.go:113:22: undefined: hookclient.EnvHookSocket
+cmd/swarm/r6_hookwiring_test.go:157:22: undefined: hookclient.EnvHookSocket
+cmd/swarm/r6_hookwiring_test.go:179:3: unknown field HookSocketPath in struct literal of type shimLaunchConfig
+cmd/swarm/r6_hookwiring_test.go:185:9: undefined: shimConfigFromLaunch
+cmd/swarm/r6_hookwiring_test.go:202:9: undefined: shimConfigFromLaunch
+FAIL	github.com/Nathandela/swarm/cmd/swarm [build failed]
+FAIL
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' ./internal/skeleton/...
+-----------------------------------------------------------------------------
+# github.com/Nathandela/swarm/internal/skeleton [github.com/Nathandela/swarm/internal/skeleton.test]
+internal/skeleton/r6_hookdrain_test.go:132:3: unknown field HookSocketPath in struct literal of type shim.Config
+internal/skeleton/r6_hookdrain_test.go:145:23: cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:228:27: undefined: hookclient.PostToShim
+internal/skeleton/r6_hookdrain_test.go:295:26: h.cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:310:8: undefined: NewHookDrainer
+internal/skeleton/r6_hookdrain_test.go:310:44: h.cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:356:26: h.cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:361:9: undefined: NewHookDrainer
+internal/skeleton/r6_hookdrain_test.go:361:46: h.cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:374:26: h.cfg.HookSocketPath undefined (type shim.Config has no field or method HookSocketPath)
+internal/skeleton/r6_hookdrain_test.go:374:26: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+-----------------------------------------------------------------------------
+Command: go test -run 'TestEmitStructuredGap' ./internal/daemon/... -v
+(behavioral RED, not compile-fail: EmitStructuredGap already exists as a STUB --
+structuredgap.go's own header names this exact moment as "the spool-boundary detection ...
+lands" -- so R6's tests fail at RUNTIME against the stub's ErrStructuredGapUnimplemented,
+not at compile time. The existing stub test, TestEmitStructuredGap_IsAStubThatAppendsNothing,
+is intentionally left green and unmodified: it pins the stub's CURRENT behavior, which this
+slice's GREEN phase retires by making emission real.)
+-----------------------------------------------------------------------------
+=== RUN   TestEmitStructuredGap_AppendsARealJournalRecord
+    r6_structuredgap_test.go:47: EmitStructuredGap: daemon: structured_gap emission is not yet implemented, want nil — R6 lands real emission, the stub is retired
+--- FAIL: TestEmitStructuredGap_AppendsARealJournalRecord (0.02s)
+=== RUN   TestEmitStructuredGap_EveryCallAppendsItsOwnBoundary
+    r6_structuredgap_test.go:86: EmitStructuredGap (1st): daemon: structured_gap emission is not yet implemented
+--- FAIL: TestEmitStructuredGap_EveryCallAppendsItsOwnBoundary (0.01s)
+=== RUN   TestEmitStructuredGap_IsAStubThatAppendsNothing
+--- PASS: TestEmitStructuredGap_IsAStubThatAppendsNothing (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	2.416s
+
+-----------------------------------------------------------------------------
+Symbols the GREEN implementer must add, by owned package
+-----------------------------------------------------------------------------
+
+internal/shim (new file, e.g. hookspool.go + the hook-socket listener wired into Run/server.go):
+
+  // Config gains:
+  HookSocketPath    string // per-session hook UDS, second listener; "" disables it (compat)
+  HookSpoolMaxBytes int    // 0 => hookSpoolDefaultMaxBytes
+
+  const HookSpoolFile = "hooks.spool"          // sibling of SnapshotFile/ExitFile/TranscriptFile
+  const hookSpoolDefaultMaxBytes = 8 << 20
+  const HookPostTag  byte = '{'
+  const HookDrainTag byte = 'D'
+  const HookAckByte  byte = 0x01
+
+  type HookRecord struct {
+      Seq  uint64          `json:"seq"`
+      Body json.RawMessage `json:"body"`
+  }
+  type HookSpool struct{ ... }
+  func OpenHookSpool(path string, maxBytes int) (*HookSpool, error)
+  func (s *HookSpool) Append(body []byte) (seq uint64, err error)   // fsyncs before returning
+  func (s *HookSpool) ReadFrom(after uint64) (recs []HookRecord, gapAt uint64, hasGap bool, err error)
+  func (s *HookSpool) Compact(foldSeq uint64) error                 // temp+fsync+rename, 0600
+  func (s *HookSpool) Close() error
+  var ErrHookSpoolFull = errors.New("shim: hook spool at its size bound")
+  var testHookAfterSpoolFsync func()   // test-only seam, nil in production
+
+  type HookDrainRequest struct {
+      FromSeq uint64 `json:"from_seq"`
+      FoldSeq uint64 `json:"fold_seq"`
+  }
+  type HookDrainResponse struct {
+      Records     []HookRecord `json:"records"`
+      Gap         bool         `json:"gap,omitempty"`
+      GapBoundary uint64       `json:"gap_boundary,omitempty"`
+  }
+
+  Hook socket wire (second listener at cfg.HookSocketPath, demuxed on its own leading byte):
+    '{' HookPost: one self-delimited JSON value; Append it; ack with HookAckByte ONLY if
+        Append returned nil; close either way.
+    'D' HookDrainTag: one self-delimited JSON HookDrainRequest follows; compact up to
+        FoldSeq (if >0), answer with one self-delimited JSON HookDrainResponse, close.
+        Stateless per connection -- no live-follow.
+
+internal/hookclient (new file, e.g. shimpost.go):
+
+  const EnvHookSocket = "SWARM_SHIM_HOOK_SOCK"
+  type HookPath string
+  const ( HookPathShim HookPath = "shim"; HookPathDaemon HookPath = "daemon" )
+  func PostToShim(hookSocketPath string, cb engine.Callback) (acked bool, err error)
+      // SAME JSON encoding as Post (SetEscapeHTML(false)); one ack-byte read under a deadline.
+  func PostSmart(hookSocketPath, daemonSocketPath string, cb engine.Callback) (HookPath, error)
+      // ""/dial-failure -> daemon path immediately; reachable-but-silent -> retry the SAME
+      // shim socket with the SAME cb a bounded number of times, then fall back.
+
+cmd/swarm (main.go, shim env wiring + runHook only):
+
+  // shimLaunchConfig gains:
+  HookSocketPath string `json:"hook_socket_path"`
+
+  // runShim's inline shim.Config construction is extracted to:
+  func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config
+
+  // runHook calls hookclient.PostSmart(os.Getenv(hookclient.EnvHookSocket),
+  // os.Getenv(hookclient.EnvSocket), cb) in place of today's bare hookclient.Post.
+
+internal/skeleton (new file, e.g. hookdrain.go, beside interaction.go/capability.go):
+
+  func (d *Daemon) ingestHookBytes(raw []byte) error
+      // serveHook's (conn.go) shared second half: hookclient.Decode -> d.eng.HandleCallback
+      // -> (nil error only) d.serveHookInteractions. Both the live path and the drain path
+      // below call this ONE function.
+
+  type HookDrainer struct{ ... }
+  func NewHookDrainer(d *Daemon, sessionID, hookSocketPath, cursorPath string) *HookDrainer
+  func (hd *HookDrainer) DrainOnce() (applied int, err error)
+  func (hd *HookDrainer) Cursor() uint64
+  var ErrHookDrainGap = errors.New("skeleton: hook drain observed a spool gap")
+
+  // capability.go's store half, beside the existing pure deriveSessionCapabilities:
+  func (d *Daemon) SessionCapabilities(sessionID string) (protocol.SessionCapabilities, bool)
+  func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.SessionCapabilities)
+      // re-registering an id that already has a record MERGES via SetStructuredChat's
+      // degrade-only rule (protocol/schema/capability.go, already shipped) rather than
+      // overwriting it, so the one-way rule survives a reconcile-time re-registration.
+
+internal/daemon (structured_gap emission ONLY -- structuredgap.go):
+
+  EmitStructuredGap stops returning ErrStructuredGapUnimplemented unconditionally and instead
+  appends a real journal.Record{Type: journal.TypeStructuredGap, SessionID: sessionID,
+  Payload: StructuredGapEvent{TS: now, Reason: reason}} for every call. No new symbols; the
+  existing stub test (TestEmitStructuredGap_IsAStubThatAppendsNothing) is retired/replaced by
+  the GREEN implementer in the same commit that makes emission real, exactly as its own
+  header comment already says it must be.
+
+=============================================================================
+ADDENDUM 2026-08-15 -- PARTIALLY SUPERSEDED BY fixpack-red.txt
+=============================================================================
+
+This file is the RED evidence for the ORIGINAL R6 slice and stays valid for the
+seven test files it enumerates above. Two corrections, both raised by the
+rejecting reviewer (LOW 11):
+
+1. THE FILE LIST IS INCOMPLETE AS DELIVERED. Two further test files shipped in
+   the same slice and are NOT covered here:
+
+     internal/shim/r6_gapfix_test.go
+     internal/skeleton/r6_gapfix_test.go
+
+   They were written AFTER the slice went green, as regression pins for defects
+   a probe had already confirmed (their own headers say so). That is legitimate
+   regression practice, but it is not a failing-first run, and this file's
+   "New test files (all additive...)" list should not be read as covering them.
+
+2. THE FIX-PACK ROUND 1 TESTS HAVE THEIR OWN RED FILE. Every test the fixer
+   added or strengthened in response to the reviewer's punch list -- including
+   the subset of the two gapfix files that was strengthened, and the renaming of
+   TestHookSpool_AcceptedNotYetAckedWindowIsAlreadyDurable to
+   TestHookSpool_AcceptedNotYetAckedWindow_RecordIsAlreadyVisibleToASecondHandle
+   -- is evidenced in:
+
+     docs/verification/r6-red/fixpack-red.txt
+
+The pre-authorized retirement of TestEmitStructuredGap_IsAStubThatAppendsNothing
+recorded at the end of this file is unaffected and was reviewed as clean.

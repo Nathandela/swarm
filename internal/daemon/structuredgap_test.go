@@ -1,13 +1,9 @@
 package daemon
 
-// FAILING-FIRST (TDD RED, GG-5) tests for ADR-017 T2 rule 2 / playbook 6.1: the
-// daemon-authored structured_gap capability-degrade event. An unrecoverable shim/daemon
-// spool or cursor gap "emits an exact structured_gap boundary, disables structured_chat
-// for that session instance, and forbids a fabricated completion" (playbook 6.1). This
-// slice defines the event SHAPE and the emission SEAM; the emission itself is a STUB
-// that returns ErrStructuredGapUnimplemented until the spool-boundary detection
-// (ADR-010's spool) lands -- a stub that appends nothing is the fabricated-completion
-// rule applied to the seam itself: better silence than a false event.
+// Tests for ADR-017 T2 rule 2 / playbook 6.1: the daemon-authored structured_gap
+// capability-degrade event. An unrecoverable shim/daemon spool or cursor gap "emits an
+// exact structured_gap boundary, disables structured_chat for that session instance,
+// and forbids a fabricated completion" (playbook 6.1).
 //
 // CARRIER: StructuredGapEvent rides the EXISTING journal.Record family under a new
 // journal.TypeStructuredGap discriminator, exactly mirroring how InteractionItem rides
@@ -16,16 +12,12 @@ package daemon
 // the same reason InteractionItem omits them: the enclosing journal.Record already
 // carries both.
 //
-// THE SEAMS these tests pin (undefined symbols -> compile-fail RED):
-//
-//	journal.TypeStructuredGap journal.RecordType = "structured_gap"
-//	type StructuredGapEvent struct{ TS time.Time; Reason string }
-//	var ErrStructuredGapUnimplemented error
-//	func (*Daemon) EmitStructuredGap(sessionID, reason string) error
+// R6 (bd agents-tracker-hggx.7) landed real emission (r6_structuredgap_test.go);
+// the stub-emission pin this file used to carry (TestEmitStructuredGap_
+// IsAStubThatAppendsNothing) is retired along with the stub itself.
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -52,31 +44,5 @@ func TestStructuredGapEvent_WireShape(t *testing.T) {
 func TestJournalTypeStructuredGap_IsADistinctWireDiscriminator(t *testing.T) {
 	if journal.TypeStructuredGap != "structured_gap" {
 		t.Fatalf("journal.TypeStructuredGap = %q; want %q", journal.TypeStructuredGap, "structured_gap")
-	}
-}
-
-// TestEmitStructuredGap_IsAStubThatAppendsNothing: emission is unimplemented (the
-// spool-boundary detection is a later slice's work), so the seam returns
-// ErrStructuredGapUnimplemented and -- because a fabricated completion is forbidden --
-// the journal is untouched rather than gaining a half-true event.
-func TestEmitStructuredGap_IsAStubThatAppendsNothing(t *testing.T) {
-	d := openDaemon(t, daemonConfig(t))
-
-	before, err := d.JournalReadFrom(0)
-	if err != nil {
-		t.Fatalf("JournalReadFrom before: %v", err)
-	}
-
-	err = d.EmitStructuredGap("s1", "spool cursor gap")
-	if !errors.Is(err, ErrStructuredGapUnimplemented) {
-		t.Fatalf("EmitStructuredGap error = %v; want ErrStructuredGapUnimplemented", err)
-	}
-
-	after, err := d.JournalReadFrom(0)
-	if err != nil {
-		t.Fatalf("JournalReadFrom after: %v", err)
-	}
-	if len(after.Events) != len(before.Events) {
-		t.Fatalf("journal grew by %d records on an unimplemented emission; want 0 (a stub must never fabricate a completion)", len(after.Events)-len(before.Events))
 	}
 }

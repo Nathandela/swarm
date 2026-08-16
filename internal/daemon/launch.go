@@ -15,6 +15,7 @@ import (
 	"github.com/Nathandela/swarm/internal/hookclient"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -95,6 +96,75 @@ type shimSpawnConfig struct {
 	Cols       int      `json:"cols"`
 	Rows       int      `json:"rows"`
 	GraceMS    int      `json:"grace_ms"`
+	// HookSocketPath is the per-session shim-owned hook UDS (playbook §6.1). "" is the
+	// pre-R6 compat default the shim reads as "bind no hook listener at all".
+	HookSocketPath string `json:"hook_socket_path"`
+	// HookDrainToken gates that socket's DRAIN verb. It is DELIBERATELY not in Env: the
+	// agent (and every hook script it spawns) holds the POST token by necessity, while
+	// DRAIN is destructive (FoldSeq compacts on the caller's say-so) and reads every
+	// spooled body -- including the POST token itself. Persisting it here, in the same
+	// 0600 file reconcile already re-reads the POST token from, is what lets a RESTARTED
+	// daemon still drain the shims that outlived it.
+	HookDrainToken string `json:"hook_drain_token"`
+}
+
+// HookChannel names one session's structured-capture channel: the shim-owned hook
+// socket, the dedicated secret that gates its DRAIN verb, and the path the daemon-side
+// fold cursor lives at. It is recovered from the 0600 shim-launch.json, so a daemon
+// that restarted under a still-running shim finds exactly what it minted at launch.
+type HookChannel struct {
+	SocketPath string
+	DrainToken string
+	CursorPath string
+	// SpoolPath is the shim's own durable log, read DIRECTLY by the daemon once no live
+	// shim is left to serve a DRAIN (R6 review fix-pack round 2, BLOCKER 2). The shim's
+	// hook server shuts down with the agent it reaped, so without this every event acked
+	// inside the last drain interval of a session was unreachable forever while its
+	// bytes sat on disk.
+	SpoolPath string
+}
+
+// hookSocketPath is the per-session hook UDS path, deterministic exactly like
+// shimSocketPath so spawn and any later reader agree without bookkeeping.
+func hookSocketPath(stateDir, id string) string {
+	return filepath.Join(stateDir, id, "hook.sock")
+}
+
+// hookFoldCursorPath is where the DAEMON-side fold cursor for a session lives: in the
+// session dir, beside the shim's own spool, so it is retired with the session.
+func hookFoldCursorPath(dir string) string { return filepath.Join(dir, "hook.fold") }
+
+// newHookDrainToken mints a session's DRAIN secret (crypto/rand), the twin of
+// newHookToken. Two distinct secrets rather than one: see shimSpawnConfig's own field
+// doc for why the POST side's token must not open the DRAIN side.
+func newHookDrainToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("daemon: generate hook drain token: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// SessionHookChannel recovers id's hook channel from its persisted launch config. It
+// reports false for a session launched before the channel existed (no hook_socket_path
+// key at all) rather than fabricating one -- the same "unset means disabled" convention
+// the shim and hookclient.PostSmart already follow.
+func (d *Daemon) SessionHookChannel(id string) (HookChannel, bool) {
+	dir := d.sessionDir(id)
+	data, err := os.ReadFile(filepath.Join(dir, shimLaunchConfigFile))
+	if err != nil {
+		return HookChannel{}, false
+	}
+	var lc shimSpawnConfig
+	if json.Unmarshal(data, &lc) != nil || lc.HookSocketPath == "" {
+		return HookChannel{}, false
+	}
+	return HookChannel{
+		SocketPath: lc.HookSocketPath,
+		DrainToken: lc.HookDrainToken,
+		CursorPath: hookFoldCursorPath(dir),
+		SpoolPath:  filepath.Join(dir, shim.HookSpoolFile),
+	}, true
 }
 
 // Launch starts a new session (Launch == launch(spec, nil)).
@@ -347,16 +417,28 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // stable PID that reconcile can match) and detaches itself; the shim's stdio goes
 // to the daemon log while the AGENT's env is the filtered set in the config.
 func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (*exec.Cmd, error) {
+	// The structured-capture channel (playbook §6.1): the shim binds its own hook
+	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
+	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
+	// launch config -- never in the agent's env. A restarted daemon recovers all three
+	// from that file (SessionHookChannel), because shims outlive daemons.
+	hookSock := hookSocketPath(d.cfg.StateDir, id)
+	drainToken, err := newHookDrainToken()
+	if err != nil {
+		return nil, err
+	}
 	lc := shimSpawnConfig{
-		SessionID:  id,
-		Argv:       spec.Argv,
-		Cwd:        spec.Cwd,
-		Env:        injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), spec.CaptureEvents),
-		SocketPath: sock,
-		SessionDir: dir,
-		Cols:       spec.Cols,
-		Rows:       spec.Rows,
-		GraceMS:    int(shimGrace / time.Millisecond),
+		SessionID:      id,
+		Argv:           spec.Argv,
+		Cwd:            spec.Cwd,
+		Env:            injectHookEnv(persist.FilterEnv(spec.ClientEnv), id, token, d.cfg.SocketPath, hookSeqFilePath(dir), hookSock, spec.CaptureEvents),
+		SocketPath:     sock,
+		SessionDir:     dir,
+		Cols:           spec.Cols,
+		Rows:           spec.Rows,
+		GraceMS:        int(shimGrace / time.Millisecond),
+		HookSocketPath: hookSock,
+		HookDrainToken: drainToken,
 	}
 	data, err := json.Marshal(lc)
 	if err != nil {
@@ -409,14 +491,18 @@ func newHookToken() (string, error) {
 // added POST-filter deliberately: FilterEnv (S-2) would strip them, but the agent's
 // `swarm hook` needs them to reach and authenticate to the daemon, and to know
 // which of its events carry a body worth keeping.
-func injectHookEnv(filtered []string, id, token, sock, seqFile string, capture []string) []string {
-	out := make([]string, 0, len(filtered)+5)
+func injectHookEnv(filtered []string, id, token, sock, seqFile, hookSock string, capture []string) []string {
+	out := make([]string, 0, len(filtered)+6)
 	out = append(out, filtered...)
 	out = append(out,
 		hookclient.EnvSessionID+"="+id,
 		hookclient.EnvToken+"="+token,
 		hookclient.EnvSocket+"="+sock,
 		hookclient.EnvSequenceFile+"="+seqFile,
+		// The shim's own hook socket (playbook §6.1). hookclient.PostSmart treats an
+		// EMPTY value exactly as an unset one -- straight to the daemon, no dial
+		// attempt -- so injecting it unconditionally keeps one contract rather than two.
+		hookclient.EnvHookSocket+"="+hookSock,
 		// Injected even when empty: "no capture rows" is the ordinary state of every
 		// adapter that implements no capture extension, and one contract ("read the
 		// list") is simpler for the hook than two ("read it, or infer from its absence").

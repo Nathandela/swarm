@@ -5,20 +5,25 @@ package daemon
 // structured_gap boundary, disables structured_chat for that session instance, and
 // forbids a fabricated completion."
 //
-// This slice defines the event SHAPE and the emission SEAM. Emission itself is a STUB:
-// the spool-boundary detection (ADR-010's spool) that would trigger it does not exist yet,
-// so EmitStructuredGap returns ErrStructuredGapUnimplemented and appends nothing --
-// exactly the fabricated-completion rule applied to the seam itself, better silence than a
-// false event.
-//
 // CARRIER: StructuredGapEvent rides the existing journal.Record family under
 // journal.TypeStructuredGap, mirroring how InteractionItem rides journal.TypeInteraction
 // (interaction.go). Session id and cursor are deliberately absent from the event body for
 // the same reason InteractionItem omits them: the enclosing journal.Record carries both.
+//
+// internal/daemon cannot import internal/protocol (protocol already imports daemon), so
+// the session-capability DEGRADE half of playbook 6.1 ("disables structured_chat for that
+// session instance") is skeleton's obligation (internal/skeleton/hookdrain.go), which holds
+// the only type (protocol.SessionCapabilities) that rule can be expressed against. This
+// package's job ends at "the journal gains an honest structured_gap record" -- the caller
+// proves the boundary (internal/shim's HookSpool + internal/skeleton's HookDrainer); this
+// seam never fabricates one on its own.
 
 import (
-	"errors"
+	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/journal"
 )
 
 // StructuredGapEvent is the structured_gap record's payload.
@@ -27,13 +32,18 @@ type StructuredGapEvent struct {
 	Reason string    `json:"reason"`
 }
 
-// ErrStructuredGapUnimplemented is returned by EmitStructuredGap until spool-boundary
-// detection lands.
-var ErrStructuredGapUnimplemented = errors.New("daemon: structured_gap emission is not yet implemented")
-
-// EmitStructuredGap will emit a structured_gap boundary for sessionID once spool-boundary
-// detection lands. Until then it is a stub: it appends nothing to the journal and returns
-// ErrStructuredGapUnimplemented.
+// EmitStructuredGap durably appends a structured_gap journal record for sessionID.
+// Every call appends its own record -- emission is never coalesced or deduplicated,
+// because each call names a distinct proven boundary.
 func (d *Daemon) EmitStructuredGap(sessionID, reason string) error {
-	return ErrStructuredGapUnimplemented
+	payload, err := json.Marshal(StructuredGapEvent{TS: time.Now(), Reason: reason})
+	if err != nil {
+		return fmt.Errorf("daemon: marshal structured_gap event: %w", err)
+	}
+	_, err = d.journal.Append(journal.Record{
+		SessionID: sessionID,
+		Type:      journal.TypeStructuredGap,
+		Payload:   payload,
+	})
+	return err
 }

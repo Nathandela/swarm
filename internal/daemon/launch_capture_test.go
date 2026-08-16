@@ -21,7 +21,7 @@ func TestInjectHookEnv_CarriesTheAdaptersCaptureRows(t *testing.T) {
 	filtered := persist.FilterEnv([]string{"CONDA_PREFIX=/x"})
 	rows := []string{"UserPromptSubmit", "PreToolUse", "Stop"}
 
-	got := injectHookEnv(filtered, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq", rows)
+	got := injectHookEnv(filtered, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq", "/state/sid-1/hook.sock", rows)
 
 	want := hookclient.EnvCapture + "=" + hookclient.CaptureEnv(rows)
 	if lineIndex(got, want) < 0 {
@@ -35,7 +35,7 @@ func TestInjectHookEnv_CarriesTheAdaptersCaptureRows(t *testing.T) {
 // defect. The variable is still injected -- empty -- so a hook reads one contract rather than
 // two ("absent" and "empty" are the same answer, and neither captures).
 func TestInjectHookEnv_ASessionWithNoCaptureRowsDeclaresNone(t *testing.T) {
-	got := injectHookEnv(nil, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq", nil)
+	got := injectHookEnv(nil, "sid-1", "tok-abc", "/run/d.sock", "/state/sid-1/hook.seq", "/state/sid-1/hook.sock", nil)
 
 	if want := hookclient.EnvCapture + "="; lineIndex(got, want) < 0 {
 		t.Fatalf("injected env missing %q; got %v", want, got)
