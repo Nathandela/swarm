@@ -42,8 +42,17 @@ the direct-push flow; the Homebrew cask publishes through the fine-grained tap P
 
 ## Exit status
 
-Three consecutive fully green required runs: 31865631617 and 31871192243 achieved, then the
-streak reset twice on orchestrator lane-split staging errors (31877066151, 31879368459 — both
-caught by the fences doing their job) and once on the obligations/webpki closure split. Current
-streak restarts at 31880-series green on the whole tree. The bead closes when the counter reads
-three; every named red item is individually fixed and reviewed.
+EXIT MET 2026-08-16: three consecutive fully green required runs — 31946757334 (719b695),
+31952500398 (f8338e1), 31965785264 (5147465) — with the R4 foundation, the D3 switcher UI,
+and the whole R5 launch wave inside the streak, so the greens are load-bearing, not idle.
+
+The road there is part of the record: after the earlier resets (lane-split staging errors
+31877066151/31879368459, the obligations/webpki closure split), the streak was broken four
+more times by genuinely new reds, each root-caused rather than rerun: two linux-only R6
+spool defects (socket close-with-unread-data RST semantics; three test-only exports the
+B94 fence correctly refused), two skeleton rig races proven by injection (the 125 ms
+append-floor spacing assumption; a hook process exit treated as a sync point), one stale
+e2e calibration (l1Bound predating the spool's 250 ms drain tick), a lint-version skew
+(local v1.64.8 vs CI v2.12.2 — local now pinned to CI's exact version), and the B58
+watcher's stop-before-observe window. None recurred after its fix; the flake tail was
+confirmed empty by a full-suite GOMAXPROCS=2 starvation sweep.
