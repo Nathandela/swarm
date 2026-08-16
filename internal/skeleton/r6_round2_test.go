@@ -184,26 +184,26 @@ func TestHookDrainer_AppliesAckedRecordsFromTheSpoolFileAfterTheShimIsGone(t *te
 	if _, _, err := hd.DrainOnce(); err == nil {
 		t.Fatalf("DrainOnce succeeded against a dead shim's socket; the premise of this test is that the socket is gone")
 	}
-	applied, skipped, err := hd.DrainFromSpoolFile()
+	applied, skipped, err := hd.drainFromSpoolFile()
 	if err != nil {
-		t.Fatalf("DrainFromSpoolFile: %v", err)
+		t.Fatalf("drainFromSpoolFile: %v", err)
 	}
 	if applied != 1 || skipped != 0 {
-		t.Fatalf("DrainFromSpoolFile applied=%d skipped=%d, want applied=1 skipped=0 -- a durably acked record must be recoverable straight from hooks.spool once its shim is gone", applied, skipped)
+		t.Fatalf("drainFromSpoolFile applied=%d skipped=%d, want applied=1 skipped=0 -- a durably acked record must be recoverable straight from hooks.spool once its shim is gone", applied, skipped)
 	}
 	if got := awaitJournalTexts(t, sk, sessionID, 1); got[0] != "r2c-recovered" {
 		t.Fatalf("journal texts = %v, want [r2c-recovered]", got)
 	}
-	if hd.Cursor() != 1 {
-		t.Fatalf("Cursor() = %d after a disk drain, want 1 -- the disk path must persist the cursor exactly like the socket path", hd.Cursor())
+	if hd.cursor() != 1 {
+		t.Fatalf("Cursor() = %d after a disk drain, want 1 -- the disk path must persist the cursor exactly like the socket path", hd.cursor())
 	}
 	// Idempotent: a second disk drain over the same cursor applies nothing.
-	applied2, _, err := hd.DrainFromSpoolFile()
+	applied2, _, err := hd.drainFromSpoolFile()
 	if err != nil {
-		t.Fatalf("second DrainFromSpoolFile: %v", err)
+		t.Fatalf("second drainFromSpoolFile: %v", err)
 	}
 	if applied2 != 0 {
-		t.Fatalf("second DrainFromSpoolFile applied=%d, want 0", applied2)
+		t.Fatalf("second drainFromSpoolFile applied=%d, want 0", applied2)
 	}
 }
 
@@ -336,7 +336,7 @@ func TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker(t *testing.T
 	sk := assembleAt(t, dir)
 	t.Cleanup(func() { _ = sk.Close() })
 
-	caps, ok := sk.SessionCapabilities(sessionID)
+	caps, ok := sk.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found", sessionID)
 	}
@@ -348,7 +348,7 @@ func TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker(t *testing.T
 	}
 	// The same must hold on the SECOND call, which is served from the in-memory cache
 	// the first one populated.
-	caps2, _ := sk.SessionCapabilities(sessionID)
+	caps2, _ := sk.sessionCapabilities(sessionID)
 	if caps2.StructuredChat || !caps2.TerminalFallback {
 		t.Fatalf("cached read: StructuredChat=%v TerminalFallback=%v, want false/true", caps2.StructuredChat, caps2.TerminalFallback)
 	}

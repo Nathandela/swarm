@@ -392,7 +392,7 @@ func (hd *HookDrainer) SetToken(token string) {
 	hd.mu.Unlock()
 }
 
-// SetSpoolPath configures the session's hooks.spool file, which DrainFromSpoolFile reads
+// SetSpoolPath configures the session's hooks.spool file, which drainFromSpoolFile reads
 // directly when no live shim is left to serve a DRAIN. The zero value (never called)
 // disables the disk path entirely -- the same "unset means disabled" convention the
 // hook socket itself follows.
@@ -402,9 +402,9 @@ func (hd *HookDrainer) SetSpoolPath(path string) {
 	hd.mu.Unlock()
 }
 
-// Cursor returns the persisted, applied-and-folded cursor (0 if nothing has drained
+// cursor returns the persisted, applied-and-folded cursor (0 if nothing has drained
 // yet).
-func (hd *HookDrainer) Cursor() uint64 {
+func (hd *HookDrainer) cursor() uint64 {
 	return readHookCursor(hd.cursorPath)
 }
 
@@ -453,7 +453,7 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 	return hd.applyLocked(resp)
 }
 
-// DrainFromSpoolFile is DrainOnce's socket-independent twin (R6 review fix-pack round 2,
+// drainFromSpoolFile is DrainOnce's socket-independent twin (R6 review fix-pack round 2,
 // BLOCKER 2): it reads the session's hooks.spool FILE directly, applies everything past
 // the persisted cursor with the identical rules, and persists the advanced cursor after
 // each record.
@@ -469,7 +469,7 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 // It is a no-op when no spool path was configured (SetSpoolPath), and reports the disk
 // error verbatim when the file is gone: "the spool is gone" and "the spool is clean and
 // empty" must never look the same to a caller.
-func (hd *HookDrainer) DrainFromSpoolFile() (applied, skipped int, err error) {
+func (hd *HookDrainer) drainFromSpoolFile() (applied, skipped int, err error) {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
 	return hd.drainFromSpoolFileLocked()
@@ -490,7 +490,7 @@ func (hd *HookDrainer) drainFromSpoolFileLocked() (applied, skipped int, err err
 	return hd.applyLocked(shim.HookDrainResponse{Records: recs, Gap: hasGap, GapBoundary: gapAt})
 }
 
-// errNoHookSpoolPath is DrainFromSpoolFile's refusal when no spool file was configured.
+// errNoHookSpoolPath is drainFromSpoolFile's refusal when no spool file was configured.
 var errNoHookSpoolPath = errors.New("skeleton: no hook spool path configured for this drainer")
 
 // FinalDrain is the LAST drain of a session's life, run when its loop is stopped

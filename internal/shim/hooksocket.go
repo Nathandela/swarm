@@ -51,6 +51,15 @@ const (
 	// HookDrainRequest is three small fields; this is generous headroom, not a
 	// tight fit.
 	hookDrainMaxBytes = 64 << 10
+
+	// hookResidualDiscardMax bounds serveConn's post-handler discard of unread
+	// request bytes. Closing a unix socket with unread data in its receive queue
+	// resets the peer on Linux, destroying the buffered reply -- or the clean FIN a
+	// refusal answers with -- so "refused" would read as ECONNRESET there and as EOF
+	// on Darwin. The discard keeps the refusal contract (close with no response
+	// bytes = EOF) platform-independent; a writer still flooding past this bound
+	// gets the reset it earned.
+	hookResidualDiscardMax = 256 << 10
 )
 
 // HookDrainRequest is a DRAIN's request body.
@@ -166,6 +175,14 @@ func (h *hookServer) serveConn(conn net.Conn) {
 	case HookDrainTag:
 		h.serveDrain(conn)
 	}
+	// FIN first so the peer's read sees EOF (or the already-written reply) the
+	// moment the handler is done, then a bounded discard of whatever request bytes
+	// the handler declined to read, so the deferred Close cannot reset the peer on
+	// Linux (see hookResidualDiscardMax). Still under the connection deadline.
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(conn, hookResidualDiscardMax))
 }
 
 // servePost Appends the posted body to the spool and, ONLY when that succeeds,

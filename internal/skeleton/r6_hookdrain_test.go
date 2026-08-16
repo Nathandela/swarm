@@ -50,12 +50,12 @@ package skeleton
 //	    // capability record (see below), and returns applied (the pre-gap count) with
 //	    // ErrHookDrainGap -- it never advances past the boundary and never calls DrainOnce
 //	    // again on its own.
-//	func (hd *HookDrainer) Cursor() uint64  // the persisted, applied-and-folded cursor
+//	func (hd *HookDrainer) cursor() uint64  // the persisted, applied-and-folded cursor
 //
 //	var ErrHookDrainGap = errors.New("skeleton: hook drain observed a spool gap")
 //
 //	// capability.go's store half, sibling of the existing pure deriveSessionCapabilities:
-//	func (d *Daemon) SessionCapabilities(sessionID string) (protocol.SessionCapabilities, bool)
+//	func (d *Daemon) sessionCapabilities(sessionID string) (protocol.SessionCapabilities, bool)
 //	func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.SessionCapabilities)
 //	    // re-registering an id that already has a record MERGES via SetStructuredChat's
 //	    // degrade-only rule rather than overwriting it outright, so a reconcile-time
@@ -321,8 +321,8 @@ func TestHookDrainer_DrainsEverythingThatAccumulatedWhileNeverDrained(t *testing
 	if applied != n {
 		t.Fatalf("DrainOnce applied %d record(s), want %d", applied, n)
 	}
-	if hd.Cursor() != n {
-		t.Fatalf("Cursor() = %d after a full drain, want %d", hd.Cursor(), n)
+	if hd.cursor() != n {
+		t.Fatalf("Cursor() = %d after a full drain, want %d", hd.cursor(), n)
 	}
 
 	got := awaitJournalTexts(t, sk, sessionID, n)
@@ -510,7 +510,7 @@ func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *tes
 		t.Fatalf("no structured_gap journal record for %s after a proven spool tear", sessionID)
 	}
 
-	caps, ok := sk.SessionCapabilities(sessionID)
+	caps, ok := sk.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after a gap degrade", sessionID)
 	}
@@ -526,7 +526,7 @@ func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *tes
 		Provider: "claude", ProviderVersion: "1.0.0", AdapterRevision: "rev",
 		StructuredChat: true, TerminalFallback: false,
 	})
-	caps2, ok := sk.SessionCapabilities(sessionID)
+	caps2, ok := sk.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after re-registration", sessionID)
 	}
@@ -548,7 +548,7 @@ func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *tes
 		Provider: "claude", ProviderVersion: "1.0.0", AdapterRevision: "rev",
 		StructuredChat: true, TerminalFallback: false,
 	})
-	caps3, ok := sk2.SessionCapabilities(sessionID)
+	caps3, ok := sk2.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found on a restarted daemon", sessionID)
 	}

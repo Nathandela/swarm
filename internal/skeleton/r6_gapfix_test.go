@@ -217,8 +217,8 @@ func TestHookDrainer_OnAHoleAboveTheCursor_NeverAppliesPastTheBoundary(t *testin
 	if applied != 0 {
 		t.Fatalf("DrainOnce applied %d record(s) from ABOVE a reported gap boundary, want 0 -- ADR-017 forbids silently bridging the hole", applied)
 	}
-	if hd.Cursor() != 1 {
-		t.Fatalf("Cursor() = %d after a gap, want 1 (unchanged) -- the cursor must never advance past an unrecoverable boundary", hd.Cursor())
+	if hd.cursor() != 1 {
+		t.Fatalf("Cursor() = %d after a gap, want 1 (unchanged) -- the cursor must never advance past an unrecoverable boundary", hd.cursor())
 	}
 	if n := countJournalInteractions(t, sk, sessionID); n != 0 {
 		t.Fatalf("journal holds %d interaction item(s) for %s from past a reported gap, want 0", n, sessionID)
@@ -301,7 +301,7 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 	if n := countJournalStructuredGaps(t, sk1, sessionID); n != 1 {
 		t.Fatalf("journal holds %d structured_gap record(s) after the first incarnation, want 1", n)
 	}
-	caps1, ok := sk1.SessionCapabilities(sessionID)
+	caps1, ok := sk1.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after the first incarnation's degrade", sessionID)
 	}
@@ -327,7 +327,7 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 		Provider: "claude", ProviderVersion: "1.0.0", AdapterRevision: "rev",
 		StructuredChat: true, TerminalFallback: false,
 	})
-	caps2, ok := sk2.SessionCapabilities(sessionID)
+	caps2, ok := sk2.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found on the second incarnation", sessionID)
 	}
@@ -346,7 +346,7 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 	if n := countJournalStructuredGaps(t, sk2, sessionID); n != 1 {
 		t.Fatalf("journal holds %d structured_gap record(s) across two daemon incarnations draining the SAME boundary, want exactly 1", n)
 	}
-	caps3, ok := sk2.SessionCapabilities(sessionID)
+	caps3, ok := sk2.sessionCapabilities(sessionID)
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after the second incarnation's drain", sessionID)
 	}

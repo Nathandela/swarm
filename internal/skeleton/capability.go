@@ -131,9 +131,9 @@ func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.Sessio
 	}
 }
 
-// SessionCapabilities returns sessionID's stored capability record, if any -- from
+// sessionCapabilities returns sessionID's stored capability record, if any -- from
 // memory, or from the durable side-file a PRIOR daemon incarnation wrote.
-func (d *Daemon) SessionCapabilities(sessionID string) (protocol.SessionCapabilities, bool) {
+func (d *Daemon) sessionCapabilities(sessionID string) (protocol.SessionCapabilities, bool) {
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
 	return d.lookupCapabilitiesLocked(sessionID)
