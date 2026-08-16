@@ -110,6 +110,8 @@ func (d *Daemon) initInteractionsLocked() {
 			Append: func(session string, item json.RawMessage) error {
 				return d.core.RecordInteractionRaw(session, item)
 			},
+			// nil in production: the floor defaults to time.Now. See Config.ItemClock.
+			Now: d.itemClock,
 		})
 	}
 }

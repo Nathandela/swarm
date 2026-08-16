@@ -66,7 +66,11 @@ func buildBinaries(t *testing.T) {
 
 // assemble stands up the full in-process assembly over a short-pathed state dir
 // (/tmp keeps the socket under the 104-byte sun_path limit), with cleanup.
-func assemble(t *testing.T) *Daemon {
+//
+// opts adjust the Config before Serve, for the one thing a test cannot set afterwards: a
+// field the assembly reads from its OWN goroutines (the append floor's clock is read by
+// releaseInteractions' ticker, so writing it post-Serve would be a data race, not a seam).
+func assemble(t *testing.T, opts ...func(*Config)) *Daemon {
 	t.Helper()
 	buildBinaries(t)
 	dir, err := os.MkdirTemp("/tmp", "swsk")
@@ -75,7 +79,7 @@ func assemble(t *testing.T) *Daemon {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	sk, err := Serve(Config{
+	cfg := Config{
 		StateDir:           dir,
 		SocketPath:         filepath.Join(dir, "d.sock"),
 		LockPath:           filepath.Join(dir, "d.lock"),
@@ -85,7 +89,11 @@ func assemble(t *testing.T) *Daemon {
 		PollInterval:       50 * time.Millisecond,
 		StalenessThreshold: 2 * time.Second,
 		FakeAgentBin:       fakeAgentBin,
-	})
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	sk, err := Serve(cfg)
 	if err != nil {
 		t.Fatalf("skeleton.Serve (the daemon assembly is not built): %v", err)
 	}

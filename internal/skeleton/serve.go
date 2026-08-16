@@ -67,6 +67,18 @@ type Config struct {
 	// definition the gateway's supervision unit dials, and leaves it empty on a machine
 	// that was never provisioned for remote (ADR-007 B15).
 	RemoteSocketPath string
+	// ItemClock is the append floor's clock seam (remotegw.ItemAdmissionConfig.Now),
+	// nil => time.Now, which is every production caller.
+	//
+	// It exists because ADR-010 §7's merge window is WALL-CLOCK. Whether two increments
+	// of one item fold into one lossless append (IS-DELTA-1/-2) or ship as two records
+	// therefore depends on how much real time passed between two Offer calls -- so a test
+	// that must prove the MERGED item is admitted cannot get that from a real clock: a
+	// scheduler stall of one window between the two offers is enough to release the first
+	// increment alone, and CI's parallelism produces exactly that (docs/verification/
+	// r0-flake-rootcause.md). Pinning the clock is what makes "these two are inside one
+	// window" a fact of the test rather than a coincidence of the machine.
+	ItemClock func() time.Time
 }
 
 // Daemon is the assembled, running walking skeleton: the core lifecycle daemon,
@@ -135,6 +147,7 @@ type Daemon struct {
 	// IS-LIFE-2's answered_locally signal. All three are cleared by endSession.
 	itemMu     sync.Mutex
 	items      *remotegw.ItemAdmission
+	itemClock  func() time.Time // Config.ItemClock; nil => time.Now (the floor's own default)
 	itemIDs    map[string]string
 	turnIDs    map[string]string
 	approvals  map[string]*pendingApproval
@@ -188,7 +201,8 @@ func Serve(cfg Config) (*Daemon, error) {
 		capturing:  make(map[string]struct{}),
 	}
 	d.sampleFn = d.sampleGrid // the per-session grid sample (overridable in tests)
-	d.initInteractions()      // the ADR-010 §7 append floor + the adapter resolver (interaction.go)
+	d.itemClock = cfg.ItemClock
+	d.initInteractions() // the ADR-010 §7 append floor + the adapter resolver (interaction.go)
 	// The capability store's durable home: one 0600 record per session dir, so an
 	// ADR-017 T2 rule 2 degrade outlives the incarnation that authored it
 	// (capability.go). Set before anything can register a record.

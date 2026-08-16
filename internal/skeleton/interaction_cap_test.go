@@ -18,11 +18,13 @@ package skeleton
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // awaitKind polls the journal for the first item of one kind, and fails with the caller's own
@@ -43,6 +45,48 @@ func awaitKind(t *testing.T, sk *Daemon, session, kind string, why string) map[s
 	return nil
 }
 
+// pinnedClock is a monotone clock the test moves by hand. Every method is mutex-guarded: the
+// append floor reads it from the daemon's own release ticker while the test advances it.
+type pinnedClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *pinnedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *pinnedClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// assembleOnPinnedFloorClock stands up the assembly with the ADR-010 §7 append floor on a clock
+// the TEST moves, and returns both.
+//
+// WHY A TEST NEEDS THIS AND NOT A SLEEP. The floor's window is wall-clock and its rule is a
+// SPACING FLOOR, not a batching delay (IS-DELTA-2): an item offered a full window after the last
+// release is admitted at once. So whether two increments of one item_id fold into one lossless
+// append or ship as two separate records is decided by how much REAL time elapsed between two
+// Offer calls -- microseconds on an idle machine, and more than a window whenever the scheduler
+// takes the producer away in between. Under CI's full-suite parallelism it does exactly that, and
+// this test then read the first increment alone and failed on its 4096 vs 8192 bytes
+// (docs/verification/r0-flake-rootcause.md records the reproduction and the injection proof).
+//
+// With the clock pinned, "both increments are inside one window" is a fact of the rig: no time
+// passes between the offers no matter how long the machine takes over them, and the release
+// happens when the test says so -- through the daemon's OWN release ticker, which is still the
+// production driver calling the production Flush.
+func assembleOnPinnedFloorClock(t *testing.T) (*Daemon, *pinnedClock) {
+	t.Helper()
+	clk := &pinnedClock{now: time.Now()}
+	sk := assemble(t, func(cfg *Config) { cfg.ItemClock = clk.Now })
+	return sk, clk
+}
+
 // TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped is the confirmed defect, in the
 // shipped producer's own terms.
 //
@@ -52,7 +96,7 @@ func awaitKind(t *testing.T, sk *Daemon, session, kind string, why string) map[s
 // envelope -- 8 405 B as the floor re-marshals it, over an 8 KiB MaxItemBytes and under a raised
 // one. IS-DELTA-2 calls the merge "lossless text concatenation", so BOTH halves must arrive.
 func TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped(t *testing.T) {
-	sk := assemble(t)
+	sk, clock := assembleOnPinnedFloorClock(t)
 	const session = "s-cap-merge"
 	inc := func(text string) adapter.Interaction {
 		return adapter.Interaction{
@@ -64,6 +108,11 @@ func TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped(t *testing.T) 
 		inc(strings.Repeat("a", specMaxTextBytes)),
 		inc(strings.Repeat("b", specMaxTextBytes)),
 	), adapter.HookPayload{Event: "PostToolUse"})
+
+	// All three were offered at the SAME pinned instant: the user_message took the free slot,
+	// and both increments folded behind it. Opening the window is what lets the merged item out,
+	// and the daemon's own release ticker is what carries it.
+	clock.advance(remotegw.DefaultAppendWindow)
 
 	item := awaitKind(t, sk, session, adapter.KindAgentMessage,
 		"IS-DELTA-2 merges two pending increments for one item_id into ONE lossless append; §5's "+

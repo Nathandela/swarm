@@ -61,8 +61,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
@@ -106,7 +108,7 @@ func TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRen
 	// Then the whole recorded Edit turn, one `swarm hook` PROCESS per record, in recording order:
 	// the prompt, a Read, an Edit that escalated to a permission dialog, the applied change, and
 	// the agent's reply.
-	replayCorpusThroughHookBinary(t, env, fixture)
+	replayCorpusThroughHookBinary(t, rig.sk, env, fixture)
 
 	// EIGHT records, SIX items. The two tool calls fold open+close into one row each
 	// (IS-DELTA-3), and the recording's Notification is not one of the adapter's capture rows --
@@ -239,7 +241,11 @@ func TestClaudeLiveChainE2E_TheRecordedBodiesEnterThroughSwarmHookAndThePhoneRen
 //
 // Serially, and in recording order: a CLI fires its hooks one at a time, and the transcript this
 // asserts on is an ordered exchange rather than a bag of items.
-func replayCorpusThroughHookBinary(t *testing.T, env []string, fixture string) {
+//
+// AND THE PROCESS EXITING IS NOT WHAT MAKES IT ORDERED -- awaitHookIngested is. See its comment:
+// each record is waited INTO the daemon before the next one is posted, because a `swarm hook`
+// that has exited has only handed its callback over, not had it applied.
+func replayCorpusThroughHookBinary(t *testing.T, sk *Daemon, env []string, fixture string) {
 	t.Helper()
 	fx, err := fixtureio.LoadFixture(filepath.Join(claudeCorpusDir, fixture))
 	if err != nil {
@@ -247,7 +253,61 @@ func replayCorpusThroughHookBinary(t *testing.T, env []string, fixture string) {
 	}
 	for _, hp := range fx.HookPayloads {
 		runHookBinary(t, env, hp.Event, hp.Raw)
+		awaitHookIngested(t, sk, env, hp.Event)
 	}
+}
+
+// awaitHookIngested blocks until the daemon has INGESTED the callback the `swarm hook` process
+// that just exited posted. It is the barrier that makes "in recording order" true of the daemon
+// and not merely of the spawns.
+//
+// WHY THE PROCESS EXITING IS NOT A SYNC POINT. `swarm hook` returns once its callback has been
+// handed over -- written to the daemon socket (hookclient.Post returns after the write; there is
+// no reply to wait for) or durably spooled by the shim (PostToShim's ack byte). The daemon APPLIES
+// it afterwards, on whichever goroutine picks it up: one per connection for a direct post
+// (daemon.Config.ConnHandler -- "each connection is handed to ConnHandler in its own goroutine"),
+// or HookDrainer's 250ms spool tick for a shim-carried one. Two records posted in order can
+// therefore be SHAPED out of order, and the turn is what breaks first: IS-ENV-1 closes the turn on
+// the terminal agent_message, so a Stop that overtakes the Edit's PostToolUse leaves the
+// file_change behind it with no turn_id at all -- the exact CI failure this rig produced
+// (docs/verification/r0-flake-rootcause.md).
+//
+// THE OBSERVABLE IS THE DAEMON'S OWN INGEST BOOKKEEPING, not a sleep and not an item count (only
+// some records shape items at all, and the floor may still be holding the ones that do):
+// markHookSeqIngested records a callback's sequence only AFTER serveHookInteractions has shaped
+// and offered its items (hookdrain.go), so a sequence that reads back as ingested means this
+// record's items already carry the turn they belong to.
+func awaitHookIngested(t *testing.T, sk *Daemon, env []string, event string) {
+	t.Helper()
+	session := envValue(env, hookclient.EnvSessionID)
+	seq := hookSequenceUsed(t, env)
+	deadline := time.Now().Add(s19Deadline)
+	for time.Now().Before(deadline) {
+		if sk.hookSeqDuplicate(session, seq) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("`swarm hook %s` (callback sequence %d for session %s) never reached the daemon's "+
+		"interaction plane within %s: it was posted and the process exited 0, so either the shim's "+
+		"spool never carried it or the drain never applied it", event, seq, session, s19Deadline)
+}
+
+// hookSequenceUsed reads the sequence the hook process that just exited consumed: the daemon-
+// injected per-session counter FILE holds it, because nextSequence writes the incremented value
+// under its flock before the post (hookclient). It is the id the daemon's dedup set is keyed by.
+func hookSequenceUsed(t *testing.T, env []string) uint64 {
+	t.Helper()
+	path := envValue(env, hookclient.EnvSequenceFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the session's hook sequence file %s: %v", path, err)
+	}
+	seq, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		t.Fatalf("the hook sequence file %s holds %q, which is not a counter: %v", path, data, err)
+	}
+	return seq
 }
 
 // runHookBinary is the one exec: `swarm hook <event>` with body on stdin, exactly as the CLI
