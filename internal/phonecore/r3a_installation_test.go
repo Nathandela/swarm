@@ -224,7 +224,7 @@ func (rt *r3aRecordingTransport) RoundTrip(r *http.Request) (*http.Response, err
 		return nil, err
 	}
 	if swallow != nil && swallow(seq, r) {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, errors.New("r3a: response lost on the way back (injected)")
 	}
 	return resp, nil
@@ -256,7 +256,7 @@ func r3aSubmitWake(t *testing.T, gwURL string, addr PushAddress, capability stri
 	if err != nil {
 		t.Fatalf("submitting the wake: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }
 

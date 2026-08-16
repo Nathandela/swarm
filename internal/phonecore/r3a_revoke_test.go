@@ -174,7 +174,7 @@ func r3aMachineRevoke(t *testing.T, gwURL string, addr PushAddress, capability s
 	if err != nil {
 		t.Fatalf("machine revoke: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }
 
