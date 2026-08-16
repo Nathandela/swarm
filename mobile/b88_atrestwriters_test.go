@@ -93,6 +93,13 @@ var permittedAtRestWriters = map[string]string{
 		"blob under the WAKE tier KEK (it holds wake keys, so cleartext is not an option, and the wake tier is the " +
 		"one a push-woken process can open with the content tier locked, PB-KEY-2). No cleartext field exists in the " +
 		"file. Constructed by the census via Resume, like the two writers above.",
+	filepath.Join("internal", "phonecore", "machineregistry.go"): "machines/machine-registry.json plus the " +
+		"per-machine namespaces (wave R4, ADR-018 MM6). AT-REST FORM SETTLED IN TWO HALVES: the registry file is " +
+		"CLEARTEXT -- machine endpoint ids and display names, both already in PB-STATE-9's pinned cleartext list " +
+		"one file over (State.Machine is what OpenStore filters on and State.MachineName is display-only), and the " +
+		"load path must read them registry-first with both tiers locked; the MIGRATION's namespace copy writes " +
+		"nothing new at all -- it moves the EXISTING files (phone-state.json, device.key, push-state.sealed) " +
+		"byte-identical, so every sealed byte stays sealed under the writer that owns its form above.",
 	filepath.Join("mobile", "pairing.go"): "pairing-attempt: PB-PAIR-4's durable pairing state, one label from a " +
 		"closed set (paired, sas_mismatch, different_machine, ...). CLEARTEXT and outside the census -- carries no key " +
 		"material and no session content, so PB-SEC-1 is not engaged (ADR-007 B88).",

@@ -1,0 +1,64 @@
+=== R4 ROUND-2 RED EVIDENCE (review-finding fixes) ===
+date: 2026-08-16T10:44:40Z
+go version go1.26.5 darwin/amd64
+
+--- go test ./internal/phonecore/ -run "TestR4R2" -count=1 (RED) ---
+--- FAIL: TestR4R2_ConnectionCap_RemainsAHardBoundAcrossRemove (0.10s)
+    r4_round2_test.go:106: 2 clients ran concurrently during Remove; the documented cap is 1 and it is a HARD bound -- the removed client must be stopped BEFORE arbitration promotes its successor, not after
+--- FAIL: TestR4R2_ParkedClientEventsNeverReachTheAggregateStream (0.02s)
+    r4_round2_test.go:156: the aggregate stream delivered an event from PARKED machine "m-a"; Stop()-parking must bound the client's event flow, not merely its Running() boolean (the fail-open class machinemanager.go's stop signal exists to close)
+--- FAIL: TestR4R2_NewMachineRegistry_RefusesARootHoldingAnUnmigratedSingleton (0.02s)
+    r4_round2_test.go:184: NewMachineRegistry constructed an EMPTY live registry over a root that still holds an unmigrated phone-state.json; Resume now answers ErrStateMigrated while the registry names no machine -- migrate, never construct
+--- FAIL: TestR4R2_ValidMachineID_RefusesTheRegistryFileName (0.00s)
+    r4_round2_test.go:202: validMachineID accepted "machine-registry.json", the registry file's own name; its namespace directory would occupy the committed registry's path and wedge the root beyond any retry
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.239s
+FAIL
+
+--- go test ./internal/remotegw/ -run "TestR4R2" -count=1 (RED) ---
+--- FAIL: TestR4R2_RevokeObligation_RecordRefusesToClobberAPendingObligation (0.06s)
+    r4_round2_test.go:47: recording a second obligation silently clobbered a PENDING one: the undelivered revoke for [97 97 97 97 97 97 97 97 97 97 97 97 97 97 97 97] is destroyed and its address stays live at the gateway with no durable record that it should not be
+--- FAIL: TestR4R2_RevokeObligation_TerminalRefusalResolvesWithTheReasonPreserved (0.04s)
+    r4_round2_test.go:101: a terminal 401 refusal left the obligation PENDING; every future start re-presents a capability the gateway already refused as unauthorized -- the obligation never converges
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.043s
+FAIL
+
+--- go test ./cmd/swarm-remote/ -run "TestR4R2" -count=1 (RED: compile-level, undefined contract symbols) ---
+# github.com/Nathandela/swarm/cmd/swarm-remote [github.com/Nathandela/swarm/cmd/swarm-remote.test]
+cmd/swarm-remote/r4_round2_test.go:118:10: undefined: revokeHTTPClient
+cmd/swarm-remote/r4_round2_test.go:119:2: undefined: revokeHTTPClient
+cmd/swarm-remote/r4_round2_test.go:120:21: undefined: revokeHTTPClient
+cmd/swarm-remote/r4_round2_test.go:122:2: undefined: redrivePendingMachineRevoke
+FAIL	github.com/Nathandela/swarm/cmd/swarm-remote [build failed]
+FAIL
+
+--- STAGED: symbols implemented, main ORDERING not yet moved (redrive still after the gate) ---
+date: 2026-08-16T10:47:04Z
+--- FAIL: TestR4R2_Main_RedrivesThePendingRevokeBeforeTheQuiescenceGate (0.06s)
+    r4_round2_test.go:181: the pending revoke obligation was never DRIVEN: the process start in the only state that can hold one (post-revoke, zero paired devices) exited at the quiescence gate first, so an address the gateway never deleted stays live forever. stderr:
+        swarm-remote: no paired device to serve (0 paired, want exactly 1): supervise: nothing to serve; gateway quiescent
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm-remote	1.151s
+FAIL
+
+=== NOTES ===
+Round 2 = fix pack for the adversarial review of the round-1 GREEN. Every test above
+was written BEFORE its fix and verified failing for the RIGHT reason:
+
+- internal/phonecore/r4_round2_test.go: 4 runtime failures (cap exceeded during
+  Remove; parked client's event delivered on the aggregate stream; NewMachineRegistry
+  constructed over an unmigrated singleton root; validMachineID accepted the registry
+  file's own name).
+- internal/remotegw/r4_round2_test.go: 2 runtime failures (Record clobbered a pending
+  obligation; a terminal 401 left the obligation pending forever).
+- cmd/swarm-remote/r4_round2_test.go: compile-level RED first (undefined
+  redrivePendingMachineRevoke / revokeHTTPClient -- the frozen contract), then, with
+  the symbols implemented but main's ordering UNCHANGED, the staged runtime RED above:
+  TestR4R2_Main_RedrivesThePendingRevokeBeforeTheQuiescenceGate failed because the
+  process exited at the quiescence gate without ever driving the pending obligation --
+  the exact BLOCKING finding (the durable revoke retry was unreachable in production,
+  since a completed revoke leaves zero paired devices and the gate exits first).
+
+No assertion of the round-1 RED inventory was weakened; the round-2 tests are purely
+additive files. No git add/commit performed.

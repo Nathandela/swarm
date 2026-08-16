@@ -93,6 +93,16 @@ type App struct {
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).
 	stateDir string
+	// coreDir is the directory a.core was actually resumed from: stateDir until the R4
+	// migration commits, the per-machine registry namespace afterwards. The machines
+	// surface keys on it so the live core is never resumed a second time (MM6 step 5).
+	coreDir string
+	// wakeSealer and contentSealer are the two tier sealers NewApp built over the
+	// KeyCustody. Retained because the R4 machines surface resumes ADDITIONAL per-machine
+	// namespaces under the same custody (machines.go); they hold the KEK fetcher, never
+	// key material.
+	wakeSealer    phonecore.Sealer
+	contentSealer phonecore.Sealer
 
 	events *dispatcher
 
@@ -177,6 +187,9 @@ type App struct {
 	// "revoked" after a pairing re-armed it (PB-STATE-10). Zero -- the normal case -- means
 	// no grace at all, so a revocation stays terminal exactly as PB-APP-10 requires.
 	pairingGraceUntil time.Time
+	// machines is the R4 multi-machine manager view (machines.go), built lazily by the
+	// first machines-surface verb. Guarded by mu.
+	machines *machinesRuntime
 }
 
 // session is one Start..Stop generation.
@@ -219,20 +232,29 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		resyncAt:       map[string][]time.Time{},
 		resyncAsked:    map[string]bool{},
 	}
+	// PB-KEY-9, delivered. Both tiers are sealed under a key the Android Keystore
+	// unwraps and this process never stores: the sealers hold the FETCHER, so every
+	// seal and every open goes back to Keystore and the content tier's gate is the
+	// unwrap refusing rather than a flag beside it. A separate sealer per tier is
+	// what keeps PB-KEY-2's split real at rest -- one file cannot be gated two ways,
+	// and one sealer over both would put the content key behind the wake tier's KEK,
+	// which opens with no user present.
+	a.wakeSealer = custodySealer{tier: "wake", fetch: custody.WakeKEK}
+	a.contentSealer = custodySealer{tier: "content", fetch: custody.ContentKEK}
+	a.coreDir = cfg.StateDir
 	core, err := phonecore.Resume(phonecore.Config{
-		Dir:     cfg.StateDir,
-		Machine: cfg.MachineID,
-		Ack:     &relayAcker{app: a},
-		// PB-KEY-9, delivered. Both tiers are sealed under a key the Android Keystore
-		// unwraps and this process never stores: the sealers hold the FETCHER, so every
-		// seal and every open goes back to Keystore and the content tier's gate is the
-		// unwrap refusing rather than a flag beside it. A separate sealer per tier is
-		// what keeps PB-KEY-2's split real at rest -- one file cannot be gated two ways,
-		// and one sealer over both would put the content key behind the wake tier's KEK,
-		// which opens with no user present.
-		WakeSealer:    custodySealer{tier: "wake", fetch: custody.WakeKEK},
-		ContentSealer: custodySealer{tier: "content", fetch: custody.ContentKEK},
+		Dir:           cfg.StateDir,
+		Machine:       cfg.MachineID,
+		Ack:           &relayAcker{app: a},
+		WakeSealer:    a.wakeSealer,
+		ContentSealer: a.contentSealer,
 	})
+	if errors.Is(err, phonecore.ErrStateMigrated) {
+		// The R4 migration has committed: the singleton blob at StateDir is a rollback
+		// artefact and the pairing lives in its per-machine registry namespace (MM6
+		// step 5). Resume from there instead of standing up a second live sequencer.
+		core, err = a.resumeMigrated(cfg)
+	}
 	if err != nil {
 		a.events.close()
 		return nil, err
@@ -546,7 +568,15 @@ func (a *App) Close() (err error) {
 	for p := range a.pairings {
 		live = append(live, p)
 	}
+	machines := a.machines
+	a.machines = nil
 	a.mu.Unlock()
+
+	// The machines manager owns per-pairing clients and the aggregate-stream relay;
+	// closing it here is what lets drainAggregate terminate (machines.go).
+	if machines != nil {
+		_ = machines.mgr.Close()
+	}
 
 	// AN IN-FLIGHT HANDSHAKE IS A WRITER ON stateDir, and Close used to leave it running: it
 	// joined the relay-drain session and nothing else. The handshake's last act is persist()

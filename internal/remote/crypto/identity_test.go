@@ -77,7 +77,7 @@ func TestIdentity_NoPrivateKeyInLogs(t *testing.T) {
 		//nolint:staticcheck // S1025 wants id.String() here, but %s IS the subject: this list
 		// enumerates the fmt verbs a log line can reach an Identity through, and collapsing
 		// the %s entry into a direct String() call removes that verb from the leak fence.
-		fmt.Sprintf("%s", id), //nolint:gosimple // the %s verb is itself under test; String() would drop it from the fence
+		fmt.Sprintf("%s", id), //nolint:staticcheck // the %s verb is itself under test; String() would drop it from the fence
 		fmt.Sprint(id),
 	}
 	// Search for the private scalars in raw, hex, and a long recognizable run.

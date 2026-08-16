@@ -1,0 +1,51 @@
+=== Wave R4 round 3 RED evidence ===
+Sun Aug 16 11:25:23 UTC 2026
+go version go1.26.5 darwin/amd64
+
+--- cmd/swarm-remote (round-3 tests) ---
+--- FAIL: TestR4R3_Redrive_RefusesToDeleteALivePushAddress (0.13s)
+    r4_round3_test.go:66: the gateway saw 1 DELETE(s) with a device paired again; the redrive just destroyed the live pairing's wake path (the tombstone makes it permanent)
+swarm-remote: machine revoke: push-gateway.json carries no machine_revoke_capability; the pairing's push address cannot be deleted at the gateway
+--- FAIL: TestR4R3_RevokeMoment_RecordsTheObligationEvenWithoutACapability (0.00s)
+    r4_round3_test.go:144: the revoke moment left NO durable obligation on a pre-producer provisioning; provisioning machine_revoke_capability afterwards can never drive the delete that was owed -- the durable-retry promise silently does not hold
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm-remote	1.139s
+FAIL
+exit: 1
+
+--- internal/phonecore (round-3 tests) ---
+--- FAIL: TestR4R3_AddMachine_AdoptsNoResidueFromAForgottenPairing (0.06s)
+    r4_round3_test.go:62: the re-added namespace still holds the forgotten pairing's device.key (stat answered nil/other); a re-pair silently adopted forgotten key material
+--- FAIL: TestR4R3_OpenMachineRegistry_PurgesNamespacesTheRegistryDoesNotName (0.04s)
+    r4_round3_test.go:91: the orphan namespace /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/TestR4R3_OpenMachineRegistry_PurgesNamespacesTheRegistryDoesNotN1148337599/001/machines/m-x survived Open; the forgotten pairing's sealed key material is never collected
+--- FAIL: TestR4R3_RegistryManagerRemove_ForgetsDurablyEvenWhenStopFails (0.03s)
+    r4_round3_test.go:144: the registry still holds 1 entrie(s) after Remove; the forgotten machine reappears with its keys on the next launch
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.125s
+FAIL
+exit: 1
+
+--- mobile (round-3 tests) ---
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+mobile/r4_round3_test.go:122:37: a.Broken undefined (type *MachineInfo has no field or method Broken)
+mobile/r4_round3_test.go:129:8: b.Broken undefined (type *MachineInfo has no field or method Broken)
+mobile/r4_round3_test.go:129:20: b.BrokenReason undefined (type *MachineInfo has no field or method BrokenReason)
+FAIL	github.com/Nathandela/swarm/mobile [build failed]
+FAIL
+exit: 1
+
+--- POST-CAPTURE FIXTURE CORRECTIONS (disclosed; no assertion weakened) ---
+Two corrections were made AFTER this RED capture, before GREEN:
+1. TestR4R3_RevokeMoment_RecordsTheObligationEvenWithoutACapability failed at RED
+   time for a compound reason: the durability defect under test AND a missing
+   remote/ dir in the fixture (the store's atomic write needs its parent). The
+   GREEN implementation creates the store's parent dir in machineRevoke itself
+   (production-safe: the record is the durable half of the revoke), so the fixture
+   needed no change; the RED failure message above already shows the defect
+   ("left NO durable obligation").
+2. TestR4R3_OneBrokenNamespaceDoesNotDegradeTheOthers's final registry-count
+   assertion was corrected from the test's own STALE in-memory registry handle to
+   reopening the committed registry from disk (phonecore.OpenMachineRegistry) plus
+   a namespace-deletion stat -- STRICTLY STRONGER (durable, not in-memory). The
+   RED-time failures shown above (wholesale App.Machines failure) are the reviewed
+   defect and were reproduced before any fixture edit.

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -233,6 +234,143 @@ func terminalRelayError(err error) bool {
 	return false
 }
 
+// revokeHTTPClient builds the revoke producer's HTTP client. A package variable so a
+// test can point the drive at its TLS double; production never reassigns it.
+var revokeHTTPClient = func() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+
+// machineRevoke is the shared half of the machine-side revoke PRODUCER (bead
+// agents-tracker-u37c; playbook 3.2: "Machine-side device revocation uses the
+// machine-revoke capability and retries deletion durably after local epoch rotation").
+// With record set it durably registers the obligation to delete this pairing's push
+// address BEFORE the first network attempt; without it, it re-drives whatever
+// obligation an earlier process left pending, resolved idempotently by the PG-REV-2
+// tombstone's 204.
+//
+// A push-gateway.json without machine_revoke_capability predates the producer: the
+// delete cannot be presented, and that is disclosed rather than silently required.
+func machineRevoke(stateDir, gatewayURL, capability string, addr remotegw.PushAddress, record bool) {
+	// The obligation must be recordable even on a state dir whose remote/ scaffold is
+	// not fully provisioned: the record is the durable half of the revoke.
+	if err := os.MkdirAll(filepath.Join(stateDir, "remote"), 0o700); err != nil {
+		report("machine revoke: create remote state dir", err)
+		return
+	}
+	store, err := remotegw.OpenRevokeObligationStore(
+		filepath.Join(stateDir, "remote", "revoke-obligation.json"))
+	if err != nil {
+		report("machine revoke: open obligation store", err)
+		return
+	}
+	if record {
+		// Recorded UNCONDITIONALLY, before the capability check: on a pre-producer
+		// provisioning (no machine_revoke_capability yet) the revoke moment still owes
+		// the delete, and only a durable obligation lets a later provisioning of the
+		// capability drive it. Record needs no revoker.
+		m := remotegw.NewRevokeObligationMachine(remotegw.RevokeObligationConfig{
+			Store: store, Address: addr,
+		})
+		if err := m.Record(); err != nil {
+			report("machine revoke: record obligation", err)
+			return
+		}
+	} else if _, ok := store.Pending(); !ok {
+		return
+	}
+	if capability == "" {
+		report("machine revoke: push-gateway.json carries no machine_revoke_capability; "+
+			"the pairing's push address cannot be deleted at the gateway (the obligation "+
+			"stays durable for a later provisioning)", nil)
+		return
+	}
+	m := remotegw.NewRevokeObligationMachine(remotegw.RevokeObligationConfig{
+		Store: store,
+		Revoker: &remotegw.HTTPAddressRevoker{
+			BaseURL:                 gatewayURL,
+			MachineRevokeCapability: capability,
+			Client:                  revokeHTTPClient(),
+		},
+		Address: addr,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := m.Drive(ctx); err != nil {
+		// A retryable failure stays durable for the next start; a terminal refusal
+		// resolved the record with the reason preserved. Either way the operator line
+		// carries the classification in err itself.
+		report("machine revoke: drive obligation", err)
+	}
+}
+
+// produceMachineRevoke is the record-and-drive arm, run at the revoke moment.
+func produceMachineRevoke(p gatewayParams) {
+	if p.PushGateway == nil {
+		return
+	}
+	machineRevoke(p.StateDir, p.PushGateway.GatewayURL, p.PushGateway.MachineRevokeCapability,
+		p.PushGateway.Address, true)
+}
+
+// redrivePendingMachineRevoke is u37c's durable retry across machine death, and it
+// MUST run BEFORE requireSomethingToServe: a completed revoke leaves ZERO paired
+// devices -- exactly the state the quiescence gate exits on -- so a retry gated behind
+// "something to serve" is unreachable in the only world that ever needs it. It needs
+// only StateDir and push-gateway.json, never a paired device or resolved params.
+//
+// THE ZERO-DEVICE PRECONDITION IS ENFORCED, not assumed (round 3): the redrive drives
+// only while the device registry is quiescent. push-gateway.json has no writer in this
+// tree (a hand-provisioned scaffold), so a re-pair after a revoke keeps the SAME push
+// address -- and Drive uses the obligation's stored address regardless. Driving the
+// stored DELETE with a device paired again would tombstone the LIVE pairing's wake
+// path permanently while reporting success. An obligation found pending in that state
+// is RETIRED durably instead: leaving it pending defers the same delete to the next
+// zero-device start (the next revoke), against whatever address is stored.
+func redrivePendingMachineRevoke(stateDir string) {
+	f, addr, present, err := parsePushGatewayFile(filepath.Join(stateDir, "remote"))
+	if err != nil {
+		report("machine revoke: read push-gateway.json", err)
+		return
+	}
+	if !present {
+		return
+	}
+	reg, err := device.Open(filepath.Join(stateDir, "devices"))
+	if err != nil {
+		report("machine revoke: open device registry", err)
+		return
+	}
+	if n := len(reg.List()); n > 0 {
+		retireStalePendingRevoke(stateDir, n)
+		return
+	}
+	machineRevoke(stateDir, f.GatewayURL, f.MachineRevokeCapability, addr, false)
+}
+
+// retireStalePendingRevoke resolves a pending revoke obligation found with n devices
+// paired again: the stored address may be the live pairing's own wake path (see
+// redrivePendingMachineRevoke), so the delete must never be presented -- now or on any
+// later start.
+func retireStalePendingRevoke(stateDir string, n int) {
+	store, err := remotegw.OpenRevokeObligationStore(
+		filepath.Join(stateDir, "remote", "revoke-obligation.json"))
+	if err != nil {
+		report("machine revoke: open obligation store", err)
+		return
+	}
+	ob, ok := store.Pending()
+	if !ok {
+		return
+	}
+	ob.Done = true
+	ob.Refusal = fmt.Sprintf("retired undriven: %d device(s) paired again before the delete "+
+		"resolved; the stored address may be the live pairing's wake path", n)
+	if err := store.Put(ob); err != nil {
+		report("machine revoke: retire stale obligation", err)
+		return
+	}
+	report("machine revoke: pending obligation retired undriven; a device is paired again "+
+		"and the stored push address may be live", nil)
+}
+
 // report writes one operator-facing line to stderr, which is what the systemd/launchd unit
 // captures. os.Stderr is read at call time so a test can observe the same channel an
 // operator does.
@@ -254,6 +392,15 @@ func main() {
 	}
 	daemonSocket := os.Getenv(daemon.EnvRemoteSocket)
 
+	// The durable retry across machine death (u37c): a revoke obligation an earlier
+	// process recorded and could not resolve is re-presented BEFORE the quiescence
+	// gate, because a completed revoke leaves zero paired devices and a retry placed
+	// after the gate would be unreachable in the one world that needs it. The redrive
+	// itself ENFORCES that zero-device precondition (round 3): with a device paired
+	// again it retires the obligation instead of deleting what may be the live
+	// pairing's wake path. The PG-REV-2 tombstone makes the re-presented delete a 204.
+	redrivePendingMachineRevoke(stateDir)
+
 	// PB-LIFE-3(a): consulted BEFORE resolving params, so a machine with nothing to serve
 	// exits quiescent instead of as the provisioning failure resolveGatewayParams reports.
 	if err := requireSomethingToServe(stateDir); err != nil {
@@ -274,6 +421,11 @@ func main() {
 		// would refuse to resolve params anyway. Only a later `swarm remote pair` starts
 		// one again -- necessarily a fresh process, under the NEW epoch.
 		if errors.Is(err, remotegw.ErrDeviceRevoked) {
+			// The owner revoked the paired device: the machine PRODUCES the revoke --
+			// record the durable obligation and delete the pairing's push address at the
+			// gateway (u37c). Independent of the epoch rotation the revoke performed: the
+			// obligation holds pairing material only.
+			produceMachineRevoke(p)
 			err = fmt.Errorf("%w: %w", err, supervise.ErrQuiescent)
 		}
 		exit(err)

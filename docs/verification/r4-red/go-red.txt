@@ -1,0 +1,185 @@
+======================================================================
+R4 multi-machine foundation - failing-test inventory RED RUN (Go lanes)
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+bead: agents-tracker-hggx.5 (Wave R4: transactional migration to machine registry;
+      independent MachineClient state/keys/loops; add/switch/remove UX + global
+      inbox; per-machine push address + revocation incl. the u37c machine-side
+      revoke producer; bounded connection concurrency + deterministic stale-state
+      rendering) and agents-tracker-u37c (machine-side revoke producer).
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-16 (run 09:25 UTC)
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+new files (ADDITIVE ONLY):
+  internal/phonecore/r4_migration_test.go        (MM6 transactional migration:
+      happy path keyed by the AUTHENTICATED machine id; 4 pre-commit kill points
+      leave the old state authoritative; the post-commit kill point leaves the
+      registry fully live and the old singleton path refusing ErrStateMigrated
+      [never two live send sequencers]; rollback-readable old blob; custody
+      verified before any mutation, byte-hash identical on refusal)
+  internal/phonecore/r4_isolation_test.go        (MM2/MM3/MM4/MM7/MM8: two real
+      pairings with disjoint namespaces/keys/seq spaces/cursors/op queues/wake
+      addresses; revocation of A leaves B's namespace BYTE-IDENTICAL and live;
+      process death restores both; removal deletes exactly one namespace;
+      machine-qualified aggregate stream where duplicate session ids do not
+      collide; duplicate AddMachine refused)
+  internal/phonecore/r4_connectioncap_test.go    (MM3: documented cap never
+      exceeded; deterministic least-recently-viewed overflow; parked rows render
+      Stale with their durable last-sync instant, deterministically under an
+      injected clock; connected rows never marked stale)
+  internal/phonecore/r4_revokeproducer_e2e_test.go  (u37c end-to-end SHAPE against
+      the REAL internal/pushgw server in process: machine records a durable revoke
+      obligation, drives DELETE with the machine-revoke capability, submit
+      capability dead after; durable retry across machine process death resolves
+      through the PG-REV-2 tombstone's 204; then the phone honors -- severed
+      forever, drops counted, survives phone process death, re-adoption refused)
+  internal/remotegw/r4_revokeproducer_test.go    (u37c unit half: exact wire shape
+      DELETE /v1/addresses/{base64url} + "Swarm-Revoke <cap>" + empty body;
+      obligation durable BEFORE the first network attempt and across a store
+      reopen; retry classification 5xx/transport=retryable, 204=terminal,
+      re-drive after success=no-op; request bytes independent of local epoch
+      rotation [playbook :146-147])
+  cmd/swarm-remote/r4_revokecap_test.go          (u37c config half:
+      push-gateway.json gains machine_revoke_capability carried verbatim into
+      remotegw.PushGatewayConfig; a pre-producer file WITHOUT the field stays
+      valid and resolves with the capability empty)
+  mobile/r4_screencoverage_test.go               (deliverable 3, facade half:
+      8 R4 screen elements traced S16-style through screen_coverage.tsv --
+      machines.list/add/select/forget, inbox.global, machines.connection_health,
+      machines.stale_age, machines.recovery)
+  android/gate/r4_multimachine_ui_test.go        (deliverable 3, Android half:
+      MachinesScreen.kt pure screen model exists, names ADD_COMPUTER/
+      SWITCH_COMPUTER/FORGET_COMPUTER/GLOBAL_INBOX, has the destinationFor
+      first-run resolver and the 4 row facts; JVM suite exists [that check is a
+      FENCE and passes at RED time by construction -- labelled in the file])
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt
+      (compile-RED JVM contract for MachinesScreen/MachineRowModel/
+      MachinesDestination; evidence in android-red.txt)
+no existing test or non-test source file is modified by this work. AddSole, the
+ADR-011 scope, internal/pushgw, internal/skeleton and internal/shim are untouched.
+======================================================================
+
+### COMPILE-LEVEL RED (the r3-red convention: "undefined symbols are the frozen
+### contract the implementation must supply"). Every failure below is an R4
+### contract symbol -- there are no unrelated breaks in the owned packages at the
+### time of this run.
+###
+### THE B94 FENCE IS BIDIRECTIONAL: the GREEN slice that wires
+### NewRegistryManager/the migration as the production path MUST delete the ~15
+### phonecore MM4 rows at internal/verify/phaseb_reachability_test.go:114-133,
+### and the u37c producer wiring MUST delete the R3 evidence's "HonorMachineRevoke
+### producer" open-obligation disclosure
+### (docs/verification/r3-green/android-green-round2.txt:222-226).
+
+=== go test -count=1 -run TestR4 -gcflags=-e ./internal/phonecore/
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/r4_isolation_test.go:38:9: undefined: MachineRegistry
+internal/phonecore/r4_isolation_test.go:50:14: undefined: NewMachineRegistry
+internal/phonecore/r4_isolation_test.go:192:14: undefined: OpenMachineRegistry
+internal/phonecore/r4_isolation_test.go:233:14: undefined: NewMachineRegistry
+internal/phonecore/r4_isolation_test.go:243:14: undefined: NewRegistryManager
+internal/phonecore/r4_isolation_test.go:243:38: undefined: ManagerOptions
+internal/phonecore/r4_isolation_test.go:291:14: undefined: NewMachineRegistry
+internal/phonecore/r4_connectioncap_test.go:33:69: undefined: RegistryManager
+internal/phonecore/r4_connectioncap_test.go:35:14: undefined: NewMachineRegistry
+internal/phonecore/r4_connectioncap_test.go:39:14: undefined: NewRegistryManager
+internal/phonecore/r4_connectioncap_test.go:39:38: undefined: ManagerOptions
+internal/phonecore/r4_connectioncap_test.go:154:21: undefined: MachineRow
+internal/phonecore/r4_migration_test.go:105:26: undefined: MigrationKillPoint
+internal/phonecore/r4_migration_test.go:106:2: undefined: MigKillAfterVerify
+internal/phonecore/r4_migration_test.go:107:2: undefined: MigKillAfterNamespace
+internal/phonecore/r4_migration_test.go:108:2: undefined: MigKillAfterStateCopy
+internal/phonecore/r4_migration_test.go:109:2: undefined: MigKillBeforeCommit
+internal/phonecore/r4_migration_test.go:113:19: undefined: MigrationKillPoint
+internal/phonecore/r4_migration_test.go:114:16: undefined: MigrationKillPoint
+internal/phonecore/r4_migration_test.go:122:45: undefined: MigrationKillPoint
+internal/phonecore/r4_migration_test.go:122:72: undefined: MigrationConfig
+internal/phonecore/r4_migration_test.go:123:9: undefined: MigrationConfig
+internal/phonecore/r4_migration_test.go:164:14: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:210:17: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:214:17: undefined: OpenMachineRegistry
+internal/phonecore/r4_migration_test.go:214:65: undefined: ErrRegistryNotLive
+internal/phonecore/r4_migration_test.go:233:16: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:253:15: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:253:71: undefined: MigKillAfterCommit
+internal/phonecore/r4_migration_test.go:254:57: undefined: MigKillAfterCommit
+internal/phonecore/r4_migration_test.go:257:14: undefined: OpenMachineRegistry
+internal/phonecore/r4_migration_test.go:260:38: undefined: MigKillAfterCommit
+internal/phonecore/r4_migration_test.go:273:50: undefined: ErrStateMigrated
+internal/phonecore/r4_migration_test.go:294:15: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:321:15: undefined: MigrateSingletonToRegistry
+internal/phonecore/r4_migration_test.go:328:15: undefined: OpenMachineRegistry
+internal/phonecore/r4_migration_test.go:328:63: undefined: ErrRegistryNotLive
+internal/phonecore/r4_revokeproducer_e2e_test.go:77:25: undefined: remotegw.OpenRevokeObligationStore
+internal/phonecore/r4_revokeproducer_e2e_test.go:81:22: undefined: remotegw.NewRevokeObligationMachine
+internal/phonecore/r4_revokeproducer_e2e_test.go:81:58: undefined: remotegw.RevokeObligationConfig
+internal/phonecore/r4_revokeproducer_e2e_test.go:83:22: undefined: remotegw.HTTPAddressRevoker
+internal/phonecore/r4_revokeproducer_e2e_test.go:108:26: undefined: remotegw.OpenRevokeObligationStore
+internal/phonecore/r4_revokeproducer_e2e_test.go:112:23: undefined: remotegw.NewRevokeObligationMachine
+internal/phonecore/r4_revokeproducer_e2e_test.go:112:59: undefined: remotegw.RevokeObligationConfig
+internal/phonecore/r4_revokeproducer_e2e_test.go:114:22: undefined: remotegw.HTTPAddressRevoker
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+=== go test -count=1 -run TestR4 -gcflags=-e ./internal/remotegw/
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/r4_revokeproducer_test.go:94:14: undefined: HTTPAddressRevoker
+internal/remotegw/r4_revokeproducer_test.go:128:16: undefined: OpenRevokeObligationStore
+internal/remotegw/r4_revokeproducer_test.go:134:13: undefined: NewRevokeObligationMachine
+internal/remotegw/r4_revokeproducer_test.go:134:40: undefined: RevokeObligationConfig
+internal/remotegw/r4_revokeproducer_test.go:143:19: undefined: OpenRevokeObligationStore
+internal/remotegw/r4_revokeproducer_test.go:166:16: undefined: OpenRevokeObligationStore
+internal/remotegw/r4_revokeproducer_test.go:171:13: undefined: NewRevokeObligationMachine
+internal/remotegw/r4_revokeproducer_test.go:171:40: undefined: RevokeObligationConfig
+internal/remotegw/r4_revokeproducer_test.go:173:13: undefined: HTTPAddressRevoker
+internal/remotegw/r4_revokeproducer_test.go:221:16: undefined: OpenRevokeObligationStore
+internal/remotegw/r4_revokeproducer_test.go:226:13: undefined: NewRevokeObligationMachine
+internal/remotegw/r4_revokeproducer_test.go:226:40: undefined: RevokeObligationConfig
+internal/remotegw/r4_revokeproducer_test.go:228:13: undefined: HTTPAddressRevoker
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+=== go test -count=1 -run TestR4 -gcflags=-e ./cmd/swarm-remote/
+# github.com/Nathandela/swarm/cmd/swarm-remote [github.com/Nathandela/swarm/cmd/swarm-remote.test]
+cmd/swarm-remote/r4_revokecap_test.go:37:3: unknown field MachineRevokeCapability in struct literal of type pushGatewayFile
+cmd/swarm-remote/r4_revokecap_test.go:48:9: cfg.MachineRevokeCapability undefined (type *remotegw.PushGatewayConfig has no field or method MachineRevokeCapability)
+cmd/swarm-remote/r4_revokecap_test.go:50:54: cfg.MachineRevokeCapability undefined (type *remotegw.PushGatewayConfig has no field or method MachineRevokeCapability)
+cmd/swarm-remote/r4_revokecap_test.go:70:9: cfg.MachineRevokeCapability undefined (type *remotegw.PushGatewayConfig has no field or method MachineRevokeCapability)
+cmd/swarm-remote/r4_revokecap_test.go:72:74: cfg.MachineRevokeCapability undefined (type *remotegw.PushGatewayConfig has no field or method MachineRevokeCapability)
+FAIL	github.com/Nathandela/swarm/cmd/swarm-remote [build failed]
+FAIL
+
+### RUNTIME-LEVEL RED (the guards compile and FAIL for the requirement's own
+### reason: no coverage rows, no facade verbs, no screen model file).
+
+=== go test -count=1 -run TestR4 ./mobile/
+--- FAIL: TestR4_EveryMultiMachineScreenElementIsTracedToAFacadeMethod (0.27s)
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "inbox.global" (ADR-018 MM4, playbook 4.2:196-199) has no row in screen_coverage.tsv. The verb behind it is one R4 owes; without it the machine switcher / global inbox ships untraced or not at all
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.add" (ADR-018 MM6, playbook 4.1:465-472) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.connection_health" (ADR-018 MM5/MM8, playbook 4.2:198) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.forget" (ADR-018 MM7, playbook 4.9:319-324) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.list" (ADR-018 MM3, playbook 4.2:196-198) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.recovery" (ADR-018 MM8, playbook 6.7:575-576) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.select" (ADR-018 MM3, playbook 4.2:200-202) has no row in screen_coverage.tsv. [...]
+    r4_screencoverage_test.go:100: PB-BIND-3 COVERAGE FAILURE: R4 screen element "machines.stale_age" (ADR-018 MM3, playbook 4.2:200-202) has no row in screen_coverage.tsv. [...]
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	1.372s
+FAIL
+
+=== go test -count=1 -run TestR4 ./android/gate/
+--- FAIL: TestR4_MachinesScreenModelExistsAndNamesEveryAffordance (0.00s)
+    r4_multimachine_ui_test.go:45: R4's machine switcher has no screen model: open /Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/screens/MachinesScreen.kt: no such file or directory. The module's rule (PB-DS-9, PairOnlyScreen/TriageInboxScreen precedent) is a pure model the JVM suite can drive; a switcher composed directly in a Surface is untestable copy-in-the-view
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.823s
+FAIL
+
+### HONEST NOTES
+###  - TestR4_MachinesScreenModelHasItsJVMSuite (android/gate) PASSES at RED time
+###    by construction (the RED slice checks in the Kotlin suite it fences); it is
+###    labelled as a fence in the file and is NOT counted as coverage here.
+###  - The [...] lines above elide only the repeated sentence tail of the mobile
+###    coverage failure; the full text is in the test source and reproduces with
+###    the command shown.
+###  - Physical three-machines-two-relays exit is the OWNER's; this wave's bar is
+###    code-complete + gates green + the isolation tests standing in, to be
+###    disclosed in docs/verification/r4-multimachine.md by the GREEN/ledger pass.
+======================================================================

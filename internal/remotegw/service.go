@@ -114,7 +114,13 @@ type ServiceConfig struct {
 type PushGatewayConfig struct {
 	GatewayURL       string // the push gateway's base URL, e.g. https://push.example.com
 	SubmitCapability string // this pairing's submit capability (spec §2.2)
-	Address          PushAddress
+	// MachineRevokeCapability is the pairing's machine-revoke capability (spec §2.2/3.4,
+	// PG-AUTH-9: DISTINCT from submit), carried verbatim from push-gateway.json for the
+	// revoke producer (revokeproducer.go, bead agents-tracker-u37c). Empty on every
+	// pre-producer provisioning: the producer then cannot run and must say so --
+	// degraded and disclosed, never silently required.
+	MachineRevokeCapability string
+	Address                 PushAddress
 	// Transport is the durable push_transport selection (PG-MIG-1). Nil => in-memory,
 	// which defaults to legacy_relay (PG-MIG-1/2's starting state) and is not durable
 	// across a restart -- production wires the file.

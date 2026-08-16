@@ -139,6 +139,21 @@ var requiredScreenElements = []string{
 	// clock running ahead (every wake correctly refused, forever) and forged wakes.
 	"push.gateway_registration",
 	"push.drop_diagnosis",
+
+	// ADDED BY WAVE R4 (ADR-018, bead agents-tracker-hggx.5), additively and for the
+	// reason S16's block states: the list must GROW when the product does, or the reverse
+	// check fires on every legitimately new element. mobile/r4_screencoverage_test.go
+	// states the case for each and hard-codes them there too, so this list and that one
+	// keep meeting in the middle. Every one is a control or fact a user touches on the R4
+	// machine-switcher and global-inbox screens.
+	"machines.list",              // ADR-018 MM3: the switcher's row set, four facts per row
+	"machines.add",               // ADR-018 MM6: adds BESIDE existing pairings, never replaces
+	"machines.select",            // ADR-018 MM3: feeds the deterministic least-recently-viewed policy
+	"machines.forget",            // ADR-018 MM7: phone-side removal of exactly one pairing
+	"inbox.global",               // ADR-018 MM4: rows keyed (machine_id, session_id), never folded
+	"machines.connection_health", // ADR-018 MM5/MM8: one row's degradation degrades that row only
+	"machines.stale_age",         // ADR-018 MM3: a parked row visibly shows its last-sync age
+	"machines.recovery",          // ADR-018 MM8: recovery screens routed per machine
 }
 
 type coverageRow struct {

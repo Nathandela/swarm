@@ -38,6 +38,12 @@ field Event.State string
 field Event.Stream string
 field Freshness.LastHeardUnixMs int64
 field Freshness.Silent bool
+field InboxItem.Group string
+field InboxItem.MachineID string
+field InboxItem.MachineName string
+field InboxItem.NeedsInput bool
+field InboxItem.SessionID string
+field InboxItem.Title string
 field JournalEntry.Cursor int64
 field JournalEntry.Group string
 field JournalEntry.SessionID string
@@ -48,6 +54,14 @@ field LaunchSpec.Cwd string
 field LaunchSpec.Options string
 field LaunchSpec.Prompt string
 field LaunchSpec.Rows int
+field MachineInfo.Broken bool
+field MachineInfo.BrokenReason string
+field MachineInfo.Connected bool
+field MachineInfo.DisplayName string
+field MachineInfo.ID string
+field MachineInfo.LastSyncUnixMs int64
+field MachineInfo.NeedsInput int
+field MachineInfo.Stale bool
 field MachinePresence.ObservedUnixMs int64
 field MachinePresence.State string
 field Op.Action string
@@ -114,6 +128,7 @@ ifacemethod EventListener.OnEvent(*Event)
 ifacemethod KeyCustody.ContentKEK() ([]byte, error)
 ifacemethod KeyCustody.WakeKEK() ([]byte, error)
 ifacemethod RelayTrust.VerifyRelayChain(string, []byte) error
+method App.AddMachine(string, string) error
 method App.Approve(string, string, string) (*Op, error)
 method App.BeginPairing(string) (*Pairing, error)
 method App.BeginPairingWithCode(string, string) (*Pairing, error)
@@ -124,6 +139,8 @@ method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
 method App.EnsurePushRegistration(string) error
 method App.ErrorClass(string) (string, error)
+method App.ForgetMachine(string) error
+method App.GlobalInbox() (*InboxList, error)
 method App.HandlePushWake(string) (*WakeAlert, error)
 method App.InstallContentKey([]byte) error
 method App.InstallWakeKey([]byte) error
@@ -135,6 +152,7 @@ method App.Launch(*LaunchSpec) (*Op, error)
 method App.MachineFreshness() (*Freshness, error)
 method App.MachineName() (string, error)
 method App.MachinePresence() (*MachinePresence, error)
+method App.Machines() (*MachineList, error)
 method App.Outcome(string) (*Outcome, error)
 method App.PairedDeviceName() (string, error)
 method App.PairingState() (string, error)
@@ -154,6 +172,7 @@ method App.Resync(string) error
 method App.ResyncPending(string) (bool, error)
 method App.RevokeThisDevice() (*Op, error)
 method App.Roster() (*SessionList, error)
+method App.SelectMachine(string) error
 method App.SendInput(string, []byte) error
 method App.Session(string) (*Session, error)
 method App.SetEventListener(EventListener) error
@@ -171,10 +190,15 @@ method App.UndeliveredInputs() (*UndeliveredList, error)
 method App.UnlockContent() error
 method App.UnsubscribeJournal() error
 method App.WakeDropCounts() (*PushWakeDrops, error)
+method InboxList.At(int) (*InboxItem, error)
+method InboxList.Count() (int, error)
 method JournalPage.At(int) (*JournalEntry, error)
 method JournalPage.Count() (int, error)
 method JournalPage.NextCursor() (int64, error)
 method JournalPage.Stale() (bool, error)
+method MachineList.At(int) (*MachineInfo, error)
+method MachineList.Cap() (int, error)
+method MachineList.Count() (int, error)
 method Pairing.Cancel() error
 method Pairing.Confirm() error
 method Pairing.ConfirmOrigin(string) error
@@ -199,10 +223,14 @@ type Config struct
 type Event struct
 type EventListener interface
 type Freshness struct
+type InboxItem struct
+type InboxList struct
 type JournalEntry struct
 type JournalPage struct
 type KeyCustody interface
 type LaunchSpec struct
+type MachineInfo struct
+type MachineList struct
 type MachinePresence struct
 type Op struct
 type Outcome struct

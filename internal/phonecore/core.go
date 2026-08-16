@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -135,6 +136,13 @@ func Resume(cfg Config) (*Core, error) {
 	if store == nil {
 		path := ""
 		if cfg.Dir != "" {
+			// MM6 step 5: once the machine registry under this dir is LIVE, the singleton
+			// blob here is a rollback artefact, not a resumable state -- resuming it would
+			// stand up a second live send sequencer for the pairing, and a re-issued seq
+			// under a retained epoch is stale-dropped by the gateway permanently.
+			if _, err := os.Stat(registryPath(cfg.Dir)); err == nil {
+				return nil, fmt.Errorf("phonecore: resume %s: %w", cfg.Dir, ErrStateMigrated)
+			}
 			path = filepath.Join(cfg.Dir, StateFileName)
 		}
 		var err error

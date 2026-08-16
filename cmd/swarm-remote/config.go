@@ -290,6 +290,13 @@ func loadRelayConfig(stateDir string) (relaycfg.Config, error) {
 type pushGatewayFile struct {
 	GatewayURL       string `json:"gateway_url"`
 	SubmitCapability string `json:"submit_capability"`
+	// MachineRevokeCapability is the pairing's machine-revoke capability (spec 2.2/3.4,
+	// distinct from submit -- PG-AUTH-9), presented as "Swarm-Revoke <cap>" by the R4
+	// revoke producer (bead agents-tracker-u37c). OPTIONAL: every push-gateway.json
+	// provisioned before the producer existed carries only the first two capabilities,
+	// and refusing such a file would take down the working wake path to add a revoke
+	// path. Empty means the producer cannot run and discloses that instead.
+	MachineRevokeCapability string `json:"machine_revoke_capability,omitempty"`
 	// PushAddress is PG-ALLOC-1's 16 opaque bytes, hex-encoded (32 hex characters).
 	PushAddress string `json:"push_address"`
 }
@@ -321,37 +328,51 @@ func validateGatewayURL(raw string) error {
 	return nil
 }
 
+// parsePushGatewayFile reads and validates <remoteDir>/push-gateway.json WITHOUT
+// opening any durable store, so the revoke redrive can consult it in a quiescent state
+// dir. present=false with a nil error is the missing-file case: every pairing's state
+// until it migrates.
+func parsePushGatewayFile(remoteDir string) (pushGatewayFile, remotegw.PushAddress, bool, error) {
+	var f pushGatewayFile
+	var addr remotegw.PushAddress
+	data, err := os.ReadFile(filepath.Join(remoteDir, "push-gateway.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return f, addr, false, nil
+	}
+	if err != nil {
+		return f, addr, false, fmt.Errorf("read push-gateway.json: %w", err)
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		return f, addr, false, fmt.Errorf("parse push-gateway.json: %w", err)
+	}
+	if f.GatewayURL == "" || f.SubmitCapability == "" || f.PushAddress == "" {
+		return f, addr, false, fmt.Errorf("push-gateway.json present but missing a required field " +
+			"(gateway_url, submit_capability, push_address)")
+	}
+	if err := validateGatewayURL(f.GatewayURL); err != nil {
+		return f, addr, false, fmt.Errorf("push-gateway.json: %w", err)
+	}
+	raw, err := hex.DecodeString(f.PushAddress)
+	if err != nil || len(raw) != len(addr) {
+		return f, addr, false, fmt.Errorf("push-gateway.json: push_address must be %d hex-encoded bytes", len(addr))
+	}
+	copy(addr[:], raw)
+	return f, addr, true, nil
+}
+
 // resolvePushGatewayConfig reads the optional push-gateway.json and, only if present,
 // opens the three durable stores the wake-obligation machine needs (a dedicated wake_seq
 // file, distinct from PushSeq -- see remotegw.PushGatewayConfig.WakeSeq's doc comment for
 // why sharing one would be wrong). A missing file returns (nil, nil): this is NOT an
 // error, it is every pairing's state until it migrates.
 func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, error) {
-	path := filepath.Join(remoteDir, "push-gateway.json")
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	f, addr, present, err := parsePushGatewayFile(remoteDir)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("read push-gateway.json: %w", err)
-	}
-	var f pushGatewayFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse push-gateway.json: %w", err)
-	}
-	if f.GatewayURL == "" || f.SubmitCapability == "" || f.PushAddress == "" {
-		return nil, fmt.Errorf("push-gateway.json present but missing a required field " +
-			"(gateway_url, submit_capability, push_address)")
-	}
-	if err := validateGatewayURL(f.GatewayURL); err != nil {
-		return nil, fmt.Errorf("push-gateway.json: %w", err)
-	}
-	raw, err := hex.DecodeString(f.PushAddress)
-	var addr remotegw.PushAddress
-	if err != nil || len(raw) != len(addr) {
-		return nil, fmt.Errorf("push-gateway.json: push_address must be %d hex-encoded bytes", len(addr))
-	}
-	copy(addr[:], raw)
 
 	wakeSeq, err := remotegw.OpenSeqSource(filepath.Join(remoteDir, "outbound-wake.seq"))
 	if err != nil {
@@ -366,11 +387,12 @@ func resolvePushGatewayConfig(remoteDir string) (*remotegw.PushGatewayConfig, er
 		return nil, fmt.Errorf("open push-transport store: %w", err)
 	}
 	return &remotegw.PushGatewayConfig{
-		GatewayURL:       f.GatewayURL,
-		SubmitCapability: f.SubmitCapability,
-		Address:          addr,
-		Transport:        transport,
-		Obligations:      obligations,
-		WakeSeq:          wakeSeq,
+		GatewayURL:              f.GatewayURL,
+		SubmitCapability:        f.SubmitCapability,
+		MachineRevokeCapability: f.MachineRevokeCapability,
+		Address:                 addr,
+		Transport:               transport,
+		Obligations:             obligations,
+		WakeSeq:                 wakeSeq,
 	}, nil
 }

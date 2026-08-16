@@ -1,0 +1,69 @@
+======================================================================
+R4 multi-machine foundation - Android screen-model RED RUN (gradle lane)
+epic: agents-tracker-hggx / bead: agents-tracker-hggx.5 (Wave R4, deliverable 3:
+      add/switch/remove computer UX and global inbox -- every affordance nameable
+      by the screen model, tested from first-run resolver state, Obsidian design
+      system)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-16
+new files (ADDITIVE ONLY):
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt
+      (the frozen JVM contract: MachinesScreen.destinationFor first-run resolver
+      [0 machines -> PAIR_ONLY, >=1 -> MACHINES], nameable affordances
+      ADD_COMPUTER/SWITCH_COMPUTER/FORGET_COMPUTER/GLOBAL_INBOX, MachineRowModel
+      keyed by machine id so duplicate display names do not collide, parked rows
+      stale with their last-sync age, needs-input count on every row)
+  android/gate/r4_multimachine_ui_test.go (Go gate, runtime RED -- captured in
+      go-red.txt: MachinesScreen.kt does not exist)
+no existing Kotlin production or test source is modified. The Obsidian fence is
+NOT duplicated: android/gate/s24_screens_test.go's PB-DS-11/PB-DS-6 sweeps cover
+all production Kotlin, so MachinesScreen.kt is inside the existing fence the
+moment it exists.
+
+environment (the CI android job's discipline):
+  JAVA_HOME=/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HOME=/usr/local/share/android-commandlinetools
+  script file: /tmp/r4_red_androidunit.sh
+  command: ./gradlew --no-daemon --rerun-tasks --no-build-cache
+           :app:compileDebugUnitTestKotlin
+  == start: 2026-08-16T09:25:40Z
+  == end:   2026-08-16T09:27:51Z   (BUILD FAILED in 2m 9s, exit 1)
+  android/app/libs/swarm.aar mtime: Aug 16 10:29 local (08:29 UTC) -- PREDATES
+  the run's start, so this lane did not rebuild the AAR; :app:requireSwarmAar
+  only asserted its presence. No test task executed, so no test-result XML is
+  claimed by this run (a compile-RED produces none by definition).
+======================================================================
+
+### COMPILE-LEVEL RED, the exact convention of the repo's Go RED runs: every
+### root error is an unresolved R4 contract symbol (MachinesScreen,
+### MachinesDestination, MachineRowModel); the 'it'/type-inference lines are
+### cascades of those same unresolved model types inside lambda receivers.
+### 22 errors total; the full list:
+
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:42:13 Unresolved reference 'MachinesDestination'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:43:13 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:49:22 Unresolved reference 'MachinesDestination'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:49:52 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:50:22 Unresolved reference 'MachinesDestination'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:50:52 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:57:21 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:57:54 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:71:9 Unresolved reference 'MachineRowModel'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:81:20 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:81:40 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:83:54 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:89:20 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:90:13 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:92:36 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:93:98 Unresolved reference 'stale'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:94:41 Unresolved reference 'lastSyncUnixMs'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:95:39 Unresolved reference 'it'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:96:70 Unresolved reference 'stale'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:101:20 Unresolved reference 'MachinesScreen'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:101:40 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesScreenTest.kt:102:39 Unresolved reference 'needsInput'.
+
+BUILD FAILED in 2m 9s
+21 actionable tasks: 21 executed
+== exit: 1
+======================================================================

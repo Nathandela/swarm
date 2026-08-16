@@ -219,8 +219,14 @@ $ go test -count=1 -run TestR3AR2 ./internal/phonecore/ ./internal/remote/pairin
 5. WHAT THIS FILE DOES NOT CLAIM
   - Everything round 1's section 4 disclaims (physical-handset exit,
     facade wiring, degraded-push Settings copy) still holds.
-  - The two OPEN OBLIGATIONS of section 2 (P6 durable dual-revocation
-    with a deletion tombstone; the HonorMachineRevoke producer) and the
-    msg4 capability-signal gate are NAMED deferrals for the facade
-    slice, not delivered work.
+  - The msg4 capability-signal gate is a NAMED deferral, not delivered
+    work. [Amended 2026-08-16, wave R4 / agents-tracker-u37c: the two
+    other OPEN OBLIGATIONS this list carried -- P6 durable
+    dual-revocation with a deletion tombstone, and the
+    HonorMachineRevoke producer -- were DELIVERED by
+    internal/remotegw/revokeproducer.go + cmd/swarm-remote's
+    produceMachineRevoke, driven end to end against the real
+    internal/pushgw in
+    internal/phonecore/r4_revokeproducer_e2e_test.go; the deferral
+    lines are retired per that wave's ledger rule.]
 ======================================================================
