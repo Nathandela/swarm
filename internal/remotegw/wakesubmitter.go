@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -174,9 +175,27 @@ func (s *HTTPWakeSubmitter) SubmitWake(ctx context.Context, envelope []byte) err
 		Retryable bool   `json:"retryable"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &parsed) == nil && parsed.Code != "" {
-		return &WakeSubmitError{Code: parsed.Code, Retryable: parsed.Retryable, Message: sanitizeGatewayMessage(parsed.Message)}
+		return &WakeSubmitError{
+			Code: parsed.Code, Retryable: parsed.Retryable,
+			Message:    sanitizeGatewayMessage(parsed.Message),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 	// No parseable error body: see this file's header. Returned PLAIN, exactly like a
 	// transport failure, never as a *WakeSubmitError.
 	return fmt.Errorf("remotegw: gateway response (status %d) carried no parseable error body", resp.StatusCode)
+}
+
+// parseRetryAfter reads an HTTP Retry-After value in its delta-seconds form (the shape
+// spec §3.6's Throttled response uses), so PG-OBL-9's scheduler can honour it. The
+// HTTP-date form is deliberately NOT parsed: turning an absolute date into a delay needs
+// a wall-clock read this otherwise clock-injected package has no seam for, and the
+// gateway under this spec never sends one -- an unrecognised value is simply no floor,
+// which the machine's ordinary backoff already covers safely.
+func parseRetryAfter(v string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
 }

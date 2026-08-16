@@ -79,9 +79,35 @@ type TransportRouter struct {
 	Gateway   gatewayObligationDriver // *WakeObligationMachine satisfies this
 }
 
+// gatewayObligationSuperseder is the OPTIONAL cancellation half of the deferred-wake
+// pre-append ruling (bd agents-tracker-hggx.4.4): *WakeObligationMachine satisfies it.
+// It is asserted at the call site rather than folded into gatewayObligationDriver so
+// every existing router test double (spies implementing only Trigger/Drive) keeps
+// compiling unchanged -- a double without it simply cannot be superseded, which is the
+// honest no-op for a spy that never pre-appended anything durable either. wakeSeq
+// scopes the cancellation to the one provisional record the deferral created, and
+// ownAppends to the coalesces that deferral cycle itself contributed to it
+// (WakeObligationMachine.Supersede's identity and coalesce rules).
+type gatewayObligationSuperseder interface {
+	Supersede(wakeSeq uint64, ownAppends int, reason string) error
+}
+
+// gatewayProvisionalTriggerer is the OPTIONAL identity-reporting half of the same
+// ruling: a gateway arm that can say WHICH wake_seq a pre-append trigger landed on,
+// so the deferral's later supersede has an identity to scope itself to.
+// *WakeObligationMachine satisfies it; an arm without it (an old spy) still gets its
+// plain Trigger and the deferral simply has no identity to cancel by, the safe default.
+type gatewayProvisionalTriggerer interface {
+	TriggerProvisional() (uint64, error)
+}
+
 var (
-	_ PushTriggerer         = (*TransportRouter)(nil)
-	_ obligationPreAppender = (*TransportRouter)(nil)
+	_ PushTriggerer                 = (*TransportRouter)(nil)
+	_ obligationPreAppender         = (*TransportRouter)(nil)
+	_ provisionalObligationAppender = (*TransportRouter)(nil)
+	_ obligationSuperseder          = (*TransportRouter)(nil)
+	_ gatewayObligationSuperseder   = (*WakeObligationMachine)(nil)
+	_ gatewayProvisionalTriggerer   = (*WakeObligationMachine)(nil)
 )
 
 // PreAppendObligation durably records intent to wake for the CURRENT push_transport
@@ -104,6 +130,56 @@ func (r *TransportRouter) PreAppendObligation() error {
 		return nil
 	}
 	return r.Gateway.Trigger()
+}
+
+// PreAppendProvisionalObligation is PreAppendObligation for the DEFERRED wake
+// (bd agents-tracker-hggx.4.4): it additionally reports the wake_seq the durable
+// trigger landed on -- the identity SupersedeObligation later scopes the deferral
+// timer's cancellation to -- with ok=false when no identity was recorded (a
+// non-gateway transport, a nil arm, or an arm without the capability, in which case
+// the plain pre-append still ran).
+func (r *TransportRouter) PreAppendProvisionalObligation() (seq uint64, ok bool, err error) {
+	if r.Transport == nil {
+		return 0, false, nil
+	}
+	t, err := r.Transport.Transport()
+	if err != nil {
+		return 0, false, err
+	}
+	if t != TransportGateway || r.Gateway == nil {
+		return 0, false, nil
+	}
+	if pt, capable := r.Gateway.(gatewayProvisionalTriggerer); capable {
+		seq, err := pt.TriggerProvisional()
+		return seq, err == nil, err
+	}
+	return 0, false, r.Gateway.Trigger()
+}
+
+// SupersedeObligation durably cancels the provisional obligation identified by wakeSeq
+// -- in place, honestly, and ONLY it (WakeObligationMachine.Supersede's identity
+// scoping) -- when the deferred-wake timer's at-send preference re-read suppressed the
+// send whose record PreAppendProvisionalObligation created (bd agents-tracker-hggx.4.4).
+// ownAppends is passed straight through: it is the deferral cycle's own pre-append count
+// against that record, and only the machine has the coalesce total to compare it with.
+// Only the gateway leg does real work: the other transports pre-append nothing, so
+// there is nothing to supersede.
+func (r *TransportRouter) SupersedeObligation(wakeSeq uint64, ownAppends int, reason string) error {
+	if r.Transport == nil {
+		return nil
+	}
+	t, err := r.Transport.Transport()
+	if err != nil {
+		return err
+	}
+	if t != TransportGateway {
+		return nil
+	}
+	sup, ok := r.Gateway.(gatewayObligationSuperseder)
+	if !ok {
+		return nil
+	}
+	return sup.Supersede(wakeSeq, ownAppends, reason)
 }
 
 // PushTrigger routes to exactly one transport, selected fresh on every call.

@@ -50,6 +50,39 @@ type obligationPreAppender interface {
 	PreAppendObligation() error
 }
 
+// provisionalObligationAppender is the deferred-wake refinement of obligationPreAppender
+// (bd agents-tracker-hggx.4.4): the pre-append that also reports WHICH wake_seq the
+// durable trigger landed on (ok=false when none was recorded), so the deferral timer's
+// later cancellation can be scoped to exactly the provisional record this deferral
+// created -- and never to whatever obligation happens to be live at fire time, which
+// PG-OBL-5's coalescing routinely makes a record carrying other sessions' hand-offs.
+// *TransportRouter is the only implementation.
+type provisionalObligationAppender interface {
+	PreAppendProvisionalObligation() (seq uint64, ok bool, err error)
+}
+
+// obligationSuperseder is the OPTIONAL cancellation counterpart of obligationPreAppender
+// (bd agents-tracker-hggx.4.4, ruled option (a)): the deferred-wake timer's at-send
+// preference re-read (ADR-010 §4(b), PB-PUSH-8) may decide NOT to send the wake whose
+// provisional obligation preAppendObligation durably recorded at trigger time, and the
+// record must then be superseded -- durably, in place, honestly (never claiming a
+// send, never left non-terminal for a redrive to resurrect), and ONLY that record
+// (wakeSeq names it; a record carrying a coalesced trigger this deferral cycle did not
+// itself make is refused downstream). ownAppends is how many pre-appends the cycle being
+// cancelled made onto that record, which is what tells the machine a coalesce apart from
+// a foreign one -- see WakeObligationMachine.Supersede.
+// *TransportRouter is the only implementation, and only its gateway leg does real work.
+type obligationSuperseder interface {
+	SupersedeObligation(wakeSeq uint64, ownAppends int, reason string) error
+}
+
+// wakeOutcomePreferenceSuppressed is the LastOutcome word stamped on a provisional
+// deferred-wake obligation whose send was suppressed at the timer's at-send preference
+// re-read -- the preference had flipped off, was unreadable, or no preference custody
+// was configured at all; every one of those suppresses at the sender (PB-PUSH-8,
+// categoryEnabled), and every one means the wake was deliberately not sent.
+const wakeOutcomePreferenceSuppressed = "preference_suppressed"
+
 // PushConfig configures a PushNotifier.
 //
 // It carries a WakeKey and NO content key, and that is PB-PUSH-0's "the content key is
@@ -119,7 +152,23 @@ type PushNotifier struct {
 	// nothing and loses nothing.
 	deferred   map[string]struct{}
 	deferArmed bool
-	lastErr    error
+	// deferredSeq is the wake_seq of the PROVISIONAL obligation the deferred-wake
+	// pre-append recorded (deferredSeqSet false when none was), remembered so the
+	// deferral timer's preference-suppressed supersede names exactly that record.
+	// One slot suffices: deferrals inside one armed window coalesce into one record
+	// (each pre-append re-reports the same live seq), and the timer consumes the slot
+	// whether it sends or supersedes.
+	//
+	// deferredAppends counts how many of THIS cycle's pre-appends landed on that record
+	// -- the mint plus one per further deferred interaction that coalesced into it. It is
+	// what lets the supersede tell its own coalesces from a foreign session's
+	// (WakeObligationMachine.Supersede's ownAppends); noteDeferredProvisional restarts the
+	// count whenever the reported seq changes, so it is always "how many of mine are on
+	// THIS record", never a running total across records.
+	deferredSeq     uint64
+	deferredSeqSet  bool
+	deferredAppends int
+	lastErr         error
 }
 
 // The notifier is a full outbound sink and forwards both optional contracts. Pinned so a
@@ -217,7 +266,7 @@ func (n *PushNotifier) Snapshot(roster []protocol.JournalRecord, cursor uint64) 
 // nothing new) and is the forced consequence of PG-OBL-2's "obligation before publish"
 // ordering, not an oversight.
 func (n *PushNotifier) Event(rec protocol.JournalRecord) error {
-	// One prefsCache for this call: wouldWakeNow's peek and maybeWake's immediate-path
+	// One prefsCache for this call: peekWakeDisposition's peek and maybeWake's immediate-path
 	// commit gate on the SAME preference read for the SAME record, so they share it rather
 	// than each paying a separate LoadPrefs() (and, on failure, a separate setErr). See
 	// prefsCache's doc for why the deferred-wake timer below does NOT get this cache.
@@ -301,20 +350,47 @@ var errNoPushPrefs = errors.New("remotegw: push suppressed: no preference custod
 // minting fresh if it appended nothing at all.
 func (n *PushNotifier) preAppendObligation(rec protocol.JournalRecord, cache *prefsCache) {
 	pre, ok := n.cfg.Pusher.(obligationPreAppender)
-	if !ok || !n.wouldWakeNow(rec, cache) {
+	if !ok {
 		return
+	}
+	disp := n.peekWakeDisposition(rec, cache)
+	if disp == wakeNone {
+		return
+	}
+	if disp == wakeDeferred {
+		// The DEFERRED case remembers the provisional record's identity, so the timer's
+		// preference-suppressed supersede cancels that record and nothing else.
+		if pp, capable := n.cfg.Pusher.(provisionalObligationAppender); capable {
+			seq, recorded, err := pp.PreAppendProvisionalObligation()
+			if err != nil {
+				n.setErr(err)
+			} else if recorded {
+				n.noteDeferredProvisional(seq)
+			}
+			return
+		}
 	}
 	if err := pre.PreAppendObligation(); err != nil {
 		n.setErr(err)
 	}
 }
 
-// wouldWakeNow reports, WITHOUT mutating any bookkeeping (lastGroup/lastWake/deferred),
-// whether rec would cause maybeWake to send an IMMEDIATE (non-deferred) wake once the
-// publish it is about to gate on succeeds. It exists only to drive preAppendObligation,
-// and it must be EXACT: a false positive would durably record an obligation for a wake
-// PG-OBL-7 requires never exist ("a suppressed trigger creates NO obligation"), and a
-// false negative reopens the crash gap PG-OBL-2 exists to close.
+// wakeDisposition is peekWakeDisposition's answer: what maybeWake would do with rec once
+// the publish it gates on succeeds.
+type wakeDisposition int
+
+const (
+	wakeNone      wakeDisposition = iota // no wake: suppressed, disabled, or not wake-worthy
+	wakeImmediate                        // send() fires now
+	wakeDeferred                         // window-suppressed interaction: deferred to the window's end (ADR-010 §4(b))
+)
+
+// peekWakeDisposition reports, WITHOUT mutating any bookkeeping (lastGroup/lastWake/
+// deferred), whether rec would cause maybeWake to send an IMMEDIATE wake, a DEFERRED
+// one, or none at all. It exists only to drive preAppendObligation, and it must be
+// EXACT: a false positive would durably record an obligation for a wake PG-OBL-7
+// requires never exist ("a suppressed trigger creates NO obligation"), and a false
+// negative reopens the crash gap PG-OBL-2 exists to close.
 //
 // It deliberately mirrors maybeWake's gating rather than sharing code with it, because
 // maybeWake's version COMMITS (isTransition/claimWindow mutate state) and this one must
@@ -336,36 +412,50 @@ func (n *PushNotifier) preAppendObligation(rec protocol.JournalRecord, cache *pr
 // coalesces into a real wake rather than sitting unresolved: it costs one redundant local
 // write, not a leaked or duplicated wake.
 //
-// A DEFERRED wake (window-suppressed interaction) is deliberately reported as false: its
-// own timer runs long after this publish already succeeded, is not durable, and is not
-// the crash gap PG-OBL-2 names -- pre-appending for it would durably record an
-// obligation for a send this process has not committed to (the preference is re-checked
-// at send, ADR-010 §4(b)), which trades a small window for a worse one.
-func (n *PushNotifier) wouldWakeNow(rec protocol.JournalRecord, cache *prefsCache) bool {
+// A DEFERRED wake (window-suppressed interaction) reports wakeDeferred, and
+// preAppendObligation records a durable PROVISIONAL obligation for it exactly as for an
+// immediate wake (bd agents-tracker-hggx.4.4, ruled option (a)). This closes the
+// narrower PG-OBL-2 crash gap the earlier design accepted as a residual: the deferral
+// timer fires up to one window AFTER the mailbox record is published, so a crash inside
+// that window used to publish an event with no durable obligation announcing it. The
+// cost the old design feared -- durably recording intent for a send the at-send
+// preference re-read (PB-PUSH-8) may yet forbid -- is paid honestly instead: the timer
+// SUPERSEDES the provisional record in place when the re-read suppresses the send
+// (maybeWake's deferral closure, WakeObligationMachine.Supersede).
+func (n *PushNotifier) peekWakeDisposition(rec protocol.JournalRecord, cache *prefsCache) wakeDisposition {
 	if n.cfg.Pusher == nil {
-		return false
+		return wakeNone
 	}
 	category := rec.Group
+	deferrable := false
 	if rec.Type == recordTypeInteraction {
-		category = status.GroupNeedsInput
+		category, deferrable = status.GroupNeedsInput, true
 	} else {
 		if rec.Group == "" || !isWakeWorthy(rec.Group) {
-			return false
+			return wakeNone
 		}
 		n.mu.Lock()
 		prev, seen := n.lastGroup[rec.SessionID]
 		n.mu.Unlock()
 		if seen && prev == rec.Group {
-			return false
+			return wakeNone
 		}
 	}
 	if !n.categoryEnabled(category, cache) {
-		return false
+		return wakeNone
 	}
 	n.mu.Lock()
 	last, seen := n.lastWake[rec.SessionID]
 	n.mu.Unlock()
-	return !seen || n.now().Sub(last) >= n.window
+	if !seen || n.now().Sub(last) >= n.window {
+		return wakeImmediate
+	}
+	if deferrable {
+		return wakeDeferred
+	}
+	// A window-suppressed GROUP transition is dropped, not deferred (maybeWake's own
+	// deferral comment), so it creates no obligation either (PG-OBL-7).
+	return wakeNone
 }
 
 // maybeWake decides whether this record is a hand-off worth waking the phone for and, if
@@ -441,7 +531,7 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord, cache *prefsCache) 
 	if n.cfg.Pusher == nil {
 		return
 	}
-	// cache carries wouldWakeNow's already-loaded preference forward for this SAME record
+	// cache carries peekWakeDisposition's already-loaded preference forward for this SAME record
 	// (Event's peek and this commit, moments later): reused here rather than reloaded.
 	if !n.categoryEnabled(category, cache) {
 		return
@@ -469,11 +559,37 @@ func (n *PushNotifier) maybeWake(rec protocol.JournalRecord, cache *prefsCache) 
 				// either way: a dropped wake must still release the single timer arm, or one
 				// preference flip wedges the deferral path shut for every session after it.
 				owed := n.claimDeferred()
+				if !owed {
+					return
+				}
+				// The provisional identity, and this cycle's pre-append count against it,
+				// are consumed on EVERY fire that owed a wake -- sent or suppressed -- so
+				// neither can leak into a later cycle's supersede.
+				provSeq, provAppends, haveProv := n.takeDeferredSeq()
 				// nil cache: this runs up to n.window later, on its own goroutine, and MUST
 				// re-read the preference fresh rather than reuse Event's cache from send time
 				// (the whole point of "re-read AT SEND" above).
-				if owed && n.categoryEnabled(status.GroupNeedsInput, nil) {
+				if n.categoryEnabled(status.GroupNeedsInput, nil) {
 					send()
+					return
+				}
+				// The re-read suppressed the send. The PROVISIONAL obligation
+				// preAppendObligation durably recorded for this deferral (PG-OBL-2,
+				// bd agents-tracker-hggx.4.4) must now be superseded -- durably, honestly,
+				// and scoped to exactly that record by its remembered wake_seq -- or a
+				// later redrive would submit a wake the preference forbids. A no-op for
+				// any Pusher without the capability (the legacy paths, which pre-appended
+				// nothing), and skipped entirely when no identity was recorded: cancelling
+				// "whatever is live" would destroy other sessions' coalesced hand-offs.
+				// provAppends is how many pre-appends THIS cycle made onto that record --
+				// two window-suppressed interactions in one window make two, the second
+				// coalescing into the first's record -- so the machine can cancel a record
+				// carrying only this cycle's own needs_input triggers while still refusing
+				// one a foreign trigger joined (Supersede's ownAppends).
+				if sup, ok := n.cfg.Pusher.(obligationSuperseder); ok && haveProv {
+					if err := sup.SupersedeObligation(provSeq, provAppends, wakeOutcomePreferenceSuppressed); err != nil {
+						n.setErr(err)
+					}
 				}
 			})
 		}
@@ -513,6 +629,31 @@ func (n *PushNotifier) claimDeferred() bool {
 		delete(n.deferred, s)
 	}
 	return true
+}
+
+// noteDeferredProvisional remembers the provisional record a deferred pre-append landed
+// on and counts this cycle's pre-appends onto it. A reported seq that differs from the
+// remembered one is a DIFFERENT record (the previous cycle's was delivered, superseded or
+// re-minted over), so the count restarts at 1 rather than carrying a stale cycle's
+// allowance onto a record it never touched.
+func (n *PushNotifier) noteDeferredProvisional(seq uint64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.deferredSeqSet && n.deferredSeq == seq {
+		n.deferredAppends++
+		return
+	}
+	n.deferredSeq, n.deferredSeqSet, n.deferredAppends = seq, true, 1
+}
+
+// takeDeferredSeq consumes the remembered provisional obligation identity and this
+// cycle's pre-append count against it, if any.
+func (n *PushNotifier) takeDeferredSeq() (seq uint64, ownAppends int, ok bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	seq, ownAppends, ok = n.deferredSeq, n.deferredAppends, n.deferredSeqSet
+	n.deferredSeq, n.deferredSeqSet, n.deferredAppends = 0, false, 0
+	return seq, ownAppends, ok
 }
 
 // isTransition records the record's group and reports whether it CHANGED the session's
@@ -564,10 +705,10 @@ func isWakeWorthy(g status.Group) bool {
 }
 
 // prefsCache memoizes a single LoadPrefs() call across preAppendObligation's peek
-// (wouldWakeNow) and maybeWake's immediate-path commit for the SAME Event call, so the
+// (peekWakeDisposition) and maybeWake's immediate-path commit for the SAME Event call, so the
 // two no longer pay two separate reads -- and, on failure, two separate setErr calls --
 // for what is gating the identical record. Both calls compute the same category for the
-// same rec (wouldWakeNow's peek does not mutate the state maybeWake's commit reads), so
+// same rec (peekWakeDisposition's peek does not mutate the state maybeWake's commit reads), so
 // the cached PREFERENCE is valid to reuse regardless of which category each call checks.
 //
 // It must NOT be threaded into the deferred-wake timer's own categoryEnabled call

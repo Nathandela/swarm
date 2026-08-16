@@ -199,3 +199,553 @@ all. Trading the crash-window gap for a false-obligation risk on every preferenc
 was judged the worse trade. It is nonetheless a real, accepted deviation from PG-OBL-2's
 "before or atomically with" requirement, not a closed gap, and is tracked as a distinct
 follow-up: bd issue agents-tracker-hggx.4.4.
+
+[2026-08-16 update to this residual: RULED, option (a) -- pre-append a PROVISIONAL
+obligation at trigger time for the deferred case, with the timer's send() durably and
+honestly superseding it when the re-read preference has flipped off. The residual above
+is therefore no longer an accepted deviation; its closure is pinned by the failing tests
+of the dated 2026-08-16 RED section below, and the GREEN evidence that follows them is
+what records the gap actually closed.]
+
+======================================================================
+R3 wake-obligation PUNCH LIST (the three open obligations) - RED RUN
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+beads: agents-tracker-hggx.4.4 (PG-OBL-2 deferred-wake crash gap, RULED option (a)),
+       agents-tracker-hggx.4.5 (PG-OBL-10 degraded-health surface),
+       agents-tracker-hggx.4.3 (PG-OBL-9 real backoff retry driver)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-16
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64   HEAD: 61711b6
+new files (ADDITIVE ONLY, package internal/remotegw; no existing test or non-test
+source file is modified by this work):
+  internal/remotegw/r3pl_obl2_deferred_gap_test.go      (hggx.4.4: provisional
+      pre-append at trigger time for the DEFERRED wake, simulated crash between publish
+      and timer-fire with restart over the same durable files, honest durable supersede
+      when the preference re-read at send has flipped off, positive control)
+  internal/remotegw/r3pl_obl10_degraded_health_test.go  (hggx.4.5: expired/abandoned
+      last obligation visible through Service.Err, ADR-007 B114's one reader)
+  internal/remotegw/r3pl_obl9_backoff_test.go           (hggx.4.3: timer-driven retry
+      scheduler -- exponential backoff growth, expiry bound not attempt count,
+      gateway Retry-After honoured end to end through HTTPWakeSubmitter)
+command: go test ./internal/remotegw/ -count=1 2>&1
+======================================================================
+
+### TEST INVENTORY (file:line at capture time) AND THE REASON EACH FAILS
+
+hggx.4.4 / PG-OBL-2 (assertion-level RED; every symbol used already exists):
+  r3pl_obl2_deferred_gap_test.go:152 TestOBL2_DeferredInteractionWakePreAppendsADurableProvisionalObligation
+      FAILS: durable record after the deferred trigger is the FIRST wake's terminal
+      "delivered" record; no non-terminal provisional obligation exists (wouldWakeNow
+      deliberately reports false for the deferred case, so preAppendObligation records
+      nothing).
+  r3pl_obl2_deferred_gap_test.go:183 TestOBL2_CrashInsideTheDeferralWindowStillWakesThePhoneAfterRestart
+      FAILS: the crash is actually simulated (the deferral timer is never fired; every
+      live object abandoned; ObligationStore + wake_seq SeqSource reopened from the same
+      files) and Pending() finds 0 non-terminal obligations, so the restart re-drive has
+      nothing to submit -- the published interaction record is an event the phone is
+      never told about.
+  r3pl_obl2_deferred_gap_test.go:234 TestOBL2_PreferenceFlipDuringDeferralSupersedesTheProvisionalObligationHonestly
+      FAILS at its precondition: no provisional obligation was pre-appended to supersede
+      (state "delivered"). Once GREEN lands the pre-append, this test's body pins the
+      supersede contract: zero gateway submits after the flip (PB-PUSH-8), same wake_seq
+      superseded IN PLACE, terminal-but-never-"delivered"/never-"provider_accepted"
+      state with a non-empty last-outcome word, durable across a reopen (Pending()
+      empty, a restart Drive submits nothing).
+  r3pl_obl2_deferred_gap_test.go:318 TestOBL2_TimerFireWithPreferenceStillOnDrivesTheProvisionalObligation
+      FAILS at the same precondition; its body is the positive control -- prefs still
+      on at fire => the deferred send coalesces into the provisional record (PG-OBL-5)
+      and submits its sealed bytes verbatim (PG-WAKE-12), ending "delivered".
+
+hggx.4.5 / PG-OBL-10 (assertion-level RED; obligations driven to their terminal states
+through the REAL machine, never hand-written store records):
+  r3pl_obl10_degraded_health_test.go:111 TestOBL10_ExpiredLastObligationIsAVisibleDegradedPushState
+      FAILS: Service.Err() = nil for a migrated pairing whose last obligation is
+      "expired" (driven there via virtual clock past WakeV1Expiry).
+  r3pl_obl10_degraded_health_test.go:133 TestOBL10_AbandonedLastObligationNamesTheStateAndItsOutcomeCode
+      FAILS: Service.Err() = nil for a pairing whose last obligation was driven to
+      "abandoned" by a 410 address_revoked (retryable=false) refusal; the body also
+      pins that the surfaced error names the state AND the last outcome code (the
+      operator's repair path).
+  r3pl_obl10_degraded_health_test.go:162 TestOBL10_HealthyAndLiveObligationsDoNotDegradeServiceErr
+      PASSES -- a DOCUMENTED, NAMED FENCE (the same category the 2026-08-15 run
+      annotated, e.g. TestTransportStore_DefaultsToLegacyRelay): all-negative control
+      (delivered / pending / unmigrated => Err() nil) whose two POSITIVE siblings above
+      are what discriminate; annotated as such in its own doc comment.
+
+hggx.4.3 / PG-OBL-9 (COMPILE-LEVEL RED; the frozen contract GREEN must supply is
+enumerated in the file's doc comment -- WakeRetryConfig{Machine, Store, Address, Now,
+After, BaseDelay}, NewWakeRetryScheduler, (*WakeRetryScheduler).Kick(ctx), with Kick's
+semantics pinned there: drive now; one timer armed per retryable failure via the
+package's existing After seam; delay doubles from BaseDelay; Retry-After honoured;
+terminal state stops scheduling; expiry -- never attempt count -- bounds the whole
+retry):
+  r3pl_obl9_backoff_test.go:153 TestOBL9_RetryBackoffDoublesAcrossConsecutiveRetryableFailures
+  r3pl_obl9_backoff_test.go:192 TestOBL9_RetryIsBoundedByExpiryNotAttemptCount
+  r3pl_obl9_backoff_test.go:248 TestOBL9_HonoursGatewayRetryAfterOverItsOwnBackoff
+      The third goes end to end through the REAL HTTPWakeSubmitter against the existing
+      wakeGatewayServer TLS double answering 429 quota_exceeded (retryable) with
+      Retry-After: 45 -- pinning BOTH that the submitter stops discarding the header
+      and that the scheduler waits no less than 45s (BaseDelay is 1s, so backoff alone
+      cannot explain the delay) while staying inside the obligation's own expiry.
+
+### HEADLINE COMPILE-LEVEL RED (the state this diff leaves the package in)
+
+$ go test ./internal/remotegw/ -count=1
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/r3pl_obl9_backoff_test.go:102:9: undefined: WakeRetryScheduler
+internal/remotegw/r3pl_obl9_backoff_test.go:121:12: undefined: NewWakeRetryScheduler
+internal/remotegw/r3pl_obl9_backoff_test.go:121:34: undefined: WakeRetryConfig
+internal/remotegw/r3pl_obl9_backoff_test.go:263:11: undefined: NewWakeRetryScheduler
+internal/remotegw/r3pl_obl9_backoff_test.go:263:33: undefined: WakeRetryConfig
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+### ASSERTION-LEVEL RED, CAPTURED FOR REAL (hggx.4.4 + hggx.4.5): with ONLY the
+### compile-broken r3pl_obl9 file set aside (plain filesystem mv to /tmp and back,
+### byte-identical on restore), the other two files run against the CURRENT
+### implementation, no stub anywhere:
+
+$ mv internal/remotegw/r3pl_obl9_backoff_test.go /tmp/r3pl_setaside/
+$ go test ./internal/remotegw/ -count=1 -run 'TestOBL2|TestOBL10' -v
+    r3pl_obl10_degraded_health_test.go:118: Service.Err() = nil for a pairing whose last wake obligation reached "expired": PG-OBL-10 requires a visible degraded push state -- the phone has stopped receiving wakes and nothing reports it (bd agents-tracker-hggx.4.5)
+--- FAIL: TestOBL10_ExpiredLastObligationIsAVisibleDegradedPushState (0.01s)
+    r3pl_obl10_degraded_health_test.go:140: Service.Err() = nil for a pairing whose last wake obligation reached "abandoned": PG-OBL-10 requires a visible degraded push state (bd agents-tracker-hggx.4.5)
+--- FAIL: TestOBL10_AbandonedLastObligationNamesTheStateAndItsOutcomeCode (0.00s)
+--- PASS: TestOBL10_HealthyAndLiveObligationsDoNotDegradeServiceErr (0.00s)   [the documented fence above]
+    r3pl_obl2_deferred_gap_test.go:161: durable obligation after a DEFERRED interaction wake: ok=true state="delivered", want a non-terminal PROVISIONAL record -- PG-OBL-2 requires the obligation recorded before or atomically with the publish, and the deferred path records nothing until the timer fires (bd agents-tracker-hggx.4.4)
+--- FAIL: TestOBL2_DeferredInteractionWakePreAppendsADurableProvisionalObligation (0.10s)
+    r3pl_obl2_deferred_gap_test.go:198: crash gap reproduced: 0 non-terminal obligations survived a crash inside the deferral window, want 1 -- the published interaction record (cursor 2) is an event the phone is never told about (PG-OBL-2, bd agents-tracker-hggx.4.4)
+--- FAIL: TestOBL2_CrashInsideTheDeferralWindowStillWakesThePhoneAfterRestart (0.08s)
+    r3pl_obl2_deferred_gap_test.go:243: precondition missing: no non-terminal PROVISIONAL obligation was pre-appended for the deferred wake (ok=true state="delivered") -- the deferred path records nothing at trigger time yet (bd agents-tracker-hggx.4.4)
+--- FAIL: TestOBL2_PreferenceFlipDuringDeferralSupersedesTheProvisionalObligationHonestly (0.06s)
+    r3pl_obl2_deferred_gap_test.go:327: precondition missing: no non-terminal PROVISIONAL obligation was pre-appended for the deferred wake (ok=true state="delivered") (bd agents-tracker-hggx.4.4)
+--- FAIL: TestOBL2_TimerFireWithPreferenceStillOnDrivesTheProvisionalObligation (0.08s)
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.423s
+
+$ go vet ./internal/remotegw/     (same set-aside state)
+(no output -- the two runnable new files are vet-clean)
+$ mv /tmp/r3pl_setaside/r3pl_obl9_backoff_test.go internal/remotegw/
+
+### hggx.4.3 VERIFIED AGAINST A THROWAWAY STUB (the same scaffolding role both prior
+### RED runs record): a zero-logic stub of the scheduler contract
+### (internal/remotegw/zzz_scratch_stub_r3pl.go -- no-op Kick; deleted immediately
+### after these checks, never committed, absent from this diff) let the whole suite
+### compile so the OBL9 tests could prove they fail as ASSERTIONS, not panics:
+
+$ go test ./internal/remotegw/ -count=1 -run 'TestOBL9' -v     (against the no-op stub)
+    r3pl_obl9_backoff_test.go:161: Kick made 0 submit attempts, want 1 (drive now, then back off)
+--- FAIL: TestOBL9_RetryBackoffDoublesAcrossConsecutiveRetryableFailures (0.01s)
+    r3pl_obl9_backoff_test.go:211: only 0 submit attempts across the five-minute obligation, want at least 8: an attempt COUNT is not the bound (PG-OBL-9) -- doubling from 1s inside WakeV1Expiry leaves room for at least eight
+--- FAIL: TestOBL9_RetryIsBoundedByExpiryNotAttemptCount (0.00s)
+    r3pl_obl9_backoff_test.go:273: gateway saw 0 requests after Kick, want 1
+--- FAIL: TestOBL9_HonoursGatewayRetryAfterOverItsOwnBackoff (0.02s)
+
+$ go test -race -count=1 ./internal/remotegw/     (against the same stub)
+9 FAILs total -- EXACTLY the nine new tests above, zero data-race warnings, and every
+pre-existing test in the package still PASSes (the new harnesses disturb nothing).
+$ golangci-lint run ./internal/remotegw/...       (same stub state)
+(no findings -- the three new files are lint-clean beyond the deliberate typecheck RED)
+
+### GATES AT CAPTURE TIME (PATH includes $HOME/go/bin)
+
+  go build ./...                                   PASS (test-only diff; no build impact)
+  go vet ./internal/remotegw/                      FAILS with exactly the five undefined
+                                                   WakeRetry* symbols above -- the
+                                                   deliberate compile-level RED, same
+                                                   shape as this file's 2026-08-15 run
+  golangci-lint run ./internal/remotegw/...        reports only that same typecheck RED
+  go test -race -count=1 ./cmd/swarm-remote/       ok      35.058s (untouched, green)
+  go test -race -count=1 ./internal/pushgw/        ok      12.590s (untouched, green)
+
+### DESIGN DECISIONS THIS RED RUN PINS
+
+1. hggx.4.4 is RULED (orchestrator), option (a) of the bead: the deferred case
+   pre-appends a PROVISIONAL durable obligation at trigger time, and the timer's send()
+   supersedes it durably when the AT-SEND preference re-read (ADR-010 section 4(b),
+   PB-PUSH-8) has flipped off. The supersede vocabulary is deliberately pinned by
+   PROPERTY, not by name: same wake_seq superseded in place, terminal, never
+   "delivered"/"provider_accepted", non-empty LastOutcome, durable across reopen --
+   GREEN may reuse the store's existing abandoned state with a distinct outcome word or
+   extend ObligationState, and either satisfies the suite. The 2026-08-15 addendum's
+   "accepted deviation" status is superseded (see the update note appended to it).
+2. hggx.4.3's scheduler contract is frozen by the OBL9 file's doc comment; it follows
+   the package's existing seams exactly (Now like every machine, After like
+   PushConfig.After) and adds no dependency. Retry-After is pinned END TO END (submitter
+   parse + scheduler honour) rather than as a parser unit test, so GREEN cannot satisfy
+   the suite with a header field nothing reads.
+3. hggx.4.5 reads the degraded state through Service.Err -- ADR-007 B114's existing
+   single reader -- not through a new surface, and pins that the error NAMES the
+   terminal state and (for abandoned) the last outcome code, because a degraded state
+   that withholds the WHY surfaces a symptom with no repair path.
+4. No PB-PUSH-3 producer is added: no new function hands a payload to the relay push
+   provider (the scheduler drives the GATEWAY submit path, WakeSubmitter, which the
+   relay producer ledger does not govern), so pbpush3_producers_test.go's covered-by
+   ledger is untouched.
+
+======================================================================
+R3 wake-obligation PUNCH LIST (the three open obligations) - GREEN RUN
+epic: agents-tracker-hggx (Remote Control playbook delivery, R0-R9)
+beads: agents-tracker-hggx.4.4 (PG-OBL-2 deferred-wake crash gap, option (a)),
+       agents-tracker-hggx.4.5 (PG-OBL-10 degraded-health surface),
+       agents-tracker-hggx.4.3 (PG-OBL-9 real backoff retry driver)
+role: GREEN (TDD Phase 3, GG-5) -- the minimum implementation that turns the dated
+      2026-08-16 RED section above green, with no assertion weakened and no test edited
+date: 2026-08-16
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64   HEAD at capture: 0363431
+command: go test ./internal/remotegw/ -count=1 -run 'TestOBL2|TestOBL9|TestOBL10' -v
+======================================================================
+
+### WHAT WAS BUILT (all in package internal/remotegw; line numbers at capture time)
+
+hggx.4.4 / PG-OBL-2 -- the deferred wake now pre-appends a PROVISIONAL obligation at
+trigger time, and the timer supersedes it durably and honestly on an at-send flip:
+  push.go:320  preAppendObligation now fires for BOTH dispositions (immediate and
+               deferred); push.go:377 peekWakeDisposition replaces wouldWakeNow with a
+               three-way non-mutating peek (wakeNone / wakeImmediate / wakeDeferred);
+               a window-suppressed GROUP transition still reports wakeNone (PG-OBL-7).
+  push.go:504-537  the deferral timer's closure: prefs-on fire send()s exactly as
+               before (the send coalesces into the provisional record, PG-OBL-5, and
+               Drive submits its sealed bytes verbatim, PG-WAKE-12); a suppressed
+               at-send re-read calls the new obligationSuperseder capability with the
+               outcome word "preference_suppressed".
+  obligation.go:67  ObligationSuperseded ("superseded"), a TERMINAL machine-local
+               extension of the section 6.3 state set -- the RED run's design note 1
+               explicitly allowed extending the vocabulary; it is deliberately not
+               `abandoned` so PG-OBL-10's health surface cannot report a user
+               preference as an outage, and deliberately not `delivered` so the record
+               never claims a send that did not happen.
+  obligation.go:359  (*WakeObligationMachine).Supersede: in-place (same wake_seq),
+               durable Put, no-op when nothing is live or a submit is mid-flight (the
+               driving guard -- bytes already on the wire cannot be cancelled, so the
+               in-flight Drive's honest outcome lands instead).
+  pushtransport.go:127  TransportRouter.SupersedeObligation: gateway leg only, via the
+               new optional gatewayObligationSuperseder interface (asserted at the call
+               site so every existing Trigger/Drive-only test double compiles unchanged).
+
+hggx.4.5 / PG-OBL-10 -- the terminal obligation state is now operator-visible:
+  service.go:431  Service.Err gains a fourth joined member;
+  service.go:444  wakeObligationErr reads the store's CURRENT record for the configured
+               address (live read, not a stashed first error: the pairing's health IS
+               its last obligation's outcome) and degrades ONLY on expired/abandoned,
+               naming both the terminal state and the LastOutcome code (the repair
+               path). delivered/pending/in_flight/superseded and unmigrated services
+               report nothing.
+
+hggx.4.3 / PG-OBL-9 -- the timer-driven, expiry-bounded backoff driver:
+  wakeretry.go (new)  WakeRetryConfig / NewWakeRetryScheduler:77 / Kick:92 / drive:112,
+               exactly the RED file's frozen contract: Kick drives now via
+               Machine.Drive; a still-live post-Drive record (every live outcome is
+               retryable) arms exactly ONE timer; the delay doubles per consecutive
+               retryable failure from BaseDelay (loop-doubled, ceilinged at
+               WakeV1Expiry, so no shift overflow at unbounded attempt counts);
+               WakeSubmitError.RetryAfter is a FLOOR over the backoff; a terminal
+               state stops scheduling and resets the failure count. The timer fire
+               re-drives under context.Background() -- the triggering ctx is routinely
+               cancelled the moment the trigger returns (push.go's 5s send timeout),
+               and a retry under a dead ctx would loop as a transport failure forever.
+  obligation.go:124  WakeSubmitError.RetryAfter; wakesubmitter.go:195 parseRetryAfter
+               (delta-seconds form, the section 3.6 Throttled shape) stamped onto every
+               parsed gateway refusal -- the header is no longer discarded.
+  service.go:283  production wiring: the scheduler wraps the machine AND stands in the
+               TransportRouter's gateway arm (Trigger/Drive/Supersede delegate), so a
+               retryable failure on any live trigger arms the backoff too, not only
+               the startup redrive; service.go:364 RedrivePendingWakeObligations now
+               drives through it (same error surface as before).
+
+The RESIDUAL recorded in the 2026-08-15 addendum above is CLOSED: the deferred path now
+records its obligation before the mailbox publish (PG-OBL-2's "before or atomically
+with" holds for the deferred case too), and the false-obligation risk that ruling note
+weighed is answered by the honest supersede rather than by leaving the gap open.
+
+### GREEN RUN (all nine, plus the documented fence)
+
+$ go test ./internal/remotegw/ -count=1 -run 'TestOBL2|TestOBL9|TestOBL10' -v
+--- PASS: TestOBL10_ExpiredLastObligationIsAVisibleDegradedPushState (0.00s)
+--- PASS: TestOBL10_AbandonedLastObligationNamesTheStateAndItsOutcomeCode (0.00s)
+--- PASS: TestOBL10_HealthyAndLiveObligationsDoNotDegradeServiceErr (0.00s)
+--- PASS: TestOBL2_DeferredInteractionWakePreAppendsADurableProvisionalObligation (0.11s)
+--- PASS: TestOBL2_CrashInsideTheDeferralWindowStillWakesThePhoneAfterRestart (0.13s)
+--- PASS: TestOBL2_PreferenceFlipDuringDeferralSupersedesTheProvisionalObligationHonestly (0.12s)
+--- PASS: TestOBL2_TimerFireWithPreferenceStillOnDrivesTheProvisionalObligation (0.16s)
+--- PASS: TestOBL9_RetryBackoffDoublesAcrossConsecutiveRetryableFailures (0.00s)
+--- PASS: TestOBL9_RetryIsBoundedByExpiryNotAttemptCount (0.00s)
+--- PASS: TestOBL9_HonoursGatewayRetryAfterOverItsOwnBackoff (0.05s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remotegw	1.565s
+
+### GATES (PATH includes $HOME/go/bin)
+
+  go build ./...                                   PASS
+  go vet ./...                                     PASS (no output)
+  golangci-lint run                                PASS (repo-wide, no findings)
+  golangci-lint run ./internal/remotegw/... ./cmd/swarm-remote/... ./internal/pushgw/...
+                                                   PASS (no findings)
+  go test -race -count=1 ./internal/remotegw/      ok      28.941s (FULL package: every
+                                                   pre-existing test green alongside the
+                                                   nine new ones; zero data races)
+  go test -race -count=1 ./cmd/swarm-remote/       ok      35.939s
+  go test -race -count=1 ./internal/pushgw/        ok      15.150s
+
+No test file was modified. No PB-PUSH-3 producer was added (the scheduler drives the
+gateway WakeSubmitter path; the relay producer ledger is untouched). Nothing committed.
+
+======================================================================
+R3 wake-obligation PUNCH LIST - ROUND 2 (review-fix pass over the GREEN run above)
+epic: agents-tracker-hggx    beads: .4.4 / .4.5 / .4.3
+role: GREEN round 2 -- close the prior round's review findings (2 BLOCKER, 1 HIGH,
+      2 MEDIUM, 2 MINOR) with no r3pl_* assertion weakened and no test file edited
+date: 2026-08-16
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64
+======================================================================
+
+### FINDING CLOSURES (package internal/remotegw; line refs at capture time)
+
+BLOCKER 1 (Supersede cancels whatever is live) -- Supersede is now IDENTITY-SCOPED:
+  obligation.go  (*WakeObligationMachine).Supersede(wakeSeq uint64, reason string)
+  refuses (durable no-op) a live record whose wake_seq is not the named one, AND a
+  record carrying coalesced triggers (Coalesced > 0): PG-OBL-5 coalescing means other
+  sessions' hand-offs -- authorized by preferences the deferral's re-read never
+  consulted -- ride the same record, and cancelling it destroyed wakes still owed
+  (the reviewer's s2-completed probe). The identity flows end to end: the machine's
+  new TriggerProvisional() reports the wake_seq the pre-append trigger landed on
+  (gatewayProvisionalTriggerer, forwarded by WakeRetryScheduler.TriggerProvisional);
+  TransportRouter.PreAppendProvisionalObligation carries it up; PushNotifier remembers
+  it (deferredSeq/takeDeferredSeq, consumed on every owed fire) and the timer closure
+  supersedes exactly that seq. Re-verified with the reviewer's probe shape: s1
+  immediate wake delivered; s1 #2 deferred -> provisional; s2 Group=completed
+  coalesces and its submit fails retryably; needs_input-only flip; timer fire leaves
+  the record PENDING (not superseded) and a later redrive delivers s2's hand-off.
+
+BLOCKER 2 (Supersede silent nil while driving) -- a Supersede that lands while a
+  submit is in flight is now PARKED (pendingSupersede on the machine), never dropped:
+  Drive's post-submit merge consumes it exactly once and applies it when the outcome
+  lands retryable (same identity rules: named seq, Coalesced == 0), so the record goes
+  superseded instead of back to pending -- removing precisely the pending record
+  PG-OBL-9's scheduler would have retried into the send the at-send re-read forbade.
+  A delivered outcome drops the parked request honestly (the bytes were on the wire
+  before the cancellation; the record claims only the send that happened); abandoned
+  is already terminal. SupersedeAll (below) has no single record to park against and
+  returns errSupersedeInFlight instead; its caller arms a retry and the next fire
+  supersedes cleanly. Re-verified: Supersede called from inside SubmitWake, submit
+  returns retryable -> record is superseded/preference_suppressed, nothing left to
+  retry.
+
+HIGH (redrive path never re-reads the preference, PB-PUSH-8 / ADR-010 4(b)) --
+  WakeRetryConfig gains an optional Prefs PushPrefsSource (service.go wires
+  cfg.PushPrefs -- the SAME durable object the notifier gates live wakes on) and the
+  scheduler's driveOnce re-reads it before EVERY drive it performs (startup redrive
+  via Service.RedrivePendingWakeObligations -> WakeRetryScheduler.Drive, and every
+  retry-timer fire):
+    - push FULLY off (both categories disabled): the live obligation is durably
+      superseded via the machine's new SupersedeAll(reason) -- legal exactly here,
+      coalesced triggers included, because every category that could have authorized
+      any of them is off. Zero submits. Re-verified with the reviewer's probe: defer,
+      full flip, crash, reopen the same files, redrive -> 0 wakes, record superseded.
+    - unreadable preference: fail closed (no drive), the error surfaces to the caller,
+      and the arm logic below retries -- a settings-screen race must not destroy a
+      wake nor send one.
+  ACCEPTED DEVIATION, recorded here as the review required: a PARTIAL flip (the
+  category that authorized the deferral off, the other still on) does NOT suppress the
+  redrive. A coalesced obligation is category-less by construction (PG-OBL-5 folds
+  needs_input and finished triggers into one record; the wire object neither carries
+  nor may carry a category, PB-PUSH-3), so post-crash the machine cannot know which
+  still-enabled preference authorized which coalesced trigger, and suppressing on ANY
+  disabled category would durably destroy hand-offs a still-on preference is owed --
+  the exact defect BLOCKER 1 exists to forbid. The wake is content-free (78-byte
+  constant envelope) and the enabled category's coalesced triggers legitimize the
+  send; the residual disclosure is one wake's timing to the provider, bounded by the
+  obligation's five-minute expiry. Recording per-category provenance on the obligation
+  would be new durable schema for exactly this edge and is deliberately not done.
+
+MEDIUM (PG-OBL-10 signal erased by the PG-OBL-6 re-mint) -- the mint now carries the
+  REPLACED record's degraded end onto its replacement: WakeObligation gains
+  PriorTerminalState/PriorTerminalOutcome (persisted; omitempty; old files read as "no
+  degraded prior", same schema version), stamped by mintLocked when the replaced
+  record ended expired/abandoned -- including a still-live record minted over after
+  its expiry passed, which is the same fact never stamped. service.go's
+  wakeObligationErr now degrades on a live (pending/in_flight) record whose
+  PriorTerminalState is expired/abandoned, naming both; the replacement's own delivery
+  is what clears it, which keeps the recovery direction the review verified correct.
+  Re-verified with the reviewer's probe: two Triggers, clock past WakeV1Expiry, one
+  Drive -> store holds the re-minted pending record and Service.Err() now reports the
+  degraded pairing instead of healthy. (Known, pre-existing: Service.Err also joins
+  notifier.Err(), a sticky first error -- the composite surface still does not
+  un-degrade; unchanged this round.)
+
+MEDIUM (retry scheduler treats a store READ error as terminal) -- drive() now
+  separates the two: only a SUCCESSFUL Get showing terminal/absent ends the series and
+  resets the backoff; a Get error joins the drive error, falls through to the arm
+  logic, and schedules a retry. Re-verified: one transient Get failure after a
+  retryable submit -> exactly one timer armed, series continues.
+
+MINOR (failures++ under an already-armed timer) -- the armed check now precedes the
+  increment: only the call that actually arms advances the backoff curve, so a
+  concurrent Kick can no longer inflate the next delay. The pinned 1s/2s/4s/8s curve
+  is unchanged (TestOBL9_RetryBackoffDoubles... green).
+
+MINOR (uncancelled retry chain outlives the Service) -- WakeRetryScheduler.Stop():
+  armed timers still fire (never cancelled, per the package's timer idiom) but as
+  no-ops once stopped. Service.Run defers wakeRetry.Stop(), scoping the retry tail to
+  the relay generation that armed it (cmd/swarm-remote builds a fresh Service per
+  redial, and each generation's RedrivePendingWakeObligations re-adopts any live
+  obligation), so a closed Service can no longer submit wakes for up to WakeV1Expiry
+  nor race the next generation's scheduler. Re-verified: Stop before an armed fire ->
+  zero further submits.
+
+### VERIFICATION METHOD
+
+Each finding was re-verified with a temporary probe test reproducing the reviewer's
+own scenario (5 probes, all PASS against the fixed implementation), then the probes
+were deleted -- the durable contract remains the r3pl_* suites, all nine of which stay
+green with no assertion weakened and no test file edited (git diff touches zero
+_test.go files in internal/remotegw).
+
+### GATES, ROUND 2 (PATH includes $HOME/go/bin)
+
+  go build ./...                                   PASS
+  go vet ./...                                     PASS (no output)
+  golangci-lint run                                PASS (repo-wide, no findings)
+  go test -race -count=1 ./internal/remotegw/      ok      27.657s (full package,
+                                                   zero data races)
+  go test -race -count=1 ./cmd/swarm-remote/       ok      34.048s
+  go test -race -count=1 ./internal/pushgw/        ok      9.504s
+
+git diff touches zero _test.go files; the lane's working set is obligation.go,
+push.go, pushtransport.go, service.go, wakeretry.go, wakesubmitter.go and this file.
+Nothing committed.
+
+======================================================================
+R3 wake-obligation PUNCH LIST - ROUND 3 (review-fix pass over ROUND 2)
+epic: agents-tracker-hggx    beads: .4.4 / .4.5
+role: FIXER round 1 -- close 1 BLOCKING, 1 MINOR, 1 INFORMATIONAL, RED-first
+date: 2026-08-16
+go: go version go1.26.5 darwin/amd64   host: darwin/amd64   HEAD: 556e12b
+======================================================================
+
+### RED FIRST (GG-5), CAPTURED BEFORE ANY IMPLEMENTATION CHANGE
+
+NEW test file, written against the current implementation and containing no
+implementation of its own:
+
+  internal/remotegw/r3pl_obl2_double_deferral_test.go:45
+    TestOBL2_TwoDeferralsInOneWindowStillSupersedeOnAPreferenceFlip   (BLOCKING)
+  internal/remotegw/r3pl_obl2_double_deferral_test.go:156
+    TestOBL10_ASupersededObligationDoesNotEraseADegradedPairing       (MINOR)
+
+The BLOCKING case is the reviewer's repro verbatim: the existing harness's
+deferOneInteractionWake (interaction #1 wakes immediately at t=0, #2 at t=5s is
+window-suppressed and deferred), plus a THIRD interaction for the SAME session at
+t=10s. Its pre-append coalesces into the SAME provisional record (asserted as a
+setup PRECONDITION: coalesced == 1), the user flips needs_input off, and the timer
+fires at t=30s. Both halves the finding names are asserted: ZERO further submits
+(including from a LATER drive -- a redial, a restart redrive, or PG-OBL-9's retry
+timer), and NO false degraded state on Service.Err() afterwards.
+
+RED run, no stub anywhere, PATH includes $HOME/go/bin:
+
+  $ go test -count=1 -v \
+      -run 'TestOBL2_TwoDeferralsInOneWindowStillSupersedeOnAPreferenceFlip|TestOBL10_ASupersededObligationDoesNotEraseADegradedPairing' \
+      ./internal/remotegw/
+
+  === RUN   TestOBL2_TwoDeferralsInOneWindowStillSupersedeOnAPreferenceFlip
+      r3pl_obl2_double_deferral_test.go:100: a later drive submitted the wake the
+      user turned off (2 submits, want 1): the provisional record was left "pending"
+      with coalesced=1, so PB-PUSH-8's suppression did not hold
+  --- FAIL: TestOBL2_TwoDeferralsInOneWindowStillSupersedeOnAPreferenceFlip (0.16s)
+  === RUN   TestOBL10_ASupersededObligationDoesNotEraseADegradedPairing
+      r3pl_obl2_double_deferral_test.go:177: Service.Err() = nil for a pairing whose
+      push address was REVOKED and whose replacement obligation was merely superseded:
+      a supersede sends nothing, so it cannot prove the pairing repaired -- PG-OBL-10's
+      degraded state must survive it
+  --- FAIL: TestOBL10_ASupersededObligationDoesNotEraseADegradedPairing (0.00s)
+  FAIL
+  FAIL    github.com/Nathandela/swarm/internal/remotegw   1.079s
+
+ASSERTION-LEVEL, both of them -- no compile break, no panic. The BLOCKING failure
+reproduces the reviewer's exact observation (submit count 1 -> 2: a push the
+preference forbade left the machine). An earlier ordering of the same test tripped
+one assertion sooner, on the durable state, and is recorded here for completeness:
+
+      the provisional obligation is still "pending" (coalesced=1) after the send was
+      cancelled: every trigger riding this record is one of THIS deferral cycle's own
+      needs_input interactions [...] so the cancel must land, not be refused as a
+      foreign coalesce
+
+### FINDING CLOSURES (package internal/remotegw; line refs at capture time)
+
+BLOCKING (PG-OBL-7 / PB-PUSH-8: two deferrals in one window left the provisional
+  obligation uncancelled on a preference flip) -- CLOSED with the approved lean fix,
+  cycle-local pre-append accounting, no deviation:
+
+    push.go:150-161   PushNotifier gains deferredAppends alongside deferredSeq: how
+      many of THIS deferral cycle's pre-appends landed on THAT provisional record.
+    push.go:639       noteDeferredProvisional(seq) -- increments when the pre-append
+      reports the SAME seq (a coalesce this cycle made), restarts at 1 when the seq
+      differs (a different record; a stale cycle's allowance must never carry over).
+    push.go:651       takeDeferredSeq now returns (seq, ownAppends, ok) and clears
+      both, so neither can leak into a later cycle -- consumed on EVERY fire that
+      owed a wake, sent or suppressed, exactly as before.
+    push.go:590       the deferral timer's suppression path passes provAppends down
+      through obligationSuperseder.SupersedeObligation(wakeSeq, ownAppends, reason)
+      (push.go:72) -> TransportRouter.SupersedeObligation (pushtransport.go:166) ->
+      WakeRetryScheduler.Supersede (wakeretry.go:123) -> the machine.
+    obligation.go:462 (*WakeObligationMachine).Supersede(wakeSeq, ownAppends, reason):
+      the guard is now `ob.Coalesced > ownAppends-1` (was `ob.Coalesced > 0`). The
+      mint accounts for one pre-append and each further one for a single coalesce, so
+      the cancel LANDS while every coalesce is this cycle's own deferral and is
+      REFUSED the moment one it cannot account for appears -- a foreign coalesce
+      still blocks, which is the R2 blocker's property, unweakened.
+    obligation.go:413 Drive's post-submit merge applies the identical accounting to a
+      PARKED supersede (`cur.Coalesced <= parked.ownAppends-1`); supersedeRequest
+      carries ownAppends (obligation.go:193).
+  ownAppends <= 0 refuses everything -- the safe default for a caller that recorded
+  nothing. Scope check: this is NOT the accepted deviation recorded in ROUND 2 above
+  (the post-crash, category-less redrive, where the machine genuinely cannot know
+  which preference authorized which coalesced trigger). Here every coalesce is one of
+  this process's own deferred interactions, i.e. needs_input, exactly the category
+  the at-send re-read found disabled, and the process knows it in memory.
+
+MINOR (PG-OBL-10: a superseded record silently erased a real degraded signal) --
+  CLOSED with BOTH options the review offered, because each covers a different hop:
+    obligation.go:544 mintLocked carries a NON-EMPTY PriorTerminalState across a
+      SUPERSEDED prior (`case prior.State == ObligationSuperseded &&
+      prior.PriorTerminalState != ""`). A supersede puts nothing on the wire, so it
+      never proved the pairing repaired; only a DELIVERY may clear a carried degraded
+      end, which is why `delivered` deliberately has no case there.
+    service.go:464    wakeObligationErr reads ObligationSuperseded in the SAME branch
+      as pending/in_flight, so a superseded record carrying an expired/abandoned
+      prior still reports degraded, naming the state and the outcome code (the
+      repair path: address_revoked means re-pair). The message now reads "and no
+      wake has delivered since" rather than "and its replacement has not delivered
+      yet", which is true of both the live and the cancelled case; nothing in the
+      tree matched on the old wording. service.go:451-455's doc comment was corrected
+      to match (superseded is not degraded ON ITS OWN, but still reports a degraded
+      predecessor it carries).
+
+INFORMATIONAL (honesty of the parked supersede) -- CLOSED at obligation.go:405-411,
+  one sentence in Drive's merge comment: the parked supersede also fires on
+  `transport_failure`, where the bytes WERE put on the wire and the outcome is simply
+  unknown, so the record can read superseded/preference_suppressed while the phone
+  still receives that wake. Superseded means "this machine will make no FURTHER
+  attempt, and none of its attempts is known to have been accepted"; it is never
+  proof that no send occurred. It still never claims a delivery that did not happen,
+  which is the property the state exists for.
+
+### GATES, ROUND 3 (PATH includes $HOME/go/bin)
+
+  go build ./...                                    PASS
+  go vet ./...                                      PASS (no output)
+  golangci-lint run                                 PASS (repo-wide, no findings)
+  go test -race -count=1 ./internal/remotegw/       ok  29.789s
+  go test -race -count=1 ./cmd/swarm-remote/        ok  34.411s
+  go test -race -count=1 ./internal/pushgw/         ok  11.438s
+  go test -count=1 -run TestB94 ./internal/verify/  ok   3.687s (reachability fence
+                                                    green: NewWakeRetryScheduler/Kick
+                                                    stay reachable from production
+                                                    entry points; the root set was
+                                                    not widened)
+
+No existing assertion was weakened and no pre-existing _test.go file was edited: the
+round's only test change is the NEW r3pl_obl2_double_deferral_test.go. The lane's
+working set is obligation.go, push.go, pushtransport.go, service.go, wakeretry.go,
+wakesubmitter.go, that new test file and this evidence file. Nothing committed.

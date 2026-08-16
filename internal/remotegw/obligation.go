@@ -27,7 +27,7 @@ package remotegw
 // ("the wake follows a SUCCESSFUL append", push.go:Event) is untouched: preAppendObligation
 // is a no-op unless the Pusher implements the optional pre-append capability AND the
 // live selection is TransportGateway. Filed and closed as bd issue
-// agents-tracker-hggx.4.2; see push.go's Event/preAppendObligation/wouldWakeNow and
+// agents-tracker-hggx.4.2; see push.go's Event/preAppendObligation/peekWakeDisposition and
 // pushtransport.go's TransportRouter.PreAppendObligation for the full mechanism, and
 // TestPushNotifier_GatewayTransportAppendsTheObligationBeforePublishingTheMailboxRecord
 // (push_obligation_order_test.go) for the regression proof.
@@ -46,7 +46,8 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 )
 
-// ObligationState is one of the five states of spec §6.3's diagram.
+// ObligationState is one of the five states of spec §6.3's diagram, plus the
+// machine-local `superseded` extension below.
 type ObligationState string
 
 const (
@@ -55,6 +56,15 @@ const (
 	ObligationDelivered ObligationState = "delivered"
 	ObligationExpired   ObligationState = "expired"
 	ObligationAbandoned ObligationState = "abandoned"
+	// ObligationSuperseded is a TERMINAL state this implementation adds beyond §6.3's
+	// five (bd agents-tracker-hggx.4.4, orchestrator ruling option (a)): the deferred
+	// wake's PROVISIONAL obligation, pre-appended at trigger time (PG-OBL-2), was
+	// durably CANCELLED because the at-send preference re-read (ADR-010 §4(b),
+	// PB-PUSH-8) suppressed the send. It is deliberately not `delivered` (no send
+	// happened -- the record must never claim one) and deliberately not `abandoned`
+	// (the push path is not broken; PG-OBL-10's degraded-health surface must not
+	// report a user preference as an outage). LastOutcome carries the reason word.
+	ObligationSuperseded ObligationState = "superseded"
 )
 
 // WakeObligation is the durable record keyed (push_address, wake_seq) -- PG-OBL-1. It
@@ -70,6 +80,17 @@ type WakeObligation struct {
 	Attempts    int
 	Coalesced   int // PG-OBL-5/6: triggers that landed on this obligation while it was live
 	LastOutcome string
+	// PriorTerminalState/PriorTerminalOutcome carry the REPLACED record's degraded end
+	// (expired/abandoned) across a mint, because the store keeps only the CURRENT record
+	// per address and PG-OBL-10's health surface (service.go's wakeObligationErr) reads
+	// exactly that record. Without them, PG-OBL-6's re-mint erases the degraded state
+	// inside the very Drive call that detected it -- and it erases it for precisely the
+	// busy pairing (coalesced triggers waiting) whose expiring wakes an operator most
+	// needs to see. Empty when the replaced record ended well (delivered, superseded)
+	// or there was none; never cleared in place -- the record's own delivery is what
+	// makes the health surface stop reading them.
+	PriorTerminalState   ObligationState
+	PriorTerminalOutcome string
 }
 
 // nonTerminal reports whether ob is still live (pending or in_flight).
@@ -107,6 +128,11 @@ type WakeSubmitError struct {
 	Code      string
 	Retryable bool
 	Message   string
+	// RetryAfter is the gateway's declared Retry-After delay (spec §3.6's Throttled
+	// shape; §6.4's "honour Retry-After" row), zero when the refusal carried none.
+	// PG-OBL-9's retry scheduler treats it as a floor: the next attempt is scheduled
+	// no earlier than this, whatever the scheduler's own backoff says.
+	RetryAfter time.Duration
 }
 
 func (e *WakeSubmitError) Error() string {
@@ -152,6 +178,24 @@ type WakeObligationMachine struct {
 	now     func() time.Time
 	mu      sync.Mutex
 	driving bool
+	// pendingSupersede parks an identity-scoped Supersede that arrived while a submit
+	// was in flight (driving). Bytes already on the wire cannot be cancelled, but a
+	// RETRYABLE outcome is not terminal either: before this existed, Supersede's
+	// silent no-op let the record land back on pending and PG-OBL-9's scheduler then
+	// retried it to delivery -- sending the wake the at-send preference re-read forbade
+	// (PB-PUSH-8). Drive's own post-submit merge consumes it: a delivery is honest (the
+	// send happened before the cancellation), a retryable outcome applies the parked
+	// supersede instead of going back to pending.
+	pendingSupersede *supersedeRequest
+}
+
+// supersedeRequest is the parked identity-scoped cancellation (see pendingSupersede).
+// ownAppends carries the caller's cycle-local pre-append count unchanged (Supersede's
+// doc), so the merge applies the identical coalesce accounting the synchronous path does.
+type supersedeRequest struct {
+	wakeSeq    uint64
+	ownAppends int
+	reason     string
 }
 
 // errNilObligationSeq is returned when a WakeObligationMachine is asked to mint a wake
@@ -197,15 +241,37 @@ func NewWakeObligationMachine(cfg WakeObligationConfig) *WakeObligationMachine {
 func (m *WakeObligationMachine) Trigger() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	_, err := m.triggerLocked()
+	return err
+}
+
+// TriggerProvisional is Trigger, additionally reporting the wake_seq of the record the
+// trigger landed on -- the identity the deferred-wake pre-append (push.go's
+// preAppendObligation, bd agents-tracker-hggx.4.4) hands back to Supersede so the
+// deferral timer's cancellation is scoped to the PROVISIONAL record it created, never to
+// whatever happens to be live at fire time.
+func (m *WakeObligationMachine) TriggerProvisional() (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.triggerLocked()
+}
+
+// triggerLocked is Trigger's body: coalesce into the live record or mint fresh,
+// returning the wake_seq the trigger landed on. The caller MUST hold m.mu.
+func (m *WakeObligationMachine) triggerLocked() (uint64, error) {
 	ob, ok, err := m.cfg.Store.Get(m.cfg.Address)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if ok && ob.nonTerminal() && !m.now().After(ob.ExpiresAt) {
 		ob.Coalesced++
-		return m.cfg.Store.Put(ob)
+		return ob.WakeSeq, m.cfg.Store.Put(ob)
 	}
-	return m.mintLocked(m.now())
+	var prior *WakeObligation
+	if ok {
+		prior = &ob
+	}
+	return m.mintLocked(m.now(), prior)
 }
 
 // Drive attempts delivery of the address's live obligation, if any, exactly once and
@@ -251,8 +317,10 @@ func (m *WakeObligationMachine) Drive(ctx context.Context) error {
 			// PG-OBL-6: something is still waiting to wake the phone for. mintLocked
 			// while still holding mu -- this is the SAME lock Trigger takes, and Drive
 			// (unlike Trigger) never releases it before calling mint, so no interleaving
-			// with a concurrent Trigger is possible here.
-			err := m.mintLocked(now)
+			// with a concurrent Trigger is possible here. The just-expired record rides
+			// along as the mint's prior, so the degraded state it represents survives
+			// onto the replacement for PG-OBL-10's health surface.
+			_, err := m.mintLocked(now, &ob)
 			m.mu.Unlock()
 			return err
 		}
@@ -275,6 +343,10 @@ func (m *WakeObligationMachine) Drive(ctx context.Context) error {
 
 	m.mu.Lock()
 	m.driving = false
+	// Pop any Supersede that arrived while the submit was in flight: whatever this
+	// merge decides, the parked request is consumed exactly once, here.
+	parked := m.pendingSupersede
+	m.pendingSupersede = nil
 	defer m.mu.Unlock()
 	cur, ok, err := m.cfg.Store.Get(m.cfg.Address)
 	if err != nil {
@@ -323,25 +395,137 @@ func (m *WakeObligationMachine) Drive(ctx context.Context) error {
 		cur.State = ObligationPending
 		cur.LastOutcome = "transport_failure"
 	}
+	// A Supersede parked during the submit lands NOW, on the retryable outcome that
+	// would otherwise put the record back where PG-OBL-9's scheduler retries it into
+	// the send the preference forbade. It obeys the same identity and coalesce scoping
+	// as the synchronous path: only the record it named, and only while every coalesce
+	// on it is accounted for by the requester's own pre-appends (Supersede's rules,
+	// restated here because the merge already holds the record).
+	//
+	// HONESTY LIMIT, NOT A GUARANTEE OF NON-DELIVERY: this branch also fires on
+	// `transport_failure`, where the request bytes WERE put on the wire and the outcome
+	// is simply unknown -- so the record can read superseded/preference_suppressed while
+	// the phone still receives that wake. Superseded means "this machine will make no
+	// FURTHER attempt, and none of its attempts is known to have been accepted"; it is
+	// never proof that no send occurred. It still never claims a delivery that did not
+	// happen, which is the property the state exists for.
+	if parked != nil && cur.State == ObligationPending &&
+		cur.WakeSeq == parked.wakeSeq && cur.Coalesced <= parked.ownAppends-1 {
+		cur.State = ObligationSuperseded
+		cur.LastOutcome = parked.reason
+	}
 	if err := m.cfg.Store.Put(cur); err != nil {
 		return err
 	}
 	return submitErr
 }
 
+// Supersede durably cancels EXACTLY the obligation identified by wakeSeq, in place --
+// same wake_seq, state ObligationSuperseded, LastOutcome set to reason. It exists for
+// one caller chain: the deferred-wake timer's at-send preference re-read (push.go's
+// maybeWake, ADR-010 §4(b), PB-PUSH-8) deciding NOT to send the wake whose PROVISIONAL
+// obligation preAppendObligation durably recorded -- and whose wake_seq it remembered --
+// at trigger time (PG-OBL-2, bd agents-tracker-hggx.4.4). Leaving that record
+// non-terminal would have a later redrive (PG-OBL-8/9) submit a wake the preference
+// forbids; marking it delivered would claim a send that never happened. Superseded is
+// the honest third word.
+//
+// IDENTITY SCOPING, both halves deliberate (review R2 blocker): a live record whose
+// wake_seq is not the named one is NOT the provisional this deferral created (it was
+// delivered and replaced, or PG-OBL-6 re-minted over it) and is left alone; a live
+// record that IS the named one but carries a FOREIGN coalesced trigger is also left
+// alone -- coalescing (PG-OBL-5) means other sessions' hand-offs, authorized by
+// preferences this re-read never consulted, ride the same record, and cancelling it
+// would durably destroy wakes still owed. The record then stays live and a later drive
+// delivers it; the deferral's own trigger rides along, which is what coalescing has
+// always meant.
+//
+// ownAppends IS WHAT SEPARATES "FOREIGN" FROM "MINE", and a plain `Coalesced > 0` refusal
+// could not (review R3 round-1 BLOCKING). One deferral CYCLE routinely pre-appends more
+// than once: two window-suppressed interactions inside the same 30 s window are both
+// deferred onto the same armed timer, and the second pre-append COALESCES into the first
+// one's provisional record, so Coalesced is 1 with no foreign trigger anywhere. Refusing
+// there left the record live, a later redrive submitted the wake the preference had just
+// forbidden (PB-PUSH-8), and an undriven one expired into a PG-OBL-10 "degraded pairing"
+// that was really the user's own toggle. So the caller passes how many pre-appends IT made
+// onto this record in the cycle it is now cancelling (push.go's deferredAppends): the mint
+// accounts for one of them and each further one for a single coalesce, hence the cancel
+// lands while Coalesced <= ownAppends-1 and is refused the moment a coalesce this cycle
+// cannot account for appears. ownAppends<=0 refuses everything, the safe default for a
+// caller that recorded nothing.
+//
+// A Supersede that lands while a submit is IN FLIGHT (the driving guard) is PARKED, not
+// dropped: bytes on the wire cannot be cancelled, but the outcome is not yet known
+// either, and Drive's own merge applies the parked cancellation should the record come
+// back retryable -- the case where a silent no-op would hand PG-OBL-9's scheduler a
+// pending record to retry into the forbidden send.
+func (m *WakeObligationMachine) Supersede(wakeSeq uint64, ownAppends int, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.driving {
+		m.pendingSupersede = &supersedeRequest{wakeSeq: wakeSeq, ownAppends: ownAppends, reason: reason}
+		return nil
+	}
+	ob, ok, err := m.cfg.Store.Get(m.cfg.Address)
+	if err != nil {
+		return err
+	}
+	if !ok || !ob.nonTerminal() || ob.WakeSeq != wakeSeq || ob.Coalesced > ownAppends-1 {
+		return nil
+	}
+	ob.State = ObligationSuperseded
+	ob.LastOutcome = reason
+	return m.cfg.Store.Put(ob)
+}
+
+// errSupersedeInFlight reports a SupersedeAll that found a submit in flight: the
+// cancellation did not land, and unlike Supersede's identity-scoped parking there is no
+// single named record to park it against. The caller (PG-OBL-9's scheduler) arms a
+// retry, whose next fire re-reads the preference and supersedes cleanly.
+var errSupersedeInFlight = errors.New("remotegw: cannot supersede: a wake submit is in flight")
+
+// SupersedeAll durably cancels the address's live obligation WHATEVER it carries,
+// coalesced triggers included. That is legal in exactly one situation, and its one
+// caller (WakeRetryScheduler's at-drive preference re-read, PB-PUSH-8) is in it: every
+// push category is disabled, so every trigger the record coalesced -- whichever
+// preference once authorized it -- is suppressed too. Anywhere a category might still
+// be enabled, Supersede's identity-scoped refusal is the correct tool instead.
+func (m *WakeObligationMachine) SupersedeAll(reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.driving {
+		return errSupersedeInFlight
+	}
+	ob, ok, err := m.cfg.Store.Get(m.cfg.Address)
+	if err != nil {
+		return err
+	}
+	if !ok || !ob.nonTerminal() {
+		return nil
+	}
+	ob.State = ObligationSuperseded
+	ob.LastOutcome = reason
+	return m.cfg.Store.Put(ob)
+}
+
 // mintLocked seals a fresh WakeV1 at the next durable wake_seq and persists a new pending
-// obligation for cfg.Address, at issued time `at`. The caller MUST hold m.mu.
-func (m *WakeObligationMachine) mintLocked(at time.Time) error {
+// obligation for cfg.Address, at issued time `at`, returning the minted wake_seq. prior
+// is the record this mint REPLACES in the address-keyed store (nil when there was none):
+// when it ended degraded -- expired or abandoned, including a still-live record whose
+// expiry had already passed, which is the same fact never stamped -- the fresh record
+// carries that end in its PriorTerminal fields so PG-OBL-10's health surface still sees
+// it (see WakeObligation). The caller MUST hold m.mu.
+func (m *WakeObligationMachine) mintLocked(at time.Time, prior *WakeObligation) (uint64, error) {
 	if m.cfg.Seq == nil {
-		return errNilObligationSeq
+		return 0, errNilObligationSeq
 	}
 	seq, err := m.cfg.Seq.Next()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	env, err := SealWakeV1(m.cfg.WakeKey, m.cfg.Address, seq, at)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ob := WakeObligation{
 		Address:   m.cfg.Address,
@@ -351,7 +535,21 @@ func (m *WakeObligationMachine) mintLocked(at time.Time) error {
 		ExpiresAt: at.Add(WakeV1Expiry),
 		State:     ObligationPending,
 	}
-	return m.cfg.Store.Put(ob)
+	if prior != nil {
+		switch {
+		case prior.State == ObligationExpired || prior.State == ObligationAbandoned:
+			ob.PriorTerminalState, ob.PriorTerminalOutcome = prior.State, prior.LastOutcome
+		case prior.nonTerminal() && at.After(prior.ExpiresAt):
+			ob.PriorTerminalState, ob.PriorTerminalOutcome = ObligationExpired, "expired"
+		case prior.State == ObligationSuperseded && prior.PriorTerminalState != "":
+			// A SUPERSEDED record carrying a degraded prior passes it on rather than
+			// ending the chain: superseding sends nothing, so it never proved the
+			// pairing repaired. Only a DELIVERY may clear a carried degraded end, which
+			// is exactly why `delivered` has no case here.
+			ob.PriorTerminalState, ob.PriorTerminalOutcome = prior.PriorTerminalState, prior.PriorTerminalOutcome
+		}
+	}
+	return seq, m.cfg.Store.Put(ob)
 }
 
 // --- ObligationStore: a single JSON file, in the same durability idiom as
@@ -373,6 +571,11 @@ type obligationRecord struct {
 	Attempts    int             `json:"attempts"`
 	Coalesced   int             `json:"coalesced"`
 	LastOutcome string          `json:"last_outcome"`
+	// Optional (absent in files written before PG-OBL-10's prior-terminal carry, which
+	// unmarshals as the empty values); same schema version deliberately -- old readers
+	// ignore unknown fields, old files read as "no degraded prior".
+	PriorTerminalState   ObligationState `json:"prior_terminal_state,omitempty"`
+	PriorTerminalOutcome string          `json:"prior_terminal_outcome,omitempty"`
 }
 
 // errCorruptObligationStore flags an unreadable or unsupported obligation-store file.
@@ -472,6 +675,7 @@ func loadObligations(path string) (map[PushAddress]WakeObligation, error) {
 			Address: addr, WakeSeq: rec.WakeSeq, Envelope: rec.Envelope,
 			IssuedAt: rec.IssuedAt, ExpiresAt: rec.ExpiresAt, State: rec.State,
 			Attempts: rec.Attempts, Coalesced: rec.Coalesced, LastOutcome: rec.LastOutcome,
+			PriorTerminalState: rec.PriorTerminalState, PriorTerminalOutcome: rec.PriorTerminalOutcome,
 		}
 	}
 	return out, nil
@@ -483,6 +687,7 @@ func persistObligations(path string, byAddr map[PushAddress]WakeObligation) erro
 		f.Obligations[hex.EncodeToString(addr[:])] = obligationRecord{
 			WakeSeq: ob.WakeSeq, Envelope: ob.Envelope, IssuedAt: ob.IssuedAt, ExpiresAt: ob.ExpiresAt,
 			State: ob.State, Attempts: ob.Attempts, Coalesced: ob.Coalesced, LastOutcome: ob.LastOutcome,
+			PriorTerminalState: ob.PriorTerminalState, PriorTerminalOutcome: ob.PriorTerminalOutcome,
 		}
 	}
 	data, err := json.Marshal(f)

@@ -3,6 +3,7 @@ package remotegw
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -173,9 +174,13 @@ type Service struct {
 	watchers *TerminalWatcher
 	// wakeMachine/wakeObligations are set only when cfg.PushGateway is configured, and
 	// exist so RedrivePendingWakeObligations (PG-OBL-8) has something to re-drive at
-	// startup without reaching back into cfg.
+	// startup without reaching back into cfg. wakeRetry (PG-OBL-9, set under the same
+	// condition) is the retry scheduler wrapped around wakeMachine; it is ALSO the
+	// TransportRouter's gateway arm, so every Drive -- live trigger or startup redrive --
+	// arms the timer-driven backoff on a retryable outcome.
 	wakeMachine     *WakeObligationMachine
 	wakeObligations ObligationStore
+	wakeRetry       *WakeRetryScheduler
 }
 
 // NewService builds a runtime over cfg. It wires a RelaySink onto a Gateway for the
@@ -244,6 +249,7 @@ func NewService(cfg ServiceConfig) *Service {
 	// leaves `pusher` exactly as it always has been -- no router, no obligation machine.
 	var wakeMachine *WakeObligationMachine
 	var wakeObligations ObligationStore
+	var wakeRetry *WakeRetryScheduler
 	if cfg.PushGateway != nil {
 		wakeObligations = cfg.PushGateway.Obligations
 		if wakeObligations == nil {
@@ -268,7 +274,24 @@ func NewService(cfg ServiceConfig) *Service {
 			Seq:     wakeSeq,
 			Now:     cfg.Now,
 		})
-		pusher = &TransportRouter{Transport: transport, Legacy: pusher, Gateway: wakeMachine}
+		// PG-OBL-9: the retry scheduler wraps the machine and stands in the router's
+		// gateway arm, so a retryable submit failure on ANY drive -- a live trigger as
+		// much as the startup redrive -- arms a timer-driven backoff bounded by the
+		// obligation's own expiry, instead of waiting for an unrelated trigger or redial
+		// to happen along before it. Trigger/Drive/Supersede all delegate to the machine,
+		// so the router's ordering contract (push_obligation_order_test.go) is unchanged.
+		wakeRetry = NewWakeRetryScheduler(WakeRetryConfig{
+			Machine: wakeMachine,
+			Store:   wakeObligations,
+			Address: cfg.PushGateway.Address,
+			Now:     cfg.Now,
+			// PB-PUSH-8 on the redrive/retry paths: the scheduler re-reads the SAME
+			// durable preference the notifier gates live wakes on, so an obligation that
+			// survived a crash cannot carry a trigger-time authorization past a user who
+			// has since turned push off.
+			Prefs: cfg.PushPrefs,
+		})
+		pusher = &TransportRouter{Transport: transport, Legacy: pusher, Gateway: wakeRetry}
 	}
 	notifier := NewPushNotifier(sink, PushConfig{
 		Pusher:  pusher,
@@ -310,7 +333,7 @@ func NewService(cfg ServiceConfig) *Service {
 	})
 	return &Service{
 		cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers,
-		wakeMachine: wakeMachine, wakeObligations: wakeObligations,
+		wakeMachine: wakeMachine, wakeObligations: wakeObligations, wakeRetry: wakeRetry,
 	}
 }
 
@@ -321,14 +344,13 @@ func NewService(cfg ServiceConfig) *Service {
 // the same address before the obligation's five-minute expiry. It is a no-op when this
 // pairing has not migrated off legacy_relay (cfg.PushGateway unset).
 //
-// This is deliberately the SIMPLEST re-drive shape that satisfies PG-OBL-8's "on restart,
-// load and re-drive every non-terminal obligation": one pass over Pending() at startup,
-// not a scheduled loop. PG-OBL-9's ongoing backoff-until-expiry retry -- for the case
-// where a retryable failure happens and NEITHER a restart nor any other trigger arrives
-// before expiry -- is tracked as a follow-up (bd issue agents-tracker-hggx.4.3) rather
-// than built here.
+// The one pass over Pending() at startup is PG-OBL-8's shape; the drive itself goes
+// through the PG-OBL-9 retry scheduler (bd agents-tracker-hggx.4.3), so a redrive whose
+// submit fails RETRYABLY arms the timer-driven, expiry-bounded backoff rather than
+// waiting for an unrelated trigger or redial to land before the obligation's five
+// minutes run out.
 func (s *Service) RedrivePendingWakeObligations(ctx context.Context) error {
-	if s.wakeMachine == nil || s.wakeObligations == nil {
+	if s.wakeRetry == nil || s.wakeObligations == nil {
 		return nil
 	}
 	pending, err := s.wakeObligations.Pending()
@@ -339,12 +361,12 @@ func (s *Service) RedrivePendingWakeObligations(ctx context.Context) error {
 		return nil
 	}
 	// This wave's scope is one pairing (one address) per Service (see PushGatewayConfig's
-	// TODO), so wakeMachine.Drive -- which drives its own configured Address -- is the
-	// whole redrive regardless of how many non-terminal records Pending() reports; a
-	// future ADR-018 N-pairings widening is what would make this iterate distinct
-	// addresses. A redrive failure here must not stop the rest of gateway startup
-	// (PG-OBL-3's failure-isolation applies at boot exactly as it does live).
-	return s.wakeMachine.Drive(ctx)
+	// TODO), so one Drive against the configured Address is the whole redrive regardless
+	// of how many non-terminal records Pending() reports; a future ADR-018 N-pairings
+	// widening is what would make this iterate distinct addresses. A redrive failure here
+	// must not stop the rest of gateway startup (PG-OBL-3's failure-isolation applies at
+	// boot exactly as it does live).
+	return s.wakeRetry.Drive(ctx)
 }
 
 // gatewayAuthorities is the PRODUCTION ReconcileSource: each authority is read from the
@@ -405,8 +427,58 @@ func (s *Service) PushNotifier() *PushNotifier { return s.notifier }
 // It is deliberately a SNAPSHOT of first errors rather than a stream: each component's
 // stored error is the root cause it saw, not the latest symptom, and a gateway that has
 // recovered still owes the operator the reason it was degraded.
+//
+// The fourth member is PG-OBL-10 (bd agents-tracker-hggx.4.5): the wake-obligation
+// store's CURRENT record for the configured push address, read live rather than stashed,
+// because the pairing's push health IS its last obligation's outcome -- a later
+// obligation that delivers replaces the record and clears the state, exactly as
+// PG-OBL-10's "last obligation" wording intends.
 func (s *Service) Err() error {
-	return errors.Join(s.bridge.Err(), s.sink.Err(), s.notifier.Err())
+	return errors.Join(s.bridge.Err(), s.sink.Err(), s.notifier.Err(), s.wakeObligationErr())
+}
+
+// wakeObligationErr surfaces PG-OBL-10's degraded push state: a migrated pairing whose
+// LAST wake obligation reached `expired` or `abandoned` has a phone that has stopped
+// receiving wakes, and the one operator-visible surface (this Err, printed to the unit's
+// log by cmd/swarm-remote) must say so -- naming the terminal state AND the last outcome
+// code, because the code is the repair path (address_revoked means re-pair;
+// push_token_unregistered means the handset must rotate its token). `delivered` is a
+// working push path, `pending`/`in_flight` are still inside their retry horizon, and
+// `superseded` is the user's own preference honoured -- none of the three is degraded ON
+// ITS OWN, though the latter two still report a degraded PREDECESSOR they carry (below).
+// An unmigrated service (no obligation custody at all) reports nothing here.
+func (s *Service) wakeObligationErr() error {
+	if s.wakeObligations == nil || s.cfg.PushGateway == nil {
+		return nil
+	}
+	ob, ok, err := s.wakeObligations.Get(s.cfg.PushGateway.Address)
+	if err != nil {
+		return fmt.Errorf("remotegw: push degraded: wake-obligation store unreadable: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	switch ob.State {
+	case ObligationExpired, ObligationAbandoned:
+		return fmt.Errorf("remotegw: push degraded (PG-OBL-10): this pairing's last wake obligation reached %q (last outcome %q) -- the phone is not receiving wakes", ob.State, ob.LastOutcome)
+	case ObligationPending, ObligationInFlight, ObligationSuperseded:
+		// A record whose PREDECESSOR ended degraded is still a degraded pairing:
+		// PG-OBL-6's re-mint replaces an expired-with-coalesced-triggers record inside
+		// the very Drive call that expires it, and without reading the carried-over
+		// prior state this surface would report the busiest failing pairing -- the one
+		// whose wakes keep expiring with more triggers always waiting -- as healthy.
+		// A DELIVERY is what clears it, which is why `superseded` is read here rather
+		// than in the healthy default: a supersede puts nothing on the wire, so it
+		// cannot prove a revoked address or a dead token repaired -- it would merely
+		// have written over the evidence and reported healthy until the next real wake
+		// attempt re-derived the same failure.
+		if ob.PriorTerminalState == ObligationExpired || ob.PriorTerminalState == ObligationAbandoned {
+			return fmt.Errorf("remotegw: push degraded (PG-OBL-10): this pairing's previous wake obligation reached %q (last outcome %q) and no wake has delivered since -- the phone is not receiving wakes", ob.PriorTerminalState, ob.PriorTerminalOutcome)
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 // Progressed reports whether traffic actually crossed the relay link during this runtime's
@@ -437,6 +509,14 @@ func (s *Service) Run(ctx context.Context) error {
 	// connection (control gate or read-only tap) is left behind after the sidecar exits.
 	defer func() { _ = s.leases.Close() }()
 	defer func() { _ = s.watchers.Close() }()
+	// End the PG-OBL-9 retry tail with the generation that armed it: a Service is one
+	// relay generation (cmd/swarm-remote builds a fresh one per redial), and an armed
+	// backoff chain left running would keep submitting wakes -- concurrently with the
+	// NEXT generation's scheduler -- for up to WakeV1Expiry after this Run returned.
+	// The next generation's RedrivePendingWakeObligations picks the live obligation up.
+	if s.wakeRetry != nil {
+		defer s.wakeRetry.Stop()
+	}
 	// PB-GW-8: re-append whatever the outbox reserved but never saw acked BEFORE any new
 	// frame goes out, so a delivery-unknown record is recovered by its IDENTICAL sealed
 	// envelope (which the phone stale-drops for free) rather than re-sealed at a fresh seq.
