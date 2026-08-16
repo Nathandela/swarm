@@ -83,13 +83,22 @@ func TestB58_TheLabelIsPublishedAfterTheDurableWrite(t *testing.T) {
 	go func() {
 		defer close(done)
 		for {
+			// One FINAL poll after stop closes, rather than returning immediately: stop is
+			// closed only after the main goroutine has itself awaited `paired`, and the label
+			// is monotonic from there, so the last read is guaranteed to observe it. Without
+			// it, a starved watcher (CI load, run 31946175820) could see stop before its next
+			// poll and exit having observed nothing, tripping the vacuous-pass guard below.
+			var last bool
 			select {
 			case <-stop:
-				return
+				last = true
 			default:
 			}
 			st, serr := p.State()
 			if serr != nil || st != "paired" {
+				if last {
+					return
+				}
 				continue
 			}
 			// The label says the pairing is done. Ask the durable state the same question.
