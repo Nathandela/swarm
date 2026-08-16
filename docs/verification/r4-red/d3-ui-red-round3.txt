@@ -1,0 +1,144 @@
+======================================================================
+RED evidence -- R4 D3 ROUND 3 fix pack (bead agents-tracker-0ox9)
+Date: 2026-08-16 (13:45-13:50 UTC)
+GG-5: failing-first, evidenced before any implementation change.
+Rounds 1 and 2 are d3-ui-red.txt / d3-ui-red-round2.txt beside this
+file; this round fixes the review findings against round 2's GREEN.
+======================================================================
+
+New test files (additive):
+  android/gate/r4_d3_round3_test.go
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelRound3Test.kt
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewRound3Test.kt
+  android/app/src/test/kotlin/dev/swarm/phone/VerbDispatchRound3Test.kt
+
+One existing test file changed, by STRENGTHENING ONLY (the MAJOR
+finding is about that file's own integrity -- see section 3):
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt
+
+One existing gate file changed, by ADDING claims (the MINOR finding):
+  android/gate/s24_screens_test.go (s24ScreenComponents rows)
+
+----------------------------------------------------------------------
+1. Go gate RED -- `go test -run TestR4D3R3 ./android/gate/` exit 1,
+   7/7 new tests failing, each for the finding it fences (go vet clean;
+   full output archived at /tmp/r4d3r3_gate_red.txt):
+
+  :56/:61/:67  ASuccessfulSwitchIsNotSilent
+       switchComputer's whole body is
+       "{ machineVerb { app -> app.selectMachine(machineId) } }":
+       no settle, no say(...), no recorded confirmation. Round 2 routed
+       every REFUSAL through say and left SUCCESS mute on the switcher's
+       primary control. (BLOCKING 1)
+  :80/:85/:91  TheSelectedMachineReachesThePanelAndTheRow
+       machinesPanel builds `MachinesPanelScreen.of(snapshot.rows,
+       cap = snapshot.cap)` with no selection, switchComputer records
+       none, and MachinesPanelView.kt never reads selectedMachineId --
+       so every panel is byte-identical across a switch, drawMachines'
+       equality guard early-returns and no row can ever be marked.
+       (BLOCKING 1, its mechanism)
+  :106 TheAddFormsLimitsAreComposed
+       no production Kotlin spends ADD_LIMITS: nothing on screen says
+       the added computer still needs its own pairing ceremony (bead
+       agents-tracker-ak2s) or that switching does not re-target the
+       live relay session. (BLOCKING 2)
+  :128/:134/:139  TheD3RecordDisclosesWhatAUserCannotComplete
+       docs/verification/r4-multimachine.md still carried round 2's
+       blanket "all reachable by a user" claim; neither that file nor
+       r4-d3-ui.md cited bead agents-tracker-ak2s, and r4-d3-ui.md did
+       not state the pairing-ceremony limit at all. (BLOCKING 2, the
+       deleted disclosure)
+  :159 AddAsksBeforeItSeversEveryLease
+       addComputer's body has no setPositiveButton: it runs app.stop()
+       -- suspendInput -> coalesce.Abandon + Leases().SeverAll + a real
+       disconnect -- with no question, while the LESS destructive
+       Forget has asked since round 2. (BLOCKING 3)
+  :179/:186/:198  ASecondAddWhileOneIsRunningIsRefusedOutLoud
+       addComputer hands its verb to the lane with no single-flight
+       key, says no ADD_IN_FLIGHT, and VerbDispatch.enqueue's body is
+       "{ laneFor(plane).execute { ... } }" -- no key, no refusal, so a
+       rapid double tap runs stop/add/start twice. (BLOCKING 3)
+  :228 EveryComposedScreenIsClaimedByTheCompositionTable
+       3 composed screens have no entry in s24ScreenComponents:
+       GlobalInboxView.kt, MachinesPanelView.kt, PairOnlyView.kt --
+       so PB-DS-6's per-screen fence asks nothing of them and passing
+       is indistinguishable from being unchecked. (MINOR, closed at its
+       class: PairOnlyView was found by the same sweep)
+
+----------------------------------------------------------------------
+2. Kotlin COMPILE-RED -- script /tmp/r4d3r3_red_compile.sh,
+   `./gradlew --no-daemon --rerun-tasks --no-build-cache
+   :app:compileDebugUnitTestKotlin`, BUILD FAILED in 1m34s, exit 1,
+   start 2026-08-16T13:47:43Z. 39 errors, every one an unresolved
+   round-3 contract symbol; zero cascades:
+
+  VerbDispatchRound3Test.kt:40,46,74,75,89,94,114,122,151,152
+       No parameter with name 'key' found.
+  VerbDispatchRound3Test.kt:53,58,101,122
+       Argument type mismatch: actual 'Unit', expected 'Boolean'
+       (enqueue reports nothing, so a refusal cannot be said).
+  MachinesPanelRound3Test.kt:68,82,95,101,108,109
+       No parameter with name 'selected' (statusLine / of).
+  MachinesPanelRound3Test.kt:83  Unresolved reference 'SELECTED_MARK'
+  MachinesPanelRound3Test.kt:110 Unresolved reference 'selectedMachineId'
+  MachinesPanelRound3Test.kt:128 Unresolved reference 'switchedTo'
+  MachinesPanelRound3Test.kt:147 Unresolved reference 'ADD_LIMITS'
+  MachinesPanelRound3Test.kt:165 Unresolved reference 'ADD_CONFIRM'
+  MachinesPanelRound3Test.kt:198 Unresolved reference 'ADD_IN_FLIGHT'
+  MachinesPanelViewRound3Test.kt:48,71,81  No parameter 'selected'
+  MachinesPanelViewRound3Test.kt:77,93     Unresolved 'SELECTED_MARK'
+  MachinesPanelViewRound3Test.kt:113,118   Unresolved 'ADD_LIMITS'
+
+  ZERO errors from MachinesPanelViewTest.kt: its round-3 change
+  (explicit nowUnixMs + the needs-input PHRASE) compiles against the
+  round-2 API unchanged, which is what makes it a strengthening rather
+  than a new requirement.
+
+Gradle discipline: AAR untouched (app/libs/swarm.aar mtime Aug 16
+13:51:16, 12427801 B, identical before and after both runs); no
+test-result XML deleted; no daemon, no build cache, all tasks rerun.
+
+----------------------------------------------------------------------
+3. The MAJOR finding is TEST INTEGRITY, so its evidence is a proof of
+   vacuity rather than a failing run.
+
+MachinesPanelViewTest.aRowRendersItsNeedsInputCount asserted
+`texts().any { it.contains("2") }`, and its view() helper passed no
+nowUnixMs -- so round 2's clocked sublabel was computed against the
+REAL clock over lastSyncUnixMs = 1000L and rendered `synced 20681d
+ago`, which satisfies contains("2") for a machine with needsInput = 0.
+The assertion's text never changed and it stopped asking anything.
+
+The proof is kept as a permanent test rather than a note:
+  MachinesPanelRound3Test.theLastSyncAgeAloneSuppliesDigitsAndNoNeedsInputPhrase
+  -- statusLine(needsInput = 0, lastSync = 1000L, now = 1787000000000L)
+     contains "2" AND contains no needs-input phrase.
+The fix is a strengthening: the helper pins nowUnixMs = 10_000L, the
+assertion asks for "2 sessions need input", and a negative control
+(aRowWithNothingWaitingRendersNoNeedsInputPhrase) was added beside it.
+No assertion was removed, relaxed or reworded downward.
+
+----------------------------------------------------------------------
+4. GREEN (2026-08-16, all exit 0)
+
+- Kotlin: script /tmp/r4d3r3_green_gradle.sh, `./gradlew --no-daemon
+  --rerun-tasks --no-build-cache :app:testDebugUnitTest`, BUILD
+  SUCCESSFUL in 3m30s, start 13:55:09Z end 13:58:40Z. 156 result XMLs
+  (153 before + the 3 new classes), 1240 tests, 0 failures, 0 errors.
+  New classes ran: VerbDispatchRound3Test 6/6, MachinesPanelRound3Test
+  9/9, MachinesPanelViewRound3Test 3/3; MachinesPanelViewTest 9/9 (8
+  frozen + the new negative control). XMLs freshly written (15:58:39
+  local), none deleted. AAR mtime/size identical before and after
+  (Aug 16 13:51:16, 12427801 B).
+- Go: `go build ./...` clean; `go vet ./android/gate/` clean;
+  `golangci-lint run ./android/gate/...` 0 issues; `go test -race
+  ./android/gate/` ok (51.5s -- round-1, round-2 and round-3 D3 gates
+  green together, with PB-DS-6's exhaustiveness fence); `go test
+  -count=1 -run TestB94 ./internal/verify/` ok (3.4s).
+
+Constraints honored: no assertion weakened anywhere; mobile/ and
+internal/** untouched (BLOCKING 1 is fixed surface-side precisely
+because the facade publishes no current-machine fact, and the pairing
+ceremony is bead agents-tracker-ak2s, out of this slice by ruling);
+android/unbound-verbs.tsv untouched; no git add/commit.
+======================================================================

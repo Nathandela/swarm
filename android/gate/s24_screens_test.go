@@ -1222,6 +1222,46 @@ var s24ScreenComponents = map[string]map[string]string{
 		"notice":      "§4 Notice line -- one per repair channel with a hole in it",
 		"ctaButton":   "the one control: the repair, or the way back to Pairing",
 	},
+	// WAVE R4'S MACHINE SWITCHER (bead agents-tracker-0ox9). It arrived with no row here, which
+	// is how it came to be fenced by the weak clause alone -- `s24ScreenComponents[name]` returns
+	// an empty requirement for an unclaimed file, so the loop asks only that SOMETHING in the kit
+	// is called and a screen that dropped its header, its disclosure or its rows would still
+	// pass. `TestR4D3R3_EveryComposedScreenIsClaimedByTheCompositionTable` is what makes that
+	// omission fail rather than read as a pass.
+	//
+	// `notice` IS CLAIMED FOR TWO SENTENCES AND BOTH ARE HONESTY: ADR-018's cap sentence, drawn
+	// only when the roster exceeds the documented connection cap, and round 3's add-form limits,
+	// drawn ALWAYS because they always bind (the added computer still needs its own pairing
+	// ceremony -- bead agents-tracker-ak2s -- and switching does not re-target the live session).
+	// A screen that quietly stopped drawing either would be claiming completeness it does not
+	// have, which is the exact defect this slice's round 3 was called over.
+	"dev/swarm/phone/ui/screens/MachinesPanelView.kt": {
+		"navHeaderDrill": "the drill header -- the switcher is a sub-state of Settings, per §4",
+		"ctaButton":      "the aggregate inbox entry and the Add computer submit",
+		"sessionList":    "`.prows` -- the switcher's rows, carrying the gap and the side padding",
+		"settingsRow":    "derivation row 15 -- one per pairing, the row IS the switch control",
+		"denyChip":       "the per-row phone-side Forget (playbook 4.9), destructive polarity",
+		"notice":         "§4 Notice line -- ADR-018's cap sentence, the add form's limits, a broken row's own fault",
+	},
+	// THE AGGREGATE INBOX (inbox.global), the switcher's one destination. `emptyState` is row 8's
+	// and it is load-bearing on THIS screen above all: an aggregate list that draws nothing when
+	// no pairing holds a session is indistinguishable from an aggregate list that failed to read
+	// any pairing at all.
+	"dev/swarm/phone/ui/screens/GlobalInboxView.kt": {
+		"navHeaderDrill": "the drill header -- one level below the switcher, per §4",
+		"sessionList":    "`.prows` -- the (machine_id, session_id) rows' container",
+		"settingsRow":    "derivation row 15 -- one per row: the session, and the machine that serves it",
+		"emptyState":     "derivation row 8 -- a screen that draws nothing cannot say why it is empty",
+	},
+	// THE PAIR-ONLY SCREEN, unclaimed since it landed and found by the same exhaustiveness fence.
+	// It is the whole app on a phone with no pairing, so what it composes is not a detail: the
+	// title, the one offer to pair, and the reason there is nothing else.
+	"dev/swarm/phone/ui/screens/PairOnlyView.kt": {
+		"navHeader":  "the screen's own title -- there is nothing to drill back to",
+		"ctaButton":  "the one offer: pair this phone with a computer",
+		"emptyState": "derivation row 8 -- the reason this screen is all there is",
+		"notice":     "§4 Notice line -- why a pairing is missing, when the reason is known",
+	},
 }
 
 // s24ScreenKitFaults reports what one screen source owes the requirement and does not spend.

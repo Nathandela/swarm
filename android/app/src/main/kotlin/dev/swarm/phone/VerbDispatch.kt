@@ -67,6 +67,22 @@ class VerbDispatch(
     private val crossing = mutableSetOf<View>()
 
     /**
+     * The same fence for work that has NO control to key on (agents-tracker-0ox9 round 3).
+     *
+     * [enqueue] exists precisely because the machines controls are rebuilt per draw, so a mark
+     * keyed on a view fences nothing there -- and it was deliberately undroppable, for the
+     * push-token reconciliation that must never be discarded (agents-tracker-b6iu). But Add
+     * computer runs `App.Stop` -> AddMachine -> `App.Start` on that lane, and a rapid double tap
+     * ran that twice: two disconnects, two rounds of buffered input resolved undelivered, two
+     * lease severances, while the first was still crossing.
+     *
+     * SO THE FENCE IS OPT-IN, BY KEY. Unkeyed work keeps b6iu's guarantee exactly; keyed work is
+     * single-flight per key. Main-thread only, like [crossing], which is why it is not
+     * synchronized.
+     */
+    private val crossingKeys = mutableSetOf<Any>()
+
+    /**
      * Whether a live screen is still holding this dispatch.
      *
      * Process death and rebuild are constant on Android and a command takes a relay round trip,
@@ -121,15 +137,34 @@ class VerbDispatch(
      * after a preference write runs after it, and two reconciliations run in the order they were
      * asked for. That is the whole of the sequencing this needs; nothing here queues or retries.
      *
+     * @param key the single-flight key, or null for work that must never be dropped ([crossingKeys]
+     *  has the argument). While work under this key is crossing, a second enqueue under it does
+     *  NOTHING -- not the work, and not a settle either -- and says so in its return value, so
+     *  the caller can put the refusal on screen instead of swallowing it.
      * @param work the facade call. It runs off the main thread and must not touch a View.
      * @param settle what the answer changes on screen. It runs on [main], and only while this
      *  dispatch is attached -- a reconciliation whose panel has gone has nothing to report to.
+     * @return whether the work was accepted onto the lane. False means nothing was sent.
      */
-    fun <T> enqueue(plane: SendPlane, work: () -> T, settle: (Result<T>) -> Unit) {
+    fun <T> enqueue(
+        plane: SendPlane,
+        key: Any? = null,
+        work: () -> T,
+        settle: (Result<T>) -> Unit,
+    ): Boolean {
+        if (key != null && !crossingKeys.add(key)) return false
         laneFor(plane).execute {
             val answer = runCatching(work)
-            main.execute { if (attached) settle(answer) }
+            main.execute {
+                // The key is freed BEFORE the attached check, for [press]'s recorded reason: a
+                // dropped settle that left the mark standing would refuse every later attempt
+                // for the life of this dispatch, with nothing to distinguish it from a dead
+                // button.
+                if (key != null) crossingKeys.remove(key)
+                if (attached) settle(answer)
+            }
         }
+        return true
     }
 
     /** Whether a press of [control] is still crossing to the machine. */

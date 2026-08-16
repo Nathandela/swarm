@@ -38,16 +38,57 @@ this file records.
   aggregate identities (:232); duplicate AddMachine refused with the first add
   standing (:290).
 
-### D3 — add/switch/forget screen model + global inbox facade (NOT reachable UX)
+### D3 — add/switch/forget + global inbox, composed and reachable (follow-on DONE, scoped)
 
-SCOPE, STATED UP FRONT (round-3 honesty amendment): what exists is the manager-backed
-Go facade and a PURE Kotlin screen model. `MachinesScreen.kt` is referenced by nothing
-in `android/app/src/main` -- no companion View, no Surface, no navigation caller -- so
-no user can reach ADD_COMPUTER, SWITCH_COMPUTER, FORGET_COMPUTER or GLOBAL_INBOX. The
-playbook's literal D3 wording ("every affordance nameable by the screen model, tested
-from first-run resolver state") is met; DELIVERED UX is not claimed. Composing the
-switcher and inbox over `FacadeBridge` is the follow-on slice (the 6
-`android/unbound-verbs.tsv` rows).
+SCOPE, STATED UP FRONT AND SCOPED (2026-08-16, bead agents-tracker-0ox9 follow-on;
+amended again in round 3, which RESTORED this paragraph — round 2 deleted the honesty
+disclosure that stood here and replaced it with a blanket claim that all four R4
+affordances were user-reachable, which is not true of ADD_COMPUTER. Deleting a
+disclosure to claim completeness is the defect class this evidence system exists to
+prevent, so the disclosure is written back in full and fenced by
+`android/gate/r4_d3_round3_test.go:TestR4D3R3_TheD3RecordDisclosesWhatAUserCannotComplete`).
+
+What exists NOW: the manager-backed Go facade, the pure screen model, AND the
+composed, navigable UX — `MachinesPanelScreen`/`MachinesPanelView.kt` (the switcher),
+`GlobalInboxScreen`/`GlobalInboxView.kt` (the aggregate inbox), both reached from the
+Settings panel's named `Computers` entry (`MachinesPanelScreen.ENTRY_LABEL`, spent by
+`SettingsPanelView.kt`) through `PhoneSurface.openMachines`/`openGlobalInbox`, with
+the destination decided by the first-run resolver (`MachinesScreen.destinationFor`)
+at the draw, never hand-fed.
+
+WHAT A USER CAN COMPLETE END TO END, exactly:
+
+- SWITCH_COMPUTER — a row tap records the selection, the row is MARKED `selected` and
+  the success is spoken; what it does NOT do is re-target this phone's live relay
+  session (`mobile/machines.go:19-21`), and the confirmation says so in the same
+  sentence.
+- FORGET_COMPUTER — complete: it asks `FORGET_CONFIRM` and destroys exactly one
+  pairing's keys, namespace and caches.
+- GLOBAL_INBOX — complete as a READOUT: rows are inert by decision, because a row tap
+  could only pretend to navigate while SelectMachine does not retarget.
+
+WHAT A USER CANNOT COMPLETE HERE, and why:
+
+- ADD_COMPUTER — reachable and wired to `App.AddMachine`, and NOT completable by a
+  user in this slice. The form registers the pairing beside the existing ones; the
+  second machine's namespace then awaits THAT machine's own pairing ceremony, which
+  this slice deliberately does not wire — it is **bead agents-tracker-ak2s**, out of
+  scope by ruling. Until that lands, a row added by hand has no live client, renders
+  its last-sync age forever, and is forget-only. The limits are on screen under the
+  add form (`MachinesPanelScreen.ADD_LIMITS`, rendered the way ADR-018's cap sentence
+  is) rather than only in this file, and the add asks `ADD_CONFIRM` first because it
+  stops the drain — buffered keystrokes resolved undelivered, every input lease
+  severed, the link dropped.
+- The physical three-machines-two-relays exit stays the owner's, as ever.
+
+The rest of the shipped behaviour: the broken-pairing row renders its own fault at
+rest with MM8's "other computers are unaffected" sentence; the system back gesture is
+armed for both new drill-downs; refusals on the roster path surface via toast+line,
+never silently; a second Add while one is running is refused out loud. Full evidence:
+`docs/verification/r4-d3-ui.md`, with the failing-first records in
+`docs/verification/r4-red/d3-ui-red.txt` (round 1),
+`docs/verification/r4-red/d3-ui-red-round2.txt` (round 2 fix pack) and
+`docs/verification/r4-red/d3-ui-red-round3.txt` (round 3 fix pack).
 
 - Go facade: `mobile/machines.go` — `App.Machines`:279, `App.SelectMachine`:336,
   `App.AddMachine`:362 (runs the MM6 migration on first use, then adds BESIDE),
@@ -64,8 +105,11 @@ switcher and inbox over `FacadeBridge` is the follow-on slice (the 6
   FORGET_COMPUTER / GLOBAL_INBOX, `MachineRowModel` keyed by machine id with
   reachability / lastSyncUnixMs / needsInput / derived stale. JVM suite
   `MachinesScreenTest.kt` (RED slice's frozen contract) now compiles and passes.
-- New bound verbs with no Kotlin caller yet are ledgered in
-  `android/unbound-verbs.tsv` (6 rows), per that file's uncallable-by-default rule.
+- The six verbs' `android/unbound-verbs.tsv` rows were DELETED with the follow-on
+  wiring (the ledger's uncallable-by-default rule run to completion):
+  `App.Machines`/`AddMachine`/`SelectMachine`/`ForgetMachine`/`GlobalInbox` and
+  `MachineList.Cap` all have production Kotlin callers now, fenced by
+  `android/gate/r4_d3_reachability_test.go` and `boundverbledger_test.go`.
 
 ### D4 — per-machine push revoke producer, end to end (u37c)
 

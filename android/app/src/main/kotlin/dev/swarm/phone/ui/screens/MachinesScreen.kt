@@ -48,6 +48,15 @@ data class MachineRowModel(
     val connected: Boolean,
     val lastSyncUnixMs: Long,
     val needsInput: Int,
+    /**
+     * MM8's per-machine recovery fact: this pairing's durable state failed to resume, so the row
+     * is registered and has no live client. Its affordances are forget-or-re-pair, and tapping it
+     * must surface [brokenReason] rather than spend a switch on a refusal the screen can state
+     * itself (machines.recovery).
+     */
+    val broken: Boolean = false,
+    /** The broken pairing's OWN fault, verbatim from the facade; empty on a healthy row. */
+    val brokenReason: String = "",
 ) {
     /**
      * A row beyond the connection cap is parked, and a parked row must visibly show its last-sync

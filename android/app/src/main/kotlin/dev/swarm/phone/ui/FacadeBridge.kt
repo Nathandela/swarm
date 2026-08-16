@@ -1,6 +1,9 @@
 package dev.swarm.phone.ui
 
 import dev.swarm.phone.keys.ConnectionState
+import dev.swarm.phone.ui.screens.GlobalInboxRowModel
+import dev.swarm.phone.ui.screens.GlobalInboxScreen
+import dev.swarm.phone.ui.screens.MachineRowModel
 import swarmmobile.App
 import swarmmobile.Session
 import swarmmobile.Snapshot
@@ -55,6 +58,57 @@ class FacadeBridge(private val app: App) {
     fun triageInbox(): TriageInbox {
         val roster = rosterView()
         return TriageInbox.from(roster.rows, journalStale = roster.stale)
+    }
+
+    /**
+     * Wave R4's machine-switcher snapshot (machines.list): every paired machine's four facts of
+     * playbook 4.2:198, WITH the documented connection cap they were arbitrated under.
+     *
+     * TOGETHER IS THE POINT, [rosterView]'s reason one handle over: the cap rides
+     * `MachineList.Cap` "so the switcher can render the limitation honestly" (ADR-018), and a
+     * second `App.Machines` call to fetch it would be a cap from a different arbitration than the
+     * rows on screen. The broken-pairing fields cross verbatim (MM8): the row's own fault is the
+     * screen's to render, never this adapter's to soften.
+     */
+    fun machines(): MachinesSnapshot {
+        val list = app.machines()
+        return MachinesSnapshot(
+            rows = (0 until list.count()).map { index ->
+                val info = list.at(index)
+                MachineRowModel(
+                    machineId = info.getID(),
+                    displayName = info.getDisplayName(),
+                    connected = info.getConnected(),
+                    lastSyncUnixMs = info.getLastSyncUnixMs(),
+                    needsInput = info.getNeedsInput().toInt(),
+                    broken = info.getBroken(),
+                    brokenReason = info.getBrokenReason(),
+                )
+            },
+            cap = list.cap().toInt(),
+        )
+    }
+
+    /**
+     * Wave R4's aggregate inbox (inbox.global): one list across every pairing, folded by
+     * [GlobalInboxScreen.rows] on the TUPLE (machine_id, session_id) -- the R4 exit criterion
+     * (MM4). The fold is the MODEL's, applied here the way [triageInbox] applies
+     * `TriageInbox.from`, so the screen and its JVM suite drive the same function.
+     */
+    fun globalInbox(): List<GlobalInboxRowModel> {
+        val list = app.globalInbox()
+        return GlobalInboxScreen.rows(
+            (0 until list.count()).map { index ->
+                val item = list.at(index)
+                GlobalInboxRowModel(
+                    machineId = item.getMachineID(),
+                    machineName = item.getMachineName(),
+                    sessionId = item.getSessionID(),
+                    title = item.getTitle(),
+                    needsInput = item.getNeedsInput(),
+                )
+            },
+        )
     }
 
     /**
@@ -146,6 +200,12 @@ class FacadeBridge(private val app: App) {
     }
 
     private data class RosterView(val rows: List<SessionRow>, val stale: Boolean)
+
+    /**
+     * The machine roster read ONCE: its rows and the cap they were arbitrated under, together --
+     * see [machines].
+     */
+    data class MachinesSnapshot(val rows: List<MachineRowModel>, val cap: Int)
 
     /**
      * PB-INPUT-2's lease state for one session, and WHAT IS LEFT OF PB-APP-4's grid read.

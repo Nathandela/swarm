@@ -156,6 +156,16 @@ object SettingsTag {
     const val CONNECTION_CLOCK = "settings.connection.clock"
 
     /**
+     * Wave R4's machine-switcher entry (bead agents-tracker-0ox9): the row that leads to the
+     * Computers screen, named by [MachinesPanelScreen.ENTRY_LABEL] -- the model's recorded copy,
+     * spent here rather than typed here (defect shape 1, agents-tracker-64rf).
+     *
+     * It is NOT [ROW] ([MACHINE_ROW]'s reason): that tag marks the push toggles, and a caller
+     * reaching for a preference must not be handed a navigation row.
+     */
+    const val MACHINES_ENTRY = "settings.machines.entry"
+
+    /**
      * Derivation row 12's kill-switch panel, drawn only where the switch is OFF
      * (agents-tracker-2pnu F5, agents-tracker-zecs).
      *
@@ -198,6 +208,11 @@ object SettingsTag {
  *  (agents-tracker-nx44.2). It is a view the SURFACE owns, on the scaffold slot's own terms: what
  *  it says changes on the surface's clock and this panel redraws itself, so a panel that built one
  *  would rebuild the mark under whoever is pressing it.
+ * @param onOpenMachines where the machine-switcher entry goes (bead agents-tracker-0ox9), or null
+ *  for a host with no switcher to navigate to, which composes NO entry rather than a row that
+ *  does nothing -- `navHeaderDrill(back = null)`'s own ruling, one screen over. The row's words
+ *  are [MachinesPanelScreen]'s recorded copy, so the entry is findable by the name the model
+ *  froze (defect shape 1).
  */
 fun settingsPanelView(
     context: Context,
@@ -208,6 +223,7 @@ fun settingsPanelView(
     deliveryRedirectFor: (String) -> View = { label -> ctaButton(context, label, CtaKind.MORE) },
     below: View? = null,
     status: View? = null,
+    onOpenMachines: (() -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -294,6 +310,25 @@ fun settingsPanelView(
                 ).apply { tag = SettingsTag.REMOTE_ACCESS },
             )
         }
+    }
+
+    // UNDER THE MACHINE CLUSTER AND ABOVE THE PREFERENCES (bead agents-tracker-0ox9). The two
+    // sections above are about the computer this phone is pinned to; this row is where the OTHER
+    // computers live -- add, switch, forget, and the aggregate inbox behind them -- so it follows
+    // the cluster it extends. It is a NAMED row in the composition, never an anonymous slot: the
+    // burial that made the pairing panel unfindable (agents-tracker-64rf) is the defect shape this
+    // placement exists to refuse.
+    onOpenMachines?.let { open ->
+        column.addView(
+            settingsRow(
+                context = context,
+                label = MachinesPanelScreen.ENTRY_LABEL,
+                sublabel = MachinesPanelScreen.ENTRY_SUBLABEL,
+            ).apply {
+                tag = SettingsTag.MACHINES_ENTRY
+                setOnClickListener { open() }
+            }.screenAir(),
+        )
     }
 
     panel.sections.forEach { section ->

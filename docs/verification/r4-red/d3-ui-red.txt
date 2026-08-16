@@ -1,0 +1,269 @@
+======================================================================
+R4 D3 follow-on -- machine switcher + global inbox COMPOSED: RED inventory
+epic: agents-tracker-hggx / bead: agents-tracker-0ox9 (compose the machine
+      switcher [add/switch/forget, broken-pairing row rendering its own fault]
+      and the global inbox entry over FacadeBridge; wire navigation; bind the
+      6 android/unbound-verbs.tsv verbs; Obsidian design)
+role: RED (TDD Phase 1 + Red, GG-5)
+date: 2026-08-16
+baseline: main @ b3f1372 (r4-multimachine.md round 3 is the disclosed GREEN
+      state this slice starts from: MachinesScreen.kt exists, referenced by
+      NOTHING in android/app/src/main; the six R4 symbols are bound, tested,
+      and ledgered UNCALLED)
+
+new files (ADDITIVE ONLY -- no existing production or test source modified,
+no assertion weakened, unbound-verbs.tsv untouched by this RED slice):
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt
+  android/gate/r4_d3_reachability_test.go
+
+the three recorded UX defect shapes this inventory pins, by name:
+  FINDABLE   -- a control that exists must be named by the composition, never
+                an anonymous `below:` slot (agents-tracker-64rf, -nx44.6)
+  REACHABLE  -- a screen that exists must have a navigation caller, first-run
+                state paths included (the deleted machinesPanelView shipped
+                with "zero production call sites")
+  NEVER HAND-FED -- state is built through the real resolver
+                (MachinesScreen.destinationFor) from first-run (0 machines),
+                never by conjuring a MACHINES world the resolver never answered
+
+======================================================================
+1. Go gate RED (android/gate/r4_d3_reachability_test.go)
+======================================================================
+command: go test -count=1 -run TestR4D3 ./android/gate/   (exit 1)
+also run: go build ./... PASS; go vet ./android/gate/ PASS;
+          golangci-lint run ./android/gate/ 0 issues (PATH=$HOME/go/bin);
+          go test -race -count=1 ./android/gate/ -- the ONLY failures in the
+          whole -race suite are the five TestR4D3 below (46.4s);
+          go test -count=1 -run TestB94 ./internal/verify/ PASS (the B94
+          ledger is untouched by this RED slice).
+
+FAILING, each for exactly the composed-UX gap r4-multimachine.md D3 discloses:
+
+  TestR4D3_TheMachinesSwitcherIsComposedAndHasANavigationCaller
+      android/gate/r4_d3_reachability_test.go:125 -> FAILS at :128:
+      ui/screens/MachinesPanelView.kt does not exist (readFileOrFail). The
+      caller half (machinesPanelView called from outside its file) arms the
+      moment the file exists.
+  TestR4D3_TheEntryIsNamedByTheRecordedCopyAtACallSite
+      android/gate/r4_d3_reachability_test.go:191 -> no production Kotlin
+      references ENTRY_LABEL outside a declaring file: the switcher has no
+      NAMED way in (FINDABLE shape).
+  TestR4D3_TheFirstRunResolverIsConsultedByProduction
+      android/gate/r4_d3_reachability_test.go:211 -> no production Kotlin
+      calls `.destinationFor(`: the first-run resolver decides nothing
+      (HAND-FED shape). NOTE: the first cut of this test matched the bare
+      name and PASSED against MachinesScreen.kt's own DECLARATION -- the
+      shadowing trap boundVerbCall's dot rule records; the dot is now
+      required and the test fails for the right reason.
+  TestR4D3_TheSixMachineVerbsAreCalledAndLeaveTheLedger
+      android/gate/r4_d3_reachability_test.go:243 -> 12 errors, two per
+      symbol: App.Machines / App.AddMachine / App.SelectMachine /
+      App.ForgetMachine / App.GlobalInbox / MachineList.Cap each have NO
+      production-Kotlin caller AND are still excused at
+      android/unbound-verbs.tsv:58-63. GREEN's exit is called AND
+      row-deleted; the existing bidirectional gate
+      (TestBoundVerbs_TheLedgerCannotExcuseASymbolTheAppNowReaches) forces
+      the deletion half once the call half lands, keeping the ledger honest.
+  TestR4D3_TheGlobalInboxIsComposedAndHasANavigationCaller
+      android/gate/r4_d3_reachability_test.go:287 -> no production Kotlin
+      declares `fun globalInboxView(`: the GLOBAL_INBOX destination is a
+      bound verb and a ledger row with no screen behind it.
+
+PASSING BY DESIGN (disclosed, the go-red-round3.txt precedent -- a guard that
+pins the shape the fix must not take):
+  TestR4D3_TheSwitcherIsNotBuriedInTheAnonymousBelowSlot
+      android/gate/r4_d3_reachability_test.go:158 -> vacuously green today
+      (no machinesPanelView exists anywhere); it exists so a GREEN that
+      composes the switcher INTO unrecomposedControls or hands it to a
+      `below =` slot -- the exact 64rf/nx44.6 burial -- fails loudly.
+
+raw run:
+--- FAIL: TestR4D3_TheMachinesSwitcherIsComposedAndHasANavigationCaller (0.00s)
+    r4_d3_reachability_test.go:128: agents-tracker-0ox9: cannot read android/app/src/main/kotlin/dev/swarm/phone/ui/screens/MachinesPanelView.kt: open /Users/Nathan/Code/swarm/android/app/src/main/kotlin/dev/swarm/phone/ui/screens/MachinesPanelView.kt: no such file or directory
+--- FAIL: TestR4D3_TheEntryIsNamedByTheRecordedCopyAtACallSite (0.04s)
+    r4_d3_reachability_test.go:200: agents-tracker-0ox9: no production Kotlin outside its declaring file references ENTRY_LABEL, so the machine switcher has no NAMED way in. A control that exists must be findable -- named by the composition, not discovered by scrolling past an anonymous column (agents-tracker-64rf, agents-tracker-nx44.6)
+--- FAIL: TestR4D3_TheFirstRunResolverIsConsultedByProduction (0.01s)
+    r4_d3_reachability_test.go:231: agents-tracker-0ox9: no production Kotlin calls MachinesScreen.destinationFor(...). The first-run resolver (0 machines -> PAIR_ONLY, >=1 -> MACHINES) exists and decides nothing: the destination a real user lands on is not the resolver's answer, so every JVM test that drives destinationFor is testing a function the app ignores
+--- FAIL: TestR4D3_TheSixMachineVerbsAreCalledAndLeaveTheLedger (0.04s)
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.App.Machines -- the switcher's row snapshot (machines.list) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:58 still excuses App.Machines. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.App.AddMachine -- Add computer -- BESIDE the existing pairings, MM6 migration on first use (machines.add) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:59 still excuses App.AddMachine. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.App.SelectMachine -- Switch computer -- feeds the least-recently-viewed policy (machines.select) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:60 still excuses App.SelectMachine. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.App.ForgetMachine -- Forget this computer -- phone-side, distinct from revoke (machines.forget) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:61 still excuses App.ForgetMachine. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.App.GlobalInbox -- the aggregate inbox keyed (machine_id, session_id) (inbox.global) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:62 still excuses App.GlobalInbox. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+    r4_d3_reachability_test.go:268: agents-tracker-0ox9: swarmmobile.MachineList.Cap -- the documented foreground connection cap, rendered honestly (ADR-018) -- has NO production-Kotlin caller. This is the phase's standing defect class ('the requirement is implemented, and the app cannot reach it'), and wave R4's D3 disclosure says so; composing the switcher and inbox over FacadeBridge is what retires it
+    r4_d3_reachability_test.go:275: agents-tracker-0ox9: android/unbound-verbs.tsv:63 still excuses MachineList.Cap. The row's own text names this slice as its deletion condition; a wired verb's row must go with the wiring, or the ledger rots into a list of considered-sounding rows about symbols the app reaches
+--- FAIL: TestR4D3_TheGlobalInboxIsComposedAndHasANavigationCaller (0.01s)
+    r4_d3_reachability_test.go:298: agents-tracker-0ox9: no production Kotlin declares `fun globalInboxView(`; the GLOBAL_INBOX destination (inbox.global) exists as a bound verb and a ledger row, and no screen composes it -- the triage inbox is still the only inbox, single-machine by construction
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.864s
+FAIL
+
+======================================================================
+2. Android JVM RED (gradle lane) -- COMPILE-RED, the repo's convention
+======================================================================
+environment (the CI android job's discipline):
+  JAVA_HOME=/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HOME=/usr/local/share/android-commandlinetools
+  script file: /tmp/r4d3_red_androidunit.sh (set -eu)
+  command: ./gradlew --no-daemon --rerun-tasks --no-build-cache
+           :app:compileDebugUnitTestKotlin
+  == start: 2026-08-16T12:21:21Z
+  == end:   BUILD FAILED in 2m 4s, exit 1 (~12:23:25Z; the `== end` echo is
+            unreached under set -eu on the intended failure)
+  android/app/libs/swarm.aar mtime BEFORE and AFTER the lane:
+    Aug 16 13:51 local (11:51Z), 12427801 bytes -- the round-3 artifact,
+    untouched: this lane did not rebuild the AAR, :app:requireSwarmAar only
+    asserted its presence.
+  test-result XML mtimes BEFORE and AFTER: testDebugUnitTest set at
+    Aug 16 13:40, testReleaseUnitTest at Aug 16 13:43 (the round-3 GREEN
+    lane's), untouched -- a compile-RED produces and rewrites none, and no
+    test-results were ever deleted.
+
+### Every root error is an unresolved R4-D3 contract symbol
+### (MachinesPanelScreen, MachinesPanel, machinesPanelView, GlobalInboxScreen,
+### GlobalInboxRowModel, MachineRowModel's broken/brokenReason); the
+### 'it'/type-inference/'lowercase' lines are cascades of those same
+### unresolved types inside lambda receivers. 40 errors total; the full list:
+
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:27:9 Unresolved reference 'GlobalInboxRowModel'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:37:20 Unresolved reference 'GlobalInboxScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:38:13 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:49:24 Unresolved reference 'it'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:49:37 Cannot infer type for type parameter 'A'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:49:37 Cannot infer type for type parameter 'B'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:49:40 Unresolved reference 'it'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:49:63 Unresolved reference 'size'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:55:20 Unresolved reference 'GlobalInboxScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:56:13 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:64:45 Unresolved reference 'title'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:69:20 Unresolved reference 'GlobalInboxScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/GlobalInboxScreenTest.kt:70:13 Cannot infer type for type parameter 'T'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:74:21 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:82:21 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:102:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:107:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:112:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:117:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:133:13 No parameter with name 'broken' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:134:13 No parameter with name 'brokenReason' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:136:79 Unresolved reference 'broken'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:153:13 No parameter with name 'broken' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:154:13 No parameter with name 'brokenReason' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:156:22 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:173:20 Unresolved reference 'lowercase'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:182:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:192:20 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelScreenTest.kt:208:13 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:65:9 No parameter with name 'broken' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:66:9 No parameter with name 'brokenReason' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:76:15 Unresolved reference 'machinesPanelView'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:78:17 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:93:27 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:95:26 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:135:27 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:137:17 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:153:27 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:155:26 Unresolved reference 'MachinesPanelScreen'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewTest.kt:241:27 Unresolved reference 'MachinesPanelScreen'.
+
+BUILD FAILED in 2m 4s
+21 actionable tasks: 21 executed
+== exit: 1
+
+======================================================================
+3. The frozen contract, test by test (the inventory GREEN must satisfy;
+   no assertion may be weakened)
+======================================================================
+
+MachinesPanelScreenTest.kt (pure model -- copy, cap honesty, broken state):
+  :56  theSwitcherWorldIsEnteredThroughTheResolverFromFirstRun
+       first-run 0 machines -> PAIR_ONLY through the REAL resolver; only the
+       first Add flips it to MACHINES; the panel exists only then.
+  :79  thePanelRowSetIsTheModelsOwnAndNotARestatement
+       MachinesPanelScreen.of folds duplicate machine ids exactly as
+       MachinesScreen.rows does (one row per pairing, MM4).
+  :96  everyAffordanceCarriesRecordedCopy
+       ENTRY_LABEL="Computers", ADD_LABEL="Add computer" (playbook 4.1 step
+       4's words), FORGET_LABEL="Forget this computer" (playbook 4.9's
+       words), GLOBAL_INBOX_LABEL="All sessions" -- recorded ONCE, spent by
+       the view, referenced by the composition (FINDABLE).
+  :126 aBrokenRowCarriesItsOwnFaultAndNeverReadsConnected
+       MachineRowModel gains broken/brokenReason; a broken row never reads
+       "connected" (ADR-018 MM3's honesty, both directions).
+  :146 theBrokenNoticeNamesTheFaultAndReassuresAboutTheOthers
+       brokenNotice(row) is non-null for a broken row, contains the row's
+       OWN brokenReason AND "other computers are unaffected" -- the
+       SelectMachine refusal as a user-visible state, never a crash or a
+       silent no-op, and never the wholesale clear-app-data remedy (MM8).
+  :178 aHealthyRowHasNoBrokenNotice
+       null for a healthy row -- no fault sentence over a working pairing.
+  :191 theCapIsStatedWhenRowsExceedItAndSilentWhenTheyDoNot
+       capNotice states "3" when 4 rows ride a cap of 3 (MachineList.Cap
+       rendered honestly, ADR-018); null inside the cap.
+
+MachinesPanelViewTest.kt (Robolectric -- the switcher AS DRAWN; every control
+found by its recorded copy, presses climb to the nearest clickable ancestor):
+  :90  addComputerIsFindableByItsRecordedCopyAndFires
+       "Add computer" on screen, tappable, fires onAddComputer once.
+  :108 tappingARowSwitchesToThatMachineById
+       two rows BOTH named "laptop"; tapping the second switches to "m-b" --
+       identity is the machine id, never the display name (MM4).
+  :129 everyRowOffersForgetAndItNamesItsMachine
+       "Forget this computer" fires onForgetComputer("m-a") -- never by
+       proximity.
+  :150 theGlobalInboxEntryIsFindableAndFires
+       "All sessions" on screen, tappable, fires onOpenGlobalInbox.
+  :168 aParkedRowRendersStaleAndAConnectedRowRendersConnected
+       the model's reachability words ("connected"/"stale") are ON SCREEN,
+       not only in the model (playbook 4.2:200-202).
+  :187 aRowRendersItsNeedsInputCount
+       the fourth row fact of playbook 4.2:198, visible.
+  :201 aBrokenRowRendersItsOwnFaultAndDoesNotSwitch
+       the broken row's reason and "other computers are unaffected" are
+       visible AT REST; tapping the broken row fires NO switch.
+  :235 aBrokenRowStillOffersForget
+       forget-or-re-pair is the broken row's affordance set: Forget fires
+       onForgetComputer("m-b") on the broken row too.
+
+GlobalInboxScreenTest.kt (pure model -- the R4 exit keying):
+  :36  theSameSessionIdOnTwoMachinesIsTwoRows
+       (m-a,s-1) and (m-b,s-1) are two rows with distinct tuple keys.
+  :54  aDuplicateTupleIsFoldedToItsFirstRow
+       one (machine,session) identity is one row.
+  :68  aSharedTitleIsNeverAnAuthority
+       a display title never folds two sessions (playbook 4.2).
+
+android/gate/r4_d3_reachability_test.go (source-graph reachability + the wire):
+  :125 switcher view exists in the module's shape and has a caller outside
+       its own file (REACHABLE)
+  :158 never composed into unrecomposedControls nor passed as `below =`
+       (the 64rf/nx44.6 burial, fenced by name; passing-by-design today)
+  :191 ENTRY_LABEL is spent by a production caller (FINDABLE)
+  :211 `.destinationFor(` has a production call site (NEVER HAND-FED)
+  :243 the six symbols are CALLED and their unbound-verbs.tsv:58-63 rows are
+       DELETED (both halves currently false -> 12 errors)
+  :287 globalInboxView exists and has a navigation caller
+
+what this RED slice deliberately does NOT touch:
+  - android/unbound-verbs.tsv: the rows stay until the verbs are genuinely
+    called; deleting them RED-side would make boundverbledger_test.go fail
+    over an unwired verb, which is a dishonest ledger, not a failing test.
+  - Obsidian design assertions: android/gate/s24_screens_test.go's
+    PB-DS-11/PB-DS-6 sweeps and the ADR-009 visual-direction fences cover
+    ALL production Kotlin, so MachinesPanelView.kt and globalInboxView are
+    inside the existing fence the moment they exist -- duplicating them here
+    would be a second opinion that can disagree with the first.
+  - PhoneSurfaceNavigationTest's `there is no machines destination to arrive
+    at` (no "Machines" TAB): NOT weakened and binding on GREEN -- the
+    navigation wire must be a named entry (ENTRY_LABEL) somewhere the paired
+    app composes, not a resurrected fourth tab.
+  - migration-on-first-add: already flows through App.AddMachine (MM6,
+    r4-multimachine.md D1); binding the verb is what makes it reachable.
+======================================================================

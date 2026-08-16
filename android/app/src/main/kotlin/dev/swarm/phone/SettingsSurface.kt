@@ -387,6 +387,16 @@ class SettingsSurface(
      */
     internal var statusSlot: () -> View? = { null }
 
+    /**
+     * Where the machine-switcher entry goes (wave R4, bead agents-tracker-0ox9), or null for a
+     * host with no switcher -- the default instance's true condition, as [onReplaced] records.
+     *
+     * IT IS THE HOST'S AND NOT THIS PANEL'S, for [statusSlot]'s reason: which screen the entry
+     * opens is navigation state `PhoneSurface` owns, and this panel only places the row that
+     * names it. Null composes no entry at all rather than a row that does nothing.
+     */
+    internal var onOpenMachines: (() -> Unit)? = null
+
     fun render() {
         when (val startup = runtime.phone()) {
             is PhoneStartup.Unavailable -> {
@@ -822,6 +832,7 @@ class SettingsSurface(
                 deliveryRedirectFor = ::deliveryRedirectFor,
                 below = outcome,
                 status = statusSlot(),
+                onOpenMachines = onOpenMachines,
             ),
         )
     }

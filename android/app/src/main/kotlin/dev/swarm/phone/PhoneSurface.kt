@@ -46,11 +46,16 @@ import dev.swarm.phone.ui.screens.ActivityPanelScreen
 import dev.swarm.phone.ui.screens.ApprovalSheetPanel
 import dev.swarm.phone.ui.screens.ApprovalSheetScreen
 import dev.swarm.phone.ui.screens.Destination
+import dev.swarm.phone.ui.screens.GlobalInboxRowModel
 import dev.swarm.phone.ui.screens.InboxScreen
 import dev.swarm.phone.ui.screens.InboxTab
 import dev.swarm.phone.ui.screens.LaunchFieldId
 import dev.swarm.phone.ui.screens.LaunchPanel
 import dev.swarm.phone.ui.screens.LaunchPanelScreen
+import dev.swarm.phone.ui.screens.MachinesDestination
+import dev.swarm.phone.ui.screens.MachinesPanel
+import dev.swarm.phone.ui.screens.MachinesPanelScreen
+import dev.swarm.phone.ui.screens.MachinesScreen
 import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.Presentation
@@ -61,7 +66,9 @@ import dev.swarm.phone.ui.screens.SheetTag
 import dev.swarm.phone.ui.screens.TranscriptScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
 import dev.swarm.phone.ui.screens.activityPanelView
+import dev.swarm.phone.ui.screens.globalInboxView
 import dev.swarm.phone.ui.screens.launchPanelView
+import dev.swarm.phone.ui.screens.machinesPanelView
 import dev.swarm.phone.ui.screens.approvalSheetView
 import dev.swarm.phone.ui.screens.pairOnlyView
 import dev.swarm.phone.ui.screens.phoneScaffoldView
@@ -288,10 +295,14 @@ class PhoneSurface(
     // nx44.2). It is handed as a PROVIDER rather than as a view because the panel redraws itself:
     // [statusSlot] detaches the one host from whichever screen held it last, and this surface is
     // not told when the panel decides to rebuild.
+    // AND THE MACHINE-SWITCHER ENTRY (wave R4, bead agents-tracker-0ox9). The settings panel
+    // places the row and spends the model's recorded name; where it goes is navigation state this
+    // surface owns, so the callback crosses the same way the pill provider does.
     private val settings = SettingsSurface(activity, runtime, dispatch).also {
         it.onReplaced = ::render
         it.toasts = toasts
         it.statusSlot = ::statusSlot
+        it.onOpenMachines = ::openMachines
     }
 
     /**
@@ -560,6 +571,31 @@ class PhoneSurface(
      */
     private val launchScreen = LaunchScreen()
 
+    /**
+     * The add-computer form's two boxes (wave R4, bead agents-tracker-0ox9), on the launch form's
+     * own reasoning: `App.AddMachine` takes a machine id and a display name, this surface has
+     * neither, and a value supplied on the user's behalf would be a hardcoded pairing shipped in
+     * production code. The hints are the SCREEN MODEL's recorded copy (PB-DS-9).
+     */
+    private val addMachineId = field(MachinesPanelScreen.ADD_ID_HINT)
+
+    private val addMachineName = field(MachinesPanelScreen.ADD_NAME_HINT)
+
+    /**
+     * The add form as one re-parentable host, for [launchHost]'s reason sharpened by [composer]'s:
+     * the boxes hold what the user has typed and not yet sent, and a form rebuilt per draw would
+     * empty them at the rate the machine produces journal events. [machinesPanelView] takes it as
+     * the NAMED `addForm` slot; [addComputerSlot] detaches it from whichever draw held it last.
+     */
+    private val addComputerHost = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        for (box in listOf(addMachineId, addMachineName)) {
+            addView(box)
+            box.screenAir()
+        }
+    }
+
     /** The session the controls act on, chosen in [renderReady] and never from an Intent. */
     private var session: String = ""
 
@@ -594,8 +630,56 @@ class PhoneSurface(
     private var detail: String? = null
         set(value) {
             field = value
-            onDrillDownChanged(value != null)
+            pushDrillDown()
         }
+
+    /**
+     * Whether the machine switcher is open (wave R4, bead agents-tracker-0ox9).
+     *
+     * IT IS A SUB-STATE OF [Destination.SETTINGS] AND NOT A DESTINATION OF ITS OWN, for exactly
+     * [detail]'s structural reason: the bar draws the labels `TriageInboxScreen` records and
+     * `Destination.forLabel` THROWS on one it cannot place -- and the Machines TAB is deleted by
+     * decision (agents-tracker-nx44.3), so the switcher lives behind the settings screen's named
+     * entry ([MachinesPanelScreen.ENTRY_LABEL]) rather than bringing the tab back. Switching tabs
+     * preserves it, like the drill-down; re-tapping the Settings tab pops it, like the drill-down.
+     */
+    private var machinesOpen = false
+
+    /**
+     * Whether the aggregate inbox is open -- one level below [machinesOpen], reached from the
+     * switcher's [MachinesPanelScreen.GLOBAL_INBOX_LABEL] entry (inbox.global).
+     */
+    private var globalInboxOpen = false
+
+    /** What the switcher last drew, for [inboxDrawn]'s reason. */
+    private var machinesDrawn: MachinesPanel? = null
+
+    /**
+     * The machine this phone last switched to, or empty until somebody switches (round 3).
+     *
+     * IT IS HERE BECAUSE THE FACADE HAS NOWHERE TO PUT IT. `App.SelectMachine` records the viewed
+     * pairing for the least-recently-viewed connection policy, and `MachineInfo` carries no
+     * current-machine fact back: the roster's `Connected` flag only moves when the roster exceeds
+     * the cap, so two successive switches inside the cap produced the SAME panel, [drawMachines]'
+     * equality guard early-returned, and a successful switch was indistinguishable from a dead
+     * button. This is the fact that makes the panel differ.
+     *
+     * WHAT IT DOES NOT CLAIM: it is this surface's memory of a selection, so a rebuilt Activity
+     * starts with no row marked. That is the honest end of the trade -- an unmarked row asserts
+     * nothing, while a mark restored from a fact the facade does not publish would be invented.
+     */
+    private var selectedMachine: String = ""
+
+    /**
+     * The minute the switcher's row ages were computed in (round 2). The panel model carries no
+     * clock, so an unchanged panel would freeze "synced 4m ago" at its first draw; folding the
+     * minute into the redraw guard keeps the age as fresh as the last render, which is exactly
+     * the sync pill's own freshness and no more.
+     */
+    private var machinesAgeMinute = 0L
+
+    /** What the aggregate inbox last drew, for [inboxDrawn]'s reason. */
+    private var globalInboxDrawn: List<GlobalInboxRowModel>? = null
 
     /**
      * Told whether the drill-down is open, so [PhoneActivity] can arm the system back gesture
@@ -611,6 +695,31 @@ class PhoneSurface(
      * start.
      */
     internal var onDrillDownChanged: (Boolean) -> Unit = {}
+
+    /**
+     * The one place the gesture's arming predicate exists (round 2). It is the UNION of every
+     * drill sub-state -- the session detail, the switcher, the aggregate inbox -- because a
+     * sub-state the predicate ignores is a screen the system back gesture exits the app from,
+     * and since the flag survives the exit, re-entering lands the user back in the screen the
+     * gesture failed to leave. Three writers pushing their own booleans is how that drift
+     * shipped the first time; every writer calls this instead.
+     */
+    private fun pushDrillDown() {
+        onDrillDownChanged(detail != null || machinesOpen || globalInboxOpen)
+    }
+
+    /**
+     * The committed back gesture, from [PhoneActivity]: pop the drill-down the user is actually
+     * standing in, innermost first -- the aggregate inbox sits one level below the switcher.
+     * What crosses is still local screen state and nothing else (PB-SEC-11).
+     */
+    internal fun closeDrillDown() {
+        when {
+            globalInboxOpen -> closeGlobalInbox()
+            machinesOpen -> closeMachines()
+            else -> closeSessionDetail()
+        }
+    }
 
     /**
      * What the inbox last put IN FRONT OF THE USER: null whenever the inbox list is not what is on
@@ -1821,7 +1930,15 @@ class PhoneSurface(
                 else -> drawDetail(open)
             }
             Destination.ACTIVITY -> drawActivity(bridge)
-            Destination.SETTINGS -> drawSettings()
+            // The machine switcher and the aggregate inbox are SUB-STATES of the Settings
+            // destination ([machinesOpen]'s KDoc has the argument), drawn only where there is a
+            // phone to read them from: the branch with no core has no machine roster, and what it
+            // shows on this tab is the routed failure the settings panel already carries.
+            Destination.SETTINGS -> when {
+                globalInboxOpen && bridge != null -> drawGlobalInbox(bridge)
+                machinesOpen && bridge != null -> drawMachines(bridge)
+                else -> drawSettings()
+            }
         }
         inboxDrawn = null
     }
@@ -2098,8 +2215,326 @@ class PhoneSurface(
      * refused.
      */
     private fun drawSettings() {
-        if (contentShows == Destination.SETTINGS) return
+        // The two machines memos are part of the guard, for `drawInbox`'s third-clause reason:
+        // backing out of the switcher lands here with the destination unchanged, so without them
+        // the early return fires and the switcher stays on screen over a tab that thinks it
+        // popped.
+        if (contentShows == Destination.SETTINGS &&
+            machinesDrawn == null && globalInboxDrawn == null
+        ) {
+            return
+        }
+        machinesDrawn = null
+        globalInboxDrawn = null
         hostContent(settings.root)
+    }
+
+    /**
+     * Wave R4's machine switcher (bead agents-tracker-0ox9), drawn ONLY where the first-run
+     * resolver says the world it lives in exists -- see [machinesPanel]. Redrawn only when the
+     * panel has changed, for [drawInbox]'s reason.
+     */
+    private fun drawMachines(bridge: FacadeBridge) {
+        val panel = machinesPanel(bridge)
+        if (panel == null) {
+            // The resolver answered PAIR_ONLY, or the roster could not be read -- and either
+            // way [machinesPanel] has already SAID so (round 2): the sub-state is dropped
+            // rather than left pointing at a world the resolver never answered, and the
+            // gesture is disarmed with it.
+            machinesOpen = false
+            globalInboxOpen = false
+            pushDrillDown()
+            drawSettings()
+            return
+        }
+        // THE CLOCK IS PART OF THE GUARD (round 2): the row ages are computed from `now`, so an
+        // unchanged panel redrawn only on data change would freeze them at first draw.
+        val now = System.currentTimeMillis()
+        val minute = now / 60_000L
+        if (panel == machinesDrawn && minute == machinesAgeMinute && globalInboxDrawn == null &&
+            contentShows == Destination.SETTINGS
+        ) {
+            return
+        }
+        machinesDrawn = panel
+        machinesAgeMinute = minute
+        globalInboxDrawn = null
+        hostContent(
+            machinesPanelView(
+                context = activity,
+                panel = panel,
+                onAddComputer = ::addComputer,
+                onSwitchComputer = ::switchComputer,
+                onForgetComputer = ::forgetComputer,
+                onOpenGlobalInbox = ::openGlobalInbox,
+                onBack = ::closeMachines,
+                addForm = addComputerSlot(),
+                nowUnixMs = now,
+            ),
+        )
+    }
+
+    /**
+     * The switcher's panel, THROUGH THE FIRST-RUN RESOLVER -- never hand-fed. The destination is
+     * `MachinesScreen.destinationFor`'s answer over the roster the facade just returned: zero
+     * machines is the pair-only world and composes NO panel, one or more is the machines world.
+     * A branch here that conjured a MACHINES world the resolver never answered is the hand-fed
+     * defect shape this call exists to refuse.
+     */
+    private fun machinesPanel(bridge: FacadeBridge): MachinesPanel? = try {
+        val snapshot = bridge.machines()
+        when (MachinesScreen.destinationFor(snapshot.rows.size)) {
+            MachinesDestination.PAIR_ONLY -> {
+                // The resolver's answer is an answer, not an absence (round 2): the user
+                // tapped the entry, the panel is not composed, and the recorded sentence says
+                // why over the screen they land back on.
+                say(PressFeedback.ofUnsent(MachinesPanelScreen.PAIR_FIRST))
+                null
+            }
+            MachinesDestination.MACHINES ->
+                // The selection rides the panel (round 3): it is what the row's mark is drawn
+                // from AND what makes two panels differ across a switch, which is what stops
+                // [drawMachines]' equality guard from swallowing the redraw.
+                MachinesPanelScreen.of(
+                    snapshot.rows,
+                    cap = snapshot.cap,
+                    selected = selectedMachine,
+                )
+        }
+    } catch (refused: Exception) {
+        // A refusal is a state, never a silent no-op (round 2). `outcome` alone is a child of
+        // unrecomposedControls at the bottom of the Inbox tab -- invisible from Settings -- so
+        // the routed answer goes through [say], which writes the line AND fires row 1's toast
+        // over the screen the user is standing on. Reached once per entry attempt: the null
+        // return drops [machinesOpen], so journal-event renders do not repeat it.
+        say(PressFeedback.ofRefusal(bridge.routeFacadeError(refused.message.orEmpty())))
+        null
+    }
+
+    /**
+     * The aggregate inbox (inbox.global), one level below the switcher. Redrawn only when its
+     * rows have changed, for [drawInbox]'s reason.
+     */
+    private fun drawGlobalInbox(bridge: FacadeBridge) {
+        val rows = try {
+            bridge.globalInbox()
+        } catch (refused: Exception) {
+            // [machinesPanel]'s catch has the argument (round 2): the routed answer must be
+            // visible from the screen the user is on, and `say` is what makes that true.
+            say(PressFeedback.ofRefusal(bridge.routeFacadeError(refused.message.orEmpty())))
+            null
+        }
+        if (rows == null) {
+            globalInboxOpen = false
+            pushDrillDown()
+            drawMachines(bridge)
+            return
+        }
+        if (rows == globalInboxDrawn && contentShows == Destination.SETTINGS) return
+        globalInboxDrawn = rows
+        machinesDrawn = null
+        hostContent(globalInboxView(activity, rows, onBack = ::closeGlobalInbox))
+    }
+
+    /**
+     * The add form's host, detached from whatever held it last -- [statusSlot]'s reason, spent on
+     * the third view this app moves between draws: a screen tree is built before it is hosted, so
+     * the detach has to happen here, at request time.
+     */
+    private fun addComputerSlot(): View {
+        (addComputerHost.parent as? ViewGroup)?.removeView(addComputerHost)
+        return addComputerHost
+    }
+
+    /** The settings entry was tapped: open the switcher (wave R4), and arm the back gesture. */
+    private fun openMachines() {
+        machinesOpen = true
+        globalInboxOpen = false
+        pushDrillDown()
+        render()
+    }
+
+    /**
+     * The switcher's chevron, and the system back gesture through [closeDrillDown]: back to the
+     * settings screen that named the entry. The preview is undone before the next screen lands
+     * in the same host -- [closeSessionDetail]'s own reasoning, verbatim: a committed gesture
+     * leaves [contentHost] at 90% and transparent.
+     */
+    private fun closeMachines() {
+        machinesOpen = false
+        globalInboxOpen = false
+        pushDrillDown()
+        Motion.clearPredictiveBack(contentHost)
+        render()
+    }
+
+    /** The switcher's aggregate entry: open the global inbox (inbox.global). */
+    private fun openGlobalInbox() {
+        globalInboxOpen = true
+        pushDrillDown()
+        render()
+    }
+
+    /** The aggregate inbox's chevron and back gesture: back to the switcher it was opened from. */
+    private fun closeGlobalInbox() {
+        globalInboxOpen = false
+        pushDrillDown()
+        Motion.clearPredictiveBack(contentHost)
+        render()
+    }
+
+    /**
+     * Playbook 4.1 step 4: the developer chooses Add computer. `App.AddMachine` registers the
+     * pairing BESIDE the existing ones and runs MM6's transactional migration on first use --
+     * both facade-side already; what this surface owes it is the two values a user typed and
+     * nothing supplied on their behalf. The model's own refusal resolves a blank id here, before
+     * a lane is spent on a request the facade must refuse (the launch form's discipline).
+     *
+     * IT ASKS FIRST, AND IT ASKS ABOUT THE RIGHT THING (round 3). The blast radius is not the new
+     * row: the verb below stops the drain, and `App.Stop` is `suspendInput` -- every buffered
+     * keystroke resolved UNDELIVERED, every input lease severed, the link really dropped. That is
+     * strictly more destructive than forgetting one pairing, which has asked since round 2, and
+     * it asked nothing. [MachinesPanelScreen.ADD_CONFIRM] names it; the dialog is
+     * [forgetComputer]'s shape for [confirmThenPress]'s recorded reasons.
+     *
+     * AND A SECOND TAP IS REFUSED OUT LOUD. The controls here are rebuilt per draw, so
+     * `VerbDispatch.press`'s per-control fence cannot hold this one; the lane's keyed fence does,
+     * and its refusal is spoken rather than swallowed -- running stop/add/start twice would
+     * disconnect the phone and destroy unsent input a second time.
+     */
+    private fun addComputer() {
+        val id = addMachineId.text.toString().trim()
+        val name = addMachineName.text.toString().trim()
+        if (id.isEmpty()) {
+            say(PressFeedback.ofUnsent(MachinesPanelScreen.ADD_ID_MISSING))
+            return
+        }
+        AlertDialog.Builder(activity)
+            .setMessage(MachinesPanelScreen.ADD_CONFIRM)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val sent = machineVerb(
+                    key = ADD_MACHINE_KEY,
+                    settle = {
+                        addMachineId.text.clear()
+                        addMachineName.text.clear()
+                    },
+                ) { app ->
+                    // THE SURFACE SATISFIES THE FACADE'S PRECONDITION INSTEAD OF FORWARDING ITS
+                    // REFUSAL (round 2). `App.AddMachine` is refused while `a.sess != nil` -- the
+                    // MM6 migration must not race a live drain -- and `a.sess` is non-nil on
+                    // every foregrounded phone, so the raw verb could never succeed and its
+                    // ErrClassInvalidRequest routed to a "report a bug" toast blaming the app for
+                    // a precondition only this surface can meet. Stop and Start are idempotent
+                    // and safe by their own KDoc; the whole sequence runs on this lane, off the
+                    // looper, and the restart is in a finally so a refused add does not leave the
+                    // phone disconnected.
+                    app.stop()
+                    try {
+                        app.addMachine(id, name)
+                    } finally {
+                        app.start()
+                    }
+                }
+                if (!sent) say(PressFeedback.ofUnsent(MachinesPanelScreen.ADD_IN_FLIGHT))
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * A row was tapped: record the switch, BY MACHINE ID (MM4). The view is the only input the
+     * deterministic least-recently-viewed connection policy takes; the broken-pairing refusal
+     * cannot reach here from the panel -- a broken row takes no tap -- and if the facade refuses
+     * anyway, the routed answer lands on screen like every other (MM8: a state, never a crash and
+     * never a silent no-op).
+     *
+     * SUCCESS IS ANSWERED TOO (round 3), which it was not: the verb settled with [machineVerb]'s
+     * default no-op, so a switch that WORKED said nothing and marked nothing, and the redraw
+     * guard early-returned over a byte-identical panel. Both halves of the answer are here -- the
+     * row's mark, through [selectedMachine], and the spoken confirmation, which states in the
+     * same breath what the switch did NOT do (mobile/machines.go:19-21: the live relay session
+     * has not moved). Round 2 routed every refusal through [say] and left the success mute.
+     */
+    private fun switchComputer(machineId: String) {
+        val name = machinesDrawn?.rows?.firstOrNull { it.machineId == machineId }
+            ?.displayName.orEmpty().ifEmpty { machineId }
+        machineVerb(
+            settle = {
+                selectedMachine = machineId
+                say(PressFeedback.ofSuccess(MachinesPanelScreen.switchedTo(name)))
+            },
+        ) { app -> app.selectMachine(machineId) }
+    }
+
+    /**
+     * Playbook 4.9: the PHONE-side removal of exactly one pairing, distinct from revoking a phone
+     * from a computer. The facade's own refusals -- the active pairing, the last pairing -- route
+     * to the screen as states.
+     *
+     * IT ASKS FIRST (round 2). What this destroys -- the pairing's keys, namespace and caches --
+     * does not come back, it hangs on a denyChip in a row's trailing slot beside a row that is
+     * itself a tap target, and `kill`, which ends ONE session, has asked since S24: mrq5's own
+     * argument, unspent here until now. The dialog is [confirmThenPress]'s shape (a second
+     * window, never a row in the composition; the platform's own OK/Cancel words) without its
+     * [Press], because the machines verbs settle through [machineVerb]'s lane rather than a
+     * per-control dispatch. The QUESTION is the model's recorded copy (PB-DS-9).
+     */
+    private fun forgetComputer(machineId: String) {
+        AlertDialog.Builder(activity)
+            .setMessage(MachinesPanelScreen.FORGET_CONFIRM)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                machineVerb { app -> app.forgetMachine(machineId) }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * One machines verb, run OFF the looper and answered back on it.
+     *
+     * IT IS [dispatch]'s `enqueue` AND NOT `press`, because the controls here are built per draw
+     * from the row set -- an in-flight mark keyed on a view the next redraw replaces would fence
+     * nothing. What survives is the half that matters: the facade call leaves the main thread
+     * (`AddMachine` runs MM6's migration, which is file I/O), and the refusal is ROUTED rather
+     * than thrown -- PB-APP-9's table, the outcome line and row 1's toast, exactly like every
+     * other press ([dispatchPress]'s program without the control).
+     *
+     * @param key the lane's single-flight key, or null for a verb that must never be dropped
+     *  ([VerbDispatch.enqueue]'s own argument). Add computer carries one: it stops the drain, so
+     *  a double tap would disconnect the phone and destroy unsent input twice.
+     * @param settle what a RETURNED verb changes on screen, on the looper; a refusal goes to the
+     *  routed line instead.
+     * @return whether the verb was ACCEPTED, i.e. whether anything was sent at all. False means a
+     *  verb under the same [key] is still crossing -- or, unreachable from a drawn switcher
+     *  because the panel is composed only where the bridge exists, that the phone core is not
+     *  ready. A caller that passes no key is never refused and may ignore this.
+     */
+    private fun machineVerb(
+        key: Any? = null,
+        settle: () -> Unit = {},
+        verb: (App) -> Unit,
+    ): Boolean {
+        val startup = runtime.phone()
+        if (startup !is PhoneStartup.Ready) return false
+        return dispatch.enqueue(
+            SendPlane.COMMAND,
+            key = key,
+            work = { verb(startup.app) },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { settle() },
+                    onFailure = {
+                        say(
+                            PressFeedback.ofRefusal(
+                                FacadeBridge(startup.app)
+                                    .routeFacadeError(it.message.orEmpty()),
+                            ),
+                        )
+                    },
+                )
+                render()
+            },
+        )
     }
 
     /** Put [view] under the bar, and record which destination it is. */
@@ -2222,7 +2657,15 @@ class PhoneSurface(
      * draws.
      */
     private fun selectDestination(next: Destination) {
-        if (next == destination) detail = null
+        if (next == destination) {
+            detail = null
+            // The Settings tab's own sub-states pop by the same platform convention (wave R4,
+            // bead agents-tracker-0ox9): re-tapping the tab is the way back for a user standing
+            // in the switcher or the aggregate inbox, chevrons aside.
+            machinesOpen = false
+            globalInboxOpen = false
+            pushDrillDown()
+        }
         destination = next
         render()
     }
@@ -2964,5 +3407,15 @@ class PhoneSurface(
          * ever on screen without a panel to fill it, so the blank is never read by anybody.
          */
         const val SLOT_LABEL = ""
+
+        /**
+         * Add computer's single-flight key on the COMMAND lane (round 3).
+         *
+         * A CONSTANT AND NOT THE MACHINE ID: what must not run twice is the stop/add/start
+         * SEQUENCE, whatever pairing it is registering, because it is the disconnect and the
+         * abandoned input that a second run repeats -- keying on the typed id would let two
+         * different ids sever the leases twice.
+         */
+        const val ADD_MACHINE_KEY = "machines.add"
     }
 }

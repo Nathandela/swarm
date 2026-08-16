@@ -112,7 +112,11 @@ class PhoneActivity : AppCompatActivity() {
         }
 
         override fun handleOnBackPressed() {
-            surface.closeSessionDetail()
+            // WHICHEVER DRILL-DOWN IS OPEN IS THE ONE THE GESTURE LEAVES (round 2): the machine
+            // switcher and the aggregate inbox are drill-downs too, and a commit that only ever
+            // popped the session detail closed the Activity out from under both. The surface
+            // owns the which; what crosses from here is still nothing but the commit.
+            surface.closeDrillDown()
         }
     }
 

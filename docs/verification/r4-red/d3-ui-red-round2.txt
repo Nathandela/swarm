@@ -1,0 +1,75 @@
+======================================================================
+RED evidence -- R4 D3 ROUND 2 fix pack (bead agents-tracker-0ox9)
+Date: 2026-08-16 (13:10-13:13 UTC)
+GG-5: failing-first, evidenced before any implementation change.
+Round 1's evidence is d3-ui-red.txt beside this file; this round fixes
+the review findings against that GREEN and touches nothing round 1 froze.
+======================================================================
+
+New test files (additive only; no existing test modified):
+  android/gate/r4_d3_round2_test.go
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelRound2Test.kt
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/MachinesPanelViewRound2Test.kt
+  android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SettingsPanelMachinesEntryTest.kt
+
+----------------------------------------------------------------------
+Go gate RED -- `go test -run TestR4D3R2 ./android/gate/` exit 1,
+5/5 new tests failing, each for the finding it fences (go vet clean):
+
+  :81  AddComputerSatisfiesTheMigrationPreconditionItself
+       addComputer's verb has no .stop()/.start() around .addMachine(
+       (stop@-1 add@377 start@-1). mobile/machines.go:418 refuses
+       AddMachine whenever a.sess != nil -- every foregrounded phone --
+       and the ErrClassInvalidRequest routes to Remedy.REPORT_BUG, so
+       the panel's primary CTA was a permanent bug-report toast and the
+       MM6 migration trigger was unreachable. (BLOCKING finding 1)
+  :118 ForgetAsksTheModelsQuestionBeforeTheVerb
+       forgetComputer's whole body is `machineVerb { app ->
+       app.forgetMachine(machineId) }`: no setPositiveButton, no
+       FORGET_CONFIRM -- one un-confirmed tap destroys a pairing's
+       keys/namespace/caches, mrq5's defect shape verbatim. (BLOCKING 2)
+  :155 TheBackGestureIsArmedForTheNewDrillDowns
+       fatal: no `fun pushDrillDown(` -- onDrillDownChanged still has
+       exactly one write site (the `detail` setter), so the system back
+       gesture pops the Activity out from under both new drill-downs
+       and machinesOpen survives to re-open the switcher. (BLOCKING 3)
+  :204x2 + :215 ARosterRefusalIsNeverASilentNoOp
+       machinesPanel and drawGlobalInbox catch blocks write outcome.text
+       (a child of unrecomposedControls at the bottom of the Inbox tab)
+       with no say(...), and no production Kotlin spends PAIR_FIRST --
+       the zero-rows entry bounces to Settings wordlessly. (finding 4)
+  :233 TheMachinesDrawSpendsTheClockSeam
+       drawMachines passes no clock into the panel view; only three of
+       playbook 4.2:198's four row facts reach the screen. (finding 5)
+
+----------------------------------------------------------------------
+Kotlin COMPILE-RED -- script /tmp/r4d3r2_red_compile.sh,
+`./gradlew --no-daemon --rerun-tasks --no-build-cache
+:app:compileDebugUnitTestKotlin`, BUILD FAILED in 1m32s, exit 1,
+end 2026-08-16T13:12:54Z. Every error is an unresolved round-2
+contract symbol; zero cascades:
+
+  MachinesPanelRound2Test.kt:56  Unresolved reference 'FORGET_CONFIRM'
+  MachinesPanelRound2Test.kt:72  Unresolved reference 'PAIR_FIRST'
+  MachinesPanelRound2Test.kt:86,100,109,122
+       Too many arguments for 'fun statusLine(row: MachineRowModel)'
+       (the two-argument clocked overload does not exist)
+  MachinesPanelViewRound2Test.kt:63  No parameter with name 'nowUnixMs'
+
+Gradle discipline: AAR untouched (app/libs/swarm.aar mtime Aug 16
+13:51, 12427801 B, identical before/after); no test-result XML deleted
+(compile task only); no daemon, no build cache, all 21 tasks rerun.
+
+Disclosed pins (not RED, by design): MachinesPanelViewRound2Test's
+addForm-slot and onBack tests, and both SettingsPanelMachinesEntryTest
+tests, pin round-1 behaviour that already exists (review observations
+(c) and (d) asked for exactly this coverage); they are expected green
+on first successful compile and ride the same compile-RED today. The
+one-argument statusLine assertion pins the round-1 contract unchanged.
+
+Constraints honored: no existing test file modified; no assertion
+weakened; android/unbound-verbs.tsv untouched this round (its 6 rows
+were deleted with the round-1 wiring and stay deleted); mobile/ not
+modified -- finding 1 is fixed surface-side by SATISFYING the facade's
+stated precondition, never by weakening mobile/machines.go's guard.
+======================================================================
