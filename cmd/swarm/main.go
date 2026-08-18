@@ -66,7 +66,8 @@ const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|ls|watch|kill|send|p
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
   swarm handoff    launch a supervised cross-CLI handoff
-                   (--cli agent [--model m] [--name n] --context-file file)
+                   (--cli agent [--model m] [--name n]
+                    [--supervision passive|manual|none] --context-file file)
   swarm spawn      launch a new session with context
                    (--cli agent [--dir d] [--model m] [--worktree] [--name n],
                     one of --prompt text | --handoff file | --delegate file)

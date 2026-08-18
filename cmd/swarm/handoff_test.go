@@ -257,3 +257,81 @@ func TestUsage_ListsFirstClassHandoffWithoutSkills(t *testing.T) {
 		t.Fatalf("usage still advertises the retired skill/slash installer:\n%s", usage)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ADR-010 Amendment 3 C1: `swarm handoff --supervision passive|manual|none`.
+// The mode is validated locally against the closed vocabulary, defaults to
+// passive, and travels in LaunchReq.Supervision beside the handoff intent.
+// ---------------------------------------------------------------------------
+
+func TestRunHandoff_SupervisionModeTravelsInLaunchReq(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "default is passive", args: nil, want: protocol.SupervisionPassive},
+		{name: "passive", args: []string{"--supervision", "passive"}, want: protocol.SupervisionPassive},
+		{name: "manual", args: []string{"--supervision", "manual"}, want: protocol.SupervisionManual},
+		{name: "none", args: []string{"--supervision", "none"}, want: protocol.SupervisionNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempStateDir(t)
+			contextPath := writeHandoffContext(t, "context\n")
+			t.Setenv(hookclient.EnvSessionID, "source-1")
+			c := newFakeSpawnClient()
+			c.sessions = []protocol.SessionView{handoffSource("source-1", t.TempDir(), status.ProcessRunning)}
+			args := append([]string{"--cli", "claude", "--context-file", contextPath}, tc.args...)
+			var stderr bytes.Buffer
+			if exit := runHandoff(args, c, io.Discard, &stderr); exit != 0 {
+				t.Fatalf("exit = %d, want 0; stderr=%q", exit, stderr.String())
+			}
+			req := onlyLaunch(t, c)
+			if req.Supervision != tc.want {
+				t.Errorf("LaunchReq.Supervision = %q, want %q", req.Supervision, tc.want)
+			}
+			if req.SpawnIntent != protocol.SpawnIntentHandoff {
+				t.Errorf("SpawnIntent = %q, want handoff (the daemon admits supervision only with it)", req.SpawnIntent)
+			}
+		})
+	}
+}
+
+func TestRunHandoff_RefusesUnknownSupervisionMode(t *testing.T) {
+	contextPath := writeHandoffContext(t, "context\n")
+	t.Setenv(hookclient.EnvSessionID, "source-1")
+	for _, mode := range []string{"eager", "watch", ""} {
+		t.Run(mode, func(t *testing.T) {
+			useTempStateDir(t)
+			c := newFakeSpawnClient()
+			c.sessions = []protocol.SessionView{handoffSource("source-1", t.TempDir(), status.ProcessRunning)}
+			var stderr bytes.Buffer
+			exit := runHandoff([]string{"--cli", "claude", "--context-file", contextPath, "--supervision", mode}, c, io.Discard, &stderr)
+			if exit != misuseExit {
+				t.Fatalf("exit = %d, want %d (misuse); stderr=%q", exit, misuseExit, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "--supervision") {
+				t.Errorf("stderr = %q, want it to name --supervision", stderr.String())
+			}
+			if got := len(c.reqs()); got != 0 {
+				t.Errorf("Launch called %d times after an unknown supervision mode, want 0", got)
+			}
+		})
+	}
+}
+
+func TestRunHandoff_UsageNamesSupervisionModes(t *testing.T) {
+	const want = "[--supervision passive|manual|none]"
+	c := newFakeSpawnClient()
+	var stderr bytes.Buffer
+	if exit := runHandoff([]string{"--help"}, c, io.Discard, &stderr); exit != 0 {
+		t.Fatalf("--help exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("handoff help missing %q:\n%s", want, stderr.String())
+	}
+	if !strings.Contains(usage, want) {
+		t.Errorf("top-level usage missing %q:\n%s", want, usage)
+	}
+}
