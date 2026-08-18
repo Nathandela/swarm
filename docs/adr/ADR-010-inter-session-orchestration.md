@@ -353,15 +353,17 @@ hook. On each signal it reads the child's CURRENT meta and derives its group. En
 `ready_for_review` is one only once the child has been observed `working`, so the idle
 moment right after launch never wakes the source. There is at most ONE pending event per
 child (ADR-008's level-triggered latest state): a newer attention state replaces an
-undelivered older one, and every event carries a strictly increasing per-child sequence so
-ids stay distinct and delivery is idempotent per sequence.
+undelivered older one, a child that resumes working drops it (the human answered at the
+machine; waking the source would find nothing), and every event carries a strictly
+increasing per-child sequence so ids stay distinct and delivery is idempotent per sequence.
 
 ### C3. Delivery is a `send_input` message, gated on the source's raw state
 
 A pending event is delivered by typing one submitted message into the SOURCE session through
 the same serialized owner-tier path `swarm send` uses (Amendment 1 A2 — the assembly gets an
 exported seam on the owner-tier server; no new op). It is delivered only while the source is
-running, its turn is idle, its interaction is not a permission request, and no controller
+running, its turn is idle, it is waiting on neither a permission request nor a question of
+its own (a typed message would be read as the human's answer to either), and no controller
 lease is held on it (a human attached to the source is not interrupted). Otherwise the event
 stays pending: the roster row shows it, and a short retry cadence re-checks the source, since
 a human detach emits no status signal. The message names the event id, the child's session
@@ -374,8 +376,10 @@ instructions into its supervisor.
 ### C4. Durability and lifecycle
 
 Supervision records live under `<stateDir>/supervision/` (0700 directory, 0600 files) and
-are replayed after a daemon restart, so a pending event is delivered exactly once across a
-crash. Delivering `completed`, or the child leaving the roster, retires the record. A source
+are reloaded after a daemon restart — each re-evaluated against the child's current meta,
+since a child that ended while the daemon was down is finalized by reconcile with no status
+signal — so a pending event is delivered exactly once across a crash. Delivering
+`completed`, or the child leaving the roster, retires the record. A source
 that ends first leaves the record in place: the child row shows an orphaned-supervisor
 marker and no re-parenting happens (D4's rule that lineage never couples lifecycles).
 
