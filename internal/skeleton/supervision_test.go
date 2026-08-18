@@ -822,3 +822,73 @@ func TestSupervisor_ConcurrentSignalsDeliverOnce(t *testing.T) {
 		t.Fatal("pending(kid) = true after the concurrent delivery")
 	}
 }
+
+// TestSupervisor_RestartEvaluatesAChildThatEndedWhileDown (review): a child that finished
+// while the daemon was down is finalized by reconcile with no status signal, so the loaded
+// record must be re-evaluated at construction or the source is never woken.
+func TestSupervisor_RestartEvaluatesAChildThatEndedWhileDown(t *testing.T) {
+	f, s1, dir := armedPair(t)
+	s1.signal("kid")
+	settle(t, f, 0)
+	s1.close()
+
+	f.setStatus("kid", stExited) // ended while no supervisor was running
+	s2, err := newSupervisor(supEndpoint, dir, supRetry, f.get, f.isControlled, f.send)
+	if err != nil {
+		t.Fatalf("second newSupervisor over the same dir: %v", err)
+	}
+	t.Cleanup(s2.close)
+	got := awaitDelivered(t, f, 1)
+	want := supervisionNotification(nsChild("kid"), supervisionEvent{Seq: 1, Group: status.GroupCompleted, Interaction: status.InteractionNone})
+	if got[0].local != "src" || got[0].req.Text != want {
+		t.Fatalf("send after restart = %+v\nwant completed seq 1 to src: %q", got[0], want)
+	}
+	if _, err := os.Stat(recordPath(dir, "kid")); !os.IsNotExist(err) {
+		t.Fatalf("record still present after a delivered completed: %v", err)
+	}
+}
+
+// TestSupervisor_LaunchBaselineNeverCountsAsWorking (review): the launch baseline is Turn
+// unknown, which Derive maps to working; only an OBSERVED active turn arms the first
+// ready_for_review, so a heuristic idle read right after launch wakes nobody.
+func TestSupervisor_LaunchBaselineNeverCountsAsWorking(t *testing.T) {
+	baseline := status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone}
+	f := newSupFakes(plainMeta("src", stReady), passiveChild("kid", "src", baseline))
+	s, _ := newTestSupervisor(t, f)
+	m, _ := f.get("kid")
+	s.arm(m)
+	s.signal("kid")
+	f.setStatus("kid", stReady)
+	s.signal("kid")
+	settle(t, f, 0)
+	if s.pending("kid") {
+		t.Fatal("pending(kid) = true for the idle moment right after launch")
+	}
+	f.setStatus("kid", stWorking)
+	s.signal("kid")
+	f.setStatus("kid", stReady)
+	s.signal("kid")
+	awaitDelivered(t, f, 1)
+}
+
+// TestSupervisor_ChildBackToWorkingClearsAStaleEvent (review): a needs_input answered at
+// the machine before the source could be woken is stale once the child works again;
+// waking the source to find nothing would only cost it a turn.
+func TestSupervisor_ChildBackToWorkingClearsAStaleEvent(t *testing.T) {
+	f, s, _ := armedPair(t)
+	s.signal("kid")
+	f.setStatus("src", stWorking) // source busy: the event queues
+	f.setStatus("kid", stPrompt)
+	s.signal("kid")
+	if !s.pending("kid") {
+		t.Fatal("pending(kid) = false behind a busy source")
+	}
+	f.setStatus("kid", stWorking) // answered locally
+	s.signal("kid")
+	if s.pending("kid") {
+		t.Fatal("pending(kid) = true after the child resumed working")
+	}
+	f.setStatus("src", stReady)
+	s.signal("src")
+	settle(t, f, 0)
+}

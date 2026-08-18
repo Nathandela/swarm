@@ -324,25 +324,6 @@ func Serve(cfg Config) (*Daemon, error) {
 	d.api.approve = d.approveInteraction
 	d.srv = protocol.NewServer(d.api, epID)
 	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
-	// ADR-010 Amendment 3 C2..C4: the passive supervisor, over the owner-tier Server's
-	// SendInput (C3's serialized write seam) and IsControlled (a human at the source's
-	// controls is never interrupted). Constructed AFTER d.srv exists, so the records a
-	// prior incarnation left are the reconcile-time arming: registerSession fired for the
-	// reconnected sessions during daemon.Open above, when d.sup was still nil, and the
-	// durable record is what a re-arm would have kept anyway. A record dir that cannot be
-	// opened aborts assembly like every other component's store.
-	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.core.Get, d.srv.IsControlled, d.srv.SendInput)
-	if err != nil {
-		return nil, err // defer'd cleanup tears down d.api + core
-	}
-	d.sup = sup
-	// C5: both readers of the live pending flag, for the same reason both remote-control
-	// readers exist below -- the Server stamps SessionView.SupervisionPending, the roster
-	// poller needs it in its diff key or a flip (which changes no persisted meta) would
-	// fan out no event.
-	d.srv.SetSupervisionPendingFunc(d.sup.pending)
-	d.api.SetSupervisionPendingFunc(d.sup.pending)
 
 	// R-GW.8: the dedicated remote-tier listener the gateway dials. It binds its own
 	// socket and accept loop (independent of the demuxed main UDS), and every connection
@@ -387,6 +368,27 @@ func Serve(cfg Config) (*Daemon, error) {
 		d.srv.SetRemoteControlledFunc(rs.IsControlled)
 		d.api.SetRemoteControlledFunc(rs.IsControlled)
 	}
+
+	// ADR-010 Amendment 3 C2..C4: the passive supervisor, over the owner-tier Server's
+	// SendInput (C3's serialized write seam) and every controller lease, owner or remote
+	// (a human at the source's controls is never interrupted). Constructed AFTER both
+	// Servers exist -- its delivery goroutine may read d.remoteSrv at once -- so the
+	// records a prior incarnation left are the reconcile-time arming: registerSession
+	// fired for the reconnected sessions during daemon.Open above, when d.sup was still
+	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
+	// that cannot be opened aborts assembly like every other component's store.
+	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
+		d.core.Get, d.anyControlled, d.srv.SendInput)
+	if err != nil {
+		return nil, err // defer'd cleanup tears down d.api + core
+	}
+	d.sup = sup
+	// C5: both readers of the live pending flag, for the same reason both remote-control
+	// readers exist above -- the Server stamps SessionView.SupervisionPending, the roster
+	// poller needs it in its diff key or a flip (which changes no persisted meta) would
+	// fan out no event.
+	d.srv.SetSupervisionPendingFunc(d.sup.pending)
+	d.api.SetSupervisionPendingFunc(d.sup.pending)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -467,6 +469,16 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 	if d.sup != nil {
 		d.sup.signal(id)
 	}
+}
+
+// anyControlled reports whether ANY controller lease -- an owner attach or a phone
+// take_control -- is held on local: the supervisor never types into a session someone is
+// driving (ADR-010 Amendment 3 C3). The remote Server may be absent (no remote listener).
+func (d *Daemon) anyControlled(local string) bool {
+	if d.srv.IsControlled(local) {
+		return true
+	}
+	return d.remoteSrv != nil && d.remoteSrv.IsControlled(local)
 }
 
 // endSession is the daemon's OnSessionEnd hook: it retires an ended session's

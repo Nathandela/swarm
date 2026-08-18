@@ -26,7 +26,10 @@ package skeleton
 //
 // DURABLE (C4): one 0600 JSON record per child under <stateDir>/supervision (0700), so a
 // pending event survives a daemon restart and is delivered exactly once across it: the
-// next incarnation loads the records and its retry cadence delivers them with no signal.
+// next incarnation loads the records, re-evaluates each against the child's current meta
+// (a child that ended while the daemon was down never signals), and delivers with no
+// signal. A record that could not be written leaves this incarnation governed by memory,
+// so after a crash its last written event may be delivered a second time.
 //
 // THE NOTIFICATION CARRIES NO SESSION-AUTHORED TEXT (C3): ids, seq, group and interaction
 // only. The source retrieves output deliberately with `swarm peek`, so an untrusted child
@@ -117,7 +120,11 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 		return nil, err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".json") {
+			_ = os.Remove(filepath.Join(dir, e.Name())) // a crashed write's temp file
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -129,16 +136,15 @@ func newSupervisor(endpointID, dir string, retry time.Duration,
 			log.Printf("skeleton: supervision record %s is unreadable, skipped: %v", e.Name(), err)
 			continue
 		}
-		if _, ok := get(r.Child); !ok {
-			// The child was deleted while the daemon was down (a live delete signals
-			// and retires): nothing to supervise, and its source must not hear of it.
-			_ = os.Remove(filepath.Join(dir, e.Name()))
-			continue
-		}
 		s.records[r.Child] = &r
-		if r.Pending != nil {
+		// Re-evaluate against the child's CURRENT meta: a child that ended while the
+		// daemon was down is finalized by reconcile with no status signal, and one deleted
+		// meanwhile must be retired, not reported. A pending event, old or new, is nudged.
+		s.mu.Lock()
+		if s.evaluateLocked(&r) {
 			s.nudge()
 		}
+		s.mu.Unlock()
 	}
 	s.wg.Add(1)
 	go s.run()
@@ -222,6 +228,8 @@ func (s *supervisor) evaluateLocked(r *supervisionRecord) bool {
 		if g == status.GroupNeedsInput || g == status.GroupCompleted || (g == status.GroupReadyForReview && r.SeenWorking) {
 			r.Seq++ // a newer attention state REPLACES an undelivered one; the seq still advances
 			r.Pending = &supervisionEvent{Seq: r.Seq, Group: g, Interaction: m.Status.Interaction}
+		} else {
+			r.Pending = nil // answered or resumed at the machine: waking the source now would find nothing
 		}
 	}
 	if changed {
