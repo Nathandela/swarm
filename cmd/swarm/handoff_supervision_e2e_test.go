@@ -68,7 +68,7 @@ func TestHandoffSupervision_PassiveChildWakesSourceThroughRealBinaries(t *testin
 	// The roster shows the mode on the child; the notification lands on the source.
 	deadline := time.Now().Add(15 * time.Second)
 	var sawMode, sawNotice bool
-	for time.Now().Before(deadline) && !(sawMode && sawNotice) {
+	for time.Now().Before(deadline) && (!sawMode || !sawNotice) {
 		if out, err := run("ls", "--json"); err == nil {
 			var views []protocol.SessionView
 			_ = json.Unmarshal([]byte(out), &views)
