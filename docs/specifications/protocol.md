@@ -398,7 +398,9 @@ the daemon launches the session and replies with `launch` carrying the new
 `session` view (whose `id` is the namespaced session id). On a rejected field the
 daemon replies with `error` and forwards nothing. A `supervision` outside the closed
 vocabulary, or a non-empty one without `spawn_intent` `handoff`, is refused
-`invalid_field` before any daemon side effect (ADR-010 Amendment 3 C1).
+`invalid_field` before any daemon side effect (ADR-010 Amendment 3 C1); on the remote
+tier any non-empty `supervision` is refused `policy`, since a mode makes `spawned_from`
+actionable and the launch content hash does not bind lineage.
 
 > AMENDED BY ADR-007 B144 (2026-08-15): `launch` above is owner-tier only. Phone launch is a
 > supported RCE-class action in the first complete product (B144, RC-D9): the remote-tier

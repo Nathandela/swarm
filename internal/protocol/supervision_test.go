@@ -298,3 +298,41 @@ func TestSupervision_ServerSendInputRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestSupervision_RemoteTierLaunchRefusesAMode (review finding on slice 1): a
+// supervision mode makes spawned_from ACTIONABLE — the daemon will later type into that
+// session — and LaunchContentHash does not bind lineage, so a gateway could graft
+// `supervision=passive` onto a validly signed launch. The remote tier refuses any mode
+// with CodePolicy before any daemon side effect; the owner tier is unaffected.
+func TestSupervision_RemoteTierLaunchRefusesAMode(t *testing.T) {
+	stub := newStubDaemon()
+	sock := serveRemoteAPI(t, allowAllLaunchPolicy{stub})
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapRemoteGateway})
+
+	req := policyLaunchReq(t)
+	req.SpawnedFrom, req.SpawnIntent, req.Supervision = "src1", SpawnIntentHandoff, SupervisionPassive
+	rc.writeControl(remoteLaunchControl(rep.EndpointID, req))
+	got := rc.readControl()
+	if got.Op != OpError || got.ErrorCode != CodePolicy || !strings.Contains(got.Error, "supervision") {
+		t.Fatalf("remote launch with supervision = op %q code %q err %q; want error/%s naming supervision", got.Op, got.ErrorCode, got.Error, CodePolicy)
+	}
+	if n := len(stub.launchSpecs()); n != 0 {
+		t.Fatalf("daemon launched %d sessions for a refused remote op; want 0", n)
+	}
+}
+
+// TestSupervision_ServerSendInputIsOwnerTierOnly: the seam's atomicity claim is owner-tier
+// only (distinct leases per tier), so a remote-tier Server refuses it outright.
+func TestSupervision_ServerSendInputIsOwnerTierOnly(t *testing.T) {
+	d := newSendInputDaemon()
+	d.setMetas(statusMeta("s1", status.TurnIdle, status.InteractionNone))
+	srv := NewServer(d, "ep")
+	srv.remoteTier = true
+	if err := srv.SendInput("s1", SendInputReq{Text: "hi", Submit: true}); err == nil {
+		t.Fatal("remote-tier Server.SendInput succeeded; want a refusal")
+	}
+	if n := d.attachCount(); n != 0 {
+		t.Fatalf("remote-tier SendInput opened %d upstream streams; want 0", n)
+	}
+}

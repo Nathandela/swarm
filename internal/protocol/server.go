@@ -1311,6 +1311,13 @@ func (cc *clientConn) handleLaunch(c Control) {
 		cc.replyErrorCode("launch: supervision requires spawn_intent handoff", CodeInvalidField)
 		return
 	}
+	// A mode makes spawned_from ACTIONABLE (the assembly later types into that session)
+	// and LaunchContentHash does not bind lineage, so a gateway could graft a mode onto a
+	// validly signed launch: the remote tier refuses every mode (R-POL.9 posture).
+	if req.Supervision != "" && cc.srv.remoteTier {
+		cc.replyErrorCode("launch: supervision is not permitted on the remote tier", CodePolicy)
+		return
+	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
 	if resolvedCwd != "" {
 		spec.Cwd = resolvedCwd // ADR-007 D8 (finding D): use the RESOLVED path the policy validated

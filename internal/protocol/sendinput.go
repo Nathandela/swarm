@@ -113,6 +113,9 @@ func (cc *clientConn) handleSendInput(c Control) {
 // exactly the guarantees and limits a `swarm send` is. Every refusal precedes the first
 // byte -- and sendMessage already refuses once the Server is closed.
 func (s *Server) SendInput(local string, req SendInputReq) error {
+	if s.remoteTier {
+		return fmt.Errorf("send_input: owner-tier only") // its atomicity holds against owner-tier lease input alone
+	}
 	frames, why := sendInputFrames(&req)
 	if why != "" {
 		return fmt.Errorf("send_input: %s", why)
