@@ -142,6 +142,10 @@ type LaunchSpec struct {
 	// "delegate". The daemon only stamps them into meta — exactly as it does ResumedFrom.
 	SpawnedFrom string
 	SpawnIntent string
+	// Supervision is the supervision mode of a handoff child (ADR-010 Amendment 3
+	// C1): "passive", "manual" or "none", empty otherwise. Stamped into meta verbatim,
+	// like the lineage above; the server validates it, the assembly's supervisor acts on it.
+	Supervision string
 	// CaptureEvents are the session adapter's capture=raw events
 	// (ADR-010-adapter-structured-capture §6), injected into the agent env so its
 	// `swarm hook` keeps the CLI's own body for those events and no others. Resolved

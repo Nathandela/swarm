@@ -204,6 +204,14 @@ type SessionView struct {
 	// session's row serializes exactly as it did before the fields existed.
 	SpawnedFrom string `json:"spawned_from,omitempty"`
 	SpawnIntent string `json:"spawn_intent,omitempty"`
+	// Supervision is the persisted supervision mode of a handoff child (ADR-010
+	// Amendment 3 C1/C5) and SupervisionPending reports that an attention event of
+	// that child awaits its source: LIVE daemon state, sampled at stamp time exactly
+	// like RemoteControlled, so the board can show a supervisor pending or gone. Both
+	// omitempty: an unsupervised row serializes exactly as it did before the fields
+	// existed.
+	Supervision        string `json:"supervision,omitempty"`
+	SupervisionPending bool   `json:"supervision_pending,omitempty"`
 	// RemoteControlled reports that a PAIRED DEVICE currently holds this session's
 	// controller lease (the remote-tier Server's IsControlled, R1.3.7). It is the
 	// board's honest answer to "who has the keyboard": a TUI attach and a phone
@@ -294,6 +302,12 @@ type LaunchReq struct {
 	// un-lineaged launch is byte-identical to the pre-lineage shape.
 	SpawnedFrom string `json:"spawned_from,omitempty"`
 	SpawnIntent string `json:"spawn_intent,omitempty"`
+	// Supervision is the supervision mode of a handoff child (ADR-010 Amendment 3
+	// C1): one of SupervisionPassive, SupervisionManual or SupervisionNone, valid only
+	// alongside SpawnIntentHandoff -- a mode names how the SOURCE follows its child,
+	// so it is meaningless on any other launch. omitempty: an unsupervised launch is
+	// byte-identical to the pre-supervision shape.
+	Supervision string `json:"supervision,omitempty"`
 }
 
 // The closed spawn-intent vocabulary (ADR-010 D2/D4): the two flavors of spawn share
@@ -301,4 +315,13 @@ type LaunchReq struct {
 const (
 	SpawnIntentHandoff  = "handoff"
 	SpawnIntentDelegate = "delegate"
+)
+
+// The closed supervision-mode vocabulary (ADR-010 Amendment 3 C1): passive is
+// daemon-managed (the source is woken only when the child needs attention), manual
+// is the source's own watch loop, none is launch-and-report.
+const (
+	SupervisionPassive = "passive"
+	SupervisionManual  = "manual"
+	SupervisionNone    = "none"
 )

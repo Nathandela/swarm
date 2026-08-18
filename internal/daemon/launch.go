@@ -275,6 +275,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		ResumedFrom:   spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
 		SpawnedFrom:   spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)
 		SpawnIntent:   spec.SpawnIntent,
+		Supervision:   spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
 		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
 	s := &session{meta: m, stop: make(chan struct{})}

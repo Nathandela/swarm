@@ -74,6 +74,7 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 		// intent vocabulary and nothing else; the daemon stamps both into meta.
 		SpawnedFrom: req.SpawnedFrom,
 		SpawnIntent: req.SpawnIntent,
+		Supervision: req.Supervision, // ADR-010 Amendment 3 C1: validated vocabulary, carried verbatim
 	}
 }
 
@@ -82,6 +83,16 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 func validSpawnIntent(intent string) bool {
 	switch intent {
 	case "", SpawnIntentHandoff, SpawnIntentDelegate:
+		return true
+	}
+	return false
+}
+
+// validSupervision reports whether a supervision mode is one the closed ADR-010
+// Amendment 3 C1 vocabulary admits. Empty is valid: only a handoff carries a mode.
+func validSupervision(mode string) bool {
+	switch mode {
+	case "", SupervisionPassive, SupervisionManual, SupervisionNone:
 		return true
 	}
 	return false
@@ -245,6 +256,10 @@ type Server struct {
 	// An atomic pointer, not a plain field: the setter runs at assembly while the
 	// accept loop is already live, and stampView reads it from every serving goroutine.
 	remoteControlledFn atomic.Pointer[controlledFunc]
+	// supervisionPendingFn is the source of SessionView.SupervisionPending (ADR-010
+	// Amendment 3 C5): the assembly registers its supervisor's pending query here.
+	// Same shape and same reason for the atomic pointer as remoteControlledFn.
+	supervisionPendingFn atomic.Pointer[controlledFunc]
 
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
@@ -451,10 +466,11 @@ func (s *Server) distribute(m persist.Meta) {
 	// of the session, so every subscriber's row must agree, and the shared-marshal
 	// fast path below depends on the two branches stamping the same value.
 	controlled := s.remoteControlled(m.ID)
+	pending := s.supervisionPending(m.ID)
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled, pending)})
 	}
 
 	s.subMu.Lock()
@@ -462,7 +478,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled, pending)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -584,6 +600,27 @@ func (s *Server) SetRemoteControlledFunc(fn func(local string) bool) {
 // remoteControlled answers the registered source, false when none is registered.
 func (s *Server) remoteControlled(local string) bool {
 	if p := s.remoteControlledFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return false
+}
+
+// SetSupervisionPendingFunc registers the source of SessionView.SupervisionPending
+// (ADR-010 Amendment 3 C5). Production wires the assembly supervisor's pending query
+// here, so a child's roster row shows that an attention event awaits its source. nil
+// clears it; unset, no row is ever stamped.
+func (s *Server) SetSupervisionPendingFunc(fn func(local string) bool) {
+	if fn == nil {
+		s.supervisionPendingFn.Store(nil)
+		return
+	}
+	f := controlledFunc(fn)
+	s.supervisionPendingFn.Store(&f)
+}
+
+// supervisionPending answers the registered source, false when none is registered.
+func (s *Server) supervisionPending(local string) bool {
+	if p := s.supervisionPendingFn.Load(); p != nil {
 		return (*p)(local)
 	}
 	return false
@@ -1260,6 +1297,25 @@ func (cc *clientConn) handleLaunch(c Control) {
 	}
 	if req.SpawnIntent != "" && req.SpawnedFrom == "" {
 		cc.replyErrorCode("launch: spawn_intent requires spawned_from", CodeInvalidField)
+		return
+	}
+	// ADR-010 Amendment 3 C1: the same discipline for the supervision mode -- a closed
+	// vocabulary (it persists into meta and drives the assembly's supervisor), and a
+	// mode says how the SOURCE follows a HANDOFF child, so it is meaningless elsewhere.
+	if !validSupervision(req.Supervision) {
+		cc.replyErrorCode("launch: supervision "+strconv.Quote(req.Supervision)+" is not "+
+			strconv.Quote(SupervisionPassive)+", "+strconv.Quote(SupervisionManual)+" or "+strconv.Quote(SupervisionNone), CodeInvalidField)
+		return
+	}
+	if req.Supervision != "" && req.SpawnIntent != SpawnIntentHandoff {
+		cc.replyErrorCode("launch: supervision requires spawn_intent handoff", CodeInvalidField)
+		return
+	}
+	// A mode makes spawned_from ACTIONABLE (the assembly later types into that session)
+	// and LaunchContentHash does not bind lineage, so a gateway could graft a mode onto a
+	// validly signed launch: the remote tier refuses every mode (R-POL.9 posture).
+	if req.Supervision != "" && cc.srv.remoteTier {
+		cc.replyErrorCode("launch: supervision is not permitted on the remote tier", CodePolicy)
 		return
 	}
 	spec := daemonLaunchSpec(req, cc.srv.remoteTier, c.OperationID)
@@ -2592,14 +2648,14 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID))
+	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID))
 }
 
 // stampView builds one general-view row (V-4) for the given endpoint id. It is
 // a free function (not just a *clientConn method) so distribute can stamp a
 // SHARED view once for every subscriber on a stable endpoint id (R3.3.1)
 // without needing a specific connection.
-func stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled bool) *SessionView {
+func stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool) *SessionView {
 	return &SessionView{
 		EndpointID:   endpointID,
 		ID:           NamespacedID(endpointID, m.ID),
@@ -2621,6 +2677,10 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,
+		// ADR-010 Amendment 3 C5: the mode is persisted, the pending event is live
+		// supervisor state sampled by the caller exactly like RemoteControlled.
+		Supervision:        m.Supervision,
+		SupervisionPending: supervisionPending,
 	}
 }
 

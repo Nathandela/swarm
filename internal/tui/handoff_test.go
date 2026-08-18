@@ -292,3 +292,108 @@ func TestHandoff_NoUsableTargetRefusesLocally(t *testing.T) {
 		t.Fatal("no-target refusal sent source input")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ADR-010 Amendment 3 C1: the form's third and last field is the supervision mode
+// (passive by default), cycled with the arrows; focus wraps over three fields.
+// ---------------------------------------------------------------------------
+
+func TestHandoff_FormHasSupervisionAsThirdField(t *testing.T) {
+	m := newModel(t, newFakeClient(sPrompt("endpoint/source", "codex", "/repo", "question", time.Minute)), handoffAgents())
+	m = send(m, detectMsg{agents: handoffAgents()()})
+	m = send(m, keyH)
+
+	rm := m.(rootModel)
+	if rm.handoff.supervision != protocol.SupervisionPassive {
+		t.Fatalf("default supervision = %q, want %q", rm.handoff.supervision, protocol.SupervisionPassive)
+	}
+	if line := lineContaining(view(m), "supervision"); !strings.Contains(line, "passive") {
+		t.Fatalf("form missing the supervision field with its passive default (line %q):\n%s", line, view(m))
+	}
+
+	// Focus order is target -> model -> supervision, then back to target.
+	m = send(m, keyTab)
+	m = send(m, keyTab)
+	if f := m.(rootModel).handoff.focus; f != 2 {
+		t.Fatalf("focus after two tabs = %d, want 2 (supervision)", f)
+	}
+	if hint := m.(rootModel).handoff.hint(); !strings.Contains(hint, "arrows change supervision") {
+		t.Errorf("supervision hint = %q, want it to say arrows change supervision", hint)
+	}
+	m = send(m, keyRight)
+	if got := m.(rootModel).handoff.supervision; got != protocol.SupervisionManual {
+		t.Fatalf("right on supervision selected %q, want manual", got)
+	}
+	m = send(m, keyRight) // none
+	m = send(m, keyRight) // wraps to passive
+	if got := m.(rootModel).handoff.supervision; got != protocol.SupervisionPassive {
+		t.Fatalf("third right on supervision selected %q, want passive (wrap)", got)
+	}
+	m = send(m, keyLeft) // wraps back to none
+	rm = m.(rootModel)
+	if rm.handoff.supervision != protocol.SupervisionNone {
+		t.Fatalf("left on supervision selected %q, want none (wrap)", rm.handoff.supervision)
+	}
+	if line := lineContaining(view(m), "supervision"); !strings.Contains(line, "none") {
+		t.Fatalf("form does not show the selected supervision mode (line %q):\n%s", line, view(m))
+	}
+	if rm.handoff.targetName() != "claude" || rm.handoff.model != "opus" {
+		t.Fatalf("cycling supervision disturbed target %q / model %q", rm.handoff.targetName(), rm.handoff.model)
+	}
+
+	m = send(m, keyTab)
+	if f := m.(rootModel).handoff.focus; f != 0 {
+		t.Fatalf("focus after a third tab = %d, want 0 (wraps over three fields)", f)
+	}
+	m = send(m, keyDown)
+	m = send(m, keyDown)
+	if f := m.(rootModel).handoff.focus; f != 2 {
+		t.Fatalf("focus after two downs = %d, want 2", f)
+	}
+	m = send(m, keyDown)
+	if f := m.(rootModel).handoff.focus; f != 0 {
+		t.Fatalf("focus after three downs = %d, want 0", f)
+	}
+	// Up moves backward like the launch form: from target it wraps to supervision.
+	for i, want := range []int{2, 1, 0} {
+		m = send(m, keyUp)
+		if f := m.(rootModel).handoff.focus; f != want {
+			t.Fatalf("focus after %d up(s) = %d, want %d", i+1, f, want)
+		}
+	}
+
+	// A detection refresh keeps the chosen mode, as it keeps target and model.
+	m = send(m, detectMsg{gen: rm.detectGen, agents: handoffAgents()()})
+	if got := m.(rootModel).handoff.supervision; got != protocol.SupervisionNone {
+		t.Fatalf("detection refresh reset supervision to %q, want none", got)
+	}
+}
+
+func TestHandoff_SubmitPassesSupervisionModeIntoPrompt(t *testing.T) {
+	for steps, mode := range supervisionModes {
+		t.Run(mode, func(t *testing.T) {
+			f := newFakeClient(sPrompt("endpoint/source", "codex", "/repo", "question", time.Minute))
+			m := newModel(t, f, handoffAgents())
+			m = send(m, detectMsg{agents: handoffAgents()()})
+			m = send(m, keyH)
+			m = send(m, keyTab)
+			m = send(m, keyTab)
+			for i := 0; i < steps; i++ {
+				m = send(m, keyRight)
+			}
+			_, cmd := m.Update(keyEnter)
+			execCmd(cmd)
+			calls := f.sendInputCalls()
+			if len(calls) != 1 {
+				t.Fatalf("SendInput calls = %d, want 1: %+v", len(calls), calls)
+			}
+			want := "--supervision '" + mode + "'"
+			if !strings.Contains(calls[0].req.Text, want) {
+				t.Errorf("submitted prompt missing %q:\n%s", want, calls[0].req.Text)
+			}
+			if !strings.Contains(calls[0].req.Text, "swarm handoff --cli 'claude'") {
+				t.Errorf("submitted prompt lost the selected target:\n%s", calls[0].req.Text)
+			}
+		})
+	}
+}

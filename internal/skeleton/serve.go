@@ -166,6 +166,11 @@ type Daemon struct {
 	// playbook §6.2; capability.go).
 	capStore sessionCapabilityStore
 
+	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
+	// armed from registerSession, signalled from emitStatus and endSession, closed by
+	// Close. nil in a test Daemon literal, so every use is nil-guarded like d.eng/d.api.
+	sup *supervisor
+
 	// drains holds the per-session hook-spool drain loops (hookdrainloop.go): the
 	// production caller of HookDrainer, started from registerSession and stopped by
 	// endSession/Close.
@@ -255,6 +260,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	assembled := false
 	defer func() {
 		if !assembled {
+			if d.sup != nil {
+				d.sup.close() // its delivery goroutine, once started, must not outlive a failed assembly
+			}
 			d.api.close()
 			_ = core.Close()
 		}
@@ -361,6 +369,27 @@ func Serve(cfg Config) (*Daemon, error) {
 		d.api.SetRemoteControlledFunc(rs.IsControlled)
 	}
 
+	// ADR-010 Amendment 3 C2..C4: the passive supervisor, over the owner-tier Server's
+	// SendInput (C3's serialized write seam) and every controller lease, owner or remote
+	// (a human at the source's controls is never interrupted). Constructed AFTER both
+	// Servers exist -- its delivery goroutine may read d.remoteSrv at once -- so the
+	// records a prior incarnation left are the reconcile-time arming: registerSession
+	// fired for the reconnected sessions during daemon.Open above, when d.sup was still
+	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
+	// that cannot be opened aborts assembly like every other component's store.
+	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
+		d.core.Get, d.anyControlled, d.srv.SendInput)
+	if err != nil {
+		return nil, err // defer'd cleanup tears down d.api + core
+	}
+	d.sup = sup
+	// C5: both readers of the live pending flag, for the same reason both remote-control
+	// readers exist above -- the Server stamps SessionView.SupervisionPending, the roster
+	// poller needs it in its diff key or a flip (which changes no persisted meta) would
+	// fan out no event.
+	d.srv.SetSupervisionPendingFunc(d.sup.pending)
+	d.api.SetSupervisionPendingFunc(d.sup.pending)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	go d.eng.Run(ctx) // the ONLY periodic driver (E10.8); idle when PollInterval<=0
@@ -404,6 +433,9 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// the staleness guard can downgrade a now-idle session. Folding the status into
 	// RegisterSession closes the register->seed gap an early hook could fall into.
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+	if d.sup != nil {
+		d.sup.arm(m) // a passive handoff child gets its supervision record (ADR-010 Amendment 3 C2)
+	}
 	// The structured-capture channel's daemon half (playbook §6.1, hookdrainloop.go):
 	// one drain loop per session with a shim-owned hook spool. Started here rather than
 	// only at launch so a session whose shim OUTLIVED this daemon -- the case the whole
@@ -432,6 +464,21 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 	if d.api != nil {
 		d.api.emitStatus(id, s)
 	}
+	// After the persist above, so the supervisor's evaluation reads the CURRENT meta
+	// (ADR-010 Amendment 3 C2). Cheap and synchronous; delivery is its own goroutine.
+	if d.sup != nil {
+		d.sup.signal(id)
+	}
+}
+
+// anyControlled reports whether ANY controller lease -- an owner attach or a phone
+// take_control -- is held on local: the supervisor never types into a session someone is
+// driving (ADR-010 Amendment 3 C3). The remote Server may be absent (no remote listener).
+func (d *Daemon) anyControlled(local string) bool {
+	if d.srv.IsControlled(local) {
+		return true
+	}
+	return d.remoteSrv != nil && d.remoteSrv.IsControlled(local)
 }
 
 // endSession is the daemon's OnSessionEnd hook: it retires an ended session's
@@ -461,6 +508,11 @@ func (d *Daemon) endSession(id string) {
 	d.sweepSessionInteractions(id)
 	// The interaction fold keys and the open turn name a CLI that is gone (interaction.go).
 	d.forgetInteractions(id)
+	// A child that ended is `completed` for its supervisor; a source that ended leaves its
+	// children's events pending (ADR-010 Amendment 3 C4: no re-parenting).
+	if d.sup != nil {
+		d.sup.signal(id)
+	}
 }
 
 // gridPoll is how often the assembly samples each running session's shim grid and
@@ -796,8 +848,11 @@ func (d *Daemon) Close() error {
 		d.captureWG.Wait()           // drain in-flight conversation-id captures
 		d.stopHookDrains()           // join every hook-spool drain loop BEFORE the core it applies through goes away
 		d.drainPendingInteractions() // flush anything the append floor is still holding (below)
-		_ = d.core.Close()           // stops accepting new connections; releases the lock
-		_ = d.srv.Close()            // disconnects clients; drains the per-connection loops
+		if d.sup != nil {
+			d.sup.close() // no supervision send may start once the Server below is closing
+		}
+		_ = d.core.Close() // stops accepting new connections; releases the lock
+		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
 		if d.remoteSrv != nil {
 			_ = d.remoteSrv.Close() // tears down the remote-tier listener + its connections
 		}

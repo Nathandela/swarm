@@ -97,15 +97,26 @@ instruction to the source agent. That agent writes a context document, launches 
 linked child with the first-class `swarm handoff` command, and remains responsible for
 monitoring it through `swarm watch`, `swarm peek`, and `swarm send` until completion.
 
+The form's third field picks how the source follows the child:
+
+- `passive` (default) — the daemon supervises: when the child needs input, is ready for
+  review, or completes, swarm types one short notification into the source session and
+  the source agent takes it from there with `swarm peek` and `swarm send`. Nothing is
+  typed while the source is busy, waiting on a question or permission, or attached by a
+  human; the
+  board shows `supervisor pending` on the child until it is delivered.
+- `manual` — the source agent runs the `swarm watch` / `peek` / `send` loop itself.
+- `none` — the source reports the child session ID and stops; you supervise.
+
 The same command is available directly inside any live swarm-managed session:
 
 ```sh
-swarm handoff --cli claude --model opus --context-file /tmp/handoff.md
+swarm handoff --cli claude --model opus --supervision passive --context-file /tmp/handoff.md
 ```
 
 It prints only the child session ID on stdout so the source can supervise it reliably.
 Permission requests are never treated as ordinary prompts: resolve them with the human
-before opening or submitting a handoff.
+before opening or submitting a handoff, and a supervision notification never approves one.
 
 ## Supported agents
 

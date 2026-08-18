@@ -4,7 +4,8 @@ package main
 // deliberately thin owner-tier wrapper over the already-shipped List + Launch
 // protocol: the source agent authors context, this command snapshots it under
 // Swarm's protected state directory, and the daemon launches a linked child.
-// Monitoring remains explicit through `swarm watch`, `peek`, and `send`.
+// Monitoring remains explicit through `swarm watch`, `peek`, and `send`, or is
+// delegated to the daemon's passive supervisor (ADR-010 Amendment 3 C1).
 
 import (
 	"errors"
@@ -18,11 +19,14 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-const handoffUsage = `usage: swarm handoff --cli <agent> [--model m] [--name n] --context-file <file>
+const handoffUsage = `usage: swarm handoff --cli <agent> [--model m] [--name n]
+                     [--supervision passive|manual|none] --context-file <file>
 
   Launch a new Swarm session from an agent-authored context document. The command
   must run inside a live Swarm-managed source session. It prints the child session
-  id on stdout; supervise it with swarm watch, swarm peek, and swarm send.
+  id on stdout. With --supervision passive (the default) the daemon wakes the source
+  when the child needs attention; manual supervises with swarm watch, swarm peek,
+  and swarm send; none leaves supervision to the human.
 `
 
 func runHandoff(args []string, c agentClient, stdout, stderr io.Writer) int {
@@ -36,6 +40,7 @@ func runHandoff(args []string, c agentClient, stdout, stderr io.Writer) int {
 	model := fs.String("model", "", "model to launch the target agent with")
 	name := fs.String("name", "", "target session label (default: the daemon's)")
 	contextFile := fs.String("context-file", "", "agent-authored handoff context file (required)")
+	supervision := fs.String("supervision", protocol.SupervisionPassive, "supervision mode: passive, manual or none")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -52,6 +57,12 @@ func runHandoff(args []string, c agentClient, stdout, stderr io.Writer) int {
 	}
 	if *contextFile == "" {
 		_, _ = fmt.Fprintln(stderr, "handoff: --context-file is required")
+		return misuseExit
+	}
+	switch *supervision {
+	case protocol.SupervisionPassive, protocol.SupervisionManual, protocol.SupervisionNone:
+	default:
+		_, _ = fmt.Fprintf(stderr, "handoff: --supervision %q is not one of passive, manual, none\n", *supervision)
 		return misuseExit
 	}
 
@@ -91,6 +102,7 @@ func runHandoff(args []string, c agentClient, stdout, stderr io.Writer) int {
 		InitialPrompt: initial,
 		SpawnedFrom:   parent,
 		SpawnIntent:   protocol.SpawnIntentHandoff,
+		Supervision:   *supervision,
 	}
 	if *model != "" {
 		req.Options = map[string]string{"model": *model}
