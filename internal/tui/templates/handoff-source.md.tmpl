@@ -1,0 +1,46 @@
+Prepare and supervise a handoff from this Swarm session to another agent.
+
+Create a temporary context document outside the repository and replace every bracketed note with concrete, current facts. Do not leave placeholders.
+
+```sh
+handoff_file="$(mktemp /tmp/swarm-context.XXXXXX.md)"
+chmod 600 "$handoff_file"
+cat >"$handoff_file" <<'SWARM_HANDOFF_CONTEXT'
+# Goal
+[The exact outcome the receiving agent must achieve.]
+
+# Current state
+[Repository, branch/worktree, changed files, active processes, and unfinished work.]
+
+# Decisions and constraints
+[User decisions, safety boundaries, forbidden actions, and important assumptions.]
+
+# Evidence and validation
+[Commands already run, results, failures, and evidence that still needs verification.]
+
+# Next actions
+[Ordered concrete actions, including what requires human confirmation.]
+
+# Pointers
+[Relevant files, line locations, issue IDs, commits, and external references.]
+SWARM_HANDOFF_CONTEXT
+```
+
+Re-read the document and correct omissions before launching. Then run exactly:
+
+```sh
+child_id="$(swarm handoff --cli {{shellQuote .Target}}{{if .Model}} --model {{shellQuote .Model}}{{end}} --context-file "$handoff_file")"
+printf 'handoff child: %s\n' "$child_id"
+```
+
+After launch: Stop editing the shared checkout. You remain the supervisor until the receiving session is complete or the human explicitly releases you.
+
+Supervise with this event-driven cycle; do not poll continuously:
+
+1. Wait with `swarm watch "$child_id" --until needs_input,ready_for_review,completed --timeout 10m`.
+2. Exit 2 from that command is a timeout, meaning the child is still working. Start the same wait again. Any other nonzero exit is an operational error to report.
+3. On `needs_input`, run `swarm peek "$child_id"`. If it is a permission request, ask the human and never approve it yourself. If it is an ordinary question, answer only from the approved context with `swarm send "$child_id" --text "..."`, then wait once with `swarm watch "$child_id" --until change --timeout 10m` before returning to the multi-state wait.
+4. On `ready_for_review`, run `swarm peek "$child_id"`, independently validate the work, and send specific feedback with `swarm send "$child_id" --text "..."`. Then wait once for a real transition with `swarm watch "$child_id" --until change --timeout 10m` before returning to the multi-state wait, so the unchanged review snapshot cannot create a tight loop.
+5. On `completed`, run a final `swarm peek "$child_id"`, inspect the repository and validation evidence, then report the result and any remaining risk to the human.
+
+Keep the child session ID and use it for every watch, peek, and send command. Do not silently take over unresolved work or permission decisions.

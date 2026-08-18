@@ -38,7 +38,7 @@ import (
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
 
-// maxSendInputText bounds one steering message's text. Two precedents exist and only one
+// MaxSendInputText bounds one steering message's text. Two precedents exist and only one
 // fits: wire.MaxFrame (1 MiB) is the TRANSPORT bound, which would let a single steering
 // message paste a megabyte into somebody's session, while phonecore.MaxInputPayload (4096)
 // is the bound the INPUT path already imposes on one PTY write — and this text is framed
@@ -46,7 +46,7 @@ import (
 // than imported: internal/phonecore is a deliberately daemon-free leaf (PB-BIND-0) and
 // internal/protocol must not pull it in, the same re-homing submitframe did for the
 // framing rule itself.
-const maxSendInputText = 4096
+const MaxSendInputText = 4096
 
 // keySequences is the CLOSED named-key vocabulary of ADR-010 A2, in ONE place: the daemon
 // maps a name to bytes here and `swarm send` validates against KeySequence rather than
@@ -108,7 +108,7 @@ func (cc *clientConn) handleSendInput(c Control) {
 
 // sendInputFrames validates one request and cuts it into the exact PTY writes the message
 // becomes, or returns why it is malformed (an empty reason means valid). EXACTLY ONE MODE
-// per request. Text is ONE frame — it is within maxSendInputText, the bound the input path
+// per request. Text is ONE frame — it is within MaxSendInputText, the bound the input path
 // imposes on a single PTY write — and a Submit adds the CR as its OWN frame, so the byte
 // that RUNS the message never shares a write with it (agents-tracker-r3p: Claude Code reads
 // text+CR arriving in one write as an unsubmitted paste). A key is a single frame — it
@@ -127,8 +127,8 @@ func sendInputFrames(req *SendInputReq) ([][]byte, string) {
 			return nil, "unknown key " + strconv.Quote(req.Key)
 		}
 		return [][]byte{seq}, ""
-	case len(req.Text) > maxSendInputText:
-		return nil, "text is " + strconv.Itoa(len(req.Text)) + " bytes, over the " + strconv.Itoa(maxSendInputText) + "-byte bound"
+	case len(req.Text) > MaxSendInputText:
+		return nil, "text is " + strconv.Itoa(len(req.Text)) + " bytes, over the " + strconv.Itoa(MaxSendInputText) + "-byte bound"
 	}
 
 	frames := [][]byte{[]byte(req.Text)}

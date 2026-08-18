@@ -70,6 +70,7 @@ The daemon starts automatically the first time, and you land on the general view
 | <kbd>⏎</kbd> | Attach to the selected session — raw and full-screen (<kbd>ctrl</kbd>+<kbd>q</kbd> returns) |
 | <kbd>n</kbd> | New session — pick an agent and a working directory |
 | <kbd>e</kbd> | Rename the selected session |
+| <kbd>h</kbd> | Hand work to another supported CLI and supervise it from the source session |
 | <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill it (or delete a finished one) — confirm with <kbd>y</kbd> |
 | <kbd>esc</kbd> | Quit the TUI — your agents keep running |
 
@@ -87,6 +88,24 @@ swarm tracks three orthogonal signals per session — process, turn, and interac
 | **Completed** | Exited (code shown) or lost. Stays listed until you delete it. |
 
 Detection is typed-event-first where a CLI exposes structured events — Claude Code drives it through settings-configured hooks — with screen-grid heuristics (reading the emulated screen, never raw bytes) as the fallback.
+
+### Supervised handoff
+
+Select a source session that is waiting at an ordinary prompt or ready for review and
+press <kbd>h</kbd>. Choose the target CLI and model; swarm submits one structured
+instruction to the source agent. That agent writes a context document, launches the
+linked child with the first-class `swarm handoff` command, and remains responsible for
+monitoring it through `swarm watch`, `swarm peek`, and `swarm send` until completion.
+
+The same command is available directly inside any live swarm-managed session:
+
+```sh
+swarm handoff --cli claude --model opus --context-file /tmp/handoff.md
+```
+
+It prints only the child session ID on stdout so the source can supervise it reliably.
+Permission requests are never treated as ordinary prompts: resolve them with the human
+before opening or submitting a handoff.
 
 ## Supported agents
 

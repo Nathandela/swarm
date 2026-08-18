@@ -71,6 +71,7 @@ type screen int
 const (
 	screenGeneral screen = iota
 	screenLaunch
+	screenHandoff
 	screenAttach
 )
 
@@ -176,6 +177,7 @@ type rootModel struct {
 	screen  screen
 	general generalModel
 	launch  launchModel
+	handoff handoffModel
 	attach  attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
@@ -315,6 +317,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.general.width = msg.Width
 		m.launch.width = msg.Width
+		m.handoff.width = msg.Width
 		m.attach.width = msg.Width
 		return m, nil
 
@@ -427,8 +430,11 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// place so agent availability greys/ungreys live without discarding the form.
 		m.agents = msg.agents
 		m.detected = true
-		if m.screen == screenLaunch {
+		switch m.screen {
+		case screenLaunch:
 			m.launch.refreshAgents(msg.agents)
+		case screenHandoff:
+			m.handoff.refreshAgents(msg.agents)
 		}
 		return m, nil
 
@@ -439,6 +445,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case m.screen == screenLaunch:
 			m.launch.paste(msg.Content)
+		case m.screen == screenHandoff:
+			m.handoff.paste(msg.Content)
 		case m.screen == screenGeneral && m.general.editing:
 			m.general.pasteEdit(msg.Content)
 		}
@@ -476,9 +484,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case handoffDoneMsg:
-		// A refused injection (no such session, a daemon that predates send_input) is
-		// surfaced rather than silently swallowed; a success is a no-op here — the text
-		// is now sitting in the session's prompt for the human to complete.
+		// A refused source instruction (no such session, a daemon that predates
+		// send_input) is surfaced rather than silently swallowed. On success the
+		// complete handoff workflow has been submitted and the source owns supervision.
 		if msg.err != nil {
 			return m, m.general.setBanner("handoff failed: " + msg.err.Error())
 		}
@@ -557,6 +565,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateGeneral(msg)
 		case screenLaunch:
 			return m.updateLaunch(msg)
+		case screenHandoff:
+			return m.updateHandoff(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -573,6 +583,8 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.pairing.view(), "y allow   n deny")
 	case m.screen == screenLaunch:
 		content = m.composeBoard(m.launch.view(), m.launch.hint())
+	case m.screen == screenHandoff:
+		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).

@@ -1,0 +1,45 @@
+package tui
+
+import (
+	_ "embed"
+	"fmt"
+	"strings"
+	"text/template"
+
+	"github.com/Nathandela/swarm/internal/protocol"
+)
+
+//go:embed templates/handoff-source.md.tmpl
+var handoffSourcePrompt string
+
+var handoffSourceTemplate = template.Must(template.New("handoff-source").Funcs(template.FuncMap{
+	"shellQuote": shellQuote,
+}).Parse(handoffSourcePrompt))
+
+type handoffPromptData struct {
+	Target string
+	Model  string
+}
+
+// renderHandoffPrompt produces the complete instruction sent to the selected source
+// session. Target and model are the only form-controlled values. The fixed template is
+// kept below the daemon's one-message input bound, and the rendered result is checked
+// again because a free-form model value can expand it.
+func renderHandoffPrompt(target, model string) (string, error) {
+	var out strings.Builder
+	if err := handoffSourceTemplate.Execute(&out, handoffPromptData{Target: target, Model: model}); err != nil {
+		return "", fmt.Errorf("render handoff prompt: %w", err)
+	}
+	prompt := out.String()
+	if len(prompt) > protocol.MaxSendInputText {
+		return "", fmt.Errorf("handoff prompt is %d bytes, over the %d-byte send bound", len(prompt), protocol.MaxSendInputText)
+	}
+	return prompt, nil
+}
+
+// shellQuote returns one POSIX-shell single-quoted word. The handoff prompt contains a
+// copyable command, so editable model text must remain data even when it contains spaces,
+// quotes, or shell metacharacters.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}

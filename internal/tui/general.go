@@ -336,20 +336,19 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editCursor = utf8.RuneCountInString(s.Name)
 		}
 	case k.Text == "h":
-		// Inject the /swarm-handoff slash command into the selected session (ADR-010
-		// D3), UNSUBMITTED: the human completes the target CLI/model and presses Enter
-		// inside the session. The gate is the session being at a prompt — anything
-		// mid-turn is told so rather than having input silently queued behind its work.
+		// Open the two-field supervised-handoff form against the selected source. Raw
+		// status gates this before any input is sent: the display group intentionally
+		// combines ordinary prompts with permission requests, but those are not equally
+		// safe places to submit an instruction.
 		if s, ok := m.general.selected(); ok {
-			if !atPrompt(s.Group) {
-				// The refusal is immediate and returns NO command: the board's own
-				// repaint tick (repaintInterval) already re-emits the frame often
-				// enough to clear the banner at its expiry, so this path does not
-				// arm a second, longer timer behind a keystroke that did nothing.
-				m.general.setBanner(handoffBusyBanner)
+			if allowed, why := handoffSourceEligibility(s); !allowed {
+				m.general.setBanner(why)
 				return m, nil
 			}
-			return m, handoffCmd(m.client, s.ID)
+			m.handoff = newHandoffModel(s, m.agents, m.detected, m.width)
+			m.screen = screenHandoff
+			m.detectGen++
+			return m, detectCmd(m.detect, m.detectGen)
 		}
 	case isCtrlX(k):
 		// Capture the confirm target by identity (and its kill-vs-delete state)
@@ -497,32 +496,6 @@ type killDoneMsg struct {
 
 func killCmd(c Client, id string) tea.Cmd {
 	return func() tea.Msg { return killDoneMsg{id: id, err: c.Kill(id)} }
-}
-
-// handoffText is the slash-command text the trigger types into the session — the
-// trailing space leaves the cursor where the human types the target CLI (ADR-010 D3).
-const handoffText = "/swarm-handoff "
-
-// handoffBusyBanner is the refusal shown when the selected session is mid-turn: D3
-// requires the TUI to surface that rather than queue the injection.
-const handoffBusyBanner = "session is busy — try when it is at a prompt"
-
-// atPrompt reports whether a session is waiting on a human, the only state that can
-// receive an injected slash command.
-func atPrompt(g status.Group) bool {
-	return g == status.GroupNeedsInput || g == status.GroupReadyForReview
-}
-
-// handoffDoneMsg carries the injection's outcome so a daemon refusal is bannered rather
-// than silently discarded (the killDoneMsg precedent).
-type handoffDoneMsg struct{ err error }
-
-// handoffCmd types the slash command into the session WITHOUT submitting it, over the
-// same owner-tier send_input op `swarm send` uses (A2).
-func handoffCmd(c Client, id string) tea.Cmd {
-	return func() tea.Msg {
-		return handoffDoneMsg{err: c.SendInput(id, protocol.SendInputReq{Text: handoffText})}
-	}
 }
 
 // renameDoneMsg carries a rename's outcome so a failure (including an older daemon's

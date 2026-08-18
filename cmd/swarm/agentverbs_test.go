@@ -389,6 +389,68 @@ func TestRunWatch_MatchAfterEvents(t *testing.T) {
 	}
 }
 
+// TestRunWatch_MultipleAttentionStates pins the supervised-handoff wait: one
+// event-driven watch can wake for any state where the source must inspect or act,
+// instead of polling or racing three independent watch processes.
+func TestRunWatch_MultipleAttentionStates(t *testing.T) {
+	const until = "needs_input,ready_for_review,completed"
+	for _, match := range []status.Group{
+		status.GroupNeedsInput,
+		status.GroupReadyForReview,
+		status.GroupCompleted,
+	} {
+		t.Run(string(match), func(t *testing.T) {
+			client := newFakeAgentClient(view("local/a1", "claude", "review", status.GroupWorking))
+			client.emit(view("local/z9", "codex", "other", match))
+			client.emit(view("local/a1", "claude", "review", match))
+
+			var stdout, stderr bytes.Buffer
+			exit := runWatch([]string{"--until", until, "--timeout", "3s", "local/a1"}, client, &stdout, &stderr)
+			if exit != 0 {
+				t.Fatalf("runWatch exit = %d, want 0; stderr=%q", exit, stderr.String())
+			}
+			if got := decodeView(t, stdout.Bytes()).Group; got != match {
+				t.Errorf("matched group = %q, want %q", got, match)
+			}
+		})
+	}
+
+	// Existing state is still consulted after subscribing, so an already-waiting
+	// child cannot be missed merely because it emitted the transition early.
+	client := newFakeAgentClient(view("local/a1", "claude", "review", status.GroupReadyForReview))
+	var stdout, stderr bytes.Buffer
+	if exit := runWatch([]string{"--until", until, "--timeout", "3s", "local/a1"}, client, &stdout, &stderr); exit != 0 {
+		t.Fatalf("immediate multi-state match exit = %d, want 0; stderr=%q", exit, stderr.String())
+	}
+}
+
+func TestParseWatchUntil_MultipleAttentionStatesValidation(t *testing.T) {
+	m, err := parseWatchUntil(" needs_input, ready_for_review,completed,needs_input ")
+	if err != nil {
+		t.Fatalf("parse valid multi-state predicate: %v", err)
+	}
+	for _, g := range []status.Group{status.GroupNeedsInput, status.GroupReadyForReview, status.GroupCompleted} {
+		if !m.matchesSnapshot(view("local/a1", "claude", "review", g)) {
+			t.Errorf("multi-state matcher did not accept %q", g)
+		}
+	}
+	if m.matchesSnapshot(view("local/a1", "claude", "review", status.GroupWorking)) {
+		t.Error("multi-state matcher accepted working, which was not requested")
+	}
+
+	for _, bad := range []string{
+		"needs_input,",
+		",completed",
+		"needs_input,bogus",
+		"change,completed",
+		"needs_input,change",
+	} {
+		if _, err := parseWatchUntil(bad); err == nil {
+			t.Errorf("parseWatchUntil(%q) succeeded, want refusal", bad)
+		}
+	}
+}
+
 // TestRunWatch_Timeout pins the distinct timeout exit: no matching event before the
 // deadline is exit code 2 (not 0, not the generic error 1) with an explanation on
 // stderr, and nothing that could be mistaken for a SessionView on stdout.

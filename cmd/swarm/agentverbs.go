@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -89,7 +90,7 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 func runWatch(args []string, c agentClient, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	until := fs.String("until", string(status.GroupNeedsInput), "wait for needs_input, ready_for_review, completed, or change")
+	until := fs.String("until", string(status.GroupNeedsInput), "wait for one or more comma-separated states: needs_input, ready_for_review, completed; or change")
 	timeout := fs.Duration("timeout", watchDefaultTimeout, "give up after this long")
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -169,28 +170,49 @@ func runKill(args []string, c agentClient, stdout, stderr io.Writer) int {
 // caller already has, not something the session did.
 type watchMatcher struct {
 	anyChange bool
-	group     status.Group
+	groups    map[status.Group]struct{}
 }
 
 func (m watchMatcher) matchesSnapshot(v protocol.SessionView) bool {
-	return !m.anyChange && v.Group == m.group
+	if m.anyChange {
+		return false
+	}
+	_, ok := m.groups[v.Group]
+	return ok
 }
 
 func (m watchMatcher) matchesEvent(v protocol.SessionView) bool {
-	return m.anyChange || v.Group == m.group
+	if m.anyChange {
+		return true
+	}
+	_, ok := m.groups[v.Group]
+	return ok
 }
 
 // parseWatchUntil resolves the --until value into its matcher, naming the offending
 // value when it is not one of the four the verb accepts.
 func parseWatchUntil(until string) (watchMatcher, error) {
-	if until == untilChange {
+	parts := strings.Split(until, ",")
+	if len(parts) == 1 && strings.TrimSpace(parts[0]) == untilChange {
 		return watchMatcher{anyChange: true}, nil
 	}
-	switch g := status.Group(until); g {
-	case status.GroupNeedsInput, status.GroupReadyForReview, status.GroupCompleted:
-		return watchMatcher{group: g}, nil
+	groups := make(map[status.Group]struct{}, len(parts))
+	for _, raw := range parts {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return watchMatcher{}, fmt.Errorf("invalid --until value %q: empty state in comma-separated list", until)
+		}
+		if value == untilChange {
+			return watchMatcher{}, fmt.Errorf("invalid --until value %q: change cannot be combined with status states", until)
+		}
+		switch g := status.Group(value); g {
+		case status.GroupNeedsInput, status.GroupReadyForReview, status.GroupCompleted:
+			groups[g] = struct{}{}
+		default:
+			return watchMatcher{}, fmt.Errorf("unknown --until state %q in %q: want needs_input, ready_for_review, completed, or change", value, until)
+		}
 	}
-	return watchMatcher{}, fmt.Errorf("unknown --until value %q: want needs_input, ready_for_review, completed, or change", until)
+	return watchMatcher{groups: groups}, nil
 }
 
 // findSession returns the roster row with the given namespaced id.

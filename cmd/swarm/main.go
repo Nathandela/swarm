@@ -59,24 +59,24 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|spawn|ls|watch|kill|send|peek|agents|version]
+const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|ls|watch|kill|send|peek|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
   swarm shim       run the PTY-owning shim process
   swarm hook       post a hook event to the daemon
+  swarm handoff    launch a supervised cross-CLI handoff
+                   (--cli agent [--model m] [--name n] --context-file file)
   swarm spawn      launch a new session with context
                    (--cli agent [--dir d] [--model m] [--worktree] [--name n],
                     one of --prompt text | --handoff file | --delegate file)
   swarm ls         list sessions (--json for the full roster)
   swarm watch      wait for a session to reach a status
-                   (--until needs_input|ready_for_review|completed|change, --timeout d)
+                   (--until needs_input[,ready_for_review,completed]|change, --timeout d)
   swarm kill       terminate a session
   swarm send       type into a session <session>
                    (--text s [--no-submit] | --key enter|esc|ctrl-c|tab|up|down)
   swarm peek       print a session's current screen <session> [--lines N]
-  swarm agents     install the /swarm-handoff and /swarm-delegate slash commands
-                   into each CLI's convention (agents install [--dry-run])
   swarm version    print the build version
 `
 
@@ -111,6 +111,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runRelay(args[1:], stdout, stderr)
 	case "spawn":
 		return dispatchAgentVerb(runSpawn, args[1:], nil, stdout, stderr)
+	case "handoff":
+		return dispatchAgentVerb(runHandoff, args[1:], nil, stdout, stderr)
 	case "ls":
 		return dispatchAgentVerb(runLS, args[1:], nil, stdout, stderr)
 	case "watch":
@@ -121,10 +123,6 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runSend, args[1:], nil, stdout, stderr)
 	case "peek":
 		return dispatchAgentVerb(runPeek, args[1:], nil, stdout, stderr)
-	case "agents":
-		// Direct dispatch, NOT dispatchAgentVerb: installing the slash-command files
-		// writes local files only and must work with no daemon to dial.
-		return runAgents(args[1:], stdout, stderr)
 	case "version", "--version":
 		return runVersion(stdout)
 	default:

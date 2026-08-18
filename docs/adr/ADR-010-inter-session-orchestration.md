@@ -265,3 +265,58 @@ the child to read the file, so instructions never travel as argv.
 - Phase 4 — `swarm agents install` (slash commands + usage doc) and the TUI trigger.
 
 Phases are independently shippable; TDD failing-first evidence per GG-5 throughout.
+
+## Amendment 2 (2026-08-18): first-class supervised handoff CLI replaces generated command files
+
+A field failure showed the D3/A5 entry point was not portable: a source agent could be
+told to use a generated command that was not installed for its CLI, and Codex's command
+syntax differed from Claude's. The generated-command installer also made discovery a
+per-vendor setup concern even though D1 had already chosen the local CLI as the common
+transport. This amendment supersedes D3 and A5 Phase 4 where they conflict.
+
+### B1. One installed entry point: `swarm handoff`
+
+`swarm handoff --cli <agent> [--model <model>] [--name <name>] --context-file <file>`
+is shipped in the swarm binary. It must run inside a live swarm-managed source session,
+resolved from `SWARM_SESSION_ID` and the daemon roster. The command copies the authored
+document under the protected swarm state directory, launches the target in the source
+session's cwd, records `spawned_from` plus `spawn_intent=handoff`, and prints only the
+child session ID on stdout. A launch refusal removes the protected copy. The existing
+lower-level `swarm spawn` and delegation behavior remain available; handoff no longer
+depends on any generated user-home command file.
+
+### B2. The TUI submits a fixed source instruction, not a target launch
+
+The `h` key opens a two-field form containing only target CLI and model. On submit, the
+TUI sends one embedded, vendor-neutral instruction to the captured source session through
+`send_input` with submit enabled. The instruction requires the source agent to author six
+sections (Goal, Current state, Decisions and constraints, Evidence and validation, Next
+actions, Pointers), invoke the exact B1 command, capture its stdout session ID, stop
+editing the shared checkout, and supervise the child. The TUI never calls `OpLaunch` for
+this flow and never exposes launch-scope controls such as sandbox or permission bypasses.
+
+The instruction is bounded by `protocol.MaxSendInputText` before it reaches the daemon;
+target and model are POSIX-shell quoted in its copyable command. Generated slash-command
+documents and `swarm agents install` are removed. No external command-extension setup or
+additional control server is part of this framework.
+
+### B3. Raw-state safety and identity revalidation
+
+The display group `needs_input` intentionally combines ordinary questions with permission
+requests, so it is not a sufficient injection gate. A handoff may open only when the
+source process is running, its turn is idle, and its interaction is prompt, none, or
+unknown. Permission requests are refused with a specific message; active or unknown turns
+and ended processes are refused separately. The form captures the source session ID and
+re-resolves the current roster row immediately before submission, preventing a concurrent
+regroup or status transition from redirecting or queueing the instruction.
+
+### B4. Supervision is a lifecycle, not launch-and-forget
+
+`swarm watch` accepts a comma-separated attention set, so the source waits on
+`needs_input,ready_for_review,completed` without polling. On attention it uses `peek` to
+inspect the child and `send` for approved answers or review feedback. It never approves a
+permission request; it escalates that decision to the human. After sending review
+feedback, it first waits for `--until change` before re-entering the multi-state wait, so
+the unchanged ready-for-review snapshot cannot create a tight loop. Timeout exit 2 means
+the child is still working and the event-driven wait should be renewed. Completion still
+requires a final repository and validation inspection by the source supervisor.
