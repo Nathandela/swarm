@@ -29,10 +29,21 @@ SWARM_HANDOFF_CONTEXT
 Re-read the document and correct omissions before launching. Then run exactly:
 
 ```sh
-child_id="$(swarm handoff --cli {{shellQuote .Target}}{{if .Model}} --model {{shellQuote .Model}}{{end}} --context-file "$handoff_file")"
+child_id="$(swarm handoff --cli {{shellQuote .Target}}{{if .Model}} --model {{shellQuote .Model}}{{end}} --supervision {{shellQuote .Supervision}} --context-file "$handoff_file")"
 printf 'handoff child: %s\n' "$child_id"
 ```
 
+{{if eq .Supervision "passive" -}}
+After launch: Stop editing the shared checkout. Finish this turn and wait. Swarm has registered passive supervision for the child and will start a new turn in this session by typing one message whenever the child needs attention. That message begins with `[swarm supervision <child>#<n>]` and names the child session id and its state; it never carries the child's output. On each such message:
+
+1. Run `swarm peek "$child_id"` to inspect the child.
+2. On a permission request, ask the human and never approve it yourself.
+3. On an ordinary question, answer only from the approved context with `swarm send "$child_id" --text "..."`.
+4. On `ready_for_review`, independently validate the work and send specific feedback with `swarm send "$child_id" --text "..."`.
+5. On `completed`, inspect the repository and validation evidence, then report the result and any remaining risk to the human.
+
+Do not poll the child and do not block this turn waiting for it: each attention event arrives as a fresh message. Keep the child session ID and use it for every peek and send command. Do not silently take over unresolved work or permission decisions.
+{{- else if eq .Supervision "manual" -}}
 After launch: Stop editing the shared checkout. You remain the supervisor until the receiving session is complete or the human explicitly releases you.
 
 Supervise with this event-driven cycle; do not poll continuously:
@@ -44,3 +55,6 @@ Supervise with this event-driven cycle; do not poll continuously:
 5. On `completed`, run a final `swarm peek "$child_id"`, inspect the repository and validation evidence, then report the result and any remaining risk to the human.
 
 Keep the child session ID and use it for every watch, peek, and send command. Do not silently take over unresolved work or permission decisions.
+{{- else -}}
+After launch: Stop editing the shared checkout. Report the child session id in `$child_id` to the human and stop; the human supervises the receiving session, and you steer it only when the human asks you to.
+{{- end}}

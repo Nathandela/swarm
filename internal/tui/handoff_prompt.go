@@ -17,17 +17,26 @@ var handoffSourceTemplate = template.Must(template.New("handoff-source").Funcs(t
 }).Parse(handoffSourcePrompt))
 
 type handoffPromptData struct {
-	Target string
-	Model  string
+	Target      string
+	Model       string
+	Supervision string
 }
 
 // renderHandoffPrompt produces the complete instruction sent to the selected source
-// session. Target and model are the only form-controlled values. The fixed template is
-// kept below the daemon's one-message input bound, and the rendered result is checked
-// again because a free-form model value can expand it.
-func renderHandoffPrompt(target, model string) (string, error) {
+// session. Target, model and supervision mode are the only form-controlled values; the
+// mode selects the supervision tail (ADR-010 Amendment 3 C1) and is checked against the
+// closed vocabulary here so the template never renders an unknown one. The fixed
+// template is kept below the daemon's one-message input bound, and the rendered result
+// is checked again because a free-form model value can expand it.
+func renderHandoffPrompt(target, model, supervision string) (string, error) {
+	switch supervision {
+	case protocol.SupervisionPassive, protocol.SupervisionManual, protocol.SupervisionNone:
+	default:
+		return "", fmt.Errorf("handoff prompt: unknown supervision mode %q", supervision)
+	}
 	var out strings.Builder
-	if err := handoffSourceTemplate.Execute(&out, handoffPromptData{Target: target, Model: model}); err != nil {
+	data := handoffPromptData{Target: target, Model: model, Supervision: supervision}
+	if err := handoffSourceTemplate.Execute(&out, data); err != nil {
 		return "", fmt.Errorf("render handoff prompt: %w", err)
 	}
 	prompt := out.String()

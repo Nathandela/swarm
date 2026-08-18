@@ -787,8 +787,18 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	}
 	tailText = clampCells(tailText, cols.summary)
 	tail := styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed) + tailText)
+	// Amber markers share one cell budget with the summary and take precedence over
+	// it: the summary yields, then the markers themselves clamp, so the row never
+	// exceeds the terminal.
+	var markers []string
 	if s.RemoteControlled {
-		marker := " " + remoteControlMarker
+		markers = append(markers, remoteControlMarker)
+	}
+	if s.SupervisionPending {
+		markers = append(markers, supervisionMarker(s, m.sessions))
+	}
+	if len(markers) > 0 {
+		marker := " " + strings.Join(markers, " ")
 		markerWidth := lipgloss.Width(marker)
 		if markerWidth > cols.summary {
 			marker = clampCells(marker, cols.summary)
@@ -882,6 +892,26 @@ func confirmPrompt(s protocol.SessionView) string {
 // deliberately out of scope -- the daemon answers a bare bool, and naming the device
 // needs a deviceID accessor plus a registry lookup that does not exist yet.
 const remoteControlMarker = "phone control"
+
+// supervisionPendingMarker and supervisionGoneMarker are the row's passive-supervision
+// words (ADR-010 Amendment 3 C3/C4): an attention event awaits delivery to the source,
+// or nobody will be woken because the source has left the roster or stopped running.
+const (
+	supervisionPendingMarker = "supervisor pending"
+	supervisionGoneMarker    = "supervisor gone"
+)
+
+// supervisionMarker picks the pending or gone word for a row whose supervision event
+// is undelivered. The source is matched the way lineageBadge matches parents:
+// SpawnedFrom carries the LOCAL id.
+func supervisionMarker(s protocol.SessionView, sessions []protocol.SessionView) string {
+	for _, o := range sessions {
+		if localID(o.ID) == s.SpawnedFrom && o.Status.Process == status.ProcessRunning {
+			return supervisionPendingMarker
+		}
+	}
+	return supervisionGoneMarker
+}
 
 // lineageBadge is the row's spawn-lineage decoration (ADR-010 D4): where a spawned
 // session came from, and whether it spawned any session currently on the roster.

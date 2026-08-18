@@ -12,28 +12,35 @@ import (
 )
 
 // handoffModel is the deliberately small source-side form. It captures the source
-// session by identity and exposes only the receiving CLI and its model. Launch scope,
-// permission bypasses, directories, prompts, and worktree choices do not belong here:
-// the source agent authors context and invokes the first-class CLI itself.
+// session by identity and exposes only the receiving CLI, its model, and the
+// supervision mode (ADR-010 Amendment 3 C1). Launch scope, permission bypasses,
+// directories, prompts, and worktree choices do not belong here: the source agent
+// authors context and invokes the first-class CLI itself.
 type handoffModel struct {
 	sourceID string
 
-	agents    []AgentInfo
-	targetIdx int
-	detected  bool
-	model     string
-	focus     int // 0 target, 1 model
+	agents      []AgentInfo
+	targetIdx   int
+	detected    bool
+	model       string
+	supervision string
+	focus       int // 0 target, 1 model, 2 supervision
 
 	errMsg string
 	width  int
 }
 
+// handoffSupervisionModes is the closed vocabulary the form cycles through, passive
+// first because it is the default.
+var handoffSupervisionModes = []string{protocol.SupervisionPassive, protocol.SupervisionManual, protocol.SupervisionNone}
+
 func newHandoffModel(source protocol.SessionView, agents []AgentInfo, detected bool, width int) handoffModel {
 	m := handoffModel{
-		sourceID: source.ID,
-		agents:   append([]AgentInfo(nil), agents...),
-		detected: detected,
-		width:    width,
+		sourceID:    source.ID,
+		agents:      append([]AgentInfo(nil), agents...),
+		detected:    detected,
+		supervision: protocol.SupervisionPassive,
+		width:       width,
 	}
 	m.targetIdx = firstUsableHandoff(m.agents)
 	m.loadModelDefault()
@@ -168,6 +175,11 @@ func (m *handoffModel) cycleModel(forward bool) {
 	m.errMsg = ""
 }
 
+func (m *handoffModel) cycleSupervision(forward bool) {
+	m.supervision = cycleValue(handoffSupervisionModes, m.supervision, forward)
+	m.errMsg = ""
+}
+
 func (m *handoffModel) paste(s string) {
 	if m.focus != 1 {
 		return
@@ -187,6 +199,7 @@ func (m handoffModel) view() string {
 	b.WriteString(m.clampLine(title) + "\n\n")
 	b.WriteString(m.fieldLine("target", m.targetValue(), m.focus == 0))
 	b.WriteString(m.fieldLine("model", m.modelValue(), m.focus == 1))
+	b.WriteString(m.fieldLine("supervision", m.supervisionValue(), m.focus == 2))
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.clampLine("  "+styleError.Render(m.errMsg)) + "\n")
 	}
@@ -236,9 +249,16 @@ func (m handoffModel) modelValue() string {
 	return value
 }
 
+func (m handoffModel) supervisionValue() string {
+	return styleDim.Render("◂ ") + styleAmber.Render(m.supervision) + styleDim.Render(" ▸")
+}
+
 func (m handoffModel) hint() string {
-	if m.focus == 0 {
+	switch m.focus {
+	case 0:
 		return "arrows change target · tab/↑↓ next · enter continue · esc cancel"
+	case 2:
+		return "arrows change supervision · tab/↑↓ next · enter continue · esc cancel"
 	}
 	if spec, ok := m.modelSpec(); ok && spec.Type == "string" {
 		return "type, paste, or use arrows · tab/↑↓ next · enter continue · esc cancel"
@@ -254,20 +274,18 @@ func (m rootModel) updateHandoff(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Code == tea.KeyEnter:
 		return m.submitHandoff()
 	case k.Code == tea.KeyTab || k.Code == tea.KeyDown:
-		h.focus = (h.focus + 1) % 2
+		h.focus = (h.focus + 1) % 3
 	case k.Code == tea.KeyUp:
-		h.focus = (h.focus + 1) % 2
-	case k.Code == tea.KeyLeft:
-		if h.focus == 0 {
-			h.cycleTarget(false)
-		} else {
-			h.cycleModel(false)
-		}
-	case k.Code == tea.KeyRight:
-		if h.focus == 0 {
-			h.cycleTarget(true)
-		} else {
-			h.cycleModel(true)
+		h.focus = (h.focus + 2) % 3
+	case k.Code == tea.KeyLeft, k.Code == tea.KeyRight:
+		forward := k.Code == tea.KeyRight
+		switch h.focus {
+		case 0:
+			h.cycleTarget(forward)
+		case 1:
+			h.cycleModel(forward)
+		default:
+			h.cycleSupervision(forward)
 		}
 	case k.Code == tea.KeyBackspace:
 		if h.focus == 1 {
@@ -300,7 +318,7 @@ func (m rootModel) submitHandoff() (tea.Model, tea.Cmd) {
 		h.errMsg = "no installed, supported target agent"
 		return m, nil
 	}
-	prompt, err := renderHandoffPrompt(h.targetName(), h.model)
+	prompt, err := renderHandoffPrompt(h.targetName(), h.model, h.supervision)
 	if err != nil {
 		h.errMsg = err.Error()
 		return m, nil
