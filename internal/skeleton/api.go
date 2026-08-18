@@ -128,6 +128,11 @@ type coreAPI struct {
 	// An atomic pointer, not a plain field: the poller goroutine starts in newCoreAPI,
 	// BEFORE the assembly can build the remote Server and wire this.
 	controlledFn atomic.Pointer[controlledFunc]
+	// supervisionPendingFn is the roster poller's source for a session's pending
+	// supervision event (ADR-010 Amendment 3 C5): live supervisor state, in the diff key
+	// for the same reason controlledFn is, and an atomic pointer for the same reason too
+	// (the supervisor is built after the poller starts).
+	supervisionPendingFn atomic.Pointer[controlledFunc]
 
 	// tap is the shared per-session output multiplexer (A7 F1). Attach routes through
 	// it so the owner controller and the future remote peek can both observe one
@@ -936,28 +941,50 @@ func (a *coreAPI) isControlled(local string) bool {
 	return false
 }
 
+// SetSupervisionPendingFunc registers the roster poller's supervision-pending source
+// (ADR-010 Amendment 3 C5). The assembly wires it to its supervisor's pending query,
+// beside the protocol Server's own registration. nil clears it; unset, no session is
+// ever reported pending.
+func (a *coreAPI) SetSupervisionPendingFunc(fn func(local string) bool) {
+	if fn == nil {
+		a.supervisionPendingFn.Store(nil)
+		return
+	}
+	f := controlledFunc(fn)
+	a.supervisionPendingFn.Store(&f)
+}
+
+// isSupervisionPending answers the registered source, false when none is registered.
+func (a *coreAPI) isSupervisionPending(local string) bool {
+	if p := a.supervisionPendingFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return false
+}
+
 // rosterSnap is the per-session change key the poller diffs on: the status the
 // board groups by, the display label (so a rename, which changes only the name,
-// fans out live just like a status change), and whether a paired device holds the
-// session's controller lease. All three fields are comparable, so the whole key
-// compares with ==.
+// fans out live just like a status change), whether a paired device holds the
+// session's controller lease, and whether a supervision event awaits the session's
+// source. All four fields are comparable, so the whole key compares with ==.
 //
-// controlled is the one key member that is NOT derived from persist.Meta: a remote
-// take_control changes nothing the core persists, so without it in the key a control
-// flip alone would fan out no event at all and the roster badge would appear only
-// when some unrelated status change happened to follow (ADR-008's 1s roster bound
-// would silently fail for that field).
+// controlled and supervisionPending are the key members that are NOT derived from
+// persist.Meta: a remote take_control or a supervisor's pending event changes nothing
+// the core persists, so without them in the key a flip alone would fan out no event
+// at all and the roster marker would appear only when some unrelated status change
+// happened to follow (ADR-008's 1s roster bound would silently fail for that field).
 type rosterSnap struct {
-	status     status.Status
-	name       string
-	controlled bool
+	status             status.Status
+	name               string
+	controlled         bool
+	supervisionPending bool
 }
 
 // watch samples the roster and emits a meta whenever a session's status, display
-// label OR remote-control state changes (the core exposes no push source, so changes
-// are observed by polling). It mirrors protocol.FromDaemon's watcher: dedup, retry a
-// momentarily-full queue on the next poll (never drop a change), and prune vanished
-// sessions so the seen map stays bounded.
+// label, remote-control OR supervision-pending state changes (the core exposes no push
+// source, so changes are observed by polling). It mirrors protocol.FromDaemon's
+// watcher: dedup, retry a momentarily-full queue on the next poll (never drop a
+// change), and prune vanished sessions so the seen map stays bounded.
 func (a *coreAPI) watch() {
 	defer a.wg.Done()
 	seen := map[string]rosterSnap{}
@@ -968,7 +995,7 @@ func (a *coreAPI) watch() {
 		present := map[string]struct{}{}
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
-			cur := rosterSnap{status: m.Status, name: m.Name, controlled: a.isControlled(m.ID)}
+			cur := rosterSnap{status: m.Status, name: m.Name, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID)}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

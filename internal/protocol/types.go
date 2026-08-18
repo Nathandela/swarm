@@ -172,6 +172,14 @@ const (
 	SpawnIntentDelegate = schema.SpawnIntentDelegate
 )
 
+// The closed supervision-mode vocabulary (ADR-010 Amendment 3 C1), re-exported for
+// the same reason.
+const (
+	SupervisionPassive = schema.SupervisionPassive
+	SupervisionManual  = schema.SupervisionManual
+	SupervisionNone    = schema.SupervisionNone
+)
+
 // The JSON message types are declared in the daemon-free subpackage schema and
 // aliased here, so every existing importer (and the GG-7 drift check, which
 // reflects them) sees exactly the same types. The split is PB-BIND-0: a Go

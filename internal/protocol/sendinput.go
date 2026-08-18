@@ -106,6 +106,23 @@ func (cc *clientConn) handleSendInput(c Control) {
 	cc.replyOK(c.SessionID)
 }
 
+// SendInput is the daemon-authored write seam ADR-010 Amendment 3 C3 gives the assembly's
+// supervisor: it types one message into the SOURCE session by LOCAL id, riding the SAME
+// serialized owner-tier path as a client send_input (validation, running check, then
+// sendMessage's atomicity, gap and bound), so a supervision notification is subject to
+// exactly the guarantees and limits a `swarm send` is. Every refusal precedes the first
+// byte -- and sendMessage already refuses once the Server is closed.
+func (s *Server) SendInput(local string, req SendInputReq) error {
+	frames, why := sendInputFrames(&req)
+	if why != "" {
+		return fmt.Errorf("send_input: %s", why)
+	}
+	if !s.sessionRunning(local) {
+		return fmt.Errorf("send_input: session %s is not running", strconv.Quote(local))
+	}
+	return s.sendMessage(local, frames)
+}
+
 // sendInputFrames validates one request and cuts it into the exact PTY writes the message
 // becomes, or returns why it is malformed (an empty reason means valid). EXACTLY ONE MODE
 // per request. Text is ONE frame — it is within MaxSendInputText, the bound the input path

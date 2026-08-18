@@ -52,6 +52,7 @@ type Meta struct {
 	ResumedFrom    string            `json:"resumed_from"`
 	SpawnedFrom    string            `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
 	SpawnIntent    string            `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
+	Supervision    string            `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
 }
 
 // Store is a session store rooted at a single state directory. The root and

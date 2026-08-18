@@ -176,6 +176,8 @@ alongside the group.
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
+| `supervision`   | string          | the persisted supervision mode of a handoff child: `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); absent when none |
+| `supervision_pending` | bool      | an attention event of this handoff child awaits its source; live supervisor state, sampled like `remote_controlled` (ADR-010 Amendment 3 C5); absent when false |
 | `capabilities`  | `*SessionCapabilities` | daemon-authored per-session capability record (ADR-017 T2), absent on an older daemon or a session not yet stamped -- see "The `SessionCapabilities` record" below. Shares its wire name with `Control.capabilities` (the hello negotiated-capability list); the two are unrelated fields of unrelated messages that happen to share a name, and the GG-7 drift check treats the key as documented once it has one row |
 
 ## The `LaunchReq` message
@@ -200,6 +202,7 @@ and unrelated secrets are dropped.
 | `worktree`       | bool                | opt into launch-time git-worktree isolation (Epic 12)      |
 | `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
 | `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
+| `supervision`    | string              | optional supervision mode, one of `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); refused unless `spawn_intent` is `handoff` |
 
 > AMENDED BY ADR-007 B144 (2026-08-15): `LaunchReq` above is the owner-tier form's request — free
 > `cwd`, `options`, `env`. B144's preset model arrives with the R1/R5 skeleton as a **separate**
@@ -393,7 +396,9 @@ frozen contract.
 The client sends `launch` with a `launch` request. After server-side revalidation
 the daemon launches the session and replies with `launch` carrying the new
 `session` view (whose `id` is the namespaced session id). On a rejected field the
-daemon replies with `error` and forwards nothing.
+daemon replies with `error` and forwards nothing. A `supervision` outside the closed
+vocabulary, or a non-empty one without `spawn_intent` `handoff`, is refused
+`invalid_field` before any daemon side effect (ADR-010 Amendment 3 C1).
 
 > AMENDED BY ADR-007 B144 (2026-08-15): `launch` above is owner-tier only. Phone launch is a
 > supported RCE-class action in the first complete product (B144, RC-D9): the remote-tier
@@ -704,7 +709,10 @@ input funnel every lease write uses. It never takes, bumps or supersedes the att
 lease — that is why it is a distinct op rather than a local control session, which
 would kick an attached human off mid-keystroke. It is **refused `not_authorized` on the
 remote tier**, before the session is resolved and before any authorization is consulted
-(mirroring `attach`): the remote tier keeps its own signed `take_control` lane.
+(mirroring `attach`): the remote tier keeps its own signed `take_control` lane. The
+daemon's supervision component authors its notifications to a source session through
+this same serialized path (ADR-010 Amendment 3 C3), so they carry every guarantee and
+bound below.
 
 The `send_input` payload (`SendInputReq`) carries `text`, `submit` and `key`, and names
 **exactly one mode** per request:
