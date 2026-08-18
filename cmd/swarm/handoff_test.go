@@ -301,7 +301,7 @@ func TestRunHandoff_SupervisionModeTravelsInLaunchReq(t *testing.T) {
 func TestRunHandoff_RefusesUnknownSupervisionMode(t *testing.T) {
 	contextPath := writeHandoffContext(t, "context\n")
 	t.Setenv(hookclient.EnvSessionID, "source-1")
-	for _, mode := range []string{"eager", "watch"} {
+	for _, mode := range []string{"eager", "watch", ""} {
 		t.Run(mode, func(t *testing.T) {
 			useTempStateDir(t)
 			c := newFakeSpawnClient()

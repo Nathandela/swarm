@@ -354,14 +354,12 @@ func TestHandoff_FormHasSupervisionAsThirdField(t *testing.T) {
 	if f := m.(rootModel).handoff.focus; f != 0 {
 		t.Fatalf("focus after three downs = %d, want 0", f)
 	}
-	// Up also cycles over all three fields (its direction is not pinned).
-	seen := map[int]bool{}
-	for i := 0; i < 3; i++ {
+	// Up moves backward like the launch form: from target it wraps to supervision.
+	for i, want := range []int{2, 1, 0} {
 		m = send(m, keyUp)
-		seen[m.(rootModel).handoff.focus] = true
-	}
-	if len(seen) != 3 || m.(rootModel).handoff.focus != 0 {
-		t.Fatalf("three ups visited %v and ended on %d, want all three fields and back to 0", seen, m.(rootModel).handoff.focus)
+		if f := m.(rootModel).handoff.focus; f != want {
+			t.Fatalf("focus after %d up(s) = %d, want %d", i+1, f, want)
+		}
 	}
 
 	// A detection refresh keeps the chosen mode, as it keeps target and model.

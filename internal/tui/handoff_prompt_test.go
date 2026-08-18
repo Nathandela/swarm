@@ -89,8 +89,8 @@ func TestRenderHandoffPrompt_ModeSpecificTails(t *testing.T) {
 		},
 		{
 			mode:      protocol.SupervisionNone,
-			want:      []string{`--supervision 'none'`, "report", "stop", "$child_id"},
-			forbidden: []string{"watch", "[swarm supervision", "--timeout"},
+			want:      []string{`--supervision 'none'`, "the human supervises", "$child_id"},
+			forbidden: []string{"watch", "[swarm supervision", "--timeout", "swarm peek", "swarm send"},
 		},
 	}
 	for _, tc := range cases {
@@ -124,9 +124,10 @@ func TestRenderHandoffPrompt_ModeSpecificTails(t *testing.T) {
 }
 
 func TestRenderHandoffPrompt_UnknownSupervisionRefused(t *testing.T) {
-	got, err := renderHandoffPrompt("claude", "opus", "eager")
-	if err == nil {
-		t.Fatalf("unknown supervision mode rendered a prompt:\n%s", got)
+	for _, mode := range []string{"eager", ""} {
+		if got, err := renderHandoffPrompt("claude", "opus", mode); err == nil {
+			t.Fatalf("supervision mode %q rendered a prompt:\n%s", mode, got)
+		}
 	}
 }
 
