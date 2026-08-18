@@ -510,6 +510,9 @@ func TestSupervisor_UnsafeSourceKeepsEventPending(t *testing.T) {
 	}{
 		{"source turn active", func(f *supFakes) { f.setStatus("src", stWorking) }, func(f *supFakes) { f.setStatus("src", stReady) }},
 		{"source at a permission dialog", func(f *supFakes) { f.setStatus("src", stPerm) }, func(f *supFakes) { f.setStatus("src", stReady) }},
+		// A source waiting on its own question (interaction prompt) would read the typed
+		// notification as the human's answer: the human answers first, then it is safe.
+		{"source waiting on a question", func(f *supFakes) { f.setStatus("src", stPrompt) }, func(f *supFakes) { f.setStatus("src", stReady) }},
 		{"source not running", func(f *supFakes) { f.setStatus("src", stExited) }, func(f *supFakes) { f.setStatus("src", stReady) }},
 		{"source under a controller lease", func(f *supFakes) { f.setControlled("src", true) }, func(f *supFakes) { f.setControlled("src", false) }},
 		{"source missing from the roster", func(f *supFakes) { f.remove("src") }, func(f *supFakes) { f.put(plainMeta("src", stReady)) }},
@@ -536,18 +539,6 @@ func TestSupervisor_UnsafeSourceKeepsEventPending(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestSupervisor_SourceAtAPromptIsSafe: a source whose turn is idle at an ordinary prompt
-// (needs_input via prompt, not permission) may be interrupted -- only a permission dialog
-// blocks delivery.
-func TestSupervisor_SourceAtAPromptIsSafe(t *testing.T) {
-	f, s, _ := armedPair(t)
-	f.setStatus("src", stPrompt)
-	s.signal("kid")
-	f.setStatus("kid", stPrompt)
-	s.signal("kid")
-	awaitDelivered(t, f, 1)
 }
 
 // TestSupervisor_RetryDeliversAfterControllerReleaseWithoutSignal: a human detach emits no
