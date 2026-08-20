@@ -180,11 +180,56 @@ class FacadeBridge(private val app: App) {
                     truncated = item.getTruncated(),
                     degraded = item.getDegraded(),
                     resolved = item.getResolved(),
+                    // Wave R6 (M2.2/M2.4): the additive facts the transcript renders per row.
+                    // Mapped here so they cross the boundary instead of dying one hop short of
+                    // the screen (android/gate/r6_chat_ui_test.go pins each getter).
+                    detail = item.getDetail(),
+                    toolKind = item.getToolKind(),
+                    turnId = item.getTurnID(),
+                    tsUnixMs = item.getTSUnixMs(),
+                    source = item.getSource(),
                 )
             },
             nextCursor = page.nextCursor(),
             stale = page.stale(),
         )
+    }
+
+    /**
+     * ADR-014 §2's honest floor: the machine has said that nothing older than this session's
+     * oldest folded item is still retained, so "load earlier" has nothing left to fetch.
+     *
+     * GUARDED, the way [pendingApproval] guards its own read and for the same reason: this is
+     * reached from [dev.swarm.phone.PhoneSurface]'s draw, which runs on the main looper on every
+     * journal event, and a refusal propagating out of a render would take the app down while the
+     * user watches an agent work. FALSE is the safe answer -- it offers the control, and a control
+     * that comes back empty is a smaller harm than a screen that cannot be drawn.
+     */
+    fun historyFloor(sessionId: String): Boolean = try {
+        app.historyFloor(sessionId)
+    } catch (refused: Exception) {
+        false
+    }
+
+    /**
+     * The OTHER end of the same control (Wave R6 review round 2): THIS PHONE could not hold the
+     * page the machine sent, so more history exists and this handset cannot show it.
+     *
+     * IT IS NOT [historyFloor] AND MUST NEVER BE COLLAPSED INTO IT. The floor is the machine's
+     * sentence -- "nothing older than this is retained" -- and a screen that dropped its control
+     * on THIS fact while showing the floor's silence would be telling the reader they had
+     * reached the beginning of a conversation that goes further back. What the phone's own bound
+     * replaces is worse than either: `insertLocked` put each page at the front and `trimLocked`
+     * evicted oldest-first, so at the retention bound a page landed and was evicted inside the
+     * same call and the user tapped forever with nothing moving.
+     *
+     * GUARDED for [historyFloor]'s reason, and FALSE is the safe answer here too: it goes on
+     * offering the control, which is a smaller harm than a screen that cannot be drawn.
+     */
+    fun historyAtCapacity(sessionId: String): Boolean = try {
+        app.historyAtCapacity(sessionId)
+    } catch (refused: Exception) {
+        false
     }
 
     /**

@@ -171,6 +171,18 @@ type App struct {
 	// the launch screen's only honest source for its tier-denied state. "" until the
 	// machine has answered one: the screens' first-run state, never a guess.
 	launchCapability string
+	// historyFloor is ADR-014 §2's retention floor per session, as the machine last stated
+	// it on an interaction_history reply: true once nothing older than the delivered page
+	// is retained. Absent (false) until a page has been read, which is the same state as
+	// "more exists" to the screen that reads it -- both mean "offer load earlier".
+	historyFloor map[string]bool
+	// historyCapped is the OTHER end of the same control: the phone could not hold the page
+	// the machine sent (phonecore.MaxBackfillPerSession), so there is more history and this
+	// handset cannot show it. It is kept apart from historyFloor deliberately -- they are
+	// two different sentences, one about the MACHINE's retention and one about the PHONE's,
+	// and a screen that collapsed them would tell a reader they had reached the beginning of
+	// a conversation that goes further back.
+	historyCapped map[string]bool
 	// resyncAt are the resync attempt times PER STREAM, the state §6.0's rate bound is
 	// enforced against. Per stream because a shared budget lets the two repairable channels
 	// starve each other, and one shared-bucket gap stales both at once.
@@ -487,6 +499,11 @@ func (a *App) UndeliveredInputs() (list *UndeliveredList, err error) {
 	defer barrier(&err)
 	if _, err = a.ready(); err != nil {
 		return nil, err
+	}
+	if a.coalesce == nil {
+		// An App assembled without the keystroke plane (a read-model harness) has, by
+		// construction, no undelivered input -- an honest empty ledger, not a panic.
+		return &UndeliveredList{}, nil
 	}
 	entries := a.coalesce.Undelivered()
 	out := &UndeliveredList{
@@ -1066,6 +1083,8 @@ func transcriptItem(it phonecore.Item) TranscriptItem {
 		Detail:    it.Detail,
 		Degraded:  it.Degraded,
 		Resolved:  it.Resolved,
+		ToolKind:  it.ToolKind,
+		Source:    it.Source,
 	}
 }
 
@@ -1387,6 +1406,12 @@ func (a *App) Outcome(operationID string) (out *Outcome, err error) {
 		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: Outcome requires an operation id"))
 	}
 	if ctrl, ok := core.Router().Replies().TakeFor(operationID); ok {
+		// Wave R6 fix-pack, ROUND 2: the moment an interaction_history /
+		// interaction_detail reply is TAKEN is the moment its records become the
+		// transcript -- and the only moment they can, because RecordOutcome below
+		// persists a verdict and drops the payload (a durable map nothing prunes is
+		// where a page of full item bodies must never be written).
+		a.adoptInteractionRead(ctrl)
 		_ = core.RecordOutcome(ctrl)
 	}
 	if ctrl, ok := core.State().OpOutcomes[operationID]; ok {

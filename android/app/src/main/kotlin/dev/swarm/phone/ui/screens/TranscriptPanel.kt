@@ -3,6 +3,9 @@ package dev.swarm.phone.ui.screens
 import dev.swarm.phone.ui.ApprovalItem
 import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.ItemFields
+import dev.swarm.phone.ui.kit.Markdown
+import dev.swarm.phone.ui.kit.MarkdownBlock
+import dev.swarm.phone.ui.kit.ToolCard
 
 /**
  * ADR-009-structured-chat-interaction (1) -- the chat transcript's SCREEN MODEL: what a session
@@ -64,6 +67,63 @@ data class TranscriptPanel(
     val blocks: List<TranscriptBlock>,
     /** PB-DS-9: what an empty section says, because an empty section is still a section. */
     val emptyCopy: String,
+    /**
+     * IS-ENV-1's OPEN turn (Wave R6, M2.4 / review finding B7, corrected in review round 2).
+     *
+     * BOTH HALVES OF THE RACE READ IT. `App.ComposerSend` and `App.Interrupt` each REQUIRE the
+     * turn the screen drew them against -- a tap lands later than it was rendered, and the daemon
+     * refuses `stale_turn` rather than typing into a turn nobody meant.
+     *
+     * **IT USED TO BE THE LATEST ITEM'S `turn_id`, AND THAT IS THE CLOSED TURN.** `turnIDLocked`
+     * reads the open turn, STAMPS it onto the terminal `agent_message`, and THEN deletes it -- so
+     * once a turn ends the last item still carries turn A while the daemon's current turn is the
+     * empty string, and protocol.md states the matching half in as many words: "an idle session
+     * is matched by the EMPTY expected_turn". The phone therefore named a turn that was over on
+     * every idle session, and `composerSend` refused `stale_turn` 100% of the time: the agent
+     * finishes, you read the answer, you reply from the phone, refused -- the ORDINARY path, and
+     * re-reading the transcript (the refusal's own stated remedy) could not change the answer.
+     *
+     * So this mirrors IS-ENV-1's rule instead of sampling a row: a turn OPENS on a `user_message`
+     * and CLOSES on any terminal `agent_message`. Empty means no turn is open -- an idle session
+     * -- which is the value the daemon matches, never a default this screen invented.
+     */
+    val latestTurnId: String = "",
+    /**
+     * The oldest item this phone holds for the session -- ADR-014's `before_item`.
+     *
+     * AN ITEM ID AND NEVER A CURSOR (IS-ENV-2). A daemon restart's reconciliation legitimately
+     * re-delivers the same items at new cursors, so a cursor-paged read would silently skip or
+     * repeat after one.
+     *
+     * AND NEVER A TEAR'S SYNTHETIC ID (review round 2). `applyStructuredGapLocked` mints
+     * `structured_gap:<ts>` for the boundary element finding B4 made first-class, and no producer
+     * ever put that id on an item: on the daemon `historyItemID` answers "" for every
+     * non-`interaction` record, so the boundary scan cannot match it and `interactionHistory`
+     * refuses `invalid_field`. It was reachable whenever the oldest element this phone held was a
+     * tear -- a reseed floor cutting just before a proven gap -- and PERMANENT once reached,
+     * because only a successful page could change which element is oldest. Empty means there is
+     * nothing this phone can name, and the control is not offered.
+     */
+    val oldestItemId: String = "",
+    /**
+     * Whether "load earlier" is worth offering: there is an item this phone can page BEFORE, the
+     * machine has not said that nothing older is retained (ADR-014 §2's honest floor), and this
+     * phone can still hold what a page would deliver. At any of those the control is DROPPED
+     * rather than greyed -- a tap that can only ever come back empty is the dead-chevron defect
+     * (agents-tracker-2yb) wearing a page.
+     */
+    val offersLoadEarlier: Boolean = false,
+    /**
+     * ADR-017 T2 rule 2: this session's structured record is PROVEN torn.
+     *
+     * IT IS READ OFF THE TRANSCRIPT because that is where the proof is. The daemon's degrade is
+     * one-way and durable, and the phone's only sight of it is the `structured_gap` element the
+     * daemon authored -- there is no capability read on this facade (Wave R6 disclosed residual,
+     * docs/verification/r6-chat.md). So a session holding a gap has no structured composer, and
+     * one whose gap the retention bound has since evicted gets the daemon's own
+     * `structured_unsupported` refusal instead, visibly.
+     */
+    val structureTorn: Boolean = false,
 )
 
 /**
@@ -114,6 +174,53 @@ data class TranscriptBlock(
      * running" without re-parsing the sentence the screen wrote for a human.
      */
     val running: Boolean = false,
+    /**
+     * M2.2's glyph: `ToolCard.glyphFor(tool_kind)`, or "" for a row that is not a tool call.
+     *
+     * IT IS ITS OWN FIELD AND NOT PART OF [line] for the reason [emphasis] is its own field: the
+     * sentence is copy, and a symbol inside copy is a symbol the recorded crossing pins byte for
+     * byte. `activityRow` draws it as a leading cell.
+     */
+    val glyph: String = "",
+    /**
+     * M2.2's timestamp, formatted by `ToolCard.timestampLabel` -- and EMPTY except at a turn
+     * boundary. See [turnStart]: a time on every row is the noise that makes a boundary invisible.
+     */
+    val timestamp: String = "",
+    /**
+     * `ToolCard.separatorBefore`: this row starts a new turn (IS-ENV-1).
+     *
+     * IT IS SPENT AS THE TIMESTAMP rather than as a rule across the column, and that is a design
+     * decision recorded rather than a shortcut: this app's kit has no divider component and
+     * minting one is a design act, while a time at the head of each turn is the separator every
+     * chat surface already uses -- and it spends `ts`, which M2.2 asks for in the same breath.
+     */
+    val turnStart: Boolean = false,
+    /**
+     * M2.1's parsed prose, for the kinds whose text IS markdown (`agent_message`). Empty
+     * everywhere else: a tool's target and a decision's verdict are wire values rather than
+     * prose, and running a parser over them would let a path containing `*` render as emphasis.
+     */
+    val markdown: List<MarkdownBlock> = emptyList(),
+    /**
+     * ADR-017 T2 rule 2's tear: this row IS the boundary, not a message across it.
+     *
+     * A tear must be able to be DRAWN. What this replaces was the neutral row, which printed the
+     * wire's kind name `structured_gap` at the reader -- a label for a machine -- and before
+     * finding B4 the record was dropped outright, so the rows either side of a PROVEN
+     * discontinuity were drawn adjacent with nothing between them.
+     */
+    val gap: Boolean = false,
+    /** M2.2: this card has a body worth hiding, so collapsing it is offered. */
+    val expandable: Boolean = false,
+    /** Whether it is open. Open is the default -- see [TranscriptScreen.of]'s `collapsed`. */
+    val expanded: Boolean = true,
+    /**
+     * IS-CAP-2/M3.3: the card is CLIPPED and the machine still holds the whole of it, so the
+     * fetch is honest to offer. False means there is nothing to fetch and the card must not
+     * promise one.
+     */
+    val offersDetail: Boolean = false,
 )
 
 /** The transcript, as a pure function over the items the phone holds. */
@@ -168,18 +275,101 @@ object TranscriptScreen {
     /** §4's one non-terminal status: the item is open and more records will follow. */
     private const val STATUS_IN_PROGRESS = "in_progress"
 
+    /**
+     * §4's three terminal statuses. They are here because IS-ENV-1's turn CLOSES on a terminal
+     * `agent_message` and this screen has to be able to say when one has -- see [openTurnOf].
+     */
+    private const val STATUS_COMPLETED = "completed"
+    private const val STATUS_FAILED = "failed"
+    private const val STATUS_DECLINED = "declined"
+
     /** The word a `tool_run` still `in_progress` leads its mono well with. See [TOOL_RUN]'s arm. */
     private const val RUNNING = "running"
 
-    fun of(items: List<InteractionItem>): TranscriptPanel = TranscriptPanel(
-        heading = HEADING,
+    /**
+     * @param collapsed the item ids the reader has SHUT (M2.2's expand/collapse).
+     *
+     *  OPEN IS THE DEFAULT, and that is a decision this file owes an argument for, because
+     *  `ToolCard`'s own KDoc says the opposite ("collapsed hides the well: a burst scans one line
+     *  each"). The recorded Claude Code crossing pins the tool run's captured output and the file
+     *  change's diff as the two mono blocks a real turn draws (TranscriptScreenGoldenTest), and a
+     *  collapsed default would silently stop drawing the first of them. Hiding what the machine
+     *  said by default is also the wrong side of this app's standing rule about absence: a reader
+     *  who has not asked for anything gets the whole record, and the collapse is theirs to spend.
+     * @param atFloor the machine has said nothing older than [TranscriptPanel.oldestItemId] is
+     *  retained (ADR-014 §2). False covers both "there is more" and "no page has been read yet",
+     *  which are the same state to a screen: offer the control.
+     */
+    fun of(
+        items: List<InteractionItem>,
+        collapsed: Set<String> = emptySet(),
+        atFloor: Boolean = false,
+        atCapacity: Boolean = false,
+        withoutDetail: Set<String> = emptySet(),
+    ): TranscriptPanel {
         // THE WIRE'S ORDER, KEPT. See the file KDoc: a conversation is read in the order it was
         // said, and `App.ReadTranscript` already walks the fold by ascending cursor.
-        blocks = items.map(::blockFor),
-        emptyCopy = EMPTY,
-    )
+        val blocks = items.mapIndexed { index, item ->
+            blockFor(
+                item,
+                previous = items.getOrNull(index - 1),
+                collapsed = collapsed,
+                withoutDetail = withoutDetail,
+            )
+        }
+        return TranscriptPanel(
+            heading = HEADING,
+            blocks = blocks,
+            emptyCopy = EMPTY,
+            // The turn the screen is DRAWING, which is what a send or a Stop tapped now is
+            // rendered against -- the OPEN one, by IS-ENV-1's own rule. See [latestTurnId].
+            latestTurnId = openTurnOf(items),
+            oldestItemId = pageableAnchorOf(items),
+            offersLoadEarlier = pageableAnchorOf(items).isNotEmpty() && !atFloor && !atCapacity,
+            // ADR-017's degrade is ONE-WAY, so ANY tear this phone still holds means the session
+            // has no structured composer -- not merely the latest one.
+            structureTorn = items.any { it.kind == STRUCTURED_GAP },
+        )
+    }
 
-    private fun blockFor(item: InteractionItem): TranscriptBlock {
+    /**
+     * IS-ENV-1's rule, mirrored: the turn that is OPEN over these items, or "" for an idle
+     * session. See [TranscriptPanel.latestTurnId] for why sampling the last row was wrong.
+     *
+     * IT IS THE DAEMON'S `turnIDLocked` LINE FOR LINE -- a `user_message` opens a turn, every
+     * item inside it carries that turn, and a terminal `agent_message` closes it -- because the
+     * value this produces is compared against that function's own state by the daemon, and two
+     * rules that were meant to agree are the thing that disagreed here.
+     */
+    private fun openTurnOf(items: List<InteractionItem>): String {
+        var open = ""
+        for (item in items) {
+            open = item.turnId
+            if (item.kind == AGENT_MESSAGE && terminal(item.status)) open = ""
+        }
+        return open
+    }
+
+    /** §4's three terminal statuses; `in_progress` is the only one that leaves an item running. */
+    private fun terminal(status: String): Boolean =
+        status == STATUS_COMPLETED || status == STATUS_FAILED || status == STATUS_DECLINED
+
+    /**
+     * The oldest element the DAEMON can match as a `before_item`, or "".
+     *
+     * A `structured_gap` is skipped rather than named: its id is minted by the phone from the
+     * boundary's emission instant, and no producer ever stamped it on an item. See
+     * [TranscriptPanel.oldestItemId].
+     */
+    private fun pageableAnchorOf(items: List<InteractionItem>): String =
+        items.firstOrNull { it.kind != STRUCTURED_GAP }?.itemId.orEmpty()
+
+    private fun blockFor(
+        item: InteractionItem,
+        previous: InteractionItem?,
+        collapsed: Set<String>,
+        withoutDetail: Set<String> = emptySet(),
+    ): TranscriptBlock {
         val fields = item.fields()
         val block = when (item.kind) {
             USER_MESSAGE -> TranscriptBlock(
@@ -204,11 +394,24 @@ object TranscriptScreen {
             // marked span" as a stated design rule, and a running mark on flowing text is a design
             // question -- what it looks like on a SENTENCE rather than on a tool's single line --
             // that this bead leaves to M2's card work rather than guessing at.
-            AGENT_MESSAGE -> TranscriptBlock(
-                itemId = item.itemId,
-                kind = item.kind,
-                line = item.text,
-            )
+            //
+            // AND SINCE WAVE R6 IT IS MARKDOWN (M2.1). The agent's text is markdown-shaped prose
+            // and was drawn with its markers in it, so a reader saw `**` and backticks rather
+            // than emphasis. The parse happens HERE and not in the view for the reason every
+            // other decision on this screen is here: what a message reads as is the model's, and
+            // the view's job is to give the blocks their type. The fence goes to the mono well
+            // rather than into the sentence -- column-aligned text inside a body-copy layout is
+            // silently re-wrapped, which misreports what the machine printed.
+            AGENT_MESSAGE -> {
+                val markdown = Markdown.parse(item.text)
+                TranscriptBlock(
+                    itemId = item.itemId,
+                    kind = item.kind,
+                    line = Markdown.plainText(markdown),
+                    markdown = markdown,
+                    well = Markdown.codeText(markdown),
+                )
+            }
 
             TOOL_RUN -> {
                 // agents-tracker-dwwv.1.2: the one place `status` (§4) is read at all. `RUNNING`
@@ -219,6 +422,16 @@ object TranscriptScreen {
                 // "You"'s precedent (see the file KDoc's three rules): the one word this row
                 // needs and the wire has none for.
                 val running = item.status == STATUS_IN_PROGRESS
+                val body = lines(if (running) RUNNING else "", fields.output, fields.marker)
+                // M2.2's card, decided by the kit MODEL and not re-derived here: the glyph comes
+                // off ONE flat field (IS-TOOL-1 forbids the phone parsing `tool` or the arguments
+                // to infer an action) and the expansion decides whether the well is drawn at all.
+                //
+                // `Model.well` IS DELIBERATELY NOT SPENT. It is the fold's `text` reconstruction,
+                // which is the right body for a message and empty for a tool call; §3.3's own
+                // `output_excerpt` and `truncation_marker` are this row's literal, and they are
+                // read through `fields` like every other per-kind value on this screen.
+                val card = ToolCard.modelFor(item, expanded = !collapsed.contains(item.itemId))
                 TranscriptBlock(
                     itemId = item.itemId,
                     kind = item.kind,
@@ -230,8 +443,17 @@ object TranscriptScreen {
                     // never claims to hold output it only saw a marker for. RUNNING leads when
                     // the item is still open, so a tool with no output yet still draws a well
                     // saying so, rather than the empty one PB-DS-9's rule already refuses.
-                    well = lines(if (running) RUNNING else "", fields.output, fields.marker),
+                    well = if (card.wellVisible) body else "",
                     running = running,
+                    glyph = card.glyph,
+                    expandable = body.isNotEmpty(),
+                    expanded = card.wellVisible,
+                    // ...unless the machine has already answered that the whole of this one is
+                    // gone (round 3, finding F4). `card.offersDetail` reads fields journalled at
+                    // CAPTURE time and cannot know that the daemon's bounded store has since
+                    // evicted the body; the phone can, once it has asked and been refused, and
+                    // an offer left standing over that answer invites a tap that can only fail.
+                    offersDetail = card.offersDetail && !withoutDetail.contains(item.itemId),
                 )
             }
 
@@ -276,9 +498,31 @@ object TranscriptScreen {
                 },
             )
 
+            // ADR-017 T2 rule 2's BOUNDARY, which is not one of §3's eight kinds and never came
+            // from a producer: the daemon authors it when a shim/daemon spool gap is PROVEN, and
+            // `phonecore` folds it into the transcript as its own element so that a client can
+            // draw it. Drawing it is this arm.
+            //
+            // IT MUST NOT FALL TO [neutral]. That row says the kind and stops, which here would
+            // print the literal `structured_gap` at a reader -- a label for a machine, in the one
+            // place where the reader needs a sentence. And the alternative the finding actually
+            // found was worse: with the record dropped, the rows either side of the tear were
+            // drawn ADJACENT, so the phone showed a continuous conversation across a boundary the
+            // daemon had proved was discontinuous. That is the silent bridge ADR-017 forbids.
+            STRUCTURED_GAP -> TranscriptBlock(
+                itemId = item.itemId,
+                kind = item.kind,
+                line = GAP_LINE,
+                // The machine's own reason, VERBATIM and in the mono register every other
+                // machine-authored literal on this screen takes (IS-TOOL-3's posture): it names a
+                // spool and a sequence number, which is diagnosis rather than copy.
+                well = item.text,
+                gap = true,
+            )
+
             else -> neutral(item)
         }
-        return marked(block, item)
+        return marked(block, item, previous)
     }
 
     /**
@@ -321,7 +565,11 @@ object TranscriptScreen {
      * renders as the neutral row rather than as a card with no words on it. A blank row is the one
      * outcome that tells the reader nothing at all.
      */
-    private fun marked(block: TranscriptBlock, item: InteractionItem): TranscriptBlock {
+    private fun marked(
+        block: TranscriptBlock,
+        item: InteractionItem,
+        previous: InteractionItem?,
+    ): TranscriptBlock {
         // THE FALLBACK KEEPS THE BLOCK AND REPLACES ONLY ITS WORDS. Rebuilding it as [neutral]
         // would drop what the kind decided about it -- an `approval_request` whose summary the
         // producer left empty would stop being answerable, which is the one property on this
@@ -330,7 +578,21 @@ object TranscriptScreen {
         var line = base.line
         if (item.truncated) line += CLIPPED
         if (item.degraded) line = joined(line, DEGRADED)
-        return base.copy(line = line, emphasis = spanIn(line, base.emphasis))
+        // M2.2's separator, applied here rather than in eight places for [marked]'s own reason:
+        // it is an ENVELOPE fact (§2's `ts`, IS-ENV-1's `turn_id`) and holds for every kind.
+        //
+        // THE HEAD OF THE TRANSCRIPT COUNTS TOO, and that is the one place this differs from
+        // `ToolCard.separatorBefore`, deliberately rather than by accident. That function answers
+        // "is there a RULE to draw between these two rows", and there is nothing above the first
+        // row to separate it from; the question here is "does this row head a turn", and the
+        // first one always does. The kit model stays the authority for every other pair.
+        val turnStart = previous == null || ToolCard.separatorBefore(previous, item)
+        return base.copy(
+            line = line,
+            emphasis = spanIn(line, base.emphasis),
+            turnStart = turnStart,
+            timestamp = if (turnStart) ToolCard.timestampLabel(item.tsUnixMs) else "",
+        )
     }
 
     /**
@@ -379,4 +641,24 @@ object TranscriptScreen {
     private const val APPROVAL_RESOLVED = "approval_resolved"
     private const val PLAN_UPDATE = "plan_update"
     private const val SESSION_STATUS = "session_status"
+
+    /**
+     * The NINTH element, which is not one of §3's kinds: `phonecore.KindStructuredGap`, the
+     * daemon's own proven boundary folded into the transcript (ADR-017 T2 rule 2).
+     */
+    private const val STRUCTURED_GAP = "structured_gap"
+
+    /**
+     * What the tear SAYS, which is the whole of why it is a kind of its own on this screen.
+     *
+     * THREE FACTS, IN THE ORDER A READER NEEDS THEM. That the record broke; that what the agent
+     * did across the break never arrived, so the rows either side are NOT consecutive; and that
+     * the phone's composer is gone for this session, because ADR-017's degrade is one-way and a
+     * session in terminal fallback has no message sink to put a phone-typed message into. The
+     * third is here rather than only beside the composer because this is where the reader is
+     * looking when they find out.
+     */
+    private const val GAP_LINE = "The structured record broke here. What the agent did across " +
+        "this break never reached this phone, so the rows above and below are not consecutive, " +
+        "and this session can no longer be typed into from the phone."
 }

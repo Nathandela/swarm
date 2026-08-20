@@ -95,9 +95,38 @@ func r1Ops() []r1Op {
 		// Implemented by Wave R5: the frame below (bodyless, subject-less) is refused
 		// invalid_field by the REAL handler once authorized and version-checked.
 		{"session_launch", OpSessionLaunch, ActionSessionLaunch, false, CodeInvalidField},
-		{"composer_send", OpComposerSend, ActionComposerSend, true, CodeNotImplemented},
+		// SUPERSESSION EXECUTED (Wave R6, pre-recorded in docs/verification/r6-red/
+		// chat-red.txt and in r6_composersend_test.go's header): this row read
+		//   {"composer_send", OpComposerSend, ActionComposerSend, true, CodeNotImplemented}
+		// while composer_send had only the refusal-only handler. The REAL handler
+		// (remote_chat.go handleComposerSend) refuses this same bodyless frame as
+		// STRUCTURAL -- CodeInvalidField, after the same authz + body-version gates --
+		// exactly as R5 retargeted session_launch. Every choke-point ordering assertion
+		// below is inherited unchanged.
+		{"composer_send", OpComposerSend, ActionComposerSend, true, CodeInvalidField},
 		{"operation_status", OpOperationStatus, ActionOperationStatus, false, CodeInvalidField},
-		{"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true, CodeNotImplemented},
+		// SUPERSESSION EXECUTED TWICE, and the second one changes the VALUE.
+		//
+		// R6 (first): this row read
+		//   {"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true, CodeNotImplemented}
+		// for the refusal-only handler, and the R6 slice kept the value on the reasoning
+		// that "turn_interrupt's frame below IS well-formed (the op has no body), so the
+		// retarget is the SEAM'S answer for this stub backend".
+		//
+		// R6 FIX-PACK (second, finding B7; recorded in docs/verification/r6-red/
+		// chat-red.txt): the premise "the op has no body" is gone. A probe showed a Stop
+		// rendered against turnA typing the cancel sequence into turnB -- in playbook §8.1,
+		// the turn the OWNER just started at the terminal, whose half-typed line the cancel
+		// key clears. turn_interrupt now carries (session, expected_turn), so the BODYLESS
+		// frame this table sends is no longer well-formed and is refused STRUCTURALLY,
+		// before the seam -- CodeInvalidField, after the same authz + body-version gates,
+		// which is exactly what composer_send's row two lines up asserts and why. Every
+		// choke-point ordering assertion below is inherited unchanged; the seam-absent
+		// CodeNotImplemented answer this row used to measure is still measured, by
+		// r6_turninterrupt_test.go's
+		// TestR6TurnInterrupt_ABackendWithoutTheSeamRefusesRatherThanPretending, which
+		// sends a WELL-FORMED frame and therefore reaches the seam.
+		{"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true, CodeInvalidField},
 		{"terminal_control_begin", OpTerminalControlBegin, ActionTerminalControlBegin, true, CodeNotImplemented},
 		{"terminal_control_end", OpTerminalControlEnd, ActionTerminalControlEnd, true, CodeNotImplemented},
 	}

@@ -1,10 +1,13 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import dev.swarm.phone.ui.kit.ComposerAvailability
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ctaStack
@@ -192,6 +195,33 @@ object DetailTag {
     /** Derivation row 9's bar: the field and the control that sends what is in it. */
     const val COMPOSER = "detail.composer"
 
+    /**
+     * What the screen says INSTEAD of the composer, for a session whose structured record tore
+     * (ADR-017 T2 rule 2, Mirror M2.4).
+     *
+     * IT IS ITS OWN TAG AND NOT A STATE ON [COMPOSER], which is exactly the point: the bar is
+     * absent, not disabled, so there is no composer to carry a state. A test that could only ask
+     * "is the composer disabled" would pass over the case where it is still there.
+     */
+    const val COMPOSER_ABSENT = "detail.composer.absent"
+
+    /**
+     * ADR-009 (6)'s visible per-send report: pending, sent, or refused with the gentle
+     * `stale_turn` wording. Above the bar, which is where every notice on this screen sits
+     * relative to what it qualifies.
+     */
+    const val COMPOSER_NOTICE = "detail.composer.notice"
+
+    /**
+     * The state of the send itself -- Sending / Sent / Not sent -- which is a SEPARATE line from
+     * [COMPOSER_NOTICE]'s remedy for the same reason [LEASE] and [LEASE_DETAIL] are separate: one
+     * is what happened and the other is what to do about it, and only the second is a refusal.
+     */
+    const val COMPOSER_STATE = "detail.composer.state"
+
+    /** ADR-014's "load earlier", at the TOP of the conversation it extends backwards. */
+    const val LOAD_EARLIER = "detail.transcript.earlier"
+
     /** PB-INPUT-2's "visibly", in row 22's component. */
     const val LEASE = "detail.lease"
 
@@ -272,6 +302,15 @@ fun sessionDetailView(
     outcome: String,
     onBack: () -> Unit,
     onApproval: ((String) -> Unit)? = null,
+    /**
+     * ADR-014's "load earlier" (Mirror M3.1). A SLOT for [resync]'s reason: it reaches a facade
+     * verb whose refusals route through PB-APP-9, and both of those belong to the surface. Null
+     * composes nothing at all -- the panel may offer the page while the caller has no control to
+     * put there, and a promise with no affordance is worse than neither.
+     */
+    loadEarlier: View? = null,
+    onToolTap: ((String) -> Unit)? = null,
+    onDetail: ((View, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -339,8 +378,18 @@ fun sessionDetailView(
     // THE CONVERSATION, WHICH IS THIS SCREEN'S SUBJECT NOW. It is `transcriptView`'s composition and
     // not a second one written here: the heading, the rows, the wells and row 8's empty state are
     // all its, and a screen that rebuilt them would be the copy §2's reuse rule exists to prevent.
+    // ADR-014's PAGE, ABOVE THE CONVERSATION IT EXTENDS. It goes here and not under the
+    // transcript for the same rule the notices follow: a control goes where what it acts on
+    // begins, and what this one acts on is the TOP of the conversation. It is dropped once the
+    // machine has declared the floor -- a tap that can only come back empty is the dead-chevron
+    // defect wearing a page (agents-tracker-2yb).
+    if (panel.offersLoadEarlier && loadEarlier != null) {
+        column.addView(loadEarlier.tagged(DetailTag.LOAD_EARLIER).screenAir())
+    }
+
     column.addView(
-        transcriptView(context, panel.transcript, onApproval).apply { tag = DetailTag.TRANSCRIPT },
+        transcriptView(context, panel.transcript, onApproval, onToolTap, onDetail)
+            .apply { tag = DetailTag.TRANSCRIPT },
     )
 
     // THE ANSWER, DIRECTLY UNDER THE QUESTION (agents-tracker-dwwv.2.4). The transcript's own
@@ -424,7 +473,34 @@ fun sessionDetailView(
     // 9 puts the composer at the bottom of the screen, and because everything above it is either
     // the conversation or a report about it: a control the user is reaching for must not be moved
     // by a notice arriving above it.
-    column.addView(composer.tagged(DetailTag.COMPOSER))
+    // ADR-009 (6)'s VISIBLE SEND, above the bar it reports on -- the same placement rule every
+    // other notice on this screen follows. It is the ERROR variant only for a refusal; a pending
+    // or delivered send is this screen reporting its own state, and painting that `--p-err` would
+    // report a refusal nobody made (see [outcome]'s own paragraph).
+    if (panel.composerStateLabel.isNotEmpty()) {
+        column.addView(
+            notice(context, panel.composerStateLabel).apply { tag = DetailTag.COMPOSER_STATE }
+                .screenAir(),
+        )
+    }
+    if (panel.composerNotice.isNotEmpty()) {
+        column.addView(
+            notice(context, panel.composerNotice, NoticeKind.ERROR)
+                .apply { tag = DetailTag.COMPOSER_NOTICE }
+                .screenAir(),
+        )
+    }
+    // ADR-017 T2 rule 2: a session with no message sink has NO COMPOSER, and says so where the
+    // composer would have been. Absent rather than disabled -- see [DetailTag.COMPOSER_ABSENT].
+    if (panel.composerAvailability == ComposerAvailability.ABSENT) {
+        column.addView(
+            notice(context, panel.composerAbsentNotice)
+                .apply { tag = DetailTag.COMPOSER_ABSENT }
+                .screenAir(),
+        )
+    } else {
+        column.addView(composer.tagged(DetailTag.COMPOSER))
+    }
     return column
 }
 
@@ -461,15 +537,157 @@ fun sessionDetailRedraw(
     drawn: SessionDetailPanel?,
     next: SessionDetailPanel,
     onApproval: ((String) -> Unit)? = null,
+    onToolTap: ((String) -> Unit)? = null,
+    onDetail: ((View, String) -> Unit)? = null,
 ): Boolean {
-    if (drawn == null || next != drawn.copy(transcript = next.transcript)) return false
+    if (drawn == null) return false
+    // THE FIELDS A NEW CONVERSATION MOVES ON ITS OWN, and no others. Wave R6 gave the panel four
+    // values derived from the transcript, and three of them are not COMPOSED into this column at
+    // all -- the placeholder is applied to a field the surface owns, the expected turn is read at
+    // press time, and the page's `before_item` is read at press time too -- so a difference in
+    // them can ride along with the rows. The fourth pair, `composerAvailability` and
+    // `offersLoadEarlier`, ADD OR REMOVE CHILDREN of this column, so they are deliberately left
+    // out: a patch that let them through would leave a composer over a torn session, or a "load
+    // earlier" control over a floor the machine has just declared.
+    val patchable = drawn.copy(
+        transcript = next.transcript,
+        composerPlaceholder = next.composerPlaceholder,
+        expectedTurn = next.expectedTurn,
+        loadEarlierBeforeItem = next.loadEarlierBeforeItem,
+    )
+    if (next != patchable) return false
     val slot = host.findViewWithTag<View>(DetailTag.TRANSCRIPT) as? ViewGroup ?: return false
-    slot.removeAllViews()
-    val rebuilt = transcriptView(slot.context, next.transcript, onApproval)
-    (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
-    slot.addView(rebuilt)
+    val list = slot.findViewWithTag<View>(TranscriptTag.LIST) as? ViewGroup
+    // Row 8's empty state is not a row container, so a conversation arriving at an empty screen
+    // (or leaving one) has no rows to mutate: that transition recomposes the block, which is the
+    // behaviour this patch had for every case before it learned to mutate.
+    if (list == null || drawn.transcript.blocks.isEmpty() || next.transcript.blocks.isEmpty()) {
+        slot.removeAllViews()
+        val rebuilt = transcriptView(slot.context, next.transcript, onApproval, onToolTap, onDetail)
+        (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
+        slot.addView(rebuilt)
+        return true
+    }
+    patchConversation(
+        list, drawn.transcript.blocks, next.transcript.blocks, onApproval, onToolTap, onDetail,
+    )
     return true
 }
+
+/**
+ * Mirror M2.3: apply the difference between two conversations to the rows ALREADY ON SCREEN.
+ *
+ * WHAT IT BUYS IS EVERY ROW THAT DID NOT CHANGE. A recomposition per journal event re-measures and
+ * re-antialiases every `TextView` in the column, so the conversation shimmers exactly while it is
+ * being read, and each row loses its selection, its accessibility focus and any touch in flight.
+ * `TranscriptIncremental` decides WHICH rows changed; this spends that decision.
+ *
+ * THE WALK IS BY BLOCK AND THE CONTAINER IS FLAT, so the two have to be kept in step: one block
+ * composes one row plus an optional well plus an optional detail offer, and
+ * `transcriptBlockViewCount` is the count that says how many. `current` is the list of blocks the
+ * container is showing AT THIS POINT IN THE WALK -- removals are applied first (which is why
+ * `reconcileBlocks` emits them first), so every later index names the same block in the list and
+ * the same run of views in the container.
+ */
+private fun patchConversation(
+    list: ViewGroup,
+    drawn: List<TranscriptBlock>,
+    next: List<TranscriptBlock>,
+    onApproval: ((String) -> Unit)?,
+    onToolTap: ((String) -> Unit)?,
+    onDetail: ((View, String) -> Unit)?,
+) {
+    val mutations = TranscriptIncremental.reconcileBlocks(drawn, next)
+    if (mutations.isEmpty()) return
+    val current = drawn.toMutableList()
+    val atBottom = listIsScrolledToBottom(list)
+
+    for (mutation in mutations) {
+        when (mutation) {
+            is BlockMutation.Remove -> {
+                val index = current.indexOfFirst { it.itemId == mutation.itemId }
+                if (index < 0) continue
+                removeRun(list, childOffsetOf(current, index, onDetail),
+                    transcriptBlockViewCount(current[index], onDetail))
+                current.removeAt(index)
+            }
+            is BlockMutation.Rebind -> {
+                if (mutation.index >= current.size) continue
+                val at = childOffsetOf(current, mutation.index, onDetail)
+                removeRun(list, at, transcriptBlockViewCount(current[mutation.index], onDetail))
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail)
+                current[mutation.index] = mutation.block
+            }
+            is BlockMutation.Insert -> {
+                val at = childOffsetOf(current, minOf(mutation.index, current.size), onDetail)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail)
+                current.add(minOf(mutation.index, current.size), mutation.block)
+            }
+        }
+    }
+
+    // M2.3's stick-to-bottom, and its whole point is the negative half: a reader who had scrolled
+    // UP is never yanked down by a burst, and a page of history arriving at the FRONT never
+    // scrolls at all -- which is why the predicate reads the insertion's own position rather than
+    // the fact that something arrived.
+    if (TranscriptIncremental.stickToBottom(atBottom, mutations)) {
+        val last = list.getChildAt(list.childCount - 1) ?: return
+        last.requestRectangleOnScreen(Rect(0, 0, last.width, last.height))
+    }
+}
+
+/** Where [index]'s views start in a flat container holding [blocks]. */
+private fun childOffsetOf(
+    blocks: List<TranscriptBlock>,
+    index: Int,
+    onDetail: ((View, String) -> Unit)?,
+): Int = blocks.take(index).sumOf { transcriptBlockViewCount(it, onDetail) }
+
+private fun removeRun(list: ViewGroup, at: Int, count: Int) {
+    repeat(count) { if (at < list.childCount) list.removeViewAt(at) }
+}
+
+private fun insertRun(
+    list: ViewGroup,
+    at: Int,
+    block: TranscriptBlock,
+    onApproval: ((String) -> Unit)?,
+    onToolTap: ((String) -> Unit)?,
+    onDetail: ((View, String) -> Unit)?,
+) {
+    transcriptBlockViews(list.context, block, onApproval, onToolTap, onDetail)
+        .forEachIndexed { offset, view -> list.addView(view, at + offset) }
+}
+
+/**
+ * Whether the reader is at the bottom of whatever scrolls above these rows.
+ *
+ * IT IS ASKED BEFORE THE MUTATION and not after, which is the whole of the fact being read: "was
+ * the reader following the conversation" is a question about the screen they were looking at, and
+ * inserting rows changes the answer. No scrolling ancestor means nothing scrolls, which is
+ * honestly "at the bottom": there is nowhere else to be.
+ */
+private fun listIsScrolledToBottom(list: View): Boolean {
+    var parent = list.parent
+    while (parent is View) {
+        if (parent is ScrollView) {
+            val content = parent.getChildAt(0) ?: return true
+            return parent.scrollY + parent.height >= content.height - SCROLL_BOTTOM_SLACK_PX
+        }
+        parent = parent.getParent()
+    }
+    return true
+}
+
+/**
+ * How far from the exact bottom still counts as "at the bottom", in raw pixels.
+ *
+ * IT IS NOT A DESIGN VALUE and is not in the ledger for that reason: nothing is drawn at this
+ * size and nothing is spaced by it. It is the tolerance on a comparison between a scroll offset
+ * and a content height, both of which move by a fraction of a pixel when a row re-measures, and
+ * an exact comparison would make "following the conversation" depend on rounding.
+ */
+private const val SCROLL_BOTTOM_SLACK_PX = 4
 
 /**
  * Tag a slot with the part it renders and detach it from whatever last held it.

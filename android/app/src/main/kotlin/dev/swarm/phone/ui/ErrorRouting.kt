@@ -46,6 +46,13 @@ object SwarmErrorTokens {
     const val REPAIR_REQUIRED: String = GoCustodyFailure.KEY_INVALIDATED_TOKEN
     const val REVOKED: String = "swarm/revoked"
     const val NEEDS_LEASE: String = "swarm/no-lease"
+
+    /**
+     * Wave R6 (IS-LIFE-5): the daemon refused a composer send because the conversation moved
+     * on between the phone rendering the turn and the tap landing. An ordinary race with a
+     * mild remedy -- re-read and send again, the draft retained -- never a bug report.
+     */
+    const val STALE_TURN: String = "swarm/stale-turn"
     const val RATE_LIMITED: String = "swarm/rate-limited"
     const val PAIRING_FAILED: String = "swarm/pairing-failed"
 
@@ -89,6 +96,7 @@ enum class ErrorState {
     REPAIR_REQUIRED,
     REVOKED,
     NEEDS_LEASE,
+    STALE_TURN,
     RATE_LIMITED,
     PAIRING_FAILED,
 
@@ -288,6 +296,14 @@ object ErrorRouter {
             "Your machine has not given this phone control of that session. Take control to " +
                 "type or to stop it; retrying is the one thing that cannot help.",
         ),
+        SwarmErrorTokens.STALE_TURN to RoutedError(
+            ErrorState.STALE_TURN, Remedy.REFRESH,
+            // Gentle by design (Mirror M2.4): the conversation moving on is ordinary, not an
+            // error, and the copy never claims the message went anywhere. The composer keeps
+            // the draft (ComposerModel.noticeFor's retainsDraft), so the remedy is one act.
+            "The conversation moved on before your message landed. Nothing was typed into the " +
+                "session; your draft is kept -- read the latest turn and press send again.",
+        ),
         SwarmErrorTokens.RATE_LIMITED to RoutedError(
             ErrorState.RATE_LIMITED, Remedy.WAIT_AND_RETRY,
             "Too many requests in a short window. Wait a moment before trying again.",
@@ -337,4 +353,83 @@ object ErrorRouter {
         }
         return outermost ?: checkNotNull(byToken[SwarmErrorTokens.UNKNOWN])
     }
+
+    /**
+     * The DAEMON's refusal codes, which are a second vocabulary (Wave R6 review round 2).
+     *
+     * [route] matches the FACADE's `swarm/...` tokens inside a thrown message. A machine
+     * refusal does not arrive that way: it arrives as `OperationOutcome.code`, in the daemon's
+     * own `schema.ErrorCode` spelling. Nothing translated between them, so `ErrorState.
+     * STALE_TURN` -- the one state Mirror M2.4 wrote gentle copy for -- had no producer at all:
+     * the composer could only reach it from a facade-local error that never carries that class.
+     *
+     * THE TABLE IS SMALL AND ITS DEFAULT IS [ErrorState.UNKNOWN] ON PURPOSE, which is [route]'s
+     * own reserved-row rule rather than a second decision: a code this build has never seen is
+     * not a network problem, and a plausible-looking neighbour would tell the user to wait out
+     * a fault waiting cannot fix. What keeps an unrecognised refusal legible is not this table
+     * but the machine's own words, which every caller renders verbatim in the detail cell
+     * beside the sentence (agents-tracker-ksvb.10's split).
+     */
+    fun routeMachineCode(code: String): RoutedError {
+        val unknown = checkNotNull(byToken[SwarmErrorTokens.UNKNOWN])
+        val token = MachineRefusalCodes.toToken[code] ?: return unknown
+        return byToken[token] ?: unknown
+    }
+}
+
+/**
+ * The daemon-side refusal codes this app translates, and nothing else it may.
+ *
+ * They are spelled here as literals for [SwarmErrorTokens]' reason exactly: the unit-test JVM
+ * does not load the AAR, so nothing can be read out of it. The authority is
+ * `internal/protocol/schema`; a code missing from this map is not a bug in the map, it is a
+ * code with no phone-side remedy, and [ErrorRouter.routeMachineCode] answers UNKNOWN for it.
+ */
+object MachineRefusalCodes {
+
+    /** `schema.CodeStaleTurn`: the conversation moved on between the render and the tap. */
+    const val STALE_TURN: String = "stale_turn"
+
+    /** `schema.CodeRateLimit`: the one refusal waiting actually fixes. */
+    const val RATE_LIMIT: String = "rate_limit"
+
+    /**
+     * `schema.CodeUnavailable`: the machine no longer holds what was asked for. On the M3 reads
+     * that means IS-CAP-3's answer for an evicted body -- and it is TERMINAL for that card.
+     *
+     * NAMED HERE, DELIBERATELY NOT IN [toToken] (Wave R6 review round 3, finding F4). It is a fact
+     * about ONE verb, so it is the screen's own sentence plus the machine's words -- see
+     * `SessionDetailScreen.detailReadNoticeFor`. It is spelled here rather than at the screen so
+     * the two places that must agree on the literal (the sentence and the withdrawal of the offer)
+     * read the same constant.
+     */
+    const val UNAVAILABLE: String = "unavailable"
+
+    /**
+     * `schema.CodeInvalidField`: the machine cannot look this id up at all. Also terminal for a
+     * card, also deliberately absent from [toToken] -- see [UNAVAILABLE].
+     */
+    const val INVALID_FIELD: String = "invalid_field"
+
+    /**
+     * The map, and it is TWO ROWS rather than a translation of the whole daemon vocabulary.
+     *
+     * `policy`, `structured_unsupported`, `interrupt_unsupported`, `unavailable`,
+     * `invalid_field`, `already_applied` and the rest are deliberately absent: each of them is a
+     * fact about ONE verb, and the honest rendering of one is the screen's own sentence for that
+     * verb plus the machine's words verbatim -- which is what `SessionDetailScreen` and
+     * `ApprovalSheetScreen` already do. Routing them through this table would replace a
+     * verb-specific sentence with a generic remedy, which reads as advice and is not.
+     *
+     * THE RULE HAS A COST WHEN A CALLER FORGETS IT (round 3, finding F4). The two M3 reads DID
+     * hand their code to [ErrorRouter.routeMachineCode], so `unavailable` and `invalid_field`
+     * -- absent from this map on purpose -- fell to `ErrorState.UNKNOWN` and a user tapping a
+     * clipped card whose body the daemon had evicted read "Something failed in a way the app does
+     * not recognise. Try again", advice for a retry that can never work. Absence from this map is
+     * an instruction to the SCREEN, not a licence to route anyway.
+     */
+    internal val toToken: Map<String, String> = mapOf(
+        STALE_TURN to SwarmErrorTokens.STALE_TURN,
+        RATE_LIMIT to SwarmErrorTokens.RATE_LIMITED,
+    )
 }

@@ -927,14 +927,59 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 		// every semantic op (Op == Action) -- only the daemon holds the device registry
 		// and the preset custody.
 		return protocol.OpLaunchPresets, nil
-	case protocol.ActionComposerSend, protocol.ActionOperationStatus,
-		protocol.ActionTurnInterrupt, protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
-		// The R1 refusal-ops vocabulary (Wave R1 skeleton, playbook §6.3): forwarded to the
-		// daemon like kill/delete/approve/push_prefs, Op == Action, never gateway-locally
-		// refused -- only the daemon holds the device registry requireRemoteAuthz
-		// authorizes against. (session_launch moved to its own arm above when Wave R5 gave
-		// it a body; operation_status carries only subject_operation_id and needs no body
-		// gate.) terminal_input / terminal_control_keepalive (ADR-017 T6) are
+	case protocol.ActionComposerSend:
+		// Wave R6: the real composer_send. launch/approve/session_launch's rule, inherited
+		// by the fourth body-carrying action: a composer_send whose body was stripped in
+		// transit is REFUSED here, never forwarded bodyless -- a zero body would reach the
+		// daemon as a send naming no text and surface to the user as some other refusal
+		// for a frame that merely lost its payload. The gateway stays a blind conduit for
+		// the body's CONTENT: integrity is the phone signature's job via
+		// ComposerSendContentHash, recomputed daemon-side.
+		if rc.ComposerSend == nil {
+			return "", errors.New("remotegw: composer_send command missing its composer body in-envelope")
+		}
+		return protocol.OpComposerSend, nil
+	case protocol.ActionTurnInterrupt:
+		// Wave R6 FIX-PACK B7: turn_interrupt WAS bodyless by design, and the design was
+		// wrong. Finding B7 proved that an interrupt carrying no turn coordinate types the
+		// cancel sequence into whatever turn is current when it ARRIVES -- in playbook
+		// §8.1, the turn the owner just started at the terminal, whose half-typed line the
+		// cancel key clears. The op now carries composer_send's own precondition, so it
+		// inherits composer_send's own body gate: a stripped body must never be forwarded,
+		// because a zero body is an interrupt naming no turn, which is exactly the frame
+		// this fix exists to make unspeakable.
+		if rc.TurnInterrupt == nil {
+			return "", errors.New("remotegw: turn_interrupt command missing its interrupt body in-envelope")
+		}
+		return protocol.OpTurnInterrupt, nil
+	case protocol.ActionInteractionHistory:
+		// Wave R6 FIX-PACK B6 (ADR-014 §1 named this route as accepted and it did not
+		// exist: a phone-issued read fell to the default arm below and was refused
+		// "unsupported command action"). An UNSIGNED read, forwarded to the daemon like
+		// every other op -- unlike terminal_watch and journal_resync it has no
+		// gateway-local plane to serve it from: the journal and the retained bodies live
+		// on the DAEMON. It carries no device signature, and the gates that apply are the
+		// daemon's own (negotiated `journal` capability + kill switch, fix-pack B2),
+		// exactly as for journal_read.
+		if rc.History == nil {
+			return "", errors.New("remotegw: interaction_history command missing its read body in-envelope")
+		}
+		return protocol.OpInteractionHistory, nil
+	case protocol.ActionInteractionDetail:
+		if rc.Detail == nil {
+			return "", errors.New("remotegw: interaction_detail command missing its read body in-envelope")
+		}
+		return protocol.OpInteractionDetail, nil
+	case protocol.ActionOperationStatus,
+		protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
+		// The remaining semantic ops: forwarded to the daemon like kill/delete/approve/
+		// push_prefs, Op == Action, never gateway-locally refused -- only the daemon holds
+		// the device registry requireRemoteAuthz authorizes against. (session_launch and
+		// composer_send moved to their own arms above when R5/R6 gave each a body, and
+		// turn_interrupt joined them in the R6 fix-pack when finding B7 proved that a Stop
+		// with no turn coordinate is not a Stop; operation_status carries only
+		// subject_operation_id and needs no body gate.)
+		// terminal_input / terminal_control_keepalive (ADR-017 T6) are
 		// deliberately NOT added here: they ride only the E2EE frame's own sender/sequence
 		// and a confirmed control generation, never a signed action, so they fall to the
 		// default arm's generic refusal below exactly like any other unrecognised action.

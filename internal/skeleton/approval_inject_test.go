@@ -85,12 +85,20 @@ var (
 // carry no Enter (each selects and submits on its own), so a caller wanting the second paint
 // flushes the line discipline itself -- `injectRig.readBack`'s bare newline, or an owner
 // attachment's Input. Every grid must be the same size: the PTY is sized once.
+//
+// AFTER THE GRIDS, THE FAKE KEEPS READING (Wave R6): a real CLI reads prompt after prompt,
+// so the script ends with a few BARE `ask` steps -- same parked cursor, NO repaint -- before
+// the idle. Without them the fake went deaf after its first report, and any test driving a
+// SECOND line into the session (the composer race test's accepted send after a readBack)
+// could never observe it land. Bare asks paint nothing, so every grid-recognition and
+// watchdog assertion sees exactly the screen it saw before.
 func gridScript(t *testing.T, gs ...recordedGrid) (script string, cols, rows int) {
 	t.Helper()
 	if len(gs) == 0 {
 		t.Fatal("gridScript needs at least one recorded grid to paint")
 	}
 	var b strings.Builder
+	var park string
 	for _, g := range gs {
 		raw, err := os.ReadFile(filepath.Join(permDialogFixtures, g.fixture+".snap.json"))
 		if err != nil {
@@ -109,7 +117,11 @@ func gridScript(t *testing.T, gs ...recordedGrid) (script string, cols, rows int
 				g.fixture, snap.Cols, snap.Rows, cols, rows)
 		}
 		cols, rows = snap.Cols, snap.Rows
-		b.WriteString("print " + string(ansi) + "\nask \x1b[" + strconv.Itoa(snap.Rows) + ";1H\n")
+		park = "\x1b[" + strconv.Itoa(snap.Rows) + ";1H"
+		b.WriteString("print " + string(ansi) + "\nask " + park + "\n")
+	}
+	for i := 0; i < 4; i++ {
+		b.WriteString("ask " + park + "\n")
 	}
 	b.WriteString("idle 600s\n")
 	return b.String(), cols, rows

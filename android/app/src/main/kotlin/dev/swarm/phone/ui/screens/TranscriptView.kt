@@ -4,9 +4,12 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
+import dev.swarm.phone.ui.kit.markdownBody
 import dev.swarm.phone.ui.kit.monoWell
+import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
@@ -75,6 +78,33 @@ object TranscriptTag {
 
     /** Row 8's block, under a heading whose session has said nothing yet. */
     const val EMPTY = "transcript.empty"
+
+    /**
+     * `.prows` -- the container the blocks sit in.
+     *
+     * IT IS TAGGED SO THAT A PATCH CAN FIND IT (Mirror M2.3). `sessionDetailRedraw` mutates the
+     * rows in place rather than recomposing the column, and the container is what it mutates; a
+     * child index would start meaning something else the day the heading gains a sibling.
+     */
+    const val LIST = "transcript.list"
+
+    /**
+     * ADR-017 T2 rule 2's proven boundary (Wave R6).
+     *
+     * ITS OWN TAG AND ITS OWN COMPONENT, for [APPROVAL]'s reason at its sharpest: the tear is the
+     * one element on this screen that is not something the agent said, and a single tag over it
+     * and the conversation would let a test find either and assert the other. It is `notice` at
+     * the ERROR variant rather than `activityRow`, which is §4's own split -- the machine is the
+     * one talking, and the sentence is about the RECORD rather than about the work.
+     */
+    const val GAP = "transcript.gap"
+
+    /**
+     * IS-CAP-2/M3.3's offer: the full pre-truncation body this card was clipped from, which the
+     * machine still holds. Its own tag because it is the one control in the conversation that
+     * reaches the wire, and a test must be able to find it without finding a row.
+     */
+    const val DETAIL = "transcript.detail"
 }
 
 /**
@@ -94,6 +124,8 @@ fun transcriptView(
     context: Context,
     panel: TranscriptPanel,
     onApproval: ((String) -> Unit)? = null,
+    onToolTap: ((String) -> Unit)? = null,
+    onDetail: ((View, String) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -117,29 +149,91 @@ fun transcriptView(
 
     column.addView(
         sessionList(context).apply {
+            tag = TranscriptTag.LIST
             panel.blocks.forEach { block ->
-                addView(rowFor(context, block, onApproval))
-                // AND THE WELL IS A SIBLING RATHER THAN A CHILD OF THE ROW. `activityRow` is a
-                // sentence with an optional marked span; a factory that also took a block of mono
-                // would be a second component wearing the first one's name. The container's own
-                // gap is what puts them together, which is the same arrangement every other pair
-                // of stacked cards in this app gets.
-                if (block.well.isNotEmpty()) {
-                    // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a unified diff or a
-                    // tool's stdout is exactly the column-aligned text `setHorizontallyScrolling`
-                    // refuses to wrap, and a line past this card's own width was silently
-                    // clipped with nothing below it wide enough to reach the rest.
-                    addView(
-                        monoWell(context, block.well)
-                            .apply { tag = TranscriptTag.WELL }
-                            .scrolledHorizontally(),
-                    )
-                }
+                transcriptBlockViews(context, block, onApproval, onToolTap, onDetail)
+                    .forEach(::addView)
             }
         },
     )
     return column
 }
+
+/**
+ * The views ONE block composes, in order: its row (or its tear), its mono well, its detail offer.
+ *
+ * IT IS A FUNCTION AND NOT A LOOP BODY because `sessionDetailRedraw` composes exactly one block at
+ * a time when it patches the conversation in place (Mirror M2.3). A patch that rebuilt the rows
+ * from its own copy of this arrangement would be a second statement of what a block looks like,
+ * and the two would drift the first time a block gained a part.
+ *
+ * A BLOCK IS SEVERAL SIBLINGS AND NOT ONE CONTAINER. `activityRow` is a sentence with an optional
+ * marked span; a factory that also took a block of mono would be a second component wearing the
+ * first one's name, and wrapping the pair in a group of this file's own would spend a gap the
+ * container already spends. So `sessionList`'s own gap is what puts them together -- which is the
+ * arrangement every other pair of stacked cards in this app gets.
+ */
+internal fun transcriptBlockViews(
+    context: Context,
+    block: TranscriptBlock,
+    onApproval: ((String) -> Unit)? = null,
+    onToolTap: ((String) -> Unit)? = null,
+    onDetail: ((View, String) -> Unit)? = null,
+): List<View> {
+    val views = mutableListOf<View>()
+    // THE TEAR IS NOT A ROW, and that is ADR-017's requirement landing on a screen. A
+    // `structured_gap` drawn as an `activityRow` would be one more thing in the conversation, in
+    // the same card, in the same ink, at the same rhythm -- which is how a proven discontinuity
+    // ends up reading as something the agent said. `notice(ERROR)` is §4's variant for the machine
+    // talking about its own state, the register the stale mark and the refusal line already take.
+    views.add(
+        if (block.gap) {
+            notice(context, block.line, NoticeKind.ERROR).apply { tag = TranscriptTag.GAP }
+        } else {
+            rowFor(context, block, onApproval, onToolTap)
+        },
+    )
+    if (block.well.isNotEmpty()) {
+        // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a unified diff or a tool's stdout is
+        // exactly the column-aligned text `setHorizontallyScrolling` refuses to wrap, and a line
+        // past this card's own width was silently clipped with nothing below it wide enough to
+        // reach the rest.
+        views.add(
+            monoWell(context, block.well)
+                .apply { tag = TranscriptTag.WELL }
+                .scrolledHorizontally(),
+        )
+    }
+    // IS-CAP-2's OFFER, UNDER THE CLIPPED THING IT IS ABOUT (M3.3). It is a sentence the reader
+    // taps rather than a button, on this file's own standing rule about the surface: the
+    // conversation's controls are its rows, and a second button register inside a chat column
+    // would compete with the one control this screen reserves for a decision. No destination, no
+    // tap -- `onApproval`'s ruling, which is `navHeaderDrill(back = null)`'s one component over.
+    if (block.offersDetail && onDetail != null) {
+        views.add(
+            notice(context, DETAIL_OFFER).apply {
+                tag = TranscriptTag.DETAIL
+                // THE TAPPED VIEW RIDES WITH THE ID, which is `VerbDispatch.press`'s whole
+                // contract: the control it is handed is disabled while the press is crossing, so
+                // a tap that has been made does not look untapped. Handing it the screen's
+                // container instead would disable the conversation.
+                setOnClickListener { view -> onDetail(view, block.itemId) }
+            },
+        )
+    }
+    return views
+}
+
+/**
+ * How many siblings [transcriptBlockViews] composes for [block]. Kept HERE, immediately beside the
+ * composition, because it is the same statement counted rather than built: a patch that walks the
+ * container needs to know where one block's views end and the next block's begin, and a count
+ * living anywhere else would drift the first time a block gained a part.
+ */
+internal fun transcriptBlockViewCount(block: TranscriptBlock, onDetail: ((View, String) -> Unit)?): Int =
+    1 +
+        (if (block.well.isNotEmpty()) 1 else 0) +
+        (if (block.offersDetail && onDetail != null) 1 else 0)
 
 /**
  * One block's row, and the one place a listener is attached.
@@ -152,15 +246,34 @@ private fun rowFor(
     context: Context,
     block: TranscriptBlock,
     onApproval: ((String) -> Unit)?,
+    onToolTap: ((String) -> Unit)?,
 ): View = activityRow(
     context = context,
-    body = block.line,
+    // M2.1: the prose the model already flattened, given its type here. `markdownBody` styles
+    // exactly the string the model decided the row reads as -- passed in rather than recomputed,
+    // so a span can never land at an offset naming different words -- and a block with no
+    // markdown (every kind but `agent_message`) is handed its line unchanged.
+    body = if (block.markdown.isEmpty()) {
+        block.line
+    } else {
+        markdownBody(context, block.markdown, block.line)
+    },
     emphasis = block.emphasis,
+    // M2.2's separator, spent as the head-of-turn time. Absent everywhere else, which is what
+    // makes the boundary legible: `activityRow`'s cell costs nothing when it is null.
+    timestamp = block.timestamp.ifEmpty { null },
+    // M2.2's glyph, read from ONE flat field by the kit's card model.
+    glyph = block.glyph.ifEmpty { null },
 ).apply {
     if (!block.approval) {
         // agents-tracker-dwwv.1.2: a still-running tool_run is its own tag, same reasoning as
         // APPROVAL below -- see [TranscriptTag.RUNNING].
         tag = if (block.running) TranscriptTag.RUNNING else TranscriptTag.BLOCK
+        // M2.2's expand/collapse: the whole row is the target, which is this file's standing
+        // rule ("a tap target smaller than the thing it belongs to is the shape a reader misses
+        // on a moving surface"). A card with nothing to hide is not clickable at all, so a row
+        // that cannot collapse never looks like one that can.
+        if (block.expandable) onToolTap?.let { toggle -> setOnClickListener { toggle(block.itemId) } }
         return@apply
     }
     tag = TranscriptTag.APPROVAL
@@ -168,6 +281,12 @@ private fun rowFor(
     // what makes a view clickable, so NOT setting one is the whole of not offering the tap.
     onApproval?.let { open -> setOnClickListener { open(block.itemId) } }
 }
+
+/**
+ * What the clipped card's offer SAYS. It is copy, so it is here rather than in the kit (PB-DS-9),
+ * and it names the ACTION and its cost: the bytes are on the machine and this asks for them.
+ */
+private const val DETAIL_OFFER = "This was clipped. Tap to fetch the whole of it from your machine."
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

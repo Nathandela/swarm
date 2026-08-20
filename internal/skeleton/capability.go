@@ -24,13 +24,16 @@ package skeleton
 // their own RED+GREEN slice since they change what the existing capability-record tests
 // pin.
 //
-// interrupt is left at its zero value (false) for every adapter: nothing in
-// internal/adapter exposes a LifecycleSink-style interrupt seam to consult, so there is
-// nothing to derive it from. T6's own closing paragraph gives the honest default for an
-// unset record: "This provider version has no safe remote interrupt." Guessing interrupt
-// from structured_chat would assert a capability no seam proves, which is exactly what T2
-// rule 3 ("the phone renders from the record and infers nothing") forbids one layer up.
-// Tracked in bd agents-tracker-hggx.2.1 alongside the LifecycleSink seam itself.
+// interrupt is derived from adapter.AsTurnInterrupter (Wave R6, Mirror M2.4). The note
+// that stood here -- "interrupt is left at its zero value (false) for every adapter:
+// nothing in internal/adapter exposes a LifecycleSink-style interrupt seam to consult, so
+// there is nothing to derive it from" -- was the honest state of a deferral this wave
+// discharged: the seam now exists (adapter.TurnInterrupter, proven by claude, absent on
+// every other adapter), the daemon's InterruptTurn executes exactly its declared data,
+// and the capability record derives Interrupt from the SAME seam -- true where a seam is
+// proven, false where none is, never guessed from structured_chat (T2 rule 3's "the phone
+// renders from the record and infers nothing" still governs; the record just finally has
+// a fact to carry). r6_interruptapply_test.go is the pin.
 
 import (
 	"encoding/json"
@@ -218,6 +221,29 @@ func (d *Daemon) sessionDegradedLocked(sessionID string) bool {
 	return err == nil
 }
 
+// sessionDegraded reports whether a structured gap has been PROVEN for sessionID, reading
+// the durable marker directly rather than through the capability record.
+//
+// IT READS THE MARKER AND NOT THE RECORD BECAUSE IN PRODUCTION THERE IS NO RECORD.
+// registerSessionCapabilities has no production caller today -- it and
+// deriveSessionCapabilities are reached only from tests -- so sessionCapabilities answers
+// ok=false for every live session, and lookupCapabilitiesLocked's marker application (which
+// only runs when a record EXISTS) never fires. markSessionDegraded, by contrast, IS wired:
+// hookdrain.go calls it on a proven gap, and its own comment records that with no record
+// authored "the marker above is the whole degrade". So the marker is the only
+// production-reachable proof of a degrade, and a gate that consulted the record alone would
+// be a gate that never fires -- which is exactly the shape review finding B3 is about.
+//
+// (That registerSessionCapabilities is unwired is a SEPARATE, pre-existing gap: ADR-017 T2
+// rule 3's "the phone renders from the capability record" has no record to render from. It
+// is disclosed in docs/verification/r6-chat.md rather than closed here -- wiring the
+// derivation into session launch is a capability-publication slice, not a chat fix.)
+func (d *Daemon) sessionDegraded(sessionID string) bool {
+	d.capStore.mu.Lock()
+	defer d.capStore.mu.Unlock()
+	return d.sessionDegradedLocked(sessionID)
+}
+
 // markSessionDegraded durably records that sessionID proved a structured gap, then
 // degrades its stored record if one exists. One-way and idempotent: calling it on an
 // already-degraded session changes nothing.
@@ -306,13 +332,17 @@ func (d *Daemon) persistSessionCapabilitiesLocked(sessionID string, c protocol.S
 // adapter revision that produced the record; both are carried through verbatim.
 func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersion, adapterRevision string) protocol.SessionCapabilities {
 	_, structured := adapter.AsInteractionSource(a)
+	// Wave R6 (ADR-017 T2 rule 3): Interrupt is derived from the SAME seam InterruptTurn
+	// executes, so the Stop affordance the phone renders and the op behind it agree by
+	// construction -- true where a TurnInterrupter is proven, false where none is, never
+	// inferred from structured_chat.
+	_, interrupt := adapter.AsTurnInterrupter(a)
 	return protocol.SessionCapabilities{
 		Provider:         provider,
 		ProviderVersion:  providerVersion,
 		AdapterRevision:  adapterRevision,
 		StructuredChat:   structured,
 		TerminalFallback: !structured,
-		// Interrupt stays false (zero value): no LifecycleSink seam exists to derive it
-		// from. See the package doc above and bd agents-tracker-hggx.2.1.
+		Interrupt:        interrupt,
 	}
 }

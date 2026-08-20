@@ -11,6 +11,9 @@ files are `docs/verification/fixtures/spike-sb/*.json` and `cmp` reports them id
 | `claude-bash-pretooluse-no-escalation.json` | `docs/verification/fixtures/spike-sb/claude-bash-pretooluse-no-escalation.json` | copied | a Bash call that never escalated: `UserPromptSubmit` -> `PreToolUse` -> `PostToolUse` with real `tool_response.stdout`, plus a second prompt in the same session |
 | `claude-bash-permissionrequest-run1.json` | `docs/verification/fixtures/spike-sb/claude-bash-permissionrequest-run1.json` | copied | the ONE genuine Bash `PermissionRequest` S-B captured — and it is a Bash-with-a-file-path, so it is spike S-C's carve-out (`mode: prompt_card`). Its `pty_capture` holds the real on-screen dialog the keystroke map is read off. |
 | `claude-edit-permissionrequest-run1.json` | `docs/verification/fixtures/spike-sb/claude-edit-permissionrequest-run1.json` | copied | a Read tool run, an Edit `PermissionRequest` (native `mode: card`), and the `tool_response.structuredPatch` that becomes a `file_change` |
+| `claude-grep-pretooluse.json` | `docs/verification/fixtures/r6-chat/claude-grep-pretooluse.json` | copied | Wave R6 (M2.2): a real Grep call — `tool_input.pattern` carries the pattern (plus `output_mode`), grounding §7's `search` arm for Grep |
+| `claude-glob-pretooluse.json` | `docs/verification/fixtures/r6-chat/claude-glob-pretooluse.json` | copied | Wave R6 (M2.2): a real Glob call — `tool_input.pattern` carries the filename pattern, grounding §7's `search` arm for Glob |
+| `claude-webfetch-pretooluse.json` | `docs/verification/fixtures/r6-chat/claude-webfetch-pretooluse.json` | copied | Wave R6 (M2.2): a real WebFetch call — `tool_input.url` carries the URL (plus `prompt`), grounding §7's `fetch` arm and the fetch target-field ruling (`query` carries the URL) |
 
 The **Provenance** column is BEAD nq0q's fence's own input (`internal/adapter/claude/provenance_test.go`):
 `copied` rows are asserted sha256-identical to their declared Source; a `reconstructed` row (none
@@ -51,7 +54,15 @@ payload away from being supported, and none is guessed at meanwhile (IS-TOOL-2's
   section. Follow-up: `agents-tracker-hgyg`.
 - **A `Write` `PostToolUse`** — S-B captured Write's `PreToolUse` (`file_path`/`content`) only, so
   whether Write's response carries a `structuredPatch` is unobserved.
-- **`Grep`/`Glob`/`WebFetch` `tool_input`** — never captured, so §7's `search` and `fetch` action
-  types have no evidenced key to read and those calls classify as `other`.
+- ~~**`Grep`/`Glob`/`WebFetch` `tool_input`** — never captured~~ — CAPTURED by Wave R6
+  (2026-08-19, the three `claude-*-pretooluse.json` rows above): real `claude` 2.1.214
+  (the npm-distributed native binary, same version as this corpus' S-B three; the
+  machine-installed 2.1.235 preview no longer offers Grep/Glob in its toolset at all —
+  verified live, `ToolSearch` reports no such deferred tool and the model answers by Bash)
+  driven through the actual `swarm-char` binary — real PTY, real hook sink, `-p` print
+  mode, `--settings` denying Bash so the model exercises the three tools themselves,
+  `--setting-sources ""`. The recording rig (relay + settings) is copied beside the
+  fixtures under `docs/verification/fixtures/r6-chat/`. §7's `search` and `fetch` arms now
+  read the RECORDED keys: `pattern` for Grep/Glob, `url` for WebFetch.
 - **An exit code, a non-empty `stderr`, or an `interrupted: true` tool response** — the shapes
   exist in the recorded `tool_response` objects but only ever with benign values.

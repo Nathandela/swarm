@@ -1159,7 +1159,9 @@ func (cc *clientConn) handleControl(c Control) {
 		// derived from the wire c.SessionID.
 		cc.handleSessionLaunch(c)
 	case OpComposerSend:
-		cc.handleRefusalOp(c, ActionComposerSend, c.SessionID)
+		// The REAL Wave R6 handler (Mirror M2.4, IS-LIFE-5). Session-bound: the signed
+		// tuple's own subject is the wire session id, as for kill/approve.
+		cc.handleComposerSend(c)
 	case OpOperationStatus:
 		// The REAL Wave R5 handler. Names no session instance: pinned like
 		// session_launch above.
@@ -1169,7 +1171,14 @@ func (cc *clientConn) handleControl(c Control) {
 		// pinned to the operation sentinel like its two siblings above.
 		cc.handleLaunchPresets(c)
 	case OpTurnInterrupt:
-		cc.handleRefusalOp(c, ActionTurnInterrupt, c.SessionID)
+		// The REAL Wave R6 handler (Mirror M2.4: Stop is a signed op, not a keystroke).
+		cc.handleTurnInterrupt(c)
+	case OpInteractionHistory:
+		// Wave R6 M3.1: unsigned paged read (IS-CAP-2's terminal_watch precedent).
+		cc.handleInteractionHistory(c)
+	case OpInteractionDetail:
+		// Wave R6 M3.3: unsigned detail-on-demand read.
+		cc.handleInteractionDetail(c)
 	case OpTerminalControlBegin:
 		cc.handleRefusalOp(c, ActionTerminalControlBegin, c.SessionID)
 	case OpTerminalControlEnd:
@@ -1636,8 +1645,9 @@ func (cc *clientConn) handleApprove(c Control) {
 //
 // Wave R5 removed session_launch and operation_status from this dispatch: their real
 // handlers (remote_launch.go) inherit the choke-point ordering unchanged and are pinned
-// by r5_sessionlaunch_test.go. composer_send / turn_interrupt / terminal_control_begin /
-// terminal_control_end remain refusal-only here.
+// by r5_sessionlaunch_test.go. Wave R6 removed composer_send and turn_interrupt the same
+// way (remote_chat.go, pinned by r6_composersend_test.go / r6_turninterrupt_test.go);
+// terminal_control_begin / terminal_control_end remain refusal-only here.
 func (cc *clientConn) handleRefusalOp(c Control, action, session string) {
 	if !cc.requireRemoteAuthz(c, action, session, nil) {
 		return
@@ -2073,12 +2083,7 @@ func (cc *clientConn) handleJournalRead(c Control) {
 	if !ok {
 		return
 	}
-	// C2a: blank the journal when remote control is disabled — a journal_read is a leak of
-	// session lifecycle metadata, so `off` must refuse it (mirrors the terminal peek's gate).
-	// REMOTE-TIER ONLY (finding B): the owner tier shares the KillSwitch-implementing coreAPI
-	// and must never be gated.
-	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
-		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+	if !cc.allowUnsignedJournalPlaneRead() {
 		return
 	}
 	res, err := jb.JournalReadFrom(c.Cursor)
@@ -2127,6 +2132,27 @@ func (cc *clientConn) handleJournalSubscribe() {
 		cc.srv.jsubMu.Unlock()
 	})
 	cc.replyOK("")
+}
+
+// allowUnsignedJournalPlaneRead is the kill-switch half of the gate EVERY unsigned read of
+// the journal plane rides: journal_read, and -- since the Wave R6 fix-pack (finding B2) --
+// interaction_history and interaction_detail.
+//
+// IT IS ONE FUNCTION BECAUSE IT WAS TWO PLACES AND ONE OF THEM WAS EMPTY. handleJournalRead
+// had both gates; the two R6 reads cited it as their precedent in a comment and honored
+// NEITHER, so with the kill switch off journal_read refused while interaction_history served
+// a user_message's text verbatim and interaction_detail served a full output excerpt. Both
+// are the same class of leak -- session content read by a paired device -- and `off` means
+// off for all three or it means nothing.
+//
+// C2a: blank the journal when remote control is disabled. REMOTE-TIER ONLY (finding B): the
+// owner tier shares the KillSwitch-implementing coreAPI and must never be gated.
+func (cc *clientConn) allowUnsignedJournalPlaneRead() bool {
+	if cc.srv.remoteTier && cc.srv.remoteControlDisabled() {
+		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
+		return false
+	}
+	return true
 }
 
 // journalBackend returns the backend's JournalBackend if journal ops are available

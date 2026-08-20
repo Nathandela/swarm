@@ -1147,12 +1147,30 @@ var s24ScreenComponents = map[string]map[string]string{
 	// a second inventory of the same shapes. `monoWell` is here for a tool's output and a file's
 	// diff, at `terminal = FALSE`: it is §2's one factory for every mono block, and the variant
 	// that printed the VT grid in `terminal_peek.fg` has no caller left in this app.
+	//
+	// WAVE R6 ADDS TWO CLAIMS AND NO NEW COMPONENT (Mirror M2.1/M2.2, ADR-017). `notice` is
+	// claimed twice over, for the two things on this surface that are NOT the conversation: the
+	// ERROR variant draws ADR-017 T2 rule 2's proven `structured_gap` boundary -- §4's own split,
+	// the machine talking about its own record rather than about the work -- and the INFO variant
+	// draws IS-CAP-2's tap-to-fetch offer under a card the machine clipped. `markdownBody` is the
+	// kit's markdown-to-type pass, spent on `activityRow`'s body cell: the agent's prose is
+	// markdown-shaped, and the styling is the KIT's decision (PB-DS-6) while the flattening is
+	// the screen model's.
+	//
+	// NEITHER CLAIM CAN BE SATISFIED BY ITS OWN DECLARATION (Wave R6 round 3, the closing
+	// review's sweep, whose subject was the module-wide symbol check). `s24Spends` reads ONE
+	// screen file, skips `import` lines, and demands the call form `symbol(`; `notice` is
+	// declared in ui/kit/Kit.kt and `markdownBody` in ui/kit/Markdown.kt, so a match here is a
+	// spend and nothing else. That is a property of the mechanism, so it holds for every row of
+	// this table rather than for these two.
 	"dev/swarm/phone/ui/screens/TranscriptView.kt": {
 		"sectionLabel": "the heading over the conversation -- an empty section is still a section (PB-DS-9)",
 		"sessionList":  "`.prows` -- the blocks' container, carrying the gap and the side padding",
 		"activityRow":  "one interaction item, derivation row 14 reused a fourth time",
 		"monoWell":     "a tool's output and a file's diff -- §2's one factory for every mono block",
 		"emptyState":   "derivation row 8 -- a heading over no conversation is a section that lies",
+		"notice":       "§4 Notice line -- ADR-017's structured_gap tear (ERROR) and IS-CAP-2's detail offer",
+		"markdownBody": "M2.1's markdown subset given type, on row 14's own body cell",
 	},
 	// The approval card (ADR-009 (4)), and the row that keeps `monoWell`'s reuse rule fenced now
 	// that the two terminal screens are gone. It is the LITERAL a decision is about -- §7's action

@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "cli": "claude-code",
+  "version": "2.1.214",
+  "scenario": "glob-pretooluse",
+  "pty_capture": "Rm91bmQgMiBgLm1kYCBmaWxlcyBpbiBgL3ByaXZhdGUvdG1wL3I2cmVjL3dvcmtgOg0KDQotIGBub3Rlcy5tZGANCi0gYHJlYWRtZS5tZGANChtbPzI1aA==",
+  "hook_payloads": [
+    {
+      "event": "UserPromptSubmit",
+      "raw": {
+        "session_id": "0043f29d-9ee7-4767-abd9-d806ca5c515a",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/0043f29d-9ee7-4767-abd9-d806ca5c515a.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "a603f00b-36c8-4e7e-bf3a-63b192385cd1",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Use your Glob tool to list the *.md files in this directory. Report them. Bash is denied; use the Glob tool directly."
+      },
+      "received_at_ms": 1787164551694
+    },
+    {
+      "event": "PreToolUse",
+      "raw": {
+        "session_id": "0043f29d-9ee7-4767-abd9-d806ca5c515a",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/0043f29d-9ee7-4767-abd9-d806ca5c515a.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "a603f00b-36c8-4e7e-bf3a-63b192385cd1",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Glob",
+        "tool_input": {
+          "pattern": "*.md"
+        },
+        "tool_use_id": "toolu_01N6EaiDWm4ntYp7VPdojLDw"
+      },
+      "received_at_ms": 1787164553649
+    },
+    {
+      "event": "PostToolUse",
+      "raw": {
+        "session_id": "0043f29d-9ee7-4767-abd9-d806ca5c515a",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/0043f29d-9ee7-4767-abd9-d806ca5c515a.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "a603f00b-36c8-4e7e-bf3a-63b192385cd1",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Glob",
+        "tool_input": {
+          "pattern": "*.md"
+        },
+        "tool_response": {
+          "filenames": [
+            "notes.md",
+            "readme.md"
+          ],
+          "durationMs": 7,
+          "numFiles": 2,
+          "truncated": false,
+          "totalMatches": 2,
+          "countIsComplete": true
+        },
+        "tool_use_id": "toolu_01N6EaiDWm4ntYp7VPdojLDw",
+        "duration_ms": 7
+      },
+      "received_at_ms": 1787164553771
+    },
+    {
+      "event": "Stop",
+      "raw": {
+        "session_id": "0043f29d-9ee7-4767-abd9-d806ca5c515a",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/0043f29d-9ee7-4767-abd9-d806ca5c515a.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "a603f00b-36c8-4e7e-bf3a-63b192385cd1",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "Found 2 `.md` files in `/private/tmp/r6rec/work`:\n\n- `notes.md`\n- `readme.md`",
+        "background_tasks": [],
+        "session_crons": []
+      },
+      "received_at_ms": 1787164556454
+    }
+  ]
+}

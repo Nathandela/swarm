@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "cli": "claude-code",
+  "version": "2.1.214",
+  "scenario": "grep-pretooluse",
+  "pty_capture": "VGhlIGZpbGUgY29udGFpbmluZyBgU1dBUk1fUjZfTUFSS0VSYCBpcyAqKm5vdGVzLm1kKiouDQobWz8yNWg=",
+  "hook_payloads": [
+    {
+      "event": "UserPromptSubmit",
+      "raw": {
+        "session_id": "a25d8a02-074d-43b4-977f-5a9107c40f27",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/a25d8a02-074d-43b4-977f-5a9107c40f27.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "7430e2a2-591b-47b3-bb51-8708a83b104a",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Use your Grep tool to find which file in this directory contains SWARM_R6_MARKER. Report the file name. Bash is denied; use the Grep tool directly."
+      },
+      "received_at_ms": 1787164544995
+    },
+    {
+      "event": "PreToolUse",
+      "raw": {
+        "session_id": "a25d8a02-074d-43b4-977f-5a9107c40f27",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/a25d8a02-074d-43b4-977f-5a9107c40f27.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "7430e2a2-591b-47b3-bb51-8708a83b104a",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Grep",
+        "tool_input": {
+          "pattern": "SWARM_R6_MARKER",
+          "output_mode": "files_with_matches"
+        },
+        "tool_use_id": "toolu_01QA1D2e8ciF4v5ZcqRKHfD4"
+      },
+      "received_at_ms": 1787164548374
+    },
+    {
+      "event": "PostToolUse",
+      "raw": {
+        "session_id": "a25d8a02-074d-43b4-977f-5a9107c40f27",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/a25d8a02-074d-43b4-977f-5a9107c40f27.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "7430e2a2-591b-47b3-bb51-8708a83b104a",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Grep",
+        "tool_input": {
+          "pattern": "SWARM_R6_MARKER",
+          "output_mode": "files_with_matches"
+        },
+        "tool_response": {
+          "mode": "files_with_matches",
+          "filenames": [
+            "notes.md"
+          ],
+          "numFiles": 1,
+          "totalFiles": 1
+        },
+        "tool_use_id": "toolu_01QA1D2e8ciF4v5ZcqRKHfD4",
+        "duration_ms": 10
+      },
+      "received_at_ms": 1787164548500
+    },
+    {
+      "event": "Stop",
+      "raw": {
+        "session_id": "a25d8a02-074d-43b4-977f-5a9107c40f27",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/a25d8a02-074d-43b4-977f-5a9107c40f27.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "7430e2a2-591b-47b3-bb51-8708a83b104a",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "The file containing `SWARM_R6_MARKER` is **notes.md**.",
+        "background_tasks": [],
+        "session_crons": []
+      },
+      "received_at_ms": 1787164550252
+    }
+  ]
+}

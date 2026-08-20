@@ -41,7 +41,17 @@ var pbe2e2Verbs = []struct {
 	{"beginPairing", "\"pairs against a local relay + daemon\": there is no way to enter or scan a QR"},
 	{"confirmOrigin", "PB-PAIR-6's destination confirmation, which BeginPairing leaves the app owing"},
 	{"sas", "\"SAS matches\": there is nothing that displays the six words to compare"},
-	{"sendInput", "\"types\": there is no control that sends a keystroke"},
+	// "types" IS `composerSend` SINCE WAVE R6, and the clause is unchanged -- what changed is
+	// the verb that performs it. The smoke drives a control that puts a line into a session and
+	// watches it arrive at the machine; until R6 that control sent raw bytes plus a CR on the
+	// live keystroke plane behind PB-INPUT-3's lease, and Mirror M2.4 replaced it with the
+	// SIGNED composer_send op ("the lease leaves the UX -- composer gated on `online` only").
+	// The daemon still TYPES the line into the session's own composer, so the observable effect
+	// at the machine is what it always was; what the op adds is an honest `source: phone`
+	// attribution, a turn precondition, and a refusal the phone can render. `App.SendInput` has
+	// no production caller left and carries its row in android/unbound-verbs.tsv, which is where
+	// the replacement is argued at length.
+	{"composerSend", "\"types\": there is no control that puts a line into a session"},
 	{"takeControl", "\"takes control\""},
 }
 
@@ -65,6 +75,13 @@ func TestPBE2E2_TheAppCanPerformEveryActionTheSmokeDrives(t *testing.T) {
 		// A CALL, not a mention. Every one of these verbs is discussed in the module's prose --
 		// PairingFlow's own doc names the SAS and the scan step -- so a substring check would
 		// pass on the comment explaining that the control does not exist.
+		//
+		// AND NOT A DECLARATION EITHER (Wave R6 round 3, the closing review's sweep). This is the
+		// module-wide form that let four R6 symbols match their own `fun` one file over, and it
+		// is safe here for a structural reason rather than by luck: the pattern requires a
+		// LEADING DOT, so it matches only a receiver-qualified call. A Kotlin declaration is
+		// `fun composerSend(` with no receiver, and the verb these five name is declared in Go
+		// behind the gomobile AAR, which this blob does not contain at all.
 		call := regexp.MustCompile(`(?i)\.` + regexp.QuoteMeta(want.verb) + `\s*\(`)
 		if !call.MatchString(body) {
 			t.Errorf("PB-E2E-2: no Kotlin in android/app/src/main CALLS the facade verb %q, so "+

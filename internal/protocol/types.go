@@ -150,6 +150,15 @@ const (
 	// (Wave R5, playbook "launch_presets"): Op == Action like every mapped sibling,
 	// answered with Control.Presets + Control.PresetPolicyRevision.
 	OpLaunchPresets = "launch_presets"
+
+	// The Wave R6 M3 read ops (Mirror M3.1 / M3.3, ADR-014). Both are UNSIGNED reads on
+	// the ActionTerminalWatch precedent (IS-CAP-2): no device fields, the device
+	// authenticator is never consulted, and no new device-signed action exists for
+	// either -- PB-SYNC-5's actionClass switch stays closed. interaction_history answers
+	// on Control.Journal + Control.HistoryFloor; interaction_detail answers one Journal
+	// record whose Item is the full pre-truncation body, or IS-CAP-3's `unavailable`.
+	OpInteractionHistory = "interaction_history"
+	OpInteractionDetail  = "interaction_detail"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

@@ -17,6 +17,7 @@ const ErrClassRelayAddressInvalid
 const ErrClassRelayUnknown
 const ErrClassRepairRequired
 const ErrClassRevoked
+const ErrClassStaleTurn
 const ErrClassStateCorrupt
 const ErrClassUnknown
 const ErrClassUnreconciled
@@ -117,9 +118,11 @@ field TranscriptItem.ItemID string
 field TranscriptItem.Kind string
 field TranscriptItem.Resolved bool
 field TranscriptItem.SessionID string
+field TranscriptItem.Source string
 field TranscriptItem.Status string
 field TranscriptItem.TSUnixMs int64
 field TranscriptItem.Text string
+field TranscriptItem.ToolKind string
 field TranscriptItem.Truncated bool
 field TranscriptItem.TurnID string
 field UndeliveredInput.AtMillis int64
@@ -141,6 +144,7 @@ method App.BeginPairingWithCode(string, string) (*Pairing, error)
 method App.ClearUndeliveredInputs() error
 method App.ClockVerdict() (string, error)
 method App.Close() error
+method App.ComposerSend(string, string, string) (*Op, error)
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
 method App.EnsurePushRegistration(string) error
@@ -148,15 +152,19 @@ method App.ErrorClass(string) (string, error)
 method App.ForgetMachine(string) error
 method App.GlobalInbox() (*InboxList, error)
 method App.HandlePushWake(string) (*WakeAlert, error)
+method App.HistoryAtCapacity(string) (bool, error)
+method App.HistoryFloor(string) (bool, error)
 method App.InstallContentKey([]byte) error
 method App.InstallWakeKey([]byte) error
-method App.Interrupt(string) (*Op, error)
+method App.Interrupt(string, string) (*Op, error)
 method App.IsRunning() (bool, error)
 method App.Kill(string) (*Op, error)
 method App.KillSwitchEngaged() (bool, error)
 method App.Launch(*LaunchSpec) (*Op, error)
 method App.LaunchCapability() (string, error)
 method App.LaunchPresets() (*PresetList, error)
+method App.LoadEarlierInteractions(string, string, int) (*Op, error)
+method App.LoadInteractionDetail(string, string) (*Op, error)
 method App.MachineFreshness() (*Freshness, error)
 method App.MachineName() (string, error)
 method App.MachinePresence() (*MachinePresence, error)

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": ["WebFetch", "Grep", "Glob", "Read"],
+    "deny": ["Bash"]
+  },
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/tmp/r6rec/relay.sh"}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/tmp/r6rec/relay.sh"}]}],
+    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/tmp/r6rec/relay.sh"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "/tmp/r6rec/relay.sh"}]}]
+  }
+}

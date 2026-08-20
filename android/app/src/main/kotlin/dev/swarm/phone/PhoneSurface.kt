@@ -1,6 +1,7 @@
 package dev.swarm.phone
 
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -20,6 +21,8 @@ import dev.swarm.phone.runtime.SocketDisposition
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.CommandVerdict
+import dev.swarm.phone.ui.ErrorRouter
+import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
@@ -34,6 +37,7 @@ import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.NoticeKind
+import dev.swarm.phone.ui.kit.SendState
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.ctaButton
@@ -63,7 +67,10 @@ import dev.swarm.phone.ui.screens.MachinesScreen
 import dev.swarm.phone.ui.screens.PairOnlyReason
 import dev.swarm.phone.ui.screens.PairOnlyScreen
 import dev.swarm.phone.ui.screens.Presentation
+import dev.swarm.phone.ui.screens.DeepLinkAnchor
+import dev.swarm.phone.ui.screens.DeepLinkLanding
 import dev.swarm.phone.ui.screens.RevokeNotice
+import dev.swarm.phone.ui.screens.SessionDetailOpen
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.SheetTag
@@ -323,11 +330,13 @@ class PhoneSurface(
      * Without a lease the model refuses the keystroke and offers the step that would make it work,
      * which is take_control; with one it asks first and then interrupts.
      *
-     * IT INTERRUPTS THROUGH `App.Interrupt` AND NOT THROUGH `sendInput(0x03)`, which is the same
-     * decision one hop down: `mobile/commands.go` sends the interrupt byte itself and returns an Op
-     * naming the action, so a phone that wrote the byte here would be a second implementation of
-     * an interrupt and would leave the bound verb unreachable. [SessionDetail.interruptBytes] is
-     * the phone-side statement of the constant and is consumed by its own unit test, not by this.
+     * IT INTERRUPTS THROUGH `App.Interrupt` AND NOT BY WRITING ANY BYTE ITSELF, which since Wave
+     * R6 is the SIGNED turn_interrupt op (`mobile/commands.go`, Mirror M2.4): the daemon types the
+     * session adapter's own recorded cancel sequence, so a phone that composed a keystroke here
+     * would be guessing a key the daemon refuses to guess. The lease-gated stop model this plan
+     * still branches on ([SessionDetail.stop]'s ACQUIRE_LEASE_FIRST arm) is stricter than the op
+     * requires -- the signed op needs no lease -- and relaxing it is the wave's disclosed
+     * view-side residual (docs/verification/r6-chat.md).
      *
      * IT IS `.a2-no` (agents-tracker-ksvb.4). Both of its arms end a thing the user started -- an
      * interrupt, or the lease step that leads to one -- and the deny treatment is what the design
@@ -340,19 +349,39 @@ class PhoneSurface(
         // lane would be a data race on the fact that decides which of two different things this
         // one control does.
         val target = session
+        val turn = detailDrawn?.expectedTurn.orEmpty()
         when (detailDrawn?.confirmedStopAction) {
             // The one control on this surface whose two arms are on two different PLANES, which
             // is why the plane is chosen per press rather than per control.
             StopAction.SEND_INTERRUPT -> {
                 stopNotSentFor = ""
                 Press(
-                    SendPlane.LIVE,
-                    verb = { app -> app.interrupt(target) },
+                    // COMMAND since Wave R6: App.Interrupt is the signed turn_interrupt op
+                    // (sealSignedCommand -> sendContext -> awaitConn), not a keystroke, so its
+                    // press rides the command lane like every other signed verb (s25's fence
+                    // is what holds the declaration to the verb's real destination policy).
+                    SendPlane.COMMAND,
+                    // AND IT NAMES THE TURN IT WAS DRAWN AGAINST (Wave R6 review finding B7).
+                    // `App.Interrupt` REQUIRES a non-empty expected_turn: Stop and Send are
+                    // tapped under one race, and a Stop rendered against turn A that lands in
+                    // turn B types the adapter's cancel sequence into whatever the machine is
+                    // doing NOW -- which in playbook 8.1 is the turn the owner just started at
+                    // the terminal, where the cancel key clears their half-typed line. The turn
+                    // is read HERE, from the panel this surface last drew, on the looper that
+                    // owns it, for the same reason the branch above is.
+                    verb = { app -> app.interrupt(target, turn) },
                     // The one press on this surface the design wrote a confirmation for. Without
                     // it, an interrupt that reached the machine and an interrupt still crossing
                     // look identical: the outcome line is cleared for both and the button comes
                     // back enabled either way.
+                    //
+                    // AND IT REPORTS ON THE SEALING, WHICH IS WHY THE VERDICT BELOW EXISTS
+                    // (review round 2). `App.Interrupt` returns the moment the envelope is
+                    // appended, so this sentence is true of the phone and says nothing about
+                    // the machine; `interrupt_unsupported` and `stale_turn` are facts only the
+                    // machine has, and [renderInterruptVerdict] is where they reach the reader.
                     confirmation = SessionDetail.INTERRUPT_SENT,
+                    settle = { answer -> rememberInterrupt(answer) },
                 )
             }
             StopAction.ACQUIRE_LEASE_FIRST -> {
@@ -437,17 +466,78 @@ class PhoneSurface(
      * ksvb.4 named is the one that landed: this field and this button are derivation row 9's
      * composer now, on the session detail, and the launch form keeps the column to itself.
      */
+    // THE LABEL IS UNCHANGED AND THE VERB UNDER IT IS NOT (Mirror M2.4). PB-E2E-2's smoke names
+    // this control by its words (`PhoneSurfaceControlsTest`), and the words are still true: what
+    // the machine does with a `composer_send` is type the line into the session's own composer and
+    // submit it, so "Send line" describes the effect exactly as it did over the keystroke path.
+    // What changed is that it no longer needs a lease, no longer rides the live input plane, and
+    // is refused legibly rather than silently when the conversation has moved on.
     private val send = actionButton("Send line", CtaKind.APPROVE) {
         // Read here, on the looper that owns the field. The lane never touches a View.
         val target = session
         val line = typed.text.toString()
+        val turn = detailDrawn?.expectedTurn.orEmpty()
+        // The last send's report goes the moment a new one is planned: a notice about a refusal
+        // the user has already answered by typing again is a report of the wrong press.
+        composerSendFor = target
+        composerRefusal = ""
+        composerSendState = SendState.PENDING
         Press(
-            SendPlane.LIVE,
-            verb = { app -> app.sendInput(target, (line + "\r").toByteArray(Charsets.UTF_8)) },
-            // The field is emptied only once the bytes are away, which is where the clear has
-            // always been: a send the machine refused leaves what the user typed on screen.
-            settle = { typed.text.clear() },
+            // COMMAND, and the plane change IS the verb change: `composer_send` is a SIGNED
+            // operation that resolves, so it rides the lane that polls `awaitConn` for a
+            // connection, exactly like every other signed verb on this surface.
+            SendPlane.COMMAND,
+            verb = { app -> app.composerSend(target, turn, line) },
+            // THE FACADE'S OWN refusals, and ONLY those: a phone with no link, an unreconciled
+            // handset, an empty line. They are the ones that resolve without the machine, so
+            // they are the ones this hook can answer -- see [rememberComposerSend] for the
+            // refusals that arrive later, which is every refusal the daemon authors.
+            refused = { routed ->
+                composerSendState = SendState.REFUSED
+                composerRefusal = routed.state.name
+            },
+            // THE SETTLE LATCHES THE OPERATION AND CHANGES NOTHING ELSE (review round 2).
+            //
+            // IT USED TO SET `SendState.SENT` AND RUN `typed.text.clear()` HERE, under a comment
+            // reading "THE FIELD IS EMPTIED ONLY ON THE MACHINE'S ACCEPTANCE" -- which was false.
+            // `VerbDispatch.press` settles on the FACADE CALL returning, and `App.ComposerSend`
+            // returns its `Op` the instant the envelope is appended to the mailbox. So the
+            // composer reported a send as delivered on LOCAL SEALING, and a send the daemon went
+            // on to refuse was shown as sent with the user's words already erased.
+            settle = { answer -> rememberComposerSend(answer) },
         )
+    }
+
+    /**
+     * ADR-014's "load earlier" (Mirror M3.1), and the FIRST caller of `App.LoadEarlierInteractions`.
+     *
+     * IT PAGES BY ITEM ID AND NEVER BY CURSOR (IS-ENV-2). The id is the oldest item this phone
+     * holds for the session, read off the panel this surface last drew; a daemon restart's
+     * reconciliation legitimately re-delivers the same items at new cursors, so a cursor-paged
+     * read would silently skip or repeat after one.
+     *
+     * IT IS A SLOT ON THE DETAIL rather than a control the screen builds, for [resyncControl]'s
+     * reason: the verb is live-only and refuses with a routed class, and routing a refusal through
+     * PB-APP-9's table is this surface's job.
+     */
+    private val loadEarlier = actionButton(SLOT_LABEL, CtaKind.MORE) {
+        val target = session
+        val before = detailDrawn?.loadEarlierBeforeItem.orEmpty()
+        if (before.isEmpty()) {
+            null
+        } else {
+            backfilledAt[target] = SystemClock.elapsedRealtime()
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.loadEarlierInteractions(target, before, HISTORY_PAGE) },
+                // AND THE PAGE IS CLAIMED, WHICH IS WHAT FOLDS IT (review round 2). The reply
+                // becomes the transcript inside `App.Outcome` and nowhere else, so a press that
+                // forgot the operation id was a control that could never do anything: "Load
+                // earlier" reached the machine, the machine answered, and the answer sat in the
+                // reply cache while the control went on being offered.
+                settle = { answer -> rememberHistoryRead(answer, target, aloud = true) },
+            )
+        }
     }
 
     /**
@@ -1002,6 +1092,112 @@ class PhoneSurface(
     private var stopNotSentFor: String = ""
 
     /**
+     * The session the last composer send was issued for, and what became of it (Mirror M2.4,
+     * ADR-009 (6): "pending -> sent -> refused ... a send that cannot get through is shown
+     * refused, not silently swallowed").
+     *
+     * THEY ARE A PRESS AND NOT A SESSION FACT, on [stopNotSentFor]'s argument exactly: the state
+     * belongs to a send this surface issued, so it is remembered beside the session it was issued
+     * for and a send against one session never reports on another. Cleared when a new send is
+     * planned and when the drill-down closes.
+     */
+    private var composerSendFor: String = ""
+
+    private var composerSendState: SendState? = null
+
+    /**
+     * PB-APP-9's routed ERROR STATE for that send, as the token `ComposerModel.noticeFor` speaks.
+     *
+     * IT IS THE STATE AND NOT THE MESSAGE. `stale_turn` is ORDINARY -- the conversation moved on
+     * between the render and the tap -- and its remedy is mild, so it has copy of its own; every
+     * other refusal shares the generic wording. Routing on the token rather than on the sentence
+     * is what keeps that decision in one table (`ErrorRouter`) instead of in a string match here.
+     */
+    private var composerRefusal: String = ""
+
+    /**
+     * The four Wave R6 operations this surface has issued and not yet claimed an answer for
+     * (review round 2), on [killOp]'s own argument: an operation the machine ANSWERS must be
+     * remembered by id, because there is no generic outcome drain on this surface and a
+     * discarded id is an answer nobody can ever ask for.
+     *
+     * ALL FOUR WERE FIRE-AND-FORGET. `VerbDispatch.press` settles on the FACADE CALL returning,
+     * and each of these verbs returns the moment its envelope is appended to the mailbox --
+     * `signedCommand` for the send and the Stop, `unsignedRead` for the two M3 reads. So the
+     * composer reported delivery on local sealing, the Stop's `interrupt_unsupported` never
+     * arrived, and neither read ever folded: `adoptInteractionRead` runs inside `App.Outcome`
+     * and nothing called it, so "Load earlier" did nothing and a clipped card never expanded.
+     *
+     * THEY ARE CLAIMED ON A LATER DRAW AND NOT ON THE LANE, which is [rememberLease]'s rule:
+     * these fields are read by `render` on the looper, so latching them from a lane would
+     * publish an operation to the drawing thread through a plain field.
+     *
+     * THEY SURVIVE LEAVING THE DRILL-DOWN, deliberately and unlike the composer's own press
+     * facts: an op that is never claimed is an op that stays in `App.PendingOpCount` for the
+     * life of the process, and a refusal the reader walked away from is still a refusal they
+     * asked for. [renderVerdicts] runs on every draw of every destination, so all four resolve
+     * wherever the user has gone.
+     */
+    private var composerOp: String = ""
+
+    private var interruptOp: String = ""
+
+    private var historyOp: String = ""
+
+    /** The session [historyOp] was issued for: a page's answer must never report on another. */
+    private var historyFor: String = ""
+
+    /**
+     * Whether [historyOp]'s refusal is said OUT LOUD.
+     *
+     * The same read is issued by two things: the reader's own "Load earlier" press, whose
+     * refusal has to reach the finger that asked, and M3.2's cold-open backfill, whose refusal
+     * is deliberately silent because nobody pressed anything (see [backfillOnOpen]). One latch
+     * serves both, so the difference travels with it.
+     */
+    private var historySpeaks: Boolean = false
+
+    private var detailOp: String = ""
+
+    /** The item [detailOp] was issued for: a refusal is a fact about THAT card and no other. */
+    private var detailFor: String = ""
+
+    /**
+     * The cards whose whole body the machine has TERMINALLY refused, by item_id (Wave R6 review
+     * round 3, finding F4).
+     *
+     * A card offers the fetch on `truncated`+`detail`, both journalled when the item was captured
+     * -- so a body the daemon's bounded store has since evicted goes on advertising itself, and
+     * the refusal left it doing so forever: tap, read "no longer kept", tap again. This is the
+     * phone's memory of the one answer that settles it, and it is per ITEM because that is what
+     * the answer is about. It is deliberately NOT durable: the machine's retention is its own to
+     * change, and a fresh visit asking once more is a cheap question with a true answer.
+     */
+    private val detailRefused = mutableSetOf<String>()
+
+    /**
+     * The tool cards the reader has SHUT, by item_id (Mirror M2.2's expand/collapse).
+     *
+     * IT IS THE SURFACE'S AND NOT THE PANEL'S because it is a fact about this reader's screen and
+     * not about the session: nothing on the wire says a card is collapsed, and a model that
+     * carried it would be a model that had to be told. Cleared with the drill-down, which is what
+     * "the collapse is theirs to spend" means for the life of one visit.
+     */
+    private val collapsedCards = mutableSetOf<String>()
+
+    /**
+     * When this surface last asked the machine for a page of history, per session, on
+     * `SystemClock.elapsedRealtime`'s monotonic clock (Mirror M3.2's throttle).
+     *
+     * THE CLOCK IS MONOTONIC AND NOT THE WALL CLOCK. PB-APP-11 forbids trusting a wall clock the
+     * user or a peer can move; what a throttle needs is elapsed time, and a backfill that a clock
+     * correction let fire on every open would multiply reads against the machine-to-phone append
+     * ceiling.
+     */
+    private val backfilledAt = mutableMapOf<String, Long>()
+
+
+    /**
      * The operations whose verdict has already been put on screen, so it is said ONCE.
      *
      * [render] runs on every journal event and the outcome stays in the core's durable map, so a
@@ -1014,6 +1210,9 @@ class PhoneSurface(
     private var leaseSaid: String = ""
 
     private var approveSaid: String = ""
+
+    /** The same one-shot latch for the Stop's own verdict (review round 2). See [killSaid]. */
+    private var interruptSaid: String = ""
 
     /** The phone this surface has started, so [release] can stop the one it actually started. */
     private var connected: App? = null
@@ -2094,6 +2293,12 @@ class PhoneSurface(
         // updated in place keeps its FIRST record's cursor (IS-LAYER-3), so paging past the tail
         // would miss exactly the updates the event fired for.
         val chat = bridge.transcript(open, JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        // M3.2's COLD OPEN, decided by the model and thrown once. `SessionDetailOpen.plan` says a
+        // session this phone holds NO items for backfills on open -- a week-old session must show
+        // its history rather than an empty well and a Repair button -- and that a re-open inside
+        // the throttle window asks for nothing, because flipping in and out of a screen must not
+        // multiply reads against the machine-to-phone append ceiling.
+        backfillOnOpen(open, chat.items.size)
         return SessionDetailScreen.of(
             SessionDetail(
                 sessionId = open,
@@ -2111,8 +2316,28 @@ class PhoneSurface(
                 // press is read back: the Stop plan latched the session it could not send for, and
                 // a notice about another session's press would be the proximity error again.
                 stopNotSent = stopNotSentFor == open,
+                // ADR-009 (6)'s per-send state, and PB-APP-9's routed class for it -- both read
+                // back per session, so a send against one never reports on another.
+                composerState = composerSendState.takeIf { composerSendFor == open },
+                composerRefusal = if (composerSendFor == open) composerRefusal else "",
             ),
-            TranscriptScreen.of(chat.items),
+            TranscriptScreen.of(
+                chat.items,
+                // M2.2's collapse, which is this reader's and not the wire's.
+                collapsed = collapsedCards,
+                // AND THE OFFERS THE MACHINE HAS ALREADY SETTLED (round 3, finding F4): a card
+                // whose whole body it answered `unavailable` for keeps advertising the fetch off
+                // its capture-time fields, and re-offering a fetch that can never succeed is the
+                // app inviting a tap it knows the answer to.
+                withoutDetail = detailRefused,
+                // ADR-014 §2's honest floor: once the machine has said nothing older is retained,
+                // the control goes rather than staying to come back empty.
+                atFloor = historyFloorFor(bridge, open),
+                // AND THIS PHONE'S OWN END OF THE CONVERSATION, which is a different sentence
+                // from the machine's floor and is kept apart from it: the last page could not
+                // be held whole, so there IS more and this handset cannot show it.
+                atCapacity = bridge.historyAtCapacity(open),
+            ),
             // PB-INPUT-2 REACHES THE USER HERE NOW, and that is the peek's deletion landing rather
             // than a new fact: the sentence and the Take control button were that screen's, and this
             // is the screen a session is read on. The verdict travels with the lease for
@@ -2126,6 +2351,105 @@ class PhoneSurface(
             // PB-SYNC-2 forbids, applied to input.
             bridge.undelivered().forSession(open),
         )
+    }
+
+    /**
+     * ADR-014's floor for one session, guarded and cached-free: `App.HistoryFloor` is an O(1) read
+     * of a map the reply already filled, so asking it per draw costs nothing on the wire.
+     */
+    private fun historyFloorFor(bridge: FacadeBridge, session: String): Boolean =
+        bridge.historyFloor(session)
+
+    /**
+     * M3.2: ask the machine for this session's history ONCE on a cold open, throttled.
+     *
+     * THE DECISION IS [SessionDetailOpen]'S AND THE THROW IS HERE, which is this surface's
+     * standing split: a model decides, a surface acts. Both halves of the model's rule matter --
+     * a session with items already on the phone backfills on the reader's own "load earlier" and
+     * never on open, and a re-open inside the window asks for nothing, because flipping in and out
+     * of a screen must not multiply reads against the 8/s machine-to-phone append ceiling.
+     *
+     * IT IS FIRE-AND-FORGET AND ITS REFUSAL IS SILENT, which is the one difference from every
+     * press on this surface and is deliberate: nobody pressed anything. A cold open that cannot
+     * reach the machine shows what the phone holds -- which is what the empty state already says
+     * -- and the reader's own "load earlier" is the control that reports a refusal out loud.
+     */
+    private fun backfillOnOpen(session: String, itemCount: Int) {
+        val now = SystemClock.elapsedRealtime()
+        if (!SessionDetailOpen.plan(itemCount, backfilledAt[session] ?: NEVER_BACKFILLED, now)) {
+            return
+        }
+        backfilledAt[session] = now
+        // AND HERE M3.2 STOPS, HONESTLY AND ON PURPOSE. `SessionDetailOpen.plan` answers true for
+        // a session this phone holds NO items for, and that is exactly the session the facade
+        // cannot page: `App.LoadEarlierInteractions` REQUIRES a non-empty `before_item` (ADR-014
+        // pages strictly BEFORE a named item, by id and never by cursor, IS-ENV-2), and there is
+        // no anchorless "newest page" read on this boundary. A phone holding nothing has no id to
+        // name, so there is nothing to ask.
+        //
+        // WHAT A USER THEREFORE CANNOT DO: open a session this phone has never held an item for
+        // and see its history. What they get is the transcript's own empty state, which says the
+        // conversation has not reached this phone rather than that the agent said nothing, and
+        // PB-SYNC-1's Repair control beside it. This is disclosed in docs/verification/r6-chat.md
+        // rather than papered over, and it is one facade verb away from being closed.
+        //
+        // The throttle instant is still recorded above, deliberately: the moment an anchorless
+        // read exists, this call site is correct without any other change, and until then a
+        // re-open must not re-run the decision at the rate a user flips between screens.
+        val before = detailDrawn?.loadEarlierBeforeItem.orEmpty()
+        if (before.isEmpty()) return
+        val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+        // `enqueue` AND NOT `press`, which is agents-tracker-xla6's own split: `press` disables
+        // the control it is handed for as long as the work is crossing, and nobody tapped
+        // anything here -- handing it a view would grey out part of a screen the reader is
+        // reading. The refusal is deliberately silent for the same reason (see the KDoc).
+        dispatch.enqueue(
+            SendPlane.COMMAND,
+            key = BACKFILL_KEY + session,
+            work = { app.loadEarlierInteractions(session, before, HISTORY_PAGE) },
+            // The answer is claimed like the pressed one -- the fold happens in `App.Outcome`
+            // and a cold open that never claimed its own read showed the same empty screen it
+            // was fired to fill -- but SILENTLY: `aloud = false` keeps this path's refusal
+            // unsaid, which is the decision in this function's KDoc and not a new one.
+            settle = { answer -> rememberHistoryRead(answer, session, aloud = false) },
+        )
+    }
+
+    /**
+     * M2.2's expand/collapse, which is a screen fact and reaches no wire at all.
+     *
+     * IT REDRAWS THROUGH [render] LIKE EVERY OTHER STATE CHANGE, so the collapse arrives through
+     * `sessionDetailRedraw`'s incremental patch -- one row rebound, the rest of the conversation
+     * left exactly where the reader's finger last saw it.
+     */
+    private fun toggleToolCard(itemId: String) {
+        if (!collapsedCards.remove(itemId)) collapsedCards.add(itemId)
+        render()
+    }
+
+    /**
+     * M3.3/IS-CAP-2: ask the machine for the whole of a clipped card.
+     *
+     * IT IS A PRESS AND NOT A BACKGROUND READ, because it has an answer the reader is waiting for
+     * and it can be refused: outside the daemon's retention window the reply is the coded
+     * `unavailable` refusal carrying NO records at all (IS-CAP-3 -- never a partial body presented
+     * as whole), and that refusal has to reach the person who tapped. `dispatchPress` is what puts
+     * it on PB-APP-9's routed line and in row 1's toast.
+     */
+    private fun fetchDetail(control: View, itemId: String) {
+        val target = session
+        press(control) {
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.loadInteractionDetail(target, itemId) },
+                // AND THE BODY IS CLAIMED, which is the whole of what this press does (review
+                // round 2): `App.Outcome` is where the reply replaces the clipped body, so a
+                // press that discarded the operation id expanded nothing while reporting
+                // success -- and the `unavailable` refusal IS-CAP-3 exists for never arrived
+                // either, because a refusal is an answer and answers are claimed by id.
+                settle = { answer -> rememberDetailRead(answer, itemId) },
+            )
+        }
     }
 
     /**
@@ -2153,13 +2477,20 @@ class PhoneSurface(
         // drill-down is not the view in the host. `openApproval` rides along because the recomposed
         // blocks carry the tap that answers a card.
         if (routed == detailOutcomeDrawn && contentShows == Destination.INBOX &&
-            sessionDetailRedraw(contentHost, detailDrawn, panel, ::openApproval)
+            sessionDetailRedraw(
+                contentHost, detailDrawn, panel, ::openApproval, ::toggleToolCard, ::fetchDetail,
+            )
         ) {
             detailDrawn = panel
+            // M2.5's placeholder is applied to the FIELD and not composed, which is why it rides
+            // the patch: the bar is a slot this surface owns and a redraw never rebuilds it.
+            typed.hint = panel.composerPlaceholder
             return
         }
         detailDrawn = panel
         detailOutcomeDrawn = routed
+        typed.hint = panel.composerPlaceholder
+        loadEarlier.text = panel.loadEarlierLabel
         stop.text = panel.stopLabel
         kill.text = panel.killLabel
         release.text = panel.releaseLabel
@@ -2192,6 +2523,13 @@ class PhoneSurface(
                 outcome = routed,
                 onBack = ::closeSessionDetail,
                 onApproval = ::openApproval,
+                // ADR-014's page, M2.2's collapse and IS-CAP-2's fetch: the control is a slot this
+                // surface owns (the verb and its refusal are both this surface's), and the two
+                // taps are callbacks for `onApproval`'s reason -- the ROWS are the conversation's
+                // controls, and only this surface may reach a facade verb from one.
+                loadEarlier = loadEarlier,
+                onToolTap = ::toggleToolCard,
+                onDetail = ::fetchDetail,
             ),
         )
     }
@@ -2223,7 +2561,28 @@ class PhoneSurface(
      *  (IS-LIFE-2) therefore scrolls nowhere, instead of to a card about something else.
      */
     private fun openApproval(itemId: String) {
-        if (approvalDrawn?.itemId != itemId) return
+        // THE LANDING IS RESOLVED BY ITEM ID AND SAYS SO WHEN IT MISSES (Mirror M3's deep link,
+        // as far as PB-SEC-11 permits one).
+        //
+        // THE NOTIFICATION HALF OF M3'S DEEP LINK IS PARKED AND CANNOT BE BUILT HERE.
+        // `PhoneActivity` reads NOTHING off its Intent -- its own KDoc states it in the
+        // imperative and `PhoneActivityWindowTest.a_crafted_launch_intent_selects_nothing`
+        // enforces it by comparing a hostile intent's render against a plain launch's, byte for
+        // byte -- and `WakeNotifications` deliberately carries no destination, using
+        // NEW_TASK|CLEAR_TASK instead of an extra for exactly that reason. So a notification tap
+        // cannot land on an item, and building one would be the shape that test exists to catch.
+        // What IS reachable is the IN-APP landing: this tap, on a block of the conversation. `DeepLinkAnchor` answers Found or NotRetained over the
+        // conversation this screen is drawing, and NotRetained is a NAMED state rather than a
+        // silent nothing: a tap that lands on the wrong thing is worse than one that says so, and
+        // a tap that does nothing at all is the dead-chevron defect (agents-tracker-2yb).
+        val landing = DeepLinkAnchor.resolveById(
+            detailDrawn?.transcript?.blocks.orEmpty().map { it.itemId },
+            itemId,
+        )
+        if (landing is DeepLinkLanding.NotRetained || approvalDrawn?.itemId != itemId) {
+            say(PressFeedback.ofUnsent(ANCHOR_NOT_RETAINED))
+            return
+        }
         approvalHost.requestRectangleOnScreen(Rect(0, 0, approvalHost.width, approvalHost.height))
     }
 
@@ -2658,6 +3017,15 @@ class PhoneSurface(
         // one press on one screen; carried across a departure it would greet the user on their
         // return with a failure from before they left.
         stopNotSentFor = ""
+        // AND SO ARE THE COMPOSER'S OWN PRESS FACTS, on the same argument one clause over: the
+        // send state and its routed refusal report on a press made on THIS visit, and the tool
+        // cards the reader collapsed are a fact about the screen they were reading rather than
+        // about the session. Carried across a departure they would greet the user on their return
+        // with a refusal from before they left, over a conversation they had rearranged.
+        composerSendFor = ""
+        composerSendState = null
+        composerRefusal = ""
+        collapsedCards.clear()
         // THE PREVIEW IS UNDONE BEFORE THE NEXT SCREEN IS DRAWN INTO THE SAME HOST. A committed
         // gesture leaves [contentHost] at 90% and fully transparent, and the inbox is hosted in
         // that same view -- so without this the user's back gesture succeeds and lands them on an
@@ -3025,6 +3393,180 @@ class PhoneSurface(
         renderKillVerdict(bridge)
         renderLeaseVerdict(bridge)
         renderApprovalVerdict(bridge)
+        // Wave R6's four, on the same program and for the same reason (review round 2): every
+        // one of them has an ANSWER, and none of them was claimed.
+        renderComposerVerdict(bridge)
+        renderInterruptVerdict(bridge)
+        renderReadVerdicts(bridge)
+    }
+
+    /**
+     * ADR-009 (6)'s per-send lifecycle, claimed BY OPERATION ID (Mirror M2.4, review round 2).
+     *
+     * THE DECISION IS [SessionDetailScreen.composerVerdictFor]'S AND NOT THIS FUNCTION'S, which
+     * is this surface's standing split -- a model decides, a surface acts -- and it matters more
+     * here than anywhere: what a settle does to a draft cannot be unit-tested on this side of
+     * the AAR, and a composer that cleared the field on local sealing is what that blindness
+     * produced last round.
+     *
+     * THE CLAIM IS ONE-SHOT because `App.Outcome` answers from a durable map: a latched
+     * operation re-claimed per draw would re-toast at whatever rate the user's agents produce
+     * journal events (`renderPresetFlow`'s own recorded defect).
+     */
+    private fun renderComposerVerdict(bridge: FacadeBridge) {
+        if (composerOp.isEmpty()) return
+        val verdict = try {
+            SessionDetailScreen.composerVerdictFor(bridge.launchOutcome(composerOp), composerOp)
+        } catch (unreadable: Exception) {
+            // Unresolved is the honest state, and the next draw asks again.
+            return
+        }
+        if (!verdict.answered) return
+        composerOp = ""
+        composerSendState = verdict.state
+        composerRefusal = verdict.refusal
+        // THE DRAFT IS SPENT ONLY HERE, and only on the answer that says it was delivered.
+        if (verdict.clearsDraft) typed.text.clear()
+        if (verdict.notice.isNotEmpty()) {
+            say(PressFeedback.ofRefusal(verdict.notice, verdict.detail))
+        }
+    }
+
+    /** The Stop's own answer, claimed the way [renderKillVerdict] claims the kill's. */
+    private fun renderInterruptVerdict(bridge: FacadeBridge) {
+        if (interruptOp.isEmpty() || interruptOp == interruptSaid) return
+        val verdict = try {
+            CommandVerdict.of(bridge.launchOutcome(interruptOp), interruptOp, CommandVerdict.ACCEPTED_OK)
+        } catch (unreadable: Exception) {
+            return
+        }
+        if (!verdict.answered) return
+        interruptSaid = interruptOp
+        // SILENT ON ACCEPTED: the turn's own terminal item is the confirmation, and the press
+        // already said the interrupt went (SessionDetail.INTERRUPT_SENT).
+        val notice = SessionDetailScreen.interruptNoticeFor(verdict)
+        if (notice.isNotEmpty()) {
+            say(PressFeedback.ofRefusal(notice, SessionDetailScreen.interruptDetailFor(verdict)))
+        }
+    }
+
+    /**
+     * The two M3 reads, whose answer is not a sentence but the TRANSCRIPT.
+     *
+     * CLAIMING IS THE ADOPTION MOMENT, exactly as it is for the preset refresh: `App.Outcome`
+     * folds a claimed `interaction_history` page into the live `ItemStore` and a claimed
+     * `interaction_detail` body over the clipped card (`adoptInteractionRead`). Until this
+     * claimed them, both replies sat in the reply cache and no screen could ever show them --
+     * which is why [renderVerdicts] runs BEFORE the content is drawn: a page claimed after it
+     * would reach the screen one journal event late.
+     *
+     * A REFUSED READ IS SAID OUT LOUD ONLY WHERE SOMEBODY PRESSED SOMETHING ([historySpeaks]).
+     * The detail read is always a press, so it always speaks.
+     */
+    private fun renderReadVerdicts(bridge: FacadeBridge) {
+        if (historyOp.isNotEmpty()) {
+            val outcome = try {
+                bridge.launchOutcome(historyOp)
+            } catch (unreadable: Exception) {
+                null
+            }
+            if (outcome != null && outcome.operationId == historyOp && outcome.code.isNotBlank()) {
+                val speaks = historySpeaks
+                val target = historyFor
+                historyOp = ""
+                historyFor = ""
+                historySpeaks = false
+                when {
+                    outcome.code != READ_HISTORY_OK -> {
+                        // THE MACHINE'S OWN WORDS, in the detail cell (round 3, finding F4). This
+                        // used to hand the wire code to `ErrorRouter.routeMachineCode` and pass
+                        // the result to the ONE-ARG `ofRefusal`, which sets no detail -- so the
+                        // daemon's sentence was discarded and codes with no row in the routing
+                        // table (deliberately: `unavailable`, `invalid_field`) were rendered as
+                        // `ErrorState.UNKNOWN`'s "Something failed in a way the app does not
+                        // recognise". Every other machine-answering verb on this surface says a
+                        // verb-specific sentence and shows what the machine said; these two are
+                        // no longer the exception.
+                        val verdict = CommandVerdict.of(outcome, outcome.operationId, READ_HISTORY_OK)
+                        if (speaks) {
+                            say(
+                                PressFeedback.ofRefusal(
+                                    SessionDetailScreen.historyReadNoticeFor(verdict),
+                                    SessionDetailScreen.historyReadDetailFor(verdict),
+                                ),
+                            )
+                        }
+                    }
+                    // THE PAGE ARRIVED AND THIS PHONE COULD NOT HOLD IT (ADR-014 A8). The control
+                    // is dropped by the panel on the same fact; this is the sentence that stops
+                    // that from reading as "you have reached the beginning" -- said ONCE, at the
+                    // moment it becomes true, where the finger that asked was.
+                    speaks && bridge.historyAtCapacity(target) ->
+                        say(PressFeedback.ofRefusal(SessionDetailScreen.historyCapacityNotice(), ""))
+                }
+            }
+        }
+        if (detailOp.isNotEmpty()) {
+            val outcome = try {
+                bridge.launchOutcome(detailOp)
+            } catch (unreadable: Exception) {
+                null
+            }
+            if (outcome != null && outcome.operationId == detailOp && outcome.code.isNotBlank()) {
+                val card = detailFor
+                detailOp = ""
+                detailFor = ""
+                if (outcome.code != READ_DETAIL_OK) {
+                    // IS-CAP-3's `unavailable` among them: the machine no longer retains the
+                    // whole of this card. The sentence is the SCREEN's, verb-specific, with the
+                    // machine's own words beside it -- see the history arm above for the routing
+                    // this replaced and why.
+                    val verdict = CommandVerdict.of(outcome, outcome.operationId, READ_DETAIL_OK)
+                    say(
+                        PressFeedback.ofRefusal(
+                            SessionDetailScreen.detailReadNoticeFor(outcome.code, verdict),
+                            SessionDetailScreen.detailReadDetailFor(verdict),
+                        ),
+                    )
+                    // AND THE OFFER GOES WITH IT when the refusal is terminal (round 3, F4). The
+                    // card advertises the fetch from fields journalled at CAPTURE time, so an
+                    // evicted body goes on offering itself: the reader taps, reads that it is
+                    // gone, and is invited to tap again. This is the one place the phone learns
+                    // otherwise, and it is remembered per item because it is true of that item.
+                    if (card.isNotEmpty() && SessionDetailScreen.detailReadIsTerminal(outcome.code)) {
+                        detailRefused.add(card)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Latch the composer_send this surface issued. See [rememberLease] for the `Any?`. */
+    private fun rememberComposerSend(answer: Any?) {
+        val issued = answer as? Op ?: return
+        composerOp = issued.operationID
+    }
+
+    /** Latch the turn_interrupt this surface issued. */
+    private fun rememberInterrupt(answer: Any?) {
+        val issued = answer as? Op ?: return
+        interruptOp = issued.operationID
+        interruptSaid = ""
+    }
+
+    /** Latch the history read this surface issued, and whether its refusal speaks. */
+    private fun rememberHistoryRead(answer: Any?, target: String, aloud: Boolean) {
+        val issued = answer as? Op ?: return
+        historyOp = issued.operationID
+        historyFor = target
+        historySpeaks = aloud
+    }
+
+    /** Latch the full-body fetch this surface issued, and the CARD it was issued for. */
+    private fun rememberDetailRead(answer: Any?, itemId: String) {
+        val issued = answer as? Op ?: return
+        detailOp = issued.operationID
+        detailFor = itemId
     }
 
     private fun renderKillVerdict(bridge: FacadeBridge) {
@@ -3397,6 +3939,19 @@ class PhoneSurface(
         val verb: (App) -> Any?,
         val settle: (Any?) -> Unit = {},
         val confirmation: String? = null,
+        /**
+         * What this press's REFUSAL changes on screen, back on the looper, beyond PB-APP-9's
+         * routed line and row 1's toast -- which every press already gets and which are not
+         * replaced here.
+         *
+         * IT IS THE MIRROR OF [settle] AND WAS MISSING (Mirror M2.4). A refusal used to be
+         * uniform, so a control could only report success in its own words; the composer needs
+         * both halves, because ADR-009 (6) makes the per-send state VISIBLE and `stale_turn` is
+         * an ordinary outcome with its own gentle copy rather than a fault. The parameter is the
+         * routed classification and not the message, so the decision stays in `ErrorRouter`'s
+         * table instead of becoming a string match at a call site.
+         */
+        val refused: (RoutedError) -> Unit = {},
     )
 
     /**
@@ -3477,9 +4032,8 @@ class PhoneSurface(
                     // the error class as a prefix, so it routes through the same table as every
                     // other failure rather than being shown raw.
                     onFailure = {
-                        val refusal = PressFeedback.ofRefusal(
-                            FacadeBridge(app).routeFacadeError(it.message.orEmpty()),
-                        )
+                        val routed = FacadeBridge(app).routeFacadeError(it.message.orEmpty())
+                        val refusal = PressFeedback.ofRefusal(routed)
                         // PB-APP-9's remedy becomes the control it names (agents-tracker-agre).
                         // `swarm/no-lease` says the machine will not carry this session's keystrokes,
                         // which the screen's own lease fact cannot know -- see [leaseRefusedFor] --
@@ -3487,6 +4041,7 @@ class PhoneSurface(
                         // place of a Stop that would earn the same refusal.
                         if (refusal.offersTakeControl) leaseRefusedFor = session
                         say(refusal)
+                        planned.refused(routed)
                     },
                 )
                 render()
@@ -3594,6 +4149,60 @@ class PhoneSurface(
          */
         const val JOURNAL_FROM_THE_START = 0L
         const val WHOLE_JOURNAL = 0L
+
+        /**
+         * ADR-014's page size for one "load earlier" (Mirror M3.1).
+         *
+         * IT IS A COUNT OF ITEMS AND NOT A SCREENFUL. The daemon rounds a page DOWN to an item
+         * boundary, so what arrives is whole messages; what this number bounds is how much of the
+         * machine's retained history one tap asks for. The facade refuses anything above its own
+         * frame bound, so a larger number here would be a press that can only ever be refused.
+         */
+        const val HISTORY_PAGE = 50L
+
+        /**
+         * What an ACCEPTED M3 read replies with (review round 2).
+         *
+         * A read that worked answers with its own op name rather than `ok`: `handleInteraction*`
+         * writes `Control{Op: OpInteractionHistory/OpInteractionDetail}` and the facade reports
+         * the reply's op as the outcome code where there is no error code. This is
+         * `renderPresetFlow`'s `"launch_presets"` arm, twice, and it is spelled here rather than
+         * inline so the two reads cannot drift apart from each other.
+         */
+        const val READ_HISTORY_OK = "interaction_history"
+
+        const val READ_DETAIL_OK = "interaction_detail"
+
+        /**
+         * The backfill instant for a session this surface has never backfilled.
+         *
+         * IT IS NOT ZERO. `SessionDetailOpen.plan` compares `now - last >= throttle` on a
+         * MONOTONIC clock whose zero is boot, so a session opened in the first thirty seconds of
+         * an uptime would read as "backfilled at boot, still inside the window" and would show an
+         * empty conversation with no read issued. A large negative instant is outside every
+         * window by construction.
+         */
+        const val NEVER_BACKFILLED = Long.MIN_VALUE / 2
+
+        /**
+         * The single-flight key prefix for a session's cold-open backfill, per session.
+         *
+         * PER SESSION AND NOT GLOBAL: two sessions opened in quick succession are two different
+         * reads and neither should drop the other, which is what one shared key would do.
+         */
+        const val BACKFILL_KEY = "backfill:"
+
+        /**
+         * What the screen says when a tapped block names an item the conversation no longer holds
+         * (Mirror M3's landing).
+         *
+         * IT IS SAID RATHER THAN SWALLOWED. The tap used to `return` in silence when the id did
+         * not match the card on screen -- which is exactly what a resolved approval looks like
+         * (IS-LIFE-2) and exactly what a retention-trimmed one looks like -- so the reader pressed
+         * a row and the screen did nothing at all.
+         */
+        const val ANCHOR_NOT_RETAINED =
+            "That message is no longer in the history this phone is holding."
 
         /**
          * What a control built as a SLOT is labelled before the screen that places it has said.

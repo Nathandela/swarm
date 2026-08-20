@@ -21,6 +21,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [011](ADR-011-multi-device-epochs.md) | Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces | Accepted (amended 2026-08-14, signed off 2026-08-15) | 2026-08-07 |
 | [012](ADR-012-type-ladder-consolidation-phase-1.md) | Type ladder consolidation, phase 1 — safe merges | Accepted | 2026-08-09 |
 | [013](ADR-013-mirror-capture-architecture.md) | Mirror capture architecture — structure beside the PTY; the phone's answer typed into the CLI's own dialog | Accepted (amended 2026-08-14, signed off 2026-08-15) | 2026-08-13 |
+| [014](ADR-014-paged-interaction-history.md) | Paged interaction history — the transcript's past read on demand, by item identity, with an honest floor | Accepted | 2026-08-19 |
 | [015](ADR-015-push-gateway-split.md) | The push gateway splits from the relay — Swarm operates the FCM sender, `swarm-remote` submits the wake, Android is the first client | Accepted | 2026-08-14 |
 | [016](ADR-016-web-pki-relay-tls.md) | Web PKI is the default relay TLS policy — the pin becomes an expert policy with an authenticated rotation | Accepted | 2026-08-14 |
 | [017](ADR-017-terminal-fallback-capability.md) | Capability-driven terminal fallback — the sanitized terminal returns, for the sessions that cannot be chat, and for nothing else | Accepted | 2026-08-14 |

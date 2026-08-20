@@ -162,6 +162,21 @@ var requiredScreenElements = []string{
 	// argv, cwd, env, or options -- these two elements are that whole surface.
 	"launch.presets", // playbook 4.3: the machine-published preset list the selection screen renders
 	"launch.confirm", // playbook 4.3: one signed session_launch at the confirmed revision
+
+	// ADDED BY WAVE R6 (Mirror M2.4, bead agents-tracker-hggx.7), additively and for the
+	// reason S16's block states. mobile/r6_chatverbs_test.go states the case and pins the
+	// verb's behaviour (live-only, structural refusals, the stale_turn class); the row's
+	// note carries the disclosed view-side residual.
+	"composer.send", // ADR-009 (8) / IS-LIFE-5: one structured message as the signed composer_send op
+
+	// ADDED BY THE WAVE R6 REVIEW FIX-PACK (finding B6), additively and for the same reason.
+	// ADR-014 §1 stated as an ACCEPTED DECISION that interaction_history and
+	// interaction_detail "are gateway-routed", and the route did not exist at any layer:
+	// internal/remotegw had no arm and no action constant, so a phone-issued read was
+	// refused "unsupported command action", and M3.1/M3.3 were unreachable from a handset
+	// while being marked GREEN. Building the gateway arm without a producer would have moved
+	// the same unreachable claim one layer over, so the facade half is named here.
+	"transcript.history", // ADR-014 / IS-CAP-2: page the transcript's past, and fetch one item's full body
 }
 
 type coverageRow struct {

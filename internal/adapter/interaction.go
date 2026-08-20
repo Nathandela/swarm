@@ -325,6 +325,31 @@ func AsApprovalApplier(a Adapter) (ApprovalApplier, bool) {
 	return ap, ok
 }
 
+// TurnInterrupter is the OPTIONAL interface an adapter implements when its CLI's current
+// turn can be interrupted by a RECORDED key sequence (Wave R6, Mirror M2.4's semantic Stop;
+// ADR-017 T2/T6). It is pure data out -- the CORE does the writing, exactly as Command/
+// Resume return an argv core runs -- and it is discovered by type assertion like every
+// other extension here.
+//
+// ABSENCE IS A SIGNAL (ADR-010 §5): an adapter that implements nothing here is complete
+// and fully supported; the daemon refuses turn_interrupt with interrupt_unsupported rather
+// than guessing a keystroke into a CLI whose cancel key nobody recorded (IS-TOOL-2's
+// never-guess posture one layer down), and the ADR-017 capability record derives its
+// `interrupt` field from this same seam, so the phone's Stop affordance and the op it
+// rides agree by construction.
+type TurnInterrupter interface {
+	// InterruptKeys is the CLI's OWN cancel sequence, written to the session's PTY
+	// verbatim. It must be non-empty: a declared interrupt that types nothing is a Stop
+	// button that does nothing.
+	InterruptKeys() []byte
+}
+
+// AsTurnInterrupter reports whether a proves a semantic interrupt seam.
+func AsTurnInterrupter(a Adapter) (TurnInterrupter, bool) {
+	ti, ok := a.(TurnInterrupter)
+	return ti, ok
+}
+
 // AsInteractionSource reports whether a implements the optional capture
 // extension. ok == false is the GENERIC-FALLBACK SIGNAL (ADR-010 §5): the adapter
 // is complete and fully supported, and the daemon derives items from the

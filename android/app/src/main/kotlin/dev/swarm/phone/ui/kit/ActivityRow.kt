@@ -58,12 +58,26 @@ import dev.swarm.phone.R
  *  sentence has a copy bug, and this fails loudly rather than rendering the row unemphasised,
  *  which is the failure nobody would see.
  * @param timestamp null renders no timestamp cell AT ALL rather than an empty one -- see above.
+ * @param glyph the leading kind cell (Mirror M2.2, Wave R6): one character naming what a row IS,
+ *  which for the chat transcript is `ToolCard.glyphFor(tool_kind)` -- §7's vocabulary mirrored
+ *  flat by the machine and read ONCE (IS-TOOL-1 forbids the phone inferring an action).
+ *
+ *  IT IS THE TIMESTAMP CELL'S TREATMENT AND ITS RULES, spent a second time rather than derived
+ *  again: the same `Mono.Meta` / `--p-ink3` role, the same wrap-content column, the same "absent
+ *  costs nothing" (null renders no cell, so a conversation of messages has no gutter reserved for
+ *  a symbol only tool rows carry). Row 14 states one leading cell and this is a second reading of
+ *  it, which is §2's reuse rule rather than a new value: nothing here is a number this file chose.
+ *
+ *  A CELL AND NOT A PREFIX ON [body]. The alternative -- splicing the character into the sentence
+ *  -- would put a symbol inside copy the SCREEN wrote (PB-DS-9) and would rewrite the transcript
+ *  lines the recorded Claude Code crossing pins byte for byte.
  */
 fun activityRow(
     context: Context,
     body: CharSequence,
     emphasis: CharSequence? = null,
     timestamp: CharSequence? = null,
+    glyph: CharSequence? = null,
 ): LinearLayout {
     val row = KitStack(
         context,
@@ -85,6 +99,17 @@ fun activityRow(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
+    if (glyph != null) {
+        row.addView(
+            Kit.textView(context).apply {
+                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+                setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
+                text = glyph
+                layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
+                tag = KitTag.ACTIVITY_GLYPH
+            },
+        )
+    }
     if (timestamp != null) {
         row.addView(
             Kit.textView(context).apply {

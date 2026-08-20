@@ -100,6 +100,11 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `subject_operation_id` | string          | Wave R5 `operation_status`: the operation being ASKED ABOUT — distinct from the query's own `operation_id` exactly as `interaction_id` is (ADR-007 D7) |
 | `operation_outcome` | `*OperationOutcomeView` | Wave R5 `operation_status` reply: `applied` (authoritative, with the session id), `outcome_unknown` (honest undecidability), or `unknown_operation` (no record; never invented) |
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
+| `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5): the phone's structured message under the wire name `composer_send`, carrying `session` / `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text or a different turn (ADR-009 (8)) |
+| `turn_interrupt`   | `*TurnInterruptReq` | Wave R6 `turn_interrupt` body, added by the review fix-pack (finding B7): the semantic Stop's subject under the wire name `turn_interrupt`, carrying `session` / `expected_turn`, bound into the device signature via `TurnInterruptContentHash` so a gateway cannot re-point a valid Stop at a different turn. `expected_turn` is REQUIRED and non-empty — the op was BODYLESS when it landed, and a Stop with no turn coordinate typed the cancel sequence into whatever turn was current on arrival, including one the owner had just started at the terminal |
+| `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; the reply rides the existing `journal` carrier, strictly older than `before_item`, ascending by cursor |
+| `interaction_detail` | `*InteractionDetailReq` | Wave R6 `interaction_detail` body (Mirror M3.3, IS-CAP-2): the unsigned detail read under the wire name `interaction_detail`, carrying `session` / `item_id`; the reply is exactly one `journal` record whose `item` is the FULL pre-truncation body, or the sealed `unavailable` refusal outside retention (IS-CAP-3) |
+| `history_floor`    | bool                | Wave R6 `interaction_history` reply: nothing older than the returned page is retained, so the phone renders a retention floor instead of offering "load earlier" forever (Mirror M3.1) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -550,9 +555,13 @@ re-delivered approve finds the approval already answered or already resolved, an
 > `operation_status` now have REAL handlers and no longer answer `op_not_implemented`;
 > see "`session_launch` / `launch_presets` / `operation_status` (Wave R5)" below. The
 > choke-point ordering this section pins (authz first, then `body_version`, then the
-> op-specific reply) is inherited by the real handlers unchanged. `composer_send`,
-> `turn_interrupt`, `terminal_control_begin` and `terminal_control_end` remain
-> refusal-only exactly as described here.
+> op-specific reply) is inherited by the real handlers unchanged.
+>
+> AMENDED BY WAVE R6 (2026-08-19, Mirror M2.4, ADR-009 (8)): `composer_send` and
+> `turn_interrupt` now have REAL handlers too — see "`composer_send` / `turn_interrupt`
+> / `interaction_history` / `interaction_detail` (Wave R6)" below, with the same
+> inherited choke-point ordering. Only `terminal_control_begin` and
+> `terminal_control_end` remain refusal-only exactly as described here.
 
 The Wave R1 "refusal-ops" skeleton (playbook §6.3, ADR-017 T5, ADR-007 B144): six signed
 remote-tier ops landing as **refusal-only** daemon handlers ahead of their real business
@@ -660,6 +669,141 @@ session id), `outcome_unknown` (a launch that died mid-flight and cannot be prov
 never silent), or `unknown_operation` (no record; never invented). The read has no side
 effect and never authorizes a retry (playbook:449): re-sending the SAME signed
 `session_launch` operation id is the one re-driver.
+
+### `composer_send` / `turn_interrupt` / `interaction_history` / `interaction_detail` (Wave R6)
+
+The complete-chat vocabulary (Mirror M2.4 / M3.1 / M3.3, ADR-009 (5)/(8), ADR-014,
+interaction-schema.md IS-LIFE-5 and IS-CAP-2/-3).
+
+**`composer_send`** is the phone's structured message into one session. The body
+(`Control.composer_send`: `session`, `expected_turn`, `text`) is bound into the device
+signature via `ComposerSendContentHash(session, expected_turn, text)`, recomputed
+daemon-side from the forwarded body, so a gateway cannot alter the text or re-point
+`expected_turn` under a valid signature. After the shared authz + `body_version` gates,
+structural refusals fire `invalid_field` in order: missing body; a body `session` that is
+not the signed `session_id` (the approve collision rule); empty `text`; text past the
+`send_input` path's own 4096-byte bound (refused, never truncated — a clipped send submits
+a different message than the one the signature covered). The daemon then checks
+`expected_turn` against the session's CURRENT turn (IS-ENV-1's own state): a send rendered
+against a turn that has moved on — a newer `user_message` opened a new turn, or the turn
+closed on a terminal `agent_message` — is refused **`stale_turn`** and types NOTHING; an
+idle session is matched by the EMPTY `expected_turn`. An accepted send is written into the
+session's PTY through the daemon's own input path with the r3p submit-boundary framing
+(the CR that runs the message never shares a write with it), and the daemon remembers the
+injection so the NEXT captured `UserPromptSubmit` echoing that text journals with
+`source: "phone"` and the op's `operation_id`.
+
+> ATTRIBUTION IS BOUNDED, NOT INFALLIBLE (amended by the Wave R6 review fix-pack, finding
+> B9). This paragraph used to end "an owner-typed prompt keeps `owner` and does not consume
+> the correlation", with no qualifier, and that is not something the mechanism can promise.
+> The CLI's `UserPromptSubmit` hook is the only echo and carries no injection id, so the
+> daemon correlates BY TEXT — and a probe showed both directions of the resulting collision:
+> an owner-typed `yes` at the terminal was stamped `source: "phone"` carrying the phone's
+> `operation_id`, because a phone send of `yes` was still pending. Short words are exactly
+> the ones two parties type identically. The correlation is therefore TIME-BOUNDED: a
+> pending injection expires after `skeleton.pendingSendTTL` (10 s, ~3 orders of magnitude
+> over the local hook round trip) and a prompt arriving after it keeps the adapter's honest
+> `owner`. What the daemon promises is that an attribution of `phone` is backed by an
+> injection it watched WITHIN that window; what it cannot promise is that two identical
+> prompts inside one window are told apart.
+
+**`composer_send` is refused on a degraded session.** A session degraded by a proven
+`structured_gap` (ADR-017 T2 rule 2), or holding a capability record that says
+`structured_chat` is false, has NO structured composer, because it has no message sink — the
+user's words would go into the PTY and the transcript could never show them, which is the gap
+silently bridged. The refusal is **`structured_unsupported`**, `turn_interrupt`'s
+`interrupt_unsupported` for the composer: the caller is fine, the capability is absent, and
+nothing is typed.
+
+> SHARPENED, SAME REVIEW ROUND. This paragraph opened "A session whose `structured_chat`
+> capability is absent, **or** has been degraded…", which reads as a promise the handler does
+> not keep: a session with **no capability record at all** is NOT refused. That is deliberate
+> and disclosed rather than an oversight — `registerSessionCapabilities` /
+> `deriveSessionCapabilities` have no production caller yet (`internal/skeleton/capability.go`
+> and `chat.go`'s gate both say so in as many words), so today NO live session has a record,
+> and refusing on absence would refuse every composer send on the wire: feature-off dressed as
+> fail-closed, hiding the very defect the gate exists to catch. The two facts the gate keys on
+> are the two that are production-reachable: the durable degrade marker, and a record that
+> exists and says false. When the capability-publication slice lands, the absent-record arm
+> becomes reachable and should tighten to a refusal; docs/verification/r6-chat.md carries that
+> as a named residual.
+
+**`composer_send` can still be merged with the owner's draft, and is not yet fixed.** The
+injection writes the text and the CR through the session tap with no check that the
+terminal's input region is empty; if the owner has a half-typed line there when the send
+lands, the phone's text is APPENDED and the CR submits the concatenation. ADR-017's
+IS-LIFE-5 amendment obligation (`expected_input_revision`, enforced by a shim-wide input
+transaction) is the fix, `internal/shim` is out of Wave R6's scope, and the gap is disclosed
+in ADR-017's "Deferred, disclosed" and in docs/verification/r6-chat.md rather than papered
+over.
+
+**`turn_interrupt`** is the semantic Stop as a signed op. Its body
+(`Control.turn_interrupt`: `session`, `expected_turn`) is bound into the device signature
+via `TurnInterruptContentHash(session, expected_turn)`, recomputed daemon-side, so a gateway
+cannot re-point a valid Stop at a different turn. After the shared authz + `body_version`
+gates the structural refusals fire `invalid_field` in order: missing `session_id`; missing
+body; a body `session` that is not the signed `session_id`; an EMPTY `expected_turn`. The
+daemon then checks `expected_turn` against the session's CURRENT turn and refuses
+**`stale_turn`** having typed nothing. Only then does it resolve the session's adapter seam
+and either type that adapter's OWN declared cancel sequence, or refuse
+**`interrupt_unsupported`** having typed nothing (ADR-017's honest degrade: "this provider
+version has no safe remote interrupt" is a nameable state, never a guessed keystroke and
+never a silent OK).
+
+> AMENDED BY THE WAVE R6 REVIEW FIX-PACK (finding B7). This op was specified here as
+> carrying "NO body — the signed tuple's `session_id` is its whole subject, so no new crypto
+> appears anywhere on its path", and the bodylessness was sold as a virtue. It was a defect.
+> `composer_send` carries `expected_turn` for a stated reason — a tap lands later than it was
+> rendered — and Stop is tapped under exactly that race; probed, a Stop rendered against turn
+> A returned `ok` and typed the cancel sequence into turn B, which in playbook §8.1 is the
+> turn the OWNER just started from the terminal. The Claude adapter's own note records that
+> the cancel key at an IDLE prompt clears the composer, so a late Stop wipes the terminal
+> user's half-typed line. The signed tuple's session is the AUTHORIZATION subject; the turn
+> is the OPERATIONAL one, and the op had none. The "no new crypto" half of the old sentence
+> still holds exactly: the body rides the tuple's EXISTING content slot, `composer_send`'s
+> own arrangement. `expected_turn` is REQUIRED and non-empty — there is deliberately no
+> spelling of "interrupt whatever is running", which is what closes the idle case.
+
+**`interaction_history`** and **`interaction_detail`** are UNSIGNED reads on the
+`terminal_watch` precedent (IS-CAP-2): never forwarded to the device authenticator, no
+device fields, and no new device-signed action — `actionClass` stays closed. They ARE
+gateway-routed (`opForAction`, `ActionInteractionHistory` / `ActionInteractionDetail`), and
+a read whose body was stripped in transit is refused at the gateway rather than forwarded
+bodyless, the rule `launch` / `approve` / `session_launch` / `composer_send` already ride.
+Daemon-side both require the negotiated `journal` capability AND honor the remote kill
+switch, exactly as `journal_read` does — the same two gates, the same two refusals, on the
+same plane.
+
+> CORRECTED BY THE WAVE R6 REVIEW FIX-PACK (finding B2). The gate sentence above used to
+> read "gating (capability, kill switch) is daemon-side, behind the seams", and the seams
+> applied neither: with the kill switch OFF, `journal_read` refused while
+> `interaction_history` served a `user_message`'s text verbatim and `interaction_detail`
+> served a full pre-truncation output body; with NO capability negotiated, `journal_read`
+> refused and `interaction_history` still served. Remote tier only — the owner tier shares
+> the kill-switch-implementing core and is never gated.
+
+`interaction_history` (`Control.interaction_history`: `session`, `before_item`,
+`limit`) answers on the existing `journal` carrier — every record the named session's,
+strictly older than `before_item`, ascending by cursor, at most `limit` — plus
+`history_floor` when nothing older is retained; an unknown `before_item` or a
+non-positive `limit` is refused `invalid_field`. The page also carries every
+`structured_gap` boundary inside its range, beside the `interaction` records: a page that
+omitted them would span a proven tear contiguously, which is ADR-017's silently-bridged gap.
+`limit` bounds RECORDS but the page begins on an ITEM BOUNDARY — the window is the largest
+suffix of whole items that fits, and one item too large to fit ships alone and over `limit`
+rather than being cut. (Amended by the fix-pack, finding B5: the trim was by raw record over
+a channel the phone pages by item id, so a multi-record `agent_message` could arrive as a
+headless tail that the phone rendered as a whole message and that no later page could ever
+return.) The boundary rule is ONE-SIDED, and review round 2 recorded that rather than leaving
+it implied: the page BEGINS on an item boundary and ENDS at `before_item`'s first record's
+cursor, so an item whose own later increments follow that cursor is delivered head-only. The
+consumer's rule keeps that honest rather than corrupt — a record that does not strictly advance
+its item's cursor is dropped, never concatenated in the wrong place — so what a reader sees is a
+message that stops early. ADR-014 A6 carries the full accounting. `interaction_detail`
+(`Control.interaction_detail`: `session`, `item_id`) answers exactly ONE `journal` record
+whose `item` is the FULL pre-truncation body retained at capture time; outside the bounded
+retention window it answers the sealed **`unavailable`** with no records at all (IS-CAP-3:
+never a partial body presented as whole).
 
 ### `terminal_subscribe` / `terminal_snapshot`
 

@@ -19,6 +19,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
@@ -89,6 +90,18 @@ func (b *reconnectBackoff) next() time.Duration {
 func (b *reconnectBackoff) reset() {
 	b.attempt = 0
 }
+
+// reconnectDelayObserver receives every delay App.run SCHEDULES between dial attempts,
+// with the 1-based attempt number. It is nil in production and installed only by a test
+// in this package; it is an atomic pointer rather than a plain var so an App generation
+// still winding down from an earlier test cannot race the installation.
+//
+// WHY IT EXISTS. PB-NET-4's schedule can be measured exactly here and nowhere else. The
+// out-of-process fence (mobile/conformance/pbnet4_flappingrelay_test.go) can only time
+// dial ARRIVALS at a relay, which is this delay plus the host's own scheduling and
+// transport latency -- so it can prove the schedule GROWS but can never hold it to
+// section 6.0's +/-20% band without asserting a quantity the code does not control.
+var reconnectDelayObserver atomic.Pointer[func(attempt int, d time.Duration)]
 
 // relayAcker releases consumed relay mailbox items. It is injected into the core, which
 // must not import the relay client (PB-BIND-0 constrains its closure).
@@ -377,9 +390,22 @@ func (a *App) run(ctx context.Context) {
 				s != connRelayInsecure && s != connRelayTrustUnavailable {
 				a.setConn(connReconnecting)
 			}
+			delay := rb.next()
+			// Test-only observation seam (nil in production, the internal/shim
+			// testHookAfterSignalArm pattern): it publishes the delay the loop SCHEDULED,
+			// which is the only place that quantity exists. Every out-of-process rig can
+			// see is a dial ARRIVING at a relay, which is the scheduled delay plus however
+			// long this host took to wake the goroutine and carry the connection -- a
+			// quantity PB-NET-4 does not control and must not assert (Wave R6 review round
+			// 3, finding F5(a): a 605.6 ms arrival gap against section 6.0's 600 ms
+			// ceiling, on a schedule that had been correct). It adds no production
+			// behaviour: nothing reads it unless a test has installed an observer.
+			if obs := reconnectDelayObserver.Load(); obs != nil {
+				(*obs)(rb.attempt, delay)
+			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(rb.next()):
+			case <-time.After(delay):
 			}
 			if ctx.Err() != nil {
 				break

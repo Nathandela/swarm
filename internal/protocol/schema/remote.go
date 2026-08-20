@@ -129,6 +129,18 @@ const (
 	// terminal_watch and terminal_unwatch have none.
 	ActionJournalResync = "journal_resync"
 
+	// ActionInteractionHistory / ActionInteractionDetail are Mirror M3.1/M3.3's two reads
+	// (ADR-014). They join journal_resync's class VERBATIM -- UNSIGNED, no actionClass
+	// entry, forwarded to the daemon as a plain op and gated THERE on the negotiated
+	// `journal` capability and the kill switch, exactly as handleJournalRead is. They ride
+	// bodies (before_item/limit, item_id) which the gateway carries but never reads, and
+	// which the gateway REFUSES to forward stripped: a bodyless history read would reach
+	// the daemon as a page request naming no item and surface as some other refusal for a
+	// frame that merely lost its payload (launch/approve/session_launch/composer_send's
+	// rule, inherited by the two reads).
+	ActionInteractionHistory = "interaction_history"
+	ActionInteractionDetail  = "interaction_detail"
+
 	// ActionPushPrefs sets the machine-side push preference for the signing device
 	// (PB-PUSH-8): which categories of transition may wake it. Unlike the reads above it
 	// IS signed and IS forwarded to the daemon's device authenticator -- the gateway holds
@@ -276,6 +288,25 @@ type RemoteCommand struct {
 	// already owns the ids of") was wrong across devices: operation_status is READ class,
 	// so ANY paired tier could read back another operation's namespaced session id.
 	SubjectOperationID string `json:"subject_operation_id,omitempty"`
+	// ComposerSend is the composer_send body (Wave R6, IS-LIFE-5): the structured message
+	// the phone authored, riding beside the signed tuple under launch's own rule -- the
+	// body is bound into the signature via ContentHash = ComposerSendContentHash(it),
+	// which the daemon recomputes from the forwarded body, so a gateway that alters the
+	// text or re-points expected_turn breaks the signature.
+	ComposerSend *ComposerSendReq `json:"composer_send,omitempty"`
+	// TurnInterrupt is the turn_interrupt body (Wave R6 review fix-pack B7). The op was
+	// bodyless until finding B7 proved a Stop with no turn coordinate lands the cancel
+	// sequence in whatever turn is current when it ARRIVES. The body is bound into the
+	// signature via ContentHash = TurnInterruptContentHash(it), recomputed daemon-side,
+	// on composer_send's exact pattern.
+	TurnInterrupt *TurnInterruptReq `json:"turn_interrupt,omitempty"`
+	// History and Detail are the two UNSIGNED M3 read bodies (ADR-014). They carry no
+	// signature binding because the ops carry no device signature at all -- sealing under
+	// the epoch content key is already proof the asker is the paired device, and the
+	// daemon gates them on the negotiated journal capability and the kill switch
+	// (handleInteractionHistory / handleInteractionDetail), exactly as journal_read is.
+	History *InteractionHistoryReq `json:"interaction_history,omitempty"`
+	Detail  *InteractionDetailReq  `json:"interaction_detail,omitempty"`
 	// BodyVersion binds this command to the R1 profile version the phone selected
 	// (RemoteProfileV1.AcceptedBodyVersions, ADR-017 T5 / playbook §6.3: "every durable
 	// semantic mutation binds the selected profile ... signs a canonical hash of its full

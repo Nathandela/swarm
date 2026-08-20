@@ -127,6 +127,135 @@ func SignApprove(ks crypto.KeyStore, in ApproveInput) (schema.DeviceCommandAuth,
 	})
 }
 
+// ComposerSendInput is the identity of a composer_send op the phone authors (Wave R6,
+// Mirror M2.4, IS-LIFE-5). ExpectedTurn and Text are the body's own halves beside the
+// session: all three are bound into the signature via ComposerSendContentHash.
+type ComposerSendInput struct {
+	Machine      string    // target machine endpoint id
+	Session      string    // namespaced session id the send targets
+	OperationID  string    // durable client-generated idempotency key
+	ExpiresAt    time.Time // command validity horizon
+	ExpectedTurn string    // the turn the phone rendered the send against ("" = idle)
+	Text         string    // the message
+}
+
+// SignComposerSend authors and signs a composer_send command, mirroring SignApprove: the
+// signed tuple's content slot is schema.ComposerSendContentHash over the SAME
+// (session, expected_turn, text) body SealComposerSendEnvelope carries, so a gateway that
+// alters the text or re-points expected_turn breaks the signature rather than reaching the
+// daemon as a well-formed send of something else. Re-deriving the hash at a call site is
+// the same forbidden duplication mobile/commands.go records for the take_control token.
+func SignComposerSend(ks crypto.KeyStore, in ComposerSendInput) (schema.DeviceCommandAuth, error) {
+	return SignCommand(ks, CommandInput{
+		Action:      schema.ActionComposerSend,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: schema.ComposerSendContentHash(&schema.ComposerSendReq{
+			Session: in.Session, ExpectedTurn: in.ExpectedTurn, Text: in.Text,
+		}),
+	})
+}
+
+// SealComposerSendEnvelope seals the SIGNED composer_send command together with its body
+// (Wave R6), mirroring SealSessionLaunchEnvelope: the body rides beside the signed tuple so
+// the gateway can forward it, the command's ContentHash must be
+// schema.ComposerSendContentHash(body) which the daemon recomputes from the forwarded body,
+// and BodyVersion is bound to the one profile version this phone read
+// (schema.CurrentProfileVersion) -- the daemon refuses any other, absent included. seq must
+// be unique per epoch.
+func SealComposerSendEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, body *schema.ComposerSendReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			ComposerSend:      body,
+			BodyVersion:       schema.CurrentProfileVersion,
+		},
+	})
+}
+
+// TurnInterruptInput is the identity of a turn_interrupt op the phone authors (Wave R6,
+// Mirror M2.4). ExpectedTurn is the turn the SCREEN drew the Stop button against; both it
+// and the session are bound into the signature via TurnInterruptContentHash.
+type TurnInterruptInput struct {
+	Machine      string    // target machine endpoint id
+	Session      string    // namespaced session id the interrupt targets
+	OperationID  string    // durable client-generated idempotency key
+	ExpiresAt    time.Time // command validity horizon
+	ExpectedTurn string    // the turn the phone rendered the Stop against; never empty
+}
+
+// SignTurnInterrupt authors and signs a turn_interrupt command, mirroring SignComposerSend
+// exactly -- which is the whole point of the Wave R6 fix-pack's finding B7. The two ops
+// answer the SAME race (a tap lands later than it was rendered) and now carry the same
+// precondition under the same binding, so a gateway that re-points expected_turn breaks the
+// signature rather than reaching the daemon as a well-formed Stop of a different turn.
+// Re-deriving the hash at a call site is the forbidden duplication SignComposerSend records.
+func SignTurnInterrupt(ks crypto.KeyStore, in TurnInterruptInput) (schema.DeviceCommandAuth, error) {
+	return SignCommand(ks, CommandInput{
+		Action:      schema.ActionTurnInterrupt,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: schema.TurnInterruptContentHash(&schema.TurnInterruptReq{
+			Session: in.Session, ExpectedTurn: in.ExpectedTurn,
+		}),
+	})
+}
+
+// SealTurnInterruptEnvelope seals the SIGNED turn_interrupt command together with its body
+// (Wave R6), mirroring SealComposerSendEnvelope. The body rides beside the signed tuple so
+// the gateway can forward it, the command's ContentHash must be
+// schema.TurnInterruptContentHash(body) which the daemon recomputes from the forwarded body,
+// and BodyVersion is bound to the one profile version this phone read. seq must be unique
+// per epoch.
+//
+// THE OP WAS BODYLESS UNTIL THE R6 FIX-PACK; see schema.TurnInterruptReq for what that cost.
+func SealTurnInterruptEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, body *schema.TurnInterruptReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			TurnInterrupt:     body,
+			BodyVersion:       schema.CurrentProfileVersion,
+		},
+	})
+}
+
+// SealInteractionHistoryEnvelope seals the UNSIGNED interaction_history read (Mirror M3.1,
+// ADR-014) with its paging body. UNSIGNED is journal_resync's decision verbatim (see
+// schema.ActionInteractionHistory): the tuple carries no device signature, sealing under the
+// epoch content key is already proof the asker is the paired device, and the gates that
+// matter are the daemon's own -- the negotiated `journal` capability and the kill switch.
+//
+// It carries no BodyVersion for the same reason journal_resync does not: body_version binds
+// a durable semantic MUTATION to a profile (ADR-017 T5), and a read mutates nothing.
+// seq must be unique per epoch.
+func SealInteractionHistoryEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, body *schema.InteractionHistoryReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			History:           body,
+		},
+	})
+}
+
+// SealInteractionDetailEnvelope seals the UNSIGNED interaction_detail read (Mirror M3.3,
+// IS-CAP-2), SealInteractionHistoryEnvelope's sibling on every count.
+func SealInteractionDetailEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, body *schema.InteractionDetailReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: cmd,
+			Detail:            body,
+		},
+	})
+}
+
 // SealApproveEnvelope seals the SIGNED approve command together with its ApproveReq body
 // (IS-LIFE-4), mirroring SealLaunchEnvelope: the body rides beside the signed tuple so the
 // gateway can reconstruct the approve Control the daemon validates against. seq must be

@@ -350,16 +350,25 @@ func s25WholeToken(code string, at int, opener string) bool {
 	return !strings.HasSuffix(before, "class") && !strings.HasSuffix(before, "fun")
 }
 
-// s25PressOpeners are the two shapes a dispatched press takes in this module.
+// s25PressOpeners are the three shapes a DISPATCHED facade call takes in this module.
 //
 // `Press(` is `PhoneSurface`'s own declaration type -- a plane, a verb and a settle, planned on
 // the looper and handed to [VerbDispatch] by `dispatchPress`. `press(` is that dispatcher call
 // itself, which is what `SettingsSurface` makes directly: its presses have no plan step, so a
 // Press type there would be a wrapper around one call site. BOTH ARE DISPATCHED, and a fence
 // that knew only the first read every SettingsSurface press as a stray main-thread call -- which
-// is the direction that fails loudly. The direction that fails silently is the one this pair
+// is the direction that fails loudly. The direction that fails silently is the one that pair
 // closes: a verb dispatched in the second shape looked, to the plane scan, like no press at all.
-var s25PressOpeners = []string{"Press(", "press("}
+//
+// `enqueue(` IS THE THIRD, AND IT WAS MISSING (Wave R6). It is `VerbDispatch`'s own sibling of
+// `press` for work NOBODY TAPPED -- same lanes, same `attached` check, same off-looper execution
+// -- and it exists precisely because `press` disables the control it is handed, which is the
+// right answer to a finger and the wrong one for a screen's own cold-open backfill (the argument
+// is agents-tracker-xla6's, in `VerbDispatch.enqueue`'s KDoc). This fence's subject is a waiting
+// verb reaching `awaitConn` ON THE MAIN THREAD, and an enqueued verb does not; reading it as a
+// stray call reported a correctly dispatched read as a defect, which is the direction that
+// drives the next author to route the call badly to make the gate quiet.
+var s25PressOpeners = []string{"Press(", "press(", "enqueue("}
 
 // s25PressBodies is every dispatched press in one source, in either shape, in source order.
 func s25PressBodies(code string) []s25Span {
@@ -601,6 +610,9 @@ func s25MisplanedPresses(code string, presses []s25Span, waiting, live map[strin
 		if len(waits) == 0 && len(lives) == 0 {
 			continue
 		}
+		// TWICE UNABLE TO MATCH A DECLARATION (Wave R6 round 3, the closing review's sweep of
+		// module-wide symbol checks): `body` is ONE press span rather than the module, and the
+		// dotted form cannot appear in `enum class SendPlane`'s own bare `COMMAND` / `LIVE`.
 		declaresCommand := strings.Contains(body, "SendPlane.COMMAND")
 		declaresLive := strings.Contains(body, "SendPlane.LIVE")
 		switch {

@@ -55,6 +55,10 @@ const (
 	ActionPushPrefs       = schema.ActionPushPrefs
 	ActionJournalResync   = schema.ActionJournalResync
 
+	// The two Mirror M3 reads (ADR-014), journal_resync's UNSIGNED class verbatim.
+	ActionInteractionHistory = schema.ActionInteractionHistory
+	ActionInteractionDetail  = schema.ActionInteractionDetail
+
 	// The R1 "refusal-ops" semantic vocabulary (playbook §6.3, ADR-017 T5, ADR-007 B144);
 	// see schema.ActionSessionLaunch's doc comment for the full contract.
 	ActionSessionLaunch        = schema.ActionSessionLaunch

@@ -6,14 +6,16 @@ package conformance_test
 // WHY THOSE CASES WENT, and what went with them. That test asserted two properties of three
 // verbs with no wire verb: the call fails VISIBLY, and it leaks no pending op. S16 wired two of
 // the three, so their cases asserted the product was still broken and were removed --
-// SetPushPreference now seals a real signed push_prefs, and Interrupt is a keystroke on the live
-// input plane. But the SECOND property did not stop applying to SetPushPreference: it still
+// SetPushPreference now seals a real signed push_prefs, and Interrupt rode the live input
+// plane until Wave R6 moved it onto the signed turn_interrupt op (M2.4). But the SECOND
+// property did not stop applying to SetPushPreference: it still
 // returns a.signedCommand, so it still issues an op, and the hazard the original test named is
 // unchanged -- an op no reply can ever resolve raises PendingOpCount for the life of the
 // process, which makes every REAL pending op invisible behind it.
 //
-// Interrupt is owed nothing here and that is not an omission: input is never acknowledged by the
-// machine, so it creates no op at all and the property is structurally inapplicable.
+// Interrupt now issues a tracked op too, and the gateway ANSWERS a forwarded turn_interrupt
+// (the daemon's reply is sealed back), so its pending op resolves the ordinary way; an
+// offline press refuses before anything is issued (mobile/r6_chatverbs_test.go pins both).
 //
 // THE ORDERING THIS FILE ALSO MEASURES. SetPushPreference persists the preference and advances
 // its durable version BEFORE sealing the command, so a send that then fails -- and ADR-007 B16

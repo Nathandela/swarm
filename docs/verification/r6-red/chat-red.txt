@@ -1,0 +1,1315 @@
+=== RED evidence: slice chat (Wave R6 remaining scope -- Mirror M2/M3 + playbook 8.1) ===
+Date: 2026-08-16 (UTC; per-run timestamps below)
+Role: RED (contract-test writer)
+Bead: agents-tracker-hggx.7 (R6 Claude complete chat; the spool foundation is ALREADY at
+      HEAD 5147465 and untouched by this slice -- its own evidence is spool-red.txt and
+      fixpack-red.txt beside this file)
+Scope: Mirror M2.1/M2.2/M2.3/M2.4/M2.5 and M3.1/M3.2/M3.3 rows plus the M3 deep-link
+      landing, turned into failing contracts per the rows' own test obligations. Owned
+      surfaces only: internal/protocol, internal/skeleton (interaction path),
+      internal/remotegw (op routing arms), internal/adapter/claude, internal/phonecore,
+      mobile/, android/. internal/pushgw, internal/shim's spool/hook internals, the R4
+      registry internals and cmd/swarm-pushgw are untouched.
+
+Baseline check: `go build ./...` exits 0 at capture time -- every file this slice adds is
+a _test.go / Test.kt file and NO production source was modified (git status: the only
+non-test working-tree modification, internal/remote/pairing/b69_accept_commit_test.go,
+predates this slice and is not this slice's). `go vet ./...` across the WHOLE repository
+reports failures in EXACTLY the five packages whose new tests freeze undefined symbols
+(internal/phonecore, internal/protocol, internal/remotegw, internal/skeleton, mobile) --
+nothing else in the tree regressed. internal/adapter/claude and android/gate compile
+clean and RED at runtime, for the right reasons, shown below.
+
+New test files (all additive; no existing file was modified), mapped to their rows:
+
+  internal/protocol/r6_composersend_test.go    -- M2.4: composer_send wire body
+      (session/expected_turn/text under Control.composer_send), content-hash binding
+      (schema.ComposerSendContentHash), authz-first ordering, bodyless/mismatch/empty/
+      oversize structural refusals, stale_turn sealed code, seamless-backend refusal
+  internal/protocol/r6_turninterrupt_test.go   -- M2.4: semantic interrupt as the signed
+      turn_interrupt op (no new body, no new crypto), authz-first, sessionless refusal,
+      interrupt_unsupported sealed code, refusal passthrough
+  internal/protocol/r6_historydetail_test.go   -- M3.1/M3.3: interaction_history
+      (session/before_item/limit; reply on Control.Journal + history_floor) and
+      interaction_detail (session/item_id; IS-CAP-2 UNSIGNED read, zero authenticator
+      tuples) with IS-CAP-3's `unavailable`
+  internal/skeleton/r6_composerapply_test.go   -- M2.4 daemon side: expected_turn
+      precondition against the daemon's own turn state incl. THE RACE TEST (turn advances
+      between render and tap -> stale_turn, PTY untouched; also the closed-turn ending),
+      accepted send typed into the live PTY (real injectRig session), injection-time
+      correlation (echoed UserPromptSubmit -> source "phone" + operation_id; owner-typed
+      prompt stays "owner" and does not consume the correlation)
+  internal/skeleton/r6_interruptapply_test.go  -- M2.4: adapter.AsTurnInterrupter seam
+      (claude proves keys; opencode proves none), InterruptTurn applies the declared
+      sequence / refuses interrupt_unsupported typing NOTHING, capability record derives
+      Interrupt from the seam (ADR-017 T2 rule 3)
+  internal/skeleton/r6_toolkind_test.go        -- M2.2: flat `tool_kind` on journalled
+      tool_run items (search/execute/fetch + `other` never guessed) + the schema row pin
+      (RUNTIME-RED; staged run below)
+  internal/skeleton/r6_historydetail_test.go   -- M3.1/M3.3 daemon side: paging
+      conformance (strictly older, ascending, limit-bound, honest floor, unknown
+      before_item / non-positive limit refused), capture-time detail store (truncated
+      item sets detail=true; full body retrievable past the clip; unknown -> unavailable)
+  internal/adapter/claude/r6_searchfetch_test.go -- M2.2: Grep/Glob/WebFetch arms driven
+      by RECORDED fixtures + PROVENANCE.md rows (RUNTIME-RED: fixtures not recorded yet)
+  internal/remotegw/r6_composerroute_test.go   -- M2.4 gateway hop: RemoteCommand
+      .ComposerSend carried verbatim, stripped body refused loudly (launch/approve rule
+      inherited), turn_interrupt stays bodyless and forwards
+  internal/phonecore/r6_composerverbs_test.go  -- M2.4/M2.2 phone core: SignComposerSend
+      binds ComposerSendContentHash over the same body SealComposerSendEnvelope carries
+      (round-tripped through remotegw.OpenRemoteCommand); fold carries Item.Source and
+      Item.ToolKind, absent facts stay absent
+  internal/phonecore/r6_deeplink_test.go       -- M3 deep-links: ItemStore.Resolve by
+      item_id (never cursor), survives a reconciliation that moved cursors (fold by id,
+      no duplication), honest miss for unretained/cross-session ids
+  mobile/r6_chatverbs_test.go                  -- M2.4: App.ComposerSend live-only
+      (offline class, nothing queued, zero pending ops), structural refusals,
+      ErrClassStaleTurn + STALE_TURN taxonomy row, Interrupt as the signed turn_interrupt
+      op with NO undelivered-input-ledger residue, TranscriptItem.ToolKind/Source
+  android/gate/r6_chat_ui_test.go              -- go-lane runtime RED companion (r5
+      precedent): Markdown.kt / ToolCard.kt existence + purity fences, InteractionItem's
+      five additive fields (toolKind/turnId/tsUnixMs/source/detail) + FacadeBridge
+      mapping, Composer send-state symbols, the five JVM suites exist
+  android/.../ui/kit/MarkdownTest.kt           -- M2.1: subset renders (paragraph/
+      heading/fence/bullets/links/spans) + INJECTION CONTROLS: HTML stays text,
+      javascript:/data: schemes yield no href, markdown inside code stays literal,
+      unterminated fence swallows nothing, pathological input total, parse pure
+  android/.../ui/kit/ToolCardTest.kt           -- M2.2: glyph per tool_kind (distinct,
+      closed, unknown->other), collapsed/expanded well, truncated+detail offers the
+      fetch, timestamp label (0 = absent fact), separator exactly on turn_id change
+  android/.../ui/screens/TranscriptIncrementalTest.kt -- M2.3: reconcile keyed by
+      item_id (burst -> appends only; status flip / approval resolution / text growth ->
+      single in-place rebind; unchanged -> nothing), stick-to-bottom only from the
+      bottom and never on a rebind, anchor survives a burst by id
+  android/.../ui/kit/ComposerSendStateTest.kt  -- M2.4/M2.5: availability online-only +
+      STRUCTURAL absence for structured_chat=false (ADR-017), visible pending/sent/
+      refused, stale_turn's own gentle draft-retaining notice, "Message"/"Add
+      feedback..." placeholder, multi-line paste never auto-submits
+  android/.../ui/screens/SessionDetailOpenTest.kt -- M3.2: cold-open backfill,
+      throttled; M3 deep-link: DeepLinkAnchor lands by id or answers NotRetained,
+      never a silent wrong landing
+
+-----------------------------------------------------------------------------
+Command: PATH="$HOME/go/bin:$PATH" go test -run '^$' -gcflags=-e ./internal/protocol/
+-----------------------------------------------------------------------------
+COMPILE RED. Full unresolved-contract census (54 root errors):
+  ComposerSendReq (12), Control.ComposerSend field (8), ComposerSender (1),
+  CodeStaleTurn (5), schema.ComposerSendContentHash (1);
+  TurnInterrupter (1), CodeInterruptUnsupported (3);
+  InteractionHistorian (1), InteractionDetailer (1), CodeUnavailable (4),
+  OpInteractionHistory (4), OpInteractionDetail (4), Control.History field (4),
+  Control.Detail field (4), InteractionHistoryReq (4), InteractionDetailReq (4),
+  Control.HistoryFloor field (1).
+Representative lines:
+  internal/protocol/r6_composersend_test.go:62:14: undefined: ComposerSendReq
+  internal/protocol/r6_composersend_test.go:102:3: unknown field ComposerSend in struct literal of type Control
+  internal/protocol/r6_composersend_test.go:146:19: undefined: CodeStaleTurn
+  internal/protocol/r6_composersend_test.go:184:20: undefined: schema.ComposerSendContentHash
+  internal/protocol/r6_turninterrupt_test.go:69:7: undefined: TurnInterrupter
+  internal/protocol/r6_turninterrupt_test.go:83:19: undefined: CodeInterruptUnsupported
+  internal/protocol/r6_historydetail_test.go:84:4: undefined: InteractionHistorian
+  internal/protocol/r6_historydetail_test.go:97:19: undefined: OpInteractionHistory
+  internal/protocol/r6_historydetail_test.go:157:10: got.HistoryFloor undefined (type Control has no field or method HistoryFloor)
+FAIL github.com/Nathandela/swarm/internal/protocol [build failed]
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' -gcflags=-e ./internal/skeleton/
+-----------------------------------------------------------------------------
+COMPILE RED (33 root errors), every one a frozen seam:
+  (*coreAPI).ComposerSend (10), protocol.ComposerSendReq (10), protocol.CodeStaleTurn (2),
+  (*coreAPI).InteractionHistory (4), (*coreAPI).InteractionDetail (2),
+  protocol.CodeUnavailable (1), adapter.AsTurnInterrupter (3),
+  (*coreAPI).InterruptTurn (3), protocol.CodeInterruptUnsupported (1).
+FAIL github.com/Nathandela/swarm/internal/skeleton [build failed]
+
+STAGED RUNTIME RED (fixpack-red.txt's staging convention): with ONLY the three
+compile-RED skeleton files temporarily set aside, the package compiles -- proving the
+package's compile failure comes solely from this slice's frozen symbols -- and the
+no-new-symbol file fails at RUNTIME against the fully assembled daemon:
+  Command: go test -run 'TestR6ToolKind' ./internal/skeleton/
+  --- FAIL: TestR6ToolKind_AToolRunItemCarriesTheFlatToolKindField (search/execute/fetch)
+      journalled tool_run tool_kind = "", want "search" [/"execute"/"fetch"]
+  --- FAIL: TestR6ToolKind_AnUnclassifiedCallCarriesOtherNeverAGuess
+      unclassified tool_run tool_kind = "", want "other"
+  --- FAIL: TestR6ToolKind_TheSchemaBooksTheFieldRow
+      interaction-schema.md documents no `tool_kind` field
+  (files restored immediately after the run; the tree holds all of them)
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' -gcflags=-e ./internal/remotegw/
+-----------------------------------------------------------------------------
+COMPILE RED (5 root errors):
+  internal/remotegw/r6_composerroute_test.go:40:24: undefined: protocol.ComposerSendReq
+  internal/remotegw/r6_composerroute_test.go:48:39: rc.ComposerSend undefined (type protocol.RemoteCommand has no field or method ComposerSend)
+  internal/remotegw/r6_composerroute_test.go:53:101: undefined: protocol.ComposerSendReq
+  internal/remotegw/r6_composerroute_test.go:70:3: unknown field ComposerSend in struct literal of type protocol.RemoteCommand
+  internal/remotegw/r6_composerroute_test.go:106:20: undefined: protocol.ComposerSendReq
+FAIL github.com/Nathandela/swarm/internal/remotegw [build failed]
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' -gcflags=-e ./internal/phonecore/
+-----------------------------------------------------------------------------
+COMPILE RED (22 root errors): SignComposerSend (2), ComposerSendInput (2),
+SealComposerSendEnvelope (1), schema.ComposerSendContentHash (1),
+schema.ComposerSendReq (2), RemoteCommand.ComposerSend (2), Item.Source (6),
+Item.ToolKind (2), (*ItemStore).Resolve (4).
+FAIL github.com/Nathandela/swarm/internal/phonecore [build failed]
+
+-----------------------------------------------------------------------------
+Command: go test -run '^$' -gcflags=-e ./mobile/
+-----------------------------------------------------------------------------
+COMPILE RED (12 root errors): (*App).ComposerSend (3), ErrClassStaleTurn (2),
+TranscriptItem.ToolKind (3), TranscriptItem.Source (4).
+FAIL github.com/Nathandela/swarm/mobile [build failed]
+
+-----------------------------------------------------------------------------
+Command: go test -run 'TestR6SearchFetch' ./internal/adapter/claude/
+-----------------------------------------------------------------------------
+RUNTIME RED, for the row's own reason -- the fixtures are a deliverable:
+  --- FAIL: TestR6SearchFetch_RecordedFixturesClassifyTheirOwnTools
+      LoadFixture(claude-grep-pretooluse.json): ... no such file or directory
+      LoadFixture(claude-glob-pretooluse.json): ... no such file or directory
+      LoadFixture(claude-webfetch-pretooluse.json): ... no such file or directory
+  --- FAIL: TestR6SearchFetch_TheProvenanceLedgerCarriesEachNewFixture
+      PROVENANCE.md has no row for each of the three
+RECORDING OBLIGATION (GREEN/owner): the three fixtures must be REAL captures (the S-B
+rig: real claude binary, real PTY, real hook sink, version-stamped), copied into
+testdata/interaction with `copied` PROVENANCE rows so provenance_test.go's sha256 fence
+holds them, exactly like the S-B three. Hand-authored bodies are the thing IS-TOOL-2
+exists to forbid; these tests deliberately load the corpus and nothing else.
+
+-----------------------------------------------------------------------------
+Command: go test -run 'TestR6_' ./android/gate/
+-----------------------------------------------------------------------------
+RUNTIME RED:
+  --- FAIL: TestR6_MarkdownRendererExistsAndIsPure         (Markdown.kt: no such file)
+  --- FAIL: TestR6_ToolCardExistsAndReadsTheFlatToolKind   (ToolCard.kt: no such file)
+  --- FAIL: TestR6_InteractionItemCarriesTheAdditiveFieldsAndTheBridgeMapsThem
+      (InteractionItem.kt lacks turnId/tsUnixMs/toolKind/source/detail; FacadeBridge
+       never maps getTurnID/getTSUnixMs/getToolKind/getSource/getDetail)
+  --- FAIL: TestR6_ComposerCarriesTheVisibleSendStates
+      (Composer.kt lacks SendState/PENDING/SENT/REFUSED/STALE_TURN)
+  TestR6_TheJVMSuitesExist PASSES by construction (this slice wrote the suites); it
+  fences their continued existence, not their outcome.
+
+-----------------------------------------------------------------------------
+Android gradle lane (the CI android job's discipline)
+-----------------------------------------------------------------------------
+environment:
+  JAVA_HOME=/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+  ANDROID_HOME=/usr/local/share/android-commandlinetools
+  script file: /tmp/r6_red_chat_androidunit.sh
+  command: ./gradlew --no-daemon --rerun-tasks --no-build-cache
+           :app:compileDebugUnitTestKotlin
+  == start: 2026-08-16T19:24:27Z
+  == end:   2026-08-16T19:26:03Z, BUILD FAILED in 1m 34s, script exit 1
+            (21 actionable tasks: 21 executed)
+  android/app/libs/swarm.aar mtime: Aug 16 18:34 local -- PREDATES the run's start
+  (21:24 local), so this lane did not rebuild the AAR; :app:requireSwarmAar only
+  asserted its presence. android/app/build/test-results/* mtimes: Aug 16 20:48 and
+  20:50 local, from earlier unrelated runs -- ALSO PREDATING this run's start. No test
+  task executed here and no test-result XML is claimed by this run (a compile-RED
+  produces none by definition; nothing under test-results was removed).
+
+COMPILE-LEVEL RED, the exact r4/r5 convention: 197 errors total; the ONLY files with
+errors are this slice's five new suites (MarkdownTest, ToolCardTest,
+TranscriptIncrementalTest, ComposerSendStateTest, SessionDetailOpenTest). Every root
+error is an unresolved R6 contract symbol; the rest are member/type-inference cascades
+of the same symbols inside lambdas. Unresolved-reference census (root symbols):
+   16 MarkdownBlock    15 Markdown        14 ToolCard        14 ComposerModel
+   12 TranscriptIncremental  6 TranscriptMutation  5 SendState
+    4 DeepLinkLanding   3 SessionDetailOpen  3 DeepLinkAnchor  3 ComposerAvailability
+plus the four InteractionItem additive-field errors, the exact contract:
+  e: .../ui/kit/ToolCardTest.kt:34:45 No parameter with name 'detail' found.
+  e: .../ui/kit/ToolCardTest.kt:35:9  No parameter with name 'toolKind' found.
+  e: .../ui/kit/ToolCardTest.kt:35:30 No parameter with name 'turnId' found.
+  e: .../ui/kit/ToolCardTest.kt:35:47 No parameter with name 'tsUnixMs' found.
+Full raw output: /tmp/r6_red_chat_android_out.txt at capture time (transient; the
+census above is the durable record, per the r5 precedent).
+
+No collateral damage: full-package runs of the two runtime-RED packages fail EXACTLY
+this slice's tests and nothing else --
+  go test ./internal/adapter/claude/  -> only the two TestR6SearchFetch_* fail
+  go test ./android/gate/             -> only the four failing TestR6_* above fail
+
+-----------------------------------------------------------------------------
+Pre-recorded supersessions (the R5 precedent: declared at RED, executed at GREEN
+with quoted assertions -- NEVER silently)
+-----------------------------------------------------------------------------
+1. internal/protocol/r1_refusalops_test.go r1Ops(): the composer_send and
+   turn_interrupt rows (wantCode CodeNotImplemented) retarget to the REAL handlers'
+   answers when the GREEN slice lands them -- composer_send's bodyless frame becomes
+   CodeInvalidField; turn_interrupt's well-formed frame becomes the seam's answer --
+   exactly as R5 retargeted session_launch/operation_status. Every choke-point
+   ordering assertion there is inherited unchanged.
+2. mobile/commands.go (*App).Interrupt: the input-plane ride ("an interrupt IS a
+   keystroke") rests on a premise Wave R1 dissolved (its own doc comment says the
+   rejected signed action would die "one hop short of the daemon" -- ActionTurnInterrupt
+   is now mapped at every hop) and M2.4 commands the replacement. The GREEN slice must
+   quote and retire that doc comment and ANY test pinning the input-plane ride or the
+   "interrupt" Op action, per the M1.2 authorized-rewrite rule. The Kotlin-side 4lta
+   pin (an offline Stop SAYS SO) is preserved, not weakened: the signed op refuses
+   offline legibly (mobile/r6_chatverbs_test.go:111 asserts exactly that).
+3. internal/skeleton/capability.go's header note "interrupt is left at its zero value
+   (false) for every adapter" becomes stale prose when the seam lands; the existing
+   capability_test.go table pins StructuredChat/TerminalFallback only, so no test
+   assertion weakens -- the note must be rewritten in the same GREEN commit
+   (r6_interruptapply_test.go:114 is the new pin).
+
+-----------------------------------------------------------------------------
+GREEN-slice obligations these tests deliberately imply (so none is discovered late)
+-----------------------------------------------------------------------------
+- GG-7: adding Control.ComposerSend / Control.History / Control.Detail /
+  Control.HistoryFloor trips internal/protocol/protocolmd_test.go until protocol.md
+  gains their field-table rows IN THE SAME COMMIT (ADR-009 (8) books the composer row
+  by name). WARNING for that author, from this wave's HARD RULES: a Meaning cell must
+  say "wire name" -- the protocolmd BIDI test parses the phrase spelled J-S-O-N-space-
+  k-e-y as a header row; never write it in a cell.
+- interaction-schema.md: §3.3 gains the `tool_kind` row (pinned by
+  internal/skeleton/r6_toolkind_test.go:80); §7's fetch arm needs its target-field
+  ruling recorded when the WebFetch fixture lands (the RED asserts only "some target
+  field is non-empty" to leave the ruling to the recorded payload).
+- ADR-014 (M3.1) is authored in the GREEN slice and must ratify -- or amend WITH quoted
+  supersession -- the interaction_history shape frozen in
+  internal/protocol/r6_historydetail_test.go.
+- mobile taxonomy fences: ErrClassStaleTurn needs its error_taxonomy.tsv row (pinned at
+  mobile/r6_chatverbs_test.go:93), its exported_surface.golden entry, the Kotlin
+  ErrorState token, and the conformance reachability row -- the three-directional s16
+  fences will hold it. New bound verbs (ComposerSend) join screen_coverage.tsv.
+- android/unbound-verbs.tsv: M2.4 names it -- composer_send/turn_interrupt leave the
+  unbound ledger when the Kotlin verbs bind them.
+- The M2.3 view-side wiring (PhoneSurface sessionDetailRedraw applying
+  TranscriptIncremental's mutations, Robolectric burst/scroll coverage against real
+  views) belongs to GREEN; the model contract here is deliberately view-free.
+
+-----------------------------------------------------------------------------
+Honest scope disclosure (what this RED slice does NOT cover)
+-----------------------------------------------------------------------------
+- M2.6 (MailboxWait long-poll replacing the 500 ms sleep) and its measured sub-300 ms
+  handset echo: not covered here; it needs its own RED against mobile/relay.go's poll
+  loop plus an owner-side measurement. Remaining-work item for the wave.
+- M2.7 (increment rendering): partially covered -- TranscriptIncrementalTest pins the
+  in-place text-growth rebind; the caret-while-streaming affordance and synthetic
+  increment feed are not pinned. Remaining-work item.
+- M3.4/M3.5 (JSONL-tail enrichment, tail-killed negative control, stop_reason): not
+  covered; own slice.
+- Approvals: the approve moment (cards, prompt cards, grid-gated injection, M1.4's
+  in-transcript sheet) LANDED in M1 with its own evidence (mirror-m1.md,
+  approval_inject_test.go, ApprovalSheetPanel prompt_card handling). This slice adds
+  only the M2.3-shaped pin that a resolution mutates the transcript in place
+  (TranscriptIncrementalTest.anApprovalResolutionIsAnInPlaceMutationToo) and the
+  re-delivery/first-answer-wins rows stay pinned where M1/spool left them.
+- The 8.1 physical demonstration is the OWNER's exit. The automated stand-ins this
+  wave's bar requires (one per 8.1 step) are to be enumerated and disclosed in
+  docs/verification/r6-chat.md by the closing agent; the stand-ins THIS slice
+  contributes are: step 1/2 (type from terminal, continue from phone) ->
+  r6_composerapply_test.go idle+race+attribution; step 3 (composer delivery) ->
+  r6_composersend/route/verbs chain; approvals from either side -> M1's suite;
+  wake/reopen-into-the-exact-card -> r6_deeplink_test.go + SessionDetailOpenTest;
+  finish from the terminal without session replacement -> owner-typed attribution +
+  the co-presence/spool evidence already on file. Gaps (network switch, background
+  wake timing) belong to the physical run and MUST be disclosed as such in r6-chat.md.
+
+
+================================================================================
+WAVE R6 REVIEW FIX-PACK -- RED EVIDENCE (2026-08-19)
+================================================================================
+
+Three independent adversarial reviewers rejected the R6 implementation slice with a
+convergent punch list. This section is the failing-first record for the GO half of that
+list (B1-B7, B9, B10, B13 and the Go/doc half of B5/B6). It is NOT the record of the
+original slice, which is above; it is the record of what the original slice got wrong.
+
+HOW EACH CAPTURE WAS TAKEN. Every fix below was first PROVEN by a reviewer's temporary
+probe. Each probe was converted into a PERMANENT test, and then -- for this record -- the
+FIX ALONE was reverted in place, the permanent test was run against the pre-fix code, and
+the output was captured verbatim before the fix was restored. So each block below is the
+new test failing against the code as three reviewers found it, not a transcription of what
+somebody expected it to say.
+
+The permanent tests are:
+  internal/remotegw/r6fix_forwardassembly_test.go   (B1, B6, B7 carriage)
+  internal/protocol/r6fix_chatgates_test.go         (B2, B7 wire)
+  internal/skeleton/r6fix_chat_test.go              (B3, B4a, B5, B7 daemon, B9)
+  internal/phonecore/r6fix_gap_test.go              (B4b)
+  mobile/r6_chatverbs_test.go                       (B7 facade)
+
+ONE CAPTURE DID NOT MEASURE WHAT IT AIMED AT, AND IS RECORDED RATHER THAN DISCARDED. The
+first B5 capture (21:14:28Z) reverted interactionHistory's CALL SITE while leaving
+historyPageStart in place, and the B5 tests exercise historyPageStart directly, so it
+exited 0 -- a green run that proved nothing. It is listed below with that verdict attached.
+The second B5 capture (21:14:42Z) reverts historyPageStart itself to the original
+record-wise trim and is the real one. An evidence file that quietly dropped the first
+attempt would be claiming a clean first try.
+
+--------------------------------------------------------------------------------
+----- B1 + B6 (gateway assembly + M3 route)
+RUN AT 2026-08-19T21:13:26Z  exit=1
+--- FAIL: TestR6Fix_EveryRemoteCommandBodyReachesTheDaemonControl (0.00s)
+    r6fix_forwardassembly_test.go:97: RemoteCommand.PushPrefs is exempt from forwarding: push_prefs is authorized by the daemon but APPLIED AT THE GATEWAY (PB-PUSH-8/PB-PUSH-10, CommandBridge.applyPushPrefs): the preference is gateway-side state, so there is no Control.PushPrefs for it to arrive in and routeCommand never reaches forward() for this action at all.
+    r6fix_forwardassembly_test.go:108: RemoteCommand.ComposerSend did NOT reach Control.ComposerSend: forwardControl forgot to copy it. This is finding B1 exactly -- composer_send was refused invalid_field on every real phone send because this one line was missing, and no test noticed because every test hand-built its own Control.
+    r6fix_forwardassembly_test.go:108: RemoteCommand.TurnInterrupt did NOT reach Control.TurnInterrupt: forwardControl forgot to copy it. This is finding B1 exactly -- composer_send was refused invalid_field on every real phone send because this one line was missing, and no test noticed because every test hand-built its own Control.
+    r6fix_forwardassembly_test.go:108: RemoteCommand.History did NOT reach Control.History: forwardControl forgot to copy it. This is finding B1 exactly -- composer_send was refused invalid_field on every real phone send because this one line was missing, and no test noticed because every test hand-built its own Control.
+    r6fix_forwardassembly_test.go:108: RemoteCommand.Detail did NOT reach Control.Detail: forwardControl forgot to copy it. This is finding B1 exactly -- composer_send was refused invalid_field on every real phone send because this one line was missing, and no test noticed because every test hand-built its own Control.
+--- FAIL: TestR6Fix_TheComposerBodyReachesTheDaemonThroughTheRealAssembly (0.00s)
+    r6fix_forwardassembly_test.go:138: the assembled Control carries NO composer body; the daemon refuses it invalid_field and the user's message is never typed
+--- FAIL: TestR6Fix_TheM3ReadsAreRoutedAndNotRefusedAsUnknownActions (0.00s)
+    --- FAIL: TestR6Fix_TheM3ReadsAreRoutedAndNotRefusedAsUnknownActions/interaction_history (0.00s)
+        r6fix_forwardassembly_test.go:186: opForAction(interaction_history) = remotegw: unsupported command action "interaction_history"; ADR-014 §1 states as an ACCEPTED DECISION that this read is gateway-routed, so a refusal here means the ADR documents a route that does not exist and M3 is unreachable from a phone
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.015s
+FAIL
+
+
+----- B2 (kill switch + capability on the two M3 reads)
+RUN AT 2026-08-19T21:13:42Z  exit=1
+--- FAIL: TestR6Fix_TheM3ReadsHonorTheKillSwitchExactlyAsJournalReadDoes (0.03s)
+    r6fix_chatgates_test.go:85: interaction_history with the kill switch OFF = op "interaction_history" code "" carrying 1 records; want the same "kill_switch" journal_read gives. This served a user_message's text verbatim to a phone the owner had just cut off.
+    r6fix_chatgates_test.go:90: the refused history read carried 1 journal records; a refusal must carry no content at all
+    r6fix_chatgates_test.go:98: interaction_detail with the kill switch OFF = op "interaction_detail" code "" carrying 1 records; want "kill_switch". This served a full pre-truncation output body to a cut-off phone.
+    r6fix_chatgates_test.go:103: the refused detail read carried 1 journal records; want none
+--- FAIL: TestR6Fix_TheM3ReadsRequireTheNegotiatedJournalCapability (0.00s)
+    r6fix_chatgates_test.go:136: interaction_history with NO capability negotiated = op "interaction_history" carrying 1 records; want the same refusal journal_read gives
+    r6fix_chatgates_test.go:136: interaction_detail with NO capability negotiated = op "interaction_detail" carrying 1 records; want the same refusal journal_read gives
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.848s
+FAIL
+
+
+----- B3 (composer_send on a degraded session)
+RUN AT 2026-08-19T21:14:01Z  exit=1
+2026/08/19 23:14:07 skeleton: grid-tap snapshot failed for session vldx5mwuwllrzcvf (1 total): dial unix /tmp/swsk3784892058/vldx5mwuwllrzcvf/shim.sock: connect: no such file or directory
+--- FAIL: TestR6Fix_ADegradedSessionRefusesTheComposerAndTypesNothing (4.35s)
+    r6fix_chat_test.go:87: composer_send on a TERMINAL-FALLBACK session was ACCEPTED (code ""): the user's message is typed into a PTY whose transcript can never show it -- ADR-017's silently-bridged gap, which is the one move the ADR forbids
+--- FAIL: TestR6Fix_ADegradeWithNoPriorRecordStillRefusesTheComposer (0.92s)
+    r6fix_chat_test.go:122: composer_send on a session with a PROVEN structured gap and no capability record was ACCEPTED (code ""): in production no record is ever authored, so this is the only shape the degrade actually takes
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	6.433s
+FAIL
+
+----- B7 (interrupt turn precondition, daemon side)
+RUN AT 2026-08-19T21:14:09Z  exit=1
+2026/08/19 23:14:15 skeleton: grid-tap snapshot failed for session bcwucc5lyuj2ohud (1 total): dial unix /tmp/swsk3894800720/bcwucc5lyuj2ohud/shim.sock: connect: no such file or directory
+--- FAIL: TestR6Fix_AStaleInterruptIsRefusedAndTypesNothing (4.65s)
+    r6fix_chat_test.go:183: a Stop rendered against the SUPERSEDED turn "01M0DXZWQRF8A46QQC5032F2SZ" was applied (code ""). In playbook §8.1 the turn it would have reached is the one the OWNER just started at the terminal, and the cancel key at an idle prompt clears their half-typed line.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.786s
+FAIL
+
+----- B9 (composer echo correlation is unbounded)
+RUN AT 2026-08-19T21:14:17Z  exit=1
+--- FAIL: TestR6Fix_AnExpiredInjectionNoLongerClaimsAnIdenticalOwnerPrompt (2.18s)
+    r6fix_chat_test.go:238: an owner-typed "yes" was stamped source=phone with operation_id=devA:01JPHONE, 11s after the injection it matched. Attribution must be a fact the daemon OBSERVED, and it observed no injection within the window.
+    r6fix_chat_test.go:244: the owner prompt carries operation_id devA:01JPHONE, binding a phone op to a message the phone did not send
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.298s
+FAIL
+
+----- B4a (history page drops the proven tear)
+RUN AT 2026-08-19T21:14:22Z  exit=1
+--- FAIL: TestR6Fix_TheHistoryPageCarriesTheStructuredGap (2.44s)
+    r6fix_chat_test.go:412: the history page (1 records) carries NO structured_gap. The daemon PROVED a capability tear between these two messages and the page presents them as contiguous -- ADR-017's silently-bridged gap, on the paging channel.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.505s
+FAIL
+
+----- B5 (history pages trimmed by record, not by item)
+RUN AT 2026-08-19T21:14:28Z  exit=0
+ok  	github.com/Nathandela/swarm/internal/skeleton	1.091s
+
+
+----- B5 (history pages trimmed by record, not by item)
+RUN AT 2026-08-19T21:14:42Z  exit=1
+--- FAIL: TestR6Fix_APageNeverBeginsInTheMiddleOfAnItem (0.01s)
+    r6fix_chat_test.go:329: the page begins at index 2 -- inside item 01JB's run. The phone folds by item_id and cannot know a head is missing, so it renders the tail of the agent's message as the whole of it, and the earlier records are unreachable forever.
+--- FAIL: TestR6Fix_AnItemLargerThanTheLimitShipsWholeRatherThanLivelocking (0.00s)
+    r6fix_chat_test.go:351: page start = 2 for an item of 3 records under limit 1; want 0 (the whole item). Any other answer returns a partial item or an empty page with more available, and the phone can never make progress
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.083s
+FAIL
+
+
+----- B4b (phone transcript drops the proven tear)
+RUN AT 2026-08-19T21:14:56Z  exit=1
+--- FAIL: TestR6Fix_AStructuredGapIsAFirstClassTranscriptElement (0.01s)
+    r6fix_gap_test.go:63: the structured_gap did not land: the tear the daemon PROVED is invisible to the phone, so the transcript draws the items either side of it as one continuous conversation -- ADR-017 T2 rule 2's silently-bridged gap, exactly
+--- FAIL: TestR6Fix_AGapWithNoDecodablePayloadStillRendersTheTear (0.00s)
+    r6fix_gap_test.go:127: a structured_gap with no payload was dropped; the tear is real whether or not its reason survived
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.011s
+FAIL
+
+----- B4 (structured_gap payload never crossed toWireJournalRecord)
+RUN AT 2026-08-19T21:14:59Z  exit=1
+--- FAIL: TestR6Fix_TheHistoryPageCarriesTheStructuredGap (2.48s)
+    r6fix_chat_test.go:406: the structured_gap crossed the wire with an EMPTY body: the phone can see that a tear exists only by inspecting the type, and has nothing to render
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.560s
+FAIL
+
+
+--------------------------------------------------------------------------------
+B10 -- THE GATES WERE RED WHEN THE FIX-PACK STARTED (captured before any change)
+--------------------------------------------------------------------------------
+
+B10(a) internal/remotegw, 2026-08-19T20:41Z, exit=1:
+
+    --- FAIL: TestR1RefusalOps_ForwardedToDaemonNeverGatewayLocallyRefused
+        --- FAIL: .../composer_send
+            r1_refusalops_test.go:114: PollOnce: cursor 1: remotegw: composer_send command
+            missing its composer body in-envelope -- a mapped action must forward, not
+            refuse locally
+    --- FAIL: TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal
+        r1_refusalops_test.go:216: poll err = cursor 1: remotegw: composer_send command
+        missing its composer body in-envelope
+        r1_refusalops_test.go:222: run 1 forwarded 0, want 1
+
+  The new body gate in command_loop.go was CORRECT; the supersession had been executed on
+  internal/protocol/r1_refusalops_test.go and the remotegw TWIN of the same table was never
+  touched. Fixed the way R5 fixed this exact case for session_launch: the row gets a REAL
+  BODY with a quoted supersession comment. No assertion weakened -- the stripped-body
+  refusal it used to accidentally exercise is separately pinned by
+  TestR6ComposerRoute_AStrippedBodyIsRefusedLoudlyNeverForwardedBodyless.
+
+B10(b) internal/phonecore, 2026-08-19T20:41Z, exit=1:
+
+    --- FAIL: TestPhoneSeals_TheSweepCoversEveryProducerInThePackage
+        issuedat_test.go:154: command.go declares SealComposerSendEnvelope, which the
+        IssuedAt sweep does not cover ...
+        issuedat_test.go:154: command.go declares SealTurnInterruptEnvelope, which the
+        IssuedAt sweep does not cover ...
+
+  Both DO stamp IssuedAt via sealPhoneFrame, so this was a RED FENCE rather than a live
+  PB-GW-6 defect -- but for those two verbs PB-GW-6 was asserting nothing at all, which is
+  the state the fence exists to make impossible. Fixed by covering them, plus the two new
+  M3 read seals, in phoneSeals.
+
+B10(c) internal/skeleton TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing:
+  see docs/verification/r6-chat.md and the return note -- investigated, NOT reproduced, and
+  therefore NOT "fixed" by a speculative change to a rig that may not be racy. Recorded as
+  open rather than closed on a guess.
+
+--------------------------------------------------------------------------------
+SUPERSESSIONS EXECUTED BY THIS FIX-PACK (each carries its reason at its own site)
+--------------------------------------------------------------------------------
+
+1. internal/protocol/r1_refusalops_test.go, turn_interrupt row: wantCode
+   CodeNotImplemented -> CodeInvalidField. The row's R6 comment justified keeping the value
+   on the premise "the op has no body". Finding B7 removed that premise: turn_interrupt now
+   carries (session, expected_turn), so the bodyless frame this table sends is refused
+   STRUCTURALLY before the seam, exactly as composer_send's row two lines up. The
+   seam-absent CodeNotImplemented answer the row used to measure is STILL measured, by
+   r6_turninterrupt_test.go's ...ABackendWithoutTheSeamRefusesRatherThanPretending, which
+   sends a well-formed frame and therefore reaches the seam. Nothing is lost.
+
+2. internal/remotegw/r6_composerroute_test.go:
+   TestR6ComposerRoute_TurnInterruptStaysBodylessAndForwards ->
+   ...TurnInterruptCarriesItsTurnAndForwards. The old test asserted the DEFECT ("the body
+   gate must not grow to cover it"). Its load-bearing assertion -- the interrupt forwards
+   and is never gateway-locally refused -- is unchanged; only what "well-formed" means
+   changed. The stripped-body refusal it now implies is pinned in
+   r6fix_forwardassembly_test.go.
+
+3. internal/protocol/r6_historydetail_test.go: every connection now negotiates CapJournal.
+   The file's header asserted "gating (capability, kill switch) is daemon-side, behind the
+   seams"; finding B2 proved the second half false. NO assertion about a reply's CONTENT
+   changed -- the connections simply now negotiate the capability the reads require, and the
+   two gates get their own fences.
+
+4. internal/skeleton/r6_interruptapply_test.go and internal/protocol/r6_turninterrupt_test.go:
+   seam and frame signatures follow B7. Every assertion is unchanged; each call now names
+   the turn it is stopping.
+
+5. mobile: App.Interrupt(session) -> App.Interrupt(session, expectedTurn). REQUIRES a
+   Kotlin change at android/.../PhoneSurface.kt:356 (app.interrupt(target)), which this lane
+   does not own and must not touch. Flagged to the Android lane.
+
+--------------------------------------------------------------------------------
+NOT FIXED, DISCLOSED (see docs/verification/r6-chat.md's CANNOT YET)
+--------------------------------------------------------------------------------
+
+B13. injectComposerText writes text+CR with no empty-input-region check and no input
+transaction, so a phone send can be MERGED WITH THE OWNER'S HALF-TYPED DRAFT and the CR
+submits the concatenation -- a message nobody wrote. ADR-017's IS-LIFE-5 amendment
+obligation is discharged IN WRITING in that ADR (the (a)/(b)/(c) accounting), disclosing
+that (a) -- expected_input_revision and the shim-wide input transaction -- is deferred,
+because only internal/shim owns the PTY writer and can make the check atomic, and because
+NO adapter seam characterizes the input region (ApprovalApplier, TurnInterrupter,
+InteractionSource, HostProber -- none of them). Deriving "the composer is empty" from the
+raw grid would be the never-guess move IS-TOOL-2 forbids.
+
+ADJACENT DEFECT FOUND WHILE FIXING B3, disclosed not closed: registerSessionCapabilities
+and deriveSessionCapabilities have NO PRODUCTION CALLER -- they are reached only from tests
+-- so no live session has a capability record at all, and ADR-017 T2 rule 3's "the phone
+renders from the capability record" has no record to render from. It is invisible to the
+B94 fence because both are unexported. Consequence for B3: the composer gate keys on the
+durable degrade MARKER (markSessionDegraded IS wired, from hookdrain.go), because a gate
+reading only the record would never fire on any real session. The absent-record arm is
+deliberately NOT a refusal -- with the derivation unwired that would refuse every send on
+every session, feature-off dressed as fail-closed -- and is pinned as a disclosed
+compromise by TestR6Fix_AnUndegradedSessionWithNoRecordStillAcceptsTheComposer.
+
+--------------------------------------------------------------------------------
+B10(c) -- THE APPROVAL FLAKE: INVESTIGATED, NOT REPRODUCED, NOT "FIXED"
+--------------------------------------------------------------------------------
+
+The punch list reported that
+TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing
+(internal/skeleton/approval_validate_r4_test.go:131) failed 1 of 3 clean
+`go test -race -count=1 ./internal/skeleton/` runs and passes in isolation, and instructed:
+root-cause it as a rig race and fix the RIG's synchronization, never the assertion -- with
+the house rule that a CI-load flake is always PROVEN BY INJECTION before it is called fixed.
+
+INJECTION ATTEMPTED. It did not reproduce:
+
+  8 x  GOMAXPROCS=2 go test -race -count=1 ./internal/skeleton/ \
+         -run TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing
+       -> ok, 8/8 (4.8s - 6.4s each), 2026-08-19T21:18Z
+
+  4 x  go test -race -count=1 ./internal/skeleton/     (the FULL package, the shape the
+                                                        report names)
+       -> ok, 4/4, 2026-08-19T21:16:40Z / 21:21:12Z / 21:25:56Z / 21:30:27Z
+          (271.1s, 282.2s, 269.9s, 266.9s)
+
+  1 x  go test -count=1 ./internal/skeleton/  (no race) -> ok, 247.5s, 2026-08-19T20:44Z
+       (the pre-change baseline)
+
+NOTHING WAS CHANGED, AND THAT IS THE FINDING. The house rule cuts both ways: a flake is
+proven by injection before it is called fixed, and a rig is not "synchronized" by a change
+whose effect nobody can measure. Editing the rig here would produce a green run
+indistinguishable from the twelve green runs above and a claim -- "the race is fixed" --
+with no evidence under it. That is the shape of claim this wave's review exists to catch.
+
+WHAT WAS READ, so the next agent starts further along than this one did. The test's own
+timing surface is:
+  - `launchFake(t, sk, "print REFUSE\nidle 60s\n")`: the fake CLI exits after 60 SECONDS.
+    Nothing in the test bounds its own duration against that 60s, so a package run slow
+    enough to push the seven subtests past the fake's lifetime changes what the daemon can
+    observe underneath them. Twelve runs did not get near it (the test completes in ~1-3s),
+    but it is the one unbounded relationship in the rig.
+  - the trailing `time.Sleep(500 * time.Millisecond)` before the "no approval_resolved"
+    sweep: a wall-clock wait for an event that must NOT arrive. Under load it can only make
+    the test pass more easily, never fail -- so it is not the flake, but it is the reason a
+    real regression here would be quiet.
+It uses launchFake, not the modified gridScript rig, so the R6 slice's rig changes are not
+implicated on the evidence available.
+
+RECORDED AS OPEN. docs/verification/r6-chat.md must not claim this gate is clean on the
+strength of twelve passes; twelve passes bound the rate, they do not disprove it.
+
+================================================================================
+WAVE R6 FIX-PACK -- ANDROID LANE (Mirror M2/M3 view slice, review finding B8;
+plus findings B11 and B12). Bead agents-tracker-hggx.7.
+Captured 2026-08-19, UTC. Host: darwin/arm64, JDK 21, Gradle 9.5.1 wrapper,
+AGP/Robolectric as pinned in android/toolchain.env.
+
+WHAT WAS RED, AND HOW IT WAS MADE RED. Every capture below reverts THE FIX and
+nothing else, in place, then runs the permanent suite against it. The reverts
+are listed line by line so a reader can re-apply them; the green files were kept
+aside and restored immediately after each run (verified by diff).
+
+Gradle discipline for every run in this record: a SCRIPT FILE (never a bare
+command line -- `pgrep -f gradle-wrapper.jar` self-matches from one and hangs),
+./gradlew --no-daemon --rerun-tasks --no-build-cache, no test-results directory
+was ever deleted, and android/app/libs/swarm.aar was printed before and after
+each run and did not move (2026-08-19T21:49:21Z, 12514800 bytes -- rebuilt from
+the current mobile/ at 21:49:03Z before any of this).
+
+--------------------------------------------------------------------------------
+RED 1 -- 2026-08-19T22:25:40Z .. 22:28:08Z   (BUILD FAILED, 26 tests, 6 failed)
+   ./gradlew ... :app:testDebugUnitTest --tests '*MarkdownLinkHonestyTest'
+                                        --tests '*TranscriptChatRenderTest'
+
+REVERTED (three hunks, all restored after the run):
+  ui/kit/Markdown.kt      linkAt: `Span(shownFor(label, target, href), ...)`
+                            -> `Span(label, ...)`            [finding B11 (a)]
+  ui/kit/Markdown.kt      Scan.find: the remembered-miss body
+                            -> `text.indexOf(needle, from)`  [finding B11 (b)]
+  ui/screens/TranscriptView.kt  rowFor: `markdownBody(...)` -> `block.line`,
+                            `timestamp = block.timestamp...` -> `null`,
+                            `glyph = block.glyph...`         -> `null`
+                                                             [finding B8]
+
+FAILURES, verbatim from the JUnit XML:
+
+  MarkdownLinkHonestyTest > a label naming another host is replaced by the real destination
+      org.junit.ComparisonFailure: the phone drew a tappable span reading like a
+      bank while pointing at another host. What is shown must be where it goes
+      expected:<https://[evil.example/pay]> but was:<https://[your-bank.example/login]>
+
+  MarkdownLinkHonestyTest > a bare-host label pointing elsewhere is replaced too
+      org.junit.ComparisonFailure: expected:<[https://evil].example> but was:<[your-bank].example>
+
+  MarkdownLinkHonestyTest > an adversarial run of unmatched markers parses without quadratic blow-up
+      java.lang.AssertionError: parsing four unmatched-marker runs took 21782ms.
+      The class KDoc claims every pass is a single linear scan; a quadratic
+      re-scan per marker is a cost the agent's output chooses, on the thread
+      PhoneEvents redraws from
+
+      ^ 21.8 SECONDS for 40k of each unmatched marker. This is the half of B11
+        that was recorded as a documentation defect ("fix the code or the
+        claim") and measures as a denial of service: agent prose is
+        adversarially sourced, PhoneEvents posts a redraw to the MAIN LOOPER on
+        every interaction event, and the input that costs it is four lines of a
+        quoted README. The fixed parser runs the same input in well under the
+        2 s bound the test asserts.
+
+  TranscriptChatRenderTest > a tool run draws the flat tool_kind glyph as its own cell
+      org.junit.ComparisonFailure: the glyph is not on screen, so M2.2's card is
+      a model nothing draws expected:<[R]> but was:<[]>
+
+  TranscriptChatRenderTest > the markdown styling reaches the view as spans on the body
+      java.lang.AssertionError: the row's body is a plain String, so the markdown
+      the model parsed is invisible
+
+  TranscriptChatRenderTest > a markdown link that lies about its destination is not drawn as written
+      java.lang.AssertionError: the transcript drew a span reading like a bank
+      and pointing somewhere else
+
+DISCLOSED LIMIT OF THIS CAPTURE. `the timestamp is drawn where the turn changes
+and nowhere else` PASSED under the revert, because it asserts on the SCREEN
+MODEL and the revert removed only the VIEW's use of it. That is honest and it is
+also a weaker fence than the glyph's, which asserts the rendered cell; recorded
+rather than papered over.
+
+--------------------------------------------------------------------------------
+RED 2 -- 2026-08-19T22:28:37Z .. 22:30:17Z   (BUILD FAILED at
+   :app:compileDebugUnitTestKotlin -- a COMPILE-RED on frozen symbols, which is
+   this wave's own precedent for a contract that does not exist yet)
+   ./gradlew ... :app:testDebugUnitTest --tests '*TranscriptIncrementalPositionTest'
+
+REVERTED (restored after the run):
+  ui/screens/TranscriptIncremental.kt
+      TranscriptMutation.Append(index, item, tail) -> Append(item)
+      TranscriptMutation.Remove(itemId)            -> deleted
+      diff(): the removals pass                    -> deleted
+      stickToBottom():  `Append && it.tail`        -> `Append`   [finding B12]
+
+  (BlockMutation and reconcileBlocks were left in place, so production still
+  compiled: the revert is of the MODEL the finding is about, not of the app.)
+
+FAILURES, verbatim:
+
+  e: TranscriptIncrementalPositionTest.kt:57:30 Unresolved reference 'index'.
+  e: TranscriptIncrementalPositionTest.kt:69:50 Unresolved reference 'index'.
+  e: TranscriptIncrementalPositionTest.kt:80:65 Unresolved reference 'Remove'.
+  e: TranscriptIncrementalPositionTest.kt:86:28 Unresolved reference 'it'.
+  (+ two induced "Cannot infer type for type parameter 'R'" on the same lines)
+
+  ^ B12 exactly: an insertion could not say WHERE it went, so ADR-014's paged
+    history could only be appended at the END -- a week-old exchange drawn below
+    the message the reader was looking at -- and a departure had no vocabulary
+    at all, so `phonecore.MaxItemsPerSession`'s head trim left a row on screen
+    over a transcript that no longer holds it.
+
+--------------------------------------------------------------------------------
+GREEN, same suites and the whole module: see docs/verification/r6-chat.md's
+Gates section. The green files were restored from /tmp before the green run and
+the restoration was verified with `diff -q` on all three.
+
+--------------------------------------------------------------------------------
+GREEN, ANDROID LANE -- 2026-08-19T22:50:29Z .. 22:54:55Z  (BUILD SUCCESSFUL)
+   ./gradlew --no-daemon --rerun-tasks --no-build-cache \
+       :app:testDebugUnitTest lint :app:assembleDebug
+
+   170 result XML files, ALL mtimes 2026-08-19T22:54:51Z -- after the recorded
+   start of 22:50:29Z, so the results are this run's and not a stale directory
+   (no test-results directory was deleted at any point).
+   tests=1354  failures=0  errors=0  skipped=0
+   android/app/libs/swarm.aar before AND after: 2026-08-19T21:49:21Z, 12514800
+   bytes -- the same artifact throughout, rebuilt from the current mobile/ at
+   21:49:03Z before the lane started, so no dependency was swapped mid-build.
+   No production or test Kotlin was edited after 22:50:29Z (verified with
+   `find -newer` against a reference file at that instant).
+
+   The suites this lane added or changed, all green:
+     MarkdownLinkHonestyTest             8
+     TranscriptChatRenderTest           18
+     TranscriptIncrementalPositionTest   6
+     TranscriptIncrementalRedrawTest     7
+     SessionDetailComposerTest          11
+   and the frozen ones they had to keep green:
+     TranscriptScreenGoldenTest          6   (the recorded Claude Code crossing)
+     StreamingRedrawTest                 3   (what a patch may and may not touch)
+     TranscriptIncrementalTest           8   (the M2.3 model's own contract)
+     PhoneSurfaceControlsTest            3   (PB-E2E-2's controls, by label)
+     TranscriptPanelTest / TranscriptViewTest / SessionDetailViewTest  22/9/24
+
+   Go side, same lane: go build ./... , go vet ./... , golangci-lint run (v2,
+   0 issues), go test ./android/gate/ ./mobile/ ./internal/verify/
+   ./internal/protocol/ -- all ok at 22:55:39Z .. 22:57:03Z.
+
+
+================================================================================
+WAVE R6 -- REVIEW ROUND 2 RED EVIDENCE (2026-08-20)
+================================================================================
+
+The fix-pack's own reviewer confirmed B1-B13 fixed BY MUTATION and then found four more
+blockers plus three smaller findings, every one of the same shape: a layer that existed and had
+never been exercised. Each fix below was written failing-first; where the defect was in code
+that already existed (rather than a missing symbol), the RED was captured by RESTORING the code
+to the state the reviewer found it in, running the new fence, and restoring the fix -- the
+mutation is named in each capture's own header so a reader can repeat it.
+
+Captures, in the order they were taken:
+
+  1. internal/phonecore                     -- undefined-only (ApplyDetail, ApplyPage, MaxBackfillPerSession)
+  2. mobile/conformance                     -- undefined-only (App.HistoryAtCapacity)
+  3. internal/phonecore RecordOutcome       -- pre-fix state restored
+  4. mobile/conformance, both M3 reads      -- pre-fix adoptInteractionRead restored
+  5. android/gate                           -- the production surface claims NO R6 verb's answer
+  6. internal/skeleton                      -- the reviewer's own surviving pendingSendTTL mutation
+  7. android :app:testDebugUnitTest         -- the JVM suites, compile-RED then behavioural-RED
+
+--- CAPTURE 1 ---------------------------------------------------------------
+
+=== 2026-08-20T00:02:30Z RED capture 1: internal/phonecore (undefined-only)
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/r6r2_interactionread_test.go:88:8: s.ApplyDetail undefined (type *ItemStore has no field or method ApplyDetail)
+internal/phonecore/r6r2_interactionread_test.go:122:7: s.ApplyDetail undefined (type *ItemStore has no field or method ApplyDetail)
+internal/phonecore/r6r2_interactionread_test.go:153:8: s.ApplyPage undefined (type *ItemStore has no field or method ApplyPage)
+internal/phonecore/r6r2_interactionread_test.go:187:23: undefined: MaxBackfillPerSession
+internal/phonecore/r6r2_interactionread_test.go:194:9: s.ApplyPage undefined (type *ItemStore has no field or method ApplyPage)
+internal/phonecore/r6r2_interactionread_test.go:202:7: s.ApplyPage undefined (type *ItemStore has no field or method ApplyPage)
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+--- CAPTURE 2 ---------------------------------------------------------------
+
+=== 2026-08-20T00:05:27Z RED capture 2: mobile/conformance (undefined-only: App.HistoryAtCapacity)
+# github.com/Nathandela/swarm/mobile/conformance_test
+# [github.com/Nathandela/swarm/mobile/conformance_test]
+vet: mobile/conformance/r6r2_chatoutcome_test.go:220:26: h.App.HistoryAtCapacity undefined (type *swarmmobile.App has no field or method HistoryAtCapacity)
+
+--- CAPTURE 3 ---------------------------------------------------------------
+
+=== 2026-08-20T00:07:07Z RED capture 3: internal/phonecore RecordOutcome, pre-fix state restored (the line 'ctrl.Journal = nil' removed) so the assertion is measured against the code as the reviewer found it
+--- FAIL: TestR6R2_ADurableOutcomeIsAVerdictAndNotAPayload (0.05s)
+    r6r2_interactionread_test.go:242: the durable outcome carries 1 journal records; a verdict is what survives a process death, and the records a read delivered are the live transcript's
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.026s
+FAIL
+
+--- CAPTURE 4 ---------------------------------------------------------------
+
+=== 2026-08-20T00:09:03Z RED capture 4: mobile/conformance with adoptInteractionRead restored to its pre-fix body (both replies folded through ItemStore.Apply), the code as the reviewer found it
+--- FAIL: TestR6R2_TheDetailReplyReplacesTheClippedBodyOnTheRealFacade (6.41s)
+    r6r2_chatoutcome_test.go:171: timed out after 5s: the whole body never reached the card the user tapped
+--- FAIL: TestR6R2_APageIsHeldEvenWhenTheSessionIsAtItsRetentionBound (11.33s)
+    r6r2_chatoutcome_test.go:210: timed out after 5s: the page was evicted by the very trim it was paged in behind
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	20.223s
+FAIL
+
+--- CAPTURE 5 ---------------------------------------------------------------
+
+=== 2026-08-20T00:16:42Z RED capture 5: android/gate (the surface claims no R6 verb's answer)
+--- FAIL: TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface (0.05s)
+    r6_chat_ui_test.go:238: composerOp is never latched, so the operation id the machine keys its answer by is gone before the answer exists (M2.4 -- a composer_send is fire-and-forget)
+    r6_chat_ui_test.go:242: no draw claims composerOp through bridge.launchOutcome, so M2.4 -- a composer_send is fire-and-forget. Every other machine-answering control on this surface claims its own operation by id (PB-SYNC-2); there is no generic drain that would catch this one
+    r6_chat_ui_test.go:238: interruptOp is never latched, so the operation id the machine keys its answer by is gone before the answer exists (M2.4 -- a Stop's refusal never reaches the reader)
+    r6_chat_ui_test.go:242: no draw claims interruptOp through bridge.launchOutcome, so M2.4 -- a Stop's refusal never reaches the reader. Every other machine-answering control on this surface claims its own operation by id (PB-SYNC-2); there is no generic drain that would catch this one
+    r6_chat_ui_test.go:238: historyOp is never latched, so the operation id the machine keys its answer by is gone before the answer exists (M3.1 -- a history page never folds)
+    r6_chat_ui_test.go:242: no draw claims historyOp through bridge.launchOutcome, so M3.1 -- a history page never folds. Every other machine-answering control on this surface claims its own operation by id (PB-SYNC-2); there is no generic drain that would catch this one
+    r6_chat_ui_test.go:238: detailOp is never latched, so the operation id the machine keys its answer by is gone before the answer exists (M3.3 -- a clipped card never expands)
+    r6_chat_ui_test.go:242: no draw claims detailOp through bridge.launchOutcome, so M3.3 -- a clipped card never expands. Every other machine-answering control on this surface claims its own operation by id (PB-SYNC-2); there is no generic drain that would catch this one
+    r6_chat_ui_test.go:254: production Kotlin never references "composerVerdictFor(", so the composer decides on the MACHINE's answer is not what happens
+    r6_chat_ui_test.go:254: production Kotlin never references "clearsDraft", so the field is emptied by the verdict rather than by the local seal is not what happens
+    r6_chat_ui_test.go:254: production Kotlin never references "interruptNoticeFor(", so a refused Stop says the turn was not stopped is not what happens
+    r6_chat_ui_test.go:254: production Kotlin never references "historyAtCapacity", so the reader is told when this phone can hold no more history is not what happens
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.745s
+FAIL
+
+--- CAPTURE 6 ---------------------------------------------------------------
+
+=== 2026-08-20T00:35:34Z RED capture 6: internal/skeleton, pendingSendTTL mutated 10s -> 1000h (the reviewer's own surviving mutation). The two B9 fences stay GREEN because they advance the fake clock BY the constant they measure; the new value fence is what catches it.
+=== RUN   TestR6Fix_AnExpiredInjectionNoLongerClaimsAnIdenticalOwnerPrompt
+--- PASS: TestR6Fix_AnExpiredInjectionNoLongerClaimsAnIdenticalOwnerPrompt (3.39s)
+=== RUN   TestR6Fix_AFreshInjectionStillClaimsItsEcho
+--- PASS: TestR6Fix_AFreshInjectionStillClaimsItsEcho (0.06s)
+=== RUN   TestR6R2_TheComposerEchoWindowIsBoundedByAValueAndNotOnlyByAMechanism
+    r6r2_chatbound_test.go:37: pendingSendTTL = 1000h0m0s, above the 1m0s ceiling. Text correlation is what stamps `source: phone` on an item, and a window this long is indistinguishable from the unbounded one finding B9 was raised against: an owner who types the same short word at the terminal inside it is credited to the phone, which INVENTS a fact. protocol.md and docs/verification/r6-chat.md both promise the reader a bounded window; if this value is meant to change, change them in the same commit
+--- FAIL: TestR6R2_TheComposerEchoWindowIsBoundedByAValueAndNotOnlyByAMechanism (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.508s
+FAIL
+
+--- CAPTURE 7 ---------------------------------------------------------------
+
+7a. COMPILE-RED for the three new JVM suites. The round-2 additions were renamed
+    (composerVerdictFor / interruptNoticeFor / interruptDetailFor / routeMachineCode /
+    TranscriptScreen.of's atCapacity parameter -> ...R2Temp) so the suites compile against the
+    world as it was before them; production Kotlin was renamed with them, so the ONLY errors are
+    the test sources'. Run from a script file (/tmp/r6r2/gradle.sh), never a bare command line.
+    JAVA_HOME=/usr/local/opt/openjdk@21/..., ANDROID_HOME=/usr/local/share/android-commandlinetools,
+    ./gradlew --no-daemon --rerun-tasks --no-build-cache :app:testDebugUnitTest
+
+RECORDED START: 2026-08-20T00:27:32Z
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:27:34 Unresolved reference 'routeMachineCode'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:38:59 Unresolved reference 'routeMachineCode'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:43:54 Unresolved reference 'routeMachineCode'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:44:54 Unresolved reference 'routeMachineCode'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:54:25 Unresolved reference 'routeMachineCode'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:51:43 Unresolved reference 'composerVerdictFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:65:43 Unresolved reference 'composerVerdictFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:74:43 Unresolved reference 'composerVerdictFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:93:47 Unresolved reference 'composerVerdictFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:110:33 Unresolved reference 'composerVerdictFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:123:42 Unresolved reference 'interruptNoticeFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:131:33 Unresolved reference 'interruptDetailFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:140:46 Unresolved reference 'interruptNoticeFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailVerdictTest.kt:141:46 Unresolved reference 'interruptDetailFor'.
+e: file:///Users/Nathan/Code/swarm/android/app/src/test/kotlin/dev/swarm/phone/ui/screens/TranscriptTurnAndAnchorTest.kt:155:40 No parameter with name 'atCapacity' found.
+BUILD FAILED in 1m 34s
+GRADLE_EXIT=1
+RECORDED END: 2026-08-20T00:29:07Z
+
+7b. BEHAVIOURAL-RED for the two transcript-model blockers, with everything else restored and
+    ONLY the two model lines reverted to their pre-fix form:
+        latestTurnId = items.lastOrNull()?.turnId.orEmpty()
+        oldestItemId = items.firstOrNull()?.itemId.orEmpty()
+    Three of the suite's seven tests fail -- the closed turn a send is drawn against, the tear
+    used as a page anchor, and a phone holding only a tear.
+
+RECORDED START: 2026-08-20T00:29:34Z
+TranscriptTurnAndAnchorTest > a phone holding only a tear has nothing it can page before FAILED
+    org.junit.ComparisonFailure at TranscriptTurnAndAnchorTest.kt:139
+TranscriptTurnAndAnchorTest > the load-earlier anchor is never the synthetic id of a tear FAILED
+    org.junit.ComparisonFailure at TranscriptTurnAndAnchorTest.kt:125
+TranscriptTurnAndAnchorTest > a closed turn is not offered as the turn a send is drawn against FAILED
+    org.junit.ComparisonFailure at TranscriptTurnAndAnchorTest.kt:73
+7 tests completed, 3 failed
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 1m 47s
+GRADLE_EXIT=1
+RECORDED END: 2026-08-20T00:31:22Z
+
+================================================================================
+WAVE R6 REVIEW ROUND 3 -- the closing fix pass (findings F1-F8).
+Captured 2026-08-20, UTC. Host: darwin/arm64. Bead agents-tracker-hggx.7.
+
+Nothing above this line was edited. One CORRECTION to a capture above is stated
+here, in place of editing it, and it is stated first.
+
+--------------------------------------------------------------------------------
+CORRECTION (2026-08-20, finding F3) to RED 1's B11 block above.
+
+RED 1 quotes a JUnit failure message verbatim: "the phone drew a tappable span
+reading like a bank while pointing at another host". The capture is genuine and
+is left exactly as the run produced it. THE WORD "tappable" IN IT WAS WRONG, and
+so was the same word in the narrative around finding B11 generally.
+
+NO MARKDOWN LINK ON THIS SURFACE IS TAPPABLE, AND NONE EVER WAS.
+`Markdown.Span.linkHref` is consumed by exactly one thing -- `styleRun`, which
+spends a TextAppearanceSpan role on it -- and a grep of android/app/src/main for
+`URLSpan|ClickableSpan|setMovementMethod|LinkMovementMethod|linksClickable|
+autoLink` returns NOTHING. The spoof B11 closed is therefore a READ-AND-RETYPE
+spoof: a URL a reader believes and types into a browser by hand, which is the
+whole of what a phishing URL needs, and NOT a click hijack. That is a smaller
+claim than the one this record made, and it is the true one.
+
+Links stay text-only by ORCHESTRATOR RULING this round: outbound navigation
+launched from adversarially-sourced agent output is a new attack surface and new
+scope, and this wave does not open it. The test message quoted above has been
+corrected in the source (assertions untouched), and one test was RENAMED --
+"a URL-shaped label under a refused scheme is still not tappable" ->
+"... still carries no href" -- because the old name asserted a property no link
+here has. Its assertions are unchanged, and its own comment records the rename.
+
+--------------------------------------------------------------------------------
+F1 -- B5's page-on-item-boundary fix was UNFENCED ON THE PRODUCTION PATH.
+
+All three of B5's tests call `historyPageStart` DIRECTLY on a hand-built slice
+(r6fix_chat_test.go:312, :342, :359). None drives `interactionHistory`, so the
+CALL SITE could be reverted with the suite still green -- confirmed by the round-2
+reviewer and re-confirmed here.
+
+MUTATION (internal/skeleton/chat.go, `interactionHistory`):
+    start := historyPageStart(older, limit)
+ -> start := 0
+    if len(older) > limit { start = len(older) - limit }
+
+BEFORE the new fence, 2026-08-20T01:24Z:
+    go test -count=1 -run TestR6 ./internal/skeleton/   -> ok (the mutation survives)
+
+AFTER, same mutation, TestR6R3_TheServedHistoryPageNeverBeginsInTheMiddleOfAnItem
+(internal/skeleton/r6r3_chat_test.go), 2026-08-20T01:26Z:
+    --- FAIL: TestR6R3_TheServedHistoryPageNeverBeginsInTheMiddleOfAnItem (1.68s)
+        r6r3_chat_test.go:87: the served page begins at cursor 3, which is INSIDE
+        item "01M0ECD96VK158P3G5DR3YFBZS" -- its first record is at cursor 2. [...]
+    FAIL
+Fix restored; the test is green on the fixed tree (2.97s).
+
+The new case drives `sk.api.InteractionHistory` over a REAL journal whose middle
+item is an agent_message grown across three records under one item_id (one offer
+per DefaultAppendWindow on the pinned floor clock), and asserts the served page
+begins at that item's FIRST record -- the minimum cursor the journal holds for it.
+
+SWEEP for the same shape elsewhere in this wave (a test that exercises a helper
+the production path merely happens to call): the only other separable helper/call-site
+pair on this slice is `pendingSendTTL`, and it is finding F6 below. Every other R6
+fence drives a production entry point already -- the gap page (B4a) through
+`InteractionHistory`, the command bodies (B1) reflectively through the real gateway
+assembly, the phone folds through `ItemStore`, the Kotlin through the screen models
+plus android/gate's greps of production Kotlin.
+
+    ^^^ CORRECTION, 2026-08-20T03:09Z (round 3's CLOSING review; text above kept as
+    written). [SUPERSEDED IN COUNT ONLY by the 2026-08-20T03:43Z correction below:
+    the sweep missed THREE, not one. Everything this block says about F4's own fence
+    is accurate and stands; the singular "ONE" is what is wrong, and the two others
+    are named below.] THE SWEEP MISSED ONE, AND IT WAS F4'S OWN FENCE. The last clause --
+    "the Kotlin through ... android/gate's greps of production Kotlin" -- treated a
+    grep of production Kotlin as equivalent to driving a production entry point. It
+    is not, when the grep is unscoped. TestR6R3_TheTwoM3ReadsSayWhatTheMachineSaid
+    checked its six F4 symbols with strings.Contains over `appKotlinSource` -- the
+    WHOLE app module -- and every one of them matched its own DECLARATION
+    (`fun historyReadNoticeFor(` etc. in SessionDetailPanel.kt:516-555, the
+    `withoutDetail: Set<String>` parameters in TranscriptPanel.kt:308,371), not the
+    call. So those six were separable helper/call-site pairs exactly like
+    `pendingSendTTL`, and the sentence above is false as written.
+
+    DISPROVED BY EXECUTION, not by reading. The reviewer gutted all four F4 call
+    sites in PhoneSurface.kt -- hardcoded both notice/detail pairs, deleted the
+    `detailRefused.add(card)` block, deleted `withoutDetail = detailRefused` from the
+    TranscriptScreen.of call at :2332 -- and got `go test ./android/gate/` ok and
+    `:app:testDebugUnitTest` BUILD SUCCESSFUL, 1382 tests, 0 failures. Reproduced
+    here on the same mutation at 03:06Z: gate ok, exit 0. The only check that was
+    call-site-scoped was the negative one (renderReadVerdicts must not contain
+    `routeMachineCode`), which catches the one named regression and nothing else.
+    This was a fence gap, not a live defect -- the shipped code was and is correct.
+
+    CLOSED, test-only. The six positive checks now read
+    `r6ReadVerdictsBody(t)` -- renderReadVerdicts alone -- and the sixth is
+    `detailRefused.add(` (the record being made) rather than `withoutDetail` (a
+    parameter name that matched its declaration); a seventh check reads the new
+    `r6DetailPanelBody(t)` for the literal `withoutDetail = detailRefused` on the
+    transcript draw. Both are extracted by `r6SurfaceFunc`. Re-running the SAME
+    gutting mutation, 2026-08-20T03:07Z:
+        --- FAIL: TestR6R3_TheTwoM3ReadsSayWhatTheMachineSaid (0.01s)
+          r6_chat_ui_test.go:302: renderReadVerdicts -- the one function that answers
+          the two M3 reads -- never calls "historyReadNoticeFor(", so a refused
+          history page falls back to a generic routed remedy [...]  (and the same for
+          historyReadDetailFor(, detailReadNoticeFor(, detailReadDetailFor(,
+          detailReadIsTerminal(, detailRefused.add()
+          r6_chat_ui_test.go:311: detailPanel draws the transcript without passing
+          `withoutDetail = detailRefused`, so the cards the machine has answered
+          `unavailable` for go on offering a fetch that can never succeed [...]
+        FAIL   (exit 1; seven checks, one per deleted line, none collateral)
+    Production restored byte-identical (md5 2ab5e0571de0828fccf6c390b2f7e596 before
+    and after); `go test -count=1 ./android/gate/` ok, 6.9s.
+
+    ^^^ SECOND CORRECTION, 2026-08-20T03:43Z (round 3's closing review's OWN sweep,
+    swept again; both texts above kept as written). THE SWEEP MISSED THREE, NOT ONE,
+    and the count is the whole of what changes -- every claim either correction makes
+    about F4's fence is accurate. The two the 03:09Z pass did not name were in the
+    SAME FILE as the one it fixed, one of them one function away:
+
+      (1) android/gate/r6_chat_ui_test.go:247-257 --
+          TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface, the sibling
+          IMMEDIATELY ABOVE the function the 03:09Z pass corrected. Its four semantic
+          symbols -- `composerVerdictFor(`, `clearsDraft`, `interruptNoticeFor(`,
+          `historyAtCapacity` -- were checked with strings.Contains over
+          `appKotlinSource`, and every one matched its own DECLARATION
+          (SessionDetailPanel.kt:586, :213, :489; FacadeBridge.kt:229). Identical
+          shape, identical file, one function up: the sweep fixed the sibling and
+          missed this one.
+
+          DISPROVED BY EXECUTION. Gutting renderComposerVerdict (PhoneSurface.kt
+          :3416-3432) -- keeping `bridge.launchOutcome(composerOp)` and `composerOp
+          = ""` so the latch loop above still passes, and replacing the verdict with
+          an unconditional `composerSendState = SendState.SENT; composerRefusal = "";
+          typed.text.clear()` -- plus gutting renderInterruptVerdict's notice at
+          :3447:
+              go test -count=1 ./android/gate/   2026-08-20, this pass, on the
+              UNSCOPED tree     ok  github.com/Nathandela/swarm/android/gate
+                                6.969s   (exit 0)
+          RE-CAPTURED EXACTLY at 03:50:01 -> 03:50:04Z, because the run above was
+          taken before the fence was scoped and its wall-clock stamp was recorded
+          only to the minute. A throwaway probe in this package (removed
+          immediately after) replays the PRE-FIX unscoped form of the four checks
+          against the SAME mutated tree, which is reproducible where the original
+          run is not:
+              old unscoped check for "composerVerdictFor(" PASSES on the mutated tree
+              old unscoped check for "clearsDraft"         PASSES on the mutated tree
+              old unscoped check for "interruptNoticeFor(" PASSES on the mutated tree
+              old unscoped check for "historyAtCapacity"   PASSES on the mutated tree
+              --- PASS  (exit 0)
+          All four, satisfied by their own declarations, with both call sites gutted.
+          That mutation is THIS WAVE'S ROUND-2 HEADLINE BLOCKER restored as a live,
+          user-visible defect -- a REFUSED send displayed as "Sent" with the user's
+          typed words erased, and stale_turn's gentle copy dead -- with both lanes'
+          gates green. Fence gap, not a live defect: the shipped code is correct.
+
+          CLOSED, test-only. The four checks now read the one production function
+          that must make the call, via the `r6SurfaceFunc` helper the 03:09Z pass
+          already added, and `historyAtCapacity` is checked TWICE because it is two
+          different sentences to the reader -- renderReadVerdicts SAYS the capacity
+          notice once where the finger was, detailPanel DROPS the "Load earlier"
+          control on the same fact. Re-running the SAME gutting mutation:
+              go test -count=1 -run TestR6R2 ./android/gate/  03:48:58 -> 03:49:00Z
+              r6_chat_ui_test.go:313: renderComposerVerdict -- the one production
+              function that must make the call -- never references
+              "composerVerdictFor(", so the composer decides on the MACHINE's answer
+              r6_chat_ui_test.go:313: ... never references "clearsDraft", so the
+              field is emptied by the verdict rather than by the local seal
+              r6_chat_ui_test.go:313: renderInterruptVerdict ... never references
+              "interruptNoticeFor(", so a refused Stop says the turn was not stopped
+              FAIL   (exit 1; three checks, one per deleted line, none collateral)
+          Full package under the mutation: FAIL, exit 1, at 03:49:07Z. Restored,
+          `go test -count=1 ./android/gate/` ok 6.965s, exit 0, at 03:49:26Z.
+          Production restored
+          byte-identical (sha1 545f22f770a98b0d4649fac6151293c2386829b8 before and
+          after); `go test -count=1 ./android/gate/` ok, 7.0s.
+
+      (2) android/gate/r6_chat_ui_test.go:135 --
+          TestR6_TheChatKitIsReachedFromProductionKotlin's `markdownBody`, found by
+          this pass's own sweep rather than reported. Six of that loop's seven
+          symbols are DOTTED MEMBER REFERENCES (`Markdown.parse`, `ToolCard.`,
+          `TranscriptIncremental.`, `ComposerModel.`, `SessionDetailOpen.`,
+          `DeepLinkAnchor.`) and so cannot appear in their own declaration -- `object
+          ToolCard {` and `fun parse(` hold no dot. `markdownBody` is the exception:
+          it is a TOP-LEVEL `fun markdownBody(` at ui/kit/Markdown.kt:402, inside the
+          very blob the check reads.
+
+          DISPROVED BY EXECUTION. Deleting the ONLY call site (TranscriptView.kt's
+          `rowFor`, the markdown arm of the `body =` argument, so every row prints
+          `block.line` unstyled and M2.1's spans never become type):
+              old unscoped check, probed on the mutated tree by a throwaway test
+              in this package (removed immediately after), 03:50:30 -> 03:50:33Z
+              -> PASSES, satisfied by Markdown.kt:402's declaration alone (exit 0)
+          CLOSED, test-only. That one entry is now scoped to
+          screens/TranscriptView.kt -- the file that spends it and does not declare
+          it -- and asks for the call form `markdownBody(`, which its `import
+          dev.swarm.phone.ui.kit.markdownBody` cannot satisfy. Same mutation:
+              go test -count=1 -run TestR6_TheChatKitIsReachedFromProductionKotlin
+              ./android/gate/   03:49:17 -> 03:49:18Z
+              r6_chat_ui_test.go:160: Wave R6 finding B8: screens/TranscriptView.kt
+              never references "markdownBody(", so M2.1 -- the parsed spans never
+              become type on a row [...]
+              FAIL   (exit 1)
+          Production restored byte-identical (sha1
+          aff22d63d19f5ff71265da6cc092e3128ed88449 before and after).
+
+    AND THE REST OF THE CLASS, SWEPT AND CLEARED. Every REACH check -- one that
+    asserts a production symbol is CALLED, which is the class all three misses are in
+    -- in the five gate files this wave touched was read for the same shape.
+    Declaration checks are a separate class and are excluded on purpose: they are
+    MEANT to match a declaration, and each is scoped to the one file that would hold
+    it (TestR6_MarkdownRendererExistsAndIsPure's three, ToolCard's two,
+    InteractionItem's five fields, Composer's five send states, TranscriptPanel's
+    seven). So are forbidden-symbol scans, whose failing direction is presence.
+
+    45 reach checks examined; 5 newly scoped; 7 already scoped by the 03:09Z pass;
+    33 justified IN PLACE at the site.
+
+      r6_chat_ui_test.go   7  kit reach            1 scoped (markdownBody), 6 dotted
+      r6_chat_ui_test.go   5  FacadeBridge getters generated onto the AAR's Go type;
+                                                   no Kotlin declares any of them
+      r6_chat_ui_test.go   4  app.<verb>(          receiver-qualified; declared in Go
+      r6_chat_ui_test.go   4  <latch> = " "        cannot match `private var
+                                                   composerOp: String = ""`
+      r6_chat_ui_test.go   4  launchOutcome(<latch>) names an ARGUMENT; no declaration
+                                                   is written in argument position
+      r6_chat_ui_test.go   4  semantic (F-close)   ALL 4 NEWLY SCOPED (5 checks:
+                                                   historyAtCapacity twice)
+      r6_chat_ui_test.go   6  F4's symbols         scoped 03:09Z (renderReadVerdicts)
+      r6_chat_ui_test.go   1  withoutDetail =      scoped 03:09Z (detailPanel)
+      r6_chat_ui_test.go   1  TranscriptTag.GAP    dotted; declared bare inside the
+                                                   object
+      s19_pbe2e2_test.go   5  pbe2e2Verbs          regex requires a LEADING DOT, which
+                                                   `fun composerSend(` cannot produce,
+                                                   and the subject is Go behind the AAR
+      s24_screens_test.go  2  notice, markdownBody s24Spends reads ONE screen file,
+                                                   skips imports, demands `symbol(`;
+                                                   both are declared in ui/kit
+      s25_mainthread_test.go 2 SendPlane.COMMAND/  per-press-span, and dotted against
+                               LIVE               an enum whose entries are bare
+      s23_kit_test.go      0  -                   this wave added no reach check here
+
+    The rule the three misses share, now written at each site: a symbol check must be
+    unable to match its own declaration, and a dotted, receiver-qualified or
+    argument-position form is the cheap way to get that for free. Where the literal
+    cannot be given that shape -- `clearsDraft`, `historyAtCapacity`, `markdownBody`
+    -- the check must be scoped to the function or the file that has to make the call.
+
+--------------------------------------------------------------------------------
+F6 -- B9's TTL bound. REPORTED UNFENCED; ALREADY FENCED, verified by mutation.
+
+The round-2 reviewer ran the two named B9 tests only. Review round 2 had already
+added the ceiling assertion (internal/skeleton/r6r2_chatbound_test.go).
+
+MUTATION (internal/skeleton/chat.go):
+    const pendingSendTTL = 10 * time.Second -> 1000 * time.Hour
+    go test -count=1 -run TestR6 ./internal/skeleton/   2026-08-20T01:27Z
+    --- FAIL: TestR6R2_TheComposerEchoWindowIsBoundedByAValueAndNotOnlyByAMechanism
+        r6r2_chatbound_test.go:37: pendingSendTTL = 1000h0m0s, above the 1m0s ceiling. [...]
+    FAIL
+No code change was needed or made.
+
+--------------------------------------------------------------------------------
+F5(b) -- cmd/swarm TestRunShim_LaunchesAgentPersistsAndLeadsSession.
+A BOUNDED WAIT TREATED AS A SYNC POINT. REPRODUCED BY INJECTION, then fixed and
+re-run under the identical injection.
+
+INJECTION: GOMAXPROCS=1, 6 x hw.ncpu busy loops, -count=6.
+
+BEFORE (rig unchanged), 2026-08-20T01:32:33Z .. 01:34:35Z:
+    --- FAIL: TestRunShim_LaunchesAgentPersistsAndLeadsSession (18.30s)
+        role_test.go:112: shim pid 54208 never became its own session leader
+        (getsid != pid) - setsid was not guaranteed
+    ... 6 of 6 runs FAILED (pids 54208, 54368, 54514, 54691, 54832, 55004)
+    FAIL github.com/Nathandela/swarm/cmd/swarm  114.315s   GO_EXIT=1
+(An earlier, milder injection -- GOMAXPROCS=2, 2 x hw.ncpu, -count=8, 01:31:18Z
+.. 01:32:20Z -- was 8/8 GREEN. The flake needs real starvation.)
+
+FIX (rig only, no assertion weakened): the test now waits on the REAL CONDITION
+instead of a duration. `runShim` calls `ensureSession()` BEFORE `shim.Run`, and
+`shim.Run` binds cfg.SocketPath as its first act ("Bind the socket first",
+internal/shim/shim.go:113-120) -- so the socket existing PROVES setsid already
+happened, by an ordering that lives in the production code rather than in a
+timeout. becomesSessionLeader (a 3 s poll for a property the process holds from
+birth) is replaced by awaitPath + a single getsid read.
+
+AFTER, identical injection, 2026-08-20T01:35:27Z .. 01:37:45Z:
+    ok  github.com/Nathandela/swarm/cmd/swarm  114.267s   GO_EXIT=0   (6/6)
+
+--------------------------------------------------------------------------------
+F5(a) -- mobile/conformance TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff.
+A WALL-CLOCK BAND WITH NO HEADROOM, over a quantity the rig does not control.
+REPRODUCED BY INJECTION, then fixed and re-run under the identical injection.
+
+INJECTION: GOMAXPROCS=1, 6 x hw.ncpu busy loops, -count=4.
+
+BEFORE, 2026-08-20T01:38:01Z .. 01:38:37Z:
+    --- FAIL: TestPBNET4_TheRealRunLoopGrows... (3.42s)
+        pbnet4_flappingrelay_test.go:251: PB-NET-4: gap #1 between dial attempts
+        at the tap was 1.200393917s, want within [800ms, 1.2s]
+    FAIL  mobile/conformance 31.651s  GO_EXIT=1   (1 of 4 runs)
+393 microseconds over a ceiling that IS the largest legal schedule. The round-2
+reviewer's own capture was the same shape: 605.604042ms against [400ms, 600ms].
+
+FIX, in two halves, and the property is asserted MORE tightly than before:
+ (a) the exact band moved to where the quantity exists. mobile/relay.go gains an
+     observation seam on the delay App.run SCHEDULES (an atomic pointer, nil in
+     production, the internal/shim testHookAfterSignalArm pattern), and
+     mobile/pbnet4_rundelay_test.go's TestPBNET4_TheRunLoopSchedulesSection60sBackoff
+     drives the REAL run loop (NewApp + Start against a 503 endpoint) and holds
+     each scheduled delay to section 6.0's band with NO tolerance -- plus a
+     one-sided elapsed check, because observing rb.next()'s answer alone would not
+     catch `time.After(250 * time.Millisecond)` beside a correct computation.
+ (b) the conformance fence keeps the half a tap can honestly prove: the FLOOR,
+     which is load-immune (an arrival gap is the scheduled delay plus non-negative
+     transit, so it cannot be SHORT unless the schedule is), and a ceiling with a
+     named 1 s transit allowance that catches a schedule of the wrong order.
+
+MUTATION of the new fence (mobile/relay.go, the wiring revert the conformance file
+was originally written to catch), 2026-08-20T01:41Z:
+    case <-time.After(delay): -> case <-time.After(250 * time.Millisecond):
+    --- FAIL: TestPBNET4_TheRunLoopSchedulesSection60sBackoff (0.58s)
+        pbnet4_rundelay_test.go:120: PB-NET-4: the loop scheduled 520.734966ms
+        before dial attempt 2 but only 254.005709ms passed before it scheduled the
+        next one. [...]  (and the same for attempt 3)
+    FAIL
+Fix restored.
+
+AFTER, identical injection, -count=6:
+    conformance   2026-08-20T01:42:39Z .. 01:43:57Z   ok 54.007s  GO_EXIT=0 (6/6)
+    the new fence 2026-08-20T01:44:04Z .. 01:44:24Z   ok 12.614s  GO_EXIT=0 (6/6)
+
+--------------------------------------------------------------------------------
+F5, THE THIRD LOAD-SENSITIVE GATE -- internal/skeleton
+TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing.
+NOT REPRODUCED, and therefore NOT FIXED and STILL RECORDED OPEN.
+
+INJECTION: GOMAXPROCS=1, 6 x hw.ncpu busy loops, -race, -count=10.
+    2026-08-20T01:44:35Z .. 01:45:43Z   ok internal/skeleton 26.220s  GO_EXIT=0
+
+Ten more passes under deliberate starvation, on top of the fourteen this wave had
+already recorded. Twenty-four passes bound the rate; they do not disprove it. It
+stays in docs/verification/r6-chat.md's open rows, unfixed, because a rig edit
+whose effect nobody can measure produces a green run indistinguishable from these
+plus a claim with no evidence under it.
+
+--------------------------------------------------------------------------------
+F2/F4 -- the Android lane. ONE gradle pass with FOUR mutations applied at once,
+each attributable to the test it fails by name. Script file, JDK 21,
+./gradlew --no-daemon --rerun-tasks --no-build-cache :app:testDebugUnitTest,
+no test-results directory deleted, AAR printed before and after and unmoved
+(2026-08-20T01:55:03Z, 12525352 bytes).
+
+MUTATIONS:
+  M1 [F2] ui/kit/Markdown.kt  hostOf: normalizedForHostTest(value) -> value
+                              URL_SHAPED: RegexOption.IGNORE_CASE removed
+                              linkAt: the case-folded scheme check -> raw startsWith
+  M2 [F4] ui/screens/TranscriptPanel.kt  offersDetail: the withoutDetail filter dropped
+  M3 [F4] ui/screens/SessionDetailPanel.kt  detailReadNoticeFor: the UNAVAILABLE arm
+                              answers DETAIL_REFUSED (the evicted body loses its
+                              own sentence)
+  M4 [F4] ui/screens/SessionDetailPanel.kt  historyReadDetailFor -> "" (the machine's
+                              words dropped again)
+
+RUN: 2026-08-20T01:59:41Z .. 02:03:14Z, BUILD FAILED in 3m 32s, GRADLE_EXIT=1,
+1382 tests completed, 7 failed:
+
+  MarkdownLinkHonestyTest > a trailing space does not hide a lying label FAILED
+  MarkdownLinkHonestyTest > a trailing dot does not hide a lying label FAILED
+  MarkdownLinkHonestyTest > an uppercase scheme does not hide a lying label FAILED
+  MarkdownLinkHonestyTest > a zero-width space does not hide a lying label FAILED
+  SessionDetailVerdictTest > an evicted body is named as gone and the offer is withdrawn FAILED
+  SessionDetailVerdictTest > a refused history page says what the machine said and not a generic remedy FAILED
+  TranscriptChatRenderTest > a card the machine has answered unavailable for stops offering the fetch FAILED
+
+THE CONTROLS STAYED GREEN under M1, which is what makes the four evasion tests
+mean something: "the same decorations on an HONEST label change nothing" (a
+trailing dot, a capital scheme and a zero-width space on a label whose host
+MATCHES) passed, so the normalization decides WHETHER a label is a URL claim and
+never rewrites one telling the truth. "a detail read the machine answered says
+nothing at all" passed under M3/M4 for the same reason.
+
+All four files restored (verified by content check) and the clean run re-recorded
+in docs/verification/r6-chat.md's Gates section.
+
+--------------------------------------------------------------------------------
+F4 -- the surface half, fenced in the go lane where the wiring lives.
+android/gate/r6_chat_ui_test.go TestR6R3_TheTwoM3ReadsSayWhatTheMachineSaid.
+
+MUTATION (PhoneSurface.kt, renderReadVerdicts' detail arm, back to what shipped):
+    say(PressFeedback.ofRefusal(ErrorRouter.routeMachineCode(outcome.code)))
+    2026-08-20T01:51Z: FAIL github.com/Nathandela/swarm/android/gate
+    ("renderReadVerdicts routes an M3 read's wire code through
+      ErrorRouter.routeMachineCode again [...]")
+Fix restored; green on the fixed tree.
+
+--------------------------------------------------------------------------------
+F2 -- RE-PROVEN over the FINAL implementation.
+
+The first F2 fix listed the invisible characters as a hand-written set of `'\uXXXX'`
+char literals. `android/gate/s23_kit_test.go`'s PB-DS-7 numeric accounting refused
+it, correctly and by its own rule: every one of those literals contains digits, and
+a number spelled inside a literal is accounted for by nothing.
+
+    --- FAIL: TestPBDS7_EveryNumberInTheKitIsAccountedFor (0.32s)
+        s23_kit_test.go:3590: PB-DS-7: Markdown.kt:355: the literal '\u200B'
+        contains a digit, and it is not on s23TextLiteralExemptions. [...]
+    (16 such lines, 2026-08-20T02:12Z)
+
+The set is replaced by the PROPERTY it was enumerating -- Unicode category Cf, via
+`Character.getType(it) == Character.FORMAT.toInt()`. It covers every character on
+that list and the ones nobody thought of, spells no literal, and reads.
+`go test ./android/gate/` is green on it (2026-08-20T02:13Z, ok 6.898s).
+
+MUTATION RE-RUN over the final implementation (M1 only: hostOf's normalization
+call, RegexOption.IGNORE_CASE, and the case-folded target scheme, all reverted),
+2026-08-20T02:14:16Z .. 02:16:06Z, script file, --tests '*MarkdownLinkHonestyTest':
+
+    MarkdownLinkHonestyTest > a trailing space does not hide a lying label FAILED
+    MarkdownLinkHonestyTest > a trailing dot does not hide a lying label FAILED
+    MarkdownLinkHonestyTest > an uppercase scheme does not hide a lying label FAILED
+    MarkdownLinkHonestyTest > a zero-width space does not hide a lying label FAILED
+    13 tests completed, 4 failed
+    BUILD FAILED in 1m 49s   GRADLE_EXIT=1
+
+Nine tests passed under the mutation, including the anti-vacuity control and the
+eight B11 cases -- the four that fail are exactly the four evasions. Fix restored.

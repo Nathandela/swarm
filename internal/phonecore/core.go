@@ -567,10 +567,21 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 // resolves an op whose reply the phone may never see, so an operation gap does not leave the
 // phone guessing. An UNTAGGED outcome is refused -- attributing it to some op by proximity
 // would persist the wrong verdict for a mutating op.
+//
+// WHAT IS PERSISTED IS A VERDICT AND NOT A PAYLOAD (Wave R6 review round 2). This stored the
+// WHOLE Control, journal records included, into a map nothing prunes -- this package's own
+// recorded residual, quoted at interaction.go: "never pruned, so every launch re-offers every
+// outcome ever recorded". Wave R6's two reads answer WITH RECORDS, so every history page wrote
+// up to `limit` full item bodies into the phone's durable state file permanently, and every
+// detail read wrote the FULL PRE-TRUNCATION BODY -- precisely the payload that was too large
+// to ship inline. The records belong to the LIVE transcript, which is where the facade folds
+// them the moment the reply is claimed; what has to survive a process death is the answer:
+// which op, what the machine said, and whether it said anything at all.
 func (c *Core) RecordOutcome(ctrl schema.Control) error {
 	if ctrl.OperationID == "" {
 		return errors.New("phonecore: outcome carries no operation id")
 	}
+	ctrl.Journal = nil
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := c.st.clone()

@@ -125,6 +125,7 @@ Fields below are additional to the envelope. Every string field is capped per §
 |---|---|---|
 | `tool` | string | adapter-reported tool name (`Read`, `Bash`, `Edit`, …) |
 | `action` | object | the structured summary of §7 — what makes a card read `Read src/main.rs` |
+| `tool_kind` | string | §7's `action.type`, mirrored FLAT at the item's top level (Mirror M2.2, Wave R6): the phone picks a card glyph from this one field and parses nothing (IS-TOOL-1). Exactly the adapter's classification — `other` stays `other` (IS-TOOL-2) — and an unclassified call (no `action` at all) carries no `tool_kind` either: an absent fact stays absent |
 | `output_excerpt` | string | leading bytes of the tool's output |
 | `truncation_marker` | string | the CLI's own truncation text, verbatim (§7) |
 | `exit_code` | int | for `execute` actions |
@@ -354,7 +355,7 @@ phone, decides what the tool *did*.
 |---|---|---|
 | `type` | string | `read` \| `edit` \| `write` \| `search` \| `execute` \| `fetch` \| `other` |
 | `path` | string | file-scoped target, for `read`/`edit`/`write` |
-| `query` | string | the pattern, for `search` |
+| `query` | string | the pattern, for `search`; the URL, for `fetch` (the Wave R6 target-field ruling, recorded when the first real WebFetch payload was captured — `claude-webfetch-pretooluse.json`: the URL is the fetch's target and rides the existing field rather than growing this sealed table a fifth member) |
 | `command` | string | the argv rendering, for `execute` |
 
 - **IS-TOOL-1** (Ubiquitous) `action` SHALL be produced machine-side by the per-CLI adapter. A

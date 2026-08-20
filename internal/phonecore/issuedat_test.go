@@ -105,6 +105,34 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealLaunchPresetsEnvelope: %v", err)
 	}
+	// Wave R6's four (bead agents-tracker-hggx.7): the complete chat's two signed verbs and
+	// the two M3 reads. THE SWEEP CAUGHT THE FIRST TWO -- composer_send and turn_interrupt
+	// landed with the map untouched, and TestPhoneSeals_TheSweepCoversEveryProducerInThePackage
+	// failed naming both (review finding B10b). Both DO stamp IssuedAt via sealPhoneFrame, so
+	// the failure was a red fence rather than a live PB-GW-6 defect -- but for those two verbs
+	// PB-GW-6 was asserting nothing at all, which is precisely the state this fence exists to
+	// make impossible. An unstamped composer_send would be the user's only way to answer a
+	// blocked agent, refused forever by PB-GW-2's bound with nothing logged.
+	composer, err := SealComposerSendEnvelope(key, epoch, seq.Next(), auth,
+		&schema.ComposerSendReq{Session: "m1/s1", ExpectedTurn: "01JTURN", Text: "hello"})
+	if err != nil {
+		t.Fatalf("SealComposerSendEnvelope: %v", err)
+	}
+	interrupt, err := SealTurnInterruptEnvelope(key, epoch, seq.Next(), auth,
+		&schema.TurnInterruptReq{Session: "m1/s1", ExpectedTurn: "01JTURN"})
+	if err != nil {
+		t.Fatalf("SealTurnInterruptEnvelope: %v", err)
+	}
+	history, err := SealInteractionHistoryEnvelope(key, epoch, seq.Next(), auth,
+		&schema.InteractionHistoryReq{Session: "m1/s1", BeforeItem: "01JB", Limit: 20})
+	if err != nil {
+		t.Fatalf("SealInteractionHistoryEnvelope: %v", err)
+	}
+	detail, err := SealInteractionDetailEnvelope(key, epoch, seq.Next(), auth,
+		&schema.InteractionDetailReq{Session: "m1/s1", ItemID: "01JB"})
+	if err != nil {
+		t.Fatalf("SealInteractionDetailEnvelope: %v", err)
+	}
 	return map[string][]byte{
 		"SealInputData":             data,
 		"SealInputResize":           resize,
@@ -116,6 +144,11 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 		"SealApproveEnvelope":       approve,
 		"SealSessionLaunchEnvelope": sessionLaunch,
 		"SealLaunchPresetsEnvelope": presetsList,
+
+		"SealComposerSendEnvelope":       composer,
+		"SealTurnInterruptEnvelope":      interrupt,
+		"SealInteractionHistoryEnvelope": history,
+		"SealInteractionDetailEnvelope":  detail,
 	}
 }
 

@@ -246,13 +246,40 @@ func TestPBNET4_TheRealRunLoopGrowsReAuthenticatesAndResetsItsBackoff(t *testing
 		{800 * time.Millisecond, 1200 * time.Millisecond},  // 1s +/-20%
 		{1600 * time.Millisecond, 2400 * time.Millisecond}, // 2s +/-20%
 	}
+	// WHAT A WALL CLOCK OVER A NETWORK HOP CAN HONESTLY SAY (Wave R6 review round 3,
+	// finding F5(a)). An arrival gap is r + d + L: the time the refusal took to reach the
+	// phone, the delay the loop SCHEDULED, and the next connection's transit. r and L are
+	// non-negative and unbounded above, so the gap is bounded BELOW by the scheduled delay
+	// exactly, and ABOVE by nothing this rig controls.
+	//
+	// This loop used to assert both edges of section 6.0's band on that quantity, and the
+	// band's top IS the largest legal schedule -- zero headroom. A correct run loop failed
+	// it under load: `gap #0 ... 605.604042ms, want within [400ms, 600ms]` (round-2
+	// reviewer), and `gap #1 ... 1.200393917s` reproduced at GOMAXPROCS=1 under load while
+	// this fix was written.
+	//
+	// NOTHING WAS DROPPED. The exact band moved to where the quantity exists --
+	// mobile/pbnet4_rundelay_test.go's TestPBNET4_TheRunLoopSchedulesSection60sBackoff,
+	// which drives this same App.run through NewApp+Start and reads the delay the loop
+	// itself chose, with no tolerance at all, plus a one-sided elapsed check so a delay
+	// that is computed and not waited on fails there too. What stays here is the half a
+	// tap can prove: the FLOOR, which is load-immune by the algebra above and is what a
+	// fixed 250 ms delay violates, and a deliberately generous ceiling that catches a
+	// schedule of the wrong ORDER without asserting the host's scheduler.
+	const latencyAllowance = time.Second
 	for i, b := range bands {
-		if gaps[i] < b.lo || gaps[i] > b.hi {
-			t.Fatalf("PB-NET-4: gap #%d between dial attempts at the tap was %v, want within "+
-				"[%v, %v] (section 6.0: initial 500ms, factor 2, jitter +/-20%%), measured "+
-				"against the REAL App.run loop over a relay that refuses every dial. A fixed, "+
-				"non-growing delay (the pre-fix 250ms, or any other constant) fails here",
-				i, gaps[i], b.lo, b.hi)
+		if gaps[i] < b.lo {
+			t.Fatalf("PB-NET-4: gap #%d between dial attempts at the tap was %v, BELOW the %v "+
+				"floor of section 6.0's band (initial 500ms, factor 2, jitter +/-20%%), measured "+
+				"against the REAL App.run loop over a relay that refuses every dial. The gap is "+
+				"the scheduled delay plus non-negative transit, so it can only be short if the "+
+				"schedule is: a fixed, non-growing delay (the pre-fix 250ms, or any other "+
+				"constant) fails here", i, gaps[i], b.lo)
+		}
+		if gaps[i] > b.hi+latencyAllowance {
+			t.Fatalf("PB-NET-4: gap #%d between dial attempts at the tap was %v, over the %v "+
+				"band ceiling even allowing %v for transit and scheduling. A gap this long is a "+
+				"schedule of the wrong order, not a loaded host", i, gaps[i], b.hi, latencyAllowance)
 		}
 	}
 	if n := tap.authCount(); n != 0 {

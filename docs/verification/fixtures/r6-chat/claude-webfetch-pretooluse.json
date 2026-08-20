@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "cli": "claude-code",
+  "version": "2.1.214",
+  "scenario": "webfetch-pretooluse",
+  "pty_capture": "UGFnZSB0aXRsZTogKipFeGFtcGxlIERvbWFpbioqDQobWz8yNWg=",
+  "hook_payloads": [
+    {
+      "event": "UserPromptSubmit",
+      "raw": {
+        "session_id": "05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "b413c785-d3a9-4ab2-8e29-56023d46521e",
+        "permission_mode": "default",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Use your WebFetch tool to fetch https://example.com/ and report the page title in one line. Bash is denied; use the WebFetch tool directly."
+      },
+      "received_at_ms": 1787164559663
+    },
+    {
+      "event": "PreToolUse",
+      "raw": {
+        "session_id": "05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "b413c785-d3a9-4ab2-8e29-56023d46521e",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PreToolUse",
+        "tool_name": "WebFetch",
+        "tool_input": {
+          "url": "https://example.com/",
+          "prompt": "What is the page title (the text in the \u003ctitle\u003e element)? Reply with just the title."
+        },
+        "tool_use_id": "toolu_01RT7F6QXvMJEwtoVR3PnUA7"
+      },
+      "received_at_ms": 1787164562603
+    },
+    {
+      "event": "PostToolUse",
+      "raw": {
+        "session_id": "05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "b413c785-d3a9-4ab2-8e29-56023d46521e",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "PostToolUse",
+        "tool_name": "WebFetch",
+        "tool_input": {
+          "url": "https://example.com/",
+          "prompt": "What is the page title (the text in the \u003ctitle\u003e element)? Reply with just the title."
+        },
+        "tool_response": {
+          "bytes": 559,
+          "code": 200,
+          "codeText": "OK",
+          "result": "Example Domain",
+          "durationMs": 920,
+          "url": "https://example.com/"
+        },
+        "tool_use_id": "toolu_01RT7F6QXvMJEwtoVR3PnUA7",
+        "duration_ms": 920
+      },
+      "received_at_ms": 1787164563714
+    },
+    {
+      "event": "Stop",
+      "raw": {
+        "session_id": "05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9",
+        "transcript_path": "/Users/Nathan/.claude/projects/-private-tmp-r6rec-work/05be08c2-0d4d-43d3-a72a-5a7dbf9ef0f9.jsonl",
+        "cwd": "/private/tmp/r6rec/work",
+        "prompt_id": "b413c785-d3a9-4ab2-8e29-56023d46521e",
+        "permission_mode": "default",
+        "effort": {
+          "level": "high"
+        },
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "Page title: **Example Domain**",
+        "background_tasks": [],
+        "session_crons": []
+      },
+      "received_at_ms": 1787164565724
+    }
+  ]
+}

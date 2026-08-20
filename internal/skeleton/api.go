@@ -1,6 +1,7 @@
 package skeleton
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -62,6 +63,16 @@ type coreAPI struct {
 	// Daemon for the reason sampleFn and captureFn are: one seam, not the whole assembly.
 	// nil => the daemon cannot answer an approve, and says so.
 	approve func(machine, operationID string, req protocol.ApproveReq) (protocol.ErrorCode, error)
+
+	// The Wave R6 complete-chat seams (chat.go), handed across at assembly exactly as
+	// approve is: composer applies one composer_send (M2.4), interrupt one turn_interrupt,
+	// history serves ADR-014's paged read (M3.1) and detail IS-CAP-2's full-body read
+	// (M3.3). Each is nil in a bare test literal; the coreAPI methods below then refuse
+	// loudly rather than pretending (ApproveInteraction's rule).
+	composer  func(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
+	interrupt func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
+	history   func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
+	detail    func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
 
 	// pairing carries the machine-side pairing identity + enrollment material and the
 	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
@@ -475,6 +486,51 @@ func (a *coreAPI) ApproveInteraction(machine, operationID string, req protocol.A
 // serve approve (IS-LIFE-4).
 var _ protocol.InteractionApprover = (*coreAPI)(nil)
 
+// ComposerSend makes coreAPI a protocol.ComposerSender (Wave R6, Mirror M2.4): it delegates
+// to the outer Daemon's composerSend (chat.go), which owns the expected_turn precondition,
+// the PTY write and the injection-time attribution. An unwired seam refuses LOUDLY with no
+// invented code, for ApproveInteraction's stated reasons: OK here is a sent message no
+// agent received.
+func (a *coreAPI) ComposerSend(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error) {
+	if a.composer == nil {
+		return "", errors.New("skeleton: this daemon has no composer seam wired; nothing was typed")
+	}
+	return a.composer(machine, operationID, req)
+}
+
+// InterruptTurn makes coreAPI a protocol.TurnInterrupter (Wave R6): the semantic Stop.
+func (a *coreAPI) InterruptTurn(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error) {
+	if a.interrupt == nil {
+		return "", errors.New("skeleton: this daemon has no interrupt seam wired; nothing was interrupted")
+	}
+	return a.interrupt(machine, operationID, req)
+}
+
+// InteractionHistory makes coreAPI a protocol.InteractionHistorian (Wave R6, M3.1).
+func (a *coreAPI) InteractionHistory(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error) {
+	if a.history == nil {
+		return nil, false, "", errors.New("skeleton: this daemon has no interaction-history seam wired")
+	}
+	return a.history(session, beforeItem, limit)
+}
+
+// InteractionDetail makes coreAPI a protocol.InteractionDetailer (Wave R6, M3.3).
+func (a *coreAPI) InteractionDetail(session, itemID string) (json.RawMessage, protocol.ErrorCode, error) {
+	if a.detail == nil {
+		return nil, "", errors.New("skeleton: this daemon has no interaction-detail seam wired")
+	}
+	return a.detail(session, itemID)
+}
+
+// coreAPI ALSO satisfies the four Wave R6 chat seams so the assembled remote-tier Server
+// can serve composer_send / turn_interrupt / interaction_history / interaction_detail.
+var (
+	_ protocol.ComposerSender       = (*coreAPI)(nil)
+	_ protocol.TurnInterrupter      = (*coreAPI)(nil)
+	_ protocol.InteractionHistorian = (*coreAPI)(nil)
+	_ protocol.InteractionDetailer  = (*coreAPI)(nil)
+)
+
 func newCoreAPI(core *daemon.Daemon, fakeAgentBin, endpointID string) *coreAPI {
 	a := &coreAPI{
 		core:         core,
@@ -566,7 +622,14 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 		Agent:     r.Agent,
 		Name:      r.Name,
 	}
-	if r.Type == journal.TypeInteraction {
+	if r.Type == journal.TypeInteraction || r.Type == journal.TypeStructuredGap {
+		// `structured_gap` joins `interaction` as a payload that IS transcript content
+		// (Wave R6 review finding B4, ADR-017 T2 rule 2). Its payload carries the proven
+		// boundary's instant and reason, and WITHOUT crossing here the phone received a
+		// typed record with an empty body: it could see that a tear existed only if it
+		// inspected the type, and it had nothing to render. A gap that cannot be rendered
+		// is a gap silently bridged -- the transcript shows the items either side of it
+		// as contiguous -- which is the one thing ADR-017 forbids.
 		out.Item = r.Payload
 	}
 	return out

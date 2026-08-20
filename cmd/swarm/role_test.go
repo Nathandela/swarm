@@ -45,8 +45,8 @@ func buildRoleBinaries(t *testing.T) (swarmBin, fakeAgent string) {
 }
 
 // writeLaunchConfig writes a shim launch config that runs the fake agent through
-// script, returning the config path and the session dir.
-func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, sessionDir string) {
+// script, returning the config path, the session dir and the control socket path.
+func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, sessionDir, socketPath string) {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "script.txt")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
@@ -60,12 +60,13 @@ func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, session
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 
+	socketPath = filepath.Join(sockDir, "s")
 	data, err := json.Marshal(shimLaunchConfig{
 		SessionID:  "role-test",
 		Argv:       []string{fakeAgent, scriptPath},
 		Cwd:        t.TempDir(),
 		Env:        []string{"PATH=" + os.Getenv("PATH")},
-		SocketPath: filepath.Join(sockDir, "s"),
+		SocketPath: socketPath,
 		SessionDir: sessionDir,
 		Cols:       80,
 		Rows:       24,
@@ -78,7 +79,7 @@ func writeLaunchConfig(t *testing.T, fakeAgent, script string) (cfgPath, session
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
 		t.Fatalf("write launch config: %v", err)
 	}
-	return cfgPath, sessionDir
+	return cfgPath, sessionDir, socketPath
 }
 
 func assertSideFiles(t *testing.T, sessionDir string) {
@@ -94,7 +95,7 @@ func TestRunShim_LaunchesAgentPersistsAndLeadsSession(t *testing.T) {
 	swarmBin, fakeAgent := buildRoleBinaries(t)
 	// The idle keeps the shim alive long enough to observe its session id while
 	// it is still running.
-	cfgPath, sessionDir := writeLaunchConfig(t, fakeAgent, "print role-ok\nidle 2s\nexit 5\n")
+	cfgPath, sessionDir, socketPath := writeLaunchConfig(t, fakeAgent, "print role-ok\nidle 2s\nexit 5\n")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -108,8 +109,29 @@ func TestRunShim_LaunchesAgentPersistsAndLeadsSession(t *testing.T) {
 
 	// Spawned without a new group, the shim's in-place setsid succeeds, so it
 	// becomes its own session leader: getsid(pid) == pid (E4.1 verified).
-	if !becomesSessionLeader(pid, 3*time.Second) {
-		t.Errorf("shim pid %d never became its own session leader (getsid != pid) — setsid was not guaranteed; stderr:\n%s", pid, stderr.String())
+	//
+	// WAIT ON THE REAL CONDITION, NOT ON A DURATION (Wave R6 review round 3, finding
+	// F5(b)). This assertion used to poll getsid for a fixed 3 s and report "setsid was
+	// not guaranteed" if the answer had not arrived by then -- a bounded wait treated as
+	// a sync point, measuring PROCESS STARTUP LATENCY, which this rig does not control.
+	// Under load it fails on a shim that would have led its session perfectly well a
+	// moment later: reproduced 6/6 at GOMAXPROCS=1 with 6x hw.ncpu busy loops
+	// (docs/verification/r6-chat.md, Gates).
+	//
+	// The condition the assertion actually depends on is "the shim has got past
+	// ensureSession". `cmd/swarm.runShim` calls ensureSession BEFORE shim.Run, and
+	// shim.Run binds cfg.SocketPath as its first act (internal/shim/shim.go:113-120,
+	// "Bind the socket first"), so the socket existing is proof that setsid has ALREADY
+	// happened -- the ordering is in the production code, not in a timeout. Waiting for
+	// it makes the getsid read below a single, deterministic observation, and its
+	// deadline is a runaway guard rather than the measurement.
+	if !awaitPath(socketPath, 25*time.Second) {
+		t.Fatalf("shim pid %d never bound its control socket %s; it never reached shim.Run at all. stderr:\n%s",
+			pid, socketPath, stderr.String())
+	}
+	if sid, err := unix.Getsid(pid); err != nil || sid != pid {
+		t.Errorf("shim pid %d is serving its control socket but getsid = %d (err %v), want %d — "+
+			"setsid was not guaranteed; stderr:\n%s", pid, sid, err, pid, stderr.String())
 	}
 
 	err := cmd.Wait()
@@ -125,7 +147,7 @@ func TestRunShim_LaunchesAgentPersistsAndLeadsSession(t *testing.T) {
 
 func TestRunShim_ReExecsToAcquireSessionWhenGroupLeader(t *testing.T) {
 	swarmBin, fakeAgent := buildRoleBinaries(t)
-	cfgPath, sessionDir := writeLaunchConfig(t, fakeAgent, "print role-ok\nexit 5\n")
+	cfgPath, sessionDir, _ := writeLaunchConfig(t, fakeAgent, "print role-ok\nexit 5\n")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -149,15 +171,20 @@ func TestRunShim_ReExecsToAcquireSessionWhenGroupLeader(t *testing.T) {
 	assertSideFiles(t, sessionDir)
 }
 
-// becomesSessionLeader polls until getsid(pid) == pid (pid leads its session) or
-// the deadline passes.
-func becomesSessionLeader(pid int, timeout time.Duration) bool {
+// awaitPath waits for path to exist. It replaces becomesSessionLeader's poll for a
+// PROPERTY the shim holds from birth with a wait for an EVENT the shim publishes: see
+// the call site for why the difference decides whether the test measures setsid or the
+// host's scheduler. The deadline is a runaway guard -- a shim that never binds its
+// socket never ran -- and not the quantity under test.
+func awaitPath(path string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if sid, err := unix.Getsid(pid); err == nil && sid == pid {
+	for {
+		if _, err := os.Stat(path); err == nil {
 			return true
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return false
 }

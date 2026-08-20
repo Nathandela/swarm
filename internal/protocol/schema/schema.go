@@ -110,6 +110,24 @@ type Control struct {
 	// the session id), outcome_unknown (honest undecidability), or unknown_operation
 	// (no record; never invented).
 	OperationOutcome *OperationOutcomeView `json:"operation_outcome,omitempty"`
+	// Wave R6 complete-chat additive fields (Mirror M2.4 / M3.1 / M3.3, ADR-009 (8)).
+	// ComposerSend is the composer_send body: one structured message plus the turn it was
+	// rendered against, bound into the device signature via ComposerSendContentHash.
+	ComposerSend *ComposerSendReq `json:"composer_send,omitempty"`
+	// TurnInterrupt is the turn_interrupt body (Wave R6 review fix-pack B7): the session
+	// plus the turn the phone RENDERED the Stop against, bound into the device signature
+	// via TurnInterruptContentHash. See schema/chat.go for why the op stopped being
+	// bodyless.
+	TurnInterrupt *TurnInterruptReq `json:"turn_interrupt,omitempty"`
+	// History is the interaction_history body (M3.1, ADR-014); the reply rides the
+	// existing Journal carrier plus HistoryFloor.
+	History *InteractionHistoryReq `json:"interaction_history,omitempty"`
+	// Detail is the interaction_detail body (M3.3, IS-CAP-2's unsigned read); the reply
+	// carries exactly one Journal record whose Item is the full pre-truncation body.
+	Detail *InteractionDetailReq `json:"interaction_detail,omitempty"`
+	// HistoryFloor rides the interaction_history reply: nothing older than the returned
+	// page is retained, so the phone renders a retention floor instead of a spinner.
+	HistoryFloor bool `json:"history_floor,omitempty"`
 	// DeviceCapability rides the launch_presets reply: the SIGNING device's own
 	// authorization tier ("full"/"read_only"/"read_approve") as pinned machine-side in
 	// the device registry at enrollment (round-2 fix-pack). It is the phone's only

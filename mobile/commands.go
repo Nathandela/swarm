@@ -320,54 +320,81 @@ func issueRevokeThenDropTokenAtRelay(revoke func() (*Op, error), atRelay func() 
 	return op, err
 }
 
-// interruptByte is Ctrl-C. A PTY in its default ISIG mode turns 0x03 into SIGINT for the
-// foreground process group, which is exactly how a human stops a running agent.
-const interruptByte = 0x03
-
-// Interrupt is PB-APP-3's persistent Stop: hold the lease, send Ctrl-C.
+// Interrupt is PB-APP-3's persistent Stop: the SIGNED turn_interrupt op (Wave R6, Mirror
+// M2.4 "Stop becomes a signed interrupt op"). The daemon resolves the session's adapter and
+// types that CLI's OWN recorded cancel sequence, or refuses `interrupt_unsupported` having
+// typed nothing -- so Stop has a visible SUCCESS and a visible REFUSAL, per verb, which the
+// input-plane ride structurally could not give it (a dropped input frame is silence).
 //
-// THE RESOLUTION THIS IMPLEMENTS, recorded 2026-07-25. Stop had no wire verb -- the signed
-// action set is launch, kill, delete, approve, device_revoke, take_control, terminal_watch,
-// terminal_unwatch and push_prefs, with no interrupt anywhere -- and this verb used to record
-// a durable local refusal saying so. That was right while no resolution existed and became
-// wrong the moment one did: the button is on the screen and it does nothing.
+// SUPERSESSION, EXECUTED (pre-recorded in docs/verification/r6-red/chat-red.txt and
+// mobile/r6_chatverbs_test.go). The 2026-07-25 resolution that stood here -- "an interrupt
+// IS a keystroke (Ctrl-C, 0x03, through a PTY in ISIG mode), so Stop holds the lease and
+// sends 0x03 on the live input plane" -- rested on a premise its own text stated: "MINTING A
+// NEW SIGNED ACTION WAS REJECTED [because] ... until every hop learned it, a command bearing
+// the new action would be refused by the daemon's CLOSED, fail-closed capability switch one
+// hop short of the daemon". Wave R1 dissolved that premise (ActionTurnInterrupt is mapped at
+// every hop: actionClass, opForAction, handleControl) and Wave R6 landed the real handler,
+// so the ride is retired with its reason. What the keystroke ride could never deliver, this
+// op does: no lease is needed (the tuple's own signature is the authorization), the daemon
+// executes the ADAPTER's declared sequence rather than assuming ISIG semantics, and the
+// reply resolves the op -- success and refusal both land on the screen.
 //
-// MINTING A NEW SIGNED ACTION WAS REJECTED. It would change what requireRemoteAuthz accepts
-// and would need its own authz tuple, its own biometric tier and its own replay story, all to
-// duplicate a capability the input plane already delivers. Worse, until every hop learned it,
-// a command bearing the new action would be refused by the daemon's CLOSED, fail-closed
-// capability switch one hop short of the daemon -- and a refused action seals no reply, so the
-// op would never resolve and Stop would hang forever while looking, to the app, exactly like a
-// command that was delivered.
+// What is KEPT from the old ride, deliberately:
 //
-// So an interrupt IS a keystroke and rides the live input plane, with kill as the escalation.
-// Three consequences follow and all three are the requirement rather than side effects:
-//
-//   - It is GATED ON A CONFIRMED LEASE (PB-INPUT-2), so it refuses legibly rather than
-//     returning success. The gateway drops an input frame from a device holding no lease
-//     SILENTLY, which is a user watching a Stop button work while the agent keeps running.
-//   - It is LIVE ONLY (ADR-007 D7): never queued, never replayed. A Stop that arrives ten
-//     minutes late interrupts whatever the agent is doing THEN, after the user gave up and
-//     started something else.
-//   - An undeliverable one is recorded on the undelivered ledger (PB-INPUT-1) rather than
-//     dropped, because silence on THIS control is the worst place for it.
-//
-// The returned Op names the action for the screen and is deliberately NOT tracked in flight:
-// input is never acknowledged by the machine, so an op awaiting a reply would raise
-// PendingOpCount for the life of the process and hide every genuinely pending op behind it.
-func (a *App) Interrupt(session string) (op *Op, err error) {
+//   - LIVE ONLY (ADR-007 D7's spirit): sealSignedCommand appends to the mailbox or fails.
+//     A Stop that arrives ten minutes late interrupts whatever the agent is doing THEN, so
+//     an offline press refuses with the offline class -- a LEGIBLE refusal, which preserves
+//     the 4lta pin (an offline Stop SAYS SO) rather than weakening it.
+//   - Nothing rides the undelivered-INPUT ledger: the signed op is not a keystroke, and its
+//     failure surfaces on the op itself (r6_chatverbs_test.go pins the ledger stays empty).
+// EXPECTED_TURN IS REQUIRED (Wave R6 fix-pack, review finding B7). The verb took only a
+// session until a probe showed what that costs: with turnA superseded by turnB, a
+// ComposerSend rendered against turnA was refused stale_turn while an Interrupt rendered
+// against the SAME turnA succeeded and typed the cancel sequence into turnB. In playbook
+// §8.1 turnB is the turn the OWNER just started at the terminal, and the Claude adapter's
+// own note records that the cancel key at an idle prompt CLEARS the composer -- so a late
+// Stop wipes the terminal user's half-typed line. Stop and Send are tapped under one race
+// and now carry one precondition; the screen passes the turn it DREW the button against, and
+// a Stop that names no turn is refused before anything is signed.
+func (a *App) Interrupt(session, expectedTurn string) (op *Op, err error) {
 	defer barrier(&err)
+	if session == "" || expectedTurn == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: Interrupt needs a session id and the turn the screen drew Stop against"))
+	}
 	if _, err = a.ready(); err != nil {
 		return nil, err
 	}
-	if err = a.SendInput(session, []byte{interruptByte}); err != nil {
+	return a.signedCommand(schema.ActionTurnInterrupt, session, nil, commandBody{
+		interrupt: &schema.TurnInterruptReq{Session: session, ExpectedTurn: expectedTurn},
+	})
+}
+
+// ComposerSend is Mirror M2.4's structured composer: one message into a session's agent,
+// as the signed composer_send op. expectedTurn is the turn the SCREEN rendered the draft
+// against ("" for an idle session); the daemon refuses `stale_turn` when the conversation
+// has moved on, and the composer shows that gently with the draft retained
+// (ErrClassStaleTurn's taxonomy row). The signed tuple's content slot binds
+// (session, expected_turn, text) via schema.ComposerSendContentHash -- derived in
+// phonecore.SignComposerSend, never here (the take_control-token rule: a re-derivation is a
+// silent signature failure with no compile error).
+//
+// LIVE-ONLY, NEVER QUEUED (B43, ADR-009 (6)): a message replayed out of a queue lands in a
+// turn nobody rendered it against, which is the very race expected_turn exists to kill. An
+// offline send refuses with the offline class and stores NOTHING; the composer shows it
+// refused rather than silently swallowed.
+func (a *App) ComposerSend(session, expectedTurn, text string) (op *Op, err error) {
+	defer barrier(&err)
+	if session == "" || text == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: ComposerSend needs a session id and a non-empty message"))
+	}
+	if _, err = a.ready(); err != nil {
 		return nil, err
 	}
-	id, err := newOperationID()
-	if err != nil {
-		return nil, err
-	}
-	return &Op{Action: "interrupt", SessionID: session, OperationID: id}, nil
+	return a.signedCommand(schema.ActionComposerSend, session, nil, commandBody{
+		composer: &schema.ComposerSendReq{Session: session, ExpectedTurn: expectedTurn, Text: text},
+	})
 }
 
 // TerminalWatch opens the server-rendered terminal peek for a session (PB-APP-4). It is a
@@ -719,6 +746,16 @@ type commandBody struct {
 	// rides beside the signed tuple (SealSessionLaunchEnvelope) and is bound into the
 	// signature via ContentHash = schema.SessionLaunchContentHash(it).
 	sessionLaunch *schema.SessionLaunchReq
+	// composer is Wave R6's composer_send body. Like approve it changes both halves --
+	// the signature covers schema.ComposerSendContentHash(it) and the envelope carries the
+	// body (SealComposerSendEnvelope) -- and for the same reason the derivation is
+	// phonecore's (SignComposerSend), not this package's.
+	composer *schema.ComposerSendReq
+	// interrupt is Wave R6's turn_interrupt body, composer's exact twin since the fix-pack
+	// bound expected_turn into it (finding B7): signature covers
+	// schema.TurnInterruptContentHash(it), envelope carries it, derivation is phonecore's
+	// (SignTurnInterrupt).
+	interrupt *schema.TurnInterruptReq
 }
 
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
@@ -791,6 +828,30 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 			ExpiresAt:   expiresAt,
 			GateToken:   body.gate,
 		})
+	case body.composer != nil:
+		// ComposerSend signs a DIFFERENT tuple too: the content slot is
+		// schema.ComposerSendContentHash over the exact (session, expected_turn, text)
+		// body the envelope carries. phonecore owns the derivation, for SignApprove's
+		// stated reason.
+		cmd, err = phonecore.SignComposerSend(core.KeyStore(), phonecore.ComposerSendInput{
+			Machine:      core.State().Machine,
+			Session:      session,
+			OperationID:  id,
+			ExpiresAt:    expiresAt,
+			ExpectedTurn: body.composer.ExpectedTurn,
+			Text:         body.composer.Text,
+		})
+	case body.interrupt != nil:
+		// Wave R6 fix-pack B7: turn_interrupt signs the composer's shape -- the content
+		// slot is schema.TurnInterruptContentHash over the exact (session, expected_turn)
+		// body the envelope carries. phonecore owns the derivation, same rule as above.
+		cmd, err = phonecore.SignTurnInterrupt(core.KeyStore(), phonecore.TurnInterruptInput{
+			Machine:      core.State().Machine,
+			Session:      session,
+			OperationID:  id,
+			ExpiresAt:    expiresAt,
+			ExpectedTurn: body.interrupt.ExpectedTurn,
+		})
 	case body.approve != nil:
 		// Approve signs a DIFFERENT tuple too: ADR-007 D7 spends the content slot on the
 		// INTERACTION CONTENT, so the hash under the signature is the card's own content_hash,
@@ -845,6 +906,15 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		// carry the body-version binding a bare SealCommandEnvelope omits -- the daemon
 		// refuses an absent body_version identically to a wrong one.
 		env, err = phonecore.SealLaunchPresetsEnvelope(sc.key, sc.epoch, seq, cmd)
+	case body.composer != nil:
+		// Wave R6: the composer body rides beside the signed tuple with its body-version
+		// binding, exactly as the preset confirmation does.
+		env, err = phonecore.SealComposerSendEnvelope(sc.key, sc.epoch, seq, cmd, body.composer)
+	case body.interrupt != nil:
+		// Wave R6 fix-pack B7: the interrupt body rides beside the signed tuple with its
+		// body-version binding, exactly as the composer body does. (It was bodyless when
+		// the op landed; schema.TurnInterruptReq records what that cost.)
+		env, err = phonecore.SealTurnInterruptEnvelope(sc.key, sc.epoch, seq, cmd, body.interrupt)
 	case body.prefs != nil:
 		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
 	case body.approve != nil:

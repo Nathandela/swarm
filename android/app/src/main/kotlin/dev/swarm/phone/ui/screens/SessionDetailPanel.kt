@@ -2,10 +2,16 @@ package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.CommandResult
 import dev.swarm.phone.ui.CommandVerdict
+import dev.swarm.phone.ui.ErrorRouter
+import dev.swarm.phone.ui.ErrorState
+import dev.swarm.phone.ui.MachineRefusalCodes
+import dev.swarm.phone.ui.OperationOutcome
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.UndeliveredLedger
+import dev.swarm.phone.ui.kit.ComposerModel
+import dev.swarm.phone.ui.kit.SendState
 
 /**
  * PB-APP-3 -- inventory C2's screen model: what the session detail SAYS about a [SessionDetail].
@@ -154,7 +160,70 @@ data class SessionDetailPanel(
     val offersAcknowledge: Boolean,
     /** What the acknowledgement reads as. */
     val acknowledgeLabel: String,
+    /**
+     * Whether the structured composer exists at all, and whether it can send right now
+     * (Mirror M2.4, `ComposerModel.availabilityFor`).
+     *
+     * ABSENT IS STRUCTURAL AND NOT A DISABLED CONTROL (ADR-017 T2 rule 2): `structured_chat=false`
+     * means there is no message sink, so the composer is GONE rather than greyed -- a greyed
+     * control promises a verb that will come back, and this degrade is one-way.
+     */
+    val composerAvailability: dev.swarm.phone.ui.kit.ComposerAvailability,
+    /** M2.5's status-driven placeholder: "Message" idle, "Add feedback..." while working. */
+    val composerPlaceholder: String,
+    /** ADR-009 (6)'s visible per-send state, or "" before anything has been sent. */
+    val composerStateLabel: String,
+    /** The refusal's copy -- `stale_turn` gets its own gentle one -- or "" when there is none. */
+    val composerNotice: String,
+    /** Whether what the user typed survives that refusal. It always does; see the notice model. */
+    val composerRetainsDraft: Boolean,
+    /** What the screen says where the composer WOULD be, for a session that has none. */
+    val composerAbsentNotice: String,
+    /**
+     * The turn both `App.ComposerSend` and `App.Interrupt` are drawn against (review finding B7):
+     * the transcript's latest, read off the panel the screen is showing, so the precondition the
+     * daemon checks is the one the reader could see.
+     */
+    val expectedTurn: String,
+    /** ADR-014: whether "load earlier" is offered, and the item id it pages before. */
+    val offersLoadEarlier: Boolean,
+    val loadEarlierBeforeItem: String,
+    /** What that control reads as. */
+    val loadEarlierLabel: String,
 )
+
+/**
+ * The MACHINE's answer to one composer_send, as everything the composer does about it
+ * (Mirror M2.4, ADR-009 (6)). Built by [SessionDetailScreen.composerVerdictFor], which is where
+ * the reasoning lives.
+ *
+ * IT IS A VALUE AND NOT A READ ON A SURFACE, for [CommandVerdict]'s reason exactly: the phone
+ * core is a gomobile AAR the unit-test JVM does not load, so a decision taken inside a settle
+ * cannot be reached by any test at all -- which is how a composer came to clear the user's
+ * draft on local sealing with an exhaustive suite standing over it.
+ */
+data class ComposerVerdict(
+    /** Whether the machine has said anything about THIS send. */
+    val answered: Boolean,
+    /** The send's visible lifecycle state, or null while unanswered. */
+    val state: SendState?,
+    /** PB-APP-9's routed ERROR STATE token, as `ComposerModel.noticeFor` speaks it. "" if accepted. */
+    val refusal: String,
+    /** Whether what the user typed is now spent. True on acceptance ONLY -- see the builder. */
+    val clearsDraft: Boolean,
+    /** The refusal's copy, or "" where there is nothing to report. */
+    val notice: String,
+    /** The machine's own words, verbatim, for the mono detail cell beside [notice]. */
+    val detail: String,
+) {
+    companion object {
+        /** Nothing issued, or nothing answered: the screen the press already drew. */
+        val UNANSWERED = ComposerVerdict(
+            answered = false, state = null, refusal = "",
+            clearsDraft = false, notice = "", detail = "",
+        )
+    }
+}
 
 object SessionDetailScreen {
 
@@ -166,6 +235,28 @@ object SessionDetailScreen {
      * same control whether the machine had granted a lease or not, so a user could not tell until
      * a keystroke vanished. The step that would make Stop work is what the control offers instead.
      */
+    /**
+     * What the screen says where the composer WOULD be, for a session whose structured record
+     * tore (ADR-017 T2 rule 2).
+     *
+     * IT SAYS WHAT IS STILL POSSIBLE. A control that simply vanishes reads as a bug, and the
+     * remedy here is real and nearby: the machine still has the session, and the owner can type
+     * at it. What the sentence must never do is imply the phone will get the composer back --
+     * the degrade is one-way for the life of the session instance.
+     */
+    private const val COMPOSER_ABSENT =
+        "This session's structured record broke, so it can no longer be typed into from the " +
+            "phone. It is still running on your machine, where you can still type at it."
+
+    /**
+     * ADR-014's page, in the reader's terms rather than the wire's.
+     *
+     * "Earlier" AND NOT "older" OR "history": what the control fetches is the part of THIS
+     * conversation that happened before what is on screen, and the reader's question is where the
+     * conversation started rather than how old a record is.
+     */
+    private const val LOAD_EARLIER = "Load earlier messages"
+
     private const val STOP = "Stop"
     private const val STOP_NEEDS_LEASE = "Take control to stop this"
 
@@ -208,6 +299,60 @@ object SessionDetailScreen {
      * refusal end in three different places.
      */
     private const val KILL_REFUSED = "Your machine did not end this session"
+
+    /**
+     * What the screen says when the machine REFUSED the Stop (Wave R6 review round 2).
+     *
+     * [KILL_REFUSED]'s argument, on the verb beside it, and it was the same silence: a Stop the
+     * machine declined and a Stop that worked drew the identical screen -- the outcome line is
+     * cleared for both and the button comes back enabled either way -- because the press
+     * discarded the operation and nothing ever claimed its answer. The two honest refusals this
+     * now carries are `interrupt_unsupported` (the provider proves no cancel key, so NOTHING was
+     * typed) and `stale_turn` (the turn it was drawn against is over), and both are facts the
+     * user cannot infer from anything else on the screen.
+     *
+     * IT NAMES WHAT IS TRUE OF THE TURN rather than the verb, for [KILL_REFUSED]'s reason, and
+     * the machine's own words follow it in the detail cell because those three refusals are
+     * fixed in three different places.
+     */
+    private const val INTERRUPT_REFUSED = "Your machine did not stop this turn"
+
+    /**
+     * What the screen says when THIS PHONE can hold no more of the conversation (review round 2,
+     * ADR-014 A8).
+     *
+     * IT IS NOT THE FLOOR'S SILENCE, and that distinction is the whole reason it exists. When the
+     * MACHINE says nothing older is retained, the control simply goes: the reader has reached the
+     * beginning and there is nothing to explain. When the PHONE runs out of room there IS more,
+     * and a control that vanished without a word would be telling the reader they had reached a
+     * beginning that is not there.
+     *
+     * IT NAMES WHERE THE REST IS, because that is the only act available: nothing on the handset
+     * recovers it, and the machine still has it.
+     */
+    private const val HISTORY_AT_CAPACITY =
+        "This phone is holding as much of this conversation as it can. Anything earlier is still " +
+            "on your machine."
+
+    /**
+     * What the screen says when the MACHINE refused a "load earlier" (round 3, finding F4).
+     *
+     * IT NAMES WHAT IS TRUE OF THE CONVERSATION, on [KILL_REFUSED]'s rule, and it is deliberately
+     * NOT [HISTORY_AT_CAPACITY]: that sentence is the PHONE's own limit and this is the machine
+     * declining, which are different facts with different remedies. The machine's own words follow
+     * in the detail cell.
+     */
+    private const val HISTORY_REFUSED = "Your machine did not send more of this conversation"
+
+    /** [HISTORY_REFUSED]'s argument on the clipped-card fetch: something refused it, not nothing. */
+    private const val DETAIL_REFUSED = "Your machine did not send the whole of this message"
+
+    /**
+     * IS-CAP-3's `unavailable`, said as the fact it is: the whole body is GONE, and no number of
+     * taps brings it back. What is on screen is what the machine kept.
+     */
+    private const val DETAIL_UNAVAILABLE =
+        "Your machine no longer keeps the whole of this message, so what is shown is all of it"
 
     /**
      * PB-APP-8's sentence for one session's chronology, in the register the other screens set.
@@ -332,6 +477,142 @@ object SessionDetailScreen {
      */
     fun killDetailFor(verdict: CommandVerdict): String =
         if (verdict.refused) verdict.reason else ""
+
+    /**
+     * [killNoticeFor]'s program on the Stop (Wave R6 review round 2). See [INTERRUPT_REFUSED].
+     *
+     * SILENT ON ACCEPTED, which is this screen's standing rule and is sharper here than for the
+     * kill: the confirmation the agent stopped is the transcript itself -- the turn's terminal
+     * item -- and a toast saying so beside it would be the app claiming credit for a fact the
+     * conversation already shows.
+     */
+    fun interruptNoticeFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.sentence(INTERRUPT_REFUSED) else ""
+
+    /** The machine's own words about that refusal, for the detail cell. See [killDetailFor]. */
+    fun interruptDetailFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.reason else ""
+
+    /** See [HISTORY_AT_CAPACITY]: said once, where the reader's finger was, when the page cannot be held. */
+    fun historyCapacityNotice(): String = HISTORY_AT_CAPACITY
+
+    /**
+     * What the screen says when the machine REFUSED a "load earlier" (Wave R6 review round 3,
+     * finding F4). [killNoticeFor]'s program, on the read.
+     *
+     * WHY IT IS HERE RATHER THAN IN THE ROUTER. Both M3 reads used to hand their wire code to
+     * `ErrorRouter.routeMachineCode` and say whatever came back, through the ONE-ARG
+     * `PressFeedback.ofRefusal` overload -- which carries no detail cell, so the machine's own
+     * words were dropped on the floor. `unavailable` and `invalid_field` are in no routing table
+     * (deliberately: see [dev.swarm.phone.ui.MachineRefusalCodes]), so what a user actually read
+     * was `ErrorState.UNKNOWN`'s "Something failed in a way the app does not recognise" -- the
+     * app's own shrug, in place of the sentence the daemon sent. These are the only two
+     * machine-answering verbs on this surface that did that; the composer, the Stop, the kill and
+     * the approval all say a verb-specific sentence and put the machine's words in the detail
+     * cell, and IS-CAP-3's legibility rule is that the words are shown, not classified away.
+     */
+    fun historyReadNoticeFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.sentence(HISTORY_REFUSED) else ""
+
+    /** The machine's own words about that refusal, for the detail cell. See [killDetailFor]. */
+    fun historyReadDetailFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.reason else ""
+
+    /**
+     * What the screen says when the machine refused the whole of a clipped card ([historyReadNoticeFor]'s
+     * argument, on the detail read).
+     *
+     * IT NAMES THE ONE REFUSAL THE USER CAN ACT ON. `unavailable` is IS-CAP-3's answer for a body
+     * the machine no longer retains -- capture-time retention is bounded and this one has aged out
+     * -- and the honest sentence says the whole of it is GONE rather than that a fetch failed,
+     * because a fetch that failed invites the tap again and this one can never succeed. The offer
+     * under the card is withdrawn on the same fact ([detailReadIsTerminal]).
+     */
+    fun detailReadNoticeFor(code: String, verdict: CommandVerdict): String = when {
+        !verdict.refused -> ""
+        code == MachineRefusalCodes.UNAVAILABLE -> verdict.sentence(DETAIL_UNAVAILABLE)
+        else -> verdict.sentence(DETAIL_REFUSED)
+    }
+
+    /** The machine's own words about that refusal, for the detail cell. See [killDetailFor]. */
+    fun detailReadDetailFor(verdict: CommandVerdict): String =
+        if (verdict.refused) verdict.reason else ""
+
+    /**
+     * Whether a refused detail read can NEVER succeed for that card, so the offer must go.
+     *
+     * THE DEFECT IT CLOSES (round 3, finding F4). `TranscriptBlock.offersDetail` is derived from
+     * the item's own `truncated`+`detail` fields, which were journalled when the item was CAPTURED
+     * -- so a body the daemon has since evicted still advertises the fetch, and the refusal left
+     * it advertising it forever. A user who tapped it read a sentence and tapped again.
+     *
+     * TWO CODES AND NOT EVERY REFUSAL: `unavailable` (the body is gone -- the store is oldest-first
+     * and never refills) and `invalid_field` (this id is not one the machine can look up at all).
+     * A transport failure or a rate limit is NOT terminal and the offer stays, because for those
+     * tapping again is exactly the remedy.
+     */
+    fun detailReadIsTerminal(code: String): Boolean =
+        code == MachineRefusalCodes.UNAVAILABLE || code == MachineRefusalCodes.INVALID_FIELD
+
+    /**
+     * What the MACHINE's answer to one composer_send does to the composer (Mirror M2.4,
+     * ADR-009 (6)), claimed BY OPERATION ID (PB-SYNC-2).
+     *
+     * ## Why this exists at all
+     *
+     * Wave R6 review round 2: the send's `settle` ran on the FACADE CALL returning, and
+     * `App.ComposerSend` returns its `*Op` the instant the envelope is appended to the mailbox.
+     * So the composer set `SendState.SENT` and cleared the field on LOCAL SEALING -- before the
+     * machine had seen the message -- and a refused send was shown as sent with the user's words
+     * erased. `Press.refused` could then only fire for facade-LOCAL errors, so the daemon's
+     * `stale_turn` never routed and `SendState.STALE_TURN` had no producer at all.
+     *
+     * ## The three decisions, in one place
+     *
+     * **Unanswered is not a state.** Until the machine replies there is nothing to say, and the
+     * `PENDING` label the press already set is the honest screen. Saying anything else here is
+     * the defect above, one layer over.
+     *
+     * **Acceptance is the ONLY thing that empties the field.** That is what
+     * [ComposerVerdict.clearsDraft] is, and it is a property of the ANSWER rather than a line at
+     * a call site, because the call site is exactly where it was got wrong.
+     *
+     * **The refusal is routed, never string-matched.** `stale_turn` earns [SendState.STALE_TURN]
+     * and `ComposerModel`'s gentle copy because `ErrorRouter.routeMachineCode` says it is that
+     * class; every other refusal is [SendState.REFUSED] with the generic copy, and the machine's
+     * own words ride beside it in [ComposerVerdict.detail] rather than inside the sentence
+     * (agents-tracker-ksvb.10's split).
+     */
+    fun composerVerdictFor(outcome: OperationOutcome, operationId: String): ComposerVerdict {
+        val verdict = CommandVerdict.of(outcome, operationId, CommandVerdict.ACCEPTED_OK)
+        if (!verdict.answered) {
+            return ComposerVerdict.UNANSWERED
+        }
+        if (verdict.accepted) {
+            return ComposerVerdict(
+                answered = true, state = SendState.SENT, refusal = "",
+                clearsDraft = true, notice = "", detail = "",
+            )
+        }
+        val routed = ErrorRouter.routeMachineCode(outcome.code)
+        val state = if (routed.state == ErrorState.STALE_TURN) {
+            SendState.STALE_TURN
+        } else {
+            SendState.REFUSED
+        }
+        val notice = ComposerModel.noticeFor(routed.state.name)
+        return ComposerVerdict(
+            answered = true,
+            state = state,
+            refusal = routed.state.name,
+            // NEVER on a refusal, and never conditional on WHICH refusal: a composer that ate
+            // the user's words punishes them for the machine's answer, and `stale_turn` -- the
+            // ordinary one -- is the case that makes it obvious.
+            clearsDraft = false,
+            notice = notice.copy,
+            detail = verdict.reason,
+        )
+    }
 
     /**
      * PB-INPUT-2's "visibly", for the two states this app renders as themselves rather than as a
@@ -473,6 +754,41 @@ object SessionDetailScreen {
         undeliveredDetail = undeliveredDetailFor(undelivered),
         offersAcknowledge = undelivered.entries.isNotEmpty(),
         acknowledgeLabel = ACKNOWLEDGE,
+        // ---- Mirror M2.4/M2.5, the composer -------------------------------------
+        //
+        // THE GATE IS THE KIT MODEL'S AND IS NOT RE-DECIDED HERE. `ComposerModel` holds the
+        // availability rule, the notice copy and the placeholder; this file supplies the two
+        // facts it asks about, and both come from things this screen already reads.
+        //
+        // `structuredChat` COMES OFF THE TRANSCRIPT, which is a disclosure and not a shortcut:
+        // there is no capability read on this facade (Wave R6's disclosed residual -- the daemon
+        // authors session capability records that nothing publishes), and the phone's only sight
+        // of ADR-017's one-way degrade is the `structured_gap` element the daemon wrote into the
+        // journal. A session holding one has no message sink. A session whose gap the retention
+        // bound has since evicted gets the machine's own `structured_unsupported` refusal
+        // instead, rendered through [composerNotice] -- late, but never silent.
+        composerAvailability = ComposerModel.availabilityFor(
+            online = lease.online,
+            structuredChat = !transcript.structureTorn,
+        ),
+        // A WORKING AGENT IS ONE WITH AN OPEN TOOL RUN, read off the blocks this screen has
+        // already decided rather than off a second source. `TranscriptBlock.running` is §4's
+        // `in_progress` and exists precisely so a caller can ask without re-parsing a sentence.
+        composerPlaceholder = ComposerModel.placeholderFor(
+            working = transcript.blocks.any { it.running },
+        ),
+        composerStateLabel = detail.composerState?.let { ComposerModel.stateLabel(it) }.orEmpty(),
+        composerNotice = if (detail.composerRefusal.isEmpty()) {
+            ""
+        } else {
+            ComposerModel.noticeFor(detail.composerRefusal).copy
+        },
+        composerRetainsDraft = ComposerModel.noticeFor(detail.composerRefusal).retainsDraft,
+        composerAbsentNotice = COMPOSER_ABSENT,
+        expectedTurn = transcript.latestTurnId,
+        offersLoadEarlier = transcript.offersLoadEarlier,
+        loadEarlierBeforeItem = transcript.oldestItemId,
+        loadEarlierLabel = LOAD_EARLIER,
     )
 
 }

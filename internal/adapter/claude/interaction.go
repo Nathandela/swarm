@@ -100,6 +100,11 @@ type hookBody struct {
 type toolInput struct {
 	Command  string `json:"command"`
 	FilePath string `json:"file_path"`
+	// Pattern and URL are Wave R6's recorded keys (M2.2): Grep and Glob both carry
+	// `pattern` and WebFetch carries `url`, read off the real captures in
+	// testdata/interaction/claude-{grep,glob,webfetch}-pretooluse.json.
+	Pattern string `json:"pattern"`
+	URL     string `json:"url"`
 }
 
 // toolResponse is the union of the recorded response shapes, keyed by the members this producer
@@ -235,10 +240,13 @@ func (claudeAdapter) Decision(ref, decisionID string) (adapter.DecisionAction, b
 // actionFor is interaction-schema.md §7's structured summary, produced machine-side per IS-TOOL-1
 // so a card reads "Read src/main.rs" without the phone parsing an argument.
 //
-// Only the four tools S-B actually recorded are classified. `search` and `fetch` have no arm
-// because no Grep/Glob/WebFetch body was ever captured, and their argument key would be a guess
-// -- IS-TOOL-2 says an unclassifiable call is "other", never guessed at, and PROVENANCE.md
-// records the gap. Each is one recorded payload away from an arm here.
+// Only tools with a RECORDED payload are classified: the four S-B recorded, plus the three
+// Wave R6 recorded (M2.2 — testdata/interaction/claude-{grep,glob,webfetch}-pretooluse.json,
+// real claude 2.1.214). Glob is `search` like Grep: a filename pattern is a search, and
+// inventing a separate type would grow §7's sealed vocabulary for no rendering gain. WebFetch
+// is `fetch`, with the recorded `url` riding §7's `query` field — the fetch target-field
+// ruling recorded in interaction-schema.md §7. Anything else stays IS-TOOL-2's `other`,
+// never guessed at; PROVENANCE.md records what remains uncaptured.
 func actionFor(tool string, in toolInput) adapter.ToolAction {
 	switch tool {
 	case "Bash":
@@ -249,6 +257,10 @@ func actionFor(tool string, in toolInput) adapter.ToolAction {
 		return adapter.ToolAction{Type: "edit", Path: in.FilePath}
 	case "Write":
 		return adapter.ToolAction{Type: "write", Path: in.FilePath}
+	case "Grep", "Glob":
+		return adapter.ToolAction{Type: "search", Query: in.Pattern}
+	case "WebFetch":
+		return adapter.ToolAction{Type: "fetch", Query: in.URL}
 	}
 	return adapter.ToolAction{Type: "other"}
 }
@@ -352,6 +364,18 @@ func approvalFrom(tool string, in toolInput, receivedAtMs int64) adapter.Interac
 	item.Ref = refKind + tool + ":" + strconv.FormatInt(receivedAtMs, 10)
 	return item
 }
+
+// InterruptKeys makes the claude adapter an adapter.TurnInterrupter (Wave R6, Mirror
+// M2.4's semantic Stop): the CLI's OWN cancel key, as pure data the core writes verbatim.
+//
+// THE SEQUENCE IS RECORDED, NOT GUESSED (IS-TOOL-2's posture): the S-B capture of real
+// claude 2.1.214 (testdata/interaction/claude-bash-permissionrequest-run1.json,
+// pty_capture) renders the CLI's own hint "esc to interrupt" on the working screen, and
+// the M1.1 dialog capture renders "Esc to cancel" -- the same key the keystroke map above
+// already types for a deny. One byte, no Enter: ESC selects and acts on its own, so a key
+// that lands after the turn already finished is swallowed by an idle composer rather than
+// submitting anything.
+func (claudeAdapter) InterruptKeys() []byte { return []byte{0x1b} }
 
 // summaryFor is §3.5's one-line card headline. It is built from the LITERAL action -- the command
 // that will run, the path that will change -- and deliberately not from Bash's `description`

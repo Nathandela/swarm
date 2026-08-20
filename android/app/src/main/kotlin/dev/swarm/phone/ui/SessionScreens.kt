@@ -134,6 +134,25 @@ data class SessionDetail(
      * forgets it loses the improvement, never the truth.
      */
     val title: String = "",
+    /**
+     * The state of THIS screen's last composer send (Mirror M2.4, ADR-009 (6)), or null when the
+     * reader has not sent anything on this session since the screen was opened.
+     *
+     * IT IS THE SURFACE'S TO SET, exactly like [stopNotSent] and for the same argument: a send is
+     * a PRESS and not a fact about the session. `PhoneSurface` latches it when its own
+     * `App.ComposerSend` press is issued and again when the machine answers, per session, so a
+     * refusal is a report of something that happened rather than a state a link change invented.
+     */
+    val composerState: dev.swarm.phone.ui.kit.SendState? = null,
+    /**
+     * The refusal the machine (or the facade) answered that send with, as PB-APP-9's routed
+     * ERROR STATE token -- the vocabulary `ErrorRouter` already speaks, never a message.
+     *
+     * `stale_turn` is the one this row exists for: it is ORDINARY (the conversation moved on
+     * between render and tap) and it has its own gentle copy, which is a different thing from
+     * every other refusal and must not read like a fault.
+     */
+    val composerRefusal: String = "",
 ) {
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale

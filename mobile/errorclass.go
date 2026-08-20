@@ -159,6 +159,13 @@ const (
 	// keystroke is refused. The screen's remedy is to offer take-control, never to retry.
 	ErrClassNoLease = "swarm/no-lease"
 
+	// ErrClassStaleTurn is the daemon's stale_turn refusal of a composer send (Wave R6,
+	// IS-LIFE-5): the conversation moved on between the phone rendering the turn and the
+	// tap landing. An ORDINARY race, not a bug report -- the remedy is specific and mild
+	// (re-read the transcript and send again, the draft retained), which is why it is its
+	// own class rather than ErrClassUnknown or ErrClassInternal.
+	ErrClassStaleTurn = "swarm/stale-turn"
+
 	// ErrClassRateLimited is a bound this phone enforces on itself (the §6.0 resync budget).
 	// Retryable, but only after waiting -- "asking harder" is what the bound exists to stop.
 	ErrClassRateLimited = "swarm/rate-limited"
@@ -213,6 +220,7 @@ var errClasses = []string{
 	ErrClassGrantLost,
 	ErrClassNotFound,
 	ErrClassInternal,
+	ErrClassStaleTurn,
 	ErrClassNoLease,
 	ErrClassOffline,
 	ErrClassRevoked,

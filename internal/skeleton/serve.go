@@ -155,6 +155,17 @@ type Daemon struct {
 	interacted map[string]status.Interaction
 	adapterFor func(agentType string) (adapter.Adapter, bool)
 
+	// The COMPLETE-CHAT state (Wave R6, chat.go), riding itemMu with its siblings:
+	// pendingSends holds each session's accepted composer injections awaiting their
+	// UserPromptSubmit echo (M2.4's injection-time attribution), and details/detailOrder/
+	// detailBytes are M3.3's byte-bounded capture-time retention of full pre-truncation
+	// bodies (one 64 MiB store, oldest-first eviction). A session's entries are cleared by
+	// endSession.
+	pendingSends map[string][]pendingSend
+	details      map[string]map[string][]byte
+	detailOrder  []detailKey
+	detailBytes  int
+
 	// hookSeq is ingestHookBytes's own idempotency guard (hookdrain.go, R6 review
 	// fix-pack BLOCKER 1): the bounded, durable SET of hook callback Sequences fully
 	// ingested per session -- a membership test, not a high-water gate, because a hook
@@ -322,6 +333,12 @@ func Serve(cfg Config) (*Daemon, error) {
 	// answered OK by a daemon that applied nothing dismisses the card on every surface
 	// (IS-LIFE-2) while the CLI stays blocked.
 	d.api.approve = d.approveInteraction
+	// Wave R6 (chat.go): the complete-chat seams, handed across on the approve pattern.
+	// Left nil, each coreAPI method refuses rather than pretending.
+	d.api.composer = d.composerSend
+	d.api.interrupt = d.interruptTurn
+	d.api.history = d.interactionHistory
+	d.api.detail = d.interactionDetail
 	d.srv = protocol.NewServer(d.api, epID)
 	d.controlled = d.srv.IsControlled // grid tap skips a session with a live controller (R1.3.7)
 

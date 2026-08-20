@@ -725,6 +725,16 @@ internal object KitTag {
     const val ACTIVITY_BODY = "activity body"
 
     /**
+     * The row's leading glyph cell (Mirror M2.2, Wave R6).
+     *
+     * IT IS A CELL AND NOT A PREFIX ON THE BODY, which is the whole of why it exists as a tag: a
+     * tool card's kind is `ToolCard.glyphFor(tool_kind)`, one flat field read once, and splicing
+     * it into the sentence would rewrite the line the recorded crossing pins byte for byte
+     * (TranscriptScreenGoldenTest) as well as putting a symbol inside copy the screen wrote.
+     */
+    const val ACTIVITY_GLYPH = "activity glyph"
+
+    /**
      * The toast. Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.toast` is the
      * retired mock's class and the shared Substrate block declares no rule for it at all, so a tag
      * naming that selector would point a reader at something that does not exist.

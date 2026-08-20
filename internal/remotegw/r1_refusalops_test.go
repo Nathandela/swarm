@@ -102,6 +102,29 @@ func TestR1RefusalOps_ForwardedToDaemonNeverGatewayLocallyRefused(t *testing.T) 
 				// WELL-FORMED session_launch, exactly as it does for launch and approve.
 				cmd.SessionLaunch = &schema.SessionLaunchReq{PresetID: "preset-api", PresetRevision: "rev-1"}
 			}
+			if o.action == protocol.ActionComposerSend {
+				// SUPERSEDED BY WAVE R6 for this one row, on R5's exact precedent above
+				// (pre-recorded in docs/verification/r6-red/chat-red.txt §B10a):
+				// composer_send now carries a real body, and the gateway inherits
+				// launch's/approve's/session_launch's stripped-body rule
+				// (r6_composerroute_test.go's
+				// TestR6ComposerRoute_AStrippedBodyIsRefusedLoudlyNeverForwardedBodyless
+				// pins that refusal, so nothing is lost by giving this row a body). The
+				// forward-not-refuse assertion below is unchanged -- it now holds for a
+				// WELL-FORMED composer_send, exactly as it does for launch and approve.
+				cmd.ComposerSend = &schema.ComposerSendReq{Session: "m/s1", ExpectedTurn: "01JTURN", Text: "hello"}
+			}
+			if o.action == protocol.ActionTurnInterrupt {
+				// SUPERSEDED BY WAVE R6 (docs/verification/r6-red/chat-red.txt §B7):
+				// turn_interrupt is NO LONGER BODYLESS. Review finding B7 proved that an
+				// interrupt with no turn coordinate lands ESC in whatever turn is current
+				// when it arrives -- including a turn the OWNER just started at the
+				// terminal, whose half-typed line ESC clears. The op now carries the
+				// composer's own precondition (expected_turn), so this row carries a body
+				// for the same reason the three above it do. The forward-not-refuse
+				// assertion is unchanged.
+				cmd.TurnInterrupt = &schema.TurnInterruptReq{Session: "m/s1", ExpectedTurn: "01JTURN"}
+			}
 			mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealAt(t, key, 1, 1, cmd)}}}
 			fwd := &recordingForwarder{reply: protocol.Control{
 				Op: protocol.OpError, ErrorCode: protocol.CodeNotImplemented, Error: o.action + ": not implemented yet",
@@ -187,6 +210,11 @@ func TestR1RefusalOps_TerminalInputAndKeepaliveStayUnmappedGenericRefusal(t *tes
 // no longer the stateless op_not_implemented this test's premise names -- to
 // composer_send, which remains refusal-only. Every assertion is unchanged; the premise
 // ("a stateless refusal redelivers identically") is simply kept true of the op chosen.
+//
+// WAVE R6 gives the driving frame a REAL composer body, on R5's precedent (see the table
+// above): composer_send's own body gate now refuses a stripped body at the gateway, so a
+// bodyless frame here would never reach the forward this test is about. The canned reply is
+// still the stateless op_not_implemented the premise names, so the premise is untouched.
 func TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal(t *testing.T) {
 	key := inboundKey(97)
 	const epoch uint32 = 3
@@ -196,7 +224,8 @@ func TestR1RefusalOps_CrashShapedRedeliveryGetsTheSameRefusal(t *testing.T) {
 		DeviceCommandAuth: protocol.DeviceCommandAuth{
 			Action: protocol.ActionComposerSend, OperationID: "op-launch-crash", DeviceID: "d1", Sig: "device-signature",
 		},
-		BodyVersion: schema.CurrentProfileVersion,
+		ComposerSend: &schema.ComposerSendReq{Session: "m/s1", ExpectedTurn: "01JTURN", Text: "hello"},
+		BodyVersion:  schema.CurrentProfileVersion,
 	}
 	env := sealAt(t, key, epoch, 1, cmd)
 	rl.add(1, env)

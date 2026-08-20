@@ -16,127 +16,113 @@ import (
 	"time"
 )
 
-// TestPBAPP3_StopIsTheInterruptKeystrokeOnTheLiveLease.
+// TestPBAPP3_StopIsTheSignedTurnInterruptOp.
 //
-// THE RESOLUTION THIS ENCODES, recorded 2026-07-25 and not obvious from the requirement text.
-// PB-APP-3's "persistent Stop" had no wire verb: the signed action set defines launch, kill,
-// delete, approve, device_revoke, take_control, terminal_watch, terminal_unwatch and
-// push_prefs, and there is no interrupt anywhere. Minting one was rejected -- a new signed
-// action changes what requireRemoteAuthz accepts, needs its own authz tuple, its own biometric
-// tier and its own replay story, all to duplicate a capability the input plane already
-// delivers. An interrupt IS a keystroke: Ctrl-C is byte 0x03 and a PTY in its default ISIG
-// mode turns it into SIGINT for the foreground process group, which is exactly how a human
-// stops a running agent. So Stop is: hold the lease, send 0x03, with kill as the escalation.
-//
-// S8's facade correctly refused to INVENT a verb and records a durable local refusal instead
-// (App.Interrupt -> a.refuse). That was right while no resolution existed and is wrong now:
-// the button is on the screen and it does nothing.
-func TestPBAPP3_StopIsTheInterruptKeystrokeOnTheLiveLease(t *testing.T) {
+// SUPERSESSION EXECUTED (Wave R6, Mirror M2.4 "Stop becomes a signed interrupt op";
+// pre-recorded in docs/verification/r6-red/chat-red.txt and mobile/r6_chatverbs_test.go).
+// This test was TestPBAPP3_StopIsTheInterruptKeystrokeOnTheLiveLease and pinned the
+// 2026-07-25 resolution verbatim: "An interrupt IS a keystroke: Ctrl-C is byte 0x03 ...
+// So Stop is: hold the lease, send 0x03", and its second half asserted "NO NEW SIGNED
+// ACTION WAS MINTED ... a command bearing an invented action would be refused by the
+// daemon's closed capability switch while looking, to the app, exactly like one that was
+// delivered". That premise was dissolved by Wave R1 (ActionTurnInterrupt is mapped at
+// every hop: actionClass, opForAction, handleControl) and retired by Wave R6's real
+// handler, so the pin is retargeted to the NEW contract: Stop seals the signed
+// turn_interrupt command -- no lease, no 0x03, and the op resolves, which is what gives
+// the button a visible success AND a visible refusal.
+func TestPBAPP3_StopIsTheSignedTurnInterruptOp(t *testing.T) {
 	h := s16ReconciledHarness(t)
 
-	if _, err := h.App.TakeControl(testSession); err != nil {
-		t.Fatalf("TakeControl: %v", err)
-	}
-	h.AwaitLease(testSession)
-
-	if _, err := h.App.Interrupt(testSession); err != nil {
-		t.Fatalf("Interrupt on a held lease: %v", err)
+	if _, err := h.App.Interrupt(testSession, "01JTURN"); err != nil {
+		t.Fatalf("Interrupt: %v -- Stop rides the signed turn_interrupt op now (M2.4) and "+
+			"needs no lease; a refusal here is a Stop button that does nothing", err)
 	}
 
-	// The 125 ms coalescing window holds a keystroke briefly; the drain timer releases it.
-	deadline := time.Now().Add(5 * time.Second)
-	found := false
-	for time.Now().Before(deadline) && !found {
-		h.Drain()
-		h.mu.Lock()
-		for _, in := range h.Inputs {
-			if in.Kind == "data" && bytes.Contains(in.Data, []byte{0x03}) {
-				found = true
-				break
-			}
-		}
-		h.mu.Unlock()
-		time.Sleep(20 * time.Millisecond)
+	cmd := h.AwaitCommand("turn_interrupt")
+	if cmd.Session != testSession {
+		t.Errorf("PB-APP-3: the turn_interrupt command targeted %q, want %q", cmd.Session, testSession)
 	}
-	if !found {
-		t.Fatalf("PB-APP-3: Stop sent no 0x03 to the machine.\n" +
-			"App.Interrupt records a local refusal -- \"interrupt has no signed wire action; the " +
-			"verb is owed by another slice\" -- which was correct while no resolution existed and " +
-			"is stale now: an interrupt IS a keystroke (Ctrl-C, 0x03, through a PTY in ISIG mode), " +
-			"the phone already has take_control -> data_in, and minting a new signed action to " +
-			"duplicate that would change the signed action set for nothing. Today the persistent " +
-			"Stop button is on the screen and does nothing.")
+	if cmd.Sig == "" || cmd.DeviceID == "" {
+		t.Errorf("PB-APP-3/M2.4: the turn_interrupt command carries no device signature "+
+			"(sig %q, device %q); an unsigned interrupt is a raw keystroke with extra steps", cmd.Sig, cmd.DeviceID)
 	}
 
-	// AND NO NEW SIGNED ACTION WAS MINTED. The whole point of the resolution is that the
-	// signed set does not change; a command bearing an invented action would be refused by
-	// the daemon's closed capability switch while looking, to the app, exactly like one that
-	// was delivered.
+	// AND NO 0x03 RIDES THE INPUT PLANE: the keystroke ride is retired, not duplicated. A
+	// Stop that both sealed the op and typed the byte would interrupt twice.
+	time.Sleep(300 * time.Millisecond)
+	h.Drain()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for _, c := range h.Commands {
-		if strings.Contains(c.Action, "interrupt") {
-			t.Errorf("PB-APP-3: a %q command reached the machine. actionClass is a closed "+
-				"fail-closed switch (internal/skeleton/deviceauth.go); an action it does not know "+
-				"is refused one hop short of the daemon, and a refused action seals no reply, so "+
-				"the op never resolves and Stop hangs forever", c.Action)
+	for _, in := range h.Inputs {
+		if in.Kind == "data" && bytes.Contains(in.Data, []byte{0x03}) {
+			t.Errorf("PB-APP-3: Stop still sent 0x03 on the input plane beside the signed op; " +
+				"the input-plane ride is superseded (Wave R6, M2.4)")
 		}
 	}
 }
 
-// TestPBAPP3_StopWithoutALeaseDoesNotSilentlyDoNothing.
+// TestPBAPP3_StopNeedsNoLeaseAndSaysSoWhenItCannotReachTheMachine.
 //
-// PB-INPUT-2 refuses every keystroke until the machine has CONFIRMED a lease, so an ungated
-// Stop is a button that appears to work and changes nothing. The screen's answer is to show
-// the take-control step (the Kotlin half asserts that); the facade's answer is to REFUSE
-// legibly rather than to return success.
-func TestPBAPP3_StopWithoutALeaseDoesNotSilentlyDoNothing(t *testing.T) {
+// SUPERSESSION EXECUTED (Wave R6, same record). This was
+// TestPBAPP3_StopWithoutALeaseDoesNotSilentlyDoNothing, pinning "PB-INPUT-2 refuses every
+// keystroke until the machine has CONFIRMED a lease ... the refusal must name the lease,
+// because the screen's remedy is to offer take-control rather than to retry". The signed op
+// needs no lease -- the tuple's own signature is the authorization -- so the old refusal
+// would now be a Stop refused for a precondition the op does not have. What is KEPT is the
+// property the old test protected: a Stop that cannot act never silently succeeds.
+func TestPBAPP3_StopNeedsNoLeaseAndSaysSoWhenItCannotReachTheMachine(t *testing.T) {
 	h := s16ReconciledHarness(t)
 
-	_, err := h.App.Interrupt(testSession)
-	if err == nil {
-		t.Fatalf("PB-APP-3/PB-INPUT-2: Stop with no confirmed lease returned success. The " +
-			"gateway drops an input frame from a device holding no lease SILENTLY, so the user " +
-			"watched a Stop button work and the agent kept running")
+	// No TakeControl anywhere: the signed op authorizes itself.
+	if _, err := h.App.Interrupt(testSession, "01JTURN"); err != nil {
+		t.Fatalf("Interrupt with no lease: %v -- the signed turn_interrupt op needs none", err)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "lease") {
-		t.Errorf("PB-APP-3: Stop without a lease failed with %v; the refusal must name the "+
-			"lease, because the screen's remedy is to offer take-control rather than to retry", err)
+	if cmd := h.AwaitCommand("turn_interrupt"); cmd.Session != testSession {
+		t.Errorf("turn_interrupt targeted %q, want %q", cmd.Session, testSession)
 	}
 }
 
-// TestPBAPP3_AnOfflineStopResolvesAsUndeliveredAndIsNeverReplayed.
+// TestPBAPP3_AnOfflineStopRefusesLegiblyAndIsNeverReplayed.
 //
-// ADR-007 D7: input is live-only, never queued, never replayed. A Stop is the case where that
-// rule has teeth -- a keystroke that arrives ten minutes late types a character, and a Stop
-// that arrives ten minutes late interrupts whatever the agent is doing THEN, after the user
-// gave up and started something else.
-func TestPBAPP3_AnOfflineStopResolvesAsUndeliveredAndIsNeverReplayed(t *testing.T) {
+// SUPERSESSION EXECUTED (Wave R6, same record). This was
+// TestPBAPP3_AnOfflineStopResolvesAsUndeliveredAndIsNeverReplayed, whose middle pinned the
+// input-plane ledger: "a Stop pressed with no connection left NO NEW undelivered record ...
+// silence here is the silent drop PB-INPUT-1 forbids". The signed op is NOT a keystroke, so
+// the undelivered-INPUT ledger is exactly where its failure must NOT land
+// (mobile/r6_chatverbs_test.go pins the ledger stays empty); its refusal surfaces on the op
+// itself, as a classed error the screen renders -- the 4lta pin (an offline Stop SAYS SO)
+// preserved on the op plane. What is KEPT UNCHANGED is live-only: nothing is queued, and
+// nothing arrives on the reconnected link (ADR-007 D7's teeth -- a Stop that lands ten
+// minutes late interrupts whatever the agent is doing THEN).
+func TestPBAPP3_AnOfflineStopRefusesLegiblyAndIsNeverReplayed(t *testing.T) {
 	h := s16ReconciledHarness(t)
-	if _, err := h.App.TakeControl(testSession); err != nil {
-		t.Fatalf("TakeControl: %v", err)
-	}
-	h.AwaitLease(testSession)
 
 	// The link goes away. Stop is pressed. Nothing may be held for the reconnection.
 	if err := h.App.Stop(); err != nil {
 		t.Fatalf("App.Stop: %v", err)
 	}
 
-	// MEASURED AS A DELTA, and it has to be. App.Stop itself calls suspendInput, which empties
-	// the coalescer and resolves whatever it held as undelivered -- including the empty probe
-	// AwaitLease types. A test that read the ledger's absolute count would therefore be green
-	// today, for a Stop button that records nothing at all: the pass would come from the
-	// teardown of the previous step. This is standing defect class (iii) in miniature.
 	before := s16UndeliveredCount(t, h)
-	_, _ = h.App.Interrupt(testSession)
-	if s16UndeliveredCount(t, h) == before {
-		t.Errorf("PB-INPUT-1/PB-APP-3: a Stop pressed with no connection left NO NEW undelivered "+
-			"record (ledger stayed at %d). The user is entitled to be told the agent was not "+
-			"stopped; silence here is the silent drop PB-INPUT-1 forbids, on the one control "+
-			"where it matters most", before)
+	_, err := h.App.Interrupt(testSession, "01JTURN")
+	if err == nil {
+		t.Fatalf("PB-APP-3: an offline Stop returned success; the user watched a Stop button " +
+			"work while the machine never heard it")
+	}
+	class, cerr := h.App.ErrorClass(err.Error())
+	if cerr != nil {
+		t.Fatalf("ErrorClass: %v", cerr)
+	}
+	if class == "" || class == "swarm/unknown" || class == "swarm/internal" {
+		t.Errorf("PB-APP-3/PB-APP-9: the offline Stop's refusal classified as %q (%v); the user "+
+			"is entitled to a legible state, not a bug report", class, err)
+	}
+	if got := s16UndeliveredCount(t, h); got != before {
+		t.Errorf("Wave R6/M2.4: an offline Stop left %d new undelivered-INPUT record(s); the "+
+			"signed op is not a keystroke and reports on itself, not on the keystroke ledger",
+			got-before)
 	}
 
+	commandsBefore := len(h.Commands)
 	sentBefore := len(h.Inputs)
 	if err := h.App.Start(); err != nil {
 		t.Fatalf("App.Start: %v", err)
@@ -147,13 +133,18 @@ func TestPBAPP3_AnOfflineStopResolvesAsUndeliveredAndIsNeverReplayed(t *testing.
 	time.Sleep(500 * time.Millisecond)
 	h.Drain()
 	h.mu.Lock()
-	after := h.Inputs[sentBefore:]
-	h.mu.Unlock()
-	for _, in := range after {
+	defer h.mu.Unlock()
+	for _, c := range h.Commands[commandsBefore:] {
+		if c.Action == "turn_interrupt" {
+			t.Errorf("ADR-007 D7's spirit: a Stop pressed while offline arrived on the " +
+				"RECONNECTED link as a signed op. It interrupts whatever the agent is doing now, " +
+				"which is not what the user asked for and not what they are watching")
+		}
+	}
+	for _, in := range h.Inputs[sentBefore:] {
 		if in.Kind == "data" && bytes.Contains(in.Data, []byte{0x03}) {
-			t.Errorf("ADR-007 D7: a Stop pressed while offline arrived on the RECONNECTED link. " +
-				"It interrupts whatever the agent is doing now, which is not what the user asked " +
-				"for and not what they are watching")
+			t.Errorf("a Stop pressed while offline arrived on the reconnected link as 0x03; " +
+				"the input-plane ride is retired AND nothing may replay")
 		}
 	}
 }

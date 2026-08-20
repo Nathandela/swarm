@@ -252,6 +252,14 @@ func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.H
 		Status: in.Status,
 	}
 
+	if in.Kind == adapter.KindUserMessage {
+		// Injection-time correlation (Mirror M2.4, 8.1 step 3): the adapter honestly
+		// reports every prompt as owner-typed -- it cannot know -- and the daemon, the
+		// only party that watched the injection, re-attributes the one that echoes an
+		// accepted composer send (chat.go).
+		d.stampComposerEchoLocked(sessionID, in.Text, fields)
+	}
+
 	var resolved []json.RawMessage
 	pending := in.Kind == adapter.KindApprovalRequest && in.Status == adapter.StatusInProgress
 	if pending {
@@ -267,9 +275,14 @@ func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.H
 	}
 	d.noteItemLocked(sessionID, it)
 
-	payload, err := fitItem(it, fields)
+	payload, full, err := fitItem(it, fields)
 	if err != nil {
 		return nil, resolved, err
+	}
+	if full != nil {
+		// M3.3's capture-time retention: the truncated item shipped with detail=true, so
+		// the full pre-truncation body must be retrievable past the clip (IS-CAP-2).
+		d.retainDetailLocked(sessionID, it.ItemID, full)
 	}
 	if pending {
 		// After the fit, never before: R2's rule is TRUNCATE, THEN HASH, so the digest names the
@@ -344,6 +357,21 @@ func (d *Daemon) forgetInteractions(sessionID string) {
 	delete(d.openItems, sessionID)
 	delete(d.interacted, sessionID)
 	delete(d.hookSeq, sessionID) // R6: ingestHookBytes's per-session dedup high-water mark
+	// The complete-chat state (chat.go): a dead session's pending injections can never
+	// echo, and its retained detail bodies name items nothing can fetch. The store's byte
+	// count and order shed the session's entries with it.
+	delete(d.pendingSends, sessionID)
+	for _, body := range d.details[sessionID] {
+		d.detailBytes -= len(body)
+	}
+	delete(d.details, sessionID)
+	kept := d.detailOrder[:0]
+	for _, k := range d.detailOrder {
+		if k.session != sessionID {
+			kept = append(kept, k)
+		}
+	}
+	d.detailOrder = kept
 	prefix := sessionID + "\x00"
 	for k := range d.itemIDs {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
@@ -409,6 +437,12 @@ func interactionFields(in adapter.Interaction) map[string]any {
 		put("stop_reason", in.StopReason)
 	case adapter.KindToolRun:
 		put("tool", in.Tool)
+		// Mirror M2.2: `tool_kind` mirrors §7's action type FLAT at the item's top level,
+		// beside the envelope, so the phone picks a card glyph from one field and parses
+		// nothing (IS-TOOL-1). It is exactly the adapter's classification -- `other` stays
+		// `other`, never upgraded (IS-TOOL-2) -- and an unclassified call (zero Action)
+		// carries no tool_kind at all, the same absence rule putAction applies.
+		put("tool_kind", in.Action.Type)
 		putAction(f, in.Action)
 		put("output_excerpt", in.OutputExcerpt)
 		put("truncation_marker", in.TruncationMarker)
@@ -497,23 +531,32 @@ func putAction(f map[string]any, a adapter.ToolAction) {
 // `full_bytes` is measured on the item as it serialized with NOTHING clipped, which is §2's
 // "byte length of the untruncated payload" -- and is why stage 1 runs after that first marshal
 // rather than inside the field builder.
-func fitItem(it daemon.InteractionItem, fields map[string]any) (json.RawMessage, error) {
+//
+// SINCE WAVE R6 (M3.3) a truncated item ALSO ships `detail: true` and the SECOND return
+// value is the item's full pre-truncation serialization -- nil when nothing was clipped --
+// so the caller can retain it for IS-CAP-2's detail read. The one first serialization the
+// fit already performs IS that body; nothing is serialized twice for it.
+func fitItem(it daemon.InteractionItem, fields map[string]any) (json.RawMessage, json.RawMessage, error) {
 	payload, err := serializeItem(&it, fields)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	untruncated := len(payload)
 	if !capFields(fields) && untruncated <= daemon.MaxItemBytes {
-		return payload, nil
+		return payload, nil, nil
 	}
+	full := payload
 	it.Truncated = true
 	it.FullBytes = untruncated
+	// IS-CAP-2: `detail` says the full body is retrievable, and the caller retaining the
+	// returned full body is what makes that true rather than optimistic.
+	it.Detail = true
 	for ceiling := maxTextBytes; ; ceiling /= 2 {
 		if payload, err = serializeItem(&it, fields); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(payload) <= daemon.MaxItemBytes {
-			return payload, nil
+			return payload, full, nil
 		}
 		if ceiling == 0 {
 			// Unreachable with the shapes above -- at a one-byte ceiling the structural residue
@@ -521,7 +564,7 @@ func fitItem(it daemon.InteractionItem, fields map[string]any) (json.RawMessage,
 			// is an error rather than a panic because a later kind could invent a field this
 			// walker does not reach, and a silent oversized item would be refused downstream with
 			// no clue where it came from.
-			return nil, fmt.Errorf("interaction: a %s item of %d bytes will not fit the %d-byte cap "+
+			return nil, nil, fmt.Errorf("interaction: a %s item of %d bytes will not fit the %d-byte cap "+
 				"even with every string emptied (interaction-schema.md §5)", it.Kind, len(payload), daemon.MaxItemBytes)
 		}
 		clipStrings(fields, ceiling)
@@ -618,6 +661,7 @@ func capFields(f map[string]any) bool {
 // and 64).
 var itemUnclippedFields = map[string]bool{
 	"source": true, "stop_reason": true, "change": true, "mode": true, // top level
+	"tool_kind": true, // §7's closed vocabulary mirrored flat (M2.2); half an enum is invalid, not smaller
 	"type": true, "state": true, // action.type (§7), steps[].state (§3.7)
 	"process": true, "turn": true, "interaction": true, "group": true, // session_status (§3.8)
 	"decision": true, "by": true, // approval_resolved (§3.6)

@@ -52,6 +52,29 @@ data class InteractionItem(
     val degraded: Boolean = false,
     /** IS-LIFE-2: an `approval_request` whose `approval_resolved` has been folded. */
     val resolved: Boolean = false,
+    /**
+     * IS-CAP-2 (Wave R6, M2.2/M3.3): the machine retains this item's FULL pre-truncation body,
+     * so an expanded truncated card may OFFER the detail fetch. False means there is nothing to
+     * fetch and the card must not promise one.
+     */
+    val detail: Boolean = false,
+    /**
+     * §3.3's `tool_kind` (Wave R6, M2.2): §7's action type mirrored flat, so [ToolCard] picks a
+     * glyph from ONE field and parses nothing (IS-TOOL-1). Empty where the wire carried none.
+     */
+    val toolKind: String = "",
+    /** IS-ENV-1's turn (Wave R6, M2.2): the separator draws exactly where this changes. */
+    val turnId: String = "",
+    /**
+     * §2's `ts` as epoch milliseconds (Wave R6, M2.2). 0 is an ABSENT fact, never the epoch:
+     * PB-APP-11 forbids substituting arrival time, and the label renders nothing for 0.
+     */
+    val tsUnixMs: Long = 0L,
+    /**
+     * §3.1's `source` (Wave R6, M2.4): honest phone-vs-terminal attribution, daemon-stamped at
+     * injection time. Empty where the wire carried none -- never invented.
+     */
+    val source: String = "",
 ) {
 
     /**

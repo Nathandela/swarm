@@ -111,6 +111,14 @@ class TranscriptScreenGoldenTest {
         truncated = o.getBoolean("Truncated"),
         degraded = o.getBoolean("Degraded"),
         resolved = o.getBoolean("Resolved"),
+        // Wave R6 (M2.2/M2.4): the five additive facts FacadeBridge now maps -- read off the
+        // recorded golden so the suite renders exactly what the shipped bridge reads
+        // (android/gate/i1_screengolden_test.go's two-way field join).
+        detail = o.getBoolean("Detail"),
+        toolKind = o.getString("ToolKind"),
+        turnId = o.getString("TurnID"),
+        tsUnixMs = o.getLong("TSUnixMs"),
+        source = o.getString("Source"),
     )
 
     private fun itemsOf(side: String, field: String = "items"): List<InteractionItem> {

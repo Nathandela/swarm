@@ -331,12 +331,31 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	}
 	defer func() { _ = dc.Close() }()
 
+	if err := dc.writeControl(forwardControl(dc.endpointID, op, rc)); err != nil {
+		return protocol.Control{}, err
+	}
+	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
+	return dc.readControl(10 * time.Second)
+}
+
+// forwardControl is ForwardCommand's ASSEMBLY, split out so it can be tested without a
+// daemon socket.
+//
+// IT IS SPLIT OUT BECAUSE THE ASSEMBLY IS WHERE THE BUGS ARE, TWICE NOW. Wave R5 shipped a
+// blocker whose whole shape was "the reference path was never exercised" (the PolicyEnv
+// field), and Wave R6's review found the identical defect one field over: rc.ComposerSend
+// was NEVER copied onto the Control, so every real phone send arrived at the daemon with a
+// nil body while every test that "covered" composer_send hand-built its own Control and
+// bypassed this function entirely. r6fix_forwardassembly_test.go now walks
+// protocol.RemoteCommand BY REFLECTION and fails on any body field this function forgets --
+// a fence that fails on the day a new body is added, not on the day a user taps Send.
+func forwardControl(endpointID, op string, rc protocol.RemoteCommand) protocol.Control {
 	cmd := rc.DeviceCommandAuth
 	sessionID := rc.Session
 	exp := cmd.ExpiresAt
 	ctrl := protocol.Control{
 		Op:          op,
-		EndpointID:  dc.endpointID,
+		EndpointID:  endpointID,
 		SessionID:   sessionID,
 		OperationID: cmd.OperationID,
 		DeviceID:    cmd.DeviceID,
@@ -350,6 +369,14 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 		// operation_status's query subject is copied onto its Control coordinate.
 		SessionLaunch:      rc.SessionLaunch,
 		SubjectOperationID: rc.SubjectOperationID,
+		// Wave R6: the composer_send body (bound by ComposerSendContentHash), the
+		// turn_interrupt body (bound by TurnInterruptContentHash, fix-pack B7) and the two
+		// UNSIGNED M3 read bodies. Every one of them is content the gateway carries and
+		// never reads.
+		ComposerSend:  rc.ComposerSend,
+		TurnInterrupt: rc.TurnInterrupt,
+		History:       rc.History,
+		Detail:        rc.Detail,
 	}
 	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
 	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to
@@ -362,11 +389,19 @@ func (g *Gateway) ForwardCommand(op string, rc protocol.RemoteCommand) (protocol
 	if op == protocol.OpDeviceRevoke {
 		ctrl.TargetDeviceID = sessionID
 	}
-	if err := dc.writeControl(ctrl); err != nil {
-		return protocol.Control{}, err
+	// The two M3 reads name their session INSIDE their own body (they are unsigned, so
+	// the signed tuple's Session slot is not their subject). Copy it onto the Control
+	// coordinate so the daemon's session-scoped logging and reply addressing agree with
+	// the body -- the handlers themselves read the body, never this field.
+	if ctrl.SessionID == "" {
+		switch {
+		case rc.History != nil:
+			ctrl.SessionID = rc.History.Session
+		case rc.Detail != nil:
+			ctrl.SessionID = rc.Detail.Session
+		}
 	}
-	// The daemon replies OpOK / OpLaunch on success or OpError on refusal.
-	return dc.readControl(10 * time.Second)
+	return ctrl
 }
 
 // namespaceRecord rewrites a journal record's SessionID to the endpoint-scoped id

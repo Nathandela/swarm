@@ -217,20 +217,17 @@ func TestPBBIND3_EveryFacadeMethodWorksAgainstARealBackend(t *testing.T) {
 	}
 	h.AwaitCommand(protocol.ActionKill)
 
-	// PB-APP-3's Stop, RESOLVED in S16: an interrupt IS a keystroke (Ctrl-C, 0x03, through a
-	// PTY in ISIG mode), so it rides the live input plane and is GATED on a confirmed lease
-	// like every other keystroke (PB-INPUT-2). The walk released control above, so the lease is
-	// re-acquired here -- which is exactly what the session screen does, and what
-	// TestPBAPP3_StopWithoutALeaseDoesNotSilentlyDoNothing asserts the phone refuses without.
-	if _, err := app.TakeControl(testSession); err != nil {
-		t.Fatalf("TakeControl before the interrupt: %v", err)
-	}
-	h.AwaitLease(testSession)
-	if _, err := app.Interrupt(testSession); err != nil {
+	// PB-APP-3's Stop, RE-RESOLVED by Wave R6 (M2.4: "Stop becomes a signed interrupt op").
+	// The S16 walk re-acquired the lease here because the old ride was a keystroke; the
+	// signed turn_interrupt op needs no lease -- the tuple's own signature authorizes it --
+	// so the walk presses Stop bare and watches the op arrive, exactly as the session
+	// screen now does.
+	if _, err := app.Interrupt(testSession, "01JTURN"); err != nil {
 		t.Fatalf("Interrupt: %v -- PB-BIND-3 lists interrupt as a required screen element and "+
-			"S16 wired it to the input plane; a refusal here means Stop is on the screen and "+
-			"does nothing", err)
+			"Wave R6 wired it to the signed turn_interrupt op; a refusal here means Stop is on "+
+			"the screen and does nothing", err)
 	}
+	h.AwaitCommand("turn_interrupt")
 
 	if _, err := app.RevokeThisDevice(); err != nil {
 		t.Fatalf("RevokeThisDevice: %v -- ActionDeviceRevoke is in the signed action set and the "+

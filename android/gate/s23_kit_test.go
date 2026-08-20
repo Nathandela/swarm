@@ -607,7 +607,11 @@ func s23NestedKitFiles(t *testing.T) []string {
 // s23OwnedFiles is the set of kit sources this slice fences: the foundation plus the files
 // s23Inbox names. Motion.kt is PB-DS-8's, for the reason the package comment gives.
 func s23OwnedFiles() map[string]bool {
-	owned := map[string]bool{"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true}
+	// Markdown.kt joined the foundation in Wave R6, when it stopped being a pure parser and
+	// started applying type roles to what it parses. s23ClaimedFiles carries the argument.
+	owned := map[string]bool{
+		"Kit.kt": true, "ColorMix.kt": true, "Surfaces.kt": true, "Markdown.kt": true,
+	}
 	for _, c := range s23Inbox {
 		owned[c.File] = true
 	}
@@ -660,6 +664,32 @@ func s23ClaimedFiles() map[string]string {
 	}
 	claimed[s23MotionFile] = "PB-DS-8, by s23_motion_test.go's exemption"
 	claimed[s23HapticsFile] = "obsidian-migration-plan O6.2, by o6_haptics_test.go's exemption"
+	// The two Wave R6 chat files (Mirror M2.1/M2.2), fenced by r6_chat_ui_test.go.
+	//
+	// ToolCard.kt is on the Motion/Haptics terms: it paints nothing. It is a pure card model
+	// (glyph, expand shape, timestamp label, separator rule) whose ONLY numbers are epoch
+	// milliseconds, so the metric join into PB-DS-7's table of surfaces and paddings would have
+	// nothing to join to.
+	//
+	// MARKDOWN.KT WAS ON THOSE TERMS AND IS NOT ANY MORE. The claim below read "a pure String ->
+	// blocks parser" and was true when the file held only the parser; the R6 view slice added
+	// `markdownBody`, which applies TYPE ROLES to the parsed spans, and a file that paints must
+	// be inside the scans that police painting -- otherwise a hex literal, a raw pixel count and
+	// an invented typeface all pass unread there, which is exactly the hole s23ClaimedFiles was
+	// written against. It is therefore in s23OwnedFiles, beside Kit.kt/ColorMix.kt/Surfaces.kt,
+	// as foundation rather than as an inventory component: it declares no `fun` a screen composes
+	// as a visual element, it mints no value of its own, and every role it spends -- `Title.Row`
+	// for bold, `Mono.InlineStrong` for code and links -- is one the ladder already holds.
+	//
+	// Their exhaustive JVM suites (MarkdownTest, MarkdownLinkHonestyTest, ToolCardTest) are
+	// existence-fenced by TestR6_TheJVMSuitesExist.
+	//
+	// SWEPT FOR THE SELF-SATISFYING SYMBOL CHECK and clear (Wave R6 round 3, the closing
+	// review's defect class). Nothing this wave added to this file asserts that a symbol is
+	// REACHED: what it adds is file-set membership and one text-literal exemption keyed by the
+	// literal itself. This file's own Contains checks are `R.dimen.*` resource references, which
+	// no Kotlin declares, and forbidden-symbol scans, whose failing direction is presence.
+	claimed["ToolCard.kt"] = "Mirror M2.2 (Wave R6), by r6_chat_ui_test.go's flat-tool_kind fence"
 	return claimed
 }
 
@@ -3386,6 +3416,14 @@ var s23TextLiteralExemptions = map[string]string{
 		"page's inline sheet -- and no arithmetic can reach it. Every other KitTag names a " +
 		"selector too; this is the first one whose selector happens to contain a digit, which is " +
 		"why the table did not need this row until now.",
+	`"^(?:https?://)?([A-Za-z0-9][A-Za-z0-9.\\-]*\\.[A-Za-z]{2,})(?:[:/?#]|\$)"`: "Markdown.kt's " +
+		"URL-shape test (Wave R6, review finding B11): whether a LINK LABEL is itself a URL, which " +
+		"is what decides that a label claiming one host while pointing at another is replaced by " +
+		"its real destination. Every digit in it is REGEX SYNTAX -- `0-9` is a character range and " +
+		"`{2,}` is a repetition bound on the TLD -- so none of them is a length, a size or a " +
+		"duration, and no arithmetic in this kit can reach any of them. It is written as a quoted " +
+		"string rather than a raw one for this fence's sake: the accounting refuses a raw string " +
+		"outright because it cannot see inside one.",
 }
 
 // s23TextLiteralFaults reports every string or char literal that could be carrying a number.

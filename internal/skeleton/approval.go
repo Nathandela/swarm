@@ -255,7 +255,7 @@ func (d *Daemon) resolveApprovalLocked(session, decision, by, operationID string
 		// idempotency key and IS-APR-1 forbids it ever equalling the interaction_id.
 		fields["operation_id"] = operationID
 	}
-	payload, err := fitItem(daemon.InteractionItem{
+	payload, _, err := fitItem(daemon.InteractionItem{
 		V:      daemon.InteractionSchemaVersion,
 		ItemID: newItemID(),
 		TS:     time.Now().UTC(),
@@ -355,7 +355,7 @@ func (d *Daemon) sweepSessionInteractions(session string) {
 	now := time.Now().UTC()
 	for _, id := range ids {
 		oi := open[id]
-		payload, err := fitItem(daemon.InteractionItem{
+		payload, _, err := fitItem(daemon.InteractionItem{
 			V:      daemon.InteractionSchemaVersion,
 			ItemID: id,
 			TS:     now,
@@ -398,7 +398,7 @@ func (d *Daemon) sessionStatusItem(session string, now time.Time) []json.RawMess
 	if exit != nil {
 		fields["exit_code"] = *exit
 	}
-	payload, err := fitItem(daemon.InteractionItem{
+	payload, _, err := fitItem(daemon.InteractionItem{
 		V: daemon.InteractionSchemaVersion, ItemID: newItemID(), TS: now, Kind: adapter.KindSessionStatus,
 	}, fields)
 	if err != nil {

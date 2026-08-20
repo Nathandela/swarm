@@ -274,6 +274,14 @@ type TranscriptItem struct {
 	Detail    bool
 	Degraded  bool
 	Resolved  bool
+	// ToolKind is a tool_run's flat glyph vocabulary (Mirror M2.2, interaction-schema.md
+	// §3.3 `tool_kind`): the Kotlin ToolCard picks its glyph from this ONE field and never
+	// parses Body (IS-TOOL-1's posture at this boundary). Empty where the wire carried none.
+	ToolKind string
+	// Source is a user_message's honest phone-vs-terminal attribution (Mirror M2.4):
+	// "phone" only when the daemon watched its own injection, "owner" for a prompt typed at
+	// the machine, empty where the wire carried none -- never invented.
+	Source string
 }
 
 // TranscriptPage is a transcript HANDLE, for the same reason as SessionList: gomobile has no

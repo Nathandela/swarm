@@ -51,6 +51,92 @@ import dev.swarm.phone.R
  *  session's own Stop -- `App.Interrupt`, drawn by the screen with a confirmation on it -- so a
  *  second one inside this bar would be two controls for one verb.
  */
+/**
+ * Mirror M2.4/M2.5 (Wave R6) -- the composer's MODEL, beside the bar factory below: the
+ * availability gate, the visible per-send lifecycle, the gentle stale_turn notice, the
+ * status-driven placeholder, and paste discipline. Pure JVM (ComposerSendStateTest drives it);
+ * the live bar's rebind onto these states is the wave's disclosed view-side residual
+ * (android/unbound-verbs.tsv, App.ComposerSend row).
+ */
+
+/**
+ * Whether the composer exists at all, and whether it can send right now. ABSENT is ADR-017's
+ * structural honesty: `structured_chat=false` means NO message sink exists, so a fallback
+ * session has no composer rather than a greyed one promising a verb the session lacks.
+ */
+enum class ComposerAvailability { AVAILABLE, OFFLINE, ABSENT }
+
+/**
+ * The visible per-send lifecycle (ADR-009 (6): "pending -> sent -> refused ... A send that
+ * cannot get [through] is shown refused, not silently swallowed"). STALE_TURN is REFUSED's
+ * one refined form: the same terminal state with its own gentle copy, because the
+ * conversation moving on is ordinary and the remedy is mild (M2.4).
+ */
+enum class SendState { PENDING, SENT, REFUSED, STALE_TURN }
+
+/** One refusal notice: the copy the composer shows, and whether the draft survives it. */
+data class ComposerNotice(val copy: String, val retainsDraft: Boolean)
+
+/** One accepted paste: the draft it becomes, and whether it submits (it never does). */
+data class ComposerPaste(val draft: String, val submits: Boolean)
+
+object ComposerModel {
+
+    /**
+     * The availability gate (M2.4, R3's ruling): ONLINE ONLY -- the lease is out of the UX
+     * entirely -- and structural absence for a session with no structured chat (ADR-017).
+     */
+    fun availabilityFor(online: Boolean, structuredChat: Boolean): ComposerAvailability = when {
+        !structuredChat -> ComposerAvailability.ABSENT
+        !online -> ComposerAvailability.OFFLINE
+        else -> ComposerAvailability.AVAILABLE
+    }
+
+    /**
+     * The send item's state label. Each state is tellable apart: "delivery unknown" rendered
+     * as "sent" is a lie (ADR-009 (6)).
+     */
+    fun stateLabel(state: SendState): String = when (state) {
+        SendState.PENDING -> "Sending"
+        SendState.SENT -> "Sent"
+        SendState.REFUSED -> "Not sent"
+        SendState.STALE_TURN -> "Not sent - the conversation moved on"
+    }
+
+    /**
+     * The notice for one refusal code (the wire's own vocabulary: Outcome.Code / the
+     * taxonomy's rendered states). stale_turn gets its OWN gentle copy -- it never claims
+     * the text was sent, and the draft is RETAINED for a re-send against the refreshed turn.
+     * Every other refusal keeps the draft too (a refusal that eats the user's words punishes
+     * them for the machine's answer), with the generic copy.
+     */
+    fun noticeFor(code: String): ComposerNotice = when (code) {
+        "STALE_TURN" -> ComposerNotice(
+            copy = "The conversation moved on before your message landed. Nothing was " +
+                "delivered; read the latest turn and press send again.",
+            retainsDraft = true,
+        )
+        else -> ComposerNotice(
+            copy = "Your message was refused and not delivered.",
+            retainsDraft = true,
+        )
+    }
+
+    /**
+     * M2.5's status-driven placeholder: an idle session invites a message, and a WORKING
+     * agent still accepts input -- as feedback into the running turn, and the placeholder
+     * says so rather than implying the composer is closed.
+     */
+    fun placeholderFor(working: Boolean): String = if (working) "Add feedback..." else "Message"
+
+    /**
+     * M2.4's paste discipline: a multi-line paste is ONE draft and never auto-submits -- a
+     * newline in pasted text is content, not a submit (the r3p submit-boundary rule,
+     * phone-side; PB-INPUT-6's atomic paste one plane over).
+     */
+    fun acceptPaste(text: String): ComposerPaste = ComposerPaste(draft = text, submits = false)
+}
+
 fun composerBar(context: Context, field: View, send: View): LinearLayout = KitStack(
     context,
     LinearLayout.HORIZONTAL,
