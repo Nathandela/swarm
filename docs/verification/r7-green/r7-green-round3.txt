@@ -1,0 +1,155 @@
+=== 2026-08-20T08:58:37Z GATE start (Wave R7 round 3) ===
+go version: go version go1.26.5 darwin/amd64
+golangci-lint: golangci-lint has version 2.12.2 built with go1.26.5 from (unknown, modified: ?, mod sum: "h1:7+d1uY0bq1MU2UV3R5pW5Q7QWdcoq4naMRXM+gsJKrs=") on (unknown)
+
+--- go build ./... (2026-08-20T08:58:38Z)
+exit=0
+--- go vet ./... (2026-08-20T08:58:42Z)
+exit=0
+--- golangci-lint run (2026-08-20T08:58:44Z)
+0 issues.
+exit=0
+--- go test -race -count=1 on owned packages + internal/verify (2026-08-20T08:58:48Z)
+ok  	github.com/Nathandela/swarm/internal/adapter	2.696s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	2.898s
+ok  	github.com/Nathandela/swarm/internal/appserver	4.404s
+ok  	github.com/Nathandela/swarm/internal/daemon	95.216s
+ok  	github.com/Nathandela/swarm/internal/engine	33.543s
+?   	github.com/Nathandela/swarm/internal/procstart	[no test files]
+ok  	github.com/Nathandela/swarm/internal/protocol	41.023s
+ok  	github.com/Nathandela/swarm/internal/remotegw	56.284s
+ok  	github.com/Nathandela/swarm/internal/shim	123.760s
+ok  	github.com/Nathandela/swarm/internal/shimwire	2.768s
+ok  	github.com/Nathandela/swarm/internal/skeleton	336.067s
+ok  	github.com/Nathandela/swarm/internal/verify	69.897s
+exit=0  (2026-08-20T09:04:29Z)
+--- GG-7 protocol.md bidi drift (2026-08-20T09:04:29Z)
+=== RUN   TestProtocolMDBidi_FieldSetMatchesStructs
+--- PASS: TestProtocolMDBidi_FieldSetMatchesStructs (0.00s)
+=== RUN   TestProtocolMD_ExistsAndDocumentsEveryField
+--- PASS: TestProtocolMD_ExistsAndDocumentsEveryField (0.00s)
+=== RUN   TestProtocolMD_DocumentsEveryOp
+--- PASS: TestProtocolMD_DocumentsEveryOp (0.00s)
+ok  	github.com/Nathandela/swarm/internal/protocol	2.082s
+exit=0
+=== 2026-08-20T09:04:32Z GATE done ===
+
+=== MUTATION TRANSCRIPT (Wave R7 round 3) ===
+Each mutation: the production line is CHANGED, the named test is run, the failure is observed
+verbatim, the change is REVERTED (`go build` re-verified after each revert). Every one FIRES.
+
+--- MUT-1  2026-08-20T08:37:31Z
+    backendconnect.go: SendBackendAttach(id, ch.AgentArgs) -> SendBackendAttach(id, nil)
+    (the round-2 review's own probe)
+$ go test ./internal/skeleton/ -run TestR7R3_TheAgentIsLaunchedAsACLIENT -count=1
+2026/08/20 10:38:03 skeleton: session 5g3vjehp2gociqqj never announced a thread within 20s
+--- FAIL: TestR7R3_TheAgentIsLaunchedAsACLIENTOfTheAppServerTheShimSpawned (35.22s)
+    r7r3_topology_test.go:171: the agent's argv never carried
+    "--remote unix:///tmp/swsk2059235278/5g3vjehp2gociqqj/codex.sock". The daemon's go-ahead is
+    the ONLY thing that puts it there, and without it the TUI and the daemon are on two
+    unconnected planes: no thread/started ever reaches this daemon, the phone drives a
+    conversation the owner cannot see, and the wave's exit criterion is structurally unreachable
+FAIL	github.com/Nathandela/swarm/internal/skeleton	36.327s   exit=1
+
+  Note the daemon's own log line in the same run: with the agent launched without --remote, the
+  agent never becomes a client of the app-server, so no thread is ever announced. That is the
+  structural unreachability the review described, observed.
+
+--- MUT-6  2026-08-20T08:38:19Z   backend.go: forgetBackend no longer closes the connection
+--- FAIL: TestR7R3_EndingASessionCLOSESItsBackendConnection (4.00s)
+    r7r3_topology_test.go:327: endSession dropped the session's backend registration but never
+    CLOSED the connection. Its read loop and its socket outlive the session they belong to, and
+    nothing else in the daemon owns that fd
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.134s   exit=1
+
+--- MUT-7  2026-08-20T08:38:35Z
+    backendconnect.go: subscribeThread loses `if !isMissingRollout(err) { return late, err }`
+--- FAIL: TestR7Fix_TheThreadJoinRetriesOnlyTheRecordedRolloutRaceAndGapsWhenItWasLate (0.00s)
+    r7fix_test.go:376: subscribeThread retries on something other than the RECORDED
+    pre-first-turn failure. Retrying a transport fault for 45s is a session that hangs instead
+    of degrading
+--- FAIL: TestR7R3_ATransportFaultOnTheThreadJoinFAILSFASTRatherThanRetryingTheWholeWindow (2.82s)
+    r7r3_topology_test.go:265: subscribeThread reported SUCCESS on a transport fault; the daemon
+    would then register a backend whose connection is dead
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.947s   exit=1
+
+  The first of the two is the RE-SCOPED round-2 test. Under its round-2 whole-file grep form it
+  would NOT have fired, because isMissingRollout's own declaration satisfies the string search
+  (hard rule 4). That is the finding, demonstrated.
+
+--- MUT-4b 2026-08-20T08:42:32Z   interaction.go: turnIDLocked loses its mid-turn adoption arm
+    (re-run against the FINAL, lint-refactored form of the function)
+--- FAIL: TestR7R3_ADaemonThatJoinsMIDTURNHoldsTheRunningTurnRatherThanReadingAsIdle (6.60s)
+    r7r3_topology_test.go:372: the daemon holds NO turn for a turn that is demonstrably running.
+    The phone then renders an idle session, its composer send takes the turn/start branch and
+    QUEUES A SECOND CONCURRENT TURN, and Stop is impossible because interrupt refuses an empty
+    expected_turn
+FAIL	github.com/Nathandela/swarm/internal/skeleton	8.226s   exit=1
+
+--- MUT-5b 2026-08-20T08:42:44Z   interaction.go: the adoption arm loses its closedTurns guard
+--- FAIL: TestR7R3_AFrameOfAnALREADYCLOSEDTurnDoesNotReopenIt (4.89s)
+    r7r3_topology_test.go:438: a frame of a turn this daemon already CLOSED reopened it as
+    "01M0F5CQSNGGES4ZKCZTWMFM6B". The session then looks busy forever, every composer send is
+    steered into a turn that has ended, and the phone can never start a new one
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.990s   exit=1
+
+--- MUT-2  2026-08-20T08:39:33Z   reconcile.go: handleShimExit loses d.reapOrphanBackend(id)
+=== RUN   TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED
+    r7r3_reaper_test.go:82: the session backend survived the death of its shim while the daemon
+    was UP. It has no PTY to HUP it and no stream anybody watches, so it keeps serving the
+    session's socket forever while holding real account credentials, and nothing else in the
+    system will ever reap it (§R7.2c)
+--- FAIL: TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED (11.38s)
+--- PASS: TestR7R3Reaper_ARESTARTOverADeadShimREAPSTheOrphanThroughRECONCILE (0.22s)
+FAIL	github.com/Nathandela/swarm/internal/daemon	16.188s   exit=1
+
+--- MUT-3  2026-08-20T08:39:59Z   reconcile.go: reconcileRunning loses d.reapOrphanBackend(m.ID)
+--- PASS: TestR7BackendReaper_AnOrphanedBackendIsKILLEDAndItsFileRemoved (1.32s)
+--- PASS: TestR7BackendReaper_NeverDials (0.16s)
+--- PASS: TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED (0.18s)
+    r7r3_reaper_test.go:133: the orphaned session backend survived a daemon restart over its
+    dead shim. reconcile's orphan arm is the ONLY party that can reap it once both the shim and
+    the previous daemon are gone (§R7.2c)
+--- FAIL: TestR7R3Reaper_ARESTARTOverADeadShimREAPSTheOrphanThroughRECONCILE (10.24s)
+FAIL	github.com/Nathandela/swarm/internal/daemon	16.029s   exit=1
+
+  BOTH round-2 reaper tests PASS in that same run. They call reapOrphanBackend directly, so
+  deleting its only production call site is invisible to them -- which is the review's finding,
+  demonstrated, and why the new test never mentions the reaper.
+
+--- MUT-8  2026-08-20T08:53:16Z   server.go: killGroups never signals the backend group
+    (`backend > 0` -> `backend < 0`; deleting the block outright does not compile, since
+    `backend` then goes unused -- which is why the mutation form must be stated)
+$ go test -count=1 -run TestR7 -v ./internal/shim/
+--- FAIL: TestR7ShimBackend_TheAgentDoesNotSpawnUntilTheDaemonSaysGoAhead (20.89s)
+--- FAIL: TestR7ShimBackend_AGoAheadThatNeverArrivesSpawnsTheAgentANYWAY (21.40s)
+--- FAIL: TestR7ShimBackend_BackendAttachAppendsAgentArgsVerbatim (20.15s)
+--- FAIL: TestR7ShimBackend_TheBackendLeadsItsOwnProcessGroup (25.08s)
+--- FAIL: TestR7ShimBackend_ATermIgnoringBackendIsDEADAfterRunReturns (30.67s)
+--- FAIL: TestR7ShimBackend_TheJoinDoesNotBlockRun (20.68s)
+--- PASS: TestR7ShimBackend_ABackendThatDiesFirstEndsTheSessionAndIsRECORDED (0.46s)
+--- PASS: TestR7ShimBackend_ABackendThatNeverBecomesServableStillLaunchesTheAgent (0.43s)
+--- PASS: TestR7ShimBackend_ANilBackendIsThePreR7SessionByteForByte (0.08s)
+--- FAIL: TestR7ShimBackend_BackendInfoIsZeroSixHundred (25.06s)
+--- FAIL: TestR7ShimBackend_BackendInfoDecodesToTheDocumentedWireShape (25.09s)
+--- FAIL: TestR7ShimBackend_AnAgentThatCannotEXECStillTakesItsBackendDownWithIt (30.11s)
+FAIL	github.com/Nathandela/swarm/internal/shim	221.996s   exit=1
+
+  This is the round-3 LOW correction: round 1's mutation table named
+  ATermIgnoringBackendIsDEADAfterRunReturns as the containment fence and the round-2 reviewer
+  reported it did not fire under their form of this mutation. Under the form recorded here it
+  DOES fire, with eight siblings.
+
+=== STABILITY (the headline test is not flaky) ===
+$ for i in 1 2 3; go test -race -count=1 -run TestR7R3_ ./internal/skeleton/
+ok  github.com/Nathandela/swarm/internal/skeleton  14.177s
+ok  github.com/Nathandela/swarm/internal/skeleton  13.412s
+ok  github.com/Nathandela/swarm/internal/skeleton  13.658s
+
+$ for i in 1..4; go test -race -count=1 -run 'TestR7Backend|TestR7R3Reaper' ./internal/daemon/
+ok  github.com/Nathandela/swarm/internal/daemon  8.877s
+ok  github.com/Nathandela/swarm/internal/daemon  7.377s
+ok  github.com/Nathandela/swarm/internal/daemon  7.297s
+ok  github.com/Nathandela/swarm/internal/daemon  8.068s
+  (before the r7BackendSpec fix this selection failed 2 of 3 runs WITH round-3's changes
+  REVERTED, which is how the flake was established as pre-existing)

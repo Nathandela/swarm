@@ -155,6 +155,42 @@ type Interaction struct {
 	// Empty for a self-contained one-record item.
 	Ref string
 
+	// ClientRef is the id THE CLIENT supplied when it originated this interaction, echoed
+	// back by the CLI verbatim -- Codex's `userMessage.clientId`, which the daemon set as
+	// `clientUserMessageId` on turn/start or turn/steer.
+	//
+	// It exists because it is the ONLY exact composer-echo correlation any provider offers.
+	// The alternative -- matching the echoed prompt by TEXT -- has a probed mis-attribution
+	// on record (internal/skeleton/chat.go's pendingSendTTL doc: an OWNER-typed "yes" was
+	// stamped source=phone because a phone send of "yes" was still pending). An adapter
+	// whose CLI carries no such id leaves this empty, and the daemon falls back to what it
+	// already does.
+	//
+	// Like Ref, it is MACHINE-SIDE: the daemon consumes it and it never reaches the wire.
+	ClientRef string
+
+	// TurnRef is the CLI's OWN id for the TURN this interaction belongs to -- Codex's
+	// `params.turnId`, a UUIDv7 the app-server mints.
+	//
+	// THE TURN RULE ITSELF IS STILL THE DAEMON'S. IS-ENV-1 says a turn opens on a
+	// user_message and closes on a terminal agent_message, `turn_id` on the wire is the
+	// daemon's own ULID, and none of that changes: this field sources NO boundary and
+	// decides NO grouping. It is the third machine-side correlation key beside Ref and
+	// ClientRef, and it exists for one reason -- a provider whose turn operations take the
+	// CLI's own turn id as a PRECONDITION cannot be driven with an id the CLI never minted.
+	//
+	// PROBED (Wave R7 review BLOCKING 1, and confirmed against the real 0.147.0 server):
+	// `turn/steer` documents expectedTurnId as "Required active turn id precondition. The
+	// request fails when it does not match the currently active turn", and R7 round 1 sent
+	// the daemon's 26-char ULID against the server's UUIDv7 -- so EVERY mid-turn phone send
+	// was rejected, and `turn/interrupt` was worse, because the server's honest
+	// `no active turn to interrupt` for an id it had never seen was swallowed as benign and
+	// a Stop that stopped nothing reported success.
+	//
+	// Like Ref and ClientRef it is MACHINE-SIDE and never reaches the wire. An adapter whose
+	// CLI has no turn identity leaves it empty, and the daemon's turn state is unaffected.
+	TurnRef string
+
 	// user_message (§3.1) / agent_message (§3.2). Text on an agent_message is the
 	// INCREMENT this record appends, never the accumulated body (IS-DELTA-1).
 	Text       string

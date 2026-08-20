@@ -1,0 +1,136 @@
+# RAW GATE TRANSCRIPT -- Wave R7 GREEN (bead agents-tracker-hggx.8)
+# host: darwin/amd64, go go1.26.5, golangci-lint 2.12.2, PATH=$HOME/go/bin:$PATH
+
+## FINAL GATE RUN (go build ./... ; go vet ./... ; golangci-lint run ; go test -race -count=1 <owned packages>)
+2026-08-20T06:54:45Z
+BUILDEXIT=0
+VETEXIT=0
+0 issues.
+LINTEXIT=0
+ok  	github.com/Nathandela/swarm/internal/adapter	2.962s
+ok  	github.com/Nathandela/swarm/internal/adapter/agy	2.298s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	2.803s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	1.918s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	11.098s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	3.166s
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	3.756s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	3.988s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	2.527s
+ok  	github.com/Nathandela/swarm/internal/shim	95.485s
+ok  	github.com/Nathandela/swarm/internal/shimwire	2.330s
+ok  	github.com/Nathandela/swarm/internal/daemon	61.426s
+ok  	github.com/Nathandela/swarm/internal/appserver	3.456s
+ok  	github.com/Nathandela/swarm/internal/engine	12.891s
+ok  	github.com/Nathandela/swarm/internal/remotegw	33.077s
+ok  	github.com/Nathandela/swarm/internal/protocol	22.241s
+ok  	github.com/Nathandela/swarm/internal/skeleton	300.941s
+ok  	github.com/Nathandela/swarm/internal/verify	36.495s
+ok  	github.com/Nathandela/swarm/cmd/swarm	58.869s
+TESTEXIT=0
+2026-08-20T07:00:05Z
+
+## MUTATION FENCES (each: mutate, run the named test, restore)
+
+### /tmp/mut2.txt
+2026/08/20 08:42:07 shim: no backend_attach arrived within 300ms; launching the agent DEGRADED (no backend arguments appended)
+--- FAIL: TestR7ShimBackend_TheBackendLeadsItsOwnProcessGroup (25.12s)
+    r7_backend_test.go:278: shim.Run did not return within 25s
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	26.771s
+FAIL
+
+### /tmp/mut3.txt
+2026/08/20 08:42:47 shim: no backend_attach arrived within 300ms; launching the agent DEGRADED (no backend arguments appended)
+--- FAIL: TestR7ShimBackend_TheJoinDoesNotBlockRun (20.09s)
+    r7_backend_test.go:328: shim.Run never returned with a TERM-ignoring backend attached; the backend's Wait is being joined BEFORE the final group KILL, so Run is parked behind a process that will never die on its own
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/shim	21.589s
+FAIL
+
+### /tmp/mut4.txt
+--- FAIL: TestR7BackendLiveness_ADialThatSUCCEEDSIsNotLiveness (0.04s)
+    r7_backendlaunch_test.go:217: the daemon called a backend live because the DIAL succeeded. A socket outlives the process that bound it, and adopting an unrelated process on a reused path means the daemon reports a session live whose agent died hours ago
+--- FAIL: TestR7BackendLiveness_APidWhoseStartTimeDisagreesIsNotLive (0.02s)
+    r7_backendlaunch_test.go:238: a pid whose recorded start-time does not match the running process read LIVE; on a busy machine a recycled pid is not exotic and adopting one attaches the daemon to a stranger's process
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	4.851s
+FAIL
+
+### /tmp/mut7c.txt
+--- FAIL: TestR7ApplyTypedEvent_RequiresNoTokenAndNoDurableSequence (0.00s)
+    r7_typedevent_test.go:96: ApplyTypedEvent on a session with NO hook token: engine: typed event for a session with no token
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/engine	0.738s
+FAIL
+
+### /tmp/mut8.txt
+2026/08/20 08:44:39 skeleton: grid-tap snapshot failed for session 7ygo5i5sjl4nstud (1 total): dial unix /tmp/swsk2526290775/7ygo5i5sjl4nstud/shim.sock: connect: no such file or directory
+--- FAIL: TestR7ComposerSink_NoBackendAndNoKeystrokeSeamREFUSESHavingTypedNothing (3.88s)
+    r7_composersink_test.go:248: send with no sink = code "" err <nil>, want structured_unsupported. TODAY this path writes the text and a CR into the PTY for EVERY provider, which is the live defect
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.966s
+FAIL
+
+### /tmp/mut9.txt
+2026/08/20 08:45:56 skeleton: grid-tap snapshot failed for session y2bqhfv4kqi5okui (1 total): dial unix /tmp/swsk4250841960/y2bqhfv4kqi5okui/shim.sock: connect: no such file or directory
+--- FAIL: TestR7Lifecycle_ADaemonRestartWithASuccessfulRejoinNeitherGapsNorDegrades (3.67s)
+    r7_lifecycle_test.go:123: a SUCCESSFUL rejoin journalled 1 structured_gap(s): [map[reason:backend_unavailable ts:2026-08-20T08:45:57.233735+02:00]]. A successful rejoin is NOT a proven gap, and ADR-017's whole posture is that a gap is proven, never assumed
+    r7_lifecycle_test.go:128: a daemon restart PERMANENTLY degraded a live Codex session. markSessionDegraded is one-way and durable, so the composer is now gone from this session forever -- and from every other one, on the first `swarm daemon restart`
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.780s
+FAIL
+
+### /tmp/mut10.txt
+--- FAIL: TestR7Capabilities_StructuredChatIsSeamANDLiveBackendPerSessionInstance (0.00s)
+    r7_lifecycle_test.go:176: a Codex session with NO live backend claims structured_chat. This is the pre-R7 session -- argv `codex`, no --remote, no backend child -- and it has exactly the heuristic status it has always had. Claiming a structured plane it does not have is what makes the phone show a composer whose every send is refused
+    r7_lifecycle_test.go:182: a Codex session with no backend does not declare terminal_fallback
+--- FAIL: TestR7Capabilities_InterruptIsAlsoPerSessionInstanceAndNotPerAdapterType (0.00s)
+    r7_lifecycle_test.go:194: a Codex session with a live backend reads interrupt=false; turn/interrupt is RECORDED working (turn-interrupt.json, turn-completed-interrupted.json) and the phone would hide a Stop button that works
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.119s
+FAIL
+
+## EARLIER RUN that caught the cmd/swarm regression (pre-fix)
+--- FAIL: TestAttachDialer_AttachesAfterAutoUpgrade (16.12s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	66.981s
+FAIL
+TESTEXIT=1
+
+## MUTATION 1 -- finishEscalation no longer kills -backendPgid
+--- FAIL: TestR7ShimBackend_ATermIgnoringBackendIsDEADAfterRunReturns (30.09s)
+    r7_backend_test.go:297: shim.Run did not return within 30s
+FAIL	github.com/Nathandela/swarm/internal/shim	31.416s
+
+## MUTATION 5 -- delete the obligation-9c containment check
+--- FAIL: TestR7BackendSource_ObligationNineC_ThePlanMayNameNoPathOutsideTheSessionDir (0.00s)
+    r7_backendsource_test.go:213: case 0: ResolveBackend accepted a plan naming an absolute path outside the session dir: {Program:codex Args:[--listen unix:///tmp/evil.sock] AgentArgs:[]}
+    r7_backendsource_test.go:213: case 1: ... AgentArgs:[--remote unix:///tmp/evil.sock]
+    r7_backendsource_test.go:213: case 2: ... Args:[--listen unix:///state/01JSESSION/../../etc/passwd]
+    r7_backendsource_test.go:213: case 3: ... Args:[--config /Users/someone/.codex/auth.json]
+FAIL	github.com/Nathandela/swarm/internal/adapter	0.666s
+
+## MUTATION 6 -- DefaultItemWindow reverted to 125ms
+=== RUN   TestR7ItemWindow_TheItemFloorIsTwoHundredFiftyMillisecondsAndIsItsOwnConstant
+--- FAIL: TestR7ItemWindow_TheItemFloorIsTwoHundredFiftyMillisecondsAndIsItsOwnConstant (0.00s)
+=== RUN   TestR7ItemWindow_ItemAdmissionDefaultsToTheItemFloorAndNotTheAppendFloor
+--- FAIL: TestR7ItemWindow_ItemAdmissionDefaultsToTheItemFloorAndNotTheAppendFloor (0.01s)
+=== RUN   TestR7ItemWindow_AtThreeStreamingSessionsTheTerminalPlaneSTILLGetsSlots
+--- PASS: TestR7ItemWindow_AtThreeStreamingSessionsTheTerminalPlaneSTILLGetsSlots (0.00s)   <-- VACUOUS AS NAMED, see README
+=== RUN   TestR7ItemWindow_WideningTheFloorLosesNOTHING
+--- PASS: TestR7ItemWindow_WideningTheFloorLosesNOTHING (0.00s)
+
+## MUTATION 7 (as named: mint a hook token for a backend session) -- DID NOT FIRE
+ok  	github.com/Nathandela/swarm/internal/engine	0.700s
+## MUTATION 7b (weaken engine.go's empty-token check) -- DID NOT FIRE (masked by the high-water)
+ok  	github.com/Nathandela/swarm/internal/engine	0.681s
+## MUTATION 7c (give ApplyTypedEvent the hook path's token requirement) -- see the block above
+
+## REGRESSION CHECK: the cmd/swarm failure was verified to be R7's, not pre-existing
+$ git stash push -u && go test ./cmd/swarm/ -run TestAttachDialer_AttachesAfterAutoUpgrade -count=1 -race
+ok  	github.com/Nathandela/swarm/cmd/swarm	6.478s        <-- green at HEAD
+$ git stash pop && (same command)
+--- FAIL: TestAttachDialer_AttachesAfterAutoUpgrade  (x3 of 3 runs)
+    attach_upgrade_test.go:60: daemonRestarter: daemon restart: replacement did not become reachable
+# cause: registerSession dereferenced d.core, which daemon.Open's synchronous reconcile fires
+# BEFORE Serve assigns it. Guarded; the final gate run above is green.

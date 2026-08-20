@@ -330,13 +330,44 @@ func (d *Daemon) persistSessionCapabilitiesLocked(sessionID string, c protocol.S
 // deriveSessionCapabilities builds the capability record for a newly launched session
 // instance. providerVersion is the detected CLI version and adapterRevision is the Swarm
 // adapter revision that produced the record; both are carried through verbatim.
-func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersion, adapterRevision string) protocol.SessionCapabilities {
-	_, structured := adapter.AsInteractionSource(a)
+//
+// THIS FUNCTION IS DEAD CODE TODAY, AND SO IS ITS `liveBackend` ARGUMENT (review round 4,
+// LOW 5). Nothing in production calls it: its only caller is registerSessionCapabilities, which
+// has no production caller either (see Daemon.sessionDegraded's own KDoc), so no live session
+// has a capability record at all and the derivation below runs only under test. R7 landed the
+// per-session-instance correction because leaving a KNOWN-WRONG derivation in place for a later
+// slice to inherit is how a defect ships; it did NOT wire the publication, which is
+// agents-tracker-hggx.2.1's slice and needs a launch-time write plus a phone-visible record.
+//
+// So: the correction is real, and it is NOT REACHABLE FROM PRODUCTION. A reader must not come
+// away believing a Codex session's capability record says any of this today -- it has none, and
+// the only production-reachable capability fact is the durable degrade marker.
+func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersion, adapterRevision string, liveBackend bool) protocol.SessionCapabilities {
+	// WAVE R7 CORRECTS A REAL DERIVATION DEFECT (ADR-013 §R7.7). Until now both fields were
+	// facts about the ADAPTER TYPE. The moment the Codex adapter implements InteractionSource
+	// -- which R7 is the wave that does it -- a PRE-UPGRADE Codex session (argv `codex`, no
+	// --remote, no backend child, no backend_socket_path) would claim structured_chat=true and
+	// the phone would show a composer whose every send is refused. So the derivation is now
+	// SEAM AND LIVE BACKEND, PER SESSION INSTANCE.
+	//
+	// `liveBackend` is not ANDed into every provider: a provider that needs no backend
+	// (Claude, whose structured plane is its HOOK channel) proves no BackendSource and its
+	// derivation is untouched. ANDing a backend fact into every provider would have turned
+	// this wave into a Claude regression.
+	_, needsBackend := adapter.AsBackendSource(a)
+	_, sourcesItems := adapter.AsInteractionSource(a)
+	structured := sourcesItems && (!needsBackend || liveBackend)
 	// Wave R6 (ADR-017 T2 rule 3): Interrupt is derived from the SAME seam InterruptTurn
 	// executes, so the Stop affordance the phone renders and the op behind it agree by
 	// construction -- true where a TurnInterrupter is proven, false where none is, never
 	// inferred from structured_chat.
-	_, interrupt := adapter.AsTurnInterrupter(a)
+	//
+	// R7 adds the OTHER half of that same rule, in the opposite direction: interruptTurn now
+	// dispatches turn/interrupt on a live backend BEFORE it consults AsTurnInterrupter, so a
+	// Codex session whose RPC interrupt is RECORDED working would otherwise read
+	// interrupt:false and the phone would hide a Stop button that works.
+	_, keystrokeInterrupt := adapter.AsTurnInterrupter(a)
+	interrupt := keystrokeInterrupt || (needsBackend && liveBackend)
 	return protocol.SessionCapabilities{
 		Provider:         provider,
 		ProviderVersion:  providerVersion,

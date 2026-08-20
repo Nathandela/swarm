@@ -63,6 +63,12 @@ type Config struct {
 	// entirely -- the compat default, matching HookSocketPath's own "unset means
 	// disabled" convention. POST needs no token of its own; see hooksocket.go.
 	HookToken string
+
+	// Backend, when non-nil, is the SESSION BACKEND this shim owns beside the agent -- the
+	// `codex app-server` of Mirror M4.1 (backend.go). nil is the PRE-R7 SESSION and the
+	// session of every other CLI: no file written, no timeout waited, no handshake expected,
+	// and the spawn path below is byte-for-byte what it has always been.
+	Backend *BackendConfig
 }
 
 // Metrics holds test-observable counters. All fields are safe for concurrent
@@ -78,6 +84,11 @@ type ExitInfo struct {
 	ExitCode   int       `json:"exit_code"`
 	ExitSignal string    `json:"exit_signal"`
 	FinishedAt time.Time `json:"finished_at"`
+	// BackendExit is the session backend's own exit code, present ONLY when this session had
+	// one (Wave R7, ADR-013 §R7.6). Its whole purpose is that "the Codex backend died" is
+	// never reported as an unexplained agent exit: with no PTY and no streams, a dead
+	// app-server leaves no other trace anywhere in the system.
+	BackendExit *int `json:"backend_exit,omitempty"`
 }
 
 // testHookAfterSignalArm, when non-nil, is invoked inside Run once the
@@ -139,19 +150,165 @@ func Run(cfg Config) (agentExit int, err error) {
 		testHookAfterSignalArm()
 	}
 
-	cmd := &exec.Cmd{
-		Path: cfg.Argv[0],
-		Args: cfg.Argv,
-		Env:  buildEnv(cfg.Env),
-		Dir:  cfg.Cwd,
-	}
 	ws := &pty.Winsize{Rows: uint16(cfg.Rows), Cols: uint16(cfg.Cols)}
-	ptmx, err := pty.StartWithSize(cmd, ws)
-	if err != nil {
-		sigStop()
-		_ = listener.Close()
-		closeTranscript(tr)
-		return 0, fmt.Errorf("shim: start agent: %w", err)
+
+	// THE BACKEND PATH (Wave R7, ADR-013 §R7.2e) and THE PRE-R7 PATH are deliberately
+	// separate, and the second is byte-for-byte what it has always been. Every session
+	// launched before R7, and every session of every other CLI forever, has Backend == nil:
+	// no file written, no timeout waited, no handshake expected (HookSocketPath's own
+	// unset-means-disabled convention).
+	var (
+		cmd     *exec.Cmd
+		ptmx    *os.File
+		srv     *server
+		replies *replyPump
+		backend *backendProc
+		// backendWatch is `backend` ONLY once its socket became servable. See §R7.6 below.
+		backendWatch *backendProc
+		// preAgent holds the goroutines the backend path starts BEFORE the agent exists, so
+		// they are started exactly once on either path.
+		started bool
+	)
+	acceptDone := make(chan struct{})
+	drainDone := make(chan struct{})
+	// sigDone releases the signal handler on a clean agent exit; it is JOINED at
+	// finalization, so after that join no onSignal can run to signal a possibly-reused pgid.
+	sigDone := make(chan struct{})
+	var sigWG sync.WaitGroup
+	// startPlanes brings up everything that needs the server: the signal handler, the
+	// control-socket accept loop and the PTY drain. On a BACKEND session it runs BEFORE the
+	// backend is even spawned, which is what lets the daemon hello/attach and send its
+	// go-ahead while no agent exists yet -- and what keeps a TERM arriving in that window
+	// from waiting on the go-ahead bound before anything is contained.
+	startPlanes := func() {
+		if started {
+			return
+		}
+		started = true
+		sigWG.Add(1)
+		go func() {
+			defer sigWG.Done()
+			select {
+			case <-sigCh:
+				srv.onSignal(shimwire.SigTerm)
+			case <-sigDone:
+			}
+		}()
+		go func() {
+			defer close(acceptDone)
+			srv.acceptLoop()
+		}()
+		go func() {
+			defer close(drainDone)
+			srv.drain()
+		}()
+	}
+
+	if cfg.Backend == nil {
+		cmd = &exec.Cmd{
+			Path: cfg.Argv[0],
+			Args: cfg.Argv,
+			Env:  buildEnv(cfg.Env),
+			Dir:  cfg.Cwd,
+		}
+		var startErr error
+		ptmx, startErr = pty.StartWithSize(cmd, ws)
+		if startErr != nil {
+			sigStop()
+			_ = listener.Close()
+			closeTranscript(tr)
+			return 0, fmt.Errorf("shim: start agent: %w", startErr)
+		}
+		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
+		replies = wireReplies(emu, srv)
+		startPlanes()
+	} else {
+		// The PTY pair is opened FIRST so the control plane can serve -- hello, attach, and
+		// the go-ahead itself -- before the agent process exists. That ordering is the whole
+		// point: the daemon becomes a connected JSON-RPC client of the backend BEFORE the
+		// agent can start a turn, which is what makes it impossible to miss a
+		// `thread/started` and removes the cold-start rollout race rather than retrying
+		// around it.
+		var tty *os.File
+		var openErr error
+		ptmx, tty, openErr = pty.Open()
+		if openErr != nil {
+			sigStop()
+			_ = listener.Close()
+			closeTranscript(tr)
+			return 0, fmt.Errorf("shim: open pty: %w", openErr)
+		}
+		_ = setWinsize(ptmx, ws)
+		srv = newServer(listener, cfg.SocketPath, emu, tr, ptmx, 0, cfg.GraceTimeout, cfg.Metrics)
+		replies = wireReplies(emu, srv)
+		startPlanes()
+
+		var berr error
+		backend, berr = startBackend(cfg.Backend, cfg.SessionDir)
+		if backend != nil {
+			// Recorded BEFORE anything can be signalled at it, so a TERM arriving in this
+			// window still reaps it.
+			srv.setBackendPgid(backend.pgid)
+		}
+		if berr != nil {
+			log.Printf("shim: session backend unavailable, launching the agent without it: %v", berr)
+		} else {
+			// SERVING, so the session HAS a structured plane and its death is a real
+			// lifecycle event (below). A backend that never served is not watched: this
+			// session is running degraded without one, exactly as a pre-R7 Codex session
+			// does, and ending it on the death of something it never used would take the
+			// agent down for a channel it is not using.
+			backendWatch = backend
+			if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
+				log.Printf("shim: record the session backend: %v", werr)
+			}
+		}
+
+		goAheadTimeout := cfg.Backend.GoAheadTimeout
+		if goAheadTimeout <= 0 {
+			goAheadTimeout = defaultBackendGoAheadTimeout
+		}
+		agentArgs, ok := srv.waitBackendGoAhead(goAheadTimeout)
+		if !ok {
+			log.Printf("shim: no backend_attach arrived within %s; launching the agent DEGRADED "+
+				"(no backend arguments appended)", goAheadTimeout)
+		}
+		argv := append(append([]string(nil), cfg.Argv...), agentArgs...)
+		cmd = &exec.Cmd{
+			Path:        argv[0],
+			Args:        argv,
+			Env:         buildEnv(cfg.Env),
+			Dir:         cfg.Cwd,
+			Stdin:       tty,
+			Stdout:      tty,
+			Stderr:      tty,
+			SysProcAttr: &syscall.SysProcAttr{Setsid: true, Setctty: true},
+		}
+		startErr := cmd.Start()
+		_ = tty.Close() // the child holds its own dup; the master is ours
+		if startErr != nil {
+			sigStop()
+			_ = ptmx.Close()
+			_ = listener.Close()
+			closeTranscript(tr)
+			<-acceptDone
+			<-drainDone
+			// THE BACKEND IS ALREADY RUNNING ON THIS PATH, and this is the only exit from
+			// Run that does not pass through finalization. Review BLOCKING 5, PROBED: with
+			// cfg.Argv naming a nonexistent program the backend was still alive 5 s after
+			// Run returned, still holding the session socket -- a process authenticated to
+			// a real ChatGPT account, with no PTY to HUP it and no stream anyone watches,
+			// which is the exact sentence backend.go opens with. finishEscalation issues the
+			// group KILL to both recorded groups (the agent's is still 0, and killGroups
+			// never signals 0), and the join is what proves it is gone rather than merely
+			// signalled.
+			if backend != nil {
+				srv.finishEscalation()
+				<-backend.dead
+			}
+			return 0, fmt.Errorf("shim: start agent: %w", startErr)
+		}
+		srv.setAgentPgid(cmd.Process.Pid)
 	}
 
 	// The hook socket (playbook §6.1): a second, independent listener over its own
@@ -180,36 +337,6 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 	}
 
-	srv := newServer(listener, cfg.SocketPath, emu, tr, ptmx, cmd.Process.Pid, cfg.GraceTimeout, cfg.Metrics)
-	// Route emulator query replies (DSR/DA/...) back into the PTY master so the
-	// agent receives them on stdin. A bounded async pump does the actual writes,
-	// so a query-flooding agent that never reads stdin can never block the
-	// emulator's reply drain (and thus the PTY drain) on a full PTY (S9).
-	replies := newReplyPump(srv.ptyIn)
-	emu.SetReplyWriter(replies)
-
-	// The agent pgid is now known: act on any catchable termination of the shim by
-	// running the same TERM->grace->KILL of the agent's group (the socket signal path,
-	// reused). A signal buffered since before the spawn is handled here too. On a
-	// clean agent exit, sigDone releases this goroutine without signalling anything.
-	// It is a one-shot (at most one onSignal) and is JOINED at finalization (below).
-	sigDone := make(chan struct{})
-	var sigWG sync.WaitGroup
-	sigWG.Add(1)
-	go func() {
-		defer sigWG.Done()
-		select {
-		case <-sigCh:
-			srv.onSignal(shimwire.SigTerm)
-		case <-sigDone:
-		}
-	}()
-
-	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		srv.acceptLoop()
-	}()
 	var hookAcceptDone chan struct{}
 	if hookSrv != nil {
 		hookAcceptDone = make(chan struct{})
@@ -218,14 +345,19 @@ func Run(cfg Config) (agentExit int, err error) {
 			hookSrv.acceptLoop()
 		}()
 	}
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		srv.drain()
-	}()
 
-	// Block until the agent (group leader) is reaped.
-	waitErr := cmd.Wait()
+	// Block until the agent (group leader) is reaped -- or, on a backend session, until the
+	// BACKEND dies first.
+	//
+	// THE BACKEND'S OWN CRASH IS A REAL LIFECYCLE EVENT and it kills the terminal, not just
+	// the mirror: under `codex --remote unix://SOCK` the TUI is a CLIENT of the app-server
+	// (R1 leg 2 recorded its whole boot handshake going through it), so a dead backend leaves
+	// the owner wedged. R7 does NOT restart it -- a restarted server has no thread state and
+	// the TUI's connection is already broken -- it fires the agent's existing
+	// TERM->grace->KILL from this new edge so the owner gets a clean end, and RECORDS WHY in
+	// exit.json so it is never reported as an unexplained agent exit.
+	var backendExit *int
+	waitErr := waitAgentOrBackend(cmd, backendWatch, srv, &backendExit)
 
 	// Agent reaped: stop catching signals, release the handler, drain any signal that
 	// was buffered before the stop, and JOIN the handler goroutine. After this it is
@@ -253,6 +385,19 @@ func Run(cfg Config) (agentExit int, err error) {
 	// timer) and no escalation goroutine survives Run to fire a stray signal.
 	srv.finishEscalation()
 
+	// JOIN THE BACKEND, AND ONLY NOW. The backend's Wait goroutine is joined AFTER
+	// finishEscalation has issued the final group KILL, which is what guarantees the join
+	// RETURNS: a backend that ignores TERM is already reaped by that KILL. Joining it before
+	// would park Run behind a process that will never die on its own -- the deadlock
+	// TestR7ShimBackend_TheJoinDoesNotBlockRun exists to fence.
+	if backend != nil {
+		<-backend.dead
+		if backendExit == nil {
+			code := backend.exitCode
+			backendExit = &code
+		}
+	}
+
 	// Release the master: closing it unblocks the drain's Read and any in-flight
 	// reply write (freeing the ptyWriter lock), so neither the reply pump nor the
 	// drain can be stuck when we tear them down — even if a pathological
@@ -272,7 +417,7 @@ func Run(cfg Config) (agentExit int, err error) {
 	// Persist the side-files (snapshot first, then exit.json, then fsync the
 	// dir). A persistence failure is surfaced as Run's err while the agent's
 	// exit code is still returned.
-	persistErr := persistSideFiles(cfg.SessionDir, emu, exitCode, exitSignal)
+	persistErr := persistSideFiles(cfg.SessionDir, emu, exitCode, exitSignal, backendExit)
 
 	// Flush buffered DataOut, emit exit_report to any connected client, then
 	// tear the socket down.
@@ -284,6 +429,42 @@ func Run(cfg Config) (agentExit int, err error) {
 	}
 
 	return exitCode, persistErr
+}
+
+// wireReplies routes emulator query replies (DSR/DA/...) back into the PTY master so the
+// agent receives them on stdin. A bounded async pump does the actual writes, so a
+// query-flooding agent that never reads stdin can never block the emulator's reply drain
+// (and thus the PTY drain) on a full PTY (S9).
+func wireReplies(emu *vt.Emulator, srv *server) *replyPump {
+	replies := newReplyPump(srv.ptyIn)
+	emu.SetReplyWriter(replies)
+	return replies
+}
+
+// waitAgentOrBackend blocks until the agent is reaped and returns its wait error. On a
+// session with a backend it ALSO watches the backend: if the backend dies first, its exit is
+// recorded through backendExit, the agent's own TERM->grace->KILL is fired from that new
+// edge, and the agent is then waited for as usual.
+//
+// It is a separate function rather than an inline select so the no-backend path is literally
+// `cmd.Wait()`, unchanged.
+func waitAgentOrBackend(cmd *exec.Cmd, backend *backendProc, srv *server, backendExit **int) error {
+	if backend == nil {
+		return cmd.Wait()
+	}
+	agentDone := make(chan error, 1)
+	go func() { agentDone <- cmd.Wait() }()
+	select {
+	case err := <-agentDone:
+		return err
+	case <-backend.dead:
+		code := backend.exitCode
+		*backendExit = &code
+		log.Printf("shim: the session backend exited with %d; ending the session (its TUI is a "+
+			"client of that server, so it is wedged rather than merely unmirrored)", code)
+		srv.onSignal(shimwire.SigTerm)
+		return <-agentDone
+	}
 }
 
 // waitClosed reports whether ch is closed within d.
@@ -301,7 +482,7 @@ func waitClosed(ch <-chan struct{}, d time.Duration) bool {
 // files is durable. If the snapshot cannot be produced or written, exit.json is
 // NOT written, preserving the invariant that exit.json's presence implies a
 // complete snapshot. Any failure is returned so Run can surface it.
-func persistSideFiles(dir string, emu *vt.Emulator, exitCode int, exitSignal string) error {
+func persistSideFiles(dir string, emu *vt.Emulator, exitCode int, exitSignal string, backendExit *int) error {
 	snap, err := emu.Snapshot()
 	if err != nil {
 		return fmt.Errorf("shim: snapshot: %w", err)
@@ -310,9 +491,10 @@ func persistSideFiles(dir string, emu *vt.Emulator, exitCode int, exitSignal str
 		return fmt.Errorf("shim: write snapshot: %w", err)
 	}
 	data, err := json.Marshal(ExitInfo{
-		ExitCode:   exitCode,
-		ExitSignal: exitSignal,
-		FinishedAt: time.Now(),
+		ExitCode:    exitCode,
+		ExitSignal:  exitSignal,
+		FinishedAt:  time.Now(),
+		BackendExit: backendExit,
 	})
 	if err != nil {
 		return fmt.Errorf("shim: marshal exit info: %w", err)

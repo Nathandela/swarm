@@ -1,0 +1,241 @@
+{
+  "note": "SCHEMA-DERIVED frames for shapes the R1 gate did not capture. See r7-PROVENANCE.md. Every member below is present in the generated binding named by its own `source` key; the VALUES are illustrative and no test may assert one is an observation. Field names, required-ness and string unions ARE authoritative.",
+  "generated": "2026-08-20",
+  "cli": "codex-cli 0.147.0",
+  "commands": [
+    "codex app-server generate-ts --out <dir>",
+    "codex app-server generate-json-schema --out <dir>"
+  ],
+  "frames": [
+    {
+      "name": "commandExecutionStarted",
+      "source": "ts/v2/ItemStartedNotification.ts + ts/v2/ThreadItem.ts (commandExecution variant)",
+      "why": "The gate recorded item/started for a userMessage only. R7 opens a tool_run here.",
+      "msg": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "commandExecution",
+            "id": "exec-251cb6db-2df1-41d6-936d-4e2a58fac5e7",
+            "pluginId": null,
+            "scriptPath": null,
+            "command": "bash -lc 'ls -la ws'",
+            "cwd": "/Users/Nathan/.claude/jobs/72c288b2/tmp/codex-gate/ws",
+            "processId": null,
+            "source": "agent",
+            "status": "inProgress",
+            "commandActions": [
+              {
+                "type": "listFiles",
+                "command": "ls -la ws",
+                "path": "ws"
+              }
+            ],
+            "aggregatedOutput": null,
+            "exitCode": null,
+            "durationMs": null
+          },
+          "threadId": "01a00335-9a50-79e2-8253-e08861d67c4d",
+          "turnId": "01a00335-d9d8-7d72-8682-775ad560a74c",
+          "startedAtMs": 1786760265000
+        },
+        "emittedAtMs": 1786760265001
+      }
+    },
+    {
+      "name": "commandExecutionCompleted",
+      "source": "ts/v2/ItemCompletedNotification.ts + ts/v2/ThreadItem.ts (commandExecution variant) + ts/v2/CommandExecutionStatus.ts",
+      "why": "Proves item/completed carries the RESULTS -- aggregatedOutput and exitCode -- so R7 needs no outputDelta accumulator (ADR-013 R7.9 question 1).",
+      "msg": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "commandExecution",
+            "id": "exec-251cb6db-2df1-41d6-936d-4e2a58fac5e7",
+            "pluginId": null,
+            "scriptPath": null,
+            "command": "bash -lc 'ls -la ws'",
+            "cwd": "/Users/Nathan/.claude/jobs/72c288b2/tmp/codex-gate/ws",
+            "processId": null,
+            "source": "agent",
+            "status": "completed",
+            "commandActions": [
+              {
+                "type": "listFiles",
+                "command": "ls -la ws",
+                "path": "ws"
+              }
+            ],
+            "aggregatedOutput": "total 8\ndrwxr-xr-x  3 nathan  staff   96 Aug 15 04:17 .\n-rw-r--r--  1 nathan  staff   14 Aug 15 04:17 README.md\n",
+            "exitCode": 0,
+            "durationMs": 118
+          },
+          "threadId": "01a00335-9a50-79e2-8253-e08861d67c4d",
+          "turnId": "01a00335-d9d8-7d72-8682-775ad560a74c",
+          "completedAtMs": 1786760265118
+        },
+        "emittedAtMs": 1786760265119
+      }
+    },
+    {
+      "name": "commandExecutionFailed",
+      "source": "ts/v2/CommandExecutionStatus.ts (\"inProgress\" | \"completed\" | \"failed\" | \"declined\")",
+      "why": "The non-zero-exit arm, so tool_run status failed is fenced against a value the union actually has.",
+      "msg": {
+        "method": "item/completed",
+        "params": {
+          "item": {
+            "type": "commandExecution",
+            "id": "exec-9f2b1a44-0c31-4a7e-bb02-6e0e2b4c1d55",
+            "pluginId": null,
+            "scriptPath": null,
+            "command": "bash -lc 'exit 3'",
+            "cwd": "/Users/Nathan/.claude/jobs/72c288b2/tmp/codex-gate/ws",
+            "processId": null,
+            "source": "agent",
+            "status": "failed",
+            "commandActions": [
+              {
+                "type": "unknown",
+                "command": "exit 3"
+              }
+            ],
+            "aggregatedOutput": "",
+            "exitCode": 3,
+            "durationMs": 12
+          },
+          "threadId": "01a00335-9a50-79e2-8253-e08861d67c4d",
+          "turnId": "01a00335-d9d8-7d72-8682-775ad560a74c",
+          "completedAtMs": 1786760266000
+        },
+        "emittedAtMs": 1786760266001
+      }
+    },
+    {
+      "name": "userMessageStartedWithClientId",
+      "source": "ts/v2/ThreadItem.ts (userMessage variant, `clientId`) + ts/v2/TurnStartParams.ts and ts/v2/TurnSteerParams.ts (`clientUserMessageId`)",
+      "why": "The EXACT composer-echo correlation key. The gate's recorded item/started carried clientId: null because its turn was started without one. A daemon that supplies clientUserMessageId reads it back here, so no text correlation and no turn-scoped fallback is needed on the backend branch (ADR-013 R7.5).",
+      "msg": {
+        "method": "item/started",
+        "params": {
+          "item": {
+            "type": "userMessage",
+            "id": "01a0033b-d17f-7070-9744-a3fb14dee165",
+            "clientId": "swarm:01JQ7Z0V0000000000000000",
+            "content": [
+              {
+                "type": "text",
+                "text": "ship it",
+                "text_elements": []
+              }
+            ]
+          },
+          "threadId": "01a00339-a80e-72a0-966f-116427b6b9ce",
+          "turnId": "01a0033b-d0be-77e1-88e7-584ddeea562d",
+          "startedAtMs": 1786760647039
+        },
+        "emittedAtMs": 1786760647040
+      }
+    },
+    {
+      "name": "commandExecutionRequestApproval",
+      "source": "schema/CommandExecutionRequestApprovalParams.json",
+      "why": "The sibling the adapter declares (codex.go:44) but the gate never captured -- it recorded the fileChange one. Note `command`, `cwd` and `commandActions` are all nullable and only {itemId, startedAtMs, threadId, turnId} are required.",
+      "msg": {
+        "method": "item/commandExecution/requestApproval",
+        "id": 4,
+        "params": {
+          "threadId": "01a00335-9a50-79e2-8253-e08861d67c4d",
+          "turnId": "01a00335-d9d8-7d72-8682-775ad560a74c",
+          "itemId": "exec-77c0a1f2-5d6b-4f0e-9a3c-2b8e5d17c9aa",
+          "approvalId": null,
+          "command": "bash -lc 'rm -rf build'",
+          "cwd": "/Users/Nathan/.claude/jobs/72c288b2/tmp/codex-gate/ws",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "rm -rf build"
+            }
+          ],
+          "startedAtMs": 1786760259641,
+          "reason": null,
+          "proposedExecpolicyAmendment": null,
+          "proposedNetworkPolicyAmendments": null,
+          "networkApprovalContext": null,
+          "environmentId": null
+        }
+      }
+    },
+    {
+      "name": "turnStartRequestWithClientUserMessageId",
+      "source": "ts/v2/TurnStartParams.ts",
+      "why": "The idle-composer request shape. `input` is an ARRAY of UserInput (recorded: errors-observed.json rejects a map).",
+      "msg": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "turn/start",
+        "params": {
+          "threadId": "01a00339-a80e-72a0-966f-116427b6b9ce",
+          "clientUserMessageId": "swarm:01JQ7Z0V0000000000000000",
+          "input": [
+            {
+              "type": "text",
+              "text": "ship it",
+              "text_elements": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "turnSteerRequestWithClientUserMessageId",
+      "source": "ts/v2/TurnSteerParams.ts",
+      "why": "The mid-turn composer request shape. `expectedTurnId` is REQUIRED and is the native optimistic-concurrency guard R1 note 4 says to propagate rather than reinvent.",
+      "msg": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "turn/steer",
+        "params": {
+          "threadId": "01a00339-a80e-72a0-966f-116427b6b9ce",
+          "clientUserMessageId": "swarm:01JQ7Z0V0000000000000001",
+          "expectedTurnId": "01a0033b-d0be-77e1-88e7-584ddeea562d",
+          "input": [
+            {
+              "type": "text",
+              "text": "actually, stop",
+              "text_elements": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "threadReadWithTurns",
+      "source": "ts/v2/ThreadReadParams.ts + ts/v2/Thread.ts (`turns`) + ts/v2/TurnItemsView.ts",
+      "why": "The post-outage backfill ADR-013 R7.6 called the largest open question. Thread.turns is documented as populated on thread/read when includeTurns is true, and TurnItemsView has a `full` member.",
+      "msg": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "thread/read",
+        "params": {
+          "threadId": "01a00339-a80e-72a0-966f-116427b6b9ce",
+          "includeTurns": true
+        }
+      }
+    }
+  ],
+  "decisionVocabulary": {
+    "source": "schema/FileChangeRequestApprovalResponse.json and schema/CommandExecutionRequestApprovalResponse.json",
+    "note": "Per-kind, not per-CLI. ADR-010 5 and the R1 gate disagreed because they described different requests.",
+    "item/fileChange/requestApproval": ["accept", "acceptForSession", "decline", "cancel"],
+    "item/commandExecution/requestApproval": [
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel",
+      {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["<string>"]}},
+      {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"host": "<string>", "action": "allow|deny"}}}
+    ],
+    "replyEnvelope": {"decision": "<one of the above>"}
+  }
+}

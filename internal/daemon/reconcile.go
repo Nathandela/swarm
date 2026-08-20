@@ -66,6 +66,16 @@ func (d *Daemon) reconcileRunning(m persist.Meta) {
 
 	// 3. Reaped, PID-reused, or not serving → LOST. Zero signals are sent: the
 	//    daemon reclassifies only its own record, never touching the PID (S3).
+	//
+	//    THE ONE EXCEPTION IS THE SESSION BACKEND (Wave R7, ADR-013 §R7.2c), and it is not
+	//    a weakening of S3. S3 protects the daemon from signalling a pid it merely RECORDED
+	//    and may no longer own; the backend is signalled only when its recorded pid AND its
+	//    recorded start time both still match, which is proof the process is the one this
+	//    session's shim spawned. That shim is gone, so nothing else in the system will ever
+	//    reap it -- and unlike the agent, it has no PTY to HUP it and no stream anybody
+	//    watches, so it would otherwise keep serving the session's socket forever while
+	//    holding real account credentials.
+	d.reapOrphanBackend(m.ID)
 	m.Status.Process = status.ProcessLost
 	if err := d.saveMeta(m); err != nil {
 		d.logf("reconcile: persist lost meta for %s: %v", m.ID, err)
@@ -164,6 +174,17 @@ func (d *Daemon) handleShimExit(id string) {
 	if !hasExit && terminalAlready {
 		return // no exit report and already terminal: nothing to advance
 	}
+	// THE SESSION BACKEND, on the path that is REACHED WHILE THIS DAEMON IS UP (Wave R7,
+	// ADR-013 §R7.2c; review round 3 BLOCKING 2). reconcile's orphan arm closes the residual
+	// only for a shim that died while NO daemon was watching; this is the more common half --
+	// a shim SIGKILLed under a live daemon -- and without the reap here nothing ever revisits
+	// it, because reconcile skips any session no longer persisted RUNNING.
+	//
+	// It is a NO-OP on every ordinary end. The shim's own TERM->grace->KILL contains its
+	// backend and Run joins it before returning, so by the time the shim process is gone its
+	// backend is already reaped and reapOrphanBackend finds a dead pid and merely removes the
+	// stale record. It kills only in the case the shim could not act on: an uncatchable signal.
+	d.reapOrphanBackend(id)
 	d.finalizeTerminal(id, func(cur persist.Meta) persist.Meta {
 		if hasExit {
 			return mergeExit(cur, ei) // exited+code (rank 2): wins over a racing lost

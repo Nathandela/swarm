@@ -36,12 +36,39 @@ const threadIDKey = `"threadId"`
 // mapping onto the engine's generic "turn"/"interaction" dimensions. The values are
 // the status-package string constants, spelled literally so this package depends
 // only on the contract + vt (T-5): an adapter may not import internal/status.
+//
+// `capture` is ADR-010 §1's declaration that the event's BODY must be preserved rather than
+// flattened to top-level strings. Wave R7 sets it on every row this package's
+// InteractionSource actually reads a body from -- which is what makes the declaration and the
+// shaper agree by construction (conformance obligation 1), and what makes
+// r1-codex-fixtures/frame-samples.json the golden vector set for both.
 var eventSources = []struct {
 	event, turn, interaction string
+	capture                  bool
 }{
-	{"turn/started", "active", "none"},
-	{"turn/completed", "idle", "none"},
-	{"item/commandExecution/requestApproval", "idle", "permission"},
+	{event: "turn/started", turn: "active", interaction: "none"},
+	{event: "turn/completed", turn: "idle", interaction: "none", capture: true},
+	{event: "item/commandExecution/requestApproval", turn: "idle", interaction: "permission", capture: true},
+	// Wave R7 / M4.5. Both rows are RECORDED, and both close real holes.
+	//
+	// item/fileChange/requestApproval is the approval the R1 gate actually CAPTURED
+	// (r1-codex-fixtures/approval-request.json). The commandExecution sibling above has been
+	// declared since Epic 11 and the gate never saw it fire, so on the one approval flow
+	// anybody has run end to end, the declared mapping did not fire at all.
+	//
+	// serverRequest/resolved is what CLEARS `permission`. The server broadcasts it to every
+	// attached client the instant ANY of them answers (frame-samples.json,
+	// r1-codex-gate.md:129-131), so without the row a session the OWNER approved at the
+	// terminal keeps showing an awaiting-input badge on the phone until the turn ends.
+	{event: "item/fileChange/requestApproval", turn: "idle", interaction: "permission", capture: true},
+	{event: "serverRequest/resolved", interaction: "none"},
+	// The CONTENT rows. They map no status dimension at all -- the engine's deriveDims
+	// drops an empty turn and an empty interaction, so they are benign no-ops on the status
+	// path -- and exist because their bodies are what M4.2 shapes into the transcript:
+	// the prompt, the streamed prose increments, and a tool run's args and results.
+	{event: "item/started", capture: true},
+	{event: "item/completed", capture: true},
+	{event: "item/agentMessage/delta", capture: true},
 }
 
 // codexAdapter is the stateless Codex strategy object; shared by value, safe
@@ -98,14 +125,15 @@ func (codexAdapter) Options() []adapter.OptionSpec {
 func (codexAdapter) SignalSources() []adapter.SignalSource {
 	sources := make([]adapter.SignalSource, 0, len(eventSources)+1)
 	for _, e := range eventSources {
-		sources = append(sources, adapter.SignalSource{
-			Kind: "event",
-			Descriptor: map[string]string{
-				"event":       e.event,
-				"turn":        e.turn,
-				"interaction": e.interaction,
-			},
-		})
+		desc := map[string]string{
+			"event":       e.event,
+			"turn":        e.turn,
+			"interaction": e.interaction,
+		}
+		if e.capture {
+			desc[adapter.DescriptorCapture] = adapter.CaptureRaw
+		}
+		sources = append(sources, adapter.SignalSource{Kind: "event", Descriptor: desc})
 	}
 	sources = append(sources, adapter.SignalSource{
 		Kind:       "heuristic",

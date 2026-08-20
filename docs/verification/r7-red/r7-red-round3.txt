@@ -1,0 +1,74 @@
+=== Wave R7 ROUND 3 -- RED transcript (bead agents-tracker-hggx.8)
+Date: 2026-08-20 (UTC). Repo: /Users/Nathan/Code/swarm, branch main.
+Round 3 fixes the round-2 review's two BLOCKING and four MEDIUM findings.
+
+WHAT "RED" MEANS IN THIS ROUND, stated plainly so nothing is over-read.
+
+Round 3 is a FIX round, and its findings split into three shapes:
+
+  (a) A HOLE in production behaviour  -> a test that FAILS AT RUNTIME before the fix.
+      One finding is this shape (BLOCKING 2a: a shim killed while the daemon is UP left its
+      backend alive forever). Its runtime RED is below.
+
+  (b) SHIPPED behaviour whose FENCE was missing or vacuous -> the new test is GREEN from the
+      first run, because the behaviour is already correct; what was missing was the test that
+      fails when the behaviour is REMOVED. For these, the MUTATION is the evidence and there
+      is no honest way to make them fail first. Each one's mutation, with the failure message
+      it produced, is in r7-green-round3.txt. This covers BLOCKING 1 (the agent arguments),
+      BLOCKING 2b (reconcile's reaper call site) and MEDIUM 3 (subscribeThread's retry rule).
+
+  (c) A DESIGN DEFECT with no runtime symptom until the composed path is driven -> MEDIUM 1
+      (a mid-turn rejoin held no turn) and MEDIUM 4 (an ended session never closed its
+      connection). Both are covered by the package-level compile RED below plus their
+      mutations.
+
+--- 2026-08-20T08:35:04Z  go vet ./internal/skeleton/ ./internal/daemon/
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r7r3_topology_test.go:261:34: cannot use conn (variable of type
+     *r7ResumeConn) as *appserver.Client value in argument to sk.subscribeThread
+
+  The first failure of the round: subscribeThread took the CONCRETE *appserver.Client, so its
+  retry rule -- which errors are retried -- could not be driven by behaviour at all. That is
+  why round 2's fence for it was a source-grep, and why that grep was satisfiable by the error
+  string's own declaration (review MEDIUM 3). With this file set aside the package compiled,
+  and TestR7R3_EndingASessionCLOSESItsBackendConnection then failed on r7FakeBackend having no
+  Close method -- backendConn did not require one, which is exactly MEDIUM 4's hole.
+
+--- 2026-08-20T08:35:15Z  go test ./internal/daemon/ -run TestR7R3Reaper -count=1 -v
+=== RUN   TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED
+    r7r3_reaper_test.go:82: the session backend survived the death of its shim while the daemon
+    was UP. It has no PTY to HUP it and no stream anybody watches, so it keeps serving the
+    session's socket forever while holding real account credentials, and nothing else in the
+    system will ever reap it (§R7.2c)
+--- FAIL: TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED (11.36s)
+=== RUN   TestR7R3Reaper_ARESTARTOverADeadShimREAPSTheOrphanThroughRECONCILE
+--- PASS: TestR7R3Reaper_ARESTARTOverADeadShimREAPSTheOrphanThroughRECONCILE (0.29s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	14.736s
+
+  The failing test is shape (a): the HOLE. It drives a REAL shim, SIGKILLs it (so the shim can
+  never run its own containment), and waits for the daemon's own supervisor to notice. Before
+  the fix, handleShimExit marked the session LOST and reaped nothing.
+
+  The passing test is shape (b): reconcile's call site was already correct and was fenced by
+  NOTHING (deleting it left ./internal/daemon green, because both existing reaper tests called
+  the helper directly). Its mutation is MUT-3 in r7-green-round3.txt.
+
+NEW TEST FUNCTIONS THIS ROUND (8):
+  internal/skeleton/r7r3_topology_test.go
+    TestR7R3_TheAgentIsLaunchedAsACLIENTOfTheAppServerTheShimSpawned
+    TestR7R3_ATransportFaultOnTheThreadJoinFAILSFASTRatherThanRetryingTheWholeWindow
+    TestR7R3_TheRecordedRolloutRaceIsRETRIEDAndReportedLATE
+    TestR7R3_EndingASessionCLOSESItsBackendConnection
+    TestR7R3_ADaemonThatJoinsMIDTURNHoldsTheRunningTurnRatherThanReadingAsIdle
+    TestR7R3_AFrameOfAnALREADYCLOSEDTurnDoesNotReopenIt
+  internal/daemon/r7r3_reaper_test.go
+    TestR7R3Reaper_AShimKILLEDWhileTheDaemonIsUPHasItsBackendREAPED
+    TestR7R3Reaper_ARESTARTOverADeadShimREAPSTheOrphanThroughRECONCILE
+
+ONE EXISTING TEST WAS TIGHTENED, NEVER WEAKENED:
+  internal/skeleton/r7fix_test.go:346 TestR7Fix_TheThreadJoinRetriesOnlyTheRecordedRolloutRace...
+  Its second assertion grepped the WHOLE FILE for "no rollout found", which isMissingRollout's
+  own declaration satisfies (hard rule 4). It is now scoped to subscribeThread's function body
+  and asserts the CALL (`isMissingRollout(err)`), and MUT-7 shows it now fires.

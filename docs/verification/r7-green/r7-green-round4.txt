@@ -1,0 +1,227 @@
+WAVE R7 ROUND 4 -- GATE RECORD (closing fix agent)
+Host: darwin 25.5.0; Go toolchain: go1.26.5; golangci-lint: golangci-lint has version 2.12.2 built with go1.26.5 from (unknown, modified: ?, mod sum: "h1:7+d1uY0bq1MU2UV3R5pW5Q7QWdcoq4naMRXM+gsJKrs=") on (unknown)
+All timestamps UTC. Working tree: the uncommitted R7 slice plus this round's changes.
+
+############ GATES ############
+--- go build ./... (2026-08-20T09:56:36Z)
+exit=0  (2026-08-20T09:56:39Z)
+--- go vet ./... (2026-08-20T09:56:39Z)
+exit=0  (2026-08-20T09:56:41Z)
+--- golangci-lint run (v2.12.2) (2026-08-20T09:56:41Z)
+0 issues.
+exit=0  (2026-08-20T09:56:45Z)
+
+--- go test -race -count=1 on owned packages + internal/verify (2026-08-20T09:50:25Z)
+ok  	github.com/Nathandela/swarm/internal/adapter	2.144s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	2.411s
+ok  	github.com/Nathandela/swarm/internal/appserver	3.569s
+ok  	github.com/Nathandela/swarm/internal/daemon	64.642s
+ok  	github.com/Nathandela/swarm/internal/engine	17.615s
+?   	github.com/Nathandela/swarm/internal/procstart	[no test files]
+ok  	github.com/Nathandela/swarm/internal/protocol	26.389s
+ok  	github.com/Nathandela/swarm/internal/remotegw	39.961s
+ok  	github.com/Nathandela/swarm/internal/shim	100.611s
+ok  	github.com/Nathandela/swarm/internal/shimwire	2.471s
+ok  	github.com/Nathandela/swarm/internal/skeleton	352.180s
+ok  	github.com/Nathandela/swarm/internal/verify	42.260s
+exit=0  (2026-08-20T09:56:21Z)
+
+--- GG-7 protocol.md bidi drift (2026-08-20T09:56:52Z)
+=== RUN   TestProtocolMDBidi_FieldSetMatchesStructs
+--- PASS: TestProtocolMDBidi_FieldSetMatchesStructs (0.00s)
+=== RUN   TestProtocolMD_ExistsAndDocumentsEveryField
+--- PASS: TestProtocolMD_ExistsAndDocumentsEveryField (0.00s)
+=== RUN   TestProtocolMD_DocumentsEveryOp
+--- PASS: TestProtocolMD_DocumentsEveryOp (0.00s)
+ok  	github.com/Nathandela/swarm/internal/protocol	0.822s
+exit=0  (2026-08-20T09:56:53Z)
+
+############ MUTATION RECORD (13 mutations, 13 FENCED) ############
+Each block: the production line is changed, the named test is run, it FAILS, the change is reverted.
+
+=== M1  Ruling 2 -- register the backend only when subscribed (round 3's order)
+--- M1  Ruling 2 -- register the backend only when subscribed (round 3's order) mutation applied: 2026-08-20T09:57:20Z
+227c227,229
+< 	d.registerBackend(id, threadID, conn)
+---
+> 	if subscribed {
+> 		d.registerBackend(id, threadID, conn)
+> 	}
+2026/08/20 11:57:29 skeleton: grid-tap snapshot failed for session hqwrspdlhcww6gjj (1 total): dial unix /tmp/swsk414393711/hqwrspdlhcww6gjj/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExists (23.96s)
+    r7r4_join_test.go:341: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	25.444s
+FAIL
+M1  Ruling 2 -- register the backend only when subscribed (round 3's order): VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M2  Ruling 1 -- emit a gap on the not-yet-subscribed (fresh) path
+--- M2  Ruling 1 -- emit a gap on the not-yet-subscribed (fresh) path mutation applied: 2026-08-20T09:57:50Z
+227a228
+> 	d.emitBackendGap(id, gapBackendPriorHistory)
+2026/08/20 11:57:59 skeleton: grid-tap snapshot failed for session fw6tbrmh7qern4yp (1 total): dial unix /tmp/swsk1703777096/fw6tbrmh7qern4yp/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExists (6.82s)
+    r7r4_join_test.go:342: a fresh Codex launch has a thread that has run NO turn, so a join that could not resume yet has missed NOTHING; emitting a gap there is not merely inconvenient, it is factually false, and the false statement is what removes the composer -- but 1 structured_gap(s) were journalled: [backend_prior_history]
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	8.225s
+FAIL
+M2  Ruling 1 -- emit a gap on the not-yet-subscribed (fresh) path: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M3  Ruling 1 -- delete the prior-history arm
+--- M3  Ruling 1 -- delete the prior-history arm mutation applied: 2026-08-20T09:58:03Z
+231,232d230
+< 		// RULING 1's honest arm, and the only success path that still emits a gap.
+< 		d.emitBackendGap(id, gapBackendPriorHistory)
+2026/08/20 11:58:12 skeleton: grid-tap snapshot failed for session qv5ikdpqu5ml4rmm (1 total): dial unix /tmp/swsk2677360546/qv5ikdpqu5ml4rmm/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_AThreadThatHadALREADYRunTurnsBeforeTheJoinIsAnHonestGap (14.45s)
+    r7r4_join_test.go:434: the daemon joined a thread that had ALREADY run turns and said nothing. It never read those turns -- a client receives a thread's items only after it resumes -- so this transcript begins mid-conversation, which is the tear ADR-017 forbids bridging silently
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	15.871s
+FAIL
+M3  Ruling 1 -- delete the prior-history arm: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M4  Ruling 3 -- treat the recorded rollout race as a hard failure
+--- M4  Ruling 3 -- treat the recorded rollout race as a hard failure mutation applied: 2026-08-20T09:58:22Z
+369c369
+< 		if !isMissingRollout(err) {
+---
+> 		if true {
+2026/08/20 11:58:31 skeleton: grid-tap snapshot failed for session wfxtbcmcralzfvta (1 total): dial unix /tmp/swsk3719710726/wfxtbcmcralzfvta/shim.sock: connect: no such file or directory
+2026/08/20 11:58:35 skeleton: session wfxtbcmcralzfvta can never subscribe to thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_AUserWhoThinksLongerThanTheJoinDeadlineIsNEVERPermanentlyDegraded (8.80s)
+    r7r4_join_test.go:395: thinking for longer than the join deadline PERMANENTLY degraded a healthy session. `no turn started within the window` proves nothing except that the user is thinking; markSessionDegraded is one-way and durable and is reserved for a PROVEN structural gap (ADR-017)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	10.242s
+FAIL
+M4  Ruling 3 -- treat the recorded rollout race as a hard failure: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M5  MEDIUM 3 -- delete the thread/status/changed row from backendFoldPassthrough
+--- M5  MEDIUM 3 -- delete the thread/status/changed row from backendFoldPassthrough mutation applied: 2026-08-20T09:58:37Z
+412d411
+< 	"thread/status/changed":     true,
+2026/08/20 11:58:45 skeleton: grid-tap snapshot failed for session 7jicwi73hngxxxsl (1 total): dial unix /tmp/swsk791896404/7jicwi73hngxxxsl/shim.sock: connect: no such file or directory
+--- FAIL: TestR7Pump_AFrameThatCanShapeNOItemDoesNotFlushTheFold (4.01s)
+    --- FAIL: TestR7Pump_AFrameThatCanShapeNOItemDoesNotFlushTheFold/thread/status/changed (0.17s)
+        r7_pump_test.go:394: thread/status/changed FLUSHED the open agentMessage fold. It shapes no interaction at all, so it can never appear in a transcript and cannot reorder one; flushing on it multiplies the offered-record rate by the recorded lifecycle-frame ratio and puts one streaming session above the machine's whole 8 appends/s budget
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.490s
+FAIL
+M5  MEDIUM 3 -- delete the thread/status/changed row from backendFoldPassthrough: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M5b MEDIUM 3 -- every frame is an ordering boundary again (round 3's behaviour)
+--- M5b MEDIUM 3 -- every frame is an ordering boundary again (round 3's behaviour) mutation applied: 2026-08-20T09:58:46Z
+381c381
+< 	if !backendFoldPassthrough[fr.Method] {
+---
+> 	if true {
+2026/08/20 11:58:53 skeleton: grid-tap snapshot failed for session vvgq7xuqn36kww6i (1 total): dial unix /tmp/swsk4095477625/vvgq7xuqn36kww6i/shim.sock: connect: no such file or directory
+--- FAIL: TestR7Pump_TheRECORDEDFrameMixStaysInsideTheAppendCeiling (4.91s)
+    r7_pump_test.go:479: the RECORDED frame mix produced 10 folded agentMessage records in 1.13150675s; the 200ms batch admits at most 5 (+1 flush). Every mid-stream tokenUsage, status and diff frame is flushing a fold it cannot possibly reorder, so one streaming session offers 10 appends/s into a machine-wide budget of 8 (remotegw.DefaultAppendWindow) and PB-GW-7's live peek freezes on a stale grid for as long as it streams
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	6.309s
+FAIL
+M5b MEDIUM 3 -- every frame is an ordering boundary again (round 3's behaviour): VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M6  delete noteBackendUnavailable from the dial-failure arm
+--- M6  delete noteBackendUnavailable from the dial-failure arm mutation applied: 2026-08-20T09:58:56Z
+187d186
+< 		d.noteBackendUnavailable(id)
+2026/08/20 11:59:03 skeleton: grid-tap snapshot failed for session o532dd3ftsbqgoln (1 total): dial unix /tmp/swsk2395585269/o532dd3ftsbqgoln/shim.sock: connect: no such file or directory
+2026/08/20 11:59:04 skeleton: session o532dd3ftsbqgoln backend unavailable: appserver: upgrade /tmp/r7r4-nothing-serves.sock/rpc: failed to WebSocket dial: failed to send handshake request: Get "http://localhost/rpc": dial unix /tmp/r7r4-nothing-serves.sock: connect: no such file or directory
+--- FAIL: TestR7R4_ADialThatNeverSucceedsGapsDegradesAndRELEASESTheShimAnyway (16.52s)
+    r7r4_join_test.go:468: a backend that never connected journalled NO structured_gap; this session will never have a structured plane and the phone would keep offering a composer
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	17.971s
+FAIL
+M6  delete noteBackendUnavailable from the dial-failure arm: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M7  delete conn.Close() from the no-thread-announced arm
+--- M7  delete conn.Close() from the no-thread-announced arm mutation applied: 2026-08-20T09:59:18Z
+199d198
+< 		_ = conn.Close()
+2026/08/20 11:59:26 skeleton: grid-tap snapshot failed for session yscrifargrh42gws (1 total): dial unix /tmp/swsk2182122707/yscrifargrh42gws/shim.sock: connect: no such file or directory
+2026/08/20 11:59:31 skeleton: session yscrifargrh42gws never announced a thread within 700ms
+--- FAIL: TestR7R4_AThreadNeverAnnouncedGapsDegradesAndCLOSESTheConnection (17.83s)
+    r7r4_join_test.go:500: the daemon abandoned the join without CLOSING the connection; its read loop and its UDS are owned by nobody
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	19.235s
+FAIL
+M7  delete conn.Close() from the no-thread-announced arm: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M8  accept any resume error at the join
+--- M8  accept any resume error at the join mutation applied: 2026-08-20T09:59:41Z
+215c215
+< 	if serr != nil && !isMissingRollout(serr) {
+---
+> 	if false {
+2026/08/20 11:59:50 skeleton: grid-tap snapshot failed for session bpsv7zes2vpratth (1 total): dial unix /tmp/swsk3641330456/bpsv7zes2vpratth/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_AHardResumeFailureAtTheJoinRefusesToRegisterADeafBackend (6.80s)
+    r7r4_join_test.go:536: the daemon registered a message sink on a thread it can never read. Every composer send would succeed and its answer would never appear
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	8.232s
+FAIL
+M8  accept any resume error at the join: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M9  make the subscription loop's hard-failure arm silent
+--- M9  make the subscription loop's hard-failure arm silent mutation applied: 2026-08-20T09:59:54Z
+374d373
+< 			d.noteBackendLost(id, "the thread subscription could not be established: "+err.Error())
+2026/08/20 12:00:02 skeleton: grid-tap snapshot failed for session z3lxprfdzjj3u4zs (1 total): dial unix /tmp/swsk2938002172/z3lxprfdzjj3u4zs/shim.sock: connect: no such file or directory
+2026/08/20 12:00:06 skeleton: session z3lxprfdzjj3u4zs can never subscribe to thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32000: thread is gone
+--- FAIL: TestR7R4_ASubscriptionThatFailsHARDAfterRegistrationTearsHonestly (27.05s)
+    r7r4_join_test.go:564: a subscription that can NEVER be established left the session holding a sink whose stream never arrives -- the composer keeps working and the transcript never moves, which is the silent bridge ADR-017 forbids
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	28.444s
+FAIL
+M9  make the subscription loop's hard-failure arm silent: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M10 delete 'go d.watchSessionBackend(id, conn)' from the join
+--- M10 delete 'go d.watchSessionBackend(id, conn)' from the join mutation applied: 2026-08-20T10:00:26Z
+228d227
+< 	go d.watchSessionBackend(id, conn)
+2026/08/20 12:00:35 skeleton: grid-tap snapshot failed for session r7zbq2r4x7w3ijp3 (1 total): dial unix /tmp/swsk2108287218/r7zbq2r4x7w3ijp3/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_TheWatcherGapsTheTailWhenTheAppServerDiesMidSession (17.14s)
+    r7r4_join_test.go:604: the app-server died mid-session and the transcript simply STOPPED. Nothing marks the discontinuity, and the phone keeps offering a composer over a dead channel
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	18.549s
+FAIL
+M10 delete 'go d.watchSessionBackend(id, conn)' from the join: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M11 delete the already-ended guard from watchSessionBackend
+--- M11 delete the already-ended guard from watchSessionBackend mutation applied: 2026-08-20T10:00:49Z
+479,481d478
+< 	if _, ok := d.sessionBackendFor(id); !ok {
+< 		return // already forgotten by endSession; the session is over, not torn
+< 	}
+2026/08/20 12:00:58 skeleton: grid-tap snapshot failed for session 2ry3ieei6hi4gdzi (1 total): dial unix /tmp/swsk2423062381/2ry3ieei6hi4gdzi/shim.sock: connect: no such file or directory
+--- FAIL: TestR7R4_TheWatcherIsSILENTForASessionThatAlreadyEnded (7.52s)
+    r7r4_join_test.go:635: a session that ENDED normally was reported as a TORN transcript ("backend_lost: the app-server connection closed"). Every completed Codex session would carry a false tear at its end
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	8.944s
+FAIL
+M11 delete the already-ended guard from watchSessionBackend: VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== M12 MEDIUM 4 -- move connectBackendsForRunning() out of Serve into registerSession (BELOW it in the file; the round-3 anchor-to-EOF grep PASSES under this)
+--- M12 MEDIUM 4 -- move connectBackendsForRunning() out of Serve into registerSession (BELOW it in the file; the round-3 anchor-to-EOF grep PASSES under this) mutation applied: 2026-08-20T10:01:03Z
+453d452
+< 	d.connectBackendsForRunning()
+517a517
+> 	d.connectBackendsForRunning()
+--- FAIL: TestR7Fix_ServeCatchesUpTheBackendsOfSESSIONSItAdoptedAtReconcile (0.00s)
+    r7fix_test.go:438: Serve never catches up the session backends it adopted at reconcile. Every `swarm daemon restart` then tears a live Codex session's structured plane with no rejoin, no gap and no degrade
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1.431s
+FAIL
+M12 MEDIUM 4 -- move connectBackendsForRunning() out of Serve into registerSession (BELOW it in the file; the round-3 anchor-to-EOF grep PASSES under this): VERDICT=FENCED (test failed under mutation, exit=1)
+
+=== verdict tally
+13
+no survivors
+--- FINAL re-verify after doc/comment edits (2026-08-20T10:02:30Z)
+build exit=0
+vet exit=0
+0 issues.
+lint exit=0
+ok  	github.com/Nathandela/swarm/internal/skeleton	339.415s
+skeleton exit=0  (2026-08-20T10:08:22Z)
+

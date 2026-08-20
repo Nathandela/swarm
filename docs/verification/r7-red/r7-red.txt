@@ -1,0 +1,132 @@
+### go build ./...  (baseline: no production source was modified)
+2026-08-20T05:36:35Z
+exit=0
+
+### go vet ./internal/adapter
+2026-08-20T05:36:36Z
+# github.com/Nathandela/swarm/internal/adapter
+# [github.com/Nathandela/swarm/internal/adapter]
+vet: internal/adapter/r7_backendsource_test.go:45:10: undefined: BackendPlan
+exit=1
+
+### go vet ./internal/adapter/codex
+2026-08-20T05:36:37Z
+# github.com/Nathandela/swarm/internal/adapter/codex
+# [github.com/Nathandela/swarm/internal/adapter/codex]
+vet: internal/adapter/codex/r7_backend_test.go:29:48: undefined: adapter.BackendPlan
+exit=1
+
+### go vet ./internal/shimwire
+2026-08-20T05:36:37Z
+# github.com/Nathandela/swarm/internal/shimwire
+# [github.com/Nathandela/swarm/internal/shimwire]
+vet: internal/shimwire/r7_backendattach_test.go:28:14: undefined: TypeBackendAttach
+exit=1
+
+### go vet ./internal/shim
+2026-08-20T05:36:37Z
+# github.com/Nathandela/swarm/internal/shim
+# [github.com/Nathandela/swarm/internal/shim]
+vet: internal/shim/r7_backend_test.go:132:79: undefined: BackendInfo
+exit=1
+
+### go vet ./internal/daemon
+2026-08-20T05:36:37Z
+# github.com/Nathandela/swarm/internal/daemon
+# [github.com/Nathandela/swarm/internal/daemon]
+vet: internal/daemon/r7_backendlaunch_test.go:42:34: undefined: BackendSpec
+exit=1
+
+### go vet ./internal/appserver
+2026-08-20T05:36:38Z
+github.com/Nathandela/swarm/internal/appserver: build constraints exclude all Go files in /Users/Nathan/Code/swarm/internal/appserver
+exit=1
+
+### go vet ./internal/engine
+2026-08-20T05:36:38Z
+# github.com/Nathandela/swarm/internal/engine
+# [github.com/Nathandela/swarm/internal/engine]
+vet: internal/engine/r7_typedevent_test.go:148:16: r.e.ApplyTypedEvent undefined (type *Engine has no field or method ApplyTypedEvent)
+exit=1
+
+### go vet ./internal/remotegw
+2026-08-20T05:36:38Z
+# github.com/Nathandela/swarm/internal/remotegw
+# [github.com/Nathandela/swarm/internal/remotegw]
+vet: internal/remotegw/r7_itemwindow_test.go:44:5: undefined: DefaultItemWindow
+exit=1
+
+### go vet ./internal/skeleton
+2026-08-20T05:36:39Z
+github.com/Nathandela/swarm/internal/appserver: build constraints exclude all Go files in /Users/Nathan/Code/swarm/internal/appserver
+exit=1
+
+
+### go vet ./internal/skeleton  (with r7_composersink_test.go set aside, so the message names skeleton's own missing symbol rather than the missing appserver package it imports)
+2026-08-20T05:36:48Z
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r7_approval_native_test.go:135:47: undefined: adapter.BackendSpec
+exit=1
+
+### STAGED RUNTIME RED for internal/adapter/codex (see the evidence header for exactly what was staged and reverted)
+2026-08-20T05:37:00Z
+--- FAIL: TestR7CodexBackend_DescribesTheRecordedAppServerArgv (0.00s)
+    r7_backend_test.go:47: the codex adapter proves no BackendSource; M4.1 makes app-server a shim-owned child DESCRIBED by the adapter, and without the seam the daemon would have to name `codex` itself -- the exact property the Epic 9 freeze exists to protect
+--- FAIL: TestR7CodexBackend_NamesTheCoreSuppliedSocketAndNoPathOfItsOwn (0.00s)
+    r7_backend_test.go:71: the codex adapter proves no BackendSource; M4.1 makes app-server a shim-owned child DESCRIBED by the adapter, and without the seam the daemon would have to name `codex` itself -- the exact property the Epic 9 freeze exists to protect
+--- FAIL: TestR7CodexInteractions_UserMessageItemBecomesAUserMessage (0.00s)
+    r7_interaction_test.go:144: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_UserMessageCarriesTheClientIdEchoKey (0.00s)
+    r7_interaction_test.go:172: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_AgentMessageDeltaIsAnIncrementFoldedByItemId (0.00s)
+    r7_interaction_test.go:187: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_TwoDeltasOfOneMessageShareARefAndNeverAccumulate (0.00s)
+    r7_interaction_test.go:219: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_TurnCompletedClosesTheTurnEvenWithNoAgentMessage (0.00s)
+    r7_interaction_test.go:242: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_TurnCompletedFoldsOntoTheTurnsOwnAgentMessageWhenItemsNamesIt (0.00s)
+    r7_interaction_test.go:275: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_TurnStartedShapesNoItem (0.00s)
+    r7_interaction_test.go:300: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_CommandExecutionOpensAToolRunWithItsArgs (0.00s)
+    r7_interaction_test.go:312: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_CommandExecutionClosesWithItsResults (0.00s)
+    r7_interaction_test.go:341: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_ANonZeroExitClosesTheToolRunFailed (0.00s)
+    r7_interaction_test.go:360: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_OutputDeltaShapesNothing (0.00s)
+    r7_interaction_test.go:375: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_FileChangeApprovalBecomesACardWithTheCLIsOwnDecisions (0.00s)
+    r7_interaction_test.go:387: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_CommandExecutionApprovalOffersOnlyTheStringDecisions (0.00s)
+    r7_interaction_test.go:450: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_DecisionReturnsTheJSONRPCReplyBodyAndNoKeystroke (0.00s)
+    r7_interaction_test.go:477: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_IsPureAndTotalOnEveryPathologicalBody (0.00s)
+    r7_interaction_test.go:509: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexInteractions_AnUnrecognizedMethodShapesZeroItems (0.00s)
+    r7_interaction_test.go:558: the codex adapter proves no InteractionSource; M4.2 makes Codex a structured chat provider EQUAL to Claude, and without this seam captureInteractions returns 0 for every frame (internal/skeleton/interaction.go's first branch)
+--- FAIL: TestR7CodexSignalSources_DeclaresTheRecordedApprovalMethodTheGateActuallyCaptured (0.00s)
+    r7_signalsources_test.go:49: no row for item/fileChange/requestApproval; that is the approval the R1 gate CAPTURED (approval-request.json), and without the row a Codex session sitting on a file-change approval reads idle on the phone
+--- FAIL: TestR7CodexSignalSources_ServerRequestResolvedClearsThePermissionInteraction (0.00s)
+    r7_signalsources_test.go:71: no row for serverRequest/resolved; without it a Codex session that the OWNER approved at the terminal keeps showing `permission` on the phone until the whole turn ends -- an awaiting-input badge on a session that is working
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/codex	0.862s
+FAIL
+
+### repo-wide: EVERY vet failure in the tree, deduplicated
+2026-08-20T05:39:03Z
+vet: internal/adapter/codex/r7_backend_test.go:29:48: undefined: adapter.BackendPlan
+vet: internal/adapter/r7_backendsource_test.go:45:10: undefined: BackendPlan
+vet: internal/daemon/r7_backendlaunch_test.go:42:34: undefined: BackendSpec
+vet: internal/engine/r7_typedevent_test.go:148:16: r.e.ApplyTypedEvent undefined (type *Engine has no field or method ApplyTypedEvent)
+vet: internal/remotegw/r7_itemwindow_test.go:44:5: undefined: DefaultItemWindow
+vet: internal/shim/r7_backend_test.go:132:79: undefined: BackendInfo
+vet: internal/shimwire/r7_backendattach_test.go:28:14: undefined: TypeBackendAttach
+github.com/Nathandela/swarm/internal/appserver: build constraints exclude all Go files in /Users/Nathan/Code/swarm/internal/appserver
+(nothing else in the tree regressed; the two "build constraints exclude" lines are internal/appserver itself and internal/skeleton's import of it)
+
+### the B94 reachability ledger and the GG-7 protocol.md bidi test still pass (no production symbol was added, so no ledger row was earned or retired)
+2026-08-20T05:39:05Z
+ok  	github.com/Nathandela/swarm/internal/verify	7.309s

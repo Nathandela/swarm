@@ -193,3 +193,156 @@ and both now count `Stop`. Evidence: `docs/verification/a1b-claude-producer.md` 
 This ADR exists because spike S-B asked for it twice and declined to ship without it — the code change is small enough that an agent could plausibly land it as a refactor, which is exactly the failure the freeze was written to prevent.
 
 On numbering: ADR-009, ADR-010 and ADR-011 were minted together by this program. The README's "next is ADR-009" instruction was correct when written and should read ADR-012 once all three land. This is not the 007/008 collision pattern — these are three distinct sequential numbers, allocated once.
+
+## Amendment 2026-08-20 — one more optional extension: an adapter may DESCRIBE its session backend, and still gains no fd
+
+**Status**: Proposed (design, ahead of any Wave R7 code; bead `agents-tracker-hggx.8`, Mirror M4.1).
+**Revision 2 (2026-08-20)**, after design review. What changed: `BackendPlan` no longer carries an
+`Argv` whose first element the adapter chooses — it names a PROGRAM the core resolves through its own
+`LookPath` discipline, which removes the shell-injection shape by construction; and conformance
+obligation 9 is restated as **three core-side checks** instead of one promise about the adapter's
+intentions, because the promise as written was satisfied by
+`Argv: {"/bin/sh", "-c", "rm -rf / #" + spec.SocketPath}` and no boundary test could have caught it.
+**Revision 3 (2026-08-20)**, after implementation review of R7 round 1: one more additive field on
+`Interaction`, for a defect the contract as written made unfixable.
+
+```go
+// TurnRef is the CLI's OWN id for the TURN this interaction belongs to -- Codex's
+// `params.turnId`, a UUIDv7 the app-server mints. Empty for a CLI with no turn identity.
+TurnRef string
+```
+
+It is the third machine-side correlation key beside `Ref` and `ClientRef`, and it obeys their rules
+exactly: the daemon consumes it, it never reaches the wire, and IS-APR-1 still leaves exactly one id
+on the wire. **The turn RULE remains entirely the daemon's** — IS-ENV-1 opens a turn on a
+`user_message` and closes it on a terminal `agent_message`, `turn_id` on the wire is the daemon's own
+ULID, and this field sources no boundary and decides no grouping.
+
+**Why it has to exist.** A provider whose turn operations take the CLI's own turn id as a
+PRECONDITION cannot be driven with an id the CLI never minted, and the adapter is the only party that
+ever sees that id. `turn/steer`'s `expectedTurnId` is documented "Required active turn id
+precondition. The request fails when it does not match the currently active turn"; R7 round 1 sent
+the daemon's 26-character ULID, so every mid-turn phone send was rejected by a real app-server, and
+`turn/interrupt` was worse — the server's honest `no active turn to interrupt` for an id it had never
+seen was swallowed as benign, and a Stop that stopped nothing reported success. Without this field
+the only alternatives were for the daemon to parse provider frames itself (which is what ADR-013
+§R7.3 exists to prevent) or to keep guessing.
+
+**Purity is untouched.** It is one more field read out of `p.Raw`; `Interactions` stays pure, total
+and stateless, and `internal/adapter` gains no fd and no banned token.
+
+**Extends**: this ADR's decision (2), additively and optionally. The `Adapter` interface method set
+is unchanged, every existing adapter compiles and behaves exactly as before, and the E9.2 banned-token
+list stays zero-hit in every adapter package.
+**Companion**: the Wave R7 amendment of the same date to
+[ADR-013](ADR-013-mirror-capture-architecture.md), which owns the topology this serves and the
+evidence it rests on.
+**Why this ADR and not that one**: extending this boundary is ADR-level work "regardless of whether
+the change is additive" (`:16`), and that pre-commitment is recorded here. A new optional interface
+in `internal/adapter` is this document's subject even when its motivation is another's.
+
+### The gap
+
+Decision (5) names Codex's structured channel as "app-server JSON-RPC" and stops there. It does not
+say who *starts* an app-server, and nothing in the contract can express it: `Command`/`Resume` return
+the AGENT's argv, and there is no way for an adapter to say "this CLI's session needs a second
+process listening on a socket, and here is the flag that attaches the agent to it". Without a seam,
+that knowledge lands in the daemon — which is precisely the property the Epic 9 freeze exists to
+protect ("adding a CLI touches one package", `:12`).
+
+### Decision: a backend is a DESCRIPTOR, on `Command`'s exact terms
+
+A new optional extension interface, discovered by type assertion like `InteractionSource`,
+`ApprovalApplier` and `TurnInterrupter` before it:
+
+```go
+// BackendSource is the OPTIONAL extension a CLI implements when its session needs a
+// side process the CORE starts and supervises -- Codex's `app-server` (ADR-013's R7
+// amendment), opencode's `serve` (M5.1). It is PURE DATA OUT: the adapter names a
+// program and its arguments, the core resolves the program and opens every fd,
+// exactly as Binary/VersionArgs feed the core-owned Detect(a, HostProber).
+type BackendSource interface {
+    // Backend describes the side process for a session whose backend socket the core
+    // has already chosen. ok == false means this CLI needs none, which is the ordinary
+    // case and never a defect (ADR-010 §5's posture).
+    Backend(spec BackendSpec) (BackendPlan, bool)
+}
+
+// BackendSpec is what the CORE supplies: it owns the path, because it owns the session dir.
+type BackendSpec struct{ SocketPath string }
+
+// BackendPlan is what the ADAPTER answers with. There is deliberately NO argv[0]: the
+// adapter names a program the core resolves, so a plan can never name an interpreter
+// and smuggle a command line through it.
+type BackendPlan struct {
+    Program   string   // program NAME, e.g. "codex" -- the core LookPaths it (Detect's discipline)
+    Args      []string // e.g. {"app-server", "--listen", "unix://" + spec.SocketPath}
+    AgentArgs []string // appended to the agent argv, e.g. {"--remote", "unix://" + spec.SocketPath}
+}
+```
+
+Three properties are decided with it:
+
+1. **Readiness is the SOCKET, never the process streams.** The R1 gate recorded that `codex
+   app-server` writes nothing to stdout or stderr for an entire session
+   (`docs/verification/r1-codex-gate.md:75-79`), so a supervisor watching them would watch nothing.
+   The core waits for the socket to be servable; the plan carries no stream contract because there
+   is none to carry. Note that a servable socket is a READINESS fact and not a LIVENESS fact — the
+   companion amendment's §R7.2c records the backend's pid and start-time for the latter, because a
+   socket outlives the process that bound it.
+2. **The core owns the process, its own process group, and its containment.** The side process is a
+   shim-owned child started before the agent, with its own `Setpgid`, its own TERM->grace->KILL and
+   its own `Wait` (ADR-013 §R7.2a). The adapter never sees it.
+3. **Absence is a signal**, exactly as it is for every other extension here: an adapter that
+   implements nothing gains nothing and needs no change. `claude`, `opencode` and `agy` are unchanged
+   by this amendment.
+
+### Conformance obligations
+
+Additions to the existing list, all mechanical, all offline:
+
+7. `Backend` is PURE and TOTAL on `Interactions`' terms: deterministic, never panics on an empty or
+   pathological `SocketPath`, performs no I/O, and every adapter package still greps zero-hit against
+   `bannedIOTokens` (`boundary_test.go:23-30`). `BackendSpec` and `BackendPlan` are pure data and
+   trip none of those tokens.
+8. An adapter that returns `ok == true` returns a **non-empty** `Program`. A declared backend that
+   starts nothing is a session whose agent will attach to a socket nobody serves.
+9. **Three checks the CORE performs, replacing the promise the adapter used to make about itself.**
+   The rejected wording — "`Argv` and `AgentArgs` both reference the `SocketPath` the core supplied
+   and never a path of the adapter's own choosing" — is satisfied by
+   `Argv: {"/bin/sh", "-c", "rm -rf / #" + spec.SocketPath}` and is therefore not the invariant that
+   matters. The property `Command`/`Resume` already have is the one to copy: the core resolves the
+   program and execs it directly. So:
+
+   - **9a. `Program` resolves through the core's `LookPath`.** The core calls
+     `HostProber.LookPath(plan.Program)` — the same discipline `Detect(a, HostProber)` uses
+     (`adapter.go:126-147`) — and refuses a plan whose `Program` contains a path separator or whose
+     resolution fails. The adapter names a program; it never names a path.
+   - **9b. The plan is exec'd DIRECTLY, never through a shell.** The core builds
+     `exec.Cmd{Path: resolved, Args: append([]string{resolved}, plan.Args...)}`, which is the rule
+     `shim.Config` already states for the agent argv ("argv[0] = program; exec'd directly, never via
+     a shell", `internal/shim/shim.go:44`). Fence: a test asserting `Path` is the `LookPath` result
+     and that no element of the assembled command is a shell.
+   - **9c. The core REJECTS a plan that names a path outside the session dir.** For every element of
+     `Args` and `AgentArgs`, strip an optional `unix://` prefix; if what remains is an absolute path,
+     it must be within `filepath.Clean(sessionDir)`. This is a containment check the CORE performs on
+     data it does not trust, not a claim the adapter makes about itself, and it is the only one of
+     the three a malicious or merely buggy adapter cannot talk its way past. Fence, by mutation: a
+     fixture adapter returning `{"--listen", "unix:///tmp/evil.sock"}` must be refused, and deleting
+     the check must make that test fail.
+
+### Non-goals, restated for this extension
+
+- No adapter ownership of the process, its fds, its lifetime, its supervision or its socket. The plan
+  is data; the core does all of it.
+- No new `Adapter` method. `TestAdapterInterfaceMethodSet` and the `var _ Adapter = …` assertions are
+  untouched.
+- Nothing here says how the backend's *events* reach the item schema. They arrive through the
+  unchanged `InteractionSource` seam, as `HookPayload`s the core assembles from JSON-RPC frames —
+  which is what decision (2)'s own note ("it carries any captured event body, hook or JSON-RPC",
+  `:59`) already anticipated.
+- Nothing here decides the rate at which those events are admitted. That is the companion
+  amendment's §R7.4, which revises decision (7)'s single 125 ms floor into an explicit split of the
+  shared per-target slot (`DefaultItemWindow` = 250 ms for items, leaving >= 4 snapshot slots/s for
+  the terminal plane) because decision (7) reasoned about `ItemAdmission` as though `CoalescingSink`
+  were not downstream of it.

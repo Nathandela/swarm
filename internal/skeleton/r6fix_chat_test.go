@@ -231,7 +231,7 @@ func TestR6Fix_AnExpiredInjectionNoLongerClaimsAnIdenticalOwnerPrompt(t *testing
 
 	fields := map[string]any{"source": adapter.SourceOwner}
 	sk.itemMu.Lock()
-	sk.stampComposerEchoLocked(local, "yes", fields)
+	sk.stampComposerEchoLocked(local, "yes", "", fields)
 	sk.itemMu.Unlock()
 
 	if fields["source"] != adapter.SourceOwner {
@@ -272,7 +272,7 @@ func TestR6Fix_AFreshInjectionStillClaimsItsEcho(t *testing.T) {
 
 	fields := map[string]any{"source": adapter.SourceOwner}
 	sk.itemMu.Lock()
-	sk.stampComposerEchoLocked(local, "yes", fields)
+	sk.stampComposerEchoLocked(local, "yes", "", fields)
 	sk.itemMu.Unlock()
 
 	if fields["source"] != adapter.SourcePhone {

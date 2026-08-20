@@ -56,8 +56,24 @@ type server struct {
 	hub          *hub
 	ptmx         *os.File
 	ptyIn        *ptyWriter // serialized writer to the PTY master (TDataIn + emulator replies)
-	pgid         int        // agent process-group id (== agent pid; it leads its own group)
 	graceTimeout time.Duration
+
+	// pgidMu guards the two process groups this shim contains. The AGENT's group is known
+	// at construction on the ordinary path and only after the go-ahead on a backend
+	// session, so it is read under a lock rather than treated as immutable -- and a zero is
+	// never signalled, because kill(-0, ...) signals the CALLER's own group.
+	pgidMu sync.Mutex
+	pgid   int // agent process-group id (== agent pid; it leads its own group)
+	// backendPgid is the session backend's OWN group (Wave R7, ADR-013 §R7.2a). It is a
+	// SIBLING of the agent, not a member of its group, so it is signalled beside it on the
+	// same TERM->grace->KILL; there is no second timer and no second grace window.
+	backendPgid int
+
+	// goAhead carries the daemon's backend_attach (ADR-013 §R7.2e). Buffered so a daemon
+	// that sends it before the shim blocks is never lost, and one-shot so a second one is
+	// ignored rather than racing the spawn.
+	goAhead     chan shimwire.Control
+	goAheadOnce sync.Once
 
 	socketPath string
 	listener   net.Listener
@@ -89,6 +105,7 @@ func newServer(l net.Listener, socketPath string, emu *vt.Emulator, tr *transcri
 		ptyIn:        &ptyWriter{f: ptmx},
 		pgid:         pgid,
 		graceTimeout: grace,
+		goAhead:      make(chan shimwire.Control, 1),
 		socketPath:   socketPath,
 		listener:     l,
 		escStop:      make(chan struct{}),
@@ -225,6 +242,10 @@ func (s *server) serveConn(conn net.Conn) {
 				s.resize(ctrl.Cols, ctrl.Rows)
 			case shimwire.TypeSignal:
 				s.onSignal(ctrl.Sig)
+			case shimwire.TypeBackendAttach:
+				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
+				// backend, and the agent may now be spawned with AgentArgs appended.
+				s.noteGoAhead(ctrl)
 			}
 		case wire.TDataIn:
 			if !helloed {
@@ -288,9 +309,9 @@ func setWinsize(f *os.File, ws *pty.Winsize) error {
 func (s *server) onSignal(sig string) {
 	switch sig {
 	case shimwire.SigKill:
-		_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
+		s.killGroups(syscall.SIGKILL)
 	case shimwire.SigTerm:
-		_ = syscall.Kill(-s.pgid, syscall.SIGTERM)
+		s.killGroups(syscall.SIGTERM)
 		s.escMu.Lock()
 		if !s.escStarted && !s.escStopped {
 			s.escStarted = true
@@ -306,7 +327,7 @@ func (s *server) escalationWorker() {
 	defer close(s.escDone)
 	select {
 	case <-time.After(s.graceTimeout):
-		_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
+		s.killGroups(syscall.SIGKILL)
 	case <-s.escStop:
 	}
 }
@@ -328,7 +349,66 @@ func (s *server) finishEscalation() {
 	if started {
 		<-s.escDone
 	}
-	_ = syscall.Kill(-s.pgid, syscall.SIGKILL)
+	s.killGroups(syscall.SIGKILL)
+}
+
+// killGroups signals BOTH contained process groups: the agent's and, when this session has
+// one, the backend's.
+//
+// THE BACKEND IS NOT IN THE AGENT'S GROUP and never was. It is a sibling exec.Cmd, so every
+// kill(-agentPgid) misses it -- which is why the first R7 draft's claim that the backend
+// "joins the agent's existing containment" had to be retracted. Signalling both here is what
+// makes the claim true, on ONE grace window rather than two: the escalation worker and
+// finishEscalation call this same function, so the backend cannot outlive the agent's KILL.
+//
+// A ZERO pgid is never signalled: kill(-0, sig) signals the caller's OWN process group, which
+// on a backend session (where the agent's pgid is unknown until the go-ahead) would be the
+// shim signalling itself.
+func (s *server) killGroups(sig syscall.Signal) {
+	s.pgidMu.Lock()
+	agent, backend := s.pgid, s.backendPgid
+	s.pgidMu.Unlock()
+	if agent > 0 {
+		_ = syscall.Kill(-agent, sig)
+	}
+	if backend > 0 && backend != agent {
+		_ = syscall.Kill(-backend, sig)
+	}
+}
+
+// setAgentPgid records the agent's group once it exists (the backend path spawns the agent
+// after the go-ahead, so the group is not known at construction).
+func (s *server) setAgentPgid(pgid int) {
+	s.pgidMu.Lock()
+	s.pgid = pgid
+	s.pgidMu.Unlock()
+}
+
+// setBackendPgid records the session backend's group.
+func (s *server) setBackendPgid(pgid int) {
+	s.pgidMu.Lock()
+	s.backendPgid = pgid
+	s.pgidMu.Unlock()
+}
+
+// noteGoAhead delivers the daemon's backend_attach exactly once.
+func (s *server) noteGoAhead(ctrl shimwire.Control) {
+	s.goAheadOnce.Do(func() { s.goAhead <- ctrl })
+}
+
+// waitBackendGoAhead blocks until the daemon says go ahead, or the bound elapses.
+//
+// THE TIMEOUT IS WHAT KEEPS THE HANDSHAKE FROM BEING A NEW WAY TO HANG. A daemon that crashed
+// between spawning this shim and dialing the backend must not leave the owner with a terminal
+// that never starts, so a go-ahead that never arrives SPAWNS THE AGENT ANYWAY -- degraded (no
+// AgentArgs, therefore no --remote) and logged.
+func (s *server) waitBackendGoAhead(d time.Duration) ([]string, bool) {
+	select {
+	case ctrl := <-s.goAhead:
+		return ctrl.AgentArgs, true
+	case <-time.After(d):
+		return nil, false
+	}
 }
 
 // shutdown flushes buffered DataOut to the attached client, emits the exit_report

@@ -1,0 +1,144 @@
+RAW TRANSCRIPT -- Wave R7 GREEN round 2 (agents-tracker-hggx.8), 2026-08-20 UTC
+Host: darwin arm64; Go toolchain amd64 under Rosetta; golangci-lint v2.12.2; codex-cli 0.147.0
+
+############################################################
+## 1. GATE
+############################################################
+=== 2026-08-20T07:49:28Z R7 round-2 GATE ===
+--- go build ./...
+exit=0
+--- go vet ./... (2026-08-20T07:49:31Z)
+exit=0
+--- golangci-lint run (2026-08-20T07:49:32Z)
+0 issues.
+exit=0
+--- go test -race -count=1 on owned packages + internal/verify (2026-08-20T07:49:34Z)
+ok  	github.com/Nathandela/swarm/internal/adapter	2.260s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	2.574s
+ok  	github.com/Nathandela/swarm/internal/appserver	3.741s
+ok  	github.com/Nathandela/swarm/internal/daemon	55.820s
+ok  	github.com/Nathandela/swarm/internal/engine	14.239s
+?   	github.com/Nathandela/swarm/internal/procstart	[no test files]
+ok  	github.com/Nathandela/swarm/internal/protocol	23.676s
+ok  	github.com/Nathandela/swarm/internal/remotegw	34.423s
+ok  	github.com/Nathandela/swarm/internal/shim	94.388s
+ok  	github.com/Nathandela/swarm/internal/shimwire	2.307s
+ok  	github.com/Nathandela/swarm/internal/skeleton	305.819s
+ok  	github.com/Nathandela/swarm/internal/verify	30.582s
+exit=0  (2026-08-20T07:54:48Z)
+--- GG-7 protocol.md bidi drift (2026-08-20T07:54:48Z)
+ok  	github.com/Nathandela/swarm/internal/protocol	2.004s [no tests to run]
+exit=0
+=== 2026-08-20T07:54:51Z GATE done ===
+
+-- GG-7 re-run with the matching pattern (the gate's -run pattern selected no test):
+$ go test -race -count=1 -run TestProtocolMD -v ./internal/protocol/
+=== RUN   TestProtocolMDBidi_FieldSetMatchesStructs
+--- PASS: TestProtocolMDBidi_FieldSetMatchesStructs (0.00s)
+=== RUN   TestProtocolMD_ExistsAndDocumentsEveryField
+--- PASS: TestProtocolMD_ExistsAndDocumentsEveryField (0.00s)
+=== RUN   TestProtocolMD_DocumentsEveryOp
+--- PASS: TestProtocolMD_DocumentsEveryOp (0.00s)
+ok  	github.com/Nathandela/swarm/internal/protocol	1.816s   exit=0
+
+############################################################
+## 2. MUTATION HARNESS -- 11 of 11 FIRE
+############################################################
+=== 2026-08-20T07:43:09Z R7 round-2 mutation harness ===
+MUTATION M1 steer sends the daemon's ULID: FIRES
+--- FAIL: TestR7ComposerSink_AMidTurnSendDispatchesTurnSteerCarryingTheNATIVEExpectedTurnId (4.07s)
+    r7_composersink_test.go:198: turn/steer expectedTurnId = "01M0F1ZN17NFK198AQ9ZV9F9C9", want the CLI's OWN "01a0033b-d0be-77e1-88e7-584ddeea562d". It is REQUIRED by the binding and it is the built-in optimistic-concurrency guard a two-surface composer needs to avoid steering a turn that already ended -- against ITS turn table, not ours
+--- FAIL: TestR7Fix_MidTurnSteerNamesTheCLIsOwnTurnIdAndNeverTheDaemonsMintedULID (0.18s)
+    r7fix_test.go:109: turn/steer expectedTurnId = "01M0F1ZNKMACETSQX3KB7YT4G9", want the CLI's OWN turn id "01a0033b-d0be-77e1-88e7-584ddeea562d". The app-server checks this against ITS turn table; an id this daemon minted matches nothing there, so every mid-turn phone send is rejected
+MUTATION M2 interrupt sends the daemon's ULID: FIRES
+--- FAIL: TestR7Interrupt_ABackendSessionDispatchesTurnInterruptAndTypesNOTHING (3.94s)
+    r7_composersink_test.go:382: turn/interrupt turnId = "01M0F1ZW8XVNCRG5Y96J9GEZXM", want the CLI's OWN "01a0033b-d0be-77e1-88e7-584ddeea562d"
+--- FAIL: TestR7Fix_InterruptNamesTheCLIsOwnTurnIdAndNeverTheDaemonsMintedULID (0.18s)
+    r7fix_test.go:142: turn/interrupt turnId = "01M0F1ZWRMS6KABDZKW1KT6XEH", want the CLI's OWN turn id "01a0033b-d0be-77e1-88e7-584ddeea562d". A Stop that names a turn the server never minted is answered `no active turn to interrupt`, which this daemon reports to the phone as success
+MUTATION M3 no-native-id steer is not refused: FIRES
+--- FAIL: TestR7Fix_ASteerWithNoCLITurnIdIsREFUSEDRatherThanSentWithAMintedOne (3.61s)
+    r7fix_test.go:166: a mid-turn send on a turn the CLI never named reported SUCCESS; whatever it sent, the server cannot have applied it
+MUTATION M4 phone answer consumes byID: FIRES
+--- FAIL: TestR7Fix_ThePHONEAnsweredApprovalIsRetiredByTheServersOwnResolvedBroadcast (8.63s)
+    r7fix_test.go:244: the card the PHONE answered was still pending after the server broadcast serverRequest/resolved for it. The owner's phone shows a live approve button for a request that is over, until the expiry sweep marks it expired minutes later
+--- FAIL: TestR7Fix_ThePHONEAnsweredResolutionIsAttributedToThePhone (5.22s)
+    r7fix_test.go:273: no approval_resolved item was ever journalled for the phone's own answer
+MUTATION M5 no thread adoption: FIRES
+--- FAIL: TestR7Fix_ThePumpAdoptsTheAgentsOwnThreadFromTheRecordedThreadStartedFrame (3.70s)
+    r7fix_test.go:294: adopted thread = "" (ok=false), want the agent's own "01a00339-a80e-72a0-966f-116427b6b9ce"
+MUTATION M6 no post-Open backend catch-up: FIRES
+--- FAIL: TestR7Fix_ServeCatchesUpTheBackendsOfSESSIONSItAdoptedAtReconcile (0.00s)
+    r7fix_test.go:415: Serve never catches up the session backends it adopted at reconcile. Every `swarm daemon restart` then tears a live Codex session's structured plane with no rejoin, no gap and no degrade
+MUTATION M7 restart tears silently: FIRES
+--- FAIL: TestR7Fix_ARestartWhoseBackendIsGoneGAPSAndDEGRADESRatherThanTearingSilently (8.91s)
+    r7fix_test.go:389: a session whose backend could not be rejoined was NOT degraded. The phone reads the composer's availability off the transcript, so without this it keeps offering one and every send is refused after the tap
+    r7fix_test.go:394: no structured_gap was emitted for a session whose structured plane ended at the restart. A transcript that simply stops is the silent bridge ADR-017 forbids
+MUTATION M8 backend session keeps a hook token: FIRES
+--- FAIL: TestR7Fix_ASessionWithABackendIsRegisteredWithNOHookToken (3.66s)
+    r7fix_test.go:493: HandleCallback ACCEPTED a callback bearing the session's OWN token for a session that has a BACKEND. Its typed status is driven by the in-process pump (Engine.ApplyTypedEvent), and a second producer on one per-dimension high-water namespace does not warn -- it silently DROPS whichever event loses (§R7.3)
+MUTATION M9 adapter drops TurnRef on a delta: FIRES
+--- FAIL: TestR7FixTurnRef_EveryShapedFrameCarriesTheCLIsOwnTurnId (0.01s)
+    --- FAIL: TestR7FixTurnRef_EveryShapedFrameCarriesTheCLIsOwnTurnId/item/agentMessage/delta (0.00s)
+        r7fix_turnref_test.go:98: TurnRef = "", want the CLI's own "01a0033b-d0be-77e1-88e7-584ddeea562d". Without it the daemon cannot name this turn on turn/steer or turn/interrupt, and round 1's answer was to send an id it minted itself -- which the server rejects every time
+MUTATION M10 item floor back to 125ms: FIRES
+--- FAIL: TestR7ItemWindow_AtThreeStreamingSessionsTheTerminalPlaneSTILLGetsSlots (0.01s)
+    r7_itemwindow_test.go:166: the terminal plane got only 2 slots in one second; the split reserves >= 4 snapshot slots/s AT EVERY N
+=== 2026-08-20T07:44:21Z mutation harness done ===
+all mutations reverted
+
+=== 2026-08-20T07:44:36Z shim mutation (review BLOCKING 5) ===
+--- baseline: the fence must be GREEN unmutated
+ok  	github.com/Nathandela/swarm/internal/shim	1.638s
+--- MUTATED: the agent-exec error path no longer contains the backend
+MUTATION M11: FIRES
+--- FAIL: TestR7ShimBackend_AnAgentThatCannotEXECStillTakesItsBackendDownWithIt (5.39s)
+    r7_backend_test.go:545: the backend (pid 87244, pgid 87244) SURVIVED an agent exec failure. Run returned and left a live app-server holding /var/folders/08/nw803wjj28j_2sv8kzcgz1mr0000gn/T/swbe1109712043/codex.sock forever -- the exact leak §R7.2a was written to close
+reverted, build OK
+=== 2026-08-20T07:44:49Z done ===
+
+############################################################
+## 3. REAL-CLI: what was measured (no model turn, no cost)
+############################################################
+$ SWARM_REALCLI=1 SWARM_CODEX_HOME=<scratch>/codex-home SWARM_CODEX_WS=<scratch>/ws \
+    go test -tags realcli -run TestR7RealCLI_TheProtocolPRECONDITIONS -count=1 -v ./internal/appserver/
+=== RUN   TestR7RealCLI_TheProtocolPRECONDITIONSBehaveAsTheFixASSUMES
+    r7_realcli_test.go:622: MEASURED: thread/loaded/list -> {"data": [01a01e24-23ba-7a80-a0ae-67168ac2c512]}, the shape rejoinSessionBackend decodes
+    r7_realcli_test.go:638: MEASURED, review BLOCKING 1 as a fact: turn/steer with the daemon-minted ULID "01M0EZR7QB3ANMVBNVNNF8CJC8" -> appserver: rpc error -32600: no active turn to steer
+    r7_realcli_test.go:650: MEASURED: turn/interrupt with a daemon-minted turn id -> appserver: rpc error -32600: no active turn to interrupt
+    r7_realcli_test.go:652: ...and that is EXACTLY the string benignInterruptError swallows, so round 1's Stop reported SUCCESS to the phone for a turn it never touched
+--- PASS: TestR7RealCLI_TheProtocolPRECONDITIONSBehaveAsTheFixASSUMES (0.99s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/appserver	1.891s
+
+############################################################
+## 4. REAL-CLI: the topology probe, RUN and BLOCKED ON CREDENTIALS
+############################################################
+Run 1 (before the arch fix): the app-server never bound, because a Rosetta-translated
+parent spawns the universal node binary as x86_64 and codex's launcher then looks for
+@openai/codex-darwin-x64, which is not installed:
+    Error: Missing optional dependency @openai/codex-darwin-x64. Reinstall Codex: npm install -g @openai/codex@latest
+        at findCodexExecutable (file:///usr/local/lib/node_modules/@openai/codex/bin/codex.js:105:9)
+FIX: every codex spawn in r7_realcli_test.go now goes through /usr/bin/arch -arm64.
+
+Run 2: the TUI booted but sat on an interactive prompt and never created a thread --
+    "Update available! 0.147.0 -> 0.148.0 / 1. Update now (runs `npm install -g @openai/codex`) 2. Skip 3. Skip until next version"
+FIX: the probe now writes the single digit "2" and NEVER Enter (Enter would select "Update now"
+and npm-install over the owner's codex as a test side effect).
+
+Run 3: the prompt is cleared and the TUI proceeds -- to the SIGN-IN screen, because the
+isolated CODEX_HOME's copied credential can no longer refresh. The app-server says so:
+    r7_realcli_test.go:491: the daemon connection never received thread/started for the TUI's thread. The no-flag topology of ADR-013 §R7.2e depends on exactly this notification: without it the daemon cannot learn which thread the agent is on, and the ONLY remaining option is a pre-created thread id carried in agent_args
+            "code": "refresh_token_reused"
+        2026-08-20T07:53:42.913215Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Provided authentication token is expired. Please try signing in again., url: https://chatgpt.com/backend-api/codex/models?client_version=0.147.0, cf-ray: a2dfd36ac8b192e0-GVA, auth error: 401, auth error code: token_expired
+--- FAIL: TestR7RealCLI_TheDaemonAdoptsTheTUIsOwnThreadAndSteersTheCLIsOwnTurnId (94.62s)
+
+The TUI's own captured screen for run 3 ends in the codex sign-in splash and the words
+"sign in again."; NO thread is ever created, so `thread/started` is never broadcast and the
+probe fails at its FIRST assertion. This is a credential state, not a protocol result.
+
+NOT DONE, AND DELIBERATELY: seeding the scratch CODEX_HOME from the owner's live
+~/.codex/auth.json. That file holds a ChatGPT OAuth refresh token and no API key; an isolated
+server that refreshes it ROTATES it and leaves the owner's real home holding a used one --
+which is precisely the state the 401 above describes, and how the R1 gate's own copy died.
+Logging the owner out of their real Codex CLI is an owner's call, not an implementer's.
+To run it: `CODEX_HOME=<scratch>/codex-home codex login`, then re-run the probe.

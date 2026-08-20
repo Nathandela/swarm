@@ -27,6 +27,7 @@ package skeleton
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -532,8 +533,28 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	// that arrived between the write and this note would be attributed to an owner who was
 	// never there.
 	itemID, action := ap.itemID, ap.action
+	ref := d.approvalRefLocked(local, itemID)
 	ap.applied, ap.appliedOp = decision, operationID
 	d.itemMu.Unlock()
+
+	// THE NATIVE BRANCH FIRST (Wave R7, Mirror M4.3; ADR-013 §R7.5). A session with a live
+	// app-server answers its approvals BY JSON-RPC, on the daemon's OWN connection with the id
+	// THAT connection received -- r1-codex-gate.md:130-134 recorded exactly this against the
+	// real CLI: "NO KEY WAS EVER PRESSED IN THE TUI, yet the TUI's approval dialog closed".
+	//
+	// Until R7 this path fell straight through to applyDecision -> dialogTap -> ApprovalKeys ->
+	// PTY, and Codex was saved from being typed at ONLY by the accident that it proves no
+	// ApprovalApplier. The branch order is what makes the prohibition structural.
+	if native, handled := d.applyNativeDecision(local, ref, req.Decision); handled {
+		if native != nil {
+			d.clearAppliedNote(local, itemID)
+			return "", errIsLife4("approval %q could not be answered on its backend: %v", req.InteractionID, native)
+		}
+		// NO watchInjection: nothing was typed, so there is no dialog to watch. Resolution
+		// still arrives only BY OBSERVATION -- here the server's own serverRequest/resolved
+		// broadcast (backend.go), which is strictly better evidence than a grid read.
+		return "", nil
+	}
 
 	if err := d.applyDecision(local, verdict, action); err != nil {
 		d.clearAppliedNote(local, itemID)
@@ -551,6 +572,65 @@ func (d *Daemon) approveInteraction(machine, operationID string, req protocol.Ap
 	}
 	d.watchInjection(local, itemID, verdict, action)
 	return "", nil
+}
+
+// approvalRefLocked recovers the CLI's OWN id for the pending approval named by itemID -- the
+// ref the adapter attached at capture and that the pending JSON-RPC server-request was keyed
+// by. The daemon consumes the ref and never puts it on the wire (IS-APR-1), so this reverse
+// lookup over the fold map is the only way back to it. Caller holds itemMu.
+func (d *Daemon) approvalRefLocked(session, itemID string) string {
+	prefix := session + "\x00"
+	for key, id := range d.itemIDs {
+		if id == itemID && strings.HasPrefix(key, prefix) {
+			return key[len(prefix):]
+		}
+	}
+	return ""
+}
+
+// applyNativeDecision answers a pending approval over the session's app-server connection.
+//
+// handled==false means this session has NO native channel and the caller must fall through to
+// the keystroke path -- which is Claude's, unchanged. handled==true with a non-nil error means
+// the native channel was the right answer and it failed; the caller must NOT then type,
+// because a provider whose approvals are answered by RPC has no key to press, ever.
+//
+// The reply body is the ADAPTER's: InteractionSource.Decision(ref, decisionID) returns the
+// descriptor and the CORE writes it (ADR-010 §4, E9.2). That method had NO PRODUCTION CALLER
+// ANYWHERE IN THE REPO before this line -- a fact worth stating plainly, and what M4.3 changes.
+func (d *Daemon) applyNativeDecision(local, ref, decisionID string) (error, bool) {
+	b, ok := d.sessionBackendFor(local)
+	if !ok {
+		return nil, false
+	}
+	m, ok := d.core.Get(local)
+	if !ok {
+		return errors.New("the session is gone"), true
+	}
+	ad, ok := d.resolveAdapter(m.AgentType)
+	if !ok {
+		return fmt.Errorf("agent %q has no adapter", m.AgentType), true
+	}
+	src, ok := adapter.AsInteractionSource(ad)
+	if !ok {
+		return fmt.Errorf("agent %q sources no interactions, so it can describe no decision", m.AgentType), true
+	}
+	act, ok := src.Decision(ref, decisionID)
+	if !ok || len(act.Reply) == 0 {
+		return fmt.Errorf("agent %q describes no way to apply decision %q", m.AgentType, decisionID), true
+	}
+	// The id THAT CONNECTION received, consumed so a re-delivered approve cannot write a
+	// second reply the server would apply to whatever replaced this request.
+	id, ok := d.takeServerRequest(local, ref)
+	if !ok {
+		return fmt.Errorf("no pending server request is outstanding for approval %q", ref), true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
+	defer cancel()
+	if err := b.conn.Respond(ctx, id, act.Reply); err != nil {
+		return err, true
+	}
+	return nil, true
 }
 
 // clearAppliedNote drops the injection note from a session's pending approval, iff it is still

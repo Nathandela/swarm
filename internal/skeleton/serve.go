@@ -145,15 +145,26 @@ type Daemon struct {
 	// openItems every item journalled `in_progress` and not yet closed (IS-ST-2's sweep), and
 	// interacted the last status.Interaction seen per session -- the TRANSITION out of it is
 	// IS-LIFE-2's answered_locally signal. All three are cleared by endSession.
-	itemMu     sync.Mutex
-	items      *remotegw.ItemAdmission
-	itemClock  func() time.Time // Config.ItemClock; nil => time.Now (the floor's own default)
-	itemIDs    map[string]string
-	turnIDs    map[string]string
-	approvals  map[string]*pendingApproval
-	openItems  map[string]map[string]openItem
-	interacted map[string]status.Interaction
-	adapterFor func(agentType string) (adapter.Adapter, bool)
+	itemMu    sync.Mutex
+	items     *remotegw.ItemAdmission
+	itemClock func() time.Time // Config.ItemClock; nil => time.Now (the floor's own default)
+	itemIDs   map[string]string
+	turnIDs   map[string]string
+	// nativeTurns holds the CLI'S OWN id for each session's OPEN turn, when its adapter
+	// sources one (adapter.Interaction.TurnRef). It is the machine-side twin of turnIDs and
+	// never reaches the wire: turnIDs is what a phone names in expected_turn, nativeTurns is
+	// what a turn/steer or turn/interrupt must name on the provider's own socket. Cleared
+	// with turnIDs, by the same rule, in the same place (turnIDLocked / forgetInteractions).
+	nativeTurns map[string]string
+	// closedTurns holds the CLI's own id for the LAST turn this daemon saw CLOSE, per session.
+	// It exists only to bound the mid-turn rejoin adoption in turnIDLocked: a frame naming a
+	// turn this daemon already completed must not reopen it, or the session looks busy forever
+	// and no new turn can ever be started. Cleared with turnIDs, in the same places.
+	closedTurns map[string]string
+	approvals   map[string]*pendingApproval
+	openItems   map[string]map[string]openItem
+	interacted  map[string]status.Interaction
+	adapterFor  func(agentType string) (adapter.Adapter, bool)
 
 	// The COMPLETE-CHAT state (Wave R6, chat.go), riding itemMu with its siblings:
 	// pendingSends holds each session's accepted composer injections awaiting their
@@ -186,6 +197,17 @@ type Daemon struct {
 	// production caller of HookDrainer, started from registerSession and stopped by
 	// endSession/Close.
 	drains hookDrainState
+
+	// The SESSION BACKEND's state (Wave R7, backend.go): `backend` is the per-session
+	// app-server connection registry plus the outstanding server-request table, and `pump`
+	// is the producer-edge delta batcher. They ride their OWN mutexes rather than itemMu,
+	// with the lock order stated in backend.go: pumpMu -> itemMu, and backendMu taken alone.
+	backend backendState
+	pump    backendPump
+	// backendReady overrides backendReadyDeadline. Test-only, and unset in production: the
+	// degrade paths are only reachable after a dial gives up, and waiting 45 s per case is a
+	// test suite nobody runs.
+	backendReady time.Duration
 
 	// tapFailures counts grid-tap attach/snapshot failures so a tap that can no longer
 	// read a session's snapshot is OBSERVABLE rather than a silent heuristic death
@@ -254,6 +276,10 @@ func Serve(cfg Config) (*Daemon, error) {
 		PreDelete:      preDeleteWorktree,
 		OnSessionStart: d.registerSession,
 		OnSessionEnd:   d.endSession,
+		// Wave R7 (backendconnect.go): the core asks the ASSEMBLY whether a session needs a
+		// side process, because only the assembly may touch an adapter and only the core
+		// knows the session dir the plan is contained against.
+		BackendPlanner: d.planSessionBackend,
 	})
 	if err != nil {
 		return nil, err
@@ -421,6 +447,10 @@ func Serve(cfg Config) (*Daemon, error) {
 	// daemon.Open, before d.core existed to read its hook channel from; start their
 	// drain loops now (hookdrainloop.go).
 	d.startHookDrainsForRunning()
+	// ...and their SESSION BACKENDS, for exactly the same reason and at exactly the same
+	// point (Wave R7 review BLOCKING 4, backendconnect.go). registerSession's own
+	// connectSessionBackend cannot do it: it ran during daemon.Open, before d.core existed.
+	d.connectBackendsForRunning()
 
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
@@ -449,6 +479,28 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// is the last-persisted status, so the engine believes a persisted turn=active and
 	// the staleness guard can downgrade a now-idle session. Folding the status into
 	// RegisterSession closes the register->seed gap an early hook could fall into.
+	// SINGLE-WRITER, ENFORCED (Wave R7, ADR-013 §R7.3). A session with a BACKEND has its
+	// typed status driven by the in-process pump (Engine.ApplyTypedEvent), and registering it
+	// with a hook token as well would give one high-water namespace two producers -- whose
+	// failure mode is a SILENT DROP, not a warning. It is registered with NO token instead,
+	// which makes HandleCallback refuse every callback for it outright (engine.go's empty-token
+	// check) rather than leaving the exclusion to convention.
+	//
+	// It costs Codex nothing: it posts no hooks at all, and its typed rows have never fired
+	// through that path.
+	//
+	// d.core IS NIL during reconcile: daemon.Open runs it synchronously and fires this
+	// callback before Serve has assigned the core (see Serve's own comment on building the
+	// engine first). A session adopted at reconcile therefore keeps its token here, and
+	// connectSessionBackend below returns immediately for the same reason -- both are
+	// disclosed as the "rejoin is not distinguished from a fresh join" residual in
+	// docs/verification/r7-green/README.md rather than papered over with a nil-tolerant
+	// lookup that would silently do the wrong thing.
+	if d.core != nil {
+		if _, hasBackend := d.core.SessionBackend(m.ID); hasBackend {
+			token = ""
+		}
+	}
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
 	if d.sup != nil {
 		d.sup.arm(m) // a passive handoff child gets its supervision record (ADR-010 Amendment 3 C2)
@@ -458,6 +510,11 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// only at launch so a session whose shim OUTLIVED this daemon -- the case the whole
 	// spool exists for -- is drained from the moment reconcile adopts it.
 	d.startHookDrain(m.ID)
+	// The SESSION BACKEND's join (Wave R7, backendconnect.go). Started here rather than only
+	// at launch for the same reason the hook drain is: a session whose shim OUTLIVED this
+	// daemon is exactly the case ADR-001 exists for, and it must be rejoined the moment
+	// reconcile adopts it. A session with no backend returns immediately.
+	d.connectSessionBackend(m.ID)
 }
 
 // registryAdapter is the production adapter resolver behind d.adapterFor: the ONE table
@@ -511,6 +568,12 @@ func (d *Daemon) endSession(id string) {
 	// this call always sees an already-terminal status, so the tap path's
 	// Running-gate would silently no-op it every time (HIGH regression, C2 review).
 	d.stopHookDrain(id) // the session's spool has no more producer (hookdrainloop.go)
+	// The backend's frames have no more producer either: release whatever prose the fold is
+	// holding (a turn's last words must not die in the pump), then drop the connection and
+	// the pump state (backend.go).
+	d.flushBackendFrames(id)
+	d.forgetBackendPump(id)
+	d.forgetBackend(id)
 	d.captureConversationIDFinal(id)
 	d.convScanMu.Lock()
 	delete(d.convScan, id) // bound convScan to running sessions (R2.1.3 hygiene)

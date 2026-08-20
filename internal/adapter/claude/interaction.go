@@ -392,3 +392,14 @@ func summaryFor(tool string, a adapter.ToolAction) string {
 	}
 	return tool + " " + arg
 }
+
+// ComposerKeys makes the claude adapter an adapter.KeystrokeComposer (Wave R7, ADR-013
+// §R7.5): a phone message is delivered by TYPING IT into the CLI's own composer, which is
+// the mechanism Wave R6 already shipped for this provider and the only one it has -- Claude
+// Code exposes no message-submission API, and its UserPromptSubmit hook is an echo, not an
+// entry point.
+//
+// The seam exists so that ABSENCE IS THE REFUSAL for providers that must never be typed at.
+// Nothing about this path changes: the bytes are the text itself, and the daemon supplies
+// the submit framing (the CR, after submitframe.Gap) exactly as it did before the seam.
+func (claudeAdapter) ComposerKeys(text string) []byte { return []byte(text) }

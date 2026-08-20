@@ -559,6 +559,16 @@ type shimLaunchConfig struct {
 	// shim's own "no token configured" compat default -- DRAIN's check does not run
 	// at all, exactly HookSocketPath's "unset means disabled" convention.
 	HookDrainToken string `json:"hook_drain_token"`
+	// The SESSION BACKEND (Wave R7, Mirror M4.1; ADR-013 §R7.2b). BackendSocketPath == ""
+	// -- an old launch config, or any session of any CLI that needs no side process -- is
+	// the pre-R7 session and shim.Run's spawn path is then byte-for-byte what it is today.
+	// BackendProgram is the RESOLVED absolute path the daemon obtained through the adapter
+	// contract's LookPath discipline, so the shim never searches PATH itself.
+	BackendProgram    string   `json:"backend_program"`
+	BackendArgs       []string `json:"backend_args"`
+	BackendAgentArgs  []string `json:"backend_agent_args"`
+	BackendSocketPath string   `json:"backend_socket_path"`
+	BackendEnv        []string `json:"backend_env"`
 }
 
 // shimConfigFromLaunch maps a decoded launch config onto shim.Config -- the pure
@@ -585,6 +595,33 @@ func shimConfigFromLaunch(lc shimLaunchConfig) shim.Config {
 		GraceTimeout:   time.Duration(lc.GraceMS) * time.Millisecond,
 		HookSocketPath: lc.HookSocketPath,
 		HookToken:      lc.HookDrainToken,
+		Backend:        backendConfigFromLaunch(lc),
+	}
+}
+
+// backendConfigFromLaunch builds the shim's BackendConfig, or nil.
+//
+// BOTH the program and the socket must be named: a declared backend with no program starts
+// nothing while the agent attaches to a socket nobody serves (the adapter contract's
+// obligation 8, restated at the last place that can still refuse), and a program with no
+// socket has no endpoint for the agent to be pointed at. Either alone is a malformed config
+// and nil -- the pre-R7 session -- is the safe reading of it.
+func backendConfigFromLaunch(lc shimLaunchConfig) *shim.BackendConfig {
+	if lc.BackendSocketPath == "" || lc.BackendProgram == "" {
+		return nil
+	}
+	env := lc.BackendEnv
+	if len(env) == 0 {
+		// The backend inherits the AGENT's filtered environment when the daemon named none:
+		// it is the same CLI in a different mode and needs the same auth and config, and
+		// lc.Env has already passed the launch-environment allowlist.
+		env = lc.Env
+	}
+	return &shim.BackendConfig{
+		Program:    lc.BackendProgram,
+		Args:       lc.BackendArgs,
+		Env:        env,
+		SocketPath: lc.BackendSocketPath,
 	}
 }
 

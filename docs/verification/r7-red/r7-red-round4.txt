@@ -1,0 +1,51 @@
+=== RED stage 1 (missing production symbols): 2026-08-20T09:32:08Z ===
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r7r4_join_test.go:377:51: r.sk.backendSubscribed undefined (type *Daemon has no field or method backendSubscribed)
+exit=0   <- CORRECTION: this 0 is `head`'s exit status, not `go vet`'s (the
+         capture piped vet through head). go vet FAILED here; the message above
+         is its failure. Left in place rather than deleted -- see evidence honesty.
+
+=== RED stage 2 (behavioural, against round 3 production code): 2026-08-20T09:34:38Z ===
+2026/08/20 11:34:45 skeleton: grid-tap snapshot failed for session 7e26hglnpin6ajvj (1 total): dial unix /tmp/swsk3435801310/7e26hglnpin6ajvj/shim.sock: connect: no such file or directory
+2026/08/20 11:34:51 skeleton: session 7e26hglnpin6ajvj could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExists (23.63s)
+    r7r4_join_test.go:341: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+2026/08/20 11:35:09 skeleton: session c7fmlsshnst4juct could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_AUserWhoThinksLongerThanTheJoinDeadlineIsNEVERPermanentlyDegraded (20.20s)
+    r7r4_join_test.go:389: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+--- FAIL: TestR7R4_AThreadThatHadALREADYRunTurnsBeforeTheJoinIsAnHonestGap (10.21s)
+    r7r4_join_test.go:434: the daemon joined a thread that had ALREADY run turns and said nothing. It never read those turns -- a client receives a thread's items only after it resumes -- so this transcript begins mid-conversation, which is the tear ADR-017 forbids bridging silently
+2026/08/20 11:35:36 skeleton: session 4hjxenemoba2u23l backend unavailable: appserver: upgrade /tmp/r7r4-nothing-serves.sock/rpc: failed to WebSocket dial: failed to send handshake request: Get "http://localhost/rpc": dial unix /tmp/r7r4-nothing-serves.sock: connect: no such file or directory
+2026/08/20 11:35:43 skeleton: session adb6x7li4kzkk2gg never announced a thread within 700ms
+2026/08/20 11:35:46 skeleton: session 7fne2lanbhj2iem3 could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32000: thread is owned by another client
+2026/08/20 11:35:53 skeleton: session fdpjugtlqbzaqkav could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_ASubscriptionThatFailsHARDAfterRegistrationTearsHonestly (20.18s)
+    r7r4_join_test.go:561: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+2026/08/20 11:36:13 skeleton: session cxav5paqsxapog6b could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_TheWatcherGapsTheTailWhenTheAppServerDiesMidSession (20.21s)
+    r7r4_join_test.go:591: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+2026/08/20 11:36:33 skeleton: session hwb3uosl7lsvan7y could not join thread 01997f00-face-7000-8000-00000000cdex: appserver: rpc error -32600: no rollout found for thread id 01997f00-face-7000-8000-00000000cdex
+--- FAIL: TestR7R4_TheWatcherIsSILENTForASessionThatAlreadyEnded (20.19s)
+    r7r4_join_test.go:617: the session has NO message sink after 20s. resolveMessageSink refuses structured_unsupported without one, so the phone cannot start the very turn that would create the rollout the subscription is waiting for: a closed loop on the ordinary fresh launch, and the wave's exit criterion is structurally unreachable
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	126.774s
+FAIL
+
+============================================================================
+NOTE ON THE TWO RED STAGES
+Stage 1 is the compile failure naming the production symbols the new tests
+require (backendSubscribed, gapBackendPriorHistory) -- missing implementation,
+not a syntax error. Those two symbols were then added MINIMALLY, with the join
+semantics of round 3 LEFT UNCHANGED, so stage 2 could be a BEHAVIOURAL red
+rather than a compile one. Stage 2 is that run: 6 of the 9 new tests fail, and
+the two blockers are legible in the failures themselves --
+
+  "the session has NO message sink after 20s"  (Ruling 2's deadlock: 5 tests)
+  "the daemon joined a thread that had ALREADY run turns and said nothing"
+                                               (Ruling 1's inverted heuristic)
+
+The 3 that pass are the arms whose behaviour was already correct (dial failure,
+no thread announced, hard resume error). They had NO behavioural test before
+this round, which is MEDIUM 4's point, and each is mutation-fenced in
+docs/verification/r7-green/r7-green-round4.txt (M6, M7, M8).

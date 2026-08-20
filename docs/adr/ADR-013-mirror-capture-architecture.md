@@ -369,3 +369,859 @@ bridge. `thread/resume` refuses until the thread's first turn exists, so the R7 
 `thread/start` itself and hand the thread id to the TUI attach — which also matches RC-D1.
 `turn/steer` carries a native `expectedTurnId`; the composer's expected-turn precondition rides it
 rather than being reinvented. app-server writes nothing to stdout/stderr; supervision is by socket.
+
+## Amendment 2026-08-20 — Wave R7 Codex topology: the app-server is a shim-owned CHILD with its own containment, the JSON-RPC client is DAEMON-owned, and the adapter stays a pure function of one frame
+
+**Status**: Proposed (design, ahead of any R7 code; bead `agents-tracker-hggx.8`, Mirror M4.1-M4.5).
+**Revision 2 (2026-08-20)**, after design review. What changed, so a reader of the rejected draft
+does not have to diff it: the backend now has its **own** process group and its own
+TERM->grace->KILL and its own `Wait` (§R7.2a — the claim that it "joins the agent's" was FALSE, and
+is retracted below in as many words); a backend **pid and start-time** are recorded and liveness is a
+checked fact rather than a successful dial, with a named orphan reaper (§R7.2c); the spawn-ordering
+**go-ahead handshake** is specified as a `shim.Config` + control-socket change, because the preferred
+cold start was not implementable without one (§R7.2e); the append arithmetic is redone against
+`CoalescingSink`'s SHARED slot and the item floor is widened to 250 ms so a streaming Codex session
+cannot freeze terminal peek (§R7.4); the composer-echo correlation is decided for the backend branch
+(§R7.5); the capability dependency is restated as HONESTY, not safety, and the dead-backend
+`structured_gap` question is answered (§R7.7); M4.5's typed status uses a direct engine seam instead
+of `HandleCallback` (§R7.3); the app-server's own crash is covered (§R7.6); and the durability,
+detached-session and per-session-process trades are stated as Consequences (§R7.10).
+
+**Revision 3 (2026-08-20)**, after implementation review of R7 round 1. Four decisions that
+revision 2 left open or got wrong, settled in code and recorded here:
+
+1. **The daemon starts NO thread. It adopts the AGENT's.** Revision 2 framed the open question as
+   "which `agent_args`" and said the handshake was the same either way. It is not: round 1 called
+   `thread/start` from the daemon AND launched the agent with `--remote unix://SOCK` and nothing
+   else, so the agent created its own thread and the two surfaces were never on one conversation.
+   The topology is now: the daemon dials and completes `initialize`/`initialized` before the agent
+   exists, sends the go-ahead, and learns the thread from the `thread/started` the server
+   broadcasts to every attached client (RECORDED: `frame-samples.json`, where the R1 gate's
+   observer received exactly this for a thread the TUI created). It then joins with
+   `thread/resume`, which the schema documents as a rejoin of a running thread and which the gate
+   exercised end to end. `agent_args` is `--remote unix://SOCK` and carries no thread id, so §R7.9's
+   "which `agent_args`" question is CLOSED, and Q2 (`codex resume` under `--remote`) is no longer on
+   R7's path at all. `codex resume --help` at 0.147.0 does list `--remote`, recorded offline.
+2. ~~**`thread/resume`'s rollout race is retried, and a late join is an honest gap.** The RECORDED
+   `no rollout found for thread id` is the ONE error retried; every other error fails immediately.
+   A resume that needed retries succeeded only because a turn had already begun, so the daemon did
+   not see that turn's opening: it emits `structured_gap` reason `backend_joined_late`. This is
+   §R7.2e's own stated arm, now implemented rather than deferred to the Q3 measurement.~~
+   **SUPERSEDED by revision 4 below (2026-08-20), which inverts it.** The inference
+   "retried ⇒ a turn had already begun" is BACKWARDS. `no rollout found` is returned *because* no
+   turn has begun; a resume that had to retry was waiting for the first turn and therefore missed
+   NOTHING. The retry rule stands; the gap rule was factually false and is replaced.
+3. **Turn operations name the CLI's OWN turn id.** `Interaction.TurnRef` (ADR-010's companion
+   amendment) carries `params.turnId` machine-side, and `turn/steer`'s `expectedTurnId` and
+   `turn/interrupt`'s `turnId` are that value. Round 1 sent the daemon's 26-character ULID against
+   the server's UUIDv7 turn table: every mid-turn phone send was rejected by the precondition, and
+   `turn/interrupt`'s honest `no active turn to interrupt` was swallowed as benign, so a Stop that
+   stopped nothing reported success. A turn with no CLI-native id is REFUSED, never bridged.
+4. **A phone-answered approval is retired by the server's own broadcast.** The pending-request
+   table is split: answering consumes the ANSWERABILITY entry (so a request is answered once), and
+   only `serverRequest/resolved` consumes the id->ref mapping. Round 1 consumed both when the phone
+   answered, so the broadcast found nothing and the owner's card stayed live until the IS-LIFE-2
+   expiry sweep. The gate recorded the server broadcasting to the ANSWERING client, which is what
+   makes retirement-by-observation available on this ordering and not only the terminal-answered one.
+
+Also corrected: an agent `exec` failure now fires the backend's group kill before `Run` returns
+(§R7.2a's leak, reachable on the one exit that did not pass through finalization), and `Serve`
+gained `connectBackendsForRunning` beside `startHookDrainsForRunning` so a daemon restart rejoins a
+live backend or emits an honest `structured_gap` instead of tearing the structured plane silently.
+
+**Revision 4 (2026-08-20)**, after implementation review of R7 round 3. One root cause, three
+rulings. Revision 3's item 2 is struck above and replaced here; §R7.2e's "one measurement is owed"
+paragraph and §R7.7's case list are amended in place below.
+
+**The root cause.** The R1 gate RECORDED that `thread/resume` answers `no rollout found for thread
+id` until the thread's FIRST TURN starts (`r1-codex-gate.md:112-115`). This topology has the daemon
+join the thread at session LAUNCH, which is before any turn exists. Three mechanisms then compounded
+that into a broken ordinary path: a retry set `late=true` and the join emitted `structured_gap`
+reason `backend_joined_late` **on the success path**; the phone reads ANY gap as "no message sink"
+(`TranscriptPanel.kt:331` → `SessionDetailPanel.kt:770-772` → `Composer.kt:89-91`), so the composer
+disappeared; and the backend was registered only AFTER the resume succeeded, so until then
+`resolveMessageSink` found no backend and refused `structured_unsupported` — the phone could not
+start the very turn that would create the rollout. On an ordinary fresh launch the wave's exit
+criterion was structurally unreachable, and an owner who thought for 45 s got a PERMANENTLY degraded
+session while the app-server was perfectly healthy.
+
+1. **A join that missed nothing is not a gap.** `structured_gap` means "the transcript has a tear
+   that must never be silently bridged" (ADR-017). On a fresh launch there is no rollout because NO
+   TURN HAS HAPPENED, so a late join has missed NOTHING and a gap there is factually false.
+   **"Retried at least once" is no longer the test for lateness; "there is history I could not
+   read" is.** The FIRST resume attempt answers it exactly: a rollout that ALREADY EXISTS proves the
+   thread has already run at least one turn, and a client receives a thread's items only after it
+   resumes — so those turns are unread history. That is the `codex resume`-shaped session, and it
+   gets `structured_gap` reason **`backend_prior_history`** and **no durable degrade**: the tear is
+   in the HISTORY while the channel is healthy. Round 3's rule was exactly inverted — it gapped the
+   fresh session and stayed silent on this one.
+2. **The message sink is the CONNECTION, not the subscription.** The backend is registered as soon
+   as the connection is initialized and usable for `turn/start`; the thread SUBSCRIPTION is a
+   separate, possibly-pending concern that gates nothing. This breaks the deadlock by construction
+   and is the correct layering: the ability to SEND does not depend on having read history.
+   *Ordering:* a turn started before the subscription is live is still captured, because the
+   subscription retries and `thread/resume` on a RUNNING thread is a rejoin that delivers that
+   thread's live item stream (RECORDED: the R1 observer joined a turn already in flight and received
+   its 97 frames). The residual window is ~~one retry interval~~ **one retry interval at first and
+   up to the 5 s backoff ceiling thereafter (corrected in place 2026-08-20)**, and any item whose opening deltas fall
+   inside it is completed by `item/completed`, which carries the item's FULL text — so nothing is
+   permanently lost. Fenced by
+   `TestR7R4_AFreshLaunchNEVERGapsAndTheComposerDrivesTheThreadBeforeAnyTurnExists`.
+
+   > **The residual this ruling INTRODUCES, disclosed 2026-08-20 (pre-commit correction).** The
+   > ordering note above covers item CAPTURE only. It does not cover TURN DISPATCH, and there the
+   > same window has a second consequence that was not stated when the ruling was written.
+   >
+   > *The window.* It opens when `registerBackend` runs (`backendconnect.go:227`) and closes only
+   > once the subscription has landed **and** a frame naming the native turn has been shaped into
+   > the daemon's own turn state (`turnIDLocked`'s rejoin arm, `interaction.go:354`). Inside it the
+   > daemon holds a live message sink and **no turn id at all**.
+   >
+   > *The consequence.* `d.turnIDs[local]` is empty, so a phone `composer_send` carrying
+   > `expected_turn: ""` MATCHES the precondition and `deliverComposerText` takes the `turn/start`
+   > branch — **even when the terminal has already started a turn this daemon has not yet
+   > observed.** By this ADR's own rule (`chat.go:247`) a `turn/start` dispatched mid-turn queues a
+   > SECOND turn, so the owner's terminal question and the phone's message become two conversations
+   > on one thread. The corpus does not record the server's response to `turn/start` against a
+   > thread with an active turn (`errors-observed.json` holds three errors, none of them this), so
+   > whether it queues or refuses is UNPROBED; on either branch the phone was told the send
+   > succeeded.
+   >
+   > *What widens it.* Ruling 3's backoff. Retries start at 100 ms but double to a 5 s ceiling, so a
+   > session whose owner has been thinking sits at the ceiling and a terminal-started turn can go
+   > unobserved for **up to about 5 s** plus the time for its first shaped frame to arrive.
+   >
+   > *What the user would observe.* They start a turn at the terminal, send from the phone within
+   > that window, and the agent answers the phone's message as a separate turn after the terminal's
+   > rather than steering the one in flight.
+   >
+   > *Not narrowed, and why.* The only turn-naming frame that could reach an unsubscribed client is
+   > `turn/started`, and (a) the recorded corpus shows it only AFTER `thread/resume`, so there is no
+   > evidence it arrives pre-subscription at all, and (b) the Codex adapter shapes no interaction
+   > for it by design (`adapter/codex/interaction.go:140-148`), so reading it would mean sourcing a
+   > turn at the pump — which IS-ENV-1 reserves to the daemon and which would change `expected_turn`
+   > on an already-shipped wire. A synchronous `thread/resume` at send time cannot answer the
+   > question either: success proves only that a rollout EXISTS, which is equally true of an idle
+   > thread whose first turn has completed. `thread/read` is the only read that could name the
+   > active turn and its practical `itemsView` is **Q4**, unsettled. Narrowing this correctly needs
+   > a probe, not a patch; reverting Ruling 2 reinstates the deadlock and is not an option.
+3. **A healthy backend is never permanently degraded.** `markSessionDegraded` is ONE-WAY and DURABLE
+   and is reserved for a PROVEN structural gap. "No turn started within 45 s" proves only that the
+   owner is thinking, so it no longer degrades anything: the subscription retries **for the life of
+   the session**, bounded by the session's own backend registration (dropped by `endSession`, by
+   `noteBackendLost`, and by the loop's own hard-failure arm) with backoff doubling from 100 ms to a
+   5 s ceiling. A real loss still degrades honestly — an app-server that dies mid-session, and a
+   resume that fails for any reason OTHER than the recorded rollout race, both tear and say so.
+
+Also corrected in this revision: a frame that CANNOT reorder an open agentMessage fold no longer
+flushes it (§R7.4's arithmetic was measured against a pure delta stream that never occurs; at the
+RECORDED mix of ~1 lifecycle frame per 5 deltas the pump offered 9 records/s, above the 8 appends/s
+ceiling); every arm of `joinSessionBackend` and both arms of `watchSessionBackend` now have
+behavioural fences at the real call site, against a real WebSocket app-server, which is the absence
+that let both blockers survive three rounds.
+
+**One residual, stated rather than fixed.** The phone treats ANY `structured_gap` as "no message
+sink" and hides the composer. After the three rulings above no gap reaches it on the ordinary fresh
+launch, so the practical harm is gone; the conflation itself is real and wrong in general, and is
+filed as a follow-up rather than changed here — the R6 Kotlin is reviewed and these blockers are
+fixable daemon-side.
+
+**Where M4.2's "BATCHED 200 ms AT THE ADAPTER" actually lands.** Mirror M4.2's own words say the
+agentMessage deltas are batched *at the adapter*. They are not, and cannot be:
+`InteractionSource.Interactions` is required to be pure, total and stateless and `internal/adapter`
+is grep-fenced against every fd/socket/exec token, so a connection, a correlation table and a
+200 ms timer are three kinds of state a stateless strategy object may not hold. The batcher sits at
+the daemon's PRODUCER EDGE instead (`internal/skeleton/backend.go`), between the client's frame
+stream and `captureInteractions` — which is where the row's intent lands, because the coalescing
+still happens BEFORE AN ITEM EXISTS. This deviation is recorded here rather than only in a file
+header so a reader of mirror-program.md M4.2 does not go looking for a batcher in the adapter.
+
+**Amends**: decision 1's Codex row (which the 2026-08-15 amendment hardened from gated intention to
+decision, but which names a *channel* and not an *owner*), and decision 3's "Codex needs none of
+this" paragraph (`:175-176`), which is now given its positive form: what Codex *does* instead.
+**Companion**: the amendment of the same date to
+[ADR-010-adapter-structured-capture.md](ADR-010-adapter-structured-capture.md), which is where the
+one new optional adapter extension belongs — extending the frozen boundary is ADR-level work
+"regardless of whether the change is additive" (`ADR-010:16`), and that pre-commitment is ADR-010's,
+not this file's.
+**Evidence**: `docs/verification/r1-codex-gate.md`, `docs/verification/r1-codex-fixtures/`. Every
+frame shape cited below is a recorded file in that directory. Where the recording is silent this
+amendment says so in as many words and names the offline command or the realcli measurement that
+settles it; nothing here is inferred from an unrecorded frame.
+
+### R7.1 The binding question, and why the obvious answers are wrong
+
+A token-live Codex backend needs somebody to open a unix socket, perform an HTTP/1.1 WebSocket
+upgrade on `GET /rpc`, speak JSON-RPC in both directions, hold request/response correlation, and
+push item events at the daemon. ADR-001 gives every session's lifecycle to a shim; E9.2 and ADR-010
+§3 give the adapter descriptors and pure functions and **no fd**. Neither of the two obvious homes
+survives contact:
+
+- **Not the adapter.** `InteractionSource.Interactions(p HookPayload) []Interaction`
+  (`internal/adapter/interaction.go:258`) is required to be PURE and TOTAL, and `internal/adapter`
+  is grep-fenced against every fd/socket/exec token (`TestContractPackage_NoIOInSource`,
+  `boundary_test.go:23-30`). A connection, a correlation table and a 200 ms timer are three kinds of
+  state a stateless strategy object may not hold. Read literally, mirror-program.md M4.2's "batched
+  200 ms **at the adapter**" is not implementable; §R7.4 below is what that sentence means once it
+  is made legal.
+- **Not, wholesale, the shim.** The shim is the PTY plane, and decision 1 of this ADR makes that
+  plane sacred. A WebSocket JSON-RPC client is an unbounded parser of attacker-influenced bytes
+  (tool output, model prose, MCP catalogues — the R1 gate excluded a 3.8 MB `app/list/updated` frame
+  for exactly that reason) and its crash would take the PTY, the emulator and the transcript with
+  it. `internal/shim/hooksocket.go:44-52` already had to bound a DRAIN body for this reason, in as
+  many words: "permitting hundreds of megabytes of allocation inside the shim, the process that owns
+  the PTY (ADR-013's sacred plane)".
+
+### R7.2 Decision: the process is the shim's, the socket is the daemon's, and they are different things
+
+**(a) The app-server is a shim-owned CHILD with its OWN process group and its OWN containment.**
+`internal/shim.Config` (`shim.go:42`) gains a backend triple — the program plan to run, the socket
+path it must serve, and a readiness bound — and `Run` (`shim.go:97`) starts it *before*
+`pty.StartWithSize`, because `codex --remote unix://PATH` cannot attach to a socket that does not
+exist yet.
+
+**The rejected draft claimed the backend "joins the agent's existing TERM->grace->KILL containment
+(`shim.go:139-146`)". That claim was false and is retracted.** Every kill on that path is
+`syscall.Kill(-s.pgid, ...)` (`internal/shim/server.go:291,293,309,331`) and `s.pgid` is the AGENT's
+group — documented at `server.go:59` as "agent process-group id (== agent pid; it leads its own
+group)" and pinned by `internal/shim/spawn_test.go:175-191`, which asserts the agent's pgid equals
+its own pid AND differs from the shim's. A sibling `exec.Cmd` started by the shim inherits the
+SHIM's group, so all four of those kills miss it, and `cmd.Wait()` (`shim.go:228`) waits the agent
+only, so it is never reaped either. `Run` would have returned leaving a live app-server behind.
+
+The backend therefore gets containment of its own, and it is a `shim.Config` + `shim.Run` +
+`shim/server` change, not an implementation detail:
+
+1. **Its own group.** The backend is started with `SysProcAttr{Setpgid: true}`, so its pid leads its
+   own group and the node launcher plus the vendored rust binary the R1 gate recorded as two pids
+   (`r1-codex-gate.md:66-72`) both go with it.
+2. **Its own escalation.** `server` gains `backendPgid int` (0 == none). `onSignal`, the escalation
+   worker, and `finishEscalation` each signal BOTH groups — agent first, backend second, one
+   `syscall.Kill(-backendPgid, ...)` beside each existing `syscall.Kill(-pgid, ...)`. The grace
+   window is shared; there is no second timer.
+3. **Its own Wait.** A dedicated goroutine holds `backendCmd.Wait()`. It is JOINED at finalization
+   *after* `finishEscalation` has issued the final group KILL, which is what guarantees the join
+   returns rather than blocking `Run` behind a backend that ignores TERM. This mirrors the
+   escalation worker's own cancel-and-join discipline.
+4. **Its own arm-before-spawn.** The signal handler is already armed before the agent spawns
+   (`shim.go:126-131`); the backend is spawned *inside* that armed window, so a SIGTERM arriving
+   between backend spawn and agent spawn contains the backend too.
+
+Fence, by mutation: delete the `-backendPgid` kill from `finishEscalation` and a permanent test that
+spawns a TERM-ignoring backend under a shim and asserts the pid is gone after `Run` returns must
+fail. Fence 2: delete `Setpgid` and the same test must fail, because a backend in the shim's group
+is signalled by the daemon's own containment of the shim only, which is exactly the accident this
+rule refuses to rely on.
+
+Readiness is the SOCKET and never the process streams: R1 leg 1 recorded that app-server's stdout
+and stderr stay **empty for the entire session**, so a supervisor that watched them would watch
+nothing (`r1-codex-gate.md:75-79`).
+
+**(b) The socket lives in the session state dir**, `<session-dir>/codex.sock`, sibling of `hook.sock`
+(`internal/daemon/launch.go:154`), and the *intent* to run one is persisted in the 0600
+`shim-launch.json` under a new `backend_socket_path` key, on `HookSocketPath`'s exact
+**unset-means-disabled** convention (`launch.go:123-125`, `SessionHookChannel`'s `:173-190`). An
+absent key means "this session was launched without a backend" and is never a defect.
+
+**(c) A servable socket is NOT a liveness fact, and the SIGKILL residual is worse here than for the
+agent.** The agent's documented last-resort residual (an uncatchable SIGKILL of the shim) is bounded
+in practice by the PTY: the master closes, the agent takes SIGHUP/EIO. The app-server has no PTY, no
+controlling terminal, and writes to neither stream ever, so a SIGKILL of its shim leaves a process
+authenticated to a real ChatGPT account alive indefinitely, still serving `<session-dir>/codex.sock`
+— and still looking *healthy* to any rule whose readiness test is "the dial succeeded". A restarted
+daemon would rediscover the path, redial, and report a session live whose agent died hours ago. That
+is the one place this topology is qualitatively worse than the agent's residual, and it is closed by
+recording a fact rather than probing a symptom:
+
+- The shim writes `<session-dir>/backend.json` (0600) the moment the backend's socket is servable:
+  `{"pid": N, "pgid": N, "started_at_ms": …, "socket_path": "…"}`. It is a shim-authored side-file
+  beside `exit.json` and `final-snapshot.bin`, for the same reason those are: the daemon cannot know
+  a pid it did not spawn.
+- **Liveness is (pid alive AND its start-time matches AND the owning shim is live)**, checked with
+  the same `procStartTimeFn` (PID, start-time) pair reconcile already matches shims by (S1/L2,
+  `launch.go:415-425`). Two of the three are new facts; the third is the one that matters, because
+  an app-server whose shim is gone is by construction an orphan: nothing will ever reap it and no
+  agent is attached to it.
+- **The orphan reaper is named**: `Daemon.reapOrphanBackend(id)`, called from **BOTH paths on which
+  a shim's death becomes known**. For a session whose shim is not live, if `backend.json` names a
+  live pid whose start-time matches, it issues one `syscall.Kill(-pgid, SIGKILL)` and removes the
+  file. It never dials.
+  - `reconcileRunning`'s orphan arm — a shim that died while NO daemon was watching, discovered at
+    the next `swarm daemon restart`.
+  - `handleShimExit` — a shim that died while THIS daemon was up, which is the more common half and
+    which round-3 review found open (`superviseLaunched`/`pollMonitor` marked the session LOST and
+    reaped nothing, and reconcile skips any session no longer persisted RUNNING, so no later restart
+    revisited it either; PROBED: the recorded backend pid was still alive afterwards). It is a no-op
+    on every ordinary end, because the shim's own TERM→grace→KILL contains its backend and `Run`
+    joins it before returning — by the time the shim process is gone its backend is already reaped,
+    and the reaper finds a dead pid and merely removes the stale record. It kills only in the case
+    the shim could not act on: an uncatchable signal.
+- **Reconcile never adopts a backend it did not prove live by pid.** A dial that succeeds against a
+  pid that does not match `backend.json` is an unrelated process on a reused path and is refused.
+
+Fence, by mutation: make the liveness check `dial(socketPath) == nil` and a permanent test that
+leaves a live process serving a stale socket with no matching `backend.json` must fail.
+
+**(d) The JSON-RPC client is DAEMON-owned, in a new core package `internal/appserver`.** It holds
+the connection, the request-id correlation, the server-request table and nothing else; it imports
+neither `internal/adapter` nor `internal/daemon`. **No new dependency is required**: the repo already
+carries `github.com/coder/websocket v1.8.13` as a direct dependency and already dials a WebSocket
+over a caller-supplied `http.Client` at `internal/remote/relay/client.go:220-234`, which is exactly
+the shape a `net.Dial("unix", …)` transport plugs into. The **per-session pump is assembled in
+`internal/skeleton`**, beside `HookDrainer` and the interaction producer, for their stated reason
+verbatim: skeleton is the one package that already imports the adapter contract, the core daemon,
+the protocol and the gateway (`internal/skeleton/interaction.go:6-13`, `hookdrain.go:20-24`), and
+the pump is the only thing that touches all four of {client, adapter, engine, producer}.
+
+**(e) The spawn-ordering handshake, which is the one NEW mechanism this topology needs.** The
+rejected draft preferred "the daemon calls `thread/start` and owns the thread id before the TUI
+attaches" and had no way to build it: the shim starts the backend and then immediately spawns the
+agent, and the daemon is not in that loop — `launchConfirmTimeout` (`launch.go:109,449`) waits for
+the shim's CONTROL socket, which is bound at `shim.go:116` *before* either. There is no edge the
+daemon can act on. The stated fallback (the daemon connects before the shim spawns the agent) has
+the same defect and is strictly worse, because leg 1 recorded the socket appearing "within ~3 s" and
+that 3 s is the entire window a poller would have to win.
+
+**Decision: the shim GATES the agent spawn on a daemon go-ahead, over the per-session control socket
+that already exists.** Concretely:
+
+| Step | Actor | What |
+|---|---|---|
+| 1 | shim | bind control socket (unchanged, `shim.go:117`) |
+| 2 | shim | spawn backend in its own group; wait for the socket to be servable, bounded by `Config.BackendReadyTimeout` |
+| 3 | shim | write `backend.json` (§R7.2c) |
+| 4 | shim | **block** in `waitBackendGoAhead(Config.BackendGoAheadTimeout)` |
+| 5 | daemon | `waitShimServing` returns; read `backend.json`; dial; `initialize`/`initialized` |
+| 6 | daemon | optionally `thread/start` (see below); send `backend_attach{agent_args}` on the control socket |
+| 7 | shim | append `agent_args` to the agent argv verbatim; `pty.StartWithSize` |
+
+`backend_attach` is one new `shimwire` control verb, and `Config` gains two bounded timeouts. The
+timeouts are what keep this from being a new way to hang: **a go-ahead that never arrives spawns the
+agent anyway** at the deadline, degraded to the fallback below, and the shim logs which path it took.
+A backend that never becomes servable is a launch failure for the backend only — the agent still
+spawns, with no `--remote`, and the session runs exactly as a pre-R7 Codex session does, plus a
+`structured_gap` (§R7.7).
+
+**What the handshake buys, and what is still unrecorded.** It buys the guarantee that matters
+unconditionally: the daemon is connected as a client **before the agent process exists**, so no
+`thread/started` notification can be missed and the 15-17 s rollout race the gate hit never occurs at
+cold start. Whether the daemon ALSO pre-creates the thread with `thread/start` and hands its id to
+the TUI through `agent_args` depends on a flag that is **NOT RECORDED** — the gate ran
+`codex --remote unix://SOCK` and the TUI created its own thread. That question now degrades cleanly
+instead of changing the topology: with the flag, `agent_args` carries it and the daemon owns the
+thread from birth with no `thread/resume` at all; without it, `agent_args` is empty and the daemon
+learns the id from `thread/started` and joins with `thread/resume`.
+
+**One measurement is owed before the no-flag path is relied on.** The rejected draft called the join
+window "wide" on the basis of the recorded ~2.1 s from `turn/start` to first delta. That is the wrong
+quantity. The one that binds is **rollout-to-resume**: how long after the thread's first turn starts
+does `thread/resume` stop returning `no rollout found for thread id` (`errors-observed.json`)? The
+gate's 15-17 s is boot-to-resume and does not answer it. R7 MUST measure rollout-to-resume under the
+realcli gate (`//go:build realcli`, `SWARM_REALCLI=1`, isolated `CODEX_HOME`) and record the number,
+before any claim that the first turn is joinable. ~~If it exceeds the first turn's duration, the
+no-flag path emits a `structured_gap` for the first turn rather than pretending to have seen it.~~
+
+> **Amended, revision 4 (2026-08-20).** The struck sentence made the gap a function of the WAIT, and
+> that is the false rule round 3 shipped: the wait exists because no turn has started yet, so a join
+> that waits misses nothing. The measurement is still owed — it bounds how much of a first turn's
+> *opening* can fall outside the subscription — but it can no longer produce a gap by itself. What
+> the window costs is bounded and recoverable instead: the subscription retries, `thread/resume` on a
+> running thread delivers that thread's live stream, and any item whose opening deltas fell inside
+> the window is completed by `item/completed`, which carries the item's FULL text. A gap is emitted
+> only for history that CANNOT be recovered — a thread that had already run turns before the daemon
+> joined (`backend_prior_history`, §R7.7).
+
+**(f) Two clients, deliberately, and only two.** The daemon is a *second* client of the same thread —
+which is precisely what R1 leg 3 proved is safe (97 frames delivered to an observer with the TUI
+still fully functional, `r1-codex-gate.md:93-119`). The TUI is the first. Swarm opens no third.
+
+### R7.3 How the events reach the InteractionSource seam without making the adapter impure
+
+The pump calls the SAME function the hook path calls —
+`Daemon.captureInteractions(sessionID, ad, adapter.HookPayload{…})`
+(`internal/skeleton/interaction.go:187`) — with:
+
+| Field | Value | Why |
+|---|---|---|
+| `Event` | the JSON-RPC **method** (`item/agentMessage/delta`, `turn/completed`, …) | the same slot `cb.Event` fills for a hook; the adapter dispatches on it |
+| `Raw` | the **whole frame, verbatim as recorded** | makes `r1-codex-fixtures/frame-samples.json` literally the golden vector set, which is ADR-010's own stated benefit of reusing `HookPayload` (`ADR-010:59`) |
+| `ReceivedAtMs` | the daemon's receipt instant of the **first** frame folded into this payload | timestamps are daemon-side (ADR-010 §3); a batched delta's honest capture instant is its earliest content's, per `shapeItem`'s own rule (`interaction.go:238-241`) |
+
+`HookPayload`'s name is already documented as historical — "it carries any captured event body, hook
+or JSON-RPC" (`ADR-010:59`). Nothing about the seam changes. The adapter gains a pure
+`Interactions` arm per recorded method and returns normalized fields and nothing else; ids,
+ordering, the turn, caps, redaction, hashing, expiry and transport stay exactly where ADR-010 §3 put
+them. `Ref` is `params.itemId`, which is what folds successive `agentMessage` deltas under one
+`item_id` (`itemIDLocked`, `interaction.go:307`) — the adapter is still the only party that sees the
+CLI's own id, and the daemon still consumes it before the wire.
+
+**Typed status (M4.5) does NOT ride `engine.HandleCallback`.** The rejected draft routed it there and
+justified the reuse with a sequence-namespace claim that inverts the actual property: sharing one
+counter between two allocators is safe only because `hookclient.nextSequence` takes `LOCK_EX`
+(`internal/hookclient/hookclient.go:116-128`), not because the file is the same. And the consequence
+of getting it wrong is a silent DROP, not a warning — `hookSeqDuplicate` discards the callback and
+`ingestHookBytes` errors (`internal/skeleton/hookdrain.go:73-81`) — while `markHookSeqIngested`
+fsyncs a durable seen-set per callback (`hookdrain.go:289-315`), which is tolerable at
+turn-lifecycle rates and fatal if item frames ever reach it. More basically, the daemon does not need
+to authenticate to itself: the token check, the durable replay set and the on-disk counter buy
+nothing an in-process producer does not already have.
+
+**Decision: a direct engine seam.** `Engine.ApplyTypedEvent(sessionID, event string, payload
+map[string]string) error` performs exactly what `HandleCallback` does *after* the token check —
+`deriveDims` -> `withChildrenHoldingTheTurn` -> `withoutPostStopReactivation` -> `applyTyped` ->
+`commit` -> `emit` — with the sequence drawn from a per-session **in-memory** monotonic counter the
+engine allocates under `e.mu`. `applyTyped`'s per-dimension high-water is retained (it is what
+rejects a stale reorder and is real value); the fsync, the token and the durable seen-set are not.
+Frames arrive in order on one WebSocket connection, which is what makes an in-memory counter
+sufficient.
+
+**Single-writer is enforced, not assumed.** A session with a declared backend is registered with **no
+hook token and no hook env injection** (`injectHookEnv`, `launch.go:499`, becomes conditional).
+`HandleCallback` already refuses a callback whose token is empty or mismatched
+(`engine.go:281-284`), so a backend session cannot have two typed producers competing for one
+high-water namespace. This costs Codex nothing: its typed rows have never fired (the D1 debt,
+`codex.go:39-45`), so there is no working hook path to lose. Fence, by mutation: mint a hook token
+for a backend session and a permanent test asserting the two producers are mutually exclusive fails.
+
+### R7.4 Where the 200 ms batching sits, and the append arithmetic redone against the SHARED slot
+
+The batcher is a field of the **pump**, in `internal/skeleton`, between the client's frame channel
+and `captureInteractions`. It is not in the adapter (purity), not in the gateway (too late — the
+record already exists, and `ItemAdmission` is already there), and not in the shim (the PTY plane).
+That is the only reading of M4.2's "at the adapter" that is legal, and it is faithful to the intent:
+the coalescing happens **at the producer edge, before an item exists**, which is where the program
+put it.
+
+Rules, all fenceable by mutation:
+
+1. Consecutive `item/agentMessage/delta` frames for one `(session, itemId)` are folded into ONE
+   synthesized frame carrying the **concatenation** of their `delta` strings and the last frame's
+   other fields — the same method name, the same shape as
+   `r1-codex-fixtures/frame-samples.json`'s recorded delta frame. It is exactly the frame the server
+   would have emitted had it chunked more coarsely; no shape is invented.
+2. **200 ms flush, or earlier on an ordering boundary.** An open batch is flushed *before* any other
+   frame for that session is emitted, so ordering is never disturbed. Session end flushes.
+3. **Approvals bypass the batcher entirely.** `item/*/requestApproval` is emitted the instant it
+   arrives, mirroring IS-DELTA-3's head-of-queue rule one layer up.
+
+**The arithmetic. There are TWO 125 ms floors, and the rejected draft's numbers were right only at
+N=1.** R1 leg 4 recorded **586 `item/agentMessage/delta` frames in one turn** over roughly 14 s —
+about 42 frames/s (`r1-codex-gate.md:104-105,208-209`). Batching at 200 ms turns that into **<= 5
+offered records/s for that session**. That much stands. What does not is what happens next:
+
+- `remotegw.ItemAdmission` (daemon-side) releases at most one item record per `DefaultAppendWindow`
+  = 125 ms, machine-wide, merging the surplus losslessly by text concatenation within one `item_id`.
+- `remotegw.CoalescingSink` (gateway-side) is a **second, independent** floor of the same width, and
+  it states in as many words that it "IS THE ONE PLACE THE COMBINED CEILING CAN BE ENFORCED", because
+  an `ItemAdmission` release arrives there as a journal record and is "charged to the same slot as a
+  snapshot" (`internal/remotegw/coalesce.go:36-45`).
+- Journal records are **forwarded immediately and may never be coalesced or dropped** (R-GW.5,
+  `coalesce.go:46-49`), but they still SPEND the slot. Terminal snapshots are held oldest-first
+  behind it.
+
+So at N=3 streaming Codex sessions the rejected draft's own worst case offers 15 records/s,
+`ItemAdmission` releases 8/s, and those 8 consume **all eight** of `CoalescingSink`'s slots per
+second, leaving the terminal plane exactly **zero**. "Nothing is dropped" is true of items and false
+of the guarantee `DefaultAppendWindow` exists to protect (`coalesce.go:11-16`, PB-GW-7): a live peek
+freezes on a stale grid for as long as the sessions stream. Even at N=1 the honest statement is 5/8
+of the budget, not "the terminal plane can breathe" as a general claim.
+
+**Decision: split the target budget explicitly instead of letting the two planes race for it.**
+`ItemAdmission`'s floor widens to a new constant `DefaultItemWindow = 250 ms` (<= 4 item releases/s
+machine-wide), leaving >= 4 snapshot slots/s for the terminal plane at every N. The adapter-edge
+batch window stays a flat 200 ms — its job is to stop 42 frames/s from ever reaching a serialize, a
+cap pass and a queue slot, not to enforce the ceiling — so no adaptive-in-N window is introduced and
+no new state is added anywhere.
+
+**Widening the item floor is safe precisely because the merge is lossless.** `ItemAdmission` merges
+what it holds by text concatenation within one `item_id` (ADR-010 §7); a wider window merges MORE and
+loses nothing. The cost is latency and only latency, and it is stated rather than left to be
+discovered:
+
+| Streaming sessions | First token to glass |
+|---|---|
+| N = 1 | <= 200 ms (batch) + <= 250 ms (item floor) + <= 125 ms (gateway slot) + transport |
+| N sessions | <= 200 ms + N x 250 ms (the item floor queues) + <= 125 ms + transport |
+
+The playbook's <= 300 ms p95 budget is measured from *accepted item* to *visible update* and so
+excludes the first two terms, but a reader of this ADR should know the whole number. At N = 3 that is
+roughly 1.1 s to first token, against a terminal peek that stays live at 4 snapshots/s.
+
+**The owner ruling this asks for, stated as a knob and not as a hidden default.** `DefaultItemWindow`
+is the single constant that trades multi-session token latency against terminal-peek liveness. 250 ms
+splits the budget evenly. If the owner prefers token latency, lowering it toward 125 ms restores the
+rejected draft's numbers and, at N >= 3, restores the frozen peek. R7 ships 250 ms and records the
+choice; it does not ship a number computed as if the second floor were not there. Fence: the existing
+`internal/remotegw/append_budget_test.go` gains an N-session case asserting that terminal snapshots
+still reach the sink while item records are being released — mutate `DefaultItemWindow` back to 125 ms
+and it must fail.
+
+Claude is affected too, and the effect is small: `PreToolUse` + `PostToolUse` is two appends per tool
+call, so the floor binds above roughly 2 tool calls/s machine-wide instead of 3, and merges there
+rather than drops.
+
+### R7.5 Inbound: one op, per-CLI dispatch, and no keystroke ever
+
+**This is the correction of a live defect, not only new work.** `Daemon.composerSend`
+(`internal/skeleton/chat.go:113`) resolves the session, checks `expected_turn`, and calls
+`injectComposerText` (`chat.go:227`) — which writes the text and a CR into the PTY — for **every
+provider, with no seam and no provider check anywhere on the path** (`protocol/remote_chat.go:108`,
+`remotegw/command_loop.go:930`, `skeleton/chat.go:185`). A phone send to a Codex session today types
+into the Codex TUI. That is the thing playbook §8.2 forbids in as many words ("No Codex semantic
+operation is implemented by terminal keystroke injection") and it is reachable now, before any R7
+code. R7 must close it, and must close it **structurally** rather than by naming `codex` in the
+daemon:
+
+- `composer_send` resolves a **message sink** per session instance: a live backend client ->
+  `turn/start` when the daemon's turn is empty, `turn/steer` when it is not, carrying the native
+  `expectedTurnId` (recorded: `turn-steer.json` returns the unchanged turn id, which is the
+  built-in optimistic-concurrency guard R1 note 4 says to propagate rather than reinvent). No
+  backend -> the adapter's keystroke seam, **if it proves one**. Neither -> refuse
+  `structured_unsupported`, having typed nothing.
+- The keystroke composer therefore becomes an **explicit optional adapter seam**, exactly like
+  `TurnInterrupter` (`internal/adapter/interaction.go:319-338`), so that **absence is the refusal**.
+  Today it is an unconditional `sub.Input([]byte(text))` with no seam to be absent from, which is
+  precisely why it reaches Codex. The Codex adapter implements no such seam and never will, so the
+  fallback is structurally unreachable for it — ADR-010 §5's posture doing the work a provider name
+  would otherwise have to do.
+- `turn_interrupt` takes the same two-branch shape: backend -> `turn/interrupt` (recorded:
+  `turn-interrupt.json` returns `{}` and `turn-completed-interrupted.json` carries
+  `"status": "interrupted"`); else `AsTurnInterrupter`; else `interrupt_unsupported`. An interrupt
+  of an already-finished turn returns `{"code":-32600,"message":"no active turn to interrupt"}`
+  (`errors-observed.json`) and is **benign**, not an error surface: the daemon's own `stale_turn`
+  precondition (`chat.go:340-350`) already refuses that case before the RPC is sent.
+- **Approvals (M4.3)** get the native branch `approveInteraction` does not have today: it falls
+  straight through to `applyDecision` -> `dialogTap` -> `ApprovalKeys` -> PTY
+  (`skeleton/approval.go:538`, `skeleton/inject.go:73-124`), and Codex is saved from being typed at
+  only because `AsApprovalApplier` is false and the whole thing refuses `errNoApplier`. R7 branches
+  on the backend first and calls `InteractionSource.Decision(ref, decisionID)` — which **has no
+  production caller anywhere in the repo today**, a fact worth stating plainly — and writes its
+  `DecisionAction.Reply` as the JSON-RPC response. Two properties fall out and both are recorded:
+  the reply must go out on **the daemon's own connection with the id that connection received**
+  (JSON-RPC ids are per-connection; the pending request is matched by `params.itemId`, which
+  `approval-request.json` carries), and **resolution still arrives only by observation** — here as
+  the server's own `serverRequest/resolved` broadcast, which is strictly better evidence than the
+  grid observation decision 3 step 3 settles for on Claude. First-answer-wins is server-side, so the
+  daemon guesses nothing when the owner answers at the terminal.
+
+**Decision 3's Codex paragraph (`:175-176`) is re-affirmed and given its positive form**: no
+keystroke is ever injected on a Codex session — not for an approval, not for a message, not for an
+interrupt — and after R7 that is enforced by the absence of a seam rather than by the accident of an
+unimplemented interface.
+
+**The composer ECHO correlation is decided here too, because the backend branch can do better than
+the mechanism it inherits.** Today `composerSend` records a `pendingSend` and
+`stampComposerEchoLocked` claims the echo by **text** within a 10 s TTL (`chat.go:52-78,259+`) — a
+mechanism whose own comment records a PROBED mis-attribution, an owner-typed "yes" stamped
+`source=phone` with the phone's operation id. Claude cannot do better: its `UserPromptSubmit` hook is
+the only echo and it carries no injection id. **The backend branch can, and must.**
+
+- The Claude path is UNCHANGED. `stampComposerEchoLocked`, its TTL and its 8-deep FIFO stay exactly
+  as they are.
+- On a backend session the text path is **not reached at all**. A `pendingSend` is keyed by the RPC
+  reply's own identifiers: `turn/start` returns the `turnId` (recorded), and the stamp is applied to
+  the first `item/userMessage` observed on that turn.
+- For `turn/steer`, whether the reply carries the steered message's own `itemId` is **NOT RECORDED**
+  (`turn-steer.json` records only the unchanged turn id). Settle it offline with
+  `codex app-server generate-ts --out <dir>`. If it does, the stamp is exact. If it does not, the
+  fallback is the first `item/userMessage` observed on **that turn** after that steer, within
+  `pendingSendTTL` — still scoped to a turn the daemon itself started, which is strictly narrower
+  than machine-wide text matching, and it is recorded as a residual rather than claimed exact.
+- What is NOT shipped: text correlation on Codex. R7 does not carry a known attribution defect onto
+  a new provider.
+
+**One recorded contradiction, flagged rather than resolved here.** ADR-010 §5 records Codex's
+decision vocabulary from spike S-B as `accept | acceptWithExecpolicyAmendment | cancel`
+(`ADR-010:70`); R1 leg 4 recorded `accept | acceptForSession | decline | cancel` against
+codex-cli 0.147.0. These disagree, almost certainly by version. The vocabulary is per-version
+characterization data and must be re-recorded, not chosen: settle it offline with
+`codex app-server generate-json-schema --out <dir>`, and let the fixture be the source.
+
+### R7.6 Lifecycle: daemon restart, the app-server's OWN crash, and CLI upgrade
+
+**Daemon restart / upgrade.** Shims and their app-servers survive it (ADR-001). On reconcile the
+daemon proves the backend live by pid (§R7.2c) before it dials, then `initialize`/`initialized`, and
+rejoins the thread it recorded at launch. **A successful rejoin is not a proven gap** and MUST NOT
+degrade the session: `markSessionDegraded` (`internal/skeleton/capability.go:250`) is one-way and
+durable, so a rule that degraded on every daemon restart would permanently remove the composer from
+every live Codex session on the first `swarm daemon restart` — the operation ADR-001 exists to make
+ordinary. A gap is emitted only when the rejoin fails, or when the interval demonstrably cannot be
+backfilled.
+
+**What backfills it is not fully recorded, and this is the largest open mechanical question in R7.**
+`turn/completed` carried the turn's `items` in one recorded sample (`frame-samples.json`,
+`itemsView: "summary"`) and an EMPTY array in another (`turn-completed-interrupted.json`,
+`itemsView: "notLoaded"`), and `thread/started` advertises `historyMode: "paginated"`. So an
+ordered, resumable item read plausibly exists (`thread/read` is in the client-request inventory) and
+its shape was never captured. **Settle it offline, before writing the reconnect path**:
+`codex app-server generate-json-schema --out <dir>` and `codex app-server generate-ts --out <dir>`
+give `ThreadReadParams`, the `ItemsView` union and whether `itemsView` is client-selectable. If a
+lossless backfill exists, reconnect is silent; if it does not, reconnect emits an honest
+`structured_gap` and ADR-017 T2's degrade applies — never a silent bridge.
+
+**The app-server's OWN crash — the one lifecycle event this topology introduces, and which the
+rejected draft did not cover.** Under `codex --remote unix://SOCK` the TUI is a CLIENT of the
+app-server: R1 leg 2 recorded its whole boot handshake, model resolution and MCP boot going through
+the server. So if the app-server dies mid-session the owner's terminal is **dead, not merely
+unmirrored**, and a swarm-launched Codex session is strictly less reliable than a hand-run `codex`.
+That is a regression on the terminal product bought with the phone product, and it is stated as one:
+
+- **No restart, in R7.** A restarted app-server has no thread state and the TUI's connection is
+  already broken, so a restart would buy the live session nothing while adding a supervision policy
+  with no recorded behavior to test against.
+- **The shim contains the session rather than leaving it hung.** If the backend exits before the
+  agent, the shim immediately runs the agent's existing TERM->grace->KILL, so the owner gets a clean
+  session end instead of a TUI wedged against a dead socket. This is the same escalation path, fired
+  from a new edge (the backend's `Wait` returning first), which is why §R7.2a's dedicated `Wait`
+  goroutine exists as a first-class thing and not as a reaper afterthought.
+- **The exit is distinguishable.** `exit.json` gains a `backend_exit` field, so "the Codex backend
+  died" is never reported as an unexplained agent exit. A `structured_gap` covers the un-backfillable
+  tail before the session goes to exited.
+- **This needs an owner ruling and R7 must not proceed as if it had one.** The accepted trade is: a
+  swarm-launched Codex session has two failure points instead of one, in exchange for token-live
+  chat and native approvals. The alternative if the owner refuses is not a different supervision
+  policy — it is not using `--remote` at all, which is R7 not shipping. The ruling is therefore real
+  and belongs to the owner, not to the implementer.
+
+**Codex CLI upgrade under a live session.** The running app-server keeps running; only a new session
+gets a new binary. `SessionCapabilities.ProviderVersion` is already per-session-instance
+(`internal/protocol/schema/capability.go:13`). Frame-shape drift is caught the way ADR-010
+obligation 4 already requires — per-version recorded fixtures — and degrades safely by construction:
+an unrecognized method shapes **zero** interactions rather than a guess, and the grid heuristic is
+still declared, so status falls back to what it does today instead of going dark.
+
+### R7.7 Capabilities: an HONESTY dependency, not a safety gate; and what a dead backend says
+
+The rejected draft said "R7 must not ship the composer branch without" the capability-publication
+slice (`agents-tracker-hggx.2.1`). That is wrong in both directions and is restated here.
+
+**On SAFETY it was over-stated.** Safety comes entirely from §R7.5's sink resolution: no backend and
+no keystroke seam means REFUSE, having typed nothing. That is sufficient on its own, and
+`requireStructuredComposer` cannot help at all — `registerSessionCapabilities` has **no production
+caller** (`capability.go:88-100`, restated at length in `chat.go:185`'s own KDoc), so no live session
+has a record and the only reachable arm is the durable degrade marker. **R7 may ship the composer
+branch without the capability slice.**
+
+**On HONESTY it was under-stated, and this is the real dependency.** The phone's composer
+availability reads `structured_gap` off the transcript (`SessionDetailPanel.kt:763-772`:
+`structuredChat = !transcript.structureTorn`), not a capability record. So a Codex session whose
+backend is dead or was never connected still SHOWS a composer, the owner types, and the refusal
+arrives *after* the tap. ADR-017 T2 wants that surfaced before it.
+
+**Decision: yes, a dead-or-never-connected backend on a Codex session emits a `structured_gap`, and
+the three cases are distinguished so the one-way degrade is never fired on a recoverable one.**
+
+1. **Never connected.** The backend was declared in the launch config and its socket never became
+   servable, or the daemon could not dial it at launch-confirm. This session will never have a
+   structured plane: emit `structured_gap` with reason `backend_unavailable` at launch, and degrade
+   durably. The composer is correctly off before the first tap.
+2. ~~**Transient (daemon restart, rejoin succeeds).** No gap, no degrade — §R7.6's rule, which exists
+   precisely so `swarm daemon restart` does not permanently disarm every Codex composer.~~
+   **Amended in place, 2026-08-20 (pre-commit correction).** The decision is UNCHANGED — no gap, no
+   degrade — but the struck text left its cost unstated, and the implementation comment justifying
+   it asserted something FALSE: that "this thread's earlier turns were captured by the daemon that
+   launched it". They were not, for the daemon-downtime window. The agent keeps working against the
+   surviving shim while no daemon is attached; those turns are recorded in the app-server's own
+   rollout and are absent from the journal, because a client receives a thread's items only from
+   the point it resumes. **A successful rejoin therefore SILENTLY BRIDGES every turn that ran while
+   the daemon was down**, which is the one thing ADR-017 says a transcript may not do.
+   *Why the behaviour still stands:* the phone derives its composer from
+   `structuredChat = !transcript.structureTorn` and reads ANY `structured_gap` as "no message sink",
+   so gapping honestly here would remove the composer for the WHOLE session on every
+   `swarm daemon restart` — the operation ADR-001 exists to make ordinary — and would trade a
+   history tear for a capability loss. The conflation is the real defect and is filed as its own
+   bead. *What would close it:* backfill the missed interval with `thread/read {includeTurns:true}`
+   and gap only what the backfill cannot recover — **ADR-013 Q4**, open because the `itemsView` that
+   call returns in practice is unrecorded and a `summary` view is lossy for a long turn.
+   Implementation: `internal/skeleton/backendconnect.go`'s `rejoinSessionBackend`, whose comment now
+   says all of this.
+3. **Died mid-session.** §R7.6 ends the session; a `structured_gap` covers the tail so history is
+   honest about what was not captured.
+
+> **Amended, revision 4 (2026-08-20) — a fourth case, and one non-case.**
+>
+> 4. **Joined a thread that had ALREADY RUN TURNS.** The rollout file existed at the first
+>    `thread/resume`, which proves a turn had already happened, and a client receives a thread's
+>    items only after it resumes — so this daemon's transcript begins mid-conversation. Emit
+>    `structured_gap` reason `backend_prior_history` and **do not degrade**: the tear is in the
+>    history, the channel is healthy, and `markSessionDegraded` is reserved for a proven loss of the
+>    plane itself.
+>
+> **NOT a case: a subscription that is still pending.** A fresh thread has no rollout because no
+> turn has started. That is not a gap, not a degrade and not a failure — it is the ordinary state of
+> every Codex session between launch and the owner's first message. The connection is registered as
+> the message sink regardless (revision 4 ruling 2), so the composer works and the first turn is what
+> ends the wait. Round 3 answered this state with `backend_joined_late` plus
+> `markSessionDegraded`, which removed the composer from every ordinary healthy session — a
+> ONE-WAY, DURABLE verdict founded on the owner having taken 45 s to think.
+
+The capability derivation defect the rejected draft found is REAL and stands, and it is now the
+capability slice's obligation rather than R7's precondition: `deriveSessionCapabilities`
+(`capability.go:333-334`) derives `structured_chat` from `adapter.AsInteractionSource(a)` — a fact
+about the **adapter TYPE**. The moment the Codex adapter implements `InteractionSource`, a
+pre-upgrade Codex session with no backend at all would claim `structured_chat=true`. It must become
+**seam AND live backend, per SESSION INSTANCE**. The same correction applies to `Interrupt`, derived
+from `AsTurnInterrupter`, which would read `false` for a Codex session whose RPC interrupt works
+perfectly. R7 lands the derivation change with its backend fact available; the publication of those
+records stays with `agents-tracker-hggx.2.1`.
+
+**M4.5 and the grid heuristic.** `internal/adapter/codex/codex.go:39-45` already declares
+`turn/started`->active, `turn/completed`->idle and `item/commandExecution/requestApproval`->permission,
+with the file's own header recording that the producer is deferred (the D1 debt). M4.5 pays that debt
+by **building the producer** (§R7.3's `ApplyTypedEvent`), not by changing the mapping. **The heuristic
+row STAYS**: `internal/engine` already ranks a fresh typed signal above the heuristic within
+`StalenessThreshold` and *preserves* prior status on an inconclusive read (`engine.go:11-12,330-361`),
+so the two sources cannot fight; `evaluateCodexGrid` is the T-3 fallback ADR-007 requires and the only
+thing that keeps a pre-R7 session working; and
+`TestSignalSources_DeclaresTypedEventsWithStatusMapping` (`codex_test.go:184`) fails outright if the
+row is removed. **Two rows should be added, both from recorded frames**: `item/fileChange/requestApproval`
+— the approval the gate actually captured (`approval-request.json`), while the adapter declares only
+the `commandExecution` sibling — and `serverRequest/resolved`->interaction `none`, without which
+`permission` sticks until `turn/completed`. Note that `protocol-methods.txt` inventories client
+requests and server **notifications** and does **not** list the 8 server-to-client **requests** the
+gate counted; the exact set of `*/requestApproval` methods must come from `generate-ts`, not from
+guessing at siblings.
+
+**Mid-session across the upgrade.** A session launched by the pre-R7 binary has argv `codex` with no
+`--remote`, no backend child and no `backend_socket_path`. After the upgrade it keeps the grid
+heuristic and behaves **exactly as it does today** — the discovery is file-driven and an absent key
+means "no backend" (the `HookSocketPath` convention). What it does not get is structured chat, and
+per the derivation fix above it will correctly say so.
+
+### R7.8 The R6 phone: what works unchanged on a Codex session, and what does not
+
+Traced through the shipped R6 code rather than assumed. **Nothing architectural is Claude-specific;
+three concrete things are, and all three are copy or render decisions rather than plumbing.**
+
+Works unchanged: the transcript renders by item **kind** with no provider switch anywhere
+(`TranscriptPanel.kt:blockFor`); the approval sheet decodes decisions with **the CLI's own ids**, a
+rule it states explicitly against Codex's own vocabulary (`ApprovalItem.kt:160-161`); history paging
+and detail-on-demand read journal records and never a provider (`skeleton/chat.go:373,499`); the
+composer's availability gate reads `structured_gap` off the transcript (`SessionDetailPanel.kt:763-772`,
+`Composer.kt:89`); and `expected_turn` is produced by `TranscriptScreen.openTurnOf`, which mirrors the
+daemon's `turnIDLocked` line for line (`TranscriptPanel.kt:339-353` vs `interaction.go:323`).
+
+Does **not** work unchanged:
+
+1. **The turn never closes if `turn/completed` cannot produce a terminal `agent_message`.** Both the
+   daemon (`interaction.go:329-333`) and the phone close a turn **only** on a terminal
+   `agent_message`. An interrupted Codex turn recorded `items: []` with `itemsView: "notLoaded"`
+   (`turn-completed-interrupted.json`), so there may be no agent message to close it with — and a
+   turn that never closes means `expected_turn` never goes empty and **every subsequent phone send is
+   refused `stale_turn` forever**, which is exactly the R6 round-2 blocker that broke idle replies
+   100% of the time. R7's rule: `turn/completed` is what closes the turn — it is the only frame that
+   distinguishes completed/interrupted/failed — folded onto the turn's own agent message when
+   `items` names it, else emitted as a terminal `agent_message` carrying `stop_reason` and no text.
+   Whether the empty case can be removed entirely (by making `itemsView` `summary`) is the
+   `generate-ts` question of §R7.6.
+2. **A stop_reason-only `agent_message` has nothing to render.** The `AGENT_MESSAGE` arm draws
+   markdown of `item.text` and nothing else; an interrupted turn must read as "Interrupted", which
+   is new Kotlin.
+3. **Mid-stream prose has no running mark, on purpose, and Codex is the first producer to need
+   one.** `TranscriptPanel.kt:388-391` records the decision and its exact premise: "no adapter emits
+   that today (`internal/adapter/claude/interaction.go` always closes an agent_message
+   `StatusCompleted` in the same record that carries its text), so there is no wire value to drive a
+   test off yet". Codex's `in_progress` increments make that premise false. The file itself defers
+   the design question ("what it looks like on a SENTENCE rather than on a tool's single line"); R7
+   is when it comes due.
+
+Two copy strings also become false rather than merely incomplete: the Stop confirmation says the
+interrupt is "the same key a person would press at the terminal"
+(`SessionDetailPanel.kt:266`), and the approval sheet's KDoc and refusal copy are written around
+`ok` meaning "the daemon TYPED the dialog's keys" and around `no_dialog`
+(`ApprovalSheetPanel.kt:130-146`). On Codex no key is pressed, `ok` means the RPC reply was sent, and
+`no_dialog` cannot occur.
+
+### R7.9 What this amendment does NOT decide
+
+Named so a later agent reads an assumption here as drift rather than as a decision:
+
+- **Whether `item/commandExecution/outputDelta` is shaped at all.** The lean R7 answer is to open the
+  `tool_run` at `item/started` and fill its `output_excerpt` at `item/completed`, matching what
+  Claude does today (no regression, no accumulator, no new phone work) and dropping the delta frames.
+  That answer is only correct if `item/completed` for a `commandExecution` actually carries the
+  output — **the gate recorded `item/completed` for a `userMessage` only**. Settle with
+  `generate-ts`'s `CommandExecutionItem` before choosing.
+- ~~**Whether the TUI can be pointed at a daemon-created thread**, and therefore whether §R7.2e's
+  `agent_args` carries a thread id or is empty.~~ **CLOSED by revision 3**: the daemon creates no
+  thread, so there is nothing to point the TUI at. `agent_args` is `--remote unix://SOCK` and the
+  daemon adopts the agent's thread from `thread/started`.
+- **Whether a lossless post-outage backfill exists** (`thread/read`, `itemsView`), and therefore
+  whether a daemon restart is ever a `structured_gap`.
+- **The exact set of the 8 server-to-client request methods**, which `protocol-methods.txt` does not
+  list.
+- **Whether `turn/steer`'s reply carries the steered message's `itemId`** (§R7.5's echo correlation).
+- **Codex's decision vocabulary at 0.147.0**, where ADR-010 §5 and the R1 gate disagree.
+- **`file_change` shaping from `turn/diff/updated`.** The frame is recorded (a real unified diff) but
+  IS-FC-1's applied-vs-proposed distinction against Codex's approval flow is not worked out here.
+- **`thread/tokenUsage/updated`, `account/rateLimits/updated`, `turn/plan/updated`, reasoning
+  deltas.** All recorded or inventoried, none shaped in R7.
+- **opencode's equivalent (M5.1).** The backend-descriptor seam this amendment's companion adds is
+  shaped so opencode's `serve` port fits it, but M5.1 is not decided here.
+- **Any change to the Claude paths.** Decision 3's injection design, its key map, its gate and its
+  watchdog are untouched; the only Claude-adjacent change is that the keystroke composer acquires an
+  explicit seam it currently lacks, which is a fence around today's behavior, not a change to it.
+  `stampComposerEchoLocked` is likewise untouched on Claude.
+
+### R7.10 Consequences: what this topology costs, and what it forecloses
+
+Stated as trades rather than left to be discovered. All three are accepted; none is free.
+
+1. **The Codex transcript is LESS crash-durable than Claude's.** Claude's capture survives a daemon
+   outage on disk: `HookChannel.SpoolPath` exists for exactly that, added in R6 because "the shim's
+   hook server shuts down with the agent it reaped" (`internal/daemon/launch.go:143-148`). R7's
+   frames exist only in the daemon's memory between the socket and `captureInteractions`, so a daemon
+   outage loses every frame in flight, and §R7.6 is honest that whether `thread/read` can backfill is
+   UNKNOWN. There is no durable spool on the JSON-RPC path in R7. If `generate-ts` shows a lossless
+   `thread/read`, the gap is backfillable and this consequence softens; if it does not, a daemon
+   outage on a Codex session is a `structured_gap`, which is honest but is a real difference from
+   Claude. A shim-side spool is NOT the fix — it would put the JSON-RPC parse back in the PTY plane,
+   which §R7.1 rules out.
+2. **A detached or pre-existing `codex` can never be mirrored.** The backend is bound to shim launch,
+   so attaching to a `codex` the owner started themselves stays heuristic forever. This is the right
+   trade (swarm owns the session from process creation, RC-D1), and it means M5's exit criterion —
+   "every session opens into a live chat or an honest status card, nothing in between" — acquires a
+   third class: a Codex session that is neither, being heuristic-only but not degraded. M5 must name
+   that class explicitly or R7 must emit a `structured_gap` for it. R7's answer: it is the case-1
+   `structured_gap` of §R7.7, so the card is honest and the class is two, not three.
+3. **One app-server per session, forever.** The socket is in the session dir and the process is a
+   child of the shim, which is right for isolation and containment and costs **two processes per
+   session** (R1 leg 1 recorded a node launcher plus a vendored rust binary) — twenty at ten
+   sessions. It also forecloses ever sharing one app-server across sessions, which matters if
+   anything about it turns out to be per-process rate-limited or billed. Accepted: isolation and a
+   containment story that works are worth more than a process count at the scale this product runs
+   at, and the seam (ADR-010's `BackendSpec.SocketPath` being CORE-supplied) is where a future
+   sharing decision would land.
+4. **Multi-session token latency regresses to buy terminal-peek liveness** (§R7.4): 200 ms + N x
+   250 ms + 125 ms rather than 200 ms + 125 ms. `DefaultItemWindow` is the knob and the owner's.
+5. **A swarm-launched Codex session has two failure points instead of one** (§R7.6). Owner ruling
+   required.
+6. **A terminal-answered approval that lands inside the phone's send window is RECORDED AS THE
+   PHONE'S, and the phone is told its approve failed.** Added 2026-08-20 (round-3 review MEDIUM 2).
+   §R7.5 says "first-answer-wins is server-side, so the daemon guesses nothing when the owner
+   answers at the terminal". That is true of the EFFECT and false of the RECORD, and the difference
+   is not fixable at this protocol. `ServerRequestResolvedNotification` carries `{threadId,
+   requestId}` and **no decision and no answerer** — re-derived from the installed CLI's own
+   bindings, and the recorded frame in `frame-samples.json` agrees — so the resolution broadcast
+   cannot say who answered. The daemon marks a phone answer applied BEFORE the RPC leaves
+   (`internal/skeleton/approval.go`), and the resolution handler attributes any subsequent
+   resolution to `by: phone` with the phone's decision and `operation_id` whenever that mark is
+   set. If the owner answers AT THE TERMINAL inside that window, the journal records the phone's
+   decision, by the phone, for an answer the server took from the keyboard; and because the same
+   broadcast retires the request id, the phone's own RPC then finds nothing to answer and the phone
+   is returned an error. So history says the phone answered it while the phone was told it failed.
+   ACCEPTED AND DISCLOSED rather than fixed: narrowing the window (marking applied only after the
+   reply) shrinks it but cannot close it, since the server can resolve between the send and the
+   reply, and no field exists that would let the daemon tell the two cases apart. The SAFETY
+   property is unaffected — exactly one decision is ever applied, and it is the server's — and the
+   evidence's CANNOT section states this in the same words.
+7. **A daemon that joins a session MID-TURN adopts that turn without having seen its opening.**
+   Added 2026-08-20 (round-3 review MEDIUM 1). `turnIDLocked` opens a turn on any frame naming a
+   native turn id it has not already closed, not only on a `user_message`, because a daemon that
+   held NO turn for a running one read as IDLE to everything downstream: the phone's composer send
+   would carry an empty `expected_turn`, match, and take the `turn/start` branch — a SECOND
+   concurrent turn on one thread — while Stop was impossible, since interrupt refuses an empty
+   expected turn. The cost is that such a turn's earlier items are not in this transcript unless
+   `thread/resume` replays them, which is Q4 and remains UNRECORDED; the adopted turn is therefore
+   correct about what is RUNNING and silent about what it MISSED. If Q4 shows resume replays the
+   running turn's items, the adoption arm becomes belt-and-braces rather than load-bearing.

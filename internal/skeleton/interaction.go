@@ -96,6 +96,12 @@ func (d *Daemon) initInteractionsLocked() {
 	if d.turnIDs == nil {
 		d.turnIDs = map[string]string{}
 	}
+	if d.nativeTurns == nil {
+		d.nativeTurns = map[string]string{}
+	}
+	if d.closedTurns == nil {
+		d.closedTurns = map[string]string{}
+	}
 	if d.approvals == nil {
 		// The approval lifecycle's state (approval.go), initialized on the same lazy path so a
 		// test Daemon literal need not set any of it.
@@ -257,7 +263,7 @@ func (d *Daemon) shapeItem(sessionID string, in adapter.Interaction, p adapter.H
 		// reports every prompt as owner-typed -- it cannot know -- and the daemon, the
 		// only party that watched the injection, re-attributes the one that echoes an
 		// accepted composer send (chat.go).
-		d.stampComposerEchoLocked(sessionID, in.Text, fields)
+		d.stampComposerEchoLocked(sessionID, in.Text, in.ClientRef, fields)
 	}
 
 	var resolved []json.RawMessage
@@ -320,17 +326,66 @@ func (d *Daemon) itemIDLocked(sessionID, ref string) string {
 // turnIDLocked applies IS-ENV-1: a turn OPENS on a user_message and CLOSES on any terminal
 // agent_message status. Every item inside carries the open turn's id; `turn_id` is empty
 // outside one. The rule is the daemon's alone -- no adapter sources a turn.
+//
+// ONE ADDITION, AND IT IS A REJOIN RULE (Wave R7, review round 3 MEDIUM 1). A daemon that
+// joins a session MID-TURN never saw that turn's opening frame -- the agent's `item/started`
+// userMessage fired before this daemon existed -- so the user_message arm above cannot run,
+// and round 2 therefore held NO turn for a turn that was demonstrably running. Everything
+// downstream then read the session as IDLE: the phone rendered no open turn, a composer send
+// carried `expected_turn: ""`, MATCHED, and took the `turn/start` branch -- which
+// deliverComposerText's own comment says "would QUEUE A SECOND TURN, so the owner's question
+// and the phone's would arrive as two separate conversations" -- and Stop was impossible,
+// because interruptTurn refuses an empty expected_turn.
+//
+// So a frame that NAMES A NATIVE TURN this daemon has not already closed opens one. The
+// closed-turn guard is what keeps IS-ENV-1's closure the daemon's own decision: a trailing
+// frame of a turn this daemon SAW COMPLETE must never resurrect it, or the session looks busy
+// forever and no new turn can be started.
 func (d *Daemon) turnIDLocked(sessionID string, in adapter.Interaction) string {
 	if in.Kind == adapter.KindUserMessage {
 		id := newTurnID()
 		d.turnIDs[sessionID] = id
+		delete(d.closedTurns, sessionID)
+		d.noteNativeTurnLocked(sessionID, in.TurnRef)
 		return id
 	}
+	closing := in.Kind == adapter.KindAgentMessage && terminalStatus(in.Status)
 	turn := d.turnIDs[sessionID]
-	if in.Kind == adapter.KindAgentMessage && terminalStatus(in.Status) {
+	if turn == "" && !closing && in.TurnRef != "" && d.closedTurns[sessionID] != in.TurnRef {
+		turn = newTurnID()
+		d.turnIDs[sessionID] = turn
+	}
+	if turn != "" {
+		// Every frame of one Codex turn carries the same `turnId`, so this is idempotent
+		// after the opening user_message -- and it is what keeps the native id available
+		// for a turn whose opening frame this daemon never saw.
+		d.noteNativeTurnLocked(sessionID, in.TurnRef)
+	}
+	if closing {
+		if in.TurnRef != "" {
+			if d.closedTurns == nil {
+				d.closedTurns = map[string]string{}
+			}
+			d.closedTurns[sessionID] = in.TurnRef
+		}
 		delete(d.turnIDs, sessionID)
+		delete(d.nativeTurns, sessionID)
 	}
 	return turn
+}
+
+// noteNativeTurnLocked records the CLI's own id for the session's open turn. Caller holds
+// itemMu.
+//
+// An EMPTY ref never clears a recorded one: an adapter that sources no turn identity, or a
+// single frame that happens to omit it, must not erase the id the steer and the interrupt
+// depend on. That asymmetry is the whole rule -- turn CLOSURE is IS-ENV-1's, above, and is
+// never inferred from a missing field.
+func (d *Daemon) noteNativeTurnLocked(sessionID, ref string) {
+	if ref == "" {
+		return
+	}
+	d.nativeTurns[sessionID] = ref
 }
 
 // terminalStatus reports whether s ends an item (§4). in_progress is the only non-terminal
@@ -350,6 +405,8 @@ func (d *Daemon) forgetInteractions(sessionID string) {
 	d.itemMu.Lock()
 	defer d.itemMu.Unlock()
 	delete(d.turnIDs, sessionID)
+	delete(d.nativeTurns, sessionID)
+	delete(d.closedTurns, sessionID)
 	// The approval lifecycle's state for the session (approval.go). sweepSessionInteractions has
 	// already drained all three; these deletes are what stop a reused local session id inheriting
 	// a stranger's pending card if it ever had not.
@@ -661,8 +718,8 @@ func capFields(f map[string]any) bool {
 // and 64).
 var itemUnclippedFields = map[string]bool{
 	"source": true, "stop_reason": true, "change": true, "mode": true, // top level
-	"tool_kind": true, // §7's closed vocabulary mirrored flat (M2.2); half an enum is invalid, not smaller
-	"type": true, "state": true, // action.type (§7), steps[].state (§3.7)
+	"tool_kind": true,                // §7's closed vocabulary mirrored flat (M2.2); half an enum is invalid, not smaller
+	"type":      true, "state": true, // action.type (§7), steps[].state (§3.7)
 	"process": true, "turn": true, "interaction": true, "group": true, // session_status (§3.8)
 	"decision": true, "by": true, // approval_resolved (§3.6)
 	"content_hash": true, "interaction_id": true, "operation_id": true, // the minted ids and the digest

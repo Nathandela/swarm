@@ -25,12 +25,15 @@ package skeleton
 // exact shape (api.go).
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/submitframe"
 )
@@ -73,6 +76,13 @@ const pendingSendTTL = 10 * time.Second
 type pendingSend struct {
 	text        string
 	operationID string
+	// clientRef is the id THE DAEMON MINTED and handed to the CLI with the message
+	// (Codex's `clientUserMessageId`), echoed back on the item as `clientId`. When it is
+	// set the correlation is EXACT and text is never consulted -- which is the one place
+	// R7 does better than the mechanism it inherits, and the reason it must: the text
+	// correlation below has a PROBED mis-attribution on record. Empty for a provider whose
+	// echo carries no such id (Claude), where text matching is still the only mechanism.
+	clientRef string
 	// at is when the injection was accepted: pendingSendTTL's start. See its doc.
 	at time.Time
 }
@@ -123,9 +133,30 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 		return code, err
 	}
 
+	// THE SINK IS RESOLVED BEFORE ANYTHING IS WRITTEN, AND BEFORE itemMu (Wave R7, ADR-013
+	// §R7.5). Until R7 this function called injectComposerText -- text plus a CR into the PTY
+	// -- for EVERY PROVIDER, with no seam and no provider check anywhere on the path, so a
+	// phone send to a Codex session typed into the Codex TUI. That is what playbook §8.2
+	// forbids in as many words, and R7 closes it STRUCTURALLY rather than by naming a
+	// provider here.
+	//
+	// It sits OUTSIDE the hold because resolveAdapter takes itemMu itself and a Go mutex is
+	// not reentrant. Nothing is lost by that: the resolution reads the session's adapter and
+	// its backend registration, neither of which itemMu guards, while the two facts that MUST
+	// not be split -- the turn the send was checked against and the correlation its echo will
+	// consume -- are both inside the hold below.
+	sink, code, serr := d.resolveMessageSink(local, req.Session)
+	if serr != nil {
+		return code, serr
+	}
+
 	d.itemMu.Lock()
 	d.initInteractionsLocked()
 	current := d.turnIDs[local]
+	// The CLI's OWN id for that same turn, read under the SAME hold: a steer names it as a
+	// precondition, and reading it in a second hold would let a turn close in between and
+	// send the daemon's answer against a turn the CLI has already replaced.
+	native := d.nativeTurns[local]
 	if req.ExpectedTurn != current {
 		// The render-vs-tap race (IS-LIFE-5): a newer user_message opened a new turn, or
 		// the turn closed on a terminal agent_message. Refused, never misapplied -- and it
@@ -137,21 +168,120 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 	if d.pendingSends == nil {
 		d.pendingSends = map[string][]pendingSend{}
 	}
-	q := append(d.pendingSends[local], pendingSend{text: req.Text, operationID: operationID, at: d.chatNow()})
+	pending := pendingSend{text: req.Text, operationID: operationID, at: d.chatNow()}
+	if sink.backend != nil {
+		// The echo key is minted HERE, sent with the message, and read straight back off the
+		// item's `clientId`. Minting it under the same itemMu hold as the precondition means
+		// the turn the send was checked against and the correlation its echo will consume
+		// cannot be split by a concurrent capture.
+		pending.clientRef = newComposerClientRef()
+	}
+	q := append(d.pendingSends[local], pending)
 	if len(q) > maxPendingSends {
 		q = q[len(q)-maxPendingSends:]
 	}
 	d.pendingSends[local] = q
 	d.itemMu.Unlock()
 
-	if err := d.injectComposerText(local, req.Text); err != nil {
-		// The injection never reached the PTY, so the correlation recorded above will
-		// never match an echo; withdraw it rather than letting a later identical owner
-		// prompt inherit a phone attribution.
+	if err := d.deliverComposerText(local, sink, current, native, req.Text, pending.clientRef); err != nil {
+		// The message never reached the agent, so the correlation recorded above will never
+		// match an echo; withdraw it rather than letting a later identical owner prompt
+		// inherit a phone attribution.
 		d.dropPendingSend(local, operationID)
 		return "", errIsLife5("composer send into session %q: %v", req.Session, err)
 	}
 	return "", nil
+}
+
+// messageSink is how ONE session's remote messages reach its agent. Exactly one of the two
+// members is set; there is no third state, because "neither" is a refusal that never gets this
+// far (resolveMessageSink).
+type messageSink struct {
+	backend  *sessionBackend
+	keystrok adapter.KeystrokeComposer
+}
+
+// resolveMessageSink is §R7.5's three-branch resolution, in this order:
+//
+//	live backend  -> the app-server RPC (turn/start when idle, turn/steer mid-turn)
+//	no backend    -> the adapter's KEYSTROKE seam, IF IT PROVES ONE
+//	neither       -> refuse structured_unsupported, HAVING TYPED NOTHING
+//
+// The order is what makes §8.2 structural rather than accidental. The Codex adapter implements
+// no keystroke seam and never will, so the second branch is STRUCTURALLY UNREACHABLE for it --
+// ADR-010 §5's "absence is a signal" doing the work a provider name would otherwise have to do
+// -- and the backend branch is checked FIRST so a Codex approval is never typed on the one day
+// the backend crashed.
+//
+// It takes NO lock of its own beyond the ones its callees take, and must NOT be called with
+// itemMu held: resolveAdapter acquires it.
+func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protocol.ErrorCode, error) {
+	if b, ok := d.sessionBackendFor(local); ok {
+		return messageSink{backend: b}, "", nil
+	}
+	m, ok := d.core.Get(local)
+	if !ok {
+		return messageSink{}, protocol.CodeInvalidField, errIsLife5(
+			"composer send names session %q, which is not one this daemon runs", session)
+	}
+	ad, ok := d.resolveAdapter(m.AgentType)
+	if !ok {
+		return messageSink{}, protocol.CodeStructuredUnsupported, errIsLife5(
+			"agent %q has no adapter, so this session has no message sink; nothing was typed", m.AgentType)
+	}
+	kc, ok := adapter.AsKeystrokeComposer(ad)
+	if !ok {
+		return messageSink{}, protocol.CodeStructuredUnsupported, errIsLife5(
+			"session %q has no live backend and agent %q proves no keystroke composer seam, so there "+
+				"is no way to deliver this message; nothing was typed", session, m.AgentType)
+	}
+	return messageSink{keystrok: kc}, "", nil
+}
+
+// deliverComposerText writes one message through the resolved sink.
+//
+// ON THE BACKEND BRANCH: turn/start when the daemon's turn is EMPTY, turn/steer when it is not.
+// The steer carries the CLI'S OWN optimistic-concurrency guard, `expectedTurnId`, which the
+// generated binding documents as "Required active turn id precondition. The request fails when
+// it does not match the currently active turn." R1 note 4 says to PROPAGATE it rather than
+// invent a Swarm-side one. Dispatching turn/start mid-turn instead would QUEUE A SECOND TURN,
+// so the owner's question and the phone's would arrive as two separate conversations.
+func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTurn, nativeTurn, text, clientRef string) error {
+	if sink.backend == nil {
+		return d.injectComposerText(local, sink.keystrok.ComposerKeys(text))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
+	defer cancel()
+	input := []map[string]any{{"type": "text", "text": text}}
+	if expectedTurn != "" && nativeTurn == "" {
+		// REFUSED, HAVING SENT NOTHING. A steer must name the CLI's own turn, and this
+		// daemon holds none for the turn it just checked -- so there is no id to send.
+		// Sending the daemon's ULID instead is exactly review BLOCKING 1: the server's
+		// precondition rejects every one of them, and the phone is told a send succeeded.
+		return errIsLife5(
+			"session %q has an open turn the CLI never named, so no steer can name it either; "+
+				"nothing was sent", local)
+	}
+	if expectedTurn == "" {
+		return sink.backend.conn.Call(ctx, "turn/start", map[string]any{
+			"threadId":            sink.backend.threadID,
+			"clientUserMessageId": clientRef,
+			// `input` is an ARRAY of UserInput. Passing an object yields
+			// {"code":-32600,"message":"Invalid request: invalid type: map, expected a
+			// sequence"} (RECORDED: errors-observed.json).
+			"input": input,
+		}, nil)
+	}
+	return sink.backend.conn.Call(ctx, "turn/steer", map[string]any{
+		"threadId":            sink.backend.threadID,
+		"clientUserMessageId": clientRef,
+		// THE CLI'S OWN TURN ID, never the daemon's. `expectedTurnId` is the app-server's
+		// optimistic-concurrency precondition against ITS turn table, and the daemon's
+		// `turn_id` is a ULID it minted for the phone's benefit (interaction.go's
+		// newTurnID). The two are different namespaces, and R7 round 1 sent the wrong one.
+		"expectedTurnId": nativeTurn,
+		"input":          input,
+	}, nil)
 }
 
 // requireStructuredComposer is ADR-017 T2 rule 2 / Mirror M5.5 applied to the composer
@@ -224,7 +354,7 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // The amendment obligation is therefore discharged IN WRITING (ADR-017's "Deferred,
 // disclosed" section, this wave), and docs/verification/r6-chat.md's CANNOT YET states the
 // user-visible consequence in as many words.
-func (d *Daemon) injectComposerText(local, text string) error {
+func (d *Daemon) injectComposerText(local string, keys []byte) error {
 	if d.api == nil {
 		return errors.New("this daemon has no session tap wired")
 	}
@@ -233,7 +363,7 @@ func (d *Daemon) injectComposerText(local, text string) error {
 		return fmt.Errorf("tap session %q: %w", local, err)
 	}
 	defer func() { _ = sub.Close() }()
-	if err := sub.Input([]byte(text)); err != nil {
+	if err := sub.Input(keys); err != nil {
 		return fmt.Errorf("writing the message into session %q: %w", local, err)
 	}
 	time.Sleep(submitframe.Gap)
@@ -270,7 +400,7 @@ func (d *Daemon) dropPendingSend(local, operationID string) {
 // "yes" waited indefinitely for someone -- anyone -- to type "yes", and the probe that
 // stamped an OWNER-typed prompt with the phone's operation_id is what this bound refuses.
 // The sweep is over one session's short queue and runs on the echo path only.
-func (d *Daemon) stampComposerEchoLocked(sessionID, text string, fields map[string]any) {
+func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fields map[string]any) {
 	q := d.pendingSends[sessionID]
 	if len(q) == 0 {
 		// Nothing is pending, so nothing can be claimed and nothing needs sweeping. The
@@ -287,8 +417,32 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text string, fields map[stri
 		}
 	}
 	defer func() { d.pendingSends[sessionID] = live }()
+	// THE EXACT KEY FIRST (Wave R7, ADR-013 §R7.5). When the CLI echoed back the id the
+	// daemon minted and sent with the message, the correlation is a FACT and text is never
+	// consulted -- so an OWNER-typed "yes" arriving with clientId null keeps the adapter's
+	// honest owner attribution even while a phone send of "yes" is pending. That is exactly
+	// the probed mis-attribution above, and R7 does not carry it onto a new provider.
+	//
+	// AN ECHO CARRYING AN ID WE DID NOT MINT MATCHES NOTHING and falls through to no stamp at
+	// all -- deliberately, and NOT down to text matching: an id we do not recognize is
+	// positive evidence that some other client authored the message.
+	if clientRef != "" {
+		for i, p := range live {
+			if p.clientRef != clientRef {
+				continue
+			}
+			fields["source"] = adapter.SourcePhone
+			fields["operation_id"] = p.operationID
+			live = append(live[:i:i], live[i+1:]...)
+			return
+		}
+		return
+	}
 	for i, p := range live {
-		if p.text != text {
+		// A pending send with its OWN exact key is never claimed by text: it is waiting for
+		// an id, and letting a bare echo consume it would put the phone's operation_id on a
+		// message the phone did not author.
+		if p.clientRef != "" || p.text != text {
 			continue
 		}
 		fields["source"] = adapter.SourcePhone
@@ -329,11 +483,44 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 	d.itemMu.Lock()
 	d.initInteractionsLocked()
 	current := d.turnIDs[local]
+	native := d.nativeTurns[local]
 	d.itemMu.Unlock()
 	if req.ExpectedTurn != current {
 		return protocol.CodeStaleTurn, fmt.Errorf(
 			"turn interrupt: expected_turn %q is not session %q's current turn; the turn it was rendered against is over, and interrupting whatever replaced it -- including a turn the owner just started at the terminal -- is what this refusal exists to prevent",
 			req.ExpectedTurn, session)
+	}
+	// THE BACKEND BRANCH FIRST (Wave R7, M4.4), for the same reason the composer's is first:
+	// a session with a live app-server has a NATIVE interrupt, and falling through to a
+	// keystroke on the day the backend died is the one thing playbook §8.2 forbids.
+	//
+	// RECORDED: turn/interrupt returns {} (turn-interrupt.json) and the server immediately
+	// emits turn/completed with "status":"interrupted" for that exact turn id
+	// (turn-completed-interrupted.json). The TUI displayed the interruption with no keystroke.
+	if b, ok := d.sessionBackendFor(local); ok {
+		if native == "" {
+			// REFUSED, HAVING TYPED AND SENT NOTHING, and this refusal is the one that
+			// matters most (review BLOCKING 1). turn/interrupt against an id the server
+			// never minted answers `no active turn to interrupt`, which benignInterruptError
+			// -- correctly, for its own case -- reports to the phone as SUCCESS. A Stop that
+			// stopped nothing and said it worked is worse than a Stop that refused.
+			return protocol.CodeInterruptUnsupported, fmt.Errorf(
+				"turn interrupt: session %q has an open turn the CLI never named, so there is "+
+					"no turn id to interrupt; nothing was typed and nothing was sent", session)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
+		defer cancel()
+		err := b.conn.Call(ctx, "turn/interrupt", map[string]any{
+			"threadId": b.threadID,
+			// THE CLI'S OWN TURN ID. req.ExpectedTurn is the daemon's ULID, which is what
+			// the phone named and what the precondition above checked; the app-server has
+			// never seen it.
+			"turnId": native,
+		}, nil)
+		if err != nil && !benignInterruptError(err) {
+			return "", fmt.Errorf("turn interrupt: %v", err)
+		}
+		return "", nil
 	}
 	ad, ok := d.resolveAdapter(m.AgentType)
 	if !ok {
@@ -365,6 +552,24 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		return "", fmt.Errorf("turn interrupt: writing the interrupt into session %q: %w", session, err)
 	}
 	return "", nil
+}
+
+// benignInterruptError reports whether an app-server error means "the turn the owner wanted
+// stopped is already stopped".
+//
+// `turn/interrupt` on an already-finished turn returns
+// {"code":-32600,"message":"no active turn to interrupt"} (RECORDED: errors-observed.json).
+// The daemon's own stale_turn precondition already refuses that case BEFORE the RPC is sent;
+// when the race is lost anyway the outcome the owner asked for HAS HAPPENED, and reporting a
+// failure only teaches them to press Stop again. Every other error -- a transport fault, a
+// closed connection -- still surfaces, which is exactly why the client returns a TYPED
+// *appserver.RPCError rather than a flattened string.
+func benignInterruptError(err error) bool {
+	var rpcErr *appserver.RPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return strings.Contains(rpcErr.Message, "no active turn to interrupt")
 }
 
 // interactionHistory serves ADR-014's paged read (Mirror M3.1): the window of this

@@ -106,3 +106,30 @@ func signalShim(sock, sig string) error {
 	_, _, _ = wire.ReadFrame(conn)
 	return nil
 }
+
+// sendBackendAttach delivers the daemon's GO-AHEAD to a shim that is blocked before spawning
+// its agent (ADR-013 §R7.2e). It is signalShim's shape verbatim -- handshake, one control
+// frame, a short read so the shim consumes it -- because it rides the SAME per-session control
+// socket: no new listener, no new socket, no new auth surface.
+//
+// agentArgs is appended to the agent argv VERBATIM by the shim. EMPTY IS THE ORDINARY CASE:
+// it means "go ahead, I am connected, and I am not handing you a thread id".
+func sendBackendAttach(sock string, agentArgs []string) error {
+	conn, _, err := dialShimHello(sock)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeBackendAttach, AgentArgs: agentArgs})
+	if err != nil {
+		return err
+	}
+	_ = conn.SetDeadline(time.Now().Add(helloIO))
+	if err := wire.WriteFrame(conn, wire.TControl, body); err != nil {
+		return err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(helloIO))
+	_, _, _ = wire.ReadFrame(conn)
+	return nil
+}

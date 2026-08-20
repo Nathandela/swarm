@@ -39,6 +39,21 @@ const (
 	// (a snapshot interleaved into an active attach stream on one connection is
 	// unsupported). Added by the C3 fix wave for the grid tap.
 	TypeSnapshotReq = "snapshot_req"
+	// TypeBackendAttach is the daemon->shim GO-AHEAD of ADR-013 §R7.2e's spawn-ordering
+	// handshake (Wave R7, Mirror M4.1). A shim configured with a backend binds its control
+	// socket, spawns the backend, waits for the backend's socket to become servable, writes
+	// backend.json -- and then BLOCKS, before spawning the agent, until this arrives.
+	//
+	// WHY THE VERB EXISTS AT ALL. launchConfirmTimeout waits for the shim's CONTROL socket,
+	// which is bound BEFORE either process, so there is no edge the daemon can act on. The
+	// property it buys -- the daemon is a connected JSON-RPC client BEFORE THE AGENT PROCESS
+	// EXISTS -- is what makes it impossible to miss a `thread/started` and what removes the
+	// gate's cold-start rollout race rather than retrying around it. It rides the per-session
+	// control socket that already exists: no new listener, no new socket, no new auth surface.
+	//
+	// AgentArgs is appended to the agent argv VERBATIM. EMPTY IS THE ORDINARY CASE, not a
+	// defect: it means "go ahead, I am connected, and I am not handing you a thread id".
+	TypeBackendAttach = "backend_attach"
 )
 
 // Signal vocabulary for a Control{Type: TypeSignal}.
@@ -72,6 +87,10 @@ type Control struct {
 	// SnapshotLen is the snapshot's total byte length, carried in a TypeSnapshotInfo
 	// preamble so the daemon reader reassembles exactly that many chunk bytes.
 	SnapshotLen int `json:"snapshot_len,omitempty"` // snapshot_info
+	// AgentArgs rides a backend_attach: extra argv elements the shim appends to the agent's
+	// own argv verbatim before it spawns it. Absent on every other message type, and absent
+	// on a bare go-ahead -- omitempty keeps an old shim's decode identical either way.
+	AgentArgs []string `json:"agent_args,omitempty"` // backend_attach
 }
 
 // Caps is the set of OPTIONAL capabilities a peer advertised in its hello

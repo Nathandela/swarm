@@ -105,6 +105,11 @@ type Config struct {
 	OnSessionStart func(m persist.Meta, token string)
 	OnSessionEnd   func(id string)
 
+	// BackendPlanner, when non-nil, is asked at spawn whether a session needs a SIDE
+	// PROCESS (Wave R7, Mirror M4.1; backend.go). nil -- and a nil answer -- is the
+	// ordinary case: most CLIs need none, and no session of any other provider is touched.
+	BackendPlanner BackendPlanner
+
 	// ConnHandler, when non-nil, REPLACES the daemon's minimal 4-byte version
 	// handshake (serveClient) as the handler for every connection accepted on the
 	// singleton socket (Epic 8 assembly). The daemon still owns the socket —
@@ -152,6 +157,12 @@ type LaunchSpec struct {
 	// by the assembly from the adapter's SignalSources, exactly like Argv: the daemon
 	// imports no adapter package and only carries what it is given.
 	CaptureEvents []string
+	// Backend, when non-nil, is the session's RESOLVED backend plan (Wave R7, Mirror M4.1).
+	// The daemon CARRIES it and never derives it: the assembly resolves it from the
+	// session's adapter through adapter.ResolveBackend -- which performs the core's
+	// LookPath and session-dir containment checks -- exactly as it resolves Argv and
+	// CaptureEvents, because this package imports no adapter package.
+	Backend *BackendSpec
 	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
 	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
 	// session — the replay reuses the reserved session and spawns nothing. Local

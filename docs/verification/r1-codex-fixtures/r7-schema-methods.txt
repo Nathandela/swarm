@@ -1,0 +1,30 @@
+# codex-cli 0.147.0 app-server: the SERVER -> CLIENT REQUEST inventory
+#
+# SCHEMA-DERIVED (see r7-PROVENANCE.md). Source: the `ServerRequest` discriminated union in
+#   codex app-server generate-ts --out <dir>   ->   <dir>/ServerRequest.ts
+# generated 2026-08-20 under an isolated CODEX_HOME.
+#
+# WHY THIS FILE EXISTS: protocol-methods.txt (RECORDED, R1 leg 5) inventories client->server
+# requests and server->client NOTIFICATIONS. It does not list server->client REQUESTS -- the
+# frames that carry a JSON-RPC `id` and that a client MUST answer. The R1 gate counted eight of
+# them observationally; the union has ten.
+#
+# A server request is distinguished on the wire by carrying BOTH `method` and `id`, and no
+# `jsonrpc` member was present on the one the gate recorded (approval-request.json). A client
+# answers it with a JSON-RPC response on the SAME connection carrying the SAME id.
+
+item/commandExecution/requestApproval
+item/fileChange/requestApproval
+item/tool/requestUserInput
+mcpServer/elicitation/request
+item/permissions/requestApproval
+item/tool/call
+account/chatgptAuthTokens/refresh
+attestation/generate
+applyPatchApproval
+execCommandApproval
+
+# The two R7 maps to an approval_request are the first two. `applyPatchApproval` and
+# `execCommandApproval` are the v1 (legacy) spellings of the same two and are NOT emitted to a
+# v2/experimentalApi client -- the gate's client sent capabilities.experimentalApi=true and
+# received `item/fileChange/requestApproval`.

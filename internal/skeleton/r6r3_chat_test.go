@@ -42,7 +42,9 @@ func TestR6R3_TheServedHistoryPageNeverBeginsInTheMiddleOfAnItem(t *testing.T) {
 	// the whole finding is about, so the rig produces it rather than hand-building it.
 	offer := func(items ...adapter.Interaction) {
 		sk.captureInteractions(local, newCaptureAdapter(items...), adapter.HookPayload{Event: "PostToolUse"})
-		clock.advance(remotegw.DefaultAppendWindow)
+		// The ITEM floor (Wave R7 split the two, ADR-013 §R7.4); the append floor is the
+		// gateway's and is no longer the window this queue enforces.
+		clock.advance(remotegw.DefaultItemWindow)
 	}
 	offer(adapter.Interaction{Kind: adapter.KindUserMessage, Text: "ask", Source: adapter.SourceOwner})
 	awaitItems(t, sk, local, 1)

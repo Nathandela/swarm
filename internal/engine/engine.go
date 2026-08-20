@@ -161,6 +161,11 @@ type session struct {
 	// that would regress a dimension a newer sequence already set. 0 = none yet.
 	turnSeq  uint64
 	interSeq uint64
+	// typedSeq is the IN-PROCESS producer's own monotonic counter (Wave R7,
+	// ApplyTypedEvent). It is allocated under e.mu and is deliberately separate from the
+	// hook path's on-disk sequence: a backend session has no hook token, so the two
+	// producers are mutually exclusive and cannot share a namespace to corrupt.
+	typedSeq uint64
 
 	lastTypedAt  time.Time // when the last typed signal applied (precedence freshness)
 	lastSignalAt time.Time // when any signal (typed or output) was last observed (staleness)

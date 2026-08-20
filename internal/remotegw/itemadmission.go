@@ -23,6 +23,29 @@ const (
 // itemFieldText is the ONE field this queue ever merges by concatenation (IS-DELTA-1).
 const itemFieldText = "text"
 
+// DefaultItemWindow is the ITEM plane's share of the machine->phone budget, split explicitly
+// from the terminal plane's instead of letting the two race for it (ADR-013 §R7.4).
+//
+// THE ARITHMETIC THE OLD NUMBER GOT RIGHT ONLY AT N=1. There are TWO independent 125 ms
+// floors, in two processes. This queue releases at most one item record per window,
+// machine-wide. CoalescingSink is the SECOND floor of the same width, and it is "THE ONE
+// PLACE THE COMBINED CEILING CAN BE ENFORCED" (coalesce.go) because an item released here
+// arrives there AS A JOURNAL RECORD, is forwarded immediately and may never be coalesced or
+// dropped (R-GW.5) -- and STILL SPENDS THE SLOT, with terminal snapshots held oldest-first
+// behind it. At three streaming sessions the item plane's 8 releases/s therefore consumed
+// ALL EIGHT of CoalescingSink's slots per second and the terminal plane got exactly ZERO: a
+// live peek frozen on a stale grid for as long as the sessions stream, which is the very
+// guarantee DefaultAppendWindow exists to protect (PB-GW-7).
+//
+// 250 ms splits the budget evenly: <= 4 item releases/s machine-wide, leaving >= 4 snapshot
+// slots/s for the terminal plane AT EVERY N. Widening is SAFE precisely because the merge is
+// LOSSLESS -- a wider window merges MORE and loses nothing -- so the cost is latency and only
+// latency (200 ms at the adapter edge + N x 250 ms here + 125 ms downstream).
+//
+// IT IS THE OWNER'S KNOB. Lowering it back toward DefaultAppendWindow restores the tighter
+// token latency and, at N >= 3, restores the frozen peek.
+const DefaultItemWindow = 250 * time.Millisecond
+
 // ItemAdmissionConfig configures an ItemAdmission.
 type ItemAdmissionConfig struct {
 	// Append releases one admitted item toward the journal -- in production
@@ -30,7 +53,7 @@ type ItemAdmissionConfig struct {
 	// (IS-LAYER-1). It is called with the queue's lock held, so it MUST NOT call back into
 	// the queue.
 	Append func(session string, item json.RawMessage) error
-	// Window is the minimum spacing between two releases (0 => DefaultAppendWindow).
+	// Window is the minimum spacing between two releases (0 => DefaultItemWindow).
 	Window time.Duration
 	// Now is the clock seam (nil => time.Now).
 	Now func() time.Time
@@ -104,7 +127,11 @@ type pendingItem struct {
 func NewItemAdmission(cfg ItemAdmissionConfig) *ItemAdmission {
 	window := cfg.Window
 	if window <= 0 {
-		window = DefaultAppendWindow
+		// DefaultItemWindow, not DefaultAppendWindow: the two floors are independent and sit
+		// in different processes, and collapsing them to one number is the reasoning error
+		// ADR-013 §R7.4 corrects. The production path (skeleton's initInteractionsLocked)
+		// passes no Window at all, so this default IS the shipped floor.
+		window = DefaultItemWindow
 	}
 	now := cfg.Now
 	if now == nil {

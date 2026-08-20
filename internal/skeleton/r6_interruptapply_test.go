@@ -125,11 +125,11 @@ func TestR6Interrupt_AnUnknownSessionRefusesWithACode(t *testing.T) {
 // seam that makes the affordance real -- true where a seam is proven, false where none
 // is, never guessed from structured_chat.
 func TestR6Interrupt_TheCapabilityRecordDerivesInterruptFromTheSeam(t *testing.T) {
-	if got := deriveSessionCapabilities("claude", claude.New(), "9.9.9", "rev-test"); !got.Interrupt {
+	if got := deriveSessionCapabilities("claude", claude.New(), "9.9.9", "rev-test", false); !got.Interrupt {
 		t.Error("claude's capability record says interrupt=false while the adapter proves a " +
 			"TurnInterrupter seam; the phone would hide a Stop that works")
 	}
-	if got := deriveSessionCapabilities("opencode", opencode.New(), "9.9.9", "rev-test"); got.Interrupt {
+	if got := deriveSessionCapabilities("opencode", opencode.New(), "9.9.9", "rev-test", false); got.Interrupt {
 		t.Error("opencode's capability record says interrupt=true with no seam behind it; the " +
 			"phone would show a Stop that cannot work (ADR-017 T2 rule 3)")
 	}

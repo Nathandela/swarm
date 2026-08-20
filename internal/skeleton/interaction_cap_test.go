@@ -91,7 +91,7 @@ func assembleOnPinnedFloorClock(t *testing.T) (*Daemon, *pinnedClock) {
 // shipped producer's own terms.
 //
 // The first item consumes the target's one slot, so the two increments that follow are offered
-// INSIDE one DefaultAppendWindow and ItemAdmission folds them by concatenation (IS-DELTA-1/-2).
+// INSIDE one DefaultItemWindow and ItemAdmission folds them by concatenation (IS-DELTA-1/-2).
 // Each increment is already at §5's MaxTextBytes, so the union is 2 x 4 KiB of text plus the
 // envelope -- 8 405 B as the floor re-marshals it, over an 8 KiB MaxItemBytes and under a raised
 // one. IS-DELTA-2 calls the merge "lossless text concatenation", so BOTH halves must arrive.
@@ -112,7 +112,10 @@ func TestInteractionCap_TwoMaxTextIncrementsMergeAndAreNotDropped(t *testing.T) 
 	// All three were offered at the SAME pinned instant: the user_message took the free slot,
 	// and both increments folded behind it. Opening the window is what lets the merged item out,
 	// and the daemon's own release ticker is what carries it.
-	clock.advance(remotegw.DefaultAppendWindow)
+	// DefaultItemWindow, not DefaultAppendWindow: Wave R7 split the two floors (ADR-013 §R7.4)
+	// and this queue enforces the ITEM one. Advancing by the narrower window leaves the merged
+	// item held and the test reads an empty journal.
+	clock.advance(remotegw.DefaultItemWindow)
 
 	item := awaitKind(t, sk, session, adapter.KindAgentMessage,
 		"IS-DELTA-2 merges two pending increments for one item_id into ONE lossless append; §5's "+

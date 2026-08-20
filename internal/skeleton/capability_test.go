@@ -47,7 +47,7 @@ func TestDeriveSessionCapabilities_PerAdapter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {
-			got := deriveSessionCapabilities(tc.provider, tc.ad, "9.9.9", "rev-test")
+			got := deriveSessionCapabilities(tc.provider, tc.ad, "9.9.9", "rev-test", false)
 			if got.Provider != tc.provider {
 				t.Errorf("Provider = %q; want %q", got.Provider, tc.provider)
 			}
@@ -78,10 +78,19 @@ func TestDeriveSessionCapabilities_PerAdapter(t *testing.T) {
 // LifecycleSink) is deferred to bd agents-tracker-hggx.2.1 -- adding it will need a new
 // RED pass, since a real version gate would have to reject the fake provider versions
 // ("9.9.9", "v") this table currently asserts true against.
+// WAVE R7 NARROWED THE CLAIM, and only for a provider whose structured plane lives in a SIDE
+// PROCESS (ADR-013 §R7.7). The seam is still NECESSARY -- that is what this test pins, and it is
+// unchanged -- but for an adapter that also proves a BackendSource it is no longer SUFFICIENT:
+// the session must have a live backend too. Without that, the day the Codex adapter gained
+// Interactions, every PRE-UPGRADE Codex session (argv `codex`, no --remote, no backend child)
+// would have claimed structured_chat=true and the phone would have shown a composer whose every
+// send is refused. `liveBackend` is passed true here so the seam remains the only variable, and
+// the per-session-instance behavior is fenced by
+// TestR7Capabilities_StructuredChatIsSeamANDLiveBackendPerSessionInstance.
 func TestDeriveSessionCapabilities_TracksAsInteractionSourceExactly(t *testing.T) {
 	for _, ad := range []adapter.Adapter{claude.New(), codex.New(), opencode.New(), agy.New()} {
 		_, wantSource := adapter.AsInteractionSource(ad)
-		got := deriveSessionCapabilities("x", ad, "v", "r")
+		got := deriveSessionCapabilities("x", ad, "v", "r", true)
 		if got.StructuredChat != wantSource {
 			t.Errorf("%s: StructuredChat = %v but AsInteractionSource ok=%v; derivation must track the seam, not a hardcoded provider name", ad.Name(), got.StructuredChat, wantSource)
 		}

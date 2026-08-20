@@ -130,6 +130,18 @@ type shimSpawnConfig struct {
 	// 0600 file reconcile already re-reads the POST token from, is what lets a RESTARTED
 	// daemon still drain the shims that outlived it.
 	HookDrainToken string `json:"hook_drain_token"`
+	// The SESSION BACKEND (Wave R7, ADR-013 §R7.2b). An ABSENT backend_socket_path is the
+	// pre-R7 session and every non-Codex session forever -- HookSocketPath's exact
+	// unset-means-disabled convention, which is what keeps those sessions byte-for-byte
+	// unchanged. The plan is PERSISTED rather than re-derived because shims outlive daemons
+	// and a restarted daemon recovers the whole session from this 0600 file; BackendProgram
+	// in particular is the RESOLVED absolute path, so a restart never re-resolves a bare
+	// name through a PATH that may now point at a different CLI version.
+	BackendProgram    string   `json:"backend_program,omitempty"`
+	BackendArgs       []string `json:"backend_args,omitempty"`
+	BackendAgentArgs  []string `json:"backend_agent_args,omitempty"`
+	BackendSocketPath string   `json:"backend_socket_path,omitempty"`
+	BackendEnv        []string `json:"backend_env,omitempty"`
 }
 
 // HookChannel names one session's structured-capture channel: the shim-owned hook
@@ -504,6 +516,29 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		GraceMS:        int(shimGrace / time.Millisecond),
 		HookSocketPath: hookSock,
 		HookDrainToken: drainToken,
+	}
+	// The plan is either CARRIED on the spec (a caller that already resolved it) or asked
+	// for HERE, at the first moment the session id -- and therefore the session dir and the
+	// backend socket path -- exist. Either way this package never derives it: it holds no
+	// adapter and could not.
+	backendSock := backendSocketPath(d.cfg.StateDir, id)
+	if spec.Backend == nil && d.cfg.BackendPlanner != nil {
+		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock)
+		if perr != nil {
+			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
+			// the session still launches, degraded, exactly as a pre-R7 session of the same
+			// CLI does. The honest structured_gap that accompanies it is the assembly's.
+			d.logf("launch %s: no session backend planned: %v", id, perr)
+		} else {
+			spec.Backend = plan
+		}
+	}
+	if spec.Backend != nil {
+		lc.BackendProgram = spec.Backend.Program
+		lc.BackendArgs = append([]string(nil), spec.Backend.Args...)
+		lc.BackendAgentArgs = append([]string(nil), spec.Backend.AgentArgs...)
+		lc.BackendSocketPath = backendSock
+		lc.BackendEnv = append([]string(nil), spec.Backend.Env...)
 	}
 	data, err := json.Marshal(lc)
 	if err != nil {
