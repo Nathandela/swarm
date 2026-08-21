@@ -1,0 +1,72 @@
+name: stress-nightly
+
+# Playbook 11.1: "Focused stress counts for shim lifecycle, gateway cancellation, reconnect,
+# operation idempotency, callback overflow, and multi-machine isolation." The focused tests
+# exist and run at -count=1 in ci.yml's `go test -race ./...`; this lane is the elevated-count
+# regression detector (the r0 stress recipe's role, docs/verification/r0-flake-rootcause.md,
+# promoted from a documented local script to a scheduled job). Counts follow the r0 precedent
+# (N=20) for the four fast areas; the two wall-clock-bound areas (relay dial deadlines,
+# conformance callback windows: ~20s per iteration regardless of CPU) run at 10 so the whole
+# job stays under ~40 minutes. Every -run selector below was verified against `go test -list`
+# to match its named test functions (evidence: docs/verification/r9-red/stress-lane-red.txt)
+# because a selector matching nothing is a silent no-op.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+# ADR-008, same rationale as ci.yml: `local` turns a toolchain floor/pin mismatch into a hard
+# error instead of letting GOTOOLCHAIN=auto self-heal the pin into a lie.
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  stress:
+    name: stress (six focused areas, -race, elevated -count)
+    runs-on: ubuntu-latest
+    # Generous ceiling over the ~40-minute budget so a genuinely wedged iteration is killed
+    # rather than billed for six hours; each area also carries its own generous -timeout.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Shim lifecycle (internal/shim, close-vs-resize race)
+        run: >
+          go test -race -count=20 -timeout 30m
+          -run '^TestCloseVsResizeRace$'
+          ./internal/shim/
+
+      - name: Gateway cancellation (internal/remote/relay, PB-NET-7 + dial deadlines)
+        run: >
+          go test -race -count=10 -timeout 30m
+          -run '^(TestPBNET7_TheCallersCancellationWinsOverTheTransportBound|TestPBNET7_DialHonoursItsCallersContext|TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline|TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow|TestDialDeadline_EveryExportedDialInheritsTheBound)$'
+          ./internal/remote/relay/
+
+      - name: Reconnect (internal/remotegw, outbox restart + inbound replay classes)
+        run: >
+          go test -race -count=20 -timeout 30m
+          -run '^(TestGateway_SeedsResumePointFromDurableCursor|TestRelaySink_OutboxCommitsDeliveredCursorsAcrossRestart|TestGateway_RestartDoesNotReAppendDeliveredJournalRecords|TestRelaySink_OutboxReplayIsIdempotent|TestReplay_SeqRegressedPhoneRetainedInputNeverReachesLease|TestReplay_RetainedFrameClassesRefusedAfterRestart)$'
+          ./internal/remotegw/
+
+      - name: Operation idempotency (internal/idempotency, store crash/replay/compaction)
+        run: >
+          go test -race -count=20 -timeout 30m
+          -run '^(TestIdempotency_ReplayKillNoSecondSignal|TestIdempotency_OutcomeSurvivesRestart|TestIdempotency_CrashBetweenExecuteAndCommitNoDoubleExecute|TestIdempotency_InterruptOutcomeUnknownOnCrash|TestIdempotency_OperationIDBounded|TestIdempotency_TTLCompaction|TestIdempotency_CompactRenameFailureKeepsStoreUsable|TestIdempotency_CompactFsyncsParentDir|TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable)$'
+          ./internal/idempotency/
+
+      - name: Callback overflow (mobile/conformance, PB-BIND-6 threading/overflow contract)
+        run: >
+          go test -race -count=10 -timeout 30m
+          -run '^(TestPBBIND6_ConcurrentCallsAndRepeatedStartStop|TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable)$'
+          ./mobile/conformance/
+
+      - name: Multi-machine isolation (internal/phonecore, R4 two-machine namespaces)
+        run: >
+          go test -race -count=20 -timeout 30m
+          -run '^(TestR4_TwoMachines_NamespacesKeysSeqSpacesAndWakeAddressesAreDisjoint|TestR4_TwoMachines_RevocationIsolatesOnePairing|TestR4_TwoMachines_ProcessDeathRestoresBothPairings|TestR4_TwoMachines_RemovalDeletesExactlyOneNamespace|TestR4_RegistryManager_AggregateStreamIsMachineQualifiedAndDuplicateSessionIDsDoNotCollide|TestR4_RegistryManager_AddRefusesDuplicateMachineID)$'
+          ./internal/phonecore/

@@ -1,0 +1,153 @@
+==============================================================
+Wave R9 TASK A -- phone MailboxWait live tail (playbook s.10)
+TDD RED evidence, recorded before implementation
+date: 2026-08-21T07:57:32Z  commit: 73f4b05 (dirty tree, wave in progress)
+==============================================================
+
+--- RED 1+3: mobile/conformance/r9_waittail_test.go
+    (1) TestR9_TheDrainWaitsOnTheMailboxInsteadOfPolling
+    (3) TestR9_AReconnectAcrossTheWaitPathRedeliversNothing
+cmd: go test ./mobile/conformance/ -run 'TestR9_' -count=1
+
+--- FAIL: TestR9_TheDrainWaitsOnTheMailboxInsteadOfPolling (0.71s)
+    r9_waittail_test.go:275: the phone issued ZERO mailbox_wait ops while receiving an item; the drain is not the bounded server-side wait playbook section 10 requires (got 2 mailbox_read ops instead -- the 500 ms poll, ADR-007 B100)
+    r9_waittail_test.go:280: the phone issued 2 mailbox_read ops against a relay that supports mailbox_wait; the poll must survive only as the compatibility fallback an OLD relay's refusal selects
+--- FAIL: TestR9_AReconnectAcrossTheWaitPathRedeliversNothing (1.77s)
+    r9_waittail_test.go:315: zero mailbox_wait ops crossed the tap; the reconnect was not exercised on the wait path
+    r9_waittail_test.go:318: the phone fell back to 4 mailbox_read ops across a plain reconnect; the fallback is reserved for a relay that REFUSES mailbox_wait, not for a dropped link
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	3.405s
+FAIL
+
+--- RED 2: mobile/r9_waitfallback_test.go
+    (2) TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback
+The correct RED for symbols-that-must-be-created (the harness pattern this repo
+already uses): the mobile test package fails to compile with undefined errors.
+cmd: go vet ./mobile/
+
+# github.com/Nathandela/swarm/mobile [github.com/Nathandela/swarm/mobile.test]
+mobile/r9_waitfallback_test.go:207:16: undefined: waitTimeout
+mobile/r9_waitfallback_test.go:208:2: undefined: waitTimeout
+mobile/r9_waitfallback_test.go:209:21: undefined: waitTimeout
+mobile/r9_waitfallback_test.go:337:16: app.waitSupport undefined (type *App has no field or method waitSupport)
+mobile/r9_waitfallback_test.go:337:43: undefined: waitUnsupported
+mobile/r9_waitfallback_test.go:339:84: undefined: waitUnsupported
+
+--- (4) TestR9_HandlePushWake_AWakePastItsTTLRendersNothing (mobile/r9_wakettl_test.go)
+Asserts EXISTING behaviour (phonecore AcceptWakeV1's WakeV1MaxAge bound) at the
+HandlePushWake seam, so its RED is a mutation proof recorded in the GREEN section
+below once the package compiles again.
+
+==============================================================
+GREEN + MUTATION EVIDENCE (post-implementation)
+date: 2026-08-21T08:02:27Z
+==============================================================
+
+Implementation: mobile/relay.go drain -> drainWait (bounded MailboxWait under
+transport.DrainPacer, per-wait bound waitTimeout = 25s server ceiling +
+relay.DefaultCallTimeout) / drainPoll (the 500 ms poll, verbatim, selected only
+after a real old-relay refusal: a deadline-shaped first-wait failure while
+waitSupport is still unknown). App.waitSupport records the process-sticky verdict.
+transport/doc.go updated; mobile/deps_allowlist.txt gained the stdlib-only
+internal/remote/transport entry; pbnet6 permitted-reader table renamed its single
+reader to the two mutually exclusive modes.
+
+--- GREEN: all four R9 tests
+cmd: go test ./mobile/conformance/ -run TestR9_ -count=1 -race
+ok  	github.com/Nathandela/swarm/mobile/conformance	3.943s
+cmd: go test ./mobile/ -run TestR9_ -count=1 -race -v
+--- PASS: TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback (1.85s)
+--- PASS: TestR9_HandlePushWake_AWakePastItsTTLRendersNothing (0.01s)
+ok  	github.com/Nathandela/swarm/mobile	4.027s
+
+--- MUTATION M1: mobile/relay.go drain dispatch forced to a.drainPoll unconditionally
+    (cp-backup, perturb, run, cp-restore, cmp byte-verified). Test 1 fails:
+--- FAIL: TestR9_TheDrainWaitsOnTheMailboxInsteadOfPolling (0.74s)
+    r9_waittail_test.go:275: the phone issued ZERO mailbox_wait ops while receiving an item; the drain is not the bounded server-side wait playbook section 10 requires (got 2 mailbox_read ops instead -- the 500 ms poll, ADR-007 B100)
+    r9_waittail_test.go:280: the phone issued 2 mailbox_read ops against a relay that supports mailbox_wait; the poll must survive only as the compatibility fallback an OLD relay's refusal selects
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	1.816s
+FAIL
+
+--- MUTATION M2: mobile/relay.go demotion removed (waitSupport.Store(waitUnsupported)
+    replaced by a no-op). Test 2 fails -- the phone re-probes the refused wait forever
+    and the event never arrives:
+--- FAIL: TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback (15.28s)
+    r9_waitfallback_test.go:323: the journal event never reached the phone; an old relay's refusal of mailbox_wait must drop the drain into the 500 ms compatibility poll, and delivery must survive it
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	16.321s
+FAIL
+
+--- MUTATION M3: mobile/relay.go drainWait passes cursor*0 to MailboxWait (durable
+    cursor not carried into the wait). Test 3 fails at the wire-level duplicate
+    detector:
+--- FAIL: TestR9_AReconnectAcrossTheWaitPathRedeliversNothing (1.45s)
+    r9_waittail_test.go:322: the relay served 6 mailbox items for 3 pushed events across the reconnect; with acks suppressed a re-served item is a cursor regression, and section 10 budgets duplicate deliveries after retries/reconnect at ZERO
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile/conformance	2.565s
+FAIL
+
+--- MUTATION M4: internal/phonecore/pushbinding.go AcceptWakeV1 TTL comparison
+    neutralized (if false && age > WakeV1MaxAge). Test 4 fails:
+--- FAIL: TestR9_HandlePushWake_AWakePastItsTTLRendersNothing (0.01s)
+    r9_wakettl_test.go:51: a wake 6m0s past issue was accepted; WakeV1MaxAge is the whole of the capture-replay bound for the one path that puts text on a lock screen
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	0.972s
+FAIL
+
+All four perturbed files were restored from their cp backups and verified
+byte-identical with cmp before this section was recorded.
+
+==============================================================
+REGRESSIONS FOUND BY THE EXISTING SUITE UNDER THE WAIT DRAIN,
+AND THEIR FIXES (recorded because each was a RED before its fix)
+date: 2026-08-21T08:49:40Z
+==============================================================
+
+(R-a) TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned FAILED under the wait
+drain: Resync's RewindRelayCursor was invisible to a wait PARKED at the poisoned
+cursor -- an append wakes the server-side wait, which re-reads past the poisoned
+coordinate, finds nothing and RE-PARKS (relay/wait.go serveWait), so recovery had
+to wait out the whole 25 s ceiling and the fence timed out at 5 s:
+  cursorrecovery_test.go:250: timed out after 5s: after Resync the phone STILL
+  receives nothing from an honest relay: a poisoned relay read cursor is
+  unrecoverable without deleting the state directory
+FIX: App.nudgeDrain -- Resync cancels the parked wait's context after rewinding;
+drainWait treats the cancellation as 're-read the durable cursor and re-park'
+(mobile/relay.go). Green afterwards, including the durable restart leg.
+
+(R-b) TestS10_Resync{AsksTheMachine,IsRateBounded,DoesNotClearStaleness...} failed
+INTERMITTENTLY under load once the nudge existed and ran BEFORE the reseed round
+trip: cancelling a context that the wait's own request write is riding closes the
+whole websocket (the websocket library's cancel-during-write contract), and the
+reseed append then raced the connection the nudge had just killed:
+  s10_resync_test.go:172: the first Resync: swarm/offline: relay: connection closed
+  (client pump exit observed under temporary debug: 'failed to get reader: use of
+   closed network connection'; drain exit: 'failed to write msg: use of closed
+   network connection' -- debug removed after diagnosis, relay files restored
+   byte-identical, git status clean for internal/remote/relay/)
+FIX: the nudge is DEFERRED to run last in Resync, strictly after the reseed request
+crossed; its worst case is one silent reconnect onto the rewound cursor. 6/6 green
+under -race repetition afterwards.
+
+(R-c) TestSilentRelay_TheConnectionStopsClaimingToBeOnline FAILED (40.56 s): a
+relay gone silent while an ack round trip was in flight cost the swallowed ack
+timeout (10 s) PLUS a full parked wait (35 s) before the drain observed the outage
+-- 45 s nominal against the fence's 40 s bound (the poll path re-probed within one
+DefaultCallTimeout, so it never had the additive case).
+FIX: flushAcks now returns its error; the WAIT drain ends the generation on a
+failed flush (its next probe is a waitTimeout away), while the poll drain keeps
+ignoring it (its next read re-probes within 10 s). Nothing is lost: acks are
+optimisations and the durable receive high-water refuses redelivery.
+
+--- FINAL GATES
+go build ./...              : PASS
+go vet ./...                : PASS
+golangci-lint (mobile, transport): 0 issues
+go test -race -count=1 ./mobile/               : ok (37.1s)
+go test -race -count=1 ./mobile/conformance/   : ok (190.5s, then 223.8s repeat)
+go test -race -count=1 ./internal/remote/transport/ : ok (6.0s)
+go test -race -count=1 ./internal/phonecore/   : ok (28.4s; package only ever
+  perturbed for mutation M4 and restored byte-identical)
+No swarm shim / swarm-fake orphans (ps checked); no processes spawned by these
+tests outside in-process relay servers reaped by t.Cleanup.

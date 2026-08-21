@@ -27,6 +27,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/transport"
 )
 
 // The reconnect backoff between relay dial attempts, PB-NET-4 / ADR-007 section 6.0's
@@ -126,22 +127,30 @@ func (r *relayAcker) Ack(cursor uint64) error {
 }
 
 // flushAcks releases everything the core has committed since the last flush.
-func (a *App) flushAcks(ctx context.Context, cl *relay.Client) {
+//
+// The error is REPORTED, not acted on here: an ack is an optimisation (the durable receive
+// high-water refuses any redelivery), so nothing is lost when one fails -- but a failed ack
+// is a bounded exchange the relay did not answer, which is transport evidence its caller may
+// need. The poll drain ignores it, because its next MailboxRead re-probes the link within
+// one DefaultCallTimeout anyway; the wait drain must not, because its next probe would
+// otherwise be a full waitTimeout away (see drainWait).
+func (a *App) flushAcks(ctx context.Context, cl *relay.Client) error {
 	a.mu.Lock()
 	cursor := a.ackPending
 	sent := a.ackSent
 	a.mu.Unlock()
 	if cursor <= sent {
-		return
+		return nil
 	}
 	if err := cl.MailboxAck(ctx, cursor); err != nil {
-		return
+		return err
 	}
 	a.mu.Lock()
 	if cursor > a.ackSent {
 		a.ackSent = cursor
 	}
 	a.mu.Unlock()
+	return nil
 }
 
 // conn returns the live relay client, or why there is none.
@@ -904,7 +913,133 @@ func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
 	}
 }
 
-// drain polls the mailbox and hands every item to the core, in order.
+// The relay's mailbox_wait support, as THIS process has observed it (App.waitSupport).
+// It starts unknown, is confirmed by the first wait the relay ANSWERS -- items or a clean
+// empty page alike -- and is demoted to unsupported by the one piece of evidence an OLD
+// relay can produce (see drainWait). The verdict is process-sticky: an old relay does not
+// become a new one between reconnects, and re-probing on every generation would buy each
+// one a dark window the length of waitTimeout.
+const (
+	waitUnknown int32 = iota
+	waitSupported
+	waitUnsupported
+)
+
+// serverWaitCeiling is §6.0's "Server-side wait (long-poll) maximum | 25 s" (PB-NET-5),
+// transcribed exactly as internal/remotegw does for the machine hop: it is the RELAY's
+// ceiling, which is why it cannot be the phone's bound and is instead the number the
+// phone's own bound has to clear.
+const serverWaitCeiling = 25 * time.Second
+
+// waitTimeout bounds ONE MailboxWait from the phone's side: the relay's own 25 s wait
+// ceiling plus PB-NET-7's request budget for the frames that carry the wait out and its
+// reply back -- composed from §6.0's terms rather than chosen, exactly like the gateway's
+// defaultWaitTimeout, and for the same reason (a relay that honours the ceiling is never
+// cut off early; one that answers nothing is ended one request budget later).
+//
+// It is a var, not a const, for one reason only: the old-relay fallback test would
+// otherwise spend the full production bound proving a timeout fires. Nothing in
+// production writes it.
+var waitTimeout = serverWaitCeiling + relay.DefaultCallTimeout
+
+// drain hands every mailbox item to the core, in order, until the connection dies: the
+// bounded-MailboxWait live tail against every relay that supports it, and the legacy
+// 500 ms poll ONLY once this process has evidence the relay refuses the wait op
+// (playbook section 10: "an explicit compatibility fallback only for old relays").
+func (a *App) drain(ctx context.Context, cl *relay.Client) {
+	if a.waitSupport.Load() == waitUnsupported {
+		a.drainPoll(ctx, cl)
+		return
+	}
+	a.drainWait(ctx, cl)
+}
+
+// drainWait is the live tail: park a bounded server-side wait at the durable cursor,
+// deliver whatever page it returns, ack, park the next one. Reads are paced by the SAME
+// transport.DrainPacer the gateway's command-IN loop uses, so §6.0's inbound drain budget
+// binds this hop by construction rather than by a second transcription -- including
+// against a poisoned mailbox tail, where the wait returns instantly forever and the pacer
+// is what keeps the loop at the budget instead of at full speed (PB-SYNC-6; the poll
+// loop's progress condition, restated for a drain with no sleep to fall into).
+//
+// HOW AN OLD RELAY IS DETECTED, because it is the one demotion path and it must be a real
+// refusal. A pre-v0.7.0 relay answers the unknown op with an ordinary in-order MsgError
+// frame; the client correlates only MsgWaitReply frames to the parked waiter (ADR-007
+// B7), so that refusal can never reach this call -- the wait just sits silent while the
+// connection stays up, until waitTimeout ends it with the deadline. "The relay answered
+// its authenticated handshake and then answered NOTHING to a wait this process has never
+// once seen answered" is therefore the whole of the evidence an old relay can produce,
+// and it is exactly what demotes: a deadline-shaped failure while the verdict is still
+// unknown. Every other failure -- the link dying under the wait (ErrConnClosed), the
+// drain's own shutdown -- returns for an ordinary reconnect with the verdict unchanged,
+// and once ANY wait has been answered the verdict is supported and a later black-holed
+// link can no longer demote it.
+//
+// THE DEMOTION RETURNS RATHER THAN POLLING IN PLACE, and must: the refused wait's
+// un-correlated MsgError is still queued on this connection's reply channel, where the
+// next request/reply exchange would consume it as its own answer. The connection is
+// spent; run() tears it down and the next generation drains in poll mode on a clean one.
+func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
+	pacer := transport.NewDrainPacer()
+	for ctx.Err() == nil {
+		if pacer.Pace(ctx) != nil {
+			return
+		}
+		// ONE deadline per wait, cancelled rather than deferred (a defer here would
+		// accumulate one live timer per cycle for the connection's life).
+		waitCtx, cancelWait := context.WithTimeout(ctx, waitTimeout)
+		a.setWaitCancel(cancelWait)
+		// The durable cursor is read AFTER the nudge target is registered, which is what
+		// closes RewindRelayCursor's race with a parking wait: a rewind that lands before
+		// this line is picked up here, and one that lands after it cancels the wait
+		// (nudgeDrain), so neither ordering leaves the drain parked at the old cursor.
+		cursor := a.core.State().RelayCursor
+		items, _, err := cl.MailboxWait(waitCtx, cursor)
+		a.setWaitCancel(nil)
+		cancelWait()
+		pacer.Observe(len(items))
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				// The NUDGE, and it can be nothing else: the drain's own shutdown was
+				// checked above, the deadline is a different sentinel, and nothing else
+				// cancels waitCtx. RewindRelayCursor moved the durable cursor under this
+				// parked wait; re-park at the value it holds now. The client already freed
+				// the relay's wait slot on the way out (mailbox_wait_cancel travels the
+				// same stream in order), so the immediate replacement is admitted.
+				continue
+			}
+			if a.waitSupport.Load() == waitUnknown && errors.Is(err, context.DeadlineExceeded) {
+				a.waitSupport.Store(waitUnsupported)
+			}
+			return
+		}
+		a.waitSupport.Store(waitSupported)
+		for _, it := range items {
+			a.accept(ctx, it.Envelope, it.Cursor)
+		}
+		// Acks stay coalesced to one per page and INLINE, as the poll path has always
+		// taken them: at the pacer's 3 reads/s ceiling that is at most 6 metered ops/s
+		// against the relay's 600/min window, and flushAcks already skips when the
+		// durable cursor did not move.
+		//
+		// A FAILED flush ends the generation, which the poll drain does not need and this
+		// one does. An ack that timed out is a bounded exchange the relay answered nothing
+		// to; the poll's next MailboxRead would re-probe the link within DefaultCallTimeout,
+		// but this loop's next probe is a wait a full waitTimeout away -- so a silent relay
+		// noticed by the ack would otherwise stay "online" for ack timeout + waitTimeout,
+		// past the bound the silent-relay fence holds the state to. Nothing is lost: acks
+		// are optimisations, and the durable receive high-water refuses any redelivery.
+		if err := a.flushAcks(ctx, cl); err != nil {
+			return
+		}
+	}
+}
+
+// drainPoll polls the mailbox at pollInterval: the pre-wait drain, kept verbatim as the
+// compatibility fallback an old relay's refusal selects (see drain).
 //
 // The immediate next read is conditioned on PROGRESS -- the durable cursor moved -- and
 // not on the page having been non-empty. The cursor advances only for a frame the core
@@ -915,7 +1050,37 @@ func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
 // connection dies -- an unbounded-work lever handed to the party the design treats as
 // hostile (PB-SYNC-6), and reachable benignly by any frame that arrives before
 // InstallContentKey. A real backlog still drains at full speed: it advances the cursor.
-func (a *App) drain(ctx context.Context, cl *relay.Client) {
+// setWaitCancel publishes (or clears) the cancel function of the wait the drain is about
+// to park, the seam nudgeDrain acts through. Guarded by a.mu like the rest of the App's
+// cross-goroutine state.
+func (a *App) setWaitCancel(fn context.CancelFunc) {
+	a.mu.Lock()
+	a.waitCancel = fn
+	a.mu.Unlock()
+}
+
+// nudgeDrain wakes a parked mailbox wait so the drain re-reads the durable relay cursor.
+//
+// IT EXISTS FOR EXACTLY ONE CALLER: Resync, right after RewindRelayCursor. The poll
+// fallback re-reads State.RelayCursor every cycle, so a rewind reached it within one
+// pollInterval by construction; the wait drain instead PARKS at the cursor it read, and a
+// wait parked at a poisoned coordinate (ADR-007 B126) is woken by nothing -- no item is
+// ever past it -- until the relay's 25 s ceiling answers it empty. The rewind is the one
+// local state change that must interrupt the wait, and cancelling the wait's own context
+// is the mechanism the client already defines for withdrawing one cleanly.
+//
+// With no wait parked it is a no-op, and correctly so: the rewind is already durable, and
+// whichever read the drain makes next starts from it.
+func (a *App) nudgeDrain() {
+	a.mu.Lock()
+	fn := a.waitCancel
+	a.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 	for ctx.Err() == nil {
 		cursor := a.core.State().RelayCursor
 		items, err := cl.MailboxRead(ctx, cursor)
@@ -925,7 +1090,7 @@ func (a *App) drain(ctx context.Context, cl *relay.Client) {
 		for _, it := range items {
 			a.accept(ctx, it.Envelope, it.Cursor)
 		}
-		a.flushAcks(ctx, cl)
+		_ = a.flushAcks(ctx, cl) // this loop's own MailboxRead re-probes the link next cycle
 		if a.core.State().RelayCursor > cursor {
 			continue
 		}

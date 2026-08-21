@@ -105,7 +105,12 @@ func newPollObserver(t *testing.T, upstream string) *pollObserver {
 				}
 				// The relay's control ops are a JSON body inside a binary frame; matching the
 				// op on raw bytes keeps the observer from having to decode the wire format.
-				if bytes.Contains(data, []byte("mailbox_read")) {
+				// Since Wave R9 the phone's drain is a parked mailbox_wait (mobile/relay.go
+				// drainWait) and mailbox_read survives only as the old-relay fallback, so the
+				// observer treats either op as "the phone just looked": publishing immediately
+				// after a wait goes out lands the item on a freshly parked wait, which is that
+				// mechanism's own worst-aligned moment.
+				if bytes.Contains(data, []byte("mailbox_read")) || bytes.Contains(data, []byte("mailbox_wait")) {
 					select {
 					case p.reads <- struct{}{}:
 					default: // a full channel means the sampler is busy; never block the proxy
@@ -196,9 +201,12 @@ func TestPBNET5B_EchoLatencyMachineToPhoneVisible(t *testing.T) {
 	ds := make([]time.Duration, 0, samples)
 	for i := 1; i <= samples; i++ {
 		cursor := uint64(i)
-		if !obs.awaitPoll(10 * time.Second) {
-			t.Fatalf("sample %d: no mailbox_read passed the observer within 10s; the phone is not "+
-				"polling, so this harness is measuring nothing", i)
+		// 30 s, not 10: an IDLE parked wait re-parks only after the relay's 25 s server
+		// ceiling answers it empty, so the gap between two "the phone just looked" signals
+		// can legitimately be a full ceiling.
+		if !obs.awaitPoll(30 * time.Second) {
+			t.Fatalf("sample %d: no mailbox_read or mailbox_wait passed the observer within 30s; the phone is "+
+				"neither waiting nor polling, so this harness is measuring nothing", i)
 		}
 		start := time.Now()
 		h.PushEvent(schema.JournalRecord{

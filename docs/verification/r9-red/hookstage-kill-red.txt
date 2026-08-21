@@ -1,0 +1,193 @@
+R9 TASK D EVIDENCE -- hook-stage x daemon-kill-point matrix (playbook 11.1)
+Date: Fri Aug 21 09:47:40 CEST 2026
+Branch/commit: main @ 73f4b05
+
+New test: internal/skeleton/r9_hookstagekill_test.go
+  TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints
+  Stage list DERIVED from internal/adapter/claude's hookEvents table via the
+  adapter's public SignalSources() (one Kind==hook source per row), x two kill
+  points (killed-before-drain, killed-after-drain-before-ack), exactly-once
+  asserted per stage via per-stage subtests.
+
+== TDD RED NOTE ============================================================
+This wave closes a COVERAGE gap: the production drain machinery (R6:
+internal/skeleton/hookdrain.go, internal/shim/hookspool.go+hooksocket.go)
+already exists, so the matrix written first against it passes on its first
+run (recorded below). No production code was written or changed for this
+task. The failing-first demonstration for a coverage test is therefore the
+MUTATION-PROOF section: each kill-point fence is perturbed in production
+(byte-verified cp-backup/cmp-restore), the matrix shown to FAIL, the line
+restored (cmp-verified identical), and the matrix shown green again. No
+existing test assertion was weakened or deleted.
+
+== FIRST RUN (test written before any production change; green) ============
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1 -v
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/UserPromptSubmit
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PreToolUse
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PostToolUse
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/Notification
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/Stop
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/SubagentStart
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/SubagentStop
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PermissionRequest
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/UserPromptSubmit
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PreToolUse
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PostToolUse
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/Notification
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/Stop
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/SubagentStart
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/SubagentStop
+=== RUN   TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PermissionRequest
+--- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (6.82s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/UserPromptSubmit (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PreToolUse (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PostToolUse (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/Notification (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/Stop (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/SubagentStart (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/SubagentStop (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-before-drain/PermissionRequest (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/UserPromptSubmit (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PreToolUse (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PostToolUse (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/Notification (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/Stop (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/SubagentStart (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/SubagentStop (0.00s)
+    --- PASS: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints/killed-after-drain-before-ack/PermissionRequest (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.891s
+
+== MUTATION PROOF 1: killed-before-drain fence (never zero) ================
+Perturbed: internal/shim/hookspool.go readFromLocked line 369
+  'if r.Seq > after {'  ->  'if r.Seq > after+1 {'
+  (the spool replay silently withholds the oldest undrained record --
+   exactly the accepted-item loss playbook 6.1 forbids)
+cmp vs backup: differ at char 18553, line 369 (byte-verified)
+
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+--- FAIL: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (2.71s)
+    r9_hookstagekill_test.go:187: killed-before-drain restart drain applied=7 skipped=0, want applied=8 skipped=0 (one per stage)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.798s
+FAIL
+
+Restored internal/shim/hookspool.go from backup; cmp reports byte-identical.
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1   (post-restore)
+ok  	github.com/Nathandela/swarm/internal/skeleton	8.032s
+
+== MUTATION PROOF 2: killed-after-drain-before-ack fence (never twice) =====
+Perturbed: internal/skeleton/hookdrain.go applyLocked line 547
+  'persistHookCursor(hd.cursorPath, rec.Seq)'  ->  'persistHookCursor(hd.cursorPath, 0)'
+  (the fold cursor is never durably advanced -- the exact crash window the
+   pre-ack kill point exists for: drained+journalled records look undrained
+   to the restarted daemon and get re-offered)
+cmp vs backup: differ at char 23873, line 547 (byte-verified)
+
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+2026/08/21 09:48:55 skeleton: hook callback sequence 1 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 2 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 3 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 4 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 5 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 6 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 7 for session s-r9-kill was already ingested; dropped as a redelivery
+2026/08/21 09:48:55 skeleton: hook callback sequence 8 for session s-r9-kill was already ingested; dropped as a redelivery
+--- FAIL: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (5.24s)
+    r9_hookstagekill_test.go:212: pre-ack batch drain applied=8 skipped=8, want applied=8 skipped=0
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	6.331s
+FAIL
+
+Restored internal/skeleton/hookdrain.go from backup; cmp reports byte-identical.
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1   (post-restore)
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.812s
+
+== MUTATION PROOF 3: exactly-once journal delivery (the matrix's core claim) =
+Perturbed: internal/skeleton/hookdrain.go ingestHookBytes line 87 --
+  the 'd.serveHookInteractions(cb)' apply is DUPLICATED (each accepted spool
+  record shapes its journal item twice while every applied/skipped count and
+  cursor stays correct, so only the journal-level exactly-once fences can
+  catch it)
+cmp vs backup: differ at char 4461, line 88 (byte-verified)
+
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+ok  	github.com/Nathandela/swarm/internal/skeleton	8.726s
+
+== MUTATION PROOF 3: double-apply inside one incarnation ===================
+Perturbed: internal/skeleton/hookdrain.go ingestHookBytes -- the
+  'd.serveHookInteractions(cb)' apply DUPLICATED (line inserted after 87),
+  so each accepted record shapes its journal item twice while applied/skipped
+  counts and the cursor stay correct.
+
+FIRST OUTCOME (test as first written): NOT CAUGHT -- the matrix passed.
+Root cause: delivery labels came from scriptedCapture's order-consuming script
+(one batch per Interactions call), so a doubled apply SHIFTED the labels onto
+the extra calls instead of duplicating any label; every label still appeared
+exactly once. The test was STRENGTHENED in response (no assertion weakened):
+each post now carries its (kill point, stage) label IN the callback's Raw body
+(ADR-010 s6 carriage, verbatim through spool and drain) and a new
+echoCaptureAdapter shapes exactly one agent_message per record from that
+carried label -- attribution per RECORD, not per capture order. A redelivery
+in a fresh incarnation re-shapes the SAME label under a fresh item_id, so it
+lands in the journal and trips the per-stage exactly-once count.
+
+Strengthened test green run:
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+ok   github.com/Nathandela/swarm/internal/skeleton   8.140s
+
+Mutation 3 re-applied against the STRENGTHENED test:
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+--- FAIL: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (7.56s)
+    r9_hookstagekill_test.go:231: killed-before-drain item 1 = "predrain:UserPromptSubmit", want "predrain:PreToolUse" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 2 = "predrain:PreToolUsepredrain:PreToolUse", want "predrain:PostToolUse" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 3 = "predrain:PostToolUsepredrain:PostToolUse", want "predrain:Notification" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 4 = "predrain:Notificationpredrain:Notification", want "predrain:Stop" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 5 = "predrain:Stoppredrain:Stop", want "predrain:SubagentStart" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 6 = "predrain:SubagentStartpredrain:SubagentStart", want "predrain:SubagentStop" (spool order per stage)
+    r9_hookstagekill_test.go:231: killed-before-drain item 7 = "predrain:SubagentStoppredrain:SubagentStop", want "predrain:PermissionRequest" (spool order per stage)
+    r9_hookstagekill_test.go:281: journal holds 17 item(s) across the whole matrix, want exactly 16 (each stage once per kill point)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	8.526s
+FAIL
+
+Restored internal/skeleton/hookdrain.go from backup; cmp reports byte-identical.
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1   (post-restore)
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.813s
+
+== MUTATION PROOFS 1 AND 2 RE-RUN AGAINST THE STRENGTHENED TEST ============
+
+Mutation 1 re-applied: internal/shim/hookspool.go readFromLocked line 369
+  'if r.Seq > after {'  ->  'if r.Seq > after+1 {'
+cmp: differ at line 369 (byte-verified)
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+--- FAIL: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (2.22s)
+    r9_hookstagekill_test.go:223: killed-before-drain restart drain applied=7 skipped=0, want applied=8 skipped=0 (one per stage)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.320s
+FAIL
+Restored hookspool.go; cmp byte-identical.
+
+Mutation 2 re-applied: internal/skeleton/hookdrain.go applyLocked line 547
+  'persistHookCursor(hd.cursorPath, rec.Seq)' -> 'persistHookCursor(hd.cursorPath, 0)'
+cmp: differ at line 547 (byte-verified)
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1
+--- FAIL: TestHookStageKillMatrix_EveryStageExactlyOnceAcrossBothKillPoints (4.62s)
+    r9_hookstagekill_test.go:248: pre-ack batch drain applied=8 skipped=8, want applied=8 skipped=0
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	5.729s
+FAIL
+Restored hookdrain.go; cmp byte-identical.
+$ go test ./internal/skeleton/ -run TestHookStageKillMatrix -count=1   (final post-restore)
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.602s
+
+== GATES ===================================================================
+go build ./...                                : OK
+go vet ./...                                  : OK
+golangci-lint run                             : 0 issues
+go test -race -count=1 ./internal/skeleton/   : ok (401.5s, whole package)
+
+Footprint: internal/skeleton/r9_hookstagekill_test.go (new, test-only).
+Production files perturbed during mutation proofs were restored byte-identical
+(cmp-verified) each time; no production change ships with this task.

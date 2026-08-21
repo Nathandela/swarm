@@ -1,0 +1,106 @@
+== ABSENCE PROOF: no CI lane runs the focused stress tests at elevated count (playbook 11.1) ==
+date: 2026-08-21T07:43:00Z  HEAD: 73f4b05  host: Darwin arm64, go version go1.26.5 darwin/amd64
+
+-- workflow files present before this task:
+ci.yml
+release.yml
+
+-- 'schedule:' triggers across all workflows (a nightly lane would need one):
+(no matches: no workflow has any schedule trigger)
+
+-- '-count=' occurrences across all workflows (elevated-count stress would need one > 1):
+.github/workflows/ci.yml:101:        run: go test -tags integration -run '^TestDaemonIdleCPUNearZero$' -count=1 ./internal/daemon/
+.github/workflows/ci.yml:107:        run: go test -run '^TestFirstPaintGate_RealDaemon_FiftySessions_P95$' -count=1 ./internal/tui/
+.github/workflows/ci.yml:112:        run: go test -run '^TestE2E_LiveShimKeystrokeEchoLatencyP95$' -count=1 ./internal/e2e/
+.github/workflows/ci.yml:134:        run: go test -tags integration -run '^TestDaemonIdleCPUNearZero$' -count=1 ./internal/daemon/
+.github/workflows/ci.yml:257:          count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)
+.github/workflows/ci.yml:347:        run: go test -tags androidgate -timeout 60m -count=1 ./android/gate/...
+
+-- the six stress-area test names, searched across all workflows:
+(no matches: no workflow names any of the six stress areas)
+
+-- the r0 stress recipe exists only as a documented local script:
+38:## The stress recipe (`/tmp/stress.sh`, reproduced below verbatim)
+
+Conclusion: the focused stress tests run only at -count=1 inside 'go test -race ./...';
+no workflow runs them at elevated count, on any schedule. The lane is absent.
+
+== -list PROOFS: every -run selector used by the lane matches at least one test ==
+(a selector matching nothing is a silent no-op; each area's selector is verified below)
+
+-- area 1: shim lifecycle (internal/shim) --
+TestCloseVsResizeRace
+ok  	github.com/Nathandela/swarm/internal/shim	1.144s
+
+-- area 2: gateway cancellation (internal/remote/relay) --
+TestPBNET7_TheCallersCancellationWinsOverTheTransportBound
+TestPBNET7_DialHonoursItsCallersContext
+TestDialDeadline_EveryStageOfTheDialIsBoundedWithoutACallerDeadline
+TestDialDeadline_TheWholeDialFitsTheRelaysOwnPreAuthWindow
+TestDialDeadline_EveryExportedDialInheritsTheBound
+ok  	github.com/Nathandela/swarm/internal/remote/relay	0.840s
+
+-- area 3: reconnect (internal/remotegw) --
+TestReplay_SeqRegressedPhoneRetainedInputNeverReachesLease
+TestReplay_RetainedFrameClassesRefusedAfterRestart
+TestGateway_SeedsResumePointFromDurableCursor
+TestRelaySink_OutboxCommitsDeliveredCursorsAcrossRestart
+TestGateway_RestartDoesNotReAppendDeliveredJournalRecords
+TestRelaySink_OutboxReplayIsIdempotent
+ok  	github.com/Nathandela/swarm/internal/remotegw	0.851s
+
+-- area 4: operation idempotency (internal/idempotency) --
+TestIdempotency_ReplayKillNoSecondSignal
+TestIdempotency_OutcomeSurvivesRestart
+TestIdempotency_CrashBetweenExecuteAndCommitNoDoubleExecute
+TestIdempotency_InterruptOutcomeUnknownOnCrash
+TestIdempotency_OperationIDBounded
+TestIdempotency_TTLCompaction
+TestIdempotency_CompactRenameFailureKeepsStoreUsable
+TestIdempotency_CompactFsyncsParentDir
+TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable
+ok  	github.com/Nathandela/swarm/internal/idempotency	0.515s
+
+-- area 5: callback overflow (mobile/conformance) --
+TestPBBIND6_ConcurrentCallsAndRepeatedStartStop
+TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable
+ok  	github.com/Nathandela/swarm/mobile/conformance	0.915s
+
+-- area 6: multi-machine isolation (internal/phonecore) --
+TestR4_TwoMachines_NamespacesKeysSeqSpacesAndWakeAddressesAreDisjoint
+TestR4_TwoMachines_RevocationIsolatesOnePairing
+TestR4_TwoMachines_ProcessDeathRestoresBothPairings
+TestR4_TwoMachines_RemovalDeletesExactlyOneNamespace
+TestR4_RegistryManager_AggregateStreamIsMachineQualifiedAndDuplicateSessionIDsDoNotCollide
+TestR4_RegistryManager_AddRefusesDuplicateMachineID
+ok  	github.com/Nathandela/swarm/internal/phonecore	0.888s
+
+== single-iteration -race timings (basis for the per-area -count choices) ==
+shim ~2.5s | relay ~23s (wall-clock-bound: deadline waits, user time 2.2s) | remotegw ~2.7s
+idempotency ~2.0s | conformance ~19s (wall-clock-bound, user time 3.4s) | phonecore ~3.5s
+counts chosen: 20 for the four fast areas (the r0 recipe's N=20 precedent), 10 for the two
+wall-clock-bound areas (relay, conformance) so the whole job stays under ~40 min:
+  20*2.5 + 10*23 + 20*2.7 + 20*2.0 + 10*19 + 20*3.5 = ~9.5 min of test wall clock locally,
+  leaving ample margin for a slower CI runner plus module download and six -race builds.
+
+== LOCAL PROOF OF THE LANE'S COMMAND SHAPE: one area (operation idempotency) at -count=3 ==
+(the workflow's exact command with -count=3 in place of 20; full nightly volume not run locally)
+$ go test -race -count=3 -timeout 30m -run '^(TestIdempotency_ReplayKillNoSecondSignal|...|TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable)$' -v ./internal/idempotency/ | tail
+exit status: 0
+PASS lines: 27  (9 tests x 3 iterations = 27 expected)
+FAIL lines: 0
+--- PASS: TestIdempotency_CompactDirSyncFailureAfterRenameKeepsRecordsDurable (0.04s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/idempotency	2.416s
+
+== NEGATIVE CONTROL (mutation-proof analogue for a YAML-only footprint) ==
+No Go test may guard this lane (task footprint: the workflow file only), so the classic
+perturb-production-line proof has no test to fail. The lane's own most-burned defect class
+is a -run selector that matches nothing and turns the step into a silent green no-op.
+Control: perturb one selector by a single character and show -list returns zero tests
+while still exiting 0 -- exactly the silent no-op the recorded -list proofs above fence:
+
+$ go test -list '^TestCloseVsResizeRaceX$' ./internal/shim/
+ok  	github.com/Nathandela/swarm/internal/shim	1.102s
+exit status: 0 (zero tests listed, still exit 0: a typo'd selector is invisible to CI,
+which is why every selector in stress-nightly.yml was -list-verified verbatim above)

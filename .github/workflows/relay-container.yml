@@ -1,0 +1,89 @@
+name: relay-container
+
+# Relay container release gates (remote-control-product-playbook.md 11.1):
+# build the real relay image from deploy/relay/Dockerfile, scan it for
+# vulnerabilities (fail on HIGH/CRITICAL), assert non-root execution, and
+# assert the compose bundle keeps its read-only/cap-dropped hardening.
+# Deliberately a separate workflow from ci.yml: this needs a docker image
+# build of the whole repo context plus a vulnerability-DB pull, neither of
+# which belongs in the Go/Android matrix's critical path.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # Weekly rescan: new CVEs surface in an UNCHANGED image, so a
+    # push/PR-only trigger would never see them.
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: swarm-relay:ci
+
+jobs:
+  image:
+    name: build, scan, non-root, hardening
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build relay image (repo-root context, deploy/relay/Dockerfile)
+        run: docker build -f deploy/relay/Dockerfile -t "$IMAGE" .
+
+      - name: Vulnerability scan (trivy, fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: swarm-relay:ci
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # The ONLY sanctioned waiver mechanism: deploy/relay/.trivyignore.
+          # Every entry there must carry a justification and an expiry
+          # comment (the file documents the rules); empty file = nothing
+          # waived.
+          trivyignores: deploy/relay/.trivyignore
+
+      - name: Assert non-root execution (playbook 11.1)
+        # distroless/static ships no shell, so `docker run ... whoami` cannot
+        # exist; Config.User is what the runtime resolves the default user
+        # from, and the distroless :nonroot base pins nonroot to uid 65532.
+        run: |
+          user="$(docker inspect --format '{{.Config.User}}' "$IMAGE")"
+          echo "Config.User=${user}"
+          case "$user" in
+            ''|0|root|0:*|root:*)
+              echo "FAIL: relay image default user is root; playbook 11.1 requires non-root execution"
+              exit 1
+              ;;
+          esac
+
+      - name: Assert compose hardening (read-only fs, dropped capabilities)
+        working-directory: deploy/relay
+        # `docker compose config` fully resolves and VALIDATES the topology
+        # (it rejects the ports-vs-network_mode conflict class outright), so
+        # this step also proves the compose file still parses as a runnable
+        # stack after any edit.
+        run: |
+          docker compose config > rendered.yml
+          python3 - <<'PY'
+          import sys, yaml
+          services = yaml.safe_load(open("rendered.yml"))["services"]
+          failed = False
+          for name, svc in sorted(services.items()):
+              caps = svc.get("cap_drop") or []
+              opts = svc.get("security_opt") or []
+              for ok, what in [
+                  (svc.get("read_only") is True, "read_only: true"),
+                  ("ALL" in caps, "cap_drop: [ALL]"),
+                  (any("no-new-privileges" in str(o) for o in opts), "no-new-privileges"),
+              ]:
+                  if not ok:
+                      print(f"FAIL: service {name} missing {what}")
+                      failed = True
+          sys.exit(1 if failed else 0)
+          PY

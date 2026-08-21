@@ -1,0 +1,12 @@
+# deploy/relay/.trivyignore
+#
+# The ONLY sanctioned way to waive a finding from the relay-container.yml
+# vulnerability scan (trivy, exit-code 1 on HIGH/CRITICAL). Format: one CVE
+# id per line. Every entry MUST be preceded by a comment stating:
+#   - why the finding does not apply to this image (the final stage is
+#     distroless static: one Go binary, no shell, no package manager,
+#     no libc to pivot on), and
+#   - an expiry date at which the waiver is re-reviewed and either
+#     re-justified or removed.
+# An empty file waives nothing. Deleting this file breaks the workflow on
+# purpose: the ignore mechanism must stay discoverable and documented.

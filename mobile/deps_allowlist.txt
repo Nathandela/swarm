@@ -63,6 +63,12 @@ golang.org/x/sys/cpu
 # --- pairing: the XXpsk0 handshake the phone drives as initiator
 github.com/Nathandela/swarm/internal/remote/pairing
 
+# --- transport: the inbound drain pacing primitives (Wave R9, playbook section 10).
+# Stdlib-only leaf (context, sync, time): DrainPacer meters the phone's MailboxWait live
+# tail at the SAME §6.0 ceiling the gateway's command-IN loop uses, so the budget exists
+# once instead of twice. No code reaches the handset beyond those two types.
+github.com/Nathandela/swarm/internal/remote/transport
+
 # --- transport: the relay client (PB-NET-1's transitive deps, landing with the slice
 # that introduces them, exactly as the core's allowlist anticipated).
 #

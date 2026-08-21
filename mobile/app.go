@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,11 +29,15 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
-// pollInterval is the IDLE mailbox drain cadence while connected; a page that came back
-// non-empty is followed immediately by the next read, so a backlog drains at full speed.
-// It matches the gateway's own command-IN cadence for the same reason: the relay meters
-// mailbox_read and mailbox_ack against a per-source ops budget (600/min by default), and a
-// phone that polled at tens of hertz would spend that budget refusing its own reads.
+// pollInterval is the IDLE mailbox cadence of the COMPATIBILITY FALLBACK drain -- the
+// pre-wait poll loop, kept only for a relay that refuses the mailbox_wait op (an old
+// relay; see mobile/relay.go drain). The shipped drain against every supporting relay is
+// the bounded MailboxWait live tail (playbook section 10, ADR-007 B100); a page that came
+// back non-empty is still followed immediately by the next read, so a backlog drains at
+// full speed. The 500 ms matches what the gateway's command-IN cadence used to be, for
+// the reason both had: the relay meters mailbox_read and mailbox_ack against a per-source
+// ops budget (600/min by default), and a phone that polled at tens of hertz would spend
+// that budget refusing its own reads.
 const pollInterval = 500 * time.Millisecond
 
 // journalLogSize bounds the in-memory journal read model. The DURABLE model is the
@@ -115,6 +120,18 @@ type App struct {
 	// per-connection poll and read O(1) by MachinePresence. Like coalesce it has its own
 	// lock: the relay goroutine writes it while the UI thread reads.
 	presence *presenceCache
+
+	// waitSupport is the relay's mailbox_wait verdict as this process has observed it
+	// (waitUnknown / waitSupported / waitUnsupported, mobile/relay.go). Atomic rather
+	// than under mu: it is written by the drain goroutine and read at the top of every
+	// generation, and those belong to different connections.
+	waitSupport atomic.Int32
+	// waitCancel, guarded by mu, is the cancel function of the mailbox wait the drain
+	// currently has parked (nil between waits). Resync cancels it through nudgeDrain
+	// after rewinding the relay cursor, because a parked wait is the one reader that
+	// would otherwise not look at the rewound cursor until the relay's wait ceiling
+	// answered it empty (mobile/relay.go).
+	waitCancel context.CancelFunc
 
 	// bucketMu orders the phone -> machine MAILBOX BUCKET -- every envelope on it, command
 	// and input alike. It is held across allocate-seal-append at each of the three append
@@ -1404,6 +1421,21 @@ func (a *App) Resync(stream string) (err error) {
 	if err = core.RewindRelayCursor(); err != nil {
 		return err
 	}
+	// The wait drain PARKS at the cursor it read, and a wait parked at the poisoned value
+	// is woken by nothing -- an append wakes the server-side wait, which re-reads past the
+	// poisoned coordinate, finds nothing and re-parks -- until the relay's 25 s ceiling
+	// lapses. So the rewind must interrupt it, or the repair this verb exists for waits
+	// out a ceiling the user experiences as the button doing nothing (see nudgeDrain).
+	//
+	// DEFERRED, SO IT RUNS LAST -- strictly after the reseed request below has crossed the
+	// connection -- and the ordering is load-bearing: cancelling a context that the wait's
+	// own request write happens to be riding closes the WHOLE websocket underneath every
+	// caller (the websocket library's cancel-during-write contract; it cannot leave a
+	// partial frame on the wire). In that worst case the nudge costs one silent reconnect
+	// and the fresh drain starts from the rewound cursor -- but a reseed request issued
+	// AFTER the nudge would be racing the connection the nudge may have just killed, and
+	// was measured losing that race as Resync returning "offline" from a healthy phone.
+	defer a.nudgeDrain()
 	// ADMITTED, so the repair is in flight from this instant (PB-APP-8's fourth state). It is
 	// marked BEFORE the request is sealed rather than after: the seal can take a relay round
 	// trip, and a user who pressed a button and saw nothing change for a second is the exact

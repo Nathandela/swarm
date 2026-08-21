@@ -1,0 +1,102 @@
+=== R9 Task B: relay container gates -- RED evidence ===
+date: 2026-08-21T07:42:07Z  commit: 73f4b05d3402f12bf95811f64fec25738b48d902
+
+--- (1) No CI job builds deploy/relay/Dockerfile ---
+$ grep -rn 'deploy/relay' .github/workflows/ ; echo exit=$?
+exit=1
+
+--- (2) No vulnerability scanner anywhere in workflows ---
+$ grep -rni 'trivy\|grype' .github/workflows/ ; echo exit=$?
+exit=1
+
+--- (3) relay-container.yml does not exist ---
+$ ls .github/workflows/
+ci.yml
+release.yml
+
+--- (4) compose has no read_only/cap_drop/security_opt on any service ---
+$ grep -n 'read_only\|cap_drop\|security_opt\|no-new-privileges' deploy/relay/docker-compose.yml ; echo exit=$?
+exit=1
+
+--- (5) TDD red run: deploy/relay/hardening_test.go written FIRST, fails against current tree ---
+$ go test ./deploy/relay/
+--- FAIL: TestComposeServicesAreHardened (0.00s)
+    hardening_test.go:89: service caddy: missing "read_only: true"
+    hardening_test.go:89: service caddy: missing "- ALL"
+    hardening_test.go:89: service caddy: missing "no-new-privileges:true"
+    hardening_test.go:89: service caddy: missing "- NET_BIND_SERVICE"
+    hardening_test.go:89: service relay-init: missing "read_only: true"
+    hardening_test.go:89: service relay-init: missing "- ALL"
+    hardening_test.go:89: service relay-init: missing "no-new-privileges:true"
+    hardening_test.go:89: service relay-init: missing "- CHOWN"
+    hardening_test.go:89: service relay-init: missing "- DAC_OVERRIDE"
+    hardening_test.go:89: service swarm-relay: missing "read_only: true"
+    hardening_test.go:89: service swarm-relay: missing "- ALL"
+    hardening_test.go:89: service swarm-relay: missing "no-new-privileges:true"
+--- FAIL: TestRelayContainerWorkflowWiresTheGates (0.00s)
+    hardening_test.go:99: read ../../.github/workflows/relay-container.yml: open ../../.github/workflows/relay-container.yml: no such file or directory
+FAIL
+FAIL	github.com/Nathandela/swarm/deploy/relay	0.440s
+FAIL
+
+=== GREEN: implementation in place ===
+$ python3 -c yaml.safe_load(.github/workflows/relay-container.yml)
+relay-container.yml: valid YAML
+$ python3 -c yaml.safe_load(deploy/relay/docker-compose.yml) [per-service hardening keys]
+  relay-init read_only=True cap_drop=['ALL'] cap_add=['CHOWN', 'DAC_OVERRIDE'] security_opt=['no-new-privileges:true']
+  swarm-relay read_only=True cap_drop=['ALL'] cap_add=None security_opt=['no-new-privileges:true']
+  caddy read_only=True cap_drop=['ALL'] cap_add=['NET_BIND_SERVICE'] security_opt=['no-new-privileges:true']
+$ go test ./deploy/relay/
+ok  	github.com/Nathandela/swarm/deploy/relay	(cached)
+
+=== MUTATION PROOFS (cp backup, byte-verified mutate, test FAILS, cmp-verified restore) ===
+
+--- mutation: Dockerfile USER nonroot -> USER root ---
+byte-verified: deploy/relay/Dockerfile differs from backup
+--- FAIL: TestDockerfileFinalStageRunsNonRoot (0.01s)
+    hardening_test.go:67: Dockerfile final stage has no explicit non-root USER directive
+    hardening_test.go:70: Dockerfile sets USER root
+FAIL
+FAIL	github.com/Nathandela/swarm/deploy/relay	0.488s
+FAIL
+restored (cmp clean)
+
+--- mutation: compose read_only: true -> false (all services) ---
+byte-verified: deploy/relay/docker-compose.yml differs from backup
+--- FAIL: TestComposeServicesAreHardened (0.00s)
+    hardening_test.go:89: service swarm-relay: missing "read_only: true"
+    hardening_test.go:89: service caddy: missing "read_only: true"
+    hardening_test.go:89: service relay-init: missing "read_only: true"
+FAIL
+FAIL	github.com/Nathandela/swarm/deploy/relay	0.496s
+FAIL
+restored (cmp clean)
+
+--- mutation: compose cap_drop ALL -> NET_RAW (all services) ---
+byte-verified: deploy/relay/docker-compose.yml differs from backup
+--- FAIL: TestComposeServicesAreHardened (0.00s)
+    hardening_test.go:89: service relay-init: missing "- ALL"
+    hardening_test.go:89: service swarm-relay: missing "- ALL"
+    hardening_test.go:89: service caddy: missing "- ALL"
+FAIL
+FAIL	github.com/Nathandela/swarm/deploy/relay	0.479s
+FAIL
+restored (cmp clean)
+
+--- mutation: workflow severity HIGH,CRITICAL line removed ---
+byte-verified: .github/workflows/relay-container.yml differs from backup
+--- FAIL: TestRelayContainerWorkflowWiresTheGates (0.00s)
+    hardening_test.go:109: relay-container.yml: missing "HIGH,CRITICAL"
+FAIL
+FAIL	github.com/Nathandela/swarm/deploy/relay	0.458s
+FAIL
+restored (cmp clean)
+
+--- post-mutation restore check: full test run green ---
+ok  	github.com/Nathandela/swarm/deploy/relay	0.420s
+
+--- restore verification (stronger than the per-mutation cmp line) ---
+$ git diff --stat deploy/relay/Dockerfile   (empty = byte-identical to HEAD, i.e. fully restored)
+exit=0
+$ post-restore YAML re-validation of both intentionally-modified files
+both valid YAML after restore

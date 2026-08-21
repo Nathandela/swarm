@@ -39,6 +39,18 @@ services:
     volumes:
       - swarm-relay-data:/var/lib/swarm-relay
     restart: "no"
+    # Hardening (playbook 11.1): root fs immutable -- the chown writes only into
+    # the mounted volume. All capabilities dropped except the two `chown -R` as
+    # root actually uses: CHOWN to hand the tree to 65532, DAC_OVERRIDE to
+    # traverse it again on re-runs once it is already 65532-owned.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
 
   swarm-relay:
     build:
@@ -57,6 +69,17 @@ services:
       - swarm-relay-data:/var/lib/swarm-relay
       - ./relay.config:/etc/swarm-relay/relay.config:ro
     command: ["--config", "/etc/swarm-relay/relay.config"]
+    # Hardening (playbook 11.1): read-only fs except the one declared writable
+    # mount. The relay writes exactly two paths, both under /var/lib/swarm-relay
+    # (db_path's relay.db and operator_secret_file -- see relay.config.example);
+    # no /tmp, pid file, or socket path, so no tmpfs is needed. It binds only
+    # loopback high ports, so it re-adds no capability at all. relay-container.yml
+    # (CI) asserts these keys survive on every service via `docker compose config`.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # (c): wired to the relay's own /healthz+/readyz via the `healthcheck` subcommand --
     # distroless has no shell/curl/wget, so the binary checks itself rather than an external
     # tool reaching into the container. Both endpoints live on admin_listen (loopback-only,
@@ -90,6 +113,19 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data # ACME account key + issued certificates -- must persist
       - caddy-config:/config # Caddy's autosave config state
+    # Hardening (playbook 11.1): read-only fs except caddy's two declared state
+    # dirs above (the official image points XDG_DATA_HOME at /data and
+    # XDG_CONFIG_HOME at /config; caddy writes nowhere else). NET_BIND_SERVICE
+    # is re-added because caddy binds :80/:443 in the shared namespace -- Docker's
+    # ip_unprivileged_port_start=0 default would cover it, but that default is
+    # not portable to every runtime this compose file may land on.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

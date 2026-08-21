@@ -1,0 +1,79 @@
+R9 TASK E - production jitter source exercised (playbook section 10)
+Date: 2026-08-21 09:42 CEST  Branch: main @ 73f4b05
+New test file: internal/remote/relay/r9_productionjitter_test.go
+
+The production code (reconnect.go) predates these tests, so the TDD red run
+is produced by mutating the production lines each fence guards: for every
+mutation below the file is backed up with cp, the mutant is shown by diff,
+the R9 tests are run (FAIL expected), the file is restored and byte-verified
+with cmp, and the tests are re-run (PASS expected).
+
+=== Baseline run against unmodified production code ===
+=== RUN   TestR9ProductionJitterWithinSpreadBounds
+--- PASS: TestR9ProductionJitterWithinSpreadBounds (0.00s)
+=== RUN   TestR9ProductionJitterSpreadIsNotDegenerate
+--- PASS: TestR9ProductionJitterSpreadIsNotDegenerate (0.00s)
+=== RUN   TestR9ReconnectBaseGrowsMonotonicallyToCeiling
+--- PASS: TestR9ReconnectBaseGrowsMonotonicallyToCeiling (0.00s)
+PASS
+ok  	github.com/Nathandela/swarm/internal/remote/relay	1.435s
+
+=== MUTATION A: degenerate production source (frac always 0) ===
+  73c73
+  < 	return &ReconnectBackoff{frac: func() float64 { return rand.Float64()*2 - 1 }}
+  ---
+  > 	return &ReconnectBackoff{frac: func() float64 { return rand.Float64() * 0 }}
+--- test run against mutant (FAIL expected):
+--- FAIL: TestR9ProductionJitterSpreadIsNotDegenerate (0.00s)
+    r9_productionjitter_test.go:73: production jitter is degenerate: 1000 draws produced only 1 distinct delays
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.939s
+FAIL
+--- restore byte-verified by cmp: OK
+--- test run after restore (PASS expected):
+ok  	github.com/Nathandela/swarm/internal/remote/relay	0.836s
+
+=== MUTATION B: frac drawn outside [-1, 1] (spread doubled) ===
+  73c73
+  < 	return &ReconnectBackoff{frac: func() float64 { return rand.Float64()*2 - 1 }}
+  ---
+  > 	return &ReconnectBackoff{frac: func() float64 { return rand.Float64()*4 - 2 }}
+--- test run against mutant (FAIL expected):
+--- FAIL: TestR9ProductionJitterWithinSpreadBounds (0.00s)
+    r9_productionjitter_test.go:38: attempt 1 draw 1: delay 667.041433ms outside documented envelope [400ms, 600ms] around base 500ms
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	1.021s
+FAIL
+--- restore byte-verified by cmp: OK
+--- test run after restore (PASS expected):
+ok  	github.com/Nathandela/swarm/internal/remote/relay	0.812s
+
+=== MUTATION C: exponential growth removed ===
+  41c41
+  < 		d *= ReconnectFactor
+  ---
+  > 		d *= 1
+--- test run against mutant (FAIL expected):
+--- FAIL: TestR9ReconnectBaseGrowsMonotonicallyToCeiling (0.00s)
+    r9_productionjitter_test.go:96: base at attempt 2 = 500ms did not grow from 500ms before reaching the ceiling
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.970s
+FAIL
+--- restore byte-verified by cmp: OK
+--- test run after restore (PASS expected):
+ok  	github.com/Nathandela/swarm/internal/remote/relay	0.839s
+
+=== MUTATION D: ceiling cap disabled ===
+  42c42
+  < 		if d >= ReconnectCeiling {
+  ---
+  > 		if false && d >= ReconnectCeiling {
+--- test run against mutant (FAIL expected):
+--- FAIL: TestR9ReconnectBaseGrowsMonotonicallyToCeiling (0.00s)
+    r9_productionjitter_test.go:90: base at attempt 7 = 32s exceeds ReconnectCeiling 30s
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remote/relay	0.971s
+FAIL
+--- restore byte-verified by cmp: OK
+--- test run after restore (PASS expected):
+ok  	github.com/Nathandela/swarm/internal/remote/relay	0.833s
