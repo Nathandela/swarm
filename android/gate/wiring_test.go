@@ -114,17 +114,48 @@ func TestWiring_TheScreenComingToTheFrontStartsObserving(t *testing.T) {
 func TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor(t *testing.T) {
 	body := reachableInFile(t, phoneSurfacePath(t), "release", 3)
 
-	for _, want := range []struct{ verb, why string }{
-		{"UnsubscribeJournal", "a backgrounded screen goes on being fed events it will never " +
-			"render, into the bounded drop-oldest queue mobile/events.go documents"},
-		// `TerminalUnwatch` STOOD HERE, and it goes with its other half: a phone that opens no
-		// watch leaks none. See the note in the test above, and the inversion below.
-	} {
-		if !s17NamesVerb(body, want.verb) {
-			t.Errorf("PB-RUN-3/ADR-007 B16: nothing reachable from PhoneSurface.release calls "+
-				"App.%s.\n%s\nreachable from release:\n%s", want.verb, want.why, s17Indent(body))
-		}
+	// **This is a sanctioned change to a passing gate, and a fence mandated it.** The
+	// withdrawal used to be an inline `live.unsubscribeJournal()` this walk saw directly;
+	// committee round 3 moved the whole background chunk onto VerbDispatch's command lane
+	// (android/gate/s25r3_releasepath_test.go -- App.Stop beside it joins the drain's
+	// five-second close, which may not run on the looper). The property is unchanged and is
+	// asserted link by link across the seam: release reaches the lane's background verb; the
+	// lane's background verb withdraws journal delivery before it stops; the binding's
+	// withdrawal is the facade call itself.
+	if !strings.Contains(body, ".background(") {
+		t.Errorf("PB-RUN-3/ADR-007 B16: nothing reachable from PhoneSurface.release calls "+
+			"LifecycleLane.background, so the screen leaving withdraws nothing.\n"+
+			"reachable from release:\n%s", s17Indent(body))
 	}
+	lane := stripKotlinComments(readFileOrFail(t,
+		filepath.Join(kotlinMainRoot(t), filepath.FromSlash("dev/swarm/phone/LifecycleLane.kt")),
+		"PB-RUN-3"))
+	bg := kotlinMember(t, lane, "fun background(")
+	if !strings.Contains(bg, ".unsubscribeJournal(") {
+		t.Errorf("PB-RUN-3/ADR-007 B16: LifecycleLane.background does not withdraw journal "+
+			"delivery: a backgrounded screen goes on being fed events it will never render, "+
+			"into the bounded drop-oldest queue mobile/events.go documents.\n%s", s17Indent(bg))
+	}
+	if u, s := strings.Index(bg, ".unsubscribeJournal("), strings.Index(bg, ".stop("); s >= 0 && u > s {
+		t.Errorf("PB-RUN-3/ADR-007 B16: LifecycleLane.background stops the link BEFORE "+
+			"withdrawing journal delivery; the withdrawal must go while there is still a "+
+			"socket to withdraw it over.\n%s", s17Indent(bg))
+	}
+	binding := stripKotlinComments(readFileOrFail(t,
+		filepath.Join(kotlinMainRoot(t), filepath.FromSlash("dev/swarm/phone/AppLifecycle.kt")),
+		"PB-RUN-3"))
+	member := kotlinMember(t, binding, "fun unsubscribeJournal(")
+	// The DOTTED shape, not s17NamesVerb: the member string begins with the wrapper's own
+	// `fun unsubscribeJournal(` declaration, which satisfies the undotted match -- the
+	// declaration-satisfies-the-grep defect r8's rule 4 names, measured here by mutation
+	// (a hollowed wrapper kept this gate green until the dot).
+	if !strings.Contains(member, ".unsubscribeJournal(") {
+		t.Errorf("PB-RUN-3/ADR-007 B16: AppLifecycle.unsubscribeJournal does not call "+
+			"App.UnsubscribeJournal, so the chain above ends in a wrapper that withdraws "+
+			"nothing.\n%s", s17Indent(member))
+	}
+	// `TerminalUnwatch` STOOD HERE, and it goes with its other half: a phone that opens no
+	// watch leaks none. See the note in the test above, and the inversion below.
 }
 
 // TestWiring_NoScreenIssuesATerminalWatch is the AMENDMENT the two tests above record, stated as

@@ -94,6 +94,10 @@ func s25Surfaces(t *testing.T) map[string]string {
 		// fallback binding's verbs on the command lane, so a raw facade call growing inside it
 		// would be this fence's defect hiding in the fix's pocket.
 		"TerminalWatchLane.kt": filepath.Join(dir, "TerminalWatchLane.kt"),
+		// The lifecycle verbs' dispatcher (committee round 3, the onPause finding), a subject
+		// for the same reason -- and its teardown-waiting verbs, which no send-context
+		// derivation can see, have their own fence in s25r3_releasepath_test.go.
+		"LifecycleLane.kt": filepath.Join(dir, "LifecycleLane.kt"),
 	}
 }
 

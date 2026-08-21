@@ -98,6 +98,13 @@ type ExitInfo struct {
 // See shim_signal_order_test.go.
 var testHookAfterSignalArm func()
 
+// testHookBeforeBackendSpawn, when non-nil, is invoked on a backend session after the
+// control planes are up (startPlanes) and immediately BEFORE the backend is spawned. It
+// exists ONLY to let a test deliver a termination request into the window where NEITHER
+// contained process group exists yet (r7r3_startupkill_test.go); it is nil in production
+// and changes no behavior.
+var testHookBeforeBackendSpawn func(s *server)
+
 // Run execs the agent under a fresh PTY, serves the per-session socket, and
 // blocks until the agent exits. It always drains the PTY to completion, writes
 // the final snapshot + exit side-files, and reports the agent's exit code. err
@@ -243,6 +250,9 @@ func Run(cfg Config) (agentExit int, err error) {
 		replies = wireReplies(emu, srv)
 		startPlanes()
 
+		if testHookBeforeBackendSpawn != nil {
+			testHookBeforeBackendSpawn(srv)
+		}
 		var berr error
 		backend, berr = startBackend(cfg.Backend, cfg.SessionDir)
 		if backend != nil {

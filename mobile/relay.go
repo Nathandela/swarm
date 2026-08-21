@@ -942,12 +942,21 @@ const (
 	waitUnsupported
 )
 
+// helloRequestCaps is every capability the phone's r_hello asks the relay for -- the
+// CLIENT half of the negotiation whose server half is relay's serverCaps. The two sets
+// live in different packages by design (the relay cannot know which of its caps a given
+// client wants; the phone deliberately omits "rendezvous", which pairing speaks on a raw
+// connection), so TestCommitteeR3_PhoneHelloCapsAreServedByTheRelay fences them against
+// drift: every capability named here must be granted by the shipped relay, or the phone
+// would silently run degraded against its OWN relay (committee round 3, Opus nit 6).
+var helloRequestCaps = []string{"mailbox", "push", "presence", "wait"}
+
 // negotiateWaitSupport derives one connection's wait verdict from its r_hello exchange.
 // A refused or failed hello reads as unsupported rather than an error: the poll fallback
 // works against every relay, and if the hello failed because the link is dying the drain
 // discovers that within one bounded call anyway.
 func (a *App) negotiateWaitSupport(ctx context.Context, cl *relay.Client) int32 {
-	_, caps, err := cl.Hello(ctx, relay.ProtocolVersion, []string{"mailbox", "push", "presence", "wait"})
+	_, caps, err := cl.Hello(ctx, relay.ProtocolVersion, helloRequestCaps)
 	if err != nil {
 		return waitUnsupported
 	}

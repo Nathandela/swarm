@@ -165,6 +165,15 @@ func (d *Daemon) shimIdentityMatches(m persist.Meta) bool {
 // markLost reclassifies a still-running session as lost and persists it, sending
 // no signal (S3). Used when a pre-signal identity recheck fails (F6).
 func (d *Daemon) markLost(id string) {
+	// The shim this session recorded is gone (that is the only way here), so the backend
+	// only that shim could contain may have outlived it. markLost is a THIRD shim-death
+	// path beside handleShimExit and reconcile's orphan arm, and it needs the SAME sweep:
+	// once this finalize persists LOST, the monitor's handleShimExit takes its
+	// already-terminal early return BEFORE its own reap, and reconcile never revisits a
+	// session not persisted running -- so an orphan skipped here is an orphan forever
+	// (Wave R7, ADR-013 §R7.2c). A no-op for the overwhelmingly common session with no
+	// backend record.
+	d.reapOrphanBackend(id)
 	// The lost transition is applied atomically under writeMu and ONLY advances a
 	// running session — a racing handleShimExit that recorded exited+code (rank 2)
 	// is never regressed to lost (rank 1), regardless of ordering (S1).

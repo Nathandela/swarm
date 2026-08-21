@@ -68,6 +68,16 @@ type server struct {
 	// SIBLING of the agent, not a member of its group, so it is signalled beside it on the
 	// same TERM->grace->KILL; there is no second timer and no second grace window.
 	backendPgid int
+	// pendingSig is the strongest termination signal observed so far (0: none). A kill
+	// that lands during BACKEND STARTUP -- the window where BOTH pgids are still zero --
+	// signals nothing (a zero pgid is rightly never signalled, below), and with the
+	// production grace far shorter than the startup stages, the escalation worker's KILL
+	// fires into the same empty pgids: without a memory, the backend and then the agent
+	// would SPAWN AFTER their termination was requested and survive it. So every kill is
+	// remembered here under pgidMu, and setAgentPgid/setBackendPgid REPLAY it the moment a
+	// group is created. SIGKILL is sticky over SIGTERM: a group born after the one-shot
+	// escalation worker already fired must get the escalated KILL, not the stale TERM.
+	pendingSig syscall.Signal
 
 	// goAhead carries the daemon's backend_attach (ADR-013 §R7.2e). Buffered so a daemon
 	// that sends it before the shim blocks is never lost, and one-shot so a second one is
@@ -367,6 +377,9 @@ func (s *server) finishEscalation() {
 func (s *server) killGroups(sig syscall.Signal) {
 	s.pgidMu.Lock()
 	agent, backend := s.pgid, s.backendPgid
+	if s.pendingSig == 0 || sig == syscall.SIGKILL {
+		s.pendingSig = sig // remembered for replay on a group created later; KILL is sticky
+	}
 	s.pgidMu.Unlock()
 	if agent > 0 {
 		_ = syscall.Kill(-agent, sig)
@@ -377,18 +390,31 @@ func (s *server) killGroups(sig syscall.Signal) {
 }
 
 // setAgentPgid records the agent's group once it exists (the backend path spawns the agent
-// after the go-ahead, so the group is not known at construction).
+// after the go-ahead, so the group is not known at construction), REPLAYING any termination
+// observed while it did not: a killed shim must never leave a newly-born group running. The
+// read and the write share one pgidMu section, so this can never miss a concurrent kill --
+// whichever of the two runs second sees the other's effect.
 func (s *server) setAgentPgid(pgid int) {
 	s.pgidMu.Lock()
 	s.pgid = pgid
+	replay := s.pendingSig
 	s.pgidMu.Unlock()
+	if replay != 0 && pgid > 0 {
+		_ = syscall.Kill(-pgid, replay)
+	}
 }
 
-// setBackendPgid records the session backend's group.
+// setBackendPgid records the session backend's group, replaying any termination observed
+// before it existed (see setAgentPgid; the zero-pgid guard also skips the deliberate
+// setBackendPgid(0) after containBackendFailure).
 func (s *server) setBackendPgid(pgid int) {
 	s.pgidMu.Lock()
 	s.backendPgid = pgid
+	replay := s.pendingSig
 	s.pgidMu.Unlock()
+	if replay != 0 && pgid > 0 {
+		_ = syscall.Kill(-pgid, replay)
+	}
 }
 
 // noteGoAhead delivers the daemon's backend_attach exactly once.

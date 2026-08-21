@@ -1218,8 +1218,28 @@ class PhoneSurface(
     /** The same one-shot latch for the Stop's own verdict (review round 2). See [killSaid]. */
     private var interruptSaid: String = ""
 
-    /** The phone this surface has started, so [release] can stop the one it actually started. */
-    private var connected: App? = null
+    /**
+     * The phone's start/stop verbs on the command lane (committee round 3, the onPause
+     * finding). `App.Stop` joins the relay drain's five-second graceful close, so the pause
+     * path may not run it on the looper; the lane's serial order is also what keeps a resume
+     * from restarting AGAINST a still-draining stop. Its eager hold replaced [connected]:
+     * `lifecycle.started` is non-null exactly where the old field was.
+     */
+    private val lifecycle = LifecycleLane<AppLifecycle>(dispatch)
+
+    /**
+     * The facade behind [lifecycle]'s seam, cached per App so the lane's identity checks are
+     * about the PHONE rather than about whichever wrapper a redraw happened to build --
+     * `converge` runs on every render, and a fresh wrapper each time would read as a fresh
+     * phone to start.
+     */
+    private var lifecycleHandle: AppLifecycle? = null
+
+    private fun lifecycleFor(app: App): AppLifecycle {
+        val held = lifecycleHandle
+        if (held != null && held.app === app) return held
+        return AppLifecycle(app).also { lifecycleHandle = it }
+    }
 
     /** True once this surface installed its listener and started journal delivery. */
     private var observing = false
@@ -1455,8 +1475,8 @@ class PhoneSurface(
      * than restated here, because that object and android/connectivity-policy.tsv are asserted
      * equal and a third copy of the rule is a third thing to get wrong.
      *
-     * It never CONSTRUCTS a phone: [connected] is only set once one was built and started, so a
-     * pause before anything was built does not reach Keystore on the way out.
+     * It never CONSTRUCTS a phone: [lifecycle] holds a handle only once one was built and
+     * started, so a pause before anything was built does not reach Keystore on the way out.
      */
     fun release() {
         pairing.release()
@@ -1488,45 +1508,33 @@ class PhoneSurface(
         // control it disabled, so a resumed screen does not come back with a dead button.
         dispatch.detach()
 
-        val live = connected ?: return
-
-        // ADR-017 amendment T8-b: BACKGROUNDING SEVERS DIRECTLY. It is asked for BEFORE the
-        // connectivity policy is consulted and before any socket decision, because that is the
-        // whole ruling: the old answer -- that a backgrounded app loses its authority because
-        // backgrounding disconnects it -- is BY CONSEQUENCE, and rests on a connectivity choice a
-        // later wave could revisit, at which point a raw-input generation would quietly outlive
-        // the screen that owns it. Every control lease, every terminal control generation and
-        // every held byte goes here, with no transport event required and none assumed.
-        try {
-            live.enterBackground()
-        } catch (refused: Exception) {
-            // Severance is local state; there is no user on this path and nothing to report to.
-        }
-
-        if (ConnectivityPolicy.ruleFor(RuntimeState.BACKGROUND).socket != SocketDisposition.CLOSED) {
-            return
-        }
-        connected = null
-
-        // ADR-007 B16: backgrounding DISCONNECTS. Journal delivery is a request the machine is
-        // still serving on the phone's behalf, into a queue nothing is draining, so it is
-        // withdrawn before the socket goes, while there is still a socket to withdraw it over.
+        // ADR-017 amendment T8-b: BACKGROUNDING SEVERS DIRECTLY. The severance is asked for
+        // whatever the connectivity policy says about the socket, because that is the whole
+        // ruling: the old answer -- that a backgrounded app loses its authority because
+        // backgrounding disconnects it -- is BY CONSEQUENCE, and rests on a connectivity choice
+        // a later wave could revisit, at which point a raw-input generation would quietly
+        // outlive the screen that owns it. Every control lease, every terminal control
+        // generation and every held byte goes, with no transport event required and none
+        // assumed; ADR-007 B16's disconnect -- journal delivery withdrawn while there is still
+        // a socket to withdraw it over, then Stop -- follows only where the policy closes the
+        // socket. The lane keeps exactly the order the inline calls had.
         //
-        // THE TERMINAL WATCH USED TO BE WITHDRAWN HERE BESIDE IT. There is none left to withdraw:
-        // ADR-009 (2) stops this app issuing one at all, so the per-session render work it cost
-        // the daemon is not started rather than being cleaned up.
-        try {
-            live.unsubscribeJournal()
-        } catch (refused: Exception) {
-            // The socket is closing either way, and journal delivery is a phone-side flag the
-            // next Start re-establishes. There is no user present on this path.
-        }
-        try {
-            live.stop()
-        } catch (refused: Exception) {
-            // Stop is idempotent and the process may be going away regardless. There is no user
-            // present on this path and no screen left to report to.
-        }
+        // ON THE COMMAND LANE, NOT HERE (committee round 3). App.Stop joins the relay drain
+        // goroutine (mobile/app.go:480), whose teardown performs a five-second graceful close
+        // (internal/remote/relay/client.go:411), and this function runs inside
+        // PhoneActivity.onPause on the main looper -- a silent ANR, since
+        // NetworkOnMainThreadException never fires for a socket Go opened. The enqueue sits
+        // after `dispatch.detach()` and SURVIVES it: `VerbDispatch.enqueue` gates only the
+        // settle on attachment, never the work ([TerminalWatchLane.drop]'s recorded property),
+        // so the T8-b severance still reaches the core -- posted, prompt, never dropped.
+        //
+        // THE TERMINAL WATCH USED TO BE WITHDRAWN HERE BESIDE IT. There is none left to
+        // withdraw: ADR-009 (2) stops this app issuing one at all, so the per-session render
+        // work it cost the daemon is not started rather than being cleaned up.
+        lifecycle.background(
+            disconnect =
+                ConnectivityPolicy.ruleFor(RuntimeState.BACKGROUND).socket == SocketDisposition.CLOSED,
+        )
     }
 
     /**
@@ -1583,9 +1591,9 @@ class PhoneSurface(
      * THE PLAN COMES FROM [LifecycleConvergence], which had no production caller either. Its
      * COLD_START row is this moment -- the screen coming to the front, over a phone core that may
      * have been rebuilt since the last one -- and it says to re-establish exactly ONCE and only
-     * when there is persisted state to resume. `Start` is idempotent, so a redraw calls it and
-     * nothing happens, which is what makes "one re-establish" survive a screen that redraws on
-     * every poll.
+     * when there is persisted state to resume. `Start` is idempotent, and [lifecycle]'s hold
+     * is eager besides, so a redraw enqueues nothing -- which is what makes "one re-establish"
+     * survive a screen that redraws on every poll.
      */
     private fun converge(app: App) {
         val paired = try {
@@ -1601,13 +1609,21 @@ class PhoneSurface(
         if (ConnectivityPolicy.ruleFor(RuntimeState.FOREGROUND).socket != SocketDisposition.CONNECTED) {
             return
         }
-        try {
-            app.start()
-            connected = app
-        } catch (refused: Exception) {
+        // ON THE COMMAND LANE (committee round 3), for the ORDER more than the wait: Start
+        // itself spawns and returns, but a start issued HERE while release()'s stop was still
+        // draining its five-second close would no-op against the dying session (App.Start
+        // returns while a.sess != nil) and the queued stop would then land on nothing -- a
+        // foregrounded phone, disconnected. On the lane it runs behind whatever the pause
+        // enqueued. The hold is eager, so the render-per-event loop enqueues one start per
+        // connect cycle rather than one per redraw; a refused start claws the hold back on the
+        // settle and puts the routed refusal where the inline catch used to.
+        lifecycle.foreground(lifecycleFor(app)) { refused ->
             outcome.text = FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message
-            return
         }
+        // Observing is subscription state the core keeps regardless of the start crossing
+        // above; it was sequenced after a synchronous start before and is order-independent
+        // of it (both are local flags plus a listener install), so it stays here rather than
+        // riding a settle that a pause may legitimately drop.
         observe(app)
     }
 

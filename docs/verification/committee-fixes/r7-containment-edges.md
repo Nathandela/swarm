@@ -136,3 +136,139 @@ pid (24297/24314/24335/24336 after RED; 29985–30021 plus agent children after 
   cleanup) is out of this task's footprint; noted for a follow-up issue.
 - containBackendFailure blocks the (already-failed) spawn path for at most one GraceTimeout
   when a backend ignores TERM — bounded, and only on the failure path.
+
+## Round 3 — the two NEW containment interleavings (codex round-2 finding 4)
+
+Audit-committee round-3 fix wave. The round-2 edge fixes above hold; these are two further
+interleavings around them. Baseline: main at 5856a4e. Date: 2026-08-21.
+
+### The two races
+
+1. **A Kill/Delete during backend startup was LOST.** The shim's signal plane starts before
+   either contained process group exists (internal/shim/shim.go: startPlanes runs before
+   startBackend; the agent spawns only after the go-ahead), and killGroups rightly never
+   signals a zero pgid (kill(-0, sig) signals the shim's OWN group) — but nothing REMEMBERED
+   the request and nothing replayed it. With production grace (2 s) far shorter than the
+   startup stages (ReadyTimeout / GoAheadTimeout, up to 20 s each), the escalation worker's
+   KILL also fired into the same empty pgids. Net effect: the backend and then the agent
+   SPAWN AFTER their termination was requested and survive it indefinitely, on a session the
+   daemon believes it killed.
+2. **markLost reaped nothing.** Kill's pre-signal identity recheck over an already-dead shim
+   calls markLost (internal/daemon/lifecycle.go), which finalized the session LOST with no
+   backend sweep. Once persisted LOST, the monitor's handleShimExit takes its
+   already-terminal early return (internal/daemon/reconcile.go) BEFORE its own
+   reapOrphanBackend call — a SIGKILLed shim writes no exit.json — and reconcile's orphan
+   arm only visits sessions persisted RUNNING, so no restart revisits it either: the orphan
+   backend survives indefinitely.
+
+### TDD failing-first (RED)
+
+New tests written before any implementation change (the only production edit preceding RED
+is the nil-in-production test seam `testHookBeforeBackendSpawn` in shim.go, mirroring the
+existing `testHookAfterSignalArm` precedent):
+
+- `internal/shim/r7r3_startupkill_test.go`
+  (TestR7R3StartupKill_ATerminationObservedBeforeAGroupExistsIsReplayed — unit, both
+  setters, including the escalated-KILL-on-replay part against a TERM-ignoring leader;
+  TestR7R3StartupKill_AKillDuringBackendStartupLeavesNoSurvivors — through shim.Run on the
+  exact interleaving: the kill verb observed via onSignal while BOTH pgids are zero, backend
+  and idle agent both born after it)
+- `internal/daemon/r7r3_marklost_test.go`
+  (TestR7R3MarkLost_AKillObservingADeadShimStillReapsTheBackend — drives d.Kill, the real
+  production caller of markLost, against a session whose recorded shim is dead and whose
+  recorded backend is a live group)
+
+RED run, shim (`go test ./internal/shim -run 'TestR7R3StartupKill' -count=1`):
+
+    --- FAIL: TestR7R3StartupKill_ATerminationObservedBeforeAGroupExistsIsReplayed (10.09s)
+        r7r3_startupkill_test.go:76: the backend group was created AFTER the kill was observed
+        and survived it ...
+        r7r3_startupkill_test.go:91: the agent group recorded AFTER the whole TERM->grace->KILL
+        escalation ran into empty pgids survived ...
+    --- FAIL: TestR7R3StartupKill_AKillDuringBackendStartupLeavesNoSurvivors (15.12s)
+        r7r3_startupkill_test.go:143: shim.Run is still running 15s after its session was
+        KILLED ... the backend and the idle agent both spawned AFTER termination was requested
+        and survived it
+    FAIL    github.com/Nathandela/swarm/internal/shim    26.562s
+
+RED run, daemon (`go test ./internal/daemon -run 'TestR7R3MarkLost' -count=1`):
+
+    --- FAIL: TestR7R3MarkLost_AKillObservingADeadShimStillReapsTheBackend (10.12s)
+        r7r3_marklost_test.go:81: the backend survived Kill's markLost path ...
+        r7r3_marklost_test.go:86: backend.json survived the markLost reap ...
+    FAIL    github.com/Nathandela/swarm/internal/daemon    12.714s
+
+All three fail for the right reason: the processes survive a termination the system accepted.
+
+### Implementation
+
+- `internal/shim/server.go` — new `pendingSig` under the existing pgidMu: every kill records
+  the strongest termination signal observed so far (SIGKILL is sticky over SIGTERM, so a
+  group born after the one-shot escalation worker already fired gets the escalated KILL, not
+  the stale TERM); `setAgentPgid`/`setBackendPgid` REPLAY it the moment a group is recorded.
+  The record-read and the pgid-write share one pgidMu critical section, so no interleaving
+  with a concurrent killGroups can miss: whichever runs second sees the other's effect. The
+  `pgid > 0` guard keeps the deliberate `setBackendPgid(0)` after containBackendFailure, and
+  kill(-0), impossible. Every termination entry funnels through killGroups (onSignal serves
+  both the socket TypeSignal verb and the OS-signal handler; the escalation worker and
+  finishEscalation call it too), so the memory cannot be bypassed.
+- `internal/shim/shim.go` — the nil-in-production seam `testHookBeforeBackendSpawn`, invoked
+  after startPlanes and immediately before startBackend; no production behavior change.
+- `internal/daemon/lifecycle.go` — markLost now runs `d.reapOrphanBackend(id)` before its
+  finalize, making it the THIRD death path with the same sweep handleShimExit and
+  reconcile's orphan arm already have (reap-then-finalize, mirroring handleShimExit). A
+  no-op for any session with no backend record.
+
+### GREEN
+
+    ok      github.com/Nathandela/swarm/internal/shim    1.780s   (TestR7R3StartupKill)
+    ok      github.com/Nathandela/swarm/internal/daemon  2.943s   (TestR7R3MarkLost)
+
+The lost-kill integration case drops from a 15 s hang to a session fully finalized in under
+2 s, with the backend joined dead before Run returns.
+
+### Mutation proofs (cp backup, run, cmp-verified restore — all five)
+
+| # | Mutation (applied to the IMPLEMENTED code) | Test that must fail | Result |
+|---|---|---|---|
+| M1 | killGroups' remembering deleted (pendingSig never set) in shim/server.go | both TestR7R3StartupKill tests | FAIL (both, verbatim the RED failures); restore `cmp` byte-identical |
+| M2 | setBackendPgid's replay deleted in shim/server.go | TestR7R3StartupKill_ATerminationObserved... part 1 | FAIL at r7r3_startupkill_test.go:76; restore `cmp` byte-identical |
+| M3 | setAgentPgid's replay deleted in shim/server.go | TestR7R3StartupKill_ATerminationObserved... part 2 | FAIL at r7r3_startupkill_test.go:91; restore `cmp` byte-identical |
+| M4 | KILL made non-sticky (`if s.pendingSig == 0` only: first signal wins) in shim/server.go | TestR7R3StartupKill_ATerminationObserved... part 2 | FAIL at r7r3_startupkill_test.go:104 (stale TERM replayed at a TERM-ignoring leader); restore `cmp` byte-identical |
+| M5 | `d.reapOrphanBackend(id)` deleted from markLost in daemon/lifecycle.go | TestR7R3MarkLost_AKillObservingADeadShimStillReapsTheBackend | FAIL at r7r3_marklost_test.go:81 and :86; restore `cmp` byte-identical |
+
+M4 initially SURVIVED, exposing a fixture race, not an implementation gap: the replayed TERM
+could land before the sh leader had armed `trap '' TERM`, killing it and vacuously passing.
+The fixture now blocks on a readiness byte the script writes only after the trap is armed
+(r7r3Group); with that, M4 fails deterministically. No assertion was weakened.
+
+### Gates
+
+    go build ./...                            -> OK
+    go vet ./...                              -> OK
+    PATH=$HOME/go/bin:$PATH golangci-lint run -> 0 issues.
+    go test -race -count=1 ./internal/shim    -> ok (92.2s)
+    go test -race -count=1 ./internal/daemon  -> ok (52.5s)
+
+### Process hygiene
+
+Fixtures are the existing test-binary re-execs (r7BackendBind, modeIdle, r7Squatter) and
+/bin/sh//bin/sleep — never swarm-remote or the real codex CLI. Every spawned group is
+registered in t.Cleanup with an explicit kill(-pgid) and a Wait-based reap (kill(pid, 0) on
+a zombie succeeds, so only the Wait proves death); the integration test's failure path first
+kills the backend group so the backend-died edge contains the idle agent and Run returns
+before the test exits. After the full -race runs, the six shims leaked by the PRE-EXISTING
+d.Launch-style R7 daemon tests (the round-2 residual, out of footprint) were reaped by
+explicit pid via SIGTERM to their armed handlers (11895/11899/11905/11908/11911/11931);
+older ppid==1 stragglers from other sessions' runs were left untouched.
+
+### Residuals
+
+- On a killed backend session, the shim still waits out GoAheadTimeout before spawning (and
+  instantly reaping) the agent, so Run's exit after a startup-window kill can lag by up to
+  that bound. Containment is complete either way — replay guarantees no group survives — and
+  shortening the wait would mean threading a cancel into waitBackendGoAhead for a latency-only
+  gain; left out as beyond this finding's scope.
+- The momentary birth-then-replay of a group after a kill (rather than suppressing the spawn
+  outright) is the deliberate lean variant the finding allows; the replayed signal is issued
+  under the same pgidMu ordering that makes it race-free.

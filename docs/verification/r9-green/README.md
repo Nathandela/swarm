@@ -2,7 +2,9 @@
 
 Scope: the six automated release-gate gaps found by the R9 scoping audit of playbook
 sections 10-11. The owner-physical half of R9 is parked as beads (see the commit message
-and agents-tracker-hggx.10's closing note); this file records the automated half only.
+and agents-tracker-hggx.10's notes - the bead was later REOPENED under the playbook
+section 9 amendment, its automated half remains done); this file records the automated
+half only.
 
 ## What the scoping audit found already DONE (verified, not trusted)
 
@@ -20,7 +22,8 @@ CORRECTION (final audit committee, 2026-08-21): the 13 required contexts cover t
 pre-existing CI only. The two lanes THIS wave added - relay-container and stress-nightly -
 were NOT required contexts when this file first shipped (relay-container was added to the
 ruleset on 2026-08-21 as part of the committee fix wave; stress-nightly is schedule-driven
-and cannot be a per-push context - its protection path is tracked in beads erbb and 32de).
+and cannot be a per-push context - its protection path - and the ruleset's admin bypass_actors fact - are recorded on
+bead 32de, with erbb holding the separate selector-rot fence).
 stress-nightly had ZERO executions at the time of the R9 commit; its first run was
 dispatched manually on 2026-08-21. The original sentence read as broader than the ruleset
 enforced.

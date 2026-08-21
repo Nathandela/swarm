@@ -128,24 +128,49 @@ func TestR8Background_TheVerbSeversBothPlanesAndNeitherByConsequence(t *testing.
 // review's finding was actually about: the mechanism existed, the surface did not, and the
 // lifecycle called neither.
 func TestR8Background_TheAndroidLifecycleReachesIt(t *testing.T) {
+	// **This is a sanctioned change to a passing gate, and a fence mandated it** (committee
+	// round 3, the onPause finding). The severance used to be an inline
+	// `live.enterBackground()` this test read straight out of release(); that whole chunk now
+	// rides VerbDispatch's command lane, because the `live.stop()` BESIDE it joins the relay
+	// drain's five-second graceful close and may not run on the main looper
+	// (android/gate/s25r3_releasepath_test.go). The two properties this test owns are
+	// unchanged and are asserted link by link across the seam:
+	//
+	//  1. REACH: onPause -> release() -> LifecycleLane.background -> the handle's
+	//     enterBackground -> App.EnterBackground.
+	//  2. NOT BEHIND THE POLICY: the connectivity policy feeds only the lane's `disconnect`
+	//     flag; inside the lane's work the severance runs BEFORE the disconnect guard, so a
+	//     build that kept the socket open in the background still severs. (The behavioural
+	//     half -- a sever-only background still calls enterBackground -- is
+	//     LifecycleLaneTest's `a_sever_only_background_neither_unsubscribes_nor_stops...`.)
 	surface := readRepoFile(t, "../android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt")
-	if !strings.Contains(stripKotlinComments(surface), "enterBackground()") {
-		t.Fatalf("PhoneSurface never calls enterBackground(). PhoneActivity.onPause reaches this " +
-			"class's release(), and release() is where the app's authority is given back.")
-	}
 	release := stripKotlinComments(kotlinMemberBody(t, surface, "fun release() {"))
-	if !strings.Contains(release, "enterBackground()") {
+	if !strings.Contains(release, ".background(") {
 		t.Fatalf("PhoneSurface.release() -- the function PhoneActivity.onPause calls -- does not " +
-			"sever. A call somewhere else in the file is not the backgrounding path.")
+			"reach LifecycleLane.background, so nothing on the backgrounding path severs. A call " +
+			"somewhere else in the file is not the backgrounding path.")
 	}
-	// AND IT MUST NOT SIT BEHIND THE CONNECTIVITY POLICY. That is the by-consequence answer
-	// wearing the new verb's name: a build that decided to keep the socket open in the
-	// background would silently stop severing.
-	policyAt := strings.Index(release, "ConnectivityPolicy.ruleFor(")
-	severAt := strings.Index(release, "enterBackground()")
-	if policyAt >= 0 && severAt > policyAt {
-		t.Fatalf("PhoneSurface.release() severs only AFTER consulting ConnectivityPolicy. T8-b is " +
+	lane := readRepoFile(t, "../android/app/src/main/kotlin/dev/swarm/phone/LifecycleLane.kt")
+	background := stripKotlinComments(kotlinMemberBody(t, lane, "fun background("))
+	severAt := strings.Index(background, ".enterBackground(")
+	if severAt < 0 {
+		t.Fatalf("LifecycleLane.background never calls enterBackground(), so the lane release() " +
+			"rides withdraws nothing.")
+	}
+	// The disconnect guard is the policy's only reach into this function: a severance INSIDE
+	// its block (or after it) is the by-consequence answer wearing the new verb's name. The
+	// BRACED guard, deliberately: the single-statement `if (disconnect) started = null` above
+	// the enqueue clears eager state and can contain no call.
+	if guardAt := strings.Index(background, "if (disconnect) {"); guardAt >= 0 && severAt > guardAt {
+		t.Fatalf("LifecycleLane.background severs only under the disconnect guard. T8-b is " +
 			"'independent of transport': gating the severance on a connectivity decision is exactly " +
 			"the by-consequence answer, restated.")
+	}
+	binding := readRepoFile(t, "../android/app/src/main/kotlin/dev/swarm/phone/AppLifecycle.kt")
+	member := stripKotlinComments(kotlinMemberBody(t, binding, "fun enterBackground() {"))
+	if !strings.Contains(member, ".enterBackground(") {
+		t.Fatalf("AppLifecycle.enterBackground does not call App.EnterBackground, so the chain " +
+			"above ends in a wrapper that severs nothing. (Dotted on purpose: the member's own " +
+			"declaration must not satisfy this.)")
 	}
 }

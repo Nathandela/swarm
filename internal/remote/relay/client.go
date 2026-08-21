@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -78,17 +77,42 @@ type Conn struct {
 	// peerSPKI records what the peer's certificate was on a DialRawSecure dial (ADR-007
 	// B48). Nil on every other constructor, which reads as "nothing observed".
 	peerSPKI *spkiObserver
-	// pending counts requests written whose reply has not been consumed. Between
-	// exchanges it is non-zero only after a request abandoned its reply
-	// (timeout/cancel): the next request discards that many replies first, so an
-	// abandoned exchange can never hand its answer to a later, unrelated one.
+	// owed counts requests written whose reply frame the PUMP has not yet routed:
+	// roundtrip raises it (under owedMu) BEFORE its request write reaches the
+	// socket, and the pump ALONE lowers it, atomically with claiming the frames
+	// slot for an arriving frame. A clean ordinary frame that finds owed == 0
+	// therefore provably answers no written request -- it is owed to NOBODY, and
+	// queueing it would hand it to the next exchange as its answer, shifting every
+	// reply on the connection one question back for the connection's life
+	// (committee finding H1). The pump drops such frames instead.
 	//
-	// It is atomic because the PUMP reads it too (all writes stay under mu, inside
-	// roundtrip): a clean frame arriving while pending is zero is owed to NOBODY,
-	// and queueing it anyway would hand it to the next exchange as its answer --
-	// shifting every reply on the connection one question back, for the life of
-	// the connection (committee finding H1). The pump drops such frames instead.
-	pending atomic.Int64
+	// The accounting lives WHOLLY in the pump (committee round 3, codex finding 3)
+	// because the previous shape -- a shared atomic the consumer decremented on
+	// read -- gave the drop rule a TOCTOU: the pump sampled the count and then
+	// performed a potentially BLOCKING send into the capacity-1 channel, so a
+	// legitimate reply could pass the non-zero check while a stray occupied the
+	// slot, park, and enter the queue AFTER the count had reached zero -- the
+	// exact shift the rule exists to prevent. With the check, the decrement and
+	// the slot claim fused under owedMu, and the pump the only decrementer, the
+	// count a frame is judged against cannot go stale: a full channel is entered
+	// blocking only AFTER the decrement, and the pump is one goroutine, so the
+	// next frame it reads still sees a truthful count however long the consumer
+	// takes to drain the slot.
+	owedMu sync.Mutex
+	owed   int
+	// skip counts replies owed to exchanges that ABANDONED them (timeout/cancel
+	// after a successful write): the next roundtrip discards that many frames
+	// before claiming its own answer, so a slow answer is never mistaken for the
+	// answer to a later question. Guarded by mu -- only roundtrip, which holds mu
+	// for its whole exchange, touches it -- and driven by what roundtrip actually
+	// READS, never by the pump's counter, so the two bookkeepings cannot race.
+	skip int
+	// dropped/lastDropLog throttle the unsolicited-frame log line (round 3, Opus
+	// finding 5): the drop path is driven entirely by peer-sent frames, so an
+	// unthrottled print is a log-amplification lever the peer pulls for free.
+	// Touched only by the pump goroutine, hence unlocked.
+	dropped     uint64
+	lastDropLog time.Time
 
 	// The bounded server-side wait's client half (ADR-007 B7). A wait is the one
 	// exchange that does NOT hold mu across write-then-read: it registers a
@@ -287,12 +311,42 @@ func (c *Conn) pump() {
 		// correlated MsgWaitReply handled above. Queueing it would hand it to the NEXT
 		// exchange as its answer and shift every reply on this connection one question
 		// back, permanently (committee finding H1; the shape a pre-wait relay's MsgError
-		// refusal of a blindly-probed mailbox_wait arrives in). Dropped, loudly. Decode
-		// FAILURES are deliberately still forwarded: they end the connection below, and
-		// a waiting reader learns why instead of blocking until Done.
-		if f.err == nil && c.pending.Load() == 0 {
-			log.Printf("relay: dropped an unsolicited %v frame no request is owed; the peer is violating the one-reply-per-request contract", f.tag)
-			continue
+		// refusal of a blindly-probed mailbox_wait arrives in). Dropped, loudly but
+		// rate-limited. Decode FAILURES are deliberately still forwarded: they end the
+		// connection below, and a waiting reader learns why instead of blocking until
+		// Done.
+		//
+		// The owed check, the decrement and the claim on the queue slot are ONE
+		// critical section (see the owed field): deciding to enqueue and only then
+		// blocking into a full channel is the round-2 TOCTOU. When the slot is taken,
+		// the blocking send below is entered with owed ALREADY lowered, so the next
+		// frame this loop reads -- necessarily after the send completes -- is judged
+		// against a truthful count.
+		//
+		// The frame is DROPPED rather than the connection torn down, on two grounds
+		// the committee's round-2 fence pins (SHAPE 2 of
+		// TestCommittee_AnUnsolicitedFrameDoesNotShiftReplyPairing): a stray consumed
+		// mid-flight costs exactly one bounded casualty and the connection survives,
+		// and a teardown here would hand any peer able to volunteer one frame a
+		// reconnect lever. The drop is provably safe now that the pump owns the
+		// count: a frame judged against owed == 0 answers nothing that was ever
+		// written, so dropping it can displace no real reply.
+		if f.err == nil {
+			c.owedMu.Lock()
+			if c.owed == 0 {
+				c.owedMu.Unlock()
+				c.noteUnsolicitedDrop(f.tag)
+				continue
+			}
+			c.owed--
+			select {
+			case c.frames <- f:
+				c.owedMu.Unlock()
+				continue
+			default:
+				// The consumer is one frame behind; deliver outside the lock.
+				c.owedMu.Unlock()
+			}
 		}
 		select {
 		case c.frames <- f:
@@ -306,6 +360,31 @@ func (c *Conn) pump() {
 }
 
 func (c *Conn) markDone() { c.doneOnce.Do(func() { close(c.done) }) }
+
+// noteUnsolicitedDrop records one dropped unsolicited frame and logs at most one
+// line per second, carrying the running count so the suppressed drops stay visible
+// in the line that does print (Opus round-2 finding 5: the drop path is driven by
+// peer-sent frames, so an unthrottled print is peer-controlled log amplification).
+// Pump-goroutine only, hence no lock.
+func (c *Conn) noteUnsolicitedDrop(tag MsgType) {
+	c.dropped++
+	if time.Since(c.lastDropLog) < time.Second {
+		return
+	}
+	c.lastDropLog = time.Now()
+	log.Printf("relay: dropped an unsolicited %v frame no request is owed (%d dropped on this connection); the peer is violating the one-reply-per-request contract", tag, c.dropped)
+}
+
+// owedAdd adjusts the pump's owed-reply count. A raw (unpumped) connection has no
+// pump, no queue and no drop rule, so there is nothing to account.
+func (c *Conn) owedAdd(d int) {
+	if c.frames == nil {
+		return
+	}
+	c.owedMu.Lock()
+	c.owed += d
+	c.owedMu.Unlock()
+}
 
 // Done is closed when the connection is no longer usable. On a pumped
 // connection (Dial, DialSecure) that happens as soon as the peer or the network
@@ -469,28 +548,66 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Raised BEFORE the write reaches the socket, so the pump can never observe the
-	// reply to this request while pending still reads zero and drop it as unsolicited.
+	// reply to this request while owed still reads zero and drop it as unsolicited.
 	// The stream is in-order, so any frame that arrives before this write completes
 	// belongs to an earlier request or to nobody -- never to this one.
-	c.pending.Add(1)
+	c.owedAdd(1)
 	if err := c.writeFrame(ctx, tag, body); err != nil {
-		c.pending.Add(-1) // nothing was sent; no reply is owed
+		// Nothing was sent; no reply is owed. Should the frame have reached the wire
+		// anyway (a write that failed after the socket took it), its reply arrives
+		// exactly as a peer-volunteered stray would and is bounded the same way.
+		c.owedAdd(-1)
 		return nil, c.callErr(err)
 	}
 	for {
 		rtag, payload, err := c.readFrame(ctx)
 		if err != nil {
+			// This exchange's reply was never consumed: leave one discard owed to
+			// the next caller (driven by what IT reads, never by the pump's count).
+			c.skip++
 			return nil, c.callErr(err)
 		}
-		if c.pending.Add(-1) > 0 {
+		if c.skip > 0 {
+			c.skip--
 			continue // owed to an earlier request that gave up on its reply
 		}
 		if rtag == MsgError {
+			// THE STRAY QUARANTINE, the drop rule's other half (committee round 3).
+			// The pump's owed count closes one race window -- a frame judged while a
+			// stray occupies the queue -- but there is a second, complementary one
+			// that NO client-side accounting can close: when a stray was consumed as
+			// this exchange's answer, the reply it displaced is still in flight, and
+			// if the next request is written before the pump reads it, the displaced
+			// frame is indistinguishable from that request's own answer ("did this
+			// frame arrive before my write" is unobservable through a lagging
+			// reader). What the client CAN control is when the next request is
+			// written. Every stray in the H1 family is an MsgError (a pre-wait
+			// relay's refusal of an unknown op), so after adopting an error reply --
+			// the one moment a violation may just have displaced a frame -- the
+			// exchange lock is held for a beat before returning. owed is provably
+			// zero for the whole window (this frame's decrement already happened, mu
+			// blocks any new writer), so whatever the violation displaced arrives
+			// owed to nobody and is dropped by the pump instead of answering the
+			// next question. A genuine refusal pays 5ms on a path that already
+			// failed; a displaced reply lagging beyond the window is the bounded
+			// residual the evidence file records. Raw connections read inline, have
+			// no pump and no drop rule, so there is nothing to quarantine.
+			if c.frames != nil {
+				time.Sleep(strayQuarantine)
+			}
 			return nil, decodeError(payload)
 		}
 		return json.RawMessage(payload), nil
 	}
 }
+
+// strayQuarantine is how long roundtrip keeps the exchange lock after adopting an
+// MsgError reply, giving the pump time to judge -- against a provably-zero owed
+// count -- any frame a protocol violation may have displaced. Loopback delivery
+// and a netpoll wakeup are microseconds; five milliseconds is three orders of
+// magnitude of margin without being noticeable on a path that is already a
+// refusal.
+const strayQuarantine = 5 * time.Millisecond
 
 // bounded applies this connection's call deadline to ctx. A connection with no
 // deadline of its own (a raw one) returns ctx untouched, so its long poll stays a

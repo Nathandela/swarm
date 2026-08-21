@@ -666,9 +666,14 @@ tracker bead CLOSES only at the playbook boundary above (field behavior and rele
 never at the code-complete boundary alone; the parked beads are the open remainder, and none of
 them may be waived by prose. Recorded here because the 2026-08 deliveries applied this policy
 while it lived only in commit messages and close notes, which the final audit committee
-(2026-08-21, unanimous) correctly rejected as a section-16 violation: wave beads hggx.2 through
-hggx.6 and hggx.10 stay open until their field exits pass, even though their code-complete
-boundaries were reached and are CI-green on main.
+(2026-08-21, unanimous) correctly rejected as a section-16 violation: ALL wave beads with
+unmet field exits stay open - hggx.2 through hggx.9 and hggx.10 (hggx.7, .8 and .9 were
+initially left closed by the same change that adopted this rule; the committee's second
+round caught the inconsistency and they were reopened the same day). The code-complete
+boundary is reached and CI-green on main for R0 and for the code/automated halves of
+R6-R9; R1-R5 additionally hold open code work (version-skew gate, capability fields,
+Web-PKI migration, pairing ceremony, push-binding conveyance) and are code-complete only
+outside those named remainders.
 
 The dependency graph is explicit: R0 is the release baseline; R1 depends on R0 for exit but its
 docs/spikes may start in parallel; R2 and R3 depend on R1 and may implement in parallel, while R3's
