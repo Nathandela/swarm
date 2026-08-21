@@ -578,7 +578,15 @@ the double-slow fence):
   client-side (see the F3 correction above). What remains is only the epoch
   granularity of the taint: with SEVERAL discard credits outstanding across one
   observed idle leak, suppression may still fire for a window whose spent credit was
-  not the leaked one -- one boolean per epoch, closable only by correlation ids.
+  not the leaked one -- closable only by correlation ids. [CORRECTED, ROUND 5: this
+  sentence originally ended "one boolean per epoch"; the taint is a COUNTER since
+  round 4's F3-B fix, and round 5 (codex) additionally proved the counter must never
+  be clamped at spend time -- a license dies at the suppression it pays for, or all
+  licenses die together when the epoch's last credit is spent. The double-billing
+  clamp left an excess untainted credit that re-armed the cascade with two leaks and
+  three credits; TestCommitteeR4_TwoLeaksLicenseTwoSuppressionsAndNoExcessCredit is
+  the permanent fence, red under the clamp, and the misattribution residual in this
+  bullet is now bounded at exactly one casualty per observed leak.]
 - The mobile redial fence's pre-fix red is probabilistic (2/6 at HEAD, 5/6 under the
   revert mutant); post-fix it is deterministic. The race lives inside the websocket
   library's close path, out of reach of a deterministic external seam.

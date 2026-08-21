@@ -314,3 +314,76 @@ func TestCommitteeR4_ATaintIsConsumedByTheSuppressionItLicensed(t *testing.T) {
 	default:
 	}
 }
+
+// TestCommitteeR4_TwoLeaksLicenseTwoSuppressionsAndNoExcessCredit is the final
+// committee round's blocking finding (codex, round 5): with the clamp consuming a
+// license at spend time AND the suppression consuming one, two coexisting leaks were
+// double-billed -- one excess untainted credit survived, ate the successor's reply,
+// re-minted on its spurious timeout, and recreated the persistent cascade the whole
+// ledger exists to prevent. Licenses die at suppression, or all together when discard
+// reaches zero -- never at a spend.
+//
+// Serial-script timeline: E1-E3 (ct 250ms) time out (discard=3); replies 1 and 2
+// arrive idle (TWO leaks); E4's window receives reply-3 AND its own reply-4 (two
+// spends, discard=1) and abandons -- suppression one. E5's window spends the last
+// credit on its own reply and abandons -- suppression two (the second leak's bounded
+// casualty, correct in BOTH worlds). E6/E7 must then answer correctly: under the
+// double-billing clamp E5's abandonment re-minted instead, and E6's reply was eaten.
+func TestCommitteeR4_TwoLeaksLicenseTwoSuppressionsAndNoExcessCredit(t *testing.T) {
+	script := newR3Script(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	cl := script.dial(t, ctx)
+
+	script.mu.Lock()
+	script.delayReply[1] = 1500 * time.Millisecond
+	script.delayReply[2] = 200 * time.Millisecond
+	script.delayReply[3] = 900 * time.Millisecond
+	script.mu.Unlock()
+
+	t0 := time.Now()
+	at := func(d time.Duration) {
+		if s := time.Until(t0.Add(d)); s > 0 {
+			time.Sleep(s)
+		}
+	}
+
+	cl.conn.callTimeout = 250 * time.Millisecond
+	for i, name := range []string{"slow-1", "slow-2", "slow-3"} {
+		at(time.Duration(i) * 300 * time.Millisecond)
+		if _, err := cl.MailboxAppend(ctx, "peer", []byte(name)); !errors.Is(err, ErrTimeout) {
+			t.Fatalf("E%d = %v, want ErrTimeout", i+1, err)
+		}
+	}
+
+	// Idle gap: reply-1 (t=1500) and reply-2 (t=1700) free-drop -- the two leaks.
+	at(2400 * time.Millisecond)
+	cl.conn.callTimeout = 300 * time.Millisecond
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-4")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E4 = %v, want ErrTimeout (reply-3 and its own reply both spend inside "+
+			"this window; its abandonment is suppression ONE)", err)
+	}
+	at(2800 * time.Millisecond)
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-5")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E5 = %v, want ErrTimeout in BOTH worlds (the second leak's bounded "+
+			"casualty: its own reply spends the last credit)", err)
+	}
+
+	at(3200 * time.Millisecond)
+	cl.conn.callTimeout = 1500 * time.Millisecond
+	if cursor, err := cl.MailboxAppend(ctx, "peer", []byte("steady-6")); err != nil || cursor != 6 {
+		t.Fatalf("E6 = (%d, %v), want (6, nil).\n"+
+			"E5's abandonment re-minted instead of suppressing (its window's spend was "+
+			"untainted because the clamp had already consumed the license the suppression "+
+			"was owed), and the excess credit ate E6's reply -- the cascade is back", cursor, err)
+	}
+	cl.conn.callTimeout = DefaultCallTimeout
+	if cursor, err := cl.MailboxAppend(ctx, "peer", []byte("steady-7")); err != nil || cursor != 7 {
+		t.Fatalf("E7 = (%d, %v), want (7, nil): the excess-credit cascade persisted", cursor, err)
+	}
+	select {
+	case <-cl.Done():
+		t.Fatal("the connection was torn down over honest slow replies")
+	default:
+	}
+}

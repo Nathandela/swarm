@@ -152,8 +152,9 @@ type Conn struct {
 	// (TestCommitteeR4_AnHonestDoubleTimeoutKeepsFIFOAttributionForTheSuccessor
 	// pins that corner). What still cannot be told apart without the wire-format
 	// correlation ids the committee has twice declined is WHICH outstanding credit
-	// an idle drop leaked when several coexist -- idleLeak taints the whole
-	// outstanding-discard epoch, one boolean, not one flag per credit.
+	// an idle drop leaked when several coexist -- idleLeak COUNTS outstanding
+	// leak licenses against the epoch (round 4/5: a counter consumed per
+	// suppression, never a boolean, never clamped at spend).
 	discard int
 	// idleLeak counts clean frames free-dropped at owed == 0 while at least one
 	// discard credit was outstanding -- the observable signature of the idle-leak
@@ -429,8 +430,14 @@ func (c *Conn) pump() {
 					// a suppression licenses nothing further (F3-B).
 					c.spentLeaked = true
 				}
-				if c.idleLeak > c.discard {
-					c.idleLeak = c.discard
+				if c.discard == 0 {
+					// The epoch is empty: no credit remains for a leak to
+					// have eaten, so any unconsumed licenses are dead. This
+					// is the ONLY place a license dies outside a suppression
+					// (round 5, codex): a clamp at spend time double-billed a
+					// leak already owed to the abandonment's suppression, and
+					// the excess untainted credit re-armed the cascade.
+					c.idleLeak = 0
 				}
 				c.owedMu.Unlock()
 				continue // an abandoned exchange's straggler, ahead of the live reply
