@@ -74,6 +74,46 @@ type Session struct {
 	Agent   string
 	Need    string
 	Present bool
+	// ---------------------------------------------------------------------------
+	// WAVE R8 (ADR-017 T1/T2): the routed destination, and the honest header's facts.
+	// ---------------------------------------------------------------------------
+	//
+	// THE DESTINATION IS THE MACHINE'S CHOICE, RESOLVED ON THE PHONE BY READING ONLY.
+	// [Destination] is phonecore.RouteSession's answer over the daemon-authored capability
+	// record AND the machine's remote profile: "chat", "terminal_fallback" or
+	// "status_card" -- three destinations, nothing in between. A session with no record,
+	// an INCONSISTENT record (structured_chat and terminal_fallback both true), a record
+	// binding no session instance, or a machine whose profile declares no TerminalView
+	// version all resolve to the status card, which is the fail-closed answer for every
+	// one of them.
+	//
+	// A string rather than an enum because gomobile binds no Go enum type; the three
+	// values are the wire vocabulary and Kotlin switches on them.
+	Destination string
+	// Provider, ProviderVersion and MissingCapability are playbook:280's honest header:
+	// "the provider, the detected version, and the missing capability that cost it
+	// structured chat". Without all three the screen says "this is a terminal" and not
+	// "this is a terminal BECAUSE this build of this provider does not do X" -- and the
+	// second sentence is the whole of what makes three destinations honest rather than
+	// arbitrary. An empty ProviderVersion is UNKNOWN, never a guess.
+	Provider          string
+	ProviderVersion   string
+	MissingCapability string
+	// SessionInstance is the incarnation every generation and every snapshot binds to
+	// (T8-a). An empty instance means the machine bound none, and the router already
+	// refused such a record.
+	SessionInstance string
+	// StructuredChat is whether this session offers the structured COMPOSER --
+	// phonecore.ComposerAvailable, which is RouteSession's chat arm and therefore already
+	// carries every fail-closed rule: an untrusted profile, an inconsistent record and a
+	// record binding no instance all answer false. It is deliberately NOT the record's raw
+	// boolean, so no screen can offer a composer over a record the router refused.
+	//
+	// TerminalControl is read straight off the record and never inferred from the
+	// destination: a session degraded INTO the fallback by a proven structured gap may
+	// watch and may not control (T6-b).
+	StructuredChat  bool
+	TerminalControl bool
 }
 
 // SessionList is a roster HANDLE. gomobile has no bound list type, so a collection
@@ -348,6 +388,22 @@ type Snapshot struct {
 	Cols      int
 	Rows      int
 	Stale     bool
+
+	// SessionInstance is WHICH INCARNATION this screen belongs to (ADR-017 T8-a), and
+	// RenderedAtMillis is the MACHINE's own render time as Unix milliseconds UTC.
+	//
+	// THEY EXIST SO A SCREEN CAN SAY IT IS STALE. `TerminalGrid.ageMs` was hardcoded to zero
+	// because no machine-authored render time was on the wire, so the fallback presented an
+	// arbitrarily old grid as current -- and the compensating flag, `Stale`, is a
+	// sequence-gap signal that by construction does not fire when a machine simply STOPS
+	// SENDING. A screen that silently freezes is the worst failure mode this surface has,
+	// because the user acts on what they see.
+	//
+	// Milliseconds and not a time: gomobile binds no time.Time. Zero means the machine sent
+	// none -- a build that predates the closing round -- and a zero must be rendered as
+	// "unknown", never as "rendered just now".
+	SessionInstance  string
+	RenderedAtMillis int64
 }
 
 // LaunchSpec is a remote launch request. Options is a comma-separated list of key=value

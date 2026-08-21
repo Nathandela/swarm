@@ -301,17 +301,21 @@ func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTur
 // turn_interrupt has answered this shape correctly since it landed (interrupt_unsupported,
 // having typed nothing). This makes the composer symmetric with it.
 //
-// AN ABSENT RECORD IS NOT A REFUSAL, AND THAT IS A DISCLOSED COMPROMISE. IS-CAP's posture is
-// that an unproven capability is absent rather than assumed, which argues for refusing a
-// session with no record at all -- but registerSessionCapabilities has NO PRODUCTION CALLER
-// (see Daemon.sessionDegraded), so today every live session has no record, and refusing on
-// absence would refuse EVERY composer send rather than only the degraded ones. That is not
-// fail-closed, it is feature-off, and it would hide the very defect this gate exists to fix
-// behind a blanket refusal nobody could distinguish from it. The gate therefore keys on the
-// two facts that ARE production-reachable: the durable degrade marker, and a record that
-// exists and says structured_chat is false. When the capability-publication slice wires the
-// derivation, the absent-record arm becomes reachable and should tighten to a refusal;
-// docs/verification/r6-chat.md carries that as a named residual.
+// AN ABSENT RECORD IS NOT A REFUSAL, AND THAT IS A DISCLOSED COMPROMISE WHOSE REASON CHANGED
+// IN WAVE R8. It used to read "registerSessionCapabilities has NO PRODUCTION CALLER, so today
+// every live session has no record" -- accurate when written, and false since R8 wired the
+// authoring path from five call sites (round-3 minor 8). The compromise itself stands, on the
+// reason that survived the wiring: authoring is deliberately SILENT while a provider whose
+// structured plane is a side process has not dialled yet (backendPlaneDecided), because a
+// record authored in that window would pin a perfectly good chat session at
+// structured_chat=false FOREVER -- T2 rule 2 makes that degrade one-way. Refusing on absence
+// would therefore refuse the composer for every session in its startup window, which reads to
+// a user exactly like the defect this gate exists to fix.
+//
+// So the gate keys on the two POSITIVE facts: the durable degrade marker, and a record that
+// exists and says structured_chat is false. The phone's own router is where absence IS a
+// refusal (ADR-017 T2-a: no record is the honest status card and no composer), and it can be,
+// because by the time a roster reaches a phone the authoring window has closed.
 func (d *Daemon) requireStructuredComposer(local, session string) (protocol.ErrorCode, error) {
 	if d.sessionDegraded(local) {
 		return protocol.CodeStructuredUnsupported, errIsLife5(

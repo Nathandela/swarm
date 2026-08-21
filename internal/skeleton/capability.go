@@ -77,6 +77,19 @@ type sessionCapabilityStore struct {
 	mu   sync.Mutex
 	dir  string // durable home (the daemon's state dir); "" = memory only
 	byID map[string]protocol.SessionCapabilities
+	// instances caches each session's per-incarnation identifier (instance.go). It is
+	// backed by the same 0700 session dir as the record, so a daemon restart ADOPTS an
+	// instance rather than minting one (ADR-017 T8-a).
+	instances map[string]string
+	// incarnations caches the shim pid each cached instance was minted for. It is what
+	// makes a daemon restart (same shim, same pid) an ADOPTION and a session replacement
+	// (new shim, new pid) a re-mint -- the distinction ADR-017 T8-a's whole binding turns
+	// on, and one the session id cannot make (round-3 blocker 2b). Zero is UNKNOWN, never
+	// "different": a side-file written before this format carries no pid, and reading that
+	// as a replacement would reset every session's view once on the upgrade.
+	incarnations map[string]int
+	// versions caches the detected CLI version per agent type for this daemon's life.
+	versions map[string]string
 }
 
 // sessionCapabilityFile is the per-session capability record's on-disk name, sibling of
@@ -113,6 +126,14 @@ func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.Sessio
 		_ = existing.SetStructuredChat(c.StructuredChat)
 		c.StructuredChat = existing.StructuredChat
 		c.TerminalFallback = existing.TerminalFallback
+		// D-DEGRADE-ORIGIN FENCE 2 (ADR-017 T6-b). terminal_control is one of the
+		// "other fields" the merge above deliberately lets refresh, and a daemon
+		// restart's reconcile re-registers every reconnected session -- which is
+		// precisely what that merge exists for. Left alone, an unchanged reconcile
+		// silently RE-GRANTS control over a session that proved a structured gap.
+		// So control is one-way in the withdrawing direction, exactly like
+		// structured_chat: a re-registration may drop it and may never restore it.
+		c.TerminalControl = c.TerminalControl && existing.TerminalControl
 	}
 	if d.sessionDegradedLocked(sessionID) {
 		// A gap was proven for this session instance -- possibly by an incarnation
@@ -120,6 +141,10 @@ func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.Sessio
 		// answer to "may this session claim structured chat" is already no, and this
 		// incoming record does not get to reopen it (ADR-017 T2 rule 2).
 		_ = c.SetStructuredChat(false)
+		// And a degrade grants a SCREEN, never a keyboard (T6-b): the fallback this
+		// session just acquired was DERIVED, not authored at launch, and its live TUI
+		// has an uncharacterized input region.
+		c.TerminalControl = false
 	}
 	if d.capStore.byID == nil {
 		d.capStore.byID = map[string]protocol.SessionCapabilities{}
@@ -162,6 +187,38 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 		return protocol.SessionCapabilities{}, false
 	}
 	if c.StructuredChat && d.sessionDegradedLocked(sessionID) {
+		// THE DEGRADE IS NOT APPLIED TO AN ALREADY-INCONSISTENT RECORD (ADR-017 T2-b, closing
+		// review finding 9).
+		//
+		// THE LAUNDERING THIS CLOSES. `SetStructuredChat(false)` FORCES TerminalFallback true,
+		// and it was applied to whatever the disk held with no validity check at all. So the
+		// INVALID {structured_chat:true, terminal_fallback:false, terminal_control:true} --
+		// refused by every other T2-b seam -- came back as the VALID {false, true, true}, which
+		// grants AllowsTerminalControl(). The mutual-exclusion shapes launder the same way:
+		// {structured_chat:true, terminal_fallback:true, ...} is invalid as authored, and the
+		// transform erases exactly the boolean that made it invalid, reading it back as a
+		// valid grant (closing round 2 finding -- the guard originally covered only the
+		// control-without-fallback clause). The transform ran from LESS VALID to MORE
+		// AUTHORITY, which is the one direction a read may never take: T2 rule 2 lets a
+		// degrade REMOVE structured chat, and nothing in it lets a read manufacture a grant
+		// the authoring daemon never made. T2-b's own words are that an inconsistent record
+		// is REJECTED rather than resolved, because resolving it means the READER choosing
+		// which boolean to believe.
+		//
+		// IT CHECKS Validate's TWO BOOLEAN CLAUSES AND DELIBERATELY NOT ITS SESSION-INSTANCE
+		// CLAUSE, and the distinction is the whole reason this is not a bare `c.Validate()`.
+		// The boolean clauses are what the transform can ERASE -- it writes exactly those
+		// fields -- so an inconsistency there is one this branch would hide. A missing
+		// session_instance is a T8-a fact the transform never touches and cannot launder, and
+		// it is already enforced fail-closed on every read by `AllowsTerminalWatch`, which runs
+		// the full Validate. Refusing the record outright for it here would also make every
+		// record written before instances existed unreadable, which is a behaviour change this
+		// finding does not ask for and a standing test pins against.
+		if (c.StructuredChat && c.TerminalFallback) || (c.TerminalControl && !c.TerminalFallback) {
+			log.Printf("skeleton: capability record for session %s fails a routing-boolean clause "+
+				"of Validate; the structured degrade is not applied to it", sessionID)
+			return protocol.SessionCapabilities{}, false
+		}
 		_ = c.SetStructuredChat(false) // forces TerminalFallback true (protocol/schema)
 	}
 	return c, true
@@ -224,20 +281,24 @@ func (d *Daemon) sessionDegradedLocked(sessionID string) bool {
 // sessionDegraded reports whether a structured gap has been PROVEN for sessionID, reading
 // the durable marker directly rather than through the capability record.
 //
-// IT READS THE MARKER AND NOT THE RECORD BECAUSE IN PRODUCTION THERE IS NO RECORD.
-// registerSessionCapabilities has no production caller today -- it and
-// deriveSessionCapabilities are reached only from tests -- so sessionCapabilities answers
-// ok=false for every live session, and lookupCapabilitiesLocked's marker application (which
-// only runs when a record EXISTS) never fires. markSessionDegraded, by contrast, IS wired:
-// hookdrain.go calls it on a proven gap, and its own comment records that with no record
-// authored "the marker above is the whole degrade". So the marker is the only
-// production-reachable proof of a degrade, and a gate that consulted the record alone would
-// be a gate that never fires -- which is exactly the shape review finding B3 is about.
+// IT READS THE MARKER AND NOT THE RECORD BECAUSE THE MARKER OUTLIVES AND PRECEDES IT.
 //
-// (That registerSessionCapabilities is unwired is a SEPARATE, pre-existing gap: ADR-017 T2
-// rule 3's "the phone renders from the capability record" has no record to render from. It
-// is disclosed in docs/verification/r6-chat.md rather than closed here -- wiring the
-// derivation into session launch is a capability-publication slice, not a chat fix.)
+// THIS PARAGRAPH USED TO SAY THE OPPOSITE OF WHAT IS TRUE NOW, and the correction is on the
+// record rather than quietly applied (round-3 minor 8). Until Wave R8 it said "there is no
+// record in production -- registerSessionCapabilities has no production caller", and that was
+// accurate when written. R8 wired the authoring path: authorSessionCapabilities is reached
+// from the client-facing launch seam (api.go), the core's session-start hook and the
+// reconcile re-adoption (serve.go), the session tap (sessiontap.go) and the backend join
+// (backend.go), and every one of them ends in registerSessionCapabilities. A live session
+// today normally HAS a record, and a reader auditing the routing story must not come away
+// believing otherwise.
+//
+// The marker is still the right thing to read here, for two reasons that survived the
+// wiring. It is written the instant a gap is PROVEN (hookdrain.go), which can be before any
+// record exists -- the authoring path deliberately stays silent while a side-process backend
+// is still dialling (backendPlaneDecided), so a degrade proven in that window would have no
+// record to be applied to. And it is durable in the session's own dir, so it survives the
+// daemon restart that would otherwise re-author a record from a live-looking backend.
 func (d *Daemon) sessionDegraded(sessionID string) bool {
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
@@ -331,17 +392,20 @@ func (d *Daemon) persistSessionCapabilitiesLocked(sessionID string, c protocol.S
 // instance. providerVersion is the detected CLI version and adapterRevision is the Swarm
 // adapter revision that produced the record; both are carried through verbatim.
 //
-// THIS FUNCTION IS DEAD CODE TODAY, AND SO IS ITS `liveBackend` ARGUMENT (review round 4,
-// LOW 5). Nothing in production calls it: its only caller is registerSessionCapabilities, which
-// has no production caller either (see Daemon.sessionDegraded's own KDoc), so no live session
-// has a capability record at all and the derivation below runs only under test. R7 landed the
-// per-session-instance correction because leaving a KNOWN-WRONG derivation in place for a later
-// slice to inherit is how a defect ships; it did NOT wire the publication, which is
-// agents-tracker-hggx.2.1's slice and needs a launch-time write plus a phone-visible record.
+// IT IS WIRED, AND UNTIL WAVE R8 IT WAS NOT. This paragraph used to say "THIS FUNCTION IS DEAD
+// CODE TODAY, AND SO IS ITS `liveBackend` ARGUMENT ... a reader must not come away believing a
+// Codex session's capability record says any of this today -- it has none", which was true when
+// R7 wrote it and is now false in the opposite direction (round-3 minor 8). R8's
+// authorSessionCapabilities is the one authoring entry point and it calls this function, from
+// five production call sites: the client-facing launch/resume seam, the core's session-start
+// hook, the reconcile re-adoption of a running session, the session tap and the backend join.
+// A live session's record says exactly what this derivation says.
 //
-// So: the correction is real, and it is NOT REACHABLE FROM PRODUCTION. A reader must not come
-// away believing a Codex session's capability record says any of this today -- it has none, and
-// the only production-reachable capability fact is the durable degrade marker.
+// What R7 left, and what R8 reused rather than rewrote, is the per-session-instance
+// correction: `liveBackend` is a fact about THIS incarnation, and the caller supplies it from
+// backendPlaneDecided rather than from anything ambient. What remains deferred is
+// agents-tracker-hggx.2.1's T3 version-skew row, and its absence is stated in the wave's
+// evidence rather than here.
 func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersion, adapterRevision string, liveBackend bool) protocol.SessionCapabilities {
 	// WAVE R7 CORRECTS A REAL DERIVATION DEFECT (ADR-013 §R7.7). Until now both fields were
 	// facts about the ADAPTER TYPE. The moment the Codex adapter implements InteractionSource
@@ -368,12 +432,19 @@ func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersi
 	// interrupt:false and the phone would hide a Stop button that works.
 	_, keystrokeInterrupt := adapter.AsTurnInterrupter(a)
 	interrupt := keystrokeInterrupt || (needsBackend && liveBackend)
+	// WAVE R8 (ADR-017 T6-b): terminal_control is authored TRUE AT LAUNCH for a provider
+	// whose fallback is its DESIGNED surface, and never derived on the phone from
+	// terminal_fallback. The two look the same here and diverge on exactly the sessions
+	// the ruling is about: a Claude session degraded by a proven structured gap ends up
+	// with terminal_fallback=true and terminal_control=false, because SetStructuredChat
+	// grants the screen and never touches the keyboard.
 	return protocol.SessionCapabilities{
 		Provider:         provider,
 		ProviderVersion:  providerVersion,
 		AdapterRevision:  adapterRevision,
 		StructuredChat:   structured,
 		TerminalFallback: !structured,
+		TerminalControl:  !structured,
 		Interrupt:        interrupt,
 	}
 }

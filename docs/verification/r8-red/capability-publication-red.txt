@@ -1,0 +1,28 @@
+WAVE R8 RED EVIDENCE -- S1+S2, capability record validity, session instance, terminal_control (wire)
+captured 2026-08-20T12:18:10Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go vet ./internal/protocol/schema/ && go test ./internal/protocol/schema/ -run TestR8 -count=1
+
+# github.com/Nathandela/swarm/internal/protocol/schema
+# [github.com/Nathandela/swarm/internal/protocol/schema]
+vet: internal/protocol/schema/r8_record_test.go:68:53: unknown field SessionInstance in struct literal of type SessionCapabilities
+
+# github.com/Nathandela/swarm/internal/protocol/schema [github.com/Nathandela/swarm/internal/protocol/schema.test]
+internal/protocol/schema/r8_record_test.go:68:53: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:74:53: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:79:55: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:84:54: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:90:55: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:90:78: unknown field TerminalControl in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:103:18: tc.rec.Validate undefined (type SessionCapabilities has no field or method Validate)
+internal/protocol/schema/r8_record_test.go:110:51: undefined: ErrCapabilityInconsistent
+internal/protocol/schema/r8_record_test.go:126:23: unknown field SessionInstance in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:127:49: unknown field TerminalControl in struct literal of type SessionCapabilities
+internal/protocol/schema/r8_record_test.go:127:49: too many errors
+FAIL	github.com/Nathandela/swarm/internal/protocol/schema [build failed]
+FAIL
+--- internal/skeleton (publication + instance minting) ---
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r8_publication_test.go:60:10: undefined: mintSessionInstance

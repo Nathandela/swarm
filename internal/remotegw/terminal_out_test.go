@@ -53,7 +53,7 @@ func TestRelaySink_ForwardsTerminalSnapshot(t *testing.T) {
 	if err := sink.Event(protocol.JournalRecord{Cursor: 9, SessionID: "s0", Type: "launched"}); err != nil {
 		t.Fatalf("journal event: %v", err)
 	}
-	if err := sink.Terminal("s1", []string{"a", "b"}, 80, 24); err != nil {
+	if err := sink.Terminal(protocol.TerminalViewV1{Session: "s1", Lines: []string{"a", "b"}, Cols: 80, Rows: 24}); err != nil {
 		t.Fatalf("terminal snapshot: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestTerminalSink_OpaqueToRelay(t *testing.T) {
 	sink := newTestRelaySink(t, app, key)
 
 	const secret = "SECRET-GRID-LINE-XYZ"
-	if err := sink.Terminal("s1", []string{secret}, 80, 24); err != nil {
+	if err := sink.Terminal(protocol.TerminalViewV1{Session: "s1", Lines: []string{secret}, Cols: 80, Rows: 24}); err != nil {
 		t.Fatalf("terminal snapshot: %v", err)
 	}
 	if len(app.envs) != 1 {
@@ -142,8 +142,8 @@ type recordingTerminalSink struct {
 
 func (s *recordingTerminalSink) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
 func (s *recordingTerminalSink) Event(protocol.JournalRecord) error              { return nil }
-func (s *recordingTerminalSink) Terminal(session string, lines []string, cols, rows int) error {
-	s.done <- protocol.TerminalSnapshot{Session: session, Lines: lines, Cols: cols, Rows: rows}
+func (s *recordingTerminalSink) Terminal(v protocol.TerminalViewV1) error {
+	s.done <- protocol.TerminalSnapshot{Session: v.Session, Lines: v.Lines, Cols: v.Cols, Rows: v.Rows}
 	return nil
 }
 

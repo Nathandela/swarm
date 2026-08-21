@@ -43,7 +43,7 @@ import (
 // wireZeroProfile is the committed JSON of the zero-value RemoteProfileV1 (no field
 // carries omitempty). newReconcileSink below configures no Profile, so every wire-shape
 // const in this file gained this exact suffix (ADR-017 T5).
-const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0,"relay_tls_policy":"","relay_host":"","relay_spki_pin":null}`
+const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0,"relay_tls_policy":"","relay_host":"","relay_spki_pin":null,"terminal_view_max_line_bytes":0,"terminal_view_max_rows":0,"terminal_view_max_rate_hz":0}`
 
 // wireReconcileFrame is the committed sealed plaintext, byte-identical to the shape the
 // phone decoder demuxes (pinned independently in internal/phonecore/reconcile_test.go

@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui
 
+import dev.swarm.phone.ui.screens.SessionCapabilityFacts
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TranscriptScreen
 import org.junit.Assert.assertEquals
@@ -91,6 +92,7 @@ class SessionStopOfflineTest {
             d,
             TranscriptScreen.of(emptyList()),
             SessionLease(sessionId = d.sessionId, leaseHeld = d.leaseHeld, online = d.online),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
         )
 
         assertEquals(StopAction.NOT_SENT, offline.stopAction)

@@ -7,9 +7,12 @@ import dev.swarm.phone.ui.screens.LaunchAvailability
 import dev.swarm.phone.ui.screens.LaunchPresetScreen
 import dev.swarm.phone.ui.screens.MachineRowModel
 import dev.swarm.phone.ui.screens.PresetRowModel
+import dev.swarm.phone.ui.screens.SessionCapabilityFacts
+import dev.swarm.phone.ui.screens.TerminalFallbackBinding
+import dev.swarm.phone.ui.screens.TerminalFallbackModel
+import dev.swarm.phone.ui.screens.TerminalGrid
 import swarmmobile.App
 import swarmmobile.Session
-import swarmmobile.Snapshot
 
 /**
  * Phase B slice S16 -- where the pure screen models meet the bound facade.
@@ -41,6 +44,56 @@ class FacadeBridge(private val app: App) {
     fun roster(): List<SessionRow> = rosterView().rows
 
     fun sessionRow(sessionId: String): SessionRow = rowOf(app.session(sessionId))
+
+    /**
+     * ADR-017 T2 rule 3: the MACHINE's own capability record for one session, mapped and not
+     * derived.
+     *
+     * IT IS A MAPPING AND NOTHING ELSE, which is this file's whole rule. Every fail-closed
+     * decision was already taken machine-side and then once more in `phonecore.RouteSession`,
+     * whose answer rides on `Session.destination`; a session with no record, an inconsistent
+     * one, one binding no session instance, or a machine whose profile declares no
+     * capability-record version all arrive here as `structuredChat = false`, which is the honest
+     * status card. Nothing about that is re-decided at this seam.
+     */
+    fun sessionCapabilities(sessionId: String): SessionCapabilityFacts {
+        val s = app.session(sessionId)
+        return SessionCapabilityFacts(structuredChat = s.structuredChat)
+    }
+
+    /**
+     * The routed destination and the honest header's facts, for the one screen ADR-017 T1 routes
+     * a `terminal_fallback` session to. Null for every other session, because
+     * [TerminalFallbackModel.from] answers null unless the MACHINE chose that destination.
+     */
+    fun terminalFallback(sessionId: String): TerminalFallbackModel? =
+        TerminalFallbackModel.from(app.session(sessionId))
+
+    /**
+     * The fallback screen's own binding to the facade, FOR A SESSION THE MACHINE ROUTED THERE
+     * AND FOR NO OTHER -- null otherwise.
+     *
+     * IT USED TO RETURN A LIVE HANDLE FOR ANY SESSION ID, and the closing review walked one line
+     * through every R8 gate with it: `bridge.terminalFallbackBinding(id).watch()`, appended to a
+     * structured chat screen, opened a real watch with no capability read anywhere on the path.
+     * The binding's constructor is now private and
+     * [TerminalFallbackBinding.forRoutedSession] performs the read, so this method cannot hand
+     * out what it does not have -- the refusal is a `null`, not a gate note.
+     */
+    fun terminalFallbackBinding(sessionId: String): TerminalFallbackBinding? =
+        TerminalFallbackBinding.forRoutedSession(app, sessionId)
+
+    /**
+     * The machine-sanitized grid for one fallback session.
+     *
+     * IT DELEGATES, AND THE DELEGATION IS THE POINT. The read used to be `app.peek(sessionId)`
+     * right here, and `App.Peek` reads the snapshot cache for ANY session id with no capability
+     * check -- so the fallback render path was reachable from a file that is not the fallback
+     * screen and does no record read, which is exactly what ADR-017's gate note forbids. The
+     * capability read and the peek now live together in the one allowlisted file.
+     */
+    fun terminalRows(sessionId: String): TerminalGrid =
+        terminalFallbackBinding(sessionId)?.grid() ?: TerminalGrid.EMPTY
 
     /**
      * PB-APP-2's screen, with its PB-APP-8 verdict READ OFF THE HANDLE THAT CARRIED IT.

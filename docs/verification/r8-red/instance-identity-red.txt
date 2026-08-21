@@ -1,0 +1,9 @@
+WAVE R8 RED EVIDENCE -- S1, session instance identity
+captured 2026-08-20T12:18:11Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go vet ./internal/skeleton/
+
+# github.com/Nathandela/swarm/internal/skeleton
+# [github.com/Nathandela/swarm/internal/skeleton]
+vet: internal/skeleton/r8_publication_test.go:60:10: undefined: mintSessionInstance

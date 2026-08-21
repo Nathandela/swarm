@@ -215,12 +215,23 @@ func TestS11Lease_EveryLifecycleEventSeversTheLease(t *testing.T) {
 			func(l *LeaseState) { l.Apply(s11Severance("session exited")) },
 		},
 		{
-			// PB-RUN-3's backgrounding policy. Backgrounding is no longer a severance
-			// trigger in its own right (ADR-007 B133 deleted the freshness lapse it was
-			// paired with), but it still ends the lease: it DISCONNECTS the phone
-			// (ADR-007 B16), and the whole-device transport loss is what severs.
+			// PB-RUN-3's backgrounding policy, BY CONSEQUENCE: backgrounding DISCONNECTS
+			// the phone (ADR-007 B16), and the whole-device transport loss is what severs.
+			// This row is kept exactly as it was -- the guarantee it measures is real and
+			// still holds -- and the row below it is added, not substituted.
 			"app backgrounding (via the disconnect it forces)",
 			func(l *LeaseState) { l.SeverAll("the connection to the machine was lost") },
+		},
+		{
+			// ADR-017 amendment T8-b, ADDED as a STRENGTHENING: backgrounding is ALSO a
+			// severance trigger IN ITS OWN RIGHT, with no transport event of any kind.
+			// The by-consequence answer above rests on a connectivity choice a later wave
+			// could revisit, at which point authority would quietly outlive the screen
+			// that owns it -- and T6 makes "only the active foreground screen may send
+			// input" a routing rule, so a live authority with no foreground screen
+			// displaying it is precisely the state the rule forbids.
+			"app backgrounding (directly, with no transport event)",
+			func(l *LeaseState) { l.Background("the app went to the background") },
 		},
 	}
 

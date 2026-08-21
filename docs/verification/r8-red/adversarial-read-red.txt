@@ -1,0 +1,104 @@
+WAVE R8 RED EVIDENCE -- S5, the adversarial sanitizer corpus
+captured 2026-08-20T12:17:51Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go test ./internal/vt/ -run TestR8 -count=1 -race
+
+--- FAIL: TestR8Corpus_SanitizedOutputIsExact (0.01s)
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/line_separator_u2028 (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "line_separator_u2028":
+              raw  = "connected\u2028owner approved"
+              got  = "connected\u2028owner approved"
+              want = "connectedowner approved"
+            What the attacker buys if this ships: Android lays U+2028 out as a LINE BREAK: one grid row becomes two and every row below it shifts, with no control byte in the payload
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/paragraph_separator_u2029 (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "paragraph_separator_u2029":
+              raw  = "connected\u2029owner approved"
+              got  = "connected\u2029owner approved"
+              want = "connectedowner approved"
+            What the attacker buys if this ships: U+2029 is the same break one level up, and is the class a U+2028-only fix leaves open
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/soft_hyphen_u00ad (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "soft_hyphen_u00ad":
+              raw  = "pay\u00adpal.com"
+              got  = "pay\u00adpal.com"
+              want = "paypal.com"
+            What the attacker buys if this ships: U+00AD renders as nothing: `pay<SHY>pal.com` displays as paypal.com and compares unequal to it
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/mongolian_vowel_separator_u180e (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "mongolian_vowel_separator_u180e":
+              raw  = "ad\u180emin"
+              got  = "ad\u180emin"
+              want = "admin"
+            What the attacker buys if this ships: U+180E is the zero-width separator outside the U+200B-U+200F range the F7 fix covered
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/word_joiner_u2060 (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "word_joiner_u2060":
+              raw  = "a\u2060b"
+              got  = "a\u2060b"
+              want = "ab"
+            What the attacker buys if this ships: U+2060 is U+200B's non-breaking twin, and is not in U+200B-U+200F
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/invisible_operators_u2061_u2064 (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "invisible_operators_u2061_u2064":
+              raw  = "rm\u2061 \u2062-rf\u2063 \u2064/"
+              got  = "rm\u2061 \u2062-rf\u2063 \u2064/"
+              want = "rm -rf /"
+            What the attacker buys if this ships: U+2061-U+2064 are four more zero-width runes that splice content invisibly
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/interlinear_annotation_ufff9_ufffb (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "interlinear_annotation_ufff9_ufffb":
+              raw  = "ok\ufff9hidden\ufffashown\ufffb"
+              got  = "ok\ufff9hidden\ufffashown\ufffb"
+              want = "okhiddenshown"
+            What the attacker buys if this ships: U+FFF9-U+FFFB let one visible string carry a second, hidden annotation string
+    --- FAIL: TestR8Corpus_SanitizedOutputIsExact/tag_block_ue0000_ue007f (0.00s)
+        r8_corpus_test.go:274: ADR-017 T4-c, spoof "tag_block_ue0000_ue007f":
+              raw  = "safe\U000e0001\U000e0074\U000e0065\U000e0078\U000e0074\U000e007ftext"
+              got  = "safe\U000e0001\U000e0074\U000e0065\U000e0078\U000e0074\U000e007ftext"
+              want = "safetext"
+            What the attacker buys if this ships: the TAG block is a complete invisible ASCII alphabet: a whole second sentence riding inside an innocuous line
+--- FAIL: TestR8Corpus_NoRowEverBecomesTwo (0.01s)
+    r8_corpus_test.go:305: ADR-017 T4-c: line-breaking rune U+2028 survived into a phone-displayed row ("above\u2028below"). A row that the phone lays out as two rows shifts every row below it, and no control byte is present for a control-byte filter to catch.
+    r8_corpus_test.go:305: ADR-017 T4-c: line-breaking rune U+2029 survived into a phone-displayed row ("above\u2029below"). A row that the phone lays out as two rows shifts every row below it, and no control byte is present for a control-byte filter to catch.
+--- FAIL: TestR8Corpus_ZeroWidthFormatRunesAreDroppedNotSpaced (0.00s)
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+00AD must be DROPPED (zero display width), not replaced and not kept: got "ab\u00adcd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+180E must be DROPPED (zero display width), not replaced and not kept: got "ab\u180ecd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2028 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2028cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2029 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2029cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2060 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2060cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2061 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2061cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2062 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2062cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2063 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2063cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+2064 must be DROPPED (zero display width), not replaced and not kept: got "ab\u2064cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+FFF9 must be DROPPED (zero display width), not replaced and not kept: got "ab\ufff9cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+FFFA must be DROPPED (zero display width), not replaced and not kept: got "ab\ufffacd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+FFFB must be DROPPED (zero display width), not replaced and not kept: got "ab\ufffbcd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+E0001 must be DROPPED (zero display width), not replaced and not kept: got "ab\U000e0001cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+E0041 must be DROPPED (zero display width), not replaced and not kept: got "ab\U000e0041cd", want "abcd"
+    r8_corpus_test.go:330: ADR-017 T4-c: rune U+E007F must be DROPPED (zero display width), not replaced and not kept: got "ab\U000e007fcd", want "abcd"
+--- FAIL: TestR8Corpus_CombiningMarkDepthIsClampedPerCell (0.00s)
+    r8_corpus_test.go:370: ADR-017 T4-c: 500 combining marks on one cell survived unclamped (supplied 500). A cell with hundreds of marks smears vertically across the rows above and below it on the phone, and every rune in it is individually legitimate so no rune filter sees it.
+    r8_corpus_test.go:375: ADR-017 T4-c: per-cell combining depth clamped to 500, which is above the fenced ceiling of 16 (UAX #15 stream-safe format bounds a defective combining sequence at 30; a real terminal cell carries a handful)
+--- FAIL: TestR8Corpus_ARowIsBoundedByItsDeclaredGeometry (0.03s)
+    r8_corpus_test.go:443: ADR-017 T4/T5-a: a row of a 80-column grid rendered 4194304 bytes, above the 5120-byte ceiling its declared geometry implies (SnapshotTextMax=64 per cell). An unbounded row is a layout denial-of-service on the phone and it is spent from the shared append budget.
+--- FAIL: TestR8Corpus_AGridIsBoundedByItsDeclaredRowCount (0.05s)
+    r8_corpus_test.go:459: ADR-017 T4/T5-a: a grid declaring 24 rows flattened to 50000 lines. The declared geometry is what the phone allocates against; a producer that declares small and ships large is an unbounded allocation on the handset.
+--- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization (0.00s)
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/line_separator_u2028 (0.00s)
+        r8_corpus_test.go:491: column parity: "connected\u2028owner approved" sanitized to "connected\u2028owner approved" (24 runes), want 23 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/paragraph_separator_u2029 (0.00s)
+        r8_corpus_test.go:491: column parity: "connected\u2029owner approved" sanitized to "connected\u2029owner approved" (24 runes), want 23 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/soft_hyphen_u00ad (0.00s)
+        r8_corpus_test.go:491: column parity: "pay\u00adpal.com" sanitized to "pay\u00adpal.com" (11 runes), want 10 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/mongolian_vowel_separator_u180e (0.00s)
+        r8_corpus_test.go:491: column parity: "ad\u180emin" sanitized to "ad\u180emin" (6 runes), want 5 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/word_joiner_u2060 (0.00s)
+        r8_corpus_test.go:491: column parity: "a\u2060b" sanitized to "a\u2060b" (3 runes), want 2 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/invisible_operators_u2061_u2064 (0.00s)
+        r8_corpus_test.go:491: column parity: "rm\u2061 \u2062-rf\u2063 \u2064/" sanitized to "rm\u2061 \u2062-rf\u2063 \u2064/" (12 runes), want 8 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/interlinear_annotation_ufff9_ufffb (0.00s)
+        r8_corpus_test.go:491: column parity: "ok\ufff9hidden\ufffashown\ufffb" sanitized to "ok\ufff9hidden\ufffashown\ufffb" (16 runes), want 13 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+    --- FAIL: TestR8Corpus_ColumnParityIsPreservedUnderSanitization/tag_block_ue0000_ue007f (0.00s)
+        r8_corpus_test.go:491: column parity: "safe\U000e0001\U000e0074\U000e0065\U000e0078\U000e0074\U000e007ftext" sanitized to "safe\U000e0001\U000e0074\U000e0065\U000e0078\U000e0074\U000e007ftext" (14 runes), want 8 runes. A control rune DELETED instead of replaced desynchronises clipRunPrefix's walk from the declared Run.Width, and the desync only shows on rows wide enough to clip.
+--- FAIL: TestR8RealPath_TheWireSuppliedInitialSnapshotIsTheLiveHostilePath (0.00s)
+    r8_hostilepty_test.go:308: ADR-017 T4-c: a U+2028 supplied by the PRODUCER (not by this emulator) reached the phone-facing projection: "deploy\u2028owner approved: yes". renderInitial pushes SnapText over a snapshot decoded from another process's bytes, so the producer-side filter is not in this path at all and SnapText is the only sanitizer between that producer and the handset.
+    r8_hostilepty_test.go:314: wire-supplied run text sanitized to "deploy\u2028owner approved: yes", want "deployowner approved: yes"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/vt	0.957s
+FAIL

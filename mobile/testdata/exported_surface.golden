@@ -92,14 +92,23 @@ field QRPayload.HasStaticPub bool
 field QRPayload.RelayURL string
 field QRPayload.RendezvousID string
 field Session.Agent string
+field Session.Destination string
 field Session.Group string
 field Session.ID string
+field Session.MissingCapability string
 field Session.Need string
 field Session.Present bool
+field Session.Provider string
+field Session.ProviderVersion string
+field Session.SessionInstance string
+field Session.StructuredChat bool
+field Session.TerminalControl bool
 field Session.Title string
 field Snapshot.Cols int
+field Snapshot.RenderedAtMillis int64
 field Snapshot.Rows int
 field Snapshot.SessionID string
+field Snapshot.SessionInstance string
 field Snapshot.Stale bool
 field Snapshot.Text string
 field StateSummary.EpochID int64
@@ -148,6 +157,7 @@ method App.ComposerSend(string, string, string) (*Op, error)
 method App.ConnectionState() (string, error)
 method App.DeletePushToken() error
 method App.EnsurePushRegistration(string) error
+method App.EnterBackground() error
 method App.ErrorClass(string) (string, error)
 method App.ForgetMachine(string) error
 method App.GlobalInbox() (*InboxList, error)
@@ -202,7 +212,14 @@ method App.Stop() error
 method App.StreamState(string) (string, error)
 method App.SubscribeJournal() error
 method App.TakeControl(string) (*Op, error)
+method App.TerminalControlBegin(string, string) (*Op, error)
+method App.TerminalControlEnd(string) (*Op, error)
+method App.TerminalControlKeepalive(string) error
+method App.TerminalInput(string, string) error
 method App.TerminalUnwatch(string) error
+method App.TerminalViewRenew(string) error
+method App.TerminalViewUnwatch(string) error
+method App.TerminalViewWatch(string) error
 method App.TerminalWatch(string) error
 method App.UndeliveredInputs() (*UndeliveredList, error)
 method App.UnlockContent() error

@@ -73,8 +73,9 @@ class SessionDetailViewTest {
             detail,
             TranscriptScreen.of(emptyList()),
             SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
-            verdict,
-            undelivered,
+            capabilities = SessionCapabilityFacts(structuredChat = true),
+            verdict = verdict,
+            undelivered = undelivered,
         )
     }
 
@@ -131,6 +132,7 @@ class SessionDetailViewTest {
                 ),
             ),
             SessionLease(sessionId = detail.sessionId, leaseHeld = true, online = true),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
 

@@ -347,6 +347,7 @@ func issueRevokeThenDropTokenAtRelay(revoke func() (*Op, error), atRelay func() 
 //     the 4lta pin (an offline Stop SAYS SO) rather than weakening it.
 //   - Nothing rides the undelivered-INPUT ledger: the signed op is not a keystroke, and its
 //     failure surfaces on the op itself (r6_chatverbs_test.go pins the ledger stays empty).
+//
 // EXPECTED_TURN IS REQUIRED (Wave R6 fix-pack, review finding B7). The verb took only a
 // session until a probe showed what that costs: with turnA superseded by turnB, a
 // ComposerSend rendered against turnA was refused stale_turn while an Interrupt rendered
@@ -412,6 +413,213 @@ func (a *App) TerminalWatch(session string) (err error) {
 func (a *App) TerminalUnwatch(session string) (err error) {
 	defer barrier(&err)
 	_, err = a.unsignedCommand(schema.ActionTerminalUnwatch, session)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// WAVE R8 -- the capability-routed terminal fallback (ADR-017 T4 / T6).
+// ---------------------------------------------------------------------------
+
+// TerminalViewWatch opens the terminal stream for a terminal_fallback session (ADR-017 T4).
+//
+// IT IS THE SAME WIRE VERB AS TerminalWatch AND THIS COMMENT SAYS SO, because the previous
+// one did not: it claimed to open "the VERSIONED TerminalViewV1 stream" while the body was
+// byte-for-byte TerminalWatch and nothing versioned existed on any wire path (closing review,
+// finding 5). Versioning is a property of the BODY the machine sends -- since the closing
+// round every terminal_snapshot frame carries `terminal_view` beside the legacy `terminal`,
+// and a machine that predates it sends only the legacy half -- so there is nothing for a
+// second verb to negotiate and inventing one would be a wire change with no reader.
+//
+// WHY THE TWO NAMES REMAIN. `TerminalWatch` is the pre-R8 verb every existing caller uses;
+// this is the name the FALLBACK BINDING calls, and it is what the Kotlin gate's single-file
+// allowlist is written over. Two names for one verb is the honest state of it, and it is
+// recorded here rather than in a comment that describes a difference the code does not have.
+//
+// A WATCH IS A READ AND GRANTS NO INPUT AUTHORITY. It acquires no lease, mints no
+// generation and never touches the input coalescer -- gating a read on the input plane is
+// how a monitoring surface becomes a control surface by accident. The command is UNSIGNED
+// and the SESSION gate is the machine's: handleTerminalSubscribe refuses a session whose
+// capability record does not permit a terminal view, with the sealed CodeCapabilityRefused,
+// before it opens any tap.
+func (a *App) TerminalViewWatch(session string) (err error) {
+	defer barrier(&err)
+	_, err = a.unsignedCommand(schema.ActionTerminalWatch, session)
+	return err
+}
+
+// TerminalViewUnwatch closes the stream. Without it the machine keeps rendering, sealing
+// and appending full screens for a screen the user has left, against an append budget
+// shared with every other session's transcript.
+func (a *App) TerminalViewUnwatch(session string) (err error) {
+	defer barrier(&err)
+	_, err = a.unsignedCommand(schema.ActionTerminalUnwatch, session)
+	return err
+}
+
+// TerminalViewRenew renews the watch's horizon (ADR-017 amendment T4-b): the machine's only
+// evidence that anyone is still looking. It never STARTS a watch, so it cannot be a way to
+// acquire a peek without the verb the capability gate is written over.
+func (a *App) TerminalViewRenew(session string) (err error) {
+	defer barrier(&err)
+	_, err = a.unsignedCommand(schema.ActionTerminalRenew, session)
+	return err
+}
+
+// TerminalControlBegin enters control over a terminal_fallback session: the SIGNED op that
+// mints one non-transferable generation (ADR-017 T6), on the device.ActionControl tier that
+// internal/skeleton/deviceauth.go already maps and T6-a ratifies.
+//
+// It binds the session INSTANCE and the selected profile as well as the session, because a
+// signature that verifies over bytes which do not name what it authorised is a signature
+// over the wrong thing: a generation bound to a session id alone authorises raw bytes into
+// the PTY that REPLACED the one the user was reading.
+func (a *App) TerminalControlBegin(session string, sessionInstance string) (op *Op, err error) {
+	defer barrier(&err)
+	if session == "" || sessionInstance == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: TerminalControlBegin needs a session id and the session instance the screen is showing"))
+	}
+	if _, err = a.ready(); err != nil {
+		return nil, err
+	}
+	return a.signedCommand(schema.ActionTerminalControlBegin, session, nil, commandBody{
+		terminalControl: &schema.TerminalControlBeginReq{
+			Session: session, SessionInstance: sessionInstance, Profile: schema.CurrentProfileVersion,
+		},
+	})
+}
+
+// TerminalControlEnd releases the generation. It lands beside Begin rather than after it
+// because without it the first generation a user opens could only be closed by a timeout.
+func (a *App) TerminalControlEnd(session string) (op *Op, err error) {
+	defer barrier(&err)
+	if session == "" {
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: TerminalControlEnd needs a session id"))
+	}
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	op, err = a.signedCommand(schema.ActionTerminalControlEnd, session, nil, commandBody{})
+	if err != nil {
+		return nil, err
+	}
+	// ADR-017 T6-f: the release SEVERS LOCALLY AND DROPS THE HELD BYTES, without waiting for
+	// the machine's reply. The natural implementation of "release control" flushes the
+	// coalescer's window -- which is the one place a queue can form on this path, and a flush
+	// there delivers bytes whose authority the user has just withdrawn. Severing here also
+	// closes the window in which the screen still believes it may type: the machine refuses
+	// those frames anyway, and a phone that authored them would be authoring input it has
+	// already told the user it gave up.
+	core.TerminalControl().Sever(session, "control was released")
+	return op, nil
+}
+
+// TerminalInput types raw bytes into a terminal_fallback session under a live generation.
+//
+// THE PARAMETER IS TEXT, not bytes, for Paste's reason: an IME and a clipboard both hand
+// Android a String, and PB-BIND-4 keeps []byte crossings to the enumerated few.
+//
+// REFUSED INPUT IS UNDELIVERED AND NEVER BUFFERED (ADR-017 T6-f / PB-INPUT-1). The two
+// wrong answers are symmetrical and both ship a lie: buffering makes the UI look successful
+// and delivers the bytes later (the offline queue B43 proved unbuildable), and dropping
+// silently makes the UI look successful and never delivers them. refuseInput is the shape,
+// and it keeps the bytes out of the coalescer's buffer on purpose.
+//
+// IT IS NOT AN APPROVAL VERB AND MUST NEVER BECOME ONE (T6). An approval answered from a
+// fallback screen still travels as the signed ActionApprove of IS-LIFE-4, or the button is
+// not shown.
+func (a *App) TerminalInput(session string, text string) (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	data := []byte(text)
+	// The generation is re-read per frame, and its absence refuses BEFORE the bytes are
+	// accepted anywhere. There is no place in this app to hold a byte on the way to
+	// terminal_input -- not a refused one, none.
+	generation, instance, ok := core.TerminalControl().Generation(session)
+	if !ok {
+		return a.refuseInput(session, data, classed(ErrClassInvalidRequest, errors.New(
+			"swarmmobile: no live terminal control generation for this session; nothing was typed")))
+	}
+	sc, err := a.liveSendContext()
+	if err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	return a.sendTerminalInput(sc, core, session, instance, generation, data)
+}
+
+// sendTerminalInput seals and appends ONE unsigned raw-input frame. The bytes are NEVER
+// buffered on the way: a failure resolves them as an explicit undelivered record, which is
+// refuseInput's rule inherited verbatim.
+func (a *App) sendTerminalInput(sc sendCtx, core *phonecore.Core, session, instance, generation string, data []byte) error {
+	a.bucketMu.Lock()
+	defer a.bucketMu.Unlock()
+	seq, err := core.Seq().NextCommand()
+	if err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	env, err := phonecore.SealTerminalInputEnvelope(sc.key, sc.epoch, seq, core.State().Machine,
+		&schema.TerminalInputReq{
+			Session: session, SessionInstance: instance, ControlGeneration: generation, Bytes: data,
+		})
+	if err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
+		return a.refuseInput(session, data, err)
+	}
+	return nil
+}
+
+// unsignedTerminalFrame seals and appends the keepalive: the second and last unsigned frame
+// kind, carrying the generation and nothing else.
+func (a *App) unsignedTerminalFrame(op, session, generation string, _ []byte) (*Op, error) {
+	core, err := a.ready()
+	if err != nil {
+		return nil, err
+	}
+	sc, err := a.liveSendContext()
+	if err != nil {
+		return nil, err
+	}
+	a.bucketMu.Lock()
+	defer a.bucketMu.Unlock()
+	seq, err := core.Seq().NextCommand()
+	if err != nil {
+		return nil, err
+	}
+	env, err := phonecore.SealTerminalKeepaliveEnvelope(sc.key, sc.epoch, seq, core.State().Machine, session, generation)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// TerminalControlKeepalive renews the generation's horizon (ADR-017 T6-c).
+//
+// IT IS EMITTED ONLY BY THE LIVE FOREGROUND FALLBACK SCREEN, the same composition that owns
+// TerminalInput -- same routing rule, same fence. A background coroutine, a scheduled job
+// or a service-hosted timer that could emit it would hold a generation open for the full
+// horizon with NO screen displaying it, which defeats the persistent banner and the
+// leave-screen trigger together. The daemon's idle expiry is what holds when the app does
+// not; this is the app's own contract.
+func (a *App) TerminalControlKeepalive(session string) (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	generation, _, ok := core.TerminalControl().Generation(session)
+	if !ok {
+		return classed(ErrClassInvalidRequest, errors.New("swarmmobile: no live terminal control generation to keep alive"))
+	}
+	_, err = a.unsignedTerminalFrame(schema.ActionTerminalControlKeepalive, session, generation, nil)
 	return err
 }
 
@@ -756,6 +964,11 @@ type commandBody struct {
 	// schema.TurnInterruptContentHash(it), envelope carries it, derivation is phonecore's
 	// (SignTurnInterrupt).
 	interrupt *schema.TurnInterruptReq
+	// terminalControl is Wave R8's terminal_control_begin body (ADR-017 T6), composer's
+	// shape once more: the signature covers schema.TerminalControlBeginContentHash(it) and
+	// the envelope carries the body, and phonecore owns the derivation
+	// (SignTerminalControlBegin) for SignApprove's stated reason.
+	terminalControl *schema.TerminalControlBeginReq
 }
 
 // signedCommand seals one mutating command and tracks it IN FLIGHT, because the gateway
@@ -852,6 +1065,18 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 			ExpiresAt:    expiresAt,
 			ExpectedTurn: body.interrupt.ExpectedTurn,
 		})
+	case body.terminalControl != nil:
+		// Wave R8: terminal_control_begin signs the composer's shape with one field more --
+		// the SESSION INSTANCE -- because a generation bound to a session id alone survives
+		// the session's replacement and would authorise raw bytes into its successor.
+		cmd, err = phonecore.SignTerminalControlBegin(core.KeyStore(), phonecore.TerminalControlBeginInput{
+			Machine:         core.State().Machine,
+			Session:         session,
+			SessionInstance: body.terminalControl.SessionInstance,
+			Profile:         body.terminalControl.Profile,
+			OperationID:     id,
+			ExpiresAt:       expiresAt,
+		})
 	case body.approve != nil:
 		// Approve signs a DIFFERENT tuple too: ADR-007 D7 spends the content slot on the
 		// INTERACTION CONTENT, so the hash under the signature is the card's own content_hash,
@@ -915,6 +1140,10 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 		// body-version binding, exactly as the composer body does. (It was bodyless when
 		// the op landed; schema.TurnInterruptReq records what that cost.)
 		env, err = phonecore.SealTurnInterruptEnvelope(sc.key, sc.epoch, seq, cmd, body.interrupt)
+	case body.terminalControl != nil:
+		// Wave R8: the begin body rides beside the signed tuple with its body-version
+		// binding, exactly as the composer body does.
+		env, err = phonecore.SealTerminalControlBeginEnvelope(sc.key, sc.epoch, seq, cmd, body.terminalControl)
 	case body.prefs != nil:
 		env, err = phonecore.SealPushPrefsEnvelope(sc.key, sc.epoch, seq, cmd, *body.prefs)
 	case body.approve != nil:

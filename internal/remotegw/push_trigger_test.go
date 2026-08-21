@@ -98,7 +98,7 @@ func (r *recordingSink) Event(rec protocol.JournalRecord) error {
 	return nil
 }
 
-func (r *recordingSink) Terminal(_ string, _ []string, _, _ int) error {
+func (r *recordingSink) Terminal(protocol.TerminalViewV1) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.terminal++
@@ -715,7 +715,7 @@ func TestPBPUSH5_NoPusherConfiguredLeavesTheCorePathsUntouched(t *testing.T) {
 	if err := n.Event(protocol.JournalRecord{Cursor: 2, SessionID: "m/s1", Type: "status", Group: status.GroupNeedsInput}); err != nil {
 		t.Fatalf("Event with no pusher: %v", err)
 	}
-	if err := n.Terminal("m/s1", []string{"x"}, 80, 24); err != nil {
+	if err := n.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{"x"}, Cols: 80, Rows: 24}); err != nil {
 		t.Fatalf("Terminal with no pusher: %v", err)
 	}
 	if got := inner.eventCount(); got != 1 {

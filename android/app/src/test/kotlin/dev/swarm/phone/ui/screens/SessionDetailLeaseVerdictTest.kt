@@ -59,7 +59,8 @@ class SessionDetailLeaseVerdictTest {
         ),
         TranscriptScreen.of(emptyList()),
         SessionLease(sessionId = "mbp/quanthome", leaseHeld = leaseHeld, online = true),
-        verdict,
+        capabilities = SessionCapabilityFacts(structuredChat = true),
+        verdict = verdict,
     ).leaseNotice
 
     /**
@@ -75,7 +76,8 @@ class SessionDetailLeaseVerdictTest {
         ),
         TranscriptScreen.of(emptyList()),
         SessionLease(sessionId = "mbp/quanthome", leaseHeld = leaseHeld, online = true),
-        verdict,
+        capabilities = SessionCapabilityFacts(structuredChat = true),
+        verdict = verdict,
     ).leaseDetail
 
     private fun verdict(code: String, message: String = "") = ControlLease.verdictOf(

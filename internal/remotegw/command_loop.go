@@ -91,6 +91,10 @@ var _ LeaseRouter = (*LeaseManager)(nil)
 type TerminalWatchRouter interface {
 	Watch(session string)
 	Unwatch(session string)
+	// Renew extends a live watch's horizon (ADR-017 amendment T4-b). It is part of the
+	// ROUTING subset because the horizon is a wire-visible contract: without a renewal
+	// verb the horizon would expire every watch and the fallback would go dark.
+	Renew(session string)
 }
 
 // *TerminalWatcher is the production TerminalWatchRouter. Pinned at compile time.
@@ -612,9 +616,19 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		b.cfg.Leases.End(rc.Session)
 		return nil
 	case protocol.ActionTerminalWatch:
-		// A READ: start a server-rendered peek for the session. It is NOT forwarded to the
-		// daemon's device authenticator (an unsigned watch); the daemon gates the peek
-		// itself (capability + kill switch). The peek plane may be disabled (nil Watchers).
+		// A READ, and it GRANTS NO INPUT AUTHORITY (ADR-017 T4). It is NOT forwarded to
+		// the daemon's device authenticator (an unsigned watch); the peek plane may be
+		// disabled (nil Watchers).
+		//
+		// THE SESSION CAPABILITY GATE IS THE DAEMON'S, AND IT IS NOW SESSION-SCOPED
+		// (ADR-017 amendment T2-c). Until R8 the sentence "the daemon gates the peek
+		// itself (capability + kill switch)" named the negotiated remote-gateway
+		// capability and the kill switch -- NEITHER of which is about the session -- so a
+		// downlevel or compromised app that merely asked got a supervised, reconnecting
+		// peek started on its behalf onto a healthy Claude session. handleTerminalSubscribe
+		// now refuses such a session with CodeCapabilityRefused before it opens any tap,
+		// and TerminalWatcher.run ENDS the watch on that code instead of reconnecting, so
+		// a refusal costs one dial and leaves no backoff loop behind.
 		if b.cfg.Watchers == nil {
 			return nil
 		}
@@ -625,6 +639,16 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 			return nil
 		}
 		b.cfg.Watchers.Unwatch(rc.Session)
+		return nil
+	case protocol.ActionTerminalRenew:
+		// ADR-017 T4-b: the phone's evidence that someone is still looking. It NEVER
+		// starts a watch -- Renew is a no-op for a session with no live one -- so it
+		// cannot be a way to acquire a peek without the verb the capability gate is
+		// written over.
+		if b.cfg.Watchers == nil {
+			return nil
+		}
+		b.cfg.Watchers.Renew(rc.Session)
 		return nil
 	case protocol.ActionJournalResync:
 		// A READ, and PB-SYNC-5's decision: UNSIGNED, so it is NOT forwarded to the daemon's
@@ -970,8 +994,36 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 			return "", errors.New("remotegw: interaction_detail command missing its read body in-envelope")
 		}
 		return protocol.OpInteractionDetail, nil
-	case protocol.ActionOperationStatus,
-		protocol.ActionTerminalControlBegin, protocol.ActionTerminalControlEnd:
+	case protocol.ActionTerminalControlBegin:
+		// Wave R8 (ADR-017 T6): launch/approve/composer_send's rule, inherited by the
+		// action that mints a control generation. A begin whose body was stripped in
+		// transit must NEVER be forwarded bodyless: a zero body is a generation bound to
+		// no incarnation, which is precisely the frame T8-a makes unspeakable -- it would
+		// authorise raw bytes into the PTY that replaced the one the user was reading.
+		if rc.TerminalControlBegin == nil {
+			return "", errors.New("remotegw: terminal_control_begin command missing its body in-envelope")
+		}
+		return protocol.OpTerminalControlBegin, nil
+	case protocol.ActionTerminalInput:
+		// Wave R8 (ADR-017 T6): one of the exception's exactly two UNSIGNED frame kinds.
+		// It is forwarded to the daemon like the M3 reads -- no device signature, no
+		// actionClass entry -- because what authorises it is the E2EE frame's own sender
+		// and sequence plus the CONFIRMED GENERATION, which the daemon re-evaluates per
+		// frame alongside the kill switch, the device registration and the capability
+		// record (T6-e). A stripped body is refused here rather than forwarded: a zero
+		// body is raw input naming no generation and no incarnation.
+		if rc.TerminalInput == nil {
+			return "", errors.New("remotegw: terminal_input command missing its input body in-envelope")
+		}
+		return protocol.OpTerminalInput, nil
+	case protocol.ActionTerminalControlKeepalive:
+		// The second and last unsigned frame kind. It has no body -- the generation IS the
+		// frame -- so a missing generation is what a stripped frame looks like.
+		if rc.ControlGeneration == "" {
+			return "", errors.New("remotegw: terminal_control_keepalive command missing its control generation")
+		}
+		return protocol.OpTerminalControlKeepalive, nil
+	case protocol.ActionOperationStatus, protocol.ActionTerminalControlEnd:
 		// The remaining semantic ops: forwarded to the daemon like kill/delete/approve/
 		// push_prefs, Op == Action, never gateway-locally refused -- only the daemon holds
 		// the device registry requireRemoteAuthz authorizes against. (session_launch and
@@ -979,10 +1031,12 @@ func opForAction(rc protocol.RemoteCommand) (string, error) {
 		// turn_interrupt joined them in the R6 fix-pack when finding B7 proved that a Stop
 		// with no turn coordinate is not a Stop; operation_status carries only
 		// subject_operation_id and needs no body gate.)
-		// terminal_input / terminal_control_keepalive (ADR-017 T6) are
-		// deliberately NOT added here: they ride only the E2EE frame's own sender/sequence
-		// and a confirmed control generation, never a signed action, so they fall to the
-		// default arm's generic refusal below exactly like any other unrecognised action.
+		// Wave R8 gave terminal_control_begin, terminal_input and terminal_control_keepalive
+		// their own arms above: the first because it now carries a body the daemon reads,
+		// the other two because they are ADR-017 T6's UNSIGNED pair. They are NOT signed
+		// actions -- they have no actionClass entry and the daemon never asks its device
+		// authenticator about them -- which is exactly journal_resync's and the M3 reads'
+		// class, not a new one.
 		return rc.Action, nil
 	default:
 		return "", fmt.Errorf("remotegw: unsupported command action %q", rc.Action)

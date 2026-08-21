@@ -604,6 +604,11 @@ func TestBoundVerbs_TheLedgerCannotOutliveTheSymbolsItExcuses(t *testing.T) {
 	for _, owner := range nonAppBoundTypes(byType) {
 		declared = append(declared, qualify(owner, byType[owner])...)
 	}
+	// Wave R8 round 3: the ledger acquired a THIRD dimension when a second adapter appeared.
+	// `TerminalFallbackBinding` is the one place the fallback screen meets the facade, and four
+	// of its wrappers name control verbs nothing reaches -- so its rows must be rot-checked
+	// here too, or they become names with no referents the moment the class is renamed.
+	declared = append(declared, qualify("TerminalFallbackBinding", r8r3BindingMethods(t))...)
 	rows := readUnboundLedger(t)
 
 	for _, r := range staleLedgerRows(declared, rows) {

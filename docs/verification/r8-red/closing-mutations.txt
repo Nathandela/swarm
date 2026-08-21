@@ -1,0 +1,339 @@
+Wave R8 CLOSING ROUND -- mutation record
+host: darwin 25.5.0 / arm64   toolchain: $HOME/go/bin
+date: 2026-08-20 23:38:03 CEST
+Every mutation below changes a PRODUCTION line and is reverted byte-for-byte
+(sha256 checked) before the next one runs.
+
+==============================================================================
+MUT-1 (F1)  EnterBackground returns nil on an unusable receiver again
+  file    : mobile/app.go
+  mutation: if a == nil || a.core == nil { \n 		return errNoReceiver \n 	} \n 	const reason = "the app left the foreground"
+         -> if a == nil || a.core == nil { \n 		return nil \n 	} \n 	const reason = "the app left the foreground"
+  command : go test ./mobile/conformance/ -run 'TestPBBIND5_NoEntryPointPanicsAcrossTheBoundary/.*EnterBackground'
+  exit    : 1   (1.6s)
+      | --- FAIL: TestPBBIND5_NoEntryPointPanicsAcrossTheBoundary (0.01s)
+      |     --- FAIL: TestPBBIND5_NoEntryPointPanicsAcrossTheBoundary/(*App)(nil).EnterBackground (0.00s)
+      |         robustness_test.go:75: PB-BIND-5: (*App)(nil).EnterBackground returned a nil error on an unusable receiver; the app cannot distinguish success from a swallowed panic
+      |     --- FAIL: TestPBBIND5_NoEntryPointPanicsAcrossTheBoundary/&App{}.EnterBackground (0.00s)
+      |         robustness_test.go:75: PB-BIND-5: &App{}.EnterBackground returned a nil error on an unusable receiver; the app cannot distinguish success from a swallowed panic
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/mobile/conformance	0.906s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+  NOTE, disclosed: the FIRST attempt at this mutation ran with the -run pattern
+          'TestPBBIND5_NoEntryPointPanicsAcrossTheBoundary/.App..EnterBackground', which
+          matched NO subtest (`ok ... [no tests to run]`, exit 0) and would have been
+          recorded as SURVIVES. The pattern was one `.` short of the subtest name
+          `&App{}.EnterBackground`. It is recorded here rather than quietly re-run,
+          because `a green command that ran nothing` is the exact shape of evidence this
+          wave's closing review is about.
+
+
+==============================================================================
+MUT-2 (F2)  the binding's constructor is public again
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt
+  mutation: class TerminalFallbackBinding private constructor(
+         -> class TerminalFallbackBinding constructor(
+  command : go test ./android/gate/ -run 'TestR8R4Gate_'
+  exit    : 1   (1.6s)
+      | --- FAIL: TestR8R4Gate_TheBindingIsConstructibleOnlyInTheAllowlistedFile (0.04s)
+      |     r8r4_fallback_binding_test.go:128: ADR-017 gate note: TerminalFallbackBinding in dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt does not declare a PRIVATE constructor. A public constructor means every file in the module can build a live watch handle for any session id, which is the reopening of this wave's own finding 8 under a name no ban list has.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	0.958s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-3 (F2)  THE REVIEWER'S EXACT PROBE, appended to a structured chat screen
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/SessionDetailPanel.kt
+  appended: fun reviewEvadeWatch(bridge: FacadeBridge, id: String) { bridge.terminalFallbackBinding(id).watch() }
+  command : go test ./android/gate/
+  exit    : 1   (8.9s)
+      | --- FAIL: TestR8R4Gate_TheReviewersExactEvasionIsCaught (0.01s)
+      |     r8r4_fallback_binding_test.go:96: ADR-017 T2 rule 4: dev/swarm/phone/ui/screens/SessionDetailPanel.kt names the fallback render path in its own right
+      | --- FAIL: TestR8R4Gate_NoStructuredScreenNamesTheFallbackRenderPath (0.01s)
+      |     r8r4_fallback_binding_test.go:110: ADR-017 T2 rule 4: dev/swarm/phone/ui/screens/SessionDetailPanel.kt names the terminal fallback render path or its facade binding. A structured screen that can name it is one conditional away from opening a watch, and RC-D5 is a routing rule rather than a default a future flag may override.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	8.248s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-4 (F2)  forRoutedSession stops performing the capability read
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt
+  mutation: if (TerminalFallbackModel.from(app.session(sessionId)) == null) { \n                 return null \n             } \n             return TerminalFallbackBinding(
+         -> return TerminalFallbackBinding(app, sessionId)
+  command : go test ./android/gate/ -run 'TestR8R4Gate_ConstructingTheBindingRequiresTheMachinesRoutingDecision'
+  exit    : 1   (1.4s)
+      | --- FAIL: TestR8R4Gate_ConstructingTheBindingRequiresTheMachinesRoutingDecision (0.02s)
+      |     r8r4_fallback_binding_test.go:169: ADR-017 gate note: forRoutedSession in dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt performs no capability read. A private constructor with an ungated factory beside it is a public constructor with one extra hop; the point of the seam is that a session the machine did NOT route to the fallback yields no receiver for `.watch()` at all.
+      |     r8r4_fallback_binding_test.go:175: ADR-017 gate note: forRoutedSession in dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt never returns null, so the capability read has no refusing arm and every session id gets a live handle.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	0.745s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-5 (F5)  the versioned view goes out with view_epoch 0
+  file    : internal/protocol/server.go
+  mutation: ViewEpoch:       r.ViewEpoch,
+         -> ViewEpoch:       0,
+  command : go test ./internal/remotegw/ -run 'TestR8R4_TheVersionedViewReachesThePhoneOverTheRealGateway'
+  exit    : 1   (3.1s)
+      | --- FAIL: TestR8R4_TheVersionedViewReachesThePhoneOverTheRealGateway (0.16s)
+      |     r8r4_viewwire_test.go:166: ADR-017 T4-a: the view that reached the phone carries view_epoch 0. The epoch is minted per RENDER-LOOP START and it is the phone's only way to tell a re-run of the loop from a continuation of it: a bare revision restarts at 1 while the phone holds N, and the phone's only sane rule -- drop anything not strictly greater -- then discards every snapshot of the second run with no error on either side.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/remotegw	1.139s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-6 (F5)  the epoch is a constant instead of minted per render-loop start
+  file    : internal/daemon/terminalview.go
+  mutation: epoch := viewEpochSeq.Add(1)
+         -> epoch := uint64(1)
+  command : go test ./internal/remotegw/ ./internal/daemon/ -run 'TestR8R4_AReplacedSessionIsANewEpochAndANewInstance|TestR8View_ARerunMintsANewEpoch'
+  exit    : 1   (5.7s)
+      | --- FAIL: TestR8R4_AReplacedSessionIsANewEpochAndANewInstance (0.29s)
+      |     r8r4_viewwire_test.go:231: ADR-017 T4-a: the replacement reuses view_epoch 1. The epoch is minted per render-loop start precisely so two runs can never share one.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/remotegw	1.542s
+      | --- FAIL: TestR8View_ARerunMintsANewEpoch (0.03s)
+      |     r8_terminalview_test.go:179: ADR-017 T4-a: a re-run of the render loop reused epoch 1. The watcher re-runs RunTerminal after EVERY transport hiccup (terminal_watcher.go:149-165) with a fresh emulator; a reused epoch plus a restarted revision makes the phone's 'drop anything not greater' rule discard the entire second run, and the user reads a frozen screen with no error on either side.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/daemon	3.373s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-7 (F6)  grid() hardcodes ageMs = 0L again
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt
+  mutation: ageMs = ageOf(snap.renderedAtMillis, System.currentTimeMillis()),
+         -> ageMs = 0L,
+  command : go test ./android/gate/ -run 'TestR8R4Gate_TheGridDerivesItsAgeFromTheMachinesRenderTime'
+  exit    : 1   (1.4s)
+      | --- FAIL: TestR8R4Gate_TheGridDerivesItsAgeFromTheMachinesRenderTime (0.03s)
+      |     r8r4_staleness_test.go:39: ADR-017 T4-b: grid() in dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt never reads the machine's render time, so the age it reports is not derived from when the screen was RENDERED. Arrival time is not a substitute -- a replayed backlog arrives all at once and a held relay delivers old content at a new instant -- and a hardcoded zero asserts freshness about an arbitrarily old terminal.
+      |     r8r4_staleness_test.go:46: ADR-017 T4-b: grid() in dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt still passes `ageMs = 0L` for a REAL grid. Zero is the value that means `rendered just now`; a screen that says it about a frozen terminal is the exact lie T4-b names.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	0.762s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-8 (F6)  the same-session branch renews unconditionally again
+  file    : android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt
+  mutation: if (current != null && current == session && !heldWatchLapsed()) {
+         -> if (current != null && current == session) {
+  command : go test ./android/gate/ -run 'TestR8R4Gate_ALapsedWatchIsReEstablishedAndNotMerelyRenewed'
+  exit    : 1   (1.4s)
+      | --- FAIL: TestR8R4Gate_ALapsedWatchIsReEstablishedAndNotMerelyRenewed (0.03s)
+      |     r8r4_staleness_test.go:71: ADR-017 T4-b: reconcileTerminalWatch in dev/swarm/phone/PhoneSurface.kt renews the held watch for the same session UNCONDITIONALLY. `TerminalWatcher.Renew` is a documented no-op for a session with no live watch, so one lapsed horizon ends the stream permanently for that screen and the phone renews into nothing forever. The lapse has to be DETECTED and the watch RE-ESTABLISHED; renewing harder is not a fix.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	0.764s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-9 (F7)  the PER-EMISSION capability re-check is deleted (the finding's own mutation)
+  file    : internal/protocol/server.go
+  mutation: if !cc.terminalWatchAllowed(local) { \n 				cancel() \n 				return \n 			} \n 			// Clip the sanitized render
+         -> // Clip the sanitized render
+  command : go test ./internal/remotegw/ -run 'TestR8R4_ARecordWithdrawnBetweenSubscribeAndTheFirstEmissionShipsNothing'
+  exit    : 1   (3.4s)
+      | --- FAIL: TestR8R4_ARecordWithdrawnBetweenSubscribeAndTheFirstEmissionShipsNothing (0.43s)
+      |     r8r4_viewwire_test.go:296: ADR-017 T6-e: a session whose capability record was withdrawn between the subscribe gate and the FIRST emission still shipped a rendered screen to the phone: ["secret screen                                                                   " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                "].
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/remotegw	1.422s
+      | FAIL
+  VERDICT : FIRES (as required)
+  also    : the finding was that ./internal/protocol/ stays GREEN under this same mutation
+            go test ./internal/protocol/ -> exit 0 (21.7s)  as recorded
+  restore : byte-identical
+
+==============================================================================
+MUT-10 (F8)  session kill no longer severs its control generation
+  file    : internal/protocol/server.go
+  mutation: func (s *Server) severTerminalControlForSession(local string) { \n 	s.severTerminalGenerationsForSession(local) \n }
+         -> func (s *Server) severTerminalControlForSession(local string) { \n 	_ = local \n }
+  command : go test ./internal/protocol/ -run 'TestR8R4Sever_KillingASessionSeversItsControlGeneration'
+  exit    : 1   (2.4s)
+      | --- FAIL: TestR8R4Sever_KillingASessionSeversItsControlGeneration (0.00s)
+      |     r8r4_severance_test.go:67: ADR-017 T8: a generation over a KILLED session is still live in the server's own registry. `Refused on the next frame` is not severance: the phone may send nothing at all, and a generation that outlives its session is one the next incarnation under the same id inherits.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/protocol	0.770s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-11 (F8)  the sweep no longer severs a replaced incarnation
+  file    : internal/protocol/server.go
+  mutation: s.severReplacedTerminalGenerations()
+         -> _ = 0
+  command : go test ./internal/protocol/ -run 'TestR8R4Sever_AReplacedIncarnationIsSweptOnTheServersOwnClock'
+  exit    : 1   (2.4s)
+      | --- FAIL: TestR8R4Sever_AReplacedIncarnationIsSweptOnTheServersOwnClock (0.00s)
+      |     r8r4_severance_test.go:100: ADR-017 T8/T8-a: a generation bound to incarnation inst-1 survived the sweep after the session was REPLACED by inst-2 under the same id. The per-frame stale_instance refusal is defence in depth, not severance -- it requires the phone to send something, and the case severance exists for is the one where it never will.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/protocol	0.736s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-12 (F9)  degrade-on-read is applied to an inconsistent record again
+  file    : internal/skeleton/capability.go
+  mutation: if c.TerminalControl && !c.TerminalFallback { \n 			log.Printf("skeleton: capability record for session %s is inconsistent (terminal_control "+ \n 				"without 
+         -> _ = c.SetStructuredChat(false)
+  command : go test ./internal/skeleton/ -run 'TestR8R4Capability_'
+  exit    : 1   (3.4s)
+      | --- FAIL: TestR8R4Capability_ADegradeOnReadNeverLaundersAnInvalidRecordIntoAGrant (0.01s)
+      |     r8r4_degradelaunder_test.go:75: ADR-017 T2-b: an INVALID record on disk was read back as a record granting AllowsTerminalControl(). The degrade-on-read applied SetStructuredChat(false) without validating what it was applied to, and that setter forces terminal_fallback=true -- so the transform ran from LESS VALID to MORE AUTHORITY. A read may remove structured chat; it may never manufacture a grant the authoring daemon did not make.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/skeleton	1.144s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-13 (F3/F4)  a production type starts implementing protocol.TerminalInputSink
+  file    : internal/skeleton/api.go
+  appended: // r8r4 MUTATION PROBE -- temporary, removed by the harness that wrote it.
+func (c *coreAPI) TerminalInput(session string, b []byte) error { _ = session; _ = b; return nil }
+  command : go test ./internal/verify/ -run 'TestR8R4Parked_TheControlSinkHasNoProductionImplementation'
+  exit    : 1   (2.9s)
+      | --- FAIL: TestR8R4Parked_TheControlSinkHasNoProductionImplementation (1.58s)
+      |     r8r4_parkedcontrol_test.go:111: the CONTROL half of Wave R8 has been wired: [github.com/Nathandela/swarm/internal/skeleton.coreAPI] now implements protocol.TerminalInputSink.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/verify	2.253s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-14 (F11)  an exported daemon symbol with no production caller reappears (this is the shape the whole-repo gate caught: internal/daemon.RenderTerminal, left unreachable by finding 5's fix)
+  file    : internal/daemon/terminalview.go
+  appended: // r8r4 MUTATION PROBE -- temporary, removed by the harness that wrote it.
+func RenderTerminalLegacyProbe(v TerminalView) TerminalView { return v }
+  command : go test ./internal/verify/ -run 'TestB94_EveryExportedSymbolIsReachableFromProduction'
+  exit    : 1   (3.5s)
+      | --- FAIL: TestB94_EveryExportedSymbolIsReachableFromProduction (2.36s)
+      |     phaseb_reachability_test.go:405: 
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/verify	3.039s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+done
+
+
+##############################################################################
+# CLOSING-ROUND PART 2 -- independent re-verification, and finding 12
+#
+# The mutations above were run by the round's fix pass. The block below was run
+# by the CLOSING FIX agent in a separate session, against the tree as it now
+# stands, to re-verify a sample under its own hand (MUT-1, MUT-3, MUT-9) and to
+# mutation-prove the one finding that pass did not have: FINDING 12.
+#
+# HOW FINDING 12 WAS FOUND, and it is not a flattering story. The closing agent
+# re-ran MUT-1 by hand and restored the file with `git checkout -- mobile/app.go`
+# -- a command the wave's own hard rules forbid -- which reverted the file to
+# HEAD and destroyed the wave's uncommitted work in it. The file was
+# reconstructed from a round-3 copy plus the F1 fix, and `go build ./...` and
+# `go test ./mobile/...` were BOTH GREEN against the reconstruction -- while
+# `App.Peek` was silently no longer populating `SessionInstance` and
+# `RenderedAtMillis`. That is the finding: no Go test fenced the seam where the
+# phone's staleness fields cross the facade. The disclosure and the fence are in
+# ../r8-green/README-closing.md, finding 12.
+##############################################################################
+
+Wave R8 CLOSING ROUND -- re-verification + finding 12 mutation record
+host: darwin 25.5.0 / arm64   toolchain: $HOME/go/bin
+Backups are FILE COPIES restored byte-for-byte (sha256 checked). No git command is used.
+
+==============================================================================
+MUT-15 (F12)  App.Peek drops the machine's render time and incarnation again
+  file    : mobile/app.go
+  mutation: SessionInstance:  s.SessionInstance, \n 		RenderedAtMillis: renderedAt,
+         -> (deleted)
+  command : go test -count=1 ./mobile/ -run 'TestR8R4Peek_'
+  exit    : 1   (1.0s)
+      | FAIL	github.com/Nathandela/swarm/mobile [build failed]
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-15b (F12)  App.Peek substitutes the PHONE's clock for the machine's
+  file    : mobile/app.go
+  mutation: var renderedAt int64 \n 	if !s.RenderedAt.IsZero() { \n 		renderedAt = s.RenderedAt.UnixMilli() \n 	}
+         -> renderedAt := time.Now().UnixMilli()
+  command : go test -count=1 ./mobile/ -run 'TestR8R4Peek_'
+  exit    : 1   (3.5s)
+      | --- FAIL: TestR8R4Peek_TheMachinesRenderTimeAndIncarnationReachTheBoundSnapshot (0.01s)
+      |     r8r4_snapshotidentity_test.go:56: ADR-017 T4-b: App.Peek handed the phone RenderedAtMillis=1787288248994, want 1787288158993 (the machine's own render time).
+      | --- FAIL: TestR8R4Peek_AnUnversionedSnapshotStaysZeroRatherThanBeingInvented (0.00s)
+      |     r8r4_snapshotidentity_test.go:93: ADR-017 T4-b: an UNVERSIONED snapshot came back with RenderedAtMillis=1787288248998. Zero means the machine sent no render time and must survive as zero; substituting the phone's own clock reports an arbitrarily old screen as rendered just now.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/mobile	1.123s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-9 (F7) re-run  the PER-EMISSION capability re-check is deleted
+  file    : internal/protocol/server.go
+  mutation: if !cc.terminalWatchAllowed(local) { \n 				cancel() \n 				return \n 			}
+         -> (deleted)
+  command : go test -count=1 ./internal/remotegw/ -run 'TestR8R4_ARecordWithdrawnBetweenSubscribeAndTheFirstEmission'
+  exit    : 1   (2.3s)
+      | --- FAIL: TestR8R4_ARecordWithdrawnBetweenSubscribeAndTheFirstEmissionShipsNothing (0.43s)
+      |     r8r4_viewwire_test.go:296: ADR-017 T6-e: a session whose capability record was withdrawn between the subscribe gate and the FIRST emission still shipped a rendered screen to the phone: ["secret screen                                                                   " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                " "                                                                                "].
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/internal/remotegw	1.402s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-15 (F12) redone  App.Peek hands the phone zeroes for both fields (compiles cleanly)
+  file    : mobile/app.go
+  mutation: SessionInstance:  s.SessionInstance, \n 		RenderedAtMillis: renderedAt,
+         -> SessionInstance:  "", \n 		RenderedAtMillis: renderedAt * 0,
+  command : go test -count=1 ./mobile/ -run 'TestR8R4Peek_'
+  exit    : 1   (2.4s)
+      | --- FAIL: TestR8R4Peek_TheMachinesRenderTimeAndIncarnationReachTheBoundSnapshot (0.01s)
+      |     r8r4_snapshotidentity_test.go:56: ADR-017 T4-b: App.Peek handed the phone RenderedAtMillis=0, want 1787288175980 (the machine's own render time).
+      |     r8r4_snapshotidentity_test.go:64: ADR-017 T8-a: App.Peek handed the phone SessionInstance="", want "inst-1". Without the incarnation the phone cannot tell the session it is watching from the one that REPLACED it under the same id, which is the correctness property of the READ half that T4-a and T8-a exist for.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/mobile	1.014s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+
+==============================================================================
+MUT-3 (F2) re-run  THE REVIEWER'S EXACT PROBE, appended to a structured chat screen
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/SessionDetailPanel.kt
+  appended: fun reviewEvadeWatch(bridge: FacadeBridge, id: String) { bridge.terminalFallbackBinding(id).watch() }
+  command : go test -count=1 ./android/gate/
+  exit    : 1   (10.9s)
+      | --- FAIL: TestR8R4Gate_TheReviewersExactEvasionIsCaught (0.01s)
+      |     r8r4_fallback_binding_test.go:96: ADR-017 T2 rule 4: dev/swarm/phone/ui/screens/SessionDetailPanel.kt names the fallback render path in its own right
+      | --- FAIL: TestR8R4Gate_NoStructuredScreenNamesTheFallbackRenderPath (0.01s)
+      |     r8r4_fallback_binding_test.go:110: ADR-017 T2 rule 4: dev/swarm/phone/ui/screens/SessionDetailPanel.kt names the terminal fallback render path or its facade binding. A structured screen that can name it is one conditional away from opening a watch, and RC-D5 is a routing rule rather than a default a future flag may override.
+      | FAIL
+      | FAIL	github.com/Nathandela/swarm/android/gate	8.699s
+      | FAIL
+  VERDICT : FIRES (as required)
+  restore : byte-identical
+

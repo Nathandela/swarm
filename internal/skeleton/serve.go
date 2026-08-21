@@ -165,6 +165,11 @@ type Daemon struct {
 	openItems   map[string]map[string]openItem
 	interacted  map[string]status.Interaction
 	adapterFor  func(agentType string) (adapter.Adapter, bool)
+	// detectProviderVersion is the DETECTED CLI version seam (ADR-017 T2 / playbook:280:
+	// the honest header names the provider's detected version). It is a daemon seam
+	// rather than an inline probe so a test never execs, and so the record carries a fact
+	// about this host rather than a guess. Wired in Serve; nil answers "" (unknown).
+	detectProviderVersion func(agentType string) string
 
 	// The COMPLETE-CHAT state (Wave R6, chat.go), riding itemMu with its siblings:
 	// pendingSends holds each session's accepted composer injections awaiting their
@@ -286,6 +291,16 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
+	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
+	// the remote-tier capability gate consults. Wired here and nowhere else, so there is
+	// exactly one place that decides a bare coreAPI authors nothing.
+	d.api.onLaunched = d.authorLaunchedSessionCapabilities
+	d.api.sessionCaps = d.sessionCapabilities
+	d.api.tap.onSubscribe = d.authorAttachedSessionCapabilities
+	if d.detectProviderVersion == nil {
+		d.detectProviderVersion = detectProviderVersion
+	}
 	// Round-7 re-audit (codex/opus/sonnet consensus): newCoreAPI already started the
 	// coreAPI.watch() roster poller, so EVERY assembly error return past this point must tear it
 	// down (and the core) or that goroutine + its fd leak. Harmless in production (a Serve error is
@@ -451,6 +466,13 @@ func Serve(cfg Config) (*Daemon, error) {
 	// point (Wave R7 review BLOCKING 4, backendconnect.go). registerSession's own
 	// connectSessionBackend cannot do it: it ran during daemon.Open, before d.core existed.
 	d.connectBackendsForRunning()
+	// ...and their CAPABILITY RECORDS (ADR-017 T2-a / D-NIL path 3), at this point and
+	// not in registerSession, for the third time and the same reason: registerSession ran
+	// during daemon.Open with d.core still nil, so it could not read whether a reconnected
+	// session was launched with a structured backend plane -- and authoring the record
+	// there would have pinned every reconnected Codex session at structured_chat=false
+	// permanently, because T2 rule 2 makes that degrade one-way.
+	d.authorCapabilitiesForRunning()
 
 	assembled = true // success: the defer'd cleanup-unless-success must NOT tear anything down
 	close(d.ready)   // assembly complete: the ConnHandler may now serve
@@ -502,6 +524,17 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 		}
 	}
 	d.eng.RegisterSession(m.ID, token, m.ShimPID, sources, m.Status)
+	// ADR-017 T2-a / D-NIL: THE CORE'S OWN SESSION-START HOOK AUTHORS THE RECORD.
+	// This fires for every session the core starts, whichever client asked -- so it is the
+	// one place that covers a launch, a resume and a reconcile alike. The d.core guard is
+	// the same one registerSession's own comment explains three paragraphs up: during
+	// daemon.Open's reconcile this callback runs BEFORE d.core is assigned, and a record
+	// authored there could not read whether a reconnected session has a structured backend
+	// plane. authorCapabilitiesForRunning re-runs for exactly those sessions once the
+	// assembly is complete.
+	if d.core != nil {
+		d.authorSessionCapabilitiesWhenDecided(m.ID, m.AgentType, m.ShimPID)
+	}
 	if d.sup != nil {
 		d.sup.arm(m) // a passive handoff child gets its supervision record (ADR-010 Amendment 3 C2)
 	}
@@ -515,6 +548,38 @@ func (d *Daemon) registerSession(m persist.Meta, token string) {
 	// daemon is exactly the case ADR-001 exists for, and it must be rejoined the moment
 	// reconcile adopts it. A session with no backend returns immediately.
 	d.connectSessionBackend(m.ID)
+}
+
+// authorCapabilitiesForRunning authors (or re-authors) the capability record of every
+// session this daemon reconnected -- ADR-017 T2-a / D-NIL's third session-creation path.
+//
+// IT ADOPTS THE INSTANCE, IT DOES NOT MINT ONE. The shim did not restart, the PTY is the
+// same PTY, and re-minting would show the phone an epoch reset on every daemon upgrade.
+// A session that predates this ruling has no instance file at all and gets one now, which
+// is the only moment the daemon can honestly say "this incarnation begins here".
+//
+// registerSessionCapabilities' merge is what makes this safe to run on every start: a
+// prior incarnation's degrade -- and the terminal_control it withdrew -- survives.
+func (d *Daemon) authorCapabilitiesForRunning() {
+	if d.core == nil {
+		return
+	}
+	for _, m := range d.core.List() {
+		if m.Status.Process != status.ProcessRunning {
+			continue
+		}
+		inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID)
+		if !ok {
+			continue // no bindable instance: T2-a's honest status card
+		}
+		live, decided := d.backendPlaneDecided(m.ID, ad)
+		if !decided {
+			continue // the rejoin is still dialling; backend.go authors either outcome
+		}
+		if _, err := d.authorSessionCapabilities(m.ID, inst, m.AgentType, ad, version, adapterRevision, live); err != nil {
+			log.Printf("skeleton: author capability record for reconciled session %s: %v", m.ID, err)
+		}
+	}
 }
 
 // registryAdapter is the production adapter resolver behind d.adapterFor: the ONE table

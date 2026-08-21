@@ -170,6 +170,7 @@ class HumanNamesTest {
             detail,
             TranscriptScreen.of(emptyList()),
             SessionLease(sessionId = detail.sessionId, leaseHeld = false, online = true),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
 

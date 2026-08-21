@@ -32,6 +32,8 @@ package vt
 import (
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -145,18 +147,140 @@ func SnapText(s *Snap) []string {
 	if s == nil {
 		return nil
 	}
-	lines := make([]string, len(s.Lines))
-	for y, line := range s.Lines {
+	// ADR-017 T4/T5-a: the DECLARED geometry is what the phone allocates against, and a
+	// Snap's content is not otherwise bound to it. A producer that declares Rows=24 and
+	// ships 50 000 lines, or declares 80 columns and ships one 4 MB run, is an unbounded
+	// allocation on the handset spent from the shared 8-appends/s budget. Neither is a
+	// spoof; both are a denial of service, and the choke point is here because SnapText is
+	// where the phone's copy is made.
+	rows := snapRowCountCap(s.Rows, len(s.Lines))
+	maxRow := snapRowByteCap(s.Cols)
+	lines := make([]string, rows)
+	for y := 0; y < rows; y++ {
 		var b strings.Builder
-		for _, r := range line.Runs {
+		for _, r := range s.Lines[y].Runs {
+			if b.Len() >= maxRow {
+				break
+			}
 			// stripControls drops every C0 (incl. LF/CR/ESC), DEL, and C1 byte, so
 			// the concatenation can never contain a control byte or an embedded
 			// newline — the row is a single flat, escape-free line.
 			b.WriteString(stripControls(r.Text))
 		}
-		lines[y] = b.String()
+		lines[y] = clampRuneBytes(clampCombiningDepth(b.String()), maxRow)
 	}
 	return lines
+}
+
+// snapRowCountCap is the row-count ceiling, and it applies to an UNDECLARED geometry too
+// (round-2 minor 12). The clause used to read `if s.Rows > 0 && have > s.Rows`, so a Snap
+// declaring Rows=0 with 50 000 lines emitted all 50 000 -- which contradicts the rule
+// snapRowByteCap states nineteen lines below for the identical undeclared case, that
+// "undeclared" must not read as "unlimited". It is reachable from renderInitialView, which
+// decodes ANOTHER PROCESS's initial snapshot.
+func snapRowCountCap(declared, have int) int {
+	ceiling := snapDefaultRowCeiling
+	if declared > 0 && declared < ceiling {
+		ceiling = declared
+	}
+	if have > ceiling {
+		return ceiling
+	}
+	return have
+}
+
+// snapDefaultRowCeiling bounds a grid whose Snap declares no (or an absurd) row count. 1000
+// rows is far above any real terminal, and far below an allocation denial of service on a
+// handset.
+const snapDefaultRowCeiling = 1000
+
+// snapRowByteCap is the byte ceiling one phone-displayed row may occupy under the Snap's
+// DECLARED column count: SnapshotTextMax is the producer's own per-cell cap, so cols cells
+// is the row's ceiling. A Snap that declares no geometry at all still gets a ceiling --
+// "undeclared" must not read as "unlimited", for the same reason a zero profile bound does
+// not (ADR-017 T5-a).
+func snapRowByteCap(cols int) int {
+	if cols <= 0 {
+		cols = snapDefaultColCeiling
+	}
+	if cols > snapDefaultColCeiling {
+		cols = snapDefaultColCeiling
+	}
+	return SnapshotTextMax * cols
+}
+
+// snapDefaultColCeiling bounds a row whose Snap declares no (or an absurd) column count.
+// 1000 columns is far above any real terminal and far below a layout denial of service.
+const snapDefaultColCeiling = 1000
+
+// snapMaxCombiningDepth is the per-cell combining-mark clamp (ADR-017 T4-c). The "Zalgo"
+// vector is a single base character carrying hundreds of combining marks: on a phone's
+// text stack that renders as a vertical smear overdrawing the rows above and below it,
+// and no per-rune filter sees it because every rune involved is individually legitimate.
+//
+// Eight is chosen well under UAX #15's stream-safe bound of 30 for a defective combining
+// sequence; a real terminal cell carries a handful.
+const snapMaxCombiningDepth = 8
+
+// clampCombiningDepth truncates each run of combining marks to snapMaxCombiningDepth,
+// keeping a PREFIX of the marks supplied — nothing reordered, nothing invented — and
+// leaving the base character and everything after the cluster intact.
+func clampCombiningDepth(s string) string {
+	// Fast path: the overwhelming common case carries no combining mark at all.
+	var deep bool
+	var run int
+	for _, r := range s {
+		if isCombiningMark(r) {
+			run++
+			if run > snapMaxCombiningDepth {
+				deep = true
+				break
+			}
+			continue
+		}
+		run = 0
+	}
+	if !deep {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	run = 0
+	for _, r := range s {
+		if isCombiningMark(r) {
+			run++
+			if run > snapMaxCombiningDepth {
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		run = 0
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isCombiningMark reports whether r is a Unicode mark (Mn/Mc/Me) — the runes that attach
+// to the preceding base character rather than occupying a cell of their own.
+func isCombiningMark(r rune) bool {
+	return unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Me, r)
+}
+
+// clampRuneBytes truncates s to at most max bytes WITHOUT splitting a rune, so a clamped
+// row is still valid UTF-8. A row that is already inside the ceiling is returned unchanged.
+func clampRuneBytes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := 0
+	for i := range s {
+		if i > max {
+			break
+		}
+		cut = i
+	}
+	return s[:cut]
 }
 
 // clampCursor bounds a 0-based cursor coordinate into the clipped grid. limit is the
@@ -222,27 +346,118 @@ func clipRunPrefix(text string, acc, cols int) (string, int) {
 //     are REPLACED WITH A SPACE, not deleted, so a run's written character count
 //     keeps pace with its declared Width -- the merged-run renderer
 //     (clipRunPrefix) depends on that pacing.
-//   - Unicode bidi formatting/override/isolate runes (U+061C, U+200E/U+200F,
-//     U+202A-U+202E, U+2066-U+2069) and zero-width runes (U+200B-U+200D,
-//     U+FEFF) are DROPPED (F7): without this a hostile PTY could emit a
-//     Trojan-Source visual spoof (U+202E reordering displayed text, zero-width
-//     runes hiding or splicing content) that no control-byte filter catches.
-//     These runes have zero display width, so dropping them PRESERVES parity,
-//     where a space would add a column the emulator never counted.
+//   - Unicode runes of ZERO DISPLAY WIDTH are DROPPED (F7, widened by ADR-017
+//     T4-c): bidi formatting/override/isolate (U+061C, U+200E/U+200F,
+//     U+202A-U+202E, U+2066-U+2069), zero-width (U+200B-U+200D, U+FEFF), and the
+//     classes T4-c adds — see zeroWidthFormatRune below. Without this a hostile
+//     PTY could emit a Trojan-Source visual spoof (U+202E reordering displayed
+//     text, zero-width runes hiding or splicing content) that no control-byte
+//     filter catches. These runes have zero display width, so dropping them
+//     PRESERVES parity, where a space would add a column the emulator never
+//     counted.
+//
+// INVALID UTF-8 BECOMES AN EXPLICIT U+FFFD (playbook:457-458). This is written as
+// a behavior rather than left as a side effect of rune iteration: a byte that is
+// dropped silently shortens a row, and a byte that survives hands the phone's own
+// decoder the malformed input the machine was supposed to absorb.
 //
 // Clean single-grapheme run text (the overwhelming common case) passes through
 // unchanged. Union of the two lines' filters, reconciled in the 2026-08-02 merge.
 func stripControls(s string) string {
-	return strings.Map(func(r rune) rune {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if r == utf8.RuneError && size == 1 {
+			// An invalid byte, decoded one byte at a time. EXPLICITLY replaced, so a
+			// four-byte truncated sequence yields the same number of glyphs a decoder
+			// downstream would have produced, rather than vanishing.
+			b.WriteRune(utf8.RuneError)
+			continue
+		}
 		switch {
 		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
-			return ' ' // C0 / DEL / C1: replaced, never deleted (column parity)
-		case r == 0x061c, r >= 0x200b && r <= 0x200f, r >= 0x202a && r <= 0x202e,
-			r >= 0x2066 && r <= 0x2069, r == 0xfeff:
-			return -1 // bidi + zero-width (F7): zero display width, drop keeps parity
+			b.WriteByte(' ') // C0 / DEL / C1: replaced, never deleted (column parity)
+		case invisibleCellRune(r):
+			// REPLACED: invisible on the phone, but the TERMINAL gave it a cell, so
+			// dropping would shift every column after it left against a grid that did not.
+			b.WriteByte(' ')
+		case zeroWidthFormatRune(r):
+			// dropped: zero display width, so dropping keeps column parity
+		default:
+			b.WriteRune(r)
 		}
-		return r
-	}, s)
+	}
+	return b.String()
+}
+
+// zeroWidthFormatRune is the DROP class: runes the emulator assigns no cell to, so a
+// space in their place would add a column nothing counted. Each range below is a named
+// spoof with a payoff on a PHONE, which is a different renderer from a terminal:
+//
+//   - U+00AD (SOFT HYPHEN) and U+180E render as nothing and split a word:
+//     `pay<SHY>pal.com` reads as paypal.com while comparing unequal to it.
+//   - U+061C, U+200E/U+200F, U+202A-U+202E, U+2066-U+2069 are the bidi
+//     formatting/override/isolate runes of Trojan Source (F7).
+//   - U+200B-U+200D and U+FEFF are the classic zero-width splice runes (F7).
+//   - U+2028/U+2029 are laid out as LINE BREAKS by Android's text stack. One grid row
+//     becomes two, every row after it shifts, and the phone's chrome then reads a row of
+//     the terminal as a row of something else — with no control byte in the payload.
+//     They are in this class and not the replace class because the emulator assigns them
+//     no cell either: `above<U+2028>below` renders ten columns, not eleven.
+//   - U+2060-U+2064 (WORD JOINER and the invisible operators) splice or hide content
+//     exactly as U+200B does, and are outside the U+200B-U+200F range F7 covered.
+//   - U+FFF9-U+FFFB (interlinear annotation) let one visible string carry a second,
+//     hidden one.
+//   - U+E0000-U+E007F (TAG) is a complete invisible ASCII alphabet: an entire second
+//     sentence can ride inside a line that displays as innocuous.
+//
+// IT IS A PROPERTY AND NOT A LIST, and that is a round-3 repair rather than a style
+// preference. The enumeration this replaced was reviewed twice and still leaked, measurably:
+// U+206A-U+206F (INHIBIT SYMMETRIC SWAPPING and the deprecated format block, ONE CODE POINT
+// past the hand-written U+2060-U+2064 arm), U+1D173-U+1D17A (the musical format controls) and
+// the four Hangul fillers all survived it, each splicing an invisible payload into a rendered
+// row with no control byte present. A hand list makes the DEFAULT ALLOW, so the next block
+// Unicode adds -- or the next one a reviewer does not think of -- is through; this wave's rule
+// is refuse rather than render.
+//
+// The classes are split by MEASUREMENT against the real emulator, not by intuition
+// (r8r3_sanitizeproperty_test.go re-runs the measurement, so a future Unicode release that
+// contradicts it fails rather than silently eating a column):
+//
+//	unicode.Cf, Zl, Zp        the emulator gives them NO CELL -- every one, checked over the
+//	                          whole plane -- so dropping preserves parity. Zl/Zp are U+2028
+//	                          and U+2029, which Android lays out as LINE BREAKS.
+//	Default_Ignorable \ Cf    zero-width too (the variation selectors, U+034F, U+17B4/5,
+//	                          U+2065, the reserved ranges, the non-format E0000 members),
+//	                          EXCEPT the ones with a Letter category -- see invisibleCellRune.
+func zeroWidthFormatRune(r rune) bool {
+	if invisibleCellRune(r) {
+		return false // it occupies a cell; the REPLACE class owns it
+	}
+	return unicode.Is(unicode.Cf, r) ||
+		unicode.Is(unicode.Zl, r) ||
+		unicode.Is(unicode.Zp, r) ||
+		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r)
+}
+
+// invisibleCellRune is the REPLACE class: a rune that renders as NOTHING on a phone and that
+// the terminal nonetheless gave a cell to. Today that is exactly the four Hangul fillers
+// (U+115F, U+1160, U+3164, U+FFA0), and the property that picks them out is
+// "default-ignorable, not a format character, and carrying a Letter's General_Category" --
+// which is what makes a text stack lay them out at all.
+//
+// THE TWO WRONG ANSWERS ARE SYMMETRICAL, and both were shipped by someone at some point.
+// Keeping them leaves an invisible splice inside a line the user reads (`pay<U+3164>pal.com`).
+// Dropping them removes one or two columns the terminal spent, so every character to the
+// right of the payload lands under the wrong column on the phone -- which is the same class
+// of harm as the U+2028 row split, one axis over. Replacing with a blank is the only answer
+// that is both invisible-free and parity-preserving.
+func invisibleCellRune(r rune) bool {
+	return unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) &&
+		!unicode.Is(unicode.Cf, r) &&
+		unicode.IsLetter(r)
 }
 
 // runSGR builds the SGR sequence for one run's style. It always starts from a

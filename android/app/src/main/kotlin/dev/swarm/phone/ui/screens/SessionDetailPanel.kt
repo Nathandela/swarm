@@ -705,12 +705,18 @@ object SessionDetailScreen {
      *  and arrangement, and the transcript is a screen model of its own with its own heading and its
      *  own empty copy.
      * @param lease PB-INPUT-2's three lease facts, which used to reach the user through the peek.
+     * @param capabilities the MACHINE's own capability record for this session (ADR-017 T2 rule 3).
+     *  It is a parameter for [lease]'s reason and for one more: the phone renders from the record
+     *  and INFERS NOTHING, so the only correct default is [SessionCapabilityFacts.ABSENT] -- which
+     *  offers no composer, because a session whose capability the machine did not state is not a
+     *  session this screen may guess about.
      * @param verdict the rest of the machine's answer to this screen's own take_control.
      */
     fun of(
         detail: SessionDetail,
         transcript: TranscriptPanel,
         lease: SessionLease,
+        capabilities: SessionCapabilityFacts = SessionCapabilityFacts.ABSENT,
         verdict: CommandVerdict = CommandVerdict.UNANSWERED,
         undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
     ): SessionDetailPanel = SessionDetailPanel(
@@ -760,16 +766,22 @@ object SessionDetailScreen {
         // availability rule, the notice copy and the placeholder; this file supplies the two
         // facts it asks about, and both come from things this screen already reads.
         //
-        // `structuredChat` COMES OFF THE TRANSCRIPT, which is a disclosure and not a shortcut:
-        // there is no capability read on this facade (Wave R6's disclosed residual -- the daemon
-        // authors session capability records that nothing publishes), and the phone's only sight
-        // of ADR-017's one-way degrade is the `structured_gap` element the daemon wrote into the
-        // journal. A session holding one has no message sink. A session whose gap the retention
-        // bound has since evicted gets the machine's own `structured_unsupported` refusal
-        // instead, rendered through [composerNotice] -- late, but never silent.
+        // `structuredChat` COMES OFF THE CAPABILITY RECORD (ADR-017 T2 rule 3), and Wave R8 is
+        // what made that possible: the daemon now authors a record on every session-creation
+        // path and publishes it on the roster, so the disclosure this line used to carry --
+        // "there is no capability read on this facade ... the daemon authors session capability
+        // records that nothing publishes" -- is discharged rather than restated.
+        //
+        // THE INFERENCE IT REPLACES WAS THE ONE THE RULE NAMES BY EXAMPLE. Deriving support from
+        // `transcript.structureTorn` is deriving it from THE SHAPE OF THE TRANSCRIPT, and a torn
+        // transcript and a provider that never had structured chat are DIFFERENT STATES with
+        // different explanations: only the record knows which one the user is looking at, and
+        // only the record can say so before the first refusal arrives. A session whose gap the
+        // retention bound has since evicted is now answered by the record too, instead of by the
+        // machine's late `structured_unsupported`.
         composerAvailability = ComposerModel.availabilityFor(
             online = lease.online,
-            structuredChat = !transcript.structureTorn,
+            structuredChat = capabilities.structuredChat,
         ),
         // A WORKING AGENT IS ONE WITH AN OPEN TOOL RUN, read off the blocks this screen has
         // already decided rather than off a second source. `TranscriptBlock.running` is §4's
@@ -791,4 +803,29 @@ object SessionDetailScreen {
         loadEarlierLabel = LOAD_EARLIER,
     )
 
+}
+
+/**
+ * The MACHINE's own capability record for one session, as this screen reads it (ADR-017 T2).
+ *
+ * IT IS A READ AND NEVER A DERIVATION. T2 rule 3: "the phone renders from that record and infers
+ * nothing -- it never infers support from whether a transcript happens to be empty". This type
+ * exists so the inference has nowhere to hide: the panel takes the facts, and a caller that has no
+ * record hands over [ABSENT] rather than an approximation built out of whatever else it can see.
+ */
+data class SessionCapabilityFacts(
+    /** Whether the machine authored `structured_chat` for this session's incarnation. */
+    val structuredChat: Boolean,
+) {
+    companion object {
+        /**
+         * NO RECORD, which is the honest status card and not "assume the best" (amendment T2-a).
+         *
+         * It is the state of every session launched before this ruling shipped, and of every
+         * session whose machine is older than the field. Offering a composer there is offering a
+         * send that can only be refused; offering a terminal there is opening a peek onto every
+         * one of them.
+         */
+        val ABSENT = SessionCapabilityFacts(structuredChat = false)
+    }
 }

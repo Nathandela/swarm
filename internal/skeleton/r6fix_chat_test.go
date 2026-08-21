@@ -33,6 +33,7 @@ package skeleton
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -109,9 +110,22 @@ func TestR6Fix_ADegradeWithNoPriorRecordStillRefusesTheComposer(t *testing.T) {
 	r := newInjectRig(t, composerGrid, claudeApproval("req-nocap-composer"))
 	turn := r6FixOpenTurn(t, r.sk, r.local, "before")
 
-	// No registerSessionCapabilities anywhere: exactly what a real session looks like.
+	// WAVE R8 SUPERSESSION, and only of HOW the state is reached. When this test landed,
+	// the no-record state was inherited for free: registerSessionCapabilities had no
+	// production caller, so no live session had a record. R8's capability publication
+	// (internal/skeleton/instance.go) authors one on every session-creation path, so the
+	// state must now be CONSTRUCTED. Every assertion below is unchanged -- what is measured
+	// is still "a proven gap with NO capability record refuses the composer", which is
+	// still reachable (a pre-R8 session dir, an unwritable record, a path that could not
+	// bind an instance) and is still the arm the durable MARKER exists to cover.
+	r.sk.capStore.mu.Lock()
+	delete(r.sk.capStore.byID, r.local)
+	if p := r.sk.capabilityPathLocked(r.local); p != "" {
+		_ = os.Remove(p)
+	}
+	r.sk.capStore.mu.Unlock()
 	if _, ok := r.sk.sessionCapabilities(r.local); ok {
-		t.Fatalf("CONTROL BROKEN: this session already has a capability record, so it is not the " +
+		t.Fatalf("CONTROL BROKEN: this session still has a capability record, so it is not the " +
 			"production shape this test measures")
 	}
 	r.sk.markSessionDegraded(r.local)

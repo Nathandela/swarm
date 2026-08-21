@@ -281,8 +281,8 @@ func (n *PushNotifier) Event(rec protocol.JournalRecord) error {
 
 // Terminal forwards a rendered terminal snapshot untouched. A snapshot is something the
 // phone asked to watch while it is awake, so it wakes nobody.
-func (n *PushNotifier) Terminal(session string, lines []string, cols, rows int) error {
-	return n.inner.Terminal(session, lines, cols, rows)
+func (n *PushNotifier) Terminal(view protocol.TerminalViewV1) error {
+	return n.inner.Terminal(view)
 }
 
 // SetMachine passes the daemon-assigned endpoint id down to the sealing sink. A no-op here

@@ -184,6 +184,56 @@ func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
 		d.backend.adopted = map[string]string{}
 	}
 	d.backend.live[local] = &sessionBackend{threadID: threadID, conn: conn}
+	// ADR-017 T2-a / D-NIL: THE BACKEND-CONNECT SEAM AUTHORS THE RECORD IT DECIDES.
+	// R7 made structured_chat "the seam AND a live backend, per session instance", so for
+	// a provider whose structured plane lives in a side process this moment -- and not
+	// launch -- is when the fact becomes knowable. The launch, reconcile and attach paths
+	// deliberately author NOTHING until one of this file's two outcomes arrives, because
+	// T2 rule 2 makes a structured_chat degrade one-way and an early wrong record could
+	// never be corrected.
+	//
+	// Off the caller's goroutine: registerBackend holds d.backend.mu and the authoring
+	// path takes the capability store's lock and writes the session dir; holding a backend
+	// lock across a disk write would put the pump behind the filesystem.
+	go d.authorCapabilitiesOnBackendJoin(local)
+}
+
+// authorCapabilitiesOnBackendJoin authors local's record with the structured plane PROVEN
+// LIVE. It is the true half of the pair below.
+func (d *Daemon) authorCapabilitiesOnBackendJoin(local string) {
+	d.authorCapabilitiesForBackend(local, true)
+}
+
+// degradeCapabilitiesOnBackendLoss authors local's record with NO backend plane, which is
+// a DEGRADE and only a degrade (ADR-017 T2 rule 2 / D-DEGRADE-ORIGIN). The re-authoring
+// runs through the same merge as every other path, so it can only ever withdraw:
+// registerSessionCapabilities refuses the upgrade direction outright, and a
+// terminal_control it once withdrew stays withdrawn.
+//
+// A DEGRADE IS MACHINE-LOCAL IN ORIGIN. This caller and the proven hook-spool gap are the
+// only ones; no remote-reachable path induces one, because a phone-inducible degrade would
+// be a privilege escalation whose payoff is a live peek onto a structured session's
+// terminal.
+func (d *Daemon) degradeCapabilitiesOnBackendLoss(local string) {
+	d.authorCapabilitiesForBackend(local, false)
+}
+
+// authorCapabilitiesForBackend is the shared body of the two above.
+func (d *Daemon) authorCapabilitiesForBackend(local string, live bool) {
+	if d.core == nil {
+		return
+	}
+	m, ok := d.core.Get(local)
+	if !ok {
+		return
+	}
+	inst, ad, version, ok := d.sessionCapabilityInputs(local, m.AgentType, m.ShimPID)
+	if !ok {
+		return
+	}
+	if _, err := d.authorSessionCapabilities(local, inst, m.AgentType, ad, version, adapterRevision, live); err != nil {
+		log.Printf("skeleton: author capability record for backend session %s: %v", local, err)
+	}
 }
 
 // adoptBackendThread records the thread id the agent created, once.
@@ -646,6 +696,12 @@ const (
 func (d *Daemon) noteBackendUnavailable(local string) {
 	d.emitBackendGap(local, gapBackendUnavailable)
 	d.markSessionDegraded(local)
+	// ADR-017 T2-a: the marker alone leaves this session with NO capability record, and
+	// by T2-a no record is the honest status card -- which is the wrong destination for a
+	// session that has a live TUI worth watching. markSessionDegraded degrades "the
+	// record, if one exists"; this authors the one it degrades, with the backend plane
+	// proven absent, so the session lands on the read-only terminal fallback instead.
+	d.degradeCapabilitiesOnBackendLoss(local)
 }
 
 // noteBackendRejoined is CASE 2: the daemon went away and came back, the shim and its

@@ -182,8 +182,13 @@ class PhoneActivity : AppCompatActivity() {
      * Give back what the surface holds while the screen is not in front of anyone -- the camera
      * above all. A viewfinder left bound is a camera light left on.
      *
-     * It reaches no facade verb, which is PB-SEC-11 rather than style: this class is exported
-     * with a LAUNCHER filter, so any app on the device can start it.
+     * IT REACHES EXACTLY ONE FACADE VERB, and only one shape of verb may ever be added here.
+     * PB-SEC-11's concern is that this class is exported with a LAUNCHER filter, so any app on the
+     * device can start it and force this callback. `App.EnterBackground` (ADR-017 amendment T8-b)
+     * is safe under exactly that threat because everything it can do is WITHDRAW authority: the
+     * worst a hostile app achieves by forcing an onPause is costing the user their own control
+     * lease and terminal control generation. A verb that GRANTED anything would still be refused
+     * here.
      */
     override fun onPause() {
         super.onPause()

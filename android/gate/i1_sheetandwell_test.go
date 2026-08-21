@@ -198,14 +198,33 @@ func TestADR009_TheTerminalWellIsDeletedAtI1Exit(t *testing.T) {
 // delete the well SCREEN. What must not survive is `terminal = true`, which is the escape-filtered
 // VT snapshot's ink: the grid's presence in a screen is what ADR-009 (1) forbids, whatever view
 // prints it.
+// WAVE R8 AMENDMENT (ADR-017 T1): the rule is RE-SCOPED, NOT REPEALED, and the shape of the
+// amendment is a SINGLE-FILE ALLOWLIST rather than a relaxation.
+//
+// ADR-009 (1) remains the rule for every `structured_chat` session -- no terminal emulation and no
+// raw grid -- and gains exactly one exception: a session the DAEMON routed to `terminal_fallback`
+// may render the machine-sanitized snapshot, in the one body named below and nowhere else. The
+// allowlist is one file by name and not a directory, a prefix or a pattern, because what is being
+// permitted is "one screen may print it", not "screens may print it".
+//
+// NOTHING IS TRADED AWAY. `i1WellSymbols` is untouched -- the retired peek's hosting path stays
+// banned by name forever -- and `r8_fallback_ui_test.go` re-states this same ban with the same
+// allowlist alongside the additions R8 owes, so the NET assertion count rises rather than moving.
+const adr009TerminalWellAllowlist = "dev/swarm/phone/ui/screens/TerminalFallbackView.kt"
+
 func TestADR009_NoScreenRendersTheTerminalVariantOfTheWell(t *testing.T) {
 	terminalWell := regexp.MustCompile(`monoWell\s*\([^)]*terminal\s*=\s*true`)
 	for name, src := range s24ProductionKotlin(t) {
-		if terminalWell.MatchString(kotlinCodeOnly(src)) {
-			t.Errorf("ADR-009 (1): %s prints the daemon-rendered grid in the terminal well. There "+
-				"is no terminal emulation and no raw grid anywhere in the app; the transcript is "+
-				"the session surface.", name)
+		if !terminalWell.MatchString(kotlinCodeOnly(src)) {
+			continue
 		}
+		if name == adr009TerminalWellAllowlist {
+			continue
+		}
+		t.Errorf("ADR-009 (1) as re-scoped by ADR-017 T1: %s prints the daemon-rendered grid in "+
+			"the terminal well. The no-grid rule is re-scoped to structured_chat sessions, not "+
+			"repealed: only %s may render the sanitized snapshot, and only for a session the "+
+			"daemon routed to the terminal fallback.", name, adr009TerminalWellAllowlist)
 	}
 }
 

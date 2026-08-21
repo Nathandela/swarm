@@ -24,7 +24,7 @@ package protocol
 //
 //	// client.go, the house style of Launch (:128) / Kill (:144): request the peek and
 //	// return the FIRST server-rendered snapshot. The render loop pushes the session's
-//	// current grid before any new output (daemon.RenderTerminal -> renderInitial), so a
+//	// current grid before any new output (daemon.RenderTerminalView -> renderInitialView), so a
 //	// one-shot peek of an idle session returns at once instead of waiting for output.
 //	func (c *Client) TerminalSnapshot(id string) (*TerminalSnapshot, error)
 //

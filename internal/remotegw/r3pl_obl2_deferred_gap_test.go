@@ -276,7 +276,7 @@ func TestOBL2_PreferenceFlipDuringDeferralSupersedesTheProvisionalObligationHone
 			"must stay honest", cur.State, cur.LastOutcome)
 	}
 	if cur.LastOutcome == "" {
-		t.Fatalf("superseded obligation carries no last-outcome word at all: the record must SAY why it "+
+		t.Fatalf("superseded obligation carries no last-outcome word at all: the record must SAY why it " +
 			"ended (PG-OBL-1 persists the last outcome code)")
 	}
 
@@ -336,7 +336,7 @@ func TestOBL2_TimerFireWithPreferenceStillOnDrivesTheProvisionalObligation(t *te
 		t.Fatalf("gateway submits after the deferred send = %d, want 2 (the immediate wake plus the deferred one)", len(sent))
 	}
 	if !bytes.Equal(sent[1], prov.Envelope) {
-		t.Fatalf("the deferred send is not the provisional obligation's sealed bytes: it must coalesce into "+
+		t.Fatalf("the deferred send is not the provisional obligation's sealed bytes: it must coalesce into " +
 			"the provisional record (PG-OBL-5) and replay its envelope verbatim (PG-WAKE-12), not mint a second wake")
 	}
 	cur, ok, err := h.store.Get(h.addr)

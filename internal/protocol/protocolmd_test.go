@@ -64,6 +64,12 @@ func wireJSONTags() []string {
 		reflect.TypeOf(SessionView{}),
 		reflect.TypeOf(LaunchReq{}),
 		reflect.TypeOf(TerminalSnapshot{}),
+		// WAVE R8 CLOSING ROUND: the versioned view is on the wire, so it is reflected here.
+		// GG-7's field-table obligation is not a rule about which structs someone remembered
+		// to list -- the wave shipped `TerminalViewV1` fully documented in Go, bounded, and
+		// absent from every wire path, and the drift check could not have caught it because
+		// the type was not in this set.
+		reflect.TypeOf(TerminalViewV1{}),
 	}
 	seen := map[string]bool{}
 	var out []string

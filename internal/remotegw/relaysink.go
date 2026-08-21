@@ -271,17 +271,40 @@ const kindTerminalSnapshot = "terminal_snapshot"
 // snapshotFrame exactly -- the phone unmarshals this shape (TestSnapshotFrame_WireShape).
 type snapshotFrame struct {
 	Kind                      string `json:"kind"`
-	protocol.TerminalSnapshot        // session, lines, cols, rows (promoted)
+	protocol.TerminalSnapshot        // session, lines, cols, rows (promoted) -- FROZEN, unchanged
+
+	// The versioned view's coordinates (ADR-017 T4-a / T8-a), added by the closing round as
+	// SIBLING KEYS with omitempty (the time a pointer, because a zero time.Time is not omitted
+	// by encoding/json) so a frame carrying none of them serializes BYTE-IDENTICALLY to the
+	// shape this wire has always had. That is the GG-7 rule schema.Control states in as many
+	// words, and TestRelaySink_ForwardsTerminalSnapshot pins these exact bytes.
+	SessionInstance string     `json:"session_instance,omitempty"`
+	ViewEpoch       uint64     `json:"view_epoch,omitempty"`
+	Revision        uint64     `json:"revision,omitempty"`
+	Reset           bool       `json:"reset,omitempty"`
+	RenderedAt      *time.Time `json:"rendered_at,omitempty"`
 }
 
 // Terminal seals a server-rendered terminal snapshot into the phone's mailbox on the SAME
 // seq stream as the journal (A7 slice D): the plaintext is the committed wire shape the
 // phone decoder demuxes on -- the TerminalSnapshot fields plus a kind:"terminal_snapshot"
 // tag. The seal/append error is returned and stashed for Err(), mirroring the journal path.
-func (s *RelaySink) Terminal(session string, lines []string, cols, rows int) error {
+func (s *RelaySink) Terminal(view protocol.TerminalViewV1) error {
+	var renderedAt *time.Time
+	if !view.RenderedAt.IsZero() {
+		at := view.RenderedAt
+		renderedAt = &at
+	}
 	plaintext, err := json.Marshal(snapshotFrame{
-		Kind:             kindTerminalSnapshot,
-		TerminalSnapshot: protocol.TerminalSnapshot{Session: session, Lines: lines, Cols: cols, Rows: rows},
+		Kind: kindTerminalSnapshot,
+		TerminalSnapshot: protocol.TerminalSnapshot{
+			Session: view.Session, Lines: view.Lines, Cols: view.Cols, Rows: view.Rows,
+		},
+		SessionInstance: view.SessionInstance,
+		ViewEpoch:       view.ViewEpoch,
+		Revision:        view.Revision,
+		Reset:           view.Reset,
+		RenderedAt:      renderedAt,
 	})
 	if err != nil {
 		s.setErr(err)

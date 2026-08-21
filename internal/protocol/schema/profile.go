@@ -17,12 +17,16 @@ package schema
 // CurrentProfileVersion is the R1 profile version this ADR's two fields
 // (InteractionSchemaVersion, TerminalViewVersion) and the rest of the companion R1 set
 // share, per T5's "taken once across the R1 set rather than independently per ADR".
-// ADR-016 is the currently known co-owner: it adds relay_tls_policy, relay_host and the
-// pin set to this same struct (ADR-016:194) and joins this SAME version number when it
-// lands, rather than bumping it -- ADR-016's three fields are not yet declared here, and
-// their GG-7 field-table obligation is ADR-016's own, not discharged by this constant.
-// Any later ADR that adds a RemoteProfileV1 field joins this version on the same terms.
-// No production caller sets Version from this constant yet (bd agents-tracker-hggx.2.2).
+// ADR-016 is a co-owner: it adds relay_tls_policy, relay_host and the pin set to this
+// same struct (ADR-016:194) and joined this SAME version number rather than bumping it;
+// its three fields ARE declared below, and their GG-7 field-table obligation is ADR-016's
+// own, not discharged by this constant. ADR-017 T5 is the second co-owner: it adds the
+// three terminal_view_* bounds on the same terms.
+//
+// WAVE R8 IS THE FIRST WAVE TO PUBLISH A NON-ZERO PROFILE VERSION (amendment T5-a), and
+// that ENDS the "no deployed reader to break" argument that let R8's own additions join
+// version 1 rather than bump it. The next ADR that adds a field here inherits a real
+// compatibility decision, not R8's free window.
 const CurrentProfileVersion = 1
 
 type RemoteProfileV1 struct {
@@ -42,4 +46,12 @@ type RemoteProfileV1 struct {
 	RelayTLSPolicy string `json:"relay_tls_policy"`
 	RelayHost      string `json:"relay_host"`
 	RelaySPKIPin   []byte `json:"relay_spki_pin"`
+	// The three ADR-017 T5 TerminalView bounds: "size, line and rate bounds declared in
+	// the remote profile, so a phone knows the ceiling it is rendering under rather than
+	// discovering it". Zero on any of them means CLAMP TO THE PHONE'S CONSERVATIVE
+	// BUILT-IN, never "unlimited" (T5-a), and none carries omitempty for the same reason
+	// nothing else here does. TerminalViewBounds() is the one resolver.
+	TerminalViewMaxLineBytes int `json:"terminal_view_max_line_bytes"`
+	TerminalViewMaxRows      int `json:"terminal_view_max_rows"`
+	TerminalViewMaxRateHz    int `json:"terminal_view_max_rate_hz"`
 }

@@ -44,7 +44,30 @@ type machineNamer interface {
 // the phone (A7 slice D). RelaySink implements it alongside JournalSink; RunTerminal
 // requires the gateway's sink to accept snapshots.
 type TerminalSink interface {
-	Terminal(session string, lines []string, cols, rows int) error
+	Terminal(view protocol.TerminalViewV1) error
+}
+
+// terminalViewOf reads ONE frame's terminal payload as a versioned view, namespacing the
+// session id the way every other id the phone sees is namespaced.
+//
+// IT PREFERS THE VERSIONED BODY AND FALLS BACK TO THE LEGACY ONE, because both are on the
+// wire (ADR-017 T4 keeps `terminal` unchanged) and a machine that predates the closing round
+// sends only the legacy half. The fallback yields view_epoch 0, which is the honest answer --
+// "this machine does not version its views" -- and never a fabricated epoch, because an
+// invented one would let the phone believe it can detect a replacement it cannot.
+func terminalViewOf(endpointID string, ctrl protocol.Control) protocol.TerminalViewV1 {
+	if v := ctrl.TerminalView; v != nil {
+		out := *v
+		out.Session = namespaceSessionID(endpointID, v.Session)
+		return out
+	}
+	t := ctrl.Terminal
+	return protocol.TerminalViewV1{
+		Session: namespaceSessionID(endpointID, t.Session),
+		Lines:   t.Lines,
+		Cols:    t.Cols,
+		Rows:    t.Rows,
+	}
 }
 
 // ReseedSink receives PB-SYNC-2's journal repair frame. RelaySink implements it alongside
@@ -103,8 +126,56 @@ type Gateway struct {
 	socketPath string
 	sink       JournalSink
 
+	// watchLive is the WATCH-LIVENESS clause of ADR-017 T4-b, consulted before EVERY
+	// snapshot is handed to the sink. Without it the horizon was a field nothing read: an
+	// unrenewed watch kept the daemon rendering, the sink sealing and the relay appending
+	// full screens against the shared 8-appends/s budget for a phone that had gone away,
+	// which is the precise defect T4-b was written to close. Nil (unit tests that build a
+	// bare Gateway) means "no watcher owns this peek", and a peek nobody owns is allowed --
+	// the watcher is what installs the horizon, so its absence cannot be its violation.
+	watchLive func(session string) bool
+
 	mu     sync.Mutex
 	cursor uint64
+}
+
+// bindWatchLiveness installs the watch-liveness predicate the snapshot path consults. The
+// TerminalWatcher owns the horizons and the Gateway owns the stream, so the predicate is
+// injected rather than either type reaching into the other.
+func (g *Gateway) bindWatchLiveness(live func(session string) bool) {
+	g.watchLive = live
+}
+
+// watchStillLive answers the predicate for one namespaced session, defaulting to true when
+// no watcher is bound.
+func (g *Gateway) watchStillLive(session string) bool {
+	if g.watchLive == nil {
+		return true
+	}
+	return g.watchLive(session)
+}
+
+// BlankTerminal publishes an EMPTY snapshot for one session, which is how the machine says
+// "I am no longer rendering this" to a phone that never asked it to stop (ADR-017 T4-b,
+// round-3 moderate 5).
+//
+// THE HARM IT CLOSES, stated as what the user sees. The watch horizon is sixty seconds and
+// the renewal rides the phone's redraw, so an IDLE fallback screen on an IDLE session can
+// have its watch reaped while the user is looking at it. `Reap` -> `Unwatch` -> ctx cancel
+// ends the peek FROM THE GATEWAY SIDE: the daemon sends no OpError, nothing reaches the sink,
+// and the phone keeps the last grid. It is not even labelled stale -- the stream-stale flag
+// is set by explicit desync events, not by a clock, and the machine heartbeat keeps arriving.
+// That is "the machine went quiet rendered as the terminal is idle", which is precisely what
+// T4-b's staleness rule exists to forbid, introduced by this wave's own horizon.
+//
+// A sink that does not take terminal snapshots has nothing to blank and is not an error: the
+// same tolerance RunTerminal's own discovery has.
+func (g *Gateway) BlankTerminal(session string) error {
+	sink, ok := g.sink.(TerminalSink)
+	if !ok {
+		return nil
+	}
+	return sink.Terminal(protocol.TerminalViewV1{Session: session})
 }
 
 // CursorSource is a sink that knows its own DURABLE delivered cursor. New seeds the
@@ -234,6 +305,21 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 // accepts it (handleTerminalSubscribe is session-scoped -- without the id it refuses "invalid
 // session id"). The snapshot's session id is re-namespaced to the endpoint at egress, exactly
 // like RunJournal, so the phone correlates a snapshot to the roster/command id it signs against.
+// errPeekCapabilityRefused marks a terminal peek the daemon refused on the SESSION's own
+// capability record (ADR-017 T2-c). It is terminal rather than transient: unlike a kill
+// switch, which flips back, a session's record is authored once per incarnation and
+// immutable except in the degrading direction, so reconnecting can only produce the same
+// refusal until the session is replaced -- at which point the phone watches the new
+// incarnation explicitly.
+var errPeekCapabilityRefused = errors.New("remotegw: the session's capability record does not permit a terminal view")
+
+// errWatchHorizonPassed ends a peek whose watch was not renewed within its horizon
+// (ADR-017 T4-b). Like a capability refusal it is TERMINAL rather than transient: the phone
+// stopped saying it was looking, so reconnecting would resume rendering for nobody. A
+// phone that comes back asks for a new watch, which is the verb the capability gate is
+// written over.
+var errWatchHorizonPassed = errors.New("remotegw: the terminal watch horizon passed without a renewal")
+
 func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 	sink, ok := g.sink.(TerminalSink)
 	if !ok {
@@ -276,8 +362,14 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			session := namespaceSessionID(dc.endpointID, ctrl.Terminal.Session)
-			if err := sink.Terminal(session, ctrl.Terminal.Lines, ctrl.Terminal.Cols, ctrl.Terminal.Rows); err != nil {
+			// ADR-017 T4-b, PER EMISSION. The watch's horizon is asked here and not only
+			// on the reap tick, so the last screen rendered for a phone that stopped
+			// renewing is not sealed and appended on its way past an expiry that has
+			// already happened.
+			if !g.watchStillLive(session) {
+				return errWatchHorizonPassed
+			}
+			if err := sink.Terminal(terminalViewOf(dc.endpointID, ctrl)); err != nil {
 				return err
 			}
 		case protocol.OpError:
@@ -285,10 +377,18 @@ func (g *Gateway) RunTerminal(ctx context.Context, session string) error {
 			// subscribe-time refusal while off, Blocker 1b). BLANK the phone's latest-wins
 			// cache so it stops showing the pre-teardown screen (Blocker 1d), then return so
 			// the watcher backs off and reconnects (resuming when the switch flips back ON).
-			_ = sink.Terminal(namespaceSessionID(dc.endpointID, session), nil, 0, 0)
+			_ = sink.Terminal(protocol.TerminalViewV1{Session: namespaceSessionID(dc.endpointID, session)})
 			// Nothing follows the blank on this connection, so it must not sit in the
 			// coalescer: force it out before returning.
 			_ = flushTerminal(sink)
+			if ctrl.ErrorCode == protocol.CodeCapabilityRefused {
+				// ADR-017 T2-c: this session's capability record does not permit a
+				// terminal view, and that answer does not change by asking again. It is
+				// wrapped so the supervised loop ENDS the watch instead of reconnecting:
+				// a refused peek must cost ONE dial, not a permanent backoff loop against
+				// a daemon that will refuse every attempt for the life of the session.
+				return fmt.Errorf("%w: %s", errPeekCapabilityRefused, ctrl.Error)
+			}
 			return fmt.Errorf("daemon ended the terminal peek: %s (%s)", ctrl.Error, ctrl.ErrorCode)
 		default:
 			// The terminal_subscribe ack (OpOK) and any other control are ignored.
@@ -377,6 +477,13 @@ func forwardControl(endpointID, op string, rc protocol.RemoteCommand) protocol.C
 		TurnInterrupt: rc.TurnInterrupt,
 		History:       rc.History,
 		Detail:        rc.Detail,
+		// Wave R8 (ADR-017 T6): the terminal_control_begin body (bound by
+		// TerminalControlBeginContentHash), the unsigned terminal_input body, and the
+		// generation a keepalive names. All three are content the gateway carries and
+		// never reads -- it is a blind conduit here exactly as it is for the bodies above.
+		TerminalControlBegin: rc.TerminalControlBegin,
+		TerminalInput:        rc.TerminalInput,
+		ControlGeneration:    rc.ControlGeneration,
 	}
 	// device_revoke names a DEVICE, not a session, and handleDeviceRevoke reads
 	// Control.TargetDeviceID -- both to authorize (requireRemoteAuthz's subject) and to
@@ -412,8 +519,28 @@ func forwardControl(endpointID, op string, rc protocol.RemoteCommand) protocol.C
 // correlate a roster/event entry to a command with no side channel. A record with no
 // SessionID (session-neutral, e.g. gateway presence) or an already-namespaced id is
 // left untouched.
+// It is also amendment T2-b's SECOND SEAM -- "where it is decoded off the wire in the
+// gateway" -- which round 2's evidence claimed existed and which did not: `Validate()` had no
+// gateway caller and the gateway never touched the record at all (round-3 blocker 2a).
+//
+// WHY THE MIDDLE SEAM IS NOT REDUNDANT WITH THE AUTHOR'S. The daemon's author-side validation
+// protects records THIS daemon writes. It says nothing about a capabilities.json left by an
+// older or rolled-back build, a partially-written file, or a daemon an attacker has replaced
+// -- and this is the last machine-side thing between any of those and a phone that will route
+// a session on what it receives. An inconsistent record is DROPPED here rather than merely
+// refused a route downstream, so what crosses the boundary is what a phone with any router,
+// present or future, can safely act on.
+//
+// THE RECORD IS DROPPED WHOLE, and the session keeps T2-a's honest status card -- the same
+// destination the phone's own decode seam reaches. A partially-trusted record is exactly the
+// inconsistent state T2-b makes unrepresentable.
 func namespaceRecord(endpointID string, rec protocol.JournalRecord) protocol.JournalRecord {
 	rec.SessionID = namespaceSessionID(endpointID, rec.SessionID)
+	if rec.Capabilities != nil && rec.Capabilities.Validate() != nil {
+		// Nil the COPY's pointer, never the record behind it: the daemon's own registry
+		// hands this pointer out, so writing through it would blank the machine's copy.
+		rec.Capabilities = nil
+	}
 	return rec
 }
 

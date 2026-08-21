@@ -127,8 +127,22 @@ func r1Ops() []r1Op {
 		// TestR6TurnInterrupt_ABackendWithoutTheSeamRefusesRatherThanPretending, which
 		// sends a WELL-FORMED frame and therefore reaches the seam.
 		{"turn_interrupt", OpTurnInterrupt, ActionTurnInterrupt, true, CodeInvalidField},
-		{"terminal_control_begin", OpTerminalControlBegin, ActionTerminalControlBegin, true, CodeNotImplemented},
-		{"terminal_control_end", OpTerminalControlEnd, ActionTerminalControlEnd, true, CodeNotImplemented},
+		// SUPERSESSION EXECUTED (Wave R8, pre-recorded in docs/verification/r8-red/
+		// control-red.txt and in r8_terminalcontrol_test.go's
+		// TestR8Control_BeginIsNoLongerARefusalStub): these two rows read
+		//   {"terminal_control_begin", ..., CodeNotImplemented}
+		//   {"terminal_control_end",   ..., CodeNotImplemented}
+		// while ADR-017 T6's ops had only the refusal-only handler. The REAL handlers
+		// (remote_terminal.go) refuse this same BODYLESS, generation-less frame after the
+		// same authz + body-version gates, exactly as R5 retargeted session_launch and R6
+		// retargeted composer_send and turn_interrupt:
+		//   - begin is refused STRUCTURALLY (no terminal_control_begin body at all);
+		//   - end is refused STALE (this connection holds no generation to end) -- an OK
+		//     there would tell a phone its control was released when there was nothing to
+		//     release, which is what would make the banner's disappearance a lie.
+		// Every choke-point ordering assertion below is inherited unchanged.
+		{"terminal_control_begin", OpTerminalControlBegin, ActionTerminalControlBegin, true, CodeInvalidField},
+		{"terminal_control_end", OpTerminalControlEnd, ActionTerminalControlEnd, true, CodeStaleGeneration},
 	}
 }
 

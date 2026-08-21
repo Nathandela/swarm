@@ -56,6 +56,17 @@ func newRevokeSeverStub(ids ...string) *revokeSeverStub {
 	return &revokeSeverStub{stubDaemon: newStubDaemon(), devices: m}
 }
 
+// SessionCapabilities makes this stub a SessionCapabilityLookup (ADR-017 T2-c). It answers
+// the terminal-fallback record for every session so this file's suites still measure the
+// REVOKE's sever, not the capability gate that now runs before the tap; the gate is
+// measured on its own in r8_legacygate_test.go.
+func (s *revokeSeverStub) SessionCapabilities(local string) (SessionCapabilities, bool) {
+	return SessionCapabilities{
+		Provider: "opencode", ProviderVersion: "0.9.0", AdapterRevision: "rev-test",
+		SessionInstance: "inst-" + local, TerminalFallback: true, TerminalControl: true,
+	}, true
+}
+
 // RevokeDevice removes deviceID from the live set (making it a DeviceRevoker).
 func (s *revokeSeverStub) RevokeDevice(deviceID string) (bool, error) {
 	s.mu.Lock()

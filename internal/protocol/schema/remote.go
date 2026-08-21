@@ -88,6 +88,18 @@ type JournalRecord struct {
 	// A daemon predating this field simply omits the key, and the phone then renders exactly
 	// what it renders today (mobile/namefacade_test.go pins that compatibility).
 	Name string `json:"name,omitempty"`
+	// Capabilities is the session's daemon-authored capability record (ADR-017 T2),
+	// carried on ROSTER records so the phone can choose which of the three destinations a
+	// session gets -- chat, the capability-routed sanitized terminal fallback, or the
+	// honest status card -- by READING it rather than by inferring anything.
+	//
+	// It is a POINTER with omitempty because absence is wire-distinguishable ON PURPOSE
+	// (T2-a): "no record" and terminal_fallback=false take ONE code path, and a reader
+	// that could not tell them apart would have to guess about every pre-R8 session. A
+	// daemon predating this field simply omits the key, and the phone then renders the
+	// status card, which is the honest answer for a session whose machine cannot say what
+	// it supports.
+	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They
@@ -111,6 +123,33 @@ const (
 	// so no device signature is required to merely ask the gateway to open the read.
 	ActionTerminalWatch   = "terminal_watch"
 	ActionTerminalUnwatch = "terminal_unwatch"
+
+	// ActionTerminalRenew renews a live watch's HORIZON (ADR-017 amendment T4-b). It joins
+	// the two reads above VERBATIM -- UNSIGNED, no actionClass entry, routed by the gateway
+	// to its TerminalWatcher and never forwarded to the daemon's device authenticator --
+	// because it is strictly WEAKER than the watch it renews: it never starts a peek, it
+	// only extends one the capability gate already permitted.
+	//
+	// It exists because Watch/Unwatch/Close were the whole lifecycle, so a phone that
+	// simply STOPPED READING left the machine rendering full screens, sealing them and
+	// appending them against the shared 8-appends/s budget indefinitely, and building a
+	// backlog the phone then replayed. The renewal is the only evidence the machine has
+	// that anyone is still looking.
+	ActionTerminalRenew = "terminal_renew"
+
+	// ActionTerminalInput / ActionTerminalControlKeepalive are ADR-017 T6's two UNSIGNED
+	// frame kinds, and they are exactly two: the exception to full-body signatures is held
+	// to two body types and one live generation, which is what keeps it an exception
+	// rather than a policy.
+	//
+	// They join journal_resync's class VERBATIM -- UNSIGNED, no actionClass entry, sealed
+	// under the epoch content key and forwarded to the daemon as a plain op -- because
+	// what authorises them is not a per-frame signature but the E2EE frame's authenticated
+	// sender and sequence PLUS the confirmed control generation the daemon re-evaluates on
+	// every frame (T6-e). ADR-007's 2026-07-24 Decision 1 is the same exception, and this
+	// is deliberately the same one rather than a second.
+	ActionTerminalInput            = "terminal_input"
+	ActionTerminalControlKeepalive = "terminal_control_keepalive"
 
 	// ActionJournalResync asks the gateway to republish an atomic roster+events snapshot
 	// so the phone can repair a stale journal channel (PB-SYNC-2). Like the two reads
@@ -279,6 +318,21 @@ type RemoteCommand struct {
 	// which the daemon recomputes from the forwarded body, so a gateway that alters the
 	// preset id, revision or prompt breaks the signature.
 	SessionLaunch *SessionLaunchReq `json:"session_launch,omitempty"`
+	// TerminalControlBegin is the terminal_control_begin body (ADR-017 T6). It rides
+	// beside the signed tuple under launch's own rule -- bound into the signature via
+	// ContentHash = TerminalControlBeginContentHash(it), recomputed daemon-side, so a
+	// gateway that re-points a valid begin at another session, another INCARNATION or
+	// another profile breaks the signature.
+	TerminalControlBegin *TerminalControlBeginReq `json:"terminal_control_begin,omitempty"`
+	// TerminalInput is the terminal_input body (ADR-017 T6): one UNSIGNED raw-input frame.
+	// It carries no content hash because the op carries no device signature at all --
+	// sealing under the epoch content key is already proof the asker is the paired device,
+	// and the authority that matters is the generation, which the daemon re-evaluates per
+	// frame alongside the kill switch, the device registration and the capability record.
+	TerminalInput *TerminalInputReq `json:"terminal_input,omitempty"`
+	// ControlGeneration rides terminal_control_keepalive, which has no body of its own:
+	// the generation IS the frame.
+	ControlGeneration string `json:"control_generation,omitempty"`
 	// SubjectOperationID is operation_status's query subject (the asked-about op), copied
 	// by the gateway onto Control.SubjectOperationID. It IS bound into the signature
 	// (round-2 fix-pack, MAJOR 2): ContentHash = OperationStatusContentHash(subject),

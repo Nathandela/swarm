@@ -1,0 +1,18 @@
+WAVE R8 RED EVIDENCE -- S6+S7, terminal_control_begin/end, terminal_input, keepalive
+captured 2026-08-20T12:18:14Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go vet ./internal/protocol/ ./mobile/
+
+# github.com/Nathandela/swarm/internal/protocol
+# [github.com/Nathandela/swarm/internal/protocol]
+vet: internal/protocol/r8_legacygate_test.go:81:49: unknown field SessionInstance in struct literal of type SessionCapabilities
+--- FAIL: TestR8Facade_WatchVerbsExistAndGrantNoInputAuthority (0.01s)
+    r8_terminalverbs_test.go:47: ADR-017 T4: the facade declares no TerminalViewWatch. The fallback screen has no way to ask for a snapshot, so R8a ships a screen with nothing on it.
+    r8_terminalverbs_test.go:47: ADR-017 T4: the facade declares no TerminalViewUnwatch. The fallback screen has no way to ask for a snapshot, so R8a ships a screen with nothing on it.
+    r8_terminalverbs_test.go:47: ADR-017 T4: the facade declares no TerminalViewRenew. The fallback screen has no way to ask for a snapshot, so R8a ships a screen with nothing on it.
+--- FAIL: TestR8Facade_RefusedTerminalInputIsUndeliveredAndNeverBuffered (0.00s)
+    r8_terminalverbs_test.go:74: ADR-017 T6: the facade declares no TerminalInput, so R8b's input plane does not exist
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	0.879s
+FAIL

@@ -41,6 +41,23 @@ var requiredScreenElements = []string{
 	// terminal_watch / terminal_unwatch -- first-class verbs the live tail depends on
 	"terminal_watch",
 	"terminal_unwatch",
+	// WAVE R8 (ADR-017): the capability-routed terminal fallback. Three elements rather
+	// than one, because the ADR binds three INDEPENDENT authorities and collapsing them
+	// into a single row would let one arrive without the others: a watch that grants no
+	// input authority, an explicit and revocable control ceremony bound to the session
+	// INSTANCE, and a live-only raw-input plane that never buffers a byte.
+	// The routed destination itself: R8's central claim is that the MACHINE chooses the
+	// surface and the phone reads that choice, so the element is the choice.
+	"session.destination",
+	"terminal_view.watch",
+	"terminal_control.enter",
+	"terminal_control.input",
+	// ADR-017 amendment T8-b: backgrounding is a severance trigger IN ITS OWN RIGHT, so
+	// the app needs a verb for it. It is enumerated here rather than left to the TSV so
+	// deleting the row cannot delete the requirement -- and the requirement is what stops
+	// the phone core's two Background methods going back to having no production caller,
+	// which is the state that made T8-b unreachable in the shipped app.
+	"lifecycle.background",
 	// take_control acquire/release, input + resize
 	"take_control.acquire",
 	"take_control.release",

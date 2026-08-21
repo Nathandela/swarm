@@ -133,6 +133,25 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealInteractionDetailEnvelope: %v", err)
 	}
+	// Wave R8 (ADR-017 T6): the signed begin and the exception's exactly two UNSIGNED frame
+	// kinds. The unsigned pair is covered here for the reason PB-GW-6 states about ALL phone
+	// -> machine seals and not only signed ones: the 10-minute IssuedAt bound is applied by
+	// the gateway to the FRAME, so an unstamped keystroke frame is refused forever, silently
+	// -- and a raw-input plane that dies that way looks exactly like a dead terminal.
+	beginControl, err := SealTerminalControlBeginEnvelope(key, epoch, seq.Next(), auth,
+		&schema.TerminalControlBeginReq{Session: "m1/s1", SessionInstance: "inst-a", Profile: 1})
+	if err != nil {
+		t.Fatalf("SealTerminalControlBeginEnvelope: %v", err)
+	}
+	termInput, err := SealTerminalInputEnvelope(key, epoch, seq.Next(), "m1",
+		&schema.TerminalInputReq{Session: "m1/s1", SessionInstance: "inst-a", ControlGeneration: "gen-1", Bytes: []byte("ls")})
+	if err != nil {
+		t.Fatalf("SealTerminalInputEnvelope: %v", err)
+	}
+	termKeepalive, err := SealTerminalKeepaliveEnvelope(key, epoch, seq.Next(), "m1", "m1/s1", "gen-1")
+	if err != nil {
+		t.Fatalf("SealTerminalKeepaliveEnvelope: %v", err)
+	}
 	return map[string][]byte{
 		"SealInputData":             data,
 		"SealInputResize":           resize,
@@ -149,6 +168,10 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 		"SealTurnInterruptEnvelope":      interrupt,
 		"SealInteractionHistoryEnvelope": history,
 		"SealInteractionDetailEnvelope":  detail,
+
+		"SealTerminalControlBeginEnvelope": beginControl,
+		"SealTerminalInputEnvelope":        termInput,
+		"SealTerminalKeepaliveEnvelope":    termKeepalive,
 	}
 }
 

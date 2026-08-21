@@ -139,7 +139,7 @@ func TestR7ItemWindow_AtThreeStreamingSessionsTheTerminalPlaneSTILLGetsSlots(t *
 			}
 			// A live peek on each session at the render debounce rate.
 			if ms%16 < millisPerTick {
-				if err := sink.Terminal(session, []string{"grid"}, 80, 24); err != nil {
+				if err := sink.Terminal(protocol.TerminalViewV1{Session: session, Lines: []string{"grid"}, Cols: 80, Rows: 24}); err != nil {
 					t.Fatalf("terminal: %v", err)
 				}
 			}
@@ -241,7 +241,7 @@ type countingSink struct {
 
 func (s *countingSink) Snapshot([]protocol.JournalRecord, uint64) error { s.snapshots++; return nil }
 func (s *countingSink) Event(protocol.JournalRecord) error              { s.events++; return nil }
-func (s *countingSink) Terminal(string, []string, int, int) error       { s.terminals++; return nil }
+func (s *countingSink) Terminal(protocol.TerminalViewV1) error          { s.terminals++; return nil }
 
 // r7Record wraps one released item in the journal record the gateway forwards.
 func r7Record(session string, item json.RawMessage) protocol.JournalRecord {

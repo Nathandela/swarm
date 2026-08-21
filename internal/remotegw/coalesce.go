@@ -65,9 +65,9 @@ type CoalescingSink struct {
 	now    func() time.Time
 
 	mu       sync.Mutex
-	nextFree time.Time                             // when the shared slot is next free
-	stash    map[string]*protocol.TerminalSnapshot // session -> its newest held-back snapshot
-	order    []string                              // sessions holding one, oldest-first
+	nextFree time.Time                           // when the shared slot is next free
+	stash    map[string]*protocol.TerminalViewV1 // session -> its newest held-back snapshot
+	order    []string                            // sessions holding one, oldest-first
 }
 
 // debitLocked charges ONE append to the shared per-target slot and returns nothing: the
@@ -109,7 +109,7 @@ func NewCoalescingSink(cfg CoalesceConfig) *CoalescingSink {
 		inner:  cfg.Inner,
 		window: window,
 		now:    now,
-		stash:  make(map[string]*protocol.TerminalSnapshot),
+		stash:  make(map[string]*protocol.TerminalViewV1),
 	}
 }
 
@@ -169,13 +169,14 @@ func (c *CoalescingSink) Event(rec protocol.JournalRecord) error {
 // old behaviour exactly: the incoming snapshot is forwarded when the window has elapsed and
 // coalesced away when it has not. The returned error is the release's, so a real seal/append
 // failure still reaches the peek that triggered it; being coalesced is never an error.
-func (c *CoalescingSink) Terminal(session string, lines []string, cols, rows int) error {
+func (c *CoalescingSink) Terminal(view protocol.TerminalViewV1) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, held := c.stash[session]; !held {
-		c.order = append(c.order, session) // first hold since its last release: queue at the back
+	if _, held := c.stash[view.Session]; !held {
+		c.order = append(c.order, view.Session) // first hold since its last release: queue at the back
 	}
-	c.stash[session] = &protocol.TerminalSnapshot{Session: session, Lines: lines, Cols: cols, Rows: rows}
+	held := view
+	c.stash[view.Session] = &held
 	return c.release(c.now())
 }
 
@@ -214,7 +215,7 @@ func (c *CoalescingSink) release(now time.Time) error {
 	snap := c.stash[session]
 	delete(c.stash, session)
 	c.debitLocked(now)
-	return c.inner.Terminal(snap.Session, snap.Lines, snap.Cols, snap.Rows)
+	return c.inner.Terminal(*snap)
 }
 
 // DeliveredCursor forwards the inner sink's durable PB-GW-8 cursor so a restarted gateway

@@ -245,10 +245,321 @@ Listed so that no implementer "fixes" one of these on the way past, and so that 
 - **Let an adapter upgrade promote a live fallback session to structured chat.** Rejected: `playbook:291-293`. A surface that changes kind mid-session invalidates whatever the user was reading, and a promotion path is a route by which a scraped history could be presented as structured history — which T10 forbids at the content layer and this forbids at the lifecycle layer.
 - **A shorter control horizon (60 s or 5 min) with silent renewal.** Rejected: silent renewal makes the signed horizon decorative, and T7's floor is the sustained-typing criterion the original constant was chosen against (`lease.go:48-57`). The daemon may still grant less than 15 minutes, which is the safe half of this alternative without its dishonest half.
 
+## Amendment — 2026-08-20 (Wave R8 scoping review)
+
+Wave R8's scoping review found that six of this ADR's rulings are unenforceable as written against the code they land on, and that two questions listed below as undecided are in fact answerable from the tree. This amendment answers the two and closes the six. It **adds no new destination and reverses no ruling**; every clause below is a fail-closed narrowing.
+
+**T2-a. An absent capability record is the status card, and both verbs are refused.** T2 rule 3 says the phone renders from the record and infers nothing. It did not say what "no record" means, and no record is the common case: sessions launched before this ADR ships, resumed sessions, sessions re-adopted by a daemon-restart reconcile, and sessions started from the TUI all reach the phone with `capabilities` absent (`schema.go:244-249` makes that absence wire-distinguishable on purpose). **A session whose record is absent gets the honest status card; `terminal_watch` is refused; `terminal_control_begin` is refused.** "No record" and `terminal_fallback=false` take one code path, not two. Every session-creation path in the daemon authors a record, and a path that does not is a defect the fail-closed default contains rather than a fallback the phone improvises.
+
+**T2-b. `structured_chat && terminal_fallback` is an invalid record and is rejected wherever it appears.** Today the pair is consistent only by construction (`internal/skeleton/capability.go:375-376` sets `terminal_fallback = !structured`) and by the one degrade path (`internal/protocol/schema/capability.go:29-38`). Nothing forbids the inconsistent record, and a gate that tests one of the two booleans enforces T2 rule 4 only for as long as the derivation stays right. **The record carries a validity rule — the two booleans are mutually exclusive — checked where the record is authored, where it is decoded off the wire, and where it is decoded on the phone; and every gate is written over both booleans (`terminal_fallback && !structured_chat`).** This converts "no route to the fallback from a healthy structured session" from a property of the derivation into a property a malformed, stale or attacker-supplied record cannot violate.
+
+**T2-c. The capability gate binds the legacy terminal path too.** T4 keeps `TerminalSnapshot`/`terminal_watch` alive "only under the legacy remote profile". The production profile ships as a zero value, so "the legacy profile" is presently indistinguishable from "any profile"; and the legacy path carries no session-scoped gate at all — `internal/remotegw/command_loop.go:612-621` routes the watch straight to the watcher without reaching the device authenticator, and `handleTerminalSubscribe` gates only the kill switch, the remote-gateway capability and the presence of a tapper. A downlevel or compromised app that merely asks therefore peeks a healthy Claude session. **The session capability gate applies to `terminal_subscribe`/`terminal_watch` unconditionally and regardless of profile, scoped to the remote tier exactly as the kill-switch gate already is, so the owner's view of the owner's machine is untouched.**
+
+**T4-a. Snapshots carry a view epoch as well as a revision, and every epoch's first snapshot carries the reset marker.** A revision alone is not sufficient, because the render loop is per invocation and the gateway's supervised watcher re-runs it after every transport hiccup, re-seeding a fresh emulator each time. A counter restarted at 1 while the phone holds revision N makes the phone's "drop anything not greater" rule discard every subsequent snapshot, and the user is left staring at a plausible, wrong, frozen screen. **Each snapshot carries a `view_epoch`, minted per render-loop start and changed by any re-seed or session-instance change, and a `revision` strictly increasing within that epoch. The phone's rule is: a differing epoch is a hard reset that discards prior state; within one epoch, only a strictly greater revision is accepted. `reset` is true on the first snapshot of every epoch on every path, including the path where the initial snapshot fails to decode and nothing is pushed. Exactly one producer per session may publish into the coalescer's per-session slot.**
+
+**T4-b. A watch has a horizon, and staleness is shown.** The slow-observer guarantee is a property of a slow *sink*, not of an *absent* observer: the watcher ends a watch only on an explicit unwatch or a gateway close, so a phone that goes offline mid-watch leaves the machine rendering, sealing and appending full screens indefinitely against the shared append budget, building a backlog the phone then replays. **A watch is renewed on the same discipline as the control keepalive and expires without renewal; transport loss unwatches; the liveness predicate the render loop already polls every tick is widened from the kill switch alone to kill switch, capability and watch liveness; the phone skips a replayed backlog to the newest revision without rendering the intermediates; and the fallback screen displays a staleness indicator derived from the snapshot's own age, so "the machine went quiet" is never rendered as "the terminal is idle".**
+
+**T4-c. Sanitization additions, and one property the machine cannot supply.** The trusted renderer additionally drops U+2028 and U+2029 — a line-separator spoof that splits one grid row into two on the phone with no control byte present — along with U+00AD, U+180E, U+2060-U+2064, U+FFF9-U+FFFB and the U+E0000-U+E007F tag block, clamps combining-mark depth per cell, and produces replacement glyphs for invalid Unicode as an explicit, tested behavior rather than as a side effect of rune iteration. **One half of the A7 property cannot be supplied machine-side at all:** implicit bidi from strongly-RTL characters reorders a line with no control character present. The fallback body therefore lays out each row under a forced LTR paragraph direction. That is a layout attribute, not terminal emulation; it crosses no boundary this ADR draws, and without it the ADR's stated "no Unicode bidi rune can visually spoof what is displayed" is false. **The fallback body also never routes a snapshot line through a markdown, annotated-string or link-detection pipeline: a terminal line is literal monospace text, and re-interpreting it is a phishing surface no machine-side sanitizer can see.**
+
+**T5-a. Zero-valued profile fields fail closed, and this is the last wave that publishes into an empty field.** No `RemoteProfileV1` field carries `omitempty`, and the production profile is presently constructed with three of its fields set and the rest zero. **The phone reads `terminal_view_version == 0` as "no fallback exists", `capability_record_version == 0` as "record untrusted", and any zero bound as "clamp to a conservative built-in" — never as "unlimited".** Wave R8 is the first wave to publish a non-zero profile version; the "no deployed reader to break" argument that lets R8's own field additions join version 1 rather than bump it **expires with R8**, and the next record that adds a field inherits a real compatibility decision.
+
+**T6-a. The authorization tier for `terminal_control_begin` is `device.ActionControl`.** This was listed below as undecided; the code already answers it. `internal/skeleton/deviceauth.go:19-27` maps `ActionTerminalControlBegin` and `ActionTerminalControlEnd` to `device.ActionControl` alongside launch, kill and take_control. That mapping is ratified rather than re-derived: entering control over a real terminal is at least as consequential as taking the control lease, and a read-only device is refused.
+
+**T6-b. A session degraded by `structured_gap` may watch, and may not control.** This was listed below as undecided. Control authority is granted only where `terminal_fallback` was **authored true at launch**, never where it was derived by degradation. `SetStructuredChat` forces `terminal_fallback` true to give the user something to look at, not to hand them a keyboard; a degraded Claude session still has a live TUI whose input region is uncharacterized — the gap this ADR discloses under `expected_input_revision` — so raw bytes there can concatenate onto an owner's half-typed line; and refusing is reversible where granting is not. **The mechanism is a distinct daemon-authored `terminal_control` field on the capability record, not a phone-side derivation from `terminal_fallback`.** Two fences bind it: the degrade path never touches `terminal_control`, so a later "consistency fix" mirroring the `terminal_fallback = true` line cannot silently invert this ruling; and the record-merge path preserves `terminal_control=false`, so a reconcile after a degrade cannot re-grant control. **A degrade is machine-local in origin** — a proven hook-spool gap, or backend loss — and no remote-reachable path induces one; a phone-inducible degrade would be a privilege escalation whose payoff is a live peek onto a Claude session's terminal.
+
+**T6-c. The keepalive is bound to the live foreground screen exactly as input is, and the daemon expires an idle generation on its own clock.** "Only the active fallback screen may send raw input" is unenforceable if a background coroutine, a scheduled job or a service-hosted timer may hold the generation open for the full horizon with no screen displaying it. **`terminal_control_keepalive` is emitted only by the same live foreground composition that owns `terminal_input` — same routing rule, same fence — and the daemon's expiry fires on an idle generation with no inbound frames at all, never driven off frame arrival.** The phone-side rule is the app's contract; the daemon-side timer is what holds when the app does not.
+
+**T6-d. The phone has no resize authority over a fallback session.** This ADR grants none; the silence is now closed rather than reversed. The fallback renders the machine's geometry under the existing clamp. A phone-driven resize mutates the owner's live TUI, which is the worst instance of the interleaving harm this ADR requires the UX to warn about. The resize/input race is tested in its dangerous direction instead: an owner-initiated resize racing a phone byte in flight and racing a snapshot revision.
+
+**T6-e. Authority is re-evaluated per frame and per emission, not only at the severance triggers.** Matching the discipline already in the tree, where the peek gate is re-checked before every emission and the liveness predicate on every render tick: **every `terminal_input` frame re-evaluates kill switch, device registration, capability record and generation liveness, and every snapshot emission re-evaluates the capability gate,** so a session degraded, revoked or killed mid-stream stops within a tick rather than at whichever trigger the phone next happens to send.
+
+**T6-f. On severance, held bytes are dropped and never flushed.** The keystroke path holds bytes for a coalescing window by design, and the natural implementation of "release control" flushes them — which converts live-only input into a short offline queue and defeats T7's no-queue rule at the one buffer that actually exists. **On any severance trigger the paced-but-unsent bytes are discarded, the composing text is discarded rather than submitted, and each is recorded on the undelivered ledger as undelivered rather than replayable.**
+
+**T8-a. Everything bound to "the session instance" binds to a minted identifier.** This ADR binds the capability record, the control generation and every snapshot to a session instance, and makes session replacement a synchronous severance trigger; the repository has no such identifier, only a session id that survives a shim restart, a resume and a daemon restart. **A per-incarnation session-instance identifier is minted at shim spawn and persisted in the session's own directory beside its capability record; it is carried in the record, in every snapshot and in every control body; a generation whose instance no longer matches is refused; and the watcher's supervised reconnect across a replacement surfaces to the phone as an epoch reset with a changed instance, never as a seamless continuation.**
+
+**T8-b. Backgrounding severs directly.** ADR-009 already obliged this and the phone core still records the opposite — that backgrounding severs by way of the disconnect it forces. That answer is by-consequence and depends on a connectivity choice that could be revisited. **Backgrounding is a severance trigger in its own right, independent of transport.** The test that pins the by-consequence answer is amended in the same change as a strengthening, which is the only shape such an edit is allowed to take.
+
+**Gate note.** The Kotlin gates that ban the retired peek are stated over legacy symbol names, so a new verb spelled differently would clear them while the intent — no phone surface issues a watch — is routed around. **The ban widens to any watch-shaped verb and to the terminal variant of the mono well, with a single-file allowlist naming exactly the one fallback screen, plus the additions this wave owes: no structured or chat screen may name the fallback render path, and that path is unreachable without a capability read. The retired peek symbols stay banned by name, and the net assertion count rises.**
+
+## Amendment — 2026-08-20 (Wave R8 GREEN round 3)
+
+Round 3's review found that three of the amendment clauses above are stated over a mechanism
+the code could not supply, and that one of them was unreachable over the transport the product
+actually uses. These clauses close that gap. Each is a narrowing or a relocation of an existing
+binding; **none widens what a phone may do.**
+
+**T6-g. A control generation is bound to the SIGNING DEVICE, the session, its instance and the
+profile — and NOT to a connection.** The implementation stored generations on the daemon
+connection that minted them. `remotegw.Gateway.ForwardCommand` dials a **fresh daemon
+connection per command** and closes it on the reply, so a generation minted by a signed
+`terminal_control_begin` was gone before the first `terminal_input` arrived: measured on the
+assembled remote-tier server, `code="stale_generation"` with **zero bytes at the PTY**. It
+failed closed, so it was never an exploit; it made T6 unreachable by the only path the product
+has. **Generations live in a server-wide registry keyed by the minted generation id.** What
+authorises an unsigned frame is what T6 already said authorises it: the E2EE seal's own
+authenticated sender, possession of the unguessable 128-bit generation the server minted and
+returned only to an authenticated, device-signed begin, and T6-e's per-frame re-evaluation of
+the kill switch, the **signing device's** continued registration, the capability record, the
+session instance and both walls. The connection identity was never one of those controls.
+
+Two consequences are stated rather than left implicit. **The generation is a bearer secret**,
+and the reply carrying it crosses the gateway — which is already a trusted component on this
+path, because it forwards the input frames themselves, so this adds no new trusted party.
+And **`terminal_control_end` releases by (session, signing device)** rather than by connection:
+a release arrives on a fresh connection like every other command, so "this connection's
+generation" named nothing the product could produce, and every release answered
+`stale_generation` while the phone was told its control had not been given back.
+
+**T8-c. The severance of a terminal generation carries the same race fence as the lease's.**
+`Server.severControl` bumps a generation counter **before** snapshotting, so a `take_control`
+publishing after that snapshot re-checks and fails closed rather than escaping the sever; its
+own comment says so. The terminal plane had neither the bump nor the re-check, so a
+`terminal_control_begin` landing between the snapshot and the sweep escaped the sever outright
+— and a survivor is live again the moment the kill switch goes back on, which is verbatim the
+resume defect T8's synchronous severance exists to prevent. **A terminal sever bumps its own
+counter before it sweeps, and a begin re-checks that counter under the registry lock when it
+publishes.**
+
+**T8-d. The session instance binds an OBSERVABLE incarnation.** T8-a says the identifier is
+"minted at shim spawn" and that a replacement mints a new one. The implementation minted only
+when a session had none, and the repository has exactly one shim-spawn path, which always
+mints a fresh session id — so the instance was the session id under another name, and T8-a's
+replacement clause had no production path at all. **The instance is persisted together with
+the incarnation it was minted for (the shim's pid): a matching pid is an adoption, a differing
+pid is a replacement and re-mints, and an UNKNOWN pid adopts** — because a side-file written
+before this rule carries none, and reading that as a replacement would show every session on
+the machine an epoch reset for no shim restart.
+
+**T4-d. A watch that ends without the phone asking blanks the phone's copy, and a live screen
+renews on its own clock.** T4-b's horizon is enforced from the gateway: an expiry cancels the
+peek's context, so the daemon emits nothing, the sink's blanking path never runs, and the phone
+keeps its last grid — with no staleness signal, because the stream-stale flag is set by desync
+events and the machine heartbeat keeps arriving. That is exactly "the machine went quiet
+rendered as the terminal is idle", introduced by the horizon T4-b adds. **A reaped watch and a
+transport-loss unwatch publish an empty snapshot for each session they end; an explicit unwatch
+does not, because that is the phone saying it stopped looking.** And because an idle fallback
+screen on an idle session produces no redraw inside the horizon, **the renewal is driven by a
+clock the live foreground composition owns and tears down, which renews and never watches.**
+T6-c's ban is on a background emitter holding **raw input authority** open with no screen
+displaying it; a watch grants no input authority, and a timer the composition cancels is the
+composition.
+
+**T4-e. The sanitizer's drop set is a Unicode PROPERTY, not an enumeration.** T4-c listed rune
+ranges. The list was reviewed twice and still leaked, measurably: U+206A-U+206F, U+1D173-U+1D17A
+and the four Hangul fillers all survived it. An enumeration makes the default ALLOW, which
+inverts this ADR's own "when in doubt refuse rather than render". **Every rune in `Cf`, `Zl`,
+`Zp` or `Other_Default_Ignorable_Code_Point` is removed. Those the terminal gave no cell to are
+DROPPED; those it laid out — today the default-ignorable Letters, i.e. the Hangul fillers — are
+REPLACED BY A BLANK, because dropping them would shift every column to their right against a
+grid that did not move.** The split is decided by measurement against the emulator and re-run
+as a test, so a future Unicode release that contradicts it fails rather than silently eating a
+column.
+
+**T2-d. The router's answer, not the record's field, is what crosses to the UI.** T2 rule 3
+says the phone renders from the record. It does not say WHICH read: the facade handed the
+platform layer the record's raw `terminal_control` boolean, so a valid record on a machine
+publishing `terminal_view_version == 0` — every machine deployed before this ADR — routed to
+the status card while the UI was told it had a keyboard. **Every capability the UI reads is the
+router's conclusion over the record AND the machine's published profile, never a record field
+read directly**, which is the rule the composer predicate already stated and the terminal
+predicate now shares.
+
+## Amendment — 2026-08-20 (Wave R8 CLOSING round: the wave lands as the READ HALF, and the control half is parked)
+
+This amendment is written after the closing review of Wave R8. It changes what the wave
+CLAIMS more than it changes what the wave DOES, and that is the point: the previous rounds'
+evidence described a control plane that no product path can execute.
+
+**C0. R8 SHIPS THE READ HALF. THE CONTROL HALF IS PARKED as its own slice, with
+preconditions.** `protocol.TerminalInputSink` (`internal/protocol/remote_terminal.go`) has NO
+production implementation — grep outside tests returns the declaration and the type assertion
+and nothing else, and `internal/skeleton.coreAPI`, which is what is passed as `srv.d`, has no
+`TerminalInput` method — so `handleTerminalInput` takes the `op_not_implemented` arm for every
+frame the product can produce. There is also no screen affordance: no take-control control is
+reachable in the shipped app. **The wave's stated exit — "launched and safely monitored AND
+CONTROLLED from the fallback" — is UNMET on the control half**, and every claim in the R8
+evidence and in the rounds above that says or implies otherwise is superseded by this
+paragraph.
+
+The positive corollary is true and load-bearing and is stated in the same breath: **the
+raw-input attack surface in the shipped product is currently ZERO.** Nothing can type into a
+terminal from a phone, because there is nothing on the machine that would accept it.
+
+The protocol-side control work — the signed begin, the generation registry, the horizon, the
+keepalive clock, the per-frame re-checks — is reviewed, correct and KEPT. It is kept as an
+UNREACHABLE export, and B94's reachability ledger must describe it as exactly that. An
+unreachable export that a ledger claims is wired is the fence rot B94 exists to prevent.
+
+**C1. PRECONDITION FOR RESUMING THE PARKED SLICE: raw input is BEARER-AUTHORISED and T6 says
+otherwise.** `terminal_input` and `terminal_control_keepalive` carry no device identity:
+`SealTerminalInputEnvelope` (`internal/phonecore/command.go`) builds a `DeviceCommandAuth`
+with no `DeviceID`, so `forwardControl` sets `DeviceID: ""`, and `liveTerminalGeneration`
+never compares the SENDER of a frame to `gen.deviceID`. Since the epoch `ContentKey` is
+per-machine and granted to every paired device, and the begin reply is sealed to one shared
+`ReplyTarget`, **a paired READ-ONLY device could read a control-tier device's generation id
+and type under it.** It is moot today because no sink exists. It is NOT moot the moment one
+does. **No control sink may be wired until the generation is bound to the sending device's
+identity and that binding is checked per frame.** This is a precondition, not a
+recommendation.
+
+**C2. T8 is AMENDED: the trigger table's "Transport loss" and "Session replacement" rows were
+false as written.** Round 3 correctly moved generations to a SERVER-WIDE registry, because the
+gateway dials a fresh daemon connection per command and a connection-scoped generation is one
+no phone could ever use. That move removed the connection binding that made a dropped
+transport sever immediately. The table is corrected to:
+
+| Trigger | Mechanism, as of the closing round |
+|---|---|
+| Leaving the fallback screen | Unchanged: local input stops, best-effort signed `terminal_control_end`, daemon ends on receipt |
+| App backgrounding | Unchanged, and DIRECT (T8-b): `App.EnterBackground`, reached from `PhoneActivity.onPause` via `PhoneSurface.release` |
+| Transport loss | **There is no persistent phone→daemon connection on the control plane to lose.** The connection that mints a generation is closed before the first byte could ever be typed. The phone's liveness is the MISSING-KEEPALIVE clock (`TerminalKeepaliveTTL`, swept on the server's own ticker) plus T8-b's phone-side severance. "Disconnect severs synchronously at the daemon" is withdrawn as unbuildable under the per-command-connection gateway, not merely unimplemented |
+| Horizon expiry | Unchanged: daemon clock, T7, never extended |
+| Kill switch | Unchanged: synchronous at the daemon |
+| Device revocation | Unchanged: synchronous at the daemon |
+| **Session kill / session delete** | **Synchronous at the daemon** (`Server.severTerminalControlForSession`, called from `handleKill` and `handleDelete`). New in the closing round; it had no trigger at all before |
+| Session replacement / instance change | **On the server's own clock**, in the T6-c sweep (`severReplacedTerminalGenerations`): a generation whose bound incarnation is no longer the one the session's capability record names is dropped. It is NOT severance at the INSTANT of replacement, because the daemon has no notification seam that tells the protocol server an incarnation was re-minted. **Building that seam is a precondition of the parked control slice**, alongside C1 |
+
+"Refused on the next frame" is not severance and is not accepted as one anywhere in this
+table: the case severance exists for is a phone that will never send another frame.
+
+**C3. `TerminalViewV1` IS ON THE WIRE, and until the closing round it was not.** T4 and T4-a
+were implemented as a producer and never as a message: `RenderTerminalView` minted the epoch,
+the revision and the reset marker, and its ONE caller — `RenderTerminal` — discarded all three
+and passed instance `""`. No producer and no consumer of `view_epoch` existed on any wire
+path. The consequence is a correctness defect of the READ half, which is the half that ships:
+**a phone watching a session REPLACED under the same id saw the new incarnation as a seamless
+continuation**, which is exactly what T4-a and T8-a exist to prevent.
+
+The fields now cross end to end. `Control.terminal_view` carries `TerminalViewV1` on the SAME
+`terminal_snapshot` op as the legacy `terminal` body, so nothing negotiates and no
+`RemoteProfileV1` version moves (ADR-016's profile-version coordination is parked; racing that
+struct to ship an epoch would have been the larger change, not the smaller one). The sealed
+mailbox plaintext gains the five fields as `omitempty` SIBLINGS of the frozen
+`TerminalSnapshot` keys, so a frame carrying none of them is byte-identical to the shape that
+wire has always had. `docs/specifications/protocol.md` documents the body at field level and
+`TerminalViewV1` is now reflected by the GG-7 drift check — it was not, which is why the
+check could not have caught a fully documented type that never reached a wire.
+
+**C4. T4-b's staleness indicator was INERT, and a screen that silently freezes is the worst
+failure mode this surface has.** Three things were true together: `TerminalGrid.ageMs` was
+hardcoded to `0L` because no machine-authored render time was on the wire; `streamStale` is a
+SEQUENCE-GAP flag that by construction does not fire when a machine simply stops sending; and
+`PhoneSurface.reconcileTerminalWatch` opened a watch only when the DISPLAYED SESSION CHANGED,
+renewing unconditionally otherwise — while `TerminalWatcher.Renew` is a documented no-op for a
+session with no live watch. So ONE lapsed 60-second horizon ended the stream PERMANENTLY for
+that screen, the phone renewed into nothing forever, and the user read a frozen grid labelled
+fresh. Both halves are fixed: the age is derived from `rendered_at` (zero means UNKNOWN, never
+"just now"), and a lapsed watch is RE-ESTABLISHED rather than renewed harder.
+
+**C5. The routing fence was EVADABLE BY THIS WAVE'S OWN INDIRECTION.** The closing review
+appended `bridge.terminalFallbackBinding(id).watch()` to a structured chat screen and every R8
+gate stayed green: the bans are stated over the SHAPE OF A FACADE CALL SITE, round 3 moved
+those call sites behind `TerminalFallbackBinding`, whose verbs are named `watch`/`unwatch`/
+`renew`, and the binding was handed to any caller for any session id with no capability read
+anywhere on the path. That is this wave's own finding 8 — "renaming the verb is evasion" —
+reopened by the fix for it. **The answer is structural and a ban list is only its second
+half**: the binding's constructor is PRIVATE, its one factory performs the capability read and
+answers NULL for a session the machine did not route to the fallback, and `.watch()` on a
+structured session therefore has no receiver rather than a rule forbidding it. The reviewer's
+exact probe is a permanent test, applied to a synthetic mutant of the real screen through the
+SAME predicate the real scan uses.
+
+**C6. Degrade-on-read may not launder an invalid record into a more privileged valid one
+(T2-b).** `lookupCapabilitiesLocked` applied `SetStructuredChat(false)` — which FORCES
+`terminal_fallback = true` — to whatever the disk held, with no validity check. The invalid
+`{structured_chat:true, terminal_fallback:false, terminal_control:true}` came back as the
+valid `{false, true, true}`, granting `AllowsTerminalControl()`: a transform running from LESS
+VALID to MORE AUTHORITY. The degrade is no longer applied to a record whose ROUTING BOOLEANS
+are already inconsistent — both of Validate's boolean clauses, checked as Validate writes
+them. (The first fix guarded only the control-without-fallback clause, so the
+mutual-exclusion shapes `{structured_chat:true, terminal_fallback:true, ...}` still
+laundered into grants; closing round 2 found it and the guard and its fence now cover all
+three invalid shapes.) It deliberately does not apply Validate's session-instance clause at
+this seam: that clause is a T8-a fact the transform cannot launder, it is already enforced
+fail-closed by `AllowsTerminalWatch` on every read, and refusing on it here would make every
+record written before instances existed unreadable — a behaviour change this finding does not
+ask for and a standing test pins against.
+
+**C7. A per-emission gate needs its own fence.** Deleting the emission-callback capability
+re-check left `./internal/protocol/` green INCLUDING the test named for it, because that test
+is satisfied by the PER-TICK clause alone. The two are separable at exactly one moment and the
+fence now lives in it: the render loop's FIRST emission happens at loop start, before the
+ticker has fired once, so a record withdrawn between the subscribe gate and that emission is
+caught by the emission re-check and by nothing else.
+
+**C8. THE STALENESS FIELDS MUST SURVIVE THE FACADE, and until the closing round nothing said
+so.** C3 put `rendered_at` and `session_instance` on the wire and C4 made the screen derive its
+age from them, and both were fenced — but the seam BETWEEN them was not. `App.Peek` builds the
+`swarmmobile.Snapshot` the phone actually reads, and no Go test asserted it copied either field
+across; `mobile/types.go` declared them and the Kotlin gate asserted the SCREEN READS
+`renderedAtMillis`, so a `Peek` that dropped them left `./mobile/...` green. This is C7's defect
+class one package over: two fences for one property, either of which can pass while the property
+is false.
+
+It is not cosmetic. A dropped `RenderedAtMillis` is a zero, `ageOf` reads zero as UNKNOWN, and
+`watchLapsed(0)` is FALSE FOREVER — so **both halves of C4, the honest staleness indicator and
+the re-establishment of a lapsed watch, are dead together**, silently, with every other fence in
+this wave still green. The rule is therefore stated as a ruling and not as an implementation
+note: **any field the fallback screen derives a safety property from must be fenced at the
+facade seam it crosses, behaviourally, and not only where it is produced and where it is read.**
+`mobile/r8r4_snapshotidentity_test.go` is that fence, and it pins the other direction too — a
+machine that sends no render time yields ZERO, never the phone's own clock, because substituting
+it reports an arbitrarily old screen as rendered just now.
+
+## Amendment — 2026-08-21 (Wave R8 CLOSING round 2)
+
+The closing round's own review found three defects in the READ half — the half C0 says ships.
+Two are correctness defects a user meets, one is an evidence defect. All three are closed in the
+tree that carries this amendment; none of them widens the wave's scope and none of them touches
+the parked control half.
+
+**D0. THE PHONE'S HARD RESET READS `reset`, AND NOT THE EPOCH ALONE.** T4-a states the ordering
+rule as "a differing epoch is a hard reset; within one epoch, only a strictly greater revision is
+accepted", and it also states that `reset` is "true on the first snapshot of every epoch on every
+path". The daemon sent the marker and the phone decoded it, and **`SnapshotCache.Apply` compared
+only (epoch, revision) and never read it**. That is not a redundancy: `viewEpochSeq`
+(`internal/daemon/terminalview.go`) is a bare process-global counter, so it **restarts at 1 in
+every daemon process**, and sessions surviving a daemon crash, restart or upgrade is a designed
+property of this system. A phone holding `{epoch 1, revision 40}` therefore discarded a restarted
+daemon's `{epoch 1, revision 1, reset}` *and every revision after it*, and the user read a
+plausible, frozen, pre-restart terminal — the same failure T4-a exists to name, in the variant
+where the epoch collides. **The rule is amended to: a frame the machine marked `reset` is adopted
+unconditionally; otherwise the epoch/revision rule above is unchanged.** Reading the marker is
+what makes the counter's process-locality harmless, and it is deliberately the only way a lower
+revision may win, so the reorder rule is not weakened for any frame the machine did not mark.
+
+**D1. THE REAP BLANK AND THE LAPSE DETECTOR MUST ANSWER THE SAME QUESTION.** Round 3 made a
+reaped watch BLANK the phone's copy (T4-b) and round 4 gave the screen a lapse detector so it
+would RE-WATCH rather than renew into a watch that no longer exists — and the detector was
+written over the snapshot's AGE while the blank carries **no `rendered_at` at all**. Zero is
+UNKNOWN on this phone by ruling (C4: a machine predating the closing round sends no render time
+and must not be reported as rendered just now), so the detector answered NOT LAPSED for the one
+frame that proves the watch is over: **round 3's blank actively defeated round 4's detector**,
+and a user with the app in the foreground and the UI thread descheduled past the horizon sat on a
+permanently blank terminal. **The screen's lapse rule is amended to read both evidences: the
+machine SAYING it stopped — a view with no geometry, which is what `BlankTerminal` publishes and
+what no live view ever carries — and the phone INFERRING it from a screen older than the machine's
+horizon.** The blank is identified by its geometry and never by its age, because stamping a render
+time on it would make the blank look FRESH, which is the same disagreement with the sign flipped.
+A snapshot that has never arrived is a facade REFUSAL and not a blank, so the arrival window is
+not a lapse and no redraw tears down a peek that is still opening.
+
+**D2. A SEVERANCE TRIGGER IS FENCED AT THE HANDLER, NEVER AT THE HELPER.** C2's table row for
+session kill / session delete was true of the code and false of its evidence: the round-4 test
+called `severTerminalControlForSession` directly, so removing all four production call sites in
+`handleKill`/`handleDelete` left `./internal/protocol/` green — the fence-survives-its-own-removal
+class this wave raised as its own finding and claimed to have closed. **Every trigger in C2's
+table must be driven through the op that fires it, to a reply, with the registry read after.**
+Kill and delete are now fenced that way on both handler branches (the `IdempotentExecutor` branch
+and the plain one). The control plane is still parked under C0/C1 and this escape was inert in the
+shipped product; it is fenced because a trigger table is a claim about this code, and a claim no
+test can lose is not evidence.
+
+
 ## Notes
 
 **Numbering.** When Wave R1 was allocated, `docs/adr/README.md` recorded ADR-015 as the next free number, with 014 reserved by `mirror-program.md` M3.1 for paged interaction history. Wave R1 mints four together — 015 push-gateway split, 016 Web-PKI relay TLS, this one, and 018 multi-machine pairings — and 014 stays reserved. This is a **single** allocation of 017, not one of the 007/008/009/010 twin pairs; cite this file by name when both 009s are in scope, per the README's own instruction. The README's step 4 — "Add a row to the table above in the same commit" (`docs/adr/README.md:44`) — binds this file like any other: its index row lands in the commit that adds it. Step 1 was corrected by the same R1 change that landed these four files and now reads "the next FREE one is ADR-019" (`README:41`), so the numbering instruction is no longer the drift this Note was written to warn about.
 
 **On reversing a deletion.** ADR-009's closing note asks that the next agent who finds `PeekPanel.kt` deleted "meets a ruling instead of a gap", so that "nobody restores a grid to the phone believing they are fixing a regression" (`ADR-009:373-376`). This ADR is written in the same spirit and against the same risk from the opposite direction: the grid returns **by ruling, for one routed class of session, under a capability record the daemon authors**, and any restoration wider than that — a peek on a Claude session, a user-selectable terminal, a scraped item, a queued byte — is drift, not this decision being implemented.
 
-**What this ADR does not decide.** It does not specify the interaction-schema shapes it obliges (T9), the push-gateway split (ADR-015), the relay TLS policy (ADR-016), or the multi-machine pairing model (ADR-018). It does not decide the authorization tier required for `terminal_control_begin`, and it does not decide whether a Claude or Codex session degraded by `structured_gap` may enter *control* on its fallback surface or is confined to read-only. Both are owner questions and are listed as such in the R1 handoff.
+**What this ADR does not decide (replacing the previous paragraph).** It does not specify the interaction-schema shapes it obliges (T9), the push-gateway split (ADR-015), the relay TLS policy (ADR-016), or the multi-machine pairing model (ADR-018). The two owner questions previously listed here — the authorization tier for `terminal_control_begin`, and whether a `structured_gap`-degraded session may enter control — are answered above (T6-a, T6-b) and are no longer open. Three obligations remain deliberately undecided: the full T3 mandatory-row gate including the version-skew row, which is tracked separately and until it lands leaves an unrecognised Claude or Codex build opening as structured chat rather than as a labelled read-only terminal; `expected_input_revision` and the shim-wide input transaction, which need an adapter seam that characterizes the input region and which T6-b's read-only ruling is written to survive the absence of; and whether a notification may deep-link to a **read-only** fallback, which T6's routing rule constrains only for `terminal_input`.

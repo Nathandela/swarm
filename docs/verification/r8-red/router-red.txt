@@ -1,0 +1,17 @@
+WAVE R8 RED EVIDENCE -- S3, the router and both gates (daemon-side legacy gate + phone-side router)
+captured 2026-08-20T12:18:12Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go vet ./internal/protocol/ ./internal/phonecore/ ./internal/remotegw/
+
+# github.com/Nathandela/swarm/internal/protocol
+# [github.com/Nathandela/swarm/internal/protocol]
+vet: internal/protocol/r8_legacygate_test.go:81:49: unknown field SessionInstance in struct literal of type SessionCapabilities
+# github.com/Nathandela/swarm/internal/phonecore
+# [github.com/Nathandela/swarm/internal/phonecore]
+vet: internal/phonecore/r8_router_test.go:66:11: undefined: SessionDestination
+# github.com/Nathandela/swarm/internal/remotegw
+# [github.com/Nathandela/swarm/internal/remotegw]
+vet: internal/remotegw/r8_watchlease_test.go:106:54: too many arguments in call to newTerminalWatcher
+	have (*r8FakeRunner, time.Duration, time.Duration, func() time.Time)
+	want (terminalRunner, time.Duration)

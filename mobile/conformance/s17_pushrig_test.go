@@ -553,7 +553,7 @@ type s17PassthroughSink struct{}
 
 func (s17PassthroughSink) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
 func (s17PassthroughSink) Event(protocol.JournalRecord) error              { return nil }
-func (s17PassthroughSink) Terminal(string, []string, int, int) error       { return nil }
+func (s17PassthroughSink) Terminal(protocol.TerminalViewV1) error          { return nil }
 
 // s17AllEnabled is the user's push preference with both categories on. PB-PUSH-8's suppression
 // is S12's requirement and is tested at the sender there; suppressing here would only make an

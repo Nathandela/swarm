@@ -277,7 +277,7 @@ func (h *harness) PushEvent(rec schema.JournalRecord) {
 
 func (h *harness) PushTerminal(session string, lines []string, cols, rows int) {
 	h.t.Helper()
-	if err := h.sink.Terminal(session, lines, cols, rows); err != nil {
+	if err := h.sink.Terminal(protocol.TerminalViewV1{Session: session, Lines: lines, Cols: cols, Rows: rows}); err != nil {
 		h.t.Fatalf("sink.Terminal: %v", err)
 	}
 }

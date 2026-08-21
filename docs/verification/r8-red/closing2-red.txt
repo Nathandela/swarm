@@ -1,0 +1,127 @@
+WAVE R8 -- CLOSING ROUND 2 -- FAILING-FIRST TRANSCRIPTS
+Bead agents-tracker-hggx.9. Captured 2026-08-21 on darwin 25.5.0 / arm64.
+Authoritative green document: ../r8-green/README-closing2.md
+
+WHAT THIS ROUND FIXES. Three BLOCKING findings from the closing review of the closing round.
+Two are correctness defects in the READ half -- the half ADR-017 C0 says ships -- and one is an
+evidence defect. The parked control half is untouched (no terminal_input, no generation plane,
+no take-control affordance was built).
+
+  F6-2  the machine's reap BLANK (round 3) defeats the phone's LAPSE DETECTOR (round 4)
+  D0    `reset` is on the wire and nothing read it; the view epoch is process-local
+  F8-2  kill/delete severance was fenced at the HELPER, never at the CALL SITE
+
+Every test below was written before the production line it is about, and the two fences that
+were green on arrival are proved by MUTATION in closing2-mutations.txt (MUT-B, MUT-C): a fence
+nothing can break is not evidence, which is the exact class this wave already shipped once.
+
+==============================================================================
+1. D0 -- THE RESET MARKER (RED, then GREEN)
+
+  The defect, from the reviewer's probe: the phone holds {epoch 1, rev 40, "OLD screen"}; a
+  RESTARTED daemon's first loop sends {epoch 1, rev 1, Reset:TRUE, "NEW screen"} -- because
+  viewEpochSeq is a bare process-global atomic that starts again at zero in every daemon
+  process -- and SnapshotCache.Apply compares only (epoch, revision), so the reset frame AND
+  the 39 revisions after it are dropped. The user reads a plausible, frozen, pre-restart
+  terminal. Sessions surviving a daemon crash/restart/upgrade is a DESIGNED property of this
+  system, so this is not an edge case.
+
+  test written first: internal/phonecore/r8r5_viewreset_test.go
+
+  $ go test -run 'TestR8R5Snapshot' ./internal/phonecore/
+  --- FAIL: TestR8R5Snapshot_ADaemonRestartsResetFrameLands (0.00s)
+      r8r5_viewreset_test.go:50: ADR-017 T4-a: the machine's RESET frame was dropped as a stale
+      revision, so the phone still holds epoch=1 rev=40 lines=[OLD screen from before the
+      restart] after a daemon restart. [...]
+  --- FAIL: TestR8R5Snapshot_TheRevisionsAfterAResetAreAdoptedToo (0.00s)
+      r8r5_viewreset_test.go:71: the phone holds rev=40 lines=[pre-restart] after the restarted
+      daemon's SECOND emission; a reset that lands while the old high-water mark survives leaves
+      the screen frozen one frame later instead of never.
+  FAIL	github.com/Nathandela/swarm/internal/phonecore	1.060s
+  exit 1
+
+  RED FOR THE RIGHT REASON: the two guards in the same file PASSED while these failed --
+  TestR8R5Snapshot_AResetIsNotAWayToReplayAnOldScreen (the reorder rule is not repealed) and
+  TestR8R5Snapshot_TheMachinesBlankCarriesNoGeometryAndNoRenderTime.
+
+  production change: internal/phonecore/snapshot.go SnapshotCache.Apply -- a frame the machine
+  MARKED reset is adopted unconditionally; nothing else about the rule moves.
+  also corrected: internal/daemon/terminalview.go's comment on viewEpochSeq, which claimed
+  "no two runs of the loop can share one" -- true within a process, FALSE across a restart.
+
+  $ go test -count=1 -run 'TestR8R5Snapshot|TestR8R4Snapshot' ./internal/phonecore/
+  ok  	github.com/Nathandela/swarm/internal/phonecore	1.042s   exit 0
+
+==============================================================================
+2. F6-2 -- THE BLANK AND THE LAPSE DETECTOR (RED, then GREEN)
+
+  The defect: TerminalWatcher.Reap -> blank() -> Gateway.BlankTerminal sends
+  TerminalViewV1{Session: session} -- RenderedAt is the ZERO TIME. The phone reads zero as
+  UNKNOWN by ruling (ADR-017 C4), ageOf(0) = 0, and watchLapsed(0) is FALSE, so
+  PhoneSurface.reconcileTerminalWatch took its renewHeldWatch() early return FOREVER. Round 3's
+  blank actively defeated round 4's detector, and no test drove the two together.
+
+  THE PROPERTY SPANS THE GOMOBILE BOUNDARY, so it is held by three tests that meet at one set
+  of values, and that seam is stated rather than papered over:
+
+    (a) internal/remotegw/r8r5_reapblank_test.go -- the machine really sends those values, over
+        a real protocol.ServeRemote + a real remotegw.Gateway + the real TerminalWatcher
+        (Reap -> blank -> sink). It also asserts NON-VACUITY: a LIVE view carries cols/rows.
+    (b) internal/phonecore/r8r5_viewreset_test.go -- they survive the phone's real cache.
+    (c) android/.../TerminalFallbackWatchTest.kt -- the rule that READS them answers LAPSED.
+
+  (c) is the failing-first one; the production rule it needs did not exist when it was written.
+  Its RED run is the MUT-E transcript in closing2-mutations.txt (the production line reverted to
+  the age-only rule it had before this round), because a Gradle run is the only way to execute
+  it: 6 tests, exactly the 2 blank-shaped assertions FAILED, the other 4 passed.
+
+  production change:
+    android/.../ui/screens/TerminalFallbackScreen.kt -- TerminalGrid.machineStoppedRendering
+      (the machine's blank is identified by its GEOMETRY, never by its age: stamping a render
+      time on a blank would make the blank look FRESH, the same disagreement sign-flipped) and
+      TerminalFallbackBinding.watchLapsed(grid) = blank OR aged-past-horizon.
+    android/.../PhoneSurface.kt -- heldWatchLapsed asks about the GRID, not about .ageMs.
+
+  A snapshot that never arrived is a facade REFUSAL and not a blank, so the arrival window is
+  still "not lapsed" and no redraw tears down a peek that is still opening.
+
+  $ (full Android suite, restored tree) scripts/o2-gradle-run.sh test --no-daemon --rerun-tasks --no-build-cache
+  BUILD SUCCESSFUL in 6m 15s ; gradle exit status: 0
+  testDebugUnitTest:   175 result files, 175 written in the last hour, 1401 tests, 0 failures, 0 errors
+  testReleaseUnitTest: 175 result files, 175 written in the last hour, 1401 tests, 0 failures, 0 errors
+  TEST-dev.swarm.phone.ui.screens.TerminalFallbackWatchTest.xml: tests="6" failures="0" errors="0" (both variants)
+  app/libs/swarm.aar mtime 2026-08-21 06:59 -- UNCHANGED by this round: the fix needed no new
+  gomobile field, so the tests ran against the same native library the wave built.
+
+==============================================================================
+3. F8-2 -- SEVERANCE AT THE CALL SITE (green on arrival, proved by mutation)
+
+  The defect is in the EVIDENCE, not the product: TestR8R4Sever_KillingASession... calls
+  s.severTerminalControlForSession("sess1") DIRECTLY, so all four production call sites in
+  handleKill/handleDelete could be deleted with ./internal/protocol/ still green. The control
+  plane is parked (C0/C1) and has no sink, so the escape is inert in the shipped product -- it
+  is fenced because a trigger table is a claim about this code.
+
+  test written first: internal/protocol/r8r5_severcallsite_test.go -- OpKill and OpDelete driven
+  to their replies over a real remote-tier ServeRemote, on BOTH handler branches (the
+  IdempotentExecutor branch and the plain one), with the generation registry read on the same
+  Server the handlers ran on, plus a bystander generation that must survive.
+
+  $ go test -run 'TestR8R5Sever' -count=1 ./internal/protocol/
+  ok  	github.com/Nathandela/swarm/internal/protocol	0.801s   exit 0
+
+  It passes because the production behaviour was already right. What makes it evidence is
+  MUT-C in closing2-mutations.txt: with the four call sites replaced by `_ = local`, BOTH new
+  tests fail on all four assertions and the round-4 tests stay GREEN -- the reviewer's finding
+  reproduced, and closed.
+
+==============================================================================
+4. WHAT THIS ROUND DID NOT DO
+
+  - The parked control half was NOT built. No terminal_input sink, no generation/keepalive
+    plane, no take-control affordance. ADR-017 C0/C1 stand unchanged.
+  - viewEpochSeq was NOT made durable across daemon restarts. Reading `reset` is the guarantee
+    the protocol already carries and it closes the defect; persisting the counter would be a
+    second way to say the same thing.
+  - No new UI copy for a blanked screen. The blank is now transient (the screen re-watches), and
+    a sentence about it would be new product surface, not a fix. Noted as follow-up.

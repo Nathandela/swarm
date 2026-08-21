@@ -105,6 +105,10 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; the reply rides the existing `journal` carrier, strictly older than `before_item`, ascending by cursor |
 | `interaction_detail` | `*InteractionDetailReq` | Wave R6 `interaction_detail` body (Mirror M3.3, IS-CAP-2): the unsigned detail read under the wire name `interaction_detail`, carrying `session` / `item_id`; the reply is exactly one `journal` record whose `item` is the FULL pre-truncation body, or the sealed `unavailable` refusal outside retention (IS-CAP-3) |
 | `history_floor`    | bool                | Wave R6 `interaction_history` reply: nothing older than the returned page is retained, so the phone renders a retention floor instead of offering "load earlier" forever (Mirror M3.1) |
+| `terminal_control_begin` | `*TerminalControlBeginReq` | Wave R8 `terminal_control_begin` body (ADR-017 T6): the SIGNED request that mints one non-transferable control generation over a `terminal_fallback` session, under the wire name `terminal_control_begin`, carrying `session` / `session_instance` / `profile` / `expires_at`, bound into the device signature via `TerminalControlBeginContentHash` so a gateway cannot re-point a valid begin at another session, another incarnation or another profile. The session instance is REQUIRED: a generation that binds no incarnation authorises raw bytes into the PTY that replaced the one the user was reading |
+| `terminal_input`   | `*TerminalInputReq` | Wave R8 `terminal_input` body (ADR-017 T6): ONE unsigned raw-input frame under the wire name `terminal_input`, carrying `session` / `session_instance` / `control_generation` / `bytes`. It rides the E2EE frame's authenticated sender and sequence plus the CONFIRMED generation rather than its own signature — the sole exception to full-body signatures, held to exactly two body types with `terminal_control_keepalive`. Every frame re-evaluates the kill switch, device registration, the session capability record and generation liveness (T6-e); a refused frame is DROPPED and never buffered (T6-f) |
+| `terminal_view`    | `*TerminalViewV1`   | Wave R8 (ADR-017 T4/T4-a/T8-a): the VERSIONED terminal snapshot, carried under the wire name `terminal_view` on the SAME `terminal_snapshot` op as the legacy `terminal` body. Both ride one frame: a gateway that predates it ignores the key and reads `terminal` exactly as before, and one that understands it prefers this body. It was added by the closing round of Wave R8, which found the versioned fields being MINTED by the render loop and DISCARDED before the wire — so a phone watching a session replaced under the same id read the new incarnation as a seamless continuation of the old screen |
+| `control_generation` | string            | Wave R8 (ADR-017 T6): the minted control generation. It rides the `terminal_control_begin` REPLY and every `terminal_control_keepalive`. It is NOT a control lease — a generation and a lease have different lifetimes, different ceremonies and different authority, and the input path never reaches the lease plane (OPEN-C4) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
 amendments D.0-A1/A3/A6/A11): every one is `omitempty`, so a control message that
@@ -235,6 +239,44 @@ hostile PTY bytes never reach the network-facing sidecar. The phone displays
 | `lines`     | []string   | sanitized plain-text grid rows, top to bottom      |
 | `cols`      | int        | grid width the snapshot was rendered at            |
 | `rows`      | int        | grid height the snapshot was rendered at           |
+
+## The `TerminalViewV1` message
+
+`TerminalViewV1` is ADR-017 T4's read path: one **full coalesced snapshot** of a
+`terminal_fallback` session's sanitized screen, carried in `Control.terminal_view` on a
+`terminal_snapshot` op beside the legacy `TerminalSnapshot` body. There is no patch
+language and no delta — a slow observer drops superseded snapshots and receives the newest
+COMPLETE revision, which is what the gateway's coalescer already does and what T4 makes a
+wire contract. A watch grants NO INPUT AUTHORITY; nothing in this body carries or implies
+one.
+
+**Why both `view_epoch` and `revision` (amendment T4-a).** The daemon's render loop is PER
+INVOCATION and the gateway's watcher re-runs it after every transport hiccup with a fresh
+emulator. A bare revision restarted at 1 while the phone holds revision N makes the phone's
+only sane rule — "drop anything not strictly greater" — discard every snapshot of the second
+run, with no error on either side: the user reads a plausible, frozen screen. So the epoch is
+minted per render-loop start and the revision is monotonic WITHIN it, and the phone's rule is:
+differing epoch = hard reset that discards prior state; same epoch = strictly greater revision
+only.
+
+**On the sealed mailbox these fields are additive.** The phone's `terminal_snapshot` plaintext
+carries `session` / `lines` / `cols` / `rows` unchanged and the five below as `omitempty`
+siblings (`rendered_at` as a pointer, because a zero time is not omitted), so a frame carrying
+none of them serializes byte-identically to the shape that wire has always had. A machine that
+predates the closing round sends none, and the phone reads zero — which means "this machine
+does not version its views", never a fabricated epoch.
+
+| JSON key           | Go type   | Meaning                                                                 |
+| ------------------ | --------- | ----------------------------------------------------------------------- |
+| `session`          | string    | namespaced session id the view is for                                    |
+| `session_instance` | string    | which INCARNATION this screen belongs to (T8-a); how a phone tells a replacement from a continuation |
+| `view_epoch`       | uint64    | minted per render-loop START, process-globally increasing (T4-a)         |
+| `revision`         | uint64    | strictly increasing WITHIN one epoch                                     |
+| `reset`            | bool      | true on the FIRST snapshot of every epoch, on every path; the phone adopts a marked frame UNCONDITIONALLY, because the epoch counter is per daemon PROCESS and a restarted daemon re-mints epoch 1 under a phone holding a higher revision (ADR-017 D0) |
+| `cols`             | int       | grid width the view was rendered at                                      |
+| `rows`             | int       | grid height the view was rendered at                                     |
+| `lines`            | []string  | machine-sanitized rows, one string per grid row (`vt.SnapText`)          |
+| `rendered_at`      | time.Time | the MACHINE's clock: T4-b's staleness is derived from the snapshot's own age, never from arrival time — a replayed backlog arrives all at once and a held relay delivers old content at a new instant |
 
 ## The `SessionCapabilities` record
 
@@ -562,6 +604,35 @@ re-delivered approve finds the approval already answered or already resolved, an
 > / `interaction_history` / `interaction_detail` (Wave R6)" below, with the same
 > inherited choke-point ordering. Only `terminal_control_begin` and
 > `terminal_control_end` remain refusal-only exactly as described here.
+>
+> AMENDED BY WAVE R8 (2026-08-20, ADR-017 T6): `terminal_control_begin` and
+> `terminal_control_end` now have REAL handlers as well, so the refusal-only dispatch this
+> section described has **no ops left and is deleted from `server.go`**. Every one of the
+> six inherited its ordering unchanged -- authz first, then `body_version`, then the
+> op-specific reply -- and `r1_refusalops_test.go` still drives all six through those
+> assertions; what changed, op by op, is the CODE each answers a malformed frame with:
+> `terminal_control_begin` is refused `invalid_field` (a bodyless begin binds no
+> incarnation) and `terminal_control_end` is refused `stale_generation` (there is no
+> generation on this connection to end). `op_not_implemented` itself is NOT retired: it is
+> still what a daemon WITHOUT the seam answers, which is a different fact from "this build
+> does not know the op".
+>
+> R8 also lands the two UNSIGNED frame kinds ADR-017 T6 pairs with them,
+> **`terminal_input`** and **`terminal_control_keepalive`**. They carry no device signature
+> and reach no device authenticator: what authorises them is the E2EE frame's own
+> authenticated sender and sequence PLUS the confirmed control generation, re-evaluated on
+> EVERY frame alongside the kill switch, the device's continued registration and the
+> session's capability record (T6-e). That is the sole exception to full-body signatures in
+> this protocol and is deliberately the SAME exception ADR-007's 2026-07-24 Decision 1
+> already carries; it is held to exactly two body types and one live generation, which is
+> what keeps it an exception rather than a policy. A refused frame is DROPPED and never
+> buffered (T6-f), so a phone can never turn live-only input into a short offline queue.
+>
+> And **`terminal_subscribe` gains a SESSION-SCOPED capability gate** (amendment T2-c),
+> after the kill switch and before any tap opens, remote tier only: a session whose
+> daemon-authored capability record does not permit a terminal view is refused
+> `capability_refused`, and the gate is re-read before EVERY emission so a session
+> degraded, revoked or replaced mid-stream stops within a tick.
 
 The Wave R1 "refusal-ops" skeleton (playbook §6.3, ADR-017 T5, ADR-007 B144): six signed
 remote-tier ops landing as **refusal-only** daemon handlers ahead of their real business

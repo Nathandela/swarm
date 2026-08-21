@@ -47,19 +47,19 @@ func snapBytes(t *testing.T, cols, rows int, feed []byte) []byte {
 // its own goroutine when driven by the ticker path).
 type collector struct {
 	mu  sync.Mutex
-	got []TerminalRender
+	got []TerminalView
 }
 
-func (c *collector) push(r TerminalRender) {
+func (c *collector) push(v TerminalView) {
 	c.mu.Lock()
-	c.got = append(c.got, r)
+	c.got = append(c.got, v)
 	c.mu.Unlock()
 }
 
-func (c *collector) snapshots() []TerminalRender {
+func (c *collector) snapshots() []TerminalView {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return append([]TerminalRender(nil), c.got...)
+	return append([]TerminalView(nil), c.got...)
 }
 
 // assertSanitized is the core security invariant: no rendered line may carry any
@@ -67,7 +67,7 @@ func (c *collector) snapshots() []TerminalRender {
 // SnapText sanitizes at) so a legitimate multi-byte UTF-8 rune whose continuation
 // bytes fall in 0x80-0x9f is never a false positive, while every real C0/C1/DEL
 // control and embedded newline is caught.
-func assertSanitized(t *testing.T, renders []TerminalRender) {
+func assertSanitized(t *testing.T, renders []TerminalView) {
 	t.Helper()
 	for i, r := range renders {
 		for j, line := range r.Lines {
@@ -115,7 +115,7 @@ func TestRenderLoop_HostilePTYCannotEscape(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "hostile", stream, alwaysAllowed, c.push) // returns once frames closes
+	RenderTerminalView(ctx, "hostile", "", stream, alwaysAllowed, c.push) // returns once frames closes
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -146,7 +146,7 @@ func TestRenderLoop_InitialSnapshotFromStream(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "s1", stream, alwaysAllowed, c.push)
+	RenderTerminalView(ctx, "s1", "", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -188,7 +188,7 @@ func TestRenderLoop_InitialStatePreservedAcrossLiveFrame(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "seed", stream, alwaysAllowed, c.push)
+	RenderTerminalView(ctx, "seed", "", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {
@@ -224,7 +224,7 @@ func TestRenderLoop_TerminatesWhenDisallowed(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		RenderTerminal(ctx, "idle", stream, allowed.Load, c.push)
+		RenderTerminalView(ctx, "idle", "", stream, allowed.Load, c.push)
 		close(done)
 	}()
 
@@ -236,7 +236,7 @@ func TestRenderLoop_TerminatesWhenDisallowed(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("RenderTerminal parked on an idle stream after stillAllowed flipped false; " +
+		t.Fatal("RenderTerminalView parked on an idle stream after stillAllowed flipped false; " +
 			"the ticker branch must re-check liveness every tick and return (Blocker 1a)")
 	}
 }
@@ -257,7 +257,7 @@ func TestRenderLoop_CoalescesBurst(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	RenderTerminal(ctx, "burst", stream, alwaysAllowed, c.push)
+	RenderTerminalView(ctx, "burst", "", stream, alwaysAllowed, c.push)
 
 	renders := c.snapshots()
 	if len(renders) == 0 {

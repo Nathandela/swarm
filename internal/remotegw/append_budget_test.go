@@ -201,7 +201,7 @@ func TestRelaySink_SustainedPeekStaysUnderAppendBudget(t *testing.T) {
 			}
 			nextJournal = nextJournal.Add(time.Second)
 		}
-		if err := sink.Terminal("m/s1", []string{fmt.Sprintf("frame %d", frame)}, 80, 24); err != nil {
+		if err := sink.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{fmt.Sprintf("frame %d", frame)}, Cols: 80, Rows: 24}); err != nil {
 			terminalErrs++
 		}
 		clk.Advance(renderDebounceRate)
@@ -301,10 +301,10 @@ type snapshotRecorder struct {
 func (r *snapshotRecorder) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
 func (r *snapshotRecorder) Event(protocol.JournalRecord) error              { return nil }
 
-func (r *snapshotRecorder) Terminal(session string, lines []string, cols, rows int) error {
+func (r *snapshotRecorder) Terminal(v protocol.TerminalViewV1) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.got = append(r.got, protocol.TerminalSnapshot{Session: session, Lines: lines, Cols: cols, Rows: rows})
+	r.got = append(r.got, protocol.TerminalSnapshot{Session: v.Session, Lines: v.Lines, Cols: v.Cols, Rows: v.Rows})
 	return nil
 }
 
@@ -1020,7 +1020,7 @@ func TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling(t *testing.T) {
 	// relay's tumbling minute boundary twice.
 	const run = 150 * time.Second
 	for frame := 0; clk.Now().Sub(start) < run; frame++ {
-		if err := sink.Terminal("m/s1", []string{fmt.Sprintf("frame %d", frame)}, 80, 24); err != nil {
+		if err := sink.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{fmt.Sprintf("frame %d", frame)}, Cols: 80, Rows: 24}); err != nil {
 			terminalErrs++
 		}
 		item := itemJSON(t, "am1", "agent_message", map[string]any{"text": fmt.Sprintf("%d ", frame), "status": "in_progress"})
@@ -1054,7 +1054,7 @@ func TestAppendBudget_ItemReleasesAndSnapshotsShareOneCeiling(t *testing.T) {
 	// does not silence it permanently, and the debt a saturated transcript ran up must be
 	// bounded by the ceiling itself rather than accumulate without limit.
 	const finalGrid = "the last grid"
-	if err := sink.Terminal("m/s1", []string{finalGrid}, 80, 24); err != nil {
+	if err := sink.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{finalGrid}, Cols: 80, Rows: 24}); err != nil {
 		t.Fatalf("final terminal frame: %v", err)
 	}
 	for i := 0; i < 8; i++ {

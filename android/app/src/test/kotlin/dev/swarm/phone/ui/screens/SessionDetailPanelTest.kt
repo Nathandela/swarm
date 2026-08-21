@@ -211,6 +211,7 @@ class SessionDetailPanelTest {
                 detail(),
                 chat,
                 SessionLease(sessionId = "mbp/api", leaseHeld = true, online = true),
+                capabilities = SessionCapabilityFacts(structuredChat = true),
             ).transcript,
         )
     }

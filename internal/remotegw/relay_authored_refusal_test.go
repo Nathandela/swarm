@@ -95,7 +95,7 @@ func TestRelaySink_ARelayAuthoredRefusalNeverReissuesASeq(t *testing.T) {
 		{
 			name: "terminal snapshot",
 			emit: func(s *RelaySink, _ int, label string) error {
-				return s.Terminal("m/s1", []string{label}, 80, 24)
+				return s.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{label}, Cols: 80, Rows: 24})
 			},
 		},
 		{
@@ -388,7 +388,7 @@ func TestRelaySink_TheRelayCannotCauseLOSSWithoutCausingAGAP(t *testing.T) {
 			emit func(s *RelaySink, n int, label string) error
 		}{
 			{"terminal snapshot", func(s *RelaySink, _ int, label string) error {
-				return s.Terminal("m/s1", []string{label}, 80, 24)
+				return s.Terminal(protocol.TerminalViewV1{Session: "m/s1", Lines: []string{label}, Cols: 80, Rows: 24})
 			}},
 			// The reseed is the ONLY journal repair channel: a silent loss here is a repair the
 			// phone believes it received.

@@ -16,7 +16,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
 	"github.com/Nathandela/swarm/internal/remote/device"
 	"github.com/Nathandela/swarm/internal/remote/grant"
@@ -138,9 +140,28 @@ func resolveGatewayParams(stateDir, daemonSocket string) (gatewayParams, error) 
 	if err != nil {
 		return gatewayParams{}, err
 	}
+	// THE PRODUCTION PROFILE, POPULATED (ADR-017 T5-a, round-2 blocker 3). This literal is
+	// the ONLY construction of RemoteProfileV1 in the shipped tree, and it used to set the
+	// three ADR-016 relay fields and leave the rest zero. Since RouteSession fails closed on
+	// TrustsCapabilityRecord() FIRST, a zero capability_record_version routed EVERY session
+	// -- healthy Claude included -- to the status card and, because ComposerAvailable is the
+	// same predicate, took R6/R7's chat composer away from all of them. The wiring, not the
+	// versions, was the defect: these are the constants the machine has been implementing
+	// since this wave's schema landed.
+	//
+	// The three bounds are declared explicitly rather than left zero, even though zero
+	// clamps to the phone's conservative built-in: a machine that declares its ceiling is
+	// checkable against what it actually sends, and a machine that declares nothing is not.
 	profile := protocol.RemoteProfileV1{
-		RelayTLSPolicy: relayCfg.TLSPolicy,
-		RelaySPKIPin:   relayPin,
+		Version:                  schema.CurrentProfileVersion,
+		InteractionSchemaVersion: daemon.InteractionSchemaVersion,
+		TerminalViewVersion:      schema.CurrentTerminalViewVersion,
+		CapabilityRecordVersion:  schema.CurrentCapabilityRecordVersion,
+		RelayTLSPolicy:           relayCfg.TLSPolicy,
+		RelaySPKIPin:             relayPin,
+		TerminalViewMaxLineBytes: schema.DeclaredTerminalViewMaxLineBytes,
+		TerminalViewMaxRows:      schema.DeclaredTerminalViewMaxRows,
+		TerminalViewMaxRateHz:    schema.DeclaredTerminalViewMaxRateHz,
 	}
 	if u, uerr := url.Parse(relayCfg.RelayURL); uerr == nil {
 		profile.RelayHost = u.Hostname()

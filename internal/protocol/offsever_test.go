@@ -188,3 +188,19 @@ func TestProtocol_OffGatesJournalSubscribe(t *testing.T) {
 		t.Fatalf("journal_read with the kill switch off = op %q code %q; want error/kill_switch", got.Op, got.ErrorCode)
 	}
 }
+
+// serveRemoteAPIStableSrv is serveRemoteAPISrv with an explicit STABLE endpoint id, which is
+// what the assembled daemon serves its remote socket with (ServeRemoteWithID, from the
+// federation id). It exists because resolveSession requires a session id namespaced with the
+// CONNECTION's endpoint: under the per-connection fallback a second connection cannot name
+// the first connection's session, and the product opens a fresh connection PER COMMAND.
+func serveRemoteAPIStableSrv(t *testing.T, d DaemonAPI, endpointID string) (string, *Server) {
+	t.Helper()
+	sock := tmpSock(t)
+	srv, err := ServeRemoteWithID(d, sock, endpointID)
+	if err != nil {
+		t.Fatalf("ServeRemoteWithID: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	return sock, srv
+}

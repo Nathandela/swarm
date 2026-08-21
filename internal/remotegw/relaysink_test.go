@@ -236,7 +236,7 @@ func TestRelaySink_ConcurrentProducersPreserveSeqAppendOrder(t *testing.T) {
 			if i%2 == 0 {
 				_ = sink.Event(protocol.JournalRecord{Cursor: uint64(i), SessionID: "s", Type: "launched"})
 			} else {
-				_ = sink.Terminal("s", []string{"line"}, 80, 24)
+				_ = sink.Terminal(protocol.TerminalViewV1{Session: "s", Lines: []string{"line"}, Cols: 80, Rows: 24})
 			}
 		}(i)
 	}

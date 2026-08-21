@@ -324,6 +324,10 @@ func NewService(cfg ServiceConfig) *Service {
 	// (via the SAME Gateway/RelaySink as the journal), sealing each rendered snapshot to the
 	// phone. It reconnects on the journal backoff cadence.
 	watchers := NewTerminalWatcher(gw, cfg.ReconnectDelay)
+	// ADR-017 T4-b: the watcher owns the horizons, so the Gateway's snapshot path asks IT
+	// before every emission. Binding here is what turns WatchLive from a method a test calls
+	// into the predicate the production stream is gated on.
+	gw.bindWatchLiveness(watchers.WatchLive)
 	bridge := NewCommandBridge(CommandBridgeConfig{
 		Mailbox:     cfg.Relay,
 		Forwarder:   forwarder,
@@ -541,8 +545,33 @@ func (s *Service) Run(ctx context.Context) error {
 	// reconnecting IMMEDIATELY and structurally -- not incidentally via the kill switch, and not
 	// only when the deferred watchers.Close runs after wg.Wait returns (opus#2).
 	s.watchers.bindParent(ctx)
-	var revoked, linkGone atomic.Bool
 	var wg sync.WaitGroup
+	// ADR-017 T4-b, THE REAPER. Reap was a method with no production caller, so an unrenewed
+	// watch never actually expired: the deadline was written on every Watch/Renew and read by
+	// nobody. This is the tick that reads it. It runs at a quarter of the horizon so a watch
+	// outlives its expiry by at most that, and it is joined in the WaitGroup rather than left
+	// to the deferred cancel.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(s.watchers.reapInterval())
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				// TRANSPORT LOSS UNWATCHES (T4-b), and this is the one exit every teardown
+				// funnels through: a relay link death cancels ctx below, a revoke cancels
+				// it, a parent shutdown cancels it. Waiting for each watch to time out on
+				// its own horizon would leave the machine rendering and appending for a
+				// phone that provably is not there.
+				s.watchers.UnwatchAll("the relay connection ended")
+				return
+			case <-t.C:
+				s.watchers.Reap()
+			}
+		}
+	}()
+	var revoked, linkGone atomic.Bool
 	wg.Add(2)
 	go func() {
 		defer wg.Done()

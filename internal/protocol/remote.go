@@ -44,16 +44,19 @@ const (
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9), and
 // the reserved Session value a launch signs (a launch has no session yet).
 const (
-	ActionLaunch          = schema.ActionLaunch
-	ActionKill            = schema.ActionKill
-	ActionDelete          = schema.ActionDelete
-	ActionApprove         = schema.ActionApprove
-	ActionDeviceRevoke    = schema.ActionDeviceRevoke
-	ActionTakeControl     = schema.ActionTakeControl
-	ActionTerminalWatch   = schema.ActionTerminalWatch
-	ActionTerminalUnwatch = schema.ActionTerminalUnwatch
-	ActionPushPrefs       = schema.ActionPushPrefs
-	ActionJournalResync   = schema.ActionJournalResync
+	ActionLaunch                   = schema.ActionLaunch
+	ActionKill                     = schema.ActionKill
+	ActionDelete                   = schema.ActionDelete
+	ActionApprove                  = schema.ActionApprove
+	ActionDeviceRevoke             = schema.ActionDeviceRevoke
+	ActionTakeControl              = schema.ActionTakeControl
+	ActionTerminalWatch            = schema.ActionTerminalWatch
+	ActionTerminalRenew            = schema.ActionTerminalRenew
+	ActionTerminalInput            = schema.ActionTerminalInput
+	ActionTerminalControlKeepalive = schema.ActionTerminalControlKeepalive
+	ActionTerminalUnwatch          = schema.ActionTerminalUnwatch
+	ActionPushPrefs                = schema.ActionPushPrefs
+	ActionJournalResync            = schema.ActionJournalResync
 
 	// The two Mirror M3 reads (ADR-014), journal_resync's UNSIGNED class verbatim.
 	ActionInteractionHistory = schema.ActionInteractionHistory

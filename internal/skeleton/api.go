@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,13 @@ type coreAPI struct {
 	// it so the owner controller and the future remote peek can both observe one
 	// single-consumer shim session over a SINGLE upstream. Wired at construction.
 	tap *tapManager
+
+	// onLaunched and sessionCaps are the assembly's two capability-record hooks
+	// (ADR-017 T2-a): the first authors a record the instant a launch succeeds, the
+	// second is the PURE READ the remote-tier gate consults. Both nil until Serve wires
+	// them, and nil is fail-closed -- no record authored, no record found.
+	onLaunched  func(persist.Meta)
+	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
 
 	events   chan persist.Meta
 	nudge    chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
@@ -614,6 +622,14 @@ var _ protocol.JournalBackend = (*coreAPI)(nil)
 // second: the session's user-given label heads the row the agent identity annotates,
 // and it crosses here for the same reason and by the same rule.
 func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
+	return toWireJournalRecordWith(r, nil)
+}
+
+// toWireJournalRecordWith is toWireJournalRecord plus the ADR-017 T2 capability lookup
+// the ROSTER carries. caps is nil where no lookup is available, and a nil lookup means the
+// record ships with no capability record -- which by T2-a is the honest status card, not a
+// hole the phone improvises around.
+func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.SessionCapabilities, bool)) protocol.JournalRecord {
 	out := protocol.JournalRecord{
 		Cursor:    r.Cursor,
 		SessionID: r.SessionID,
@@ -621,6 +637,11 @@ func toWireJournalRecord(r journal.Record) protocol.JournalRecord {
 		Group:     r.Group,
 		Agent:     r.Agent,
 		Name:      r.Name,
+	}
+	if caps != nil {
+		if rec, ok := caps(r.SessionID); ok {
+			out.Capabilities = &rec
+		}
 	}
 	if r.Type == journal.TypeInteraction || r.Type == journal.TypeStructuredGap {
 		// `structured_gap` joins `interaction` as a payload that IS transcript content
@@ -644,7 +665,12 @@ func (a *coreAPI) JournalReadFrom(from uint64) (protocol.JournalResume, error) {
 	}
 	out := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
 	for _, r := range res.Roster {
-		out.Roster = append(out.Roster, toWireJournalRecord(r))
+		// The ROSTER is where the capability record rides (ADR-017 T2 rule 3: "the phone
+		// renders from that record"). Events do not carry it: the record is authored once
+		// per session instance and immutable except in the degrading direction, so
+		// stamping it onto every event would spend the append budget restating a fact the
+		// roster already carries -- and a degrade reaches the phone as the next roster.
+		out.Roster = append(out.Roster, toWireJournalRecordWith(r, a.sessionCaps))
 	}
 	for _, e := range res.Events {
 		out.Events = append(out.Events, toWireJournalRecord(e))
@@ -705,8 +731,69 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	if err != nil {
 		return persist.Meta{}, err
 	}
-	return a.core.Launch(resolved)
+	m, err := a.core.Launch(resolved)
+	if err != nil {
+		return m, err
+	}
+	// ADR-017 T2-a / D-NIL, PATHS 1 AND 2: the owner-tier TUI launch and the R5 remote
+	// session_launch both arrive here -- the remote-tier Server drives the same DaemonAPI
+	// -- so this is the one place a session's capability record is authored at the moment
+	// the session begins to exist. onLaunched is the assembly's hook (Serve wires it to
+	// Daemon.authorLaunchedSessionCapabilities); an unwired coreAPI, which is every unit
+	// test that builds one directly, simply authors nothing and the session keeps T2-a's
+	// honest status card.
+	if fn := a.onLaunched; fn != nil {
+		fn(m)
+	}
+	return m, nil
 }
+
+// authorLaunchedSessionCapabilities is the CLIENT-FACING launch/resume seam's own
+// guarantee (ADR-017 T2-a): the record exists before Launch returns a Meta, so a session
+// can never reach a client roster ahead of the record that routes it. A phone that saw the
+// session first would render the status card and then silently re-route, which is the
+// flicker T1's "one surface, chosen by the daemon" rules out.
+//
+// The core's OnSessionStart hook (serve.go registerSession) normally authors first, and
+// this call is then an idempotent no-op through registerSessionCapabilities' merge. It is
+// still stated here because the ORDERING guarantee belongs to this seam: the hook is the
+// core's, its firing order relative to Launch's return is the core's to change, and the
+// two are one authoring function with two call sites rather than two rules.
+func (d *Daemon) authorLaunchedSessionCapabilities(m persist.Meta) {
+	inst, ad, version, ok := d.sessionCapabilityInputs(m.ID, m.AgentType, m.ShimPID)
+	if !ok {
+		return // no bindable instance: T2-a's honest status card
+	}
+	live, decided := d.backendPlaneDecided(m.ID, ad)
+	if !decided {
+		// A provider whose structured plane is a side process has not dialled yet, and a
+		// record authored now would say structured_chat=false about a session that is
+		// about to become a perfectly good chat -- irreversibly, because T2 rule 2 makes
+		// that degrade one-way. backend.go authors it from whichever outcome arrives.
+		return
+	}
+	if _, err := d.authorSessionCapabilities(m.ID, inst, m.AgentType, ad, version, adapterRevision, live); err != nil {
+		log.Printf("skeleton: author capability record for launched session %s: %v", m.ID, err)
+	}
+}
+
+// SessionCapabilities makes coreAPI a protocol.SessionCapabilityLookup, which is the seam
+// the remote-tier capability gate reads before it opens a terminal tap (ADR-017 T2-c).
+//
+// IT IS A PURE READ AND FAILS CLOSED. It authors nothing: a gate that authored the record
+// it is about to consult would be a gate whose answer depends on the asking. ok=false
+// means "no record", which by T2-a is the status card and a refusal of both verbs.
+func (a *coreAPI) SessionCapabilities(local string) (protocol.SessionCapabilities, bool) {
+	if fn := a.sessionCaps; fn != nil {
+		return fn(local)
+	}
+	return protocol.SessionCapabilities{}, false
+}
+
+// coreAPI ALSO satisfies protocol.SessionCapabilityLookup so the assembled remote-tier
+// Server can gate terminal_subscribe on the SESSION rather than only on the kill switch
+// and the negotiated gateway capability (ADR-017 T2-c).
+var _ protocol.SessionCapabilityLookup = (*coreAPI)(nil)
 
 // composeLaunchSpec resolves a launch/resume request's concrete argv (Epic 11
 // seam: adapters into launch). It is a pure function of its inputs — getSource

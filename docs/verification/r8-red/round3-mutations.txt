@@ -1,0 +1,193 @@
+WAVE R8 -- ROUND 3 MUTATION TRANSCRIPT
+captured 2026-08-20T18:47:32Z on Darwin 25.5.0 arm64
+Each row restores exactly one PRE-FIX production line (or adds one attacker-shaped call
+site), runs the permanent test, records the named failure, and reverts.
+
+
+### MUTATION M1 the generation is bound to the minting connection again (round-2 production state)
+--- FAIL: TestR8R3_AGenerationOutlivesTheConnectionThatMintedIt (0.02s)
+    r8r3_generationregistry_test.go:78: terminal_input on a SECOND connection = op "error" code "stale_generation" error "terminal_input: refused; nothing was typed"; want ok.
+--- FAIL: TestR8R3_AGenerationSurvivesTheMintingConnectionClosing (0.00s)
+    r8r3_generationregistry_test.go:96: terminal_input after the minting connection closed = op "error" code "stale_generation"; want ok
+--- FAIL: TestR8R3_TheKeepaliveAlsoCrossesConnections (0.00s)
+    r8r3_generationregistry_test.go:115: terminal_control_keepalive on a second connection = op "error" code "stale_generation"; want ok
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.933s
+FAIL
+### reverted
+
+### MUTATION M2 the gateway forwards a capability record it never validated (T2-b's missing seam)
+--- FAIL: TestR8R3_TheGatewayStripsAnInconsistentCapabilityRecord (0.00s)
+    --- FAIL: TestR8R3_TheGatewayStripsAnInconsistentCapabilityRecord/structured_and_fallback_both_true (0.00s)
+        r8r3_recorddecode_test.go:65: the gateway forwarded an inconsistent capability record ({Provider:claude ProviderVersion:1 AdapterRevision:r SessionInstance:inst-1 StructuredChat:true TerminalFallback:true TerminalControl:false Interrupt:false}).
+    --- FAIL: TestR8R3_TheGatewayStripsAnInconsistentCapabilityRecord/control_without_fallback (0.00s)
+        r8r3_recorddecode_test.go:65: the gateway forwarded an inconsistent capability record ({Provider:opencode ProviderVersion:1 AdapterRevision:r SessionInstance:inst-1 StructuredChat:false TerminalFallback:false TerminalControl:true Interrupt:false}).
+    --- FAIL: TestR8R3_TheGatewayStripsAnInconsistentCapabilityRecord/no_session_instance (0.00s)
+        r8r3_recorddecode_test.go:65: the gateway forwarded an inconsistent capability record ({Provider:opencode ProviderVersion:1 AdapterRevision:r SessionInstance: StructuredChat:false TerminalFallback:true TerminalControl:false Interrupt:false}).
+--- FAIL: TestR8R3_TheGatewayDoesNotMutateTheCallersRecord (0.00s)
+    r8r3_recorddecode_test.go:105: namespaceRoster forwarded an inconsistent record
+--- FAIL: TestR8R3_TheJournalEgressPathIsTheOneThatValidates (0.00s)
+    r8r3_recorddecode_test.go:128: namespaceRecord does not validate the capability record it forwards.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.039s
+FAIL
+### reverted
+
+### MUTATION M3 the session instance ignores the incarnation (it becomes the session id again)
+--- FAIL: TestR8Instance_SurvivesADaemonRestartButNotAReplacement (2.05s)
+    r8_publication_test.go:130: ADR-017 T8: a REPLACEMENT shim kept the previous instance "c604502db02b6fe60821b195740291de"
+--- FAIL: TestR8R3_AReplacementShimMintsANewInstanceThroughTheProductionPath (0.02s)
+    r8r3_incarnation_test.go:68: a REPLACEMENT shim kept the previous instance "04e8b092390f18aa9cee33f196095798".
+--- FAIL: TestR8R3_TheInstanceFileRecordsTheIncarnationItWasMintedFor (0.04s)
+    r8r3_incarnation_test.go:166: a daemon restart followed by a REPLACEMENT shim kept the old instance "afda2fe53b14885e2fb4cab07a03c72d"
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.332s
+FAIL
+### reverted
+
+### MUTATION M5 the drop class reverts to the hand enumeration and the replace class is emptied
+--- FAIL: TestR8R3_NoInvisibleRuneSurvivesSanitization (0.00s)
+    r8r3_sanitizeproperty_test.go:108: 13 invisible rune(s) survived stripControls, e.g. U+034F, U+0600, U+0601, U+0602, U+0603, U+0604, U+0605, U+06DD, U+070F, U+0890, U+0891, U+08E2, U+115F.
+--- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed (0.00s)
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/inhibit_symmetric_swapping_u206a (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+206A survived sanitization (one code point past the hand-written U+2060-U+2064 arm): rendered "pay\u206apal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/deprecated_format_u206f (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+206F survived sanitization (the far end of the same block, likewise unlisted): rendered "pay\u206fpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/musical_format_u1d173 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1D173 survived sanitization (a format control in the musical-symbols plane): rendered "pay\U0001d173pal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/musical_format_u1d17a (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1D17A survived sanitization (the far end of that block): rendered "pay\U0001d17apal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_choseong_filler_u115f (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+115F survived sanitization (occupies two terminal cells and renders as nothing on a phone): rendered "payᅟpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_jungseong_filler_u1160 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1160 survived sanitization (one terminal cell, invisible on a phone): rendered "payᅠpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_filler_u3164 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+3164 survived sanitization (two terminal cells, invisible on a phone): rendered "payㅤpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/halfwidth_hangul_filler_uffa0 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+FFA0 survived sanitization (one terminal cell, invisible on a phone): rendered "payﾠpal.com"
+--- FAIL: TestR8R3_ADroppedRuneCostTheTerminalNoColumnAndAReplacedOneDid (1.76s)
+### reverted
+
+### MUTATION M6 only the replace class is emptied: a cell-occupying invisible rune is dropped, not blanked
+--- FAIL: TestR8R3_ADroppedRuneCostTheTerminalNoColumnAndAReplacedOneDid (1.85s)
+    r8r3_sanitizeproperty_test.go:193: U+115F occupies a terminal cell but sanitized to "ab"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:193: U+1160 occupies a terminal cell but sanitized to "ab"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:193: U+3164 occupies a terminal cell but sanitized to "ab"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:193: U+FFA0 occupies a terminal cell but sanitized to "ab"; want a blank in its place so the phone's columns line up with the terminal's
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/vt	2.552s
+FAIL
+### reverted
+
+### MUTATION M7 the facade re-reads the record's raw terminal_control field
+--- FAIL: TestR8R3Facade_AZeroProfileHandsKotlinNoTerminalControl (0.00s)
+    r8r3_controlfield_test.go:54: the facade handed Kotlin terminalControl=true for a session it routed to the STATUS CARD.
+--- FAIL: TestR8R3Facade_AnInconsistentRecordHandsKotlinNoTerminalControl (0.00s)
+    --- FAIL: TestR8R3Facade_AnInconsistentRecordHandsKotlinNoTerminalControl/structured_and_fallback_both_true (0.00s)
+        r8r3_controlfield_test.go:89: the facade granted terminal control over an inconsistent record
+    --- FAIL: TestR8R3Facade_AnInconsistentRecordHandsKotlinNoTerminalControl/control_without_fallback (0.00s)
+        r8r3_controlfield_test.go:89: the facade granted terminal control over an inconsistent record
+    --- FAIL: TestR8R3Facade_AnInconsistentRecordHandsKotlinNoTerminalControl/no_session_instance (0.00s)
+        r8r3_controlfield_test.go:89: the facade granted terminal control over an inconsistent record
+--- FAIL: TestR8R3Facade_TheControlFieldIsResolvedThroughThePredicate (0.00s)
+    r8r3_controlfield_test.go:103: App.session does not resolve TerminalControl through phonecore.TerminalControlAvailable. The record's raw field is not the predicate: it says what the MACHINE authored, and what Kotlin needs is what the ROUTER concluded over that record AND the machine's published profile.
+    r8r3_controlfield_test.go:109: App.session assigns the record's raw terminal_control field to the bound Session. That is the exact line round-3 major 4 names.
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	1.001s
+FAIL
+### reverted
+
+### MUTATION M8 the phone decode seam stops validating the capability record
+--- FAIL: TestR8R3_ThePhoneDecodeSeamRejectsAnInconsistentRecord (0.00s)
+    --- FAIL: TestR8R3_ThePhoneDecodeSeamRejectsAnInconsistentRecord/structured_and_fallback_both_true (0.00s)
+        r8r3_controlpredicate_test.go:152: an inconsistent capability record survived the phone's decode seam ({Provider:claude ProviderVersion:1 AdapterRevision:r SessionInstance:inst-1 StructuredChat:true TerminalFallback:true TerminalControl:false Interrupt:false}).
+    --- FAIL: TestR8R3_ThePhoneDecodeSeamRejectsAnInconsistentRecord/control_without_fallback (0.00s)
+        r8r3_controlpredicate_test.go:152: an inconsistent capability record survived the phone's decode seam ({Provider:opencode ProviderVersion:1 AdapterRevision:r SessionInstance:inst-1 StructuredChat:false TerminalFallback:false TerminalControl:true Interrupt:false}).
+    --- FAIL: TestR8R3_ThePhoneDecodeSeamRejectsAnInconsistentRecord/no_session_instance (0.00s)
+        r8r3_controlpredicate_test.go:152: an inconsistent capability record survived the phone's decode seam ({Provider:opencode ProviderVersion:1 AdapterRevision:r SessionInstance: StructuredChat:false TerminalFallback:true TerminalControl:false Interrupt:false}).
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/phonecore	1.063s
+FAIL
+### reverted
+
+### MUTATION M9 a reaped watch stops blanking the phone's copy
+--- FAIL: TestR8R3_AReapedWatchBlanksThePhonesCopy (0.00s)
+    r8r3_reapblank_test.go:78: a reaped watch blanked [], want exactly [m/sess1].
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.013s
+FAIL
+### reverted
+
+### MUTATION M10 severTerminalGenerations stops bumping the sever counter
+--- FAIL: TestR8R3_ABeginRacingASeverFailsClosed (0.02s)
+    r8r3_severrace_test.go:46: a generation whose authority was decided BEFORE a sever was published AFTER it. The sever's own sweep cannot see it, so the kill switch leaves a live keyboard behind -- and a survivor is live again the moment the switch goes back on, which is verbatim the resume defect round-2's blocker 2 was written to close.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.789s
+FAIL
+### reverted
+
+### MUTATION M11 the renewal tick is never armed (the horizon rides the redraw again)
+--- FAIL: TestR8R3Gate_AnIdleFallbackScreenKeepsItsWatchAcrossAHorizon (0.05s)
+    r8r3_fallback_ui_test.go:86: ADR-017 T4-b: reconcileTerminalWatch in dev/swarm/phone/PhoneSurface.kt takes a watch and arms no renewal tick, so the horizon still depends on a redraw that an idle screen does not produce.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.904s
+FAIL
+### reverted
+
+### MUTATION M12 the watch tick also emits a control keepalive
+--- FAIL: TestR8R3Gate_TheRenewalTickIsNotAKeepaliveEmitter (0.02s)
+    r8r3_fallback_ui_test.go:146: ADR-017 T6-c: the watch renewal tick in dev/swarm/phone/PhoneSurface.kt emits `keepAlive(`. A watch grants no input authority and its clock must not acquire any: the keepalive is bound to the live foreground composition that owns terminal_input, and a timer is precisely what that ruling excludes.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.848s
+FAIL
+### reverted
+
+### MUTATION M13 a second Kotlin file reaches TerminalFallbackBinding.beginControl
+--- FAIL: TestR8R3Gate_TheLedgerCannotExcuseAReachedBindingMethod (0.28s)
+    r8r3_fallback_ui_test.go:227: android/unbound-verbs.tsv:58 excuses TerminalFallbackBinding.beginControl as deliberately unbound, and production Kotlin now reaches it. The row's REASON is prose that stops being true when the wiring lands, and a stale reason in an exemption file is worse than a missing one.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.022s
+FAIL
+### reverted
+
+### MUTATION M14 a ledger row is deleted for a wrapper nothing reaches
+--- FAIL: TestR8R3Gate_TheFallbackBindingsVerbsAreReachedOrLedgered (0.52s)
+    r8r3_fallback_ui_test.go:190: TerminalFallbackBinding.type is reached from no production Kotlin outside dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt, and has no `TerminalFallbackBinding.type` row in android/unbound-verbs.tsv.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.277s
+FAIL
+### reverted
+
+### MUTATION M15 the binding dimension matches the bare name again (App.ReleaseControl collides)
+--- FAIL: TestR8R3Gate_TheLedgerCannotExcuseAReachedBindingMethod (0.13s)
+    r8r3_fallback_ui_test.go:227: android/unbound-verbs.tsv:59 excuses TerminalFallbackBinding.releaseControl as deliberately unbound, and production Kotlin now reaches it. The row's REASON is prose that stops being true when the wiring lands, and a stale reason in an exemption file is worse than a missing one.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.999s
+FAIL
+### reverted
+### MUTATION M4 the roster stops stamping the capability record (it never crosses the wire)
+--- FAIL: TestR8R3_ALaunchedSessionsRecordReachesTheGatewaySinkAndRoutesToTheFallback (24.54s)
+    r8r3_recordonwire_test.go:140: no capability record reached the gateway's sink for ep-d5fedc74/27v6jar4yxofg7i7 within 20s (1 session(s) bridged with no record).
+--- FAIL: TestR8R3_AStructuredSessionsRecordCrossesTheWireAndKeepsTheComposer (20.27s)
+    r8r3_recordonwire_test.go:197: no capability record reached the gateway's sink for ep-5f471f65/k4norvxl5jq6iagl within 20s (1 session(s) bridged with no record).
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	45.956s
+FAIL
+### reverted
+
+================================================================
+M1 IS TARGETED, NOT BLANKET
+================================================================
+Under M1 -- the round-2 per-connection binding restored -- the round-2 control suite,
+which holds ONE connection for the whole test, stays fully GREEN. That is the point:
+round 2's tests could not see this defect, and the mutation reproduces exactly that
+blindness rather than breaking the plane.
+$ go test ./internal/protocol/ -run TestR8Control -count=1   [under M1]
+ok  	github.com/Nathandela/swarm/internal/protocol	1.753s
+$ go test ./internal/remotegw/ -run TestR8R3_TheGatewayForwards -count=1   [under M1]
+--- FAIL: TestR8R3_TheGatewayForwardsAControlGenerationAcrossItsPerCommandConnections (0.02s)
+    r8r3_realcomposition_test.go:183: terminal_input through the gateway = op "error" code "stale_generation" error "terminal_input: refused; nothing was typed"; want ok.
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/remotegw	1.166s
+FAIL
+### reverted

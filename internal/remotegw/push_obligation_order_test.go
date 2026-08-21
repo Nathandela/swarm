@@ -34,7 +34,7 @@ func (s *orderLoggingSink) Event(protocol.JournalRecord) error {
 	*s.log = append(*s.log, "publish")
 	return nil
 }
-func (s *orderLoggingSink) Terminal(string, []string, int, int) error { return nil }
+func (s *orderLoggingSink) Terminal(protocol.TerminalViewV1) error { return nil }
 
 // orderLoggingGateway is a gatewayObligationDriver double standing in for a REAL
 // WakeObligationMachine's Trigger/Drive, appending to the SAME shared log.

@@ -1,0 +1,125 @@
+WAVE R8 -- ROUND 2 RED / MUTATION EVIDENCE
+Captured 2026-08-20 (UTC), darwin 25.5.0 arm64, Go toolchain from $HOME/go/bin.
+Bead agents-tracker-hggx.9.
+
+WHAT THIS FILE IS, AND WHY IT IS "RED" EVIDENCE RATHER THAN A MUTATION LOG.
+
+Round 2 repairs findings against code that already existed and was already green. There is
+therefore no "the symbol does not exist" compile-fail RED to capture: the failing-first state
+for every obligation below IS the pre-fix production line, and running the new test against
+that line IS the RED run. Each entry below restores exactly one pre-fix production line (or
+adds exactly one attacker-shaped call site), runs the permanent test that pins it, records the
+named failure, and reverts. Seventeen obligations, seventeen recorded failures, zero escapes.
+
+The three that escaped on the first pass are recorded in the round-2 GREEN README section 3.1
+together with what was wrong with the FENCE (not with the fix) in each case, because a fence
+that survives its own mutation is this wave's own named defect class and hiding two of them
+would repeat exactly the failure round 2 exists to correct.
+
+CAUGHT (test failed)     M1 BLOCKER1 keepalive moves the signed horizon
+        --- FAIL: TestR8Control_TheKeepaliveDoesNotExtendTheSignedHorizon (0.02s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/protocol	0.704s
+        FAIL
+
+CAUGHT (test failed)     M2 BLOCKER2 kill switch does not sever the generation
+        --- FAIL: TestR8Control_TheKillSwitchSeversRatherThanPauses (0.02s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/protocol	0.687s
+        FAIL
+
+CAUGHT (test failed)     M3 MAJOR8 revoke does not sever the generation
+        --- FAIL: TestR8Control_DeviceRevocationSeversRatherThanPauses (0.02s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/protocol	0.684s
+        FAIL
+
+CAUGHT (test failed)     M4 T6-c no idle sweep loop
+        --- FAIL: TestR8Control_AnIdleGenerationIsSweptOnTheServersOwnClock (10.05s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/protocol	10.818s
+        FAIL
+
+CAUGHT (test failed)     M5 BLOCKER3 shipped profile back to zero versions
+        --- FAIL: TestR8Profile_TheShippedProfileDeclaresTheVersionsTheFallbackDependsOn (0.05s)
+        --- FAIL: TestR8Profile_TheShippedProfileRoutesBothDestinationsForReal (0.02s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/cmd/swarm-remote	0.887s
+        FAIL
+
+CAUGHT (test failed)     M6 MAJOR4a watcher never bound to the gateway
+        --- FAIL: TestR8Wiring_TheServiceBindsTheWatcherToTheGateway (0.00s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/remotegw	0.894s
+        FAIL
+
+CAUGHT (test failed)     M7 MAJOR4b no reaper tick
+        --- FAIL: TestR8Wiring_RunReapsExpiredWatchesAndUnwatchesOnTransportLoss (5.02s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/remotegw	5.881s
+        FAIL
+
+CAUGHT (test failed)     M8 MAJOR4c transport loss does not unwatch
+        --- FAIL: TestR8Wiring_TheCancelPathUnwatchesRatherThanWaitingForRunToReturn (0.00s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/remotegw	0.897s
+        FAIL
+
+CAUGHT (test failed)     M9 MAJOR6 onPause path stops severing
+        --- FAIL: TestR8Background_TheAndroidLifecycleReachesIt (0.00s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/mobile	0.891s
+        FAIL
+
+CAUGHT (test failed)     M10 MAJOR7a renamed watch verb in a STRUCTURED CHAT screen
+        --- FAIL: TestR8Gate_OnlyTheFallbackScreenIssuesAWatch (0.06s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.872s
+        FAIL
+
+CAUGHT (test failed)     M11 MAJOR7b raw grid rendered from an EXEMPT kit file
+        --- FAIL: TestR8Gate_OnlyTheFallbackBodyPrintsTheTerminalWell (0.03s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.781s
+        FAIL
+
+CAUGHT (test failed)     M12 MAJOR7c new watch verb from an EXEMPT kit file
+        --- FAIL: TestR8Gate_OnlyTheFallbackScreenIssuesAWatch (0.06s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.812s
+        FAIL
+
+CAUGHT (test failed)     M13 MODERATE9 staleness verdict discarded again
+        --- FAIL: TestR8Gate_TheStalenessSignalIsCarriedRatherThanDiscarded (0.03s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.785s
+        FAIL
+
+CAUGHT (test failed)     M14 MODERATE10 Peek stops applying the bounds
+        (first form of this mutation was caught by the COMPILER -- "declared and not used:
+        bounds" -- which is weaker than an assertion, so it was re-run with `_ = bounds`
+        added so the package still builds:)
+        --- FAIL: TestR8Bounds_PeekResolvesAndAppliesTheBounds (0.00s)
+            r8_bounds_test.go:93: App.Peek's body does not contain "clampSnapshotLines(",
+            so the resolved TerminalView ceiling is never applied to the copy the phone
+            hands a view.
+        FAIL	github.com/Nathandela/swarm/mobile	0.995s
+
+CAUGHT (test failed)     M15 MODERATE11 grid read moves back outside the allowlist
+        --- FAIL: TestR8Gate_TheGridReadIsGatedOnACapabilityRead (0.04s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.793s
+        FAIL
+
+CAUGHT (test failed)     M16 MINOR12 undeclared row count unbounded again
+        --- FAIL: TestR8RowCap_AnUndeclaredRowCountIsStillBounded (0.01s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/internal/vt	0.603s
+        FAIL
+
+CAUGHT (test failed)     M17 MAJOR5 watch re-issued from the drawer, never closed
+        --- FAIL: TestR8Gate_TheWatchIsOpenedOnceClosedAndRenewed (0.03s)
+        FAIL
+        FAIL	github.com/Nathandela/swarm/android/gate	0.856s
+        FAIL
+

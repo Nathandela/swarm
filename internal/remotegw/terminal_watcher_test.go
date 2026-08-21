@@ -21,6 +21,7 @@ type fakeTerminalWatchRouter struct {
 	mu        sync.Mutex
 	watched   []string
 	unwatched []string
+	renewed   []string
 }
 
 func (f *fakeTerminalWatchRouter) Watch(session string) {
@@ -33,6 +34,13 @@ func (f *fakeTerminalWatchRouter) Unwatch(session string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unwatched = append(f.unwatched, session)
+}
+
+// Renew records a horizon renewal (ADR-017 amendment T4-b).
+func (f *fakeTerminalWatchRouter) Renew(session string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renewed = append(f.renewed, session)
 }
 
 // TestCommandBridge_RoutesTerminalWatch: an unsigned terminal_watch/terminal_unwatch
@@ -172,7 +180,7 @@ func (r *blockingRunner) stat() (live, peak, starts int) {
 // push peak concurrency to 2; the joining Unwatch keeps it at 1 and leaves live at 0.
 func TestTerminalWatcher_UnwatchJoinsBeforeReturn(t *testing.T) {
 	runner := &blockingRunner{exitDelay: 50 * time.Millisecond}
-	w := newTerminalWatcher(runner, 5*time.Millisecond)
+	w := newTerminalWatcher(runner, 5*time.Millisecond, DefaultWatchHorizon, time.Now)
 	t.Cleanup(func() { _ = w.Close() })
 
 	// Start a peek and wait until its goroutine is actually running.
@@ -228,7 +236,7 @@ func (r *countingRunner) count() int {
 // watcher rooted at context.Background() (the pre-fix structure) would keep reconnecting here.
 func TestTerminalWatcher_ParentCancelStopsReconnecting(t *testing.T) {
 	runner := &countingRunner{}
-	w := newTerminalWatcher(runner, 5*time.Millisecond)
+	w := newTerminalWatcher(runner, 5*time.Millisecond, DefaultWatchHorizon, time.Now)
 	t.Cleanup(func() { _ = w.Close() })
 
 	parent, cancelParent := context.WithCancel(context.Background())

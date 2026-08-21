@@ -82,6 +82,18 @@ type Control struct {
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 
+	// TerminalView is the SAME snapshot, versioned (ADR-017 T4/T4-a/T8-a). It rides the SAME
+	// terminal_snapshot op beside Terminal rather than on an op of its own, which is the
+	// smallest step that puts view_epoch, revision, reset, session_instance and rendered_at on
+	// the wire: an old gateway ignores an unknown key, a new one prefers this body, and no
+	// RemoteProfileV1 version has to move (ADR-016's profile-version coordination is parked).
+	//
+	// WITHOUT IT THE FIELDS WERE PRODUCED AND NEVER SENT. `RenderTerminalView` minted the epoch
+	// and the daemon threw it away; a phone watching a session REPLACED under the same id read
+	// the new incarnation as a seamless continuation of the old screen, which is exactly what
+	// T4-a and T8-a exist to prevent (closing review, finding 5).
+	TerminalView *TerminalViewV1 `json:"terminal_view,omitempty"`
+
 	SendInput *SendInputReq `json:"send_input,omitempty"` // owner-tier one-shot steering message, carried on send_input (ADR-010 A2)
 
 	// BodyVersion is the per-op body-version tag the R1 refusal-ops vocabulary requires
@@ -125,6 +137,14 @@ type Control struct {
 	// Detail is the interaction_detail body (M3.3, IS-CAP-2's unsigned read); the reply
 	// carries exactly one Journal record whose Item is the full pre-truncation body.
 	Detail *InteractionDetailReq `json:"interaction_detail,omitempty"`
+	// The Wave R8 terminal-fallback bodies (ADR-017 T6). TerminalControlBegin is the
+	// SIGNED begin, bound into the device signature via TerminalControlBeginContentHash;
+	// TerminalInput is one UNSIGNED raw-input frame naming the generation it was
+	// authorised under. ControlGeneration rides the begin's REPLY (the minted, non-
+	// transferable generation) and every keepalive.
+	TerminalControlBegin *TerminalControlBeginReq `json:"terminal_control_begin,omitempty"`
+	TerminalInput        *TerminalInputReq        `json:"terminal_input,omitempty"`
+	ControlGeneration    string                   `json:"control_generation,omitempty"`
 	// HistoryFloor rides the interaction_history reply: nothing older than the returned
 	// page is retained, so the phone renders a retention floor instead of a spinner.
 	HistoryFloor bool `json:"history_floor,omitempty"`

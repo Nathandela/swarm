@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -281,6 +282,10 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 		return nil, err
 	}
 	a.core = core
+	// ADR-017 T6-f: every severance trigger must DROP the bytes the coalescer is holding,
+	// so the control-generation gate needs the buffer that actually exists. Bound here
+	// because the Core is constructed before the App's coalescer is reachable from it.
+	core.TerminalControl().BindCoalescer(a.coalesce)
 
 	st := core.State()
 	a.setDestination(st.MachineRelayAuthPub)
@@ -459,6 +464,46 @@ func (a *App) Stop() (err error) {
 	return nil
 }
 
+// EnterBackground is ADR-017 amendment T8-b: BACKGROUNDING SEVERS DIRECTLY, in its own
+// right, with no transport event of any kind required and none assumed.
+//
+// It is the verb that was missing. `LeaseState.Background` and
+// `TerminalControlState.Background` both existed and both had ZERO production callers, so
+// backgrounding still severed only BY CONSEQUENCE of the disconnect it forces -- which is
+// exactly the answer T8-b was written to replace, because it rests on a connectivity choice
+// a later wave could revisit, at which point a raw-input generation would quietly outlive
+// the screen that owns it. T6's persistent control banner exists to make "a live generation
+// with no screen displaying it" impossible; this makes it impossible on the phone's side
+// too, and the daemon's own idle sweep is what holds when the app does not.
+//
+// IT IS DELIBERATELY REACHABLE WITHOUT A LIVE CONNECTION: it does not consult a.ready(), so
+// a STOPPED or CLOSED app still withdraws every authority it holds -- the whole point is that
+// it runs on the way out. It is also FAIL-CLOSED in the only direction that matters --
+// everything it can do is withdraw authority -- which is why an exported Activity calling it
+// on onPause is safe where a facade verb that GRANTED something would not be (PB-SEC-11).
+//
+// AN UNUSABLE RECEIVER STILL ERRORS (PB-BIND-5). "Not started" and "not a real object" are
+// different facts and the app has to be able to tell them apart: a bound object whose Go peer
+// is gone looks identical to a working one from Kotlin, and a nil answer here would report
+// "your authority was withdrawn" for a call that withdrew nothing. That is precisely the
+// swallowed-panic ambiguity PB-BIND-5 exists to prevent, and R8 does not get an exemption
+// from a standing invariant that ~80 other entry points satisfy. The Android caller
+// (PhoneSurface.release) already treats a refusal as nothing to report, so the honest error
+// costs the severance path nothing.
+func (a *App) EnterBackground() (err error) {
+	defer barrier(&err)
+	if a == nil || a.core == nil {
+		return errNoReceiver
+	}
+	const reason = "the app left the foreground"
+	a.core.Leases().Background(reason)
+	a.core.TerminalControl().Background(reason)
+	for _, u := range a.coalesce.Abandon(reason) {
+		a.emitUndelivered(u)
+	}
+	return nil
+}
+
 // suspendInput is the whole-device input boundary: app backgrounding, and every Stop or
 // Close. PB-INPUT-2 enumerates backgrounding as a severance event, so every lease goes --
 // a lease the phone can no longer reach is one it must not assume it still holds -- and
@@ -476,6 +521,10 @@ func (a *App) suspendInput(reason string) {
 		a.emitUndelivered(u)
 	}
 	a.core.Leases().SeverAll(reason)
+	// ADR-017 T8: the terminal control generation is on its OWN plane (OPEN-C4), so it has
+	// to be severed explicitly here. A whole-device boundary that ended the lease and left
+	// a live generation would leave the one surface where raw bytes travel still armed.
+	a.core.TerminalControl().SeverAll(reason)
 }
 
 // emitUndelivered reports one resolved-as-undelivered unit of input on the event plane.
@@ -938,14 +987,63 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 	if cs.Name != "" {
 		title = cs.Name
 	}
-	return Session{
-		ID:      cs.SessionID,
-		Title:   title,
-		Group:   string(cs.Group),
-		Agent:   cs.Agent,
-		Need:    need,
-		Present: cs.Present,
+	// ADR-017 T1/T2: the destination is RESOLVED HERE, once, by phonecore.RouteSession over
+	// the record the machine authored and the profile it published -- so there is one
+	// predicate to get right rather than one per screen, and no screen has to know the
+	// fail-closed arms. The profile is the last SUCCESSFUL reconcile's; before any
+	// reconcile it is the zero value, which T5-a reads as "no fallback exists on this
+	// machine" and routes to the status card.
+	var profile schema.RemoteProfileV1
+	if a.core != nil {
+		profile = a.core.LastProfile()
 	}
+	// A zero profile is not a placeholder: T5-a reads it as "this machine declares no
+	// TerminalView and no capability-record version", which routes every session to the
+	// status card. That is the honest answer both before the first reconcile and for a
+	// bare App a unit test builds.
+	out := Session{
+		ID:          cs.SessionID,
+		Title:       title,
+		Group:       string(cs.Group),
+		Agent:       cs.Agent,
+		Need:        need,
+		Present:     cs.Present,
+		Destination: phonecore.RouteSession(cs.Capabilities, profile).String(),
+	}
+	// StructuredChat is the COMPOSER's predicate, not the record's raw field, and the
+	// difference is load-bearing (ADR-017 T2 rule 3 + T5-a): phonecore.ComposerAvailable is
+	// RouteSession's chat arm, so an untrusted profile, an inconsistent record or a record
+	// binding no instance answers false HERE rather than at each screen. A screen reading
+	// the raw boolean would offer a composer over a record the router already refused.
+	out.StructuredChat = phonecore.ComposerAvailable(cs.Capabilities, profile)
+	// TerminalControl is the ROUTER's answer for the other destination, by the identical rule
+	// and for the identical reason (round-3 major 4). Reading `rec.TerminalControl` verbatim
+	// here handed Kotlin `true` for a perfectly VALID opencode record on any machine whose
+	// profile carries terminal_view_version == 0 -- every machine deployed before this wave --
+	// while RouteSession sent that same session to the status card. A keyboard offered over a
+	// session the router refused is the composer defect one destination over.
+	out.TerminalControl = phonecore.TerminalControlAvailable(cs.Capabilities, profile)
+	if rec := cs.Capabilities; rec != nil {
+		out.Provider = rec.Provider
+		out.ProviderVersion = rec.ProviderVersion
+		out.SessionInstance = rec.SessionInstance
+		out.MissingCapability = missingCapability(rec)
+	}
+	return out
+}
+
+// missingCapability names, in the machine's own vocabulary, WHY a session did not get
+// structured chat (playbook:280). It is derived from the record and from nothing else: a
+// derivation that guessed would be the phone inventing the sentence that is supposed to
+// make the routing honest.
+//
+// The empty string means "nothing is missing" -- a structured session -- and is what the
+// header renders as no explanation rather than as an empty one.
+func missingCapability(rec *schema.SessionCapabilities) string {
+	if rec == nil || rec.StructuredChat {
+		return ""
+	}
+	return "structured_chat"
 }
 
 // Peek renders the daemon-sanitized terminal snapshot for a session (PB-APP-4). There is
@@ -960,13 +1058,58 @@ func (a *App) Peek(session string) (snap *Snapshot, err error) {
 	if !ok {
 		return nil, classed(ErrClassNotFound, fmt.Errorf("swarmmobile: no terminal snapshot for %q", session))
 	}
+	// ADR-017 T5-a's bounds, APPLIED (round-2 moderate 10). TerminalViewBounds resolved the
+	// ceiling and nothing called it, so "a zero bound clamps to a conservative built-in,
+	// never unlimited" was asserted about a function no production path reached. This is
+	// that path: the phone's own ceiling, clamped by whatever the machine declared, applied
+	// to the copy the phone is about to hand a view. The machine's declaration can only
+	// LOWER it -- a compromised or skewed machine does not get to grant itself an unbounded
+	// render, which is clampBound's rule and the reason the resolver exists at all.
+	bounds := core.LastProfile().TerminalViewBounds()
+	// THE MACHINE'S OWN RENDER TIME AND INCARNATION CROSS WITH THE PIXELS (ADR-017 T4-b /
+	// T8-a, closing round). They are carried here and NOT re-derived on the far side, because
+	// every clock the phone could substitute is the wrong one: arrival time renders a replayed
+	// backlog as fresh and a held relay as live, and `Stale` beside them is a SEQUENCE-GAP
+	// flag that by construction does not fire when a machine simply stops sending.
+	//
+	// ZERO IS PRESERVED AS ZERO. A machine that predates the closing round sends no
+	// `rendered_at`; the screen reads zero as UNKNOWN and says so. Stamping the phone's own
+	// clock here would report an arbitrarily old terminal as rendered just now, which is the
+	// exact lie T4-b names -- so the conversion is unconditional and invents nothing.
+	var renderedAt int64
+	if !s.RenderedAt.IsZero() {
+		renderedAt = s.RenderedAt.UnixMilli()
+	}
 	return &Snapshot{
-		SessionID: s.Session,
-		Text:      strings.Join(s.Lines, "\n"),
-		Cols:      s.Cols,
-		Rows:      s.Rows,
-		Stale:     a.streamStale("terminal"),
+		SessionID:        s.Session,
+		Text:             strings.Join(clampSnapshotLines(s.Lines, bounds), "\n"),
+		Cols:             s.Cols,
+		Rows:             s.Rows,
+		Stale:            a.streamStale("terminal"),
+		SessionInstance:  s.SessionInstance,
+		RenderedAtMillis: renderedAt,
 	}, nil
+}
+
+// clampSnapshotLines applies the resolved TerminalView bounds to one snapshot's lines: at
+// most MaxRows rows, each at most MaxLineBytes bytes, truncated on a RUNE boundary so a
+// clamp can never manufacture invalid UTF-8 out of valid input.
+func clampSnapshotLines(lines []string, b schema.TerminalViewBounds) []string {
+	if len(lines) > b.MaxRows {
+		lines = lines[:b.MaxRows]
+	}
+	out := make([]string, len(lines))
+	for i, ln := range lines {
+		if len(ln) > b.MaxLineBytes {
+			cut := b.MaxLineBytes
+			for cut > 0 && !utf8.RuneStart(ln[cut]) {
+				cut--
+			}
+			ln = ln[:cut]
+		}
+		out[i] = ln
+	}
+	return out
 }
 
 // ReadJournal returns the journal entries after cursor from, at most limit of them.

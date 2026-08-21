@@ -54,6 +54,11 @@ const (
 	// PB-INPUT-3 counts TWO walls here, not three (ADR-007 B133): §6.0's 60 s biometric
 	// freshness was the third, and it is withdrawn with the requirement that owned it. The
 	// signed horizon and the sustained-typing floor are what remain, and neither moved.
+	//
+	// ADR-017 T7 ADOPTS THIS NUMBER for the terminal control generation's horizon rather
+	// than inventing a second one (see TerminalControlTTL in terminalroute.go), precisely
+	// so the system has ONE fifteen-minute wall rather than two nearly-equal ones that
+	// drift apart. Changing it therefore moves both.
 	TakeControlTTL = 15 * time.Minute
 	// MaxControlSessionTTL mirrors the daemon's own cap on a control-session lifetime
 	// (internal/protocol/server.go:156, unexported). It is written as a literal for the
@@ -218,15 +223,27 @@ func (l *LeaseState) Apply(ctrl schema.Control) {
 // Sever ends a session's lease from the phone's own side: a transport loss, or a release.
 // The severed generation is remembered so a confirmation for it cannot resurrect the lease.
 //
-// BACKGROUNDING IS NOT ITSELF A TRIGGER (ADR-007 B133), and neither is any freshness lapse:
-// there is no phone-side authentication left to go stale. A backgrounded app still loses its
-// lease, because backgrounding DISCONNECTS the phone (ADR-007 B16) and the transport loss is
-// what severs. What bounds a lease nobody severs is time alone -- the signed ExpiresAt and
-// the daemon's MaxControlSessionTTL, PB-INPUT-3's two walls.
+// NO FRESHNESS LAPSE IS A TRIGGER (ADR-007 B133): there is no phone-side authentication
+// left to go stale. What bounds a lease nobody severs is time alone -- the signed ExpiresAt
+// and the daemon's MaxControlSessionTTL, PB-INPUT-3's two walls.
+//
+// BACKGROUNDING IS A TRIGGER IN ITS OWN RIGHT (ADR-017 amendment T8-b), and Background
+// below is it. This paragraph used to say it was not -- that a backgrounded app loses its
+// lease because backgrounding DISCONNECTS the phone (ADR-007 B16) and the transport loss is
+// what severs. That answer is BY CONSEQUENCE and still holds; it is no longer the whole
+// answer, because it rests on a connectivity choice a later wave could revisit, and
+// ADR-017 T6 makes "only the active foreground screen may send input" a routing rule that
+// an authority outliving its screen would defeat.
 func (l *LeaseState) Sever(session, reason string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.severLocked(l.entry(session), reason)
+}
+
+// Background severs every lease because the app left the foreground (ADR-017 T8-b). It is
+// a DIRECT trigger: no transport event of any kind is required, and none is assumed.
+func (l *LeaseState) Background(reason string) {
+	l.SeverAll(reason)
 }
 
 // SeverAll ends every session's lease. It is the whole-device boundary: the relay

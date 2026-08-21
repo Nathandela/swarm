@@ -68,11 +68,23 @@ class SessionDetailComposerTest {
         kind = "structured_gap", status = "completed", text = "hook spool gap at seq 41",
     )
 
+    /**
+     * WAVE R8 (ADR-017 T2 rule 3): the composer's availability now comes from the MACHINE's
+     * capability record, so the fixture supplies one.
+     *
+     * It used to come from the shape of the transcript -- `!transcript.structureTorn` -- and that
+     * is the inference the rule names by example. Nothing this file asserts has changed; what
+     * changed is WHERE the fact comes from, so the torn case below now sets `structuredChat =
+     * false` (which is exactly what the daemon's one-way degrade writes into the record after a
+     * proven structured gap) instead of relying on a gap element in the item list to be read as a
+     * capability.
+     */
     private fun panel(
         items: List<InteractionItem> = listOf(agent("hello")),
         online: Boolean = true,
         sendState: SendState? = null,
         refusal: String = "",
+        structuredChat: Boolean = true,
     ): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
             sessionId = session,
@@ -85,6 +97,7 @@ class SessionDetailComposerTest {
         ),
         TranscriptScreen.of(items),
         SessionLease(sessionId = session, leaseHeld = false, online = online),
+        capabilities = SessionCapabilityFacts(structuredChat = structuredChat),
     )
 
     private fun view(p: SessionDetailPanel, composer: View = TextView(context)): View =
@@ -125,7 +138,7 @@ class SessionDetailComposerTest {
 
     @Test
     fun `a torn session has no composer at all and says why`() {
-        val p = panel(items = listOf(agent("before"), gap()))
+        val p = panel(items = listOf(agent("before"), gap()), structuredChat = false)
         assertEquals(
             "ADR-017 T2 rule 2: structured_chat=false means there is NO message sink, so a " +
                 "composer over one is a message that goes in and can never be shown",

@@ -97,7 +97,32 @@ func repairedBy(kind string) string {
 // The daemon-side encoder MUST marshal this exact shape.
 type snapshotFrame struct {
 	Kind                    string `json:"kind"`
-	schema.TerminalSnapshot        // session, lines, cols, rows (promoted)
+	schema.TerminalSnapshot        // session, lines, cols, rows (promoted) -- FROZEN, unchanged
+
+	// The versioned view's coordinates (ADR-017 T4-a / T8-a), added by the closing round.
+	//
+	// THEY ARE SIBLING KEYS AND NOT A SWAPPED EMBED, and every one is omitempty (the time a
+	// pointer, because a zero time.Time is not omitted by encoding/json). A frame carrying
+	// none of them therefore serializes BYTE-IDENTICALLY to the shape this wire has always
+	// had, which is the GG-7 rule the Control struct states in as many words -- and which
+	// `TestSnapshotFrame_WireShape` pins on this exact plaintext. A machine that predates the
+	// closing round sends none of them and the phone reads zero, which is the honest answer:
+	// "this machine does not version its views", never a fabricated epoch.
+	SessionInstance string     `json:"session_instance,omitempty"`
+	ViewEpoch       uint64     `json:"view_epoch,omitempty"`
+	Revision        uint64     `json:"revision,omitempty"`
+	Reset           bool       `json:"reset,omitempty"`
+	RenderedAt      *time.Time `json:"rendered_at,omitempty"`
+}
+
+// derefTime reads an optional wire time as a value. Absent stays ZERO, which the snapshot
+// cache and the phone's staleness indicator both read as "the machine sent no render time"
+// rather than as the epoch.
+func derefTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
 }
 
 // replyFrame is the wire shape of a sealed command-reply mailbox plaintext: the daemon's
@@ -210,6 +235,23 @@ type Snapshot struct {
 	Lines   []string
 	Cols    int
 	Rows    int
+
+	// The versioned view's own coordinates (ADR-017 T4-a / T8-a), carried since the closing
+	// round because they were produced by the daemon and thrown away before the wire.
+	//
+	// SessionInstance is WHICH INCARNATION this screen belongs to, ViewEpoch is which
+	// render-loop run produced it, Revision is its order within that run, and Reset marks the
+	// first emission of every epoch on every path. RenderedAt is the MACHINE's clock, which is
+	// the only clock a staleness indicator may be written over: arrival time renders a replayed
+	// backlog as fresh and a held relay as live.
+	//
+	// A machine that predates the closing round sends none of them, and zero is the honest
+	// answer there -- "this machine does not version its views" -- never a fabricated epoch.
+	SessionInstance string
+	ViewEpoch       uint64
+	Revision        uint64
+	Reset           bool
+	RenderedAt      time.Time
 }
 
 // SnapshotCache holds the latest server-rendered snapshot per session, keyed by
@@ -224,10 +266,44 @@ type SnapshotCache struct {
 // NewSnapshotCache returns an empty cache.
 func NewSnapshotCache() *SnapshotCache { return &SnapshotCache{snaps: map[string]Snapshot{}} }
 
-// Apply stores s as the latest snapshot for its session (overwriting any prior one).
+// Apply stores s as the latest snapshot for its session, under ADR-017 T4-a's ordering rule:
+//
+//	differing epoch = HARD RESET, adopt s and discard what is held
+//	same epoch      = adopt s only if its revision is STRICTLY GREATER
+//
+// LATEST-WINS WAS WRONG IN ONE DIRECTION AND HIGHEST-REVISION-WINS IS WRONG IN THE OTHER, which
+// is exactly why the epoch exists. Two frames of one run that arrive out of order left the phone
+// on the older screen permanently; and a rule written over the revision alone discards every
+// frame of the NEXT run, because a new render loop restarts the revision at 1 while the phone
+// holds N. That second failure is the frozen screen T4-a names: a session replaced under the
+// same id, rendering a plausible view that stopped being true.
+//
+// AN UNVERSIONED FRAME ALWAYS LANDS (epoch 0). Two things produce one and both must be applied:
+// a machine that predates the closing round, whose every frame is epoch 0 and would otherwise
+// never update; and `Gateway.BlankTerminal`, the machine saying "I am no longer rendering this"
+// to a phone that never asked it to stop -- a blank dropped as unversioned is a dead grid the
+// screen goes on calling fresh.
+//
+// AND THE MACHINE'S OWN `reset` MARKER ALWAYS LANDS, whatever the epoch and revision say
+// (closing round 2). The epoch counter is a bare process-global in the daemon
+// (internal/daemon/terminalview.go), so it RESTARTS AT 1 in every daemon process -- and a
+// session surviving a daemon crash, restart or upgrade is a designed property of this system.
+// A phone holding {epoch 1, revision 40} therefore discarded the restarted daemon's {epoch 1,
+// revision 1} AND the 39 revisions after it, and the user read a plausible, frozen, pre-restart
+// terminal: the same failure T4-a names, in the variant where the epoch happens to collide.
+// `reset` is documented (protocol.md, T4-a) as "true on the FIRST snapshot of every epoch, on
+// every path" and as what "tells the phone to discard prior state"; the daemon has always sent
+// it and the decoder has always read it. Reading it HERE is what makes the epoch's
+// process-locality harmless -- a colliding epoch is still a hard reset, because the machine
+// says it is one -- and it is deliberately the only way a lower revision may win, so the
+// reorder rule above is untouched for every frame the machine did not mark.
 func (c *SnapshotCache) Apply(s Snapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if held, ok := c.snaps[s.Session]; ok && !s.Reset && s.ViewEpoch != 0 &&
+		s.ViewEpoch == held.ViewEpoch && s.Revision <= held.Revision {
+		return
+	}
 	c.snaps[s.Session] = s
 }
 
@@ -617,7 +693,11 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		if err := json.Unmarshal(res.Plaintext, &sf); err != nil {
 			return b, res, inboundFrame{}, err
 		}
-		f.snapshot = Snapshot{Session: sf.Session, Lines: sf.Lines, Cols: sf.Cols, Rows: sf.Rows}
+		f.snapshot = Snapshot{
+			Session: sf.Session, Lines: sf.Lines, Cols: sf.Cols, Rows: sf.Rows,
+			SessionInstance: sf.SessionInstance, ViewEpoch: sf.ViewEpoch,
+			Revision: sf.Revision, Reset: sf.Reset, RenderedAt: derefTime(sf.RenderedAt),
+		}
 	case kindCommandReply:
 		var rf replyFrame
 		if err := json.Unmarshal(res.Plaintext, &rf); err != nil {
@@ -679,6 +759,14 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 			// the AEAD has vouched for the frame -- reading either from an unauthenticated
 			// header would make the untrusted relay the authority.
 			r.core.leases.Apply(f.reply)
+			// ADR-017 T6, the terminal control plane's half of the same frame -- and on its
+			// OWN plane (OPEN-C4), which is why it is a second call and not a branch inside
+			// the first. The instance comes from the session's own capability record rather
+			// than from the reply, because the record is what the machine will re-check the
+			// generation against per frame (T6-e): a generation the phone bound to a stale
+			// instance is refused stale_instance, which is the answer that keeps a screen
+			// from typing into the PTY that REPLACED the one it is showing.
+			r.core.terminalControl.Apply(f.reply, r.core.sessionInstance(f.reply.SessionID), time.Now())
 			// The verdict is deliberately dropped here: a skewed clock is not a reason to
 			// refuse an INBOUND frame (the machine's stamp is the thing being measured).
 			// The app reads it from SkewMonitor.Check in its reply handler and reports it on

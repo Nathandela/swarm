@@ -42,7 +42,7 @@ import (
 )
 
 // wireSessionCapabilities is the committed JSON of testSessionCapabilities below.
-const wireSessionCapabilities = `{"provider":"claude","provider_version":"1.2.3","adapter_revision":"rev-1","structured_chat":true,"terminal_fallback":false,"interrupt":false}`
+const wireSessionCapabilities = `{"provider":"claude","provider_version":"1.2.3","adapter_revision":"rev-1","session_instance":"","structured_chat":true,"terminal_fallback":false,"terminal_control":false,"interrupt":false}`
 
 func testSessionCapabilities() SessionCapabilities {
 	return SessionCapabilities{

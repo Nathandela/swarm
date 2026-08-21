@@ -1,0 +1,154 @@
+WAVE R8 -- ROUND 3 RED EVIDENCE
+captured 2026-08-20T18:10:57Z on Darwin 25.5.0
+
+Go toolchain: go version go1.26.5 darwin/amd64
+
+================================================================
+RED 1 -- internal/vt : the drop class is an enumeration, not a property
+================================================================
+--- FAIL: TestR8R3_NoInvisibleRuneSurvivesSanitization (0.00s)
+    r8r3_sanitizeproperty_test.go:108: 13 invisible rune(s) survived stripControls, e.g. U+034F, U+0600, U+0601, U+0602, U+0603, U+0604, U+0605, U+06DD, U+070F, U+0890, U+0891, U+08E2, U+115F.
+--- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed (0.00s)
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/inhibit_symmetric_swapping_u206a (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+206A survived sanitization (one code point past the hand-written U+2060-U+2064 arm): rendered "pay\u206apal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/deprecated_format_u206f (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+206F survived sanitization (the far end of the same block, likewise unlisted): rendered "pay\u206fpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/musical_format_u1d173 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1D173 survived sanitization (a format control in the musical-symbols plane): rendered "pay\U0001d173pal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/musical_format_u1d17a (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1D17A survived sanitization (the far end of that block): rendered "pay\U0001d17apal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_choseong_filler_u115f (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+115F survived sanitization (occupies two terminal cells and renders as nothing on a phone): rendered "payᅟpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_jungseong_filler_u1160 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+1160 survived sanitization (one terminal cell, invisible on a phone): rendered "payᅠpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/hangul_filler_u3164 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+3164 survived sanitization (two terminal cells, invisible on a phone): rendered "payㅤpal.com"
+    --- FAIL: TestR8R3_TheReviewsEscapeesAreEachNamed/halfwidth_hangul_filler_uffa0 (0.00s)
+        r8r3_sanitizeproperty_test.go:164: U+FFA0 survived sanitization (one terminal cell, invisible on a phone): rendered "payﾠpal.com"
+--- FAIL: TestR8R3_ADroppedRuneCostTheTerminalNoColumnAndAReplacedOneDid (1.57s)
+    r8r3_sanitizeproperty_test.go:197: U+034F occupies NO terminal cell but sanitized to "a͏b"; a space here adds a column the terminal never spent
+    r8r3_sanitizeproperty_test.go:193: U+115F occupies a terminal cell but sanitized to "aᅟb"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:193: U+1160 occupies a terminal cell but sanitized to "aᅠb"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:197: U+17B4 occupies NO terminal cell but sanitized to "a឴b"; a space here adds a column the terminal never spent
+    r8r3_sanitizeproperty_test.go:197: U+17B5 occupies NO terminal cell but sanitized to "a឵b"; a space here adds a column the terminal never spent
+    r8r3_sanitizeproperty_test.go:197: U+2065 occupies NO terminal cell but sanitized to "a\u2065b"; a space here adds a column the terminal never spent
+    r8r3_sanitizeproperty_test.go:193: U+3164 occupies a terminal cell but sanitized to "aㅤb"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:193: U+FFA0 occupies a terminal cell but sanitized to "aﾠb"; want a blank in its place so the phone's columns line up with the terminal's
+    r8r3_sanitizeproperty_test.go:197: U+FFF0 occupies NO terminal cell but sanitized to "a\ufff0b"; a space here adds a column the terminal never spent
+    r8r3_sanitizeproperty_test.go:197: U+FFF1 occupies NO terminal cell but sanitized to "a\ufff1b"; a space here adds a column the terminal never spent
+
+================================================================
+RED 2 -- internal/protocol : the generation dies with its connection
+================================================================
+# github.com/Nathandela/swarm/internal/protocol [github.com/Nathandela/swarm/internal/protocol.test]
+internal/protocol/r8r3_generationregistry_test.go:215:13: rig.srv.publishTerminalGenerationIfCurrent undefined (type *Server has no field or method publishTerminalGenerationIfCurrent)
+internal/protocol/r8r3_generationregistry_test.go:215:56: rig.srv.termSeverGen undefined (type *Server has no field or method termSeverGen)
+internal/protocol/r8r3_generationregistry_test.go:216:53: unknown field deviceID in struct literal of type terminalGeneration
+FAIL	github.com/Nathandela/swarm/internal/protocol [build failed]
+FAIL
+
+================================================================
+RED 2 -- internal/protocol : the generation dies with its connection
+  (behavioural; the sever-race test is compile-fail RED, held out here
+   so this file's own failures are readable one at a time)
+================================================================
+--- FAIL: TestR8R3_AGenerationOutlivesTheConnectionThatMintedIt (0.02s)
+    r8r3_generationregistry_test.go:78: terminal_input on a SECOND connection = op "error" code "stale_generation" error "terminal_input: refused; nothing was typed"; want ok.
+        The gateway dials a fresh daemon connection per command, so this is the only shape the product ever uses. A generation bound to the minting connection is a generation no phone can ever use.
+--- FAIL: TestR8R3_AGenerationSurvivesTheMintingConnectionClosing (0.00s)
+    r8r3_generationregistry_test.go:96: terminal_input after the minting connection closed = op "error" code "stale_generation"; want ok
+--- FAIL: TestR8R3_TheKeepaliveAlsoCrossesConnections (0.00s)
+    r8r3_generationregistry_test.go:115: terminal_control_keepalive on a second connection = op "error" code "stale_generation"; want ok
+--- FAIL: TestR8R3_ReleasingOnAnotherConnectionStillReleases (0.00s)
+    r8r3_generationregistry_test.go:141: terminal_control_end on a second connection = op "error" code "stale_generation" error "terminal_control_end: no live control generation on this connection"; want ok
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/protocol	0.765s
+FAIL
+
+================================================================
+RED 3 -- internal/remotegw : the product's own gateway seam
+================================================================
+# github.com/Nathandela/swarm/internal/remotegw [github.com/Nathandela/swarm/internal/remotegw.test]
+internal/remotegw/r8r3_reapblank_test.go:144:15: gw.BlankTerminal undefined (type *Gateway has no field or method BlankTerminal)
+internal/remotegw/r8r3_reapblank_test.go:152:8: undefined: terminalBlanker
+FAIL	github.com/Nathandela/swarm/internal/remotegw [build failed]
+FAIL
+
+================================================================
+RED 4 -- internal/phonecore : the control predicate + the decode fence
+================================================================
+# github.com/Nathandela/swarm/internal/phonecore [github.com/Nathandela/swarm/internal/phonecore.test]
+internal/phonecore/r8r3_controlpredicate_test.go:87:14: undefined: TerminalControlAvailable
+internal/phonecore/r8r3_controlpredicate_test.go:107:7: undefined: TerminalControlAvailable
+internal/phonecore/r8r3_controlpredicate_test.go:111:34: undefined: TerminalControlAvailable
+FAIL	github.com/Nathandela/swarm/internal/phonecore [build failed]
+FAIL
+
+================================================================
+RED 5 -- internal/skeleton : the incarnation binding + the record on the wire
+================================================================
+internal/skeleton/r8r3_incarnation_test.go:63:59: too many arguments in call to d.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:84:56: too many arguments in call to d.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:88:54: too many arguments in call to d.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:117:54: too many arguments in call to d.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:135:57: too many arguments in call to d1.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:154:59: too many arguments in call to d2.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_incarnation_test.go:161:60: too many arguments in call to d2.adoptOrMintSessionInstance
+	have (string, number)
+	want (string)
+internal/skeleton/r8r3_recordonwire_test.go:212:16: undefined: phonecore.TerminalControlAvailable
+internal/skeleton/r8r3_recordonwire_test.go:212:16: too many errors
+FAIL	github.com/Nathandela/swarm/internal/skeleton [build failed]
+FAIL
+
+================================================================
+RED 6 -- android/gate : the renewal tick + the binding ledger dimension
+================================================================
+--- FAIL: TestR8R3Gate_AnIdleFallbackScreenKeepsItsWatchAcrossAHorizon (0.05s)
+    r8r3_fallback_ui_test.go:53: ADR-017 T4-b: dev/swarm/phone/PhoneSurface.kt schedules nothing. The watch renewal rides the redraw, and an IDLE fallback screen on an IDLE session has no guaranteed redraw inside the 60s horizon -- so the machine reaps a watch the user is looking at, the peek ends from the gateway side (no OpError, no blanking frame), and the screen keeps a dead grid with no staleness signal, because StreamStale is set by desync events and the machine heartbeat keeps arriving.
+    r8r3_fallback_ui_test.go:65: ADR-017 T6-c: dev/swarm/phone/PhoneSurface.kt starts a renewal tick and cancels it nowhere reachable from release(). A tick that outlives the screen is exactly the background emitter the ruling bans: it holds the machine rendering, sealing and appending with no screen displaying anything.
+    r8r3_fallback_ui_test.go:74: ADR-017 T4-b: dev/swarm/phone/PhoneSurface.kt has no identifiable renewal tick. The scan looks for a member whose name contains `renewTick`, `watchTick` or `renewalTick`.
+--- FAIL: TestR8R3Gate_TheRenewalTickIsNotAKeepaliveEmitter (0.01s)
+    r8r3_fallback_ui_test.go:111: no renewal tick in dev/swarm/phone/PhoneSurface.kt
+--- FAIL: TestR8R3Gate_TheFallbackBindingsVerbsAreReachedOrLedgered (0.11s)
+    r8r3_fallback_ui_test.go:159: TerminalFallbackBinding.beginControl is reached from no production Kotlin outside dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt, and has no `TerminalFallbackBinding.beginControl` row in android/unbound-verbs.tsv.
+        This class is the one adapter between the fallback screen and the facade, so a wrapper nothing reaches makes the App verb it names read as BOUND while the app cannot get to it -- which is the standing defect class the ledger exists for, on a receiver it had never been pointed at.
+    r8r3_fallback_ui_test.go:159: TerminalFallbackBinding.keepAlive is reached from no production Kotlin outside dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt, and has no `TerminalFallbackBinding.keepAlive` row in android/unbound-verbs.tsv.
+        This class is the one adapter between the fallback screen and the facade, so a wrapper nothing reaches makes the App verb it names read as BOUND while the app cannot get to it -- which is the standing defect class the ledger exists for, on a receiver it had never been pointed at.
+    r8r3_fallback_ui_test.go:159: TerminalFallbackBinding.type is reached from no production Kotlin outside dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt, and has no `TerminalFallbackBinding.type` row in android/unbound-verbs.tsv.
+        This class is the one adapter between the fallback screen and the facade, so a wrapper nothing reaches makes the App verb it names read as BOUND while the app cannot get to it -- which is the standing defect class the ledger exists for, on a receiver it had never been pointed at.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	1.067s
+FAIL
+
+================================================================
+RED 7 -- the two fences added mid-round, and their own RED
+================================================================
+mobile/r8r3_controlfield_test.go and android/gate's tick-start clause were written
+after the first RED sweep, when the mutation campaign showed the production lines they
+guard were reachable without them. Their RED is the M7 and M11 transcripts in
+docs/verification/r8-green/README-round3.md section 3, which restore exactly those
+lines and record the named failure.
+
+================================================================
+A FENCE THAT SURVIVED ITS OWN MUTATION, RECORDED RATHER THAN REPAIRED SILENTLY
+================================================================
+TestR8R3_ABeginRacingASeverFailsClosed (minor 7) PASSED under mutation M10, which
+removes the sever counter's bump entirely. The first version sampled Load()-1, and
+with the counter never incremented that is 0-1 -- a huge uint64 that still differs
+from 0, so the publish failed for the wrong reason. Rewritten to drive the race in the
+order it happens (sample, sever, publish) plus a does-not-wedge arm; M10 then CAUGHT.
+Recorded because 'a fence that survives its own mutation' is this wave's own named
+defect class and round 2 shipped three of them.

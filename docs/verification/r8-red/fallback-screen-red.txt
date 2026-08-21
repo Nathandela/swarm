@@ -1,0 +1,27 @@
+WAVE R8 RED EVIDENCE -- S9, the fallback screen and the widened Kotlin gates
+captured 2026-08-20T12:18:17Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go test ./android/gate/ -run TestR8Gate -count=1
+
+--- FAIL: TestR8Gate_OnlyTheFallbackScreenIssuesAWatch (0.05s)
+    r8_fallback_ui_test.go:77: ADR-017 T4: NO production Kotlin file issues a terminal watch, so the fallback screen either does not exist or never asks the machine for a snapshot. dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt is the one file that may.
+--- FAIL: TestR8Gate_OnlyTheFallbackBodyPrintsTheTerminalWell (0.01s)
+    r8_fallback_ui_test.go:124: ADR-017 T1: no production Kotlin file renders the sanitized terminal view. dev/swarm/phone/ui/screens/TerminalFallbackView.kt is where the fallback body lives.
+--- FAIL: TestR8Gate_TheFallbackBodyNeverRoutesASnapshotLineThroughMarkdown (0.00s)
+    r8_fallback_ui_test.go:174: ADR-017 T1/T4: dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt does not exist, so R8's read half has no surface
+    r8_fallback_ui_test.go:174: ADR-017 T1/T4: dev/swarm/phone/ui/screens/TerminalFallbackView.kt does not exist, so R8's read half has no surface
+--- FAIL: TestR8Gate_TheFallbackBodyForcesLTRParagraphDirection (0.00s)
+    r8_fallback_ui_test.go:200: ADR-017 T4-c: dev/swarm/phone/ui/screens/TerminalFallbackView.kt does not exist
+--- FAIL: TestR8Gate_TheFallbackHeaderIsHonestAboutWhyThereIsNoChat (0.00s)
+    r8_fallback_ui_test.go:220: ADR-017 T1: dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt does not exist
+--- FAIL: TestR8Gate_TheControlBannerIsPersistentAndInView (0.00s)
+    r8_fallback_ui_test.go:256: ADR-017 T6: dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt does not exist
+--- FAIL: TestR8Gate_OnlyTheLiveForegroundScreenEmitsInputOrKeepalive (0.03s)
+    r8_fallback_ui_test.go:308: ADR-017 T6: no production Kotlin file emits terminal_input or the keepalive, so R8b's control half is not wired. This is the correct state at R8a's exit and the failing state at R8b's.
+--- FAIL: TestR8Gate_ComposerAvailabilityIsReadFromTheCapabilityRecord (0.00s)
+    r8_fallback_ui_test.go:344: ADR-017 T2 rule 3: dev/swarm/phone/ui/screens/SessionDetailPanel.kt still derives composer availability from `transcript.structureTorn`. The phone renders from the capability record and infers nothing; deriving support from the shape of the transcript is the exact inference the rule names.
+    r8_fallback_ui_test.go:349: ADR-017 T2 rule 3: dev/swarm/phone/ui/screens/SessionDetailPanel.kt reads no capability record at all
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.958s
+FAIL

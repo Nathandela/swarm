@@ -142,6 +142,7 @@ class StreamingRedrawTest {
             detail,
             transcript,
             SessionLease(sessionId = session, leaseHeld = leaseHeld, online = true),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
 

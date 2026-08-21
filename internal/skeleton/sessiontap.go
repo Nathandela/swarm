@@ -71,6 +71,10 @@ const (
 // tapManager multiplexes one upstream SessionStream per session id to N subscribers.
 type tapManager struct {
 	dial func(id string) (protocol.SessionStream, error)
+	// onSubscribe fires before each subscribe. It is the assembly's ADR-017 T2-a hook
+	// for the RE-ATTACH path (see authorAttachedSessionCapabilities below); nil in the
+	// unit tests that build a tapManager directly, and a no-op then.
+	onSubscribe func(id string)
 
 	parserFaults  atomic.Uint64
 	parserLastLog atomic.Int64
@@ -81,6 +85,42 @@ type tapManager struct {
 
 func newTapManager(dial func(id string) (protocol.SessionStream, error)) *tapManager {
 	return &tapManager{dial: dial, taps: map[string]*tap{}}
+}
+
+// authorAttachedSessionCapabilities is D-NIL's fourth session-creation path: RESUME AND
+// RE-ATTACH of an existing session dir.
+//
+// A session launched before ADR-017 shipped has no capabilities.json at all, and neither
+// the launch hook nor the reconcile pass ever ran for it under this ruling. The attach is
+// where such a session first proves it is live, and it is the last honest opportunity to
+// give it a record before a surface asks which of the three destinations it belongs to.
+//
+// IT ONLY EVER FILLS A HOLE. A session that already has a record returns on the first
+// line, so an attach never re-derives -- which matters because an attach can happen at any
+// time, including after a degrade, and re-deriving on a hot path would put the one-way
+// rule behind a merge it does not need to reach.
+func (d *Daemon) authorAttachedSessionCapabilities(id string) {
+	if _, ok := d.sessionCapabilities(id); ok {
+		return
+	}
+	if d.core == nil {
+		return
+	}
+	m, ok := d.core.Get(id)
+	if !ok {
+		return
+	}
+	inst, ad, version, ok := d.sessionCapabilityInputs(id, m.AgentType, m.ShimPID)
+	if !ok {
+		return // no bindable instance: T2-a's honest status card
+	}
+	live, decided := d.backendPlaneDecided(id, ad)
+	if !decided {
+		return // still dialling; backend.go authors either outcome
+	}
+	if _, err := d.authorSessionCapabilities(id, inst, m.AgentType, ad, version, adapterRevision, live); err != nil {
+		log.Printf("skeleton: author capability record for attached session %s: %v", id, err)
+	}
 }
 
 func (m *tapManager) noteParserFault(id string, err error) {
@@ -98,6 +138,13 @@ func (m *tapManager) noteParserFault(id string, err error) {
 // opens the upstream (dial + mirror seed + pump); later callers join the running
 // pump and are seeded from the mirror's current grid.
 func (m *tapManager) subscribe(id string, mode tapMode) (*tapSub, error) {
+	// Outside every lock, and before the upstream is dialled: an attach is the moment a
+	// session dir that predates this daemon -- or predates ADR-017 -- is proven live and
+	// reachable, and it is the last of D-NIL's session-creation paths to acquire a
+	// capability record.
+	if fn := m.onSubscribe; fn != nil {
+		fn(id)
+	}
 	for {
 		m.mu.Lock()
 		t := m.taps[id]

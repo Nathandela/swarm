@@ -174,8 +174,8 @@ func TestOBL10_ASupersededObligationDoesNotEraseADegradedPairing(t *testing.T) {
 
 	err = newObligationHealthService(t, addr, store).Err()
 	if err == nil {
-		t.Fatalf("Service.Err() = nil for a pairing whose push address was REVOKED and whose replacement obligation "+
-			"was merely superseded: a supersede sends nothing, so it cannot prove the pairing repaired -- PG-OBL-10's "+
+		t.Fatalf("Service.Err() = nil for a pairing whose push address was REVOKED and whose replacement obligation " +
+			"was merely superseded: a supersede sends nothing, so it cannot prove the pairing repaired -- PG-OBL-10's " +
 			"degraded state must survive it")
 	}
 	if !strings.Contains(err.Error(), "address_revoked") {

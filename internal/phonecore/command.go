@@ -397,3 +397,91 @@ func OpenControlReply(key crypto.ContentKey, raw []byte) (schema.Control, error)
 	}
 	return ctrl, nil
 }
+
+// TerminalControlBeginInput is the identity of a terminal_control_begin op the phone
+// authors (Wave R8, ADR-017 T6). SessionInstance and Profile are bound into the signature
+// via TerminalControlBeginContentHash alongside the session.
+type TerminalControlBeginInput struct {
+	Machine         string    // target machine endpoint id
+	Session         string    // namespaced session id the generation targets
+	SessionInstance string    // the INCARNATION the screen is showing; never empty
+	Profile         int       // the remote profile version the phone selected
+	OperationID     string    // durable client-generated idempotency key
+	ExpiresAt       time.Time // command validity horizon
+}
+
+// SignTerminalControlBegin authors and signs a terminal_control_begin command, mirroring
+// SignComposerSend exactly: the signed tuple's content slot is
+// schema.TerminalControlBeginContentHash over the SAME (session, session_instance,
+// profile) body SealTerminalControlBeginEnvelope carries.
+//
+// The INSTANCE is inside the hash, and that is the point of the whole op. A generation
+// bound to a session id alone survives the session's replacement, so a signature authored
+// against one PTY would authorise raw bytes into its successor -- with the user still
+// reading the screen they signed against.
+func SignTerminalControlBegin(ks crypto.KeyStore, in TerminalControlBeginInput) (schema.DeviceCommandAuth, error) {
+	return SignCommand(ks, CommandInput{
+		Action:      schema.ActionTerminalControlBegin,
+		Machine:     in.Machine,
+		Session:     in.Session,
+		OperationID: in.OperationID,
+		ExpiresAt:   in.ExpiresAt,
+		ContentHash: schema.TerminalControlBeginContentHash(&schema.TerminalControlBeginReq{
+			Session: in.Session, SessionInstance: in.SessionInstance, Profile: in.Profile,
+		}),
+	})
+}
+
+// SealTerminalControlBeginEnvelope seals the SIGNED begin together with its body, mirroring
+// SealComposerSendEnvelope: the body rides beside the signed tuple so the gateway can
+// forward it, the command's ContentHash must be
+// schema.TerminalControlBeginContentHash(body) which the daemon recomputes from the
+// forwarded body, and BodyVersion is bound to the one profile version this phone read.
+func SealTerminalControlBeginEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, body *schema.TerminalControlBeginReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth:    cmd,
+			TerminalControlBegin: body,
+			BodyVersion:          schema.CurrentProfileVersion,
+		},
+	})
+}
+
+// SealTerminalInputEnvelope seals ONE UNSIGNED raw-input frame (Wave R8, ADR-017 T6).
+//
+// IT CARRIES NO DEVICE SIGNATURE, and that is the exception T6 keeps to exactly two body
+// types: what authorises the frame is the E2EE seal's own authenticated sender and
+// sequence PLUS the confirmed generation the daemon re-evaluates on every frame, alongside
+// the kill switch, the device registration and the capability record (T6-e). A per-frame
+// signature would be a keystroke-rate signing operation for authority the frame already
+// carries.
+func SealTerminalInputEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, machine string, body *schema.TerminalInputReq) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: schema.DeviceCommandAuth{
+				Action:  schema.ActionTerminalInput,
+				Machine: machine,
+				Session: body.Session,
+			},
+			TerminalInput: body,
+		},
+	})
+}
+
+// SealTerminalKeepaliveEnvelope seals the second and last unsigned frame kind: the
+// generation IS the frame, so it carries no body of its own.
+func SealTerminalKeepaliveEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, machine, session, generation string) ([]byte, error) {
+	return sealPhoneFrame(key, epochID, seq, commandFrame{
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth: schema.DeviceCommandAuth{
+				Action:  schema.ActionTerminalControlKeepalive,
+				Machine: machine,
+				Session: session,
+			},
+			ControlGeneration: generation,
+		},
+	})
+}

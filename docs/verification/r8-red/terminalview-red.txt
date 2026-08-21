@@ -1,0 +1,14 @@
+WAVE R8 RED EVIDENCE -- S4, TerminalViewV1: epoch, revision, reset, watch horizon
+captured 2026-08-20T12:18:13Z
+host: Darwin 25.5.0 arm64
+commit: 5195685
+command: go vet ./internal/daemon/ ./internal/remotegw/
+
+# github.com/Nathandela/swarm/internal/daemon
+# [github.com/Nathandela/swarm/internal/daemon]
+vet: internal/daemon/r8_terminalview_test.go:51:8: undefined: TerminalView
+# github.com/Nathandela/swarm/internal/remotegw
+# [github.com/Nathandela/swarm/internal/remotegw]
+vet: internal/remotegw/r8_watchlease_test.go:106:54: too many arguments in call to newTerminalWatcher
+	have (*r8FakeRunner, time.Duration, time.Duration, func() time.Time)
+	want (terminalRunner, time.Duration)

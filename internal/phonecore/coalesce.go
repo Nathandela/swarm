@@ -195,6 +195,25 @@ func (c *InputCoalescer) Abandon(reason string) []Undelivered {
 	return out
 }
 
+// AbandonSession is Abandon for ONE session: the shape a per-session severance trigger
+// needs (ADR-017 T6-f). The bytes are DROPPED and recorded as undelivered, never released
+// -- releasing them on "control ended" is exactly the flush that would turn live-only
+// input into a short offline queue at the one place a queue can form.
+func (c *InputCoalescer) AbandonSession(session, reason string) []Undelivered {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.sessions {
+		if s.session != session || len(s.buf) == 0 {
+			continue
+		}
+		out := []Undelivered{{Session: session, Bytes: len(s.buf), At: c.now(), Reason: reason}}
+		s.buf = nil
+		c.record(out...)
+		return out
+	}
+	return nil
+}
+
 // Fail records a frame the coalescer already handed out whose send failed (transport
 // ErrNotDelivered). It is recorded and NOT re-buffered: re-buffering a failed live frame
 // turns the live-only path into a queue, one frame at a time.

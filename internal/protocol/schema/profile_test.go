@@ -72,7 +72,7 @@ import (
 // in sorted order (encoding/json), so "kill" precedes "launch". The three ADR-016 fields
 // ride LAST, appended in field-declaration order, matching RemoteCommand's own convention
 // of adding new fields at the end of the struct rather than reordering.
-const wireRemoteProfileV1 = `{"version":1,"accepted_actions":["launch","kill"],"accepted_body_versions":{"kill":1,"launch":2},"interaction_schema_version":1,"terminal_view_version":1,"capability_record_version":1,"relay_tls_policy":"webpki","relay_host":"swarm-relay.example.com","relay_spki_pin":"MzItYnl0ZS1zaGEyNTYtZGlnZXN0LW9mLXNwa2khIQ=="}`
+const wireRemoteProfileV1 = `{"version":1,"accepted_actions":["launch","kill"],"accepted_body_versions":{"kill":1,"launch":2},"interaction_schema_version":1,"terminal_view_version":1,"capability_record_version":1,"relay_tls_policy":"webpki","relay_host":"swarm-relay.example.com","relay_spki_pin":"MzItYnl0ZS1zaGEyNTYtZGlnZXN0LW9mLXNwa2khIQ==","terminal_view_max_line_bytes":0,"terminal_view_max_rows":0,"terminal_view_max_rate_hz":0}`
 
 func testRemoteProfile() RemoteProfileV1 {
 	return RemoteProfileV1{

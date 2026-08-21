@@ -159,6 +159,18 @@ const (
 	// record whose Item is the full pre-truncation body, or IS-CAP-3's `unavailable`.
 	OpInteractionHistory = "interaction_history"
 	OpInteractionDetail  = "interaction_detail"
+
+	// The Wave R8 UNSIGNED frame kinds (ADR-017 T6). They ride the E2EE frame's
+	// authenticated sender/sequence plus the CONFIRMED GENERATION, and are not
+	// individually signed -- "the sole exception to full-body signatures in the remote
+	// protocol, and it is deliberately the SAME exception that already exists"
+	// (ADR-007's 2026-07-24 Decision 1).
+	//
+	// THE EXCEPTION IS EXACTLY TWO BODY TYPES AND ONE LIVE GENERATION, which is what
+	// keeps it an exception. Neither is a mapped device action: PB-SYNC-5's actionClass
+	// switch stays closed, exactly as it does for the two M3 reads.
+	OpTerminalInput            = "terminal_input"
+	OpTerminalControlKeepalive = "terminal_control_keepalive"
 )
 
 // Negotiated capabilities. The legacy caps (attach, subscribe) plus the remote-tier

@@ -248,6 +248,23 @@ type Server struct {
 	// severControl) and the re-check (under ctlMu) cross lock domains.
 	severGen atomic.Uint64
 
+	// The Wave R8 terminal control generations (ADR-017 T6), on their OWN plane and their
+	// own mutex: a generation is deliberately NOT a controlSession, because the two have
+	// different lifetimes, different ceremonies and different authority (OPEN-C4).
+	//
+	// THEY LIVE ON THE SERVER, NOT ON A CONNECTION, and round 3 is where that stopped being
+	// optional: Gateway.ForwardCommand dials a fresh daemon connection per command, so the
+	// connection that mints a generation is closed before the first byte is typed. A
+	// connection-scoped registry meant every phone input frame in the product answered
+	// `stale_generation` with zero bytes at the PTY.
+	//
+	// termSeverGen is severGen's counterpart on this plane: bumped BEFORE a sever sweeps,
+	// re-checked under termMu when a begin publishes, so a generation minted across a sever
+	// fails closed rather than escaping it (round-3 minor 7).
+	termMu       sync.Mutex
+	termGens     map[string]*terminalGeneration
+	termSeverGen atomic.Uint64
+
 	// remoteControlledFn is the source of SessionView.RemoteControlled: the assembly
 	// registers the REMOTE-tier Server's IsControlled here on the OWNER-tier Server, so
 	// an owner's roster row reports when a paired device holds the lease. Unset (no
@@ -344,6 +361,12 @@ func newServer(d DaemonAPI) *Server {
 	}
 	s.wg.Add(1)
 	go s.fanoutLoop()
+	// ADR-017 T6-c: expire idle terminal control generations on the SERVER's clock. It is
+	// started here rather than beside the listener because NewServer (the assembled daemon's
+	// seam) never runs Serve, and a generation that expires only under Serve would be a
+	// generation that never expires in the shipped binary.
+	s.wg.Add(1)
+	go s.terminalSweepLoop()
 	// When the backend exposes a journal, drain its single source and fan journal
 	// events out to journal subscribers (reusing the bounded-queue evict discipline).
 	if jb, ok := d.(JournalBackend); ok {
@@ -1180,9 +1203,17 @@ func (cc *clientConn) handleControl(c Control) {
 		// Wave R6 M3.3: unsigned detail-on-demand read.
 		cc.handleInteractionDetail(c)
 	case OpTerminalControlBegin:
-		cc.handleRefusalOp(c, ActionTerminalControlBegin, c.SessionID)
+		// Wave R8 (ADR-017 T6): the REAL handler. The Wave R1 op_not_implemented stub is
+		// gone -- while it owned this op the fallback was read-only in the strongest
+		// possible sense, which was R8a's correct state and is R8b's starting point.
+		cc.handleTerminalControlBegin(c)
 	case OpTerminalControlEnd:
-		cc.handleRefusalOp(c, ActionTerminalControlEnd, c.SessionID)
+		cc.handleTerminalControlEnd(c)
+	case OpTerminalInput:
+		// Wave R8 (ADR-017 T6): one of the exception's exactly two UNSIGNED frame kinds.
+		cc.handleTerminalInput(c)
+	case OpTerminalControlKeepalive:
+		cc.handleTerminalControlKeepalive(c)
 	case OpPairStart:
 		cc.handlePairStart(c)
 	case OpPairConfirm:
@@ -1379,6 +1410,11 @@ func (cc *clientConn) handleKill(c Control) {
 			cc.replyError("kill: " + kerr.Error())
 			return
 		}
+		// ADR-017 T8: SESSION KILL is a SYNCHRONOUS severance trigger for the terminal control
+		// plane. A generation that outlives its session is one the next incarnation under the
+		// same id inherits, and a phone that has gone away sends no frame for the per-frame
+		// re-check to refuse.
+		cc.srv.severTerminalControlForSession(local)
 		cc.replyOK(c.SessionID)
 		return
 	}
@@ -1386,6 +1422,7 @@ func (cc *clientConn) handleKill(c Control) {
 		cc.replyError("kill: " + err.Error())
 		return
 	}
+	cc.srv.severTerminalControlForSession(local) // ADR-017 T8, as above
 	cc.replyOK(c.SessionID)
 }
 
@@ -1425,6 +1462,9 @@ func (cc *clientConn) handleDelete(c Control) {
 			return
 		}
 		cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+		// ADR-017 T8: the terminal control plane is SEPARATE from the lease plane (OPEN-C4), so
+		// dropping the lease leaves a live generation. A deleted session's generation goes here.
+		cc.srv.severTerminalControlForSession(local)
 		cc.replyOK(c.SessionID)
 		return
 	}
@@ -1432,7 +1472,8 @@ func (cc *clientConn) handleDelete(c Control) {
 		cc.replyError("delete: " + err.Error())
 		return
 	}
-	cc.srv.dropLease(local) // bound s.leases growth: drop the deleted session's lease (F13)
+	cc.srv.dropLease(local)                      // bound s.leases growth: drop the deleted session's lease (F13)
+	cc.srv.severTerminalControlForSession(local) // ADR-017 T8, as above
 	cc.replyOK(c.SessionID)
 }
 
@@ -1630,33 +1671,25 @@ func (cc *clientConn) handleApprove(c Control) {
 	cc.replyOK(c.SessionID)
 }
 
-// handleRefusalOp is the shared dispatch for every Wave R1 semantic op this build MAPS
-// (playbook §6.3, ADR-017 T5) but has not yet built a real handler for. It runs
-// requireRemoteAuthz FIRST -- the SAME choke point kill/delete/launch/approve already
-// ride -- so a forged signature or a missing device field is refused before the op is
-// ever distinguished from an unimplemented one. `session` is the caller's choice, PINNED
-// per op at each handleControl switch arm exactly like handleLaunch pins
-// LaunchSessionSentinel -- never derived here from c.SessionID, so a session-less op's
-// authz subject can never be steered by an arbitrary wire value. Only once authorized
-// does it check the body version the phone bound this op to -- schema.CurrentProfileVersion
-// is the sole accepted value across the whole R1 companion set (profile.go's "taken once
-// across the R1 set") -- and only once BOTH hold does it answer the sealed, stable
-// op_not_implemented refusal, because the real handler does not exist yet.
+// THE R1 REFUSAL DISPATCH IS GONE, and its absence is the wave ledger rather than a deletion
+// to notice later. `handleRefusalOp` was the shared body for every Wave R1 semantic op this
+// build MAPPED (playbook §6.3, ADR-017 T5) but had not yet built a real handler for: it ran
+// requireRemoteAuthz FIRST -- the SAME choke point kill/delete/launch/approve ride -- then
+// requireBodyVersion, and only once both held did it answer the sealed, stable
+// op_not_implemented refusal.
 //
-// Wave R5 removed session_launch and operation_status from this dispatch: their real
-// handlers (remote_launch.go) inherit the choke-point ordering unchanged and are pinned
-// by r5_sessionlaunch_test.go. Wave R6 removed composer_send and turn_interrupt the same
-// way (remote_chat.go, pinned by r6_composersend_test.go / r6_turninterrupt_test.go);
-// terminal_control_begin / terminal_control_end remain refusal-only here.
-func (cc *clientConn) handleRefusalOp(c Control, action, session string) {
-	if !cc.requireRemoteAuthz(c, action, session, nil) {
-		return
-	}
-	if !cc.requireBodyVersion(c) {
-		return
-	}
-	cc.replyErrorCode(c.Op+": not implemented yet", CodeNotImplemented)
-}
+// Every op it once owned now has a real handler, and each inherited that ordering unchanged
+// rather than reproducing it: R5 took session_launch and operation_status (remote_launch.go,
+// pinned by r5_sessionlaunch_test.go), R6 took composer_send and turn_interrupt
+// (remote_chat.go, pinned by r6_composersend_test.go / r6_turninterrupt_test.go), and R8 took
+// terminal_control_begin and terminal_control_end (remote_terminal.go, pinned by
+// r8_terminalcontrol_test.go). r1_refusalops_test.go still drives all six through the same
+// choke-point assertions; what changed is the CODE each answers a malformed frame with, which
+// that table records op by op.
+//
+// CodeNotImplemented itself is NOT retired: it is still the answer a backend without the seam
+// gives (remote_chat.go, remote_terminal.go), which is a different fact from "this build does
+// not know the op" and is why the constant outlives its first dispatcher.
 
 // severControl force-releases every control lease whose establishing control session matches the
 // predicate and cancels every active terminal peek. It is the shared severance machinery behind
@@ -1713,6 +1746,68 @@ func (s *Server) severControl(match func(*controlSession) bool) {
 // every active terminal peek on this Server (C1).
 func (s *Server) severRevokedDeviceControl(deviceID string) {
 	s.severControl(func(ctl *controlSession) bool { return ctl.deviceID == deviceID })
+	// ADR-017 T8 lists device revocation as SYNCHRONOUS AT THE DAEMON. Without this line it
+	// was a lazy per-frame DeviceRegistered poll, and a lazy poll REVERSES: measured on the
+	// assembled server, re-pairing the same device id resumed the SAME generation typing
+	// onto the PTY with no fresh terminal_control_begin (round-2 major 8).
+	s.severTerminalControl(func(devID string) bool { return devID == deviceID })
+}
+
+// severTerminalControl drops every live terminal control generation whose signing device
+// matches, on this Server. It is the terminal plane's half of the severance the lease plane
+// has had since C1/C2a -- a separate call because a generation is NOT a controlSession
+// (OPEN-C4) and the two planes are deliberately not shared.
+// It sweeps the SERVER-WIDE registry rather than the connections, because a generation is
+// not bound to one (round-3 blocker 1): the gateway dials per command, so the connection that
+// minted a generation is closed before the first byte is ever typed, and a connection-scoped
+// sever would have had nothing to find.
+func (s *Server) severTerminalControl(match func(deviceID string) bool) {
+	s.severTerminalGenerations(match)
+}
+
+// sweepTerminalControl drops every generation whose signed horizon or missing-keepalive
+// deadline has passed (ADR-017 T6-c). It runs off the server's own clock on a ticker, so an
+// IDLE generation -- one receiving no frames at all, which is exactly the state a
+// backgrounded app or a phone in an attacker's hands leaves behind -- expires without the
+// phone ever asking anything.
+func (s *Server) sweepTerminalControl() {
+	s.expireTerminalGenerations(s.now())
+	// ADR-017 T8's SESSION-REPLACEMENT trigger, on the same clock (closing review, finding 8).
+	// A generation bound to an incarnation the session no longer has is severed here rather
+	// than merely refused on a frame that may never arrive.
+	s.severReplacedTerminalGenerations()
+}
+
+// severTerminalControlForSession is T8's SESSION KILL / SESSION DELETE trigger, called
+// synchronously from the handlers that end a session. There is nothing to observe and nothing
+// to poll: the generation is gone before the reply is written.
+func (s *Server) severTerminalControlForSession(local string) {
+	s.severTerminalGenerationsForSession(local)
+}
+
+// anyLiveTerminalGeneration reports whether any connection still holds a control generation.
+// It is the observable the idle-sweep test asserts on: "the generation is gone from the
+// server's own state" is a different fact from "the next frame would be refused", and T6-c
+// is about the first.
+func (s *Server) anyLiveTerminalGeneration() bool {
+	s.termMu.Lock()
+	defer s.termMu.Unlock()
+	return len(s.termGens) > 0
+}
+
+// terminalSweepLoop drives sweepTerminalControl until the Server closes.
+func (s *Server) terminalSweepLoop() {
+	defer s.wg.Done()
+	t := time.NewTicker(TerminalIdleSweep)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			s.sweepTerminalControl()
+		}
+	}
 }
 
 // SeverAllRemoteControl force-releases EVERY remote control lease and cancels EVERY active terminal
@@ -1726,6 +1821,12 @@ func (s *Server) severRevokedDeviceControl(deviceID string) {
 // daemon's cross-package hooks are wired as callbacks).
 func (s *Server) SeverAllRemoteControl() {
 	s.severControl(func(*controlSession) bool { return true })
+	// The SAME argument this function's own comment makes for the lease, on the plane where
+	// the bytes are raw. The per-frame kill-switch clause in liveTerminalGeneration only
+	// PAUSES a generation: measured on the assembled server, `swarm remote off` then `on`
+	// resumed the identical generation typing onto the PTY with no fresh signed begin
+	// (round-2 blocker 2). This SEVERS it, so resuming costs a new terminal_control_begin.
+	s.severTerminalControl(func(string) bool { return true })
 	// Finding C: on the DISABLE transition also TERMINATE remote journal subscriber
 	// connections. While off, distributeJournal merely DROPS records (no envelope, so no
 	// sequence gap) — a surviving subscription would silently resume mid-stream on `on`,
@@ -2172,10 +2273,10 @@ func (cc *clientConn) journalBackend() (JournalBackend, bool) {
 }
 
 // handleTerminalSubscribe serves the A7 F2 remote terminal peek: a READ-ONLY window onto a
-// session's screen. It renders the session server-side (daemon.RenderTerminal over a read-only
+// session's screen. It renders the session server-side (daemon.RenderTerminalView over a read-only
 // tap) and streams sanitized OpTerminalSnapshot frames — the phone's ONLY terminal view. It is
 // SECURITY-CRITICAL and read-only on three independent layers: (1) this handler NEVER forwards
-// input; (2) RenderTerminal only reads the stream; (3) the backend's tap is read-only
+// input; (2) RenderTerminalView only reads the stream; (3) the backend's tap is read-only
 // (Input/Resize no-ops). It NEVER supersedes the local controller — the tap is a separate
 // upstream subscriber, not the interactive lease/pump — so a peek cannot touch the owner's
 // generation.
@@ -2202,6 +2303,19 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		cc.replyErrorCode("remote control is disabled (kill switch off)", CodeKillSwitch)
 		return
 	}
+	// SECOND GATE (fail-closed): the SESSION's own capability record (ADR-017 T2-c). It
+	// runs AFTER the kill switch and BEFORE the tap, both deliberately: after, so the
+	// master override still answers first with its own code; before, because a tap opened
+	// and then closed has already read the session. It is remote-tier only, inheriting
+	// peekGateOpen's scoping so the owner's view of the owner's own machine is untouched.
+	if !cc.terminalWatchAllowed(local) {
+		cc.replyErrorCode("terminal_subscribe: this session's capability record does not permit a terminal view", CodeCapabilityRefused)
+		return
+	}
+	// The INCARNATION this peek is for, read from the same record the gate above just
+	// consulted and BEFORE any tap is opened -- so the screen and the gate name the same
+	// incarnation by construction rather than by two lookups happening to agree (T8-a).
+	instance := cc.terminalWatchInstance(local)
 	tt, ok := cc.terminalTapper()
 	if !ok {
 		return
@@ -2232,7 +2346,12 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 	// output) must terminate PROMPTLY once the kill switch flips OFF, not linger until the
 	// conn drops (Blocker 1a). A backend with no kill switch — and an owner-tier peek, which
 	// the switch does not govern — is always allowed.
-	stillAllowed := cc.peekGateOpen
+	// ADR-017 T4-b / T6-e widen it from the kill switch ALONE to the kill switch AND the
+	// session's capability record, on the tick that already exists: a session degraded,
+	// revoked or replaced mid-peek must stop on the loop's own clock, not at whichever
+	// trigger the phone next happens to send. The phone may be gone; that is the case the
+	// per-tick poll exists for.
+	stillAllowed := func() bool { return cc.peekGateOpen() && cc.terminalWatchAllowed(local) }
 
 	cc.srv.wg.Add(1)
 	go func() {
@@ -2250,7 +2369,18 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 		}()
 		// Emit the LOCAL session id (the gateway namespaces at egress). NEVER forward input
 		// from this path — it is read-only.
-		daemon.RenderTerminal(ctx, local, sub, stillAllowed, func(r daemon.TerminalRender) {
+		//
+		// THE VERSIONED LOOP IS THE ONLY LOOP (ADR-017 T4-a, closing review finding 5).
+		// This used to call `RenderTerminal`, which ran the same loop and then DISCARDED the
+		// epoch, the revision and the reset marker and passed instance "" -- so the fields
+		// T4-a/T8-a define were minted on every emission and never left the machine. A phone
+		// watching a session REPLACED under the same id then read the new incarnation as a
+		// seamless continuation of the old screen.
+		//
+		// The instance is read from the session's own capability record, which is the same
+		// record the per-tick and per-emission gates re-read, so the screen and the gate name
+		// the same incarnation by construction rather than by two lookups agreeing.
+		daemon.RenderTerminalView(ctx, local, instance, sub, stillAllowed, func(r daemon.TerminalView) {
 			// Re-check the kill switch before EVERY emission (A7 C): the FIRST gate only
 			// covers subscribe time, so `swarm remote off` (or revoking the last device)
 			// mid-peek must BLANK an established REMOTE peek. A disabled switch cancels the
@@ -2260,11 +2390,26 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 				cancel()
 				return
 			}
+			// And the SESSION's capability record, re-read before every emission for the
+			// same reason and on the same discipline (ADR-017 T6-e). A gate checked only
+			// at subscribe time has the kill switch's own hole one field over: a session
+			// degraded, revoked or replaced mid-stream keeps streaming until the phone
+			// happens to send something.
+			if !cc.terminalWatchAllowed(local) {
+				cancel()
+				return
+			}
 			// Clip the sanitized render to the phone-viewport bound BEFORE encoding (A7 J), so
 			// a large grid (up to maxDim square, forwardResize-reachable) can never encode past
 			// wire.MaxFrame and be silently dropped by WriteFrame. SnapText already sanitized
 			// every line; clipping only bounds their count/width, never weakening sanitization.
 			lines, cols, rows := clipPeek(r.Lines, r.Cols, r.Rows)
+			// BOTH BODIES, ONE FRAME. `Terminal` is the legacy body T4 keeps on the wire
+			// unchanged, so a pre-R8 gateway reads exactly what it always read; `TerminalView`
+			// is the versioned one, and a gateway that understands it prefers it. Sending them
+			// together is what makes the versioned fields reachable without moving a profile
+			// version -- ADR-016's profile-version coordination is parked, and racing that
+			// struct to ship an epoch would be the larger change, not the smaller one.
 			body, err := EncodeControl(Control{
 				Op:         OpTerminalSnapshot,
 				EndpointID: cc.endpointID,
@@ -2274,6 +2419,17 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 					Cols:    cols,
 					Rows:    rows,
 				},
+				TerminalView: &TerminalViewV1{
+					Session:         r.Session,
+					SessionInstance: r.SessionInstance,
+					ViewEpoch:       r.ViewEpoch,
+					Revision:        r.Revision,
+					Reset:           r.Reset,
+					Cols:            cols,
+					Rows:            rows,
+					Lines:           lines,
+					RenderedAt:      r.RenderedAt,
+				},
 			})
 			if err != nil {
 				return
@@ -2281,7 +2437,7 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 			// Terminate the renderer on the FIRST write error (A7 #7): a readable-but-
 			// unwritable conn otherwise stalls pumpWriteTimeout per frame forever, pinning the
 			// renderer and its tap. Cancelling the ctx stops the loop and releases the tap
-			// within a bound (the deferred sub.Close runs when RenderTerminal returns).
+			// within a bound (the deferred sub.Close runs when RenderTerminalView returns).
 			if err := cc.writeFrameDeadline(wire.TControl, body); err != nil {
 				cancel()
 				return
@@ -2322,7 +2478,7 @@ func (cc *clientConn) sendPeekEnded(local string) {
 }
 
 // cancelPeek cancels this connection's in-flight terminal peek, if any (C1): a device_revoke
-// terminates the peek's render loop (RenderTerminal returns on ctx.Done), which releases its
+// terminates the peek's render loop (RenderTerminalView returns on ctx.Done), which releases its
 // read-only tap and signals the gateway the peek ended. The CancelFunc is idempotent, so a
 // concurrent conn-drop or superseding peek that also cancels is harmless.
 func (cc *clientConn) cancelPeek() {

@@ -39,7 +39,7 @@ import (
 // carries omitempty, so a Profile that was never set still serializes in full -- see
 // profile_test.go). testReconcileRecord below leaves Profile unset, so every
 // pre-ADR-017 wire-shape const in this file gained this exact suffix.
-const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0,"relay_tls_policy":"","relay_host":"","relay_spki_pin":null}`
+const wireZeroProfile = `{"version":0,"accepted_actions":null,"accepted_body_versions":null,"interaction_schema_version":0,"terminal_view_version":0,"capability_record_version":0,"relay_tls_policy":"","relay_host":"","relay_spki_pin":null,"terminal_view_max_line_bytes":0,"terminal_view_max_rows":0,"terminal_view_max_rate_hz":0}`
 
 // wireReconcileRecord is the committed JSON of the record below. The framed form (the
 // same bytes with a leading kind discriminator) is pinned identically on both sides of

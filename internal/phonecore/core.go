@@ -96,6 +96,11 @@ type Core struct {
 	// as the round trip that produced it.
 	leases *LeaseState
 	skew   *SkewMonitor
+	// terminalControl is the Wave R8 control-generation gate (ADR-017 T6). It starts EMPTY
+	// on every Resume for leases' own reason and one more: a generation is bound to the
+	// session INSTANCE, and nothing restored from disk can know whether that incarnation
+	// still exists.
+	terminalControl *TerminalControlState
 
 	mu     sync.Mutex
 	st     State
@@ -173,6 +178,10 @@ func Resume(cfg Config) (*Core, error) {
 		skew:   NewSkewMonitor(time.Now),
 		st:     store.Load().clone(),
 	}
+	// The control-generation gate shares the input coalescer's ledger through the App that
+	// owns both; here it is constructed WITHOUT one, because a severance must still drop a
+	// generation even in a Core that never coalesced a byte.
+	c.terminalControl = NewTerminalControlState(nil)
 	c.router = newMailboxRouter(crypto.ContentKey{}, c)
 	c.rebind()
 	return c, nil
@@ -202,6 +211,23 @@ func (c *Core) Ops() *OpQueue { return c.ops }
 // inbound path. It starts EMPTY on every Resume: a lease cannot survive a process death,
 // so the only correct durable representation of one is none at all.
 func (c *Core) Leases() *LeaseState { return c.leases }
+
+// TerminalControl is the Wave R8 control-generation gate (ADR-017 T6). It is DELIBERATELY
+// not LeaseState: a generation is not a lease, they have different lifetimes and different
+// ceremonies, and sharing the plane would make a fallback session compete for the shim's
+// single interactive subscriber slot the owner already holds (OPEN-C4).
+func (c *Core) TerminalControl() *TerminalControlState { return c.terminalControl }
+
+// sessionInstance is the incarnation the machine authored for one session, or "" when the
+// session is unknown or its record is absent or inconsistent. It is the coordinate every
+// control generation and every snapshot binds to (ADR-017 T8-a).
+func (c *Core) sessionInstance(session string) string {
+	cs, ok := c.router.Sessions().Get(session)
+	if !ok || cs.Capabilities == nil {
+		return ""
+	}
+	return cs.Capabilities.SessionInstance
+}
 
 // SkewMonitor is the clock-skew estimator (PB-TIME-1/-3), fed the AAD-covered IssuedAt of
 // every command reply the inbound path authenticates.

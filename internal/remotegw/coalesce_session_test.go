@@ -29,6 +29,7 @@ package remotegw
 
 import (
 	"fmt"
+	"github.com/Nathandela/swarm/internal/protocol"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ import (
 // sendTerminal offers one single-line snapshot for session to the sink.
 func sendTerminal(t *testing.T, sink *CoalescingSink, session, line string) {
 	t.Helper()
-	if err := sink.Terminal(session, []string{line}, 80, 24); err != nil {
+	if err := sink.Terminal(protocol.TerminalViewV1{Session: session, Lines: []string{line}, Cols: 80, Rows: 24}); err != nil {
 		t.Fatalf("terminal(%s, %s): %v", session, line, err)
 	}
 }
@@ -111,7 +112,7 @@ func TestCoalescingSink_TeardownBlankSurvivesConcurrentSession(t *testing.T) {
 	sendTerminal(t, sink, "m/a", "A-0") // opens the window
 	// The daemon ends A's peek: RunTerminal seals a BLANK snapshot for A (Blocker 1d).
 	clk.Advance(10 * time.Millisecond)
-	if err := sink.Terminal("m/a", nil, 0, 0); err != nil {
+	if err := sink.Terminal(protocol.TerminalViewV1{Session: "m/a", Lines: nil, Cols: 0, Rows: 0}); err != nil {
 		t.Fatalf("teardown blank: %v", err)
 	}
 	// Between the blank and the teardown flush, session B's peek forwards a frame of its own.

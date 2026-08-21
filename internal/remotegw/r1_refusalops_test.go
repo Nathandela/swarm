@@ -125,6 +125,20 @@ func TestR1RefusalOps_ForwardedToDaemonNeverGatewayLocallyRefused(t *testing.T) 
 				// assertion is unchanged.
 				cmd.TurnInterrupt = &schema.TurnInterruptReq{Session: "m/s1", ExpectedTurn: "01JTURN"}
 			}
+			if o.action == protocol.ActionTerminalControlBegin {
+				// SUPERSEDED BY WAVE R8, on the exact precedent of the three rows above
+				// (docs/verification/r8-red/control-red.txt): terminal_control_begin now
+				// carries a real body, so it inherits launch's/approve's/session_launch's/
+				// composer_send's stripped-body rule. A bodyless begin is a generation
+				// bound to NO INCARNATION, which is the frame ADR-017 T8-a exists to make
+				// unspeakable -- it would authorise raw bytes into the PTY that replaced
+				// the one the user was reading. The forward-not-refuse assertion below is
+				// unchanged: it now holds for a WELL-FORMED begin, exactly as it does for
+				// launch and approve.
+				cmd.TerminalControlBegin = &schema.TerminalControlBeginReq{
+					Session: "m/s1", SessionInstance: "inst-a", Profile: schema.CurrentProfileVersion,
+				}
+			}
 			mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealAt(t, key, 1, 1, cmd)}}}
 			fwd := &recordingForwarder{reply: protocol.Control{
 				Op: protocol.OpError, ErrorCode: protocol.CodeNotImplemented, Error: o.action + ": not implemented yet",

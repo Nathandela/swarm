@@ -101,6 +101,11 @@ type CachedSession struct {
 	// fallback to the id lives, because that is a DISPLAY decision and this is the model.
 	Name    string
 	Present bool
+	// Capabilities is the machine's own capability record for this session (ADR-017 T2),
+	// applied VERBATIM from the roster like Group, Agent and Name -- the phone derives
+	// none of it. A nil record is T2-a's honest status card and is deliberately
+	// distinguishable from a record that says terminal_fallback=false.
+	Capabilities *schema.SessionCapabilities
 }
 
 // SessionCache is the phone's merged session model (R-PHC.3), keyed by namespaced
@@ -160,6 +165,20 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	}
 	if rec.Name != "" {
 		cs.Name = rec.Name // verbatim from the wire, same rule as Group and Agent
+	}
+	if rec.Capabilities != nil {
+		// Verbatim, same rule as Group/Agent/Name, and VALIDATED at this decode seam --
+		// the third of amendment T2-b's three (author, gateway decode, phone decode). An
+		// inconsistent record is REJECTED rather than resolved: resolving it means
+		// choosing which boolean to believe, and either choice is a routing decision taken
+		// by the reader rather than by the daemon that authored it. A rejected record
+		// leaves the session on T2-a's honest status card.
+		if rec.Capabilities.Validate() == nil {
+			caps := *rec.Capabilities
+			cs.Capabilities = &caps
+		} else {
+			cs.Capabilities = nil
+		}
 	}
 	c.sessions[rec.SessionID] = cs
 	return true

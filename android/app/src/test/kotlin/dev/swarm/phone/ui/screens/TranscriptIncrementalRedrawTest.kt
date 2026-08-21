@@ -62,6 +62,7 @@ class TranscriptIncrementalRedrawTest {
         ),
         TranscriptScreen.of(items.toList()),
         SessionLease(sessionId = session, leaseHeld = false, online = true),
+        capabilities = SessionCapabilityFacts(structuredChat = true),
     )
 
     private fun host(panel: SessionDetailPanel): FrameLayout = FrameLayout(context).apply {
@@ -241,6 +242,11 @@ class TranscriptIncrementalRedrawTest {
             ),
             TranscriptScreen.of(listOf(item("a", "Running the suite."))),
             SessionLease(sessionId = session, leaseHeld = true, online = true),
+            // WAVE R8 (ADR-017 T2 rule 3): a TORN session is now the RECORD saying
+            // structured_chat=false -- which is exactly what the daemon's one-way degrade writes
+            // after a proven structured gap -- rather than a gap element in the item list being
+            // read as a capability. The assertion below is unchanged.
+            capabilities = SessionCapabilityFacts(structuredChat = false),
         )
         assertTrue(
             "a lease change was patched in place, so the controls go on saying what they said " +

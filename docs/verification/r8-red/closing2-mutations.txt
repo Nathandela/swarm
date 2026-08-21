@@ -1,0 +1,123 @@
+WAVE R8 -- CLOSING ROUND 2 -- MUTATION TRANSCRIPTS
+Bead agents-tracker-hggx.9. Captured 2026-08-21 on darwin 25.5.0 / arm64.
+
+DISCIPLINE. Every mutation below changes a PRODUCTION line (never a test), runs a named test
+selection, and is restored from a `cp` backup verified by sha256 against the pre-mutation hash.
+No git add / commit / stash / checkout / clean was used at any point. The whole-repo gate was
+run AFTER every mutation was restored and verified, from a tree proved byte-identical to the
+one being reported.
+
+pre-mutation hashes (shasum -a 256):
+  8165fc75f2005890e4f4fa06935a5361d7cda84b94cc03f1274f81fbd5b6b85d  internal/remotegw/gateway.go
+  074b8d9a2d0aa16542c17d9442db3a106fcab2db218a99d5fc9f2a7281c428ca  PhoneSurface.kt
+  ff8083dda03b36af35dcf52b8b3f0a9b9ffbbf08784839ba766ceb17f62a8cec  internal/protocol/server.go
+  b9eb0d1d9aec9a2d1fba26dcfa4e8d04b183680a894c4781049bd720d3ee0361  internal/phonecore/snapshot.go
+  97c0277be060e0ffe236800e50eeea5dabbb6b7131a30b8faf4faf7b918580f2  TerminalFallbackScreen.kt
+
+==============================================================================
+MUT-A (D0)  the phone stops reading the machine's reset marker
+  file    : internal/phonecore/snapshot.go
+  mutation: if held, ok := c.snaps[s.Session]; ok && !s.Reset && s.ViewEpoch != 0 &&
+         -> if held, ok := c.snaps[s.Session]; ok && s.ViewEpoch != 0 &&
+  command : go test -count=1 -run 'TestR8R5Snapshot|TestR8R4Snapshot' ./internal/phonecore/
+  exit    : 1
+      | --- FAIL: TestR8R5Snapshot_ADaemonRestartsResetFrameLands (0.00s)
+      |     r8r5_viewreset_test.go:50: ADR-017 T4-a: the machine's RESET frame was dropped as a
+      |     stale revision, so the phone still holds epoch=1 rev=40 lines=[OLD screen from before
+      |     the restart] after a daemon restart. [...]
+      | --- FAIL: TestR8R5Snapshot_TheRevisionsAfterAResetAreAdoptedToo (0.00s)
+      |     r8r5_viewreset_test.go:71: the phone holds rev=40 lines=[pre-restart] after the
+      |     restarted daemon's SECOND emission [...]
+      | FAIL	github.com/Nathandela/swarm/internal/phonecore	1.076s
+  VERDICT : FIRES (as required). The round-4 ordering tests stayed GREEN under it, which is the
+            point: (epoch, revision) alone cannot see this defect.
+  restore : byte-identical (b9eb0d1d...)
+
+==============================================================================
+MUT-B (F6-2)  the machine's blank carries geometry, so the phone cannot tell it from a screen
+  file    : internal/remotegw/gateway.go
+  mutation: return sink.Terminal(protocol.TerminalViewV1{Session: session})
+         -> return sink.Terminal(protocol.TerminalViewV1{Session: session, Cols: 80, Rows: 24})
+  command : go test -count=1 -run 'TestR8R5_AReapedWatch|TestR8R3_' ./internal/remotegw/
+  exit    : 1
+      | --- FAIL: TestR8R5_AReapedWatchLeavesThePhoneAFrameItCanTellFromALiveOne (0.15s)
+      |     r8r5_reapblank_test.go:79: ADR-017 T4-b: the frame a REAPED watch leaves on the phone
+      |     is {Session:mach1/sess1 SessionInstance: ViewEpoch:0 Revision:0 Reset:false Cols:80
+      |     Rows:24 Lines:[] RenderedAt:0001-01-01 00:00:00 +0000 UTC}. [...]
+      | FAIL	github.com/Nathandela/swarm/internal/remotegw	1.170s
+  VERDICT : FIRES (as required). ROUND 3'S OWN BLANK TESTS (TestR8R3_*) STAYED GREEN under this
+            mutation -- they assert that a blank is SENT and nothing about what it carries, which
+            is exactly why the phone-side rule needed a fence of its own.
+  restore : byte-identical (8165fc75...)
+
+==============================================================================
+MUT-C (F8-2)  kill and delete stop severing at the CALL SITE (the reviewer's own mutation)
+  file    : internal/protocol/server.go
+  mutation: all FOUR production call sites
+              cc.srv.severTerminalControlForSession(local)   (:1417, :1425, :1467, :1476)
+           -> _ = local
+  command : go test -count=1 -run 'TestR8R5Sever|TestR8R4Sever' ./internal/protocol/
+  exit    : 1
+      | --- FAIL: TestR8R5Sever_TheKillHandlerSeversOverTheRealServer (0.02s)
+      |     r8r5_severcallsite_test.go:68: ADR-017 T8: the KILL handler replied ok and left the
+      |     killed session's control generation live in the server registry. [...]
+      |     r8r5_severcallsite_test.go:68: ADR-017 T8: the DELETE handler replied ok and left the
+      |     deleted session's control generation live. [...]
+      | --- FAIL: TestR8R5Sever_TheIdempotentBranchSeversToo (0.00s)
+      |     r8r5_severcallsite_test.go:96: (the same two assertions, on the IdempotentExecutor
+      |     branch of both handlers)
+      | FAIL	github.com/Nathandela/swarm/internal/protocol	0.787s
+  VERDICT : FIRES on BOTH new tests and BOTH handler branches. TestR8R4Sever_* stayed GREEN --
+            the closing review's finding reproduced exactly, and closed by the new fence.
+  restore : byte-identical (ff8083dd...); re-run of both selections: ok, exit 0
+
+==============================================================================
+MUT-D (F6-2, wiring)  the surface asks the lapse rule about an age again
+  file    : android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt
+  mutation: heldWatchLapsed reverted to its round-4 body
+              TerminalFallbackBinding.watchLapsed(watchedBinding?.grid()?.ageMs ?: 0L)
+  command : go test -count=1 -run 'TestR8R5Gate' ./android/gate/
+  exit    : 1
+      | --- FAIL: TestR8R5Gate_TheHeldWatchIsJudgedOnTheWholeGridAndNotOnAnAgeAlone (0.05s)
+      |     r8r5_blanklapse_test.go:41: [...] heldWatchLapsed asks the lapse rule about `.ageMs`.
+      |     The machine's BLANK carries NO render time [...]
+      |     r8r5_blanklapse_test.go:48: [...] does not hand the lapse rule the GRID the binding
+      |     holds. [...]
+  VERDICT : FIRES on both assertions. This gate scans SOURCE and says so: the RULE is driven by
+            TerminalFallbackWatchTest, and what no unit test on this side can reach is the
+            WIRING, because PhoneSurface.heldWatchLapsed needs a live App (libgojni).
+  restore : byte-identical (074b8d9a...); full ./android/gate/ re-run: ok, exit 0
+
+==============================================================================
+MUT-E (F6-2, the rule)  the lapse rule goes back to the age-only question
+  file    : android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TerminalFallbackScreen.kt
+  mutation: fun watchLapsed(grid: TerminalGrid, horizonMs: Long = WATCH_HORIZON_MS): Boolean =
+              grid.machineStoppedRendering || watchLapsed(grid.ageMs, horizonMs)
+         -> fun watchLapsed(grid: TerminalGrid, horizonMs: Long = WATCH_HORIZON_MS): Boolean =
+              watchLapsed(grid.ageMs, horizonMs)
+  command : scripts/o2-gradle-run.sh testDebugUnitTest --no-daemon --rerun-tasks --no-build-cache \
+              --tests 'dev.swarm.phone.ui.screens.TerminalFallbackWatchTest'
+            (JAVA_HOME=/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home,
+             ANDROID_HOME=/usr/local/share/android-commandlinetools, script file, never inline)
+  exit    : 1  (gradle exit status: 1, BUILD FAILED in 1m 52s)
+      | TerminalFallbackWatchTest > an unrouted session's empty grid is a lapse and not a screen
+      |   to hold a watch for FAILED
+      |     java.lang.AssertionError at TerminalFallbackWatchTest.kt:92
+      | TerminalFallbackWatchTest > the machine's blank is a lapsed watch FAILED
+      |     java.lang.AssertionError at TerminalFallbackWatchTest.kt:48
+      | 6 tests completed, 2 failed
+  VERDICT : FIRES. This is ALSO the round's failing-first run for the Kotlin half: the mutated
+            line is byte-for-byte the rule the tree had before this round, so the RED is measured
+            against the pre-fix production behaviour and not against a strawman. Exactly the two
+            blank-shaped assertions fail; the four age-shaped ones pass, so the fix is additive
+            and the age rule was not quietly rewritten.
+  restore : byte-identical (97c0277b...); full suite re-run GREEN (see closing2-red.txt §2)
+
+==============================================================================
+SUMMARY
+
+  5 mutations, 5 fire, 0 standing escapes in this round's own work.
+  Two of the five (MUT-B, MUT-C) exist because the fence they prove was GREEN ON ARRIVAL: the
+  production behaviour was already correct and only the evidence was missing. That is the class
+  the closing review raised, and the reason the count is reported per-mutation rather than as a
+  total that could hide one.

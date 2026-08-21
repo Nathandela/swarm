@@ -187,7 +187,7 @@ type channelSink struct{}
 
 func (channelSink) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
 func (channelSink) Event(protocol.JournalRecord) error              { return nil }
-func (channelSink) Terminal(string, []string, int, int) error       { return nil }
+func (channelSink) Terminal(protocol.TerminalViewV1) error          { return nil }
 
 // channelPrefs enables both push categories, so a suppressed wake is never mistaken for a
 // constant-size one.

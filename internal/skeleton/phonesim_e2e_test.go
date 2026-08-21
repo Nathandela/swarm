@@ -548,7 +548,7 @@ func TestPhonesim_TakeControlTypeE2E(t *testing.T) {
 // The full chain exercised: phone.Watch -> relay mailbox -> gateway (routeCommand ->
 // TerminalWatcher.Watch -> Gateway.RunTerminal, which now carries the session id in the
 // terminal_subscribe frame so the daemon's resolveSession accepts it) -> daemon
-// handleTerminalSubscribe (read-only tap + RenderTerminal) -> RelaySink.Terminal seals each
+// handleTerminalSubscribe (read-only tap + RenderTerminalView) -> RelaySink.Terminal seals each
 // snapshot into THIS phone's mailbox on the shared seq stream -> phone.Observe demuxes it via
 // the phonecore.MailboxRouter into the snapshot cache. Before this wiring RunTerminal sent no
 // session id (the daemon refused it) and nothing ran RunTerminal, so no snapshot ever reached

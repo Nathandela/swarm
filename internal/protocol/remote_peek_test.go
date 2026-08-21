@@ -59,6 +59,23 @@ func newTerminalTapStub() *terminalTapStub {
 	return s
 }
 
+// SessionCapabilities makes this stub a SessionCapabilityLookup (ADR-017 T2-c), which the
+// remote-tier terminal gate now requires before it opens a tap.
+//
+// IT ANSWERS THE TERMINAL-FALLBACK RECORD FOR EVERY SESSION, on purpose: this file's
+// suites are about the PEEK's own mechanics -- kill switch, supersede, clipping, tap
+// lifetime -- so they must exercise a session the capability record ALLOWS to be watched,
+// or every one of them would measure the new gate instead of the behaviour it pins. The
+// gate itself is measured, over the real assembled remote-tier server, by
+// r8_legacygate_test.go: a healthy structured session, an absent record, an inconsistent
+// record and a record with no instance are each refused there.
+func (t *terminalTapStub) SessionCapabilities(local string) (SessionCapabilities, bool) {
+	return SessionCapabilities{
+		Provider: "opencode", ProviderVersion: "0.9.0", AdapterRevision: "rev-test",
+		SessionInstance: "inst-" + local, TerminalFallback: true, TerminalControl: true,
+	}, true
+}
+
 // RemoteControlEnabled makes terminalTapStub the pinned KillSwitch (overriding the embedded
 // stub's always-on): the switch is ON when ks is true, OFF (remote control disabled) otherwise.
 // It is an atomic so a test can flip it mid-peek from another goroutine under -race.
