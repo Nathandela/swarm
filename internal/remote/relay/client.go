@@ -162,9 +162,11 @@ type Conn struct {
 	// a boolean epoch (round 4, Opus F3-B): each observed leak licenses EXACTLY ONE
 	// suppression and is consumed by it -- the boolean form survived the suppression
 	// that paid for it and falsely tainted the next window's spend, suppressing a
-	// re-mint whose reply was genuinely in flight. Clamped to discard (a leak
-	// cannot outnumber the credits it could have spent); decremented at each
-	// suppression; the clamp retires it as credits are spent.
+	// re-mint whose reply was genuinely in flight. Incrementing is bounded at the
+	// observation (never past the outstanding credits); each suppression consumes
+	// exactly one license; and reaching discard == 0 retires all remaining licenses
+	// -- never a clamp at spend time, which double-billed a leak the suppression
+	// was owed (round 5, codex).
 	idleLeak int
 	// spent counts discard credits the pump spent inside the CURRENT live exchange's
 	// window, and spentLeaked whether any of them carried the idleLeak taint (both
