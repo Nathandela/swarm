@@ -16,7 +16,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2
 	github.com/rivo/uniseg v0.4.7
 	go.etcd.io/bbolt v1.3.11
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/tools v0.48.0
 	rsc.io/qr v0.2.0
