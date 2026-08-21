@@ -401,11 +401,30 @@ credit and the successor discards the straggler FIFO-exactly, while both round-4
 probes keep their outcomes -- the idle-stray probe sets the flag but its live exchange
 succeeds, and the no-wedge probe's suppression still fires off the leaked straggler's
 own free drop. What remains genuinely undecidable without wire correlation ids is only
-WHICH outstanding credit an idle drop leaked when several coexist (the taint is one
-boolean per epoch, not one flag per credit), and hostile-stray vs honest-straggler at
-the moment of the idle drop itself.
+hostile-stray vs honest-straggler at the moment of the idle drop itself.
 `TestCommitteeR4_AnHonestDoubleTimeoutKeepsFIFOAttributionForTheSuccessor` is the
 permanent fence; fix-wave mutants A-C pin both directions.]
+
+[CORRECTED AGAIN, ROUND-4 COMMITTEE (Opus F3-B, reproduced 3/3 and independently by
+codex): the paragraph above originally ALSO claimed that which-credit-leaked "when
+several coexist" was undecidable, and implemented the taint as ONE BOOLEAN PER EPOCH
+cleared only when discard reached zero. Both were wrong. The several-coexist half IS
+decidable by counting: each observed idle free-drop licenses exactly one suppression,
+so idleLeak is now an int, clamped to the outstanding credits, and CONSUMED by the
+suppression it licenses. The boolean form let the taint outlive the suppression that
+paid for it: with two abandoned credits and one leak, the second window's spend was
+falsely tainted, its exchange's re-mint was suppressed while its reply was genuinely
+in flight, and the successor adopted that reply with a nil error -- wrong data, the
+regression class this ledger exists to prevent, reachable on an honest slow relay
+(~four consecutive call timeouts and an idle gap; production DefaultCallTimeout 10 s
+puts that at a badly stalled ~40 s link, rare but exactly the abandonment ledger's
+world, and the casualty is the phone's mailbox cursor).
+`TestCommitteeR4_ATaintIsConsumedByTheSuppressionItLicensed` is the permanent fence
+(RED on the boolean form with E5 adopting E4's reply; mutation: removing the consume
+re-fails it). Consequence correction for the fence table and the paragraph at the
+"leaked credit converts" sentence above: an unconsumed-taint defect does NOT cost "at
+most one bounded casualty" -- its consequence is a persistent one-back shift of wrong
+data with nil errors until an idle gap, which is why the license must be countable.]
 
 ### F4/F8: the evidence corrections
 

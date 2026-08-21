@@ -228,3 +228,89 @@ func TestCommitteeR4_AnHonestDoubleTimeoutKeepsFIFOAttributionForTheSuccessor(t 
 	default:
 	}
 }
+
+// TestCommitteeR4_ATaintIsConsumedByTheSuppressionItLicensed is round 4's own blocking
+// finding (Opus F3-B), reproduced against a fully honest relay -- no stray, no protocol
+// violation, only slow replies. The idle-leak observation licenses EXACTLY ONE suppressed
+// re-mint; the boolean form of idleLeak survived the suppression that paid for it and
+// falsely tainted the NEXT window's spend, so an exchange whose reply was genuinely in
+// flight (E4 here) had its re-mint suppressed too, and its straggler was adopted by the
+// successor with a nil error.
+//
+// The script rig processes requests SERIALLY (a delayed reply delays every later reply),
+// so the timeline is built on that: reply-N is written at (processing start of N) +
+// delayReply[N], and processing of N starts after reply-(N-1) is written.
+//
+//	   0- 250  E1 (ct 250ms, delay 1300) times out; abandon re-mints: discard=1
+//	 300- 550  E2 (ct 250ms, delay 600) times out; abandon re-mints: discard=2
+//	    1300   reply-1 arrives IDLE: free drop, THE one leak
+//	1700-2000  E3 (ct 300ms, delay 1500): reply-2 (t=1900) spends inside its window
+//	           (discard=1, taint transferred); E3's own reply will not arrive until
+//	           3400, so E3 abandons -- the ONE suppression the leak licenses. The
+//	           leak is now PAID; discard stays 1.
+//	3300-3600  E4 (ct 300ms, delay 800): reply-3 (t=3400) spends inside its window
+//	           (discard=0). The paid leak must NOT taint this spend: E4's abandonment
+//	           must RE-MINT (discard=1), protecting E4's reply (in flight, t=4200).
+//	    3700+  E5 (default ct): reply-4 (4200) is consumed by E4's re-minted credit,
+//	           and reply-5 answers E5. E6/E7 stay aligned.
+func TestCommitteeR4_ATaintIsConsumedByTheSuppressionItLicensed(t *testing.T) {
+	script := newR3Script(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	cl := script.dial(t, ctx)
+
+	script.mu.Lock()
+	script.delayReply[1] = 1300 * time.Millisecond
+	script.delayReply[2] = 600 * time.Millisecond
+	script.delayReply[3] = 1500 * time.Millisecond
+	script.delayReply[4] = 800 * time.Millisecond
+	script.mu.Unlock()
+
+	t0 := time.Now()
+	at := func(d time.Duration) {
+		if s := time.Until(t0.Add(d)); s > 0 {
+			time.Sleep(s)
+		}
+	}
+
+	cl.conn.callTimeout = 250 * time.Millisecond
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-1")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E1 = %v, want ErrTimeout", err)
+	}
+	at(300 * time.Millisecond)
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-2")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E2 = %v, want ErrTimeout", err)
+	}
+
+	// The idle gap in which reply-1 free-drops at t=1300 and becomes the one leak.
+	at(1700 * time.Millisecond)
+	cl.conn.callTimeout = 300 * time.Millisecond
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-3")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E3 = %v, want ErrTimeout (reply-2 spends inside this window and this "+
+			"abandonment is the ONE suppression the idle leak licenses)", err)
+	}
+	at(3300 * time.Millisecond)
+	if _, err := cl.MailboxAppend(ctx, "peer", []byte("slow-4")); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("E4 = %v, want ErrTimeout", err)
+	}
+	cl.conn.callTimeout = DefaultCallTimeout
+
+	at(3700 * time.Millisecond)
+	if cursor, err := cl.MailboxAppend(ctx, "peer", []byte("live")); err != nil || cursor != 5 {
+		t.Fatalf("E5 = (%d, %v), want (5, nil).\n"+
+			"The idle-leak taint outlived the suppression that paid for it (idleLeak held a "+
+			"boolean epoch, not a countable license), so E4's re-mint was suppressed while its "+
+			"reply was genuinely in flight, and E5 adopted E4's straggler with a nil error", cursor, err)
+	}
+	if cursor, err := cl.MailboxAppend(ctx, "peer", []byte("steady-6")); err != nil || cursor != 6 {
+		t.Fatalf("E6 = (%d, %v), want (6, nil): the shift persisted", cursor, err)
+	}
+	if cursor, err := cl.MailboxAppend(ctx, "peer", []byte("steady-7")); err != nil || cursor != 7 {
+		t.Fatalf("E7 = (%d, %v), want (7, nil): the shift persisted", cursor, err)
+	}
+	select {
+	case <-cl.Done():
+		t.Fatal("the connection was torn down over honest slow replies")
+	default:
+	}
+}

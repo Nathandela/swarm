@@ -155,13 +155,16 @@ type Conn struct {
 	// an idle drop leaked when several coexist -- idleLeak taints the whole
 	// outstanding-discard epoch, one boolean, not one flag per credit.
 	discard int
-	// idleLeak records that a clean frame was free-dropped at owed == 0 while at
-	// least one discard credit was outstanding -- the observable signature of the
-	// idle-leak world, and the sole license for abandonReply's suppressed re-mint.
-	// Set by the pump at the free drop; cleared when the outstanding credits are
-	// fully spent (discard back to 0), having first transferred onto the spending
-	// window as spentLeaked.
-	idleLeak bool
+	// idleLeak counts clean frames free-dropped at owed == 0 while at least one
+	// discard credit was outstanding -- the observable signature of the idle-leak
+	// world, and the license for abandonReply's suppressed re-mint. A COUNTER, not
+	// a boolean epoch (round 4, Opus F3-B): each observed leak licenses EXACTLY ONE
+	// suppression and is consumed by it -- the boolean form survived the suppression
+	// that paid for it and falsely tainted the next window's spend, suppressing a
+	// re-mint whose reply was genuinely in flight. Clamped to discard (a leak
+	// cannot outnumber the credits it could have spent); decremented at each
+	// suppression; the clamp retires it as credits are spent.
+	idleLeak int
 	// spent counts discard credits the pump spent inside the CURRENT live exchange's
 	// window, and spentLeaked whether any of them carried the idleLeak taint (both
 	// reset when roundtrip raises owed for its write). They exist solely for
@@ -403,13 +406,14 @@ func (c *Conn) pump() {
 		if f.err == nil {
 			c.owedMu.Lock()
 			if c.owed == 0 {
-				if c.discard > 0 {
+				if c.discard > 0 && c.idleLeak < c.discard {
 					// A free drop while a discard credit is outstanding is the
 					// idle-leak world's signature (see the idleLeak field): if
 					// this frame was an honest straggler, its surviving credit
 					// will eat a later live reply, and only this observation
-					// licenses that exchange's suppressed re-mint.
-					c.idleLeak = true
+					// licenses that exchange's suppressed re-mint. One license
+					// per leak, never more licenses than outstanding credits.
+					c.idleLeak++
 				}
 				c.owedMu.Unlock()
 				c.noteUnsolicitedDrop(f.tag)
@@ -418,16 +422,15 @@ func (c *Conn) pump() {
 			if c.discard > 0 {
 				c.discard--
 				c.spent++
-				if c.idleLeak {
-					// The credit this window just spent belongs to a tainted
-					// epoch: an idle free drop was observed while it was
-					// outstanding, so the frame consumed here may well be the
-					// live exchange's OWN reply (the leak's casualty). Mark the
-					// window; clear the epoch once its credits are gone.
+				if c.idleLeak > 0 {
+					// An UNCONSUMED leak is outstanding, so the frame consumed
+					// here may well be the live exchange's OWN reply (the
+					// leak's casualty). Mark the window. A leak already paid by
+					// a suppression licenses nothing further (F3-B).
 					c.spentLeaked = true
-					if c.discard == 0 {
-						c.idleLeak = false
-					}
+				}
+				if c.idleLeak > c.discard {
+					c.idleLeak = c.discard
 				}
 				c.owedMu.Unlock()
 				continue // an abandoned exchange's straggler, ahead of the live reply
@@ -531,7 +534,13 @@ func (c *Conn) abandonReply() {
 	}
 	c.owed--
 	if c.spent > 0 && c.spentLeaked {
-		return // case 3: the suppressed re-mint, licensed by the observed idle leak
+		// case 3: the suppressed re-mint. The suppression CONSUMES the leak that
+		// licensed it (round 4, Opus F3-B) -- one leak, one suppression, never a
+		// second window suppressed on the same observation.
+		if c.idleLeak > 0 {
+			c.idleLeak--
+		}
+		return
 	}
 	c.discard++ // case 2
 }
