@@ -46,15 +46,12 @@ import (
 // WHAT THIS FILE DOES NOT COVER, stated rather than left to be assumed away, because this
 // package has shipped an overclaiming check before:
 //
-//   - THE RENDER PATH. `PhoneSurface.watch`/`unwatch` call `App.TerminalWatch`/`TerminalUnwatch`,
-//     which reach awaitConn through `unsignedCommandAt` -- and they are called from `renderReady`
-//     and from `release`, on the main thread, with no tap involved. That is a real instance of
-//     the same defect and it is FILED AS agents-tracker-jx1x rather than fixed here: `release`'s
-//     unwatch has a documented ordering requirement (it must precede the socket close, so the
-//     machine's render work is withdrawn while there is still a socket to withdraw it over), and
-//     `watch`'s `watching` latch is a state machine no test here can execute. The exemption
-//     is enumerated in [s25RenderPathExemptions] and asserted NOT TO GROW, so it can be paid off
-//     or argued with, but not quietly extended.
+//   - THE RENDER PATH was this list's first bullet, filed as agents-tracker-jx1x and now PAID:
+//     the terminal watch verbs reach awaitConn behind `TerminalFallbackBinding`'s bare names,
+//     they ran inline from `reconcileTerminalWatch` on the main thread, and they ride
+//     `VerbDispatch`'s command lane today (`TerminalWatchLane`). Assertion 4 below is the fence
+//     that reads through that indirection, so the wrapper trick cannot ship the defect a third
+//     time. [s25RenderPathExemptions] stays, empty, asserted NOT TO GROW.
 //   - `App.Start`, checked and found not to apply: it spawns `a.run(ctx)` on a goroutine and
 //     returns (mobile/app.go:266-284), so the call itself does not block.
 //   - Other surfaces. `PairingSurface` has click paths of its own. `App.BeginPairing` was read
@@ -93,6 +90,10 @@ func s25Surfaces(t *testing.T) map[string]string {
 	return map[string]string{
 		"PhoneSurface.kt":    filepath.Join(dir, "PhoneSurface.kt"),
 		"SettingsSurface.kt": filepath.Join(dir, "SettingsSurface.kt"),
+		// The terminal watch's own dispatcher (agents-tracker-jx1x). It exists to put the
+		// fallback binding's verbs on the command lane, so a raw facade call growing inside it
+		// would be this fence's defect hiding in the fix's pocket.
+		"TerminalWatchLane.kt": filepath.Join(dir, "TerminalWatchLane.kt"),
 	}
 }
 
@@ -126,8 +127,12 @@ var s25RenderPathExemptions = map[string]map[string]string{
 	"PhoneSurface.kt": {
 		// `watch` AND `unwatch` STOOD HERE and are gone with the functions themselves, which is
 		// what this ledger's own rule asks for: "a ledger nobody prunes stops meaning anything".
-		// ADR-009-structured-chat-interaction (2) stops this app issuing a terminal watch at all,
-		// so the two main-thread `awaitConn` reaches these rows excused are ABSENT, not fixed.
+		// ADR-009-structured-chat-interaction (2) then stopped this app issuing a terminal
+		// watch -- until ADR-017's fallback screen brought the watch BACK behind
+		// `TerminalFallbackBinding`, whose bare verb names this ledger's facade-name scans
+		// cannot see, and the main-thread reach shipped a second time as agents-tracker-jx1x.
+		// That reach now rides the command lane (`TerminalWatchLane`), and assertion 4 below is
+		// the fence that reads through the indirection; no row is owed.
 	},
 }
 
@@ -814,6 +819,174 @@ func TestS25_StrayCallScanDiscriminates(t *testing.T) {
 	if bad := s25StrayWaitingCalls(onTheLooper, map[string]bool{"setPushPreference": true}); len(bad) == 0 {
 		t.Error("the stray scan passed a signed command called straight from a switch's own " +
 			"handler, which is agents-tracker-h39k exactly")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 4. Binding indirection: a wrapper around a waiting verb IS that verb
+//    (agents-tracker-jx1x).
+// ---------------------------------------------------------------------------
+
+// s25WrapperVerbs is the per-file half of the wrapper derivation: every function in `code`
+// that calls a waiting facade verb OUTSIDE any dispatched press is a WRAPPER, and its bare
+// name is the waiting verb wearing new clothes -- a call site of that name waits in awaitConn
+// exactly as the facade call it hides does.
+//
+// THE DEFECT CLASS THIS DERIVES OVER (agents-tracker-jx1x, committee-unanimous). Round 3 of R8
+// moved `app.terminalViewWatch(...)` behind `TerminalFallbackBinding`, whose verbs are named
+// `watch`, `unwatch` and `renew` -- bare names that match no facade-verb shape -- and
+// `PhoneSurface.reconcileTerminalWatch` then called them INLINE on the main thread, on every
+// redraw of the fallback screen and from a 20-second main-looper tick. Every scan above stayed
+// green, because every scan above matches the facade's own names: the indirection laundered
+// the wait. Worst case on that path was awaitConn's five-second poll plus a relay append bound
+// of ten -- a silent ANR, since NetworkOnMainThreadException never fires for a socket Go
+// opened.
+//
+// The wrapper's ENCLOSING FUNCTION is the unit, through the same stray-call reader the direct
+// scan uses, so a wrapper whose facade call is already on a lane (a dispatched press inside
+// the wrapper) derives nothing -- judging its callers would demand a dispatch around a
+// dispatch.
+func s25WrapperVerbs(code string, waiting map[string]bool) []string {
+	var out []string
+	for fn := range s25StrayWaitingCalls(code, waiting) {
+		if fn == "" {
+			continue
+		}
+		out = append(out, fn)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// s25IndirectWaitingVerbs derives the wrapper verbs from EVERY production Kotlin file that is
+// not itself one of this fence's subjects, mapped to the file that declares them.
+//
+// It walks all of production Kotlin rather than a named list of binding files, because a named
+// list is the move that already failed twice here: the r8 ban list did not name the binding,
+// and this file's own subject set did not name the surface function that called it. A wrapper
+// added tomorrow in a file this fence has never heard of is derived the day it is written.
+// Subjects are excluded because a stray facade call THERE is already assertion 3's fault, not
+// a wrapper definition.
+func s25IndirectWaitingVerbs(t *testing.T, waiting map[string]bool) map[string]string {
+	t.Helper()
+	subjects := s25Surfaces(t)
+	out := map[string]string{}
+	for path, src := range r8AllProductionKotlin(t) {
+		if _, isSubject := subjects[filepath.Base(path)]; isSubject {
+			continue
+		}
+		for _, fn := range s25WrapperVerbs(kotlinCodeOnly(src), waiting) {
+			out[fn] = path
+		}
+	}
+	return out
+}
+
+// TestS25_AWrappedWaitingVerbIsStillDispatchedOrMisplaned is the fence that was missing when
+// agents-tracker-jx1x shipped: a call to a WRAPPER around a waiting verb is judged exactly as
+// a call to the verb itself -- it must sit inside a dispatched press, and that press must
+// declare the command lane.
+func TestS25_AWrappedWaitingVerbIsStillDispatchedOrMisplaned(t *testing.T) {
+	waiting, _ := s25Planes(t)
+	indirect := s25IndirectWaitingVerbs(t, waiting)
+
+	// The derivation floor, pinned on the binding this fence was extended for. The R8 fallback
+	// binding wraps the three watch verbs behind exactly these names; a derivation that cannot
+	// see them has stopped walking and every assertion below is over nothing.
+	for _, verb := range []string{"watch", "unwatch", "renew"} {
+		if _, ok := indirect[verb]; !ok {
+			t.Fatalf("agents-tracker-jx1x: the wrapper derivation did not find %q, though "+
+				"TerminalFallbackBinding wraps a waiting facade verb under that name. derived: %v",
+				verb, indirect)
+		}
+	}
+
+	var bad []string
+	for path, src := range r8AllProductionKotlin(t) {
+		code := kotlinCodeOnly(src)
+		// A file's own wrappers are its declarations, not call sites to judge; every OTHER
+		// file's wrappers are, by name, the permissive direction the direct scan already
+		// records: over-reporting a call is the safe way to be wrong for a fence that demands
+		// the call be on a lane.
+		verbs := map[string]bool{}
+		for v, definer := range indirect {
+			if definer == path {
+				continue
+			}
+			verbs[v] = true
+		}
+		if len(verbs) == 0 {
+			continue
+		}
+		stray := s25StrayWaitingCalls(code, verbs)
+		for _, fn := range sortedKeys(stray) {
+			calls := stray[fn]
+			sort.Strings(calls)
+			bad = append(bad, fmt.Sprintf("  %s: %q calls %v outside any dispatched press",
+				path, fn, calls))
+		}
+		for _, fault := range s25MisplanedPresses(code, s25PressBodies(code), verbs, map[string]bool{}) {
+			bad = append(bad, "  "+path+":"+fault)
+		}
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
+		t.Errorf("agents-tracker-jx1x: %s\n\n"+
+			"Each of these names is a thin wrapper around a facade verb that resolves through "+
+			"sendContext -> awaitConn, which polls for up to FIVE SECONDS before a relay append "+
+			"bounded at ten more -- so the call blocks the Android main thread exactly as the "+
+			"facade call it hides would, and nothing on the platform will ever say so "+
+			"(NetworkOnMainThreadException never fires for a socket Go opened). Hand the call to "+
+			"VerbDispatch on SendPlane.COMMAND, the way TerminalWatchLane does.",
+			strings.Join(bad, "\n"))
+	}
+}
+
+// TestS25_TheWrapperDerivationDiscriminates feeds perturbed sources to the SAME functions the
+// real assertion calls, because a control that rebuilds the comparison inline proves something
+// about the copy and nothing about the assertion.
+func TestS25_TheWrapperDerivationDiscriminates(t *testing.T) {
+	waiting := map[string]bool{"terminalViewWatch": true}
+
+	wrapper := `class Binding private constructor(private val app: App, private val id: String) {
+        fun watch() { app.terminalViewWatch(id) }
+    }`
+	if got := s25WrapperVerbs(wrapper, waiting); len(got) != 1 || got[0] != "watch" {
+		t.Errorf("the derivation read a thin wrapper around a waiting facade verb as %v, not as "+
+			"the verb wearing a new name -- which is exactly how agents-tracker-jx1x shipped", got)
+	}
+
+	dispatched := `class Screen(private val dispatch: VerbDispatch) {
+        private fun backfill() {
+            dispatch.enqueue(SendPlane.COMMAND, work = { app.terminalViewWatch(id) }, settle = {})
+        }
+    }`
+	if got := s25WrapperVerbs(dispatched, waiting); len(got) != 0 {
+		t.Errorf("a facade call already on a lane derived wrapper verbs %v, so judging its "+
+			"callers would demand a dispatch around a dispatch", got)
+	}
+
+	// The re-inlining mutation -- jx1x's exact shape -- through the same stray reader the real
+	// scan uses over the derived names.
+	verbs := map[string]bool{"watch": true}
+	reinlined := `private fun reconcileTerminalWatch(session: String?) { binding.watch() }`
+	if got := s25StrayWaitingCalls(reinlined, verbs); len(got) == 0 {
+		t.Error("a wrapper verb re-inlined onto the main thread was not reported, so the fence " +
+			"does not close agents-tracker-jx1x's defect class")
+	}
+	laneShaped := `private fun hold(handle: TerminalWatchHandle) {
+        dispatch.enqueue(plane = SendPlane.COMMAND, work = { handle.watch() }, settle = {})
+    }`
+	if got := s25StrayWaitingCalls(laneShaped, verbs); len(got) != 0 {
+		t.Errorf("a wrapper verb handed to VerbDispatch on the command lane was reported as "+
+			"stray: %v", got)
+	}
+	misplaned := `private fun hold(handle: TerminalWatchHandle) {
+        dispatch.enqueue(plane = SendPlane.LIVE, work = { handle.watch() }, settle = {})
+    }`
+	if got := s25MisplanedPresses(misplaned, s25PressBodies(misplaned), verbs, map[string]bool{}); len(got) == 0 {
+		t.Error("a wrapper around a WAITING verb declared on the live lane was not reported, " +
+			"which puts awaitConn's five-second poll in front of the keystrokes")
 	}
 }
 

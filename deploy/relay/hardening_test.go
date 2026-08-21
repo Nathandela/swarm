@@ -8,10 +8,13 @@
 package relay_test
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func read(t *testing.T, path string) string {
@@ -95,21 +98,135 @@ func TestComposeServicesAreHardened(t *testing.T) {
 	}
 }
 
+// workflowStep / workflowJob / workflowFile are the minimal parsed shape of
+// relay-container.yml this test needs. Parsing (gopkg.in/yaml.v3) instead of substring
+// matching is the point (committee finding Opus M5): a comment or a disabled job could
+// satisfy a substring, but not a structural assertion on a live step's inputs.
+type workflowStep struct {
+	Name string         `yaml:"name"`
+	Uses string         `yaml:"uses"`
+	Run  string         `yaml:"run"`
+	If   any            `yaml:"if"`
+	With map[string]any `yaml:"with"`
+}
+
+type workflowJob struct {
+	If    any            `yaml:"if"`
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowFile struct {
+	Jobs map[string]workflowJob `yaml:"jobs"`
+}
+
+// disabled reports whether an `if:` value statically switches a job/step off.
+func disabled(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return !x
+	case string:
+		s := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(x), "${{"), "}}"))
+		return strings.EqualFold(strings.TrimSpace(s), "false") || strings.TrimSpace(s) == "0"
+	default:
+		return false
+	}
+}
+
+// withString reads one step input as a string ("" if absent).
+func withString(s workflowStep, key string) string {
+	v, ok := s.With[key]
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
+}
+
 func TestRelayContainerWorkflowWiresTheGates(t *testing.T) {
-	wf := read(t, "../../.github/workflows/relay-container.yml")
-	for _, want := range []string{
-		"deploy/relay/Dockerfile",   // builds the real relay image
-		"aquasecurity/trivy-action", // vulnerability scan
-		"HIGH,CRITICAL",             // fail threshold
-		".trivyignore",              // documented ignore mechanism
-		"Config.User",               // non-root execution assertion
-		"read_only",                 // compose hardening asserted in CI
-	} {
-		if !strings.Contains(wf, want) {
-			t.Errorf("relay-container.yml: missing %q", want)
+	var wf workflowFile
+	if err := yaml.Unmarshal([]byte(read(t, "../../.github/workflows/relay-container.yml")), &wf); err != nil {
+		t.Fatalf("relay-container.yml does not parse as YAML: %v", err)
+	}
+
+	// Locate the ONE enabled job that carries a trivy step, and its steps by role.
+	var steps []workflowStep
+	var jobName string
+	for name, job := range wf.Jobs {
+		if disabled(job.If) {
+			continue
 		}
+		for _, s := range job.Steps {
+			if strings.HasPrefix(s.Uses, "aquasecurity/trivy-action") {
+				if steps != nil {
+					t.Fatalf("two enabled jobs (%s, %s) carry a trivy step; this test pins exactly one", jobName, name)
+				}
+				jobName, steps = name, job.Steps
+			}
+		}
+	}
+	if steps == nil {
+		t.Fatal("no ENABLED job in relay-container.yml runs aquasecurity/trivy-action")
+	}
+
+	build, trivy, nonroot, compose := -1, -1, -1, -1
+	for i, s := range steps {
+		if disabled(s.If) {
+			continue
+		}
+		switch {
+		case strings.Contains(s.Run, "docker build") && strings.Contains(s.Run, "deploy/relay/Dockerfile"):
+			build = i
+		case strings.HasPrefix(s.Uses, "aquasecurity/trivy-action"):
+			trivy = i
+		case strings.Contains(s.Run, "docker inspect") && strings.Contains(s.Run, ".Config.User"):
+			nonroot = i
+		case strings.Contains(s.Run, "docker compose config") && strings.Contains(s.Run, "read_only"):
+			compose = i
+		}
+	}
+	if build < 0 {
+		t.Fatal("no enabled step builds the real relay image from deploy/relay/Dockerfile")
+	}
+	if trivy < 0 {
+		t.Fatal("the trivy step is disabled (if: false)")
+	}
+	if trivy < build {
+		t.Error("the trivy step runs before the image is built; it cannot be scanning the relay image")
+	}
+
+	// The scan gates are step INPUTS, not substrings anywhere in the file.
+	ts := steps[trivy]
+	if got := withString(ts, "exit-code"); got != "1" {
+		t.Errorf("trivy exit-code input = %q, want \"1\" (a scan that cannot fail the job gates nothing)", got)
+	}
+	if got := withString(ts, "severity"); got != "HIGH,CRITICAL" {
+		t.Errorf("trivy severity input = %q, want \"HIGH,CRITICAL\"", got)
+	}
+	if got := withString(ts, "image-ref"); got == "" {
+		t.Error("trivy has no image-ref input; it is not scanning the built image")
+	}
+	if got := withString(ts, "trivyignores"); got != "deploy/relay/.trivyignore" {
+		t.Errorf("trivy trivyignores input = %q, want the documented deploy/relay/.trivyignore waiver file", got)
 	}
 	if _, err := os.Stat(".trivyignore"); err != nil {
 		t.Errorf("deploy/relay/.trivyignore: %v", err)
+	}
+
+	// Non-root execution is asserted by an enabled step running docker inspect on
+	// Config.User, after the build, and its script must be able to fail.
+	if nonroot < 0 {
+		t.Fatal("no enabled step runs docker inspect on .Config.User (playbook 11.1 non-root assertion)")
+	}
+	if nonroot < build {
+		t.Error("the non-root assertion runs before the image is built")
+	}
+	if !strings.Contains(steps[nonroot].Run, "exit 1") {
+		t.Error("the non-root assertion step has no failing path (no `exit 1`); it cannot gate anything")
+	}
+
+	// Compose hardening is re-asserted in CI over the RESOLVED topology.
+	if compose < 0 {
+		t.Fatal("no enabled step re-asserts the compose read_only hardening via docker compose config")
 	}
 }

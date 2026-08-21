@@ -46,9 +46,12 @@ import (
 // r8FallbackSymbolsInStructuredScreens is THE predicate, and it is the only one. The real scan
 // and the mutant scan below both call it, so a change that lets the evasion through cannot
 // leave the mutant test green.
+// `TerminalWatchLane` and `TerminalWatchHandle` joined with agents-tracker-jx1x: they are the
+// watch machinery's dispatcher and its handle seam, and a structured screen that can name
+// either is one handed-in binding away from opening a watch.
 var r8FallbackSymbolsInStructuredScreens = regexp.MustCompile(
 	`\b(terminalFallbackBody|TerminalFallbackView|TerminalFallbackScreen|terminalFallbackView|` +
-		`terminalFallbackBinding|TerminalFallbackBinding)\b`)
+		`terminalFallbackBinding|TerminalFallbackBinding|TerminalWatchLane|TerminalWatchHandle)\b`)
 
 // r8StructuredScreens is the list T2 rule 4 is stated over.
 var r8StructuredScreens = []string{

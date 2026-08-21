@@ -135,12 +135,41 @@ func TestMailboxDemux_GrantAndPushNotJournaled(t *testing.T) {
 }
 
 // TestSnapshotFrame_WireShape pins the exact committed plaintext JSON shape (D matches
-// this): the kind discriminator plus the TerminalSnapshot fields, in order.
+// this): the kind discriminator plus the TerminalSnapshot fields, in order -- and then
+// the SAME frame with ALL FIVE R8 sibling keys populated (bead 65bj). The five versioned
+// keys ride this struct AND remotegw's independent snapshotFrame declaration; a tag
+// drift on either side makes the phone read a zero -- and a view_epoch of 0 disables
+// SnapshotCache.Apply's revision-monotonicity guard outright -- so both pins carry the
+// exact bytes for identical data (the remotegw twin is
+// TestRelaySink_ForwardsVersionedTerminalSnapshot; the cross-package tie is
+// TestSnapshotWireParity_GatewayMarshalMatchesPhoneFrame).
 func TestSnapshotFrame_WireShape(t *testing.T) {
 	got := marshalSnapshot(t, "s1", []string{"a", "b"}, 80, 24)
 	want := `{"kind":"terminal_snapshot","session":"s1","lines":["a","b"],"cols":80,"rows":24}`
 	if string(got) != want {
 		t.Fatalf("snapshot wire shape =\n  %s\nwant\n  %s", got, want)
+	}
+
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	full, err := json.Marshal(snapshotFrame{
+		Kind: kindTerminalSnapshot,
+		TerminalSnapshot: protocol.TerminalSnapshot{
+			Session: "s1", Lines: []string{"a", "b"}, Cols: 80, Rows: 24,
+		},
+		SessionInstance: "inst-1",
+		ViewEpoch:       3,
+		Revision:        7,
+		Reset:           true,
+		RenderedAt:      &at,
+	})
+	if err != nil {
+		t.Fatalf("marshal full snapshot frame: %v", err)
+	}
+	wantFull := `{"kind":"terminal_snapshot","session":"s1","lines":["a","b"],"cols":80,"rows":24,` +
+		`"session_instance":"inst-1","view_epoch":3,"revision":7,"reset":true,` +
+		`"rendered_at":"2026-01-02T03:04:05Z"}`
+	if string(full) != wantFull {
+		t.Fatalf("versioned snapshot wire shape =\n  %s\nwant\n  %s", full, wantFull)
 	}
 }
 

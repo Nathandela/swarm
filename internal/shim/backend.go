@@ -158,6 +158,37 @@ func startBackend(cfg *BackendConfig, sessionDir string) (*backendProc, error) {
 	return b, nil
 }
 
+// containBackendFailure ends a backend the session can no longer use -- one whose identity
+// record could not be written, or whose socket never became servable -- and scrubs any
+// backend.json on disk. TERM to ITS OWN group, one grace, then always the final synchronous
+// group KILL (finishEscalation's own discipline: it reaps a TERM-ignoring member, leader or
+// child, and is a harmless ESRCH on a group that already emptied), joined on the backend's
+// dedicated Wait goroutine -- the leader's KILL is what guarantees the join returns.
+//
+// WHY KILL NOW rather than leave it to finalization: backend.json is the daemon's ONLY means
+// of identifying an orphan backend, and both callers are on paths where the record does not
+// (or can not) exist. A live app-server with no record -- authenticated to a real account, no
+// PTY, no streams -- survives an uncatchable SIGKILL of this shim FOREVER: the reaper cannot
+// reap what was never recorded. So a backend the daemon cannot find must not outlive the
+// shim's decision to stop using it.
+//
+// The record scrub covers both failure shapes: writeBackendInfo can fail AFTER its rename
+// (leaving a record that names the pid this function just killed), and a prior incarnation
+// can leave a stale one; either would send the next daemon reconcile chasing a pid that is
+// not this session's backend.
+func containBackendFailure(b *backendProc, sessionDir string, grace time.Duration) {
+	if b != nil {
+		_ = syscall.Kill(-b.pgid, syscall.SIGTERM)
+		select {
+		case <-b.dead:
+		case <-time.After(grace):
+		}
+		_ = syscall.Kill(-b.pgid, syscall.SIGKILL)
+		<-b.dead
+	}
+	_ = os.Remove(filepath.Join(sessionDir, BackendFile))
+}
+
 // waitBackendServable polls until the socket accepts a connection, the bound elapses, or the
 // backend dies first. READINESS CAN ONLY COME FROM THE SOCKET: R1 leg 1 recorded that
 // `codex app-server` writes NOTHING to stdout or stderr for an entire session, so there is no

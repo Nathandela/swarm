@@ -281,7 +281,10 @@ func r8r3BindingMethods(t *testing.T) []string {
 	}
 	body := code[i:]
 	var out []string
-	for _, m := range regexp.MustCompile(`(?m)^\s{4}fun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`).
+	// `override` joined `fun` when the binding began implementing TerminalWatchHandle
+	// (agents-tracker-jx1x): a modifier must not drop a verb from the ledger's sight, or the
+	// two watch verbs would read as undeclared while production reaches them from the lane.
+	for _, m := range regexp.MustCompile(`(?m)^\s{4}(?:override\s+)?fun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`).
 		FindAllStringSubmatch(body, -1) {
 		out = append(out, m[1])
 	}

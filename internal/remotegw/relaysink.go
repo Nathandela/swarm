@@ -277,7 +277,10 @@ type snapshotFrame struct {
 	// SIBLING KEYS with omitempty (the time a pointer, because a zero time.Time is not omitted
 	// by encoding/json) so a frame carrying none of them serializes BYTE-IDENTICALLY to the
 	// shape this wire has always had. That is the GG-7 rule schema.Control states in as many
-	// words, and TestRelaySink_ForwardsTerminalSnapshot pins these exact bytes.
+	// words. TestRelaySink_ForwardsTerminalSnapshot pins the legacy bytes,
+	// TestRelaySink_ForwardsVersionedTerminalSnapshot pins the frame with all five sibling
+	// keys, and phonecore's TestSnapshotWireParity_GatewayMarshalMatchesPhoneFrame ties this
+	// declaration byte-for-byte to its phonecore twin (bead 65bj).
 	SessionInstance string     `json:"session_instance,omitempty"`
 	ViewEpoch       uint64     `json:"view_epoch,omitempty"`
 	Revision        uint64     `json:"revision,omitempty"`

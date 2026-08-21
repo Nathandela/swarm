@@ -2563,11 +2563,26 @@ class PhoneSurface(
 
     /**
      * The session whose terminal watch this surface currently holds, with the binding that holds
-     * it. ADR-017 T4-b: a watch is opened ONCE, renewed while its screen is up, and closed when it
-     * is not -- so the machine never renders for a screen nobody is looking at.
+     * it -- on [VerbDispatch]'s COMMAND LANE, never this thread (agents-tracker-jx1x). ADR-017
+     * T4-b: a watch is opened ONCE, renewed while its screen is up, and closed when it is not --
+     * so the machine never renders for a screen nobody is looking at.
+     *
+     * The verbs are relay appends behind awaitConn's five-second poll, exactly like every other
+     * command this surface issues, and they used to run INLINE here -- a silent ANR, because
+     * NetworkOnMainThreadException never fires for a socket Go opened. [TerminalWatchLane] owns
+     * the ordering (a replaced watch is unwatched BEFORE its successor is watched, on the one
+     * serial command thread) and the refusal path (a refused watch clears the hold on the
+     * settle, so this surface re-watches instead of renewing into nothing).
      */
-    private var watchedFallback: String? = null
-    private var watchedBinding: TerminalFallbackBinding? = null
+    private val watchLane = TerminalWatchLane<TerminalFallbackBinding>(dispatch)
+
+    /**
+     * [renewHeldWatch]'s single-flight key ([VerbDispatch.enqueue]'s keyed fence). Renewals ride
+     * the redraw AND the 20-second tick; while one is crossing -- awaitConn can park it for five
+     * seconds -- a second says nothing the machine has not already heard, so it is dropped
+     * rather than queued behind the first.
+     */
+    private val watchRenewalCrossing = Any()
 
     /**
      * The clock that keeps a held watch alive while its screen is on the glass, and the interval
@@ -2605,40 +2620,29 @@ class PhoneSurface(
      * by the redraw rather than by a timer, because a timer is exactly the background emitter
      * T6-c bans -- a renewal that outlives the composition is a machine rendering for nobody.
      *
-     * Both verbs are wrapped: they are relay appends, and a refusal on the way out of a screen has
-     * no user to report to and must not take the draw down with it.
+     * Both verbs ride [watchLane] -- the command lane, agents-tracker-jx1x -- because they are
+     * relay appends: run here they blocked this thread for awaitConn's poll plus the append, and
+     * a refusal on the way out of a screen has no user to report to and must not take the draw
+     * down with it. The lane wraps both, and its settle is where a refused watch clears the hold.
      */
     private fun reconcileTerminalWatch(bridge: FacadeBridge?, session: String?) {
-        val current = watchedFallback
+        val current = watchLane.heldSession
         if (current != null && current == session && !heldWatchLapsed()) {
             renewHeldWatch()
             return
         }
-        if (current != null) {
-            try {
-                watchedBinding?.unwatch()
-            } catch (refused: Exception) {
-                // The socket may already be gone. The machine's own horizon is the backstop.
-            }
-        }
+        watchLane.drop()
         watchRenewal.removeCallbacksAndMessages(null)
-        watchedFallback = null
-        watchedBinding = null
         if (session == null || bridge == null) return
         // NULL IS THE CAPABILITY REFUSAL, and it is now a refusal this surface cannot route
         // around: the binding's constructor is private and its one factory reads the machine's
         // routing decision, so a session the machine did not send here yields no handle to watch
         // with (closing review, finding 2).
         val binding = bridge.terminalFallbackBinding(session) ?: return
-        try {
-            binding.watch()
-        } catch (refused: Exception) {
-            // A refused watch is the capability gate answering, and it answers the same way every
-            // time. Nothing is held, so nothing is renewed and nothing is left to close.
-            return
-        }
-        watchedFallback = session
-        watchedBinding = binding
+        // THE HOLD IS EAGER: state is written at enqueue time, so the redraw that follows renews
+        // instead of re-watching -- one append, not one per redraw. A watch the machine refuses
+        // clears the hold on the settle, and the tick below then finds nothing held and stops.
+        watchLane.hold(session, binding)
         scheduleWatchRenewal()
     }
 
@@ -2654,7 +2658,7 @@ class PhoneSurface(
     private fun scheduleWatchRenewal() {
         watchRenewal.removeCallbacksAndMessages(null)
         watchRenewal.postDelayed({
-            if (watchedFallback == null) return@postDelayed
+            if (watchLane.heldSession == null) return@postDelayed
             renewHeldWatch()
             scheduleWatchRenewal()
         }, watchRenewalMillis)
@@ -2664,13 +2668,22 @@ class PhoneSurface(
      * Tell the machine somebody is still looking. A refusal has no user to report to: the horizon
      * lapses on its own if this never lands, the machine reaps the watch, and -- since round 3 --
      * blanks the phone's copy rather than leaving a dead grid the screen would call fresh.
+     *
+     * ON THE COMMAND LANE, like the watch it renews (agents-tracker-jx1x): a renewal is a relay
+     * append behind awaitConn, and this function used to run it on the main thread from a
+     * 20-second main-looper tick. Keyed single-flight, so a renewal parked in awaitConn is not
+     * joined by the queue of its own successors.
      */
     private fun renewHeldWatch() {
-        try {
-            watchedBinding?.renew()
-        } catch (refused: Exception) {
-            // Deliberately silent; the machine's own horizon is the backstop.
-        }
+        val held = watchLane.held ?: return
+        dispatch.enqueue(
+            plane = SendPlane.COMMAND,
+            key = watchRenewalCrossing,
+            work = { held.renew() },
+            settle = {
+                // Deliberately silent; the machine's own horizon is the backstop.
+            },
+        )
     }
 
     /**
@@ -2696,7 +2709,7 @@ class PhoneSurface(
      * still reads as "not lapsed" and no redraw tears down a peek that is still opening.
      */
     private fun heldWatchLapsed(): Boolean {
-        val binding = watchedBinding ?: return false
+        val binding = watchLane.held ?: return false
         return try {
             TerminalFallbackBinding.watchLapsed(binding.grid())
         } catch (unreadable: Exception) {

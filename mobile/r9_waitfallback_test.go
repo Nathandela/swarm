@@ -2,22 +2,25 @@ package swarmmobile
 
 // FAILING-FIRST (TDD RED, GG-5) for Wave R9's playbook section-10 clause: the 500 ms poll
 // survives ONLY as "an explicit compatibility fallback ... for old relays", and the
-// fallback must be selected by the old relay's real refusal of the mailbox_wait op --
-// never by a config flag.
+// fallback must be selected by the old relay's own answer -- never by a config flag.
 //
-// WHAT AN OLD RELAY'S REFUSAL LOOKS LIKE ON THE WIRE, because it is the shape this test
-// reproduces byte for byte. A pre-v0.7.0 relay's dispatch has no "mailbox_wait" case, so
-// the op falls to `default: replyErr(codeBadRequest)` -- an ORDINARY in-order MsgError
-// frame. The client's parked wait correlates only MsgWaitReply frames (ADR-007 B7), so
-// that refusal never reaches the waiter: the wait sits silent until the phone's own
-// per-wait deadline ends it. "The relay answered its authenticated handshake and then
-// answered NOTHING to the very first wait" is therefore the only phone-visible evidence an
-// old relay can produce, and it is what must select the poll -- after a reconnect, because
-// the refused wait's un-correlated MsgError has already desynchronised that connection's
-// request/reply accounting.
+// STRENGTHENED by the final-audit committee (Opus M1/M2): the selecting answer is now the
+// r_hello CAPABILITY SET, not a probe's timeout. A pre-wait relay's serverCaps never
+// registered "wait", so its hello reply omits it, and a relay whose hello does not
+// advertise the capability must NEVER be sent the op at all. The old selection -- park a
+// blind mailbox_wait and read the verdict out of a 35 s deadline -- cost every generation
+// a dark window the length of waitTimeout, and the probe's refusal (an ORDINARY in-order
+// MsgError the parked waiter cannot correlate, ADR-007 B7) sat queued on the connection's
+// reply channel where the next request/reply exchange consumed it as its own answer.
 //
-// The rig: a real relay.Server behind a proxy that answers the two wait ops exactly as an
-// old relay's dispatch would (MsgError bad_request, nothing forwarded) and forwards every
+// So this fence now asserts the negotiation shape: the phone hellos, the old relay's
+// reply names no "wait", the phone drops straight into the compatibility poll -- zero
+// mailbox_wait ops on the wire, zero dark window (the delivery bound below is far under
+// one waitTimeout), and the unsupported verdict recorded per connection.
+//
+// The rig: a real relay.Server behind a proxy that answers hello exactly as an old
+// relay's dispatch would (the capability intersection minus "wait"), refuses any wait op
+// that still arrives (MsgError bad_request, the old default arm), and forwards every
 // other frame verbatim. A journal event sealed by the real machine-side RelaySink must
 // still reach the phone -- through the fallback poll -- and the drain must have recorded
 // the unsupported verdict rather than defaulted to it.
@@ -46,16 +49,19 @@ import (
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
-// r9OldRelay proxies the real relay but answers mailbox_wait and mailbox_wait_cancel the
-// way a pre-v0.7.0 relay's dispatch does: MsgError {code: bad_request}, nothing forwarded.
-// Every other frame crosses verbatim. It counts the refusals it issued and the
-// mailbox_read ops it forwarded, so the test can prove the fallback was REACHED BY the
-// refusal rather than taken by default.
+// r9OldRelay proxies the real relay but plays a pre-v0.7.0 relay at the phone: hello is
+// answered locally with the old serverCaps intersection (no "wait"), and mailbox_wait /
+// mailbox_wait_cancel -- which a negotiating phone must never send it -- are refused the
+// way the old dispatch's default arm does: MsgError {code: bad_request}, nothing
+// forwarded. Every other frame crosses verbatim. It counts the hellos it answered, the
+// refusals it issued and the mailbox_read ops it forwarded, so the test can prove the
+// fallback was REACHED BY the negotiation rather than taken by default.
 type r9OldRelay struct {
 	srv      *httptest.Server
 	upstream string
 
 	mu       sync.Mutex
+	hellos   int
 	refusals int
 	reads    int
 }
@@ -126,19 +132,40 @@ func newR9OldRelay(t *testing.T, upstream string) *r9OldRelay {
 
 func (p *r9OldRelay) URL() string { return "ws" + strings.TrimPrefix(p.srv.URL, "http") }
 
-// classify returns the old relay's MsgError reply for a wait op, or nil to forward.
+// classify returns the old relay's local reply for a hello or a wait op, or nil to
+// forward the frame verbatim.
 func (p *r9OldRelay) classify(data []byte) []byte {
 	tag, payload, err := relay.ReadFrame(bytes.NewReader(data))
 	if err != nil || tag != relay.MsgRelay {
 		return nil
 	}
 	var env struct {
-		Op string `json:"op"`
+		Op      string   `json:"op"`
+		Version int      `json:"version"`
+		Caps    []string `json:"caps"`
 	}
 	if json.Unmarshal(payload, &env) != nil {
 		return nil
 	}
 	switch env.Op {
+	case "hello":
+		// The pre-wait dispatch HAS a hello arm; what it lacks is "wait" in its
+		// serverCaps, so the agreed intersection strips it.
+		agreed := make([]string, 0, len(env.Caps))
+		for _, c := range env.Caps {
+			if c != "wait" {
+				agreed = append(agreed, c)
+			}
+		}
+		p.mu.Lock()
+		p.hellos++
+		p.mu.Unlock()
+		body, _ := json.Marshal(map[string]any{"version": env.Version, "caps": agreed})
+		var buf bytes.Buffer
+		if relay.WriteFrame(&buf, relay.MsgOK, body) != nil {
+			return nil
+		}
+		return buf.Bytes()
 	case "mailbox_wait", "mailbox_wait_cancel":
 		p.mu.Lock()
 		p.refusals++
@@ -157,10 +184,10 @@ func (p *r9OldRelay) classify(data []byte) []byte {
 	return nil
 }
 
-func (p *r9OldRelay) counts() (refusals, reads int) {
+func (p *r9OldRelay) counts() (hellos, refusals, reads int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.refusals, p.reads
+	return p.hellos, p.refusals, p.reads
 }
 
 // r9Eventually is the conformance suite's eventually, in-package.
@@ -195,19 +222,16 @@ func r9SawCursor(t *testing.T, app *App, cursor int64) bool {
 	return false
 }
 
-// TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback: the drain's first
-// wait against the old relay goes unanswered (its MsgError refusal cannot be correlated to
-// the parked wait), the phone records the unsupported verdict at its per-wait deadline,
-// reconnects, and the compatibility poll delivers the machine's journal event.
-func TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback(t *testing.T) {
-	// The per-wait bound is §6.0's 25 s server ceiling plus one request budget in
-	// production; against a relay that will never answer, a test that sat it out would
-	// spend 35 s proving a timeout fires. Shorten the bound, not the mechanism. Registered
-	// FIRST so it is restored after the app's own cleanup closed the drain.
-	oldTimeout := waitTimeout
-	waitTimeout = 1 * time.Second
-	t.Cleanup(func() { waitTimeout = oldTimeout })
-
+// TestR9_AnOldRelayWithoutTheWaitCapabilitySelectsThePollFallback: the phone's hello
+// learns the old relay never registered "wait", so the drain drops straight into the
+// compatibility poll -- no blind probe, no per-wait deadline spent discovering what the
+// handshake already said -- and the poll delivers the machine's journal event.
+//
+// waitTimeout is deliberately NOT shortened here any more, and that is half the fence:
+// the delivery bound below (r9Eventually's 15 s) is well under one production waitTimeout
+// (35 s), so a phone that still discovered the fallback by sitting out a blind probe's
+// deadline cannot pass this test at all. The dark window is gone, not shrunk.
+func TestR9_AnOldRelayWithoutTheWaitCapabilitySelectsThePollFallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -320,22 +344,29 @@ func TestR9_AnOldRelayRefusingMailboxWaitDropsThePhoneToThePollFallback(t *testi
 		t.Fatalf("sink.Event: %v", err)
 	}
 
-	r9Eventually(t, "the journal event never reached the phone; an old relay's refusal of "+
-		"mailbox_wait must drop the drain into the 500 ms compatibility poll, and delivery must "+
-		"survive it", func() bool {
+	r9Eventually(t, "the journal event never reached the phone within 15 s; a hello that does not "+
+		"advertise \"wait\" must drop the drain straight into the 500 ms compatibility poll -- with "+
+		"no blind-probe dark window ahead of delivery -- and delivery must survive it", func() bool {
 		return r9SawCursor(t, app, 1)
 	})
 
-	refusals, reads := proxy.counts()
-	if refusals == 0 {
-		t.Error("the old relay never refused a mailbox_wait: the phone did not try the wait first, " +
-			"so whatever delivered the event was not the refusal-selected fallback")
+	hellos, refusals, reads := proxy.counts()
+	if hellos == 0 {
+		t.Error("the phone never negotiated hello with the old relay: the fallback must be " +
+			"SELECTED by the advertised capability set, not taken by default or probed blind")
+	}
+	if refusals != 0 {
+		t.Errorf("the phone sent %d mailbox_wait ops to a relay whose hello did not advertise "+
+			"\"wait\"; an op the relay does not claim must never be probed -- the probe's refusal "+
+			"is an in-order MsgError the parked waiter cannot correlate, and it desynchronises the "+
+			"connection's request/reply accounting (committee finding H1)", refusals)
 	}
 	if reads == 0 {
 		t.Error("no mailbox_read crossed the proxy: the event arrived outside the compatibility poll")
 	}
 	if got := app.waitSupport.Load(); got != waitUnsupported {
-		t.Errorf("waitSupport = %d after the refusal, want waitUnsupported (%d): the fallback must be "+
-			"recorded as the old relay's refusal verdict, not re-probed or defaulted", got, waitUnsupported)
+		t.Errorf("waitSupport = %d against the old relay, want waitUnsupported (%d): the fallback "+
+			"must be recorded as this connection's negotiated verdict, not re-probed or defaulted",
+			got, waitUnsupported)
 	}
 }

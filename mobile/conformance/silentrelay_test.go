@@ -34,15 +34,37 @@ import (
 	swarmmobile "github.com/Nathandela/swarm/mobile"
 )
 
-// silentBound is how long this test waits for a call that must be bounded. It is well above
-// the bound itself -- §6.0's 10 s non-wait request timeout, which relay.DefaultCallTimeout now
-// carries -- and well below "forever": a call still parked here is parked because nothing
-// bounds it.
+// silentBound bounds the OUTBOUND-VERB test: how long it waits for a call that must be
+// bounded. It is well above the bound itself -- §6.0's 10 s non-wait request timeout, which
+// relay.DefaultCallTimeout carries -- and well below "forever": a call still parked here is
+// parked because nothing bounds it.
 //
 // It is generous enough to absorb TWO of those deadlines, which is a real cost of the fix
 // rather than a flake allowance: a.bucketMu is a plain mutex, so a keystroke issued behind a
-// command that is itself waiting out its deadline pays that deadline first.
+// command that is itself waiting out its deadline pays that deadline first. It bounds ONLY
+// the outbound verbs -- the inbound drain's own silence bound is silentStateBound below,
+// which composes from different terms.
 const silentBound = 40 * time.Second
+
+// silentStateBound bounds the CONNECTION-STATE test, and it is composed from the drain's
+// own worst case rather than inherited from the verbs above (an earlier revision reused
+// silentBound here with a comment still describing two 10 s deadlines -- true of the poll
+// era, and passing against the wait tail only because the fastest of the drain's paths
+// happened to run). Against a relay that goes silent, the drain's longest road to
+// observing the outage is:
+//
+//	waitTimeout (25 s server wait ceiling + 10 s request budget, mobile/relay.go)
+//	  -- the parked wait that will never be answered, ended by its own deadline --
+//	+ relay.DefaultCallTimeout (10 s)
+//	  -- IF no wait was ever answered on this connection, the deadline demotes it to
+//	     the compatibility poll (defense in depth for a relay that advertised "wait"
+//	     and answers nothing), whose first bounded MailboxRead then discovers the
+//	     link is dead --
+//
+// = 45 s worst case before run() tears the generation down and the state leaves
+// "online". 60 s covers it with margin that absorbs scheduling, not mechanism: a state
+// still "online" here is unobserved silence, not a slow test host.
+const silentStateBound = 60 * time.Second
 
 // awaitWithin polls fn until it reports true, or fails after d. The harness's own eventually
 // is fixed at five seconds, which is shorter than the bound under test here.
@@ -161,11 +183,13 @@ func TestSilentRelay_TheOutboundPlaneIsNeverParkedForever(t *testing.T) {
 // TestSilentRelay_TheConnectionStopsClaimingToBeOnline is the state half, and it is the one a
 // user actually sees.
 //
-// The inbound drain sits in MailboxRead under the Start..Stop context, which carries no
-// deadline and is cancelled only by Stop or Close. Against a silent relay that call never
-// returns, so drain never returns, so run() never severs the lease, never drops the client and
-// never reconnects. ConnectionState goes on answering "online" forever while nothing the phone
-// sends is answered -- a spinner would at least be honest.
+// The defect this fences (historically): the inbound drain sat in MailboxRead under the
+// Start..Stop context, which carries no deadline and is cancelled only by Stop or Close.
+// Against a silent relay that call never returned, so drain never returned, so run() never
+// severed the lease, never dropped the client and never reconnected -- ConnectionState went
+// on answering "online" forever while nothing the phone sent was answered. Today the drain
+// is the bounded wait tail; the bound it must honor is silentStateBound's composition, and
+// the assertion holds the state to exactly that.
 func TestSilentRelay_TheConnectionStopsClaimingToBeOnline(t *testing.T) {
 	h, proxy := s11rProxiedHarness(t)
 
@@ -175,10 +199,12 @@ func TestSilentRelay_TheConnectionStopsClaimingToBeOnline(t *testing.T) {
 
 	proxy.Silence()
 
-	awaitWithin(t, silentBound, "ConnectionState still reported \"online\" against a relay that "+
-		"answered nothing.\nThe drain is parked in MailboxRead on context.Background(), so the "+
-		"phone never observes the outage: it cannot sever the lease (PB-INPUT-2), cannot drop "+
-		"the client and cannot reconnect. The user is shown a healthy link and told nothing.",
+	awaitWithin(t, silentStateBound, "ConnectionState still reported \"online\" against a relay "+
+		"that answered nothing.\nThe drain's parked wait must be ended by its own waitTimeout and "+
+		"the demoted poll's first read by relay.DefaultCallTimeout (see silentStateBound); a state "+
+		"still online past both is a drain that never observes the outage -- it cannot sever the "+
+		"lease (PB-INPUT-2), cannot drop the client and cannot reconnect. The user is shown a "+
+		"healthy link and told nothing.",
 		func() bool {
 			s, err := h.App.ConnectionState()
 			return err == nil && s != "online"

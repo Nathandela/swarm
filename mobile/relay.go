@@ -126,14 +126,15 @@ func (r *relayAcker) Ack(cursor uint64) error {
 	return nil
 }
 
-// flushAcks releases everything the core has committed since the last flush.
+// flushAcks releases everything the core has committed since the last flush. It is the
+// POLL drain's ack path; the wait drain acks the same coordinates through
+// transport.AckBatcher instead (see drainWait), which is why the batcher's flush closure
+// mirrors the ackSent bookkeeping below.
 //
-// The error is REPORTED, not acted on here: an ack is an optimisation (the durable receive
-// high-water refuses any redelivery), so nothing is lost when one fails -- but a failed ack
-// is a bounded exchange the relay did not answer, which is transport evidence its caller may
-// need. The poll drain ignores it, because its next MailboxRead re-probes the link within
-// one DefaultCallTimeout anyway; the wait drain must not, because its next probe would
-// otherwise be a full waitTimeout away (see drainWait).
+// The error is REPORTED, not acted on: an ack is an optimisation (the durable receive
+// high-water refuses any redelivery), so nothing is lost when one fails. The poll drain
+// ignores it, because its next MailboxRead re-probes the link within one
+// DefaultCallTimeout anyway.
 func (a *App) flushAcks(ctx context.Context, cl *relay.Client) error {
 	a.mu.Lock()
 	cursor := a.ackPending
@@ -509,6 +510,11 @@ func (a *App) run(ctx context.Context) {
 			}
 			continue
 		}
+		// The wait verdict is negotiated FIRST, before the client is published and before
+		// the presence cadence starts, so the hello is the connection's only in-flight
+		// exchange and the drain mode is decided from the relay's own advertisement
+		// rather than from a blind probe's timeout (committee findings M1/M3).
+		a.waitSupport.Store(a.negotiateWaitSupport(ctx, cl))
 		a.setClient(cl)
 		a.setConn(connOnline)
 		rb.reset() // PB-NET-4: a successful connection un-does whatever backoff came before it
@@ -913,17 +919,45 @@ func (a *App) onConnected(ctx context.Context, cl *relay.Client) {
 	}
 }
 
-// The relay's mailbox_wait support, as THIS process has observed it (App.waitSupport).
-// It starts unknown, is confirmed by the first wait the relay ANSWERS -- items or a clean
-// empty page alike -- and is demoted to unsupported by the one piece of evidence an OLD
-// relay can produce (see drainWait). The verdict is process-sticky: an old relay does not
-// become a new one between reconnects, and re-probing on every generation would buy each
-// one a dark window the length of waitTimeout.
+// The relay's mailbox_wait support, as negotiated for the CURRENT connection
+// (App.waitSupport). run() overwrites it on every successful dial with the verdict of
+// that connection's r_hello capability exchange (negotiateWaitSupport), so the value is
+// PER CONNECTION, never process-sticky: an old relay that is upgraded is re-evaluated for
+// free on the next reconnect (bead agents-tracker-zphd), and one network stall can no
+// longer pin a modern relay to the 500 ms poll for the process lifetime (committee
+// finding M2).
+//
+//   - waitAdvertised: this connection's hello named "wait" among the agreed caps. The
+//     drain parks the wait tail on that promise; the first wait the relay ANSWERS --
+//     items or a clean empty page alike -- confirms it as waitSupported.
+//   - waitSupported: a wait has been answered on this connection; a later black-holed
+//     link is a transport failure, never a demotion.
+//   - waitUnsupported: the hello omitted "wait" (or failed outright), or -- defense in
+//     depth -- a relay that ADVERTISED the op never answered the first wait within
+//     waitTimeout (see drainWait). The drain runs the compatibility poll for the
+//     remainder of this connection.
 const (
-	waitUnknown int32 = iota
+	waitAdvertised int32 = iota
 	waitSupported
 	waitUnsupported
 )
+
+// negotiateWaitSupport derives one connection's wait verdict from its r_hello exchange.
+// A refused or failed hello reads as unsupported rather than an error: the poll fallback
+// works against every relay, and if the hello failed because the link is dying the drain
+// discovers that within one bounded call anyway.
+func (a *App) negotiateWaitSupport(ctx context.Context, cl *relay.Client) int32 {
+	_, caps, err := cl.Hello(ctx, relay.ProtocolVersion, []string{"mailbox", "push", "presence", "wait"})
+	if err != nil {
+		return waitUnsupported
+	}
+	for _, c := range caps {
+		if c == "wait" {
+			return waitAdvertised
+		}
+	}
+	return waitUnsupported
+}
 
 // serverWaitCeiling is §6.0's "Server-side wait (long-poll) maximum | 25 s" (PB-NET-5),
 // transcribed exactly as internal/remotegw does for the machine hop: it is the RELAY's
@@ -937,21 +971,31 @@ const serverWaitCeiling = 25 * time.Second
 // defaultWaitTimeout, and for the same reason (a relay that honours the ceiling is never
 // cut off early; one that answers nothing is ended one request budget later).
 //
-// It is a var, not a const, for one reason only: the old-relay fallback test would
-// otherwise spend the full production bound proving a timeout fires. Nothing in
-// production writes it.
+// It is a var, not a const, for one reason only: a test that needs the defense-in-depth
+// demotion (an ADVERTISED wait that is never answered, see drainWait) would otherwise
+// spend the full production bound proving a timeout fires. Nothing in production writes
+// it.
 var waitTimeout = serverWaitCeiling + relay.DefaultCallTimeout
 
 // drain hands every mailbox item to the core, in order, until the connection dies: the
-// bounded-MailboxWait live tail against every relay that supports it, and the legacy
-// 500 ms poll ONLY once this process has evidence the relay refuses the wait op
-// (playbook section 10: "an explicit compatibility fallback only for old relays").
+// bounded-MailboxWait live tail against every relay whose hello advertised the "wait"
+// capability, and the legacy 500 ms poll ONLY against one that did not (playbook section
+// 10: "an explicit compatibility fallback only for old relays" -- selected by the
+// relay's own capability set, never by a config flag).
+//
+// The second dispatch below is drainWait's defense-in-depth demotion landing: a relay
+// that ADVERTISED the wait and then answered nothing within waitTimeout is polled for
+// the remainder of this connection -- still exactly one mailbox reader, handed off
+// sequentially on one goroutine (PB-NET-6). If the deadline was really the link dying,
+// the poll's first bounded MailboxRead discovers that within DefaultCallTimeout and the
+// generation ends for an ordinary reconnect.
 func (a *App) drain(ctx context.Context, cl *relay.Client) {
-	if a.waitSupport.Load() == waitUnsupported {
-		a.drainPoll(ctx, cl)
-		return
+	if a.waitSupport.Load() != waitUnsupported {
+		a.drainWait(ctx, cl)
 	}
-	a.drainWait(ctx, cl)
+	if ctx.Err() == nil && a.waitSupport.Load() == waitUnsupported {
+		a.drainPoll(ctx, cl)
+	}
 }
 
 // drainWait is the live tail: park a bounded server-side wait at the durable cursor,
@@ -962,25 +1006,50 @@ func (a *App) drain(ctx context.Context, cl *relay.Client) {
 // is what keeps the loop at the budget instead of at full speed (PB-SYNC-6; the poll
 // loop's progress condition, restated for a drain with no sleep to fall into).
 //
-// HOW AN OLD RELAY IS DETECTED, because it is the one demotion path and it must be a real
-// refusal. A pre-v0.7.0 relay answers the unknown op with an ordinary in-order MsgError
-// frame; the client correlates only MsgWaitReply frames to the parked waiter (ADR-007
-// B7), so that refusal can never reach this call -- the wait just sits silent while the
-// connection stays up, until waitTimeout ends it with the deadline. "The relay answered
-// its authenticated handshake and then answered NOTHING to a wait this process has never
-// once seen answered" is therefore the whole of the evidence an old relay can produce,
-// and it is exactly what demotes: a deadline-shaped failure while the verdict is still
-// unknown. Every other failure -- the link dying under the wait (ErrConnClosed), the
+// AN OLD RELAY NEVER REACHES THIS FUNCTION. Its hello does not advertise the "wait"
+// capability, so negotiateWaitSupport records waitUnsupported at connection setup and
+// drain selects the poll outright -- no blind probe, no dark window, and no uncorrelated
+// MsgError refusal queued where the next request/reply exchange would consume it as its
+// own answer (committee finding H1; internal/remote/relay's pump additionally drops any
+// such unsolicited frame as defense in depth).
+//
+// THE ONE DEMOTION LEFT is therefore itself defense in depth, against a relay that
+// ADVERTISED the wait and then answered nothing: a deadline-shaped failure while no wait
+// has ever been answered on THIS connection stores waitUnsupported and returns, and
+// drain hands the same connection to the poll. That is safe precisely because the relay
+// claimed the op -- a claiming relay replies via the correlated MsgWaitReply or not at
+// all, so unlike the old blind probe there is no stray in-order error to desynchronise
+// the stream. Every other failure -- the link dying under the wait (ErrConnClosed), the
 // drain's own shutdown -- returns for an ordinary reconnect with the verdict unchanged,
 // and once ANY wait has been answered the verdict is supported and a later black-holed
-// link can no longer demote it.
+// link can no longer demote it. The verdict dies with the connection either way: the
+// next generation's hello decides afresh (committee finding M2).
 //
-// THE DEMOTION RETURNS RATHER THAN POLLING IN PLACE, and must: the refused wait's
-// un-correlated MsgError is still queued on this connection's reply channel, where the
-// next request/reply exchange would consume it as its own answer. The connection is
-// spent; run() tears it down and the next generation drains in poll mode on a clean one.
+// ACKS RIDE transport.AckBatcher, OFF the delivery path, at most one metered op per
+// second (MaxDrainAcksPerSec) -- the same batcher, and the same argument, as the
+// gateway's command-IN loop. The synchronous shape this replaced acked once per
+// delivered page, which at the specified 8 frames/s spends the relay's own OpsPerMin
+// window (600) in about 40 s and gets the drain quota-refused by the relay it is
+// draining (codex committee probe). Dropping an ack is safe: it is an optimisation, the
+// durable receive high-water refuses any redelivery, and a cursor that failed to flush
+// is re-recorded for the next tick.
 func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 	pacer := transport.NewDrainPacer()
+	acks := transport.NewAckBatcher(func(actx context.Context, cursor uint64) error {
+		if err := cl.MailboxAck(actx, cursor); err != nil {
+			return err
+		}
+		a.mu.Lock()
+		if cursor > a.ackSent {
+			a.ackSent = cursor
+		}
+		a.mu.Unlock()
+		return nil
+	})
+	actx, stopAcks := context.WithCancel(ctx)
+	ackDone := make(chan struct{})
+	go func() { defer close(ackDone); acks.Run(actx) }()
+	defer func() { stopAcks(); <-ackDone }() // joined, so no ack outlives the drain that owns it
 	for ctx.Err() == nil {
 		if pacer.Pace(ctx) != nil {
 			return
@@ -1011,7 +1080,10 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 				// same stream in order), so the immediate replacement is admitted.
 				continue
 			}
-			if a.waitSupport.Load() == waitUnknown && errors.Is(err, context.DeadlineExceeded) {
+			if a.waitSupport.Load() == waitAdvertised && errors.Is(err, context.DeadlineExceeded) {
+				// The defense-in-depth demotion the function comment describes: an
+				// advertised wait went unanswered for the whole bound. Recorded for THIS
+				// connection; drain falls through to the poll on the same one.
 				a.waitSupport.Store(waitUnsupported)
 			}
 			return
@@ -1020,20 +1092,16 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 		for _, it := range items {
 			a.accept(ctx, it.Envelope, it.Cursor)
 		}
-		// Acks stay coalesced to one per page and INLINE, as the poll path has always
-		// taken them: at the pacer's 3 reads/s ceiling that is at most 6 metered ops/s
-		// against the relay's 600/min window, and flushAcks already skips when the
-		// durable cursor did not move.
-		//
-		// A FAILED flush ends the generation, which the poll drain does not need and this
-		// one does. An ack that timed out is a bounded exchange the relay answered nothing
-		// to; the poll's next MailboxRead would re-probe the link within DefaultCallTimeout,
-		// but this loop's next probe is a wait a full waitTimeout away -- so a silent relay
-		// noticed by the ack would otherwise stay "online" for ack timeout + waitTimeout,
-		// past the bound the silent-relay fence holds the state to. Nothing is lost: acks
-		// are optimisations, and the durable receive high-water refuses any redelivery.
-		if err := a.flushAcks(ctx, cl); err != nil {
-			return
+		// Hand the page's committed high-water to the batcher and re-park immediately.
+		// Recording is lock-order-safe (a.mu is not held) and does no I/O; the batcher's
+		// own tick meters the flush. The silent-relay bound does not regress: the next
+		// PROBE of a relay that answers nothing is the wait parked above, ended by
+		// waitTimeout, which is the same bound the old inline-ack early exit defended.
+		a.mu.Lock()
+		pending, sent := a.ackPending, a.ackSent
+		a.mu.Unlock()
+		if pending > sent {
+			acks.Record(pending)
 		}
 	}
 }

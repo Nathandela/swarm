@@ -387,8 +387,9 @@ func TestPBNET1_TheFacadeDrivesTheRealClientFromPairingThroughAppend(t *testing.
 	}
 
 	// ACK. The relay DELETES acked items (store.ackItems), so depth returning to zero is
-	// the phone's MailboxAck arriving -- issued by App.flushAcks on the real client, from
-	// the cursor relayAcker collected inside the core's receive transaction.
+	// the phone's MailboxAck arriving -- issued off the delivery path by the wait drain's
+	// transport.AckBatcher (or by App.flushAcks in the poll fallback), from the cursor
+	// relayAcker collected inside the core's receive transaction.
 	eventually(t, "the phone never acked the items it consumed", func() bool {
 		return srv.MailboxDepth(phoneTarget) == 0
 	})

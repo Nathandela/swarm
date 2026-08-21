@@ -252,16 +252,39 @@ func Run(cfg Config) (agentExit int, err error) {
 		}
 		if berr != nil {
 			log.Printf("shim: session backend unavailable, launching the agent without it: %v", berr)
-		} else {
-			// SERVING, so the session HAS a structured plane and its death is a real
-			// lifecycle event (below). A backend that never served is not watched: this
-			// session is running degraded without one, exactly as a pre-R7 Codex session
-			// does, and ending it on the death of something it never used would take the
-			// agent down for a channel it is not using.
-			backendWatch = backend
-			if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
-				log.Printf("shim: record the session backend: %v", werr)
+			if backend != nil {
+				// It is ALIVE (a readiness timeout does not kill it) but was never
+				// recorded -- writeBackendInfo runs only after servable -- so it must
+				// not be left to finalization: an unrecorded live backend plus an
+				// uncatchable SIGKILL of this shim is an orphan the daemon can never
+				// find (containBackendFailure says why). setBackendPgid(0) afterwards:
+				// the group is fully reaped, and re-KILLing that pgid at finalization
+				// -- possibly hours later -- could hit a recycled group.
+				containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+				srv.setBackendPgid(0)
 			}
+		} else if werr := writeBackendInfo(cfg.SessionDir, backend, cfg.Backend.SocketPath); werr != nil {
+			// THE RECORD IS THE CONTAINMENT: backend.json is the daemon's only means of
+			// identifying an orphan backend, so a failure to write it (disk full, a
+			// permission fault) makes this live, account-authenticated app-server
+			// unreapable the moment the shim takes a SIGKILL. A write failure is
+			// therefore a failure of the BACKEND CHANNEL: kill the group now, surface
+			// why, and launch the agent degraded -- exactly the never-servable path.
+			// backendWatch stays nil: a deliberately-killed backend must not fire the
+			// backend-died-first edge and take the agent down with it.
+			log.Printf("shim: record the session backend: %v; killing the unrecorded backend "+
+				"and launching the agent without it (a backend the daemon cannot identify "+
+				"must not survive this shim)", werr)
+			containBackendFailure(backend, cfg.SessionDir, cfg.GraceTimeout)
+			srv.setBackendPgid(0)
+		} else {
+			// SERVING AND RECORDED, so the session HAS a structured plane and its death
+			// is a real lifecycle event (below). A backend that never served, or was
+			// never recorded, is not watched: this session is running degraded without
+			// one, exactly as a pre-R7 Codex session does, and ending it on the death of
+			// something it never used would take the agent down for a channel it is not
+			// using.
+			backendWatch = backend
 		}
 
 		goAheadTimeout := cfg.Backend.GoAheadTimeout

@@ -100,13 +100,14 @@ const sessionCapabilityFile = "capabilities.json"
 // marker, sibling of the record above.
 //
 // WHY IT EXISTS SEPARATELY (R6 review fix-pack round 1, BLOCKER 1). A degrade can be
-// proven BEFORE any capability record has been authored -- today that is in fact the
-// normal case, because nothing in production calls deriveSessionCapabilities yet
-// (capability.go's own header defers the T3 gate and the remaining adapter seams to bd
-// agents-tracker-hggx.2.1). Degrading "the record, if one exists" would therefore be a
-// guaranteed no-op in production, and the first record authored afterwards would claim
-// structured_chat=true over a session with a proven, unrecoverable hole in its event
-// stream. The marker records the FACT of the gap without inventing a record to hold it:
+// proven BEFORE any capability record has been authored. When this was written that was
+// the normal case; since Wave R8 wired the authoring path (authorSessionCapabilities is
+// reached from five production seams -- see sessionDegraded's routing note below) a live
+// session normally HAS a record, but the authoring path stays deliberately silent while
+// a side-process backend is still dialling, so a gap proven in that window still finds
+// no record. Degrading "the record, if one exists" would therefore no-op in exactly that
+// window, and the first record authored afterwards would claim structured_chat=true over
+// a session with a proven, unrecoverable hole in its event stream. The marker records the FACT of the gap without inventing a record to hold it:
 // ADR-017 T2 says capability records are authored at launch and this seam may only
 // degrade them, never fabricate one, so the degrade is stored as what it is.
 const sessionDegradedFile = "structured-degraded"

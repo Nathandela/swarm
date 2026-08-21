@@ -16,6 +16,15 @@ relay backup/restore, trusted-proxy and quota tests; docs manifest + protocol.md
 checks; release prerequisite enforced by the ACTIVE repository ruleset main-required-ci
 (id 20874942, 13 required contexts) - classic branch protection 404s, which is expected.
 
+CORRECTION (final audit committee, 2026-08-21): the 13 required contexts cover the
+pre-existing CI only. The two lanes THIS wave added - relay-container and stress-nightly -
+were NOT required contexts when this file first shipped (relay-container was added to the
+ruleset on 2026-08-21 as part of the committee fix wave; stress-nightly is schedule-driven
+and cannot be a per-push context - its protection path is tracked in beads erbb and 32de).
+stress-nightly had ZERO executions at the time of the R9 commit; its first run was
+dispatched manually on 2026-08-21. The original sentence read as broader than the ruleset
+enforced.
+
 ## The six gaps closed in this batch
 
 1. Phone 500 ms polling loop (section 10, primary path violation) -> mobile drain now

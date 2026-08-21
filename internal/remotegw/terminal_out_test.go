@@ -109,6 +109,47 @@ func TestRelaySink_ForwardsTerminalSnapshot(t *testing.T) {
 	}
 }
 
+// TestRelaySink_ForwardsVersionedTerminalSnapshot pins the exact plaintext for a view
+// carrying ALL FIVE R8 sibling keys (bead 65bj): session_instance, view_epoch, revision,
+// reset, rendered_at. These keys ride an INDEPENDENT struct declaration from phonecore's
+// snapshotFrame, and a tag drift here makes the phone read a zero -- view_epoch 0
+// disables phonecore SnapshotCache.Apply's revision-monotonicity guard -- so the bytes
+// are pinned for IDENTICAL data on both sides (the phonecore twin is
+// TestSnapshotFrame_WireShape's versioned half).
+func TestRelaySink_ForwardsVersionedTerminalSnapshot(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	app := &fakeAppender{}
+	sink := newTestRelaySink(t, app, key)
+
+	if err := sink.Terminal(protocol.TerminalViewV1{
+		Session: "s1", SessionInstance: "inst-1", ViewEpoch: 3, Revision: 7, Reset: true,
+		Cols: 80, Rows: 24, Lines: []string{"a", "b"},
+		RenderedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("terminal snapshot: %v", err)
+	}
+	if len(app.envs) != 1 {
+		t.Fatalf("appended %d envelopes; want 1", len(app.envs))
+	}
+	env, err := crypto.ParseEnvelope(app.envs[0])
+	if err != nil {
+		t.Fatalf("snapshot env parse: %v", err)
+	}
+	plain, err := crypto.OpenMailbox(key, env)
+	if err != nil {
+		t.Fatalf("snapshot env does not open under the content key: %v", err)
+	}
+	const want = `{"kind":"terminal_snapshot","session":"s1","lines":["a","b"],"cols":80,"rows":24,` +
+		`"session_instance":"inst-1","view_epoch":3,"revision":7,"reset":true,` +
+		`"rendered_at":"2026-01-02T03:04:05Z"}`
+	if string(plain) != want {
+		t.Fatalf("versioned snapshot plaintext =\n  %s\nwant\n  %s", plain, want)
+	}
+}
+
 // TestTerminalSink_OpaqueToRelay: the appended mailbox bytes are ciphertext -- the relay
 // never sees the plaintext grid content.
 func TestTerminalSink_OpaqueToRelay(t *testing.T) {

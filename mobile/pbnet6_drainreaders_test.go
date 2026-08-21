@@ -52,15 +52,16 @@ var pbnet6ReadCalls = map[string]bool{
 // inbound mailbox, and why each is the only one.
 var pbnet6PermittedReaders = map[string]string{
 	"(*App).drainWait": "THE reader's live-tail mode (Wave R9): the bounded MailboxWait loop " +
-		"App.drain selects against every relay that supports the op. Same goroutine, same single " +
-		"call site in App.run, same durable State.RelayCursor advanced only inside phonecore's " +
-		"receive transaction. PB-NET-6's concurrent-drain clause is satisfied by drain running " +
-		"exactly ONE of the two modes per Start..Stop generation, not by a lock.",
+		"App.drain selects against every relay whose hello advertised the \"wait\" capability. " +
+		"Same goroutine, same single call site in App.run, same durable State.RelayCursor advanced " +
+		"only inside phonecore's receive transaction. PB-NET-6's concurrent-drain clause is " +
+		"satisfied by drain running the modes SEQUENTIALLY on one goroutine, never concurrently.",
 	"(*App).drainPoll": "THE reader's compatibility-fallback mode: the pre-wait 500 ms poll, " +
-		"selected by App.drain only once this process has evidence the relay refuses mailbox_wait " +
-		"(an old relay). Mutually exclusive with drainWait within a generation -- drain dispatches " +
-		"to one or the other and returns when it returns, so there is still exactly one consumer " +
-		"of the durable cursor.",
+		"selected by App.drain when a connection's hello did not advertise \"wait\" (an old " +
+		"relay), or -- defense in depth -- after drainWait demoted a relay that advertised the " +
+		"op and never answered one. Never concurrent with drainWait: drain dispatches on one " +
+		"goroutine, waiting mode first, so there is still exactly one consumer of the durable " +
+		"cursor.",
 }
 
 // TestPBNET6_ThePhoneHasExactlyOneMailboxReader fails when a second consumer arrives.

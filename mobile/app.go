@@ -121,10 +121,11 @@ type App struct {
 	// lock: the relay goroutine writes it while the UI thread reads.
 	presence *presenceCache
 
-	// waitSupport is the relay's mailbox_wait verdict as this process has observed it
-	// (waitUnknown / waitSupported / waitUnsupported, mobile/relay.go). Atomic rather
-	// than under mu: it is written by the drain goroutine and read at the top of every
-	// generation, and those belong to different connections.
+	// waitSupport is the CURRENT CONNECTION's mailbox_wait verdict (waitAdvertised /
+	// waitSupported / waitUnsupported, mobile/relay.go), overwritten on every
+	// successful dial from that connection's r_hello capability exchange -- never
+	// process-sticky. Atomic rather than under mu: it is written by the transport
+	// goroutine and read by tests across generations.
 	waitSupport atomic.Int32
 	// waitCancel, guarded by mu, is the cancel function of the mailbox wait the drain
 	// currently has parked (nil between waits). Resync cancels it through nudgeDrain

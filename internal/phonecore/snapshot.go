@@ -104,8 +104,10 @@ type snapshotFrame struct {
 	// THEY ARE SIBLING KEYS AND NOT A SWAPPED EMBED, and every one is omitempty (the time a
 	// pointer, because a zero time.Time is not omitted by encoding/json). A frame carrying
 	// none of them therefore serializes BYTE-IDENTICALLY to the shape this wire has always
-	// had, which is the GG-7 rule the Control struct states in as many words -- and which
-	// `TestSnapshotFrame_WireShape` pins on this exact plaintext. A machine that predates the
+	// had, which is the GG-7 rule the Control struct states in as many words.
+	// `TestSnapshotFrame_WireShape` pins both plaintexts -- the bare legacy frame AND one
+	// carrying all five sibling keys -- and `TestSnapshotWireParity_GatewayMarshalMatchesPhoneFrame`
+	// ties this declaration byte-for-byte to remotegw's twin (bead 65bj). A machine that predates the
 	// closing round sends none of them and the phone reads zero, which is the honest answer:
 	// "this machine does not version its views", never a fabricated epoch.
 	SessionInstance string     `json:"session_instance,omitempty"`

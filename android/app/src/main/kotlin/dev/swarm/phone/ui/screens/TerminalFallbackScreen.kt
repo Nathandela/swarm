@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.TerminalWatchHandle
 import swarmmobile.App
 import swarmmobile.Snapshot
 
@@ -293,7 +294,7 @@ data class TerminalFallbackModel(
 class TerminalFallbackBinding private constructor(
     private val app: App,
     private val sessionId: String,
-) {
+) : TerminalWatchHandle {
 
     companion object {
 
@@ -404,8 +405,14 @@ class TerminalFallbackBinding private constructor(
             grid.machineStoppedRendering || watchLapsed(grid.ageMs, horizonMs)
     }
 
-    /** Open the machine-sanitized stream. A read, and only a read. */
-    fun watch() {
+    /**
+     * Open the machine-sanitized stream. A read, and only a read.
+     *
+     * [TerminalWatchHandle]'s half, and the caller's obligation is the interface's whole reason:
+     * this is a relay append behind awaitConn, and it runs on `VerbDispatch`'s command lane
+     * (`TerminalWatchLane`), never the main thread (agents-tracker-jx1x).
+     */
+    override fun watch() {
         app.terminalViewWatch(sessionId)
     }
 
@@ -441,7 +448,7 @@ class TerminalFallbackBinding private constructor(
     }
 
     /** Close it. Without this the machine renders for a screen the user has left. */
-    fun unwatch() {
+    override fun unwatch() {
         app.terminalViewUnwatch(sessionId)
     }
 

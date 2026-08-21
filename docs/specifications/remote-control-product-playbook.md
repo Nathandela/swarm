@@ -657,6 +657,19 @@ Each wave begins with failing evidence, ends with independent verification, and 
 under `docs/verification/`. A wave does not close because its code exists; its field behavior and
 release gates must pass.
 
+**Amendment (2026-08-21, per section 16; owner velocity agreement of 2026-08-15).** Delivery
+distinguishes two boundaries. The CODE-COMPLETE boundary of a wave — implementation, automated
+gates, and evidence — is reached by agent delivery under adversarial review; the wave's
+physical/field exits (handset runs, drills, non-author installs, real-CLI demonstrations) are
+then parked as named owner beads rather than blocking the next wave's code work. A wave's
+tracker bead CLOSES only at the playbook boundary above (field behavior and release gates),
+never at the code-complete boundary alone; the parked beads are the open remainder, and none of
+them may be waived by prose. Recorded here because the 2026-08 deliveries applied this policy
+while it lived only in commit messages and close notes, which the final audit committee
+(2026-08-21, unanimous) correctly rejected as a section-16 violation: wave beads hggx.2 through
+hggx.6 and hggx.10 stay open until their field exits pass, even though their code-complete
+boundaries were reached and are CI-green on main.
+
 The dependency graph is explicit: R0 is the release baseline; R1 depends on R0 for exit but its
 docs/spikes may start in parallel; R2 and R3 depend on R1 and may implement in parallel, while R3's
 physical exit also requires the R2 public-relay path; R4 depends on R2+R3; R5 depends on R1+R4; R6,

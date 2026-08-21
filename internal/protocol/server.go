@@ -161,11 +161,16 @@ const (
 	snapshotChunkSize = wire.MaxFrame - 1
 
 	// maxPeekCols/maxPeekRows bound a remote terminal PEEK snapshot to the phone
-	// viewport so its single OpTerminalSnapshot control frame can never exceed
-	// wire.MaxFrame (A7 J). A session grid can be up to maxDim (1000) square, whose
-	// sanitized text would JSON-encode well past 1 MiB and be silently dropped by
-	// WriteFrame. v1 CLIPS the already-sanitized render to this bound (clipPeek);
-	// chunking a peek across frames like the lease snapshot is a future enhancement.
+	// viewport so its single OpTerminalSnapshot control frame -- which since R8 carries
+	// the clipped grid TWICE (the legacy Terminal body plus the versioned TerminalView
+	// body) -- can never exceed wire.MaxFrame (A7 J). A session grid can be up to maxDim
+	// (1000) square, whose sanitized text would JSON-encode well past 1 MiB; WriteFrame
+	// rejects such a frame with wire.ErrFrameTooLarge and the peek's write-error arm
+	// cancels the render loop, ending the peek (see handleTerminalPeek's emission path --
+	// the frame is not silently dropped). The 200x300 bound keeps even the worst case
+	// (two bodies of 200x300 runes at up to ~6 escaped bytes each, ~0.7 MiB) under the
+	// cap. v1 CLIPS the already-sanitized render to this bound (clipPeek); chunking a
+	// peek across frames like the lease snapshot is a future enhancement.
 	maxPeekCols = 300
 	maxPeekRows = 200
 )
@@ -2401,7 +2406,10 @@ func (cc *clientConn) handleTerminalSubscribe(c Control) {
 			}
 			// Clip the sanitized render to the phone-viewport bound BEFORE encoding (A7 J), so
 			// a large grid (up to maxDim square, forwardResize-reachable) can never encode past
-			// wire.MaxFrame and be silently dropped by WriteFrame. SnapText already sanitized
+			// wire.MaxFrame -- both bodies below carry these same clipped lines, and an
+			// oversized frame would fail writeFrameDeadline with wire.ErrFrameTooLarge, hitting
+			// the write-error arm below: the render loop is cancelled and the peek ends (not a
+			// silent drop). SnapText already sanitized
 			// every line; clipping only bounds their count/width, never weakening sanitization.
 			lines, cols, rows := clipPeek(r.Lines, r.Cols, r.Rows)
 			// BOTH BODIES, ONE FRAME. `Terminal` is the legacy body T4 keeps on the wire
@@ -2492,7 +2500,10 @@ func (cc *clientConn) cancelPeek() {
 
 // clipPeek bounds an already-sanitized peek render to at most maxPeekRows lines of at most
 // maxPeekCols runes each, returning the clipped lines and clipped dimensions so the encoded
-// OpTerminalSnapshot frame stays under wire.MaxFrame (A7 J). SnapText ran upstream, so this
+// OpTerminalSnapshot frame -- carrying the clipped grid in BOTH its bodies since R8 (legacy
+// Terminal plus versioned TerminalView), worst case ~2 x 200 x 300 x 6 B ~= 0.7 MiB -- stays
+// under wire.MaxFrame's 1 MiB (A7 J); an oversized encode would surface as WriteFrame's
+// wire.ErrFrameTooLarge and cancel the render loop, never a silent drop. SnapText ran upstream, so this
 // only bounds line count/width — it NEVER alters sanitization. The common case (a grid within
 // the bound) returns the input unchanged; only an oversized grid pays the copy/truncation.
 func clipPeek(lines []string, cols, rows int) ([]string, int, int) {

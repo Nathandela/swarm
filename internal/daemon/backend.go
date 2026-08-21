@@ -21,6 +21,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -111,16 +112,51 @@ func (d *Daemon) reapOrphanBackend(id string) {
 	if !ok {
 		return
 	}
-	if d.backendAliveAt(dir) {
-		pgid := info.PGID
-		if pgid <= 0 {
-			pgid = info.PID
-		}
+	pgid := info.PGID
+	if pgid <= 0 {
+		pgid = info.PID
+	}
+	switch {
+	case d.backendAliveAt(dir):
 		// One shot, the whole group: R1 leg 1 recorded that one `codex app-server` is TWO
 		// pids (a node launcher plus the vendored rust binary), so the group is what reaps
 		// both.
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		d.logf("reaped orphaned session backend for %s (pid %d, pgid %d)", id, info.PID, pgid)
+	case pidAlive(info.PID):
+		// The recorded leader pid is RUNNING but it is not our backend: its start time
+		// disagrees (a recycled pid) or cannot be read at all. Signalling -pgid here would
+		// hit a stranger -- and in the recycled case there is provably nothing of ours left
+		// to reap, because POSIX only recycles a pid once its old process GROUP has no
+		// members remaining. LOUD, because the unreadable-start-time case lands here too and
+		// is the one residual this arm cannot tell apart; the record is still removed below
+		// (an unverifiable record can never become verifiable, so keeping it would make
+		// every future reconcile retry this same dead end).
+		d.logf("backend record for %s names live pid %d whose identity does not match; NOT "+
+			"signalling group %d (recycled pid, or unreadable start time) and dropping the record",
+			id, info.PID, pgid)
+	default:
+		// DEAD LEADER. The app-server being TWO pids cuts both ways: the leader dying does
+		// not mean the backend is gone -- the vendored child can survive in the group. If any
+		// member remains, kill(-pgid, 0) succeeds, and whoever it reaches IS the recorded
+		// backend's: a process-group id cannot be reused while the group still has members
+		// (POSIX process-group lifetime), so with the leader gone this can never be pid
+		// reuse. The identity guard is the arm above: a leader that is alive-but-mismatched
+		// never reaches this kill.
+		switch gerr := syscall.Kill(-pgid, 0); {
+		case gerr == nil:
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			d.logf("reaped surviving members of session backend group for %s (dead leader %d, "+
+				"pgid %d)", id, info.PID, pgid)
+		case !errors.Is(gerr, syscall.ESRCH):
+			// The group cannot be validated (EPERM: members exist that are not ours to
+			// signal -- so not our backend's). Refuse to signal what cannot be proven ours,
+			// say so LOUDLY, and still drop the record below: it can never become provable,
+			// and keeping it would pin every future reconcile on this same unprovable kill.
+			d.logf("CANNOT VALIDATE backend group %d for %s (%v); not signalling it and "+
+				"dropping the record", pgid, id, gerr)
+		}
+		// ESRCH: the group is empty; there is nothing left to reap.
 	}
 	if err := os.Remove(filepath.Join(dir, shim.BackendFile)); err != nil && !os.IsNotExist(err) {
 		d.logf("remove stale backend record for %s: %v", id, err)

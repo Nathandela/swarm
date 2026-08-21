@@ -439,20 +439,35 @@ func TestR8Gate_TheNetAssertionCountRose(t *testing.T) {
 // screen, and never renewed, which is the exact cost T4-b's horizon exists to bound.
 func TestR8Gate_TheWatchIsOpenedOnceClosedAndRenewed(t *testing.T) {
 	const surfaceFile = "dev/swarm/phone/PhoneSurface.kt"
+	const laneFile = "dev/swarm/phone/TerminalWatchLane.kt"
 	src, ok := r8AllProductionKotlin(t)[surfaceFile]
 	if !ok {
 		t.Fatalf("%s does not exist", surfaceFile)
 	}
 	code := kotlinCodeOnly(src)
+	// The verbs moved onto VerbDispatch's command lane with agents-tracker-jx1x: the surface
+	// still owns the reconciliation (and the renew), and TerminalWatchLane carries the open
+	// and the close for it -- inline they were five-second awaitConn stalls on the main
+	// thread. The LEASE is therefore asserted over the pair; the drawer rules below stay on
+	// the surface alone, where the drawer lives.
+	laneSrc, ok := r8AllProductionKotlin(t)[laneFile]
+	if !ok {
+		t.Fatalf("%s does not exist, so the watch verbs have no lane to ride "+
+			"(agents-tracker-jx1x)", laneFile)
+	}
+	lease := code + "\n" + kotlinCodeOnly(laneSrc)
+	// The DOTTED shape, not the bare name: the lane declares `TerminalWatchHandle`, and its
+	// `fun unwatch()` would satisfy a bare-name scan with a declaration -- measured when this
+	// test stayed green over a lane whose unwatch call had been mutated away.
 	for _, want := range []struct{ verb, why string }{
-		{"unwatch()", "without it the machine renders, seals and appends for a screen the user has left"},
-		{"renew()", "the horizon's only evidence that anyone is still looking"},
-		{"watch()", "the open half, which must still exist"},
+		{".unwatch()", "without it the machine renders, seals and appends for a screen the user has left"},
+		{".renew()", "the horizon's only evidence that anyone is still looking"},
+		{".watch()", "the open half, which must still exist"},
 	} {
-		if !strings.Contains(code, want.verb) {
-			t.Errorf("ADR-017 T4-b: %s never calls `%s` -- %s. A watch is a LEASE: open, renew while "+
-				"the screen is up, close when it is not. Round 1 wired only the open.",
-				surfaceFile, want.verb, want.why)
+		if !strings.Contains(lease, want.verb) {
+			t.Errorf("ADR-017 T4-b: neither %s nor %s calls `%s` -- %s. A watch is a LEASE: open, "+
+				"renew while the screen is up, close when it is not. Round 1 wired only the open.",
+				surfaceFile, laneFile, want.verb, want.why)
 		}
 	}
 	// THE OPEN MUST NOT SIT IN THE DRAWER. A redraw-rate `watch()` is one sealed append per

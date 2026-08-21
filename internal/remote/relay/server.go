@@ -77,8 +77,17 @@ func defaultSourceKey(remoteAddr string) string {
 }
 
 // serverCaps is the relay's capability set; r_hello negotiates the intersection.
+//
+// "wait" is the bounded server-side mailbox_wait (ADR-007 B7, PB-NET-5). It is advertised
+// HERE, in the handshake the protocol has had all along, because the alternative was
+// measured and rejected by the final-audit committee (finding H1): a client that has to
+// PROBE the op learns "unsupported" only from a timeout, and a pre-wait relay's dispatch
+// answers the unknown op with an ordinary in-order MsgError the client's parked waiter
+// cannot correlate -- a stray reply that shifts the connection's request/reply pairing.
+// With the capability advertised, a client never sends the op to a relay that did not
+// claim it, and a reconnect to an upgraded relay re-evaluates for free.
 var serverCaps = map[string]bool{
-	"mailbox": true, "push": true, "presence": true, "rendezvous": true,
+	"mailbox": true, "push": true, "presence": true, "rendezvous": true, "wait": true,
 }
 
 const (

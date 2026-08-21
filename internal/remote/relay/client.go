@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -76,11 +78,17 @@ type Conn struct {
 	// peerSPKI records what the peer's certificate was on a DialRawSecure dial (ADR-007
 	// B48). Nil on every other constructor, which reads as "nothing observed".
 	peerSPKI *spkiObserver
-	// pending counts requests written whose reply has not been consumed. It is
-	// non-zero only after a request abandoned its reply (timeout/cancel): the
-	// next request discards that many replies first, so an abandoned exchange
-	// can never hand its answer to a later, unrelated one.
-	pending int
+	// pending counts requests written whose reply has not been consumed. Between
+	// exchanges it is non-zero only after a request abandoned its reply
+	// (timeout/cancel): the next request discards that many replies first, so an
+	// abandoned exchange can never hand its answer to a later, unrelated one.
+	//
+	// It is atomic because the PUMP reads it too (all writes stay under mu, inside
+	// roundtrip): a clean frame arriving while pending is zero is owed to NOBODY,
+	// and queueing it anyway would hand it to the next exchange as its answer --
+	// shifting every reply on the connection one question back, for the life of
+	// the connection (committee finding H1). The pump drops such frames instead.
+	pending atomic.Int64
 
 	// The bounded server-side wait's client half (ADR-007 B7). A wait is the one
 	// exchange that does NOT hold mu across write-then-read: it registers a
@@ -274,6 +282,18 @@ func (c *Conn) pump() {
 			c.deliverWait(f.payload)
 			continue
 		}
+		// A clean frame that answers NO outstanding request is a protocol violation by
+		// the peer -- the relay's contract is one in-order reply per request, plus the
+		// correlated MsgWaitReply handled above. Queueing it would hand it to the NEXT
+		// exchange as its answer and shift every reply on this connection one question
+		// back, permanently (committee finding H1; the shape a pre-wait relay's MsgError
+		// refusal of a blindly-probed mailbox_wait arrives in). Dropped, loudly. Decode
+		// FAILURES are deliberately still forwarded: they end the connection below, and
+		// a waiting reader learns why instead of blocking until Done.
+		if f.err == nil && c.pending.Load() == 0 {
+			log.Printf("relay: dropped an unsolicited %v frame no request is owed; the peer is violating the one-reply-per-request contract", f.tag)
+			continue
+		}
 		select {
 		case c.frames <- f:
 		case <-c.ctx.Done():
@@ -448,17 +468,21 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 	defer cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Raised BEFORE the write reaches the socket, so the pump can never observe the
+	// reply to this request while pending still reads zero and drop it as unsolicited.
+	// The stream is in-order, so any frame that arrives before this write completes
+	// belongs to an earlier request or to nobody -- never to this one.
+	c.pending.Add(1)
 	if err := c.writeFrame(ctx, tag, body); err != nil {
+		c.pending.Add(-1) // nothing was sent; no reply is owed
 		return nil, c.callErr(err)
 	}
-	c.pending++
 	for {
 		rtag, payload, err := c.readFrame(ctx)
 		if err != nil {
 			return nil, c.callErr(err)
 		}
-		c.pending--
-		if c.pending > 0 {
+		if c.pending.Add(-1) > 0 {
 			continue // owed to an earlier request that gave up on its reply
 		}
 		if rtag == MsgError {
@@ -691,6 +715,14 @@ func (c *Client) Done() <-chan struct{} { return c.conn.Done() }
 
 // Close severs the connection. It is idempotent.
 func (c *Client) Close() error { return c.conn.Close() }
+
+// Hello negotiates the protocol version and capability set on an authenticated
+// connection -- the same r_hello a raw Conn speaks, surfaced here so a client can learn
+// PER CONNECTION which optional ops this relay serves (the "wait" capability, committee
+// finding M1) instead of probing an op blind and reading the verdict out of a timeout.
+func (c *Client) Hello(ctx context.Context, version int, caps []string) (int, []string, error) {
+	return c.conn.Hello(ctx, version, caps)
+}
 
 // AuthorizeDevice pairs this caller with the named device, authorizing
 // mailbox/push routing between the two — in BOTH directions, which is why it
