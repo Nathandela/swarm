@@ -671,9 +671,10 @@ unmet field exits stay open - hggx.2 through hggx.9 and hggx.10 (hggx.7, .8 and 
 initially left closed by the same change that adopted this rule; the committee's second
 round caught the inconsistency and they were reopened the same day). The code-complete
 boundary is reached and CI-green on main for R0 and for the code/automated halves of
-R6-R9; R1-R5 additionally hold open code work (version-skew gate, capability fields,
-Web-PKI migration, pairing ceremony, push-binding conveyance) and are code-complete only
-outside those named remainders.
+R6-R9 (for R8 that means the READ half, per ADR-017 amendment C0; the control half is
+open code work in agents-tracker-huia); R1-R4 additionally hold open code work (R1: version-skew gate, capability fields;
+R2: Web-PKI migration; R4: pairing ceremony, push-binding conveyance) and are code-complete
+only outside those named remainders; R5's remainder is its physical exit alone.
 
 The dependency graph is explicit: R0 is the release baseline; R1 depends on R0 for exit but its
 docs/spikes may start in parallel; R2 and R3 depend on R1 and may implement in parallel, while R3's
@@ -833,6 +834,16 @@ states arrive within the budgets below; answering an approval on either surface 
 chat.
 
 Deliverables:
+
+**Amendment (2026-08-21, per section 16; ADR-017 amendment C0 of 2026-08-20).** R8 delivered
+its READ half only: capability routing, `TerminalViewV1`, sanitized watch-only rendering,
+staleness/lapse honesty, kill-switch and revocation severance. The CONTROL half of the
+deliverable list below (explicit temporary control, generation-bound input, conditional safe
+interrupt) is deliberately NOT shipped and is open code work in bead agents-tracker-huia,
+gated on ADR-017 C1 (input frames carry no device identity - wiring control before per-frame
+device binding would ship a bearer token dressed as a lease) and C2 (a replacement-notification
+seam). The exit sentence below is correspondingly unmet on its control clause and the wave
+bead stays open on it.
 
 - Capability-routed `TerminalViewV1`, sanitized read-only rendering, explicit temporary control,
   live-only generation-bound input, immediate daemon-side release triggers, provider/version

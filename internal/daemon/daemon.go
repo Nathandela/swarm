@@ -209,6 +209,15 @@ type Daemon struct {
 	// daemon's lifetime; that bound is acceptable (ids are never reused).
 	tombMu  sync.Mutex
 	deleted map[string]struct{}
+
+	// reapMu serializes reapOrphanBackend's read-validate-kill-remove sequence. Its three
+	// callers -- markLost (a Kill RPC goroutine), handleShimExit (the shim monitor) and
+	// reconcile's orphan arm -- can otherwise interleave two reaps of the same session:
+	// both validate the same recorded (pid, start-time), the first kills and removes the
+	// record, and a pid recycled inside that window hands the second one's signal to a
+	// stranger's group. A leaf lock like tombMu; reaps happen only on session death, so
+	// daemon-wide is the simple shape and contention is irrelevant.
+	reapMu sync.Mutex
 }
 
 // Open acquires the singleton (flock-before-bind), rebuilds the registry from the

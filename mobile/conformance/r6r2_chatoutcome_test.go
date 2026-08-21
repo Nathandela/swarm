@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	swarmmobile "github.com/Nathandela/swarm/mobile"
@@ -189,7 +190,10 @@ func TestR6R2_APageIsHeldEvenWhenTheSessionIsAtItsRetentionBound(t *testing.T) {
 	for i := 1; i < 200; i++ {
 		h.PushEvent(r2Item(testSession, uint64(1000+i), "live-"+strconv.Itoa(i), "x", "completed", false))
 	}
-	eventually(t, "the session never filled to its retention bound", func() bool {
+	// 200 pushed records legitimately take longer than the shared 5 s to apply on a
+	// loaded host (the F7 class; this sibling flaked in the round-4 orchestrator audit
+	// while -race saturated the machine, and passes 3/3 in isolation).
+	eventuallyFor(t, 30*time.Second, "the session never filled to its retention bound", func() bool {
 		return len(r2Transcript(t, h)) == 200
 	})
 

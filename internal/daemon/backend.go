@@ -107,6 +107,11 @@ func (d *Daemon) backendAliveAt(sessionDir string) bool {
 // The stale file is removed after the kill so the NEXT reconcile does not try to reap a pid
 // that is now somebody else's.
 func (d *Daemon) reapOrphanBackend(id string) {
+	// One reap at a time (r7-check round 4, finding 1): the sequence below is
+	// read-validate-kill-remove over shared on-disk state, and its callers (markLost,
+	// handleShimExit, reconcile) can race for the same id. See Daemon.reapMu.
+	d.reapMu.Lock()
+	defer d.reapMu.Unlock()
 	dir := d.sessionDir(id)
 	info, ok := shim.ReadBackendInfo(dir)
 	if !ok {

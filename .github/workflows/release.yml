@@ -25,9 +25,16 @@ jobs:
     name: gates (ci.yml, reused)
     uses: ./.github/workflows/ci.yml
 
+  # The container lane is a publish gate too (committee round 4, codex blocker 2):
+  # relay-container.yml has no tag trigger and the branch ruleset covers only
+  # refs/heads/main, so without this reuse a release tag published unscanned.
+  container:
+    name: container (relay-container.yml, reused)
+    uses: ./.github/workflows/relay-container.yml
+
   publish:
     name: publish (goreleaser release)
-    needs: gates
+    needs: [gates, container]
     runs-on: ubuntu-latest
     permissions:
       contents: write

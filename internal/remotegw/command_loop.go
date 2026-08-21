@@ -233,10 +233,11 @@ func (b *CommandBridge) Err() error {
 	return b.pollErr
 }
 
-// RelayReplies counts the bounded waits the RELAY ANSWERED: not the waits issued, and not
-// the frames that came back in them. An idle but healthy link produces one per server-side
-// wait ceiling; a relay that completes the handshake and then goes quiet produces none,
-// however long its socket stays up.
+// RelayReplies counts the bounded waits the RELAY ANSWERED -- and, on the round-4
+// compatibility poll arm, the bounded reads it answered -- not the ops issued, and not
+// the frames that came back in them. An idle but healthy link produces one per
+// server-side wait ceiling (or one per poll cadence); a relay that completes the
+// handshake and then goes quiet produces none, however long its socket stays up.
 //
 // It is the gateway's evidence of PROGRESS, which is what the reconnect backoff resets on
 // (Service.Progressed). A count is deliberately cheaper than a timestamp: nothing here
@@ -333,6 +334,114 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 	return processed, consumed, errs
 }
 
+// gatewayHelloCaps is every capability the gateway sidecar's r_hello asks the relay
+// for -- the machine-hop sibling of mobile's helloRequestCaps, kept as one var for the
+// same reason (Opus round-3 nit 6): the cross-package fence
+// TestCommitteeR4_GatewayHelloCapsAreServedByTheShippedRelay asserts the shipped relay
+// grants every one of them, so the two sets cannot drift apart silently. The gateway
+// deliberately omits "presence" (it never asks) and "rendezvous" (pairing's, spoken on a
+// raw connection by the machine CLI, not by this sidecar).
+var gatewayHelloCaps = []string{"mailbox", "push", "wait"}
+
+// CapabilityHello is the optional per-connection negotiation seam (codex round-3
+// blocker 1, bead agents-tracker-10ar): the r_hello exchange through which a relay
+// advertises which optional ops it serves. *relay.Client satisfies it (pinned below);
+// a Mailbox seam that does not -- every unit-test fake -- simply keeps the wait it
+// implements, so the seam stays optional-to-OFFER while the wait op itself stays
+// mandatory on Mailbox (an optional wait would silently fall back to polling against
+// modern relays too, the phone-side-only fix PB-NET-5 forbids).
+type CapabilityHello interface {
+	Hello(ctx context.Context, version int, caps []string) (int, []string, error)
+}
+
+var _ CapabilityHello = (*relay.Client)(nil)
+
+// negotiateWait derives THIS connection's wait verdict from its r_hello exchange,
+// exactly as the phone's negotiateWaitSupport does: a hello that does not advertise
+// "wait" -- a pre-wait relay -- selects the compatibility poll outright, because a
+// blindly-probed mailbox_wait against such a relay is answered with an uncorrelated
+// in-order MsgError the client's pump drops as unsolicited, so every wait ends as a
+// swallowed timeout and commands stop flowing forever while the relay is perfectly
+// usable through mailbox_read. A refused or failed hello reads as unsupported rather
+// than an error, for the phone's reason: the poll works against every relay, and if the
+// hello failed because the link is dying the poll's first bounded read discovers that.
+//
+// A Service is one relay generation (cmd/swarm-remote builds a fresh one per redial),
+// so Run entry IS the connection's start and the verdict is per connection by
+// construction: an upgraded relay is re-evaluated for free on the next redial.
+func (b *CommandBridge) negotiateWait(ctx context.Context) bool {
+	h, ok := b.cfg.Mailbox.(CapabilityHello)
+	if !ok {
+		return true // no hello to consult; the seam's own MailboxWait is the contract
+	}
+	hctx, cancel := context.WithTimeout(ctx, relay.DefaultCallTimeout)
+	defer cancel()
+	_, caps, err := h.Hello(hctx, relay.ProtocolVersion, gatewayHelloCaps)
+	if err != nil {
+		return false
+	}
+	for _, c := range caps {
+		if c == "wait" {
+			return true
+		}
+	}
+	return false
+}
+
+// compatPollInterval is the compatibility fallback's cadence against a relay whose
+// hello does not advertise "wait" -- the same 500 ms the phone's drainPoll uses
+// (playbook section 10; internal/remote/transport doc.go names this as the one
+// surviving poll). It is a fallback for OLD relays only: a modern relay's command-IN
+// stays the bounded server-side wait.
+const compatPollInterval = 500 * time.Millisecond
+
+// runPoll is the compatibility arm: MailboxRead at compatPollInterval, exactly the
+// phone drainPoll's shape -- an immediate next read only on PROGRESS (the durable
+// cursor moved), never merely on a non-empty page, so one undecodable item at the
+// mailbox tail cannot spin the loop at full speed against the relay's ops budget
+// (PB-SYNC-6's argument, restated for this hop). PollOnce carries the shared batch
+// handling and the inline ack; at this cadence the metered op rate is bounded by the
+// interval itself.
+func (b *CommandBridge) runPoll(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		before := b.Cursor()
+		if _, err := b.PollOnce(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Per-item failures and transport failures arrive joined; both are
+			// stashed for Err(), and neither counts as link progress below (a
+			// conservative under-count only delays a backoff reset, where crediting
+			// a dead link would defeat what Progressed exists to prove).
+			b.setErr(err)
+		} else {
+			// The relay ANSWERED a read cleanly: the same link-progress evidence a
+			// completed wait is on the modern arm (Progressed resets the reconnect
+			// backoff on it).
+			b.mu.Lock()
+			b.replies++
+			b.mu.Unlock()
+		}
+		// PROGRESS is judged on the cursor alone, error or not: a poisoned item
+		// beside good ones joins an error while the cursor still advances, and a
+		// drain that slept on it would throttle a real backlog to the compatibility
+		// cadence (the phone's drainPoll applies the same rule).
+		if b.Cursor() > before {
+			continue // a real backlog drains at full speed: it advances the cursor
+		}
+		t := time.NewTimer(compatPollInterval)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
 // Run drives the command-IN path off the relay's server-side wait until ctx is cancelled,
 // returning ctx.Err(). Each wait is bounded HERE, by this loop, at defaultWaitTimeout.
 //
@@ -353,6 +462,14 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 // they are not swallowed: the first is stashed for Err(), so a bridge that is dropping
 // every inbound frame is observable rather than silent.
 func (b *CommandBridge) Run(ctx context.Context) error {
+	// Capabilities first, once per connection (Run entry is the connection's start --
+	// a Service is one relay generation): a relay whose hello does not advertise
+	// "wait" gets the documented MailboxRead compatibility poll, never a blind
+	// mailbox_wait probe whose refusal it can only swallow (codex round-3 blocker 1,
+	// bead agents-tracker-10ar).
+	if !b.negotiateWait(ctx) {
+		return b.runPoll(ctx)
+	}
 	acks := transport.NewAckBatcher(func(actx context.Context, cursor uint64) error {
 		return b.cfg.Mailbox.MailboxAck(actx, cursor)
 	})

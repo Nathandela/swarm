@@ -100,13 +100,76 @@ type Conn struct {
 	// takes to drain the slot.
 	owedMu sync.Mutex
 	owed   int
-	// skip counts replies owed to exchanges that ABANDONED them (timeout/cancel
-	// after a successful write): the next roundtrip discards that many frames
-	// before claiming its own answer, so a slow answer is never mistaken for the
-	// answer to a later question. Guarded by mu -- only roundtrip, which holds mu
-	// for its whole exchange, touches it -- and driven by what roundtrip actually
-	// READS, never by the pump's counter, so the two bookkeepings cannot race.
-	skip int
+	// discard counts replies owed to exchanges that ABANDONED them (timeout/cancel
+	// after a successful write). It is the ROUND-4 UNIFICATION of what used to be two
+	// independent ledgers -- the abandoned credit left parked in `owed` (pump-side)
+	// and a roundtrip-side `skip` the next caller spent on whatever it happened to
+	// read -- which could spend on DIFFERENT frames: an idle-time stray spent the
+	// abandoned owed credit (the pump enqueued the stray), the skip then spent itself
+	// on that same stray, and the abandoned exchange's late reply arrived against the
+	// next LIVE exchange's fresh credit and was adopted as its answer -- wrong data,
+	// nil error (Opus round-4 finding F3, reproduced 5/5;
+	// TestCommitteeR4_AnIdleStrayCannotRedirectAnAbandonedLateReplyOntoALiveExchange
+	// is the permanent probe). Now an abandonment moves the credit OUT of owed and
+	// into this counter, owned like owed by the pump's critical section, so one
+	// abandonment is exactly one credit and it can only ever be spent once.
+	//
+	// HOW THE PUMP SPENDS IT: a clean frame that arrives while a live exchange is
+	// waiting (owed > 0) is judged against discard FIRST -- the stream is in-order
+	// and every abandoned request was written before the live one, so the abandoned
+	// stragglers arrive AHEAD of the live reply; dropping the next `discard` such
+	// frames before delivering one is exactly the FIFO attribution. A clean frame
+	// that arrives while NOTHING is owed stays the round-3 unsolicited free drop and
+	// spends NO credit: the committee's probe is precisely the world where that frame
+	// is a hostile stray and the credit must survive it for the real straggler still
+	// in flight.
+	//
+	// THE PRICE OF THAT CHOICE, and its bound. The idle-time frame is unattributable
+	// -- an honest straggler landing at idle is free-dropped too, and its surviving
+	// credit will be spent on the NEXT live exchange's own reply, timing that
+	// exchange out spuriously. Unmitigated this CASCADES: the timed-out exchange
+	// re-mints a credit that eats its successor, forever. abandonReply therefore
+	// SUPPRESSES the re-mint when a discard credit was already spent inside the
+	// abandoning exchange's own window (`spent` below) AND that credit's lifetime
+	// was marked by an observed idle free drop (`idleLeak`/`spentLeaked` below):
+	// each leaked credit is consumed by at most ONE bounded casualty and the
+	// connection recovers
+	// (TestCommitteeR4_AnIdleArrivingLateReplyNeverWedgesTheConnection pins the
+	// recovery).
+	//
+	// WHY THE SUPPRESSION IS CONDITIONED, not unconditional (round-4 fix wave). The
+	// two worlds a spent-then-abandoned window can sit in are distinguishable after
+	// all, by evidence this side of the wire already holds: the idle-leak world
+	// (where suppression is correct -- the abandoned exchange's own reply was
+	// ALREADY consumed by the leaked credit, so minting would start the cascade)
+	// necessarily contains a clean-frame FREE DROP at owed == 0 while a discard
+	// credit was outstanding, and the honest double-slow world (two back-to-back
+	// timeouts against one stall) contains none -- there the credit spent inside
+	// the window paid for the PREDECESSOR's straggler, the abandoning exchange's
+	// own reply is still genuinely in flight, and an unconditional suppression
+	// would leave it uncredited to be adopted by the successor as wrong data with
+	// a nil error, a one-back shift persisting until the first idle gap
+	// (TestCommitteeR4_AnHonestDoubleTimeoutKeepsFIFOAttributionForTheSuccessor
+	// pins that corner). What still cannot be told apart without the wire-format
+	// correlation ids the committee has twice declined is WHICH outstanding credit
+	// an idle drop leaked when several coexist -- idleLeak taints the whole
+	// outstanding-discard epoch, one boolean, not one flag per credit.
+	discard int
+	// idleLeak records that a clean frame was free-dropped at owed == 0 while at
+	// least one discard credit was outstanding -- the observable signature of the
+	// idle-leak world, and the sole license for abandonReply's suppressed re-mint.
+	// Set by the pump at the free drop; cleared when the outstanding credits are
+	// fully spent (discard back to 0), having first transferred onto the spending
+	// window as spentLeaked.
+	idleLeak bool
+	// spent counts discard credits the pump spent inside the CURRENT live exchange's
+	// window, and spentLeaked whether any of them carried the idleLeak taint (both
+	// reset when roundtrip raises owed for its write). They exist solely for
+	// abandonReply's suppressed re-mint, above: suppression demands a credit spent
+	// inside THIS window AND the observed idle leak that marks it as the abandoned
+	// predecessor's own reply rather than an honest straggler of a slow stall.
+	spent       int
+	spentLeaked bool
 	// dropped/lastDropLog throttle the unsolicited-frame log line (round 3, Opus
 	// finding 5): the drop path is driven entirely by peer-sent frames, so an
 	// unthrottled print is a log-amplification lever the peer pulls for free.
@@ -316,12 +379,18 @@ func (c *Conn) pump() {
 		// connection below, and a waiting reader learns why instead of blocking until
 		// Done.
 		//
-		// The owed check, the decrement and the claim on the queue slot are ONE
-		// critical section (see the owed field): deciding to enqueue and only then
-		// blocking into a full channel is the round-2 TOCTOU. When the slot is taken,
-		// the blocking send below is entered with owed ALREADY lowered, so the next
-		// frame this loop reads -- necessarily after the send completes -- is judged
-		// against a truthful count.
+		// The owed/discard checks, the decrement and the claim on the queue slot are
+		// ONE critical section (see the owed field): deciding to enqueue and only
+		// then blocking into a full channel is the round-2 TOCTOU. When the slot is
+		// taken, the blocking send below is entered with owed ALREADY lowered, so
+		// the next frame this loop reads -- necessarily after the send completes --
+		// is judged against a truthful count.
+		//
+		// The judgment order is the round-4 single ledger (see the discard field):
+		// a frame nobody live is waiting for is an unsolicited FREE drop, spending
+		// no credit; a frame arriving inside a live window pays any pending discard
+		// BEFORE it may be delivered, because the in-order stream puts every
+		// abandoned straggler ahead of the live reply.
 		//
 		// The frame is DROPPED rather than the connection torn down, on two grounds
 		// the committee's round-2 fence pins (SHAPE 2 of
@@ -334,9 +403,34 @@ func (c *Conn) pump() {
 		if f.err == nil {
 			c.owedMu.Lock()
 			if c.owed == 0 {
+				if c.discard > 0 {
+					// A free drop while a discard credit is outstanding is the
+					// idle-leak world's signature (see the idleLeak field): if
+					// this frame was an honest straggler, its surviving credit
+					// will eat a later live reply, and only this observation
+					// licenses that exchange's suppressed re-mint.
+					c.idleLeak = true
+				}
 				c.owedMu.Unlock()
 				c.noteUnsolicitedDrop(f.tag)
 				continue
+			}
+			if c.discard > 0 {
+				c.discard--
+				c.spent++
+				if c.idleLeak {
+					// The credit this window just spent belongs to a tainted
+					// epoch: an idle free drop was observed while it was
+					// outstanding, so the frame consumed here may well be the
+					// live exchange's OWN reply (the leak's casualty). Mark the
+					// window; clear the epoch once its credits are gone.
+					c.spentLeaked = true
+					if c.discard == 0 {
+						c.idleLeak = false
+					}
+				}
+				c.owedMu.Unlock()
+				continue // an abandoned exchange's straggler, ahead of the live reply
 			}
 			c.owed--
 			select {
@@ -344,7 +438,11 @@ func (c *Conn) pump() {
 				c.owedMu.Unlock()
 				continue
 			default:
-				// The consumer is one frame behind; deliver outside the lock.
+				// Defensively deliver outside the lock. Under the round-4 ledger this
+				// arm is unreachable for a clean frame -- the slot is claimed only at
+				// owed == 1, after which owed == 0 free-drops everything until the
+				// consumer or abandonReply empties it -- but a blocking send under
+				// owedMu would deadlock the pump if that proof ever rotted.
 				c.owedMu.Unlock()
 			}
 		}
@@ -377,13 +475,65 @@ func (c *Conn) noteUnsolicitedDrop(tag MsgType) {
 
 // owedAdd adjusts the pump's owed-reply count. A raw (unpumped) connection has no
 // pump, no queue and no drop rule, so there is nothing to account.
+//
+// Raising the count opens a new live window, so the per-window spend record resets
+// with it (see the spent field): what abandonReply must know is whether a discard was
+// spent inside ITS exchange's window, never a predecessor's.
 func (c *Conn) owedAdd(d int) {
 	if c.frames == nil {
 		return
 	}
 	c.owedMu.Lock()
 	c.owed += d
+	if d > 0 {
+		c.spent = 0
+		c.spentLeaked = false
+	}
 	c.owedMu.Unlock()
+}
+
+// abandonReply is roundtrip's exit for an exchange that gave up on its reply (timeout
+// or cancellation after a successful write): the exchange's credit must not stay live,
+// or the next arriving frame -- owed to THIS abandoned request -- would be delivered to
+// the next caller as its answer.
+//
+// Three cases, decided in one critical section with the pump's own accounting:
+//
+//  1. The reply was ALREADY ROUTED (it sits in the queue): consume it here, which
+//     retires the exchange completely -- the pump lowered owed when it enqueued, and
+//     nothing of this exchange remains in flight. Without this drain the frame would
+//     sit in the capacity-1 queue and be read by the next exchange as its own answer.
+//  2. The reply is STILL IN FLIGHT: move the credit from owed to discard, so the pump
+//     drops it on arrival instead of delivering it to the next caller (the round-4
+//     single ledger; see the discard field).
+//  3. The reply is still in flight BUT a discard credit was already spent inside this
+//     exchange's own window AND that credit carried the observed-idle-leak taint
+//     (spentLeaked): lower owed and mint NOTHING. This is the suppressed re-mint that
+//     bounds the unattributable-idle-frame leak -- without it, one honest straggler
+//     landing while the connection is idle turns into a permanent cascade of spurious
+//     timeouts (each eaten reply re-minting the credit that eats the next). The taint
+//     condition keeps the suppression out of the honest double-slow world, where the
+//     spent credit paid for a PREDECESSOR's straggler and this exchange's own reply is
+//     still genuinely in flight: there the mint is exactly the FIFO discard the
+//     successor needs, and suppressing it hands the successor this exchange's answer
+//     as wrong data with a nil error (see the discard field's WHY paragraph; both
+//     worlds are pinned in committee_r4_ledger_test.go).
+func (c *Conn) abandonReply() {
+	if c.frames == nil {
+		return
+	}
+	c.owedMu.Lock()
+	defer c.owedMu.Unlock()
+	select {
+	case <-c.frames:
+		return // case 1: routed already; consuming it retires the exchange whole
+	default:
+	}
+	c.owed--
+	if c.spent > 0 && c.spentLeaked {
+		return // case 3: the suppressed re-mint, licensed by the observed idle leak
+	}
+	c.discard++ // case 2
 }
 
 // Done is closed when the connection is no longer usable. On a pumped
@@ -527,9 +677,10 @@ func (c *Conn) Close() error {
 // instead of parking it.
 //
 // A caller that abandons its reply (context deadline or cancellation) leaves the
-// exchange outstanding rather than tearing the connection down; the next caller
-// discards the replies owed to those abandoned requests before claiming its own,
-// so a slow answer is never mistaken for the answer to a later question.
+// exchange outstanding rather than tearing the connection down; abandonReply moves
+// the exchange's credit into the pump's discard ledger (or consumes the reply if it
+// already arrived), so a slow answer is dropped by the pump on arrival and never
+// mistaken for the answer to a later question.
 func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMessage, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -559,46 +710,49 @@ func (c *Conn) roundtrip(ctx context.Context, tag MsgType, req any) (json.RawMes
 		c.owedAdd(-1)
 		return nil, c.callErr(err)
 	}
-	for {
-		rtag, payload, err := c.readFrame(ctx)
-		if err != nil {
-			// This exchange's reply was never consumed: leave one discard owed to
-			// the next caller (driven by what IT reads, never by the pump's count).
-			c.skip++
-			return nil, c.callErr(err)
-		}
-		if c.skip > 0 {
-			c.skip--
-			continue // owed to an earlier request that gave up on its reply
-		}
-		if rtag == MsgError {
-			// THE STRAY QUARANTINE, the drop rule's other half (committee round 3).
-			// The pump's owed count closes one race window -- a frame judged while a
-			// stray occupies the queue -- but there is a second, complementary one
-			// that NO client-side accounting can close: when a stray was consumed as
-			// this exchange's answer, the reply it displaced is still in flight, and
-			// if the next request is written before the pump reads it, the displaced
-			// frame is indistinguishable from that request's own answer ("did this
-			// frame arrive before my write" is unobservable through a lagging
-			// reader). What the client CAN control is when the next request is
-			// written. Every stray in the H1 family is an MsgError (a pre-wait
-			// relay's refusal of an unknown op), so after adopting an error reply --
-			// the one moment a violation may just have displaced a frame -- the
-			// exchange lock is held for a beat before returning. owed is provably
-			// zero for the whole window (this frame's decrement already happened, mu
-			// blocks any new writer), so whatever the violation displaced arrives
-			// owed to nobody and is dropped by the pump instead of answering the
-			// next question. A genuine refusal pays 5ms on a path that already
-			// failed; a displaced reply lagging beyond the window is the bounded
-			// residual the evidence file records. Raw connections read inline, have
-			// no pump and no drop rule, so there is nothing to quarantine.
-			if c.frames != nil {
-				time.Sleep(strayQuarantine)
-			}
-			return nil, decodeError(payload)
-		}
-		return json.RawMessage(payload), nil
+	rtag, payload, err := c.readFrame(ctx)
+	if err != nil {
+		// This exchange's reply was never consumed: retire its credit through the
+		// pump's own ledger (consume it if it already arrived, else leave one
+		// discard for the pump to spend on it).
+		c.abandonReply()
+		return nil, c.callErr(err)
 	}
+	if rtag == MsgError {
+		// THE STRAY QUARANTINE, the drop rule's other half (committee round 3).
+		// The pump's owed count closes one race window -- a frame judged while a
+		// stray occupies the queue -- but there is a second, complementary one
+		// that NO client-side accounting can close: when a stray was consumed as
+		// this exchange's answer, the reply it displaced is still in flight, and
+		// if the next request is written before the pump reads it, the displaced
+		// frame is indistinguishable from that request's own answer ("did this
+		// frame arrive before my write" is unobservable through a lagging
+		// reader). What the client CAN control is when the next request is
+		// written. Every stray in the H1 family is an MsgError (a pre-wait
+		// relay's refusal of an unknown op), so after adopting an error reply --
+		// the one moment a violation may just have displaced a frame -- the
+		// exchange lock is held for a beat before returning.
+		//
+		// WHAT HOLDS DURING THE WINDOW, stated exactly (Opus round-4 F4 corrected
+		// the round-3 wording, which claimed this before it was true): owed is
+		// zero for the whole window ONLY under the round-4 ledger, where an
+		// abandoned exchange's credit moves out of owed at abandonment -- under
+		// the round-3 ledger an abandoned credit still parked in owed could admit
+		// the displaced frame mid-quarantine. Now this frame's decrement has
+		// already happened, mu blocks any new writer, so owed reads zero; and a
+		// frame arriving at owed == 0 is a FREE drop that spends no discard
+		// credit either, so the quarantine cannot leak an abandoned exchange's
+		// credit onto the displaced frame. A genuine refusal pays 5ms on a path
+		// that already failed; a displaced reply lagging beyond the window is the
+		// bounded residual the evidence file records. Raw connections read
+		// inline, have no pump and no drop rule, so there is nothing to
+		// quarantine.
+		if c.frames != nil {
+			time.Sleep(strayQuarantine)
+		}
+		return nil, decodeError(payload)
+	}
+	return json.RawMessage(payload), nil
 }
 
 // strayQuarantine is how long roundtrip keeps the exchange lock after adopting an
@@ -830,8 +984,18 @@ func (c *Client) RoutingID() string { return c.rid }
 // drop without issuing a request.
 func (c *Client) Done() <-chan struct{} { return c.conn.Done() }
 
-// Close severs the connection. It is idempotent.
+// Close severs the connection with the polite websocket close handshake. It is
+// idempotent. Use it where an orderly goodbye is the point -- a finished exchange, a
+// process exiting; a caller that is ABANDONING the connection uses CloseNow, because
+// against a peer that has stopped answering the handshake waits its full five seconds
+// with nothing to show for it (measured: the cost lands exactly when the pump has
+// exited and the peer is silent -- the state a dead link leaves behind).
 func (c *Client) Close() error { return c.conn.Close() }
+
+// CloseNow severs the connection WITHOUT the close handshake -- the teardown for a
+// caller that is abandoning the connection rather than finishing it (see Conn.CloseNow).
+// It shares Close's once, so whichever teardown runs first decides.
+func (c *Client) CloseNow() error { return c.conn.CloseNow() }
 
 // Hello negotiates the protocol version and capability set on an authenticated
 // connection -- the same r_hello a raw Conn speaks, surfaced here so a client can learn

@@ -136,6 +136,17 @@ func TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor(t *testing.T) {
 			"delivery: a backgrounded screen goes on being fed events it will never render, "+
 			"into the bounded drop-oldest queue mobile/events.go documents.\n%s", s17Indent(bg))
 	}
+	// **Committee round 4 (Opus F5), measured by mutation**: deleting `handle.stop()` from
+	// LifecycleLane.background left EVERY Go gate green, because the order check below only
+	// fires when a stop exists (`s >= 0`). The stop is load-bearing: App.Stop joins the relay
+	// drain's five-second graceful close (LifecycleHandle.stop's own doc), so a
+	// disconnecting screen that never stops leaves the link alive behind a phone the user
+	// has left. Presence is required FIRST; only then does order mean anything.
+	if !strings.Contains(bg, ".stop(") {
+		t.Errorf("PB-RUN-3/ADR-007 B16: LifecycleLane.background never stops the link: a "+
+			"disconnecting screen that withdraws its subscription but keeps the socket leaves "+
+			"the relay session connected with no screen behind it.\n%s", s17Indent(bg))
+	}
 	if u, s := strings.Index(bg, ".unsubscribeJournal("), strings.Index(bg, ".stop("); s >= 0 && u > s {
 		t.Errorf("PB-RUN-3/ADR-007 B16: LifecycleLane.background stops the link BEFORE "+
 			"withdrawing journal delivery; the withdrawal must go while there is still a "+

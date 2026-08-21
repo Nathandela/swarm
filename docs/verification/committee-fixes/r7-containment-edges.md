@@ -272,3 +272,69 @@ older ppid==1 stragglers from other sessions' runs were left untouched.
 - The momentary birth-then-replay of a group after a kill (rather than suppressing the spawn
   outright) is the deliberate lean variant the finding allows; the replayed signal is issued
   under the same pgidMu ordering that makes it race-free.
+
+## Round 4 addendum: the reap is one critical section (r7-check finding 1)
+
+markLost (Kill's pre-signal identity recheck, run on an RPC goroutine) and
+handleShimExit (the shim monitor) both call reapOrphanBackend(id) for the same session
+with nothing serializing them (internal/daemon/backend.go). The sequence is
+read-validate-kill-remove over shared on-disk state: two interleaved runs can both read
+backend.json and both validate the recorded (pid, start-time); the first kills the
+group and removes the record, and a pid recycled inside that window hands the second
+one's already-validated signal to a stranger's group. Astronomically narrow -- it needs
+a full pid recycle inside a microsecond window -- but it is the same TOCTOU class the
+identity check exists to close.
+
+Fix: `reapMu sync.Mutex` on Daemon (a leaf lock beside tombMu; reaps happen only on
+session death, so daemon-wide is the simple shape) locked for the whole of
+reapOrphanBackend.
+
+### TDD failing-first (RED)
+
+New test `internal/daemon/r7r4_reapmutex_test.go`
+(TestR7R4_ConcurrentShimDeathPathsSerializeTheReap): hooks the procStartTimeFn seam --
+backendAliveAt is its only reader and reapOrphanBackend is backendAliveAt's only caller,
+so the hook sits inside the reaper's validate step -- counts concurrent entrants for the
+recorded backend pid while holding the validate open 150ms, and reports the identity
+unreadable so both runs take the arm that signals nothing. It then drives the two REAL
+death paths concurrently: d.Kill (dead recorded shim, so the markLost path) against
+d.handleShimExit. RED on the pre-fix code (`go test ./internal/daemon -run
+'TestR7R4_' -race -count=1`):
+
+    r7r4_reapmutex_test.go:112: reapOrphanBackend entered its identity validation
+    1 time(s) while another reap of the same session was still inside its own
+    read-validate-kill-remove sequence. ...
+    --- FAIL: TestR7R4_ConcurrentShimDeathPathsSerializeTheReap (0.28s)
+
+GREEN with the mutex: `ok github.com/Nathandela/swarm/internal/daemon 6.263s`.
+
+### Mutation
+
+Backed up internal/daemon/backend.go to /tmp/backend.go.bak, deleted the
+`d.reapMu.Lock()/defer d.reapMu.Unlock()` pair, re-ran:
+
+    --- FAIL: TestR7R4_ConcurrentShimDeathPathsSerializeTheReap (0.27s)
+
+Restore: `cmp` identical (RESTORE-BYTE-VERIFIED), re-run: ok (4.137s).
+
+### Accepted blast radius: markLost's false identity mismatch now costs the backend
+
+shimIdentityMatches (internal/daemon/lifecycle.go) treats a processStartTime ERROR the
+same as a mismatch, so a transient start-time read failure for a shim that is actually
+LIVE sends Kill down the markLost path. Before round 3 that mis-cost was the LOST label
+alone (and a shim left unsignalled); since markLost gained its reap, the same false
+negative also reaps the session's backend out from under the live shim. Recorded as
+ACCEPTED, because:
+
+- A start-time read error for a live pid is procfs/sysctl failing on a running process
+  -- not a state the daemon can distinguish from the recycled-pid case it exists to
+  guard, and one the platform makes essentially unobservable in practice.
+- The alternative (skipping the reap when the mismatch might be transient) reopens the
+  orphan-forever hole round-2 codex finding 4 closed: once markLost persists LOST,
+  handleShimExit early-returns before ITS reap and reconcile never revisits a
+  non-running session, so an unreaped backend here is unreaped forever.
+- The session is finalized LOST either way; a backend deliberately left alive behind a
+  LOST session is exactly the unaccounted, account-authenticated survivor class R7
+  exists to eliminate. The reap also re-validates the BACKEND's own recorded identity
+  before signalling, so even on this path it kills only what backend.json provably
+  names.

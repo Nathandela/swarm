@@ -478,14 +478,25 @@ func (h *harness) InputData(session string) (data []byte, frames int) {
 // eventually polls fn until it reports true, or fails with msg.
 func eventually(t *testing.T, msg string, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	eventuallyFor(t, 5*time.Second, msg, fn)
+}
+
+// eventuallyFor is eventually with the caller's own wall-clock ceiling, for the waits
+// whose WORK scales past the shared 5 s under CPU contention (Opus round-4 F7: a flood
+// of hundreds of journal records can legitimately take longer than 5 s to apply on a
+// loaded host). The ceiling is a load allowance only -- the polled ASSERTION is
+// unchanged, and success still returns at the first true poll, so a generous ceiling
+// costs a healthy run nothing.
+func eventuallyFor(t *testing.T, ceiling time.Duration, msg string, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(ceiling)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("timed out after 5s: %s", msg)
+	t.Fatalf("timed out after %v: %s", ceiling, msg)
 }
 
 // fixedAuthorities is a machine whose durable coordinates are known. The reconcile record

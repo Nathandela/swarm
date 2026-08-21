@@ -233,10 +233,12 @@ func TestCommitteeR3_AStrayMidExchangeThenABurstKeepsEveryPairing(t *testing.T) 
 }
 
 // TestCommitteeR3_ALateReplyToAnAbandonedCallNeverAnswersTheNextOne pins the OTHER half
-// of the rewritten accounting: roundtrip's abandoned-reply skip is driven by what it
-// READS (a caller that abandoned its reply leaves one discard owed to the next caller),
-// not by the pump's owed counter. A reply that arrives after its caller timed out must
-// be discarded by the next exchange, never adopted as its answer.
+// of the rewritten accounting. Round 3 satisfied it with a roundtrip-side skip; round 4
+// (Opus F3) replaced that with the pump-side discard ledger -- abandonReply moves the
+// abandoned exchange's credit out of owed, and the pump spends it on the straggler
+// ahead of the live reply. The assertion is unchanged either way: a reply that arrives
+// after its caller timed out must be discarded, never adopted as the next exchange's
+// answer.
 func TestCommitteeR3_ALateReplyToAnAbandonedCallNeverAnswersTheNextOne(t *testing.T) {
 	script := newR3Script(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

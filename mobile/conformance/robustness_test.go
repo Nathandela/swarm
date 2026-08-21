@@ -200,7 +200,15 @@ func TestPBBIND6_SlowCallbackDoesNotStallTheCoreAndOverflowIsObservable(t *testi
 	// goroutine, so at most that single emit can still be outstanding and the queue is
 	// already at cap by the time this returns. Skipping this wait would let delivery below
 	// race the tail of the flood still arriving, making the survivor bound meaningless.
-	eventually(t, "the flood never fully reached the app's journal log", func() bool {
+	// The ceiling is load-tolerant, NOT the assertion (Opus round-4 F7): applying
+	// CallbackQueueSize*2 journal records is real work that a CPU-contended host can
+	// legitimately stretch past the shared 5 s helper, and this wait sits on the
+	// REQUIRED-context path of every assertion below -- a deadline flake here fails
+	// the suite on scheduling, not on the queue bound under test. The flood must
+	// still FULLY arrive (the predicate is unchanged, and exact); only the wall-clock
+	// allowance scales, and the early exit on success keeps a healthy run at the same
+	// speed as before.
+	eventuallyFor(t, 60*time.Second, "the flood never fully reached the app's journal log", func() bool {
 		page, err := h.App.ReadJournal(0, 0)
 		if err != nil {
 			return false

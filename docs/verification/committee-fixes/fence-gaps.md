@@ -134,3 +134,33 @@ the race runs (14 from this session's skeleton run, 12 leftovers from earlier ru
 all killed by explicit pid, zero remaining.
 
 Nothing staged, nothing committed.
+
+## Round 4: Opus F5 -- the stop call needed a PRESENCE fence, not only an order fence
+
+`android/gate/wiring_test.go` (TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor)
+checked that LifecycleLane.background's `.stop(` came AFTER `.unsubscribeJournal(` --
+but only `if s >= 0`: with the stop call deleted outright the order check never fires.
+Proven at package scope on the unmodified gates: backed up
+`android/app/src/main/kotlin/dev/swarm/phone/LifecycleLane.kt` to
+/tmp/LifecycleLane.kt.bak, deleted the whole `try { handle.stop() } catch ...` block,
+then:
+
+    $ go test ./android/gate -count=1        # EVERY gate, against the mutant
+    ok      github.com/Nathandela/swarm/android/gate        9.610s
+
+The stop is load-bearing: App.Stop joins the relay drain's five-second graceful close,
+so a disconnecting screen that never stops leaves the relay session connected with no
+screen behind it.
+
+Fix: a presence assertion (`strings.Contains(bg, ".stop(")`) added BEFORE the order
+check; the order check itself is byte-for-byte unchanged (nothing weakened). Mutation
+re-run against the strengthened gate (same backup/mutate/restore protocol):
+
+    --- FAIL: TestWiring_TheScreenLeavingWithdrawsWhatItAskedFor (0.01s)
+        wiring_test.go:146: PB-RUN-3/ADR-007 B16: LifecycleLane.background never stops
+        the link: a disconnecting screen that withdraws its subscription but keeps the
+        socket leaves the relay session connected with no screen behind it.
+
+Restore: `cmp` identical (RESTORE-BYTE-VERIFIED), then:
+
+    ok      github.com/Nathandela/swarm/android/gate        0.737s

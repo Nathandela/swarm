@@ -158,7 +158,10 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remotegw.OpenInputFrame":           "as OpenCommandEnvelope.",
 	"github.com/Nathandela/swarm/internal/remotegw.OpenRemoteCommand":        "as OpenCommandEnvelope; the guarded form below is what the bridge calls.",
 	"github.com/Nathandela/swarm/internal/remotegw.OpenRemoteCommandGuarded": "as OpenCommandEnvelope.",
-	"github.com/Nathandela/swarm/internal/remotegw.CommandBridge.PollOnce":   "single-step seam so a test can drive one poll instead of the Run loop.",
+	// CommandBridge.PollOnce's row is GONE because the symbol is now REACHABLE: the round-4
+	// gateway poll fallback's runPoll drives it on the compatPollInterval tick
+	// (command_loop.go), so it is no longer a single-step test seam and the fence demands
+	// the deletion.
 	// CommandBridge.Err's row is GONE because the symbol is now REACHABLE: Service.Err joins
 	// it with RelaySink's and PushNotifier's, and cmd/swarm-remote's watchDegraded prints the
 	// result to the unit's log. Its old reason ("last-error accessor for tests; Run surfaces

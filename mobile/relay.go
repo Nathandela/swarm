@@ -542,7 +542,17 @@ func (a *App) run(ctx context.Context) {
 		// new gateway does not hold. It also empties the coalescer, so bytes buffered when
 		// the link went away resolve as undelivered instead of riding the reconnect.
 		a.suspendInput("the connection to the machine was lost")
-		_ = cl.Close()
+		// CloseNow, NOT the graceful Close (Opus round-4 F6): this teardown is an
+		// abandonment on every path that reaches it -- the link already died (the
+		// reconnect must redial, not say goodbye to a peer that is not listening) or
+		// the generation was cancelled (Stop/backgrounding joins this loop from the
+		// facade's serial command lane). The polite close costs its full five-second
+		// handshake wait exactly when the pump has exited and the peer is silent --
+		// the state a dead link leaves behind -- which delayed the redial, and a
+		// background -> foreground resume, by up to ~5 s. The orderly goodbye
+		// survives where it matters: App.Close's machines manager and push gateway
+		// (process exit) and the pairing probe's finished exchange.
+		_ = cl.CloseNow()
 	}
 	a.setClient(nil)
 	a.setConn(connOffline)
