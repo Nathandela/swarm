@@ -367,7 +367,31 @@ func b1RefusingRelay(t *testing.T, upstream string) string {
 	// The relay's own wire error for a device_revoke past its per-key op budget: the client
 	// maps the code back to relay.ErrQuotaExceeded, which is a refusal runRemoteRevoke has no
 	// standing reason to treat as benign (unlike ErrNotAuthorized).
-	refusal := []byte(`{"code":"quota_exceeded","message":"relay: quota exceeded"}`)
+	//
+	// AMENDED BY SH5 (2026-08-22): purgeRelayState now classifies a quota answer as
+	// TRANSIENT -- a rate window clears by itself -- so this arm exercises the pending/
+	// deferred path rather than a substantive refusal. Its assertions (nonzero exit, the
+	// relay's reason visible, mailbox untouched, device gone locally) hold in both
+	// classifications, which is why they are unchanged; the substantive-refusal arm is
+	// exercised by sh5RefusingFront with a bad_request answer.
+	return sh5RefusingFront(t, upstream, `{"code":"quota_exceeded","message":"relay: quota exceeded"}`)
+}
+
+// sh5RefusingFront is b1RefusingRelay generalized over the refusal answered to
+// device_revoke; everything else forwards to the real relay untouched.
+func sh5RefusingFront(t *testing.T, upstream, refusalJSON string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := relay.WriteFrame(&buf, relay.MsgError, []byte(refusalJSON)); err != nil {
+		t.Fatalf("compose refusal frame: %v", err)
+	}
+	return sh5AnsweringFront(t, upstream, buf.Bytes())
+}
+
+// sh5AnsweringFront answers device_revoke with EXACTLY the given bytes -- a
+// well-formed error frame or deliberate garbage -- and forwards everything else.
+func sh5AnsweringFront(t *testing.T, upstream string, reply []byte) string {
+	t.Helper()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		down, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
@@ -409,11 +433,7 @@ func b1RefusingRelay(t *testing.T, upstream string) string {
 				// The refused op never reaches the relay, so the mailbox it would have emptied
 				// stays exactly as it was -- which is what the test measures.
 				if b1IsDeviceRevoke(data) {
-					var buf bytes.Buffer
-					if err := relay.WriteFrame(&buf, relay.MsgError, refusal); err != nil {
-						return
-					}
-					if err := down.Write(ctx, websocket.MessageBinary, buf.Bytes()); err != nil {
+					if err := down.Write(ctx, websocket.MessageBinary, reply); err != nil {
 						return
 					}
 					continue

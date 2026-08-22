@@ -8,6 +8,24 @@ import (
 // Sentinel errors returned by Client/Conn operations. Each maps to a stable wire
 // error code so a caller can errors.Is against it after a round-trip. Every
 // over-limit or refusal is a CLEAN error, never resource exhaustion (R-REL.8).
+// ErrRelayAnswered marks an error that IS the relay's answer -- an error frame the
+// relay composed and sent -- as opposed to a transport, timeout or decode failure
+// AROUND the exchange. It exists for errors.Is only and is never returned bare:
+// decodeError wraps every answer it manufactures so a caller deciding "did the relay
+// answer no, or did the exchange fail?" tests this sentinel instead of inferring the
+// answer from what the error is not -- a fallthrough that classified a truncated or
+// oversized reply frame as a substantive refusal (SH5 round-3 review F1).
+var ErrRelayAnswered = errors.New("relay: the relay answered")
+
+// answeredError is the wrapper decodeError attaches. Its Error() string is the
+// inner error's, unchanged, so no operator text or test assertion moves; Unwrap
+// keeps every sentinel reachable through errors.Is.
+type answeredError struct{ err error }
+
+func (a answeredError) Error() string        { return a.err.Error() }
+func (a answeredError) Unwrap() error        { return a.err }
+func (a answeredError) Is(target error) bool { return target == ErrRelayAnswered }
+
 var (
 	// ErrQuotaExceeded is a clean refusal past a rate/quota cap.
 	ErrQuotaExceeded = errors.New("relay: quota exceeded")

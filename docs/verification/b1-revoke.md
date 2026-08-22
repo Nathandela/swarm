@@ -1,5 +1,12 @@
 # b1 — `swarm remote revoke` must verify the relay-side outcome (ADR-007 B120 F3)
 
+> AMENDED BY SH5 (2026-08-22, bead agents-tracker-dtc5): this file's standing claims that no
+> pending-purge state exists and that nothing retries the pending arm — including the reference to
+> the `ponytail:` honest-ceiling comment at the pending branch — describe the tree BEFORE SH5. The
+> deferral is now built: `internal/remote/relaypurge` records the obligation before the local
+> revoke, and `swarm remote pair` (refusing to proceed while one is owed) and a later reachable
+> `swarm remote revoke` drive it. The transcript below is preserved as the dated evidence it is.
+
 **Status: RED.** The failing tests exist and were run at HEAD `b077104`; no production code has
 been changed. This file is the failing-first record required by implementation-goals.md GG-5.
 

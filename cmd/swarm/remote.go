@@ -31,6 +31,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/qrterm"
 	"github.com/Nathandela/swarm/internal/remote/relay"
 	"github.com/Nathandela/swarm/internal/remote/relaycfg"
+	"github.com/Nathandela/swarm/internal/remote/relaypurge"
 	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/remotegw"
 )
@@ -848,7 +849,26 @@ func runRemoteRevoke(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 // verb and the interactive picker -- inherit this, because both need the same honesty.
 func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.Writer) int {
 	stateDir := remoteStateDir()
+	// FAIL CLOSED on a registry READ ERROR, before anything destructive (round-3
+	// codex #1): with the routing id unreadable, the relay half could neither run nor
+	// be deferred, and the old behavior reported exit-0 success over exactly that.
+	if _, _, err := deviceRecordErr(stateDir, deviceID); err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the device registry could not be read (%v); "+
+			"revoking now would lose the relay half unrecoverably -- fix the registry and re-run.\n", err)
+		return 1
+	}
 	routingID := deviceRoutingID(stateDir, deviceID)
+
+	// THE OBLIGATION IS RECORDED BEFORE THE DESTRUCTIVE LOCAL REVOKE (SH5 review D1:
+	// RevokeDevice deletes the only record carrying this routing id, and a crash --
+	// or the operator's Ctrl-C during the silent relay stall below -- between that
+	// delete and a later record loses the purge forever, the 2026-08-21 incident's
+	// shape). If the relay half then LANDS, the obligation is retired in the same
+	// run; if RevokeDevice itself fails, the stale obligation names a routing id the
+	// registry still holds, and the next drive's live-pairing guard retires it. Only
+	// a failed record is disclosed and tolerated: refusing to revoke a lost handset
+	// because a bookkeeping write failed would invert the priorities.
+	obligated := recordPurgeObligation(stateDir, routingID, stderr)
 
 	if err := client.RevokeDevice(deviceID); err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
@@ -870,24 +890,140 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	switch purge {
 	case relayPurgeRefused:
 		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay REFUSED to purge this device's relay-side state: %v\n", purgeErr)
+		// A SUBSTANTIVE refusal from a reachable relay: nothing this machine
+		// re-presents changes the answer, so the obligation is resolved NOW as a
+		// tombstone -- excluded from the pair gate (round-2 Opus R2-1: the wedge
+		// bricked pairing), reason preserved on file (round-2 codex #3: the unlanded
+		// purge stays on the record; u37c's Done+Refusal shape). The relay-side state
+		// survives, and the operator line says exactly that.
+		resolvePurgeObligation(stateDir, routingID, purgeErr, stderr)
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and its "+
+			"route (routing id %s). Nothing will re-present a refused purge; cleaning that state up at the "+
+			"relay is now a manual task.\n", routingID)
 	case relayPurgePending:
-		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay was not reached, so its half of this revocation is "+
-			"PENDING: %v\n", purgeErr)
+		// The wording distinguishes never-reached from answered-but-clearing (a rate
+		// window, a superseded connection) -- both defer, but they are different
+		// diagnoses (round-3 codex #5).
+		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay did not accept the purge, so its half of this "+
+			"revocation is PENDING: %v\n", purgeErr)
+		reportDeferredPurge(routingID, obligated, stderr)
+	case relayPurgeUnprovisioned:
+		// Two very different machines land here. One never had a relay at all -- no
+		// relay.json, so no obligation was recordable and there is genuinely nothing
+		// of ours anywhere: the old exit-0 "nothing to purge" truth, kept. The other
+		// RECORDED an obligation this run (relay.json exists) and then could not
+		// dial -- a missing machine.key (round-3 codex #2) -- and for that one an
+		// exit-0 silence would be a false claim about the owed relay.
+		if !obligated {
+			return 0
+		}
+		_, _ = fmt.Fprintf(stderr, "remote revoke: this machine holds no relay identity (%v), so the relay half "+
+			"of this revocation could not run. The handset keeps its relay mailbox, its push wake and its "+
+			"route (routing id %s) at the owed relay until a restored identity drives the recorded purge, "+
+			"or it is cleaned up there by hand.\n", purgeErr, routingID)
 	default:
+		// The relay half LANDED (or there was nothing of ours to purge): the
+		// obligation recorded above is settled, and -- the relay being provably
+		// reachable right now -- so is any OLDER deferral still on file.
+		retirePurgeObligation(stateDir, routingID, stderr)
+		driveRelayPurgeObligations(stateDir, stderr)
 		return 0
 	}
-	// ponytail: the honest ceiling. ADR-007 D9 says "an offline-at-revoke machine defers the
-	// purge to reconnect" and NOTHING IN THE TREE DEFERS IT (B120 F3) -- no pending-purge
-	// state is written here and no later relay connection completes one. So this names the
-	// state instead of promising a retry, and it does NOT tell the owner to re-run the verb:
-	// the local record naming that routing id is already gone, and a second run is refused
-	// "no such device" (internal/protocol/server.go handleDeviceRevoke, owner tier). The
-	// upgrade path is D9's own: persist the routing id and drain it on the machine's next
-	// relay connection, which is the gateway's connect and this CLI's own dial.
-	_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
-		"push wake and its route (routing id %s). Nothing retries it, and this verb cannot re-address "+
-		"the device: the local record naming that routing id is already gone.\n", routingID)
 	return 1
+}
+
+// recordPurgeObligation is ADR-007 D9's deferral, built (SH5, bead
+// agents-tracker-dtc5; it retires the honest-ceiling note that used to sit in
+// performRevoke). It runs BEFORE the destructive local revoke and returns whether the
+// obligation is durably on disk; a false return means the old abandonment is back for
+// this one revoke, and the caller's report says so. The obligation carries the relay
+// URL it is owed against (review D2): after a relay cutover the purge must not
+// "land" against the new relay and read as success.
+func recordPurgeObligation(stateDir, routingID string, stderr io.Writer) bool {
+	if routingID == "" || stateDir == "" {
+		return false
+	}
+	cfg, found, err := relaycfg.Load(stateDir)
+	if err != nil || !found || cfg.RelayURL == "" {
+		// Not relay-provisioned: there is no relay-side state to owe a purge of.
+		return false
+	}
+	machineRID := ""
+	if id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile)); err == nil {
+		machineRID = string(relay.RoutingID(id.RelayAuthPublic()))
+	}
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err == nil {
+		err = store.Record(routingID, cfg.RelayURL, machineRID)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the deferred purge FAILED (%v); if the relay "+
+			"half of this revocation does not land below, nothing will retry it.\n", err)
+		return false
+	}
+	return true
+}
+
+// resolvePurgeObligation tombstones the obligation for routingID after a substantive
+// relay refusal: Pending no longer gates on it, the reason stays on file.
+func resolvePurgeObligation(stateDir, routingID string, reason error, stderr io.Writer) {
+	if routingID == "" || stateDir == "" {
+		return
+	}
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err == nil {
+		err = store.Resolve(routingID, fmt.Sprintf("%v", reason))
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the refusal failed: %v\n", err)
+	}
+}
+
+// retirePurgeObligation settles the obligation for routingID after an acknowledged
+// (or moot) relay purge. Best-effort: a failure leaves a stale obligation the next
+// drive's live-pairing or not-authorized handling resolves, and is still reported.
+func retirePurgeObligation(stateDir, routingID string, stderr io.Writer) {
+	if routingID == "" || stateDir == "" {
+		return
+	}
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err == nil {
+		err = store.Retire(routingID)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "remote revoke: retiring the settled purge obligation failed: %v\n", err)
+	}
+}
+
+// reportDeferredPurge is the one honest sentence the PENDING arm owes: what the
+// handset keeps, and what will retry. The two drive sites that exist are named --
+// `swarm remote pair` (which refuses to proceed while a purge is owed) and a later
+// `swarm remote revoke` that reaches the relay. A supervised gateway start is NOT
+// claimed: after a full revoke the unit is booted out and never starts (round-2
+// review R2-3), and a paired machine's drive never dials.
+func reportDeferredPurge(routingID string, obligated bool, stderr io.Writer) {
+	if obligated {
+		_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, "+
+			"its push wake and its route (routing id %s). The purge is recorded durably and is driven on this "+
+			"machine's next relay dial: `swarm remote pair` drives it (and refuses to proceed until it "+
+			"lands), and so does a later `swarm remote revoke` that reaches the relay.\n", routingID)
+		return
+	}
+	_, _ = fmt.Fprintf(stderr, "remote revoke: until that purge lands the handset keeps its relay mailbox, its "+
+		"push wake and its route (routing id %s). No deferral is recorded for it, and this verb cannot "+
+		"re-address the device: the local record naming that routing id is already gone.\n", routingID)
+}
+
+// driveRelayPurgeObligations drives every deferred relay purge (ADR-007 D9, SH5)
+// through the ONE shared machine-side driver -- relaypurge.DriveMachineObligations
+// carries every ruling (live-pairing guard, paired-machine-never-dials, relay
+// mismatch, not-provisioned, answered-vs-transient) so every drive site, present and
+// future (bead agents-tracker-x1en), shares one classification. Returns how many purges are STILL owed;
+// runRemotePair refuses to proceed while that is nonzero.
+func driveRelayPurgeObligations(stateDir string, stderr io.Writer) (pendingLeft int) {
+	return relaypurge.DriveMachineObligations(stateDir, func(format string, args ...any) {
+		_, _ = fmt.Fprintf(stderr, "remote: "+format+".\n", args...)
+	})
 }
 
 // remoteStateDir resolves the state dir every remote verb reads, the same way
@@ -906,27 +1042,41 @@ func remoteStateDir() string {
 
 // deviceRecord reads one device out of the durable registry, as a READ exactly like
 // pairedDeviceCount: it does not dial, so it works on a machine whose daemon is not
-// running. A missing record is reported rather than guessed at -- both callers do
-// nothing at all rather than address the relay with something invented.
+// running. A missing record is reported rather than guessed at -- callers do nothing
+// at all rather than address the relay with something invented. A registry READ
+// ERROR is distinct from absence (round-3 codex #1): collapsing it into "not found"
+// let a corrupt registry turn a revoke into a false exit-0 success with no purge
+// attempted and no obligation recorded.
 func deviceRecord(stateDir, deviceID string) (device.Record, bool) {
+	rec, ok, err := deviceRecordErr(stateDir, deviceID)
+	return rec, ok && err == nil
+}
+
+func deviceRecordErr(stateDir, deviceID string) (device.Record, bool, error) {
 	if stateDir == "" {
-		return device.Record{}, false
+		return device.Record{}, false, nil
 	}
 	reg, err := device.Open(filepath.Join(stateDir, "devices"))
 	if err != nil {
-		return device.Record{}, false
+		return device.Record{}, false, err
 	}
-	return reg.Get(deviceID)
+	rec, ok := reg.Get(deviceID)
+	return rec, ok, nil
 }
 
-// deviceRoutingID is the relay mailbox address the machine appends to for a device. It
-// must be read BEFORE the revoke, which deletes the record that carries it.
+// deviceRoutingID is the relay mailbox address the machine acts on for a device --
+// DERIVED from the device's relay-auth public key, never read from rec.RoutingID: the
+// stored field is copied verbatim from the handset's enrollment payload and the
+// gateway's C5 re-audit already calls it "self-reported (unverifiable)", deriving its
+// own route the same way as here. A purge or a live-pairing guard keyed on a
+// self-reported value can be steered by the value's author (SH5 review, codex #5);
+// relay.RoutingID(RelayAuthPub) is what the relay itself keys the mailbox by.
 func deviceRoutingID(stateDir, deviceID string) string {
 	rec, ok := deviceRecord(stateDir, deviceID)
-	if !ok {
+	if !ok || len(rec.RelayAuthPub) == 0 {
 		return ""
 	}
-	return string(rec.RoutingID)
+	return string(relay.RoutingID(ed25519.PublicKey(rec.RelayAuthPub)))
 }
 
 // errRelayNotProvisioned means this machine has no relay identity or no relay URL, so
@@ -945,6 +1095,9 @@ var errRelayNotProvisioned = errors.New("this machine is not provisioned for a r
 // a revoked device's mailbox, and authorizing a freshly paired one -- happen at moments
 // when the gateway is by construction NOT running: revoke stops it, and pairing is only
 // permitted when the device count is zero, which is quiescent (PB-LIFE-3).
+// The SH5 deferred-purge drive preserves this: relaypurge.DriveMachineObligations
+// refuses to dial while any device is registered (paired-machine-never-dials), so no
+// drive path opens a second connection under a live gateway's identity.
 //
 // The connection is short-lived on purpose. The relay supersedes an older connection for
 // the same routing id, so a long-lived CLI client would sever a gateway that came up
@@ -1023,6 +1176,11 @@ const (
 	// relayPurgePending: the relay was never reached or never answered, so the purge is
 	// deferred and the handset still holds everything it held.
 	relayPurgePending
+	// relayPurgeUnprovisioned: this machine holds no relay identity, so it could not
+	// even DIAL. Distinct from relayPurgeNone (round-3 codex #2): with an obligation
+	// on file the machine WAS provisioned at revoke time and the owed relay still
+	// holds the device's state -- exit 0 with a silent retire would be a false claim.
+	relayPurgeUnprovisioned
 )
 
 // purgeRelayState is the RELAY half of PB-STATE-10's "purge machine and relay state":
@@ -1047,23 +1205,35 @@ func purgeRelayState(stateDir, routingID string) (relayPurgeVerdict, error) {
 	if routingID == "" {
 		return relayPurgeNone, nil
 	}
-	// The dial failure and the op's refusal come back through the same return, and the two
-	// are different verdicts, so the op records that it got to run at all.
-	reached := false
+	presented := false
 	err := withMachineRelay(stateDir, func(ctx context.Context, cl *relay.Client) error {
-		reached = true
+		// presented marks that the DIAL (auth included) succeeded and the purge op
+		// itself went out: an ANSWER received before this point -- an auth_init
+		// refusal, a revoked machine registration -- is not the relay refusing the
+		// PURGE, and must not read as one (round-3 codex #4).
+		presented = true
 		return cl.DeviceRevoke(ctx, routingID)
 	})
 	switch {
 	case err == nil:
 		return relayPurgeDone, nil
-	case errors.Is(err, errRelayNotProvisioned),
-		errors.Is(err, relay.ErrNotAuthorized):
+	case errors.Is(err, errRelayNotProvisioned):
+		return relayPurgeUnprovisioned, err
+	case presented && errors.Is(err, relay.ErrNotAuthorized):
 		return relayPurgeNone, nil
-	case reached && !errors.Is(err, relay.ErrTimeout) && !errors.Is(err, relay.ErrConnClosed):
-		// The relay ANSWERED, and the answer was no. The two sentinels excluded here are the
-		// ones relay/errors.go defines as the relay answering NOTHING, which is the pending
-		// state and not a refusal.
+	case errors.Is(err, relay.ErrQuotaExceeded), errors.Is(err, relay.ErrDuplicateConnection):
+		// Answers that clear BY THEMSELVES -- a rate window lapses, a superseding
+		// connection ends -- so treating them as refusals abandoned a purge a
+		// minute's patience delivers (SH5 review). The gateway's own outage
+		// classifier draws the same line (cmd/swarm-remote).
+		return relayPurgePending, err
+	case presented && errors.Is(err, relay.ErrRelayAnswered):
+		// The relay ANSWERED THE PURGE, and the answer was no. Substantive is an
+		// ALLOWLIST anchored on the one place answers are decoded
+		// (relay.ErrRelayAnswered, SH5 round-3 F1) AND on the purge having been
+		// presented -- a reply that failed to DECODE, or an answer to the handshake
+		// rather than to device_revoke, falls to pending, never to a permanent
+		// refusal.
 		return relayPurgeRefused, err
 	default:
 		return relayPurgePending, err
@@ -1199,6 +1369,20 @@ func runRemotePair(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	capability := fs.String("capability", "full", "capability tier to grant the new device")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	// SH5 (ADR-007 D9): pairing IS the machine's next relay connection, so any purge an
+	// offline-at-revoke run deferred is driven first -- the ban lands before the new
+	// ceremony, and authorizeAtRelay lifts it for the device being granted now. A purge
+	// still owed after the drive REFUSES the pairing (review codex #4): enrolling a
+	// replacement while the revoked route lives would invert that ordering, and the
+	// replacement's own live routing id would then shield the stale mailbox forever.
+	if left := driveRelayPurgeObligations(remoteStateDir(), stderr); left > 0 {
+		_, _ = fmt.Fprintf(stderr, "remote pair: %d deferred relay purge(s) from an earlier revoke are still "+
+			"owed and could not be driven now (see above). Pairing would grant new authority before the old "+
+			"grant is provably gone, so it is refused; re-run once the relay is reachable (a rate-limited "+
+			"answer clears within a minute).\n", left)
+		return 1
 	}
 
 	client, err := dialClient([]string{protocol.CapPairing})
@@ -1801,7 +1985,35 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 	for _, d := range devices {
 		_, _ = fmt.Fprintf(stdout, "  %s  %s\n", d.DeviceID, d.Name)
 	}
+	reportRelayPurgeState(stateDir, stdout)
 	return 0
+}
+
+// reportRelayPurgeState surfaces the deferred-purge ledger (SH5): purges still owed,
+// and refused-purge tombstones -- relay-side device state a revoke could NOT remove,
+// which the owner would otherwise learn about only from a stderr line that scrolled
+// away at revoke time. Best-effort: status is a read that must never fail the verb.
+func reportRelayPurgeState(stateDir string, stdout io.Writer) {
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err != nil {
+		_, _ = fmt.Fprintf(stdout, "deferred relay purges: unavailable (%v)\n", err)
+		return
+	}
+	pending, perr := store.Pending()
+	resolved, rerr := store.Resolved()
+	if perr != nil || rerr != nil || (len(pending) == 0 && len(resolved) == 0) {
+		return
+	}
+	for _, ob := range pending {
+		_, _ = fmt.Fprintf(stdout, "deferred relay purge OWED: routing id %s at %s (recorded %s); "+
+			"driven on the next relay dial\n",
+			ob.RoutingID, ob.RelayURL, ob.RecordedAt.Format(timeFormat))
+	}
+	for _, ob := range resolved {
+		_, _ = fmt.Fprintf(stdout, "relay purge REFUSED: routing id %s at %s -- %s; that relay still "+
+			"holds the device's mailbox, push wake and route (manual cleanup)\n",
+			ob.RoutingID, ob.RelayURL, ob.Refusal)
+	}
 }
 
 // statusListDevices dials the owner daemon (CapPairing, like runRemoteDevices) and

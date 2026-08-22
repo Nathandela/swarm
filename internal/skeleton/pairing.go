@@ -18,6 +18,7 @@ import (
 	"github.com/Nathandela/swarm/internal/remote/grant"
 	"github.com/Nathandela/swarm/internal/remote/pairing"
 	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remote/relaypurge"
 )
 
 // defaultPairTTL bounds a rendezvous when the request carries no explicit TTL, and
@@ -143,6 +144,25 @@ func (a *coreAPI) BeginPairing(ctx context.Context, req protocol.PairStartReq,
 		return protocol.PairView{}, errors.New("a device is already paired (single-device v1); " +
 			"run `swarm remote devices` to see its id, then `swarm remote revoke <device-id>` " +
 			"to unregister it, and pair again")
+	}
+
+	// SH5 (bead agents-tracker-dtc5, round-3 codex #3): a deferred relay purge still
+	// owed refuses the ceremony HERE, not only in the CLI. The CLI drives obligations
+	// and checks before dialing this daemon, but that check is TOCTOU across
+	// processes -- a concurrent revoke can record an obligation and delete its device
+	// between the CLI's read and this call. Pairing and the revoke's registry delete
+	// are both daemon-mediated, so this is the serialization point a racing record
+	// cannot slip past: the CLI records the obligation BEFORE asking the daemon to
+	// revoke, so by the time the registry is empty enough to pass the wall above,
+	// the obligation is on disk for this read. Fail-closed on a ledger read error,
+	// same direction as every guard in this slice.
+	if pending, err := pendingRelayPurges(a.stateDir); err != nil {
+		return protocol.PairView{}, fmt.Errorf("the deferred relay-purge ledger could not be read (%v); "+
+			"pairing would risk granting new authority before an owed purge, so it is refused", err)
+	} else if pending > 0 {
+		return protocol.PairView{}, fmt.Errorf("%d deferred relay purge(s) from an earlier revoke are "+
+			"still owed; `swarm remote pair` drives them before the ceremony once the relay is "+
+			"reachable", pending)
 	}
 
 	// C7: a nil rendezvous seam means no relay is configured (relay.json absent, see
@@ -391,3 +411,17 @@ func (a *coreAPI) registryDir() string { return filepath.Join(a.stateDir, "devic
 // coreAPI ALSO satisfies protocol.PairingHost so an assembled owner-tier Server can host
 // a real pairing (slice A3.3-d). A nil pairingConfig makes BeginPairing fail closed.
 var _ protocol.PairingHost = (*coreAPI)(nil)
+
+// pendingRelayPurges counts the deferred relay purges still owed (SH5). Kept in its
+// own function so the ceremony gate above reads as policy, not plumbing.
+func pendingRelayPurges(stateDir string) (int, error) {
+	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
+	if err != nil {
+		return 0, err
+	}
+	pending, err := store.Pending()
+	if err != nil {
+		return 0, err
+	}
+	return len(pending), nil
+}

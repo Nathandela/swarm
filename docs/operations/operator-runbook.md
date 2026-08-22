@@ -242,18 +242,29 @@ once the relay has acknowledged the purge, and the confirmation says which state
 |---|---|---|
 | `0` | `relay state purged: its mailbox, its push token and its route are gone from the relay` | the handset is cut off now |
 | `1` | `remote revoke: the relay REFUSED to purge …: <relay's own reason>` | the relay answered and declined |
-| `1` | `remote revoke: the relay was not reached, so its half of this revocation is PENDING: …` | the machine never reached the relay |
+| `1` | `remote revoke: the relay did not accept the purge, so its half of this revocation is PENDING: …` | the relay was unreachable, or answered something that clears by itself (a rate window, a superseded connection) |
 
 A nonzero exit never means nothing happened: the local half — de-registration, epoch rotation,
 gateway stop, outbound custody — is durable before the relay is dialled at all, and the
 `revoked device <id>` confirmation and the `swarm remote pair` pointer are printed on every path.
 
-On both failing rows the handset still holds its relay mailbox, its push wake and its route.
-**Nothing retries the purge**, and re-running `swarm remote revoke <id>` will not do it either —
-the local record naming that routing id is already gone, so a second run is refused `no such
-device`. The routing id is printed with the warning so the leftover state can be identified at the
-relay. (ADR-007 D9's *"an offline-at-revoke machine defers the purge to reconnect"* is still
-unimplemented; that deferral is the fix this row is waiting on.)
+On both failing rows the handset still holds its relay mailbox, its push wake and its route, and
+re-running `swarm remote revoke <id>` will not purge it — the local record naming that routing id
+is already gone, so a second run is refused `no such device`. The routing id is printed with the
+warning so the leftover state can be identified at the relay.
+
+> AMENDED BY SH5 (2026-08-22, bead agents-tracker-dtc5): ADR-007 D9's deferral is now built. The
+> purge is recorded as a durable obligation BEFORE the local revoke runs, and it is driven on the
+> machine's next relay dial: `swarm remote pair` drives it — and refuses to proceed while one is
+> still owed — and a later `swarm remote revoke` that reaches the relay drives it too. What
+> happens to the obligation depends on how the relay answers. An UNREACHABLE relay, and answers
+> that clear by themselves (a rate-window `quota_exceeded`, a superseded connection), keep it on
+> file for the next dial. A SUBSTANTIVE refusal from a reachable relay resolves it loudly with
+> the reason — nothing re-presents a request the relay has answered no to, and cleaning up the
+> relay-side state becomes a named manual task, at revoke time and at drive time alike. An
+> obligation recorded against a relay URL the machine no longer points at is retired loudly,
+> naming the old relay, since it can never land at the new one — the same manual-cleanup task at
+> the old relay.
 
 `swarm remote regrant <device-id>` re-issues a paired device's epoch grant. Use it when a device is
 still trusted but has lost its grant; it is not part of the loss procedure.

@@ -840,19 +840,25 @@ func (c *Conn) control(ctx context.Context, op string, req map[string]any) (json
 	return c.roundtrip(ctx, MsgRelay, req)
 }
 
+// decodeError manufactures the error for a relay-composed CONTROL-OP error frame.
+// Every return is wrapped answeredError: for control replies this is the one place an
+// error is known to be the relay's ANSWER rather than a failure around the exchange,
+// and callers classifying refusal-vs-transient test relay.ErrRelayAnswered on exactly
+// that distinction. (The mailbox-wait reply path resolves its refusal codes through
+// errForCode, unwrapped -- scope any ErrRelayAnswered classification to control ops.)
 func decodeError(payload []byte) error {
 	var eb errorBody
 	_ = json.Unmarshal(payload, &eb)
 	if e, ok := codeToErr[eb.Code]; ok {
-		return e
+		return answeredError{err: e}
 	}
 	if eb.Message != "" {
-		return fmt.Errorf("relay: %s", eb.Message)
+		return answeredError{err: fmt.Errorf("relay: %s", eb.Message)}
 	}
 	if eb.Code != "" {
-		return fmt.Errorf("relay: %s", eb.Code)
+		return answeredError{err: fmt.Errorf("relay: %s", eb.Code)}
 	}
-	return errors.New("relay: server error")
+	return answeredError{err: errors.New("relay: server error")}
 }
 
 // Hello negotiates the protocol version and the intersected capability set. An
