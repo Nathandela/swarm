@@ -160,6 +160,14 @@ back to your copy of the config; see §4a if that is your situation.
 > only for a pairing whose `push_transport` has not yet migrated from `legacy_relay` to `gateway`
 > (playbook §12). Do not provision it for a new deployment.
 
+> AMENDED (2026-08-22, by the dated amendment inside ADR-015): one exception to the sentence
+> above. The application-owner deployment — the relay operator who owns the app's Firebase
+> project (`swarm-8404f`) — MAY provision `push_credentials` on a new deployment as a supported
+> configuration, under the custody rules below unchanged, until the gateway path is end-to-end
+> operable (the PG-MIG-2 sunset bead the amendment names, agents-tracker-yxpm). Every other new
+> deployment: the sentence above stands — do not provision it; those handsets run
+> foreground-only until the Swarm-operated gateway ships.
+
 If you are still inside that window and do set `push_credentials`, the file it points at is a
 private key: the Google service-account JSON contains an RSA private key, and anyone who can read
 it can send push as your Google project — against this relay's own store, which (during the legacy

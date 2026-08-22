@@ -46,6 +46,32 @@ Firebase project `swarm-8404f` exists; the Android app `dev.swarm.phone` was reg
 
 **P1. The FCM sender leaves the relay. `swarm-relay` ships with no push credential, no token map, and no push transport.** `relay.Config.PushCredentials` (`config.go:57-64`) and `cmd/swarm-relay/main.go`'s `pushOptions` (`:64-94`) are removed, not merely left empty. The protocol case labels `token_register` (`server.go:694-695`), `token_delete` (`:696-697`) and `push_trigger` (`:700`) leave the public relay protocol on the schedule P12 sets, together with their handlers (`:1092`, `:1125`, `:1204`). The relay keeps its mailbox, presence, rendezvous and quota surfaces exactly as they are. Playbook §6.5's closing line is the test of whether this ruling landed: "The relay remains usable without push credentials because push no longer lives there" (`:510`).
 
+> **AMENDED (2026-08-22, seamless self-host wave, bead agents-tracker-2bmk; committee-reviewed):**
+> P1's removal stands as the target, but its schedule is deferred and one configuration is carved
+> out while the gateway path cannot yet deliver a wake. As of this date the split gateway is not
+> end-to-end operable: `cmd/swarm-pushgw`'s attestor refuses every registration by design
+> (`notImplementedAttestor`, PG-AUTH-11/13 — Play Integrity console setup is undone owner work),
+> the phone refuses to fabricate a verdict (`mobile/pushgateway.go`), and P12's per-pairing
+> conveyance (PG-MIG-2: address allocation, authenticated pairing-update acknowledgement, the
+> machine-side capability signal) is unbuilt (`internal/remotegw/pushtransport.go`, its own SCOPE
+> HONESTY header). For a deployment steered onto the gateway path the real alternative today is
+> therefore not "the split" but "no push at all", which B16 priced and this document's own
+> alternatives section rejects. Accordingly: **the application-owner deployment — the one
+> deployment whose relay operator is the owner of the application's Firebase project (today
+> `swarm-8404f`) — may provision `relay.Config.PushCredentials` as a SUPPORTED configuration**,
+> under `relay-vps-deploy.md` §4a's custody rules, and the protocol ops P1 schedules for removal
+> (`token_register`, `token_delete`, `push_trigger`) stay in the public protocol for as long as
+> the exception stands. The exception sunsets when bead **agents-tracker-yxpm** closes — PG-MIG-2
+> end to end, with one REAL gateway wake proven on a handset (PB-E2E-5) — and P1/P12 then resume
+> unchanged. Two costs are recorded by name rather than implied: the FCM service-account private
+> key lives on a public internet-facing host (custody per §4a), and the relay's store holds a
+> cleartext push token per routing id (`docs/operations/metadata-disclosure.md` §1a). The
+> rejected alternative "the relay keeps the sender credential" is NOT reopened by this: its
+> objection is *distributing* one application's credential to every relay operator, and this
+> exception distributes it to no one — the operator in question already owns the project the
+> credential controls. The custody/arbitrary-wake argument for the split is dormant under that
+> identity, not void, and it revives the moment a second operator exists.
+
 **P2. `internal/remote/push` relocates verbatim; only its import direction inverts.** The OAuth exchange, the narrow scope, the retry/`UNREGISTERED` classification and the data-only high-priority body are the reviewed work of the push slice and are re-hosted, not re-derived. One structural consequence must be planned rather than discovered: the package is currently defined *against* the relay — `var _ relay.PushSink = (*FCM)(nil)` (`fcm.go:17-18`) and `Push(ctx, token string, p relay.PushPayload)` (`fcm.go:102`) — with the `PushSink`/`PushPayload` types owned by `internal/remote/relay/push.go:69-146`. The gateway becomes the owner of that seam; the relay's copy is deleted rather than left as a type nobody implements. B10's rename rationale ("the seam is renamed transport-neutral (`PushSink`/`PushPayload`) rather than keeping the APNs name for an FCM backend", `ADR-007:942-944`) applies again, in the other direction: the new home must not be named for FCM either.
 
 **P3. Play-Store Android is the first client. iOS/APNs is not the active target.** This amends the 2026-07-23 amendment item 1 (`ADR-007:286-296`) and the surviving half of D12 (`:94`). "Not the active target" is the precise claim: no APNs vocabulary remains in a normative or operational document, no Apple-account dependency gates any wave, and the D12 Xcode/device gate is dormant rather than deleted. The gomobile-bind-safe phone-core surface that the 2026-07-23 amendment justified by the two-binding argument is **kept** on its own merits — it is the seam Android binds through today — and this ADR does not license anyone to "simplify" the core by putting an unbindable type on the boundary now that only one binding exists.

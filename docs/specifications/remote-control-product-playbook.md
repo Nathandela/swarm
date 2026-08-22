@@ -984,7 +984,7 @@ The first multi-machine app version performs an atomic migration:
 - Persist one `push_transport` per pairing: `legacy_relay`, `gateway`, or `foreground_only`. A machine
   switches from legacy only after Android gateway registration, address allocation, authenticated
   pairing/update acknowledgement, and a successful gateway test wake. The state transition is
-  atomic; rollback selects one transport, never both.
+  atomic; rollback selects one transport, never both. (AMENDED 2026-08-22 with ADR-015's dated amendment: for the application-owner deployment, `legacy_relay` is a supported configuration — not merely a not-yet-migrated state — until the amendment's PG-MIG-2 sunset bead, agents-tracker-yxpm, closes.)
 - During the one compatibility window, revocation attempts both legacy and gateway deletion
   idempotently, but wake sequence/deduplication and the selected state forbid double delivery. Test
   new app/old relay, old app/new relay, interrupted migration, token rotation, rollback, and revoke
