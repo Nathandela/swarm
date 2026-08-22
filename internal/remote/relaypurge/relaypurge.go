@@ -37,8 +37,8 @@ import (
 // Obligation is one deferred relay purge: the routing id the revoke could not
 // de-authorize, the relay URL it is owed against, and when the deferral was recorded.
 type Obligation struct {
-	RoutingID  string    `json:"routing_id"`
-	RelayURL   string    `json:"owed_relay_url"`
+	RoutingID string `json:"routing_id"`
+	RelayURL  string `json:"owed_relay_url"`
 	// MachineRID is the relay routing id of the machine identity that owes the purge
 	// (round-3 codex #2): only that identity can present it. A drive under a
 	// DIFFERENT identity (machine.key lost and regenerated) must not let the new
