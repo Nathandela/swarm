@@ -868,7 +868,7 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	// registry still holds, and the next drive's live-pairing guard retires it. Only
 	// a failed record is disclosed and tolerated: refusing to revoke a lost handset
 	// because a bookkeeping write failed would invert the priorities.
-	obligated := recordPurgeObligation(stateDir, routingID, stderr)
+	obligation := recordPurgeObligation(stateDir, routingID, stderr)
 
 	if err := client.RevokeDevice(deviceID); err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: %v\n", err)
@@ -896,26 +896,39 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 		// bricked pairing), reason preserved on file (round-2 codex #3: the unlanded
 		// purge stays on the record; u37c's Done+Refusal shape). The relay-side state
 		// survives, and the operator line says exactly that.
-		resolvePurgeObligation(stateDir, routingID, purgeErr, stderr)
-		_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and its "+
-			"route (routing id %s). Nothing will re-present a refused purge; cleaning that state up at the "+
-			"relay is now a manual task.\n", routingID)
+		if resolvePurgeObligation(stateDir, routingID, purgeErr, stderr) {
+			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and "+
+				"its route (routing id %s). Nothing will re-present a refused purge; cleaning that state up "+
+				"at the relay is now a manual task.\n", routingID)
+		} else {
+			// The tombstone write failed, so the obligation is STILL PENDING and the
+			// next drive will re-present it (and gate pairing). Say that, not the
+			// resolved-world sentence (post-commit codex #4).
+			_, _ = fmt.Fprintf(stderr, "remote revoke: the handset keeps its relay mailbox, its push wake and "+
+				"its route (routing id %s). Recording the refusal failed, so the purge stays PENDING and is "+
+				"re-presented on this machine's next relay dial (`swarm remote pair` refuses until it "+
+				"settles).\n", routingID)
+		}
 	case relayPurgePending:
 		// The wording distinguishes never-reached from answered-but-clearing (a rate
 		// window, a superseded connection) -- both defer, but they are different
 		// diagnoses (round-3 codex #5).
 		_, _ = fmt.Fprintf(stderr, "remote revoke: the relay did not accept the purge, so its half of this "+
 			"revocation is PENDING: %v\n", purgeErr)
-		reportDeferredPurge(routingID, obligated, stderr)
+		reportDeferredPurge(routingID, obligation == purgeObligationRecorded, stderr)
 	case relayPurgeUnprovisioned:
-		// Two very different machines land here. One never had a relay at all -- no
-		// relay.json, so no obligation was recordable and there is genuinely nothing
-		// of ours anywhere: the old exit-0 "nothing to purge" truth, kept. The other
-		// RECORDED an obligation this run (relay.json exists) and then could not
-		// dial -- a missing machine.key (round-3 codex #2) -- and for that one an
-		// exit-0 silence would be a false claim about the owed relay.
-		if !obligated {
+		// Three machines land here (post-commit codex #2). One never had a relay at
+		// all -- nothing recordable, genuinely nothing of ours anywhere: the old
+		// exit-0 "nothing to purge" truth, kept. One recorded an obligation and could
+		// not dial (missing machine.key): exit 1 with the message below. And one OWED
+		// an obligation but the recording itself failed: also exit 1 -- the record
+		// helper already printed the abandonment -- because exit 0 would claim a
+		// relay half that neither ran nor deferred.
+		if obligation == purgeObligationNotApplicable {
 			return 0
+		}
+		if obligation == purgeObligationFailed {
+			return 1
 		}
 		_, _ = fmt.Fprintf(stderr, "remote revoke: this machine holds no relay identity (%v), so the relay half "+
 			"of this revocation could not run. The handset keeps its relay mailbox, its push wake and its "+
@@ -932,21 +945,33 @@ func performRevoke(client *protocol.Client, deviceID string, stdout, stderr io.W
 	return 1
 }
 
+// purgeObligationOutcome is recordPurgeObligation's three-valued answer (post-commit
+// codex #2): "no obligation on disk" covers two different worlds -- a machine that
+// never owed one, and a machine that owed one and could not write it -- and the
+// unprovisioned exit code must not conflate them.
+type purgeObligationOutcome int
+
+const (
+	purgeObligationNotApplicable purgeObligationOutcome = iota
+	purgeObligationRecorded
+	purgeObligationFailed
+)
+
 // recordPurgeObligation is ADR-007 D9's deferral, built (SH5, bead
 // agents-tracker-dtc5; it retires the honest-ceiling note that used to sit in
-// performRevoke). It runs BEFORE the destructive local revoke and returns whether the
-// obligation is durably on disk; a false return means the old abandonment is back for
-// this one revoke, and the caller's report says so. The obligation carries the relay
-// URL it is owed against (review D2): after a relay cutover the purge must not
-// "land" against the new relay and read as success.
-func recordPurgeObligation(stateDir, routingID string, stderr io.Writer) bool {
+// performRevoke). It runs BEFORE the destructive local revoke; a Failed outcome means
+// the old abandonment is back for this one revoke, and every caller's report says so.
+// The obligation carries the relay URL and machine identity it is owed under (reviews
+// D2, codex #2): after a relay cutover or an identity change the purge must not
+// "land" elsewhere and read as success.
+func recordPurgeObligation(stateDir, routingID string, stderr io.Writer) purgeObligationOutcome {
 	if routingID == "" || stateDir == "" {
-		return false
+		return purgeObligationNotApplicable
 	}
 	cfg, found, err := relaycfg.Load(stateDir)
 	if err != nil || !found || cfg.RelayURL == "" {
 		// Not relay-provisioned: there is no relay-side state to owe a purge of.
-		return false
+		return purgeObligationNotApplicable
 	}
 	machineRID := ""
 	if id, err := machineid.Load(filepath.Join(stateDir, "remote", remoteIdentityFile)); err == nil {
@@ -959,16 +984,16 @@ func recordPurgeObligation(stateDir, routingID string, stderr io.Writer) bool {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the deferred purge FAILED (%v); if the relay "+
 			"half of this revocation does not land below, nothing will retry it.\n", err)
-		return false
+		return purgeObligationFailed
 	}
-	return true
+	return purgeObligationRecorded
 }
 
 // resolvePurgeObligation tombstones the obligation for routingID after a substantive
 // relay refusal: Pending no longer gates on it, the reason stays on file.
-func resolvePurgeObligation(stateDir, routingID string, reason error, stderr io.Writer) {
+func resolvePurgeObligation(stateDir, routingID string, reason error, stderr io.Writer) bool {
 	if routingID == "" || stateDir == "" {
-		return
+		return true
 	}
 	store, err := relaypurge.Open(relaypurge.StorePath(stateDir))
 	if err == nil {
@@ -976,7 +1001,9 @@ func resolvePurgeObligation(stateDir, routingID string, reason error, stderr io.
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "remote revoke: recording the refusal failed: %v\n", err)
+		return false
 	}
+	return true
 }
 
 // retirePurgeObligation settles the obligation for routingID after an acknowledged
@@ -1976,6 +2003,11 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "remote control: OFF (device-derived; no devices paired)")
 	}
 
+	// The deferred-purge ledger reads LOCAL state, so it prints before the roster's
+	// daemon-unreachable early return (post-commit codex #3): owed purges and refusal
+	// tombstones must not disappear exactly when the daemon is down.
+	reportRelayPurgeState(stateDir, stdout)
+
 	// Roster.
 	if listErr != nil {
 		_, _ = fmt.Fprintf(stdout, "paired devices: unavailable (%v)\n", listErr)
@@ -1985,7 +2017,6 @@ func runRemoteStatus(_ []string, stdout, stderr io.Writer) int {
 	for _, d := range devices {
 		_, _ = fmt.Fprintf(stdout, "  %s  %s\n", d.DeviceID, d.Name)
 	}
-	reportRelayPurgeState(stateDir, stdout)
 	return 0
 }
 

@@ -178,10 +178,22 @@ func DriveMachineObligations(stateDir string, logf func(format string, args ...a
 				pendingLeft++
 				return err
 			case errors.Is(err, relay.ErrNotAuthorized):
-				// The relay holds no pairing with that routing id: nothing of ours to
-				// purge -- settled, not "landed".
-				logf("deferred relay purge for routing id %s settled: the relay holds no pairing "+
-					"for it", ob.RoutingID)
+				// The relay holds no pairing with that routing id UNDER THE DIALING
+				// IDENTITY. That settles the obligation only when the dialing identity
+				// is provably the one that owed it (post-commit codex #1): an
+				// obligation recorded without an identity binding (an unreadable
+				// machine.key at record time) could belong to a previous identity
+				// whose pairing survives, so it retires LOUDLY as unverifiable
+				// instead of silently as settled.
+				if ob.MachineRID != "" && ob.MachineRID == currentMachineRID {
+					logf("deferred relay purge for routing id %s settled: the relay holds no pairing "+
+						"for it", ob.RoutingID)
+					return nil
+				}
+				logf("deferred relay purge for routing id %s retired UNVERIFIED: the relay holds no "+
+					"pairing for it under this machine's current identity, but the obligation carries "+
+					"no identity binding -- if the machine identity changed since the revoke, the old "+
+					"pairing may survive at %s; verify there by hand", ob.RoutingID, ob.RelayURL)
 				return nil
 			case errors.Is(err, relay.ErrRelayAnswered):
 				// A SUBSTANTIVE refusal: the relay is reachable and answering no, and
