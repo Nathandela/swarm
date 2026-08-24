@@ -59,6 +59,9 @@ type Config struct {
 	PollInterval                                        time.Duration // engine fallback-poll cadence (E10.8); 0 = no cadence
 	StalenessThreshold                                  time.Duration
 	FakeAgentBin                                        string // DEV/TEST ONLY: resolves the reserved agent "fake"
+	// historyHome is a private test seam for the trusted daemon-user home used by
+	// lazy resume migration. Production leaves it empty and uses os.UserHomeDir.
+	historyHome string
 	// RemoteSocketPath, when non-empty, stands up the dedicated REMOTE-tier UDS the
 	// gateway dials (R-GW.8 / amendment D.0-A1), distinct from the owner-trusted main
 	// SocketPath. Every connection on it is unconditionally remote-origin, so every
@@ -291,6 +294,11 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	historyHome := cfg.historyHome
+	if historyHome == "" {
+		historyHome, _ = os.UserHomeDir()
+	}
+	d.api.historyResolver = newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits)
 	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
 	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
 	// the remote-tier capability gate consults. Wired here and nowhere else, so there is

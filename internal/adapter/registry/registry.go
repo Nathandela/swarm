@@ -23,7 +23,7 @@ import (
 // probes (E9.5).
 var constructors = map[string]func() adapter.Adapter{
 	"agy":       agy.New,
-	"claude":    claude.New,
+	"claude":    func() adapter.Adapter { return claude.New() },
 	"codex":     codex.New,
 	"opencode":  opencode.New,
 	"reference": func() adapter.Adapter { return refadapter.New(adapter.Fixture{}) },

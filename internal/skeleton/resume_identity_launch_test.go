@@ -160,6 +160,69 @@ func TestResumeMigration_ExistingIDBypassesHistoryResolver(t *testing.T) {
 	}
 }
 
+// TestResumeMigration_PreexistingConversationIDMustBeCanonical hardens legacy rows written by
+// the former permissive terminal extractors. A crafted nonempty token must not be interpreted as
+// a provider resume argument (Claude's optional --resume value is especially sensitive). The
+// API refuses it generically before history, argv resolution, or spawn and leaves the old row
+// untouched for explicit operator repair.
+func TestResumeMigration_PreexistingConversationIDMustBeCanonical(t *testing.T) {
+	for _, tc := range []struct {
+		agent     string
+		invalidID string
+		canonical string
+	}{
+		{"codex", "legacy-codex-token-do-not-leak", migratedConversationID},
+		{"claude", "--permission-mode=unsafe-do-not-leak", legacyClaudeID},
+	} {
+		t.Run(tc.agent+" rejects noncanonical", func(t *testing.T) {
+			resolver := &fakeResumeHistoryResolver{result: resumeHistoryResult{
+				Outcome: resumeHistoryFound, ConversationID: tc.canonical,
+			}}
+			r := newResumeAPIRig(t, tc.agent, tc.invalidID, resolver)
+			before := len(r.core.List())
+			beforeMeta := r.meta(t)
+			_, err := r.api.Launch(r.launchSpec(tc.agent))
+			requireStopsBeforeProviderSpawn(t, r, err, before)
+			lower := strings.ToLower(err.Error())
+			if !strings.Contains(lower, "resume") || !strings.Contains(lower, "invalid") {
+				t.Fatalf("noncanonical stored-id error = %v, want generic invalid-resume refusal", err)
+			}
+			if strings.Contains(lower, "binary") {
+				t.Fatalf("noncanonical stored id reached argv/binary resolution: %v", err)
+			}
+			if resolver.callCount() != 0 {
+				t.Fatalf("noncanonical stored id caused %d history scan(s)", resolver.callCount())
+			}
+			after := r.meta(t)
+			if after.ConversationID != beforeMeta.ConversationID {
+				t.Fatalf("noncanonical stored id changed from %q to %q", beforeMeta.ConversationID, after.ConversationID)
+			}
+			for _, secret := range []string{tc.invalidID, r.stateDir, beforeMeta.Cwd} {
+				if secret != "" && strings.Contains(err.Error(), secret) {
+					t.Fatalf("noncanonical stored-id error leaked private value %q: %v", secret, err)
+				}
+			}
+		})
+
+		t.Run(tc.agent+" accepts canonical", func(t *testing.T) {
+			resolver := &fakeResumeHistoryResolver{result: resumeHistoryResult{Outcome: resumeHistoryAmbiguous}}
+			r := newResumeAPIRig(t, tc.agent, tc.canonical, resolver)
+			before := len(r.core.List())
+			_, err := r.api.Launch(r.launchSpec(tc.agent))
+			requireStopsBeforeProviderSpawn(t, r, err, before)
+			if !strings.Contains(strings.ToLower(err.Error()), "binary") {
+				t.Fatalf("canonical stored id did not reach normal resume argv resolution: %v", err)
+			}
+			if resolver.callCount() != 0 {
+				t.Fatalf("canonical stored id caused %d history scan(s), want bypass", resolver.callCount())
+			}
+			if got := r.meta(t).ConversationID; got != tc.canonical {
+				t.Fatalf("canonical stored id changed to %q, want %q", got, tc.canonical)
+			}
+		})
+	}
+}
+
 // TestResumeMigration_UniqueMatchPersistsBeforeComposition proves lazy migration commits at the
 // pre-compose seam. The deliberately missing provider binary fails later; that failure must not
 // roll back the source identity or stamp a new session.

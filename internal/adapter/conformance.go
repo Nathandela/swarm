@@ -83,6 +83,7 @@ func CheckConformance(a Adapter) []error {
 	errs = append(errs, checkSignalSources(a)...)
 	errs = append(errs, checkResume(a)...)
 	errs = append(errs, checkExtract(a)...)
+	errs = append(errs, checkConversationIdentitySource(a)...)
 	errs = append(errs, checkInteractionSource(a)...)
 	return errs
 }
@@ -347,6 +348,9 @@ func checkParallelDeterministic(t *testing.T, a Adapter) {
 		go func() {
 			got, _ := a.Command(spec)
 			_, _ = a.ExtractConversationID(nil, []byte("conv-id=zzz"))
+			if src, ok := AsConversationIdentitySource(a); ok {
+				_, _ = src.ConversationIDFromEvent(HookPayload{Raw: json.RawMessage(`{}`)})
+			}
 			_ = a.Options()
 			_ = a.SignalSources()
 			_, _ = a.ParseVersion("probe 1.2.3")
@@ -358,6 +362,51 @@ func checkParallelDeterministic(t *testing.T, a Adapter) {
 			t.Errorf("Command not deterministic across goroutines: %v != %v", got, want)
 		}
 	}
+}
+
+func checkConversationIdentitySource(a Adapter) []error {
+	src, ok := AsConversationIdentitySource(a)
+	if !ok {
+		return nil
+	}
+	probes := []HookPayload{
+		{},
+		{Event: "Stop", Raw: json.RawMessage(``)},
+		{Event: "Stop", Raw: json.RawMessage(`{}`)},
+		{Event: "Stop", Raw: json.RawMessage(`{"session_id":`)},
+		{Event: "Stop", Raw: json.RawMessage("\x00\xff not json")},
+		{Event: "Stop", Raw: json.RawMessage(`{"padding":"` + strings.Repeat("x", (1<<20)+1) + `"}`)},
+	}
+	var errs []error
+	for _, probe := range probes {
+		id, found, panicked := conversationIdentitySafe(src, probe)
+		if panicked {
+			errs = append(errs, fmt.Errorf("ConversationIDFromEvent panicked on event %q; it must be total", probe.Event))
+			continue
+		}
+		againID, againFound, againPanicked := conversationIdentitySafe(src, probe)
+		if againPanicked {
+			errs = append(errs, fmt.Errorf("ConversationIDFromEvent panicked on its deterministic recheck for event %q; it must be total on every invocation", probe.Event))
+			continue
+		}
+		if id != againID || found != againFound {
+			errs = append(errs, fmt.Errorf("ConversationIDFromEvent is not deterministic on event %q", probe.Event))
+		}
+		if found && !IsCanonicalConversationID(id) {
+			errs = append(errs, fmt.Errorf("ConversationIDFromEvent returned ok with non-canonical id %q", id))
+		}
+	}
+	return errs
+}
+
+func conversationIdentitySafe(src ConversationIdentitySource, p HookPayload) (id string, ok, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	id, ok = src.ConversationIDFromEvent(p)
+	return
 }
 
 // probeOptions builds a representative option map from an adapter's schema so a

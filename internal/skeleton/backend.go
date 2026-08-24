@@ -242,18 +242,30 @@ func (d *Daemon) authorCapabilitiesForBackend(local string, live bool) {
 // exactly one agent and exactly one thread. Overwriting on a later `thread/started` would
 // point a live session's composer at a thread nobody is reading.
 func (d *Daemon) adoptBackendThread(local, threadID string) {
-	if threadID == "" {
+	if !adapter.IsCanonicalConversationID(threadID) {
 		return
 	}
 	d.backend.mu.Lock()
-	defer d.backend.mu.Unlock()
 	if d.backend.adopted == nil {
 		d.backend.adopted = map[string]string{}
 	}
-	if _, ok := d.backend.adopted[local]; ok {
+	accepted, adopted := d.backend.adopted[local]
+	if !adopted {
+		d.backend.adopted[local] = threadID
+		accepted = threadID
+	}
+	d.backend.mu.Unlock()
+	if accepted != threadID {
 		return
 	}
-	d.backend.adopted[local] = threadID
+	// Persistence is outside backend.mu: metadata I/O may fsync, while the backend
+	// lock is the leaf protecting live routing. Repeated notification of the same
+	// accepted id deliberately retries a transient write failure.
+	if d.core != nil {
+		if err := d.core.SetConversationID(local, threadID); err != nil {
+			log.Printf("skeleton: could not persist backend conversation identity for session %s", local)
+		}
+	}
 }
 
 // adoptedThread returns the thread id the agent created for this session, if it has been
@@ -422,6 +434,15 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		// shape degrades to the grid heuristic rather than killing the pump.
 		return
 	}
+	// The provider-owned thread id is committed before pump.emitMu is acquired.
+	// A metadata fsync must never hold the producer ordering lock and delay every
+	// other frame. Strict path decoding rejects duplicate identity keys that the
+	// ordinary projection above would silently collapse.
+	if fr.Method == backendStartedMethod {
+		if threadID, ok := backendStartedThreadID(frame); ok {
+			d.adoptBackendThread(local, threadID)
+		}
+	}
 	if fr.Method == backendDeltaMethod && fr.Params.ItemID != "" {
 		d.foldDelta(local, fr.Params.ItemID, fr.Params.Delta, frame, receivedAtMs)
 		return
@@ -434,6 +455,27 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		d.releaseFoldLocked(local)
 	}
 	d.emitBackendFrame(local, fr, frame, receivedAtMs)
+}
+
+func backendStartedThreadID(frame []byte) (string, bool) {
+	envelope, ok := decodeStrictObject(frame)
+	if !ok {
+		return "", false
+	}
+	method, ok := strictJSONString(envelope["method"])
+	if !ok || method != backendStartedMethod {
+		return "", false
+	}
+	params, ok := decodeStrictObject(envelope["params"])
+	if !ok {
+		return "", false
+	}
+	thread, ok := decodeStrictObject(params["thread"])
+	if !ok {
+		return "", false
+	}
+	id, ok := strictJSONString(thread["id"])
+	return id, ok && adapter.IsCanonicalConversationID(id)
 }
 
 // backendFoldPassthrough names the frames that CANNOT REORDER an open agentMessage fold, and so
@@ -567,14 +609,6 @@ func synthesizeDelta(b *deltaBatch) ([]byte, bool) {
 func (d *Daemon) emitBackendFrame(local string, fr backendFrame, raw []byte, receivedAtMs int64) {
 	if fr.Method == "" {
 		return
-	}
-	if fr.Method == backendStartedMethod {
-		// THE AGENT'S OWN THREAD, announced by the server to every attached client
-		// (RECORDED: frame-samples.json -- the R1 gate's observer received this notification
-		// for a thread the TUI created, having started none of its own). Noted here, at the
-		// pump, because the pump is the only party that sees every frame; joinSessionBackend
-		// waits on it.
-		d.adoptBackendThread(local, fr.Params.Thread.ID)
 	}
 	if d.eng != nil {
 		if err := d.eng.ApplyTypedEvent(local, fr.Method, nil); err != nil {

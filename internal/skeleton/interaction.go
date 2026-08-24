@@ -172,14 +172,27 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 	if !ok {
 		return
 	}
-	d.captureInteractions(cb.SessionID, ad, adapter.HookPayload{
+	payload := adapter.HookPayload{
 		Event: cb.Event,
 		// The CLI's OWN event body, kept whole by `swarm hook` for this event's capture=raw row
 		// and carried on the callback (ADR-010 §6). It is what the flattened Payload structurally
 		// cannot hold: `tool_input`, `tool_response` and a diff are nested objects.
 		Raw:          cb.Raw,
 		ReceivedAtMs: time.Now().UnixMilli(),
-	})
+	}
+	// ingestHookBytes authenticated this callback before reaching this function.
+	// Persist identity before shaping so the durable resume seam cannot be skipped
+	// by an adapter that produces no interaction for this event. A write failure is
+	// best-effort for the callback and never suppresses its transcript item; a later
+	// event carrying the same id retries SetConversationID.
+	if identity, ok := adapter.AsConversationIdentitySource(ad); ok {
+		if id, ok := identity.ConversationIDFromEvent(payload); ok {
+			if err := d.core.SetConversationID(cb.SessionID, id); err != nil {
+				log.Printf("skeleton: could not persist authenticated conversation identity for session %s", cb.SessionID)
+			}
+		}
+	}
+	d.captureInteractions(cb.SessionID, ad, payload)
 }
 
 // captureInteractions shapes one captured event body into items and offers each to the append

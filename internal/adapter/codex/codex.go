@@ -19,6 +19,9 @@
 package codex
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"strings"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -174,29 +177,100 @@ func optionFlags(opts map[string]string) []string {
 	return flags
 }
 
-// threadIDFrom extracts the double-quoted value of the JSON "threadId" field from
-// s (Codex's app-server conversation id). It is total: an absent field, missing
-// colon/quotes, or empty value yields ("", false), and it never panics on any
-// input. It tolerates optional whitespace between the key, the colon, and the value.
+// threadIDFrom accepts canonical threadId values only from complete JSON-object
+// lines. Duplicate keys, trailing JSON, malformed objects, marker-shaped prose,
+// and conflicting ids fail closed. The recursive walk preserves compatibility
+// with recorded Codex app-server envelopes while remaining total and bounded.
 func threadIDFrom(s string) (string, bool) {
-	i := strings.Index(s, threadIDKey)
-	if i < 0 {
+	if len(s) > 1<<20 {
 		return "", false
 	}
-	rest := s[i+len(threadIDKey):]
-	j := 0
-	for j < len(rest) && (rest[j] == ':' || rest[j] == ' ' || rest[j] == '\t') {
-		j++
+	var found string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, threadIDKey) {
+			continue
+		}
+		if line == "" || line[0] != '{' {
+			return "", false
+		}
+		ids, ok := threadIDsFromJSONObject([]byte(line))
+		if !ok || len(ids) == 0 {
+			return "", false
+		}
+		for _, id := range ids {
+			if !adapter.IsCanonicalConversationID(id) || found != "" && found != id {
+				return "", false
+			}
+			found = id
+		}
 	}
-	if j >= len(rest) || rest[j] != '"' {
-		return "", false
+	return found, found != ""
+}
+
+func threadIDsFromJSONObject(raw []byte) ([]string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	var ids []string
+	if !walkThreadIDJSON(dec, &ids) {
+		return nil, false
 	}
-	rest = rest[j+1:]
-	end := strings.IndexByte(rest, '"')
-	if end <= 0 {
-		return "", false // no closing quote (end<0) or an empty value (end==0)
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
 	}
-	return rest[:end], true
+	return ids, true
+}
+
+func walkThreadIDJSON(dec *json.Decoder, ids *[]string) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return false
+	}
+	delim, compound := tok.(json.Delim)
+	if !compound {
+		return true
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return false
+			}
+			key, ok := keyTok.(string)
+			if !ok {
+				return false
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return false
+			}
+			seen[key] = struct{}{}
+			if key == "threadId" {
+				value, err := dec.Token()
+				id, ok := value.(string)
+				if err != nil || !ok || !adapter.IsCanonicalConversationID(id) {
+					return false
+				}
+				*ids = append(*ids, id)
+				continue
+			}
+			if !walkThreadIDJSON(dec, ids) {
+				return false
+			}
+		}
+		end, err := dec.Token()
+		return err == nil && end == json.Delim('}')
+	case '[':
+		for dec.More() {
+			if !walkThreadIDJSON(dec, ids) {
+				return false
+			}
+		}
+		end, err := dec.Token()
+		return err == nil && end == json.Delim(']')
+	default:
+		return false
+	}
 }
 
 // gridText concatenates a snapshot's visible text, newline-separated. It is

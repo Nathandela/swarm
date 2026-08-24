@@ -130,7 +130,7 @@ Derived view groups:
 ### Persistence (R) (ADR-003)
 
 - **R-1** (Ubiquitous) State SHALL live under `$XDG_STATE_HOME/swarm` (fallback `~/.local/state/swarm`), 0700: `sessions/<id>/meta.json` (source of truth, atomic temp+rename writes, `schema_version`) + transcript files (0600, capped, rotated); `roster.json` is a rebuildable index only.
-- **R-2** (Optional) WHERE an adapter supports resume and a native conversation id was captured (S-2), an ended/lost session SHALL offer relaunch-with-resume as a **new session** linked via `resumed_from`.
+- **R-2** (Optional) WHERE an adapter supports resume and a native conversation id was captured (S-2), an ended/lost session SHALL offer relaunch-with-resume as a **new session** linked via `resumed_from`. WHERE an ended/lost Codex or Claude session predates durable capture, an explicit resume SHALL first attempt one bounded, trusted-home, fail-closed recovery of a unique provider-history identity and persist the winner write-once before composing argv. Missing, malformed, unsafe, unreadable, or ambiguous history SHALL refuse the resume and SHALL NOT fall through to a fresh launch. Providers without a characterized history format SHALL retain the captured-id-only behavior.
 - **R-3** (Ubiquitous) Completed sessions SHALL remain listed until the user deletes them (Ctrl+X on a completed row deletes; deletion tears down worktrees per S-3 when present).
 
 ### Non-functional (N)

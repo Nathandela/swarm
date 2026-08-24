@@ -436,8 +436,11 @@ func (d *Daemon) discoverLoadedThread(conn backendConn) (string, error) {
 				"which one the owner is looking at is not a choice this daemon may make",
 			len(loaded.Data)))
 	}
-	if loaded.Data[0] == "" {
-		return "", errBackendProbe("thread/loaded/list named a thread with no id")
+	if !adapter.IsCanonicalConversationID(loaded.Data[0]) {
+		// The raw provider value is untrusted and may contain prose or control
+		// characters. Refuse it before thread/resume, routing registration, or any
+		// log call, and expose only a stable generic diagnostic.
+		return "", errBackendProbe("thread/loaded/list returned an invalid thread identity")
 	}
 	return loaded.Data[0], nil
 }

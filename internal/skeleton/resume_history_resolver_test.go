@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -53,6 +54,17 @@ func resolveHistoryWithBeforeOpen(t *testing.T, home string, limits resumeHistor
 	t.Helper()
 	resolver := newFilesystemResumeHistoryResolver(home, limits)
 	resolver.beforeOpen = beforeOpen // private, test-only filesystem race seam; nil in production
+	return resolver.Resolve(m)
+}
+
+func resolveHistoryWithAliasHooks(t *testing.T, home string, limits resumeHistoryLimits, m persist.Meta,
+	beforeAliasReadlink, beforeAliasTargetOpen func(string), beforeOpen func(string),
+) resumeHistoryResult {
+	t.Helper()
+	resolver := newFilesystemResumeHistoryResolver(home, limits)
+	resolver.beforeAliasReadlink = beforeAliasReadlink     // private deterministic alias race seam
+	resolver.beforeAliasTargetOpen = beforeAliasTargetOpen // private deterministic alias race seam
+	resolver.beforeOpen = beforeOpen
 	return resolver.Resolve(m)
 }
 
@@ -218,6 +230,9 @@ func TestResumeHistory_CodexRejectsAmbiguousOrBrokenCandidateGraphs(t *testing.T
 		{"cycle", func(t *testing.T, home, cwd string) {
 			writeCodexHistory(t, home, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), legacyCodexChildID, "subagent", "")
 			writeCodexHistory(t, home, legacyCodexChildID, cwd, legacyCreatedAt.Add(2*time.Second), legacyCodexRootID, "subagent", "")
+		}},
+		{"sole self-parent cycle", func(t *testing.T, home, cwd string) {
+			writeCodexHistory(t, home, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), legacyCodexRootID, "subagent", "")
 		}},
 		{"one root plus unrelated external lineage", func(t *testing.T, home, cwd string) {
 			writeCodexHistory(t, home, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
@@ -404,6 +419,57 @@ func TestResumeHistory_ClaudeFindsTheFirstIdentityRecordWithinTheBoundedPrefix(t
 	requireHistoryResult(t, got, resumeHistoryFound, legacyClaudeID)
 }
 
+// TestResumeHistory_ClaudeAllowsCanonicalIdentityOnlyPrefixRecords pins Claude 2.1.235's
+// real transcript shape. Its earliest records may identify the session without yet carrying
+// cwd/time evidence. Those partial rows may advance the bounded scan only when their canonical
+// id already agrees with the filename; the first complete row supplies the recovery evidence.
+func TestResumeHistory_ClaudeAllowsCanonicalIdentityOnlyPrefixRecords(t *testing.T) {
+	cwd := "/work/project"
+	ts := legacyCreatedAt.Add(time.Second).Format(time.RFC3339Nano)
+
+	t.Run("three same-id partial records then complete evidence", func(t *testing.T) {
+		home := t.TempDir()
+		partial := fmt.Sprintf(`{"sessionId":%q,"type":"queue-operation"}`+"\n", legacyClaudeID)
+		body := strings.Repeat(partial, 3) +
+			fmt.Sprintf(`{"sessionId":%q,"cwd":%q,"timestamp":%q}`+"\n", legacyClaudeID, cwd, ts)
+		writeRawClaudeHistory(t, home, legacyClaudeID, cwd, body)
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("claude", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryFound, legacyClaudeID)
+	})
+
+	for _, tc := range []struct {
+		name  string
+		first string
+	}{
+		{
+			name:  "partial id conflicts with filename",
+			first: fmt.Sprintf(`{"sessionId":%q}`, legacyClaudeOtherID),
+		},
+		{
+			name:  "partial id is malformed",
+			first: `{"sessionId":"not-a-canonical-uuid"}`,
+		},
+		{
+			name:  "partial record has cwd only",
+			first: fmt.Sprintf(`{"sessionId":%q,"cwd":%q}`, legacyClaudeID, cwd),
+		},
+		{
+			name:  "partial record has timestamp only",
+			first: fmt.Sprintf(`{"sessionId":%q,"timestamp":%q}`, legacyClaudeID, ts),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			complete := fmt.Sprintf(`{"sessionId":%q,"cwd":%q,"timestamp":%q}`+"\n", legacyClaudeID, cwd, ts)
+			writeRawClaudeHistory(t, home, legacyClaudeID, cwd, tc.first+"\n"+complete)
+
+			got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("claude", cwd, legacyCreatedAt))
+			requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+		})
+	}
+}
+
 // TestResumeHistory_ClaudeUsesProviderProjectDirectoryEncoding pins Claude's actual mapping:
 // every non-ASCII-alphanumeric cwd character becomes '-', not only path separators. Dots,
 // spaces and underscores occur in ordinary worktree paths on this VM.
@@ -556,6 +622,280 @@ func TestResumeHistory_ClaudeRequiresCanonicalFilenameIdentityAndFirstBearingRec
 	})
 }
 
+// TestResumeHistory_AllowsAbsoluteInHomeProviderRootAliases pins this VM's real provider
+// layout: ~/.codex and ~/.claude are absolute symlinks to strict descendants of the same
+// trusted home. Only these first provider components receive this narrow compatibility rule;
+// target traversal remains rooted at home and no link below the provider root is allowed.
+func TestResumeHistory_AllowsAbsoluteInHomeProviderRootAliases(t *testing.T) {
+	t.Run("Codex", func(t *testing.T) {
+		home := t.TempDir()
+		providerParent := filepath.Join(home, "data", "runtime", "state")
+		cwd := filepath.Join(home, "work")
+		writeCodexHistory(t, providerParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		target := filepath.Join(providerParent, ".codex")
+		if err := os.Symlink(target, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryFound, legacyCodexRootID)
+	})
+
+	t.Run("Claude", func(t *testing.T) {
+		home := t.TempDir()
+		providerParent := filepath.Join(home, "data", "runtime", "state")
+		cwd := filepath.Join(home, "work")
+		writeClaudeHistory(t, providerParent, legacyClaudeID, cwd, legacyCreatedAt.Add(time.Second), "", "")
+		target := filepath.Join(providerParent, ".claude")
+		if err := os.Symlink(target, filepath.Join(home, ".claude")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("claude", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryFound, legacyClaudeID)
+	})
+}
+
+func TestResumeHistory_ProviderRootAliasPolicyRejectsUntrustedTargets(t *testing.T) {
+	t.Run("relative in-home alias is outside the narrow compatibility contract", func(t *testing.T) {
+		home := t.TempDir()
+		providerParent := filepath.Join(home, "data", "runtime", "state")
+		cwd := filepath.Join(home, "work")
+		writeCodexHistory(t, providerParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		target := filepath.Join("data", "runtime", "state", ".codex")
+		if err := os.Symlink(target, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("absolute target containing lexical dot-dot is rejected", func(t *testing.T) {
+		home := t.TempDir()
+		providerParent := filepath.Join(home, "data", "runtime", "state")
+		cwd := filepath.Join(home, "work")
+		writeCodexHistory(t, providerParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		// Build this textually: filepath.Join would erase the lexical ".." that the
+		// alias policy must reject before any cleaning or target traversal.
+		target := filepath.Join(home, "data", "discard") + string(os.PathSeparator) + "../runtime/state/.codex"
+		if err := os.Symlink(target, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("target equal to home is rejected", func(t *testing.T) {
+		home := t.TempDir()
+		cwd := filepath.Join(home, "work")
+		if err := os.Symlink(home, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("home-prefix confusion remains outside home", func(t *testing.T) {
+		base := t.TempDir()
+		home := filepath.Join(base, "home")
+		outside := filepath.Join(base, "home-attacker")
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cwd := filepath.Join(home, "work")
+		writeCodexHistory(t, outside, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		if err := os.Symlink(filepath.Join(outside, ".codex"), filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+}
+
+// TestResumeHistory_ProviderRootAliasTargetDepthIsBounded prevents an otherwise-safe alias
+// from forcing arbitrarily many rooted opens. The explicit policy limit is 64 components
+// relative to trusted home, including the terminal provider directory; the live VM uses far
+// fewer. Validation must count before traversal, while the exact boundary remains usable.
+func TestResumeHistory_ProviderRootAliasTargetDepthIsBounded(t *testing.T) {
+	const maxAliasTargetComponents = 64
+	buildTarget := func(t *testing.T, home string, components int) (cwd, target string) {
+		t.Helper()
+		if components < 1 {
+			t.Fatal("alias target needs a terminal provider component")
+		}
+		parts := make([]string, components-1)
+		for i := range parts {
+			parts[i] = fmt.Sprintf("d%02d", i)
+		}
+		providerParent := filepath.Join(append([]string{home}, parts...)...)
+		cwd = filepath.Join(home, "work")
+		writeCodexHistory(t, providerParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		return cwd, filepath.Join(providerParent, ".codex")
+	}
+
+	t.Run("exact maximum accepted", func(t *testing.T) {
+		home := t.TempDir()
+		cwd, target := buildTarget(t, home, maxAliasTargetComponents)
+		if err := os.Symlink(target, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryFound, legacyCodexRootID)
+	})
+
+	t.Run("maximum plus one rejected before traversal", func(t *testing.T) {
+		home := t.TempDir()
+		cwd, target := buildTarget(t, home, maxAliasTargetComponents+1)
+		if err := os.Symlink(target, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+		opens := 0
+		got := resolveHistoryWithBeforeOpen(t, home, generousResumeHistoryLimits(),
+			legacySource("codex", cwd, legacyCreatedAt), func(string) { opens++ })
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+		if opens != 0 {
+			t.Fatalf("over-depth alias opened %d target component(s) before rejection; want policy validation before traversal", opens)
+		}
+	})
+}
+
+// TestResumeHistory_ProviderRootAliasRejectsSymlinksInsideResolvedTarget ensures the narrow
+// first-component compatibility rule never degrades into EvalSymlinks-style traversal. Even
+// when the provider alias itself is absolute and lexically inside home, every resolved target
+// component, including the terminal provider directory, must be opened rooted and no-follow.
+func TestResumeHistory_ProviderRootAliasRejectsSymlinksInsideResolvedTarget(t *testing.T) {
+	t.Run("intermediate target component", func(t *testing.T) {
+		home := t.TempDir()
+		cwd := filepath.Join(home, "work")
+		actualParent := filepath.Join(home, "storage", "runtime", "state")
+		writeCodexHistory(t, actualParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		if err := os.Symlink(filepath.Join(home, "storage"), filepath.Join(home, "data")); err != nil {
+			t.Fatal(err)
+		}
+		providerTarget := filepath.Join(home, "data", "runtime", "state", ".codex")
+		if err := os.Symlink(providerTarget, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("terminal target component", func(t *testing.T) {
+		home := t.TempDir()
+		cwd := filepath.Join(home, "work")
+		actualParent := filepath.Join(home, "data", "runtime", "actual")
+		writeCodexHistory(t, actualParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		terminalTarget := filepath.Join(home, "data", "runtime", "state", "codex-provider")
+		if err := os.MkdirAll(filepath.Dir(terminalTarget), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(actualParent, ".codex"), terminalTarget); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(terminalTarget, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+}
+
+func TestResumeHistory_ProviderRootAliasReplacementAndRetargetFailClosed(t *testing.T) {
+	newCodexAliasFixture := func(t *testing.T) (home, cwd, alias, safeTarget, otherTarget string) {
+		t.Helper()
+		home = t.TempDir()
+		cwd = filepath.Join(home, "work")
+		safeParent := filepath.Join(home, "data", "runtime", "state")
+		otherParent := filepath.Join(home, "data", "runtime", "other")
+		writeCodexHistory(t, safeParent, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		writeCodexHistory(t, otherParent, legacyCodexOtherID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+		safeTarget = filepath.Join(safeParent, ".codex")
+		otherTarget = filepath.Join(otherParent, ".codex")
+		alias = filepath.Join(home, ".codex")
+		if err := os.Symlink(safeTarget, alias); err != nil {
+			t.Fatal(err)
+		}
+		return home, cwd, alias, safeTarget, otherTarget
+	}
+
+	t.Run("link inode replacement between inspect and readlink", func(t *testing.T) {
+		home, cwd, alias, safeTarget, _ := newCodexAliasFixture(t)
+		hold := alias + ".inspected"
+		swapped := false
+		beforeReadlink := func(path string) {
+			if swapped || path != alias {
+				return
+			}
+			swapped = true
+			if err := os.Rename(alias, hold); err != nil {
+				t.Fatalf("move inspected provider alias: %v", err)
+			}
+			if err := os.Symlink(safeTarget, alias); err != nil {
+				t.Fatalf("replace provider alias inode: %v", err)
+			}
+		}
+		got := resolveHistoryWithAliasHooks(t, home, generousResumeHistoryLimits(),
+			legacySource("codex", cwd, legacyCreatedAt), beforeReadlink, nil, nil)
+		if !swapped {
+			t.Fatal("resolver never exposed the provider-alias inspect/readlink boundary")
+		}
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("retarget between readlink and target traversal", func(t *testing.T) {
+		home, cwd, alias, _, otherTarget := newCodexAliasFixture(t)
+		retargeted := false
+		beforeTargetOpen := func(path string) {
+			if retargeted || path != alias {
+				return
+			}
+			retargeted = true
+			if err := os.Remove(alias); err != nil {
+				t.Fatalf("remove read provider alias: %v", err)
+			}
+			if err := os.Symlink(otherTarget, alias); err != nil {
+				t.Fatalf("retarget provider alias: %v", err)
+			}
+		}
+		got := resolveHistoryWithAliasHooks(t, home, generousResumeHistoryLimits(),
+			legacySource("codex", cwd, legacyCreatedAt), nil, beforeTargetOpen, nil)
+		if !retargeted {
+			t.Fatal("resolver never exposed the provider-alias readlink/target-open boundary")
+		}
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+
+	t.Run("retarget during rooted target traversal", func(t *testing.T) {
+		home, cwd, alias, safeTarget, otherTarget := newCodexAliasFixture(t)
+		retargeted := false
+		firstTargetComponent := filepath.Join(home, "data")
+		beforeOpen := func(path string) {
+			if retargeted || path != firstTargetComponent {
+				return
+			}
+			retargeted = true
+			if err := os.Remove(alias); err != nil {
+				t.Fatalf("remove provider alias during traversal: %v", err)
+			}
+			if err := os.Symlink(otherTarget, alias); err != nil {
+				t.Fatalf("retarget provider alias during traversal: %v", err)
+			}
+		}
+		got := resolveHistoryWithAliasHooks(t, home, generousResumeHistoryLimits(),
+			legacySource("codex", cwd, legacyCreatedAt), nil, nil, beforeOpen)
+		if !retargeted {
+			t.Fatalf("resolver did not traverse absolute alias target %q through its rooted open seam", safeTarget)
+		}
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+}
+
 func TestResumeHistory_RejectsSymlinkedRootsDirectoriesAndFiles(t *testing.T) {
 	t.Run("Codex provider root", func(t *testing.T) {
 		home := t.TempDir()
@@ -614,6 +954,17 @@ func TestResumeHistory_RejectsSymlinkedRootsDirectoriesAndFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("codex", cwd, legacyCreatedAt))
+		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
+	})
+	t.Run("Claude provider root outside home", func(t *testing.T) {
+		home := t.TempDir()
+		outside := t.TempDir()
+		cwd := "/work/project"
+		writeClaudeHistory(t, outside, legacyClaudeID, cwd, legacyCreatedAt.Add(time.Second), "", "")
+		if err := os.Symlink(filepath.Join(outside, ".claude"), filepath.Join(home, ".claude")); err != nil {
+			t.Fatal(err)
+		}
+		got := resolveHistory(t, home, generousResumeHistoryLimits(), legacySource("claude", cwd, legacyCreatedAt))
 		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
 	})
 	t.Run("Claude project root", func(t *testing.T) {
@@ -831,6 +1182,53 @@ func TestResumeHistory_RegularInodeReplacementBetweenInspectionAndOpenFailsClose
 		}
 		requireHistoryResult(t, got, resumeHistoryUnsafe, "")
 	})
+}
+
+// TestResumeHistory_CandidateReplacementWithFIFOReturnsWithoutBlocking closes the remaining
+// file-open race. A candidate that was regular at Lstat can become a FIFO before open; opening
+// it with blocking O_RDONLY would wedge explicit resume forever before fstat/SameFile can reject
+// the replacement. The resolver must open nonblocking, fail closed, and return promptly.
+func TestResumeHistory_CandidateReplacementWithFIFOReturnsWithoutBlocking(t *testing.T) {
+	home := t.TempDir()
+	cwd := filepath.Join(home, "work")
+	safe := writeCodexHistory(t, home, legacyCodexRootID, cwd, legacyCreatedAt.Add(time.Second), "", "cli", "")
+	hold := safe + ".inspected"
+	var swapped bool
+	var swapErr error
+	beforeOpen := func(path string) {
+		if swapped || filepath.Clean(path) != safe {
+			return
+		}
+		swapped = true
+		if err := os.Rename(safe, hold); err != nil {
+			swapErr = fmt.Errorf("move inspected rollout: %w", err)
+			return
+		}
+		if err := syscall.Mkfifo(safe, 0o600); err != nil {
+			swapErr = fmt.Errorf("replace rollout with FIFO: %w", err)
+		}
+	}
+
+	result := make(chan resumeHistoryResult, 1)
+	go func() {
+		result <- resolveHistoryWithBeforeOpen(t, home, generousResumeHistoryLimits(),
+			legacySource("codex", cwd, legacyCreatedAt), beforeOpen)
+	}()
+	select {
+	case got := <-result:
+		if swapErr != nil {
+			t.Fatal(swapErr)
+		}
+		if !swapped {
+			t.Fatal("resolver never exposed the rollout-file open boundary")
+		}
+		if got.ConversationID != "" || got.Outcome != resumeHistoryUnsafe && got.Outcome != resumeHistoryUnreadable {
+			t.Fatalf("FIFO replacement result = {Outcome:%v ConversationID:%q}, want bounded Unsafe/Unreadable",
+				got.Outcome, got.ConversationID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("resolver blocked opening a FIFO replacement; candidate opens must be nonblocking")
+	}
 }
 
 func TestResumeHistory_ResourceBudgetsFailClosed(t *testing.T) {

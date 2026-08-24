@@ -83,7 +83,7 @@ func buildFakeCodex(t *testing.T) string {
 // fakeCodexThreadID is the thread cmd/swarm-fake-codex announces WHEN THE AGENT ATTACHES. The
 // daemon must end up holding exactly this id, and it can only learn it from the server's own
 // broadcast.
-const fakeCodexThreadID = "01997f00-face-7000-8000-00000000cdex"
+const fakeCodexThreadID = "01997f00-face-7000-8000-00000000cde0"
 
 // r7RecordedTurnCompletedFrame is frame-samples.json's `turn/completed`, verbatim. It names the
 // same turn the recorded userMessage frame opens, and its terminal status is what IS-ENV-1
@@ -238,7 +238,7 @@ func (c *r7ResumeConn) Call(_ context.Context, method string, _, _ any) error {
 }
 
 func (c *r7ResumeConn) Respond(context.Context, json.RawMessage, any) error { return nil }
-func (c *r7ResumeConn) Close() error                                       { return nil }
+func (c *r7ResumeConn) Close() error                                        { return nil }
 
 func (c *r7ResumeConn) count() int {
 	c.mu.Lock()

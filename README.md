@@ -140,7 +140,7 @@ This is safe by design: every running session survives the restart and is reconn
 
 ## Project status
 
-Public and released — latest [`v0.11.2`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
+Public and released — latest [`v0.12.1`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
 
 One known limitation: sessions run only while the host machine is awake. Sleep pauses every agent process — they resume automatically on wake with nothing lost, but make no progress while asleep. A keep-awake option is a possible later addition (system-spec, requirement N-7).
 

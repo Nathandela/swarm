@@ -34,7 +34,7 @@ import (
 // fakeThreadID is the thread the fake app-server announces when the agent attaches. It is a
 // UUIDv7-shaped literal because that is what the real server emits (frame-samples.json), and a
 // test asserts the daemon adopted THIS id rather than one of its own.
-const fakeThreadID = "01997f00-face-7000-8000-00000000cdex"
+const fakeThreadID = "01997f00-face-7000-8000-00000000cde0"
 
 func main() {
 	if len(os.Args) < 2 {

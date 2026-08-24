@@ -247,3 +247,38 @@ func TestResumeIdentity_ThreadStartedRejectsDuplicateIdentityKeys(t *testing.T) 
 		t.Fatalf("duplicate id keys persisted ConversationID %q", got)
 	}
 }
+
+// TestResumeIdentity_DiscoverLoadedThreadRejectsNonCanonicalIDs pins the rejoin producer at
+// its earliest structured boundary. Returning an arbitrary thread/loaded/list string lets the
+// caller send it through thread/resume and backend registration before adoptBackendThread gets
+// a chance to reject persistence. Only a canonical lowercase UUID may leave discovery.
+func TestResumeIdentity_DiscoverLoadedThreadRejectsNonCanonicalIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"canonical lowercase UUID", resumeIdentityCodexID, false},
+		{"empty", "", true},
+		{"arbitrary token", "thread-42", true},
+		{"uppercase UUID", "01A00339-A80E-72A0-966F-116427B6B9CE", true},
+		{"truncated UUID", "01a00339-a80e-72a0-966f-116427b6b9c", true},
+		{"braced UUID", "{01a00339-a80e-72a0-966f-116427b6b9ce}", true},
+		{"UUID plus prose", resumeIdentityCodexID + " copied", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := newR7FakeBackend()
+			conn.reply["thread/loaded/list"] = []byte(fmt.Sprintf(`{"data":[%q]}`, tc.id))
+			got, err := (&Daemon{}).discoverLoadedThread(conn)
+			if tc.wantErr {
+				if err == nil || got != "" {
+					t.Fatalf("discoverLoadedThread(%q) = (%q, %v), want sanitized rejection", tc.id, got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.id {
+				t.Fatalf("discoverLoadedThread(%q) = (%q, %v), want canonical id", tc.id, got, err)
+			}
+		})
+	}
+}

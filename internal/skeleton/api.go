@@ -45,6 +45,14 @@ type coreAPI struct {
 	fakeAgentBin string
 	endpointID   string // this daemon's stable federation id (resume source validation)
 
+	// historyResolver performs the lazy, read-only migration for an ended/lost
+	// source whose native id predates durable capture. recoveryMu protects only
+	// the bounded in-flight map; scans and metadata I/O run outside it.
+	historyResolver       resumeHistoryResolver
+	recoveryMu            sync.Mutex
+	recoveries            map[string]*resumeRecoveryCall
+	beforeRecoveryPersist func() // private deterministic race seam; nil in production
+
 	// devices is the pinned-device registry backing R-POL.9 remote-command
 	// authorization. It is nil until wired at assembly; a nil registry authorizes
 	// nothing (authorizeCommand fails closed), so a remote-tier Server built on a
@@ -727,6 +735,15 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
 	// hands the shim, so the binary this resolves is the binary the agent runs.
 	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
+	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
+		local, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.core.Get)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		if err := a.ensureResumeConversationID(local, source); err != nil {
+			return persist.Meta{}, err
+		}
+	}
 	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
 	if err != nil {
 		return persist.Meta{}, err

@@ -93,8 +93,10 @@ var hookEvents = []struct {
 // so it is shared by value and is safe across goroutines.
 type claudeAdapter struct{}
 
-// New builds the Claude Code adapter.
-func New() adapter.Adapter { return claudeAdapter{} }
+// New builds the Claude Code adapter. Returning the concrete stateless value lets
+// callers discover its optional extensions by type assertion while it continues
+// to satisfy Adapter everywhere the frozen interface is required.
+func New() claudeAdapter { return claudeAdapter{} }
 
 func (claudeAdapter) Name() string { return "claude-code" }
 
@@ -191,6 +193,13 @@ func (claudeAdapter) ExtractConversationID(grid *vt.Snap, tail []byte) (string, 
 	return sessionIDFrom(gridText(grid))
 }
 
+// ConversationIDFromEvent reads Claude's canonical top-level session_id from an
+// authenticated hook body. The assembly authenticates the callback before this
+// pure parser is invoked.
+func (claudeAdapter) ConversationIDFromEvent(p adapter.HookPayload) (string, bool) {
+	return adapter.CanonicalTopLevelConversationID(p.Raw, "session_id")
+}
+
 // hookSettingsJSON renders the inline --settings value that installs the swarm
 // hooks per-invocation. It marshals a fixed structure (sorted map keys), so the
 // output is deterministic and valid JSON.
@@ -244,28 +253,38 @@ func optionFlags(opts map[string]string) []string {
 	return flags
 }
 
-// sessionIDFrom returns the whitespace-delimited token following the session marker
-// in s. It requires the token to be followed by a TERMINATOR (whitespace/newline):
-// a value running to EOF with no terminator is a transcript read mid-write whose id
-// may be truncated, so it is NOT accepted as complete (C3) — it will be captured on
-// a later read once the line is whole, rather than committed partial write-once. It
-// is total; an absent marker, an unterminated token, or an empty token yields
-// ("", false).
+// sessionIDFrom accepts a canonical id only from a complete, line-anchored
+// "Session " record. A value running to EOF with no terminator is a transcript
+// read mid-write and is retried after the line is complete. Multiple conflicting
+// records or marker-shaped prose fail closed.
 func sessionIDFrom(s string) (string, bool) {
-	i := strings.Index(s, sessionMarker)
-	if i < 0 {
+	if len(s) > 1<<20 {
 		return "", false
 	}
-	rest := s[i+len(sessionMarker):]
-	end := strings.IndexAny(rest, " \t\r\n")
-	if end < 0 {
-		return "", false // no terminator: the id is truncated at EOF; wait for a whole line
+	var found string
+	for _, line := range strings.SplitAfter(s, "\n") {
+		if !strings.Contains(line, sessionMarker) {
+			continue
+		}
+		left := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(left, sessionMarker) {
+			return "", false
+		}
+		rest := left[len(sessionMarker):]
+		end := strings.IndexAny(rest, " \t\r\n")
+		if end < 0 {
+			return "", false
+		}
+		id := rest[:end]
+		if !adapter.IsCanonicalConversationID(id) || strings.TrimSpace(rest[end:]) != "" {
+			return "", false
+		}
+		if found != "" && found != id {
+			return "", false
+		}
+		found = id
 	}
-	id := rest[:end]
-	if id == "" {
-		return "", false
-	}
-	return id, true
+	return found, found != ""
 }
 
 // gridText concatenates a snapshot's visible text, newline-separated. It is
