@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
@@ -60,61 +62,63 @@ func TestSpike_CommandKeyWireEncodings(t *testing.T) {
 	}
 }
 
-// TestSpike_CurrentRenameFastKeyGap records the current v0.12.1 behavior. The
-// custom rename editor switches only on key code, so Super+Arrow/Backspace are
-// accidentally treated as their one-rune unmodified forms, while Home, End,
-// and Ctrl+A/E/U are ignored.
-func TestSpike_CurrentRenameFastKeyGap(t *testing.T) {
-	newEditor := func() tea.Model {
-		s := sWorking("endpoint/s1", "codex", "~/Code/x", "building", 0)
-		s.Name = "aébc"
-		return send(newModel(t, newFakeClient(s), detectMixed()), keyRune('e'))
+// TestRename_FastEditingKeys is the production contract for native Command-key
+// events and their compatibility fallbacks. All cursor positions are rune
+// indexes: deleting left of the cursor must preserve the complete Unicode suffix.
+func TestRename_FastEditingKeys(t *testing.T) {
+	const unicodeName = "aé🐝bc"
+	end := utf8.RuneCountInString(unicodeName)
+	tests := []struct {
+		name       string
+		buffer     string
+		cursor     int
+		key        tea.KeyPressMsg
+		wantBuf    string
+		wantCursor int
+		repeat     int
+	}{
+		{name: "native command left", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper}, wantBuf: unicodeName, wantCursor: 0},
+		{name: "xterm compatible command left", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModMeta}, wantBuf: unicodeName, wantCursor: 0},
+		{name: "legacy home", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyHome}, wantBuf: unicodeName, wantCursor: 0},
+		{name: "legacy ctrl a", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}, wantBuf: unicodeName, wantCursor: 0},
+		{name: "native command right", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModSuper}, wantBuf: unicodeName, wantCursor: end},
+		{name: "xterm compatible command right", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta}, wantBuf: unicodeName, wantCursor: end},
+		{name: "legacy end", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: tea.KeyEnd}, wantBuf: unicodeName, wantCursor: end},
+		{name: "legacy ctrl e", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}, wantBuf: unicodeName, wantCursor: end},
+		{name: "native command backspace preserves unicode suffix", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "bc", wantCursor: 0},
+		{name: "legacy ctrl u preserves unicode suffix", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "bc", wantCursor: 0},
+		{name: "native command backspace at end clears buffer", buffer: unicodeName, cursor: end, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "", wantCursor: 0},
+		{name: "legacy ctrl u at end clears buffer", buffer: unicodeName, cursor: end, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "", wantCursor: 0},
+		{name: "command left at start is idempotent", buffer: unicodeName, cursor: 0, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper}, wantBuf: unicodeName, wantCursor: 0, repeat: 2},
+		{name: "command right at end is idempotent", buffer: unicodeName, cursor: end, key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta}, wantBuf: unicodeName, wantCursor: end, repeat: 2},
+		{name: "command backspace at start is idempotent", buffer: unicodeName, cursor: 0, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: unicodeName, wantCursor: 0, repeat: 2},
+		{name: "ctrl u on empty buffer is idempotent", buffer: "", cursor: 0, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "", wantCursor: 0, repeat: 2},
 	}
 
-	t.Run("modified left moves only one rune", func(t *testing.T) {
-		for _, mod := range []tea.KeyMod{tea.ModMeta, tea.ModSuper} {
-			m := send(newEditor(), tea.KeyPressMsg{Code: tea.KeyLeft, Mod: mod})
-			got := m.(rootModel).general.editCursor
-			if got != 3 {
-				t.Fatalf("modifier %v cursor = %d, want characterization value 3", mod, got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := renameEditorAt(t, tt.buffer, tt.cursor)
+			repeat := tt.repeat
+			if repeat == 0 {
+				repeat = 1
 			}
-		}
-	})
-
-	t.Run("home and ctrl a do nothing", func(t *testing.T) {
-		for _, key := range []tea.KeyPressMsg{
-			{Code: tea.KeyHome},
-			{Code: 'a', Mod: tea.ModCtrl},
-		} {
-			m := send(newEditor(), key)
-			got := m.(rootModel).general.editCursor
-			if got != 4 {
-				t.Fatalf("%s cursor = %d, want characterization value 4", key.Keystroke(), got)
+			for range repeat {
+				rm = send(rm, tt.key).(rootModel)
 			}
-		}
-	})
-
-	t.Run("super backspace deletes only one rune", func(t *testing.T) {
-		m := send(newEditor(), tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper})
-		rm := m.(rootModel)
-		if rm.general.editBuf != "aéb" || rm.general.editCursor != 3 {
-			t.Fatalf("buffer/cursor = %q/%d, want characterization value aéb/3", rm.general.editBuf, rm.general.editCursor)
-		}
-	})
-
-	t.Run("ctrl u does nothing", func(t *testing.T) {
-		m := send(newEditor(), tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
-		rm := m.(rootModel)
-		if rm.general.editBuf != "aébc" || rm.general.editCursor != 4 {
-			t.Fatalf("buffer/cursor = %q/%d, want characterization value aébc/4", rm.general.editBuf, rm.general.editCursor)
-		}
-	})
+			if rm.general.editBuf != tt.wantBuf || rm.general.editCursor != tt.wantCursor {
+				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.wantBuf, tt.wantCursor)
+			}
+			if !utf8.ValidString(rm.general.editBuf) {
+				t.Fatalf("rename edit split UTF-8: %q", rm.general.editBuf)
+			}
+		})
+	}
 }
 
-// TestSpike_PrototypeFastRenameSemantics exercises a test-only prototype of
-// the smallest cross-terminal semantic layer. It proves the desired operations
-// are rune-aware without modifying production code.
-func TestSpike_PrototypeFastRenameSemantics(t *testing.T) {
+// TestRename_PlainEditingKeysRemainSingleRuneOperations protects the existing
+// editor while fast operations are matched before their unmodified key codes.
+func TestRename_PlainEditingKeysRemainSingleRuneOperations(t *testing.T) {
+	const unicodeName = "aé🐝bc"
 	tests := []struct {
 		name       string
 		cursor     int
@@ -122,61 +126,185 @@ func TestSpike_PrototypeFastRenameSemantics(t *testing.T) {
 		wantBuf    string
 		wantCursor int
 	}{
-		{name: "native command left", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper}, wantBuf: "aébc", wantCursor: 0},
-		{name: "xterm compatible command left", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModMeta}, wantBuf: "aébc", wantCursor: 0},
-		{name: "legacy home", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyHome}, wantBuf: "aébc", wantCursor: 0},
-		{name: "legacy ctrl a", cursor: 3, key: tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}, wantBuf: "aébc", wantCursor: 0},
-		{name: "native command right", cursor: 1, key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModSuper}, wantBuf: "aébc", wantCursor: 4},
-		{name: "xterm compatible command right", cursor: 1, key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta}, wantBuf: "aébc", wantCursor: 4},
-		{name: "legacy end", cursor: 1, key: tea.KeyPressMsg{Code: tea.KeyEnd}, wantBuf: "aébc", wantCursor: 4},
-		{name: "legacy ctrl e", cursor: 1, key: tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}, wantBuf: "aébc", wantCursor: 4},
-		{name: "native command backspace", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "c", wantCursor: 0},
-		{name: "legacy ctrl u", cursor: 3, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "c", wantCursor: 0},
-		{name: "delete prefix at start is no-op", cursor: 0, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "aébc", wantCursor: 0},
-		{name: "command shift left is reserved", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper | tea.ModShift}, wantBuf: "aébc", wantCursor: 3},
-		{name: "option left is reserved", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModAlt}, wantBuf: "aébc", wantCursor: 3},
-		{name: "option backspace is reserved", cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt}, wantBuf: "aébc", wantCursor: 3},
+		{name: "left moves one rune", cursor: 3, key: keyLeft, wantBuf: unicodeName, wantCursor: 2},
+		{name: "right moves one rune", cursor: 3, key: keyRight, wantBuf: unicodeName, wantCursor: 4},
+		{name: "backspace deletes one unicode rune", cursor: 3, key: keyBackspace, wantBuf: "aébc", wantCursor: 2},
+		{name: "left at start is no-op", cursor: 0, key: keyLeft, wantBuf: unicodeName, wantCursor: 0},
+		{name: "right at end is no-op", cursor: 5, key: keyRight, wantBuf: unicodeName, wantCursor: 5},
+		{name: "backspace at start is no-op", cursor: 0, key: keyBackspace, wantBuf: unicodeName, wantCursor: 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := generalModel{editing: true, editBuf: "aébc", editCursor: tt.cursor}
-			prototypeFastRenameKey(&m, tt.key)
-			if m.editBuf != tt.wantBuf || m.editCursor != tt.wantCursor {
-				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", m.editBuf, m.editCursor, tt.wantBuf, tt.wantCursor)
-			}
-			if !utf8.ValidString(m.editBuf) {
-				t.Fatalf("prototype split UTF-8: %q", m.editBuf)
+			rm := renameEditorAt(t, unicodeName, tt.cursor)
+			rm = send(rm, tt.key).(rootModel)
+			if rm.general.editBuf != tt.wantBuf || rm.general.editCursor != tt.wantCursor {
+				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.wantBuf, tt.wantCursor)
 			}
 		})
 	}
 }
 
-func prototypeFastRenameKey(m *generalModel, k tea.KeyPressMsg) {
-	runeCount := utf8.RuneCountInString(m.editBuf)
-	switch {
-	case k.Code == tea.KeyHome && k.Mod == 0,
-		k.Code == tea.KeyLeft && isPrototypeCommandModifier(k.Mod),
-		k.Code == 'a' && k.Mod == tea.ModCtrl:
-		m.editCursor = 0
-	case k.Code == tea.KeyEnd && k.Mod == 0,
-		k.Code == tea.KeyRight && isPrototypeCommandModifier(k.Mod),
-		k.Code == 'e' && k.Mod == tea.ModCtrl:
-		m.editCursor = runeCount
-	case k.Code == tea.KeyBackspace && k.Mod == tea.ModSuper,
-		k.Code == 'u' && k.Mod == tea.ModCtrl:
-		runes := []rune(m.editBuf)
-		if m.editCursor < 0 {
-			m.editCursor = 0
-		}
-		if m.editCursor > len(runes) {
-			m.editCursor = len(runes)
-		}
-		m.editBuf = string(runes[m.editCursor:])
-		m.editCursor = 0
+// TestRename_PrintableTextStillInsertsWithModifiers prevents exact-modifier
+// matching from becoming a blanket modifier filter. Shifted characters,
+// Option-produced text, and multi-rune IME text are still ordinary input when
+// Bubble Tea supplies non-empty Text.
+func TestRename_PrintableTextStillInsertsWithModifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+		want string
+	}{
+		{name: "shifted character", key: tea.KeyPressMsg{Code: 'a', Text: "A", Mod: tea.ModShift}, want: "aAb"},
+		{name: "option produced unicode", key: tea.KeyPressMsg{Code: 'é', Text: "é", Mod: tea.ModAlt}, want: "aéb"},
+		{name: "multi rune IME text", key: tea.KeyPressMsg{Text: "漢字"}, want: "a漢字b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := renameEditorAt(t, "ab", 1)
+			rm = send(rm, tt.key).(rootModel)
+			if rm.general.editBuf != tt.want || rm.general.editCursor != utf8.RuneCountInString(tt.want)-1 {
+				t.Fatalf("printable input buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.want, utf8.RuneCountInString(tt.want)-1)
+			}
+		})
 	}
 }
 
-func isPrototypeCommandModifier(mod tea.KeyMod) bool {
-	return mod == tea.ModSuper || mod == tea.ModMeta
+// TestRename_UnsupportedModifiedEditingKeysAreNoOps ensures an unrecognized
+// modified navigation/deletion gesture cannot silently degrade to the plain
+// one-rune operation. Fast bindings intentionally require an exact modifier.
+func TestRename_UnsupportedModifiedEditingKeysAreNoOps(t *testing.T) {
+	const unicodeName = "aé🐝bc"
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{name: "super shift left", key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper | tea.ModShift}},
+		{name: "meta shift left", key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModMeta | tea.ModShift}},
+		{name: "option left", key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModAlt}},
+		{name: "ctrl left", key: tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModCtrl}},
+		{name: "super shift right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModSuper | tea.ModShift}},
+		{name: "meta shift right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta | tea.ModShift}},
+		{name: "option right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModAlt}},
+		{name: "ctrl right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl}},
+		{name: "meta backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModMeta}},
+		{name: "super shift backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper | tea.ModShift}},
+		{name: "option backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt}},
+		{name: "ctrl backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModCtrl}},
+		{name: "modified home", key: tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModMeta}},
+		{name: "modified end", key: tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModSuper}},
+		{name: "ctrl shift a", key: tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl | tea.ModShift}},
+		{name: "ctrl shift e", key: tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl | tea.ModShift}},
+		{name: "ctrl shift u", key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl | tea.ModShift}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := renameEditorAt(t, unicodeName, 3)
+			rm = send(rm, tt.key).(rootModel)
+			if rm.general.editBuf != unicodeName || rm.general.editCursor != 3 {
+				t.Fatalf("unsupported %s changed buffer/cursor to %q/%d", tt.key.Keystroke(), rm.general.editBuf, rm.general.editCursor)
+			}
+		})
+	}
+}
+
+func TestRename_FastNavigationKeepsLongNameViewportVisible(t *testing.T) {
+	const (
+		name          = "abcdef-é🐝-uvwxyz"
+		viewportWidth = 7
+	)
+	end := utf8.RuneCountInString(name)
+	rm := renameEditorAt(t, name, end)
+
+	assertViewport := func(label string, rm rootModel, cursorAtStart bool) {
+		t.Helper()
+		s, ok := rm.general.sessionByID(rm.general.editID)
+		if !ok {
+			t.Fatal("edited session disappeared")
+		}
+		cell := rm.general.nameCell(s, viewportWidth)
+		contentWidth := viewportWidth - 1 // nameCell reserves the column separator
+		if got := lipgloss.Width(cell); got > contentWidth {
+			t.Fatalf("%s viewport width = %d, want <= %d: %q", label, got, contentWidth, cell)
+		}
+		if !utf8.ValidString(cell) {
+			t.Fatalf("%s viewport split UTF-8: %q", label, cell)
+		}
+		if cursorAtStart && !strings.HasPrefix(cell, "█") {
+			t.Fatalf("%s viewport must show cursor at left edge: %q", label, cell)
+		}
+		if !cursorAtStart && !strings.HasSuffix(cell, "█") {
+			t.Fatalf("%s viewport must show cursor at right edge: %q", label, cell)
+		}
+	}
+
+	assertViewport("initial end", rm, false)
+	rm = send(rm, tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModSuper}).(rootModel)
+	assertViewport("command left", rm, true)
+	rm = send(rm, tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta}).(rootModel)
+	assertViewport("command right", rm, false)
+
+	// Prefix deletion also relocates the cursor to the start of the preserved
+	// suffix, so its viewport must immediately follow that new cursor.
+	rm = renameEditorAt(t, name, 7) // after "abcdef-"
+	rm = send(rm, tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}).(rootModel)
+	if rm.general.editBuf != "é🐝-uvwxyz" || rm.general.editCursor != 0 {
+		t.Fatalf("prefix deletion buffer/cursor = %q/%d, want é🐝-uvwxyz/0", rm.general.editBuf, rm.general.editCursor)
+	}
+	assertViewport("command backspace", rm, true)
+	s, _ := rm.general.sessionByID(rm.general.editID)
+	if cell := rm.general.nameCell(s, viewportWidth); !strings.Contains(cell, "é🐝") {
+		t.Fatalf("prefix-delete viewport must retain complete Unicode suffix: %q", cell)
+	}
+}
+
+func TestRename_StatusAdvertisesFastEditingKeys(t *testing.T) {
+	rm := renameEditorAt(t, "name", 4)
+	status := rm.generalStatus()
+	for _, token := range []string{"⌘←/→", "⌘⌫"} {
+		if !strings.Contains(status, token) {
+			t.Errorf("rename status %q must advertise %q", status, token)
+		}
+	}
+	lowerStatus := strings.ToLower(status)
+	for _, token := range []string{"home/end", "ctrl+u", "save", "cancel"} {
+		if !strings.Contains(lowerStatus, token) {
+			t.Errorf("rename status %q must advertise %q", status, token)
+		}
+	}
+}
+
+func TestRename_DoesNotEnableGlobalKeyboardEnhancements(t *testing.T) {
+	s := sWorking("endpoint/s1", "codex", "~/Code/x", "building", 0)
+	s.Name = "name"
+	rm := newModel(t, newFakeClient(s), detectMixed()).(rootModel)
+	before := rm.View().KeyboardEnhancements
+	rm = send(rm, keyRune('e')).(rootModel)
+	after := rm.View().KeyboardEnhancements
+	if after != before {
+		t.Fatalf("entering rename changed global keyboard enhancements from %+v to %+v", before, after)
+	}
+	if after.ReportEventTypes {
+		t.Fatalf("rename requested global keyboard event reporting: %+v", after)
+	}
+}
+
+// renameEditorAt enters the real inline editor, then places its rune cursor for
+// a single production update. Direct cursor placement is test arrangement only;
+// the key under test always flows through rootModel.Update/updateRename.
+func renameEditorAt(t *testing.T, name string, cursor int) rootModel {
+	t.Helper()
+	if cursor < 0 || cursor > utf8.RuneCountInString(name) {
+		t.Fatalf("invalid test cursor %d for %q", cursor, name)
+	}
+	s := sWorking("endpoint/s1", "codex", "~/Code/x", "building", 0)
+	s.Name = name
+	rm := send(newModel(t, newFakeClient(s), detectMixed()), keyRune('e')).(rootModel)
+	if !rm.general.editing {
+		t.Fatal("failed to enter rename editor")
+	}
+	rm.general.editCursor = cursor
+	return rm
 }

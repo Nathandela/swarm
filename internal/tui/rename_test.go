@@ -95,8 +95,8 @@ func TestRename_ArrowKeysEditInTheMiddle(t *testing.T) {
 	if rm.general.editBuf != "abc" || rm.general.editCursor != 2 {
 		t.Fatalf("middle insertion = %q at %d; want abc at 2", rm.general.editBuf, rm.general.editCursor)
 	}
-	if status := rm.generalStatus(); !strings.Contains(status, "←→ move cursor") {
-		t.Fatalf("rename status must advertise cursor navigation, got %q", status)
+	if status := rm.generalStatus(); !strings.Contains(status, "←→") {
+		t.Fatalf("rename status must advertise plain cursor navigation, got %q", status)
 	}
 }
 
