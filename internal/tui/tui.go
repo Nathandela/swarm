@@ -621,7 +621,7 @@ func (m rootModel) generalStatus() string {
 		return "daemon connection lost - restart swarm"
 	}
 	if m.general.editing {
-		return "type new name   ←→ move cursor   ⏎ save   esc cancel"
+		return "type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
 	}
 	if m.general.confirm {
 		return "y confirm   n cancel"

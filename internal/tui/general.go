@@ -394,8 +394,10 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // updateRename handles the inline single-line name edit (v0.5): Enter commits the
 // rename op, Esc cancels, Left/Right move a rune-aware insertion cursor, Backspace
-// deletes before that cursor, and printable text inserts there. The target is the
-// session captured when the edit opened (editID), not the live selection.
+// deletes before that cursor, and printable text inserts there. Exact fast-editing
+// gestures are matched before their exact unmodified counterparts so an unsupported
+// modified key cannot silently degrade to a one-rune edit. The target is the session
+// captured when the edit opened (editID), not the live selection.
 func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case k.Code == tea.KeyEnter:
@@ -404,20 +406,35 @@ func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, renameCmd(m.client, id, name)
 	case k.Code == tea.KeyEsc:
 		m.general.closeEdit()
-	case k.Code == tea.KeyLeft:
+	case k.Code == tea.KeyLeft && isCommandArrowModifier(k.Mod),
+		k.Code == tea.KeyHome && k.Mod == 0,
+		k.Code == 'a' && k.Mod == tea.ModCtrl:
+		m.general.editCursor = 0
+	case k.Code == tea.KeyRight && isCommandArrowModifier(k.Mod),
+		k.Code == tea.KeyEnd && k.Mod == 0,
+		k.Code == 'e' && k.Mod == tea.ModCtrl:
+		m.general.editCursor = utf8.RuneCountInString(m.general.editBuf)
+	case k.Code == tea.KeyBackspace && k.Mod == tea.ModSuper,
+		k.Code == 'u' && k.Mod == tea.ModCtrl:
+		m.general.deleteToStart()
+	case k.Code == tea.KeyLeft && k.Mod == 0:
 		if m.general.editCursor > 0 {
 			m.general.editCursor--
 		}
-	case k.Code == tea.KeyRight:
+	case k.Code == tea.KeyRight && k.Mod == 0:
 		if m.general.editCursor < utf8.RuneCountInString(m.general.editBuf) {
 			m.general.editCursor++
 		}
-	case k.Code == tea.KeyBackspace:
+	case k.Code == tea.KeyBackspace && k.Mod == 0:
 		m.general.deleteBeforeCursor()
 	case k.Text != "":
 		m.general.insertAtCursor(k.Text)
 	}
 	return m, nil
+}
+
+func isCommandArrowModifier(mod tea.KeyMod) bool {
+	return mod == tea.ModSuper || mod == tea.ModMeta
 }
 
 // closeEdit exits the inline rename mode and clears its buffer/target.
@@ -472,6 +489,21 @@ func (m *generalModel) deleteBeforeCursor() {
 	i := m.editCursor - 1
 	m.editBuf = string(append(runes[:i], runes[m.editCursor:]...))
 	m.editCursor = i
+}
+
+// deleteToStart removes every rune left of the insertion cursor while retaining
+// the complete suffix. Clamping keeps the helper total if a stale internal cursor
+// ever reaches it; normal editor updates maintain the cursor invariant already.
+func (m *generalModel) deleteToStart() {
+	runes := []rune(m.editBuf)
+	if m.editCursor < 0 {
+		m.editCursor = 0
+	}
+	if m.editCursor > len(runes) {
+		m.editCursor = len(runes)
+	}
+	m.editBuf = string(runes[m.editCursor:])
+	m.editCursor = 0
 }
 
 func isCtrlX(k tea.KeyPressMsg) bool {
