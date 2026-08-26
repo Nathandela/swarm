@@ -380,8 +380,10 @@ Three limits that remain, stated because D11 forbids reading the table above as 
 > is the project's register of who observes what, and D11's rule — never claim less exposure than
 > exists — does not stop being the rule when the observer is a model API rather than a relay
 > operator. The document's title is accordingly narrower than its contents; it is left as published
-> because `docs/INDEX.md` echoes it verbatim, so the mismatch is stated here rather than fixed by a
-> rename this section is not scoped to make.
+> because a rename this section is not scoped to make. `docs/INDEX.md`'s entry, which described
+> this file as covering "the relay operator and the push provider", was broadened instead: an
+> index that under-describes the register is D11's own failure mode moved to the discovery layer,
+> where a reader scanning for "who observes what" never reaches the correction.
 
 A **hands-off handoff** launches a successor session and instructs it to READ the source session's
 local transcript file. swarm injects no content of its own — it hands over five pointers and
