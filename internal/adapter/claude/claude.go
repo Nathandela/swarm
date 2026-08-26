@@ -127,6 +127,9 @@ func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 		return nil, err
 	}
 	argv := []string{binary, "--settings", settings}
+	if spec.Name != "" {
+		argv = append(argv, "--name", spec.Name)
+	}
 	argv = append(argv, optionFlags(spec.Options)...)
 	if spec.InitialPrompt != "" {
 		argv = append(argv, spec.InitialPrompt)
@@ -180,7 +183,11 @@ func (claudeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	return []string{binary, "--resume", spec.ConversationID}, nil
+	argv := []string{binary, "--resume", spec.ConversationID}
+	if spec.Name != "" {
+		argv = append(argv, "--name", spec.Name)
+	}
+	return argv, nil
 }
 
 // ExtractConversationID recovers the session id from the raw capture, falling back

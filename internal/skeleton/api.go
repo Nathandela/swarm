@@ -165,6 +165,9 @@ type coreAPI struct {
 	// them, and nil is fail-closed -- no record authored, no record found.
 	onLaunched  func(persist.Meta)
 	sessionCaps func(local string) (protocol.SessionCapabilities, bool)
+	// syncName is the optional provider-name egress. The local rename commits first;
+	// provider sync is best-effort and must never make the durable Swarm rename fail.
+	syncName func(local, name string)
 
 	events   chan persist.Meta
 	nudge    chan struct{} // wakes the poller to sample NOW (it is the sole snapshot producer)
@@ -578,6 +581,9 @@ func (a *coreAPI) Rename(id, name string) error {
 	err := a.core.Rename(id, name)
 	if err == nil {
 		a.pokeWatch() // fan the new name out now, not at the next poll tick
+		if a.syncName != nil {
+			a.syncName(id, name)
+		}
 	}
 	return err
 }
@@ -873,6 +879,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
 			Cwd:            spec.Cwd,
 			ConversationID: srcMeta.ConversationID,
+			Name:           spec.Name,
 			Options:        spec.Options,
 		})
 		if rerr != nil {
@@ -902,6 +909,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 			if ad, ok := registry.New(spec.AgentType); ok {
 				argv, err := ad.Command(adapter.LaunchSpec{
 					Cwd:           spec.Cwd,
+					Name:          spec.Name,
 					Options:       spec.Options,
 					InitialPrompt: spec.InitialPrompt,
 				})

@@ -144,6 +144,7 @@ Goal: two real CLIs, each characterized first, proving the adapter boundary unde
 - E11.6 Grid-heuristic fallback rules per CLI, tested against fixtures; out-of-supported-version fixture proves L-2 greying end-to-end.
 - E11.7 Scenarios 4, 5, 12 green.
 - E11.8 Adapter packages contain no core edits: same package-dependency check as E9.5, applied to both adapters (T-5).
+- E11.9 Provider-native names: Claude launch/resume argv carries the optional Swarm label through `--name`; Codex's app-server backend receives `thread/name/set` when a named thread joins or Swarm renames it, and `thread/name/updated` notifications update the sanitized durable Swarm label without an echo loop.
 
 ### Epic 12 — Worktree isolation
 Goal: opt-in isolated worktrees without touching core control flow.

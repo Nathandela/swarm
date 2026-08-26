@@ -300,6 +300,9 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.api.syncName = func(local, name string) {
+		go d.syncSessionNameToProvider(local, name)
+	}
 	historyHome := cfg.historyHome
 	if historyHome == "" {
 		historyHome, _ = os.UserHomeDir()

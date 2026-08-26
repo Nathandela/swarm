@@ -240,18 +240,20 @@ type SignalSource struct {
 	Descriptor map[string]string
 }
 
-// LaunchSpec is the input to Command: the working directory, the resolved
-// option values, and an optional initial prompt.
+// LaunchSpec is the input to Command: the working directory, optional native
+// session name, resolved option values, and optional initial prompt.
 type LaunchSpec struct {
 	Cwd           string
+	Name          string
 	Options       map[string]string
 	InitialPrompt string
 }
 
 // ResumeSpec is the input to Resume: the working directory, the conversation to
-// resume, and the resolved option values.
+// resume, an optional native session name, and the resolved option values.
 type ResumeSpec struct {
 	Cwd            string
 	ConversationID string
+	Name           string
 	Options        map[string]string
 }

@@ -184,6 +184,9 @@ func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
 		d.backend.adopted = map[string]string{}
 	}
 	d.backend.live[local] = &sessionBackend{threadID: threadID, conn: conn}
+	// A rejoined backend already has its thread id. Bring a durable Swarm label
+	// across immediately; a fresh backend with no id is handled by adoptBackendThread.
+	go d.syncExistingSessionNameToProvider(local)
 	// ADR-017 T2-a / D-NIL: THE BACKEND-CONNECT SEAM AUTHORS THE RECORD IT DECIDES.
 	// R7 made structured_chat "the seam AND a live backend, per session instance", so for
 	// a provider whose structured plane lives in a side process this moment -- and not
@@ -266,6 +269,7 @@ func (d *Daemon) adoptBackendThread(local, threadID string) {
 			log.Printf("skeleton: could not persist backend conversation identity for session %s", local)
 		}
 	}
+	go d.syncExistingSessionNameToProvider(local)
 }
 
 // adoptedThread returns the thread id the agent created for this session, if it has been
@@ -442,6 +446,9 @@ func (d *Daemon) ingestBackendFrame(local string, frame []byte, receivedAtMs int
 		if threadID, ok := backendStartedThreadID(frame); ok {
 			d.adoptBackendThread(local, threadID)
 		}
+	}
+	if fr.Method == "thread/name/updated" {
+		d.ingestProviderSessionName(local, adapter.HookPayload{Event: fr.Method, Raw: frame})
 	}
 	if fr.Method == backendDeltaMethod && fr.Params.ItemID != "" {
 		d.foldDelta(local, fr.Params.ItemID, fr.Params.Delta, frame, receivedAtMs)
