@@ -185,6 +185,12 @@ type Daemon struct {
 	detailOrder  []detailKey
 	detailBytes  int
 
+	// phoneActivity is when each session last received a remote message: the fact that
+	// replaces the take_control lease as C3's "somebody is driving this" signal, and the
+	// one the terminal renders. See phonepresence.go for why it is a send rather than a
+	// presence.
+	phoneActivity map[string]time.Time
+
 	// hookSeq is ingestHookBytes's own idempotency guard (hookdrain.go, R6 review
 	// fix-pack BLOCKER 1): the bounded, durable SET of hook callback Sequences fully
 	// ingested per session -- a membership test, not a high-water gate, because a hook
@@ -431,8 +437,14 @@ func Serve(cfg Config) (*Daemon, error) {
 		// stamps the value onto every SessionView it hands out, while the roster poller
 		// needs it in its diff key or a control flip -- which changes nothing the core
 		// persists -- would fan out no event at all.
-		d.srv.SetRemoteControlledFunc(rs.IsControlled)
-		d.api.SetRemoteControlledFunc(rs.IsControlled)
+		// A LEASE OR A RECENT MESSAGE (conversation surface, Wave G). rs.IsControlled
+		// answers only about take_control leases, and R1 removes take-control from the
+		// product -- so a board that asked only that would never again mark a session a
+		// phone is chatting in. phoneRecentlyActive is the fact the daemon actually
+		// observes; see phonepresence.go for why it is a send rather than a presence.
+		driven := func(id string) bool { return rs.IsControlled(id) || d.phoneRecentlyActive(id) }
+		d.srv.SetRemoteControlledFunc(driven)
+		d.api.SetRemoteControlledFunc(driven)
 	}
 
 	// ADR-010 Amendment 3 C2..C4: the passive supervisor, over the owner-tier Server's
@@ -618,14 +630,23 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 	}
 }
 
-// anyControlled reports whether ANY controller lease -- an owner attach or a phone
-// take_control -- is held on local: the supervisor never types into a session someone is
-// driving (ADR-010 Amendment 3 C3). The remote Server may be absent (no remote listener).
+// anyControlled reports whether somebody is driving local: the supervisor never types into
+// a session someone is driving (ADR-010 Amendment 3 C3). The remote Server may be absent
+// (no remote listener).
+//
+// IT NO LONGER READS ONLY LEASES. A phone's composer_send has never needed one, and R1
+// removes take-control from the product entirely -- so a gate that asked only about leases
+// would answer false for every phone there is and let the supervisor type into an open
+// conversation. The third clause is a message OBSERVED arriving, within a horizon; see
+// phonepresence.go for why that is deliberately weaker than a presence claim.
 func (d *Daemon) anyControlled(local string) bool {
 	if d.srv.IsControlled(local) {
 		return true
 	}
-	return d.remoteSrv != nil && d.remoteSrv.IsControlled(local)
+	if d.remoteSrv != nil && d.remoteSrv.IsControlled(local) {
+		return true
+	}
+	return d.phoneRecentlyActive(local)
 }
 
 // endSession is the daemon's OnSessionEnd hook: it retires an ended session's
@@ -661,6 +682,8 @@ func (d *Daemon) endSession(id string) {
 	d.sweepSessionInteractions(id)
 	// The interaction fold keys and the open turn name a CLI that is gone (interaction.go).
 	d.forgetInteractions(id)
+	// Nobody is driving a session that has ended (phonepresence.go).
+	d.forgetPhoneActivity(id)
 	// A child that ended is `completed` for its supervisor; a source that ended leaves its
 	// children's events pending (ADR-010 Amendment 3 C4: no re-parenting).
 	if d.sup != nil {

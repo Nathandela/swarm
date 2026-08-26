@@ -66,18 +66,6 @@ type Config struct {
 	ReadOnly  bool   // completed/lost: paint final snapshot, forward no input (G3)
 	Chrome    bool   // reserve the real bottom row for the return hint (ADR-006 v0.3); off = full passthrough (A-5)
 	Name      string // session label rendered in the reserved-row hint
-	// TookOverRemote marks an attach that STARTED while a paired device held a control
-	// lease. Its name and the note it paints ("took over from phone") both claim an
-	// eviction, and M0.1 (docs/verification/mirror-m0.md) disproved that: an owner attach
-	// and a phone's take_control coexist on one session -- the two protocol Servers keep
-	// separate lease maps over ONE coreAPI, whose Attach subscribes to the shared
-	// per-session tap instead of re-dialing the shim, so the shim's single-subscriber slot
-	// is claimed once by the tap and both live streams survive
-	// (skeleton.TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive). The honest
-	// surface is a LIVE co-presence indicator, not a one-shot note; that is design work,
-	// deferred to M2 as agents-tracker-dwwv.3.1. Until then the caller still samples once
-	// before dialing and this value is carried for the life of the attach.
-	TookOverRemote bool
 }
 
 // chromeReassertInterval throttles the reserved-row re-assert on benign live frames to
@@ -255,7 +243,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// records that the region is ours to tear down.
 	var lastAssert time.Time
 	if chromeActive(rows) {
-		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows, cfg.TookOverRemote))
+		writeAll(out, chromeHint(cfg.Name, detachKey, cols, rows))
 		chromeEngaged = true
 		lastAssert = time.Now()
 	}
@@ -414,7 +402,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// reassertChrome re-emits region+hint at the current size and clears the owed re-assert.
 	// The caller has verified the parser is in GROUND (a safe boundary).
 	reassertChrome := func() {
-		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows, cfg.TookOverRemote))
+		writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
 		lastAssert = time.Now()
 		pendingReassert = false
 	}
@@ -424,7 +412,7 @@ func Run(cfg Config) (reason Reason, err error) {
 	// byte-identical to Chrome:false). The caller has verified the parser is in GROUND.
 	applyResizeChrome := func() {
 		if chromeActive(curRows) {
-			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows, cfg.TookOverRemote))
+			writeAll(out, chromeHint(cfg.Name, detachKey, curCols, curRows))
 			chromeEngaged = true
 			lastAssert = time.Now()
 		} else if chromeEngaged {
@@ -527,7 +515,7 @@ func writeAll(w io.Writer, p []byte) {
 // survive both the region change (DECSTBM homes the cursor) and the paint. The caller
 // guarantees rows > 2. It is re-emitted by the output pump to self-heal damage (a bare
 // CSI r region reset from the agent is repaired by the next re-assert).
-func chromeHint(name string, detachKey byte, cols, rows int, tookOverRemote bool) []byte {
+func chromeHint(name string, detachKey byte, cols, rows int) []byte {
 	var b strings.Builder
 	b.WriteString("\x1b7")    // DECSC: save cursor + pen + origin mode
 	b.WriteString("\x1b[?6l") // DECOM off: make the reserved-row CUP absolute even if the agent enabled origin mode; DECRC below restores the agent's DECOM
@@ -540,7 +528,7 @@ func chromeHint(name string, detachKey byte, cols, rows int, tookOverRemote bool
 	// v0.4 P2 (dim not reverse): a faint default-colored hint, not the harsh full-width
 	// reverse-video bar that read as a white strip on dark terminals.
 	b.WriteString("\x1b[2m") // faint/dim
-	b.WriteString(hintText(name, detachKey, cols, tookOverRemote))
+	b.WriteString(hintText(name, detachKey, cols))
 	b.WriteString("\x1b[0m") // reset pen
 	b.WriteString("\x1b[K")  // clear to end of the reserved row
 	b.WriteString("\x1b8")   // DECRC: restore cursor + pen
@@ -552,12 +540,6 @@ func chromeHint(name string, detachKey byte, cols, rows int, tookOverRemote bool
 // bool, and naming the device needs a deviceID accessor plus a registry lookup that
 // does not exist yet.
 //
-// STALE WORDING, deferred to M2 (agents-tracker-dwwv.3.1): "took over" asserts an
-// eviction that M0.1 disproved -- the phone keeps both its peek and its control lease
-// across an owner attach (docs/verification/mirror-m0.md). Rewording it is not a
-// one-liner: hintrow_takeover_test.go pins these strings as the note's contract, and the
-// honest replacement is a live indicator rather than a sampled note.
-const takeoverNote = "took over from phone"
 
 // hintText builds the reserved-row hint, truncated to fit cols columns: the session
 // name and the return affordance ("<name>  ctrl+q returns to swarm"), plus the
@@ -570,13 +552,8 @@ const takeoverNote = "took over from phone"
 // critical, so it survives a narrow terminal; the note is informational. Dropped
 // whole rather than sliced because a half-note ("took ove") would eat the very
 // columns the affordance needs while saying nothing.
-func hintText(name string, detachKey byte, cols int, tookOverRemote bool) string {
+func hintText(name string, detachKey byte, cols int) string {
 	s := name + "  " + strings.ToLower(keyLabel(detachKey)) + " returns to swarm"
-	if tookOverRemote {
-		if full := s + "  " + takeoverNote; cols <= 0 || len([]rune(full)) <= cols {
-			s = full
-		}
-	}
 	if cols > 0 {
 		if r := []rune(s); len(r) > cols {
 			s = string(r[:cols])

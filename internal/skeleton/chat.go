@@ -197,6 +197,10 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 		}
 		return "", errIsLife5("composer send into session %q: %v", req.Session, err)
 	}
+	// DELIVERED, so somebody is driving this session from a phone (ADR-010 Amendment 3 C3).
+	// Recorded only on the success path: a message the machine turned away is not somebody
+	// driving anything.
+	d.notePhoneActivity(local)
 	return "", nil
 }
 
@@ -302,8 +306,10 @@ func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTur
 // composer_send, replied OK with no code, and the fake CLI received the text on stdin. The
 // user's words went into the agent and the transcript could never show them: the gap
 // silently bridged, which is the one move ADR-017 forbids. The only enforcement anywhere was
-// ComposerModel.availabilityFor in Kotlin, which no screen calls -- a client-side gate on a
-// server-side fact, which is no gate at all.
+// ComposerModel.availabilityFor in Kotlin -- a client-side gate on a server-side fact, which
+// is no gate at all wherever it is called from. (When this was written it was also called
+// from nowhere; SessionDetailPanel calls it today. The argument never rested on that, and
+// the sentence is corrected rather than left to be discovered.)
 //
 // turn_interrupt has answered this shape correctly since it landed (interrupt_unsupported,
 // having typed nothing). This makes the composer symmetric with it.
@@ -553,6 +559,7 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		if err != nil && !benignInterruptError(err) {
 			return "", fmt.Errorf("turn interrupt: %v", err)
 		}
+		d.notePhoneActivity(local)
 		return "", nil
 	}
 	ad, ok := d.resolveAdapter(m.AgentType)
@@ -584,6 +591,8 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 	if err := sub.Input(keys); err != nil {
 		return "", fmt.Errorf("turn interrupt: writing the interrupt into session %q: %w", session, err)
 	}
+	// Stopping a turn is driving the session as much as sending into it is.
+	d.notePhoneActivity(local)
 	return "", nil
 }
 

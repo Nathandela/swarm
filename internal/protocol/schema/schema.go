@@ -250,12 +250,21 @@ type SessionView struct {
 	// existed.
 	Supervision        string `json:"supervision,omitempty"`
 	SupervisionPending bool   `json:"supervision_pending,omitempty"`
-	// RemoteControlled reports that a PAIRED DEVICE currently holds this session's
-	// controller lease (the remote-tier Server's IsControlled, R1.3.7). It is the
-	// board's honest answer to "who has the keyboard": a TUI attach and a phone
+	// RemoteControlled reports that a PAIRED DEVICE is driving this session: it holds
+	// the remote-tier controller lease, OR it sent a message recently
+	// (skeleton.phoneRecentlyActive). The second clause is what keeps the field
+	// meaningful once take-control leaves the product -- composer_send never needed a
+	// lease, so a lease-only answer would be false for every phone there is.
+	//
+	// THE CLAIM THAT USED TO STAND HERE IS WITHDRAWN. It read: "a TUI attach and a phone
 	// take_control compete for the SAME single shim subscriber slot, so the two are
-	// mutually exclusive and no live in-attach indicator is possible -- the roster
-	// row is where the state can be shown at all.
+	// mutually exclusive and no live in-attach indicator is possible". M0.1 disproved it
+	// (docs/verification/mirror-m0.md): production runs two protocol Servers over one
+	// coreAPI with separate lease maps, and coreAPI.Attach subscribes to the SHARED
+	// per-session tap, so the shim's single-subscriber slot is claimed once and both live
+	// streams survive in both orders. The roster row is still where this is shown, but
+	// because a live in-attach indicator needs a side channel attach.Session does not
+	// have -- not because the two states cannot coexist.
 	//
 	// omitempty: an uncontrolled row serializes exactly as it did before the field
 	// existed, so the released 0.8.0 gateway -- which relays these frames verbatim

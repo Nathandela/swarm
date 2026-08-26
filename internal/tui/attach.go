@@ -62,29 +62,23 @@ type TerminalHandoff struct {
 // bubbletea-side adapter; cmd wires the dialer and terminal handoff.
 func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 	return func(s protocol.SessionView, readOnly bool) error {
-		// nx44.7, CORRECTED by M0.1 (docs/verification/mirror-m0.md). The dial below does
-		// NOT evict the phone, and in the assembled daemon it never did: production runs TWO
-		// protocol Servers over ONE coreAPI (internal/skeleton/serve.go -- owner d.srv on the
-		// main UDS, remote d.remoteSrv on remote.sock), each with its OWN lease map, and
-		// coreAPI.Attach subscribes to the SHARED per-session tap (internal/skeleton/api.go,
-		// tap.subscribe) rather than re-dialing the shim. The single-subscriber constraint is
-		// at the shim hub (internal/shim/server.go hub.attach) and the tap reaches it ONCE per
-		// session, on its first subscriber; every later attach -- owner attach, remote
-		// take_control, remote peek -- fans off that one upstream.
-		// TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive
-		// (internal/skeleton/copresence_test.go) proves both live streams survive in BOTH
-		// orders, and that the phone's control lease still reaches the PTY afterwards.
-		// Eviction is real only WITHIN one tier: a second OWNER attach supersedes the first on
-		// d.srv's lease map (internal/protocol/server.go attach, phase 2).
+		// NO TAKEOVER NOTE IS SAMPLED HERE ANY MORE (conversation surface, Wave G;
+		// agents-tracker-dwwv.3.1). What stood here read s.RemoteControlled once, before
+		// dialing, and painted "took over from phone" on the reserved row for the life of the
+		// attach. Both halves were wrong. The dial evicts nothing: production runs TWO
+		// protocol Servers over ONE coreAPI, each with its own lease map, and coreAPI.Attach
+		// subscribes to the SHARED per-session tap rather than re-dialing the shim, so the
+		// shim's single-subscriber slot is claimed once by the tap and both live streams
+		// survive -- proved in BOTH orders by
+		// skeleton.TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive
+		// (docs/verification/mirror-m0.md). And a value sampled before the dial could not have
+		// stayed true afterwards even if it had been.
 		//
-		// So this flag does not mean "we took the session from the phone"; it means "a phone
-		// held control when this attach started". The reserved row it drives still SAYS "took
-		// over from phone", which is now false -- but rewording it changes that note's contract
-		// and the assertions pinning it (internal/attach/hintrow_takeover_test.go), and the
-		// honest replacement is a LIVE co-presence indicator rather than a one-shot sample. That
-		// is design work, deferred to M2 as agents-tracker-dwwv.3.1. Sampling once is kept
-		// meanwhile: the chrome carries one value for the life of the attach either way.
-		tookOver := s.RemoteControlled
+		// THE HONEST REPLACEMENT IS NOT A REWORDING. A live indicator inside a running attach
+		// needs a side channel into the passthrough loop, which attach.Session does not have
+		// (Snapshot/Frames/Input/Resize/Detach/Generation and nothing else). So the lie is
+		// deleted and nothing takes its place yet: the board row carries the phone marker,
+		// where the state can be shown at all today.
 		sess, cleanup, err := dial(s.ID)
 		if err != nil {
 			return err
@@ -113,9 +107,8 @@ func NewAttachRunner(dial AttachDialer, hand TerminalHandoff) AttachRunner {
 			// — the PTY is sized to rows-1 and a DECSTBM region keeps the agent off that
 			// row — so it can no longer overdraw snapshot/agent content the way the v0.2
 			// top-row banner did. The output pump self-heals full-screen damage.
-			Chrome:         true,
-			Name:           displayName(s), // P2: identify the session by its label (falls back to the agent)
-			TookOverRemote: tookOver,
+			Chrome: true,
+			Name:   displayName(s), // P2: identify the session by its label (falls back to the agent)
 		})
 		return err
 	}

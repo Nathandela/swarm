@@ -1,106 +1,84 @@
 package attach
 
-// agents-tracker-nx44.7 -- the attach-time takeover note.
+// The reserved row's hint, after the takeover note was DELETED (conversation surface,
+// Wave G; agents-tracker-dwwv.3.1, plan §9 G.1).
 //
-// THE PREMISE THIS FILE WAS FILED ON IS DISPROVED. It read: a TUI attach and a paired
-// device's take_control compete for the SAME single shim subscriber slot (hub.attach
-// evicts unconditionally), so the two states are mutually exclusive and no LIVE
-// "phone has control" indicator is possible inside an attach -- which is why the note
-// below is a one-shot sample taken before the dial "that destroyed the answer".
-// TestCoPresence_OwnerAttachAndRemoteControl_BothStreamsLive
-// (internal/skeleton/copresence_test.go, evidence in docs/verification/mirror-m0.md)
-// proves the opposite: both live streams survive, in BOTH orders, and the phone's
-// control lease still reaches the PTY afterwards. Production runs two protocol Servers
-// over one coreAPI, each with its own lease map, and coreAPI.Attach subscribes to the
-// SHARED per-session tap, so the shim's single-subscriber slot is reached ONCE per
-// session; eviction is real only WITHIN one tier. The dial destroys nothing, and a
-// live co-presence indicator IS possible. See internal/tui/attach.go for the same
-// correction at the sampling site.
+// WHAT THIS FILE USED TO PIN, AND WHAT BECAME OF EACH ASSERTION. The note said "took over
+// from phone" and was sampled once, before the dial. Both halves were false: M0.1
+// (docs/verification/mirror-m0.md) proved an owner attach evicts no phone -- two protocol
+// Servers over one coreAPI, separate lease maps, one shared per-session tap, both live
+// streams surviving in BOTH orders -- and a value sampled before the dial could not have
+// remained true afterwards in any case. The file itself recorded the disproof and kept
+// pinning the strings as "the current contract"; this is the authorized rewrite it named.
 //
-// THE STRINGS BELOW ARE STILL THE CURRENT CONTRACT and are pinned as such. The note
-// says "took over from phone", which co-presence makes false; replacing it is a design
-// change (a live indicator, not a sampled note) plus an authorized rewrite of these
-// assertions, tracked as agents-tracker-dwwv.3.1 (M2). Until that lands, these tests
-// describe what ships -- they are not a claim that what ships is right.
+//	TestHintText_TakeoverNoteGoesLast              DELETED -- there is no takeover to order.
+//	TestHintText_TakeoverStillTruncatesToTheRow    MOVED   -> TestHintText_TruncatesToTheRow.
+//	TestHintText_NarrowRowKeepsTheEscapeAffordance MOVED   -> the same, plus the width bound.
+//	TestHintText_NoNoteWithoutATakeover            MOVED   -> TestHintText_SaysNothingAboutAPhone,
+//	                                                          strengthened from "not on this
+//	                                                          attach" to "never".
+//	TestChromeHint_PaintsTheTakeoverNote           MOVED   -> TestChromeHint_PaintsNoPhoneNote.
 //
-// ORCHESTRATOR RULING pinned here, and unaffected by the above: the note goes LAST in
-// the hint string. The ctrl+q escape affordance is safety-critical and must survive a
-// narrow terminal; the note is informational and is the first thing to go.
-//
-// RED at filing time: hintText took no takeover argument, so this file did not compile.
+// NOTHING REPLACES IT ON THIS ROW YET, and that is deliberate rather than unfinished. A live
+// co-presence indicator inside a running attach needs a side channel into the passthrough
+// loop, and attach.Session has none (Snapshot/Frames/Input/Resize/Detach/Generation). Until
+// that exists the board row carries the phone marker, which is where the state can be shown
+// at all -- and a row that says nothing beats a row that says something untrue.
 
 import (
 	"strings"
 	"testing"
 )
 
-const returnAffordance = "ctrl+q returns to swarm"
+// returnHint is the escape route the reserved row exists to carry.
+const returnHint = "returns to swarm"
 
-// TestHintText_TakeoverNoteGoesLast: on a wide row both segments are present, and
-// the note follows the return affordance.
-func TestHintText_TakeoverNoteGoesLast(t *testing.T) {
-	s := hintText("claude", DefaultDetachKey, 120, true)
-	iAff := strings.Index(s, returnAffordance)
-	if iAff < 0 {
-		t.Fatalf("hint lost the return affordance: %q", s)
+// TestHintText_SaysNothingAboutAPhone is the note's deletion, pinned so it cannot come
+// back by accident. It is stronger than the assertion it replaces: that one said an attach
+// which took nothing over carries no note, leaving the other branch alive; this says the
+// row never speaks about a phone at all, because there is no longer a fact here to speak
+// from.
+func TestHintText_SaysNothingAboutAPhone(t *testing.T) {
+	s := hintText("claude", DefaultDetachKey, 120)
+	for _, banned := range []string{"took over", "took ", "phone"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("the reserved row says %q in %q. The attach row has no phone fact to "+
+				"report: it cannot see one arrive, and the value it used to sample was read "+
+				"before the dial and never updated after", banned, s)
+		}
 	}
-	iNote := strings.Index(s, "took over")
-	if iNote < 0 {
-		t.Fatalf("an attach that evicted the phone must say so; got %q", s)
-	}
-	if iNote < iAff {
-		t.Errorf("the takeover note must come AFTER the return affordance so it is cut first; got %q", s)
-	}
-	if !strings.Contains(s, "phone") {
-		t.Errorf("the note must name what was taken over from; got %q", s)
+	if !strings.Contains(s, returnHint) {
+		t.Errorf("the hint lost the return affordance: %q", s)
 	}
 }
 
-// TestHintText_NarrowRowKeepsTheEscapeAffordanceWhole: when the row cannot hold both,
-// the note is dropped WHOLE and the escape route survives intact -- not sliced into a
-// fragment that eats the affordance's tail.
-func TestHintText_NarrowRowKeepsTheEscapeAffordanceWhole(t *testing.T) {
-	base := hintText("s", DefaultDetachKey, 0, false)
-	cols := len([]rune(base)) + 4 // room for the affordance, nowhere near the note
-
-	s := hintText("s", DefaultDetachKey, cols, true)
-	if !strings.Contains(s, returnAffordance) {
-		t.Fatalf("a narrow row dropped the escape affordance: %q (cols=%d)", s, cols)
-	}
-	if strings.Contains(s, "took over") || strings.Contains(s, "took ") {
-		t.Errorf("the note must be dropped whole on a row that cannot hold it, not sliced in; got %q", s)
-	}
-	if got := len([]rune(s)); got > cols {
-		t.Errorf("hint is %d cells wide, over the %d-column row (a wrap on the reserved row scrolls)", got, cols)
-	}
-}
-
-// TestHintText_NoNoteWithoutATakeover: an ordinary attach's row is unchanged.
-func TestHintText_NoNoteWithoutATakeover(t *testing.T) {
-	s := hintText("claude", DefaultDetachKey, 120, false)
-	if strings.Contains(s, "took over") || strings.Contains(s, "phone") {
-		t.Errorf("an attach that took nothing over must carry no note; got %q", s)
-	}
-}
-
-// TestHintText_TakeoverStillTruncatesToTheRow: even with the note, a row narrower
-// than the base hint is truncated to fit (a wrap on the reserved bottom row scrolls).
-func TestHintText_TakeoverStillTruncatesToTheRow(t *testing.T) {
+// TestHintText_TruncatesToTheRow carries forward the two truncation assertions that had a
+// surviving subject: a wrap on the reserved bottom row SCROLLS, so the hint is never wider
+// than its row, and the escape affordance is what the row exists to carry.
+func TestHintText_TruncatesToTheRow(t *testing.T) {
 	const cols = 12
-	if got := len([]rune(hintText("a-long-session-name", DefaultDetachKey, cols, true))); got > cols {
+	if got := len([]rune(hintText("a-long-session-name", DefaultDetachKey, cols))); got > cols {
 		t.Errorf("hint is %d cells wide, over the %d-column row", got, cols)
 	}
+
+	// A row with room for the whole hint keeps every cell of it.
+	full := hintText("s", DefaultDetachKey, 0)
+	if got := hintText("s", DefaultDetachKey, len([]rune(full))+4); got != full {
+		t.Errorf("a row with room to spare altered the hint: %q, want %q", got, full)
+	}
+	if !strings.Contains(full, returnHint) {
+		t.Fatalf("the untruncated hint has no escape affordance: %q", full)
+	}
 }
 
-// TestChromeHint_PaintsTheTakeoverNote pins the plumbing: the reserved-row painter
-// carries the flag through to the text it emits.
-func TestChromeHint_PaintsTheTakeoverNote(t *testing.T) {
-	got := string(chromeHint("claude", DefaultDetachKey, 120, 24, true))
-	if !strings.Contains(got, "took over") {
-		t.Errorf("the reserved row must paint the takeover note; got %q", got)
+// TestChromeHint_PaintsNoPhoneNote pins the plumbing at the painter, where the flag used
+// to be threaded through.
+func TestChromeHint_PaintsNoPhoneNote(t *testing.T) {
+	got := string(chromeHint("claude", DefaultDetachKey, 120, 24))
+	if strings.Contains(got, "took over") || strings.Contains(got, "phone") {
+		t.Errorf("the reserved row painted a phone note; got %q", got)
 	}
-	got = string(chromeHint("claude", DefaultDetachKey, 120, 24, false))
-	if strings.Contains(got, "took over") {
-		t.Errorf("the reserved row painted a takeover note for an ordinary attach; got %q", got)
+	if !strings.Contains(got, "claude") {
+		t.Errorf("the reserved row lost the session name; got %q", got)
 	}
 }

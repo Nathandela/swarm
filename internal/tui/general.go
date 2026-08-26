@@ -918,12 +918,19 @@ func confirmPrompt(s protocol.SessionView) string {
 	return "delete? y/n"
 }
 
-// remoteControlMarker names the surface that currently holds the session's
-// controller lease. A bare word, not a glyph: the roster is read at a glance and a
-// decorative symbol here would be one more thing to learn. Device NAME display is
-// deliberately out of scope -- the daemon answers a bare bool, and naming the device
-// needs a deviceID accessor plus a registry lookup that does not exist yet.
-const remoteControlMarker = "phone control"
+// remoteControlMarker says a phone is driving this session. A bare word, not a glyph:
+// the roster is read at a glance and a decorative symbol here would be one more thing to
+// learn. Device NAME display is deliberately out of scope -- the daemon answers a bare
+// bool, and naming the device needs a deviceID accessor plus a registry lookup that does
+// not exist yet.
+//
+// IT NO LONGER SAYS "CONTROL" (conversation surface, Wave G). Control was a lease the
+// phone took, and R1 removes take-control from the product; what the daemon actually
+// observes now is a MESSAGE ARRIVING, and it ages out (skeleton.phoneActiveHorizon). So
+// the marker's presence is itself the recency claim -- it appears when a phone sends and
+// disappears a couple of minutes later -- and one word is the whole of what is known. It
+// is deliberately not "phone is here": presence is a fact nobody on this wire measures.
+const remoteControlMarker = "phone"
 
 // supervisionPendingMarker and supervisionGoneMarker are the row's passive-supervision
 // words (ADR-010 Amendment 3 C3/C4): an attention event awaits delivery to the source,

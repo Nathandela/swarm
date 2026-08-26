@@ -33,7 +33,7 @@ func TestKeyLabel_DELRendersAsDEL(t *testing.T) {
 // the hint), never the old "Ctrl+\". Repointed from the v0.2 top-row chromeLine, which
 // the reserved-row design replaced.
 func TestChromeHintNamesCtrlQ(t *testing.T) {
-	hint := hintText("claude", DefaultDetachKey, 0, false)
+	hint := hintText("claude", DefaultDetachKey, 0)
 	if !strings.Contains(hint, "ctrl+q returns to swarm") {
 		t.Fatalf("hint must name ctrl+q as the return key; got %q", hint)
 	}
