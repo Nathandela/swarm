@@ -137,6 +137,10 @@ type LaunchSpec struct {
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string
+	// ConversationID, when non-empty, is a provider-native identity already known
+	// before launch (for example, an owner-local import from another supervisor).
+	// The daemon seeds it into meta atomically with the new session reservation.
+	ConversationID string
 	// ResumedFrom, when non-empty, is the LOCAL id of a prior session this launch
 	// resumes (Epic 11 / R-2). The daemon stamps it into the new session's
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the

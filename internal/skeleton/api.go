@@ -44,6 +44,9 @@ type coreAPI struct {
 	core         *daemon.Daemon
 	fakeAgentBin string
 	endpointID   string // this daemon's stable federation id (resume source validation)
+	// externalResumeMu makes provider-native adoption idempotent across concurrent
+	// owner-tier requests: lookup and launch are one critical section.
+	externalResumeMu sync.Mutex
 
 	// historyResolver performs the lazy, read-only migration for an ended/lost
 	// source whose native id predates durable capture. recoveryMu protects only
@@ -735,6 +738,21 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
 	// hands the shim, so the binary this resolves is the binary the agent runs.
 	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
+	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
+		if spec.Options[protocol.OptionResumeFrom] != "" {
+			return persist.Meta{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")
+		}
+		if !adapter.IsCanonicalConversationID(conversationID) {
+			return persist.Meta{}, fmt.Errorf("resume: external conversation identity is invalid")
+		}
+		a.externalResumeMu.Lock()
+		defer a.externalResumeMu.Unlock()
+		for _, existing := range a.core.List() {
+			if existing.AgentType == spec.AgentType && existing.ConversationID == conversationID {
+				return existing, nil
+			}
+		}
+	}
 	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
 		local, source, err := validateResumeSource(src, spec.AgentType, a.endpointID, a.core.Get)
 		if err != nil {
@@ -861,7 +879,35 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		spec.CaptureEvents = adapter.CaptureEvents(ad)
 	}
 
-	if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
+	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
+		if spec.Options[protocol.OptionResumeFrom] != "" {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")
+		}
+		if !adapter.IsCanonicalConversationID(conversationID) {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
+		}
+		ad, ok := registry.New(spec.AgentType)
+		if !ok {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
+		}
+		argv, err := ad.Resume(adapter.ResumeSpec{
+			Cwd:            spec.Cwd,
+			ConversationID: conversationID,
+			Options:        spec.Options,
+		})
+		if err != nil {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: compose argv: %w", err)
+		}
+		if len(argv) == 0 {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q did not compose a resume command", spec.AgentType)
+		}
+		resolved, err := resolveArgv0(argv, spec.ClientEnv, lookPath)
+		if err != nil {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: %w", err)
+		}
+		spec.Argv = resolved
+		spec.ConversationID = conversationID
+	} else if src := spec.Options[protocol.OptionResumeFrom]; src != "" {
 		local, srcMeta, err := validateResumeSource(src, spec.AgentType, endpointID, getSource)
 		if err != nil {
 			return daemon.LaunchSpec{}, err
