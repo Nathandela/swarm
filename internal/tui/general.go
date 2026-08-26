@@ -823,8 +823,14 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	// it: the summary yields, then the markers themselves clamp, so the row never
 	// exceeds the terminal.
 	var markers []string
-	if s.RemoteControlled {
-		markers = append(markers, remoteControlMarker)
+	// THE INSTANT, NOT THE FLAG. RemoteControlled is still the daemon's answer to "is somebody
+	// driving this" -- it gates the supervisor and the roster poller's diff key -- but a row
+	// cannot be WORDED from a boolean, and a lease carries no instant to word it with. A row
+	// with a lease and no delivered message therefore says nothing, which is correct: there is
+	// no event to report, and no shipped client has taken a lease since R6 replaced
+	// take_control with composer_send.
+	if s.RemoteActivityAt != nil {
+		markers = append(markers, phoneSentMarker(*s.RemoteActivityAt))
 	}
 	if s.SupervisionPending {
 		markers = append(markers, supervisionMarker(s, m.sessions))
@@ -918,19 +924,37 @@ func confirmPrompt(s protocol.SessionView) string {
 	return "delete? y/n"
 }
 
-// remoteControlMarker says a phone is driving this session. A bare word, not a glyph:
-// the roster is read at a glance and a decorative symbol here would be one more thing to
-// learn. Device NAME display is deliberately out of scope -- the daemon answers a bare
-// bool, and naming the device needs a deviceID accessor plus a registry lookup that does
-// not exist yet.
+// phoneSentPrefix and phoneSentClock are the marker's two halves: what the phone DID, and
+// WHEN. Words, not a glyph: the roster is read at a glance and a decorative symbol here would
+// be one more thing to learn. Device NAME display is deliberately out of scope -- the daemon
+// reports the session's activity, and naming the device needs a deviceID accessor plus a
+// registry lookup that does not exist yet.
 //
-// IT NO LONGER SAYS "CONTROL" (conversation surface, Wave G). Control was a lease the
-// phone took, and R1 removes take-control from the product; what the daemon actually
-// observes now is a MESSAGE ARRIVING, and it ages out (skeleton.phoneActiveHorizon). So
-// the marker's presence is itself the recency claim -- it appears when a phone sends and
-// disappears a couple of minutes later -- and one word is the whole of what is known. It
-// is deliberately not "phone is here": presence is a fact nobody on this wire measures.
-const remoteControlMarker = "phone"
+// IT NO LONGER SAYS "CONTROL" (conversation surface, Wave G item G.2). Control was a lease the
+// phone took, and R1 removes take-control from the product; what the daemon actually observes
+// is a MESSAGE ARRIVING, at an instant, and it ages out (skeleton.phoneActiveHorizon).
+//
+// AND IT NO LONGER SAYS JUST "phone", which is the correction this pair exists for. The short
+// form was defended on the ground that the marker's own presence carries the recency claim --
+// it appears on a send and vanishes a couple of minutes later -- and that is true of the
+// mechanism and invisible to the reader, who sees one word and no horizon. Worse, a bare noun
+// sitting beside "supervisor pending" and "supervisor gone" reads as a CONDITION: a phone is
+// on this session. That is the presence claim plan G.5 rules out in as many words, and
+// nothing on this wire measures it. An event, with its time, says only what was seen.
+//
+// The clock is 24-hour and zero-padded so the column never ragged-edges and never needs an
+// am/pm a marker has no room for.
+const (
+	phoneSentPrefix = "phone sent "
+	phoneSentClock  = "15:04"
+)
+
+// phoneSentMarker is the row's words for a session a phone has messaged. The instant is
+// rendered in the READER'S zone: the daemon may be elsewhere, and the person reading the row
+// is comparing it against their own clock.
+func phoneSentMarker(at time.Time) string {
+	return phoneSentPrefix + at.Local().Format(phoneSentClock)
+}
 
 // supervisionPendingMarker and supervisionGoneMarker are the row's passive-supervision
 // words (ADR-010 Amendment 3 C3/C4): an attention event awaits delivery to the source,

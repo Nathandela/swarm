@@ -33,6 +33,14 @@ import org.robolectric.RobolectricTestRunner
  * machine-authored literal and `emptyState` for a conversation with nothing in it -- five factories
  * that already exist, which is ADR-009-obsidian-visual-direction's requirement restated as
  * arrangement: a new screen composes the vocabulary, it does not mint one.
+ *
+ * THE SIGNED DRAWING ADDED FOUR MORE OF THEM (2026-08-26) AND THE RULE IS UNCHANGED: `gapDivider`
+ * for a proven tear, `fileChangeRow` for a change, `approvalSheet` for the decision drawn where it
+ * was asked, and `notice` for the offer onto a screen of its own. Every one of them already exists
+ * in `ui/kit/`; what this file checks is that the screen SPENDS them, on the blocks the model
+ * marked, and mints nothing of its own -- which is the half `android/gate/s24_screens_test.go`
+ * cannot see, because a screen that drew the right things out of the wrong components would pass
+ * that fence and fail this suite.
  */
 @RunWith(RobolectricTestRunner::class)
 class TranscriptViewTest {
@@ -48,6 +56,9 @@ class TranscriptViewTest {
         well: String = "",
         approval: Boolean = false,
         running: Boolean = false,
+        gap: Boolean = false,
+        fileChange: FileChangeChip? = null,
+        route: TranscriptRoute = TranscriptRoute.None,
     ) = TranscriptBlock(
         itemId = itemId,
         kind = kind,
@@ -56,6 +67,9 @@ class TranscriptViewTest {
         well = well,
         approval = approval,
         running = running,
+        gap = gap,
+        fileChange = fileChange,
+        route = route,
     )
 
     private fun panel(blocks: List<TranscriptBlock> = listOf(block())) =
@@ -64,7 +78,28 @@ class TranscriptViewTest {
     private fun view(
         panel: TranscriptPanel = panel(),
         onApproval: ((String) -> Unit)? = null,
-    ): View = transcriptView(context = context, panel = panel, onApproval = onApproval)
+        onRepair: (() -> Unit)? = null,
+        onOutput: ((String) -> Unit)? = null,
+        onDiff: ((String) -> Unit)? = null,
+    ): View = transcriptView(
+        context = context,
+        panel = panel,
+        onApproval = onApproval,
+        onRepair = onRepair,
+        onOutput = onOutput,
+        onDiff = onDiff,
+    )
+
+    /** Every string a `TextView` under [this] carries, in traversal order. */
+    private fun View.wordsIn(): List<String> {
+        val out = mutableListOf<String>()
+        fun walk(v: View) {
+            if (v is TextView) out += v.text?.toString().orEmpty()
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(this)
+        return out
+    }
 
     private fun View.allTagged(tag: String): List<View> {
         val found = mutableListOf<View>()
@@ -128,17 +163,25 @@ class TranscriptViewTest {
     /**
      * §2's reuse rule, over the one thing on this screen that is a machine-authored literal.
      *
-     * `monoWell` is documented as "the one factory for every mono block in the app". A tool's output
-     * and a unified diff are exactly that, and a transcript that laid them out as body copy would
+     * `monoWell` is documented as "the one factory for every mono block in the app". A tool's
+     * captured output is exactly that, and a transcript that laid it out as body copy would
      * silently re-wrap column-aligned text -- which misreports what the machine printed. It is
      * `terminal = false`: this is not a VT grid, and ADR-009 (1) leaves no grid anywhere in the app.
+     *
+     * **THE FIXTURE MOVED FROM `file_change` TO `tool_run`, AND THAT IS OWNER RULING R9 REACHING A
+     * TEST.** The pair this used to build -- a `file_change` carrying a well -- is now unreachable
+     * in production: `TranscriptScreen`'s `FILE_CHANGE` arm fills [TranscriptBlock.fileChange] and
+     * routes the diff to its own screen, and never fills [TranscriptBlock.well] at all. A fixture
+     * that goes on building it would be this suite proving the well works on a shape the screen
+     * can no longer be handed, which is how a test outlives the thing it was protecting. The
+     * SUBJECT is unchanged: a block that carries a machine literal draws it in the well.
      */
     @Test
     fun `a block carrying a machine literal draws it in the mono well`() {
-        val diff = view(panel(listOf(block(kind = "file_change", well = "@@ -1 +1 @@"))))
+        val output = view(panel(listOf(block(kind = "tool_run", well = "@@ -1 +1 @@"))))
         val prose = view(panel(listOf(block())))
 
-        assertEquals("@@ -1 +1 @@", textOf(diff.kitFind(TranscriptTag.WELL)))
+        assertEquals("@@ -1 +1 @@", textOf(output.kitFind(TranscriptTag.WELL)))
         assertNull(
             "a well is drawn under a block that carries no literal, which is an empty recessed " +
                 "box saying \"we have nothing\" in the shape of \"the machine printed nothing\"",
@@ -155,7 +198,7 @@ class TranscriptViewTest {
         )
 
         val card = root.kitRequire(TranscriptTag.APPROVAL)
-        assertTrue("the approval block is drawn as an ordinary line and cannot be tapped", card.isClickable)
+        assertTrue("the approval card is drawn and cannot be tapped", card.isClickable)
         card.performClick()
 
         assertEquals(
@@ -170,14 +213,19 @@ class TranscriptViewTest {
      * `navHeaderDrill(back = null)`'s precedent, and the defect it was written against
      * (agents-tracker-2yb: "the chevron therefore looks like a control and does not act").
      *
-     * The sheet that answers an approval is a separate screen with a separate owner. Until a caller
-     * hands this one a destination, the block is still DRAWN -- the conversation is not allowed to
-     * hide the thing the machine is blocked on -- and it is not offered as a control.
+     * AMENDED BY THE SIGNED DRAWING, AND THE SUBJECT IS UNCHANGED. The block is a decision CARD
+     * now (owner rulings R4 and R7) rather than a row pointing at a sheet, so what a host with no
+     * destination leaves behind is a card with no buttons and no tap -- not a missing question.
+     * The question is still drawn, because the conversation is not allowed to hide the thing the
+     * machine is blocked on; what is absent is the control. The assertion moved from the row's
+     * body cell to the card's own words for exactly that reason: `approvalSheet` carries no
+     * `ACTIVITY_BODY`, and a test that went on asking for one would fail this card for a reason
+     * that has nothing to do with whether the question is on screen.
      */
     @Test
     fun `an approval block with nowhere to go is drawn and is not a dead control`() {
         val root = view(
-            panel(listOf(block(kind = "approval_request", approval = true))),
+            panel(listOf(block(kind = "approval_request", line = "Run the tests?", approval = true))),
             onApproval = null,
         )
 
@@ -190,7 +238,7 @@ class TranscriptViewTest {
         assertTrue(
             "the approval block was dropped along with its destination, so the one item the " +
                 "machine is blocked on is missing from the conversation about it",
-            textOf(card.kitRequire(KitTag.ACTIVITY_BODY)).isNotEmpty(),
+            card.wordsIn().contains("Run the tests?"),
         )
     }
 
@@ -243,5 +291,170 @@ class TranscriptViewTest {
         // "a caller that names a span not in the sentence has a copy bug". Composing the row at all
         // is therefore the assertion; what this adds is that the sentence survived intact.
         assertEquals("Read src/main.rs", bodiesOf(root).single())
+    }
+
+    // ---- the signed drawing's new parts -------------------------------------
+
+    /**
+     * The tear, as the drawing draws it: a rule with a word on it, and the word is the repair.
+     *
+     * **WHAT IT REPLACES IS A PARAGRAPH STANDING IN THE READING PATH.** `notice(ERROR)` is a
+     * full-width sentence, and a tear drawn as one is something a reader has to finish before they
+     * can carry on reading -- between two rows of a conversation, on the screen the owner
+     * photographed with roughly 150 dp left for the messages. `gapDivider` is the same statement
+     * in the same voice at a fraction of the height, and it is the component's own recorded
+     * derivation ("the error notice, minus the paragraph").
+     *
+     * THE TYPE IS THE ASSERTION AND NOT A DETAIL. `notice` returns a `TextView` and `gapDivider`
+     * returns a `LinearLayout` of two rules around a label; a screen that kept the old factory
+     * would still carry the tag, still carry the words, and still be the paragraph. So this asks
+     * what was actually composed rather than what it happens to say.
+     */
+    @Test
+    fun `a proven tear is drawn as a divider and not as a paragraph`() {
+        val root = view(panel(listOf(block(kind = "structured_gap", line = "records missing · repair", gap = true))))
+
+        val tear = root.kitRequire(TranscriptTag.GAP)
+        assertTrue(
+            "the tear is still the full-width notice paragraph. The drawing reduces it to a rule " +
+                "with a word on it, in position, and a paragraph between two messages is the " +
+                "notice this whole slice was filed to remove",
+            tear is ViewGroup,
+        )
+        assertTrue(
+            "the tear no longer says the records are missing, or no longer carries its own " +
+                "repair -- and a tear a reader cannot act on where they found it is the notice " +
+                "standing above the conversation again",
+            tear.wordsIn().contains("records missing · repair"),
+        )
+    }
+
+    /**
+     * The repair rides on the divider, and only where there is one to ride to.
+     *
+     * `gapDivider`'s own row: "the whole line is the control", which is why the label carries the
+     * word rather than a span nothing can size. And `navHeaderDrill(back = null)`'s ruling, spent
+     * for the fourth time in this file: a control with no destination behind it is worse than no
+     * control at all (agents-tracker-2yb).
+     */
+    @Test
+    fun `the repair is on the tear, and a tear with nowhere to go is not a control`() {
+        var repaired = 0
+        val torn = panel(listOf(block(kind = "structured_gap", line = "records missing · repair", gap = true)))
+
+        val wired = view(torn, onRepair = { repaired++ })
+        wired.kitRequire(TranscriptTag.GAP).performClick()
+        assertEquals("the tear carries no repair, so the one place a reader meets the gap is the one place they cannot act on it", 1, repaired)
+
+        assertFalse(
+            "the tear is offered as tappable with no repair behind it, which is a control that " +
+                "looks like a control and does not act",
+            view(torn).kitRequire(TranscriptTag.GAP).isClickable,
+        )
+    }
+
+    /**
+     * Owner ruling R9: one tappable line per file, and never a screen of diff in the flow.
+     *
+     * **THE ROW IS A DIFFERENT COMPONENT AND SO IT IS A DIFFERENT TAG**, which is
+     * [TranscriptTag.APPROVAL]'s reasoning in this file's own words: a single tag over a chip and
+     * a row would let a test find either and assert the other's behaviour. `fileChangeRow` carries
+     * three cells and no `ACTIVITY_BODY`, so a shared tag would not merely be confusing -- every
+     * assertion written against the row would fail on the chip for the wrong reason.
+     */
+    @Test
+    fun `a file change is a chip in the flow, carrying its own three cells`() {
+        val root = view(
+            panel(
+                listOf(
+                    block(
+                        itemId = "01FILE",
+                        kind = "file_change",
+                        line = "modify · ui/kit/Composer.kt · +12 -24",
+                        fileChange = FileChangeChip("modify", "ui/kit/Composer.kt", "+12 -24"),
+                        route = TranscriptRoute.Diff("@@ -1 +1 @@"),
+                    ),
+                ),
+            ),
+        )
+
+        val chip = root.kitRequire(TranscriptTag.FILE_CHANGE)
+        assertEquals(
+            "the chip does not carry the wire's own three cells, so a reader scanning a wide " +
+                "refactor cannot see which files it touched or by how much",
+            listOf("modify", "ui/kit/Composer.kt", "+12 -24"),
+            chip.wordsIn(),
+        )
+        assertNull(
+            "the file change is ALSO drawn as an ordinary row, so one change is two things in " +
+                "the conversation",
+            root.kitFind(TranscriptTag.BLOCK),
+        )
+        assertNull(
+            "the unified diff is drawn in the flow under the chip. R9 moves it to a screen with " +
+                "room to scroll sideways; a refactor touching nine files costs nine screens here",
+            root.kitFind(TranscriptTag.WELL),
+        )
+    }
+
+    @Test
+    fun `the chip opens the diff, and a change with no diff is not a control`() {
+        var opened = ""
+        val changed = block(
+            itemId = "01FILE",
+            kind = "file_change",
+            line = "modify · ui/kit/Composer.kt · +12 -24",
+            fileChange = FileChangeChip("modify", "ui/kit/Composer.kt", "+12 -24"),
+            route = TranscriptRoute.Diff("@@ -1 +1 @@"),
+        )
+
+        view(panel(listOf(changed)), onDiff = { id -> opened = id })
+            .kitRequire(TranscriptTag.FILE_CHANGE).performClick()
+        assertEquals("the chip reported nothing, or reported something other than the item whose diff it opens", "01FILE", opened)
+
+        assertFalse(
+            "a delete carries no diff_excerpt and the chip still offers a screen, which is a tap " +
+                "onto an empty page",
+            view(panel(listOf(changed.copy(route = TranscriptRoute.None))), onDiff = { })
+                .kitRequire(TranscriptTag.FILE_CHANGE).isClickable,
+        )
+    }
+
+    /**
+     * Owner ruling R8's overflow, which is the state the model lane flagged the drawing does not
+     * allow: an open card bounded at twenty lines, showing a head, with no way on.
+     *
+     * THE LABEL IS THE MODEL'S OWN STRING AND IS NOT RE-TEMPLATED HERE. `TranscriptScreen` tables
+     * the singular and the plural separately -- because one plural template reads `1 more lines`
+     * at exactly the count likeliest to occur -- and a screen that rebuilt the sentence from a
+     * count would be a second place for English to be got wrong.
+     */
+    @Test
+    fun `a bounded body says how much more there is and offers the whole of it`() {
+        var opened = ""
+        val bounded = block(
+            itemId = "01TOOL",
+            kind = "tool_run",
+            line = "Bash go test ./...",
+            well = "=== RUN   TestOne",
+            route = TranscriptRoute.Output(text = "the whole body", label = "Open in full · 214 more lines"),
+        )
+
+        val root = view(panel(listOf(bounded)), onOutput = { id -> opened = id })
+        val offer = root.kitRequire(TranscriptTag.ROUTE)
+        assertEquals("Open in full · 214 more lines", textOf(offer))
+        offer.performClick()
+        assertEquals("the offer reported nothing, or reported something other than the item whose output it opens", "01TOOL", opened)
+
+        assertNull(
+            "a body that fits still offers a screen, so a reader is invited to tap through to " +
+                "three lines they can already see",
+            view(panel(listOf(bounded.copy(route = TranscriptRoute.None))), onOutput = { })
+                .kitFind(TranscriptTag.ROUTE),
+        )
+        assertNull(
+            "the offer is drawn with no screen behind it, which is the dead chevron wearing a route",
+            view(panel(listOf(bounded))).kitFind(TranscriptTag.ROUTE),
+        )
     }
 }

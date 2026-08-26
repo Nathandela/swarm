@@ -277,8 +277,16 @@ class PhoneScaffoldViewTest {
         )
     }
 
+    /**
+     * **SCOPED TO [phoneScaffoldView], DELIBERATELY** (chat-surface-plan B.5). The sweep is over
+     * `Destination.entries`, which has always been the three places a TAB leads -- so what
+     * narrowed is the claim rather than the loop: this says nothing about the conversation, which
+     * is a second composition with no bar at all and is asserted by
+     * `ConversationScaffoldViewTest`. [ScaffoldTag.COMPOSITION]'s own KDoc carries the amendment
+     * and names what replaces the coverage.
+     */
     @Test
-    fun `the bar is the same tabs on every destination`() {
+    fun `the bar is the same tabs on every tab destination`() {
         // The structural fact the scaffold exists for: `activityPanelView` and the settings panel
         // compose no bar of their own, so a bar that stayed inside the inbox would leave every
         // other destination with no way back.

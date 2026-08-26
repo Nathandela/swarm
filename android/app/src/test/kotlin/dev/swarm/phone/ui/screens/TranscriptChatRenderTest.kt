@@ -332,6 +332,18 @@ class TranscriptChatRenderTest {
 
     // ---- ADR-017: the tear ---------------------------------------------------
 
+    /**
+     * AMENDED BY THE SIGNED DRAWING (2026-08-26): the tear is a rule with a word on it.
+     *
+     * TWO CHANGES, AND THEY ARE DIFFERENT KINDS. The sentence is REDUCED -- the paragraph's three
+     * facts are argued down to "records missing · repair" in `TranscriptScreen.GAP_LINE`, where
+     * the counter-argument is recorded beside the argument it answers. The machine's own spool
+     * reason is DELETED from the block, and that is a real loss recorded as one: it was drawn in
+     * a mono well under the tear, and the drawing gives the tear ONE line, in position, carrying
+     * its own repair. A block of spool diagnosis beneath it is the paragraph again in the
+     * machine's voice, read out mid-conversation to someone who wants the conversation back. The
+     * reason is still journalled; it is no longer drawn between two messages.
+     */
     @Test
     fun `a structured gap is its own row with its own words`() {
         val block = blockOf(gap())
@@ -341,13 +353,17 @@ class TranscriptChatRenderTest {
                 "for a machine; a reader needs to be told the conversation is not continuous",
             block.line == "structured_gap",
         )
-        assertTrue(
-            "the tear's sentence does not say the record is broken",
-            block.line.isNotEmpty() && block.line.length > "structured_gap".length,
+        assertEquals(
+            "the tear does not say the record is missing records, or does not carry its own " +
+                "repair -- and a tear a reader cannot act on where they found it is the notice " +
+                "standing above the conversation that this slice was filed to remove",
+            "records missing · repair",
+            block.line,
         )
         assertEquals(
-            "the machine's own reason was dropped rather than carried verbatim",
-            "hook spool gap at seq 41",
+            "the machine's spool diagnosis is drawn under the tear again, which is the paragraph " +
+                "restated in the machine's own voice",
+            "",
             block.well,
         )
     }

@@ -228,6 +228,17 @@ class TranscriptPanelTest {
 
     // ---- file_change: the diff card --------------------------------------
 
+    /**
+     * AMENDED FOR OWNER RULING R9 (2026-08-26), and the amendment is MOVED rather than DELETED.
+     *
+     * The subject of the last assertion was "the diff is carried, so a file-change card does not
+     * merely say a file changed" -- and that subject survives intact. What changed is WHERE it is
+     * carried: the diff drew into the flow unconditionally on every changed file, so a refactor
+     * touching nine files cost nine screens of conversation, and it now rides on the block's own
+     * route onto a screen wide enough to scroll sideways (`TranscriptRoute.Diff`). The assertion
+     * follows it there rather than being weakened: it is still byte-exact, and the well is now
+     * asserted EMPTY, which is the half a deletion would have dropped silently.
+     */
     @Test
     fun `a file change names the change, the path and the size of it`() {
         val block = blockOf(
@@ -242,10 +253,16 @@ class TranscriptPanelTest {
         assertTrue("the path is not named: ${block.line}", block.line.contains("src/main.rs"))
         assertTrue("the size of the change is not shown: ${block.line}", block.line.contains("12"))
         assertEquals(
-            "the diff is not carried, so a file-change card says a file changed and never shows " +
-                "what changed in it",
-            "@@ -1 +1 @@",
+            "the diff is drawn in the reading column again (R9), where a wide refactor costs a " +
+                "screen per file",
+            "",
             block.well,
+        )
+        assertEquals(
+            "the diff is not carried at all, so a file-change row says a file changed and there " +
+                "is nowhere left to see what changed in it",
+            TranscriptRoute.Diff("@@ -1 +1 @@"),
+            block.route,
         )
         assertEquals("src/main.rs", block.emphasis)
     }

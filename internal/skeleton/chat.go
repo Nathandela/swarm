@@ -116,6 +116,13 @@ func (d *Daemon) resolveChatSession(machine, session string) (string, error) {
 	return local, nil
 }
 
+// testHookComposerCheckedNotYetDelivered, when non-nil, is invoked inside composerSend after
+// expected_turn has been verified and itemMu released, and before anything is delivered. That
+// gap is the whole subject of the re-check below, and nothing observable from outside the
+// package can be parked in it: the seam exists so the interleaving is DRIVEN rather than
+// raced. Always nil in production (mirroring internal/shim's testHookAfterPTYResize).
+var testHookComposerCheckedNotYetDelivered func(local string)
+
 // composerSend applies one accepted composer_send (Mirror M2.4). The precondition and the
 // injection record are taken under ONE itemMu hold, so the turn the send was checked
 // against and the correlation the echo will consume cannot be split by a concurrent
@@ -183,11 +190,21 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 	d.pendingSends[local] = q
 	d.itemMu.Unlock()
 
+	if testHookComposerCheckedNotYetDelivered != nil {
+		testHookComposerCheckedNotYetDelivered(local)
+	}
 	if err := d.deliverComposerText(local, sink, current, native, req.Text, pending.clientRef); err != nil {
 		// The message never reached the agent, so the correlation recorded above will never
 		// match an echo; withdraw it rather than letting a later identical owner prompt
 		// inherit a phone attribution.
 		d.dropPendingSend(local, operationID)
+		if errors.Is(err, errTurnMoved) {
+			// THE SAME REFUSAL THE PRECONDITION GIVES, because it is the same fact arriving
+			// a moment later. The phone draws it as bubble.stale and offers the words back.
+			return protocol.CodeStaleTurn, errIsLife5(
+				"expected_turn %q stopped being session %q's current turn before the message was "+
+					"delivered; the conversation moved on -- re-read it and send again", req.ExpectedTurn, req.Session)
+		}
 		if errors.Is(err, protocol.ErrInputBusy) {
 			// ITS OWN CODE, because it has its own remedy: nothing is wrong with the
 			// caller, the session or the message -- the line simply was not clean, and
@@ -249,6 +266,22 @@ func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protoco
 	return messageSink{keystrok: kc}, "", nil
 }
 
+// errTurnMoved is the late half of the expected_turn precondition: the turn the send was
+// checked against stopped being current before anything was delivered. It is a sentinel
+// rather than a code because it never leaves this package -- composerSend turns it into the
+// wire's stale_turn, which is the same answer the early check gives for the same fact.
+var errTurnMoved = errors.New("the turn moved between the precondition and the delivery")
+
+// turnMovedSince reports whether the session's current turn is no longer the one a send was
+// verified against. Empty matches empty: an idle session is a turn state like any other, and
+// a turn OPENING under an idle-time check is exactly the case that would otherwise dispatch
+// turn/start into a running turn.
+func (d *Daemon) turnMovedSince(local, expectedTurn string) bool {
+	d.itemMu.Lock()
+	defer d.itemMu.Unlock()
+	return d.turnIDs[local] != expectedTurn
+}
+
 // deliverComposerText writes one message through the resolved sink.
 //
 // ON THE BACKEND BRANCH: turn/start when the daemon's turn is EMPTY, turn/steer when it is not.
@@ -257,7 +290,25 @@ func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protoco
 // it does not match the currently active turn." R1 note 4 says to PROPAGATE it rather than
 // invent a Swarm-side one. Dispatching turn/start mid-turn instead would QUEUE A SECOND TURN,
 // so the owner's question and the phone's would arrive as two separate conversations.
+//
+// IT RE-READS THE TURN FIRST (Slice 0, agents-tracker-bzfe). composerSend verifies
+// expected_turn under itemMu and must release the lock before delivering -- neither sink can
+// be driven with a daemon-wide mutex held -- so the verified fact is already a moment old
+// when it is acted on, and the gap holds a tap subscribe plus a shimwire round trip on one
+// arm and a whole JSON-RPC round trip on the other. A turn opens on a user_message and closes
+// on a terminal agent_message (IS-ENV-1), both asynchronous to this path, so the owner asking
+// a question at the terminal or the agent simply finishing moves it. This narrows the window
+// to the delivery call itself and answers IS-LIFE-5's rule -- "refused, never misapplied" --
+// with the code the precondition already uses.
+//
+// WHAT IT STILL DOES NOT CLOSE, disclosed rather than implied: the write itself is not inside
+// this read. A turn that moves while the bytes are crossing the PTY is not reachable from
+// here, and it is not reachable from anywhere else either -- undoing a partial write is not a
+// thing a PTY offers. What the two arms DO close is the far larger window in front of it.
 func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTurn, nativeTurn, text, clientRef string) error {
+	if d.turnMovedSince(local, expectedTurn) {
+		return errTurnMoved
+	}
 	if sink.backend == nil {
 		return d.injectComposerText(local, sink.keystrok.ComposerKeys(text))
 	}

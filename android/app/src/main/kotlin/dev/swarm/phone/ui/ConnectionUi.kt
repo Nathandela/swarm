@@ -146,10 +146,36 @@ data class StreamView(
             else -> StreamBadge.LIVE
         }
 
+    /**
+     * What one unhealthy channel says, or empty while it is current.
+     *
+     * **THE STALE LINE MAY NOT BORROW THE TEAR'S WORD** (conversation drawing, `sync` row). It
+     * used to read *"The journal view has a gap and may be missing events."* -- a sentence that
+     * ASSERTS a tear as fact and then hedges only its consequence, which is backwards: the
+     * certain half is the part this phone cannot prove and the hedged half is the part it can.
+     * The drawing separates the two facts deliberately. A `gap` is a PROVEN, POSITIONED hole in
+     * the record, which is why it draws as a rule across the flow with a repair beside it; a
+     * stale stream is a stream that may be behind, and the sheet's note is the ruling -- *"a
+     * stale stream has no position, so it cannot claim one."* A reader told a hole exists,
+     * given no position for it and offered nothing to press, has been handed a fault report the
+     * app cannot substantiate.
+     *
+     * THE STREAM NAME LEAVES THE SENTENCE AND NOT THE MODEL. PB-APP-8's per-stream discipline is
+     * a property of [StreamView] -- [stream] still carries the name, `SettingsPanel`'s health
+     * line still names the unhealthy channels from that field, and the sync sheet still prints
+     * one line per channel. What the drawing tables is one sentence for the state, and a string
+     * not on that sheet is not on the screen.
+     *
+     * [StreamBadge.RESYNCING] STILL SPENDS THE WORD, and that is left standing rather than
+     * quietly reworded: the drawing tables `gap` and `sync` and no third row for a repair in
+     * flight, so the sentence for it is copy nobody has ruled on. It is reported rather than
+     * invented here.
+     */
     val notice: String
         get() = when (badge) {
             StreamBadge.LIVE -> ""
-            StreamBadge.STALE -> "The $stream view has a gap and may be missing events."
+            StreamBadge.STALE ->
+                "This view may be missing events. It repairs itself when the link recovers."
             StreamBadge.RESYNCING -> "Repairing the $stream view; the gap clears when the " +
                 "repair arrives."
         }

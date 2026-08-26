@@ -9,9 +9,12 @@ import dev.swarm.phone.ui.OperationOutcome
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
+import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.UndeliveredLedger
+import dev.swarm.phone.ui.kit.ComposerAvailability
 import dev.swarm.phone.ui.kit.ComposerModel
 import dev.swarm.phone.ui.kit.ComposerShut
+import dev.swarm.phone.ui.kit.MenuChoice
 import dev.swarm.phone.ui.kit.SendState
 
 /**
@@ -65,6 +68,45 @@ data class SessionDetailPanel(
     val title: String,
     /** §4's back control. The label a screen reader reads; the chevron is the kit's. */
     val back: String,
+    /**
+     * The header's overflow control, by what it opens.
+     *
+     * IT IS [back]'S ARRANGEMENT ON THE OTHER END OF THE SAME ROW: a glyph-only control needs a
+     * label for a screen reader, the words are copy, and copy belongs to the screen (PB-DS-9) --
+     * which is why `overflowControl` deliberately sets none and says so.
+     *
+     * **THE DRAWING'S COPY TABLE RECORDS NO STRING FOR IT, AND THIS ONE IS THEREFORE AUTHORED
+     * HERE RATHER THAN QUOTED.** That is a gap in the sheet rather than a licence: what the table
+     * covers is what is drawn, and U+22EE is drawn without words. The alternative was an
+     * unlabelled control on the one screen a person reaches every session through, which
+     * `notice`'s own ruling is written against. It says WHAT OPENS and not what the control looks
+     * like, so it stays true if the mark changes.
+     */
+    val menu: String,
+    /**
+     * The conversation header's second line: what this session is DOING, and on which machine.
+     *
+     * "`<state> · <machine>`", which is the drawing's own cell (`header.state`), and it is one
+     * string rather than two fields because it is one line of copy -- PB-DS-9 puts copy on the
+     * screen model, and a header handed two halves would be a header deciding how they join.
+     *
+     * THE STATE IS READ FROM THE OPEN TURN AND THE LINK, NEVER FROM "A TOOL IS RUNNING"
+     * ([headerStateFor] carries the argument). The machine half is [SessionDetail.machineLabel],
+     * and it drops out entirely -- separator and all -- for a session id that names no machine,
+     * because a trailing separator over nothing is punctuation claiming a fact.
+     */
+    val headerSubtitle: String,
+    /**
+     * The Group the header's dot draws, ALWAYS one `Kit.groupColour` can place.
+     *
+     * IT IS THE ROSTER'S OWN WORD AND THIS FIELD IS WHERE THE RACE IS ABSORBED. `statusDot` fails
+     * loudly on a Group outside the four (PB-TOK-8, and it is right to: a Group with no colour is a
+     * whole inbox section with no state) -- so a drill-down whose session left the roster between
+     * two draws would take the header's dot down with it, on the one screen a person is reading.
+     * [SessionDetailScreen.of] is what guarantees the value; see its own paragraph for which Group
+     * a phone with no answer draws and why that is the least it can claim.
+     */
+    val headerGroup: String,
     /**
      * The conversation, which is ADR-009-structured-chat-interaction (1) landing on this screen.
      *
@@ -163,7 +205,49 @@ data class SessionDetailPanel(
     val loadEarlierBeforeItem: String,
     /** What that control reads as. */
     val loadEarlierLabel: String,
-)
+    /**
+     * The drawing's one persistent affordance: what the pill says while a decision is unanswered.
+     *
+     * IT IS A LABEL AND NOT A CONDITION. Whether the pill is DRAWN is [pendingDecisionId]'s
+     * question; what it says is copy, and copy is the screen's (PB-DS-9). Splitting them is what
+     * lets the pill's condition ride the patch path -- it is derived from the transcript, which
+     * moves on its own -- while the words stay a constant nothing recomputes.
+     */
+    val decisionPillLabel: String,
+) {
+    /**
+     * The oldest unanswered decision's item id, or "" when the machine is waiting on nothing.
+     *
+     * A PASSTHROUGH AND NOT A FIELD, deliberately. It is derived from the transcript, which is
+     * already the one value `sessionDetailRedraw` accepts a difference in -- so as a computed
+     * property it rides the patch for free, and as a constructor field it would have had to be
+     * argued into the whitelist beside the header's two. What it decides is the pill above the
+     * composer and the stick-to-bottom suppression inside the list, and both of those are facts
+     * about the conversation rather than about this screen's chrome.
+     */
+    val pendingDecisionId: String get() = transcript.pendingDecisionId
+
+    /**
+     * Whether this session gets the composer BAR at all, as opposed to the sentence that says why
+     * it has none.
+     *
+     * **IT IS ONE PREDICATE BECAUSE IT NOW HAS TWO READERS, AND THEY MUST NOT DRIFT.** The bar is
+     * the scaffold's pinned region and the sentence is a line inside the scrolling column
+     * (`conversationScaffoldView`), so the surface decides whether to pin one and the screen
+     * decides whether to draw the other -- two files, one fact. Written out twice, the day the
+     * rule gains a state is the day a session draws both a bar and the sentence saying it has
+     * none, which is the class of contradiction this whole wave exists against (the plan's defect
+     * 2: two conditions sharing no term, rendering together).
+     *
+     * OFFLINE KEEPS THE BAR, which is `ComposerModel`'s decision quoted rather than re-taken: the
+     * sink exists and the link is coming back, so the draft is still worth typing and a control
+     * that vanished would teach the reader the feature was gone. The states that lose it are the
+     * ones with NO MESSAGE SINK -- a torn record, a provider reporting no structured chat, an
+     * ended session -- where a bar would promise a verb the session structurally lacks (ADR-017).
+     */
+    val composerIsBar: Boolean
+        get() = composerShut == null || composerAvailability == ComposerAvailability.OFFLINE
+}
 
 /**
  * The MACHINE's answer to one composer_send, as everything the composer does about it
@@ -338,6 +422,160 @@ object SessionDetailScreen {
 
     /** §4's back control, by where it goes rather than by a glyph a screen reader cannot read. */
     private const val BACK = "Back to inbox"
+
+    /**
+     * [BACK]'s rule at the other end of the header: what the overflow OPENS, not what it looks
+     * like.
+     *
+     * IT IS THE SHEET'S OWN STRING NOW. This read "More for this session", authored here because
+     * the drawing's copy table had no row for a glyph-only control; the owner added `Session menu`
+     * to the table rather than leaving the app speaking a sentence nobody signed. Quoted, not
+     * invented.
+     */
+    private const val MENU = "Session menu"
+
+    /**
+     * The drawing's `decision.pill` row, verbatim: the one persistent affordance in the flow.
+     *
+     * IT LIVES HERE BECAUSE IT IS COPY (PB-DS-9). `decisionPill` is a kit factory and the kit
+     * authors no words -- the string existed only inside `DecisionPillTest`, which is a string
+     * with no owner and no production caller: the same "computed and read by nothing" shape this
+     * wave is closing everywhere else.
+     */
+    private const val DECISION_PILL = "Decision needed"
+
+    /**
+     * What a conversation-menu row ANSWERS TO, which is never the words on it.
+     *
+     * `MenuChoice` splits the id from the label precisely so a menu keyed on its own visible copy
+     * does not re-route itself the day `Kill session` becomes `End session`. These are that key,
+     * and they are spelled once, here, beside the function that mints them.
+     */
+    const val MENU_LOAD_EARLIER = "conversation.menu.earlier"
+    const val MENU_KILL = "conversation.menu.kill"
+
+    /**
+     * The rows this session's header menu has -- which is a fact about the session, and therefore
+     * a decision this model takes rather than one the kit does.
+     *
+     * **WHAT IS NEVER HERE, AND BOTH ABSENCES ARE REFUSALS.** There is no TERMINAL VIEW:
+     * ADR-017:60-65 forbids a raw-terminal route on a session with a structured record, so a row
+     * offering one would be a door onto a room that is not there. And there is no REPAIR: the tear
+     * has a POSITION and the repair is drawn at it, inside the conversation, because two
+     * affordances for one live-only operation are two pending states for one act, competing over
+     * which of them is in flight.
+     *
+     * **AND `Session details` IS NOT HERE EITHER, WHICH IS A DEPARTURE FROM THE SIGNED DRAWING AND
+     * IS RECORDED AS ONE.** The drawing tables three rows; this build has no session-details
+     * screen and no route to one, so the row would be a control that goes nowhere -- the
+     * dead-chevron defect (agents-tracker-2yb), which is precisely what the drawing's own "never a
+     * dead end" rule forbids one section further down. The two facts such a screen would carry --
+     * which machine, and what the session is doing -- are already in the header the menu hangs
+     * off, which is why the omission costs a reader nothing today. It comes back the moment there
+     * is a screen behind it.
+     *
+     * LOAD EARLIER IS OFFERED ON THE SAME CONDITION THE CHIP AT THE HEAD OF THE LIST IS, and both
+     * press the same control: one operation, one pending state. It is DROPPED rather than greyed
+     * once the machine has declared the floor -- a tap that can only come back empty is the same
+     * dead affordance one row up.
+     *
+     * KILL IS ALWAYS OFFERED, because [SessionDetail.stopVisible]'s argument applies to the
+     * escalation too: the reader who most needs it is the one whose session is not answering.
+     * What guards it is the question it has always carried, not its absence.
+     */
+    fun menuChoicesFor(panel: SessionDetailPanel): List<MenuChoice> = buildList {
+        if (panel.offersLoadEarlier) add(MenuChoice(MENU_LOAD_EARLIER, panel.loadEarlierLabel))
+        add(MenuChoice(MENU_KILL, panel.killLabel, destructive = true))
+    }
+
+    /**
+     * The five words the conversation header may say about a session, and no sixth.
+     *
+     * THEY ARE THE DRAWING'S `header.state` CELL VERBATIM and are lower case because that is how
+     * it draws them -- a subtitle in the machine's own register, beside the machine's own name,
+     * rather than a label this screen capitalised into a status badge.
+     *
+     * "needs you" IS NOT "needs_input". The Group is the wire's word and belongs to the DOT, which
+     * draws it as a colour; this is the same fact said to a person, and the two are kept apart so
+     * nobody is tempted to render a Group verbatim in a sentence.
+     */
+    private const val STATE_IDLE = "idle"
+    private const val STATE_WORKING = "working"
+    private const val STATE_NEEDS_YOU = "needs you"
+    private const val STATE_OFFLINE = "not connected"
+    private const val STATE_ENDED = "ended"
+
+    /** What joins the state to the machine on the header's second line. */
+    private const val SUBTITLE_SEPARATOR = " · "
+
+    /**
+     * The Group a header draws when the ROSTER cannot name this session's, and the only place in
+     * this app that picks a Group rather than reading one.
+     *
+     * WHY IT HAS TO BE SOMETHING. `Kit.groupColour` refuses a Group outside the four and is right
+     * to (PB-TOK-8); the conversation header spends one unconditionally; and the case is real --
+     * `FacadeBridge.sessionTitle`'s own KDoc names it, "a drill-down on a session that has just
+     * left the roster is an ordinary race rather than a failure". A screen that crashed on that
+     * race would take down the one surface a person is reading.
+     *
+     * WHY IT IS `completed` AND NOT ONE OF THE OTHER THREE. Every other Group ASSERTS something:
+     * `needs_input` says the agent is blocked on this reader, `working` says it is doing something
+     * right now, `ready_for_review` says there is an answer waiting. A phone whose roster cannot
+     * name the session has evidence of none of those, and the recessive grey is the one mark in
+     * the design that claims no live activity -- the same ink `TriageInbox` gives a session that
+     * has finished, for the same reason: it recedes rather than calling for attention. The dot is
+     * the weakest claim available; the WORD beside it is still computed from what this phone does
+     * know ([headerStateFor]), so nothing here invents a state a reader can read.
+     */
+    private const val GROUP_UNKNOWN = "completed"
+
+    /**
+     * What the conversation header says this session is doing.
+     *
+     * **THE OPEN TURN IS THE SOURCE OF "working", AND `blocks.any { it.running }` IS NOT** (plan
+     * D.1). A tool run is not the unit of work: an agent that is only THINKING has no open tool
+     * and would read idle while it types, and a tool whose completion never arrived would read
+     * working forever -- a header stuck on a word no event can clear. `TranscriptPanel.latestTurnId`
+     * already mirrors IS-ENV-1's rule (a turn opens on a `user_message` and closes on any terminal
+     * `agent_message`) and is the same value both `composer_send` and `turn_interrupt` are drawn
+     * against, so the header, the composer and Stop cannot disagree about whether this session is
+     * busy.
+     *
+     * **THE ORDER IS THE PRECEDENCE AND EVERY STEP OF IT IS A RULING.** `ended` outranks
+     * everything because there is nothing to type into whatever the link or the record says
+     * ([SessionDetail.ended]'s own words). The LINK comes next: a session may well have a turn
+     * open on the machine, but a phone that cannot reach it must say so rather than reporting
+     * activity it is not receiving. `needs you` outranks `working` because a session blocked on
+     * this reader is not working -- it is stopped, waiting, and that is the fact worth the
+     * subtitle. `idle` is what is left, and it is a real state rather than a fallback: no turn is
+     * open, which is exactly the value the daemon matches an idle session by.
+     */
+    fun headerStateFor(
+        ended: Boolean,
+        online: Boolean,
+        group: String,
+        openTurn: String,
+    ): String = when {
+        ended -> STATE_ENDED
+        !online -> STATE_OFFLINE
+        group == NEEDS_INPUT -> STATE_NEEDS_YOU
+        openTurn.isNotEmpty() -> STATE_WORKING
+        else -> STATE_IDLE
+    }
+
+    /** The one Group the header turns into a word of its own. */
+    private const val NEEDS_INPUT = "needs_input"
+
+    /**
+     * The header's second line, assembled: the state, and the machine where there is one to name.
+     *
+     * THE SEPARATOR RIDES WITH THE MACHINE AND NOT WITH THE STATE, which is the whole of what an
+     * empty [machineLabel] costs. A session id carrying no namespace has no machine half at all --
+     * `TriageInboxScreen.machineOf` answers null for exactly that shape -- and "idle · " is a
+     * line promising a word the wire never sent.
+     */
+    fun headerSubtitleFor(state: String, machineLabel: String): String =
+        if (machineLabel.isEmpty()) state else state + SUBTITLE_SEPARATOR + machineLabel
 
 
     /**
@@ -624,6 +862,25 @@ object SessionDetailScreen {
         // never good at: being read.
         title = detail.title.ifEmpty { detail.sessionId },
         back = BACK,
+        menu = MENU,
+        // THE HEADER'S SECOND LINE, AND IT IS COMPOSED HERE RATHER THAN IN THE HEADER because it
+        // is copy: PB-DS-9 puts every string on the screen model, and the join between the state
+        // and the machine is as much a decision as either half.
+        headerSubtitle = headerSubtitleFor(
+            headerStateFor(
+                ended = detail.ended,
+                online = lease.online,
+                group = detail.group,
+                // D.1: the OPEN turn, which is the same value `composer_send` and `turn_interrupt`
+                // are drawn against. See [headerStateFor] for why it is not a running tool.
+                openTurn = transcript.latestTurnId,
+            ),
+            detail.machineLabel,
+        ),
+        // GUARDED HERE AND NOWHERE ELSE ([GROUP_UNKNOWN] carries the argument): the dot fails
+        // loudly on a Group it cannot place, and every caller that could hand one in is a caller
+        // that could hand in the empty string a lost roster row leaves behind.
+        headerGroup = detail.group.takeIf { it in TriageInbox.TRIAGE_ORDER } ?: GROUP_UNKNOWN,
         transcript = transcript,
         // THE LEASE MODEL DECIDES BOTH, and they are read from the two properties rather than from
         stopAction = detail.stop(),
@@ -681,11 +938,20 @@ object SessionDetailScreen {
             recordTorn = transcript.structureTorn,
             ended = detail.ended,
         ),
-        // A WORKING AGENT IS ONE WITH AN OPEN TOOL RUN, read off the blocks this screen has
-        // already decided rather than off a second source. `TranscriptBlock.running` is §4's
-        // `in_progress` and exists precisely so a caller can ask without re-parsing a sentence.
+        // **A WORKING AGENT IS ONE WITH AN OPEN TURN** (plan D.1, and [headerStateFor] carries the
+        // argument in full). This read `transcript.blocks.any { it.running }` under a comment
+        // asserting that a working agent is one with an open TOOL RUN, and that argument is
+        // deleted rather than left standing beside the one that replaced it: a tool run is not the
+        // unit of work. An agent that is only thinking has no open tool, so the placeholder said
+        // "Message" while the agent was typing; a tool whose completion never arrived leaves the
+        // predicate true forever, so it said "Add feedback..." for the rest of the session.
+        //
+        // ONE SOURCE, FOUR READERS. The header word, the working line, this placeholder and Stop
+        // all read `latestTurnId` -- which is the same value `App.ComposerSend` and `App.Interrupt`
+        // are drawn against -- so the screen cannot disagree with itself about whether this
+        // session is busy, and cannot disagree with the daemon either.
         composerPlaceholder = ComposerModel.placeholderFor(
-            working = transcript.blocks.any { it.running },
+            working = transcript.latestTurnId.isNotEmpty(),
         ),
         composerStateLabel = detail.composerState?.let { ComposerModel.stateLabel(it) }.orEmpty(),
         composerNotice = if (detail.composerRefusal.isEmpty()) {
@@ -706,6 +972,7 @@ object SessionDetailScreen {
         offersLoadEarlier = transcript.offersLoadEarlier,
         loadEarlierBeforeItem = transcript.oldestItemId,
         loadEarlierLabel = LOAD_EARLIER,
+        decisionPillLabel = DECISION_PILL,
     )
 
 }

@@ -215,7 +215,7 @@ Pure JVM, no views, testable alone.
 | D.1 | One source for *working* | `TranscriptPanel.kt:71-90` already computes the open turn correctly | **Not** `blocks.any { it.running }` (`SessionDetailPanel.kt:786-790`), which misses an agent that is only thinking and leaves a missed completion working forever. The header word, the working line, the placeholder and Stop all read the open turn |
 | D.2 | The patch path must survive it | `SessionDetailView.kt:541-558` | the redraw patches only when the diff is confined to the transcript and three whitelisted fields; anything else is a full rebuild that loses scroll position (`:700-703`). Either the field joins the whitelist deliberately, or the header does not carry it. **Decide in the RED phase, not in review** |
 | D.3 | Collapse by default | `TranscriptPanel.kt:305` (`collapsed` set), `PhoneSurface.kt:2393` | the mechanism ships; the default flips. `TranscriptPanel.kt:290-296` argues for open-by-default in writing — the counter-argument (a closed line that names its worst outcome hides nothing actionable) is recorded **in that file**, beside the argument it answers |
-| D.4 | The closed line carries what collapse would otherwise hide | `ToolCard.kt` | status (`failed` / `declined` / `timed out`, the wire's own words) and `clipped`, because `offersDetail = expanded && truncated && detail` (`ToolCard.kt:61`) would make truncation invisible by default |
+| D.4 | The closed line carries what collapse would otherwise hide | `ToolCard.kt` | status (`failed` / `declined` -- **the wire's vocabulary is four values, `in_progress | completed | failed | declined`, and an earlier draft of this row invented a fifth**; `timed out` appears nowhere in the tree as a status) and `clipped`, because `offersDetail = expanded && truncated && detail` (`ToolCard.kt:61`) would make truncation invisible by default |
 | D.5 | The in-place bound and the overflow (R8) | `TranscriptPanel.kt` | open in place to the bound; past it, head plus *Open in full · N more lines* |
 | D.6 | File change becomes a chip (R9) | `TranscriptPanel.kt:465` | today the unified diff is drawn unconditionally. The row carries verb, path and counts; the diff opens on its own screen. **Never grouped** |
 | D.7 | Send state machine (R6) | `ui/kit/Composer.kt`, `mobile/` | `pending` until the agent's own transcript echoes the prompt back — the fact `stampComposerEchoLocked` (`chat.go:393-399`) already detects. `settled` has no label; `refused` keeps the words and offers the retry |
@@ -269,7 +269,11 @@ supervisor loses its phone arm and starts typing into a live conversation.
   inferring what a command does. A machine-authored sensitivity field comes first, or `execute`
   actions are never aggregated. A count is also a claim about the machine made from what this phone
   happens to hold.
-- **Day separators.** Not in this wave.
+- **Day separators.** The reason, since every other entry here carries one and this said only "not in
+  this wave": an item's `ts_unix_ms` is the instant **this phone** received it, not the instant the agent
+  spoke, and the two diverge by exactly the offline window a separator would be drawing a line across. A
+  day boundary computed from arrival time would put "Yesterday" above a message sent this morning to a
+  phone that reconnected at noon. It needs an authored timestamp on the wire, not a layout decision.
 - **The inbox conversation row.** Last-message preview and time are not fields that exist —
   `mobile/types.go:63-117` omits both and `internal/protocol/server.go:2862-2865` publishes
   `Summary` empty. Cross-boundary work.
@@ -335,5 +339,11 @@ drawing names. The owner's physical demonstration (`agents-tracker-11un`) is the
 3. **R3 reverses a reasoned prior decision.** Answer the argument in the file where it lives.
 4. **The working field may force a full rebuild** on every status flip, on the one screen whose
    purpose is continuous reading.
-5. **Fable's design-honesty lens is uncovered.** Re-run against the drawing when credits return —
-   per the standing owner instruction that Fable is a permanent committee member.
+5. **Fable's design-honesty lens is uncovered, and remains so.** Fable was out of usage credits at the
+   committee and again on 2026-08-26 when the seat was retried. An **interim** stand-in sat the seat on
+   Opus that day and its findings are folded into this plan and into the wave (items 1-10 of its report:
+   the `Sent` label, the unwritten ADR-009 amendment, ADR-017's overclaimed phone rendering, the
+   discarded offline sentences, the short terminal marker, `timed out`, the decision-resolution states,
+   the copy-gate claim, the borrowed tear wording). **That does not discharge Fable's pass** — re-run it
+   against the drawing when credits return, per the standing owner instruction that Fable is a permanent
+   committee member.

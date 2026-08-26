@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
@@ -243,6 +244,72 @@ class KitDensityTest {
                     ),
                 ),
             ),
+        )
+    }
+
+    /**
+     * THE CONVERSATION SURFACE'S OWN STEPS AND RULES (Wave C), at the density that can see them.
+     *
+     * **THE TWO NEW HAIRLINES ARE THE REASON THIS TEST EXISTS AT ALL.** This suite's own record of
+     * the defect it caught is that `--p-hair` at 1 dp is drawn in three places, two were asserted
+     * here, and "the one path nothing looked at is the one path that drifted" -- 2.625 px against
+     * the 3 the other two spend. Wave C adds three more sites: the conversation header's bottom
+     * rule and the menu's row separators, plus the tear's own two rules. All of them are laid-out
+     * heights or drawable strokes spent through `Kit.dpPx`, and this is what says so.
+     *
+     * THE STEPS ASSERTED ARE THE ONES THAT CAN FAIL. At density 2.625 `space_8`, `space_10`,
+     * `space_16`, `space_18` and `space_24` all land on whole pixels, so a component that
+     * truncated them would pass -- claiming them here would be green that means nothing. What is
+     * claimed is `space_4` (10.5), `space_6` (15.75), `space_12` (31.5) and `space_14` (36.75),
+     * where truncation and rounding give different answers, and the control at the end proves the
+     * distinction is live in this run.
+     */
+    @Test
+    fun `the conversation surface spends the whole pixels the platform would`() {
+        val hairline = px(KitOrigin.cssFirstPx(".prow", "border")).roundToInt()
+
+        val header = conversationHeader(
+            context, title = "claude-NewLatexCV", subtitle = "idle - nathans-mbp",
+            group = "completed", back = null, menu = null,
+        )
+        val menu = conversationMenu(context, listOf(MenuChoice("a", "A"), MenuChoice("b", "B"))) {}
+        val menuRule = (0 until menu.childCount).map { menu.getChildAt(it) }.first { it !is TextView }
+        val tear = gapDivider(context, "records missing")
+        val tearRule = (0 until tear.childCount).map { tear.getChildAt(it) }.first { it !is TextView }
+        val chip = earlierChip(context, "Load earlier messages")
+        val pill = decisionPill(context, "Decision needed")
+        val change = fileChangeRow(context, "modify", "ui/kit/Composer.kt", "+12 -24")
+        val bubble = messageBubble(context, "check the relay logs too")
+
+        assertEquals(
+            emptyList<String>(),
+            mismatches(
+                listOf(
+                    // The three hairline sites this wave adds, against the same value the card,
+                    // the chip and the tab bar's rule already answer to.
+                    Claim("row 27 header bottom rule", hairline.toFloat(), (header.background as BottomRule).rulePx),
+                    Claim("row 28 menu row separator", hairline, menuRule.layoutParams.height),
+                    Claim("row 29 tear rule", hairline, tearRule.layoutParams.height),
+                    // And the steps whose rounding is visible at this density.
+                    Claim("row 28 block padding", dimenPx("swarm_space_4"), menu.paddingStart),
+                    Claim("row 30 chip padding-x", dimenPx("swarm_space_12"), chip.paddingStart),
+                    Claim("row 31 row padding-x", dimenPx("swarm_space_12"), change.paddingStart),
+                    Claim("row 32 pill padding-y", dimenPx("swarm_space_6"), pill.paddingTop),
+                    Claim("row 32 pill padding-x", dimenPx("swarm_space_14"), pill.paddingStart),
+                    Claim("row 26 bubble padding-x", dimenPx("swarm_space_12"), bubble.paddingStart),
+                ),
+            ),
+        )
+        assertNotEquals(
+            "at density $density `space_12` is a whole number of pixels, so the padding claims " +
+                "above cannot tell a truncated step from a rounded one and say nothing",
+            truncated("swarm_space_12"),
+            dimenPx("swarm_space_12"),
+        )
+        assertNotEquals(
+            "and the same for the hairline, which is the claim this block is really for",
+            px(KitOrigin.cssFirstPx(".prow", "border")).toInt(),
+            hairline,
         )
     }
 

@@ -17,7 +17,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": "owner"
+        "Source": "owner",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -34,7 +35,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -51,7 +53,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "read",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -68,7 +71,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "edit",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -85,7 +89,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -102,7 +107,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       }
     ],
     "approvals": [
@@ -121,7 +127,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       }
     ],
     "tap": {
@@ -147,7 +154,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": "owner"
+        "Source": "owner",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -164,7 +172,8 @@
         "Degraded": false,
         "Resolved": true,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -181,7 +190,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "read",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -198,7 +208,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "edit",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -215,7 +226,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -232,7 +244,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": ""
       },
       {
         "SessionID": "machine/session",
@@ -249,7 +262,8 @@
         "Degraded": false,
         "Resolved": false,
         "ToolKind": "",
-        "Source": ""
+        "Source": "",
+        "OperationID": "a4484418c17171d63d2da6ef7ffe78b7"
       }
     ],
     "approvals": []

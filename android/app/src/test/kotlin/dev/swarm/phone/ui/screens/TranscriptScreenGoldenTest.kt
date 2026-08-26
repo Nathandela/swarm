@@ -119,6 +119,12 @@ class TranscriptScreenGoldenTest {
         turnId = o.getString("TurnID"),
         tsUnixMs = o.getLong("TSUnixMs"),
         source = o.getString("Source"),
+        // Owner ruling R6's own field (lane B): WHICH of this phone's sends the agent echoed
+        // back. It is read here for the reason every other key in this function is -- the gate
+        // set-compares the getters `FacadeBridge` calls against the keys this body reads, in
+        // BOTH directions, so a field the app reads in production and the recorded-bytes suite
+        // does not is a field whose rendering is asserted nowhere.
+        operationId = o.getString("OperationID"),
     )
 
     private fun itemsOf(side: String, field: String = "items"): List<InteractionItem> {
@@ -142,13 +148,54 @@ class TranscriptScreenGoldenTest {
             if (tag == TranscriptTag.BUBBLE) {
                 rows += (tag as String) to textOf(v)
             }
-            if (tag == TranscriptTag.BLOCK || tag == TranscriptTag.APPROVAL) {
+            if (tag == TranscriptTag.BLOCK) {
                 rows += (tag as String) to textOf(v.kitRequire(KitTag.ACTIVITY_BODY))
+            }
+            // THE DECISION IS A CARD AND THE CHANGE IS A CHIP (owner rulings R4/R7 and R9), so
+            // neither is an `activityRow` and neither carries an ACTIVITY_BODY. What each one
+            // SAYS is read off the words it draws -- but not the same way, because they are not
+            // the same shape:
+            //
+            //  - A CARD LEADS WITH ITS QUESTION and then draws the literal and one to eight CLI
+            //    labels. Its row entry is that LEADING line, so this list keeps meaning "what
+            //    each row of the conversation says" and the entry stays the value the row used
+            //    to draw. Joining every word under the card would put the command and the
+            //    buttons into the conversation's own transcript, and the assertion would then
+            //    pass over a card that drew its labels in the wrong order, or the literal twice.
+            //    `approvalSheet` composes context, question, well, actions in that order and the
+            //    context line is empty here, which is why the first NON-EMPTY text is the
+            //    question rather than the first text.
+            //  - A CHIP IS THREE CELLS and says all three: verb, path, counts. Joined with the
+            //    separator the model itself uses, so the entry is the same sentence
+            //    `TranscriptScreen` writes into `TranscriptBlock.line` -- which is the point: the
+            //    chip must not quietly say something different from the model's own record of it.
+            if (tag == TranscriptTag.APPROVAL) {
+                rows += (tag as String) to wordsIn(v).firstOrNull().orEmpty()
+            }
+            if (tag == TranscriptTag.FILE_CHANGE) {
+                rows += (tag as String) to wordsIn(v).joinToString(" · ")
             }
             if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
         }
         walk(root)
         return rows
+    }
+
+    /**
+     * Every non-empty text a component draws, in the order it draws it.
+     *
+     * NON-EMPTY, because absent is not empty on this surface and several kit components draw a
+     * cell they were given nothing for -- `approvalSheet`'s context line here. A list with a blank
+     * at the front would make "the first thing this card says" the empty string.
+     */
+    private fun wordsIn(root: View): List<String> {
+        val words = mutableListOf<String>()
+        fun walk(v: View) {
+            if (v is TextView) textOf(v).takeIf { it.isNotEmpty() }?.let { words += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        return words
     }
 
     private fun wellsOf(root: View): List<String> {
@@ -198,7 +245,7 @@ class TranscriptScreenGoldenTest {
                 TranscriptTag.APPROVAL to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",
                 TranscriptTag.BLOCK to "Read /Users/Nathan/spike-sb-work/edit-target3.txt",
                 TranscriptTag.BLOCK to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",
-                TranscriptTag.BLOCK to "modify · /Users/Nathan/spike-sb-work/edit-target3.txt · +1 -1",
+                TranscriptTag.FILE_CHANGE to "modify · /Users/Nathan/spike-sb-work/edit-target3.txt · +1 -1",
                 TranscriptTag.BLOCK to "Done. Changed 'line two' to 'line TWO EDITED' in edit-target3.txt.",
             ),
             rows,
@@ -221,28 +268,34 @@ class TranscriptScreenGoldenTest {
      * the word that carried it was SILENTLY -- the closed line now names its own worst outcome
      * (TranscriptBlock.mark), so the record is not hidden, it is folded.
      *
-     * So the recorded turn's rendering is asserted TWICE, in both of the states a reader can put
-     * it in. Neither assertion was weakened: closed, the diff is still the only well and the
-     * Edit still draws none; opened, both literals are still exactly what the machine printed.
+     * AND THE DIFF LEFT THE FLOW ENTIRELY (owner ruling R9, 2026-08-26). MOVED, not deleted: the
+     * recorded diff is still asserted byte-for-byte, on the block's own route to the diff screen
+     * rather than in a well between two messages. Reading it off `wellsOf` is what would have
+     * been silent, so the well list is now asserted EMPTY in the same test -- the recorded turn
+     * draws no mono block at all until the reader opens the tool run.
      */
     @Test
-    fun `the recorded turn folds its tool output and never its diff`() {
+    fun `the recorded turn folds its tool output and routes its diff`() {
         assertEquals(
-            "a file change is never folded: the diff is the only rendering of what changed on " +
-                "disk, and the recorded turn must still show it with nothing opened",
-            listOf("@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three"),
+            "the recorded turn still pours a unified diff into the reading column with nothing " +
+                "opened, which is what made one session take two screenshots",
+            emptyList<String>(),
             wellsOf(render(itemsOf("pending"))),
+        )
+        assertEquals(
+            "a file change is never folded away to nothing: the diff is the only rendering of " +
+                "what changed on disk, and the recorded turn must still be able to show it",
+            listOf("@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three"),
+            TranscriptScreen.of(itemsOf("pending")).blocks
+                .mapNotNull { (it.route as? TranscriptRoute.Diff)?.text },
         )
     }
 
     @Test
-    fun `the recorded output and the recorded diff are the only mono blocks when opened`() {
+    fun `the recorded output is the only mono block when opened`() {
         val everyItem = itemsOf("pending").map { it.itemId }.toSet()
         assertEquals(
-            listOf(
-                "line one\nline two\nline three\n",
-                "@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three",
-            ),
+            listOf("line one\nline two\nline three\n"),
             wellsOf(render(itemsOf("pending"), expanded = everyItem)),
         )
     }
@@ -366,10 +419,18 @@ class TranscriptScreenGoldenTest {
                 "that erases what it answered cannot show what was decided",
             rows.any { it.second == "Edit /Users/Nathan/spike-sb-work/edit-target3.txt" },
         )
-        // The resolution itself, in the wire's own words: §3.6's decision and who answered it.
-        // `phone` is the whole claim — this handset's own tap, come back around the loop.
+        // The resolution itself: §3.6's decision, verbatim, and where it was answered. AMENDED
+        // (design-honesty finding, 2026-08-26) and MOVED rather than deleted -- `allowed · phone`
+        // said both facts in a vocabulary written for a machine, and this is the same two facts
+        // with the second one in the reader's language. The recorded bytes are what make this the
+        // load-bearing assertion for that copy: `decision: allowed, by: phone` is a REAL pair the
+        // daemon emitted, not a pair this side invented to render.
+        //
+        // `on this phone` is the whole claim, and it is the strongest one available here: IS-RES-1
+        // classifies `allowed` from the verdict the daemon supplied, which happens only on the
+        // phone path. The owner path resolves `answered_locally` and carries no verdict at all.
         assertEquals(
-            listOf(TranscriptTag.BLOCK to "allowed · phone"),
+            listOf(TranscriptTag.BLOCK to "allowed · answered on this phone"),
             rows.takeLast(1),
         )
         assertEquals("no tap should have been possible", "", answered)

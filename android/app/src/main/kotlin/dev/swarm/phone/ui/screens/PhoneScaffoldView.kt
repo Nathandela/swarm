@@ -87,6 +87,22 @@ object ScaffoldTag {
      * the assertion `PhoneScaffoldViewTest` inherited from the inbox's suite along with the bar --
      * and a strip UNDER the content is a warning below the fold, which is the same defect at the
      * other end of the column.
+     *
+     * **IT IS [phoneScaffoldView]'S COMPOSITION AND IT IS NOW SCOPED TO THAT, DELIBERATELY**
+     * (chat-surface-plan B.5). It was written as a claim about WHATEVER IS ON SCREEN, at a time
+     * when one composition was the only one there was, and the suite around it was written the
+     * same way -- `PhoneScaffoldViewTest`'s bar sweep and `PhoneSurfaceNavigationTest`'s two
+     * survival tests quantify over every destination the app can reach. Those tests were written
+     * to catch exactly the change this file has just made, so narrowing them is a named decision
+     * rather than a tidy-up, and the amendment is this: the quantifier is the THREE TAB
+     * DESTINATIONS, which is what [Destination] has always enumerated, and the conversation is
+     * outside it because a conversation is not a destination -- it is a place you go INTO from
+     * one, and it deliberately has no bar ([conversationScaffoldView] argues why). What replaces
+     * the coverage the narrowing gives up is a positive assertion in the other direction: that
+     * the conversation has NO bar and DOES have the strip, which `ConversationScaffoldViewTest`
+     * makes over this set's sibling arrangement and `PhoneSurfaceConversationHostTest` makes over
+     * the app the user actually opens. A universal claim quietly weakened and a universal claim
+     * replaced by two specific ones look identical in a diff, which is why this paragraph exists.
      */
     val COMPOSITION: Set<String> = setOf(STATUS, CONTENT, TABS)
 }
