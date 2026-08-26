@@ -50,7 +50,6 @@ class SessionDetailPanelTest {
         stopNotSent: Boolean = false,
     ) = SessionDetail(
         sessionId = "mbp/api",
-        leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
         stopNotSent = stopNotSent,
@@ -68,7 +67,7 @@ class SessionDetailPanelTest {
     ) = SessionDetailScreen.of(
         detail,
         TranscriptScreen.of(emptyList()),
-        SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
+        SessionLease(sessionId = detail.sessionId, online = detail.online),
         undelivered = undelivered,
     )
 
@@ -104,22 +103,6 @@ class SessionDetailPanelTest {
     }
 
     // ---- the controls, and what they say ----------------------------------
-
-    @Test
-    fun `Stop offers the take-control step when the lease is not held`() {
-        val observing = panelOf(detail(leaseHeld = false))
-
-        // PB-INPUT-3: input is refused without a confirmed lease, so a Stop button that silently
-        // did nothing is the failure the recorded decision names. The screen shows the step that
-        // would make it work instead.
-        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, observing.stopAction)
-        assertNotEquals(
-            "an observer is offered the same Stop wording as a controller, so pressing it will " +
-                "be refused by the machine with nothing on screen having warned them",
-            panelOf(detail(leaseHeld = true)).stopLabel,
-            observing.stopLabel,
-        )
-    }
 
     @Test
     fun `Kill is never one tap away`() {
@@ -210,7 +193,7 @@ class SessionDetailPanelTest {
             SessionDetailScreen.of(
                 detail(),
                 chat,
-                SessionLease(sessionId = "mbp/api", leaseHeld = true, online = true),
+                SessionLease(sessionId = "mbp/api", online = true),
                 capabilities = SessionCapabilityFacts(structuredChat = true),
             ).transcript,
         )
@@ -228,80 +211,6 @@ class SessionDetailPanelTest {
     // lease`, is NOT here: `keyboardEnabled` stayed on the model rather than moving to this screen,
     // and `SessionLeaseTest` in `ui/SessionScreensTest.kt` asserts it over both clauses.
 
-    @Test
-    fun `take control is offered exactly while the machine has not confirmed one`() {
-        assertTrue(panelOf(detail(leaseHeld = false)).offersTakeControl)
-        assertFalse(
-            "the control to take a lease is offered over a lease the machine already granted",
-            panelOf(detail(leaseHeld = true)).offersTakeControl,
-        )
-    }
-
-    /**
-     * agents-tracker-ksvb.6 RE-APPLIED (agents-tracker-nx44.6). A confirmed lease is SILENT --
-     * "healthy is silent", the pattern every other conditional notice in this app follows -- and
-     * the composer is now on this screen, so a sentence saying the user may type sits directly
-     * above the field they would type into.
-     *
-     * THIS REPLACES `the two lease sentences go with the two lease states and not the other way
-     * round`, which asserted `held.contains("confirmed you have control")` and
-     * `notHeld.contains("Take control first")`. Both were true only while the confirmed state
-     * spent a sentence and the unconfirmed one ended with that phrase. 4493a3f made exactly this
-     * rewrite on `PeekPanelScreenTest`, and a cross-session merge that resolved the peek's
-     * deletion as a deleted-file take reverted the ruling with it.
-     */
-    @Test
-    fun `the confirmed lease is silent, and the unconfirmed one is a one-line prompt`() {
-        val held = panelOf(detail(leaseHeld = true)).leaseNotice
-        val notHeld = panelOf(detail(leaseHeld = false)).leaseNotice
-
-        assertEquals(SessionDetailScreen.leaseNoticeFor(confirmed = true), held)
-        assertEquals(SessionDetailScreen.leaseNoticeFor(confirmed = false), notHeld)
-        assertTrue(
-            "the two states read the same, which is the invisible suppression PB-INPUT-2 exists " +
-                "to prevent: the user cannot tell until a keystroke vanishes",
-            held != notHeld,
-        )
-        assertTrue(
-            "a confirmed lease renders a sentence where healthy is meant to be silent, the same " +
-                "call this app makes for every other notice with nothing wrong to report -- and " +
-                "with the composer directly below it, that sentence tells the user they may type " +
-                "into the field they are already looking at",
-            held.isEmpty(),
-        )
-        assertTrue(
-            "the unconfirmed line does not say what to do about it, which leaves a shut " +
-                "keyboard with no reason beside it",
-            notHeld.contains("take control", ignoreCase = true),
-        )
-    }
-
-    /**
-     * PB-INPUT-3's take_control_end, and the half of the lease this app has never had
-     * (agents-tracker-nx44.6). `SessionLease.showsRelease` has decided it since the peek's
-     * deletion and no screen read it: a lease was held until the machine expired it.
-     */
-    @Test
-    fun `release is offered exactly while a lease is held, which is take control's mirror`() {
-        assertTrue(panelOf(detail(leaseHeld = true)).offersRelease)
-        assertFalse(
-            "the screen offers to give back a lease the machine never granted",
-            panelOf(detail(leaseHeld = false)).offersRelease,
-        )
-        assertNotEquals(
-            "the two lease controls are offered together, so a user is asked to take a lease " +
-                "they hold and give back one they do not",
-            panelOf(detail(leaseHeld = true)).offersTakeControl,
-            panelOf(detail(leaseHeld = true)).offersRelease,
-        )
-    }
-
-    // ---- PB-INPUT-1: the undelivered-input ledger --------------------------
-
-    /**
-     * agents-tracker-hxv's do-not-split ruling, from the ledger's side: "a composer that accepts
-     * input with no way to report losing it is a lie by omission".
-     */
     @Test
     fun `a session that lost nothing says nothing about losing it`() {
         val panel = panelOf(undelivered = UndeliveredLedger.EMPTY)
@@ -387,4 +296,15 @@ class SessionDetailPanelTest {
             panelOf(detail(journalStale = false)).offersResync,
         )
     }
+
+    // DELETED with the lease they described (owner ruling R1):
+    //   - `Stop offers the take-control step when the lease is not held`
+    //   - `take control is offered exactly while the machine has not confirmed one`
+    //   - `the confirmed lease is silent, and the unconfirmed one is a one-line prompt`
+    //   - `release is offered exactly while a lease is held, which is take control's mirror`
+    // Each named a panel field that no longer exists -- offersTakeControl, offersRelease,
+    // leaseNotice, leaseDetail -- or the Stop arm that demanded a lease before an interrupt
+    // that never needed one. The fence that keeps them gone is android/gate's
+    // TestR1_TheLeaseIsNotAThingAScreenReads.
+
 }

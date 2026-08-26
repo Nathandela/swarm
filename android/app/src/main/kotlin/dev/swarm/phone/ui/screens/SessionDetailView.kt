@@ -186,12 +186,6 @@ object DetailTag {
     /** The escalation, behind its own confirmation. */
     const val KILL = "detail.kill"
 
-    /** Row 22's standalone tertiary button, supplied by the surface that owns the verb. */
-    const val TAKE_CONTROL = "detail.control.take"
-
-    /** PB-INPUT-3's take_control_end, the mirror of [TAKE_CONTROL] and never beside it. */
-    const val RELEASE = "detail.control.release"
-
     /** Derivation row 9's bar: the field and the control that sends what is in it. */
     const val COMPOSER = "detail.composer"
 
@@ -214,38 +208,24 @@ object DetailTag {
 
     /**
      * The state of the send itself -- Sending / Sent / Not sent -- which is a SEPARATE line from
-     * [COMPOSER_NOTICE]'s remedy for the same reason [LEASE] and [LEASE_DETAIL] are separate: one
-     * is what happened and the other is what to do about it, and only the second is a refusal.
+     * [COMPOSER_NOTICE]'s remedy: one is what happened and the other is what to do about it,
+     * and only the second is a refusal.
      */
     const val COMPOSER_STATE = "detail.composer.state"
 
     /** ADR-014's "load earlier", at the TOP of the conversation it extends backwards. */
     const val LOAD_EARLIER = "detail.transcript.earlier"
 
-    /** PB-INPUT-2's "visibly", in row 22's component. */
-    const val LEASE = "detail.lease"
-
-    /**
-     * The machine's own words under [LEASE], in `.sheet2 .ctx` (agents-tracker-ksvb.10).
-     *
-     * IT IS ITS OWN PART AND NOT PART OF [LEASE], because it is drawn only when the machine sent
-     * words -- a lease nobody has asked for has a sentence and no diagnostic -- and because a test
-     * that could not tell them apart could not say which of the two carried the wire string.
-     */
-    const val LEASE_DETAIL = "detail.lease.detail"
-
     /**
      * The parts whose ON-SCREEN ORDER is the recorded composition.
      *
-     * [RELEASE] IS DELIBERATELY NOT IN IT, and the omission is what makes this an ordered claim at
-     * all: release and [TAKE_CONTROL] occupy the SAME position in the control stack and can never
-     * both be drawn -- `SessionLease` decides them as the two sides of one fact -- so a list
-     * carrying both could not be compared against any single screen. Its placement is asserted
-     * against its own state instead, in `SessionDetailViewTest`.
+     * FOUR ENTRIES LEFT WITH THE LEASE (owner ruling R1): LEASE, LEASE_DETAIL, TAKE_CONTROL and
+     * -- already absent from this list, for a reason that is now moot -- RELEASE. They were the
+     * machine's answer about a take_control this phone issued, and it issues none.
      */
     val COMPOSITION: Set<String> = setOf(
         NAV, STALE, RESYNC, UNDELIVERED, UNDELIVERED_DETAIL, ACKNOWLEDGE, NOT_SENT, TRANSCRIPT,
-        APPROVAL, OUTCOME, LEASE, LEASE_DETAIL, TAKE_CONTROL, STOP, COMPOSER,
+        APPROVAL, OUTCOME, STOP, COMPOSER,
     )
 }
 
@@ -262,13 +242,6 @@ object DetailTag {
  *  empty when they have asked nothing or the answer was yes. It is a STRING and not a slot for the
  *  reason the notices are strings: the surface holds the one routed line the whole app reports on,
  *  and handing the VIEW in would take it out of the column it belongs to and never give it back.
- * @param takeControl PB-INPUT-2's step, drawn only while [SessionDetailPanel.offersTakeControl] says
- *  it is the step to take. IT IS THE PEEK'S BUTTON, ARRIVING WITH THAT SCREEN'S DELETION: the same
- *  `ctaButton(kind = MORE)` the surface already built there, on the screen a session is read on now.
- *  A slot rather than a construction for [stop]'s reason -- `PhoneSurface` owns the verb, the
- *  operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
- * @param release PB-INPUT-3's take_control_end, drawn only while [SessionDetailPanel.offersRelease]
- *  says a lease is held. A slot for [takeControl]'s reason, and never on screen beside it.
  * @param resync PB-SYNC-1's repair, drawn only beside the stale notice it mends. A slot because the
  *  verb is rate-bounded and its ErrClassRateLimited refusal routes through PB-APP-9's table, which
  *  is `PhoneSurface`'s line and not this composition's.
@@ -291,8 +264,6 @@ object DetailTag {
 fun sessionDetailView(
     context: Context,
     panel: SessionDetailPanel,
-    takeControl: View,
-    release: View,
     stop: View,
     kill: View,
     resync: View,
@@ -421,47 +392,16 @@ fun sessionDetailView(
         )
     }
 
-    // PB-INPUT-2's "visibly", above the controls it qualifies -- the same rule the notices above
-    // follow, INCLUDING their gate (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6).
-    // A CONFIRMED LEASE PRINTS NOTHING: this was the app's one ungated notice, drawn over the
-    // state where nothing needs saying, and with the composer now at the bottom of this column the
-    // sentence it printed told the user they could type into the field already under their thumb.
-    // The refusal and severance sentences this field also carries are transitions rather than a
-    // healthy resting state, so they still draw.
-    if (panel.leaseNotice.isNotEmpty()) {
-        column.addView(
-            notice(context, panel.leaseNotice).apply { tag = DetailTag.LEASE }.screenAir(),
-        )
-    }
-
-    // THE MACHINE'S OWN WORDS, IN THE MACHINE'S OWN REGISTER (agents-tracker-ksvb.10). They used to
-    // be spliced into the sentence above, so a daemon Go error was drawn in the same type and ink
-    // as the copy this screen wrote. Drawn only when there are words: a lease nobody has asked for
-    // has a sentence and nothing to diagnose, and an empty mono line under it would be a cell
-    // reserved for a reply that does not exist.
-    if (panel.leaseDetail.isNotEmpty()) {
-        column.addView(
-            noticeDetail(context, panel.leaseDetail)
-                .apply { tag = DetailTag.LEASE_DETAIL }
-                .screenAir(),
-        )
-    }
-
-    // THE BUTTON SITS DIRECTLY UNDER THE SENTENCE, which is row 22's own arrangement: it is that
-    // sentence's `[Take control]` promoted out of the prose, not a control that happens to be
-    // nearby. It is added only while the model offers it -- once the machine has confirmed the
-    // lease there is nothing left to take, and a screen that composed it anyway and then hid it
-    // would be the second, contradictable statement PB-DS-9 fences against.
+    // THE LEASE SENTENCE AND ITS DETAIL WERE DELETED HERE (owner ruling R1, 2026-08-26).
+    // Both were the machine's answer about a take_control this phone issued, and it issues
+    // none. What a reader needs from this region -- can I type, and if not why -- is answered
+    // by the composer's own shut state at the bottom of the column.
+    // TWO CONTROLS, NOT FOUR. Take control and Release were deleted with the lease they named
+    // (owner ruling R1); what is left is Stop and Kill, and Kill is on its way to the header.
     //
-    // agents-tracker-nx44.1: `ctaStack` AND NOT `column`, so the three controls carry `.acts2`'s
-    // own `space_8` gap between them rather than the zero addView gave them.
+    // agents-tracker-nx44.1: `ctaStack` AND NOT `column`, so the controls carry `.acts2`'s own
+    // `space_8` gap between them rather than the zero addView gave them.
     val controls = ctaStack(context).also { it.screenAir() }
-    if (panel.offersTakeControl) controls.addView(takeControl.tagged(DetailTag.TAKE_CONTROL))
-    // AND THE WAY BACK OUT (agents-tracker-nx44.6). The two are never on screen together --
-    // `SessionLease` decides them as the two sides of one fact -- so this is the same site in the
-    // stack rather than a second one, and a lease can now be given back from the screen that took
-    // it instead of being held until the machine expires it.
-    if (panel.offersRelease) controls.addView(release.tagged(DetailTag.RELEASE))
     controls.addView(stop.tagged(DetailTag.STOP))
     controls.addView(kill.tagged(DetailTag.KILL))
     column.addView(controls)

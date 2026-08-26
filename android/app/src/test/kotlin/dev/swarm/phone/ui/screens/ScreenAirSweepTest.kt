@@ -705,8 +705,6 @@ class ScreenAirSweepTest {
     private fun sessionDetail(): View = sessionDetailView(
         context = context,
         panel = detailPanel(),
-        takeControl = ctaButton(context, "Take control", CtaKind.MORE),
-        release = ctaButton(context, "Release control", CtaKind.MORE),
         stop = ctaButton(context, "Stop", CtaKind.DENY),
         kill = ctaButton(context, "Kill session", CtaKind.DENY),
         resync = ctaButton(context, "Fetch what is missing", CtaKind.MORE),
@@ -729,13 +727,12 @@ class ScreenAirSweepTest {
     private fun detailPanel(): SessionDetailPanel = SessionDetailScreen.of(
         dev.swarm.phone.ui.SessionDetail(
             sessionId = "mbp/api",
-            leaseHeld = false,
             online = true,
             journalStale = true,
             stopNotSent = true,
         ),
         TranscriptScreen.of(emptyList()),
-        dev.swarm.phone.ui.SessionLease(sessionId = "mbp/api", leaseHeld = false, online = true),
+        dev.swarm.phone.ui.SessionLease(sessionId = "mbp/api", online = true),
     ).copy(
         transcript = TranscriptPanel(
             heading = "CONVERSATION",
@@ -750,8 +747,6 @@ class ScreenAirSweepTest {
             ),
             emptyCopy = "Nothing has been said yet.",
         ),
-        leaseNotice = "You are watching. Take control to type.",
-        leaseDetail = "kill_switch: remote control is disabled",
         undeliveredNotice = "4 bytes never reached the machine.",
         undeliveredDetail = "the link dropped",
         offersAcknowledge = true,

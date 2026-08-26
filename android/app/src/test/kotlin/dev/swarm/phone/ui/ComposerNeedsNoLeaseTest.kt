@@ -33,8 +33,7 @@ import org.junit.Test
  */
 class ComposerNeedsNoLeaseTest {
 
-    private fun lease(held: Boolean, online: Boolean) =
-        SessionLease(sessionId = "s1", leaseHeld = held, online = online)
+    private fun lease(online: Boolean) = SessionLease(sessionId = "s1", online = online)
 
     @Test
     fun `a live session is typeable without holding anything`() {
@@ -42,28 +41,21 @@ class ComposerNeedsNoLeaseTest {
             "the keyboard is shut on a session the machine would have accepted a message for. " +
                 "composer_send takes no lease at any layer; greying the field is this app " +
                 "refusing a capability the daemon grants",
-            lease(held = false, online = true).keyboardEnabled,
+            lease(online = true).keyboardEnabled,
         )
     }
 
-    @Test
-    fun `holding a lease changes nothing, because it never did`() {
-        assertEquals(
-            "whether a lease is held must make no difference to the composer: the verb behind " +
-                "it is the same signed op either way",
-            lease(held = true, online = true).keyboardEnabled,
-            lease(held = false, online = true).keyboardEnabled,
-        )
-    }
+    // The companion assertion -- that HOLDING a lease changed nothing either -- is DELETED
+    // rather than moved: with `SessionLease.leaseHeld` gone there is no second state to
+    // compare against, which is the strongest possible form of the same claim.
 
     @Test
     fun `a dead link still shuts it, and that one is not ceremony`() {
         assertFalse(
             "input is live-only and never queued (ADR-007 B43); a composer over a dropped link " +
                 "invites words that are guaranteed to be dropped",
-            lease(held = false, online = false).keyboardEnabled,
+            lease(online = false).keyboardEnabled,
         )
-        assertFalse(lease(held = true, online = false).keyboardEnabled)
     }
 
     @Test

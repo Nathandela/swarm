@@ -70,53 +70,42 @@ class RemedyControlsTest {
 
     // ---- NEEDS_LEASE offers the take-control press --------------------------
 
+    // MOVED (owner ruling R1): "a refusal for want of a lease offers the take-control press"
+    // becomes its opposite, because the press it named is deleted. The row still routes -- an
+    // older machine can still answer swarm/no-lease -- so what must be asserted now is that it
+    // lands honestly and promises nothing this app cannot do.
     @Test
-    fun `a refusal for want of a lease offers the take-control press`() {
+    fun `a refusal for want of a lease promises nothing this phone can do`() {
         val routed = ErrorRouter.route(SwarmErrorTokens.NEEDS_LEASE)
         val feedback = PressFeedback.ofRefusal(routed)
 
-        assertTrue(
-            "the machine refused this press for want of a lease and the screen offers nothing but " +
-                "the sentence. The remedy names a control this app already has -- take control -- " +
-                "and the screen's own lease fact is older than the refusal, so Stop stays labelled " +
-                "Stop and the next press earns the same refusal",
-            feedback.offersTakeControl,
-        )
         assertEquals(
-            "the refusal stopped reaching the outcome line once it started carrying an offer",
+            "the no-lease row still has to reach the reader: the ops this app sends need no " +
+                "lease, so arriving here at all means an older machine or a plane this app " +
+                "does not use, and silence would be worse than a sentence",
             routed.message,
             feedback.line,
         )
         assertEquals(routed.message, feedback.toast)
-    }
-
-    @Test
-    fun `no other routed failure offers the take-control press`() {
-        for (token in everyToken) {
-            val routed = ErrorRouter.route(token)
-            if (routed.remedy == Remedy.TAKE_CONTROL) continue
-            assertFalse(
-                "$token offers a take-control press. Its remedy is ${routed.remedy}, so the " +
-                    "control would act on a lease that is not what is wrong",
-                PressFeedback.ofRefusal(routed).offersTakeControl,
-            )
-        }
-    }
-
-    @Test
-    fun `a refusal built from a bare sentence offers no control`() {
-        // The three call sites that hand this model a screen's own words rather than a routed
-        // error -- a refused kill, a severed lease, a refused push preference. None of them is a
-        // remedy the router classified, and a control inferred from prose would be a guess.
         assertFalse(
-            PressFeedback.ofRefusal("Your machine did not end this session.").offersTakeControl,
+            "the remedy still names a control. Take control is gone from the product, so a " +
+                "remedy that is actionable here would send the reader to a button that is not " +
+                "on any screen",
+            routed.remedy.actionableHere,
         )
-        assertFalse(PressFeedback.ofSuccess("Interrupt sent").offersTakeControl)
-        assertFalse(PressFeedback.ofUnsent(SessionDetail.NOT_SENT_NOTICE).offersTakeControl)
     }
 
+    // DELETED: "no other routed failure offers the take-control press". There is no
+    // take-control press for any row to offer, which is the strongest form of that claim and
+    // is fenced in Go by TestR1_NoProductionKotlinOffersTakeControl.
+
+    // DELETED: "a refusal built from a bare sentence offers no control". Its subject was
+    // that a control must never be INFERRED from prose the router did not classify. With no
+    // control left to infer, the guarantee is structural rather than asserted.
+
+
     @Test
-    fun `a routed error derives both offers from the one remedy`() {
+    fun `a routed error derives its pairing offer from its own remedy`() {
         for (token in everyToken) {
             val routed = ErrorRouter.route(token)
             assertEquals(
@@ -124,11 +113,6 @@ class RemedyControlsTest {
                     "wrong in one place and not the other",
                 routed.remedy == Remedy.PAIR || routed.remedy == Remedy.RE_PAIR,
                 routed.offersPairing,
-            )
-            assertEquals(
-                "$token's take-control offer disagrees with its own remedy",
-                routed.remedy == Remedy.TAKE_CONTROL,
-                routed.offersTakeControl,
             )
         }
     }

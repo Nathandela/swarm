@@ -77,7 +77,12 @@ class PhoneSurfaceControlsTest {
         "They do not match" to
             "PB-SAS-3's mismatch answer, which is NOT cancel -- it is the only signal this " +
                 "protocol has for a man-in-the-middle",
-        "Take control" to "\"takes control\"",
+        // "Take control" WAS HERE, for PB-E2E-2's "takes control" clause. Owner ruling R1
+        // deleted the control, and the clause with it: the smoke's own sequence -- observe,
+        // then type -- no longer has a step between the two, because composer_send takes no
+        // lease at any layer and the composer is live on any session with a link and a sink.
+        // PB-E2E-2's scenario is amended in docs/specifications/remote-phaseB-requirements.md
+        // beside PB-INPUT-2, which is where the lease's disappearance is argued.
         "Send line" to "\"types\": there is no control that sends a keystroke",
     )
 

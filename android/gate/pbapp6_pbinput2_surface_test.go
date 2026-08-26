@@ -136,53 +136,24 @@ func redundantLedgerRows(kotlin string, rows []ledgerRow) []ledgerRow {
 // ---------------------------------------------------------------------------
 // PB-INPUT-2 -- "input is refused until the machine confirms a lease, and the confirmation is
 // VISIBLE".
-// ---------------------------------------------------------------------------
-
-// TestPBINPUT2_TheLeaseIsAFactAndNotALiteral is ADR-007 B83(3), verified from the source side.
+// TestPBINPUT2_TheLeaseIsAFactAndNotALiteral IS DELETED (owner ruling R1, 2026-08-26).
 //
-// `PhoneSurface.renderReady` calls `bridge.sessionLease(session, leaseHeld = false)`. The comment
-// beside it is honest -- "this surface never takes a lease on its own" -- and it is exactly the
-// problem: the surface DOES have a Take control button, so the one screen that can acquire a lease
-// renders every session as one it does not hold, always, and then enables Send from a different
-// fact entirely (whether the roster yielded a row).
+// It fenced ADR-007 B83(3): `FacadeBridge.sessionLease` must be passed the OUTCOME of this
+// screen's own take_control, never a literal `false` or `true`. Both literals were rejected,
+// and the second mattered more -- `true` tells every user they hold control of every session,
+// so the keyboard opens over a machine that will drop the frames silently.
 //
-// BOTH LITERALS ARE REJECTED, and the second matters more than the first. `true` is the mutation a
-// reader reaches for to make a lease assertion go green, and it is strictly worse than `false`: it
-// tells every user they hold control of every session, so the keyboard opens over a machine that
-// will drop the frames silently. What the parameter is FOR is stated on FacadeBridge.sessionLease
-// itself -- "whether the machine has CONFIRMED a control lease ... reading it back from a snapshot
-// would be guessing at a fact the reply already carries" -- and a literal is not a reply.
-func TestPBINPUT2_TheLeaseIsAFactAndNotALiteral(t *testing.T) {
-	args := leaseArgsOf(kotlinCodeOnly(appKotlinSource(t)))
-	if len(args) < leaseCallSiteFloor {
-		t.Fatalf("PB-INPUT-2: the scan found %d call(s) to FacadeBridge.sessionLease in "+
-			"production Kotlin, want at least %d.\n"+
-			"The surface does render the lease; a count this low means this file has stopped "+
-			"reading the sources, and every assertion below would then pass over nothing -- which "+
-			"is the defect class the whole android/gate package exists for, applied to itself.",
-			len(args), leaseCallSiteFloor)
-	}
-	for _, arg := range args {
-		if arg == "" {
-			t.Errorf("PB-INPUT-2: a call to FacadeBridge.sessionLease was found whose `leaseHeld` " +
-				"argument could not be read. The check reads the named form " +
-				"(`leaseHeld = ...`) or the second positional argument; a call it cannot read is " +
-				"a call it cannot fence, and it must not pass by default")
-			continue
-		}
-		if isBooleanLiteral(arg) {
-			t.Errorf("PB-INPUT-2: FacadeBridge.sessionLease is passed the LITERAL %s for "+
-				"`leaseHeld`, so the lease is not a fact the screen holds -- it is a constant.\n"+
-				"The requirement is that input is refused until the machine CONFIRMS a lease and "+
-				"that the confirmation is visible. With a literal the surface renders the same "+
-				"answer for a session the user has taken control of and one they have not, which "+
-				"is `false` telling a user with control that they have none, or `true` opening a "+
-				"keyboard over a machine that will silently drop every frame.\n"+
-				"The lease is the outcome of this screen's own take_control operation "+
-				"(PB-INPUT-3); pass what that reply said.", arg)
-		}
-	}
-}
+// THE PARAMETER IT FENCED NO LONGER EXISTS. `SessionLease` carries the link and nothing else;
+// there is no lease to state as a fact or fake as a literal, because composer_send takes none.
+// A fence over a deleted parameter is not a weaker fence, it is a fence with no subject -- and
+// leaving it green over an empty scan is exactly how this module has grown checks that pass
+// without being right.
+//
+// What replaced its purpose is one file over: android/gate/r1_takecontrolgone_test.go asserts
+// the control, the model properties and the copy are all gone, and the amended
+// TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel below asserts that the
+// requirement's own intent -- can I tell whether what I type will arrive -- is still read from
+// a model by a real screen.
 
 // TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel is the standing "called by
 // nothing" class, on a screen model rather than on a facade verb -- which is why no existing
@@ -222,17 +193,21 @@ func TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel(t *testi
 			"reachable only from a test is one the real screen may quietly disagree with.")
 	}
 
-	if !readsModelProperty(kotlin, "showsTakeControl") && !readsModelProperty(kotlin, "showsRelease") {
-		t.Errorf("PB-INPUT-2: no production Kotlin reads SessionLease.showsTakeControl or " +
-			".showsRelease, so nothing on screen distinguishes a session the user HOLDS from one " +
-			"they are merely watching.\n" +
-			"\"Visibly confirmed\" is the requirement's own word. Today the surface shows the " +
-			"same Take control button in both states and a keyboard that is live in both, which " +
-			"is a user who cannot tell whether the next thing they type will reach their machine " +
-			"until it does not.\n" +
-			"Either property satisfies this -- they are two sides of one fact and rendering " +
-			"either one distinguishes the states. Which control or wording carries it is not " +
-			"fenced here.")
+	// AMENDED 2026-08-26 (owner ruling R1). This asked for `showsTakeControl` or
+	// `showsRelease` -- the two sides of "which control to draw" -- and both are deleted with
+	// the control they chose between. The requirement's INTENT is unchanged and is what is
+	// fenced here instead: "visibly confirmed" exists so a reader can tell whether what they
+	// type will reach their machine, and the composer's own shut state answers that from the
+	// facts that actually decide it, naming which of four reasons it cannot send.
+	if !readsModelProperty(kotlin, "composerShut") && !readsModelProperty(kotlin, "composerAvailability") {
+		t.Errorf("PB-INPUT-2: no production Kotlin reads the composer's shut state, so nothing " +
+			"on screen distinguishes a session this phone can send to from one it cannot.\n" +
+			"\"Visibly confirmed\" is the requirement's own word. It used to be carried by the " +
+			"lease controls; R1 deleted those because composer_send takes no lease at any " +
+			"layer, and the composer's availability took the job over -- a stronger answer, " +
+			"because a held lease never implied a session could receive a message and the four " +
+			"shut reasons do.\n" +
+			"Either property satisfies this. Which sentence carries it is not fenced here.")
 	}
 }
 
@@ -243,118 +218,18 @@ func TestPBINPUT2_TheKeyboardVerdictAndTheLeaseStateAreReadFromTheModel(t *testi
 // package survived five rounds of finding its checks measured nothing.
 // ---------------------------------------------------------------------------
 
-// leaseCallSiteFloor is the "cannot pass by measuring nothing" floor. One call site exists today.
-const leaseCallSiteFloor = 1
-
-// sessionLeaseCall matches a CALL to FacadeBridge.sessionLease. The dot is required, which is what
-// keeps the DECLARATION in ui/FacadeBridge.kt (`fun sessionLease(sessionId: String, ...)`) from
-// reading as a call -- the same strengthening boundVerbCall documents, for the same reason.
-var sessionLeaseCall = regexp.MustCompile(`\.\s*sessionLease\s*\(`)
-
-// leaseArgsOf is the expression passed for `leaseHeld` at every sessionLease call site.
+// THE LEASE SCANNER IS DELETED (owner ruling R1, 2026-08-26).
 //
-// It reads the NAMED form first and falls back to the second positional argument, because both
-// compile and a check that understood only one would be silenced by rewriting the call.
-func leaseArgsOf(src string) []string {
-	var out []string
-	for offset := 0; ; {
-		loc := sessionLeaseCall.FindStringIndex(src[offset:])
-		if loc == nil {
-			return out
-		}
-		open := offset + loc[1] - 1
-		args, end, ok := balancedArgList(src, open)
-		if !ok {
-			return out
-		}
-		out = append(out, leaseArgumentOf(args))
-		offset = end
-	}
-}
-
-// balancedArgList returns the text between the parenthesis at open and its match, plus the offset
-// just past the closer. Quoted strings are skipped so a parenthesis inside a literal cannot
-// unbalance the walk.
-func balancedArgList(src string, open int) (string, int, bool) {
-	depth := 0
-	inString := false
-	for i := open; i < len(src); i++ {
-		switch c := src[i]; {
-		case inString:
-			switch c {
-			case '\\':
-				i++
-			case '"':
-				inString = false
-			}
-		case c == '"':
-			inString = true
-		case c == '(':
-			depth++
-		case c == ')':
-			depth--
-			if depth == 0 {
-				return src[open+1 : i], i + 1, true
-			}
-		}
-	}
-	return "", 0, false
-}
-
-var namedLeaseArg = regexp.MustCompile(`(?s)^\s*leaseHeld\s*=\s*(.*)$`)
-
-// leaseArgumentOf picks the `leaseHeld` expression out of an argument list, or "" when it cannot
-// be identified -- which the caller reports rather than passing over.
-func leaseArgumentOf(args string) string {
-	parts := splitTopLevel(args)
-	for _, p := range parts {
-		if m := namedLeaseArg.FindStringSubmatch(p); m != nil {
-			return strings.TrimSpace(m[1])
-		}
-	}
-	if len(parts) >= 2 {
-		return strings.TrimSpace(parts[1])
-	}
-	return ""
-}
-
-// splitTopLevel splits an argument list on commas that are not nested inside brackets or strings.
-func splitTopLevel(args string) []string {
-	var out []string
-	depth := 0
-	inString := false
-	start := 0
-	for i := 0; i < len(args); i++ {
-		switch c := args[i]; {
-		case inString:
-			switch c {
-			case '\\':
-				i++
-			case '"':
-				inString = false
-			}
-		case c == '"':
-			inString = true
-		case c == '(' || c == '[' || c == '{':
-			depth++
-		case c == ')' || c == ']' || c == '}':
-			depth--
-		case c == ',' && depth == 0:
-			out = append(out, args[start:i])
-			start = i + 1
-		}
-	}
-	out = append(out, args[start:])
-	return out
-}
-
-// isBooleanLiteral is true for the two expressions that make the lease a constant. Trailing
-// commas and whitespace are trimmed; anything else -- a property, a call, a variable -- is a fact
-// the screen holds, and this file takes no view on which.
-func isBooleanLiteral(expr string) bool {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(expr), ","))
-	return trimmed == "true" || trimmed == "false"
-}
+// Eight symbols lived here -- leaseCallSiteFloor, sessionLeaseCall, leaseArgsOf,
+// balancedArgList, namedLeaseArg, leaseArgumentOf, splitTopLevel and isBooleanLiteral -- and
+// between them they read the `leaseHeld` argument out of every `FacadeBridge.sessionLease`
+// call site in production Kotlin, across line breaks and named or positional, so a literal
+// could be told from a fact. That was ADR-007 B83(3)'s fence and it was a good one.
+//
+// It has no subject now: `SessionLease` carries the link and nothing else, because
+// composer_send takes no lease at any layer. Kept, the scanner would find zero call sites and
+// report green -- a check satisfied by an empty scan, which is the shape this module has been
+// burned by before.
 
 // modelPropertyRead matches a READ of a property on some receiver. The dot is what separates a
 // read from the declaration, and \b is what stops `keyboardEnabled` matching a longer name.
@@ -370,80 +245,11 @@ func readsModelProperty(src, name string) bool { return modelPropertyRead(name).
 // the time this lands) meant to be clean -- so those tests passing proves nothing about whether
 // the checks work. Each case below is an implementation that COMPILES and is wrong.
 func TestPBAPP6PBINPUT2_TheDecisionsRejectTheWrongImplementations(t *testing.T) {
-	t.Run("the lease argument", func(t *testing.T) {
-		for _, tc := range []struct {
-			name   string
-			src    string
-			want   string
-			reject bool
-		}{
-			{
-				name:   "the shipped defect: a named false",
-				src:    `val view = bridge.sessionLease(session, leaseHeld = false)`,
-				want:   "false",
-				reject: true,
-			},
-			{
-				name:   "the tempting repair, which is worse: a named true",
-				src:    `val view = bridge.sessionLease(session, leaseHeld = true)`,
-				want:   "true",
-				reject: true,
-			},
-			{
-				name:   "the same literal moved to the positional form",
-				src:    `val view = bridge.sessionLease(session, false)`,
-				want:   "false",
-				reject: true,
-			},
-			{
-				name:   "a fact the screen holds is accepted, whatever it is called",
-				src:    `val view = bridge.sessionLease(session, leaseHeld = lease.heldFor(session))`,
-				want:   "lease.heldFor(session)",
-				reject: false,
-			},
-			{
-				name:   "and a plain property read",
-				src:    `val view = bridge.sessionLease(session, leaseHeld = confirmedLease)`,
-				want:   "confirmedLease",
-				reject: false,
-			},
-			{
-				name:   "arguments on separate lines, which is how this call is actually written",
-				src:    "val view = bridge.sessionLease(\n    session,\n    leaseHeld = false,\n)",
-				want:   "false",
-				reject: true,
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				args := leaseArgsOf(tc.src)
-				if len(args) != 1 {
-					t.Fatalf("the scan found %d lease argument(s) in %q, want exactly 1. A call "+
-						"site it cannot see is a call site it cannot fence", len(args), tc.src)
-				}
-				if args[0] != tc.want {
-					t.Fatalf("read %q as the lease argument of %q, want %q", args[0], tc.src, tc.want)
-				}
-				if got := isBooleanLiteral(args[0]); got != tc.reject {
-					t.Errorf("isBooleanLiteral(%q) = %v, want %v.\nThis one answer decides "+
-						"whether PB-INPUT-2's fence is a fence or a formality", args[0], got, tc.reject)
-				}
-			})
-		}
-	})
-
-	// The declaration of the parameter is not a call, and neither is the doc comment that
-	// explains it. Both live in ui/FacadeBridge.kt, so both are read by the production scan.
-	t.Run("a declaration is not a call site", func(t *testing.T) {
-		const decl = `
-    fun sessionLease(sessionId: String, leaseHeld: Boolean): SessionLease =
-        SessionLease(sessionId, leaseHeld = leaseHeld, online = isOnline())
-`
-		if got := leaseArgsOf(decl); len(got) != 0 {
-			t.Errorf("the scan read %v out of FacadeBridge's own declaration. A check that "+
-				"treats a declaration as a call site fences the wrong file, and would report the "+
-				"adapter's `leaseHeld = leaseHeld` forwarding as the defect", got)
-		}
-	})
+	// THE LEASE-ARGUMENT NEGATIVE CONTROLS ARE DELETED WITH THE FENCE THEY PROVED (R1).
+	// They exercised leaseArgsOf and isBooleanLiteral against a table of call sites -- a
+	// literal `false`, a literal `true`, a real property read, arguments split across lines,
+	// and FacadeBridge's own declaration, which must not read as a call. Every one of them
+	// described a parameter that no longer exists.
 
 	t.Run("a model property read", func(t *testing.T) {
 		for _, tc := range []struct {

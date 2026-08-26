@@ -63,14 +63,11 @@ data class JournalPageView(
 )
 
 /**
- * What pressing Stop resolves to. Four of the five are reached from [SessionDetail.stop] and
+ * What pressing Stop resolves to. Three of the four are reached from [SessionDetail.stop] and
  * [SessionDetail.confirmStop]; [KILL] belongs to the separate escalation control and is here so
  * a caller cannot pass the two around as though they were interchangeable.
  */
 enum class StopAction {
-    /** No lease: the take-control step comes first, because the keystroke would be refused. */
-    ACQUIRE_LEASE_FIRST,
-
     /** Ask before interrupting a running agent. */
     CONFIRM,
 
@@ -100,7 +97,6 @@ enum class StopAction {
  */
 data class SessionDetail(
     val sessionId: String,
-    val leaseHeld: Boolean,
     val online: Boolean,
     val journalStale: Boolean,
     /**
@@ -193,19 +189,19 @@ data class SessionDetail(
      * and [confirmStop] then resolved NOT_SENT -- a question whose answer did nothing. A
      * confirmation is a promise that answering it acts; this one was answered by a no-op.
      *
-     * THE LEASE IS STILL THE FIRST CLAUSE. PB-INPUT-2 refuses every keystroke until the machine
-     * confirms a lease, so an observer is shown the step that would make Stop work whatever the
-     * link is doing -- offering take-control's remedy after a link check would hide the one that is
-     * actually theirs.
+     * THE LEASE CLAUSE IS GONE, AND IT WAS FAKE (owner ruling R1). It read: PB-INPUT-2 refuses
+     * every keystroke until the machine confirms a lease, so an observer is shown the step that
+     * would make Stop work. But `turn_interrupt` takes no lease -- like `composer_send`, at
+     * every layer -- so the precondition refused a Stop the machine would have accepted, and
+     * offered a remedy that changes nothing on the wire. The only real question left is the one
+     * the link asks.
      */
     fun stop(): StopAction = when {
-        !leaseHeld -> StopAction.ACQUIRE_LEASE_FIRST
         !online -> StopAction.NOT_SENT
         else -> StopAction.CONFIRM
     }
 
     fun confirmStop(): StopAction = when {
-        !leaseHeld -> StopAction.ACQUIRE_LEASE_FIRST
         !online -> StopAction.NOT_SENT
         else -> StopAction.SEND_INTERRUPT
     }
@@ -259,14 +255,17 @@ data class SessionDetail(
  * dimensions, its staleness, and these three lease properties hanging off the same object. The
  * grid is gone with the well -- "no phone surface issues a watch", so no snapshot frames are
  * appended at all, and there is nothing left for a `Snapshot` to be read into. The LEASE is
- * untouched by that ADR: (5) keeps the keystroke transport "exactly as decided, as the substrate",
- * and the three properties below are the requirement's own content.
+ * untouched by that ADR: (5) keeps the keystroke transport "exactly as decided, as the substrate".
  *
- * THEY STAY A MODEL RATHER THAN BECOMING TWO BOOLEANS AT A CALL SITE, which is the recorded reason
- * they existed here in the first place: [keyboardEnabled] is `leaseHeld && online`, and "an
- * implementation that enables the keyboard from its own lease flag satisfies PB-INPUT-2's first
- * clause and drops the second, silently, while the model that states it stays green and unread"
- * (`android/gate/pbapp6_pbinput2_surface_test.go`).
+ * WHAT IS LEFT OF IT AFTER R1 IS THE LINK (2026-08-26). The three lease properties that stood
+ * here -- leaseHeld, showsTakeControl, showsRelease -- described a control the product no longer
+ * has, because composer_send never needed one. PB-INPUT-2 is amended rather than ignored: its
+ * rule still binds any future raw-input plane, and its INTENT, that a user can tell whether what
+ * they type will reach their machine, moved to the composer's own shut state.
+ *
+ * IT STAYS A MODEL RATHER THAN BECOMING A BOOLEAN AT A CALL SITE, which is the recorded reason it
+ * existed here in the first place: a screen that decided the keyboard from its own flag would
+ * drop a clause silently while the model that states it stayed green and unread.
  */
 data class SessionLease(
     val sessionId: String,
@@ -277,7 +276,6 @@ data class SessionLease(
      * screen's own take_control operation, claimed by operation id (PB-SYNC-2), never a fact read
      * back off something the machine sent for another reason.
      */
-    val leaseHeld: Boolean,
     val online: Boolean,
     /**
      * What a person calls this session, for the nav header: `swarmmobile.Session.Title`, empty
@@ -290,10 +288,6 @@ data class SessionLease(
      */
     val title: String = "",
 ) {
-    val showsTakeControl: Boolean get() = !leaseHeld
-
-    val showsRelease: Boolean get() = leaseHeld
-
     /**
      * Whether the composer can be typed into.
      *

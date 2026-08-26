@@ -309,24 +309,20 @@ class FacadeBridge(private val app: App) {
     data class MachinesSnapshot(val rows: List<MachineRowModel>, val cap: Int)
 
     /**
-     * PB-INPUT-2's lease state for one session, and WHAT IS LEFT OF PB-APP-4's grid read.
+     * WHAT IS LEFT OF PB-APP-4's grid read, and now of PB-INPUT-2's lease state too.
      *
      * `terminalPeek` stood here and asked `App.Peek` for the daemon-rendered snapshot. ADR-009
-     * (2)/(3) deletes both ends of that: no phone surface issues a `terminal_watch`, so the cache
-     * it read is never filled, and no screen draws a grid. What the call was ALSO carrying is the
-     * lease -- which was never on the snapshot in the first place ([SessionLease.leaseHeld] is a
-     * parameter, and its own doc says why) -- so the lease survives the deletion intact and the
-     * grid does not.
+     * (2)/(3) deleted both ends of that: no phone surface issues a `terminal_watch`, so the cache
+     * it read is never filled, and no screen draws a grid. What the call was ALSO carrying was the
+     * lease -- and owner ruling R1 (2026-08-26) deleted that in its turn, because composer_send
+     * takes none at any layer.
      *
-     * IT ASKS THE FACADE FOR NOTHING. Both facts are already this side's: the caller's take_control
-     * outcome, and the transport state [isOnline] reads. The read that remains is a joining, which
-     * is what this adapter is for.
-     *
-     * @param leaseHeld whether the machine has CONFIRMED a control lease. It is the outcome of
-     *  this screen's own take_control operation (PB-INPUT-3), claimed by operation id.
+     * SO WHAT CROSSES HERE IS THE LINK, and it is still worth crossing: input is live-only and
+     * never queued, so whether the composer may send at all turns on it. The read is a joining,
+     * which is what this adapter is for.
      */
-    fun sessionLease(sessionId: String, leaseHeld: Boolean): SessionLease =
-        SessionLease(sessionId = sessionId, leaseHeld = leaseHeld, online = isOnline())
+    fun sessionLease(sessionId: String): SessionLease =
+        SessionLease(sessionId = sessionId, online = isOnline())
 
     /**
      * PB-INPUT-1's ledger: what this phone took from the user and could not deliver.

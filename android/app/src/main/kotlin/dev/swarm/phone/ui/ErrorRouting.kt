@@ -149,7 +149,16 @@ enum class Remedy {
      * here -- and offering one before the machine side is done leads to the same refusal.
      */
     CLEAR_DATA_AND_RE_PAIR,
-    TAKE_CONTROL,
+    /**
+     * NOTHING THE READER CAN DO ON THIS PHONE (owner ruling R1, 2026-08-26).
+     *
+     * This was TAKE_CONTROL, and the remedy it named is deleted: composer_send and
+     * turn_interrupt take no lease at any layer, so there is no control to take. The machine
+     * can still answer `swarm/no-lease` -- an older daemon, or a future raw-input plane -- and
+     * a routed error must land somewhere honest rather than nowhere, so the row survives with
+     * a remedy that promises nothing this app cannot do.
+     */
+    NONE_ON_THIS_PHONE,
     WAIT_AND_RETRY,
     RETRY_PAIRING,
     FIX_CLOCK,
@@ -171,14 +180,14 @@ enum class Remedy {
     val offersPairing: Boolean get() = this == PAIR || this == RE_PAIR
 
     /**
-     * Whether carrying this remedy out MEANS pressing the take-control this app already has.
+     * Whether this remedy is something the reader can carry out HERE.
      *
-     * It is one row rather than two, and it is named anyway for the reason above: the caller that
-     * needs it is [PressFeedback], which sees a refusal and must decide whether the screen owes the
-     * user a control. A bare `== TAKE_CONTROL` at that seam is a routing decision written where
-     * nothing reviews it against this table.
+     * It used to be `offersTakeControl`, naming the one control that could clear a refusal for
+     * want of a lease. That control is gone (R1), so the question flipped: what the caller --
+     * [PressFeedback] -- needs to know is whether to offer anything at all, and for this row
+     * the honest answer is no.
      */
-    val offersTakeControl: Boolean get() = this == TAKE_CONTROL
+    val actionableHere: Boolean get() = this != NONE_ON_THIS_PHONE
 }
 
 /**
@@ -196,17 +205,6 @@ data class RoutedError(
 ) {
     val offersPairing: Boolean get() = remedy.offersPairing
 
-    /**
-     * Whether this failure's remedy is the take-control press (agents-tracker-agre).
-     *
-     * WHY IT IS ASKED OF THE FAILURE AND NOT OF THE SCREEN. `swarm/no-lease` is what the MACHINE
-     * answers a keystroke it will not carry, and it is newer information than anything the screen
-     * knows: `ControlLease` records that a lease which lapsed at its horizon "still reads as
-     * confirmed", because the horizon does not ride the take_control's outcome. So the screen goes
-     * on showing Stop, the user presses it, and the same refusal comes back. The refusal itself is
-     * the only thing on the phone that knows the lease is gone.
-     */
-    val offersTakeControl: Boolean get() = remedy.offersTakeControl
 }
 
 /**
@@ -292,9 +290,13 @@ object ErrorRouter {
                 "pair again.",
         ),
         SwarmErrorTokens.NEEDS_LEASE to RoutedError(
-            ErrorState.NEEDS_LEASE, Remedy.TAKE_CONTROL,
-            "Your machine has not given this phone control of that session. Take control to " +
-                "type or to stop it; retrying is the one thing that cannot help.",
+            ErrorState.NEEDS_LEASE, Remedy.NONE_ON_THIS_PHONE,
+            // R1: the step this used to offer -- "Take control to type or to stop it" -- no
+            // longer exists, and the ops this app sends need no lease, so reaching this row at
+            // all now means an older machine or a plane this app does not use. It says what
+            // happened and stops, rather than naming a button that is not there.
+            "Your machine did not accept that from this phone. Nothing was sent, and it is " +
+                "still yours to do at the machine.",
         ),
         SwarmErrorTokens.STALE_TURN to RoutedError(
             ErrorState.STALE_TURN, Remedy.REFRESH,

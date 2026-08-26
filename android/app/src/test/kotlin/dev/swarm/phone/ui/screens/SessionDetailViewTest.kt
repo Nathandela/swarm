@@ -64,7 +64,6 @@ class SessionDetailViewTest {
     ): SessionDetailPanel {
         val detail = SessionDetail(
             sessionId = "mbp/api",
-            leaseHeld = leaseHeld,
             online = online,
             journalStale = journalStale,
             stopNotSent = stopNotSent,
@@ -72,9 +71,8 @@ class SessionDetailViewTest {
         return SessionDetailScreen.of(
             detail,
             TranscriptScreen.of(emptyList()),
-            SessionLease(sessionId = detail.sessionId, leaseHeld = detail.leaseHeld, online = detail.online),
+            SessionLease(sessionId = detail.sessionId, online = detail.online),
             capabilities = SessionCapabilityFacts(structuredChat = true),
-            verdict = verdict,
             undelivered = undelivered,
         )
     }
@@ -110,7 +108,6 @@ class SessionDetailViewTest {
     private fun panelWithApproval(): SessionDetailPanel {
         val detail = SessionDetail(
             sessionId = "mbp/api",
-            leaseHeld = true,
             online = true,
             journalStale = false,
         )
@@ -131,7 +128,7 @@ class SessionDetailViewTest {
                     ),
                 ),
             ),
-            SessionLease(sessionId = detail.sessionId, leaseHeld = true, online = true),
+            SessionLease(sessionId = detail.sessionId, online = true),
             capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
@@ -150,8 +147,6 @@ class SessionDetailViewTest {
     ): View = sessionDetailView(
         context = context,
         panel = panel,
-        takeControl = takeControl,
-        release = release,
         stop = TextView(context).apply { text = panel.stopLabel },
         kill = TextView(context).apply { text = panel.killLabel },
         resync = resync,
@@ -308,157 +303,6 @@ class SessionDetailViewTest {
      * `detail.lease.detail` is drawn only where the machine sent words, so a fixture with no
      * refusal in it would walk past the one part whose POSITION this test is the only statement of
      * -- under the sentence it explains, and above the control that sentence offers.
-     */
-    @Test
-    fun `the parts are drawn in the order the recorded composition names`() {
-        // THE LEDGER IS PART OF THE FIXTURE NOW (agents-tracker-nx44.6). Every part in
-        // `COMPOSITION` has to be on screen at once for an ordered comparison to mean anything,
-        // and PB-INPUT-1's three parts -- the notice, the machine's reason under it and the
-        // acknowledgement -- are drawn only over a session that actually lost input.
-        val root = view(
-            panel = panel(
-                leaseHeld = false,
-                journalStale = true,
-                online = false,
-                stopNotSent = true,
-                verdict = refusedLease(),
-                undelivered = lost(),
-            ),
-            outcome = "Your machine refused that.",
-        )
-
-        val order = mutableListOf<String>()
-        fun walk(v: View) {
-            (v.tag as? String)?.let { if (it in DetailTag.COMPOSITION) order += it }
-            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
-        }
-        walk(root)
-
-        assertEquals(DetailTag.COMPOSITION.toList(), order)
-    }
-
-    // ---- PB-INPUT-2 AS DRAWN, RE-HOMED FROM THE DELETED PEEK ---------------
-    //
-    // THE FOUR TESTS BELOW ARE `PeekPanelViewTest`'S. That file is deleted with the terminal peek
-    // (ADR-009 (3)) and these assertions are not: the peek held PB-INPUT-2's sentence and the Take
-    // control button only because the peek was where the keyboard was, (5) keeps the input substrate
-    // "exactly as decided", and this is the screen a session is read on now. `PeekTag.TAKE_CONTROL`
-    // and `PeekTag.LEASE` become `DetailTag.TAKE_CONTROL` and `DetailTag.LEASE`; nothing else about
-    // what they assert changed.
-
-    @Test
-    fun `take control is on screen exactly while the model offers it`() {
-        // PB-INPUT-2's recorded failure mode is that this control looked identical in both states.
-        // The inverse defect is the one that nearly shipped elsewhere: drawing it unconditionally,
-        // which tells a user who already holds the lease to take it.
-        val offered = panel(leaseHeld = false)
-        assertTrue("the model does not offer the control, so this asserts nothing", offered.offersTakeControl)
-        assertEquals(1, view(offered).allTagged(DetailTag.TAKE_CONTROL).size)
-
-        val held = panel(leaseHeld = true)
-        assertTrue("the model still offers the control, so this asserts nothing", !held.offersTakeControl)
-        assertEquals(
-            "the Take control button is on screen for a session whose lease the machine has " +
-                "already confirmed",
-            0,
-            view(held).allTagged(DetailTag.TAKE_CONTROL).size,
-        )
-    }
-
-    @Test
-    fun `the control on screen is the one the surface supplied`() {
-        val supplied = TextView(context)
-        val root = view(panel(leaseHeld = false), takeControl = supplied)
-
-        assertSame(supplied, root.allTagged(DetailTag.TAKE_CONTROL).single())
-    }
-
-    @Test
-    fun `a control re-composed after a redraw is not refused for having a parent`() {
-        // The panel is rebuilt whenever the conversation changes, which is every interaction item.
-        // A slot arriving at its next addView still claiming a discarded parent is refused by
-        // Android outright, and the failure is a crash on a screen somebody is holding.
-        val supplied = TextView(context)
-        val panel = panel(leaseHeld = false)
-        view(panel, takeControl = supplied)
-        val second = view(panel, takeControl = supplied)
-
-        assertSame(supplied, second.allTagged(DetailTag.TAKE_CONTROL).single())
-    }
-
-    /**
-     * NOT HELD still puts the model's line on screen; HELD now puts nothing there at all
-     * (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6 -- a confirmed lease is silent,
-     * the same call the stale notice above it already makes).
-     *
-     * THIS REPLACES a version that ran `kitRequire(DetailTag.LEASE)` over BOTH states inside a
-     * loop and then compared the two rendered strings -- three calls that throw the moment a
-     * confirmed lease draws no such view. 4493a3f made the identical rewrite on
-     * `PeekPanelViewTest` before that screen was deleted.
-     */
-    @Test
-    fun `the lease sentence on screen is the one the model chose for that state`() {
-        val notHeld = panel(leaseHeld = false)
-        assertEquals(notHeld.leaseNotice, textOf(view(notHeld).kitRequire(DetailTag.LEASE)))
-
-        val held = panel(leaseHeld = true)
-        assertTrue("a confirmed lease has nothing left to print", held.leaseNotice.isEmpty())
-        assertNull(
-            "a confirmed lease drew a notice anyway, which is a blank line nobody wrote -- and " +
-                "the composer is directly below it, so the sentence it used to print told the " +
-                "user they could type into the field already under their thumb",
-            view(held).kitFind(DetailTag.LEASE),
-        )
-        assertTrue(
-            "the two lease states put the same sentence on screen, which is the state PB-INPUT-2 " +
-                "was recorded NOT MET in -- a user could not tell until a keystroke vanished",
-            notHeld.leaseNotice != held.leaseNotice,
-        )
-    }
-
-    /**
-     * FAILING-FIRST (TDD RED, GG-5) for agents-tracker-ksvb.10: the machine's own words are a
-     * SECOND VIEW, drawn only where there are words.
-     *
-     * They used to be spliced into the sentence above -- `Your machine refused this phone control
-     * of the session: <a Go error>.` -- so the wire string was drawn in the notice's own type and
-     * ink, and nothing on screen said which half this product had written. The kit's `noticeDetail`
-     * is the `.sheet2 .ctx` cell and `NoticeTest` argues what it looks like; what only this suite
-     * can say is that the screen composes one at all, and skips it when the machine sent nothing.
-     */
-    @Test
-    fun `the machine's own reason is drawn under the lease sentence, and only when there is one`() {
-        val refused = panel(leaseHeld = false, verdict = refusedLease())
-
-        assertEquals(
-            "the machine's reason reaches no view, so a refusal on screen names no cause at all",
-            refused.leaseDetail,
-            textOf(view(refused).kitRequire(DetailTag.LEASE_DETAIL)),
-        )
-        assertNull(
-            "an empty detail is drawn as a blank mono line -- a cell reserved for a reply the " +
-                "machine never sent, which is the call the outcome and stale notices already make",
-            view(panel(leaseHeld = false)).kitFind(DetailTag.LEASE_DETAIL),
-        )
-        assertTrue(
-            "the sentence swallowed the machine's words again, so the demotion is undone on screen " +
-                "whatever the model decided",
-            !textOf(view(refused).kitRequire(DetailTag.LEASE)).contains(refused.leaseDetail),
-        )
-    }
-
-    // ---- the way to the sheet ---------------------------------------------
-
-    /**
-     * The tap that opens the approval sheet, asserted AT THIS SCREEN because this screen is the only
-     * thing between the surface's callback and the block that carries it.
-     *
-     * WHAT `TranscriptViewTest` CANNOT SEE. That suite hands `transcriptView` a listener directly and
-     * proves the block calls it; it says nothing about whether the session detail passed one DOWN.
-     * `sessionDetailView`'s own contract is "passed straight through", and the failure mode is silent
-     * in exactly the way the kit's own rule names: null draws the block and no control, so a screen
-     * that dropped the argument renders an approval that looks identical and does nothing -- the
-     * dead-chevron defect (agents-tracker-2yb) one surface over.
      */
     @Test
     fun `an approval block tapped on this screen reaches the caller with its item id`() {
@@ -631,25 +475,6 @@ class SessionDetailViewTest {
 
     /** PB-INPUT-3's take_control_end: a lease this screen took can now be given back. */
     @Test
-    fun `release is placed exactly while the lease is held and take control is not`() {
-        val release = TextView(context)
-
-        val held = view(panel(leaseHeld = true), release = release)
-        val observing = view(panel(leaseHeld = false), release = TextView(context))
-
-        assertSame(release, held.kitFind(DetailTag.RELEASE))
-        assertNull(
-            "the screen offers to take a lease it says is held",
-            held.kitFind(DetailTag.TAKE_CONTROL),
-        )
-        assertNull(
-            "the screen offers to give back a lease the machine never granted",
-            observing.kitFind(DetailTag.RELEASE),
-        )
-    }
-
-    /** agents-tracker-upbo: the stale notice reports a hole and could not repair one. */
-    @Test
     fun `the repair control sits with the notice that reports the hole, and nowhere else`() {
         val resync = TextView(context)
 
@@ -679,4 +504,15 @@ class SessionDetailViewTest {
         walk(this)
         return found
     }
+
+    // DELETED with the lease UX they described (owner ruling R1):
+    //   - `the parts are drawn in the order the recorded composition names`
+    //   - `take control is on screen exactly while the model offers it`
+    //   - `the control on screen is the one the surface supplied`
+    //   - `a control re-composed after a redraw is not refused for having a parent`
+    //   - `the lease sentence on screen is the one the model chose for that state`
+    //   - `the machine's own reason is drawn under the lease sentence, and only when there is one`
+    //   - `release is placed exactly while the lease is held and take control is not`
+    // The controls, the tags and the notices they asserted are gone from the screen.
+
 }

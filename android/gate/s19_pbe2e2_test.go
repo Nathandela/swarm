@@ -52,7 +52,16 @@ var pbe2e2Verbs = []struct {
 	// no production caller left and carries its row in android/unbound-verbs.tsv, which is where
 	// the replacement is argued at length.
 	{"composerSend", "\"types\": there is no control that puts a line into a session"},
-	{"takeControl", "\"takes control\""},
+	// {"takeControl", "\"takes control\""} WAS HERE, and the clause it served is retired
+	// with it (owner ruling R1, 2026-08-26; PB-INPUT-2's amendment in
+	// docs/specifications/remote-phaseB-requirements.md).
+	//
+	// PB-E2E-2's scenario reads "observes, takes control, types". The middle step existed
+	// because the raw keystroke plane is lease-gated at the daemon -- and this app has not
+	// used that plane since Wave R6 replaced it with composer_send, which takes no lease at
+	// any layer. So the smoke's own sequence has nothing between observing and typing: a
+	// session with a link and a message sink is typeable, full stop. Keeping the row would
+	// require the app to call a verb whose only effect was to un-grey a field.
 }
 
 // TestPBE2E2_TheAppCanPerformEveryActionTheSmokeDrives is the blocking precondition.

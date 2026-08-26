@@ -88,7 +88,6 @@ class SessionDetailComposerTest {
     ): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
             sessionId = session,
-            leaseHeld = false,
             online = online,
             journalStale = false,
             title = "api refactor",
@@ -96,7 +95,7 @@ class SessionDetailComposerTest {
             composerRefusal = refusal,
         ),
         TranscriptScreen.of(items),
-        SessionLease(sessionId = session, leaseHeld = false, online = online),
+        SessionLease(sessionId = session, online = online),
         capabilities = SessionCapabilityFacts(structuredChat = structuredChat),
     )
 
@@ -104,8 +103,6 @@ class SessionDetailComposerTest {
         sessionDetailView(
             context = context,
             panel = p,
-            takeControl = TextView(context),
-            release = TextView(context),
             stop = TextView(context),
             kill = TextView(context),
             resync = TextView(context),
@@ -244,11 +241,11 @@ class SessionDetailComposerTest {
     fun `no control is drawn once the machine has declared the floor`() {
         val p = SessionDetailScreen.of(
             SessionDetail(
-                sessionId = session, leaseHeld = false, online = true,
+                sessionId = session, online = true,
                 journalStale = false, title = "api refactor",
             ),
             TranscriptScreen.of(listOf(agent("oldest")), atFloor = true),
-            SessionLease(sessionId = session, leaseHeld = false, online = true),
+            SessionLease(sessionId = session, online = true),
         )
         assertFalse(p.offersLoadEarlier)
         assertNull(view(p).kitFind(DetailTag.LOAD_EARLIER))

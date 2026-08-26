@@ -37,7 +37,6 @@ class SessionDetailTest {
         stopNotSent: Boolean = false,
     ) = SessionDetail(
         sessionId = "m/sess-1",
-        leaseHeld = leaseHeld,
         online = online,
         journalStale = journalStale,
         stopNotSent = stopNotSent,
@@ -63,21 +62,15 @@ class SessionDetailTest {
         assertTrue("Stop is PERSISTENT: it is on screen in every state", detail().stopVisible)
     }
 
-    /**
-     * Stop with no lease shows the take-control step first. A Stop button that silently did
-     * nothing -- which is what an ungated one does, since PB-INPUT-2 refuses every keystroke
-     * until the machine confirms a lease -- is the failure this asserts against.
-     */
-    @Test
-    fun `stop without a lease offers take control rather than doing nothing`() {
-        val action = detail(leaseHeld = false).stop()
-        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, action)
-    }
+    // DELETED (owner ruling R1): "stop without a lease offers take control rather than doing
+    // nothing". The precondition it asserted was fake -- turn_interrupt takes no lease at any
+    // layer -- so the Stop it withheld would have worked, and the step it offered instead
+    // changed nothing on the wire. What survives is the assertion below, now unconditional.
 
-    /** With the lease confirmed, Stop is the interrupt keystroke and it needs a confirmation. */
+    /** Stop is the interrupt keystroke and it needs a confirmation. */
     @Test
-    fun `stop with a confirmed lease sends the interrupt keystroke behind a confirmation`() {
-        val d = detail(leaseHeld = true)
+    fun `stop sends the interrupt keystroke behind a confirmation`() {
+        val d = detail()
         assertEquals(StopAction.CONFIRM, d.stop())
         assertEquals(StopAction.SEND_INTERRUPT, d.confirmStop())
         assertEquals(
@@ -108,7 +101,7 @@ class SessionDetailTest {
      */
     @Test
     fun `an offline stop resolves as not sent and is never queued`() {
-        val d = detail(leaseHeld = true, online = false)
+        val d = detail(online = false)
         assertEquals(StopAction.NOT_SENT, d.confirmStop())
         assertFalse("a queued Stop is ADR-007 D7's forbidden replay", d.stopQueued)
         assertTrue(
@@ -119,7 +112,7 @@ class SessionDetailTest {
         )
         assertTrue(
             "the user must be TOLD it did not reach the machine (PB-INPUT-1)",
-            detail(leaseHeld = true, online = false, stopNotSent = true).notSentNotice.isNotBlank(),
+            detail(online = false, stopNotSent = true).notSentNotice.isNotBlank(),
         )
     }
 
@@ -164,21 +157,13 @@ class SessionLeaseTest {
         online: Boolean = true,
     ) = SessionLease(
         sessionId = "m/sess-1",
-        leaseHeld = leaseHeld,
         online = online,
     )
 
-    /** Take control, then release. Both are on screen; neither is implicit. */
-    @Test
-    fun `the lease is acquired and released explicitly`() {
-        val idle = lease(leaseHeld = false)
-        assertTrue(idle.showsTakeControl)
-        assertFalse(idle.showsRelease)
-
-        val held = lease(leaseHeld = true)
-        assertFalse(held.showsTakeControl)
-        assertTrue(held.showsRelease)
-    }
+    // DELETED (owner ruling R1): "the lease is acquired and released explicitly". Both
+    // controls are gone from the product, so the two properties that chose between them --
+    // showsTakeControl and showsRelease -- have no subject. android/gate's
+    // TestR1_TheLeaseIsNotAThingAScreenReads is the fence that keeps them gone.
 
     /**
      * The on-screen keyboard is enabled ONLY with a confirmed lease. Ungated, the user types
@@ -197,9 +182,9 @@ class SessionLeaseTest {
         assertFalse(
             "input is live-only and never queued: a composer over a dropped link invites " +
                 "words that are guaranteed to be dropped",
-            lease(leaseHeld = true, online = false).keyboardEnabled,
+            lease(online = false).keyboardEnabled,
         )
-        assertFalse(lease(leaseHeld = false, online = false).keyboardEnabled)
+        assertFalse(lease(online = false).keyboardEnabled)
     }
 }
 

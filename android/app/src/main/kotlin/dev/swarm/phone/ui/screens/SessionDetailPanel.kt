@@ -25,9 +25,10 @@ import dev.swarm.phone.ui.kit.SendState
  *    was minted for it, because one would need its own authz tuple and replay story and the
  *    daemon's CLOSED capability switch would refuse it one hop short while sealing no reply, so
  *    Stop would hang forever.
- *  - It REQUIRES THE LEASE. `SessionDetail.stop()` answers ACQUIRE_LEASE_FIRST for an observer, so
- *    this screen offers the step that would make Stop work instead of a button the machine will
- *    silently refuse.
+ *  - It REQUIRES NOTHING FIRST (owner ruling R1, 2026-08-26). This read "it REQUIRES THE LEASE",
+ *    and `SessionDetail.stop()` answered ACQUIRE_LEASE_FIRST for an observer -- a precondition
+ *    that was fake: `turn_interrupt` takes no lease at any layer, so the step being offered
+ *    changed nothing on the wire and the Stop it withheld would have worked.
  *  - It rides the LIVE-ONLY path (ADR-007 D7). An offline Stop is NOT_SENT and is never queued.
  *
  * What this answers is what a person READS: the title, the heading over the transcript, what each
@@ -76,45 +77,6 @@ data class SessionDetailPanel(
      * session.
      */
     val transcript: TranscriptPanel,
-    /**
-     * PB-INPUT-2's "visibly", in whichever of the two states the machine has put the user in, or
-     * EMPTY where the machine has confirmed the lease and there is nothing left to say.
-     *
-     * IT ARRIVED HERE WITH THE PEEK'S DELETION. The terminal peek carried the lease copy because
-     * the peek was where the keyboard was; ADR-009 (3) deletes that screen, and this is the screen
-     * a session is read on -- and typed into -- now. The requirement is untouched by the ADR --
-     * (5) keeps the input substrate "exactly as decided" -- so what moved is where the sentence is
-     * drawn, and what changed since is its density (agents-tracker-ksvb.6): see [LEASE_CONFIRMED].
-     */
-    val leaseNotice: String,
-    /**
-     * The MACHINE'S own words under [leaseNotice], or empty where it sent none
-     * (agents-tracker-ksvb.10).
-     *
-     * IT IS A SECOND FIELD AND NOT A LONGER SENTENCE. It used to be spliced into the middle of
-     * [leaseNotice] -- `Your machine refused this phone control of the session: <a Go error>.` --
-     * so a wire string was drawn in the same type, the same ink and the same voice as the copy this
-     * screen wrote. `sessionDetailView` draws it through the kit's `noticeDetail`, which is the
-     * `.sheet2 .ctx` cell: mono, tertiary, and visibly not this product talking.
-     */
-    val leaseDetail: String,
-    /**
-     * Whether the Take control step is on offer, per `SessionLease.showsTakeControl`.
-     *
-     * IT IS OFFERED EXACTLY WHILE IT IS THE STEP TO TAKE, and [offersRelease] is now its mirror.
-     */
-    val offersTakeControl: Boolean,
-    /**
-     * PB-INPUT-3's take_control_end, per `SessionLease.showsRelease` (agents-tracker-nx44.6).
-     *
-     * IT IS THE HALF OF THE LEASE THIS APP NEVER HAD. `App.ReleaseControl` sat in
-     * `android/unbound-verbs.tsv` reading "the surface can TAKE a lease and cannot give one back,
-     * so a lease is held until the machine expires it" -- and the model that would drive the
-     * control, `SessionLease.showsRelease`, was decided, unit-tested and read by nothing.
-     */
-    val offersRelease: Boolean,
-    /** What the Release control reads as. */
-    val releaseLabel: String,
     /** What pressing Stop does NOW, from the model that decides it. */
     val stopAction: StopAction,
     /** What the Stop control reads as, which differs for an observer -- see [SessionDetailScreen]. */
@@ -269,7 +231,6 @@ object SessionDetailScreen {
     private const val LOAD_EARLIER = "Load earlier messages"
 
     private const val STOP = "Stop"
-    private const val STOP_NEEDS_LEASE = "Take control to stop this"
 
     /**
      * The confirmation before an interrupt goes out.
@@ -378,13 +339,6 @@ object SessionDetailScreen {
     /** §4's back control, by where it goes rather than by a glyph a screen reader cannot read. */
     private const val BACK = "Back to inbox"
 
-    /**
-     * PB-INPUT-3's take_control_end, by what it does to the SESSION rather than by naming the verb.
-     *
-     * It is the mirror of "Take control" on purpose: the two are one fact in two states, and a
-     * release worded any other way would read as a different subject from the button it replaces.
-     */
-    private const val RELEASE = "Release control"
 
     /**
      * PB-SYNC-1's repair, named for what it mends rather than for the verb behind it
@@ -625,90 +579,25 @@ object SessionDetailScreen {
         )
     }
 
-    /**
-     * PB-INPUT-2's "visibly", for the two states this app renders as themselves rather than as a
-     * transition.
-     *
-     * **CONFIRMED IS SILENT** (agents-tracker-ksvb.6, re-applied by agents-tracker-nx44.6). It
-     * used to spend a full sentence saying control is granted, drawn unconditionally -- the app's
-     * one UNGATED notice, printed over the state where nothing needs saying. "Healthy is silent"
-     * is the pattern every other conditional notice here already follows, and the lease sentence
-     * is not exempt from it for being the one PB-INPUT-2 names by name. The composer is now on
-     * this screen, which makes the old copy worse than redundant: it told the user that what they
-     * type is sent live, directly above the field they were already looking at.
-     *
-     * **NOT CONFIRMED IS ONE LINE.** It still says what to do -- a shut keyboard with no reason
-     * beside it is the invisible suppression the requirement is against -- in the fewest words
-     * that say it, and "Read-only" is the state the rest of the screen is in.
-     *
-     * THE RULING DIED IN A MERGE ONCE. 4493a3f made this change on `PeekPanelScreen`; the peek was
-     * deleted a slice later (ADR-009 (3)) and the copy moved here from the file's pre-ksvb.6
-     * state, so a cross-session resolution of a deleted file silently reverted an owner density
-     * decision. It is recorded here so the next reader knows the old two-sentence form is a
-     * regression rather than an earlier draft.
-     */
-    private const val LEASE_CONFIRMED = ""
-
-    private const val LEASE_NOT_CONFIRMED = "Read-only -- take control to type."
-
-    /**
-     * The two sentences a REFUSAL and a SEVERANCE get instead (agents-tracker-qlf9).
-     *
-     * [LEASE_NOT_CONFIRMED] was shown for both, and it is wrong for both in the same way: it reads
-     * as "you have not pressed the button yet", and the step it offers is the one that was just
-     * declined. The machine's own words follow, because a kill switch, a revoked device and a
-     * policy refusal have three different remedies and only the reply says which one this is.
-     *
-     * THEY ARE TWO SENTENCES AND NOT ONE. A lease the machine GRANTED and later ended is not a
-     * lease it refused; `internal/remotegw/lease_sever.go` seals the detach under the
-     * take_control's own operation id, so the difference arrives on this very outcome and a single
-     * wording would accuse the machine of declining a lease it had given.
-     */
-    private const val LEASE_REFUSED = "Your machine refused this phone control of the session"
-
-    private const val LEASE_ENDED = "Your machine ended this phone's control of the session"
-
-    /** What every not-granted state shares, said once rather than in each sentence. */
-    private const val KEYBOARD_SHUT = " The keyboard stays shut."
-
-    /**
-     * @param verdict the machine's answer to the take_control THIS screen issued. It is defaulted
-     *  to [CommandVerdict.UNANSWERED] rather than required, because a phone that has asked for no
-     *  lease has not been refused one -- and the two must not read the same.
-     */
-    fun leaseNoticeFor(
-        confirmed: Boolean,
-        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
-    ): String = when {
-        // THE LEASE ITSELF IS THE AUTHORITY and this clause is first for that reason: `leaseHeld`
-        // is what shuts the keyboard, and a notice announcing control over a shut keyboard is the
-        // contradiction PB-INPUT-2's "visibly" exists to prevent.
-        confirmed -> LEASE_CONFIRMED
-        verdict.result == CommandResult.ENDED -> verdict.sentence(LEASE_ENDED) + KEYBOARD_SHUT
-        verdict.refused -> verdict.sentence(LEASE_REFUSED) + KEYBOARD_SHUT
-        else -> LEASE_NOT_CONFIRMED
-    }
-
-    /**
-     * [killDetailFor]'s program on this verb: the machine's own words beside the lease sentence,
-     * rather than inside it (agents-tracker-ksvb.10).
-     *
-     * IT ANSWERS FOR THE SEVERANCE AS WELL AS THE REFUSAL. `lease_sever.go` seals the detach with
-     * a message of its own -- what ended the lease is as diagnostic as what refused one -- and the
-     * two sentences above already keep them apart, so this cell does not have to.
-     *
-     * A CONFIRMED LEASE HAS NO DETAIL, and the clause is first for [leaseNoticeFor]'s reason: the
-     * lease itself is the authority, so a screen the model says holds control must not draw a
-     * refusal's diagnostic under a sentence announcing it.
-     */
-    fun leaseDetailFor(
-        confirmed: Boolean,
-        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
-    ): String = when {
-        confirmed -> ""
-        verdict.result == CommandResult.ENDED || verdict.refused -> verdict.reason
-        else -> ""
-    }
+    // THE LEASE'S ENTIRE VOCABULARY WAS DELETED HERE (owner ruling R1, 2026-08-26).
+    //
+    // Four sentences and two functions stood in this space: LEASE_CONFIRMED (empty),
+    // LEASE_NOT_CONFIRMED ("Read-only -- take control to type."), LEASE_REFUSED and
+    // LEASE_ENDED with their shared " The keyboard stays shut." suffix, plus leaseNoticeFor
+    // and leaseDetailFor which chose between them.
+    //
+    // EVERY ONE OF THEM ANSWERED A QUESTION THE PRODUCT NO LONGER ASKS. composer_send and
+    // turn_interrupt take no lease at any layer, so there was never a keystroke for a lease to
+    // gate here; the notice drawn in the ordinary case told the reader to press a button that
+    // changes nothing on the wire, and it was drawn on !leaseHeld with no capability input at
+    // all -- which is why it appeared beside a sentence saying typing was impossible, on the
+    // same screen, in the state the owner photographed.
+    //
+    // A REFUSAL AND A SEVERANCE HAVE NO SUBJECT EITHER: both were the machine's answer to a
+    // take_control this phone issued, and it issues none. What replaced all of it is the
+    // composer's own shut state, which names which of four reasons it cannot send
+    // (ComposerModel.shutCopyFor) -- a stronger visible confirmation than a lease flag, because
+    // a held lease never implied a session could receive a message and those four do.
 
     /**
      * @param transcript the conversation, decided by [TranscriptScreen] off the items themselves.
@@ -721,14 +610,12 @@ object SessionDetailScreen {
      *  and INFERS NOTHING, so the only correct default is [SessionCapabilityFacts.ABSENT] -- which
      *  offers no composer, because a session whose capability the machine did not state is not a
      *  session this screen may guess about.
-     * @param verdict the rest of the machine's answer to this screen's own take_control.
      */
     fun of(
         detail: SessionDetail,
         transcript: TranscriptPanel,
         lease: SessionLease,
         capabilities: SessionCapabilityFacts = SessionCapabilityFacts.ABSENT,
-        verdict: CommandVerdict = CommandVerdict.UNANSWERED,
         undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
     ): SessionDetailPanel = SessionDetailPanel(
         // THE SESSION'S OWN NAME, and the id only where there is none
@@ -738,20 +625,12 @@ object SessionDetailScreen {
         title = detail.title.ifEmpty { detail.sessionId },
         back = BACK,
         transcript = transcript,
-        // THE VERDICT IS THE MODEL'S, not the press's: `showsRelease` is what the MACHINE answered
-        // this screen's own take_control with, claimed by operation id, and [verdict] is the rest of
-        // that same answer -- which the peek used to discard on the way in.
-        leaseNotice = leaseNoticeFor(lease.showsRelease, verdict),
-        leaseDetail = leaseDetailFor(lease.showsRelease, verdict),
-        offersTakeControl = lease.showsTakeControl,
         // THE LEASE MODEL DECIDES BOTH, and they are read from the two properties rather than from
-        // one and its negation: `showsTakeControl` and `showsRelease` are the two sides of one
-        // fact, and a screen that computed the second here would be a second copy of a decision
-        // `SessionLease` already states.
-        offersRelease = lease.showsRelease,
-        releaseLabel = RELEASE,
         stopAction = detail.stop(),
-        stopLabel = if (detail.leaseHeld) STOP else STOP_NEEDS_LEASE,
+        // ONE WORDING NOW (owner ruling R1). The other was STOP_NEEDS_LEASE -- "Take control to
+        // stop this" -- shown to a reader holding no lease, which was every reader: a fake
+        // precondition in front of a real Stop, since turn_interrupt takes no lease either.
+        stopLabel = STOP,
         stopConfirmation = STOP_CONFIRMATION,
         confirmedStopAction = detail.confirmStop(),
         killLabel = KILL,

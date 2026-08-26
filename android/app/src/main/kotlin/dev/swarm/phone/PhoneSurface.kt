@@ -321,12 +321,11 @@ class PhoneSurface(
         it.onOpenMachines = ::openMachines
     }
 
-    /**
-     * IT REMEMBERS THE OPERATION IT ISSUED, which is what makes PB-INPUT-2's lease a fact rather
-     * than a literal. The lease is not on any snapshot: it is the outcome of THIS take_control,
-     * claimed by operation id, and [leaseConfirmedFor] is what asks the machine about it.
-     */
-    private val takeControl = actionButton("Take control", CtaKind.MORE) { takeControlOf(session) }
+    // TAKE CONTROL AND RELEASE CONTROL WERE DELETED HERE (owner ruling R1, 2026-08-26).
+    // composer_send and turn_interrupt take no lease at any layer, so neither button changed
+    // anything on the wire: one un-greyed a field for a verb that never needed it, and the
+    // other gave back something nothing had taken. `App.TakeControl` and `App.ReleaseControl`
+    // return to android/unbound-verbs.tsv, where ReleaseControl already sat.
 
     /**
      * PB-APP-3's persistent Stop, and the one control on this surface whose PRESS DOES TWO
@@ -387,10 +386,6 @@ class PhoneSurface(
                     confirmation = SessionDetail.INTERRUPT_SENT,
                     settle = { answer -> rememberInterrupt(answer) },
                 )
-            }
-            StopAction.ACQUIRE_LEASE_FIRST -> {
-                stopNotSentFor = ""
-                takeControlOf(target)
             }
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
             // D7). IT USED TO BE `else -> null` (agents-tracker-4lta), deferring to a notice that
@@ -553,28 +548,7 @@ class PhoneSurface(
      */
     private val composer = composerBar(activity, typed, send)
 
-    /**
-     * PB-INPUT-3's take_control_end, and the way OUT of a lease this app has never had
-     * (agents-tracker-nx44.6).
-     *
-     * `App.ReleaseControl` sat in android/unbound-verbs.tsv reading "the surface can TAKE a lease
-     * and cannot give one back, so a lease is held until the machine expires it". It is on the
-     * COMMAND plane with its sibling: a lease is claimed and surrendered by signed operations, and
-     * `mobile/commands.go` polls `awaitConn` on that path and deliberately does not on the live one.
-     *
-     * THE SETTLE FORGETS THE OPERATION THE LEASE WAS CLAIMED BY. [leaseVerdictFor] answers from the
-     * take_control this surface issued; a release that left that latch up would draw a lease as
-     * held over a session the machine has just been asked to detach, which is the same
-     * screen-disagrees-with-the-wire defect agents-tracker-agre found in the other direction.
-     */
-    private val release = actionButton(SLOT_LABEL, CtaKind.MORE) {
-        val target = session
-        Press(
-            SendPlane.COMMAND,
-            verb = { app -> app.releaseControl(target) },
-            settle = { forgetLease(target) },
-        )
-    }
+
 
     /**
      * PB-SYNC-1's repair, and `App.Resync`'s FIRST CALLER (agents-tracker-upbo).
@@ -1450,7 +1424,7 @@ class PhoneSurface(
     // working: the control moved to the screen that owns it and arrived back in this list with the
     // panel's own set, so the phone's one destructive action never stopped filtering obscured taps.
     val touchFilteredActions: List<View> =
-        listOf(takeControl, release, send, stop, kill, launch, resyncControl, acknowledge) +
+        listOf(send, stop, kill, launch, resyncControl, acknowledge) +
             pairing.touchFilteredActions + settings.touchFilteredActions
 
     /**
@@ -1807,27 +1781,16 @@ class PhoneSurface(
         // PB-INPUT-2: the lease is what the MACHINE answered this screen's own take_control with,
         // claimed by operation id. It was the literal `false` until ADR-007 B83(3), which told
         // every user they held nothing while Send stayed live from a different fact entirely.
-        val verdict = leaseVerdictFor(session, bridge)
-        // THE REFUSAL OUTRANKS THE GRANT (agents-tracker-agre) -- [detailPanel]'s clause, on the
-        // screen that owns the Take control button. A lease drawn as held over a machine that has
-        // just refused a keystroke for want of one leaves the keyboard open and the control that
-        // would fix it off screen, which is `SessionDetailPanel.offersTakeControl` reading a fact
-        // the wire has already contradicted.
-        val lease = bridge.sessionLease(
-            session,
-            leaseHeld = verdict.accepted && leaseRefusedFor != session,
-        )
+        val lease = bridge.sessionLease(session)
         // ADR-009 (4)'s card, for the question this session is actually blocked on. It is read
         // BESIDE the roster and not off it: `InboxRow.lit` is the display group, and an unresolved
         // approval_request is the machine waiting for an answer -- two different facts that a sheet
         // must not confuse (IS-SS-1).
         drawApproval(approvalPanel(bridge, inbox))
         setActionsEnabled(true)
-        // BOTH CLAUSES, AND THEY ARE THE MODEL'S. `keyboardEnabled` is `leaseHeld && online`, and
-        // the second half is a separate clause -- a lease cannot be live while the link is down. A
-        // surface that enabled the keyboard from its own lease flag would satisfy PB-INPUT-2's
-        // first clause and drop the second, silently, while the model that states it stayed green
-        // and unread.
+        // THE MODEL'S, NOT THIS SURFACE'S. `keyboardEnabled` is the link, and a surface that
+        // decided the keyboard from its own flag would be a second copy of a policy the model
+        // already states -- which is how the lease clause survived here unread for a wave.
         setKeyboardEnabled(lease.keyboardEnabled)
     }
 
@@ -2348,13 +2311,7 @@ class PhoneSurface(
     private fun detailPanel(bridge: FacadeBridge?): SessionDetailPanel? {
         val open = detail ?: return null
         if (bridge == null) return null
-        // AND A REFUSAL FOR WANT OF A LEASE ENDS IT (agents-tracker-agre). The verdict is the
-        // machine's answer to a take_control that may be older than the refusal this session's last
-        // press just earned; without this clause the panel goes on labelling the control `Stop`,
-        // and pressing it collects `swarm/no-lease` again.
-        val verdict = leaseVerdictFor(open, bridge)
-        val lease = verdict.accepted && leaseRefusedFor != open
-        val control = bridge.sessionLease(open, leaseHeld = lease)
+        val control = bridge.sessionLease(open)
         // THE CONVERSATION, AND IT IS ONE READ RATHER THAN TWO. `App.ReadTranscript` is per session,
         // so there is no roster-wide page to filter down here -- and `TranscriptPageView.stale` is
         // the JOURNAL's own stale mark, read off the handle that carried the items, because an
@@ -2376,7 +2333,6 @@ class PhoneSurface(
                 // the identity every control on this screen acts on; only what is READ changes,
                 // and an unreadable roster leaves this empty so the id renders as it did before.
                 title = bridge.sessionTitle(open),
-                leaseHeld = lease,
                 // ONLINE IS THE LEASE MODEL'S AND NOT A SECOND OPINION. `SessionLease.online` is the
                 // transport fact `FacadeBridge` already derived, and it is the clause that decides
                 // whether a confirmed Stop is sent or discarded.
@@ -2419,7 +2375,6 @@ class PhoneSurface(
             // torn transcript and a provider that never had structured chat are different
             // states with different explanations, and only the record knows which one this is.
             capabilities = bridge.sessionCapabilities(open),
-            verdict = verdict,
             // PB-INPUT-1's ledger, NARROWED HERE AND NOT IN THE FACADE. `App.UndeliveredInputs` is
             // process-wide -- a dropped link loses keystrokes for every session at once -- and a
             // screen open on one session that reported another's loss would be the proximity error
@@ -2770,18 +2725,12 @@ class PhoneSurface(
         loadEarlier.text = panel.loadEarlierLabel
         stop.text = panel.stopLabel
         kill.text = panel.killLabel
-        release.text = panel.releaseLabel
         resyncControl.text = panel.resyncLabel
         acknowledge.text = panel.acknowledgeLabel
         hostContent(
             sessionDetailView(
                 context = activity,
                 panel = panel,
-                // PB-INPUT-2's step, on the screen that now carries its sentence. It is the SAME
-                // button the deleted peek was handed, unchanged: this surface owns the verb, the
-                // operation id the lease is claimed by, and PB-SEC-12 clause 1's touch filter.
-                takeControl = takeControl,
-                release = release,
                 stop = stop,
                 kill = kill,
                 resync = resyncControl,
@@ -3544,25 +3493,6 @@ class PhoneSurface(
         LaunchFieldId.PROMPT -> launchPrompt
     }
 
-    /**
-     * Ask for the lease, and REMEMBER THE OPERATION, which is what makes PB-INPUT-2's lease a fact
-     * rather than a literal. The lease is not on any snapshot: it is the outcome of THIS
-     * take_control, claimed by operation id, and [leaseConfirmedFor] is what asks the machine
-     * about it.
-     *
-     * IT IS A FUNCTION AND NOT A LAMBDA ON ONE BUTTON because the peek's `[Take control]` is no
-     * longer the only way in: the session detail's Stop offers the same step to an observer, in the
-     * words [SessionDetailPanel.stopLabel] chooses, and a second copy of these three lines is a
-     * second place for the operation id to be forgotten.
-     */
-    private fun takeControlOf(target: String) = Press(
-        SendPlane.COMMAND,
-        verb = { app -> app.takeControl(target) },
-        // THE OPERATION ID IS REMEMBERED ON THE LOOPER, not beside the verb where it used to be
-        // written. `leaseOp` and `leaseSession` are read by `render` on every draw, so latching
-        // them from a lane would publish a lease to the drawing thread through a plain field.
-        settle = { answer -> rememberLease(answer, target) },
-    )
 
     /**
      * Latch the take_control this surface issued, so [leaseConfirmedFor] can claim its answer by
@@ -3584,27 +3514,37 @@ class PhoneSurface(
         leaseRefusedFor = ""
     }
 
-    /**
-     * Forget the take_control this surface issued, because the machine has been asked to end it.
-     *
-     * IT IS THE MIRROR OF [rememberLease] AND NOT A SECOND LEASE FACT. What decides the lease on
-     * this screen is the outcome claimed by [leaseOp]; a release that left that latch up would go
-     * on drawing the lease as held -- with the keyboard live and no Take control on offer -- over a
-     * session the machine is detaching. Dropping the id makes the next draw's verdict UNANSWERED,
-     * which is exactly what a phone holding no lease should read as.
-     *
-     * IT ONLY FORGETS ITS OWN. A release pressed while the latch names a different session would
-     * otherwise clear a lease the user still holds somewhere else.
-     */
-    private fun forgetLease(target: String) {
-        if (leaseSession != target) return
-        leaseOp = ""
-        leaseSession = ""
-        leaseSaid = ""
-        leaseRefusedFor = ""
-    }
 
     /** Latch the kill this surface issued, so [renderKillVerdict] can claim its answer. */
+    private fun rememberDetailRead(answer: Any?, itemId: String) {
+        val issued = answer as? Op ?: return
+        detailOp = issued.operationID
+        detailFor = itemId
+    }
+
+    private fun renderKillVerdict(bridge: FacadeBridge) {
+        if (killOp.isEmpty() || killOp == killSaid) return
+        val verdict = try {
+            CommandVerdict.of(bridge.launchOutcome(killOp), killOp, CommandVerdict.ACCEPTED_OK)
+        } catch (unreadable: Exception) {
+            // Unresolved is the honest state, and the next draw asks again.
+            return
+        }
+        if (!verdict.answered) return
+        killSaid = killOp
+        // A KILL THE MACHINE CARRIED OUT SAYS NOTHING. The session leaving the roster is the
+        // confirmation, and [SessionDetailScreen] is where that silence is decided rather than
+        // here -- `remote-control-mock.html` wrote no toast for a kill.
+        val notice = SessionDetailScreen.killNoticeFor(verdict)
+        // THE MACHINE'S WORDS TRAVEL AS THE TOAST'S SUFFIX (agents-tracker-ksvb.10). This verb has
+        // no panel cell of its own -- the kill's answer reaches the user through the outcome line
+        // and row 1's toast and nowhere else -- and row 1 gives that toast a separate MONO cell
+        // beside its message, which is the register the demotion asks for.
+        if (notice.isNotEmpty()) {
+            say(PressFeedback.ofRefusal(notice, SessionDetailScreen.killDetailFor(verdict)))
+        }
+    }
+
     private fun rememberKill(answer: Any?) {
         val issued = answer as? Op ?: return
         killOp = issued.operationID
@@ -3628,30 +3568,6 @@ class PhoneSurface(
         ?.stopConfirmation
         .orEmpty()
 
-    /**
-     * What the MACHINE said about the control lease for [session].
-     *
-     * IT ASKS ABOUT ONE OPERATION -- the take_control this surface issued -- and refuses to
-     * answer about any other session, because an outcome attributed by proximity is the error
-     * PB-SYNC-2's operation ids exist to prevent. A phone that has taken control of nothing, or
-     * whose target moved to a different first row, holds no lease and says so.
-     *
-     * IT RETURNS THE VERDICT AND NOT A BOOLEAN (agents-tracker-qlf9). `ControlLease.confirmedBy`
-     * answered the keyboard's question correctly and threw away the rest of the reply, so every
-     * refusal reached the screen as "your machine has not confirmed control ... Take control
-     * first" -- which reads as "you have not pressed the button yet" and offers as the remedy the
-     * step that was just declined. [SessionDetailScreen.leaseNoticeFor] is what needs the rest.
-     */
-    private fun leaseVerdictFor(session: String, bridge: FacadeBridge): CommandVerdict {
-        if (leaseOp.isEmpty() || session != leaseSession) return CommandVerdict.UNANSWERED
-        return try {
-            ControlLease.verdictOf(bridge.launchOutcome(leaseOp), leaseOp)
-        } catch (unreadable: Exception) {
-            // A facade that cannot answer has not confirmed anything, and fail-closed here is a
-            // shut keyboard rather than a keystroke sent against a lease nobody vouched for.
-            CommandVerdict.UNANSWERED
-        }
-    }
 
     /**
      * PB-APP-9 for the two session controls that used to answer with nothing: the machine's
@@ -3668,7 +3584,6 @@ class PhoneSurface(
      */
     private fun renderVerdicts(bridge: FacadeBridge) {
         renderKillVerdict(bridge)
-        renderLeaseVerdict(bridge)
         renderApprovalVerdict(bridge)
         // Wave R6's four, on the same program and for the same reason (review round 2): every
         // one of them has an ANSWER, and none of them was claimed.
@@ -3839,53 +3754,6 @@ class PhoneSurface(
         historySpeaks = aloud
     }
 
-    /** Latch the full-body fetch this surface issued, and the CARD it was issued for. */
-    private fun rememberDetailRead(answer: Any?, itemId: String) {
-        val issued = answer as? Op ?: return
-        detailOp = issued.operationID
-        detailFor = itemId
-    }
-
-    private fun renderKillVerdict(bridge: FacadeBridge) {
-        if (killOp.isEmpty() || killOp == killSaid) return
-        val verdict = try {
-            CommandVerdict.of(bridge.launchOutcome(killOp), killOp, CommandVerdict.ACCEPTED_OK)
-        } catch (unreadable: Exception) {
-            // Unresolved is the honest state, and the next draw asks again.
-            return
-        }
-        if (!verdict.answered) return
-        killSaid = killOp
-        // A KILL THE MACHINE CARRIED OUT SAYS NOTHING. The session leaving the roster is the
-        // confirmation, and [SessionDetailScreen] is where that silence is decided rather than
-        // here -- `remote-control-mock.html` wrote no toast for a kill.
-        val notice = SessionDetailScreen.killNoticeFor(verdict)
-        // THE MACHINE'S WORDS TRAVEL AS THE TOAST'S SUFFIX (agents-tracker-ksvb.10). This verb has
-        // no panel cell of its own -- the kill's answer reaches the user through the outcome line
-        // and row 1's toast and nowhere else -- and row 1 gives that toast a separate MONO cell
-        // beside its message, which is the register the demotion asks for.
-        if (notice.isNotEmpty()) {
-            say(PressFeedback.ofRefusal(notice, SessionDetailScreen.killDetailFor(verdict)))
-        }
-    }
-
-    private fun renderLeaseVerdict(bridge: FacadeBridge) {
-        if (leaseOp.isEmpty() || leaseOp == leaseSaid) return
-        val verdict = leaseVerdictFor(leaseSession, bridge)
-        if (!verdict.answered) return
-        leaseSaid = leaseOp
-        if (verdict.accepted) return
-        // THE PEEK SHOWS THIS SENTENCE TOO, and that is [PressFeedback]'s rule rather than a
-        // duplication: the line and the peek keep the message where it can be re-read, and the
-        // toast puts it in front of the eye that was on the control -- which on this surface may
-        // be the session detail's Stop, on a screen the peek is not composed into at all.
-        say(
-            PressFeedback.ofRefusal(
-                SessionDetailScreen.leaseNoticeFor(confirmed = false, verdict),
-                SessionDetailScreen.leaseDetailFor(confirmed = false, verdict),
-            ),
-        )
-    }
 
     /**
      * PB-APP-9 for the fourth verb this table now covers (agents-tracker-dwwv.2.4):
@@ -4083,8 +3951,6 @@ class PhoneSurface(
         // rather than a control this function has to remember to leave alone: it is the panic
         // action, and a phone whose session list is empty -- or whose machine is unreachable -- is
         // exactly the state its owner may need it in.
-        takeControl.enable(enabled)
-        release.enable(enabled)
         // The session detail's two, which cannot in fact be on screen while this is false -- an
         // open drill-down IS the target, so the roster cannot be empty under one. They are here
         // because they act on the chosen session, which is what this function is about.
@@ -4311,12 +4177,10 @@ class PhoneSurface(
                     onFailure = {
                         val routed = FacadeBridge(app).routeFacadeError(it.message.orEmpty())
                         val refusal = PressFeedback.ofRefusal(routed)
-                        // PB-APP-9's remedy becomes the control it names (agents-tracker-agre).
-                        // `swarm/no-lease` says the machine will not carry this session's keystrokes,
-                        // which the screen's own lease fact cannot know -- see [leaseRefusedFor] --
-                        // so the answer is latched here and the next draw offers take control in
-                        // place of a Stop that would earn the same refusal.
-                        if (refusal.offersTakeControl) leaseRefusedFor = session
+                        // R1: this used to latch `swarm/no-lease` so the next draw could offer
+                        // take control in place of a Stop that would earn the same refusal.
+                        // There is no such control now, and the ops this app sends need no
+                        // lease -- so the refusal is reported and nothing is latched.
                         say(refusal)
                         planned.refused(routed)
                     },

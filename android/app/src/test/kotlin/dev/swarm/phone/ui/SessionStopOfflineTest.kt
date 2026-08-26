@@ -40,7 +40,6 @@ class SessionStopOfflineTest {
         online: Boolean = true,
     ) = SessionDetail(
         sessionId = "mbp/api",
-        leaseHeld = leaseHeld,
         online = online,
         journalStale = false,
     )
@@ -53,33 +52,30 @@ class SessionStopOfflineTest {
                 "answer resolves to NOT_SENT with nothing sent and nothing written. A " +
                 "confirmation is a promise that answering it does something",
             StopAction.NOT_SENT,
-            detail(leaseHeld = true, online = false).stop(),
+            detail(online = false).stop(),
         )
     }
 
-    @Test
-    fun `the lease is still the first question, offline or not`() {
-        // PB-INPUT-2 refuses every keystroke until the machine confirms a lease, so an observer is
-        // shown the step that would make Stop work whatever the link is doing. A link check that
-        // ran first would offer take-control's remedy to a user who cannot use it and hide the one
-        // that is actually theirs.
-        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, detail(leaseHeld = false, online = false).stop())
-        assertEquals(StopAction.ACQUIRE_LEASE_FIRST, detail(leaseHeld = false, online = true).stop())
-    }
+    // DELETED (owner ruling R1): "the lease is still the first question, offline or not".
+    // It asserted that the lease clause ran BEFORE the link clause, so an observer was shown
+    // take-control's remedy whatever the link was doing. Both halves are gone: turn_interrupt
+    // takes no lease, so there was no first question and no remedy to offer. The link is now
+    // the only question, which the rest of this file already asserts.
+
 
     @Test
     fun `a Stop that can be sent is still asked about first`() {
         // The confirmation belongs to the press that INTERRUPTS A RUNNING AGENT and nothing here
         // removes it: it names what will actually happen rather than asking "are you sure".
-        assertEquals(StopAction.CONFIRM, detail(leaseHeld = true, online = true).stop())
-        assertEquals(StopAction.SEND_INTERRUPT, detail(leaseHeld = true, online = true).confirmStop())
+        assertEquals(StopAction.CONFIRM, detail(online = true).stop())
+        assertEquals(StopAction.SEND_INTERRUPT, detail(online = true).confirmStop())
     }
 
     @Test
     fun `an offline Stop is still never queued`() {
         // ADR-007 D7: input is live-only. A Stop held for a reconnection arrives after the user
         // gave up and did something else, and interrupts whatever is running then.
-        assertEquals(StopAction.NOT_SENT, detail(leaseHeld = true, online = false).confirmStop())
+        assertEquals(StopAction.NOT_SENT, detail(online = false).confirmStop())
     }
 
     @Test
@@ -87,11 +83,11 @@ class SessionStopOfflineTest {
         // `PhoneSurface.stopQuestion()` asks the panel and offers the confirmation only for
         // CONFIRM. The panel is where that gate reads its answer, so the fix has to arrive here or
         // the dialog is built anyway.
-        val d = detail(leaseHeld = true, online = false)
+        val d = detail(online = false)
         val offline = SessionDetailScreen.of(
             d,
             TranscriptScreen.of(emptyList()),
-            SessionLease(sessionId = d.sessionId, leaseHeld = d.leaseHeld, online = d.online),
+            SessionLease(sessionId = d.sessionId, online = d.online),
             capabilities = SessionCapabilityFacts(structuredChat = true),
         )
 

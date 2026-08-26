@@ -57,11 +57,11 @@ class TranscriptIncrementalRedrawTest {
 
     private fun panelOf(vararg items: InteractionItem): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
-            sessionId = session, leaseHeld = false, online = true,
+            sessionId = session, online = true,
             journalStale = false, title = "api refactor",
         ),
         TranscriptScreen.of(items.toList()),
-        SessionLease(sessionId = session, leaseHeld = false, online = true),
+        SessionLease(sessionId = session, online = true),
         capabilities = SessionCapabilityFacts(structuredChat = true),
     )
 
@@ -70,8 +70,6 @@ class TranscriptIncrementalRedrawTest {
             sessionDetailView(
                 context = context,
                 panel = panel,
-                takeControl = TextView(context),
-                release = TextView(context),
                 stop = TextView(context),
                 kill = TextView(context),
                 resync = TextView(context),
@@ -237,11 +235,11 @@ class TranscriptIncrementalRedrawTest {
         val host = host(drawn)
         val torn = SessionDetailScreen.of(
             SessionDetail(
-                sessionId = session, leaseHeld = true, online = true,
+                sessionId = session, online = true,
                 journalStale = false, title = "api refactor",
             ),
             TranscriptScreen.of(listOf(item("a", "Running the suite."))),
-            SessionLease(sessionId = session, leaseHeld = true, online = true),
+            SessionLease(sessionId = session, online = true),
             // WAVE R8 (ADR-017 T2 rule 3): a TORN session is now the RECORD saying
             // structured_chat=false -- which is exactly what the daemon's one-way degrade writes
             // after a proven structured gap -- rather than a gap element in the item list being

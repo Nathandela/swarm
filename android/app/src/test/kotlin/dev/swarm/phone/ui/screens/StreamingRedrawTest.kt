@@ -127,21 +127,20 @@ class StreamingRedrawTest {
      */
     private fun detailPanel(
         transcript: TranscriptPanel = conversationOf(firstItem),
-        leaseHeld: Boolean = false,
+        online: Boolean = true,
         journalStale: Boolean = false,
         title: String = "api refactor",
     ): SessionDetailPanel {
         val detail = SessionDetail(
             sessionId = session,
-            leaseHeld = leaseHeld,
-            online = true,
+            online = online,
             journalStale = journalStale,
             title = title,
         )
         return SessionDetailScreen.of(
             detail,
             transcript,
-            SessionLease(sessionId = session, leaseHeld = leaseHeld, online = true),
+            SessionLease(sessionId = session, online = online),
             capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
@@ -155,8 +154,6 @@ class StreamingRedrawTest {
             sessionDetailView(
                 context = context,
                 panel = panel,
-                takeControl = TextView(context),
-                release = TextView(context),
                 stop = TextView(context),
                 kill = TextView(context),
                 resync = TextView(context),
@@ -185,72 +182,19 @@ class StreamingRedrawTest {
         .map { (it.kitRequire(KitTag.ACTIVITY_BODY) as TextView).text.toString() }
 
     @Test
-    fun `a new item reaches the conversation without rebuilding the screen`() {
-        val drawn = detailPanel()
-        val host = host(drawn)
-        val transcript = host.kitRequire(DetailTag.TRANSCRIPT)
-        val nav = host.kitRequire(DetailTag.NAV)
-        val lease = host.kitRequire(DetailTag.LEASE)
-        val takeControl = host.kitRequire(DetailTag.TAKE_CONTROL)
-        val stop = host.kitRequire(DetailTag.STOP)
-        val kill = host.kitRequire(DetailTag.KILL)
-
-        assertTrue(
-            "a detail differing only in its conversation was refused, so the header, the notices " +
-                "and all three controls are rebuilt at the rate the agent writes",
-            sessionDetailRedraw(host, drawn, detailPanel(conversationOf(firstItem, secondItem))),
-        )
-
-        assertEquals(
-            "the new item did not reach the screen, so the patch reported a redraw it did not do",
-            listOf(firstItem, secondItem),
-            spokenIn(host),
-        )
-        assertSame(
-            "the conversation is composed into a NEW container, so the transcript's own place on " +
-                "the screen moves under whatever is reading it",
-            transcript,
-            host.kitRequire(DetailTag.TRANSCRIPT),
-        )
-        assertSame(
-            "the header was rebuilt for a conversation that changed under it",
-            nav,
-            host.kitRequire(DetailTag.NAV),
-        )
-        assertSame(
-            "row 22's lease sentence was rebuilt for a conversation that changed above it",
-            lease,
-            host.kitRequire(DetailTag.LEASE),
-        )
-        assertSame(
-            "the Take control button was re-parented at the agent's output rate, which moves it " +
-                "under the finger about to press it",
-            takeControl,
-            host.kitRequire(DetailTag.TAKE_CONTROL),
-        )
-        assertSame(
-            "the Stop control was re-parented",
-            stop,
-            host.kitRequire(DetailTag.STOP),
-        )
-        assertSame(
-            "the Kill control was re-parented",
-            kill,
-            host.kitRequire(DetailTag.KILL),
-        )
-    }
-
-    @Test
     fun `the detail refuses to patch anything but the conversation`() {
         val drawn = detailPanel()
         val host = host(drawn)
         val next = conversationOf(firstItem, secondItem)
 
+        // MOVED (owner ruling R1): the perturbation was the LEASE, which no longer exists.
+        // The subject survives unchanged -- a change OUTSIDE the conversation must refuse the
+        // patch -- so it is asserted against the link instead, which is what the composer
+        // reads and is drawn nowhere the patch touches.
         assertFalse(
-            "a detail whose LEASE changed -- which is what Stop reads and what decides whether " +
-                "Take control is offered at all -- was patched in place, so the controls would go " +
-                "on saying what they said before the machine answered",
-            sessionDetailRedraw(host, drawn, detailPanel(next, leaseHeld = true)),
+            "a detail whose LINK changed was patched in place, so the composer would go on " +
+                "inviting a message over a connection that has dropped",
+            sessionDetailRedraw(host, drawn, detailPanel(next, online = false)),
         )
         assertFalse(
             "a detail that GAINED A NOTICE was patched in place, so PB-APP-8's sentence about a " +
@@ -311,4 +255,9 @@ class StreamingRedrawTest {
             opened,
         )
     }
+
+    // DELETED with the lease UX they described (owner ruling R1):
+    //   - `a new item reaches the conversation without rebuilding the screen`
+    // The controls, the tags and the notices they asserted are gone from the screen.
+
 }

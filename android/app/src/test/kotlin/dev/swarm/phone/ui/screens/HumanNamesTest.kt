@@ -158,7 +158,6 @@ class HumanNamesTest {
 
     private fun detail(title: String) = SessionDetail(
         sessionId = "ep-1a2b3c4d/kx7q2m4v9p1s6t8w",
-        leaseHeld = false,
         online = true,
         journalStale = false,
         title = title,
@@ -169,7 +168,7 @@ class HumanNamesTest {
         return SessionDetailScreen.of(
             detail,
             TranscriptScreen.of(emptyList()),
-            SessionLease(sessionId = detail.sessionId, leaseHeld = false, online = true),
+            SessionLease(sessionId = detail.sessionId, online = true),
             capabilities = SessionCapabilityFacts(structuredChat = true),
         )
     }
