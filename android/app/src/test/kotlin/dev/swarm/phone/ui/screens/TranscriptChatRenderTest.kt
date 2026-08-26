@@ -236,21 +236,27 @@ class TranscriptChatRenderTest {
         )
     }
 
+    // MOVED (owner ruling R3): same subject -- a tool card's well follows the reader's own
+    // expansion -- with the DEFAULT inverted. What the reader spends is now the open rather
+    // than the close, so the two halves of this test swapped places; neither assertion was
+    // dropped. See TranscriptCollapseDefaultTest for why the default moved and what the
+    // closed line has to carry before it may.
     @Test
-    fun `an expandable tool card hides its well when the reader collapses it`() {
+    fun `an expandable tool card shows its well only when the reader opens it`() {
         val item = tool("t-1", toolKind = "read", output = "line one")
-        val open = TranscriptScreen.of(listOf(item)).blocks.single()
-        assertTrue("a tool run with output must be collapsible", open.expandable)
-        assertEquals("line one", open.well)
-
-        val shut = TranscriptScreen.of(listOf(item), collapsed = setOf("t-1")).blocks.single()
+        val shut = TranscriptScreen.of(listOf(item)).blocks.single()
+        assertTrue("a tool run with output must be expandable", shut.expandable)
         assertEquals(
-            "a collapsed card still printed its well, so a burst of tool calls cannot be " +
+            "a closed card still printed its well, so a burst of tool calls cannot be " +
                 "scanned one line each",
             "",
             shut.well,
         )
         assertFalse(shut.expanded)
+
+        val open = TranscriptScreen.of(listOf(item), expanded = setOf("t-1")).blocks.single()
+        assertEquals("line one", open.well)
+        assertTrue(open.expanded)
     }
 
     // ---- M3.3: the detail affordance ----------------------------------------
@@ -258,17 +264,24 @@ class TranscriptChatRenderTest {
     @Test
     fun `only a truncated card whose full body the machine retains offers the fetch`() {
         assertTrue(
-            TranscriptScreen.of(listOf(tool("t-1", "read", output = "x", truncated = true, detail = true)))
-                .blocks.single().offersDetail,
+            TranscriptScreen.of(
+                listOf(tool("t-1", "read", output = "x", truncated = true, detail = true)),
+                expanded = setOf("t-1"),
+            ).blocks.single().offersDetail,
         )
         assertFalse(
             "a card promised bytes the machine does not hold, so the tap can only ever refuse",
-            TranscriptScreen.of(listOf(tool("t-2", "read", output = "x", truncated = true)))
-                .blocks.single().offersDetail,
+            TranscriptScreen.of(
+                listOf(tool("t-2", "read", output = "x", truncated = true)),
+                expanded = setOf("t-2"),
+            ).blocks.single().offersDetail,
         )
         assertFalse(
             "an untruncated card offered to fetch what it already shows",
-            TranscriptScreen.of(listOf(tool("t-3", "read", output = "x", detail = true)))
+            TranscriptScreen.of(
+                listOf(tool("t-3", "read", output = "x", detail = true)),
+                expanded = setOf("t-3"),
+            )
                 .blocks.single().offersDetail,
         )
     }
@@ -281,17 +294,17 @@ class TranscriptChatRenderTest {
         // invited to tap again forever. The surface learns otherwise from the refusal and says so
         // here.
         val clipped = tool("t-1", "read", output = "x", truncated = true, detail = true)
-        assertTrue(TranscriptScreen.of(listOf(clipped)).blocks.single().offersDetail)
+        assertTrue(TranscriptScreen.of(listOf(clipped), expanded = setOf("t-1")).blocks.single().offersDetail)
         assertFalse(
             "the offer survived the machine's own answer that the whole of it is gone, so the " +
                 "app goes on inviting a tap it already knows the answer to",
-            TranscriptScreen.of(listOf(clipped), withoutDetail = setOf("t-1"))
+            TranscriptScreen.of(listOf(clipped), expanded = setOf("t-1"), withoutDetail = setOf("t-1"))
                 .blocks.single().offersDetail,
         )
         assertTrue(
             "a settled offer withdrew ANOTHER card's, so one evicted body silences the cards " +
                 "beside it",
-            TranscriptScreen.of(listOf(clipped), withoutDetail = setOf("t-other"))
+            TranscriptScreen.of(listOf(clipped), expanded = setOf("t-1"), withoutDetail = setOf("t-other"))
                 .blocks.single().offersDetail,
         )
     }
@@ -299,8 +312,12 @@ class TranscriptChatRenderTest {
     @Test
     fun `the detail affordance is on screen and reports the item it names`() {
         var asked = ""
+        // MOVED (owner ruling R3): the offer to fetch a clipped body is drawn under an OPEN
+        // card, so the fixture opens it. The closed line is not left silent about the clip --
+        // it carries the mark instead (TranscriptCollapseDefaultTest).
         val panel = TranscriptScreen.of(
             listOf(tool("t-1", "read", output = "clipped", truncated = true, detail = true)),
+            expanded = setOf("t-1"),
         )
         val root = transcriptView(context, panel, onDetail = { _, id -> asked = id })
         val control = root.kitFind(TranscriptTag.DETAIL)

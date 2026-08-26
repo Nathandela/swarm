@@ -159,7 +159,8 @@ class TranscriptScreenGoldenTest {
     private fun render(
         items: List<InteractionItem>,
         onApproval: ((String) -> Unit)? = null,
-    ): View = transcriptView(context, TranscriptScreen.of(items), onApproval)
+        expanded: Set<String> = emptySet(),
+    ): View = transcriptView(context, TranscriptScreen.of(items, expanded = expanded), onApproval)
 
     // ---- the conversation ----------------------------------------------------
 
@@ -195,22 +196,44 @@ class TranscriptScreenGoldenTest {
     }
 
     /**
-     * The two machine-authored literals in the turn, in `monoWell` and nowhere else.
+     * The machine-authored literals in the turn, in `monoWell` and nowhere else.
      *
      * These are the fields §2's reuse rule was written for: a tool's captured output and a unified
      * diff are column-aligned text that a body-copy layout would silently re-wrap, misreporting
      * what the machine printed. The `Edit` tool_run carries NO `output_excerpt` in the recording,
-     * so it draws no well — absent is not empty, and two wells rather than three is the assertion
-     * that the screen reads the field rather than always drawing the box.
+     * so it draws no well — absent is not empty, and the screen reading the field rather than
+     * always drawing the box is what this pins.
+     *
+     * THIS TEST IS WHERE THE OLD DEFAULT'S ARGUMENT LIVED, and it is the honest place to record
+     * that the default moved (owner ruling R3). `TranscriptScreen.of` used to argue for
+     * open-by-default on exactly this evidence: a real recorded turn draws two mono blocks, and
+     * "a collapsed default would silently stop drawing the first of them". That was true, and
+     * the word that carried it was SILENTLY -- the closed line now names its own worst outcome
+     * (TranscriptBlock.mark), so the record is not hidden, it is folded.
+     *
+     * So the recorded turn's rendering is asserted TWICE, in both of the states a reader can put
+     * it in. Neither assertion was weakened: closed, the diff is still the only well and the
+     * Edit still draws none; opened, both literals are still exactly what the machine printed.
      */
     @Test
-    fun `the recorded output and the recorded diff are the only mono blocks`() {
+    fun `the recorded turn folds its tool output and never its diff`() {
+        assertEquals(
+            "a file change is never folded: the diff is the only rendering of what changed on " +
+                "disk, and the recorded turn must still show it with nothing opened",
+            listOf("@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three"),
+            wellsOf(render(itemsOf("pending"))),
+        )
+    }
+
+    @Test
+    fun `the recorded output and the recorded diff are the only mono blocks when opened`() {
+        val everyItem = itemsOf("pending").map { it.itemId }.toSet()
         assertEquals(
             listOf(
                 "line one\nline two\nline three\n",
                 "@@ -1,3 +1,3 @@\n line one\n-line two\n+line TWO EDITED\n line three",
             ),
-            wellsOf(render(itemsOf("pending"))),
+            wellsOf(render(itemsOf("pending"), expanded = everyItem)),
         )
     }
 

@@ -211,9 +211,23 @@ data class TranscriptBlock(
      * discontinuity were drawn adjacent with nothing between them.
      */
     val gap: Boolean = false,
+    /**
+     * What a CLOSED card must say about itself, or "" when there is nothing to say.
+     *
+     * COLLAPSING IS ONLY HONEST WHEN THE CLOSED LINE IS (owner ruling R3). Two facts would
+     * otherwise become invisible the moment the default moved: a run that FAILED would read
+     * exactly like one that worked, and a body the machine CLIPPED would lose its offer to
+     * fetch the rest -- because that offer is drawn only while the card is open. So the one
+     * mark the line has carries the worse of the two, in the wire's own word.
+     *
+     * IT IS THE WIRE'S VOCABULARY AND NEVER OURS: `failed` and `declined` are section 4's
+     * statuses verbatim. `clipped` is the one word this screen writes, because §2's
+     * `truncated` is a boolean and a reader needs a noun.
+     */
+    val mark: String = "",
     /** M2.2: this card has a body worth hiding, so collapsing it is offered. */
     val expandable: Boolean = false,
-    /** Whether it is open. Open is the default -- see [TranscriptScreen.of]'s `collapsed`. */
+    /** Whether it is open. CLOSED is the default -- see [TranscriptScreen.of]'s `expanded`. */
     val expanded: Boolean = true,
     /**
      * IS-CAP-2/M3.3: the card is CLIPPED and the machine still holds the whole of it, so the
@@ -287,22 +301,58 @@ object TranscriptScreen {
     private const val RUNNING = "running"
 
     /**
-     * @param collapsed the item ids the reader has SHUT (M2.2's expand/collapse).
+     * The one word a CLIPPED body gets on its closed line. It is the only word in this
+     * function this screen writes: §2's `truncated` is a boolean, and a reader scanning a
+     * burst needs a noun.
+     */
+    private const val CLIPPED_MARK = "clipped"
+
+    /**
+     * What a closed card says about itself: the worse of "this did not succeed" and "this is
+     * not all of it", or nothing at all.
      *
-     *  OPEN IS THE DEFAULT, and that is a decision this file owes an argument for, because
-     *  `ToolCard`'s own KDoc says the opposite ("collapsed hides the well: a burst scans one line
-     *  each"). The recorded Claude Code crossing pins the tool run's captured output and the file
-     *  change's diff as the two mono blocks a real turn draws (TranscriptScreenGoldenTest), and a
-     *  collapsed default would silently stop drawing the first of them. Hiding what the machine
-     *  said by default is also the wrong side of this app's standing rule about absence: a reader
-     *  who has not asked for anything gets the whole record, and the collapse is theirs to spend.
+     * WORST STATUS WINS, and the order is the reader's interest rather than the schema's. A
+     * failure is the thing they would have acted on; a clip is still there when they open it.
+     * A run still `in_progress` gets NO mark -- [TranscriptBlock.running] already draws it,
+     * and two marks for one fact is how a row stops being scannable.
+     *
+     * A SUCCESSFUL, WHOLE CARD IS UNMARKED, deliberately. A mark on every row is a mark that
+     * means nothing, which is the failure mode of the client this rule was taken from: its
+     * collapsed groups carry no outcome at all, so the only way to find a failure is to open
+     * every one.
+     */
+    private fun closedMark(item: InteractionItem): String = when {
+        item.status == STATUS_FAILED || item.status == STATUS_DECLINED -> item.status
+        item.truncated -> CLIPPED_MARK
+        else -> ""
+    }
+
+    /**
+     * @param expanded the item ids the reader has OPENED (M2.2's expand/collapse).
+     *
+     *  CLOSED IS THE DEFAULT (owner ruling R3, 2026-08-26), and this reverses what stood here.
+     *  The old argument was: `ToolCard`'s own KDoc says a burst should scan one line each, but
+     *  the recorded Claude Code crossing draws a tool run's captured output as one of the two
+     *  mono blocks a real turn produces, so a collapsed default "would silently stop drawing
+     *  the first of them" -- and hiding what the machine said is the wrong side of this app's
+     *  standing rule about absence.
+     *
+     *  IT WAS RIGHT ABOUT THE RISK AND WRONG ABOUT THE REMEDY, and the difference is one word
+     *  in it: SILENTLY. A closed card that says nothing about itself does hide the record. A
+     *  closed card that names its own worst outcome -- [TranscriptBlock.mark] -- hides nothing
+     *  the reader would have acted on, and turns a burst of six tool calls from six screens
+     *  into six lines. The owner's own screenshots needed two of them to capture one session
+     *  for exactly the reason the old default caused.
+     *
+     *  So the parameter inverted with the decision rather than keeping its old sense: what the
+     *  reader spends is now the OPEN, and it survives redraws the same way the collapse did.
      * @param atFloor the machine has said nothing older than [TranscriptPanel.oldestItemId] is
      *  retained (ADR-014 §2). False covers both "there is more" and "no page has been read yet",
      *  which are the same state to a screen: offer the control.
      */
     fun of(
         items: List<InteractionItem>,
-        collapsed: Set<String> = emptySet(),
+        expanded: Set<String> = emptySet(),
         atFloor: Boolean = false,
         atCapacity: Boolean = false,
         withoutDetail: Set<String> = emptySet(),
@@ -313,7 +363,7 @@ object TranscriptScreen {
             blockFor(
                 item,
                 previous = items.getOrNull(index - 1),
-                collapsed = collapsed,
+                expanded = expanded,
                 withoutDetail = withoutDetail,
             )
         }
@@ -367,7 +417,7 @@ object TranscriptScreen {
     private fun blockFor(
         item: InteractionItem,
         previous: InteractionItem?,
-        collapsed: Set<String>,
+        expanded: Set<String>,
         withoutDetail: Set<String> = emptySet(),
     ): TranscriptBlock {
         val fields = item.fields()
@@ -431,7 +481,7 @@ object TranscriptScreen {
                 // which is the right body for a message and empty for a tool call; §3.3's own
                 // `output_excerpt` and `truncation_marker` are this row's literal, and they are
                 // read through `fields` like every other per-kind value on this screen.
-                val card = ToolCard.modelFor(item, expanded = !collapsed.contains(item.itemId))
+                val card = ToolCard.modelFor(item, expanded = expanded.contains(item.itemId))
                 TranscriptBlock(
                     itemId = item.itemId,
                     kind = item.kind,
@@ -454,6 +504,7 @@ object TranscriptScreen {
                     // evicted the body; the phone can, once it has asked and been refused, and
                     // an offer left standing over that answer invites a tap that can only fail.
                     offersDetail = card.offersDetail && !withoutDetail.contains(item.itemId),
+                    mark = closedMark(item),
                 )
             }
 

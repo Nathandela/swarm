@@ -56,8 +56,17 @@ class TranscriptPanelTest {
         resolved = resolved,
     )
 
+    /**
+     * One item's block, with its card OPEN.
+     *
+     * MOVED WITH THE DEFAULT (owner ruling R3): a tool run is closed until the reader asks,
+     * so every assertion in this file about what a WELL contains needs the card opened to
+     * have a subject at all. That is the fixture's job, not each test's -- and the assertions
+     * themselves are unchanged, which is the point: what a card says when it is open did not
+     * move. What the CLOSED line must carry instead is TranscriptCollapseDefaultTest's.
+     */
     private fun blockOf(item: InteractionItem): TranscriptBlock {
-        val blocks = TranscriptScreen.of(listOf(item)).blocks
+        val blocks = TranscriptScreen.of(listOf(item), expanded = setOf(item.itemId)).blocks
         assertEquals("one item rendered $blocks", 1, blocks.size)
         return blocks.first()
     }

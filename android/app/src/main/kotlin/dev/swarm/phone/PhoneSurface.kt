@@ -1183,11 +1183,15 @@ class PhoneSurface(
      * The tool cards the reader has SHUT, by item_id (Mirror M2.2's expand/collapse).
      *
      * IT IS THE SURFACE'S AND NOT THE PANEL'S because it is a fact about this reader's screen and
-     * not about the session: nothing on the wire says a card is collapsed, and a model that
+     * not about the session: nothing on the wire says a card is open, and a model that
      * carried it would be a model that had to be told. Cleared with the drill-down, which is what
-     * "the collapse is theirs to spend" means for the life of one visit.
+     * "the expansion is theirs to spend" means for the life of one visit.
+     *
+     * IT HOLDS THE OPENS, NOT THE CLOSES (owner ruling R3). The default inverted -- a tool run
+     * is closed until the reader asks -- so what a reader spends is the OPEN, and this set
+     * follows the decision rather than keeping its old sense under a name that would then lie.
      */
-    private val collapsedCards = mutableSetOf<String>()
+    private val expandedCards = mutableSetOf<String>()
 
     /**
      * When this surface last asked the machine for a page of history, per session, on
@@ -2390,7 +2394,7 @@ class PhoneSurface(
             TranscriptScreen.of(
                 chat.items,
                 // M2.2's collapse, which is this reader's and not the wire's.
-                collapsed = collapsedCards,
+                expanded = expandedCards,
                 // AND THE OFFERS THE MACHINE HAS ALREADY SETTLED (round 3, finding F4): a card
                 // whose whole body it answered `unavailable` for keeps advertising the fetch off
                 // its capture-time fields, and re-offering a fetch that can never succeed is the
@@ -2494,7 +2498,7 @@ class PhoneSurface(
      * left exactly where the reader's finger last saw it.
      */
     private fun toggleToolCard(itemId: String) {
-        if (!collapsedCards.remove(itemId)) collapsedCards.add(itemId)
+        if (!expandedCards.remove(itemId)) expandedCards.add(itemId)
         render()
     }
 
@@ -3298,7 +3302,7 @@ class PhoneSurface(
         composerSendFor = ""
         composerSendState = null
         composerRefusal = ""
-        collapsedCards.clear()
+        expandedCards.clear()
         // THE PREVIEW IS UNDONE BEFORE THE NEXT SCREEN IS DRAWN INTO THE SAME HOST. A committed
         // gesture leaves [contentHost] at 90% and fully transparent, and the inbox is hosted in
         // that same view -- so without this the user's back gesture succeeds and lands them on an
