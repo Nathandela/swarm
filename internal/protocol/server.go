@@ -42,6 +42,16 @@ const OptionResumeFrom = "resume_from"
 // request for a fresh launch.
 const OptionResumeConversationID = "resume_conversation_id"
 
+// OptionHandoffFrom is the owner-tier-only launch-option key of the hands-off
+// handoff (ADR-010 Amendment 4): it carries the NAMESPACED id of the SOURCE
+// session whose conversation the new session is told to go and read. Composition
+// -- resolving the source, its conversation identity and its transcript path --
+// is the assembly's, because only the daemon holds the resolved agent cwd; the
+// protocol layer declares the key, gates it, and forwards it verbatim. Like the
+// two resume keys it is capability-gated, so an older daemon cannot mistake the
+// request for a fresh launch.
+const OptionHandoffFrom = "handoff_from"
+
 // remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
 // remote tier (R-POL.4): each guarded option key maps to its single forbidden value, so
 // the safe default of the same key ("dangerously-skip-permissions"=="false",
@@ -229,7 +239,7 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
-	CapExternalResume,
+	CapExternalResume, CapHandsOffHandoff,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1279,6 +1289,40 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
 		return
+	}
+	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
+	// block so a request that carries both keys is refused for what it actually is --
+	// a caller bug -- rather than for whichever capability the client happened not to
+	// offer. A present-but-EMPTY handoff_from means ABSENT, exactly as the two resume
+	// keys below already treat "": a caller that means a handoff sends the source id.
+	if req.Options[OptionHandoffFrom] != "" {
+		if cc.srv.remoteTier {
+			cc.replyErrorCode("launch: hands-off handoff is not permitted on the remote tier", CodePolicy)
+			return
+		}
+		// THE LOAD-BEARING GUARD. An older daemon does not know this option key, so it
+		// would silently IGNORE it and perform a BARE LAUNCH: a context-free agent loose
+		// in the user's checkout, which the design names as the worst available outcome.
+		// Negotiation converts that silent degrade into a refusal the client can see and
+		// act on before it launches anything.
+		if !cc.hasCap(CapHandsOffHandoff) {
+			cc.replyErrorCode("launch: hands-off handoff capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
+		// handoff_from, resume_from and resume_conversation_id are three different answers
+		// to "where does this session come from". Combining them is a caller bug, not a
+		// merge, so each pairing is refused BY NAME rather than resolved by a silent
+		// precedence rule. (The resume pair's own mutual exclusion lives one layer down,
+		// in the assembly's coreAPI.Launch, and takes the same "cannot be combined with"
+		// shape.)
+		if req.Options[OptionResumeFrom] != "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" cannot be combined with "+OptionResumeFrom, CodeInvalidField)
+			return
+		}
+		if req.Options[OptionResumeConversationID] != "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" cannot be combined with "+OptionResumeConversationID, CodeInvalidField)
+			return
+		}
 	}
 	if req.Options[OptionResumeConversationID] != "" {
 		if cc.srv.remoteTier {
