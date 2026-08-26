@@ -161,8 +161,9 @@ class PhoneActivity : AppCompatActivity() {
         val screenTopPx = resources.getDimensionPixelSize(R.dimen.swarm_screen_top)
         surface.root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            val ime = insets.getInsets(WindowInsets.Type.ime())
             val top = screenTopOrRealInset(bars.top, screenTopPx)
-            view.setPadding(bars.left, top, bars.right, bars.bottom)
+            view.setPadding(bars.left, top, bars.right, bottomInsetPx(bars.bottom, ime.bottom))
             insets
         }
     }
@@ -227,3 +228,28 @@ class PhoneActivity : AppCompatActivity() {
  */
 internal fun screenTopOrRealInset(measuredTopPx: Int, screenTopPx: Int): Int =
     maxOf(measuredTopPx, screenTopPx)
+
+/**
+ * The window's bottom inset: the navigation bar, or the KEYBOARD when one is up.
+ *
+ * NOTHING IN THIS APP HAD EVER MET A KEYBOARD until the conversation gained a pinned composer.
+ * The listener above read `systemBars()` only, so an open IME covered whatever was at the bottom
+ * of the window -- which did not matter while the composer was the last child of a scroll and
+ * could simply be scrolled into view, and matters completely once it is pinned and has promised
+ * to stay above the keyboard.
+ *
+ * THE INSETS ARE ALREADY BEING DISPATCHED. targetSdk 35 forces edge-to-edge whatever the app
+ * asks for, so the IME inset arrives on every dispatch and was being ignored rather than
+ * withheld. Reading it is additive inside the one listener this app has, which is why no second
+ * mechanism appears here.
+ *
+ * A MAX AND NOT A SUM, mirroring [screenTopOrRealInset] one function up. The keyboard is drawn
+ * OVER the navigation bar rather than above it, so adding the two would inset the window by a
+ * strip of screen the keyboard already occupies -- the doubling agents-tracker-2pnu F2 records
+ * in the other axis.
+ *
+ * IT IS A TOP-LEVEL FUNCTION for [screenTopOrRealInset]'s reason: the arithmetic is testable
+ * without driving a real `WindowInsets` dispatch through Robolectric.
+ */
+internal fun bottomInsetPx(barsBottomPx: Int, imeBottomPx: Int): Int =
+    maxOf(barsBottomPx, imeBottomPx)

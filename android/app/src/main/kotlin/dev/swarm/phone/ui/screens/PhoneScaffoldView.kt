@@ -63,6 +63,25 @@ object ScaffoldTag {
     const val STATUS = "scaffold.status"
 
     /**
+     * The conversation's fixed header: what you are reading, and the way back.
+     *
+     * IT IS THE SCAFFOLD'S AND NOT THE SCREEN'S for [TABS]' own reason, turned around. A header
+     * inside the scrolling column would slide away the moment a reader moved, taking the session
+     * name and the way out with it -- which is what a drill-down inside [phoneScaffoldView]
+     * does today.
+     */
+    const val HEADER = "scaffold.header"
+
+    /**
+     * The conversation's pinned composer.
+     *
+     * IT IS OUTSIDE THE SCROLL, which is the whole of what "pinned" means and the reason the
+     * IME inset had to be read at all: as the last child of a scrolling column it could be
+     * scrolled into view, and as a sibling of the scroll it has to be kept above the keyboard.
+     */
+    const val COMPOSER = "scaffold.composer"
+
+    /**
      * The parts whose ON-SCREEN ORDER is the recorded composition: the status chrome, the content,
      * then the bar. A tab bar that scrolled with the content would be a different screen, which is
      * the assertion `PhoneScaffoldViewTest` inherited from the inbox's suite along with the bar --
@@ -111,6 +130,77 @@ enum class Destination(val label: String) {
             "PB-DS-9: the tab bar draws a tab labelled \"$label\" and there is no destination for " +
                 "it. This enum is the destinations this app has; a tab outside it renders as a " +
                 "control that goes nowhere."
+        }
+    }
+}
+
+/**
+ * THE SECOND COMPOSITION, and the reason PB-DS-9's one-destination-above-one-bar arrangement
+ * gains an exception (owner ruling on the conversation surface).
+ *
+ * WHAT [phoneScaffoldView] DOES THAT A CONVERSATION CANNOT LIVE WITH. It wraps whatever it is
+ * handed in ONE ScrollView and puts the tab bar under it, so a session's notices, its
+ * conversation and its controls all scrolled as a single document -- which is why the owner's
+ * screenshot of one session needed two screenshots, and why the composer, being the last child
+ * of that document, could only be reached by scrolling past the entire transcript.
+ *
+ * SO THE PARTS THAT MUST NOT MOVE ARE SIBLINGS OF THE SCROLL RATHER THAN INSIDE IT: a header
+ * that names what you are reading, the list, and a composer that stays under the thumb. This is
+ * the arrangement every messaging surface has, and it is not available to a destination that is
+ * handed to the scaffold as `content`.
+ *
+ * THE TAB BAR GOES AND THE STATUS STRIP STAYS, which is one decision each rather than one
+ * decision. A conversation is a place you go INTO -- back returns to the inbox, which keeps its
+ * bar -- so a bar here is an invitation to leave a screen you just arrived at. The strip is the
+ * opposite case and [ScaffoldTag.STATUS] already argues it: a warning that belongs to one
+ * destination is a warning the others do not have, and dropping it here would make the one
+ * screen where a person is typing the one screen that cannot tell them the link is gone.
+ */
+fun conversationScaffoldView(
+    context: Context,
+    header: View,
+    content: View,
+    composer: View?,
+    status: View? = null,
+): View {
+    val scroll = ScrollView(context).apply {
+        tag = ScaffoldTag.CONTENT
+        isFillViewport = true
+        clipChildren = false
+        clipToPadding = false
+        isVerticalScrollBarEnabled = false
+        // WEIGHT 1 AND HEIGHT 0: the list takes what is left after the two fixed parts, which is
+        // what makes it the only thing that scrolls.
+        layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
+        addView(content)
+    }
+    // The grain rides the SCROLLED CHILD, for ADR-009 D4.3's amended reason: one overlay per
+    // moving part, so the tile and the glyph travel together.
+    content.foreground = grainOverlay(context)
+
+    return LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        clipChildren = false
+        clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+        status?.let { addView(it.apply { foreground = grainOverlay(context) }) }
+        addView(
+            header.apply {
+                tag = ScaffoldTag.HEADER
+                foreground = grainOverlay(context)
+            },
+        )
+        addView(scroll)
+        // NULL DRAWS NOTHING, WHICH IS A STATE AND NOT AN ABSENCE. A session with no message
+        // sink has no composer at all rather than a disabled one (ADR-017), and the sentence
+        // saying why is drawn by the screen inside the scroll, where the reader is looking.
+        composer?.let {
+            addView(
+                it.apply {
+                    tag = ScaffoldTag.COMPOSER
+                    foreground = grainOverlay(context)
+                },
+            )
         }
     }
 }
