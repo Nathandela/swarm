@@ -60,11 +60,28 @@ import dev.swarm.phone.R
  */
 
 /**
- * Whether the composer exists at all, and whether it can send right now. ABSENT is ADR-017's
- * structural honesty: `structured_chat=false` means NO message sink exists, so a fallback
- * session has no composer rather than a greyed one promising a verb the session lacks.
+ * Whether the composer can send right now, and WHY NOT when it cannot.
+ *
+ * FOUR REASONS AND FOUR STATES, because they have four different remedies and only one of
+ * them is anything the reader can act on. What shipped before this had a single ABSENT
+ * state drawn on `!structuredChat`, whose sentence accused the session's record of BREAKING
+ * -- while the same condition also covered "no record was ever authored", "the record is
+ * inconsistent" and "this machine predates R8". Three of those four are not a break.
+ *
+ * ORDERING IS PART OF THE CONTRACT: see [ComposerModel.availabilityFor].
  */
-enum class ComposerAvailability { AVAILABLE, OFFLINE, ABSENT }
+enum class ComposerAvailability { AVAILABLE, OFFLINE, TORN, NO_CHAT, ENDED }
+
+/**
+ * What a shut composer says: the sentence in the field itself, and the line under it that
+ * says what is still possible.
+ *
+ * THE SECOND HALF IS NOT DECORATION. A control that simply goes quiet reads as a bug, and
+ * three of the four reasons have a real remedy nearby -- the machine still has the session,
+ * and the owner can type at it. What the copy must never do is imply the phone will get the
+ * composer back where it will not.
+ */
+data class ComposerShut(val placeholder: String, val detail: String)
 
 /**
  * The visible per-send lifecycle (ADR-009 (6): "pending -> sent -> refused ... A send that
@@ -83,13 +100,64 @@ data class ComposerPaste(val draft: String, val submits: Boolean)
 object ComposerModel {
 
     /**
-     * The availability gate (M2.4, R3's ruling): ONLINE ONLY -- the lease is out of the UX
-     * entirely -- and structural absence for a session with no structured chat (ADR-017).
+     * The availability gate (M2.4, R3's ruling): the lease is out of the UX entirely, and a
+     * session with no message sink has no composer rather than a greyed one promising a verb
+     * it structurally lacks (ADR-017).
+     *
+     * THE ORDER IS THE DESIGN. A PERMANENT reason outranks a TRANSIENT one, and the reason is
+     * honesty rather than precedence for its own sake: a session that is both offline and
+     * torn would, under the other order, be told "not connected" -- which implies the composer
+     * comes back when the link does. It never will; the structured degrade is one-way for the
+     * life of the session instance. So the permanent fact is the one reported.
+     *
+     * [ended] outranks everything because there is nothing to type into whatever else is
+     * true. [recordTorn] and [structuredChat] are then read together: a session with no
+     * structured chat is TORN when this phone holds the daemon's own `structured_gap`
+     * element, and NO_CHAT when it does not -- the difference between a record that broke and
+     * a machine that never claimed one.
      */
-    fun availabilityFor(online: Boolean, structuredChat: Boolean): ComposerAvailability = when {
-        !structuredChat -> ComposerAvailability.ABSENT
+    fun availabilityFor(
+        online: Boolean,
+        structuredChat: Boolean,
+        recordTorn: Boolean = false,
+        ended: Boolean = false,
+    ): ComposerAvailability = when {
+        ended -> ComposerAvailability.ENDED
+        recordTorn -> ComposerAvailability.TORN
+        !structuredChat -> ComposerAvailability.NO_CHAT
         !online -> ComposerAvailability.OFFLINE
         else -> ComposerAvailability.AVAILABLE
+    }
+
+    /**
+     * What a shut composer says, or null when it is not shut.
+     *
+     * EVERY SENTENCE IS ABOUT THIS STATE AND NO OTHER, and none of them offers a step that
+     * cannot produce typing -- which is what the deleted "Read-only -- take control to type"
+     * did on every route, including the two where take-control was not even drawn.
+     */
+    fun shutCopyFor(availability: ComposerAvailability): ComposerShut? = when (availability) {
+        ComposerAvailability.AVAILABLE -> null
+        ComposerAvailability.OFFLINE -> ComposerShut(
+            placeholder = "Not connected to your machine",
+            // Input is live-only and never queued (ADR-007 B43). A composer that went quiet
+            // without saying so invites the reader to believe their words are waiting.
+            detail = "Messages are never held - nothing is sent when the link returns.",
+        )
+        ComposerAvailability.TORN -> ComposerShut(
+            placeholder = "This session's record has a gap",
+            detail = "Still typeable at your machine.",
+        )
+        ComposerAvailability.NO_CHAT -> ComposerShut(
+            // NOT "broke", NOT "gap", NOT "record": this machine never claimed a chat
+            // surface for this session, which is not a failure of anything.
+            placeholder = "This agent reports no chat surface",
+            detail = "You can watch it here, and type at your machine.",
+        )
+        ComposerAvailability.ENDED -> ComposerShut(
+            placeholder = "This session has ended",
+            detail = "Its conversation is kept; there is nothing to type into.",
+        )
     }
 
     /**

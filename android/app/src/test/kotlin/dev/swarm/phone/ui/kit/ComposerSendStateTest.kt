@@ -29,12 +29,15 @@ class ComposerSendStateTest {
         assertEquals(ComposerAvailability.OFFLINE, ComposerModel.availabilityFor(online = false, structuredChat = true))
     }
 
+    // MOVED, not deleted: the subject survives and its state gained a name. ABSENT covered
+    // four situations with one sentence between them (see ComposerShutReasonTest); the arm
+    // this test has always been about -- a machine that reports no chat surface -- is NO_CHAT.
     @Test
     fun aFallbackSessionHasNoComposerNotADisabledOne() {
         assertEquals(
             "structured_chat=false means NO message sink exists; a greyed composer would promise " +
                 "a verb the session structurally lacks (ADR-017)",
-            ComposerAvailability.ABSENT,
+            ComposerAvailability.NO_CHAT,
             ComposerModel.availabilityFor(online = true, structuredChat = false),
         )
     }

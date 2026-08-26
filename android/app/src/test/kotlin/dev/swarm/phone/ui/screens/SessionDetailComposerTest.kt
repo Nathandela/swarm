@@ -142,7 +142,10 @@ class SessionDetailComposerTest {
         assertEquals(
             "ADR-017 T2 rule 2: structured_chat=false means there is NO message sink, so a " +
                 "composer over one is a message that goes in and can never be shown",
-            ComposerAvailability.ABSENT,
+            // MOVED: this fixture holds a `gap()` element, so the state it lands in is the
+            // one that names what actually happened -- the record tore -- rather than the
+            // catch-all that also covered "no record was ever authored".
+            ComposerAvailability.TORN,
             p.composerAvailability,
         )
         val root = view(p)

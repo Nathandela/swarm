@@ -119,6 +119,14 @@ data class SessionDetail(
      */
     val stopNotSent: Boolean = false,
     /**
+     * Whether this session's agent is gone.
+     *
+     * IT OUTRANKS EVERY OTHER REASON THE COMPOSER CAN BE SHUT: there is nothing to type into,
+     * whatever the link or the record says. Defaulted false and set by the surface, which is
+     * the only place that holds the roster's own word for it.
+     */
+    val ended: Boolean = false,
+    /**
      * What a person calls this session -- `swarmmobile.Session.Title`, which since
      * agents-tracker-ksvb.1 is the user's own label where the machine sent one and the id's local
      * part where it did not.

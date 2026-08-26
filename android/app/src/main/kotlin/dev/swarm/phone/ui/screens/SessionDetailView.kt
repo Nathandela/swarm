@@ -490,11 +490,24 @@ fun sessionDetailView(
                 .screenAir(),
         )
     }
-    // ADR-017 T2 rule 2: a session with no message sink has NO COMPOSER, and says so where the
-    // composer would have been. Absent rather than disabled -- see [DetailTag.COMPOSER_ABSENT].
-    if (panel.composerAvailability == ComposerAvailability.ABSENT) {
+    // A COMPOSER THAT CANNOT SEND SAYS WHY, IN THE WORDS OF ITS OWN REASON: one sentence per
+    // state rather than one accusation over four (ComposerModel.shutCopyFor).
+    //
+    // ABSENT AND DISABLED ARE DIFFERENT ANSWERS, and which one a state gets turns on whether
+    // the session HAS A MESSAGE SINK AT ALL. A torn record, a machine that reports no chat
+    // surface and an ended session have none, and never will for this instance -- so a
+    // composer over one is a message that goes in and can never be shown, and the honest
+    // shape is the sentence where the composer would have been.
+    //
+    // OFFLINE IS NOT ONE OF THOSE. The sink exists and the link is coming back, so the draft
+    // is still worth typing and a control that vanished would teach the reader the feature
+    // was gone. It keeps the bar and carries its reason inside it -- which is more than it
+    // did before, where an offline session drew a composer visually identical to a live one
+    // and the availability state that would have said otherwise was read by nothing.
+    val shut = panel.composerShut
+    if (shut != null && panel.composerAvailability != ComposerAvailability.OFFLINE) {
         column.addView(
-            notice(context, panel.composerAbsentNotice)
+            notice(context, shut.placeholder + " " + shut.detail)
                 .apply { tag = DetailTag.COMPOSER_ABSENT }
                 .screenAir(),
         )

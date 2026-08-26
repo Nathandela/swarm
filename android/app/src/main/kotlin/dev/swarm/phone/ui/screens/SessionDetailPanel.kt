@@ -11,6 +11,7 @@ import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.UndeliveredLedger
 import dev.swarm.phone.ui.kit.ComposerModel
+import dev.swarm.phone.ui.kit.ComposerShut
 import dev.swarm.phone.ui.kit.SendState
 
 /**
@@ -178,7 +179,17 @@ data class SessionDetailPanel(
     /** Whether what the user typed survives that refusal. It always does; see the notice model. */
     val composerRetainsDraft: Boolean,
     /** What the screen says where the composer WOULD be, for a session that has none. */
-    val composerAbsentNotice: String,
+    /**
+     * What a SHUT composer says, or null when it is not shut: the sentence in the field and
+     * the line under it that says what is still possible.
+     *
+     * IT REPLACES A SINGLE SENTENCE THAT COVERED FOUR STATES. The old copy accused this
+     * session's record of BREAKING, while the condition it was drawn under also covered "no
+     * record was ever authored", "the record is inconsistent" and "this machine predates R8"
+     * -- and it was drawn alongside "Read-only, take control to type", which contradicted it
+     * on the same screen. See [ComposerModel.shutCopyFor].
+     */
+    val composerShut: ComposerShut?,
     /**
      * The turn both `App.ComposerSend` and `App.Interrupt` are drawn against (review finding B7):
      * the transcript's latest, read off the panel the screen is showing, so the precondition the
@@ -782,6 +793,14 @@ object SessionDetailScreen {
         composerAvailability = ComposerModel.availabilityFor(
             online = lease.online,
             structuredChat = capabilities.structuredChat,
+            // THE FACT THAT SEPARATES A BROKEN RECORD FROM ONE THAT NEVER EXISTED, and it was
+            // computed here and read by nothing until now. `structureTorn` is this phone
+            // holding the daemon's OWN `structured_gap` element -- the machine's proof, not
+            // an inference from the shape of the transcript, which is the move T2 rule 3
+            // forbids. It does not decide WHETHER the composer is shut (the record does that,
+            // above); it decides WHICH SENTENCE the reader is owed.
+            recordTorn = transcript.structureTorn,
+            ended = detail.ended,
         ),
         // A WORKING AGENT IS ONE WITH AN OPEN TOOL RUN, read off the blocks this screen has
         // already decided rather than off a second source. `TranscriptBlock.running` is §4's
@@ -796,7 +815,14 @@ object SessionDetailScreen {
             ComposerModel.noticeFor(detail.composerRefusal).copy
         },
         composerRetainsDraft = ComposerModel.noticeFor(detail.composerRefusal).retainsDraft,
-        composerAbsentNotice = COMPOSER_ABSENT,
+        composerShut = ComposerModel.shutCopyFor(
+            ComposerModel.availabilityFor(
+                online = lease.online,
+                structuredChat = capabilities.structuredChat,
+                recordTorn = transcript.structureTorn,
+                ended = detail.ended,
+            ),
+        ),
         expectedTurn = transcript.latestTurnId,
         offersLoadEarlier = transcript.offersLoadEarlier,
         loadEarlierBeforeItem = transcript.oldestItemId,
