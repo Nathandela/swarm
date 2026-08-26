@@ -186,13 +186,20 @@ class SessionLeaseTest {
      * silently -- a live keyboard over a dead terminal, which is PB-INPUT-2's whole subject.
      */
     @Test
-    fun `the keyboard is enabled only while the lease is held`() {
-        assertFalse(lease(leaseHeld = false).keyboardEnabled)
+    // MOVED, and half of it DELETED (owner ruling R1). The lease half has no subject left:
+    // composer_send takes no lease at any layer, so greying the field on !leaseHeld was this
+    // app withholding a capability the daemon grants -- under a sentence telling the reader
+    // to press a button that changes nothing on the wire. The LINK half survives untouched
+    // and for its original reason. See ComposerNeedsNoLeaseTest for the full argument.
+    fun `the keyboard is enabled whenever the link is up, lease or no lease`() {
+        assertTrue(lease(leaseHeld = false).keyboardEnabled)
         assertTrue(lease(leaseHeld = true).keyboardEnabled)
         assertFalse(
-            "a lease cannot be live while the link is down",
+            "input is live-only and never queued: a composer over a dropped link invites " +
+                "words that are guaranteed to be dropped",
             lease(leaseHeld = true, online = false).keyboardEnabled,
         )
+        assertFalse(lease(leaseHeld = false, online = false).keyboardEnabled)
     }
 }
 

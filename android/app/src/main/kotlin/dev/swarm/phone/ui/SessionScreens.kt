@@ -295,11 +295,28 @@ data class SessionLease(
     val showsRelease: Boolean get() = leaseHeld
 
     /**
-     * PB-INPUT-2. Ungated, the user types happily at a machine that granted them nothing and
-     * the gateway drops every frame silently: a live keyboard over a dead terminal. A lease
-     * cannot be live while the link is down either, so both conditions are required.
+     * Whether the composer can be typed into.
+     *
+     * THE LEASE CLAUSE IS GONE (owner ruling R1). PB-INPUT-2's reasoning was written for the
+     * RAW KEYSTROKE PLANE, where it is still correct: those verbs really are lease-gated at
+     * the daemon (`forwardInput`, `forwardResize`), and a keyboard over a machine that
+     * granted nothing really would drop every frame silently. But this app has no raw
+     * keystroke plane -- `App.SendInput`, `Paste` and `Resize` are all in
+     * `android/unbound-verbs.tsv` with zero callers since Wave R6 replaced them -- and the
+     * verb this flag actually gates is `composer_send`, which takes NO LEASE at any layer:
+     * not in the gateway's action arm, not in `handleComposerSend`, not in
+     * `skeleton.composerSend`.
+     *
+     * So the lease clause was shutting a field over a send the machine would have accepted,
+     * under a sentence that told the reader to press a button that changes nothing on the
+     * wire. Removing it is the whole of R1 on this side.
+     *
+     * ONLINE STAYS, AND IT IS NOT CEREMONY. Input is live-only and never queued
+     * (ADR-007 B43), so a composer over a dropped link invites words that are guaranteed to
+     * be dropped. Whether a composer exists at all is a different question again, answered
+     * by the capability record rather than here (ComposerModel.availabilityFor).
      */
-    val keyboardEnabled: Boolean get() = leaseHeld && online
+    val keyboardEnabled: Boolean get() = online
 }
 
 /**
