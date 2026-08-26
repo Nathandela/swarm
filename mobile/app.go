@@ -1231,21 +1231,22 @@ func (a *App) PendingApprovals() (page *TranscriptPage, err error) {
 // per-kind decoding belongs to the client anyway (see TranscriptItem).
 func transcriptItem(it phonecore.Item) TranscriptItem {
 	return TranscriptItem{
-		SessionID: it.SessionID,
-		ItemID:    it.ItemID,
-		Cursor:    int64(it.Cursor),
-		Kind:      it.Kind,
-		Status:    it.Status,
-		TurnID:    it.TurnID,
-		TSUnixMs:  it.TSUnixMs,
-		Text:      it.Text,
-		Body:      string(it.Body),
-		Truncated: it.Truncated,
-		Detail:    it.Detail,
-		Degraded:  it.Degraded,
-		Resolved:  it.Resolved,
-		ToolKind:  it.ToolKind,
-		Source:    it.Source,
+		SessionID:   it.SessionID,
+		ItemID:      it.ItemID,
+		Cursor:      int64(it.Cursor),
+		Kind:        it.Kind,
+		Status:      it.Status,
+		TurnID:      it.TurnID,
+		TSUnixMs:    it.TSUnixMs,
+		Text:        it.Text,
+		Body:        string(it.Body),
+		Truncated:   it.Truncated,
+		Detail:      it.Detail,
+		Degraded:    it.Degraded,
+		Resolved:    it.Resolved,
+		ToolKind:    it.ToolKind,
+		Source:      it.Source,
+		OperationID: it.OperationID,
 	}
 }
 

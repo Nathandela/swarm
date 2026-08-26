@@ -151,6 +151,18 @@ type Item struct {
 	// `source` is daemon-stamped at injection time, never guessed). Empty where the
 	// wire carried none -- an absent fact stays absent.
 	Source string
+	// OperationID names WHICH of this phone's sends the agent echoed back, stamped by
+	// the daemon beside [Source] at the same moment and for the same reason: it is the
+	// only party that watched the injection.
+	//
+	// IT IS WHAT LETS A SENT MESSAGE SETTLE HONESTLY (owner ruling R6). A send is
+	// acknowledged when the daemon wrote bytes into a PTY, not when the CLI accepted
+	// them, so a bubble that settles on the acknowledgement claims a delivery the wire
+	// cannot back. This is the echo, and the echo is the delivery. Matching on TEXT
+	// instead would inherit the mis-attribution the daemon has probed and refuses to
+	// rely on (skeleton/chat.go: an owner-typed "yes" while a phone send of "yes" was
+	// pending). Empty on every item nobody claimed -- an owner's own prompt included.
+	OperationID string
 	// ToolKind is a tool_run's flat glyph vocabulary (Mirror M2.2, `tool_kind`): the §7
 	// action type journalled at the item's top level so a card picks a glyph from one
 	// field and parses nothing (IS-TOOL-1). Empty where the wire carried none.
@@ -212,8 +224,9 @@ type wireItem struct {
 	// itself applies no rule to either, but they are the two per-kind facts the
 	// transcript renders per row, so they cross the fold rather than costing a JSON
 	// parse of Body per draw.
-	Source   string `json:"source"`
-	ToolKind string `json:"tool_kind"`
+	Source      string `json:"source"`
+	ToolKind    string `json:"tool_kind"`
+	OperationID string `json:"operation_id"`
 }
 
 // ItemStore is the phone's transcript: items folded by item_id, ordered by cursor.
@@ -367,22 +380,23 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord, backfill bool) bool {
 	}
 
 	next := Item{
-		SessionID:  rec.SessionID,
-		ItemID:     w.ItemID,
-		Cursor:     rec.Cursor,
-		LastCursor: rec.Cursor,
-		Kind:       w.Kind,
-		Status:     w.Status,
-		TurnID:     w.TurnID,
-		Truncated:  w.Truncated,
-		Detail:     w.Detail,
-		Source:     w.Source,
-		ToolKind:   w.ToolKind,
-		Degraded:   w.V > ItemSchemaVersion, // IS-COMPAT-4: render what we understand, mark it
-		Revision:   w.Revision,
-		Text:       w.Text,
-		Body:       append(json.RawMessage(nil), rec.Item...),
-		Backfilled: backfill,
+		SessionID:   rec.SessionID,
+		ItemID:      w.ItemID,
+		Cursor:      rec.Cursor,
+		LastCursor:  rec.Cursor,
+		Kind:        w.Kind,
+		Status:      w.Status,
+		TurnID:      w.TurnID,
+		Truncated:   w.Truncated,
+		Detail:      w.Detail,
+		Source:      w.Source,
+		OperationID: w.OperationID,
+		ToolKind:    w.ToolKind,
+		Degraded:    w.V > ItemSchemaVersion, // IS-COMPAT-4: render what we understand, mark it
+		Revision:    w.Revision,
+		Text:        w.Text,
+		Body:        append(json.RawMessage(nil), rec.Item...),
+		Backfilled:  backfill,
 	}
 	if !w.TS.IsZero() {
 		// §2: the machine's instant for THIS record. The wire journal record carries none, so

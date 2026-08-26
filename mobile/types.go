@@ -322,6 +322,12 @@ type TranscriptItem struct {
 	// "phone" only when the daemon watched its own injection, "owner" for a prompt typed at
 	// the machine, empty where the wire carried none -- never invented.
 	Source string
+	// OperationID names WHICH of this phone's sends the agent echoed back (owner ruling
+	// R6). A message drawn on the phone stays PENDING until its own id comes back on an
+	// item, because a send is acknowledged when the daemon wrote bytes into a PTY and not
+	// when the CLI accepted them -- so the echo, and only the echo, is the delivery.
+	// Empty on every item nobody claimed.
+	OperationID string
 }
 
 // TranscriptPage is a transcript HANDLE, for the same reason as SessionList: gomobile has no

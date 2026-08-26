@@ -125,6 +125,7 @@ field TranscriptItem.Degraded bool
 field TranscriptItem.Detail bool
 field TranscriptItem.ItemID string
 field TranscriptItem.Kind string
+field TranscriptItem.OperationID string
 field TranscriptItem.Resolved bool
 field TranscriptItem.SessionID string
 field TranscriptItem.Source string
