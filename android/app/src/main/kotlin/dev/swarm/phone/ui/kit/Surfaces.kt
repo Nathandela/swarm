@@ -2,6 +2,7 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -305,6 +306,36 @@ internal fun cardSurface(context: Context, attention: Boolean): SubstrateSurface
         keyLightPx = Kit.dp(context, KitMetrics.KEY_LIGHT_DP),
         rail = if (attention) Kit.colour(context, R.color.swarm_state_attention) else null,
         railPx = Kit.dp(context, KitMetrics.RAIL_DP),
+    ),
+)
+
+/**
+ * Row 26's bubble: `--p-elev` at `--p-card-r`, and a border only where a state has something to
+ * say.
+ *
+ * A SETTLED BUBBLE HAS NO BORDER, which is the one way this recipe differs from every other in
+ * this file. The fill IS the differentiation -- the reader's words raised off the ground the
+ * agent's prose is written on -- and a hairline over the top would be a second statement of the
+ * same thing. `cardSurface` makes the opposite call for the opposite reason: a row sits among
+ * other rows, so its border is the separation.
+ *
+ * NO KEY LIGHT EITHER. `--p-card-fx` is the material's "this is a surface you could pick up";
+ * a bubble is a thing somebody said.
+ */
+internal fun bubbleSurface(context: Context, state: BubbleState): SubstrateSurface = surface(
+    SurfaceSpec(
+        fill = Kit.colour(context, R.color.swarm_surface_elevated),
+        stroke = when (state) {
+            BubbleState.SETTLED -> Color.TRANSPARENT
+            BubbleState.PENDING -> Kit.colour(context, R.color.swarm_hairline)
+            BubbleState.REFUSED -> Kit.errorBorder(context)
+        },
+        strokeWidthPx = if (state == BubbleState.SETTLED) 0 else Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+        radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        keyLight = null,
+        keyLightPx = 0f,
+        rail = null,
+        railPx = 0f,
     ),
 )
 

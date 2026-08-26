@@ -175,6 +175,19 @@ internal object Kit {
     )
 
     /**
+     * The same recipe with `--p-err` substituted: `color-mix(in srgb, --p-err 36%, --p-hair)`.
+     *
+     * IT IS NAMED RATHER THAN INLINED because the derivation table already spends it twice --
+     * the kill-switch panel (row 12) and the refused bubble (row 26) -- and a second hand-mixed
+     * copy is a second place for the share to drift from 36%.
+     */
+    fun errorBorder(context: Context): Int = ColorMix.mix(
+        colour(context, R.color.swarm_state_error),
+        ATTENTION_BORDER_SHARE,
+        colour(context, R.color.swarm_hairline),
+    )
+
+    /**
      * `--p-att`'s share of `.prow.attention`'s border, over `--p-hair`.
      *
      * origin: derivation attention-row-border

@@ -114,6 +114,26 @@ var s23Inbox = []s23Component{
 			"own would be a second copy of both, and `pairingStep`'s `detail` sets the precedent.",
 	},
 	{
+		Factory: "messageBubble",
+		File:    "MessageBubble.kt",
+		Derived: "#26 Message bubble",
+		Why: "the reader's own words, and the first component in this kit whose whole reason is " +
+			"an ASYMMETRY: the agent gets no bubble at all. Two bubbles is a chat between two " +
+			"strangers, and one of these two is the person holding the phone while the other is a " +
+			"machine reporting on their own work -- so the agent's prose is written on the ground " +
+			"and the reader's words are raised off it on `--p-elev`. It is NOT `activityRow` with " +
+			"a different fill, and the reuse rule does not reach across them: a row says \"here is " +
+			"a record\" and a bubble says \"somebody said this\", which is what made the owner's " +
+			"screenshot read as a log rather than a conversation when every sender shared one " +
+			"bordered card. Three states, and two of them are claims about DELIVERY rather than " +
+			"about appearance -- PENDING dims the ink while the agent has not echoed the message " +
+			"back, because a send is acknowledged when the daemon wrote bytes into a PTY and not " +
+			"when the CLI accepted them (owner ruling R6); REFUSED takes row 12's border recipe, " +
+			"now named as Kit.errorBorder rather than mixed a second time by hand. No tail: this " +
+			"skin's radius ladder is 14/18/10/8 and has no step small enough to read as one, so a " +
+			"tail would either look slightly wrong or invent a step.",
+	},
+	{
 		Factory: "monoWell",
 		File:    "MonoWell.kt",
 		Origin:  ".sheet2 .cmd",

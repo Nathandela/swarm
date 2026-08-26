@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.markdownBody
+import dev.swarm.phone.ui.kit.messageBubble
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.scrolledHorizontally
@@ -72,6 +73,15 @@ object TranscriptTag {
      * without re-parsing that sentence.
      */
     const val RUNNING = "transcript.running"
+
+    /**
+     * The reader's own message (kit row 26).
+     *
+     * ITS OWN TAG FOR [APPROVAL]'s REASON, at its sharpest yet: a bubble and a row are drawn by
+     * different factories and answer to different rules, and a single tag over both would let a
+     * test find either and assert the other's behaviour.
+     */
+    const val BUBBLE = "transcript.bubble"
 
     /** A tool's output or a file's diff, in the mono block every mono block in the app uses. */
     const val WELL = "transcript.well"
@@ -187,10 +197,19 @@ internal fun transcriptBlockViews(
     // ends up reading as something the agent said. `notice(ERROR)` is §4's variant for the machine
     // talking about its own state, the register the stale mark and the refusal line already take.
     views.add(
-        if (block.gap) {
-            notice(context, block.line, NoticeKind.ERROR).apply { tag = TranscriptTag.GAP }
-        } else {
-            rowFor(context, block, onApproval, onToolTap)
+        when {
+            block.gap ->
+                notice(context, block.line, NoticeKind.ERROR).apply { tag = TranscriptTag.GAP }
+            // THE READER'S OWN WORDS, ON THE READER'S OWN SIDE. A bubble rather than a row, and
+            // its own tag rather than a flag on [TranscriptTag.BLOCK] -- the reasoning APPROVAL
+            // and RUNNING already give, restated for this one: a single tag over a bubble and a
+            // row would let a test find either and assert the other's behaviour, and they are
+            // not the same claim. A row says "here is a record"; a bubble says "somebody said
+            // this".
+            block.bubble ->
+                messageBubble(context, block.line, mono = block.command)
+                    .apply { tag = TranscriptTag.BUBBLE }
+            else -> rowFor(context, block, onApproval, onToolTap)
         },
     )
     if (block.well.isNotEmpty()) {

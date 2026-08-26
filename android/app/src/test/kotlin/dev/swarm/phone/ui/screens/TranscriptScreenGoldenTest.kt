@@ -135,6 +135,13 @@ class TranscriptScreenGoldenTest {
         val rows = mutableListOf<Pair<String, String>>()
         fun walk(v: View) {
             val tag = v.tag
+            // A BUBBLE IS A ROW OF THE CONVERSATION and must stay in this list, or the reader's
+            // own message disappears from the recorded turn and the golden silently stops
+            // asserting the one thing it exists for: that a session READS as a conversation, in
+            // order. It carries its text directly rather than through an activity row's body.
+            if (tag == TranscriptTag.BUBBLE) {
+                rows += (tag as String) to textOf(v)
+            }
             if (tag == TranscriptTag.BLOCK || tag == TranscriptTag.APPROVAL) {
                 rows += (tag as String) to textOf(v.kitRequire(KitTag.ACTIVITY_BODY))
             }
@@ -183,8 +190,11 @@ class TranscriptScreenGoldenTest {
 
         assertEquals(
             listOf(
-                TranscriptTag.BLOCK to
-                    "You · Using the Edit tool, change the text 'line two' to 'line TWO EDITED' in edit-target3.txt",
+                // THE READER'S OWN MESSAGE, now a bubble and no longer prefixed. It read
+                // "You · Using the Edit tool..." because a row could only say who spoke in
+                // words; the bubble says it by which side of the screen it is on.
+                TranscriptTag.BUBBLE to
+                    "Using the Edit tool, change the text 'line two' to 'line TWO EDITED' in edit-target3.txt",
                 TranscriptTag.APPROVAL to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",
                 TranscriptTag.BLOCK to "Read /Users/Nathan/spike-sb-work/edit-target3.txt",
                 TranscriptTag.BLOCK to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",

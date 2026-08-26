@@ -212,6 +212,27 @@ data class TranscriptBlock(
      */
     val gap: Boolean = false,
     /**
+     * Whether this is the READER'S own message, drawn as a bubble on their side rather than as
+     * a row on the ground.
+     *
+     * IT REPLACES A SENTENCE. This screen used to write "You · hello", because every sender
+     * shared one `activityRow` and the copy was the only thing that could say who spoke. A
+     * bubble says it in the layout, so the prefix went with it -- keeping both would state the
+     * same fact twice, which is what the owner's screenshot shows: a column of identical
+     * bordered boxes each beginning with the same two words.
+     */
+    val bubble: Boolean = false,
+    /**
+     * Whether the reader typed a MACHINE WORD -- a `/command` -- which the bubble draws in the
+     * machine's own face.
+     *
+     * IT IS DECIDED HERE AND NOT IN THE VIEW, because it is a reading of the text and the view
+     * may not make one (PB-DS-9). The rule is deliberately narrow: the text BEGINS with a
+     * slash. A slash inside a sentence is a path or a fraction, and every CLI this app talks to
+     * puts its commands at the front of the line.
+     */
+    val command: Boolean = false,
+    /**
      * What a CLOSED card must say about itself, or "" when there is nothing to say.
      *
      * COLLAPSING IS ONLY HONEST WHEN THE CLOSED LINE IS (owner ruling R3). Two facts would
@@ -255,14 +276,14 @@ object TranscriptScreen {
     private const val EMPTY = "No messages for this session have reached this phone yet."
 
     /**
-     * Who the human is, and the one word on this screen the wire has no field for.
+     * The one character that makes a typed line a MACHINE WORD rather than a sentence.
      *
-     * §3.1's `source` is `phone` | `owner` | `derived` -- where the message was typed and how it
-     * was captured, not who typed it. All three are the same person: the owner of the machine,
-     * holding this phone. So the attribution is one word rather than a table over a field that
-     * answers a different question.
+     * IT REPLACES `YOU`, the attribution this screen used to write into every user message.
+     * That constant existed because a row could not say who spoke without saying it in words;
+     * a bubble can, so what is left to decide about the reader's own text is only how to SET
+     * it -- and a line beginning with a slash is a command in every CLI this app talks to.
      */
-    private const val YOU = "You"
+    private const val COMMAND_PREFIX = "/"
 
     /** The separator between two of the wire's own values. `SessionDetailScreen` set the idiom. */
     private const val SEPARATOR = " · "
@@ -422,11 +443,16 @@ object TranscriptScreen {
     ): TranscriptBlock {
         val fields = item.fields()
         val block = when (item.kind) {
+            // THE READER'S OWN WORDS, AND NOTHING ELSE IN THE LINE. `joined(YOU, item.text)`
+            // stood here and produced "You · hello"; the bubble says who spoke by which side
+            // of the screen it sits on, so the attribution moved from the copy into the layout
+            // rather than being drawn twice.
             USER_MESSAGE -> TranscriptBlock(
                 itemId = item.itemId,
                 kind = item.kind,
-                line = joined(YOU, item.text),
-                emphasis = YOU,
+                line = item.text,
+                bubble = true,
+                command = item.text.startsWith(COMMAND_PREFIX),
             )
 
             // THE AGENT'S WORDS ARE THE TRANSCRIPT'S DEFAULT VOICE, so they carry no attribution

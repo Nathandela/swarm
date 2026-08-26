@@ -73,24 +73,21 @@ class TranscriptPanelTest {
 
     // ---- the two message kinds -------------------------------------------
 
+    // MOVED (the conversation surface): "a user message is attributed to the person who sent
+    // it". The SUBJECT survives exactly -- a reader must be able to tell who said what -- and
+    // the mechanism moved out of the sentence and into the layout. The line is now the reader's
+    // words alone and `TranscriptBlock.bubble` carries the attribution, which is asserted in
+    // TranscriptBubbleTest against both the model and the drawn view. Keeping this assertion
+    // would pin "You ·" into a design that says the same thing twice.
     @Test
-    fun `a user message is attributed to the person who sent it`() {
+    fun `a user message carries its own words and the bubble carries the attribution`() {
         val block = blockOf(
             item("user_message", body = """{"text":"ship it","source":"phone"}""", text = "ship it"),
         )
-
-        assertTrue(
-            "a user's own message is drawn as bare text, so a transcript of a conversation reads " +
-                "as one voice and the reader cannot tell who said what",
-            block.line.contains("ship it") && block.line.contains("You"),
-        )
-        assertEquals(
-            "the attribution is not the marked span, so the one word the design puts the eye on " +
-                "is whatever the sentence happened to start with",
-            "You",
-            block.emphasis,
-        )
+        assertEquals("ship it", block.line)
+        assertTrue("the reader's own message is drawn as a bubble", block.bubble)
     }
+
 
     @Test
     fun `an agent message is the agent's own words and nothing added`() {
