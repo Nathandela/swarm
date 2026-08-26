@@ -13,6 +13,7 @@ require (
 	github.com/coder/websocket v1.8.13
 	github.com/creack/pty v1.1.24
 	github.com/flynn/noise v1.1.0
+	github.com/hbollon/go-edlib v1.7.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/rivo/uniseg v0.4.7
 	go.etcd.io/bbolt v1.3.11
