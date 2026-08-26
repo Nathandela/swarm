@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -556,7 +557,22 @@ func resolveCodexCandidateGraph(candidates []codexHistoryCandidate) resumeHistor
 
 func (r *filesystemResumeHistoryResolver) resolveClaude(home *os.Root, budget *historyBudget, m persist.Meta) resumeHistoryResult {
 	cleanCWD := filepath.Clean(m.Cwd)
-	projectName := encodeClaudeProjectCWD(cleanCWD)
+	// ONE DEFINITION, ASKED OF THE PROVIDER. The project-directory encoding is Claude's
+	// own knowledge, so it comes from the adapter's optional TranscriptLayout seam rather
+	// than from a private copy here: the hands-off composer needs the very same directory,
+	// and two copies of an encoder are two chances to disagree. The seam only NAMES the
+	// directory -- it opens nothing -- so every traversal below is still this resolver's
+	// anchored, budgeted os.Root walk.
+	//
+	// An unregistered agent type yields a nil Adapter, whose type assertion is false, so
+	// the one branch covers both "no such adapter" and "no characterized layout". Absence
+	// is the signal (ADR-010 section 5).
+	ad, _ := registry.New(m.AgentType)
+	layout, ok := adapter.AsTranscriptLayout(ad)
+	if !ok {
+		return resumeHistoryResult{Outcome: resumeHistoryUnsupported}
+	}
+	projectName := layout.ProjectDirName(cleanCWD)
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
 	if !ok {
 		return resumeHistoryResult{Outcome: outcome}
@@ -601,18 +617,6 @@ func (r *filesystemResumeHistoryResolver) resolveClaude(home *os.Root, budget *h
 	default:
 		return resumeHistoryResult{Outcome: resumeHistoryAmbiguous}
 	}
-}
-
-func encodeClaudeProjectCWD(cwd string) string {
-	var out strings.Builder
-	for _, r := range cwd {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			out.WriteRune(r)
-		} else {
-			out.WriteByte('-')
-		}
-	}
-	return out.String()
 }
 
 func parseClaudeHistoryName(name string) (string, bool, bool) {
