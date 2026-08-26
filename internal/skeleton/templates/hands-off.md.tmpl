@@ -1,3 +1,12 @@
+{{- /*
+DO NOT put the five pointer lines below into a fenced, indented or quoted block.
+They are deliberately bare "label: value" lines, and that is load-bearing rather
+than a style choice: renderHandsOffPrompt applies NO escaping, and the reason it
+is safe not to is that this prompt contains no delimiter a value could close. A
+transcript path holding a newline would step straight out of a fenced block and
+forge prompt text; with no delimiter anywhere, it has nothing to break out of.
+Prettify these lines and the no-escaping argument dies with them.
+*/ -}}
 You are taking over unfinished work from another Swarm session. None of that session's context is in your context window, and Swarm has deliberately given you no summary of it. What follows is a set of pointers. Your first task is to go and understand that work for yourself; your second is to continue it.
 
 Where the prior conversation lives:
