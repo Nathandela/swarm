@@ -42,31 +42,126 @@ func TestChromeHintNamesCtrlQ(t *testing.T) {
 	}
 }
 
-// D4 RULED (agents-tracker-rs8) — detach recognition stays solo-byte: only a
-// read that yields the detach key ALONE (n==1) detaches. The input pump has no
-// bracketed-paste state machine, so a read that carries the detach key's byte
-// amid other bytes (a paste burst, or flood) is forwarded through as ordinary
-// input, never treated as a detach. Companion pin:
-// TestPassthrough_DetachKeyDetachesAndIsNotForwarded (passthrough_test.go)
-// pins the solo-byte case that DOES detach.
-func TestDetachKey_WithinMultiByteReadIsForwardedNotDetach(t *testing.T) {
+// ADR-006 amendment 2026-08-26: a keypress is recognized independently of the
+// arbitrary read boundary that carried it. Bytes before the key are forwarded;
+// the detach key and bytes after it are not.
+func TestDetachKey_WithinMultiByteReadDetaches(t *testing.T) {
 	term := newFakeTerm(80, 24)
 	sess := newFakeSession([]byte("S"))
 	ch := runInBackground(Config{Term: term, Session: sess})
 
-	// One read carrying the detach key alongside other bytes, fed as a single
-	// write so it lands in one Read call with n>1.
 	burst := []byte{'p', DefaultDetachKey, 'q'}
 	term.feed(burst)
 
-	eventually(t, func() bool { return bytes.Equal(sess.inputBytes(), burst) })
+	res := waitResult(t, ch)
+	if res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+	if got := sess.inputBytes(); !bytes.Equal(got, []byte{'p'}) {
+		t.Fatalf("forwarded input = %q, want only bytes before detach", got)
+	}
+}
+
+func TestDetachKey_KittyCSIUDetachesAndIsNotForwarded(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	term.feed([]byte("\x1b[113;5u")) // Ctrl+Q under Kitty keyboard protocol.
+	res := waitResult(t, ch)
+	if res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+	if got := sess.inputBytes(); len(got) != 0 {
+		t.Fatalf("Kitty Ctrl+Q was forwarded: %q", got)
+	}
+}
+
+func TestDetachKey_KittyCSIUExplicitPressEventDetaches(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	term.feed([]byte("\x1b[113;5:1u"))
+	if res := waitResult(t, ch); res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+}
+
+func TestDetachKey_KittyCSIUAcrossFragmentedReadsDetaches(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	for _, fragment := range [][]byte{[]byte("\x1b"), []byte("[113"), []byte(";5"), []byte("u")} {
+		term.feed(fragment)
+	}
+	res := waitResult(t, ch)
+	if res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+	if got := sess.inputBytes(); len(got) != 0 {
+		t.Fatalf("fragmented Kitty Ctrl+Q was forwarded: %q", got)
+	}
+}
+
+func TestDetachKey_BracketedPasteForwardsLegacyAndKittyFormsByteExactly(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	paste := append([]byte("\x1b[200~before"), DefaultDetachKey)
+	paste = append(paste, []byte("\x1b[113;5uafter\x1b[201~")...)
+	for _, fragment := range [][]byte{paste[:2], paste[2:11], paste[11 : len(paste)-3], paste[len(paste)-3:]} {
+		term.feed(fragment)
+	}
+	eventually(t, func() bool { return bytes.Equal(sess.inputBytes(), paste) })
 	if sess.detachCalls != 0 {
-		t.Fatalf("detach key within a multi-byte read must not detach (D4); Session.Detach called %d times", sess.detachCalls)
+		t.Fatalf("detach sequence inside bracketed paste detached; calls = %d", sess.detachCalls)
 	}
 
 	sess.endSession()
-	res := waitResult(t, ch)
-	if res.reason != ReasonSessionEnd {
-		t.Fatalf("reason = %v, want ReasonSessionEnd (the multi-byte read must not have detached earlier)", res.reason)
+	if res := waitResult(t, ch); res.reason != ReasonSessionEnd {
+		t.Fatalf("reason = %v, want ReasonSessionEnd", res.reason)
+	}
+}
+
+func TestDetachKey_KittyReleaseIsForwardedNotDetach(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess})
+
+	release := []byte("\x1b[113;5:3u")
+	term.feed(release)
+	eventually(t, func() bool { return bytes.Equal(sess.inputBytes(), release) })
+
+	sess.endSession()
+	if res := waitResult(t, ch); res.reason != ReasonSessionEnd {
+		t.Fatalf("reason = %v, want ReasonSessionEnd", res.reason)
+	}
+}
+
+func TestDetachKey_ConfiguredControlKeyMatchesKittyCSIU(t *testing.T) {
+	term := newFakeTerm(80, 24)
+	sess := newFakeSession([]byte("S"))
+	ch := runInBackground(Config{Term: term, Session: sess, DetachKey: 0x1d}) // Ctrl+]
+
+	term.feed([]byte("\x1b[93;5u"))
+	if res := waitResult(t, ch); res.reason != ReasonDetached {
+		t.Fatalf("reason = %v, want ReasonDetached", res.reason)
+	}
+}
+
+func TestDetachInputFilter_NonDetachCSIIsByteExactAcrossFragments(t *testing.T) {
+	var got []byte
+	filter := newDetachInputFilter(DefaultDetachKey, func(p []byte) {
+		got = append(got, p...)
+	}, func() { t.Fatal("ordinary cursor key detached") })
+
+	if filter.Feed([]byte("\x1b")) || filter.Feed([]byte("[")) || filter.Feed([]byte("A")) {
+		t.Fatal("ordinary cursor key detached")
+	}
+	if want := []byte("\x1b[A"); !bytes.Equal(got, want) {
+		t.Fatalf("forwarded input = %q, want byte-exact %q", got, want)
 	}
 }

@@ -3,6 +3,24 @@
 **Status**: Accepted
 **Date**: 2026-07-18
 
+## Amendment: enhanced keyboard input (2026-08-26)
+
+A later field test attached to Codex while its TUI had enabled the Kitty keyboard
+protocol (`CSI > 7 u`). In that mode the terminal encodes Ctrl+q as a multi-byte
+CSI-u key event instead of the legacy `0x11` byte. Attach recognized only a read
+containing exactly one `0x11`, so the documented escape route did nothing even
+though raw termios had correctly disabled IXON. This is the field evidence the
+former D4 solo-byte ruling required before revisiting it.
+
+Detach recognition is now a narrow streaming input filter. It recognizes the
+configured control key as either its legacy byte or a Kitty CSI-u keypress,
+carries incomplete sequences across arbitrary input-read boundaries, and tracks
+bracketed-paste start/end markers. Inside bracketed paste, key-looking bytes are
+always forwarded as content. Outside paste, the detach event is consumed and all
+other input is forwarded byte-for-byte. Complete Kitty parsing reuses the terminal
+event decoder already present in the dependency graph; Swarm does not maintain a
+second general-purpose keyboard parser.
+
 ## Context
 
 The first human field test (v0.1.0, 2026-07-18) surfaced usability defects the
