@@ -264,6 +264,38 @@ test.
 
 ---
 
+## 8b. Independent orchestrator verification, and a review that did not land
+
+Two adversarial reviewers were run over the committed work. **Neither delivered its
+findings** — both completed and went idle, and repeated requests for the report as plain
+text produced nothing. That is recorded rather than glossed: the sweep did NOT receive the
+independent adversarial review it was given, and what follows is the orchestrator's own
+verification standing in for it.
+
+Verified directly, not taken from any phase's report:
+
+| Claim | Method | Result |
+|---|---|---|
+| R-5 was unused before Phase 0 claimed it | grep before edit | free |
+| `metadata-disclosure.md` really modified | `git status` | true, 57 insertions |
+| `registry.New` returns a true nil on unknown | read `registry.go:48-54` | true, so the type assertion genuinely fails |
+| `registry` was not a new package edge into skeleton | grep | already imported by 5 files |
+| Phase 3's not-registered branch is unreachable in production | `Resolve` gates on `{codex,claude}`; `claude` registered at `registry.go:26` | defensive only — recorded as such, not as live coverage |
+| `ProjectDirName` can emit `"."` or `".."` | `.` is non-alphanumeric so becomes `-` | impossible |
+| Empty cwd naming an empty directory component | `LocateTranscript` requires `IsAbs`; `openDirPath:369` rejects `""`/`"."`/`".."`/separators before any open | double-covered |
+| `IsCanonicalConversationID` sufficient to keep the filename in-directory | 36 chars, dashes at fixed offsets, rest `[0-9a-f]` | sufficient — no separator, cannot be `.` or `..` |
+| `handoff_from` survives the protocol→skeleton crossing | `launchOptions` passes `req.Options` through unchanged | intact |
+| The crossing is *asserted*, not just inspected | `hands_off_handoff_test.go` asserts `specs[0].Options[OptionHandoffFrom] == handoffSource` | covered |
+| Template guard did not shift the rendered prompt | probe run and removed | byte-identical, still opens `"You are taking over unfinished work from"` |
+| `persist.Meta` omitempty convention | `persist.go:36` states it explicitly | "tags are deliberately not omitempty" — Phase 2 matched it |
+
+**Coverage chain, end to end.** No single test spans client-to-launch, but the links are
+closed with no gap between them: the protocol layer tests the guards *and* asserts the
+option reaches `DaemonAPI.Launch` with its exact value; the skeleton layer tests
+composition and every refusal through the real `coreAPI.Launch` against a real state dir.
+
+---
+
 ## 9. Known limits, stated rather than solved
 
 - **Two live writers in one checkout.** The source is left alive by owner decision (E3), so
