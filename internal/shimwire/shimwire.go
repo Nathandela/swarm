@@ -54,7 +54,34 @@ const (
 	// AgentArgs is appended to the agent argv VERBATIM. EMPTY IS THE ORDINARY CASE, not a
 	// defect: it means "go ahead, I am connected, and I am not handing you a thread id".
 	TypeBackendAttach = "backend_attach"
+	// TypeSubmit is a daemon->shim SUBMIT TRANSACTION: one message's text and the
+	// carriage return that runs it, delivered under a single hold of the PTY's only
+	// serialized writer -- or refused, having written nothing.
+	//
+	// WHY IT IS A CONTROL FRAME AND NOT TWO TDataIn WRITES (Slice 0,
+	// agents-tracker-bzfe). Text and CR sent as ordinary input cannot be made atomic
+	// from the daemon's side: the daemon holds no lock the owner's own keystrokes
+	// respect, and two phone sends racing each other produce text_A, text_B, CR, CR --
+	// one submitted concatenation and one empty submit. Only the shim owns the writer,
+	// so only the shim can make "nobody has written since the last submit, write the
+	// text, wait the frame gap, write the return" one indivisible act.
+	//
+	// IT CLAIMS NOTHING ABOUT THE CLI'S INPUT REGION. The precondition is a fact about
+	// the PTY, not about what the agent has drawn on it: bytes written since the last
+	// submit. That is deliberately weaker than ADR-017:175's expected_input_revision and
+	// is the reason this can ship without characterizing anybody's composer.
+	TypeSubmit = "submit"
+	// TypeSubmitResult is the shim's answer to exactly one TypeSubmit: Refused carries
+	// the reason and is empty on success. A submit is answered on the same connection,
+	// in order, so a caller may hold one in flight and wait for it.
+	TypeSubmitResult = "submit_result"
 )
+
+// RefusedInputBusy is the one STABLE reason token a TypeSubmitResult carries: somebody
+// has written to this PTY since the last submit, so the message was not written. It is a
+// token rather than a sentence because the daemon maps it onto the wire's own refusal
+// code, and a sentence would make that a string comparison against prose.
+const RefusedInputBusy = "input_busy"
 
 // Signal vocabulary for a Control{Type: TypeSignal}.
 const (
@@ -91,6 +118,18 @@ type Control struct {
 	// own argv verbatim before it spawns it. Absent on every other message type, and absent
 	// on a bare go-ahead -- omitempty keeps an old shim's decode identical either way.
 	AgentArgs []string `json:"agent_args,omitempty"` // backend_attach
+	// SubmitTransaction is an OPTIONAL hello capability advertised by the SHIM: it
+	// will answer TypeSubmit atomically. An old shim never sets it, so a new daemon
+	// degrades to today's two unlocked writes (G-D) and the merge stays possible until
+	// the shim is replaced -- which is a disclosed degrade, not a silent one.
+	SubmitTransaction bool `json:"submit_transaction,omitempty"` // hello (shim reply)
+	// Text rides a TypeSubmit: the whole of one message, without its carriage return.
+	// The shim adds the return itself, because the point of the verb is that nothing
+	// may land between the two.
+	Text string `json:"text,omitempty"` // submit
+	// Refused rides a TypeSubmitResult and is EMPTY ON SUCCESS. A non-empty reason
+	// means nothing was written.
+	Refused string `json:"refused,omitempty"` // submit_result
 }
 
 // Caps is the set of OPTIONAL capabilities a peer advertised in its hello
@@ -100,13 +139,18 @@ type Control struct {
 // them (e.g. protocol.readSnapshot reassembles a chunked snapshot only when
 // SnapshotChunking was advertised — R1.2.2).
 type Caps struct {
-	SnapshotChunking bool
-	SnapshotOnly     bool
+	SnapshotChunking  bool
+	SnapshotOnly      bool
+	SubmitTransaction bool
 }
 
 // Caps extracts the capability fields from a hello Control.
 func (c Control) Caps() Caps {
-	return Caps{SnapshotChunking: c.SnapshotChunking, SnapshotOnly: c.SnapshotOnly}
+	return Caps{
+		SnapshotChunking:  c.SnapshotChunking,
+		SnapshotOnly:      c.SnapshotOnly,
+		SubmitTransaction: c.SubmitTransaction,
+	}
 }
 
 // Encode serializes c to its JSON wire form.

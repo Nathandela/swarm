@@ -191,6 +191,22 @@ The same vocabulary governs `session_launch` — "Launch uses the same `pending`
 >
 > The obligation therefore **stands open**, with its blocker named: it closes when `internal/shim` grows the shared input transaction and an adapter seam characterizes the input region. `docs/verification/r6-chat.md`'s CANNOT YET states the consequence in the user's own terms, and `internal/skeleton/chat.go`'s `injectComposerText` carries the same disclosure at the site.
 
+> **AMENDMENT — (a) IS NOW DISCHARGED, BY A DIFFERENT AND WEAKER MECHANISM (2026-08-26, conversation surface Slice 0, `agents-tracker-bzfe`).**
+>
+> **What changed the answer was the question, not the difficulty.** The paragraph above is correct that nothing characterizes the CLI's input region, and correct that deriving it from the grid would be the never-guess move IS-TOOL-2 forbids. Both halves of that reasoning stand. What it did not notice is that **the transaction does not need the input region at all.**
+>
+> The shim owns `ptyWriter`, the PTY master's only serialized writer, with a mutex it already takes on every write. It can therefore answer one question absolutely: **has anybody written to this PTY since the last submit.** That is a fact about the PTY, not a claim about what the agent has drawn on it, and it needs no adapter seam, no characterization and no heuristic.
+>
+> `shimwire.TypeSubmit` carries one whole message. The shim checks that count is zero, writes the text, waits `submitframe.Gap`, writes the carriage return — **all under one hold of that same lock** — or refuses having written nothing. Holding across the gap is the point: while it elapses nothing else may reach this PTY, which is exactly what stops the owner's keystroke, or a second phone send, landing between a message's two halves. `internal/skeleton/supervision.go:16` already records the same shape for the passive supervisor.
+>
+> **What is discharged, precisely.** The obligation's operative clause — "acquire the one lock every owner/remote input writer shares … then write text-plus-submit framing without releasing the lock, refusing a pre-existing or changed terminal draft" — is met. **`expected_input_revision` itself is NOT added to IS-LIFE-5 and is now not needed:** the revision never leaves the shim, because only the predicate has to cross. Refusals surface as `CodeInputBusy` (`schema/chat.go`), which the phone draws as a refused message the user can retry.
+>
+> **It errs safe by construction.** A draft typed and deleted back to empty still refuses — the counter measures bytes written, not what survives on the line. False refusal was chosen over prompt corruption deliberately.
+>
+> **What remains open, and it is smaller than what closed.** A shim predating the transaction answers `ErrSubmitUnsupported`, and the daemon degrades to the two unlocked writes — reachable only between a daemon upgrade and the shim restart that replaces it, and disclosed at the site. The merge is also exclusively a property of the keystroke branch: `resolveMessageSink`'s backend arm never touches the PTY, and the only `ComposerKeys` implementor in the tree is Claude, so the class has a known exit the day Claude gains a structured sink.
+>
+> **Why this was found now.** The R1 ruling of the conversation surface (`docs/specifications/chat-surface-plan.md`) makes both surfaces live at all times, which turns this from a disclosed edge into the ordinary case — and the audit committee then found the *worse* half nobody had stated: two phone sends racing each other produce one submitted concatenation and one empty submit, with no owner involved at all. `internal/skeleton/s0_writerserialise_test.go` reproduces both and is the failing-first evidence.
+
 ### T10. Nothing is promoted from the fallback into structured chat
 
 This is the ruling that keeps the two amendments above narrow, and it has no exceptions:

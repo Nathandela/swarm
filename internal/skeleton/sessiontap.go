@@ -370,6 +370,25 @@ func (s *tapSub) Input(p []byte) error {
 	return s.t.up.Input(p)
 }
 
+// Submit forwards one whole message to the shared upstream's submit transaction, so the
+// text and the carriage return that runs it cross the PTY's only serialized writer under
+// ONE hold of its lock (Slice 0, agents-tracker-bzfe).
+//
+// IT IS A SEPARATE VERB FROM [tapSub.Input] BECAUSE IT IS A SEPARATE GUARANTEE. Input is a
+// stream of bytes with no boundaries in it; a message HAS a boundary, and everything that
+// makes this defect possible lives in the gap between a message's two halves. An upstream
+// that proves no transaction answers ErrSubmitUnsupported and the caller degrades, visibly.
+func (s *tapSub) Submit(text string) error {
+	if s.mode != readWrite {
+		return nil
+	}
+	sm, ok := s.t.up.(protocol.MessageSubmitter)
+	if !ok {
+		return protocol.ErrSubmitUnsupported
+	}
+	return sm.Submit(text)
+}
+
 // Resize forwards to the shared upstream for a readWrite subscriber and updates
 // the daemon mirror in the same tap critical section. The lock serializes resize
 // with pump's frame feed and late-subscriber snapshots, preserving one coherent

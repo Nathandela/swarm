@@ -1,6 +1,8 @@
 package shim
 
 import (
+	"bytes"
+	"errors"
 	"log"
 	"net"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/Nathandela/swarm/internal/shimwire"
+	"github.com/Nathandela/swarm/internal/submitframe"
 	"github.com/Nathandela/swarm/internal/transcript"
 	"github.com/Nathandela/swarm/internal/vt"
 	"github.com/Nathandela/swarm/internal/wire"
@@ -230,7 +233,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -252,6 +255,21 @@ func (s *server) serveConn(conn net.Conn) {
 				s.resize(ctrl.Cols, ctrl.Rows)
 			case shimwire.TypeSignal:
 				s.onSignal(ctrl.Sig)
+			case shimwire.TypeSubmit:
+				// One message, atomically, or nothing. The answer rides the same
+				// connection so the caller can hold exactly one in flight.
+				res := shimwire.Control{Type: shimwire.TypeSubmitResult}
+				switch err := s.ptyIn.submitMessage([]byte(ctrl.Text), submitframe.Gap); {
+				case err == nil:
+				case errors.Is(err, errInputBusy):
+					// A STABLE TOKEN, not prose: the daemon turns this into the
+					// wire's own refusal code, and a sentence would make that a
+					// string comparison against a message somebody may reword.
+					res.Refused = shimwire.RefusedInputBusy
+				default:
+					res.Refused = err.Error()
+				}
+				cw.writeControl(res)
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
 				// backend, and the agent may now be spawned with AgentArgs appended.
@@ -261,7 +279,7 @@ func (s *server) serveConn(conn net.Conn) {
 			if !helloed {
 				continue // ignore input until the client has said hello
 			}
-			_, _ = s.ptyIn.Write(payload)
+			_, _ = s.ptyIn.WriteInput(payload)
 		}
 	}
 }
@@ -795,19 +813,86 @@ func (p *replyPump) close() {
 
 // ptyWriter serializes writes to the PTY master and becomes a silent no-op once
 // the master is closed, so late emulator replies never touch a closed fd.
+//
+// IT ALSO COUNTS (Slice 0, agents-tracker-bzfe). sinceSubmit is the number of INPUT
+// bytes written since the last one that ran a line -- so "has anybody typed into this
+// session since the last submit" is answerable here, and nowhere else, because this is
+// the only writer. That fact is what submitMessage refuses on. Emulator replies do not
+// count: they are the shim answering the agent's own queries, not somebody typing.
 type ptyWriter struct {
 	mu     sync.Mutex
 	f      *os.File
 	closed bool
+
+	sinceSubmit int
 }
 
 func (p *ptyWriter) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.writeLocked(b)
+}
+
+// WriteInput is Write for bytes somebody TYPED (TDataIn), which are the only bytes
+// that dirty the input line.
+func (p *ptyWriter) WriteInput(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n, err := p.writeLocked(b)
+	p.countLocked(b)
+	return n, err
+}
+
+func (p *ptyWriter) writeLocked(b []byte) (int, error) {
 	if p.closed {
 		return len(b), nil
 	}
 	return p.f.Write(b)
+}
+
+// countLocked advances the dirty-byte count: everything after the LAST line-running
+// byte in this write. A write that ends in a return leaves the line clean.
+func (p *ptyWriter) countLocked(b []byte) {
+	if i := bytes.LastIndexAny(b, "\r\n"); i >= 0 {
+		p.sinceSubmit = len(b) - i - 1
+		return
+	}
+	p.sinceSubmit += len(b)
+}
+
+// errInputBusy is the shim's refusal: the input line is not clean, so this message
+// cannot be delivered as a message.
+var errInputBusy = errors.New("the session's input line was not empty")
+
+// submitMessage writes one whole message -- text, the frame gap, then the carriage
+// return -- under ONE hold of the PTY writer's lock, or writes nothing at all.
+//
+// THE HOLD ACROSS THE GAP IS THE POINT, not an oversight. submitframe.Gap exists so no
+// downstream batching recompresses the text and its return into one PTY read tick; while
+// it elapses, nothing else may reach this PTY, which is exactly what stops a second send
+// (or the owner's own keystroke) landing between them. internal/skeleton/supervision.go
+// records the same shape for the passive supervisor: typing a notification "holds the
+// source's input serialization for at least submitframe.Gap". It is bounded at one gap,
+// because a message is two frames and never more.
+func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sinceSubmit != 0 {
+		return errInputBusy
+	}
+	if _, err := p.writeLocked(text); err != nil {
+		return err
+	}
+	time.Sleep(gap)
+	if _, err := p.writeLocked([]byte{'\r'}); err != nil {
+		// The text is in and the return is not. Count it as dirty, honestly: the line
+		// now holds words nobody submitted, and the next submit must refuse rather
+		// than run them together with its own.
+		p.countLocked(text)
+		return err
+	}
+	p.sinceSubmit = 0
+	return nil
 }
 
 func (p *ptyWriter) close() {

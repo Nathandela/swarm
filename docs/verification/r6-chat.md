@@ -235,7 +235,14 @@ version-gated, refusal never a guess); **6** untouched, correctly (Channels stay
 
 ### CANNOT YET — stated as the user experiences it
 
-i. **A phone send can be merged with the owner's half-typed terminal draft, and the CR submits
+i. **CLOSED 2026-08-26 — see the note at the end of this file.** The entry is kept verbatim below
+   because it is the record of what shipped in R6, and because what closed it did not do what
+   this entry says was required: it asks a strictly weaker question the shim can answer without
+   characterizing anything. The audit that closed it also found the worse half nobody had stated
+   here — two phone sends racing each other produce one submitted concatenation and one empty
+   submit, with no owner draft involved at all (`agents-tracker-bzfe`).
+
+   **A phone send can be merged with the owner's half-typed terminal draft, and the CR submits
    the concatenation** — a message nobody wrote. `injectComposerText` (`skeleton/chat.go:227`)
    writes text + CR through the tap with NO check that the input region is empty and NO input
    transaction. This is §8.1 step 3's own requirement and ADR-017:175's amendment obligation
@@ -353,8 +360,13 @@ xiv. **A clipped card whose whole body the machine has evicted is asked once, to
 - **The capability-publication slice**: wiring `deriveSessionCapabilities` into session launch, so
   ADR-017 T2 rule 3 has a record to render from and the composer gate can tighten its absent-record
   arm to a refusal. Invisible to the B94 reachability ledger because both symbols are unexported.
-- **`expected_input_revision` + the shim-wide input transaction** (CANNOT YET (i)):
-  `internal/shim` is out of scope for this wave.
+- ~~**`expected_input_revision` + the shim-wide input transaction** (CANNOT YET (i)):
+  `internal/shim` is out of scope for this wave.~~ **CLOSED 2026-08-26** by conversation-surface
+  Slice 0 (`agents-tracker-bzfe`), and by a weaker mechanism than this entry assumed: the shim
+  refuses a message when anything has been written to the PTY since the last submit, and writes
+  text and carriage return under one hold of its own writer lock. `expected_input_revision` was
+  not added and is not needed — the predicate crosses, the revision does not. See the amendment
+  block under ADR-017 §T-obligation and `internal/skeleton/s0_writerserialise_test.go`.
 - **An anchorless "newest page" read** (CANNOT YET (ii)).
 - **The notification deep link** (CANNOT YET (vii)) — parked and not buildable under PB-SEC-11 as
   it stands.

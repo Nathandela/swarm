@@ -188,6 +188,13 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 		// match an echo; withdraw it rather than letting a later identical owner prompt
 		// inherit a phone attribution.
 		d.dropPendingSend(local, operationID)
+		if errors.Is(err, protocol.ErrInputBusy) {
+			// ITS OWN CODE, because it has its own remedy: nothing is wrong with the
+			// caller, the session or the message -- the line simply was not clean, and
+			// the same words sent a moment later will land. NOTHING WAS WRITTEN.
+			return protocol.CodeInputBusy, errIsLife5(
+				"session %q had input on its line, so this message was not written; nothing was typed", req.Session)
+		}
 		return "", errIsLife5("composer send into session %q: %v", req.Session, err)
 	}
 	return "", nil
@@ -334,30 +341,40 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // recompresses the two into one PTY read tick (sendMessage's own rule, restated on the
 // tap because this path is the daemon's, not a Server lease's).
 //
-// DISCLOSED GAP -- THE SEND CAN BE MERGED WITH THE OWNER'S DRAFT (Wave R6 review finding
-// B13, playbook §8.1 step 3). This writes text + CR into the PTY with NO check that the
-// terminal's input region is empty and NO input transaction. If the owner has a half-typed
-// line in the CLI's composer when the phone's send lands, the phone's text is APPENDED to it
-// and the CR submits the CONCATENATION: a message nobody wrote, which is precisely the harm
-// the "refused, never truncated" rule twenty lines up exists to prevent for the other half
-// of the same message.
+// B13 IS CLOSED HERE (Slice 0, agents-tracker-bzfe), and what closed it is deliberately
+// weaker than what was once thought necessary.
 //
-// IT IS NOT CLOSED HERE, AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT.
-// ADR-017:175 records the obligation as "IS-LIFE-5 must be amended, IN THE COMMIT THAT
-// IMPLEMENTS composer_send" to carry expected_input_revision, whose enforcement is a
-// SHIM-WIDE INPUT TRANSACTION: only the shim owns the PTY writer, so only the shim can make
-// "read the input revision, refuse if it moved, write" atomic against the owner's own
-// keystrokes. internal/shim is out of this wave's scope. The half that could in principle be
-// discharged here -- gate the send on the input region being empty -- was measured and is
-// NOT reachable either: no adapter interface characterizes the input region (the seams are
-// ApprovalApplier, TurnInterrupter, InteractionSource, HostProber), and deriving "the
-// composer is empty" from the raw grid would be exactly the never-guess move IS-TOOL-2
-// forbids one layer down and that interruptTurn refuses to make. Inventing a heuristic here
-// would trade a disclosed gap for an undisclosed wrong answer.
+// WHAT THE GAP WAS. This wrote text + CR into the PTY with NO check that the terminal's
+// input region was empty and NO transaction. If the owner had a half-typed line in the
+// CLI's composer when the phone's send landed, the phone's text was APPENDED to it and the
+// CR submitted the CONCATENATION: a message nobody wrote. The same hole admitted a SECOND
+// PHONE SEND -- both pass expected_turn, because the turn id only advances when the CLI
+// echoes -- producing one concatenation and one empty submit, which is the shape a chat
+// surface produces the moment a person fires three short messages in a row.
 //
-// The amendment obligation is therefore discharged IN WRITING (ADR-017's "Deferred,
-// disclosed" section, this wave), and docs/verification/r6-chat.md's CANNOT YET states the
-// user-visible consequence in as many words.
+// WHY IT LOOKED STRUCTURAL. ADR-017:175 framed the obligation as expected_input_revision,
+// and enforcing THAT does require characterizing the CLI's input region -- which no adapter
+// seam exposes (they are ApprovalApplier, TurnInterrupter, InteractionSource, HostProber)
+// and which deriving from the raw grid would be exactly the never-guess move IS-TOOL-2
+// forbids one layer down. That reasoning was right, and it is why the answer is a different
+// question.
+//
+// THE QUESTION THAT IS ANSWERABLE. The shim owns the PTY's only serialized writer, so it
+// can say absolutely whether ANYBODY HAS WRITTEN SINCE THE LAST SUBMIT -- a fact about the
+// PTY, not about what the agent has drawn on it. shimwire.TypeSubmit carries one message;
+// the shim checks that count, writes the text, waits submitframe.Gap and writes the CR
+// under ONE hold of the writer's lock, or refuses having written nothing. It never claims
+// to know what is on the input line, and it errs safe: typed-then-deleted-back-to-empty
+// still refuses. protocol.ErrInputBusy becomes the wire's CodeInputBusy, so a refusal is a
+// state the phone can draw and retry from rather than a message silently joined to
+// somebody else's.
+//
+// WHAT REMAINS. A shim that predates the transaction answers ErrSubmitUnsupported and this
+// falls through to the two unlocked writes below -- reachable only mid-upgrade, and
+// resolved by the daemon restart that replaces the shim. The merge is also exclusively a
+// property of THIS keystroke branch: resolveMessageSink's backend arm never touches the
+// PTY, and the only ComposerKeys implementor in the tree is Claude, so the class has a
+// known exit the day Claude gains a structured sink.
 func (d *Daemon) injectComposerText(local string, keys []byte) error {
 	if d.api == nil {
 		return errors.New("this daemon has no session tap wired")
@@ -367,6 +384,18 @@ func (d *Daemon) injectComposerText(local string, keys []byte) error {
 		return fmt.Errorf("tap session %q: %w", local, err)
 	}
 	defer func() { _ = sub.Close() }()
+
+	// THE TRANSACTION, WHERE THE SHIM PROVES ONE (Slice 0). Text and CR cross the PTY's
+	// single serialized writer under one hold of its lock, refusing rather than writing
+	// into a line somebody else is holding. The disclosed gap this file has carried since
+	// Wave R6 closes here for every shim that advertises it.
+	serr := sub.Submit(string(keys))
+	if !errors.Is(serr, protocol.ErrSubmitUnsupported) {
+		return serr
+	}
+	// AN OLD SHIM, MID-UPGRADE, and the only path left is the one that can merge. It is
+	// reached exactly when the running shim predates the transaction, which a daemon
+	// restart resolves.
 	if err := sub.Input(keys); err != nil {
 		return fmt.Errorf("writing the message into session %q: %w", local, err)
 	}

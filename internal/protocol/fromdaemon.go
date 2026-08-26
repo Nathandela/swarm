@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -157,11 +158,77 @@ type shimStream struct {
 	conn   net.Conn
 	snap   []byte
 	frames chan []byte
+	caps   shimwire.Caps
 
 	writeMu   sync.Mutex
 	closeOnce sync.Once
 	done      chan struct{}
+
+	// submitMu holds ONE submit transaction in flight per stream, so the answer this
+	// caller reads is the answer to this caller's message. The shim answers submits in
+	// order on the same connection; serializing here is what makes that enough.
+	submitMu  sync.Mutex
+	submitRes chan shimwire.Control
 }
+
+// ErrSubmitUnsupported is the honest degrade: this shim predates the submit transaction
+// (Slice 0) and cannot deliver a message atomically. The caller falls back to the two
+// unlocked writes that shipped before it, which is where the merge is still possible --
+// a DISCLOSED degrade across an upgrade, not a silent one.
+var ErrSubmitUnsupported = errors.New("protocol: this shim advertises no submit transaction")
+
+// ErrInputBusy reports the shim's refusal: somebody has written to the session's PTY
+// since the last submit, so writing this message would join it to whatever is already on
+// the line. Nothing was written.
+var ErrInputBusy = errors.New("protocol: the session's input line was not empty")
+
+// Submit delivers one whole message through the shim's submit transaction: text and the
+// carriage return that runs it, under one hold of the PTY's only serialized writer.
+func (st *shimStream) Submit(text string) error {
+	if !st.caps.SubmitTransaction {
+		return ErrSubmitUnsupported
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeSubmit, Text: text})
+	if err != nil {
+		return err
+	}
+
+	st.submitMu.Lock()
+	defer st.submitMu.Unlock()
+	// Drain any answer left by a caller that gave up, so this one cannot read it.
+	select {
+	case <-st.submitRes:
+	default:
+	}
+
+	st.writeMu.Lock()
+	werr := wire.WriteFrame(st.conn, wire.TControl, body)
+	st.writeMu.Unlock()
+	if werr != nil {
+		return werr
+	}
+
+	select {
+	case res := <-st.submitRes:
+		switch res.Refused {
+		case "":
+			return nil
+		case shimwire.RefusedInputBusy:
+			return ErrInputBusy
+		default:
+			return fmt.Errorf("submitting the message: %s", res.Refused)
+		}
+	case <-st.done:
+		return errors.New("protocol: the session stream closed while a message was in flight")
+	case <-time.After(shimSubmitTimeout):
+		return errors.New("protocol: the shim did not answer a submit")
+	}
+}
+
+// shimSubmitTimeout bounds one submit. The shim holds the PTY writer for
+// submitframe.Gap and answers immediately after, so anything approaching this bound is a
+// wedged shim rather than a slow one.
+const shimSubmitTimeout = 10 * time.Second
 
 // newShimStream sends the attach request over an already-helloed shim connection
 // and reads the one snapshot frame the shim emits first (S10), then starts
@@ -186,10 +253,12 @@ func newShimStream(conn net.Conn, caps shimwire.Caps) (*shimStream, error) {
 	_ = conn.SetReadDeadline(time.Time{})
 
 	st := &shimStream{
-		conn:   conn,
-		snap:   snap,
-		frames: make(chan []byte, 256),
-		done:   make(chan struct{}),
+		conn:      conn,
+		snap:      snap,
+		frames:    make(chan []byte, 256),
+		caps:      caps,
+		done:      make(chan struct{}),
+		submitRes: make(chan shimwire.Control, 1),
 	}
 	go st.readLoop()
 	return st, nil
@@ -298,8 +367,19 @@ func (st *shimStream) readLoop() {
 			}
 		case wire.TControl:
 			c, derr := shimwire.Decode(payload)
-			if derr == nil && c.Type == shimwire.TypeExitReport {
+			if derr != nil {
+				continue
+			}
+			switch c.Type {
+			case shimwire.TypeExitReport:
 				return // session ended
+			case shimwire.TypeSubmitResult:
+				// Never block the read loop on a caller that has gone: the buffer
+				// holds one answer and a stale one is drained before the next send.
+				select {
+				case st.submitRes <- c:
+				default:
+				}
 			}
 		}
 	}

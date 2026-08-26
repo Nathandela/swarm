@@ -259,6 +259,20 @@ type SessionStream interface {
 	Close() error
 }
 
+// MessageSubmitter is the OPTIONAL half of a SessionStream that can deliver one whole
+// message atomically -- its text and the carriage return that runs it, under a single hold
+// of the PTY's only serialized writer (Slice 0, agents-tracker-bzfe).
+//
+// IT IS AN OPTIONAL INTERFACE RATHER THAN A SIXTH METHOD ON SessionStream, on the same
+// reasoning as the daemon adapter's stopEvents: a stream that cannot do it is not broken,
+// it is OLD -- a shim from before the transaction existed -- and every test double in the
+// tree would otherwise have to grow a method it has no PTY to implement. A caller that
+// gets ErrSubmitUnsupported degrades to two unlocked writes, which is where the merge is
+// still possible; that degrade is disclosed, never silent.
+type MessageSubmitter interface {
+	Submit(text string) error
+}
+
 // OperationClaimer is the optional interface a DaemonAPI ALSO implements to claim a
 // remote op's operation_id as single-use through the daemon's durable idempotency store
 // (slice A5-c). handleTakeControl claims the op AFTER authorization: a duplicate

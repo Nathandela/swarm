@@ -43,6 +43,7 @@ const (
 	CodeStaleTurn             = schema.CodeStaleTurn
 	CodeInterruptUnsupported  = schema.CodeInterruptUnsupported
 	CodeStructuredUnsupported = schema.CodeStructuredUnsupported
+	CodeInputBusy             = schema.CodeInputBusy
 	CodeUnavailable           = schema.CodeUnavailable
 )
 
