@@ -738,6 +738,13 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
 	// hands the shim, so the binary this resolves is the binary the agent runs.
 	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
+	if spec.Options[protocol.OptionHandoffFrom] != "" {
+		composed, err := composeHandsOffLaunch(spec, a.endpointID, a.core.Get, a.historyResolver)
+		if err != nil {
+			return persist.Meta{}, err
+		}
+		spec = composed
+	}
 	if conversationID := spec.Options[protocol.OptionResumeConversationID]; conversationID != "" {
 		if spec.Options[protocol.OptionResumeFrom] != "" {
 			return persist.Meta{}, fmt.Errorf("resume: external conversation id cannot be combined with resume_from")
@@ -1017,21 +1024,224 @@ func isExecutableFile(path string) bool {
 	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
 }
 
+// composeHandsOffLaunch composes a hands-off handoff (ADR-010 Amendment 4) entirely
+// inside the daemon: it resolves the source session, establishes a trustworthy
+// conversation id, opens the transcript under the anchor, renders the pointers-only
+// prompt from the embedded template, and stamps the lineage. It is a pure function of
+// its inputs -- getSource abstracts the roster and resolver the provider history -- so
+// every refusal below is unit-testable without a live daemon.
+//
+// EVERY FAILURE IS A NAMED REFUSAL AND NONE MAY FALL THROUGH. Amendment 4 E7 names a
+// context-free agent loose in the owner's checkout as the worst outcome available here,
+// worse than no handoff at all, because the owner would believe the work was carried
+// over. So this function either returns a spec carrying the full prompt or it returns
+// an error; there is no degraded middle.
+func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource func(local string) (persist.Meta, bool), resolver resumeHistoryResolver) (daemon.LaunchSpec, error) {
+	// The protocol layer already refuses these pairings, and they are refused again here
+	// because this is where the damage would be: a spec that composed a hands-off prompt
+	// and then took composeLaunchSpec's resume branch would have that prompt silently
+	// dropped in favour of a resume argv, which is precisely the bare launch E7 forbids.
+	// Cheap guard, catastrophic omission.
+	if spec.Options[protocol.OptionResumeFrom] != "" {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: %s cannot be combined with %s", protocol.OptionHandoffFrom, protocol.OptionResumeFrom)
+	}
+	if spec.Options[protocol.OptionResumeConversationID] != "" {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: %s cannot be combined with %s", protocol.OptionHandoffFrom, protocol.OptionResumeConversationID)
+	}
+
+	// STEP 1. The source, WITHOUT resume's "must not be running" clause. That clause is
+	// right for a resume -- two processes replaying one conversation is a real hazard --
+	// and inverted here: a rate-limited session is byte-identical on the wire to a healthy
+	// idle one (E2), so a RUNNING source is the primary case this feature exists for.
+	// Nothing is written to it and its lifecycle is untouched (E3); only its transcript
+	// is read.
+	local, source, err := resolveSourceSession("handoff", spec.Options[protocol.OptionHandoffFrom], endpointID, getSource)
+	if err != nil {
+		return daemon.LaunchSpec{}, err
+	}
+
+	// STEP 2. E7's scope gate, and it is the ADAPTER's knowledge that draws the line:
+	// an adapter without a characterized transcript layout is not asserted into the
+	// interface, so codex, agy and opencode are refused BY NAME rather than handed a
+	// path this daemon cannot compute.
+	ad, _ := registry.New(source.AgentType)
+	if _, ok := adapter.AsTranscriptLayout(ad); !ok {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude sources only in this sweep", source.AgentType)
+	}
+	if resolver == nil {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: no provider history resolver is configured")
+	}
+
+	// STEP 3. A trustworthy conversation id.
+	convID, err := handsOffConversationID(local, source, resolver)
+	if err != nil {
+		return daemon.LaunchSpec{}, err
+	}
+
+	// STEP 4/5. HOME is the DAEMON's, not the source's. Meta.Env would have been the
+	// obvious source and is the wrong one: on the local tier it is populated from the
+	// CONNECTING CLIENT's request, and persist.FilterEnv allowlists env NAMES without
+	// validating VALUES, so "HOME=/tmp/attacker" passes through verbatim. Anchoring the
+	// walk there would relocate the trust anchor to a root the client chose and void the
+	// resolver's documented trusted-daemon-user-home premise. The resolver is therefore
+	// used exactly as serve.go constructed it, once per daemon with an immutable home. A
+	// source whose transcript is not under that home simply does not resolve and is
+	// refused by name. The divergent-HOME case is a KNOWN, PRE-EXISTING limitation that
+	// affects resume recovery today in the same way, and is deliberately not fixed here.
+	transcript, outcome := resolver.LocateTranscript(source, convID)
+	if outcome != resumeHistoryFound {
+		return daemon.LaunchSpec{}, handsOffTranscriptError(source.AgentType, convID, outcome)
+	}
+
+	// STEP 6. The prompt, from the daemon's embedded template, so no client can put
+	// words into the successor's opening instruction. Any client-supplied InitialPrompt
+	// is REPLACED rather than merged: the hands-off form offers no prompt field, and a
+	// launch that arrived with one is not a hands-off handoff with an extra note, it is a
+	// caller trying to author half of the instruction.
+	prompt, err := renderHandsOffPrompt(handsOffPromptData{
+		ConversationID:  convID,
+		TranscriptPath:  transcript,
+		AgentCwd:        source.ProviderCwd(),
+		SourceAgent:     source.AgentType,
+		SourceSessionID: local,
+	})
+	if err != nil {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: %w", err)
+	}
+	spec.InitialPrompt = prompt
+
+	// STEP 7. Lineage. SpawnedFrom carries the LOCAL id, never the namespaced one:
+	// schema.go documents spawned_from as the parent's local id and the TUI's lineage
+	// matcher compares it against the local half of a roster id, so a namespaced value
+	// silently breaks the parent badge and the child count.
+	spec.SpawnedFrom = local
+	spec.SpawnIntent = protocol.SpawnIntentHandoff
+	// EMPTY, not "none". Amendment 3 gave "none" the meaning "a supervisor existed and
+	// declined to watch"; in a hands-off handoff no supervisor exists by construction,
+	// and collapsing the two would eventually put an orphaned-supervisor marker on a
+	// child that never had a supervisor to orphan (E3).
+	spec.Supervision = ""
+	// spec.Options is carried through untouched, so the form's chosen model survives into
+	// composeLaunchSpec and reaches the target adapter's ordinary Command() rather than
+	// being silently discarded. The launch itself is that ordinary path: hands-off adds a
+	// prompt and a lineage, not a second way to spawn a process.
+	return spec, nil
+}
+
+// handsOffConversationID establishes the id the successor will be pointed at: the
+// source's own if it is canonical, otherwise one re-derived from provider history.
+//
+// A NON-CANONICAL STORED ID IS RE-DERIVED, NOT REFUSED, which is where this diverges
+// from the resume path's validateStoredResumeConversationID. A resume must replay THAT
+// conversation, so a corrupt stored id is a hard error there. Here the id is a pointer
+// swarm is free to compute again -- and it must be, because two of the owner's seven
+// real sessions had latched the literal "./cmd/swarm/" off the rendered grid, and
+// refusing them outright would refuse the exact sessions this feature exists for. The
+// junk value is never joined into a path, never passed to the locator and never
+// reaches the prompt; it is simply discarded.
+//
+// THE STALE-FORK GUARD IS NOT IMPLEMENTED, DELIBERATELY. Claude mints a new sessionId
+// on /clear and on in-PTY /resume, so a latched id can name a real but ABANDONED
+// conversation with every check here passing. Preferring a newer id was investigated
+// and refused on measured evidence:
+//
+//   - The recovery scan cannot find the newer id. Its match predicate is
+//     withinResumeWindow -- the transcript's first cwd-bearing record must fall within
+//     -2s..+30s of the swarm session's CreatedAt -- which structurally excludes any
+//     conversation minted later. The fork we would be looking for is exactly the one
+//     the existing extractor is built to skip.
+//   - Relaxing that to "the newest transcript in the project directory" is unsafe. The
+//     directory is keyed by CWD, not by session: on the owner's machine one project
+//     directory holds 13 transcripts for a single checkout, and this tool exists to run
+//     many sessions in one checkout at once. Preferring the newest would hand the
+//     successor a CONCURRENT STRANGER's conversation as often as a fork of its own.
+//   - There is no evidence in the file that would tell the two apart. Codex records
+//     parent_thread_id; claude records nothing equivalent. Measured across all 13 real
+//     transcripts: 13 files, 13 distinct sessionIds, every file naming only its own --
+//     no in-file link to a conversation it forked from or into.
+//
+// So the failure mode left standing is "the successor reads an abandoned but genuine
+// conversation of the correct lineage", where the prompt's own ordering rule (the
+// repository records fact, the conversation records intent, the repository wins) bounds
+// the damage. The failure mode a guess would have introduced is "the successor reads an
+// unrelated session's conversation", which is both a wrong-context handoff and a
+// cross-session content disclosure. Guessing here is strictly worse than not guessing.
+func handsOffConversationID(local string, source persist.Meta, resolver resumeHistoryResolver) (string, error) {
+	if adapter.IsCanonicalConversationID(source.ConversationID) {
+		return source.ConversationID, nil
+	}
+	// Unlike the resume path's recovery this neither refuses a running source nor
+	// persists what it finds: capture is hook-driven and a wedged agent fires no hooks,
+	// so a running source with no captured id is the COMMON case here, and the id is
+	// wanted for this one launch rather than as a correction to the source's meta.
+	result := resolver.Resolve(source)
+	provider := source.AgentType
+	switch result.Outcome {
+	case resumeHistoryFound:
+		if !adapter.IsCanonicalConversationID(result.ConversationID) {
+			return "", fmt.Errorf("handoff: %s conversation history returned an unsafe identity", provider)
+		}
+		return result.ConversationID, nil
+	case resumeHistoryUnsupported, resumeHistoryNoMatch:
+		return "", fmt.Errorf("handoff: source %q has no usable %s conversation id: none was captured and no matching conversation history was found", local, provider)
+	case resumeHistoryAmbiguous:
+		return "", fmt.Errorf("handoff: multiple matching %s conversation histories were found for source %q; refusing to guess", provider, local)
+	case resumeHistoryUnsafe:
+		return "", fmt.Errorf("handoff: %s conversation history is unsafe to inspect", provider)
+	case resumeHistoryUnreadable:
+		return "", fmt.Errorf("handoff: could not read %s conversation history safely", provider)
+	default:
+		return "", fmt.Errorf("handoff: %s conversation history returned an unsafe result", provider)
+	}
+}
+
+// handsOffTranscriptError names why the transcript could not be opened. The resume
+// path's equivalent switch is deliberately not shared: these two callers differ in
+// policy (that one refuses a running source, this one is built for one) and in effect
+// (that one persists what it recovers, this one does not), so a common helper would
+// have to be parameterized on both and would say less than either.
+func handsOffTranscriptError(provider, convID string, outcome resumeHistoryOutcome) error {
+	switch outcome {
+	case resumeHistoryNoMatch:
+		return fmt.Errorf("handoff: the %s transcript for conversation %s was not found", provider, convID)
+	case resumeHistoryUnsupported:
+		return fmt.Errorf("handoff: %s has no characterized transcript layout", provider)
+	case resumeHistoryUnsafe:
+		return fmt.Errorf("handoff: the %s transcript for conversation %s is unsafe to open", provider, convID)
+	default:
+		return fmt.Errorf("handoff: the %s transcript for conversation %s could not be opened", provider, convID)
+	}
+}
+
+// resolveSourceSession is the half that a resume and a hands-off handoff genuinely
+// share: a source id must be a namespaced id of THIS endpoint and must name a session
+// that exists. It is parameterized on the flow's name only so each refusal reads as the
+// flow the caller asked for. What it deliberately does NOT include is the eligibility
+// each flow decides for itself -- resume adds "not running" and "agent type matches",
+// hands-off wants neither (see composeHandsOffLaunch).
+func resolveSourceSession(kind, src, endpointID string, getSource func(local string) (persist.Meta, bool)) (string, persist.Meta, error) {
+	ep, local, ok := protocol.ParseID(src)
+	if !ok {
+		return "", persist.Meta{}, fmt.Errorf("%s: source id %q is not a valid namespaced session id", kind, src)
+	}
+	if endpointID != "" && ep != endpointID {
+		return "", persist.Meta{}, fmt.Errorf("%s: source %q belongs to another daemon endpoint", kind, src)
+	}
+	m, ok := getSource(local)
+	if !ok {
+		return "", persist.Meta{}, fmt.Errorf("%s: source session %q not found", kind, local)
+	}
+	return local, m, nil
+}
+
 // validateResumeSource resolves and validates a resume source id: it must be a
 // namespaced id of THIS endpoint, name a session that exists, that has ENDED (not
 // running), and whose agent type matches the requested one. It returns the source
 // local id and meta, or a clear error naming the reason the resume was rejected.
 func validateResumeSource(src, agentType, endpointID string, getSource func(local string) (persist.Meta, bool)) (string, persist.Meta, error) {
-	ep, local, ok := protocol.ParseID(src)
-	if !ok {
-		return "", persist.Meta{}, fmt.Errorf("resume: source id %q is not a valid namespaced session id", src)
-	}
-	if endpointID != "" && ep != endpointID {
-		return "", persist.Meta{}, fmt.Errorf("resume: source %q belongs to another daemon endpoint", src)
-	}
-	m, ok := getSource(local)
-	if !ok {
-		return "", persist.Meta{}, fmt.Errorf("resume: source session %q not found", local)
+	local, m, err := resolveSourceSession("resume", src, endpointID, getSource)
+	if err != nil {
+		return "", persist.Meta{}, err
 	}
 	if m.Status.Process == status.ProcessRunning {
 		return "", persist.Meta{}, fmt.Errorf("resume: source session %q is still running; resume an ended or lost session", local)
