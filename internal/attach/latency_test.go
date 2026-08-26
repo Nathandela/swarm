@@ -57,9 +57,14 @@ func TestPassthrough_KeystrokeEchoLatencyP95(t *testing.T) {
 	_ = waitResult(t, ch)
 }
 
-// latencyMarker is a unique 4-byte keystroke marker (avoids the detach key byte).
+// latencyMarker is a unique keystroke marker. It encodes i as printable DECIMAL
+// digits rather than raw bytes so it carries NO control byte at all — the previous
+// {'K', byte(i>>8), byte(i), '\n'} form claimed to avoid the detach key but did not:
+// i=17 puts 0x11 in the low byte. That was invisible under D4's solo-read rule and
+// became a spurious detach under ADR-019's boundary-aware scan. The marker is data,
+// not an assertion; the latency budget below is unchanged.
 func latencyMarker(i int) []byte {
-	return []byte{'K', byte(i >> 8), byte(i), '\n'}
+	return []byte{'K', byte('0' + i/100%10), byte('0' + i/10%10), byte('0' + i%10), '\n'}
 }
 
 type latencyRecorder struct {
