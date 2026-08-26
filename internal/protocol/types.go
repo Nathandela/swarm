@@ -184,6 +184,10 @@ const (
 	CapActivity      = "activity"
 	CapPolicy        = "policy"
 	CapPairing       = "pairing"
+	// CapExternalResume permits an owner-tier client to launch a session from a
+	// provider-native conversation id that was discovered outside swarm. Older
+	// daemons do not negotiate it, so a new CLI cannot silently fresh-launch.
+	CapExternalResume = "external-resume"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema

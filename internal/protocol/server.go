@@ -36,6 +36,12 @@ const OptionWorktree = "worktree"
 // adapter's resume argv from the source conversation id.
 const OptionResumeFrom = "resume_from"
 
+// OptionResumeConversationID is the owner-tier-only launch-option key used to
+// adopt a provider-native conversation that is not already represented by a
+// swarm session. It is capability-gated so an older daemon cannot mistake the
+// request for a fresh launch.
+const OptionResumeConversationID = "resume_conversation_id"
+
 // remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
 // remote tier (R-POL.4): each guarded option key maps to its single forbidden value, so
 // the safe default of the same key ("dangerously-skip-permissions"=="false",
@@ -223,6 +229,7 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
+	CapExternalResume,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -1272,6 +1279,16 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
 		return
+	}
+	if req.Options[OptionResumeConversationID] != "" {
+		if cc.srv.remoteTier {
+			cc.replyErrorCode("launch: external resume is not permitted on the remote tier", CodePolicy)
+			return
+		}
+		if !cc.hasCap(CapExternalResume) {
+			cc.replyErrorCode("launch: external resume capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
 	}
 	// R-POL.4/.2: on the remote tier refuse a dangerous option (value-aware, hard-coded)
 	// AFTER authz but BEFORE argv/cwd validation, so the policy refusal precedes the cwd

@@ -276,19 +276,20 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
-		ID:            id,
-		AgentType:     spec.AgentType,
-		Name:          spec.Name, // user-provided label (P2); "" falls back to the agent name at display
-		Cwd:           spec.Cwd,
-		LaunchOptions: spec.Options,
-		Env:           PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
-		CreatedAt:     now,
-		LastActivity:  now,
-		ResumedFrom:   spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
-		SpawnedFrom:   spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)
-		SpawnIntent:   spec.SpawnIntent,
-		Supervision:   spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
-		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
+		ID:             id,
+		AgentType:      spec.AgentType,
+		ConversationID: spec.ConversationID,
+		Name:           spec.Name, // user-provided label (P2); "" falls back to the agent name at display
+		Cwd:            spec.Cwd,
+		LaunchOptions:  spec.Options,
+		Env:            PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
+		CreatedAt:      now,
+		LastActivity:   now,
+		ResumedFrom:    spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
+		SpawnedFrom:    spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)
+		SpawnIntent:    spec.SpawnIntent,
+		Supervision:    spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
+		Status:         status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
 	s := &session{meta: m, stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap

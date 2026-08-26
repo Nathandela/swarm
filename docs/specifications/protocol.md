@@ -213,6 +213,16 @@ and unrelated secrets are dropped.
 | `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 | `supervision`    | string              | optional supervision mode, one of `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); refused unless `spawn_intent` is `handoff` |
 
+Two option keys are reserved for resume orchestration. `resume_from` names an
+ended/lost swarm source session and creates a new row linked through
+`Meta.ResumedFrom`. `resume_conversation_id` adopts a provider-native conversation
+that is not yet represented in swarm. The latter is accepted only on the owner
+tier when `external-resume` was negotiated during `hello`; it is refused with
+`capability_refused` otherwise and with `policy` on the remote tier. The assembly
+validates the canonical identity, composes the adapter's resume argv, persists the
+identity with the launch, and reuses an existing row with the same provider and
+identity. The two resume keys are mutually exclusive.
+
 > AMENDED BY ADR-007 B144 (2026-08-15): `LaunchReq` above is the owner-tier form's request — free
 > `cwd`, `options`, `env`. B144's preset model arrives with the R1/R5 skeleton as a **separate**
 > remote-tier op, `session_launch(machine, operation_id, profile, preset_id, preset_revision,
@@ -367,6 +377,11 @@ is ADDITIVE and never fatal to the handshake: a client whose `build_version`
 differs from the daemon's (e.g. the daemon is still running an older build
 after an upgrade) can surface that and suggest `swarm daemon restart` even when
 `protocol_version` still matches (E13.2).
+
+The owner CLI offers `external-resume` only for provider-session adoption. Its
+absence is a compatibility boundary, not a best-effort downgrade: a reattach
+client must refuse before discovery or launch rather than let an older daemon
+interpret the reserved option as a fresh session.
 
 ### `list`
 

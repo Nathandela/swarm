@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|ls|watch|kill|send|peek|version]
+const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
@@ -71,6 +71,8 @@ const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|ls|watch|kill|send|p
   swarm spawn      launch a new session with context
                    (--cli agent [--dir d] [--model m] [--worktree] [--name n],
                     one of --prompt text | --handoff file | --delegate file)
+  swarm reattach   adopt provider-managed background sessions
+                   (--cli claude [--all] [--take-over] [--dry-run])
   swarm ls         list sessions (--json for the full roster)
   swarm watch      wait for a session to reach a status
                    (--until needs_input[,ready_for_review,completed]|change, --timeout d)
@@ -114,6 +116,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return dispatchAgentVerb(runSpawn, args[1:], nil, stdout, stderr)
 	case "handoff":
 		return dispatchAgentVerb(runHandoff, args[1:], nil, stdout, stderr)
+	case "reattach":
+		return dispatchAgentVerb(runReattach, args[1:], []string{protocol.CapExternalResume}, stdout, stderr)
 	case "ls":
 		return dispatchAgentVerb(runLS, args[1:], nil, stdout, stderr)
 	case "watch":

@@ -175,12 +175,21 @@ func (claudeAdapter) SignalSources() []adapter.SignalSource {
 	return sources
 }
 
-// Resume composes `claude --resume <id>`; an empty id resumes nothing.
+// Resume composes a hook-enabled `claude --resume <id>` invocation; an empty id
+// resumes nothing. Resumed sessions need the same per-invocation hooks as fresh
+// sessions so swarm remains their status and lifecycle observer.
 func (claudeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	return []string{binary, "--resume", spec.ConversationID}, nil
+	settings, err := hookSettingsJSON()
+	if err != nil {
+		return nil, err
+	}
+	argv := []string{binary, "--settings", settings}
+	argv = append(argv, optionFlags(spec.Options)...)
+	argv = append(argv, "--resume", spec.ConversationID)
+	return argv, nil
 }
 
 // ExtractConversationID recovers the session id from the raw capture, falling back

@@ -114,6 +114,30 @@ type perSourceBlockingResolver struct {
 	results  map[string]resumeHistoryResult
 }
 
+func TestExternalResumeIsIdempotentByProviderIdentity(t *testing.T) {
+	rig := newResumeAPIRig(t, "claude", migratedConversationID, nil)
+	spec := daemon.LaunchSpec{
+		AgentType: "claude",
+		Cwd:       filepath.Join(rig.stateDir, "new-work"),
+		ClientEnv: []string{"PATH=/definitely/no-provider-binaries-here"},
+		Options: map[string]string{
+			protocol.OptionResumeConversationID: migratedConversationID,
+		},
+	}
+	for i := 0; i < 2; i++ {
+		got, err := rig.api.Launch(spec)
+		if err != nil {
+			t.Fatalf("Launch %d: %v", i+1, err)
+		}
+		if got.ID != rig.sourceID {
+			t.Fatalf("Launch %d returned %q, want existing %q", i+1, got.ID, rig.sourceID)
+		}
+	}
+	if got := len(rig.core.List()); got != 1 {
+		t.Fatalf("roster size = %d, want one idempotently reused session", got)
+	}
+}
+
 func (r *perSourceBlockingResolver) Resolve(m persist.Meta) resumeHistoryResult {
 	r.entered <- m.ID
 	<-r.releases[m.ID]
