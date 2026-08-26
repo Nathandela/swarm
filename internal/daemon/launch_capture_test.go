@@ -5,7 +5,7 @@ package daemon
 // so the capture rows the adapter declared in its SignalSources have to reach it the same way
 // its token does -- injected at spawn, post allowlist-filter.
 //
-// The daemon does not resolve the adapter itself (internal/daemon imports no adapter package,
+// The daemon does not resolve the adapter itself (internal/daemon resolves no adapter,
 // by layering): the assembly composes the rows into LaunchSpec.CaptureEvents beside the argv it
 // already composes there, and this layer only carries them.
 

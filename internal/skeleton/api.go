@@ -872,7 +872,7 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 
 	// The adapter's capture=raw rows (ADR-010 §6), resolved HERE because this is the
 	// only layer holding both the registry and the launch spec: internal/daemon
-	// imports no adapter package, and the `swarm hook` process it injects them into
+	// resolves no adapter, and the `swarm hook` process it injects them into
 	// knows its event name but not its adapter. Resolved before the resume/fresh
 	// branches below so both carry them — a resumed session's hooks are the same hooks.
 	if ad, ok := registry.New(spec.AgentType); ok {

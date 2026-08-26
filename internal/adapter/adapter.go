@@ -264,8 +264,9 @@ type ResumeSpec struct {
 // IT NAMES; IT NEVER OPENS. Both halves are PURE and TOTAL on the same terms as
 // Command/Resume: deterministic, no panic on any input, and NO filesystem access
 // whatsoever -- no Stat, no Open, no read. Every byte of I/O stays in the core's
-// existing anchored, budgeted resolver (an os.Root traversal under the session's
-// own HOME, with the history budgets and alias caps), because that resolver is
+// existing anchored, budgeted resolver (an os.Root traversal under the DAEMON's
+// home -- not the session's; the resolver is built once per daemon and its home is
+// immutable -- with the history budgets and alias caps), because that resolver is
 // the only party allowed to touch the disk (ADR-001 / E9.2). An adapter that
 // opened a file here would move traversal safety inside the boundary that exists
 // precisely to keep it out.
