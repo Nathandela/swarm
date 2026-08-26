@@ -62,6 +62,9 @@ func TestComposeLaunchSpec_ValidClaudeResume(t *testing.T) {
 	if got.ResumedFrom != local {
 		t.Errorf("ResumedFrom = %q; want %q (the resume link)", got.ResumedFrom, local)
 	}
+	if got.ConversationID != src.ConversationID {
+		t.Errorf("ConversationID = %q; want inherited provider identity %q", got.ConversationID, src.ConversationID)
+	}
 	if len(got.Argv) == 0 || got.Argv[0] != "/abs/claude" {
 		t.Fatalf("resume argv[0] = %v; want the resolved claude binary", got.Argv)
 	}
@@ -141,8 +144,8 @@ func TestComposeLaunchSpec_NoConversationIDRejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("resume with no captured conversation id was accepted (got %+v); want a clear rejection", got)
 	}
-	if got.ResumedFrom != "" || len(got.Argv) != 0 {
-		t.Errorf("a rejected resume must not stamp ResumedFrom or compose argv; got ResumedFrom=%q argv=%v", got.ResumedFrom, got.Argv)
+	if got.ResumedFrom != "" || got.ConversationID != "" || len(got.Argv) != 0 {
+		t.Errorf("a rejected resume must not stamp lineage, identity, or compose argv; got ResumedFrom=%q ConversationID=%q argv=%v", got.ResumedFrom, got.ConversationID, got.Argv)
 	}
 }
 

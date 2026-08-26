@@ -43,6 +43,9 @@ func fakeReferenceBinDir(t *testing.T, convID string) string {
 // (B2), ends it, then RESUMES it — asserting the new session's argv is the adapter's
 // real RESUME argv carrying the captured id (not a fresh launch), and that
 // ResumedFrom links back to the source (R-2, B1).
+// It then ends that child and resumes it once more, proving the native identity was
+// persisted into the child before its shim ran rather than being usable for only one
+// resume hop.
 func TestE2E_ResumeAsNewSession_R2(t *testing.T) {
 	buildBinaries(t)
 	env := newDaemonEnv(t)
@@ -99,15 +102,54 @@ func TestE2E_ResumeAsNewSession_R2(t *testing.T) {
 		t.Fatalf("resumed session argv %v is not the adapter resume argv carrying %q", argv, convID)
 	}
 
-	// And the new session links back to the source.
+	// The new session must link back to the source and durably inherit the provider
+	// identity. This meta is written during the daemon reservation, before the shim
+	// starts, so a daemon crash or a lost child cannot erase the next resume hop.
 	deadline := time.Now().Add(l1Bound)
 	for time.Now().Before(deadline) {
-		if readMeta(t, env.stateDir, newLocal).ResumedFrom == srcLocal {
-			return
+		meta := readMeta(t, env.stateDir, newLocal)
+		if meta.ResumedFrom == srcLocal && meta.ConversationID == convID {
+			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("new session ResumedFrom = %q; want %q (R-2 link)", readMeta(t, env.stateDir, newLocal).ResumedFrom, srcLocal)
+	newMeta := readMeta(t, env.stateDir, newLocal)
+	if newMeta.ResumedFrom != srcLocal || newMeta.ConversationID != convID {
+		t.Fatalf("resumed child meta = {ResumedFrom:%q ConversationID:%q}; want {%q %q}",
+			newMeta.ResumedFrom, newMeta.ConversationID, srcLocal, convID)
+	}
+
+	// A lost resumed child must be a valid source for the next resume. This is the
+	// regression: before native identity inheritance, B had an empty ConversationID
+	// until provider output happened to be captured, so B -> C could silently fail.
+	if err := c.Kill(newID); err != nil {
+		t.Fatalf("kill resumed child: %v", err)
+	}
+	if _, ok := waitForStatus(t, c, newID, l1Bound, func(s status.Status) bool {
+		return s.Process != status.ProcessRunning
+	}); !ok {
+		t.Fatalf("resumed child never ended after Kill")
+	}
+
+	thirdID, _, err := c.Launch(protocol.LaunchReq{
+		Agent: "reference", Cwd: srcCwd,
+		Options: map[string]string{protocol.OptionResumeFrom: newID},
+		Env:     agentEnv, Cols: 80, Rows: 24,
+	})
+	if err != nil {
+		t.Fatalf("resume child: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Delete(thirdID) })
+	thirdLocal := localOf(t, thirdID)
+	thirdArgv := readShimArgv(t, env.stateDir, thirdLocal)
+	if !argvHas(thirdArgv, "--resume") || !argvHas(thirdArgv, convID) {
+		t.Fatalf("second resumed session argv %v is not the adapter resume argv carrying %q", thirdArgv, convID)
+	}
+	thirdMeta := readMeta(t, env.stateDir, thirdLocal)
+	if thirdMeta.ResumedFrom != newLocal || thirdMeta.ConversationID != convID {
+		t.Fatalf("second resumed child meta = {ResumedFrom:%q ConversationID:%q}; want {%q %q}",
+			thirdMeta.ResumedFrom, thirdMeta.ConversationID, newLocal, convID)
+	}
 }
 
 // waitForConversationID polls a session's persisted meta until its ConversationID

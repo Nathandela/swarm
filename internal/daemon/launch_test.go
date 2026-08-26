@@ -50,6 +50,44 @@ func TestLaunch_TwoPhaseHappy(t *testing.T) {
 	}
 }
 
+// TestLaunch_SeedsConversationIdentityBeforeSpawn proves that a resume launch
+// durably carries the provider-native identity through phase one. A daemon crash
+// before spawning must not erase the identity needed for a later resume hop.
+func TestLaunch_SeedsConversationIdentityBeforeSpawn(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+
+	spec := announceSpec(t, filepath.Join(t.TempDir(), "agent.pid"))
+	spec.ConversationID = "019d2dc4-96c0-74c5-aa1b-3a7a88bd38da"
+
+	var reserved persist.Meta
+	probe := func(phase launchPhase, m persist.Meta) error {
+		if phase == phaseReserved {
+			reserved = m
+			return errInjectedCrash
+		}
+		return nil
+	}
+	if _, err := d.launch(spec, probe); !errors.Is(err, errInjectedCrash) {
+		t.Fatalf("launch error = %v; want injected crash", err)
+	}
+	if reserved.ConversationID != spec.ConversationID {
+		t.Fatalf("reserved ConversationID = %q; want %q", reserved.ConversationID, spec.ConversationID)
+	}
+
+	store, err := persist.NewStore(cfg.StateDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	stored, err := store.Load(reserved.ID)
+	if err != nil {
+		t.Fatalf("load reserved meta: %v", err)
+	}
+	if stored.ConversationID != spec.ConversationID {
+		t.Fatalf("persisted ConversationID = %q; want %q", stored.ConversationID, spec.ConversationID)
+	}
+}
+
 // TestLaunch_CrashBeforeSpawn_NoPhantom asserts E5.4/S11: a crash after the
 // reservation meta is persisted but before the shim is spawned leaves no phantom
 // running session and no orphan shim. Reconciliation on the next Open resolves

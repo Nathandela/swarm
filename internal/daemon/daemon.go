@@ -142,6 +142,11 @@ type LaunchSpec struct {
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
 	// adapter's resume argv is the assembly's job (the daemon only carries the link).
 	ResumedFrom string
+	// ConversationID is the opaque provider-native thread or conversation identity
+	// inherited by a validated resume launch. It is assembly-owned, never accepted
+	// directly from a client, and is persisted before the shim is spawned so later
+	// resume hops survive daemon crashes and machine restarts.
+	ConversationID string
 	// SpawnedFrom, when non-empty, is the LOCAL id of the session that spawned this
 	// one (ADR-010-inter-session-orchestration D4), and SpawnIntent is "handoff" or
 	// "delegate". The daemon only stamps them into meta — exactly as it does ResumedFrom.

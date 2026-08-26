@@ -888,8 +888,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if lerr != nil {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: %w", lerr)
 		}
-		spec.Argv = resolved     // the resume argv carries the source's conversation id
-		spec.ResumedFrom = local // stamp ONLY now that a real resume argv is composed
+		spec.Argv = resolved                         // the resume argv carries the source's conversation id
+		spec.ResumedFrom = local                     // stamp ONLY now that a real resume argv is composed
+		spec.ConversationID = srcMeta.ConversationID // preserve provider identity across every resume hop
 	}
 
 	if len(spec.Argv) == 0 {
