@@ -232,9 +232,13 @@ and with `policy` on the remote tier, in both cases with no daemon side effect.
 `handoff_from`, `resume_from` and `resume_conversation_id` are three different
 answers to where a session comes from, so all three are mutually exclusive;
 pairing `handoff_from` with either resume key is refused `invalid_field` naming
-both keys, and the resume pair's own exclusion is the one stated above. A
-present-but-empty
-`handoff_from` means absent, as it does for the two resume keys. The assembly
+both keys, and the resume pair's own exclusion is the one stated above. Unlike
+the two resume keys, `handoff_from` distinguishes PRESENT-BUT-EMPTY from ABSENT
+and fails closed on the former: an empty value is refused `invalid_field`, while
+a key that was never set is an ordinary launch requiring no capability. ADR-010
+Amendment 4 E7 is the reason -- no refusal in this flow may degrade to a bare,
+context-free launch, and reading an empty source id as "absent" would reach one
+past the capability gate. The assembly
 resolves the source, its conversation identity and its transcript path, and
 composes the successor's prompt daemon-side; nothing about the handoff reaches
 `SessionView` or any other roster, list or event message.

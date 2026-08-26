@@ -144,23 +144,94 @@ func TestHandsOffHandoff_MutuallyExclusiveWithResumeOptions(t *testing.T) {
 	}
 }
 
-// TestHandsOffHandoff_EmptyValueIsAbsent pins the present-but-empty decision, which
-// is otherwise accidental. `handoff_from: ""` means ABSENT, exactly as the two resume
-// keys already treat "" (handleLaunch tests `!= ""`), so every handoff guard stays
-// inert and the request is an ordinary launch: no capability is required and nothing
-// is refused. A caller that means a handoff must send the source id.
-func TestHandsOffHandoff_EmptyValueIsAbsent(t *testing.T) {
-	stub := newStubDaemon()
-	rc := rawDial(t, serveStub(t, stub))
-	hello := rc.hello(Version, nil) // deliberately NO capability offered
-	req := handoffLaunchReq(t, map[string]string{OptionHandoffFrom: ""})
-	rc.writeControl(Control{Op: OpLaunch, EndpointID: hello.EndpointID, Launch: &req})
-	if got := rc.readControl(); got.Op == OpError {
-		t.Fatalf("empty %s refused: %#v; present-but-empty must behave as absent", OptionHandoffFrom, got)
-	}
-	if specs := stub.launchSpecs(); len(specs) != 1 {
-		t.Fatalf("launch specs = %#v; want one ordinary launch", specs)
-	}
+// TestHandsOffHandoff_EmptyValueIsRefused pins ADR-010 Amendment 4 E7: every refusal
+// in this flow is named and launches nothing, because an agent loose in the owner's
+// checkout with no idea what it is continuing is the worst outcome available -- worse
+// than no handoff at all, since the owner would believe the work was carried over.
+//
+// A caller that SETS handoff_from and computes an empty source id has a bug. Treating
+// that as "absent" -- which is what the two resume keys do with "" -- reaches exactly
+// the bare context-free launch E7 forbids, by a different route from the one the
+// capability gate closes. So hands-off fails closed instead: PRESENT-but-empty is a
+// malformed field, while ABSENT stays an ordinary launch requiring no capability.
+//
+// The two cases are distinguishable at this layer: LaunchReq.Options is a plain
+// map[string]string carried by encoding/json with no custom codec, so `{"handoff_from":""}`
+// decodes to a PRESENT key and a comma-ok lookup separates it from a key never set.
+// The "absent" arm below is what proves that end to end, through the real codec and a
+// real socket -- without it, refusing everything would look identical.
+func TestHandsOffHandoff_EmptyValueIsRefused(t *testing.T) {
+	t.Run("present but empty is refused as a malformed field", func(t *testing.T) {
+		stub := newStubDaemon()
+		rc := rawDial(t, serveStub(t, stub))
+		hello := rc.hello(Version, []string{CapHandsOffHandoff})
+		req := handoffLaunchReq(t, map[string]string{OptionHandoffFrom: ""})
+		rc.writeControl(Control{Op: OpLaunch, EndpointID: hello.EndpointID, Launch: &req})
+		got := rc.readControl()
+		if got.Op != OpError || got.ErrorCode != CodeInvalidField {
+			t.Fatalf("reply = %#v; want %s refused invalid_field", got, OptionHandoffFrom)
+		}
+		if !strings.Contains(got.Error, OptionHandoffFrom) {
+			t.Fatalf("refusal %q does not name %q", got.Error, OptionHandoffFrom)
+		}
+		if specs := stub.launchSpecs(); len(specs) != 0 {
+			t.Fatalf("empty %s reached DaemonAPI.Launch: %#v; E7 forbids degrading to a bare launch",
+				OptionHandoffFrom, specs)
+		}
+	})
+
+	// E7 again: NO refusal path may launch. A client that both fails to negotiate the
+	// capability and sends an empty id is refused by whichever guard fires first, and
+	// either way nothing is launched.
+	t.Run("present but empty launches nothing without the capability either", func(t *testing.T) {
+		stub := newStubDaemon()
+		rc := rawDial(t, serveStub(t, stub))
+		hello := rc.hello(Version, nil)
+		req := handoffLaunchReq(t, map[string]string{OptionHandoffFrom: ""})
+		rc.writeControl(Control{Op: OpLaunch, EndpointID: hello.EndpointID, Launch: &req})
+		if got := rc.readControl(); got.Op != OpError {
+			t.Fatalf("reply = %#v; want a refusal", got)
+		}
+		if specs := stub.launchSpecs(); len(specs) != 0 {
+			t.Fatalf("empty %s reached DaemonAPI.Launch: %#v", OptionHandoffFrom, specs)
+		}
+	})
+
+	// The tier guard is coarser than the field guard: on the remote tier the key is not
+	// permitted AT ALL, so the refusal names the tier rather than the empty value.
+	t.Run("present but empty is refused on the remote tier as policy", func(t *testing.T) {
+		stub := newStubDaemon()
+		rc := rawDial(t, serveRemoteAPI(t, allowAllLaunchPolicy{stub}))
+		hello := rc.hello(Version, []string{CapRemoteGateway, CapHandsOffHandoff})
+		req := handoffLaunchReq(t, map[string]string{OptionHandoffFrom: ""})
+		rc.writeControl(remoteLaunchControl(hello.EndpointID, req))
+		got := rc.readControl()
+		if got.Op != OpError || got.ErrorCode != CodePolicy {
+			t.Fatalf("reply = %#v; want remote policy refusal", got)
+		}
+		if specs := stub.launchSpecs(); len(specs) != 0 {
+			t.Fatalf("empty %s reached DaemonAPI.Launch on the remote tier: %#v", OptionHandoffFrom, specs)
+		}
+	})
+
+	// ABSENT is untouched: no capability required, no refusal, an ordinary launch.
+	// Both an options map that omits the key and no options map at all.
+	t.Run("absent stays an ordinary launch", func(t *testing.T) {
+		for _, options := range []map[string]string{nil, {"script": "/s.txt"}} {
+			stub := newStubDaemon()
+			rc := rawDial(t, serveStub(t, stub))
+			hello := rc.hello(Version, nil) // deliberately NO capability offered
+			req := handoffLaunchReq(t, options)
+			rc.writeControl(Control{Op: OpLaunch, EndpointID: hello.EndpointID, Launch: &req})
+			if got := rc.readControl(); got.Op == OpError {
+				t.Fatalf("launch with options %v refused: %#v; an absent %s must not require the capability",
+					options, got, OptionHandoffFrom)
+			}
+			if specs := stub.launchSpecs(); len(specs) != 1 {
+				t.Fatalf("launch specs = %#v; want one ordinary launch for options %v", specs, options)
+			}
+		}
+	})
 }
 
 // TestHandsOffHandoff_RawFrames inspects the BYTES on the wire rather than the

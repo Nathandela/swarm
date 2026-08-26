@@ -49,7 +49,8 @@ const OptionResumeConversationID = "resume_conversation_id"
 // is the assembly's, because only the daemon holds the resolved agent cwd; the
 // protocol layer declares the key, gates it, and forwards it verbatim. Like the
 // two resume keys it is capability-gated, so an older daemon cannot mistake the
-// request for a fresh launch.
+// request for a fresh launch; UNLIKE them, setting it to "" is an error rather
+// than a way of not setting it (ADR-010 Amendment 4 E7 -- see handleLaunch).
 const OptionHandoffFrom = "handoff_from"
 
 // remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
@@ -1293,11 +1294,28 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
 	// block so a request that carries both keys is refused for what it actually is --
 	// a caller bug -- rather than for whichever capability the client happened not to
-	// offer. A present-but-EMPTY handoff_from means ABSENT, exactly as the two resume
-	// keys below already treat "": a caller that means a handoff sends the source id.
-	if req.Options[OptionHandoffFrom] != "" {
+	// offer.
+	//
+	// PRESENCE, not emptiness, opens this block -- unlike the two resume keys below,
+	// which test `!= ""`. ADR-010 Amendment 4 E7 is specific to this flow: no refusal
+	// may degrade to a bare, context-free launch, because an agent loose in the owner's
+	// checkout with no idea what it is continuing is worse than no handoff at all -- the
+	// owner would believe the work was carried over. A caller that sets the key and
+	// computes an EMPTY source id has a bug, and reading that as "absent" would launch
+	// bare by a second route, past the capability gate that closes the first. So the key
+	// is refused present-but-empty and only a key that was never set is an ordinary
+	// launch. Options is a plain map[string]string over encoding/json, so a comma-ok
+	// lookup tells those two apart.
+	if handoffFrom, present := req.Options[OptionHandoffFrom]; present {
 		if cc.srv.remoteTier {
 			cc.replyErrorCode("launch: hands-off handoff is not permitted on the remote tier", CodePolicy)
+			return
+		}
+		// Checked before the capability, because a malformed value is a defect in THIS
+		// request whatever was negotiated, and naming the empty field is more actionable
+		// than naming a capability the client may well have offered.
+		if handoffFrom == "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" is empty; it must name the source session", CodeInvalidField)
 			return
 		}
 		// THE LOAD-BEARING GUARD. An older daemon does not know this option key, so it
