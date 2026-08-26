@@ -735,6 +735,9 @@ internal object KitTag {
      * -- what an appearance test finds it by is the span range on [ACTIVITY_BODY]'s text.
      */
     const val ACTIVITY_TIME = "activity time"
+    /** Kit row 27's header, so a screen can find the identity it composed. */
+    const val CONVERSATION_HEADER = "conversation header"
+
     const val ACTIVITY_BODY = "activity body"
 
     /**

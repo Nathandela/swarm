@@ -193,6 +193,16 @@ internal class WorkingBarShape(
 }
 
 /** `.ptabs`: a translucent fill with a 1 dp hairline along its top edge. */
+/** Kit row 27's surface: the ground, and one hairline under it. */
+internal fun headerSurface(context: Context): Drawable = BottomRule(
+    fill = Kit.colour(context, R.color.swarm_background),
+    rule = Kit.colour(context, R.color.swarm_hairline),
+    // dpPx AND NOT dp, which the metric gate is right to insist on: every other hairline in
+    // this kit is spent rounded, and at density 2.625 the same 1 dp rule would paint 2.625 px
+    // here and 3 px in the bar directly opposite it on the same screen.
+    rulePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(),
+)
+
 internal class TopRule(val fill: Int, val rule: Int, val rulePx: Float) : Drawable() {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)

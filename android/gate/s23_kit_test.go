@@ -196,6 +196,28 @@ var s23Inbox = []s23Component{
 			"variant drops its `--p-cta-fx` bloom inside a card, because the card clips it.",
 	},
 	{
+		Factory: "conversationHeader",
+		File:    "ConversationHeader.kt",
+		Derived: "#27 Conversation header",
+		Why: "who you are talking to, on which machine, doing what right now -- and the way back " +
+			"out. It is NOT navHeaderDrill with extras, and the difference is what each one " +
+			"answers: that component is a screen title and a way back (\"where am I\"), this is an " +
+			"IDENTITY (\"who is this\"), which is why it carries a subtitle at all -- with several " +
+			"machines paired the machine name is the only thing telling two identically named " +
+			"sessions apart. Its title takes the ROW rung rather than the display rung, " +
+			"deliberately reversing ADR-012 phase 2 P4 for this one header: P4 is right that a " +
+			"screen is a screen and depth is the chevron's job, and a conversation is less a " +
+			"screen the reader navigated TO than a thing they are inside, where a 27 sp session " +
+			"name over a message list reads as a document heading. The dot is statusDot and not " +
+			"presenceDot -- presence answers ONLINE/OFFLINE/UNKNOWN, a fact about a MACHINE, " +
+			"while this reports what a SESSION is doing in the roster's own Group vocabulary, so " +
+			"it reads the same here as on the row the reader tapped. The surface is BottomRule: " +
+			"the tab bar's own construction turned over, because a bordered box would float over " +
+			"the conversation and a fill with one full-width rule IS the top of the screen. " +
+			"backControl became internal rather than being copied, so the way out of a drill-down " +
+			"keeps one target size and one wording rule.",
+	},
+	{
 		Factory: "navHeaderDrill",
 		File:    "NavHeaderDrill.kt",
 		Derived: "§4 Drill-down nav header",
@@ -2490,6 +2512,17 @@ type s23TouchTarget struct {
 
 // s23TouchTargets is every stated floor in the derivation table, and where it reaches a pixel.
 var s23TouchTargets = []s23TouchTarget{
+	{
+		Row:     "#27 Conversation header",
+		Factory: "conversationHeader",
+		Why: "row 27 spends its floor on the OVERFLOW, and the overflow is a slot the surface " +
+			"fills rather than a control this component builds -- so the header is what carries " +
+			"the claim, exactly as row 15's settings row carries the toggle's. Naming the slot " +
+			"instead would assign a floor to a view the kit never sees. The back control is the " +
+			"other target on this row and it is navHeaderDrill's, unchanged and shared: backControl " +
+			"became internal rather than being copied precisely so the way out of a drill-down " +
+			"keeps one target size wherever it is drawn.",
+	},
 	{
 		Row:     "#4 Toggle",
 		Factory: "settingsRow",
