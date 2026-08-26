@@ -336,15 +336,13 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editCursor = utf8.RuneCountInString(s.Name)
 		}
 	case k.Text == "h":
-		// Open the two-field supervised-handoff form against the selected source. Raw
-		// status gates this before any input is sent: the display group intentionally
-		// combines ordinary prompts with permission requests, but those are not equally
-		// safe places to submit an instruction.
+		// Open the handoff form against the selected source. ADR-010 Amendment 4 E2:
+		// this opens on ANY row -- ended, lost, busy and permission-blocked included.
+		// Raw status used to REFUSE here, which was inverted: it refused at precisely
+		// the moment a source cannot cooperate, the only moment a hands-off handoff is
+		// needed. Status now suggests the form's default method and never decides;
+		// the supervised method still revalidates the row at submit.
 		if s, ok := m.general.selected(); ok {
-			if allowed, why := handoffSourceEligibility(s); !allowed {
-				m.general.setBanner(why)
-				return m, nil
-			}
 			m.handoff = newHandoffModel(s, m.agents, m.detected, m.width)
 			m.screen = screenHandoff
 			m.detectGen++
