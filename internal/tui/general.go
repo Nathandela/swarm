@@ -3,6 +3,7 @@ package tui
 import (
 	"cmp"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -23,6 +24,35 @@ var groupOrder = []status.Group{
 	status.GroupReadyForReview,
 	status.GroupCompleted,
 }
+
+type groupingMode int
+
+const (
+	groupByStatus groupingMode = iota
+	groupByRepo
+	groupByTag
+)
+
+type orderingMode int
+
+const (
+	orderByArrival orderingMode = iota
+	orderByActivity
+	orderByCreated
+	orderByName
+)
+
+const (
+	noRepoGroup   = "(no repo)"
+	untaggedGroup = "(untagged)"
+)
+
+// groupingLabels and orderingLabels name the modes for the options window's
+// pickers and the header's layout label (index = mode).
+var (
+	groupingLabels = [...]string{"status", "repo", "tag"}
+	orderingLabels = [...]string{"arrival", "activity", "created", "name"}
+)
 
 // Bounded row column widths for the general view (display cells). Agent, status,
 // and elapsed are semantic fields with known maximum values, so they never grow.
@@ -59,6 +89,9 @@ type rowColumns struct {
 type generalModel struct {
 	sessions []protocol.SessionView // newest category entry first; grouped at render time
 	sel      int                    // flat selection index across visible rows
+	grouping groupingMode
+	ordering orderingMode
+	sections []string // cached display-order group keys for the active grouping
 
 	confirm     bool   // a kill/delete confirm is pending
 	confirmID   string // session the confirm targets, captured by identity when it opened
@@ -73,6 +106,7 @@ type generalModel struct {
 	// editCursor is a rune index into editBuf. A rune index keeps arrow movement,
 	// insertion, and deletion safe for non-ASCII discussion names.
 	editCursor int
+	editTag    bool // the shared inline editor targets Tag instead of Name
 
 	// spinnerFrame advances on the dedicated 90 ms Working animation tick. The
 	// router runs that tick only while this board is visible and has a Working row.
@@ -102,9 +136,13 @@ const bannerDuration = 4 * time.Second
 const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
-	ordered := append([]protocol.SessionView(nil), sessions...)
-	sortSessions(ordered)
-	return generalModel{sessions: ordered}
+	m := generalModel{
+		sessions: append([]protocol.SessionView(nil), sessions...),
+		grouping: groupByStatus,
+		ordering: orderByArrival,
+	}
+	m.refreshLayout("")
+	return m
 }
 
 func categoryEnteredAt(s protocol.SessionView) time.Time {
@@ -117,11 +155,26 @@ func categoryEnteredAt(s protocol.SessionView) time.Time {
 	return s.CreatedAt
 }
 
-// sortSessions establishes the order used within every fixed display group:
-// newest category entry first, then newest creation, then id for stable ties.
-func sortSessions(sessions []protocol.SessionView) {
+func sortSessionsBy(sessions []protocol.SessionView, ordering orderingMode, grouping groupingMode) {
 	slices.SortFunc(sessions, func(a, b protocol.SessionView) int {
-		if c := categoryEnteredAt(b).Compare(categoryEnteredAt(a)); c != 0 {
+		var c int
+		switch ordering {
+		case orderByActivity:
+			c = b.LastActivity.Compare(a.LastActivity)
+		case orderByCreated:
+			c = b.CreatedAt.Compare(a.CreatedAt)
+		case orderByName:
+			c = strings.Compare(strings.ToLower(displayName(a)), strings.ToLower(displayName(b)))
+		default:
+			// Category-entry time is meaningful for status groups. Repository and
+			// tag membership are stable metadata, so their arrival is creation time.
+			if grouping == groupByStatus {
+				c = categoryEnteredAt(b).Compare(categoryEnteredAt(a))
+			} else {
+				c = b.CreatedAt.Compare(a.CreatedAt)
+			}
+		}
+		if c != 0 {
 			return c
 		}
 		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
@@ -129,6 +182,90 @@ func sortSessions(sessions []protocol.SessionView) {
 		}
 		return cmp.Compare(a.ID, b.ID)
 	})
+}
+
+func (m generalModel) groupKey(s protocol.SessionView) string {
+	switch m.grouping {
+	case groupByRepo:
+		cwd := strings.TrimSpace(s.Cwd)
+		if cwd == "" {
+			return noRepoGroup
+		}
+		name := filepath.Base(filepath.Clean(cwd))
+		if name == "." || name == string(filepath.Separator) || name == "" {
+			return noRepoGroup
+		}
+		return name
+	case groupByTag:
+		if tag := strings.TrimSpace(s.Tag); tag != "" {
+			return tag
+		}
+		return untaggedGroup
+	default:
+		return string(s.Group)
+	}
+}
+
+func (m *generalModel) rebuildSections() {
+	if m.grouping == groupByStatus {
+		m.sections = m.sections[:0]
+		for _, g := range groupOrder {
+			for _, s := range m.sessions {
+				if s.Group == g {
+					m.sections = append(m.sections, string(g))
+					break
+				}
+			}
+		}
+		return
+	}
+	seen := make(map[string]struct{}, len(m.sessions))
+	m.sections = m.sections[:0]
+	for _, s := range m.sessions {
+		key := m.groupKey(s)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		m.sections = append(m.sections, key)
+	}
+	slices.SortFunc(m.sections, func(a, b string) int {
+		if a == untaggedGroup || a == noRepoGroup {
+			return 1
+		}
+		if b == untaggedGroup || b == noRepoGroup {
+			return -1
+		}
+		return strings.Compare(strings.ToLower(a), strings.ToLower(b))
+	})
+}
+
+// sectionOrder preserves compatibility with small value-constructed models used
+// by helpers and tests. Production models eagerly cache sections in refreshLayout.
+func (m generalModel) sectionOrder() []string {
+	if len(m.sections) > 0 || len(m.sessions) == 0 {
+		return m.sections
+	}
+	m.rebuildSections()
+	return m.sections
+}
+
+func (m *generalModel) refreshLayout(selectedID string) {
+	sortSessionsBy(m.sessions, m.ordering, m.grouping)
+	m.rebuildSections()
+	m.restoreSel(selectedID)
+}
+
+// setLayout applies a grouping and ordering pair, regrouping the board around
+// the same selected session.
+func (m *generalModel) setLayout(g groupingMode, o orderingMode) {
+	id := m.selectedID()
+	m.grouping, m.ordering = g, o
+	m.refreshLayout(id)
+}
+
+func (m generalModel) layoutLabel() string {
+	return "group: " + groupingLabels[m.grouping] + " · order: " + orderingLabels[m.ordering]
 }
 
 // hasWorking reports whether the board currently has anything to animate. Keeping
@@ -149,9 +286,9 @@ func (m generalModel) hasWorking() bool {
 // that order, and finding one element at a position needs no allocation.
 func (m generalModel) selected() (protocol.SessionView, bool) {
 	i := 0
-	for _, g := range groupOrder {
+	for _, section := range m.sectionOrder() {
 		for _, s := range m.sessions {
-			if s.Group != g {
+			if m.groupKey(s) != section {
 				continue
 			}
 			if i == m.sel {
@@ -191,9 +328,9 @@ func (m generalModel) sessionByID(id string) (protocol.SessionView, bool) {
 func (m *generalModel) restoreSel(id string) {
 	if id != "" {
 		i := 0
-		for _, g := range groupOrder {
+		for _, section := range m.sectionOrder() {
 			for _, s := range m.sessions {
-				if s.Group != g {
+				if m.groupKey(s) != section {
 					continue
 				}
 				if s.ID == id {
@@ -247,14 +384,10 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	selID := m.selectedID()
 
 	var oldGroup status.Group
-	needsSort := false
 	found := false
 	for i := range m.sessions {
 		if m.sessions[i].ID == s.ID {
 			oldGroup = m.sessions[i].Group
-			needsSort = oldGroup != s.Group ||
-				!categoryEnteredAt(m.sessions[i]).Equal(categoryEnteredAt(s)) ||
-				!m.sessions[i].CreatedAt.Equal(s.CreatedAt)
 			m.sessions[i] = s
 			found = true
 			break
@@ -262,12 +395,8 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	if !found {
 		m.sessions = append(m.sessions, s)
-		needsSort = true
 	}
-	if needsSort {
-		sortSessions(m.sessions)
-	}
-	m.restoreSel(selID)
+	m.refreshLayout(selID)
 
 	if bannerGroup(s.Group) && (!found || oldGroup != s.Group) {
 		// A transition INTO needs_input/ready_for_review raises a transient banner
@@ -371,6 +500,19 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editBuf = s.Name
 			m.general.editCursor = utf8.RuneCountInString(s.Name)
 		}
+	case k.Text == "t":
+		if s, ok := m.general.selected(); ok {
+			m.general.editing = true
+			m.general.editTag = true
+			m.general.editID = s.ID
+			m.general.editBuf = s.Tag
+			m.general.editCursor = utf8.RuneCountInString(s.Tag)
+		}
+	case k.Text == "o":
+		// Open the options window seeded with the live layout (owner decision
+		// 2026-08-27: one form with arrow navigation, not one key per setting).
+		m.options = optionsModel{grouping: m.general.grouping, ordering: m.general.ordering}
+		m.screen = screenOptions
 	case k.Text == "h":
 		// Open the handoff form against the selected source. ADR-010 Amendment 4 E2:
 		// this opens on ANY row -- ended, lost, busy and permission-blocked included.
@@ -435,9 +577,14 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case k.Code == tea.KeyEnter:
-		id, name := m.general.editID, m.general.editBuf
+		id, value, editingTag := m.general.editID, m.general.editBuf, m.general.editTag
 		m.general.closeEdit()
-		return m, renameCmd(m.client, id, name)
+		if editingTag {
+			// Trim here too (the daemon trims as well) so the optimistic apply and
+			// the banner see the cleared tag a blank edit means.
+			return m, setTagCmd(m.client, id, strings.TrimSpace(value))
+		}
+		return m, renameCmd(m.client, id, value)
 	case k.Code == tea.KeyEsc:
 		m.general.closeEdit()
 	case k.Code == tea.KeyLeft && isCommandArrowModifier(k.Mod),
@@ -477,6 +624,7 @@ func (m *generalModel) closeEdit() {
 	m.editID = ""
 	m.editBuf = ""
 	m.editCursor = 0
+	m.editTag = false
 }
 
 // pasteEdit inserts bracketed-paste content at the cursor, stripping the CR/LF a
@@ -577,6 +725,16 @@ func renameCmd(c Client, id, name string) tea.Cmd {
 	return func() tea.Msg { return renameDoneMsg{id: id, name: name, err: c.Rename(id, name)} }
 }
 
+type tagDoneMsg struct {
+	id  string
+	tag string
+	err error
+}
+
+func setTagCmd(c Client, id, tag string) tea.Cmd {
+	return func() tea.Msg { return tagDoneMsg{id: id, tag: tag, err: c.SetTag(id, tag)} }
+}
+
 // tombstone records id as client-deleted (with an expiry) so a late buffered event for
 // it is dropped by apply. Called alongside remove on a successful delete.
 func (m *generalModel) tombstone(id string) {
@@ -614,7 +772,7 @@ func (m *generalModel) remove(id string) {
 	if selID == id {
 		selID = "" // the selected row is gone; restoreSel clamps into range
 	}
-	m.restoreSel(selID)
+	m.refreshLayout(selID) // a now-empty section must leave the cached order (V-1)
 }
 
 // applyName optimistically updates a renamed session's label on the board so the
@@ -624,6 +782,17 @@ func (m *generalModel) applyName(id, name string) {
 	for i := range m.sessions {
 		if m.sessions[i].ID == id {
 			m.sessions[i].Name = name
+			return
+		}
+	}
+}
+
+func (m *generalModel) applyTag(id, tag string) {
+	selectedID := m.selectedID()
+	for i := range m.sessions {
+		if m.sessions[i].ID == id {
+			m.sessions[i].Tag = tag
+			m.refreshLayout(selectedID)
 			return
 		}
 	}
@@ -696,15 +865,20 @@ func (m generalModel) view() string {
 
 	// idx walks the flat display order so it lines up with the selection index.
 	idx := 0
-	for _, g := range groupOrder {
-		rows := sessionsInGroup(m.sessions, g)
-		if len(rows) == 0 {
-			continue // empty groups are omitted (V-1)
+	for _, section := range m.sectionOrder() {
+		var hdr string
+		if m.grouping == groupByStatus {
+			g := status.Group(section)
+			hdr = groupHeaderStyle(g).Render(groupHeader(g))
+		} else {
+			hdr = styleTitle.Render(strings.ToUpper(section))
 		}
-		hdr := groupHeaderStyle(g).Render(groupHeader(g))
 		b.WriteString("  " + hdr + "\n")
-		for _, s := range rows {
-			b.WriteString(m.renderRow(s, g, idx == m.sel) + "\n")
+		for _, s := range m.sessions {
+			if m.groupKey(s) != section {
+				continue
+			}
+			b.WriteString(m.renderRow(s, s.Group, idx == m.sel) + "\n")
 			idx++
 		}
 		b.WriteString("\n")
@@ -726,7 +900,14 @@ func (m generalModel) header() string {
 		}
 	}
 	left := styleTitle.Render("swarm")
-	right := styleDim.Render(itoa(running) + " running · " + itoa(needs) + " needs you")
+	rightText := itoa(running) + " running · " + itoa(needs) + " needs you"
+	if m.grouping != groupByStatus || m.ordering != orderByArrival {
+		rightText = m.layoutLabel() + " · " + rightText
+	}
+	if m.width > 0 {
+		rightText = clampCells(rightText, m.width-lipgloss.Width(left)-3)
+	}
+	right := styleDim.Render(rightText)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 3 {
 		gap = 3
@@ -1060,14 +1241,4 @@ func localID(id string) string {
 // elapsedOf is the time since the session was last active.
 func elapsedOf(s protocol.SessionView) time.Duration {
 	return time.Since(s.LastActivity)
-}
-
-func sessionsInGroup(sessions []protocol.SessionView, g status.Group) []protocol.SessionView {
-	var out []protocol.SessionView
-	for _, s := range sessions {
-		if s.Group == g {
-			out = append(out, s)
-		}
-	}
-	return out
 }

@@ -89,7 +89,7 @@ func wireJSONTags() []string {
 // allOps is the frozen control-op vocabulary.
 func allOps() []string {
 	return []string{
-		OpHello, OpList, OpLaunch, OpKill, OpDelete, OpRename,
+		OpHello, OpList, OpLaunch, OpKill, OpDelete, OpRename, OpSetTag,
 		OpAttach, OpDetach, OpResize, OpSubscribe,
 		OpEvent, OpLease, OpOK, OpError,
 	}

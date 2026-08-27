@@ -223,6 +223,7 @@ type stubDaemon struct {
 	killed   []string
 	deleted  []string
 	renamed  []renameCall  // (local id, name) pairs passed to Rename, in order
+	tagged   []tagCall     // (local id, tag) pairs passed to SetTag, in order
 	attached []string      // local ids passed to Attach, in order
 	streams  []*stubStream // one per Attach call (newest last)
 
@@ -247,6 +248,11 @@ type stubDaemon struct {
 type renameCall struct {
 	id   string
 	name string
+}
+
+type tagCall struct {
+	id  string
+	tag string
 }
 
 // AuthorizeCommand makes stubDaemon a protocol.DeviceAuthenticator (R-POL.9). It
@@ -371,6 +377,19 @@ func (s *stubDaemon) Rename(id, name string) error {
 	defer s.mu.Unlock()
 	s.renamed = append(s.renamed, renameCall{id: id, name: name})
 	return s.renameErr
+}
+
+func (s *stubDaemon) SetTag(id, tag string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tagged = append(s.tagged, tagCall{id: id, tag: tag})
+	return nil
+}
+
+func (s *stubDaemon) tags() []tagCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]tagCall(nil), s.tagged...)
 }
 
 func (s *stubDaemon) Attach(id string) (SessionStream, error) {

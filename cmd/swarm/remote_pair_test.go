@@ -133,6 +133,9 @@ func (h *scriptedPairingHost) Rename(string, string) error {
 	// DaemonAPI grew Rename on main (v0.5) after this stub's line forked; pairing tests never rename.
 	return errors.New("scriptedPairingHost: rename not implemented")
 }
+func (h *scriptedPairingHost) SetTag(string, string) error {
+	return errors.New("scriptedPairingHost: set_tag not implemented")
+}
 func (h *scriptedPairingHost) Delete(string) error {
 	return errors.New("scriptedPairingHost: delete not implemented")
 }

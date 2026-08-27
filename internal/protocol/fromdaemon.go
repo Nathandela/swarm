@@ -53,6 +53,7 @@ func (a *daemonAdapter) Launch(spec daemon.LaunchSpec) (persist.Meta, error) { r
 func (a *daemonAdapter) Kill(id string) error                                { return a.d.Kill(id) }
 func (a *daemonAdapter) Delete(id string) error                              { return a.d.Delete(id) }
 func (a *daemonAdapter) Rename(id, name string) error                        { return a.d.Rename(id, name) }
+func (a *daemonAdapter) SetTag(id, tag string) error                         { return a.d.SetTag(id, tag) }
 func (a *daemonAdapter) Events() <-chan persist.Meta                         { return a.events }
 
 func (a *daemonAdapter) Attach(id string) (SessionStream, error) {
@@ -76,6 +77,7 @@ func (a *daemonAdapter) stopEvents() {
 type rosterSnap struct {
 	status status.Status
 	name   string
+	tag    string
 }
 
 func (a *daemonAdapter) watch() {
@@ -90,7 +92,7 @@ func (a *daemonAdapter) watch() {
 			present := map[string]struct{}{}
 			for _, m := range a.d.List() {
 				present[m.ID] = struct{}{}
-				cur := rosterSnap{status: m.Status, name: m.Name}
+				cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag}
 				if prev, ok := seen[m.ID]; ok && prev == cur {
 					continue
 				}

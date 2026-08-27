@@ -1,10 +1,10 @@
 // Package tui is the Epic 7 client-side terminal UI: a screen router that hosts
-// the general view (grouped session board), the launch form, and an attach
-// placeholder (attach passthrough is Epic 8). It talks to the daemon only through
+// the general view (grouped session board), the launch, handoff and options
+// forms, and an attach placeholder (attach passthrough is Epic 8). It talks to the daemon only through
 // the narrow Client interface, so every unit test drives it against an in-memory
 // stub — no live daemon, no socket (E7.7).
 //
-// The whole program is a single tea.Model (the router). The general/launch/attach
+// The whole program is a single tea.Model (the router). The screen
 // sub-models are plain structs the router dispatches to; the router is the only
 // shared shell. New eagerly performs the initial List so the first paint already
 // lists every session (N-1, the eager-load pin).
@@ -39,6 +39,9 @@ type Client interface {
 	// Rename changes a session's display label (v0.5). An older daemon without the op
 	// returns an error, which the caller banners (skew-safe).
 	Rename(id, name string) error
+	// SetTag changes a session's manual grouping label; an empty tag clears it. An
+	// older daemon without the op returns an error, which the caller banners.
+	SetTag(id, tag string) error
 	Subscribe() (<-chan protocol.Event, error)
 	// SendInput types into a session through the owner-tier send_input op — the SAME
 	// path `swarm send` uses, so the TUI handoff trigger and the CLI verb are one code
@@ -72,6 +75,7 @@ const (
 	screenGeneral screen = iota
 	screenLaunch
 	screenHandoff
+	screenOptions
 	screenAttach
 )
 
@@ -165,7 +169,7 @@ func workingAnimationTick() tea.Cmd {
 	return tea.Tick(workingAnimationInterval, func(time.Time) tea.Msg { return workingAnimationMsg{} })
 }
 
-// rootModel is the screen router: the only tea.Model, holding the three
+// rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
 	client Client
@@ -178,6 +182,7 @@ type rootModel struct {
 	general generalModel
 	launch  launchModel
 	handoff handoffModel
+	options optionsModel
 	attach  attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
@@ -503,6 +508,16 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.general.applyName(msg.id, msg.name)
 		return m, nil
 
+	case tagDoneMsg:
+		if msg.err != nil {
+			return m, m.general.setBanner("tag failed: " + msg.err.Error())
+		}
+		m.general.applyTag(msg.id, msg.tag)
+		if msg.tag == "" {
+			return m, m.general.setBanner("session tag cleared")
+		}
+		return m, m.general.setBanner("session tagged " + msg.tag)
+
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the
 		// (now wall-clock-expired) banner disappears. Mirrors repaintMsg's full
@@ -567,6 +582,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateLaunch(msg)
 		case screenHandoff:
 			return m.updateHandoff(msg)
+		case screenOptions:
+			return m.updateOptions(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -585,6 +602,8 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.launch.view(), m.launch.hint())
 	case m.screen == screenHandoff:
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
+	case m.screen == screenOptions:
+		content = m.composeBoard(m.options.view(m.width), optionsHint)
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
@@ -621,14 +640,15 @@ func (m rootModel) generalStatus() string {
 		return "daemon connection lost - restart swarm"
 	}
 	if m.general.editing {
+		if m.general.editTag {
+			return "edit tag · type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
+		}
 		return "type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
 	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
-	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
-	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
-	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   h handoff   ctrl+x kill   esc quit"
+	return "↑↓ move · ⏎ attach (ctrl+q returns) · o options · t tag · e rename · n new · h handoff · ^x kill · esc quit"
 }
 
 // DaemonRestarter restarts the daemon and returns a freshly-connected client to the

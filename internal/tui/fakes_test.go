@@ -55,6 +55,7 @@ type fakeClient struct {
 	killed     []string
 	deleted    []string
 	renamed    []renameCall // (id, name) pairs passed to Rename, in order
+	tagged     []tagCall    // (id, tag) pairs passed to SetTag, in order
 	launchID   string
 	launchName string // canonical name the daemon returns on the launch reply ("" = older daemon)
 	launchErr  error  // when set, Launch returns it (B1 error-surfacing tests)
@@ -78,6 +79,11 @@ type sendInputCall struct {
 type renameCall struct {
 	id   string
 	name string
+}
+
+type tagCall struct {
+	id  string
+	tag string
 }
 
 func newFakeClient(sessions ...protocol.SessionView) *fakeClient {
@@ -130,6 +136,13 @@ func (f *fakeClient) Rename(id, name string) error {
 	return f.renameErr
 }
 
+func (f *fakeClient) SetTag(id, tag string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tagged = append(f.tagged, tagCall{id: id, tag: tag})
+	return nil
+}
+
 func (f *fakeClient) Subscribe() (<-chan protocol.Event, error) { return f.events, nil }
 
 func (f *fakeClient) SendInput(id string, req protocol.SendInputReq) error {
@@ -164,6 +177,12 @@ func (f *fakeClient) renamedCalls() []renameCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]renameCall(nil), f.renamed...)
+}
+
+func (f *fakeClient) taggedCalls() []tagCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tagCall(nil), f.tagged...)
 }
 
 func (f *fakeClient) sendInputCalls() []sendInputCall {
