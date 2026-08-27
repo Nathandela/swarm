@@ -6,11 +6,13 @@ package main
 // dependencies are bound to it.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/Nathandela/swarm/internal/converge"
 	"github.com/Nathandela/swarm/internal/daemon"
+	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/version"
 )
 
@@ -55,12 +57,20 @@ func runDaemonRestartUnattended(stderr io.Writer) int {
 		},
 		RestartGateway: func() error {
 			// The package var, so a test substitutes a fake and never reaches launchd.
-			// supervise.ErrNotInstalled from Restart is the benign arm converge handles.
+			// supervise.ErrNotInstalled is mapped onto converge's own sentinel here, at
+			// the one place allowed to know both: internal/converge must not import
+			// internal/remote/supervise (ADR-007 D5, TestDaemonNeverSpawnsTheGateway).
 			sup, err := newGatewaySupervisor(cc.StateDir)
 			if err != nil {
 				return err
 			}
-			return sup.Restart()
+			if err := sup.Restart(); err != nil {
+				if errors.Is(err, supervise.ErrNotInstalled) {
+					return fmt.Errorf("%w: %v", converge.ErrGatewayNotInstalled, err)
+				}
+				return err
+			}
+			return nil
 		},
 		Log: stderr,
 	})

@@ -23,7 +23,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -69,9 +68,12 @@ type Deps struct {
 	// returning only once that replacement is reachable. Rule 4, first half.
 	RestartDaemon func(env []string) error
 
-	// RestartGateway restarts the gateway unit in place. Rule 4, second half. A
-	// supervise.ErrNotInstalled means no unit was ever installed on this machine,
-	// which is benign.
+	// RestartGateway restarts the gateway unit in place. Rule 4, second half. An
+	// error satisfying errors.Is(err, ErrGatewayNotInstalled) means no unit was ever
+	// installed on this machine, which is benign. The caller maps its supervisor's
+	// own not-installed error onto that sentinel: this package must not import
+	// internal/remote/supervise, which ADR-007 D5 reserves for the owner-invoked CLI
+	// and the gateway binary (cmd/swarm's TestDaemonNeverSpawnsTheGateway fences it).
 	RestartGateway func() error
 
 	// Log receives exactly one line per run: the reason for the exit code. It is
@@ -90,6 +92,11 @@ const (
 	ExitDeferred  = 2
 	ExitRefused   = 3
 )
+
+// ErrGatewayNotInstalled is what Deps.RestartGateway returns (wrapped or bare) when
+// no gateway unit exists on this machine. Rule 4 treats it as benign: the daemon
+// was restarted and there was no gateway to follow it.
+var ErrGatewayNotInstalled = errors.New("converge: no gateway unit installed")
 
 // Run evaluates the five rules in order and returns the process exit code. It
 // spawns nothing before rule 4, and writes exactly one reason line to d.Log
@@ -187,7 +194,7 @@ func Run(d Deps) int {
 		return say(d.Log, ExitFailed, "failed: the daemon restart failed, the gateway was not touched: %v", err)
 	}
 	if err := d.RestartGateway(); err != nil {
-		if errors.Is(err, supervise.ErrNotInstalled) {
+		if errors.Is(err, ErrGatewayNotInstalled) {
 			return say(d.Log, ExitConverged,
 				"converged: daemon restarted from the saved environment; no gateway unit is installed, "+
 					"so there was none to restart (%v)", err)

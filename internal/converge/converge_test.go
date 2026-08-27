@@ -20,7 +20,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/converge"
 	"github.com/Nathandela/swarm/internal/protocol"
-	"github.com/Nathandela/swarm/internal/remote/supervise"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -435,7 +434,7 @@ func TestRule4GatewayFollowsTheDaemonOrNothingMoves(t *testing.T) {
 		{
 			// Wrapped, so only errors.Is can see it.
 			name:       "no gateway unit installed is benign",
-			gatewayErr: fmt.Errorf("restart gateway: %w", supervise.ErrNotInstalled),
+			gatewayErr: fmt.Errorf("restart gateway: %w", converge.ErrGatewayNotInstalled),
 			wantExit:   converge.ExitConverged,
 			wantGwCall: true,
 		},
