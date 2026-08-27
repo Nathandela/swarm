@@ -174,7 +174,7 @@ then `TestLaunch_FiltersClientEnv`, both reading the agent's env dump as an empt
 whole on the next run; the env-dump reader races the writer under load and is unrelated to W2.
 Every package in the module has therefore passed at least once with W2.1 in the tree.
 
-### Negative controls (clean tree at 1e9657c3; each file restored with `git checkout --`)
+### Negative controls (clean tree at 1fa50e9f; each file restored with `git checkout --`)
 
 ```
 ## Negative control 1: shim writes control_input through the COUNTING path (WriteInput)
@@ -316,7 +316,7 @@ W2.1's untouched tests, run by name under `-race` (`s0_realclipty_test.go` is be
 ok  	github.com/Nathandela/swarm/internal/skeleton	10.598s
 ```
 
-### Negative controls (clean tree at a1189887; the file restored with `git checkout --`)
+### Negative controls (clean tree at 33ca6d6d; the file restored with `git checkout --`)
 
 ```
 ## Negative control 1: the closed-tag half of the rule removed (any prompt opening with a listed tag is dropped)
@@ -417,7 +417,7 @@ No production caller of `sentenceFor` lands in this wave: the contract names the
 name. "No refusal from a shipped daemon renders the UNKNOWN sentence" therefore still needs a
 caller (W5's words pass is the natural home); the table is ready for it.
 
-### Negative control (clean tree at 9bc0f7f2; the file restored with `git checkout --`)
+### Negative control (clean tree at 3ae018fc; the file restored with `git checkout --`)
 
 One perturbation, checked from both sides: the `stale_instance` row removed from
 `MachineRefusalCodes.sentence`.
@@ -444,7 +444,7 @@ AAR unchanged (mtime 1787859790)
 ErrorRouting.kt restored
 ```
 
-## W2.3 One refusal, said once -- NOT STARTED (contract premise wrong; ruling requested)
+## W2.3 initial finding (superseded below)
 
 Verified against the tree before any edit: `PhoneSurface.renderComposerVerdict` (`:4478-4497`) sets
 `composerRefusal` and calls `say(PressFeedback.ofRefusal(verdict.notice, verdict.detail))`; `say()`
@@ -524,7 +524,7 @@ AAR unchanged (mtime 1787859790)
 script exit=0
 ```
 
-Negative control (clean tree at 90999445; the file restored with `git checkout --`): `routeMachineCode`
+Negative control (clean tree at 3982f4d4; the file restored with `git checkout --`): `routeMachineCode`
 perturbed back to plain `unknown` for an unmapped code. The routing and verdict tests fail; the panel
 test stays green because the builder reads the map itself, so the failure isolates the router.
 
@@ -565,7 +565,7 @@ Tests written first: `android/gate/w23_refusalonce_test.go`
 `TestW23_ARefusedSendIsSaidOnceAndNeverToasted` (`renderComposerVerdict`'s body contains no
 `say(` and keeps `composerRefusalDetail = verdict.detail`; `renderInterruptVerdict` still contains
 `say(`, the control); `SessionDetailViewTest.kt` `the machine's words are drawn under the composer
-notice and absent when empty`. Fences kept: `SessionDetailViewTest.kt` `a refused send says its
+notice and absent when empty`. Fences ADDED by this fleet (green on landing, kept as fences): `SessionDetailViewTest.kt` `a refused send says its
 sentence exactly once across the view tree`; `SessionDetailComposerTest.kt:315` broadened
 (`DetailTag.OUTCOME` absent when `DetailTag.COMPOSER_NOTICE` present). `SessionDetailVerdictTest.kt:117`
 untouched.
@@ -613,7 +613,7 @@ AAR unchanged (mtime 1787859790)
 script exit=0
 ```
 
-### Negative controls (clean tree at 62bf30d9; each file restored with `git checkout --`)
+### Negative controls (clean tree at d6c5a72f; each file restored with `git checkout --`)
 
 ```
 ## Negative control 1 (Go gate): the say() call put back into renderComposerVerdict
@@ -736,7 +736,7 @@ ok  	github.com/Nathandela/swarm/mobile	56.540s
 test exit=0
 ```
 
-Negative controls (clean tree at f8808cd3; each file restored with `git checkout --`):
+Negative controls (clean tree at 5634dbe2; each file restored with `git checkout --`):
 
 ```
 ## Negative control 1: the daemon drops the synthetic message WITHOUT opening the turn
@@ -773,3 +773,23 @@ dialog, one uncounted character); `internal/skeleton/sessiontap.go`'s mode note 
 also forwards Submit and ControlKeys. Round-1 item 3 (control_input is fire-and-forget, the PTY
 write error discarded exactly as for TDataIn) is recorded on the bead. Round-1 item 4: every lint
 run from here on uses a per-worktree `GOLANGCI_LINT_CACHE` under the scratchpad.
+
+### Round-1 additions (second reviewer)
+
+`stale_generation` now reads "Your turn here ended. Start typing again." (no "terminal", and it
+keeps a remedy; the row is unreachable this wave but its words do not wait for W5). Gates:
+`go test -race ./android/gate ./mobile` ok (83.8s, 40.2s); Kotlin suite on the lane:
+
+```
+START=1787870296 (Fri Aug 28 00:38:16 CEST 2026)
+BUILD SUCCESSFUL in 4m 10s
+GRADLE_EXIT=0
+SUMMARY: xml files=202 stale(older than START)=0 tests=1595 failures=0 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=0
+```
+
+This file's own corrections: the W2.3 initial-finding heading is retitled as superseded; the
+once-fence is recorded as ADDED by this fleet rather than kept; every "clean tree at" SHA now
+names the commit actually on the branch (the pre-amend SHAs were rewritten by the
+`--amend` that added each item's negative-control evidence).
