@@ -188,8 +188,11 @@ fun conversationScaffoldView(
     val scroll = ScrollView(context).apply {
         tag = ScaffoldTag.CONTENT
         isFillViewport = true
-        clipChildren = false
-        clipToPadding = false
+        // THE VIEWPORT CLIPS (phone refit W1.2): a row scrolled out of it stops painting, so
+        // nothing draws over the pinned header or under the pinned composer. See the inbox
+        // viewport below for why nothing needs it open.
+        clipChildren = true
+        clipToPadding = true
         isVerticalScrollBarEnabled = false
         // WEIGHT 1 AND HEIGHT 0: the list takes what is left after the two fixed parts, which is
         // what makes it the only thing that scrolls.
@@ -362,11 +365,14 @@ fun phoneScaffoldView(
         // The content is shorter than the screen on a quiet inbox, and without this the tab bar
         // would ride up under the last section instead of sitting at the bottom.
         isFillViewport = true
-        // A glowing dot is inflated past its own bounds and the tab badge overhangs its icon, so
-        // every container between them and the window has to be told not to clip. Necessary at
-        // each level: a parent that clips undoes what its child allowed.
-        clipChildren = false
-        clipToPadding = false
+        // THE VIEWPORT CLIPS (phone refit W1.2). It used to be told not to, so that a glowing dot
+        // and the tab badge could overhang -- and so every row scrolled out of it kept painting,
+        // over the header and under the bar. Nothing needs the viewport open: the rows open their
+        // own bounds (SessionRow.kt), the bloom and the dot draw inside their own layer
+        // (CtaButton.kt, StatusDot.kt), and the badge lives in the bar, a sibling of this scroll
+        // under the root -- which still does not clip, for the badge's sake.
+        clipChildren = true
+        clipToPadding = true
         // `scrollbar-width: none` (derivation row 20).
         isVerticalScrollBarEnabled = false
         // Weight 1: the destination takes whatever is left after the fixed bar below it.

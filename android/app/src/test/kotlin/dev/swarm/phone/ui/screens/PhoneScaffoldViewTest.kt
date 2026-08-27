@@ -13,6 +13,7 @@ import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -276,6 +277,65 @@ class PhoneScaffoldViewTest {
             root.kitRequire(ScaffoldTag.TABS).foreground is GrainDrawable,
         )
     }
+
+    // ---- W1.2: the viewport clips, the bar does not ------------------------
+
+    /**
+     * Phone refit W1.2 (docs/specifications/phone-refit-playbook.md, agents-tracker-d45a.1). The
+     * ScrollView told every container not to clip so a glowing dot and the tab badge could
+     * overhang -- and so scrolled rows painted over the header and under the tab bar. The rows
+     * open their own bounds, the bloom and the dot draw inside their own layer, and the badge
+     * lives in the bar, a sibling of the scroll: nothing that escapes needs the viewport open.
+     */
+    @Test
+    fun `the destination viewport clips what scrolls out of it`() {
+        val viewport = scaffold().kitRequire(ScaffoldTag.CONTENT) as ViewGroup
+
+        assertTrue(
+            "the destination's ScrollView does not clip its children, so a row scrolled past " +
+                "the top of the viewport is still painted -- over whatever chrome sits there",
+            viewport.clipChildren,
+        )
+        assertTrue(
+            "the destination's ScrollView does not clip to its padding, for the same reason",
+            viewport.clipToPadding,
+        )
+    }
+
+    /** The badge overhangs the BAR's box, and the bar is the root's child, not the scroll's. */
+    @Test
+    fun `the badge still escapes because the bar holds it`() {
+        val root = scaffold(listOf(row("mbp/one", "needs_input"))) as ViewGroup
+
+        assertFalse(
+            "the scaffold root clips its children, so the badge overhanging the tab bar's top " +
+                "edge is cut in half -- the viewport was never what let it out",
+            root.clipChildren,
+        )
+        assertNotNull(
+            "the badge is drawn by the bar, which is the only reason the viewport may clip",
+            root.kitRequire(ScaffoldTag.TABS).kitFind(KitTag.BADGE),
+        )
+    }
+
+    /** W1.2 as geometry: the bar is the viewport's sibling, laid out below its bottom edge. */
+    @Test
+    fun `the tab bar is laid out below the viewport's bottom edge, never over it`() {
+        val root = scaffold()
+        root.measure(exactly(400), exactly(800))
+        root.layout(0, 0, 400, 800)
+        val viewport = root.kitRequire(ScaffoldTag.CONTENT)
+        val bar = root.kitRequire(ScaffoldTag.TABS)
+
+        assertTrue(
+            "the viewport's bottom edge (${viewport.bottom}) reaches past the tab bar's top " +
+                "(${bar.top}), so the two overlap and a row can draw under the bar",
+            viewport.bottom <= bar.top,
+        )
+        assertEquals("the bar is not pinned to the window's bottom edge", 800, bar.bottom)
+    }
+
+    private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)
 
     /**
      * **SCOPED TO [phoneScaffoldView], DELIBERATELY** (chat-surface-plan B.5). The sweep is over
