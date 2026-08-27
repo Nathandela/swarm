@@ -149,13 +149,29 @@ existing risk line to file it under either. Recorded in lane C's
 docs/verification/auto-upgrade/red-lane-c.txt as a known gap as well, from the
 converge side.
 
-One candidate has been floated for whoever owns ADR-020 -- refuse to overwrite when
-the incoming set is a strict subset of the stored one -- and it needs two caveats
-before anyone implements it. It must compare KEY SETS, not KEY=VALUE entries: in
-the poisoning case PATH is present on both sides with different values, so an
-entry-wise subset test does not fire at all. And it silently breaks the documented
-repair path, because an interactive restart that legitimately drops a variable (a
-deactivated conda env, an OPENAI_API_KEY the owner stopped exporting) is also a
-strict subset, so the file would refuse the owner's own refresh and freeze. The
-provenance of a start is not recoverable from comparing two environments; it is
-known only at the spawn site, which is cmd/swarm.
+One candidate was floated for whoever owns ADR-020 and is REJECTED, by both lanes,
+for the record: refuse to overwrite when the incoming set is a strict subset of the
+stored one. Two defects, the second disqualifying.
+
+  1. It has to compare KEY SETS, not KEY=VALUE entries. In the poisoning case PATH
+     is present on BOTH sides with different values (/opt/homebrew/bin:... against
+     /usr/bin:/bin:/usr/sbin:/sbin), so an entry-wise subset test never fires -- it
+     misses precisely the case it was written for.
+
+  2. It silently breaks the documented repair path. An interactive restart that
+     legitimately drops a variable -- a deactivated conda env, an OPENAI_API_KEY the
+     owner stopped exporting -- is a strict subset by keys too, so the guard refuses
+     the owner's own refresh, and after a permanent unset the file can never update
+     again. Section 6 of the plan tells the owner that `swarm daemon restart` from a
+     terminal is what freshens a stale saved env; this guard can make that command
+     silently do nothing. It trades a rare silent degradation for a rare silent
+     refusal-to-repair, and the second is worse because the owner has been told the
+     command works.
+
+The exact form, for whoever amends the plan: content cannot recover provenance. Two
+environments compared cannot say WHO started the daemon, and provenance is the only
+thing separating the owner's terminal from a launchd context. It is known at the
+spawn site -- cmd/swarm knows whether it was invoked from a terminal -- and could be
+marked there so that only such a start refreshes the file. That is a change to
+cmd/swarm and to this lane's writeSavedEnv, in a lane neither this agent nor lane C
+owns, and it is ADR-020's to decide.
