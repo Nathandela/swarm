@@ -28,8 +28,9 @@ package skeleton
 //   - Backpressure (S9): each subscriber has its OWN cap-tapSubQueueCap channel; on
 //     overflow that ONE subscriber is evicted (its channel closes) — the pump never
 //     blocks on it and the other subscribers are untouched.
-//   - mode: readWrite forwards Input/Resize to the upstream; readOnly makes them
-//     no-ops (the future remote peek observes without driving).
+//   - mode: readWrite forwards Input/Resize to the upstream, and Submit and ControlKeys
+//     (the two provenance-carrying writes: a whole message, a daemon-authored key);
+//     readOnly makes them no-ops (the future remote peek observes without driving).
 //
 // Locking: m.mu guards only the taps map; each tap's t.mu guards its subscriber set,
 // mirror, and closed flag. The two locks are NEVER held simultaneously (subscribe

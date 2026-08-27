@@ -444,7 +444,10 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // to know what is on the input line, and it errs safe: typed-then-deleted-back-to-empty
 // still refuses. protocol.ErrInputBusy becomes the wire's CodeInputBusy, so a refusal is a
 // state the phone can draw and retry from rather than a message silently joined to
-// somebody else's.
+// somebody else's. One class of write is written but NOT counted (phone refit W2.1):
+// shimwire.TypeControlInput frames, the daemon's own interrupt and dialog-answer keys, which
+// travel with their provenance so a phone Stop or approval never poisons the next send; the
+// residual is an approval key landing on an already-closed dialog, one uncounted character.
 //
 // WHAT REMAINS. A shim that predates the transaction answers ErrSubmitUnsupported and this
 // falls through to the two unlocked writes below -- reachable only mid-upgrade, and
