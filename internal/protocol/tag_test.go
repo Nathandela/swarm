@@ -17,6 +17,13 @@ func TestSetTagForwardsSanitizedTag(t *testing.T) {
 	if got := stub.tags(); len(got) != 1 || got[0] != (tagCall{id: "sess1", tag: "frontend"}) {
 		t.Fatalf("SetTag forwards = %+v", got)
 	}
+	// "Empty clears it" holds for whitespace too: a blank tag never persists as spaces.
+	if err := c.SetTag(id, "   "); err != nil {
+		t.Fatalf("SetTag blank: %v", err)
+	}
+	if got := stub.tags(); len(got) != 2 || got[1] != (tagCall{id: "sess1", tag: ""}) {
+		t.Fatalf("blank SetTag forwards = %+v, want empty tag", got)
+	}
 }
 
 func TestStampViewCarriesTag(t *testing.T) {

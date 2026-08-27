@@ -1623,7 +1623,7 @@ func (cc *clientConn) handleSetTag(c Control) {
 	if !ok {
 		return
 	}
-	if err := cc.srv.d.SetTag(local, SanitizeName(c.Tag)); err != nil {
+	if err := cc.srv.d.SetTag(local, strings.TrimSpace(SanitizeName(c.Tag))); err != nil {
 		cc.replyError("set_tag: " + err.Error())
 		return
 	}

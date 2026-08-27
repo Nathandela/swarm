@@ -530,8 +530,8 @@ crashing.
 
 The client sends `set_tag` with a `session_id` and the new `tag`. The daemon
 sanitizes the tag as a single-line cosmetic label, persists it in session meta,
-and broadcasts a roster `event` so every client converges. An empty tag clears the
-assignment. Older daemons reply with `error`, which the client surfaces.
+and broadcasts a roster `event` so every client converges. An empty (or
+whitespace-only) tag clears the assignment. Older daemons reply with `error`, which the client surfaces.
 
 ### `attach`
 

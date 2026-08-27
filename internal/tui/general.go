@@ -770,7 +770,7 @@ func (m *generalModel) remove(id string) {
 	if selID == id {
 		selID = "" // the selected row is gone; restoreSel clamps into range
 	}
-	m.restoreSel(selID)
+	m.refreshLayout(selID) // a now-empty section must leave the cached order (V-1)
 }
 
 // applyName optimistically updates a renamed session's label on the board so the

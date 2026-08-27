@@ -105,3 +105,18 @@ func TestSessionTagEditIsBehavioral(t *testing.T) {
 		t.Fatalf("optimistic tag = %q, want urgent", tagged.Tag)
 	}
 }
+
+func TestSessionLayoutRemoveDropsEmptySection(t *testing.T) {
+	m := newGeneralModel([]protocol.SessionView{
+		sWorking("endpoint/w", "claude", "/code/w", "working", time.Minute),
+		sCompleted("endpoint/c", "codex", "/code/c", "exit 0", time.Minute),
+	})
+	m.remove("endpoint/c")
+	if got := stripANSI(m.view()); strings.Contains(got, "COMPLETED") {
+		t.Fatalf("empty COMPLETED section still rendered after remove:\n%s", got)
+	}
+	m.remove("endpoint/w")
+	if got := stripANSI(m.view()); strings.Contains(got, "WORKING") {
+		t.Fatalf("empty WORKING section still rendered on an empty board:\n%s", got)
+	}
+}
