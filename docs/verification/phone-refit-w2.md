@@ -542,3 +542,102 @@ SUMMARY: xml files=3 stale(older than START)=0 tests=32 failures=2 errors=0
 AAR unchanged (mtime 1787859790)
 ErrorRouting.kt restored
 ```
+
+## W2.3 One refusal, said once -- option B (orchestrator ruling; playbook as recorded on main at 5ee276f)
+
+WHY THE CONTRACT'S SENTENCE WAS FALSE, AND WHAT MADE IT TRUE. The composer-notice path carried
+only `ComposerModel.noticeFor(state).copy` (`SessionDetail.composerRefusal` ->
+`SessionDetailPanel.composerNotice` -> `DetailTag.COMPOSER_NOTICE`); `verdict.detail`, the
+machine's words, reached the reader only through `say()`'s toast suffix, which is what W2.3
+deletes. So a detail cell is built: `SessionDetail.composerRefusalDetail` ->
+`SessionDetailPanel.composerNoticeDetail` -> `DetailTag.COMPOSER_NOTICE_DETAIL`, the kit's
+`noticeDetail` (mono, tertiary ink, `.sheet2 .ctx`) drawn directly under the notice and absent
+when the machine sent no words; `PhoneSurface` keeps `verdict.detail` as `composerRefusalDetail`
+where it keeps `composerRefusal`, clears it in the same two places, and no longer calls `say()`
+for a composer refusal. `renderInterruptVerdict` keeps its `say()`: a refused Stop is not a
+composer refusal.
+
+Files (the widened list, exactly): `ui/SessionScreens.kt`, `ui/screens/SessionDetailPanel.kt`,
+`ui/screens/SessionDetailView.kt`, `PhoneSurface.kt` (the function, the var, its two clears and the
+pass into `SessionDetail`).
+
+Tests written first: `android/gate/w23_refusalonce_test.go`
+`TestW23_ARefusedSendIsSaidOnceAndNeverToasted` (`renderComposerVerdict`'s body contains no
+`say(` and keeps `composerRefusalDetail = verdict.detail`; `renderInterruptVerdict` still contains
+`say(`, the control); `SessionDetailViewTest.kt` `the machine's words are drawn under the composer
+notice and absent when empty`. Fences kept: `SessionDetailViewTest.kt` `a refused send says its
+sentence exactly once across the view tree`; `SessionDetailComposerTest.kt:315` broadened
+(`DetailTag.OUTCOME` absent when `DetailTag.COMPOSER_NOTICE` present). `SessionDetailVerdictTest.kt:117`
+untouched.
+
+### RED
+
+Go (`go test -count=1 ./android/gate -run TestW23 -v`):
+
+```
+    w23_refusalonce_test.go:25: renderComposerVerdict still calls say(...): the refusal goes to the outcome line and a toast on top of the composer notice, so one refused send says its sentence three times (phone refit W2.3). Body:
+    w23_refusalonce_test.go:30: renderComposerVerdict never keeps verdict.detail as composerRefusalDetail, so once the toast is gone the machine's own words reach nobody (W2.3's detail cell; the F4 class TestR6R3_TheTwoM3ReadsSayWhatTheMachineSaid fences). Bod
+--- FAIL: TestW23_ARefusedSendIsSaidOnceAndNeverToasted (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.927s
+FAIL
+```
+
+Kotlin (`w2-gradle.sh --tests` over SessionDetailViewTest and SessionDetailComposerTest; the test
+source set fails to compile on the field and the tag that do not exist yet):
+
+```
+START=1787868085 (Fri Aug 28 00:01:25 CEST 2026)
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailViewTest.kt:546:13 No parameter with name 'composerRefusalDetail' found.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailViewTest.kt:578:46 Unresolved reference 'COMPOSER_NOTICE_DETAIL'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/screens/SessionDetailViewTest.kt:594:63 Unresolved reference 'COMPOSER_NOTICE_DETAIL'.
+BUILD FAILED in 1m 46s
+GRADLE_EXIT=1
+SUMMARY: xml files=3 stale(older than START)=3 tests=32 failures=2 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=1
+```
+
+### GREEN
+
+`go vet ./android/gate/` exit 0, `golangci-lint run ./android/gate/...` 0 issues,
+`go test -count=1 ./android/gate` ok (TestW23 passes; the R1, R6 and every other gate stays green).
+Kotlin, the whole suite on the lane:
+
+```
+START=1787868253 (Fri Aug 28 00:04:13 CEST 2026)
+BUILD SUCCESSFUL in 4m 10s
+GRADLE_EXIT=0
+SUMMARY: xml files=202 stale(older than START)=0 tests=1595 failures=0 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=0
+```
+
+### Negative controls (clean tree at 62bf30d9; each file restored with `git checkout --`)
+
+```
+## Negative control 1 (Go gate): the say() call put back into renderComposerVerdict
+ android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt | 1 +
+ 1 file changed, 1 insertion(+)
+--- FAIL: TestW23_ARefusedSendIsSaidOnceAndNeverToasted (0.01s)
+    w23_refusalonce_test.go:25: renderComposerVerdict still calls say(...): the refusal goes to the outcome line and a toast on top of the composer notice, so one refused send says its sentence three 
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	0.939s
+FAIL
+PhoneSurface.kt restored
+
+## Negative control 2 (Kotlin view): the detail cell no longer drawn under the notice
+ .../app/src/main/kotlin/dev/swarm/phone/ui/screens/SessionDetailView.kt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+START=1787868551 (Fri Aug 28 00:09:11 CEST 2026)
+SessionDetailViewTest > the machine's words are drawn under the composer notice and absent when empty FAILED
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 2m 23s
+GRADLE_EXIT=1
+SUMMARY: xml files=2 stale(older than START)=0 tests=31 failures=1 errors=0
+AAR unchanged (mtime 1787859790)
+SessionDetailView.kt restored
+```
+
+In control 2 the fence `a refused send says its sentence exactly once across the view tree` and
+the broadened `SessionDetailComposerTest:315` stay green, so the failure isolates the detail cell.

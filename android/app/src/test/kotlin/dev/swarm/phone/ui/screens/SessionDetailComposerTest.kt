@@ -333,6 +333,11 @@ class SessionDetailComposerTest {
                 "one failed send reports itself twice in two near-identical wordings",
             refused.kitFind(DetailTag.COMPOSER_STATE),
         )
+        // W2.3 (phone-refit-playbook §3): the composer notice is the refusal's single surface.
+        assertNull(
+            "the surface's outcome line repeats the refusal the composer notice already carries",
+            refused.kitFind(DetailTag.OUTCOME),
+        )
         assertNotNull(
             "a send still crossing draws nothing at all, though \"Sending\" names a state and " +
                 "explains none -- it is the one label with no notice to be duplicated by",

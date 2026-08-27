@@ -186,8 +186,18 @@ data class SessionDetail(
      * `stale_turn` is the one this row exists for: it is ORDINARY (the conversation moved on
      * between render and tap) and it has its own gentle copy, which is a different thing from
      * every other refusal and must not read like a fault.
+     *
+     * Or, for a daemon code with its own sentence and no routing row, that code (W2.2's caller):
+     * still a token the panel looks up, never a message.
      */
     val composerRefusal: String = "",
+    /**
+     * The machine's own words for that refusal, verbatim, or "" when it sent none (phone refit
+     * W2.3). The composer notice is a refusal's single surface, so the words that used to ride
+     * only the toast's mono suffix ride here and are drawn as the kit's mono tertiary cell
+     * directly under the sentence they qualify.
+     */
+    val composerRefusalDetail: String = "",
 ) {
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale

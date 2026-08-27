@@ -193,6 +193,8 @@ data class SessionDetailPanel(
     val composerStateLabel: String,
     /** The refusal's copy -- `stale_turn` gets its own gentle one -- or "" when there is none. */
     val composerNotice: String,
+    /** The machine's own words under [composerNotice], verbatim, or "" when it sent none (W2.3). */
+    val composerNoticeDetail: String,
     /** Whether what the user typed survives that refusal. It always does; see the notice model. */
     val composerRetainsDraft: Boolean,
     /** What the screen says where the composer WOULD be, for a session that has none. */
@@ -1110,6 +1112,7 @@ object SessionDetailScreen {
             MachineRefusalCodes.sentence[detail.composerRefusal]
                 ?: ComposerModel.noticeFor(detail.composerRefusal).copy
         },
+        composerNoticeDetail = if (detail.composerRefusal.isEmpty()) "" else detail.composerRefusalDetail,
         composerRetainsDraft = ComposerModel.noticeFor(detail.composerRefusal).retainsDraft,
         composerShut = ComposerModel.shutCopyFor(
             ComposerModel.availabilityFor(

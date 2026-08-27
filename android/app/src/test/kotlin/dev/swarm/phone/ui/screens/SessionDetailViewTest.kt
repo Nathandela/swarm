@@ -7,6 +7,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.R
 import dev.swarm.phone.theme.SwarmTheme
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.InteractionItem
@@ -15,7 +16,10 @@ import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.UndeliveredInput
 import dev.swarm.phone.ui.UndeliveredLedger
+import dev.swarm.phone.ui.kit.ComposerModel
+import dev.swarm.phone.ui.kit.Kit
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.SendState
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
@@ -529,4 +533,77 @@ class SessionDetailViewTest {
     //   - `release is placed exactly while the lease is held and take control is not`
     // The controls, the tags and the notices they asserted are gone from the screen.
 
+    // ---- W2.3: one refusal, said once (phone-refit-playbook §3) -----------------------------
+
+    /** A refused send with the machine's words riding beside the refusal token. */
+    private fun refusedPanel(detail: String): SessionDetailPanel {
+        val refused = SessionDetail(
+            sessionId = "mbp/api",
+            online = true,
+            journalStale = false,
+            composerState = SendState.REFUSED,
+            composerRefusal = "INPUT_BUSY",
+            composerRefusalDetail = detail,
+        )
+        return SessionDetailScreen.of(
+            refused,
+            TranscriptScreen.of(emptyList()),
+            SessionLease(sessionId = refused.sessionId, online = true),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
+        )
+    }
+
+    private fun View.textViews(): List<TextView> {
+        val found = mutableListOf<TextView>()
+        fun walk(v: View) {
+            if (v is TextView) found += v
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(this)
+        return found
+    }
+
+    /**
+     * THE CONTRACT'S PREMISE, MADE TRUE. The composer-notice path carried only
+     * `ComposerModel.noticeFor(state).copy`; the machine's words reached the reader through the
+     * toast's mono suffix alone, and W2.3 deletes the toast. So the words ride as
+     * `composerRefusalDetail` and are drawn as the kit's mono tertiary cell directly under the
+     * sentence they qualify -- and not at all when the machine sent none.
+     */
+    @Test
+    fun `the machine's words are drawn under the composer notice and absent when empty`() {
+        val words = "session \"mbp/api\" had input on its line, so this message was not written"
+        val root = view(refusedPanel(detail = words))
+        val notice = root.kitRequire(DetailTag.COMPOSER_NOTICE)
+        val cell = root.kitRequire(DetailTag.COMPOSER_NOTICE_DETAIL)
+        assertEquals(words, textOf(cell))
+        val column = notice.parent as ViewGroup
+        assertSame(
+            "the machine's words sit directly under the sentence they qualify",
+            cell,
+            column.getChildAt(column.indexOfChild(notice) + 1),
+        )
+        assertEquals(
+            "the cell is the kit's mono tertiary cell (`noticeDetail`, `.sheet2 .ctx`): visibly the " +
+                "machine talking, never this app's own body type",
+            Kit.colour(context, R.color.swarm_text_tertiary),
+            (cell as TextView).currentTextColor,
+        )
+        assertNull(
+            "no words, no cell: an empty mono line is a cell reserved for a reason that does not exist",
+            view(refusedPanel(detail = "")).kitFind(DetailTag.COMPOSER_NOTICE_DETAIL),
+        )
+    }
+
+    /** Fence (W2.3): the sentence is on the view tree once, whatever else the screen draws. */
+    @Test
+    fun `a refused send says its sentence exactly once across the view tree`() {
+        val sentence = ComposerModel.noticeFor("INPUT_BUSY").copy
+        val root = view(refusedPanel(detail = "the machine said so"))
+        assertEquals(
+            "one refused send reports itself more than once on one screen",
+            1,
+            root.textViews().count { it.text.toString() == sentence },
+        )
+    }
 }
