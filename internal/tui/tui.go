@@ -1,10 +1,10 @@
 // Package tui is the Epic 7 client-side terminal UI: a screen router that hosts
-// the general view (grouped session board), the launch form, and an attach
-// placeholder (attach passthrough is Epic 8). It talks to the daemon only through
+// the general view (grouped session board), the launch, handoff and options
+// forms, and an attach placeholder (attach passthrough is Epic 8). It talks to the daemon only through
 // the narrow Client interface, so every unit test drives it against an in-memory
 // stub — no live daemon, no socket (E7.7).
 //
-// The whole program is a single tea.Model (the router). The general/launch/attach
+// The whole program is a single tea.Model (the router). The screen
 // sub-models are plain structs the router dispatches to; the router is the only
 // shared shell. New eagerly performs the initial List so the first paint already
 // lists every session (N-1, the eager-load pin).
@@ -166,7 +166,7 @@ func workingAnimationTick() tea.Cmd {
 	return tea.Tick(workingAnimationInterval, func(time.Time) tea.Msg { return workingAnimationMsg{} })
 }
 
-// rootModel is the screen router: the only tea.Model, holding the three
+// rootModel is the screen router: the only tea.Model, holding the screen
 // sub-models and the shared client/size state.
 type rootModel struct {
 	client Client
@@ -600,7 +600,7 @@ func (m rootModel) View() tea.View {
 	case m.screen == screenHandoff:
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
 	case m.screen == screenOptions:
-		content = m.composeBoard(m.options.view(), optionsHint)
+		content = m.composeBoard(m.options.view(m.width), optionsHint)
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
