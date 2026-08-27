@@ -275,7 +275,9 @@ func Restart(cfg ClientConfig) error {
 // It is the lock that is consulted, not the pidfile, because the pidfile is
 // best-effort (daemon.go's writePIDFile ignores its error) while the flock is the
 // singleton itself. The lock is taken and released immediately, so this never
-// blocks a daemon that is starting.
+// blocks a daemon that is starting. Like every other acquireLock caller it CREATES
+// the lock file (0600) if the directory exists and the file does not — an empty
+// file the next daemon start would have created anyway.
 //
 // Only ErrAlreadyRunning — a live holder — reports false. Every other error, a
 // state dir that does not exist or one this user cannot open, also reports true:

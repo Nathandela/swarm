@@ -63,6 +63,10 @@ func writeSavedEnv(stateDir string) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil { // the content reaches disk before the rename names it
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -79,6 +83,12 @@ func writeSavedEnv(stateDir string) error {
 // When no daemon has ever saved one, the returned error satisfies
 // errors.Is(err, os.ErrNotExist) — the caller's cue that an unattended restart has
 // no environment to spawn from and must refuse rather than fall back to its own.
+//
+// A file that exists reads back NON-NIL even when it is empty, because nil is not a
+// neutral value downstream: ClientConfig.Env reads nil as "no environment supplied"
+// and inherits the caller's, so a truncated file returned as nil would hand the
+// timer's own bare environment to the replacement daemon silently. Empty and
+// non-nil spawns with nothing but the SWARM_DAEMON_* stamps, which fails loudly.
 func LoadSavedEnv(stateDir string) ([]string, error) {
 	f, err := os.Open(SavedEnvPath(stateDir))
 	if err != nil {
@@ -86,7 +96,7 @@ func LoadSavedEnv(stateDir string) ([]string, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var env []string
+	env := []string{}
 	scan := bufio.NewScanner(f)
 	for scan.Scan() {
 		if line := scan.Text(); line != "" {

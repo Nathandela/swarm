@@ -83,6 +83,29 @@ func TestLoadSavedEnvMissing(t *testing.T) {
 	}
 }
 
+// TestLoadSavedEnvEmptyFile fences the nil/non-nil distinction ClientConfig.Env is
+// built on: a saved file that exists but holds nothing must read back as an EMPTY,
+// NON-NIL slice. Read back as nil it would mean "no env supplied" at the spawn, and
+// the unattended restart would silently inherit the timer's environment — the exact
+// failure L2 exists to prevent, arrived at through the safest-looking file on disk.
+func TestLoadSavedEnvEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(SavedEnvPath(dir), nil, 0o600); err != nil {
+		t.Fatalf("write empty saved env: %v", err)
+	}
+	env, err := LoadSavedEnv(dir)
+	if err != nil {
+		t.Fatalf("LoadSavedEnv on an empty file: %v", err)
+	}
+	if env == nil {
+		t.Fatal("LoadSavedEnv on an existing empty file returned a NIL slice; a nil Env means "+
+			"\"inherit the caller's environment\" at the spawn, so it must be empty-but-non-nil")
+	}
+	if len(env) != 0 {
+		t.Fatalf("LoadSavedEnv on an empty file = %q, want no entries", env)
+	}
+}
+
 // TestSpawnDaemonEnvironment is THE environment test: the invariant L2 exists for.
 // It spawns for real through defaultSpawnDaemon — no fake seam — and reads what the
 // child actually received out of the daemon log.
@@ -150,6 +173,14 @@ func TestLockFree(t *testing.T) {
 		if !LockFree(cfg) {
 			t.Fatal("LockFree = false on an unheld lock, want true")
 		}
+		// The probe must not keep what it took: a held-open lock would lock the daemon
+		// this very converge is about to spawn out of its own singleton. flock is
+		// per-open-file-description, so a leak inside this process still contends here.
+		f, err := acquireLock(cfg.LockPath)
+		if err != nil {
+			t.Fatalf("lock not released by LockFree: acquireLock = %v", err)
+		}
+		_ = releaseLock(f)
 	})
 
 	t.Run("held lock", func(t *testing.T) {
