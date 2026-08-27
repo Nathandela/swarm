@@ -38,6 +38,7 @@ package skeleton
 // the brief m.mu, preserving the no-head-of-line-blocking property (L1).
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -387,6 +388,22 @@ func (s *tapSub) Submit(text string) error {
 		return protocol.ErrSubmitUnsupported
 	}
 	return sm.Submit(text)
+}
+
+// ControlKeys forwards DAEMON-AUTHORED keys -- a turn interrupt, a dialog answer -- on the frame
+// that carries their provenance, so the shim writes them without counting them as somebody
+// typing (phone refit W2.1, agents-tracker-d45a.2). An upstream that proves no such frame gets
+// them as Input: today's behaviour, a disclosed degrade that a daemon restart resolves.
+func (s *tapSub) ControlKeys(p []byte) error {
+	if s.mode != readWrite {
+		return nil
+	}
+	if cw, ok := s.t.up.(protocol.ControlInputWriter); ok {
+		if err := cw.ControlInput(p); !errors.Is(err, protocol.ErrControlInputUnsupported) {
+			return err
+		}
+	}
+	return s.t.up.Input(p)
 }
 
 // Resize forwards to the shared upstream for a readWrite subscriber and updates

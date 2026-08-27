@@ -117,7 +117,7 @@ func (d *Daemon) applyDecision(session, verdict, action string) error {
 		return err
 	}
 	defer func() { _ = sub.Close() }()
-	if err := sub.Input([]byte(keys)); err != nil {
+	if err := sub.ControlKeys([]byte(keys)); err != nil {
 		return fmt.Errorf("writing the dialog's keys into session %q: %w", session, err)
 	}
 	return nil

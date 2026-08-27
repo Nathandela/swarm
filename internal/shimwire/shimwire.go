@@ -75,6 +75,13 @@ const (
 	// the reason and is empty on success. A submit is answered on the same connection,
 	// in order, so a caller may hold one in flight and wait for it.
 	TypeSubmitResult = "submit_result"
+	// TypeControlInput is a daemon->shim frame carrying keys the DAEMON authored -- a turn
+	// interrupt, a dialog answer -- rather than bytes somebody typed (phone refit W2.1,
+	// agents-tracker-d45a.2). Provenance is a property of who sent the frame: the shim writes
+	// these bytes to the PTY exactly as it writes TDataIn, but does not count them against the
+	// next TypeSubmit. The shim never judges what a byte does to the input line (an owner's
+	// Escape at the terminal is the identical byte); it only records which door it came through.
+	TypeControlInput = "control_input"
 )
 
 // RefusedInputBusy is the one STABLE reason token a TypeSubmitResult carries: somebody
@@ -123,6 +130,13 @@ type Control struct {
 	// degrades to today's two unlocked writes (G-D) and the merge stays possible until
 	// the shim is replaced -- which is a disclosed degrade, not a silent one.
 	SubmitTransaction bool `json:"submit_transaction,omitempty"` // hello (shim reply)
+	// ControlInput is an OPTIONAL hello capability advertised by the SHIM: it honours
+	// TypeControlInput as a non-counting write. An old shim never sets it, so a new daemon
+	// sends its control keys as ordinary input (G-D) -- today's behaviour, disclosed.
+	ControlInput bool `json:"control_input,omitempty"` // hello (shim reply)
+	// Keys rides a TypeControlInput: the daemon-authored bytes, written verbatim. They are
+	// the adapters' recorded control sequences (ESC, a digit), which JSON carries exactly.
+	Keys string `json:"keys,omitempty"` // control_input
 	// Text rides a TypeSubmit: the whole of one message, without its carriage return.
 	// The shim adds the return itself, because the point of the verb is that nothing
 	// may land between the two.
@@ -142,6 +156,7 @@ type Caps struct {
 	SnapshotChunking  bool
 	SnapshotOnly      bool
 	SubmitTransaction bool
+	ControlInput      bool
 }
 
 // Caps extracts the capability fields from a hello Control.
@@ -150,6 +165,7 @@ func (c Control) Caps() Caps {
 		SnapshotChunking:  c.SnapshotChunking,
 		SnapshotOnly:      c.SnapshotOnly,
 		SubmitTransaction: c.SubmitTransaction,
+		ControlInput:      c.ControlInput,
 	}
 }
 

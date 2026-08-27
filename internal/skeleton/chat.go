@@ -659,7 +659,7 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		return "", fmt.Errorf("turn interrupt: tap session %q: %w", session, err)
 	}
 	defer func() { _ = sub.Close() }()
-	if err := sub.Input(keys); err != nil {
+	if err := sub.ControlKeys(keys); err != nil {
 		return "", fmt.Errorf("turn interrupt: writing the interrupt into session %q: %w", session, err)
 	}
 	// Stopping a turn is driving the session as much as sending into it is.

@@ -233,7 +233,7 @@ func (s *server) serveConn(conn net.Conn) {
 				// cw.chunkSnapshot is written and read only in this read-loop goroutine
 				// (hub.attach reads it), so it never races the attach writer goroutine.
 				cw.chunkSnapshot = ctrl.SnapshotChunking
-				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true})
+				cw.writeControl(shimwire.Control{Type: shimwire.TypeHello, WireVersion: shimwire.Version, SnapshotChunking: true, SnapshotOnly: true, SubmitTransaction: true, ControlInput: true})
 				if ctrl.WireVersion != shimwire.Version {
 					return // close only this connection on version skew
 				}
@@ -270,6 +270,11 @@ func (s *server) serveConn(conn net.Conn) {
 					res.Refused = err.Error()
 				}
 				cw.writeControl(res)
+			case shimwire.TypeControlInput:
+				// Daemon-authored keys (an interrupt, a dialog answer): the non-counting
+				// write. The bytes reach the PTY exactly as typed input would; what differs
+				// is the frame they arrived on, and that is the whole of the judgement made.
+				_, _ = s.ptyIn.Write([]byte(ctrl.Keys))
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
 				// backend, and the agent may now be spawned with AgentArgs appended.
@@ -834,7 +839,8 @@ func (p *ptyWriter) Write(b []byte) (int, error) {
 }
 
 // WriteInput is Write for bytes somebody TYPED (TDataIn), which are the only bytes
-// that dirty the input line.
+// that dirty the input line. Daemon-authored control keys (shimwire.TypeControlInput)
+// go through Write for the same reason emulator replies do: they are not somebody typing.
 func (p *ptyWriter) WriteInput(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -51,8 +51,10 @@ func TestTypeConstants(t *testing.T) {
 		TypeResize:     "resize",
 		TypeSignal:     "signal",
 		TypeExitReport: "exit_report",
-		SigTerm:        "term",
-		SigKill:        "kill",
+		// W2.1 (phone-refit-playbook §3): daemon-authored control keys carry their provenance.
+		TypeControlInput: "control_input",
+		SigTerm:          "term",
+		SigKill:          "kill",
 	}
 	for got, want := range cases {
 		if got != want {
@@ -74,6 +76,10 @@ func TestRoundTrip_EveryMessageType(t *testing.T) {
 		{"exit-report-clean", Control{Type: TypeExitReport, ExitCode: intPtr(0), ExitSignal: ""}},
 		{"exit-report-code", Control{Type: TypeExitReport, ExitCode: intPtr(7)}},
 		{"exit-report-signal", Control{Type: TypeExitReport, ExitCode: intPtr(137), ExitSignal: "SIGKILL"}},
+		// W2.1 (phone-refit-playbook §3): the capability on the hello reply and the frame it enables.
+		{"hello-control-input-cap", Control{Type: TypeHello, WireVersion: Version, ControlInput: true}},
+		{"control-input-interrupt", Control{Type: TypeControlInput, Keys: "\x1b"}},
+		{"control-input-dialog-answer", Control{Type: TypeControlInput, Keys: "3"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,7 +143,8 @@ func TestEncode_OmitsZeroValuedOptionalFields(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	s := string(b)
-	for _, absent := range []string{"cols", "rows", "sig", "exit_code", "exit_signal"} {
+	// W2.1 (phone-refit-playbook §3): a plain hello also carries no control_input capability and no keys.
+	for _, absent := range []string{"cols", "rows", "sig", "exit_code", "exit_signal", "control_input", "keys"} {
 		if strings.Contains(s, absent) {
 			t.Errorf("hello message unexpectedly contains %q: %s", absent, s)
 		}
