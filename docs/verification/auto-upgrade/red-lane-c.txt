@@ -218,3 +218,47 @@ GATES on the final tree:
     $ go test -race -count=1 ./internal/converge/       -> ok  2.055s, 19/19 pass
     $ golangci-lint run ./internal/converge/            -> 0 issues.
     $ gofmt -l internal/converge/                       -> empty
+
+KNOWN GAP -- REAL, AND DELIBERATELY NOT FENCED HERE
+
+Rule 3 refuses a daemon.env that is absent or empty. It does NOT refuse one that
+is non-empty but DEGRADED, and degraded is the likelier failure. Raised by lane A
+after this suite was green.
+
+The mechanism: daemon.env is rewritten on every daemon start from that daemon's
+own environment (the plan's L2, "an interactive start refreshes it"). A daemon
+started from a poorer environment therefore overwrites a good file with a poorer
+one. FilterEnv over a launchd or cron context keeps PATH=/usr/bin:/bin:/usr/sbin:
+/sbin, HOME and SHELL, and carries no provider key. Three lines, non-empty, so
+len(env) == 0 does not fire; rule 4 spawns from it; the phone-launched sessions
+that follow cannot resolve `claude` on that PATH and lose ADR-006 billing
+inheritance. It is self-stabilising -- every later unattended restart faithfully
+rewrites the same degraded content and logs "converged" each time.
+
+Narrow today: EnsureDaemon (cmd/swarm/main.go:266) and the two daemon.Restart
+call sites are the only ways a daemon starts, and under the plan as designed the
+timer never spawns from launchd's environment (rule 0 exits first; rules 1-3
+cannot spawn; rule 4 uses the saved slice). The exposure is any OTHER `swarm`
+client command run from a launchd or cron context, which D-1 auto-starts a daemon
+for. Section 6 names environment STALENESS (rotated keys) but not degradation.
+
+A read-side guard was considered and rejected, not merely skipped. The proposed
+form -- warn when the saved env carries neither ANTHROPIC_API_KEY nor
+OPENAI_API_KEY -- misfires on healthy machines: internal/persist/env.go's
+allowlist carries no Bedrock, Vertex or subscription-auth variable of any kind,
+so a subscription-authenticated Claude Code user, a Bedrock user and a Vertex
+user all have a saved env with no provider key and nothing wrong with it. The
+warning would fire every night, forever, on those machines, and a nightly line
+that is wrong on a healthy machine trains its reader to skip the night it is
+right. It is also false-negative-prone: a cron context that DOES export the key
+but carries launchd's PATH passes the check and is still degraded.
+
+The invariant belongs where the file is written, not where it is read. A
+predicate on the read side is a proxy for a write-side rule, and lane A declined
+to change the write side because both candidate fixes contradict the plan's
+"rewritten on every start" -- a decision change above a lane's footprint. The
+same reasoning disqualifies a proxy for it here, with the added cost that the
+proxy is a heuristic where the write-side rule would be exact.
+
+Recorded for the orchestrator as a section 6 risk and, if the decision goes that
+way, an ADR-020 amendment. Not implemented in this lane.
