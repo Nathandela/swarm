@@ -215,3 +215,131 @@ Deviation from the contract's file list: `internal/protocol/fromdaemon.go` gaine
 in production. `tapSub.ControlKeys` also treats `ErrControlInputUnsupported` as the old-shim
 degrade (the contract's snippet only shows the missing-interface case), because the production
 upstream always has the method once it exists.
+
+## W2.4 Claude's synthetic prompts are not messages
+
+Fixture check first, as the contract asks: no `prompt` in `internal/adapter/claude/testdata/interaction/*.json`
+opens with `<` (the six fixtures carry PreToolUse/PostToolUse/PermissionRequest/Stop bodies), so
+the golden corpus tests at `interaction_test.go:232` and `:259` are unchanged and `:54` is untouched.
+
+Tests written first, appended to `internal/adapter/claude/interaction_test.go`:
+`TestUserPromptSubmit_SyntheticEnvelopesShapeNothing` (table over the fourteen recorded tags, plus
+an attributed `<teammate-message ...>`), `TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept`
+(the negative control: `fix the <div> wrapper`, `<title>Foo</title> what does this render?`),
+`TestIsSyntheticPrompt_GoldenTagListMatchesTheRecordedCorpus`, `TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept`.
+
+### RED
+
+The two behavioural tests were run first so the RED is the defect and not a compile error:
+
+```
+--- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing (0.02s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/system-reminder (0.01s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/task-notification (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/teammate-message (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/agent-message (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/tool_use_error (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/persisted-output (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/command-name (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/command-message (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/local-command-caveat (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/local-command-stdout (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/local-command-stderr (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/bash-input (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/bash-stdout (0.00s)
+    --- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing/bash-stderr (0.00s)
+--- PASS: TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept (0.00s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	1.094s
+FAIL
+
+(one failure's text) interaction_test.go:401: a <system-reminder> envelope shaped 1 item(s), want 0: the CLI's own prompt was drawn as a message the owner typed: [{Kind:user_message ... Text:<system-reminder>
+```
+
+Then the two predicate tests, which fail to compile until the predicate exists:
+
+```
+# github.com/Nathandela/swarm/internal/adapter/claude [github.com/Nathandela/swarm/internal/adapter/claude.test]
+internal/adapter/claude/interaction_test.go:437:24: undefined: syntheticPromptTags
+internal/adapter/claude/interaction_test.go:438:75: undefined: syntheticPromptTags
+internal/adapter/claude/interaction_test.go:441:6: undefined: syntheticPromptTags
+internal/adapter/claude/interaction_test.go:455:6: undefined: isSyntheticPrompt
+internal/adapter/claude/interaction_test.go:459:6: undefined: isSyntheticPrompt
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude [build failed]
+FAIL
+```
+
+### GREEN
+
+`go test -race -count=1 ./internal/adapter/claude/` (whole package, 55 tests):
+
+```
+--- PASS: TestGoldenCorpus_TheRecordedPayloadsShapeExactlyTheseItems (0.02s)
+--- PASS: TestGoldenCorpus_PassesCheckInteractionFixture (0.03s)
+--- PASS: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing (0.01s)
+--- PASS: TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept (0.00s)
+--- PASS: TestIsSyntheticPrompt_GoldenTagListMatchesTheRecordedCorpus (0.00s)
+--- PASS: TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept (0.00s)
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	3.620s
+```
+
+### Gates
+
+`go build ./...` exit 0, `go vet ./...` exit 0, `golangci-lint run ./...` 0 issues (2.12.2).
+The module-wide `go test -race ./...` recorded under W2.1 already had this change in the tree for
+every package that ran after `internal/adapter/claude` (the adapter package itself was tested
+with the change in the targeted GREEN above). For this commit the packages that import
+`internal/adapter/claude` (`go list -deps`) were run again under `-race` with the SWARM_* variables
+unset:
+
+```
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	4.466s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	3.714s
+FAIL	github.com/Nathandela/swarm/internal/skeleton	1221.946s   (549 pass, 54 fail: every failure "shim ... did not confirm serving",
+                                                                    during the other lane's Gradle compile burst; no test failed on an assertion)
+ok  	github.com/Nathandela/swarm/cmd/swarm	76.581s
+ok  	github.com/Nathandela/swarm/cmd/swarm-char	14.352s
+
+rerun at load average 3.4:
+ok  	github.com/Nathandela/swarm/internal/skeleton	425.273s   (497 pass, 0 fail; includes TestSlice0_* and the two W2.1 control-key tests)
+```
+
+W2.1's untouched tests, run by name under `-race` (`s0_realclipty_test.go` is behind
+`//go:build realcli` and needs a real `claude`; it is untouched and was not run):
+
+```
+--- PASS: TestG4_ARefusedSendLeavesTheSessionsTerminalUntouched (4.75s)
+--- PASS: TestSlice0_OwnerEnterAndTwoPhoneSendsEachLandAsOneWholeMessage (1.28s)
+--- PASS: TestSlice0_AnOwnerDraftAndItsEnterNeverSplitAPhoneSend (1.07s)
+--- PASS: TestSlice0_TwoPhoneSendsAreNotMergedIntoOneSubmit (0.54s)
+--- PASS: TestSlice0_AnOwnerDraftIsNeverMergedWithAPhoneSend (0.22s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	10.598s
+```
+
+### Negative controls (clean tree at a1189887; the file restored with `git checkout --`)
+
+```
+## Negative control 1: the closed-tag half of the rule removed (any prompt opening with a listed tag is dropped)
+ internal/adapter/claude/interaction.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+--- FAIL: TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept (0.00s)
+    interaction_test.go:456: isSyntheticPrompt("<system-reminder> keeps showing up in my transcripts, what is it?") = true, want false: the envelope is never closed
+    interaction_test.go:456: isSyntheticPrompt("<system-reminder>") = true, want false: the envelope is never closed
+    interaction_test.go:456: isSyntheticPrompt("<command-name>/clear") = true, want false: the envelope is never closed
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude	0.944s
+FAIL
+interaction.go restored
+
+## Negative control 2: the filter bypassed at the UserPromptSubmit case
+ internal/adapter/claude/interaction.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+--- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeNothing (0.02s)
+FAIL
+FAIL
+interaction.go restored
+```
+
+Control 1 leaves the three other tests green (the envelopes are still dropped, the bracketed
+prompts still kept), so the failure isolates the closed-tag half of the rule; control 2 fails only
+the envelope table, so the bracketed-prompt control is not the filter's accident.
