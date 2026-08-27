@@ -68,7 +68,7 @@ func TestOptionsWindowNarrowTerminalKeepsSelectionVisible(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: cols, Height: 40})
 	m = send(m, keyRune('o'))
 	view := stripANSI(m.(rootModel).View().Content)
-	// The 30-cell group row still fits; the 61-cell order row degrades to the
+	// The 29-cell group row still fits; the 61-cell order row degrades to the
 	// compact picker rather than clipping "name" and the ▸ affordance away.
 	if !strings.Contains(view, "● status   ○ repo   ○ tag ▸") || !strings.Contains(view, "◂ arrival ▸") {
 		t.Fatalf("narrow options view:\n%s", view)
