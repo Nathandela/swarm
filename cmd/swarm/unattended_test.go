@@ -331,7 +331,11 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 		}
-		for _, want := range []string{"converged", "restarted from the saved environment"} {
+		// The third substring is converge's own prose for the benign gateway arm: a temp
+		// state dir has no unit, so the real supervisor returns ErrNotInstalled and the
+		// wiring maps it. Without it a RestartGateway that returned nil unconditionally
+		// would pass this case while never having attempted the gateway.
+		for _, want := range []string{"converged", "restarted from the saved environment", "no gateway unit is installed"} {
 			if !strings.Contains(stderr, want) {
 				t.Fatalf("stderr must contain %q; got:\n%s", want, stderr)
 			}
