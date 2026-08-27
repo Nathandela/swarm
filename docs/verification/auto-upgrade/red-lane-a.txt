@@ -20,3 +20,98 @@ internal/daemon/unattended_test.go:163:6: undefined: LockFree
 internal/daemon/unattended_test.go:170:7: undefined: LockFree
 FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
 FAIL
+
+--------------------------------------------------------------------------------
+2. RED for the two assertions added by the adversarial self-review
+--------------------------------------------------------------------------------
+
+TestLoadSavedEnvEmptyFile was written after the first commit, failing-first against
+the implementation as committed at 3b9eedf:
+
+$ go test -race ./internal/daemon/ -run 'TestLoadSavedEnvEmptyFile'
+--- FAIL: TestLoadSavedEnvEmptyFile (0.00s)
+    unattended_test.go:101: LoadSavedEnv on an existing empty file returned a NIL slice; a nil Env means "inherit the caller's environment" at the spawn, so it must be empty-but-non-nil
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/daemon	4.136s
+
+TestLockFree's release assertion passed against correct code, so its discrimination
+is proved by negative control A below instead.
+
+--------------------------------------------------------------------------------
+3. NEGATIVE CONTROLS — each is a one-line perturbation of the implementation,
+   applied IN PLACE in this agent's own private worktree and reverted with
+   `git checkout -- <file>` immediately after the run. Verbatim failing lines.
+--------------------------------------------------------------------------------
+
+A. LockFree leaks the lock instead of releasing it
+   (client.go: `_ = releaseLock(f)` -> `_ = f`)
+
+--- FAIL: TestLockFree (0.01s)
+    --- FAIL: TestLockFree/free_lock (0.00s)
+        unattended_test.go:181: lock not released by LockFree: acquireLock = daemon: another instance is already running
+
+B. writeSavedEnv saves the raw environment instead of the S-2 allowlist
+   (savedenv.go: `env := PolicyEnv(nil)` -> `env := daemonEnviron()`)
+
+--- FAIL: TestOpenWritesSavedEnv (0.09s)
+    unattended_test.go:54: first start: saved env = ["PATH=/first/bin" "HOME=/home/first" "LC_SWARM_PROBE=one" "AWS_SECRET_ACCESS_KEY=must-not-be-saved"], want ["PATH=/first/bin" "HOME=/home/first" "LC_SWARM_PROBE=one"]
+
+C. Open no longer writes daemon.env (daemon.go: the writeSavedEnv call removed)
+
+--- FAIL: TestOpenWritesSavedEnv (0.03s)
+    unattended_test.go:45: stat saved env: stat /tmp/swd3493005282/daemon.env: no such file or directory
+
+D. LoadSavedEnv flattens the error chain (savedenv.go: `%w` -> `%v`)
+
+--- FAIL: TestLoadSavedEnvMissing (0.00s)
+    unattended_test.go:82: LoadSavedEnv error = daemon: read saved environment: open /tmp/TestLoadSavedEnvMissing1917599238/001/daemon.env: no such file or directory, want one satisfying errors.Is(err, os.ErrNotExist)
+
+E. The saved file is world-readable (savedenv.go: `0o600` -> `0o644`)
+
+--- FAIL: TestOpenWritesSavedEnv (0.04s)
+    unattended_test.go:48: saved env mode = -rw-r--r--, want 0600
+
+F. daemon.env is written once and never refreshed (savedenv.go: early return when
+   the file already exists)
+
+--- FAIL: TestOpenWritesSavedEnv (0.05s)
+    unattended_test.go:69: second start: saved env = ["PATH=/first/bin" "HOME=/home/first" "LC_SWARM_PROBE=one"], want ["PATH=/second/bin" "LC_SWARM_PROBE=two"]
+
+G. THE MANDATORY ONE — the spawn reverts to the caller's environment
+   (client.go: the `if cfg.Env != nil { base = ... }` branch deleted, leaving
+   `base := os.Environ()`)
+
+--- FAIL: TestSpawnDaemonEnvironment (0.30s)
+    --- FAIL: TestSpawnDaemonEnvironment/saved_env_replaces_the_caller's (0.24s)
+        unattended_test.go:114: child env lacks LC_SWARM_PROBE=saved; got:
+        unattended_test.go:117: child env carries the CALLER's LC_SWARM_PROBE=caller; got:
+
+   (Both assertions fired. The dumped environment that followed each line showed
+   LC_SWARM_PROBE=caller and no LC_SWARM_PROBE=saved, as expected.)
+
+--------------------------------------------------------------------------------
+4. NOTE ON THE ENVIRONMENT TEST'S CHILD PROGRAM
+--------------------------------------------------------------------------------
+
+The plan's test table calls for a real spawn, no fake. The child is a two-line
+shell script that ignores its argument and execs /usr/bin/env, NOT /usr/bin/env
+itself: `env daemon` does not ignore the "daemon" argument defaultSpawnDaemon
+passes, it tries to exec a program of that name and exits 127 without printing
+anything.
+
+    $ /usr/bin/env daemon
+    env: daemon: No such file or directory
+    exit=127
+
+Everything else in the test is production: defaultSpawnDaemon is called directly,
+forks a real detached child, and the assertions read the environment that child
+actually received out of the daemon log the spawn redirects it to.
+
+--------------------------------------------------------------------------------
+5. GREEN
+--------------------------------------------------------------------------------
+
+$ go build ./...                                  # ok
+$ go vet ./internal/daemon/                       # ok
+$ go test -race ./internal/daemon/                # ok, whole package
+$ golangci-lint run ./internal/daemon/            # 0 issues
