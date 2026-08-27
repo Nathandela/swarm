@@ -1,0 +1,184 @@
+RED evidence -- lane C: internal/converge, the `swarm daemon restart --unattended` rule engine
+Plan: docs/specifications/auto-upgrade-plan.md revision 5, section 3 (L2) and the section 4 test table
+Goal: implementation-goals.md GG-5 (the failing-first run is evidenced)
+Command: go test -race ./internal/converge/
+Recorded: 2026-08-27, worktree branch worktree-agent-ab342286b82d6e745
+
+STAGE 1 -- tests written, no implementation file at all.
+
+    $ go test -race ./internal/converge/
+    github.com/Nathandela/swarm/internal/converge: no non-test Go files in internal/converge
+    FAIL    github.com/Nathandela/swarm/internal/converge [build failed]
+    FAIL
+
+STAGE 2 -- the exported surface added as signature-only stubs (Run returns
+ExitFailed unconditionally and calls no dependency; SessionsFromStore and
+HelloVia return zero values), so the suite compiles and every test fails on
+BEHAVIOUR rather than on a missing package. This is the failing-first run of
+record: each rule fails for the absence of its own logic.
+
+The line numbers below are the test files as they stood at THIS run. The review
+round further down later inserted TestMissingDependencyFailsBeforeTouchingAnything
+into converge_test.go and rewrote the HelloVia harness in adapters_test.go, so
+the adapters_test.go references and the last converge_test.go reference no longer
+point at the same lines on the committed tree. The test NAMES are stable.
+
+--- FAIL: TestSessionsFromStoreReadsRealMetaFromDisk (0.04s)
+    adapters_test.go:50: read 0 sessions, want 3: []
+--- FAIL: TestHelloViaReturnsTheServedBuildVersion (0.00s)
+    adapters_test.go:132: HelloVia = "", want the served build version "dev"
+--- FAIL: TestHelloViaOnADeadSocketErrorsButNotAsAProtocolBump (0.00s)
+    adapters_test.go:141: HelloVia against a socket nobody is listening on: err = nil, want an error
+--- FAIL: TestRule0FreeLockExitsConvergedAndTouchesNothingElse (0.00s)
+    converge_test.go:162: Run with a free lock = 1, want ExitConverged (0)
+    converge_test.go:164: call trace = [], want [LockFree]
+--- FAIL: TestRule1HelloDecidesIdempotence (0.00s)
+    --- FAIL: TestRule1HelloDecidesIdempotence/same_build_is_the_nightly_no-op (0.00s)
+        converge_test.go:217: Run = 1, want 0
+        converge_test.go:219: call trace = [], want [LockFree Hello]
+    --- FAIL: TestRule1HelloDecidesIdempotence/a_different_build_proceeds_to_the_disk_checks_and_restarts (0.00s)
+        converge_test.go:217: Run = 1, want 0
+        converge_test.go:219: call trace = [], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+    --- FAIL: TestRule1HelloDecidesIdempotence/a_protocol_bump_proceeds_without_a_usable_build_version (0.00s)
+        converge_test.go:217: Run = 1, want 0
+        converge_test.go:219: call trace = [], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+    --- FAIL: TestRule1HelloDecidesIdempotence/a_wedged_daemon_defers (0.00s)
+        converge_test.go:217: Run = 1, want 2
+        converge_test.go:219: call trace = [], want [LockFree Hello]
+--- FAIL: TestRule1WedgedDaemonLogsTheDialError (0.00s)
+    converge_test.go:232: Run against a wedged daemon = 1, want ExitDeferred (2)
+--- FAIL: TestRule2BusySessionDefersAndIsNamed (0.00s)
+    --- FAIL: TestRule2BusySessionDefersAndIsNamed/an_active_turn_is_working (0.00s)
+        converge_test.go:276: Run with a working session = 1, want ExitDeferred (2)
+        converge_test.go:284: Run wrote nothing to Log; every exit must write exactly one reason line
+    --- FAIL: TestRule2BusySessionDefersAndIsNamed/an_idle_turn_on_a_prompt_needs_input (0.00s)
+        converge_test.go:276: Run with a needs_input session = 1, want ExitDeferred (2)
+        converge_test.go:284: Run wrote nothing to Log; every exit must write exactly one reason line
+    --- FAIL: TestRule2BusySessionDefersAndIsNamed/an_idle_turn_on_a_permission_needs_input (0.00s)
+        converge_test.go:276: Run with a needs_input session = 1, want ExitDeferred (2)
+        converge_test.go:284: Run wrote nothing to Log; every exit must write exactly one reason line
+    --- FAIL: TestRule2BusySessionDefersAndIsNamed/an_unknown_turn_is_working (0.00s)
+        converge_test.go:276: Run with a working session = 1, want ExitDeferred (2)
+        converge_test.go:284: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRule2CompletedAndReadyForReviewProceed (0.00s)
+    converge_test.go:300: Run with only idle sessions = 1, want ExitConverged (0)
+    converge_test.go:303: idle sessions must not stop the converge
+    converge_test.go:305: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRule2SessionsErrorDefers (0.00s)
+    converge_test.go:315: Run with an unreadable roster = 1, want ExitDeferred (2)
+    converge_test.go:320: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRule3NoSavedEnvRefusesAndNamesTheManualStep (0.00s)
+    converge_test.go:332: Run with no saved env = 1, want ExitRefused (3)
+    converge_test.go:340: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRule3UnreadableSavedEnvFails (0.00s)
+    converge_test.go:356: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRule4ConvergesInOrderWithTheSavedEnvironment (0.00s)
+    converge_test.go:367: Run = 1, want ExitConverged (0)
+    converge_test.go:369: call trace = [], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+--- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves (0.00s)
+    --- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves/a_failed_spawn_leaves_the_gateway_untouched (0.00s)
+        converge_test.go:421: Run wrote nothing to Log; every exit must write exactly one reason line
+    --- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves/no_gateway_unit_installed_is_benign (0.00s)
+        converge_test.go:416: Run = 1, want 0
+        converge_test.go:419: RestartGateway called = false, want true
+        converge_test.go:421: Run wrote nothing to Log; every exit must write exactly one reason line
+    --- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves/any_other_gateway_error_fails_the_run (0.00s)
+        converge_test.go:419: RestartGateway called = false, want true
+        converge_test.go:421: Run wrote nothing to Log; every exit must write exactly one reason line
+--- FAIL: TestRefusedHelloSpawnsOnceAndOnlyAfterTheDiskChecks (0.00s)
+    converge_test.go:437: Run against a protocol-bumped daemon = 1, want ExitConverged (0)
+--- FAIL: TestNilLogDoesNotPanic (0.00s)
+    converge_test.go:462: Run with a nil Log = 1, want ExitConverged (0)
+FAIL
+FAIL    github.com/Nathandela/swarm/internal/converge    1.012s
+FAIL
+
+(TestExitCodesAreTheDocumentedNumbers passed at stage 2: it fences the four
+constants, which the stub already declared, not any behaviour.)
+
+NEGATIVE CONTROL -- run after the suite went green, on commit 8370bea. Run was
+perturbed in this worktree to call RestartGateway BEFORE RestartDaemon (the
+"both or neither, in that order" property of rule 4), by hoisting the gateway
+call above the daemon call and holding its error:
+
+    gwErr := d.RestartGateway()
+    if err := d.RestartDaemon(env); err != nil { ... }
+    if err := gwErr; err != nil { ... }
+
+The order test must, and does, fail. Verbatim:
+
+    $ go test -race -run 'TestRule4ConvergesInOrderWithTheSavedEnvironment' ./internal/converge/
+    --- FAIL: TestRule4ConvergesInOrderWithTheSavedEnvironment (0.00s)
+        converge_test.go:369: call trace = [LockFree Hello Sessions SavedEnv RestartGateway RestartDaemon], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+    FAIL
+    FAIL    github.com/Nathandela/swarm/internal/converge    0.929s
+    FAIL
+
+The whole suite under the same perturbation -- three more tests catch it, and
+the "a failed spawn leaves the gateway untouched" arm catches the real hazard
+(a gateway kicked onto the new binary while the daemon stayed old):
+
+    $ go test -race ./internal/converge/
+    --- FAIL: TestRule1HelloDecidesIdempotence (0.00s)
+        --- FAIL: TestRule1HelloDecidesIdempotence/a_different_build_proceeds_to_the_disk_checks_and_restarts (0.00s)
+            converge_test.go:219: call trace = [LockFree Hello Sessions SavedEnv RestartGateway RestartDaemon], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+        --- FAIL: TestRule1HelloDecidesIdempotence/a_protocol_bump_proceeds_without_a_usable_build_version (0.00s)
+            converge_test.go:219: call trace = [LockFree Hello Sessions SavedEnv RestartGateway RestartDaemon], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+    --- FAIL: TestRule4ConvergesInOrderWithTheSavedEnvironment (0.00s)
+        converge_test.go:369: call trace = [LockFree Hello Sessions SavedEnv RestartGateway RestartDaemon], want [LockFree Hello Sessions SavedEnv RestartDaemon RestartGateway]
+    --- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves (0.00s)
+        --- FAIL: TestRule4GatewayFollowsTheDaemonOrNothingMoves/a_failed_spawn_leaves_the_gateway_untouched (0.00s)
+            converge_test.go:419: RestartGateway called = true, want false
+    FAIL
+    FAIL    github.com/Nathandela/swarm/internal/converge    0.824s
+    FAIL
+
+TestRefusedHelloSpawnsOnceAndOnlyAfterTheDiskChecks did NOT fail under this
+perturbation, and correctly so: it fences only that the spawn happens after both
+disk reads, which the perturbation preserves. The daemon-before-gateway order is
+fenced by the four failures above, not by that test.
+
+The perturbation was reverted with `git checkout -- internal/converge/converge.go`
+and the suite is green again.
+
+SECOND RED -- the adversarial review round added one rule the first pass had
+missed: a Deps function the orchestrator forgets to wire. Go exits a panicking
+process with status 2, which is precisely ExitDeferred ("nothing was touched,
+try again tomorrow"), so an unguarded nil would have had the nightly job lie to
+launchd -- possibly after the daemon had already been stopped. The test was
+written first and failed on the panic it exists to prevent. Verbatim head:
+
+    $ go test -race -run TestMissingDependencyFailsBeforeTouchingAnything ./internal/converge/
+    --- FAIL: TestMissingDependencyFailsBeforeTouchingAnything (0.00s)
+        --- FAIL: TestMissingDependencyFailsBeforeTouchingAnything/LockFree (0.00s)
+    panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+    [signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x5caf6d2]
+    ...
+    github.com/Nathandela/swarm/internal/converge.Run(...)
+        internal/converge/converge.go:101 +0x32
+    FAIL    github.com/Nathandela/swarm/internal/converge    0.882s
+    FAIL
+
+NEGATIVE CONTROL 2 -- HelloVia. The first version of this test stood up a real
+protocol.Server, which can only ever answer with the TEST binary's own
+version.Version; an adapter that ignored the reply and returned its own version
+would have passed it, and that adapter would make rule 1 see "already converged"
+every night forever. The test now runs a hand-rolled daemon that stamps a build
+version this binary has never heard of. Perturbing HelloVia to return
+version.Version instead of the reply's BuildVersion fails it. Verbatim:
+
+    $ go test -race -count=1 -run TestHelloViaReturnsTheServedBuildVersion ./internal/converge/
+    --- FAIL: TestHelloViaReturnsTheServedBuildVersion (0.02s)
+        adapters_test.go:155: HelloVia = "dev", want the SERVED build version "v0.0.0-served-by-the-daemon" (this binary is "dev")
+    FAIL
+    FAIL    github.com/Nathandela/swarm/internal/converge    0.846s
+    FAIL
+
+Reverted the same way; green again.
+
+GATES on the final tree (commit bcc8142 plus this file):
+
+    $ go build ./...                                    -> clean
+    $ go vet ./internal/converge/                       -> clean
+    $ go test -race -count=1 ./internal/converge/        -> ok  1.866s
+    $ golangci-lint run ./internal/converge/            -> 0 issues.
