@@ -2,7 +2,6 @@ package tui
 
 import (
 	"cmp"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -731,13 +730,7 @@ type tagDoneMsg struct {
 }
 
 func setTagCmd(c Client, id, tag string) tea.Cmd {
-	return func() tea.Msg {
-		tagger, ok := c.(interface{ SetTag(string, string) error })
-		if !ok {
-			return tagDoneMsg{id: id, tag: tag, err: errors.New("tagging is not supported by this daemon")}
-		}
-		return tagDoneMsg{id: id, tag: tag, err: tagger.SetTag(id, tag)}
-	}
+	return func() tea.Msg { return tagDoneMsg{id: id, tag: tag, err: c.SetTag(id, tag)} }
 }
 
 // tombstone records id as client-deleted (with an expiry) so a late buffered event for

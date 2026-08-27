@@ -1617,20 +1617,13 @@ func (cc *clientConn) handleRename(c Control) {
 	cc.replyOK(c.SessionID)
 }
 
-// handleSetTag persists a sanitized manual grouping label. The optional daemon
-// surface keeps older/custom DaemonAPI implementations source-compatible and
-// gives a clear refusal when tagging is unavailable.
+// handleSetTag persists a sanitized manual grouping label, mirroring handleRename.
 func (cc *clientConn) handleSetTag(c Control) {
 	local, ok := cc.resolveSession(c)
 	if !ok {
 		return
 	}
-	tagger, ok := cc.srv.d.(interface{ SetTag(string, string) error })
-	if !ok {
-		cc.replyError("set_tag: not supported")
-		return
-	}
-	if err := tagger.SetTag(local, SanitizeName(c.Tag)); err != nil {
+	if err := cc.srv.d.SetTag(local, SanitizeName(c.Tag)); err != nil {
 		cc.replyError("set_tag: " + err.Error())
 		return
 	}

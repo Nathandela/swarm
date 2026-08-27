@@ -319,6 +319,7 @@ type DaemonAPI interface {
 	Kill(id string) error
 	Delete(id string) error
 	Rename(id, name string) error            // update a session's display label (v0.5)
+	SetTag(id, tag string) error             // update a session's manual grouping label; "" clears it
 	Attach(id string) (SessionStream, error) // opened once per lease
 	Events() <-chan persist.Meta             // single status-change source; Server fans out
 }

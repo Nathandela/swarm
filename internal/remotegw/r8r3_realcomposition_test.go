@@ -64,6 +64,7 @@ func (b *r8Backend) Launch(daemon.LaunchSpec) (persist.Meta, error)    { return 
 func (b *r8Backend) Kill(string) error                                 { return nil }
 func (b *r8Backend) Delete(string) error                               { return nil }
 func (b *r8Backend) Rename(string, string) error                       { return nil }
+func (b *r8Backend) SetTag(string, string) error                       { return nil }
 func (b *r8Backend) Attach(string) (protocol.SessionStream, error)     { return nil, os.ErrNotExist }
 func (b *r8Backend) Events() <-chan persist.Meta                       { return b.events }
 func (b *r8Backend) AuthorizeCommand(protocol.DeviceCommandAuth) error { return nil }

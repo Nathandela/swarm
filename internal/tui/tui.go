@@ -39,6 +39,9 @@ type Client interface {
 	// Rename changes a session's display label (v0.5). An older daemon without the op
 	// returns an error, which the caller banners (skew-safe).
 	Rename(id, name string) error
+	// SetTag changes a session's manual grouping label; an empty tag clears it. An
+	// older daemon without the op returns an error, which the caller banners.
+	SetTag(id, tag string) error
 	Subscribe() (<-chan protocol.Event, error)
 	// SendInput types into a session through the owner-tier send_input op — the SAME
 	// path `swarm send` uses, so the TUI handoff trigger and the CLI verb are one code
