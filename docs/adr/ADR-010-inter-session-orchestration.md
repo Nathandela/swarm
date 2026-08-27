@@ -389,3 +389,158 @@ marker and no re-parenting happens (D4's rule that lineage never couples lifecyc
 `SessionView.supervision_pending` (live, sampled like `remote_controlled` so a flip fans out
 within ADR-008's roster bound) get their `protocol.md` rows in the same commit (GG-7). No new
 control op, no MCP, no skill, no slash command.
+
+## Amendment 4 (2026-08-26): hands-off handoff — pointers, not cooperation
+
+Amendments 2 and 3 both assume a source agent that can be asked. The TUI types an instruction into
+the source session; the source authors the six-section document, invokes the B1 command, captures
+the child id and supervises it. Every one of those steps needs a live, responsive agent sitting at
+a prompt. The cases the owner actually loses work to are the ones where that assumption fails — a
+rate-limited Claude session, one wedged mid-tool-call, one out of context — and in exactly those
+cases the supervised path's FIRST action, a `send_input` write into the source, is the action that
+cannot land. This amendment adds a second handoff method, `hands-off`, which asks the source for
+nothing at all: the human presses `h`, chooses the method, and swarm launches a new session that
+is told where the old conversation lives. It governs B2 and B3 where they conflict; B1, B4 and all
+of Amendment 3 are untouched for the supervised method, which remains what the form defaults to
+whenever it can work. Its clauses are lettered E because D1-D8 are this ADR's original decisions
+and are cited by that name throughout.
+
+### E1. The TUI MAY call `OpLaunch` — for the hands-off method only
+
+B2 says the TUI "never calls `OpLaunch` for this flow and never exposes launch-scope controls such
+as sandbox or permission bypasses." The first half is narrowed to the supervised method. The
+hands-off method has no cooperating source to delegate the launch to, so the TUI submits the
+launch itself, through the same `OpLaunch` every other owner-tier client already uses; there is no
+second launch path and no new op. The second half STANDS, unchanged and for both methods: the
+handoff form carries target CLI, model and method, and nothing else. Sandbox and permission-bypass
+flags are not on it, and hands-off is not the door through which they arrive — that half of B2 was
+never about who calls `OpLaunch`, it was about what a launch form is allowed to widen, and nothing
+here widens it. What the client sends is a source session id plus the form's three choices; the
+daemon composes everything else (E5), so the client's whole new authority is naming which session
+to hand off from, which is authority ADR-004 already grants any same-user process.
+
+### E2. B3's eligibility gate becomes the DEFAULT SUGGESTION for a `method` field, never the action selector
+
+B3 admits a handoff "only when the source process is running, its turn is idle, and its
+interaction is prompt, none, or unknown." Kept as the gate on the whole feature, that rule is not
+merely conservative, it is inverted: it refuses at precisely the moment a source cannot cooperate,
+which is the only moment a hands-off handoff is needed. The measured reason it cannot be repaired
+by widening the predicate is that there is no predicate to widen — a rate-limited Claude session is
+byte-identical on the wire to a healthy idle one. Same running process, same idle turn, same
+`prompt` interaction, same everything the daemon can see. A status-driven selector therefore routes
+the exact failure this feature exists for into the supervised path, where the instruction is typed
+into a session that will not read it until the limit lifts, and the human learns this by watching
+nothing happen.
+
+Status therefore SUGGESTS and never DECIDES. `h` opens the form on any row, including ended, lost,
+busy and permission-blocked ones. The form gains `method` as a field, whose DEFAULT follows B3's
+predicate — supervised where it holds, hands-off where it does not — and hands-off stays selectable
+on every row, including a healthy idle one, because the human may know something the roster cannot
+see. The method is frozen when the form opens and is displayed, so a roster event arriving while
+the form is open never changes the branch the human is about to press Enter on; only the human
+changes it.
+
+B3's revalidation clause is untouched. The supervised method still captures the source session id,
+still re-resolves the current roster row immediately before submission, and still refuses a
+permission request, an active or unknown turn, and an ended process, with the same separate
+messages. What changes is what a refusal MEANS: it no longer means the row cannot be handed off,
+because the other method is one field away in the same form.
+
+### E3. The source is never signalled, and supervision is left EMPTY rather than `none`
+
+No `send_input`, no stop, no kill. The hands-off method writes nothing to the source and does not
+touch its lifecycle, which is D4's rule that lineage never couples lifecycles, applied to the case
+where the temptation to couple is strongest. Only `spawned_from` and `spawn_intent=handoff` link
+the two rows.
+
+The child's persisted `supervision` is left EMPTY, not `none`. The distinction earns its keep
+because Amendment 3 gave `none` a specific meaning: a supervisor EXISTED and chose not to watch —
+a source agent was asked, took the mode, reported the child session id and stopped, and the human
+took over. C2's arming rule, C4's records and the orphaned-supervisor marker are all written
+against that reading. In a hands-off handoff no supervisor exists by construction; there was never
+an agent in a position to choose. Collapsing the two would make `none` mean either "declined" or
+"never asked", which is the ambiguity C2 reads the field to resolve, and it would eventually put an
+orphaned-supervisor marker on a child that never had a supervisor to orphan. Empty means no
+supervision relationship was ever formed; `none` keeps meaning a formed relationship the source
+declined to act on.
+
+### E4. Cross-provider transcript disclosure is an owner decision taken at the form, not a silent default
+
+The composed prompt instructs the successor to READ a local transcript file. That file is the raw
+record of another session: whatever a human pasted into it, whatever a tool printed, whatever file
+content was read into the conversation — credentials pasted in a hurry, environment dumps,
+proprietary source. When the chosen target CLI belongs to a different vendor than the source's,
+launching the successor is what sends that content to a second model provider, under an agreement
+the source's provider never covered. D2 already established that transcripts travel as raw
+per-vendor pointers with no cross-vendor normalization; what is new here is that swarm now points
+one vendor's agent at another vendor's file, on the owner's behalf, with no agent in between
+deciding what to quote.
+
+That is a disclosure decision, so it is taken by the owner, knowingly, at the form: where the
+target provider differs from the source's, submit takes an explicit confirmation naming both
+providers. A same-vendor handoff takes no confirmation — the content reaches nobody new. The
+disclosure is also recorded operator-side in `docs/operations/metadata-disclosure.md`, because
+ADR-007 D11 forbids this project from claiming less exposure than exists, and an undocumented
+cross-vendor content path is exactly that.
+
+### E5. What is handed over is POINTERS ONLY
+
+The composed prompt carries five facts: the source's canonical conversation uid, the transcript
+path, the working directory, the source agent name, and the swarm session id. No digest, no
+summary, no extraction, no filter recipe, no `jq` line, no tail of the file. The reason is that
+every recipe swarm could ship is a recipe swarm can ship WRONG — an invalid filter, a
+shell-quoting hazard, a summary produced by a compaction that dropped the part that mattered — and
+swarm that ships no recipe ships no recipe that can be wrong. It also removes three failure modes
+that would each have needed their own refusal path, in a feature whose entire premise is that the
+normal path has already failed.
+
+The successor is in any case better placed than swarm to decide how to read the file. It knows its
+own context budget, its own tools, and what it has just been asked to do; swarm knows the file's
+size. This delegates the decision rather than eliminating it, and that is stated plainly: a 30 MB
+transcript is still a problem, it is now a problem owned by the party that can see the constraints
+it has to be solved against. Composition happens in the daemon, from an embedded template, never
+client-side — so no client can forge the instruction, and the transcript path that reaches the
+successor is the daemon's own resolution, which for a worktree source the client provably cannot
+compute (the agent's real cwd is `<repo>/.swarm/worktrees/<id>` while `Meta.Cwd` is the repo root).
+
+### E6. Accepted risks, stated rather than solved
+
+**Two live writers in one checkout.** The source is left running (E3), so it may still be editing
+the files the successor is about to edit. Nothing enforces otherwise, and nothing pretends to: the
+mitigation is honesty in the prompt and a warning in the form. The prompt does NOT claim the source
+stopped responding — the owner chose to leave it alive, a rate-limited agent resumes in minutes,
+and a prompt asserting a fact swarm did not check teaches the successor to trust the wrong things.
+It says the source may still be running and editing this checkout, tells the successor to run
+`git status` before writing, and gives it the ordering rule it needs when the two disagree: the
+conversation records intent, the repository records fact, and where they conflict the repository
+wins. The form warns while the source is running. `OptionWorktree` stays available as a manual
+choice for an owner who wants real isolation and is not forced, because forcing it would silently
+change what "continue this work" means in the common case where the source is genuinely dead.
+
+**Prompt injection.** Reading a prior transcript means ingesting whatever that session saw,
+including anything an untrusted tool output or fetched page put in front of it. C3 avoids this for
+supervision delivery by never carrying session-authored text into the supervisor; hands-off cannot
+make the same choice, because the transcript IS the payload. The risk is accepted on the same
+footing as D7: for the personal single-owner deployment, any same-user process already holds full
+daemon power, and the successor runs with the authority the owner gave it either way. It is
+recorded here rather than argued away.
+
+### E7. Scope: `claude` sources only in this sweep
+
+Hands-off resolves a source only when the source agent is `claude`. `codex`, `agy` and `opencode`
+are refused BY NAME. Every refusal in this flow is named and launches nothing: no refusal may
+degrade to a bare, context-free launch, because an agent loose in the owner's checkout with no idea
+what it is continuing is the worst outcome available here — worse than no handoff at all, since the
+owner would believe the work was carried over. The gate is the adapter's knowledge of its own
+transcript layout, expressed as an optional interface discovered by type assertion, which is the
+house pattern from `ADR-010-adapter-structured-capture.md` for extending the frozen adapter
+contract; an adapter that does not implement it is not asserted into the interface, and its
+sessions are refused. Codex is the next candidate and needs the dated-directory scan the existing
+resume resolver already performs, so it is a later slice, not this one. agy and opencode have no
+characterized on-disk history format at all, which is the same line R-2 already draws for resume.
+
+The launch option (`handoff_from`) is owner-tier only and capability-negotiated for the same
+fail-closed reason: a client talking to an older daemon that does not know the option must be
+refused by name, never served a launch with the option quietly dropped. Its `protocol.md` rows —
+the launch-option row and the capability row — land in the same commit as the code (GG-7), and the
+product requirement lands in `system-spec.md` as R-5.

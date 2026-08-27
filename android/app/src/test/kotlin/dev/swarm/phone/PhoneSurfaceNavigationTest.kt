@@ -73,15 +73,36 @@ class PhoneSurfaceNavigationTest {
      */
     private val inboxControl = "launch"
 
+    /**
+     * **NARROWED, DELIBERATELY, IN THE COMMIT THAT REQUIRED IT** (chat-surface-plan B.5). This
+     * test and the one below it were written as claims about WHATEVER IS ON SCREEN, at a time when
+     * one composition was the only one there was -- and they were written to catch exactly the
+     * change the conversation surface makes: a screen that drops the bar. They are claims about
+     * the THREE TAB DESTINATIONS now.
+     *
+     * WHY THE CONVERSATION IS OUTSIDE THE QUANTIFIER RATHER THAN AN EXCEPTION TO IT. A
+     * conversation is not a destination: `Destination` enumerates the three places a tab leads,
+     * and a conversation is a place you go INTO from one of them, with back returning to the inbox
+     * -- which keeps its bar. A bar there is an invitation to leave a screen you have just arrived
+     * at, and it is what forced the composer 74 dp above a bar the reader had to scroll past the
+     * whole transcript to reach.
+     *
+     * WHAT PAYS FOR THE NARROWING is `PhoneSurfaceConversationHostTest`, which asserts the same
+     * facts in the positive direction -- on a tab destination the bar is there and the
+     * conversation's own fixed regions are not -- and `ConversationScaffoldViewTest`, which
+     * asserts the conversation has no bar and keeps the connection strip. Both were added in this
+     * commit, because a universal claim quietly weakened and one replaced by two specific ones
+     * look identical in a diff.
+     */
     @Test
-    fun `the window carries the tab bar, whatever is under it`() {
+    fun `the window carries the tab bar on every tab destination`() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 assertEquals(
-                    "the tab bar is not on the phone screen at all, so the four destinations " +
+                    "the tab bar is not on the tab destinations at all, so the destinations " +
                         "inventory C1.4 names have no way in. It is composed inside " +
-                        "`triageInboxView`, which is one destination among the four -- a bar that " +
-                        "belongs to the inbox is a bar the other three screens do not have",
+                        "`triageInboxView`, which is one destination among them -- a bar that " +
+                        "belongs to the inbox is a bar the other screens do not have",
                     destinations,
                     activity.tabLabels(),
                 )
@@ -89,8 +110,9 @@ class PhoneSurfaceNavigationTest {
         }
     }
 
+    /** The other half of the narrowing above, on the same terms and for the same reason. */
     @Test
-    fun `the bar survives on every destination it navigates to`() {
+    fun `the bar survives on every tab destination it navigates to`() {
         ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 for (destination in destinations) {

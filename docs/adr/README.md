@@ -16,7 +16,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [008](ADR-008-go-toolchain-floor-1-25.md) | Go toolchain floor moves to 1.25 (gomobile tool directive) | Accepted | 2026-07-22 |
 | [009](ADR-009-obsidian-visual-direction.md) | Obsidian visual direction — warm material, champagne accent, one specular moment | Accepted | 2026-08-07 |
 | [009](ADR-009-structured-chat-interaction.md) | The phone surface is a structured chat transcript — the terminal grid is retired | Accepted (amended 2026-08-14, signed off 2026-08-15) | 2026-08-07 |
-| [010](ADR-010-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Accepted (amended 2026-08-07, 2026-08-18) | 2026-08-07 |
+| [010](ADR-010-inter-session-orchestration.md) | Inter-session orchestration — agent-initiated spawn, handoff, observation, and steering via local CLI verbs | Accepted (amended 2026-08-07, 2026-08-18, 2026-08-26) | 2026-08-07 |
 | [010](ADR-010-adapter-structured-capture.md) | Structured interaction capture is an optional, additive extension of the frozen adapter contract | Accepted | 2026-08-07 |
 | [011](ADR-011-multi-device-epochs.md) | Multi-device epochs — per-device sender ids, per-device inbound keys, per-device seq spaces | Accepted (amended 2026-08-14, signed off 2026-08-15) | 2026-08-07 |
 | [012](ADR-012-type-ladder-consolidation-phase-1.md) | Type ladder consolidation, phase 1 — safe merges | Accepted | 2026-08-09 |
@@ -26,6 +26,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [016](ADR-016-web-pki-relay-tls.md) | Web PKI is the default relay TLS policy — the pin becomes an expert policy with an authenticated rotation | Accepted | 2026-08-14 |
 | [017](ADR-017-terminal-fallback-capability.md) | Capability-driven terminal fallback — the sanitized terminal returns, for the sessions that cannot be chat, and for nothing else. **Amended 2026-08-20 (Wave R8):** T2-a/T2-b/T2-c, T4-a/T4-b/T4-c, T5-a, T6-a..T6-f, T8-a/T8-b and the gate note — every one a fail-closed narrowing, and the two owner questions it left open are answered. **Amended again 2026-08-20 (Wave R8 CLOSING round), C0-C7: the wave lands as the READ HALF ONLY.** The control half — `terminal_input`, the generation/keepalive plane, any take-control affordance — is PARKED with written preconditions (C1: raw input is bearer-authorised); T8's transport-loss row is WITHDRAWN as unbuildable and its replacement row is a sweep, not a synchronous sever. C8 adds the facade-seam rule for the staleness fields. The raw-input attack surface in the shipped product is ZERO | Accepted | 2026-08-14 |
 | [018](ADR-018-multi-machine-pairings.md) | Multi-machine pairings — one phone, N independent single-device relationships | Accepted | 2026-08-14 |
+| [019](ADR-019-boundary-aware-detach-recognition.md) | Detach recognition becomes boundary-aware — the solo-read test (D4) is superseded | Accepted | 2026-08-26 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the

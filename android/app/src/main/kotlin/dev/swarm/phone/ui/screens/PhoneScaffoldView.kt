@@ -87,6 +87,22 @@ object ScaffoldTag {
      * the assertion `PhoneScaffoldViewTest` inherited from the inbox's suite along with the bar --
      * and a strip UNDER the content is a warning below the fold, which is the same defect at the
      * other end of the column.
+     *
+     * **IT IS [phoneScaffoldView]'S COMPOSITION AND IT IS NOW SCOPED TO THAT, DELIBERATELY**
+     * (chat-surface-plan B.5). It was written as a claim about WHATEVER IS ON SCREEN, at a time
+     * when one composition was the only one there was, and the suite around it was written the
+     * same way -- `PhoneScaffoldViewTest`'s bar sweep and `PhoneSurfaceNavigationTest`'s two
+     * survival tests quantify over every destination the app can reach. Those tests were written
+     * to catch exactly the change this file has just made, so narrowing them is a named decision
+     * rather than a tidy-up, and the amendment is this: the quantifier is the THREE TAB
+     * DESTINATIONS, which is what [Destination] has always enumerated, and the conversation is
+     * outside it because a conversation is not a destination -- it is a place you go INTO from
+     * one, and it deliberately has no bar ([conversationScaffoldView] argues why). What replaces
+     * the coverage the narrowing gives up is a positive assertion in the other direction: that
+     * the conversation has NO bar and DOES have the strip, which `ConversationScaffoldViewTest`
+     * makes over this set's sibling arrangement and `PhoneSurfaceConversationHostTest` makes over
+     * the app the user actually opens. A universal claim quietly weakened and a universal claim
+     * replaced by two specific ones look identical in a diff, which is why this paragraph exists.
      */
     val COMPOSITION: Set<String> = setOf(STATUS, CONTENT, TABS)
 }
@@ -155,6 +171,11 @@ enum class Destination(val label: String) {
  * opposite case and [ScaffoldTag.STATUS] already argues it: a warning that belongs to one
  * destination is a warning the others do not have, and dropping it here would make the one
  * screen where a person is typing the one screen that cannot tell them the link is gone.
+ *
+ * @param scrollY where in the transcript to put the reader, or null for THE NEWEST MESSAGE. See
+ *  [anchorConversation] for both halves of why this parameter exists at all; the short version is
+ *  that null is what OPENING a conversation means and a number is what COMING BACK to one means,
+ *  and that this scaffold cannot tell the two apart by itself because it is built fresh for both.
  */
 fun conversationScaffoldView(
     context: Context,
@@ -162,6 +183,7 @@ fun conversationScaffoldView(
     content: View,
     composer: View?,
     status: View? = null,
+    scrollY: Int? = null,
 ): View {
     val scroll = ScrollView(context).apply {
         tag = ScaffoldTag.CONTENT
@@ -174,6 +196,7 @@ fun conversationScaffoldView(
         layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         addView(content)
     }
+    scroll.anchorConversation(content, scrollY)
     // The grain rides the SCROLLED CHILD, for ADR-009 D4.3's amended reason: one overlay per
     // moving part, so the tile and the glyph travel together.
     content.foreground = grainOverlay(context)
@@ -203,6 +226,105 @@ fun conversationScaffoldView(
             )
         }
     }
+}
+
+/**
+ * Put the reader at [scrollY], or at THE NEWEST MESSAGE when there is nothing to restore.
+ *
+ * **THE DEFECT THIS EXISTS AGAINST IS THE OWNER'S FIRST COMPLAINT, UNANSWERED BY THE WHOLE
+ * SURFACE THAT WAS BUILT AROUND IT** (agents-tracker-tu7z, P0). The transcript is oldest-at-top
+ * and this scaffold hands it a brand-new `ScrollView` at `scrollY = 0`, so opening a session put
+ * a reader on its FIRST messages -- and it never recovered, because `SessionDetailView`'s
+ * stick-to-bottom is gated on `listIsScrolledToBottom`, which is false for a reader parked at the
+ * top. Every subsequent line the agent wrote landed below the fold with no scroll. "Messages that
+ * are scattered, an app page that is way too long" is the literal reading of a screen that opens
+ * at the beginning of a session and then accumulates the rest of it out of sight.
+ *
+ * **AND IT IS ALSO agents-tracker-jz0z, WHICH IS THE SAME MECHANISM ONE REBUILD LATER** (P1).
+ * `PhoneSurface.drawScaffold` calls this function on every `ScaffoldKey` change, and the key
+ * includes `literal` and `composer` -- so opening an R8 output screen or an R9 diff and coming
+ * back, or a session losing its message sink, discards the `ScrollView` the offset lived on. A
+ * scaffold rebuilt fresh cannot know which of the two it is; only the surface knows, so the
+ * surface says, and [scrollY] is how. Null means OPEN and a number means COME BACK.
+ *
+ * **IT IS A LAYOUT LISTENER AND NOT A `post`, AND THAT IS THE ONE DECISION IN HERE.** A
+ * `ScrollView` cannot scroll before it has been laid out: `ScrollView.scrollTo` clamps against its
+ * own viewport height and its child's height, and both are zero until a measure and layout pass
+ * has run, so a scroll issued at construction time is silently discarded. `post { fullScroll() }`
+ * is the common idiom and it is a RACE dressed as a fix -- it lands after whichever traversal the
+ * message queue happens to run first, which on a warm view hierarchy is usually the right one and
+ * on a cold start, a slow first frame or a Robolectric looper is not. Acting ON the layout pass
+ * that produces the height is the same instruction with the race removed: the listener is invoked
+ * from the end of `View.layout`, which is the first moment the answer exists.
+ *
+ * The listener is hung on the CONTENT and not on the scroll, because the two lay out on different
+ * occasions: a `ScrollView` whose bounds never change does not re-layout when the transcript grows
+ * inside it, and it is the transcript's height that decides where the bottom is.
+ *
+ * **IT IS SPENT ONCE, AND THE ALTERNATIVE IS A WORSE DEFECT THAN THE ONE IT FIXES.** An anchor
+ * re-applied on every layout would drag a reader who had scrolled up to re-read something down to
+ * the newest message the instant their agent wrote a line. Following the agent AFTER the opening
+ * is `TranscriptIncremental.stickToBottom`'s decision and it declines for exactly that reader;
+ * this is only where they START.
+ *
+ * **WHAT "ONCE" MEANS IS THE FIRST LAYOUT WITH SOMETHING TO SCROLL, AND THE OBVIOUS READING OF
+ * THAT IS WRONG.** "The first layout with a height at all" is what this was written as, and
+ * `isFillViewport` -- three lines up, and load-bearing for the tab bar -- makes it a bug: a
+ * content host that is EMPTY or shorter than the screen is re-measured to exactly the viewport,
+ * so it never reports zero and the anchor would be spent on a transcript that had not arrived
+ * yet. `drawScaffold` does run on draws where the host is empty. So the condition is that the
+ * content is TALLER THAN THE VIEWPORT: below that there is no bottom that differs from the top,
+ * scrolling would be a no-op, and a reader cannot have moved away from a position they cannot
+ * leave -- which is what makes staying armed safe rather than merely convenient.
+ *
+ * @param content the scrolled child, whose height is what "the bottom" is measured against.
+ * @param scrollY the offset to restore, or null for the newest message. Handing the content's own
+ *  height to `scrollTo` IS the bottom, because the clamp turns any y past the end into the end --
+ *  which is also what makes a restored offset safe when the conversation shrank underneath it, as
+ *  a page prepended past the retention bound or an item the machine replaced can do.
+ */
+private fun ScrollView.anchorConversation(content: View, scrollY: Int?) {
+    val scroll = this
+    content.addOnLayoutChangeListener(
+        object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                view: View,
+                left: Int,
+                top: Int,
+                right: Int,
+                bottom: Int,
+                oldLeft: Int,
+                oldTop: Int,
+                oldRight: Int,
+                oldBottom: Int,
+            ) {
+                // AN ANCHOR THAT WAS NEVER SPENT OUTLIVES ITS SCAFFOLD, and the content it is
+                // hung on outlives every scaffold there will ever be: `PhoneSurface.contentHost`
+                // is built once and re-parented for the life of the app. So a conversation that
+                // fit the screen leaves an armed listener behind, and the host it is on goes on
+                // to hold the Activity journal and the next session's transcript.
+                //
+                // IT IS NOT THAT A STALE ONE WOULD SCROLL THE WRONG SCREEN. `ScrollView.scrollTo`
+                // does nothing at all on a scroll whose child has been taken away, and
+                // `drawScaffold` takes the content host out of every scaffold it discards -- so
+                // today the leftovers are inert. Depending on that is the accident; this says the
+                // thing that is actually meant, which is that the anchor is a fact about ONE
+                // composition, and drops it on the way out so they cannot pile up either.
+                if (view.parent !== scroll) {
+                    view.removeOnLayoutChangeListener(this)
+                    return
+                }
+                val height = bottom - top
+                // The scroll's own frame is set before its children lay out, so this reads the
+                // viewport of the pass that is happening rather than the previous one's.
+                if (height <= scroll.height) return
+                // Removing from inside the callback is safe and is the idiom: `View.layout`
+                // iterates a CLONE of its listener list for this exact reason.
+                view.removeOnLayoutChangeListener(this)
+                scroll.scrollTo(0, scrollY ?: height)
+            }
+        },
+    )
 }
 
 /**

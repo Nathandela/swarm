@@ -227,16 +227,17 @@ type AgentInstanceRef struct {
 // namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
 // never call status.Derive), alongside the three raw status dimensions.
 type SessionView struct {
-	EndpointID   string        `json:"endpoint_id"`
-	ID           string        `json:"id"` // namespaced: <endpoint_id>/<local>
-	Agent        string        `json:"agent"`
-	Name         string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
-	Cwd          string        `json:"cwd"`
-	Status       status.Status `json:"status"` // the three raw dims
-	Group        status.Group  `json:"group"`  // precomputed server-side (E6.9)
-	LastActivity time.Time     `json:"last_activity"`
-	CreatedAt    time.Time     `json:"created_at"`
-	Summary      string        `json:"summary"` // V-4 one-line last-output summary
+	EndpointID     string        `json:"endpoint_id"`
+	ID             string        `json:"id"` // namespaced: <endpoint_id>/<local>
+	Agent          string        `json:"agent"`
+	Name           string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
+	Cwd            string        `json:"cwd"`
+	Status         status.Status `json:"status"`           // the three raw dims
+	Group          status.Group  `json:"group"`            // precomputed server-side (E6.9)
+	GroupEnteredAt time.Time     `json:"group_entered_at"` // when the session entered Group; drives newest-first ordering
+	LastActivity   time.Time     `json:"last_activity"`
+	CreatedAt      time.Time     `json:"created_at"`
+	Summary        string        `json:"summary"` // V-4 one-line last-output summary
 	// SpawnedFrom / SpawnIntent expose the session's lineage (ADR-010 D4) so the
 	// roster can show where a session came from. Both are omitempty: an ordinary
 	// session's row serializes exactly as it did before the fields existed.
@@ -270,6 +271,20 @@ type SessionView struct {
 	// existed, so the released 0.8.0 gateway -- which relays these frames verbatim
 	// and is untouched by this change -- sees no new bytes.
 	RemoteControlled bool `json:"remote_controlled,omitempty"`
+	// RemoteActivityAt is WHEN a paired device last delivered a message to this session,
+	// carried only while that instant is still inside the daemon's horizon
+	// (skeleton.phoneActiveHorizon). It is what the terminal's marker SAYS -- "phone sent
+	// 09:41" -- and it is an instant rather than another flag because the row has to state
+	// an EVENT: a bare noun sitting beside "supervisor pending" reads as a CONDITION, "a
+	// phone is on this session", which is precisely the presence claim nobody on this wire
+	// measures (conversation surface, plan G.5).
+	//
+	// A POINTER with omitempty, like Capabilities and for the same reason in a different
+	// key: encoding/json does not omit a zero time.Time, so a value field would stamp
+	// "0001-01-01T00:00:00Z" onto every row that has never seen a phone. Absent means no
+	// message is in the window -- there is no in-band way to say "never" as opposed to
+	// "not lately", and the marker needs no such distinction because both draw nothing.
+	RemoteActivityAt *time.Time `json:"remote_activity_at,omitempty"`
 	// Capabilities is the daemon-authored per-session capability record (ADR-017 T2): a
 	// pointer with omitempty, so an absent record (an older daemon, or a session the
 	// daemon has not stamped yet) is wire-distinguishable from a stamped record that says

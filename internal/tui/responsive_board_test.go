@@ -38,7 +38,10 @@ func TestResponsiveRowsNeverExceedTerminalWidth(t *testing.T) {
 	// Schema-v0 sessions migrate without LastActivity. Their derived elapsed age is
 	// deliberately enormous, so the fixed elapsed field must still stay bounded.
 	s.LastActivity = time.Time{}
-	s.RemoteControlled = true
+	// The marker is now `phone sent HH:mm`, three times the width of the bare noun it
+	// replaced, so the width discipline is exercised against the string that actually ships.
+	sentAt := time.Date(2026, 8, 26, 9, 41, 0, 0, time.Local)
+	s.RemoteActivityAt = &sentAt
 	s.SpawnedFrom = "parent-with-a-long-name"
 
 	for _, width := range []int{48, 72, 92, 120, 160, 200} {

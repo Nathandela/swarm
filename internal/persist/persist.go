@@ -35,24 +35,67 @@ var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
 type Meta struct {
-	SchemaVersion  int               `json:"schema_version"`
-	ID             string            `json:"id"`
-	AgentType      string            `json:"agent_type"`
-	Name           string            `json:"name"` // user-provided session label; "" falls back to AgentType at display time
-	Cwd            string            `json:"cwd"`
-	LaunchOptions  map[string]string `json:"launch_options"`
-	Env            []string          `json:"env"`
-	CreatedAt      time.Time         `json:"created_at"`
-	Status         status.Status     `json:"status"`
-	LastActivity   time.Time         `json:"last_activity"`
-	ShimPID        int               `json:"shim_pid"`
-	ShimStartTime  int64             `json:"shim_start_time"`
-	ConversationID string            `json:"conversation_id"`
-	ExitCode       *int              `json:"exit_code"`
-	ResumedFrom    string            `json:"resumed_from"`
-	SpawnedFrom    string            `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
-	SpawnIntent    string            `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
-	Supervision    string            `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	AgentType     string `json:"agent_type"`
+	Name          string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
+	Cwd           string `json:"cwd"`
+	// AgentCwd is additive and DELIBERATELY DID NOT BUMP SchemaVersion. An adversarial
+	// review proposed bumping it, reasoning that a rolled-back old daemon would rewrite
+	// meta.json from its own struct and drop the field. That is true, and bumping is the
+	// worse cure: Load REFUSES any meta whose schema_version exceeds the build's (see
+	// below), so a v2 stamp would make a rolled-back daemon fail to load EVERY session
+	// written by the newer one, rather than merely losing an optional field. Dropping
+	// AgentCwd degrades ProviderCwd to Cwd -- today's behaviour before this field existed
+	// -- and the value is re-stamped on the next launch. Degraded beats unloadable.
+	AgentCwd      string            `json:"agent_cwd"` // resolved agent cwd when a pre-launch hook overrode Cwd; "" otherwise. See ProviderCwd.
+	LaunchOptions map[string]string `json:"launch_options"`
+	Env           []string          `json:"env"`
+	CreatedAt     time.Time         `json:"created_at"`
+	Status        status.Status     `json:"status"`
+	// GroupEnteredAt is when Status last crossed a status.Derive display-group
+	// boundary. It is additive without a schema-version bump for the same rollback
+	// compatibility reason as AgentCwd above. Older records use LastActivity (then
+	// CreatedAt) as a stable best-effort fallback until their next write.
+	GroupEnteredAt time.Time `json:"group_entered_at"`
+	LastActivity   time.Time `json:"last_activity"`
+	ShimPID        int       `json:"shim_pid"`
+	ShimStartTime  int64     `json:"shim_start_time"`
+	ConversationID string    `json:"conversation_id"`
+	ExitCode       *int      `json:"exit_code"`
+	ResumedFrom    string    `json:"resumed_from"`
+	SpawnedFrom    string    `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
+	SpawnIntent    string    `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
+	Supervision    string    `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+}
+
+// EffectiveGroupEnteredAt returns the durable ordering instant for a session.
+// Records written before GroupEnteredAt existed fall back deterministically,
+// without rewriting every meta.json merely because the daemon restarted.
+func (m Meta) EffectiveGroupEnteredAt() time.Time {
+	if !m.GroupEnteredAt.IsZero() {
+		return m.GroupEnteredAt
+	}
+	if !m.LastActivity.IsZero() {
+		return m.LastActivity
+	}
+	return m.CreatedAt
+}
+
+// ProviderCwd is the working directory the AGENT actually ran in: AgentCwd when a
+// pre-launch hook resolved one, and Cwd otherwise. The two differ for a worktree-isolated
+// session (Epic 12), where Cwd is the repo the launch was requested in and the agent runs
+// under <repo>/.swarm/worktrees/<id>.
+//
+// An agent CLI files its own history under an encoding of the directory it ran in, so
+// every provider-facing path derivation must ask for this rather than read Cwd. Cwd keeps
+// its own meaning untouched and is what worktree teardown stays anchored to
+// (internal/skeleton's preDeleteWorktree); conflating the two would tear down nothing.
+func (m Meta) ProviderCwd() string {
+	if m.AgentCwd != "" {
+		return m.AgentCwd
+	}
+	return m.Cwd
 }
 
 // Store is a session store rooted at a single state directory. The root and

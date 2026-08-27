@@ -78,6 +78,36 @@ While renaming, <kbd>←</kbd>/<kbd>→</kbd> moves one character. <kbd>⌘</kbd
 
 Attach is raw passthrough: the agent CLI's own interface, full-screen and untouched. swarm adds a single thin line (session name and the detach key), and even that is toggleable. Ended sessions offer <kbd>r</kbd> to resume them as a fresh, linked session where the agent supports it.
 
+### Bring existing Claude sessions into swarm
+
+With swarm already running, inspect the Claude Agent View background sessions that
+can be adopted:
+
+```sh
+swarm reattach --cli claude --all --dry-run
+```
+
+Adopt active background sessions by explicitly transferring supervision from
+Claude's background daemon to swarm:
+
+```sh
+swarm reattach --cli claude --take-over
+```
+
+Add `--all` to include completed and stopped sessions as well:
+
+```sh
+swarm reattach --cli claude --all --take-over
+```
+
+Only Claude background sessions are considered; interactive sessions are never
+imported. `--take-over` stops Claude's background supervisor before any live
+session is launched under swarm, preventing two supervisors from owning the same
+session. Re-running the command is safe: swarm reuses an existing row with the
+same native Claude session ID instead of creating a duplicate. If the CLI reports
+that the daemon lacks external-resume support, run `swarm daemon restart` after
+upgrading swarm.
+
 ### Status groups
 
 swarm tracks three orthogonal signals per session — process, turn, and interaction — and derives the group you see, so the list always tells you what to do next:
@@ -142,7 +172,7 @@ This is safe by design: every running session survives the restart and is reconn
 
 ## Project status
 
-Public and released — latest [`v0.12.2`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
+Public and released — latest [`v0.12.4`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
 
 One known limitation: sessions run only while the host machine is awake. Sleep pauses every agent process — they resume automatically on wake with nothing lost, but make no progress while asleep. A keep-awake option is a possible later addition (system-spec, requirement N-7).
 

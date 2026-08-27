@@ -53,6 +53,26 @@ object SwarmErrorTokens {
      * mild remedy -- re-read and send again, the draft retained -- never a bug report.
      */
     const val STALE_TURN: String = "swarm/stale-turn"
+
+    /**
+     * Slice 0 (chat-surface-plan row 0.6, `schema.CodeInputBusy`): the shim refused a composer
+     * send because somebody has written to this session's PTY since the last submit, so the text
+     * would have joined whatever is already on the input line and the carriage return would have
+     * submitted the concatenation.
+     *
+     * IT IS A REFUSAL AND NOT A FAILURE. Nothing was written -- that is the posture
+     * `composer_send` already takes for an over-long body -- and the draft is kept. It is also
+     * the app working: merging the reader's words into someone's half-typed line is the defect
+     * the whole of Slice 0 exists to prevent, and this is what prevention sounds like from the
+     * outside.
+     *
+     * IT CLAIMS NOTHING ABOUT THE CLI'S INPUT REGION. ADR-017:175's `expected_input_revision`
+     * would require characterising one and `skeleton/chat.go` rightly refuses to guess; this is
+     * the strictly weaker fact the shim owns absolutely, holding the PTY's only serialised
+     * writer. Conservative in the safe direction: a draft typed and deleted back to empty still
+     * refuses.
+     */
+    const val INPUT_BUSY: String = "swarm/input-busy"
     const val RATE_LIMITED: String = "swarm/rate-limited"
     const val PAIRING_FAILED: String = "swarm/pairing-failed"
 
@@ -97,6 +117,16 @@ enum class ErrorState {
     REVOKED,
     NEEDS_LEASE,
     STALE_TURN,
+
+    /**
+     * The composer's SECOND refusal, and it is its own state for [PAIRING_CODE_INVALID]'s reason
+     * applied to the drawing: the copy sheet tables `bubble.refused` and `bubble.stale` as two
+     * states of one sent bubble, and two states that read identically are one state. The reader's
+     * next move differs between them -- one waits for an input line to clear, the other re-reads
+     * a turn that moved on -- and `SessionDetailPanel.composerVerdictFor` keys the composer's
+     * notice on this enum's NAME, so a shared state is a shared sentence with no way back.
+     */
+    INPUT_BUSY,
     RATE_LIMITED,
     PAIRING_FAILED,
 
@@ -303,8 +333,28 @@ object ErrorRouter {
             // Gentle by design (Mirror M2.4): the conversation moving on is ordinary, not an
             // error, and the copy never claims the message went anywhere. The composer keeps
             // the draft (ComposerModel.noticeFor's retainsDraft), so the remedy is one act.
-            "The conversation moved on before your message landed. Nothing was typed into the " +
-                "session; your draft is kept -- read the latest turn and press send again.",
+            //
+            // THE WORDS ARE THE DRAWING'S `bubble.stale` ROW, NOT THIS FILE'S OWN. Three
+            // different stale-turn sentences were shipping across the app -- this one, and two
+            // in `ui/kit/Composer.kt` -- and the row that is captioned "shipped copy, kept"
+            // matched none of the three. The intent above is unchanged and the sentence is
+            // shorter than what it replaces: it still never claims delivery, it still names the
+            // one act, and it now reads the same here as on the bubble the user is looking at.
+            "Not sent — the conversation moved on. Read the latest turn and send again.",
+        ),
+        SwarmErrorTokens.INPUT_BUSY to RoutedError(
+            ErrorState.INPUT_BUSY, Remedy.WAIT_AND_RETRY,
+            // THE REMEDY IS WAITING AND NOT REFRESHING, and the two are not interchangeable here
+            // even though the row above is one line up. `stale_turn` asks the reader to re-read
+            // a turn that moved on; nothing has moved on in this one -- the draft is current and
+            // there is nothing to re-read. The input line empties when whoever is typing on it
+            // submits or clears it, and sending again then works, which is WAIT_AND_RETRY
+            // exactly: retryable, and not by asking harder.
+            //
+            // THE SENTENCE NAMES THE LINE AND NEVER THE READER. The shim refused rather than
+            // merge, so this is the app working; a wording that put the reader at fault would
+            // report a prevented defect as one they caused.
+            "Not sent — the terminal's input line was not empty.",
         ),
         SwarmErrorTokens.RATE_LIMITED to RoutedError(
             ErrorState.RATE_LIMITED, Remedy.WAIT_AND_RETRY,
@@ -396,6 +446,27 @@ object MachineRefusalCodes {
     const val RATE_LIMIT: String = "rate_limit"
 
     /**
+     * `schema.CodeInputBusy`: the shim refused a composer send rather than joining this
+     * message to whatever is already on the session's input line (chat-surface-plan row 0.6).
+     *
+     * IT IS IN [toToken] AND `unavailable` IS NOT, which looks like the rule below being bent
+     * and is not. That rule sends a fact about ONE VERB to the screen's own sentence -- and
+     * this is a fact about one verb. What decides it is the same thing that decided
+     * [STALE_TURN], which is equally verb-specific and has had a row since Wave R6: the drawing
+     * tables `bubble.refused` beside `bubble.stale` as two STATES OF THE SENT BUBBLE. A state of
+     * the bubble is rendered by the composer, and `SessionDetailPanel.composerVerdictFor` reads
+     * the composer's notice off `routed.state.name` -- so a code with no state of its own has no
+     * way to reach a sentence at all. That is precisely what happened: `input_busy` existed in
+     * exactly one place in the tree, the Go constant, and the daemon's specific refusal reached
+     * the user as `ErrorState.UNKNOWN`'s "Your message was refused and not delivered."
+     *
+     * The distinction the rule is really drawing is between a notice UNDER A CONTROL, which
+     * belongs to the verb's own screen, and a rendered STATE the copy sheet has ruled on. The
+     * two M3 reads are the first; this is the second.
+     */
+    const val INPUT_BUSY: String = "input_busy"
+
+    /**
      * `schema.CodeUnavailable`: the machine no longer holds what was asked for. On the M3 reads
      * that means IS-CAP-3's answer for an evicted body -- and it is TERMINAL for that card.
      *
@@ -414,7 +485,7 @@ object MachineRefusalCodes {
     const val INVALID_FIELD: String = "invalid_field"
 
     /**
-     * The map, and it is TWO ROWS rather than a translation of the whole daemon vocabulary.
+     * The map, and it is THREE ROWS rather than a translation of the whole daemon vocabulary.
      *
      * `policy`, `structured_unsupported`, `interrupt_unsupported`, `unavailable`,
      * `invalid_field`, `already_applied` and the rest are deliberately absent: each of them is a
@@ -432,6 +503,10 @@ object MachineRefusalCodes {
      */
     internal val toToken: Map<String, String> = mapOf(
         STALE_TURN to SwarmErrorTokens.STALE_TURN,
+        // Chat-surface-plan row 0.6, and the third row's admission ticket is argued at
+        // [INPUT_BUSY] rather than here: it is a STATE OF THE SENT BUBBLE that the drawing has
+        // ruled on, which is what STALE_TURN is and what `unavailable` is not.
+        INPUT_BUSY to SwarmErrorTokens.INPUT_BUSY,
         RATE_LIMIT to SwarmErrorTokens.RATE_LIMITED,
     )
 }

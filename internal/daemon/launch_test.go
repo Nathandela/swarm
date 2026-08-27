@@ -50,6 +50,28 @@ func TestLaunch_TwoPhaseHappy(t *testing.T) {
 	}
 }
 
+func TestLaunch_SeedsKnownConversationIdentity(t *testing.T) {
+	cfg := daemonConfig(t)
+	d := openDaemon(t, cfg)
+	pidFile := filepath.Join(t.TempDir(), "agent.pid")
+	spec := announceSpec(t, pidFile)
+	spec.ConversationID = "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b"
+	m, err := d.Launch(spec)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	agentPID := readPIDFile(t, pidFile)
+	t.Cleanup(func() { killTree(agentPID); killTree(m.ShimPID) })
+
+	if m.ConversationID != spec.ConversationID {
+		t.Fatalf("returned ConversationID = %q, want %q", m.ConversationID, spec.ConversationID)
+	}
+	stored, ok := d.Get(m.ID)
+	if !ok || stored.ConversationID != spec.ConversationID {
+		t.Fatalf("stored meta = %#v; want seeded conversation identity", stored)
+	}
+}
+
 // TestLaunch_CrashBeforeSpawn_NoPhantom asserts E5.4/S11: a crash after the
 // reservation meta is persisted but before the shim is spawned leaves no phantom
 // running session and no orphan shim. Reconciliation on the next Open resolves

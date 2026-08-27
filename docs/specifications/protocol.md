@@ -179,12 +179,14 @@ alongside the group.
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
 | `group`         | `status.Group`  | the daemon-computed display group (E6.9)                      |
+| `group_entered_at` | time          | when the session entered `group`; used for newest-first ordering within that group |
 | `last_activity` | time            | timestamp of the session's last activity                      |
 | `created_at`    | time            | session creation timestamp                                    |
 | `summary`       | string          | V-4 one-line last-output summary                              |
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
+| `remote_activity_at` | `*time.Time` | when a paired device last delivered a message to this session, carried only while that instant is inside the daemon's activity horizon; absent when no message is in the window. The board row's words -- `phone sent 09:41` -- are drawn from this instant, so the row states an event and never a presence claim (conversation surface, Wave G item G.2) |
 | `supervision`   | string          | the persisted supervision mode of a handoff child: `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); absent when none |
 | `supervision_pending` | bool      | an attention event of this handoff child awaits its source; live supervisor state, sampled like `remote_controlled` (ADR-010 Amendment 3 C5); absent when false |
 | `capabilities`  | `*SessionCapabilities` | daemon-authored per-session capability record (ADR-017 T2), absent on an older daemon or a session not yet stamped -- see "The `SessionCapabilities` record" below. Shares its wire name with `Control.capabilities` (the hello negotiated-capability list); the two are unrelated fields of unrelated messages that happen to share a name, and the GG-7 drift check treats the key as documented once it has one row |
@@ -212,6 +214,36 @@ and unrelated secrets are dropped.
 | `spawned_from`   | string              | optional local id of the spawning session, carried verbatim into meta (ADR-010 D4) |
 | `spawn_intent`   | string              | optional spawn intent, one of `handoff` or `delegate`; refused without a `spawned_from` |
 | `supervision`    | string              | optional supervision mode, one of `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); refused unless `spawn_intent` is `handoff` |
+
+Two option keys are reserved for resume orchestration. `resume_from` names an
+ended/lost swarm source session and creates a new row linked through
+`Meta.ResumedFrom`. `resume_conversation_id` adopts a provider-native conversation
+that is not yet represented in swarm. The latter is accepted only on the owner
+tier when `external-resume` was negotiated during `hello`; it is refused with
+`capability_refused` otherwise and with `policy` on the remote tier. The assembly
+validates the canonical identity, composes the adapter's resume argv, persists the
+identity with the launch, and reuses an existing row with the same provider and
+identity. The two resume keys are mutually exclusive.
+
+A third option key is reserved for the hands-off handoff (ADR-010 Amendment 4).
+`handoff_from` carries the NAMESPACED id of the SOURCE session whose conversation
+the new session is told to go and read; the source is never signalled, stopped or
+asked to cooperate. It is accepted only on the owner tier when `hands-off-handoff`
+was negotiated during `hello`; it is refused with `capability_refused` otherwise
+and with `policy` on the remote tier, in both cases with no daemon side effect.
+`handoff_from`, `resume_from` and `resume_conversation_id` are three different
+answers to where a session comes from, so all three are mutually exclusive;
+pairing `handoff_from` with either resume key is refused `invalid_field` naming
+both keys, and the resume pair's own exclusion is the one stated above. Unlike
+the two resume keys, `handoff_from` distinguishes PRESENT-BUT-EMPTY from ABSENT
+and fails closed on the former: an empty value is refused `invalid_field`, while
+a key that was never set is an ordinary launch requiring no capability. ADR-010
+Amendment 4 E7 is the reason -- no refusal in this flow may degrade to a bare,
+context-free launch, and reading an empty source id as "absent" would reach one
+past the capability gate. The assembly
+resolves the source, its conversation identity and its transcript path, and
+composes the successor's prompt daemon-side; nothing about the handoff reaches
+`SessionView` or any other roster, list or event message.
 
 > AMENDED BY ADR-007 B144 (2026-08-15): `LaunchReq` above is the owner-tier form's request — free
 > `cwd`, `options`, `env`. B144's preset model arrives with the R1/R5 skeleton as a **separate**
@@ -367,6 +399,19 @@ is ADDITIVE and never fatal to the handshake: a client whose `build_version`
 differs from the daemon's (e.g. the daemon is still running an older build
 after an upgrade) can surface that and suggest `swarm daemon restart` even when
 `protocol_version` still matches (E13.2).
+
+The owner CLI offers `external-resume` only for provider-session adoption. Its
+absence is a compatibility boundary, not a best-effort downgrade: a reattach
+client must refuse before discovery or launch rather than let an older daemon
+interpret the reserved option as a fresh session.
+
+The owner CLI offers `hands-off-handoff` only when it is about to send a
+`handoff_from` launch, and its absence is the same kind of compatibility boundary
+for the same reason, stated more sharply: an older daemon does not know the option
+key and would silently ignore it, launching a context-free agent into the user's
+checkout. The client must refuse rather than launch. The capability is advertised
+on both tiers because `serverCaps` is tier-independent, but the option itself is
+refused `policy` on the remote tier, so negotiating it there grants nothing.
 
 ### `list`
 

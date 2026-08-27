@@ -114,10 +114,46 @@ type perSourceBlockingResolver struct {
 	results  map[string]resumeHistoryResult
 }
 
+func TestExternalResumeIsIdempotentByProviderIdentity(t *testing.T) {
+	rig := newResumeAPIRig(t, "claude", migratedConversationID, nil)
+	spec := daemon.LaunchSpec{
+		AgentType: "claude",
+		Cwd:       filepath.Join(rig.stateDir, "new-work"),
+		ClientEnv: []string{"PATH=/definitely/no-provider-binaries-here"},
+		Options: map[string]string{
+			protocol.OptionResumeConversationID: migratedConversationID,
+		},
+	}
+	for i := 0; i < 2; i++ {
+		got, err := rig.api.Launch(spec)
+		if err != nil {
+			t.Fatalf("Launch %d: %v", i+1, err)
+		}
+		if got.ID != rig.sourceID {
+			t.Fatalf("Launch %d returned %q, want existing %q", i+1, got.ID, rig.sourceID)
+		}
+	}
+	if got := len(rig.core.List()); got != 1 {
+		t.Fatalf("roster size = %d, want one idempotently reused session", got)
+	}
+}
+
 func (r *perSourceBlockingResolver) Resolve(m persist.Meta) resumeHistoryResult {
 	r.entered <- m.ID
 	<-r.releases[m.ID]
 	return r.results[m.ID]
+}
+
+// Both fakes exist to control the RECOVERY outcome and nothing else. They locate no
+// transcript, which is the fail-closed answer: a hands-off handoff composed against
+// one of these rigs refuses by name rather than pointing a successor at a path no
+// resolver stood behind.
+func (r *perSourceBlockingResolver) LocateTranscript(persist.Meta, string) (string, resumeHistoryOutcome) {
+	return "", resumeHistoryUnsupported
+}
+
+func (f *fakeResumeHistoryResolver) LocateTranscript(persist.Meta, string) (string, resumeHistoryOutcome) {
+	return "", resumeHistoryUnsupported
 }
 
 func (f *fakeResumeHistoryResolver) Resolve(persist.Meta) resumeHistoryResult {

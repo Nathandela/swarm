@@ -240,8 +240,8 @@ func TestSignalSources_DeclaresSixHooksWithStatusMapping(t *testing.T) {
 	}
 }
 
-// TestResume_CarriesConversationID — E11.2 / R-2: Resume composes `claude --resume
-// <id>`; an empty id resumes nothing.
+// TestResume_CarriesConversationID — E11.2 / R-2: Resume composes a hook-enabled
+// `claude --resume <id>`; an empty id resumes nothing.
 func TestResume_CarriesConversationID(t *testing.T) {
 	a := newAdapter()
 
@@ -265,6 +265,9 @@ func TestResume_CarriesConversationID(t *testing.T) {
 	}
 	if !containsArg(argv, fixtureConversationID) {
 		t.Errorf("Resume argv missing the conversation id %q; argv = %v", fixtureConversationID, argv)
+	}
+	if !containsArg(argv, "--settings") {
+		t.Errorf("Resume argv missing per-invocation hook settings; argv = %v", argv)
 	}
 }
 

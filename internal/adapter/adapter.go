@@ -257,3 +257,49 @@ type ResumeSpec struct {
 	Name           string
 	Options        map[string]string
 }
+
+// TranscriptLayout is the OPTIONAL extension a CLI implements when swarm has
+// CHARACTERIZED where that CLI keeps its conversation transcripts on disk. It is
+// discovered by TYPE ASSERTION (AsTranscriptLayout), never by a method on
+// Adapter: the frozen method set gains nothing (ADR-010 Non-goals).
+//
+// IT NAMES; IT NEVER OPENS. Both halves are PURE and TOTAL on the same terms as
+// Command/Resume: deterministic, no panic on any input, and NO filesystem access
+// whatsoever -- no Stat, no Open, no read. Every byte of I/O stays in the core's
+// existing anchored, budgeted resolver (an os.Root traversal under the DAEMON's
+// home -- not the session's; the resolver is built once per daemon and its home is
+// immutable -- with the history budgets and alias caps), because that resolver is
+// the only party allowed to touch the disk (ADR-001 / E9.2). An adapter that
+// opened a file here would move traversal safety inside the boundary that exists
+// precisely to keep it out.
+//
+// WHY TWO METHODS RATHER THAN ONE TranscriptPath(convID). The two callers
+// disagree about what they know. The hands-off composer holds a conversation id
+// and wants the file. The resume-history MIGRATION resolver holds NO id -- it is
+// searching for one -- and needs the DIRECTORY so it can read the candidate ids
+// out of it. A single path-composing method cannot serve the second caller at
+// all, so the seam splits exactly where their knowledge does.
+//
+// ABSENCE IS THE SIGNAL (ADR-010 section 5), and here it is load-bearing. An
+// adapter whose layout nobody has characterized implements NOTHING, the
+// assertion fails, and the caller refuses that provider BY NAME. A stub
+// returning "" would instead look like an answer and send an anchored open at a
+// directory named "" -- a silent wrong path in place of a named refusal.
+type TranscriptLayout interface {
+	// ProjectDirName encodes a working directory into the single directory name
+	// the CLI files that cwd's transcripts under (e.g. "/a/b" -> "-a-b"). It
+	// returns a BARE NAME, never a path: the core joins it beneath the provider
+	// root it opened, and joining is the core's act.
+	ProjectDirName(cwd string) string
+
+	// TranscriptFileName names the transcript file for one conversation id
+	// within that directory. It does NOT validate convID -- callers owe
+	// IsCanonicalConversationID before this and an os.Root anchor after it.
+	TranscriptFileName(convID string) string
+}
+
+// AsTranscriptLayout reports whether a has a characterized transcript layout.
+func AsTranscriptLayout(a Adapter) (TranscriptLayout, bool) {
+	layout, ok := a.(TranscriptLayout)
+	return layout, ok
+}

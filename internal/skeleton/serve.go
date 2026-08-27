@@ -448,6 +448,13 @@ func Serve(cfg Config) (*Daemon, error) {
 		driven := func(id string) bool { return rs.IsControlled(id) || d.phoneRecentlyActive(id) }
 		d.srv.SetRemoteControlledFunc(driven)
 		d.api.SetRemoteControlledFunc(driven)
+		// AND WHEN, which is what the row actually says (conversation surface, Wave G item
+		// G.2). `driven` can only produce the bare noun `phone`, and a bare noun in the marker
+		// column reads as a condition -- the presence claim G.5 rules out. The instant is
+		// already recorded and already horizon-bounded; this is where it is spent. Registered
+		// on the owner-tier Server only: the roster poller's diff key is about WHETHER a
+		// session is driven, and `driven` above still answers that.
+		d.srv.SetRemoteActivityFunc(d.remoteActivityAt)
 	}
 
 	// ADR-010 Amendment 3 C2..C4: the passive supervisor, over the owner-tier Server's

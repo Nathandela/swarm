@@ -136,7 +136,10 @@ func TestRoster_SupervisionMarkerKeepsRowWithinTerminalWidth(t *testing.T) {
 	child.Cwd = "~/a/very/long/path/to/a/worktree/whose/text/used/to/wrap"
 	child.Summary = "A deliberately long summary that must be clamped before the terminal wraps it onto a second line"
 	child.SpawnedFrom = "parent-with-a-long-name"
-	child.RemoteControlled = true
+	// The wider `phone sent HH:mm` marker, beside the supervision one: two markers plus a
+	// lineage badge is the fullest this tail ever gets.
+	sentAt := time.Date(2026, 8, 26, 9, 41, 0, 0, time.Local)
+	child.RemoteActivityAt = &sentAt
 
 	for _, width := range []int{48, 72, 92, 120, 160, 200} {
 		t.Run(itoa(width), func(t *testing.T) {

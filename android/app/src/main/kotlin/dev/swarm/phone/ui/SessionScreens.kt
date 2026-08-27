@@ -139,6 +139,37 @@ data class SessionDetail(
      */
     val title: String = "",
     /**
+     * The roster's own `swarmmobile.Session.Group` for this session, verbatim.
+     *
+     * IT IS READ AND NEVER DERIVED, which is [dev.swarm.phone.ui.TriageInbox]'s standing rule and
+     * is why this is a field rather than something the conversation header works out: a second
+     * derivation on the handset is a second source of truth about what a session is doing, and the
+     * mark this feeds is the one the reader just tapped a row to get here from. A session reads the
+     * same in the header as it did on that row, or the header is lying about which one is open.
+     *
+     * DEFAULTED FOR [title]'S REASON AND WITH A SHARPER CONSEQUENCE. Empty means "the roster could
+     * not answer for this session" -- an ordinary race, the same one that leaves [title] empty --
+     * and `SessionDetailScreen` is where that is turned into something drawable, because
+     * `Kit.groupColour` fails loudly on a Group it cannot place and a drill-down must not die of a
+     * roster row that left between two draws.
+     */
+    val group: String = "",
+    /**
+     * What to CALL the machine this session is on, as `MachineLabel.of` already decides it: the
+     * hostname the machine published, or the endpoint id where it published none.
+     *
+     * IT IS THE LABEL AND NOT THE ENDPOINT ID, and the split is [title]'s exactly one level out:
+     * the id is what the roster namespaces sessions under and what a scope chip filters on, and
+     * this is the half a person reads. The conversation header carries it because with several
+     * machines paired it is the only thing telling two identically named sessions apart -- the
+     * drawing's own sentence for the row it sits in.
+     *
+     * EMPTY MEANS THERE IS NO MACHINE TO NAME, not "unknown": a session id with no namespace has
+     * no machine half at all, and the header then says the state alone rather than the state
+     * beside a word invented here (ADR-007 B135, `MachineLabel`'s own ruling).
+     */
+    val machineLabel: String = "",
+    /**
      * The state of THIS screen's last composer send (Mirror M2.4, ADR-009 (6)), or null when the
      * reader has not sent anything on this session since the screen was opened.
      *

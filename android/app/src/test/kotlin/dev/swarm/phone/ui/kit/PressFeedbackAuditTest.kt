@@ -7,6 +7,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
@@ -66,6 +67,18 @@ class PressFeedbackAuditTest {
      * target, and the row is in this table), `statusDot` and `workingBar` are marks rather than
      * controls, and `textField` answers a focus rather than a press -- its response is the
      * champagne focus ring, which is PB-DS-7's row and FocusRingTest's subject.
+     *
+     * THE CONVERSATION SURFACE'S CONTROLS JOINED IN WAVE C, and its two NON-controls are named
+     * here on the same terms. `messageBubble` is a thing somebody said, not a thing anybody
+     * presses -- row 26's whole argument is that it is not a row. `conversationHeader` builds no
+     * control of its own: its back and its overflow are SLOTS a screen fills, which is why row 27
+     * spends its touch floor on whatever is handed in rather than on anything this kit made. The
+     * overflow that goes in that slot IS here, because `overflowControl` builds it.
+     *
+     * The five that are here are every kit component on that surface a finger lands on: the
+     * overflow, one menu line, the tear's repair, the earlier chip, the file change and the
+     * decision pill. A menu LINE rather than the block, because the block is a container and the
+     * line is what is pressed -- `toggle`'s relationship to `settingsRow`, the other way up.
      */
     private fun controls(): Map<String, View> = mapOf(
         "ctaButton(APPROVE)" to ctaButton(context, "Approve", CtaKind.APPROVE),
@@ -79,7 +92,26 @@ class PressFeedbackAuditTest {
         ),
         "settingsRow" to settingsRow(context, "Notifications"),
         "machineRow" to machineRow(context, "nathans-mbp", "online", mark = PresenceMark.ONLINE),
+        "overflowControl" to overflowControl(context),
+        "conversationMenu(row)" to firstMenuRow(),
+        "gapDivider" to gapDivider(context, "records missing - repair"),
+        "earlierChip" to earlierChip(context, "Load earlier messages"),
+        "fileChangeRow" to fileChangeRow(context, "modify", "ui/kit/Composer.kt", "+12 -24"),
+        "decisionPill" to decisionPill(context, "Decision needed"),
     ).mapValues { (_, view) -> view.apply { setOnClickListener { } } }
+
+    /**
+     * One line out of a built menu, which is the thing a finger actually lands on.
+     *
+     * THE MENU IS THE ONE KIT COMPONENT THAT WIRES ITS OWN ROWS, because they are built from data
+     * a caller passes. `mapValues` above replaces that listener with the audit's own, which is
+     * exactly what this suite does to every other control -- what it measures is the platform's
+     * pressed state, not which callback runs.
+     */
+    private fun firstMenuRow(): View {
+        val menu = conversationMenu(context, listOf(MenuChoice("kill", "Kill session", true))) {}
+        return (0 until menu.childCount).map { menu.getChildAt(it) }.first { it is TextView }
+    }
 
     /** One ACTION_DOWN at the view's own origin, as the platform delivers it. */
     private fun pressDown(view: View) {

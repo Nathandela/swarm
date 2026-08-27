@@ -15,6 +15,13 @@ import (
 	"sync"
 	"time"
 
+	// internal/adapter is imported for ONE pure syntax predicate,
+	// IsCanonicalConversationID (see SetConversationID). The layering rule this
+	// package states repeatedly is that the daemon never RESOLVES an adapter --
+	// argv, capture rows and backend plans are composed by the assembly and only
+	// carried here — and that rule is intact: nothing below constructs or consults
+	// an Adapter. internal/adapter depends only on internal/vt, so there is no cycle.
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -73,6 +80,9 @@ type Config struct {
 	// just-saved meta (test seam E5.3). It observes the reconnect-before-lost
 	// ordering: a live shim is never persisted as lost.
 	onMetaSave func(persist.Meta)
+	// groupNow is a test clock for category transitions. Production leaves it nil
+	// and uses time.Now.
+	groupNow func() time.Time
 
 	// PreLaunch and PreDelete are optional launch-time isolation hooks (Epic 12):
 	// the daemon core calls them generically and carries no worktree-specific
@@ -137,6 +147,10 @@ type LaunchSpec struct {
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string
+	// ConversationID, when non-empty, is a provider-native identity already known
+	// before launch (for example, an owner-local import from another supervisor).
+	// The daemon seeds it into meta atomically with the new session reservation.
+	ConversationID string
 	// ResumedFrom, when non-empty, is the LOCAL id of a prior session this launch
 	// resumes (Epic 11 / R-2). The daemon stamps it into the new session's
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
@@ -155,13 +169,13 @@ type LaunchSpec struct {
 	// (ADR-010-adapter-structured-capture §6), injected into the agent env so its
 	// `swarm hook` keeps the CLI's own body for those events and no others. Resolved
 	// by the assembly from the adapter's SignalSources, exactly like Argv: the daemon
-	// imports no adapter package and only carries what it is given.
+	// resolves no adapter and only carries what it is given.
 	CaptureEvents []string
 	// Backend, when non-nil, is the session's RESOLVED backend plan (Wave R7, Mirror M4.1).
 	// The daemon CARRIES it and never derives it: the assembly resolves it from the
 	// session's adapter through adapter.ResolveBackend -- which performs the core's
 	// LookPath and session-dir containment checks -- exactly as it resolves Argv and
-	// CaptureEvents, because this package imports no adapter package.
+	// CaptureEvents, because this package resolves no adapter.
 	Backend *BackendSpec
 	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
 	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
@@ -391,7 +405,7 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	}
 	m.Status = next
 	m.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -406,7 +420,9 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 // output (Epic 11 / R-2) — the id a later resume replays. It is WRITE-ONCE: the
 // first non-empty capture wins and later captures are ignored, so the id never
 // flaps. The write goes through the sole meta writer under writeMu (G6, no second
-// writer); an unknown or tombstoned session and an empty id are no-ops.
+// writer); an unknown or tombstoned session and an empty id are no-ops. A capture
+// that cannot be this provider's id is refused before the latch (see below) and is
+// likewise a no-op, not an error.
 func (d *Daemon) SetConversationID(id, convID string) error {
 	if convID == "" {
 		return nil
@@ -423,13 +439,31 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
 	}
+	// VALIDATE BEFORE LATCHING. The transcript-tail scraper can extract something
+	// that is not an id at all — on the owner's machine two real claude sessions
+	// had latched the literal "./cmd/swarm/" — and because the latch is write-once,
+	// junk in the field means the AUTHORITATIVE hook-sourced id can never correct
+	// it. Refusing here, BEFORE the write-once branch, leaves the field EMPTY so
+	// that later capture still wins; write-once itself is untouched, only the set
+	// of values allowed to take the latch shrinks. The check is gated on agent type
+	// exactly as skeleton's validateStoredResumeConversationID gates it: claude and
+	// codex are the only providers whose id format is characterized, and refusing an
+	// uncharacterized provider's perfectly valid id would be a regression. A refusal
+	// returns nil because it is a policy outcome, not a fault: SetConversationID
+	// already answers nil whenever a capture does not become the stored id, and its
+	// callers log every error they get while the scraper retries on every transcript
+	// growth.
+	if (m.AgentType == "claude" || m.AgentType == "codex") && !adapter.IsCanonicalConversationID(convID) {
+		d.writeMu.Unlock()
+		return nil
+	}
 	if m.ConversationID != "" {
 		d.writeMu.Unlock()
 		return nil // write-once: already captured
 	}
 	m.ConversationID = convID
 	m.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -467,7 +501,7 @@ func (d *Daemon) Rename(id, name string) error {
 	m.Name = name
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = persist.FilterEnv(m.Env)
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -533,7 +567,7 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
 
 	d.writeMu.Lock()
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -562,7 +596,7 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // constructs a Meta from a raw, unfiltered env source must filter before
 // reaching here, or the unfiltered value will reach the in-memory registry
 // (store.Save only protects disk, since it filters its own copy of m).
-func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
+func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
 	}
@@ -578,18 +612,41 @@ func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	}
 	d.mu.Unlock()
 
+	// Category-entry time changes only when the derived display group changes.
+	// Every durable meta mutation passes this choke point, so unrelated writes
+	// (rename, conversation-id capture, activity within one group) preserve it.
+	if prevExists {
+		if status.Derive(prev.Status) != status.Derive(m.Status) {
+			m.GroupEnteredAt = d.categoryNow()
+		} else {
+			m.GroupEnteredAt = prev.EffectiveGroupEnteredAt()
+		}
+	} else if m.GroupEnteredAt.IsZero() {
+		m.GroupEnteredAt = m.EffectiveGroupEnteredAt()
+		if m.GroupEnteredAt.IsZero() {
+			m.GroupEnteredAt = d.categoryNow()
+		}
+	}
+
 	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
 	// journal record without meta (tolerable) but never meta without journal (A7).
-	if rec, ok := journalRecordFor(prev, prevExists, m); ok {
+	if rec, ok := journalRecordFor(prev, prevExists, *m); ok {
 		if _, jerr := d.journal.Append(rec); jerr != nil {
 			return false, jerr
 		}
 	}
-	if err := d.store.Save(m); err != nil {
+	if err := d.store.Save(*m); err != nil {
 		return false, err
 	}
-	d.putMem(m)
+	d.putMem(*m)
 	return true, nil
+}
+
+func (d *Daemon) categoryNow() time.Time {
+	if d.cfg.groupNow != nil {
+		return d.cfg.groupNow()
+	}
+	return time.Now()
 }
 
 // processRank orders the process dimension for the terminal-write precedence
@@ -635,7 +692,7 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 		return // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(next)
+	written, err := d.saveMetaLocked(&next)
 	d.writeMu.Unlock()
 	if err != nil {
 		d.logf("finalize: persist terminal meta for %s: %v", id, err)

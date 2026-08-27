@@ -2,6 +2,7 @@ package dev.swarm.phone
 
 import android.graphics.Rect
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -9,6 +10,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -28,6 +30,7 @@ import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
+import dev.swarm.phone.ui.MachineLabel
 import dev.swarm.phone.ui.PressFeedback
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SyncStatus
@@ -38,13 +41,21 @@ import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.SendState
+import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ToastHost
 import dev.swarm.phone.ui.kit.composerBar
+import dev.swarm.phone.ui.kit.conversationHeader
+import dev.swarm.phone.ui.kit.conversationMenu
 import dev.swarm.phone.ui.kit.ctaButton
+import dev.swarm.phone.ui.kit.decisionPill
+import dev.swarm.phone.ui.kit.earlierChip
 import dev.swarm.phone.ui.kit.emptyState
+import dev.swarm.phone.ui.kit.navHeaderDrill
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.overflowControl
 import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.textField
+import dev.swarm.phone.ui.screens.PendingSend
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
 import dev.swarm.phone.ui.screens.ApprovalSheetPanel
@@ -80,7 +91,11 @@ import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.SheetTag
 import dev.swarm.phone.ui.screens.TranscriptScreen
 import dev.swarm.phone.ui.screens.TriageInboxScreen
+import dev.swarm.phone.ui.screens.TranscriptRoute
 import dev.swarm.phone.ui.screens.activityPanelView
+import dev.swarm.phone.ui.screens.conversationScaffoldView
+import dev.swarm.phone.ui.screens.diffScreen
+import dev.swarm.phone.ui.screens.outputScreen
 import dev.swarm.phone.ui.screens.globalInboxView
 import dev.swarm.phone.ui.screens.launchPanelView
 import dev.swarm.phone.ui.screens.launchPresetView
@@ -479,6 +494,7 @@ class PhoneSurface(
         // The last send's report goes the moment a new one is planned: a notice about a refusal
         // the user has already answered by typing again is a report of the wrong press.
         composerSendFor = target
+        composerSentText = line
         composerRefusal = ""
         composerSendState = SendState.PENDING
         Press(
@@ -519,7 +535,7 @@ class PhoneSurface(
      * reason: the verb is live-only and refuses with a routed class, and routing a refusal through
      * PB-APP-9's table is this surface's job.
      */
-    private val loadEarlier = actionButton(SLOT_LABEL, CtaKind.MORE) {
+    private val loadEarlier = pressable(earlierChip(activity, SLOT_LABEL)) {
         val target = session
         val before = detailDrawn?.loadEarlierBeforeItem.orEmpty()
         if (before.isEmpty()) {
@@ -548,7 +564,125 @@ class PhoneSurface(
      */
     private val composer = composerBar(activity, typed, send)
 
+    /**
+     * The conversation header's way back: the design's own chevron, and nothing beside it.
+     *
+     * **IT IS LIFTED OUT OF [navHeaderDrill] RATHER THAN BUILT, AND THAT IS INTERIM.** The kit's
+     * back control is `NavHeaderDrill.kt`'s private `backControl` -- the tinted `swarm_nav_back`
+     * path, the 48 dp floor on both edges, row 23's focus ring, `KitTag.DRILL_BACK` -- and
+     * `conversationHeader` takes the control as a SLOT the surface fills, so the surface needs a
+     * factory to fill it with. There is no public one yet. The two alternatives were worse: a
+     * `ctaButton` here is a champagne call-to-action where the drawing draws a chevron, and a
+     * `TextView` assembled in this file would be this surface choosing an appearance, which is
+     * the one thing PB-DS-9 keeps out of a call site. A REQUEST to expose `backControl(context,
+     * label)` is filed; when it lands, these four lines become one call and nothing else changes.
+     *
+     * THE LABEL IS BLANKED AND THE WORDS BECOME THE DESCRIPTION, which is the drawing's own
+     * header: `‹` alone, with the session name taking the row. `navHeaderDrill` pairs the glyph
+     * with a visible label because a screen TITLE row has space for one; a conversation header
+     * spends that space on the machine and the state. The words are not lost -- they are what a
+     * screen reader reads, set per panel from [SessionDetailPanel.back], which is the field that
+     * has always existed for exactly that ("the label a screen reader reads; the chevron is the
+     * kit's").
+     */
+    private val back: View =
+        navHeaderDrill(activity, back = SLOT_LABEL, title = "").let { row ->
+            val control = row.findViewWithTag<View>(KitTag.DRILL_BACK)
+            row.removeView(control)
+            control.apply { setOnClickListener { closeSessionDetail() } }
+        }
 
+    /**
+     * The header's trailing mark, and the 48 dp square that replaced 160 dp of stacked CTAs
+     * (owner ruling R2).
+     *
+     * IT IS NOT [SecureWindow.gate]D AND THAT IS THE RULE RATHER THAN AN OMISSION. PB-SEC-12
+     * clause 1 is about controls that ACT -- destructive or authorising -- and opening a menu
+     * acts on nothing: an overlay that stole this tap would show the user a menu. The tap that
+     * matters is the one on `Kill session` inside the menu, and the menu itself is gated where it
+     * is built ([drawConversationMenu]).
+     */
+    private val overflow: TextView = overflowControl(activity).apply {
+        setOnClickListener { toggleConversationMenu() }
+    }
+
+    /**
+     * What the conversation pins under the thumb: Stop, and the bar that sends a line.
+     *
+     * **WHY THE TWO ARE ONE REGION.** Owner ruling R2 puts Stop with the composer and Kill in the
+     * header's menu, so that neither costs vertical space in the READING FLOW. The scaffold has
+     * one pinned slot below its scroll ([conversationScaffoldView]), and this is what goes in it.
+     * Everything else that stood between the transcript and the composer -- Take control, Release,
+     * Kill -- is gone from the product or gone from the column.
+     *
+     * **IT IS A CONTAINER THIS SURFACE OWNS, AND IT IS THE LANDING PAD FOR A KIT CHANGE RATHER
+     * THAN THE FINAL SHAPE.** Ruling R2 as the committee amended it puts the stop affordance
+     * INSIDE the bar -- an empty composer while the agent works shows Stop, a non-empty one shows
+     * Send with Stop still reachable, and which fires is read from the live field at press time.
+     * That is `ui/kit/Composer.kt`'s to build (chat-surface-plan §6, `composerBar` "extended with
+     * the stop affordance"), and when it lands this container collapses to the bar alone and
+     * [stop] is handed to it. Until then Stop is a sibling ABOVE the bar rather than a child of
+     * it: still pinned, still one thumb-reach from anywhere in the conversation, and never again
+     * below a transcript.
+     *
+     * **STOP IS STILL ON SCREEN IN EVERY STATE**, which is PB-APP-3 and is not this slice's to
+     * revisit -- `SessionDetail.stopVisible` is a `val` and not a condition, and the recorded
+     * argument is that hiding it removes the one control that tells a reader what to do next. So
+     * the region does not learn to drop it on an idle session; what it costs is one control's
+     * height OUTSIDE the scroll, against the 160 dp of stacked CTAs it replaces INSIDE it.
+     */
+    /**
+     * The drawing's one persistent affordance: *Decision needed*, above the composer, while the
+     * machine is blocked on this reader.
+     *
+     * IT IS ADDED AND REMOVED RATHER THAN HIDDEN, which is this surface's standing rule ("a view
+     * that is not on screen is a view this did not add") -- and it is the ONE child of
+     * [composerRegion] that moves, deliberately: the other three must never be re-parented, because
+     * one of them holds what the user has typed and another may be under a finger. Inserting at
+     * index 0 touches none of them.
+     *
+     * **WHAT IT DOES NOT YET DO, NAMED RATHER THAN IMPLIED.** The drawing shows it only while the
+     * unanswered decision is OFF SCREEN. That needs the scroll position of the block, which is a
+     * listener on the scaffold's `ScrollView` and belongs with the inline decision card it points
+     * at (Wave E). Until then it is drawn whenever a decision is unanswered, which is a superset:
+     * it never fails to appear when it is owed, and it can appear beside the card it names. The
+     * tap is the same landing `openApproval` already resolves BY ITEM ID, so a decision that
+     * resolved while the reader was reading scrolls nowhere rather than to something else.
+     */
+    private val decisionPillControl: TextView =
+        decisionPill(activity, SLOT_LABEL).apply {
+            setOnClickListener { detailDrawn?.pendingDecisionId?.let(::openApproval) }
+        }
+
+    /**
+     * What a composer that is on screen and CANNOT SEND says under itself.
+     *
+     * **THIS CLOSES D.10'S HALF OF THE OFFLINE STATE, WHICH THIS FILE WAS CLAIMING AND NOT DOING.**
+     * `ComposerModel` computes two sentences for `ComposerAvailability.OFFLINE` -- "Not connected
+     * to your machine" and "Messages are never held - nothing is sent when the link returns" --
+     * and the second is the one fact on that sheet a reader cannot deduce from a greyed field.
+     * The bar stayed (the sink exists, the link is coming back, the draft is worth typing) and
+     * `composerShut` was DISCARDED on that arm, so the hint came from `placeholderFor(working)`
+     * alone and both sentences were read by nothing: exactly the "computed and read by nothing"
+     * defect the wave exists to close, inside the wave.
+     *
+     * IT IS A `notice` AND NOT A SLOT THAT COMES AND GOES, because an empty one draws no height at
+     * all -- `notice` spends no padding -- so the region's four children never change and the
+     * composer is never re-parented. The three shut states that lose the bar say the same two
+     * sentences INSIDE the scroll instead, where the composer would have been
+     * (`DetailTag.COMPOSER_ABSENT`); this is the fourth, which keeps its bar.
+     */
+    private val composerShutDetail: TextView = noticeLine()
+
+    private val composerRegion: LinearLayout = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        addView(stop)
+        stop.screenAir()
+        addView(composer)
+        addView(composerShutDetail)
+        composerShutDetail.screenAir()
+    }
 
     /**
      * PB-SYNC-1's repair, and `App.Resync`'s FIRST CALLER (agents-tracker-upbo).
@@ -702,6 +836,17 @@ class PhoneSurface(
      */
     private var detail: String? = null
         set(value) {
+            // THE REMEMBERED SCROLL BELONGS TO ONE CONVERSATION, AND THIS IS THE ONE PLACE THAT
+            // KNOWS WHICH ONE IS OPEN. Every departure and every switch goes through this setter
+            // -- the chevron, the back gesture, re-tapping the Inbox tab, a row tap on the list,
+            // and the core refusing on a later resume -- so clearing here cannot be forgotten on
+            // one of them, which is the failure mode a clause added beside each of those five
+            // call sites has. Left standing, the offset would open the NEXT session at the place
+            // the reader left the last one, which on a shorter conversation is its end and on a
+            // longer one is the middle of somebody else's work. [conversationScrollY] argues the
+            // other half: what makes it survive a REBUILD is that a rebuild does not come
+            // through here.
+            if (value != field) conversationScrollY = null
             field = value
             pushDrillDown()
         }
@@ -788,6 +933,16 @@ class PhoneSurface(
      */
     internal fun closeDrillDown() {
         when {
+            // THE MENU IS THE INNERMOST THING THERE IS, and it is asked first for the same reason
+            // the aggregate inbox is asked before the switcher: a sub-state the predicate ignores
+            // is a screen the gesture exits THROUGH. Back over an open conversation menu closes
+            // the menu; it does not take away the conversation the menu was opened on top of.
+            closeConversationMenu() -> Unit
+            // AND THE LITERAL SCREEN IS THE NEXT ONE IN, on the menu's own argument: back over
+            // R8's output or R9's diff returns to the conversation it was opened from, not out of
+            // the conversation entirely. Without this arm the gesture would close the session and
+            // leave the reader on the inbox, two screens from where they were.
+            closeLiteralScreen() -> Unit
             globalInboxOpen -> closeGlobalInbox()
             machinesOpen -> closeMachines()
             else -> closeSessionDetail()
@@ -853,8 +1008,71 @@ class PhoneSurface(
      */
     private var contentShows: Destination? = null
 
-    /** What the tab bar last drew: the tabs, and the destination they point at. */
-    private var barDrawn: Pair<List<InboxTab>, Destination>? = null
+    /**
+     * What the SCAFFOLD last drew: which composition, over what.
+     *
+     * IT WAS `barDrawn` AND A `Pair` OF THE TABS AND THE DESTINATION, which was the whole question
+     * while there was one composition. There are two now ([drawScaffold] has the argument), and a
+     * key that could not tell them apart would leave a conversation hosted inside the tab scaffold
+     * for as long as the tabs and the destination happened not to change -- which is every draw
+     * between opening a session and closing it.
+     */
+    private var scaffoldDrawn: ScaffoldKey? = null
+
+    /**
+     * Where the reader was in the conversation when its scaffold was last discarded, or null when
+     * the next conversation to be drawn is being OPENED rather than returned to.
+     *
+     * **IT IS A NUMBER THE SURFACE CARRIES BECAUSE THE VIEW THAT HELD IT IS GONE**
+     * (agents-tracker-jz0z). [ScaffoldKey] includes `literal` and `composer`, so opening an R8
+     * output screen or an R9 diff and coming back rebuilds the scaffold, as does a session losing
+     * its message sink -- and `conversationScaffoldView` builds a fresh `ScrollView` per call, so
+     * the offset dies with the one that is discarded. [contentHost] surviving the rebuild does not
+     * save it: a `FrameLayout` has no scroll position, and the comment in [drawScaffold] that said
+     * otherwise stood in this file for a whole wave while the screen it described was dumping
+     * readers at the top of the transcript.
+     *
+     * **NULL IS A STATE AND NOT AN ABSENCE**, which is the whole of H.1 (agents-tracker-tu7z):
+     * a conversation with nothing to restore opens at its NEWEST message, because the transcript
+     * is oldest-at-top and the alternative -- the one that shipped -- is a reader landing on the
+     * first messages of a session and never being scrolled again.
+     *
+     * IT IS CLEARED BY [detail]'S SETTER AND WRITTEN BY [drawScaffold], which is the split that
+     * makes it correct: a rebuild is not a change of conversation and does not go through the
+     * setter, and a departure is, and does. Kept while the reader is off on Activity or Settings
+     * with a session still open, for the reason `selectDestination` already gives about the
+     * drill-down itself: checking the feed mid-session is not leaving the session.
+     */
+    private var conversationScrollY: Int? = null
+
+    /**
+     * The four facts that decide which root the window holds, and what is in it.
+     *
+     * IT IS A TYPE AND NOT A TUPLE because two of the four are booleans, and a `Triple` of a list,
+     * an enum and two `Boolean`s is a key whose halves can be swapped without anything failing.
+     */
+    private data class ScaffoldKey(
+        val tabs: List<InboxTab>,
+        val destination: Destination,
+        /** Whether the conversation composition is the one on screen. */
+        val conversation: Boolean,
+        /**
+         * Whether that conversation gets a pinned composer at all
+         * ([SessionDetailPanel.composerIsBar]). A session that loses its message sink -- a torn
+         * record, an ended agent -- loses the bar rather than being handed a disabled one, and
+         * that is a change of COMPOSITION, so it belongs in the key rather than in a redraw.
+         */
+        val composer: Boolean,
+        /**
+         * The item whose literal is open on its own screen, or "" for the conversation itself.
+         *
+         * IT IS IN THE KEY BECAUSE IT CHANGES WHICH ROOT THE WINDOW HOLDS, exactly like
+         * [conversation]. R8's output and R9's diff are SCREENS, not sheets over the
+         * conversation: the drawing gives each one a nav header and a well that scrolls both
+         * ways, and neither fits inside a column whose whole point is that only the list moves.
+         */
+        val literal: String = "",
+    )
 
     /**
      * What the sync chrome last said, for [inboxDrawn]'s reason.
@@ -1080,6 +1298,15 @@ class PhoneSurface(
      * planned and when the drill-down closes.
      */
     private var composerSendFor: String = ""
+
+    /**
+     * The words that were actually sent, captured at the press (owner ruling R6).
+     *
+     * IT IS NOT THE COMPOSER'S TEXT. The draft is spent on the daemon's acceptance and the reader
+     * is free to start typing the next line immediately; reading the field to draw the pending
+     * bubble would show them their NEXT message attributed to the one already in flight.
+     */
+    private var composerSentText: String = ""
 
     private var composerSendState: SendState? = null
 
@@ -1378,6 +1605,12 @@ class PhoneSurface(
      * overlay is the first such thing, and [windowRoot] is where it hangs.
      */
     private val host = FrameLayout(activity).apply {
+        // NAMED, so a test can ask how many compositions this window is holding rather than
+        // guessing at a child index. Two roots stacked here draw on top of each other -- the one
+        // underneath keeps its listeners, its accessibility focus and whatever was typed into it,
+        // while the one on top looks correct -- so a swap that forgot its `removeAllViews` would
+        // pass every assertion about what is ON screen. This is what makes that question askable.
+        tag = PHONE_APP_HOST
         // A glowing dot and the tab badge are drawn outside their own views.
         clipChildren = false
         clipToPadding = false
@@ -1385,7 +1618,54 @@ class PhoneSurface(
     }
 
     /**
-     * The window: the app, and the toast overlay above it.
+     * The conversation menu, and the tap that closes it, over the app and under the toast.
+     *
+     * **IT IS A VIEW IN THIS WINDOW AND NOT A DIALOG, AND PB-SEC-12 CLAUSE 1 IS WHY.** Kill is a
+     * privileged control -- it ends a session outright -- and `filterTouchesWhenObscured` is a
+     * property of a View in a window this surface OWNS. `confirmThenPress` says so about its own
+     * `AlertDialog` in as many words: "the dialog's own buttons live in a window this surface does
+     * not own". A menu built as a popup or a dialog would take Kill's tap through a window with no
+     * touch filter on it, which is the one control an overlay attack is most worth mounting
+     * against. Owner ruling R2 moved Kill; it did not relax what protects it.
+     *
+     * **THE HOST IS THE SCRIM AND THAT IS THE WHOLE DISMISS BEHAVIOUR.** It fills the window and
+     * takes taps, so anything outside the menu closes it -- the platform convention, and the only
+     * way out for a user who opened the menu by accident and does not want any of its three acts.
+     * It is `INVISIBLE`-by-emptiness rather than by a flag: an empty host draws nothing, takes
+     * nothing (see [drawConversationMenu]'s clearing) and is exactly as findable as a full one,
+     * which is [drawSync]'s own argument for filling both its slots with silence.
+     *
+     * UNDER THE TOAST, WHICH IS THE ORDER IT IS ADDED IN. A toast reports what a press did; a menu
+     * is where presses come from. A menu drawn over the report of its own last act would hide the
+     * answer from the person who just asked the question.
+     */
+    private val menuHost = FrameLayout(activity).apply {
+        clipChildren = false
+        clipToPadding = false
+        layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
+        // THE SCRIM IS THE HOST ITSELF and it is armed only while there is a menu in it, because
+        // a permanently clickable full-window view over the app is a window that eats every tap.
+        setOnClickListener { closeConversationMenu() }
+        isClickable = false
+    }
+
+    /**
+     * The conversation header's own host, for [syncHost]'s reason exactly.
+     *
+     * WHAT IT SAYS AND WHEN THE SCAFFOLD IS BUILT ARE TWO DIFFERENT CLOCKS. The header carries the
+     * session's state word, which flips at every turn boundary; the scaffold is rebuilt only when
+     * the destination changes or a conversation opens or closes. A scaffold handed a fresh header
+     * per draw would be rebuilt at the rate the agent produces turns, re-parenting the
+     * conversation -- and the composer, with whatever the user has typed in it -- under whoever is
+     * using it. So the header is drawn INTO this host by [drawConversationHeader], guarded on its
+     * own three facts, and the host itself never moves.
+     */
+    private val headerHost = FrameLayout(activity).apply {
+        layoutParams = ViewGroup.LayoutParams(MATCH, WRAP)
+    }
+
+    /**
+     * The window: the app, the menu over it, and the toast overlay above both.
      *
      * THE ORDER IS THE Z-ORDER, which is the whole of what "above the tab bar" means in a
      * `FrameLayout`: [toasts] is added last, so it draws over the bar rather than behind it. It
@@ -1401,6 +1681,7 @@ class PhoneSurface(
         clipToPadding = false
         layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
         addView(host)
+        addView(menuHost)
         addView(toasts)
     }
 
@@ -1423,6 +1704,14 @@ class PhoneSurface(
     // REVOKE IS IN HERE THROUGH [SettingsSurface] AND NOT BY NAME, which is the sentence above
     // working: the control moved to the screen that owns it and arrived back in this list with the
     // panel's own set, so the phone's one destructive action never stopped filtering obscured taps.
+    // AND ONE CONTROL IS DELIBERATELY REACHED THROUGH A VIEW THIS LIST CANNOT HOLD. Owner ruling
+    // R2 moves Kill into the conversation header's menu, so the tap that ends a session lands on a
+    // menu ROW -- and the menu is built per open ([drawConversationMenu]) rather than once, because
+    // which rows exist is a fact about the session. A list is the wrong shape for a view that does
+    // not exist yet, so the gate is applied where the menu is built, on the block: a `ViewGroup`
+    // consults `filterTouchesWhenObscured` before dispatching to its children, so one gate covers
+    // every row. [kill] itself stays in this list and stays gated -- it is still the control the
+    // row presses, and it is still what carries the confirmation.
     val touchFilteredActions: List<View> =
         listOf(send, stop, kill, launch, resyncControl, acknowledge) +
             pairing.touchFilteredActions + settings.touchFilteredActions
@@ -1914,7 +2203,7 @@ class PhoneSurface(
         // Both are cleared rather than left, because both guard early returns: a phone whose device
         // was revoked lands here with a bar and a destination already recorded, and would then be
         // shown neither of them again when it re-pairs.
-        barDrawn = null
+        scaffoldDrawn = null
         contentShows = null
         host.removeAllViews()
         host.addView(
@@ -2025,12 +2314,22 @@ class PhoneSurface(
     }
 
     /**
-     * Draw the bar, and rebuild it only when what it says has changed.
+     * Put the right ROOT in the window, and rebuild it only when which one, or what is in it, has
+     * changed.
+     *
+     * **THERE ARE TWO ROOTS NOW AND THIS IS THE ONE PLACE THAT CHOOSES** (chat-surface-plan §5).
+     * The tab scaffold hosts a destination above one shared bar; the conversation scaffold hosts a
+     * header, a list that owns its own scroll, and a pinned composer, with no bar and the
+     * connection strip kept. They are separate compositions rather than one with a flag because
+     * what differs is the ARRANGEMENT -- which parts scroll -- and a scaffold that took a boolean
+     * would be two screens sharing a body and disagreeing about what is inside its `ScrollView`.
      *
      * THE EQUALITY CHECK IS NOT AN OPTIMISATION, for the reason [inboxDrawn] records: [render]
      * runs on every resume, after every action AND on every journal event, and the scaffold holds
-     * [contentHost] -- so a bar rebuilt unconditionally would re-parent the destination under
-     * whoever is using it, at whatever rate their agents happen to be producing events.
+     * [contentHost] -- so a root rebuilt unconditionally would re-parent the destination under
+     * whoever is using it, at whatever rate their agents happen to be producing events. On the
+     * conversation it would also re-parent the composer, with whatever the reader has typed and
+     * not yet sent still in it.
      */
     private fun drawScaffold(tabs: List<InboxTab>) {
         // THE APP IS ON SCREEN, SO THE UNPAIRED PHONE'S SCREEN IS NOT -- [drawPairOnly]'s clearing,
@@ -2038,28 +2337,217 @@ class PhoneSurface(
         // back to the sentence explaining why its app is empty, not to a camera it did not ask for.
         pairOnlyDrawn = null
         pairingStarted = false
-        val next = tabs to destination
-        if (next == barDrawn && host.childCount > 0) return
-        barDrawn = next
-        // BOTH HOSTS SURVIVE THE REBUILD, and both have to be taken out of the scaffold that is
-        // about to be discarded: Android refuses an `addView` of a child that still claims a
-        // parent. The status chrome joined the content host here rather than in
+        val conversation = conversationOnScreen
+        // BUILT BEFORE THE KEY, because building it is what decides whether there is one. A route
+        // whose block has left the conversation -- a page of history prepended past the retention
+        // bound, an item the machine replaced -- resolves to nothing, and the honest answer is to
+        // fall back to the conversation rather than to host an empty screen.
+        val literal = literalRouteItem.takeIf { conversation && it.isNotEmpty() }?.let(::literalScreenOrNull)
+        if (literal == null) literalRouteItem = ""
+        val next = ScaffoldKey(
+            tabs = tabs,
+            destination = destination,
+            conversation = conversation,
+            composer = conversation && detailDrawn?.composerIsBar == true,
+            literal = literalRouteItem,
+        )
+        if (next == scaffoldDrawn && host.childCount > 0) return
+        // WHERE THE READER WAS, READ OFF THE SCROLL THAT IS ABOUT TO BE DISCARDED
+        // (agents-tracker-jz0z). It is taken HERE, past the early return and before
+        // [scaffoldDrawn] is overwritten, because both facts it needs are only true at this
+        // point: that a rebuild is actually happening, and which composition is being torn down.
+        //
+        // TWO GUARDS, AND EACH ANSWERS A CASE THAT WOULD OTHERWISE PUT A READER SOMEWHERE THEY
+        // HAVE NEVER BEEN. The first is that the composition being discarded was the
+        // CONVERSATION: on a tab destination [contentHost] hangs inside `phoneScaffoldView`'s
+        // scroll instead, and reading that would carry how far down the Activity journal someone
+        // had scrolled into the transcript they return to. The second is that the drill-down is
+        // still open: [closeSessionDetail] clears the memory through [detail]'s setter and then
+        // renders, so a read here would resurrect the offset one line after it was deliberately
+        // dropped, and the next session opened would land at the previous one's position.
+        //
+        // A NULL PARENT NEEDS NO GUARD OF ITS OWN and that is not an accident: while an R8 or R9
+        // screen is up the conversation's hosts are detached and [contentHost] has no parent at
+        // all, so the return journey reads nothing and the offset taken on the way IN is still
+        // the one that gets restored.
+        if (scaffoldDrawn?.conversation == true && detail != null) {
+            (contentHost.parent as? ScrollView)?.let { conversationScrollY = it.scrollY }
+        }
+        scaffoldDrawn = next
+        // EVERY LONG-LIVED HOST SURVIVES THE REBUILD, and each has to be taken out of the scaffold
+        // that is about to be discarded: Android refuses an `addView` of a child that still claims
+        // a parent. The status chrome joined the content host here rather than in
         // `detachHostedViews` because it is not hosted IN the content -- that is the whole of the
         // fix. The nav row's pill is the other way round ([statusSlot]): it IS inside a
         // destination, so it detaches at composition time instead.
-        (contentHost.parent as? ViewGroup)?.removeView(contentHost)
-        (syncHost.parent as? ViewGroup)?.removeView(syncHost)
+        //
+        // THE HEADER AND THE COMPOSER REGION JOINED THEM WITH THE SECOND COMPOSITION. Both are
+        // handed to `conversationScaffoldView` and neither is inside [contentHost], so
+        // `removeAllViews` on that host cannot reach either -- and the composer holds what the
+        // user has typed, which is the one thing on this screen that must survive every rebuild
+        // the app performs.
+        for (held in listOf(contentHost, syncHost, headerHost, composerRegion)) {
+            (held.parent as? ViewGroup)?.removeView(held)
+        }
         host.removeAllViews()
         host.addView(
-            phoneScaffoldView(
-                context = activity,
-                content = contentHost,
-                tabs = tabs,
-                destination = destination,
-                onSelectDestination = ::selectDestination,
-                status = syncHost,
-            ),
+            if (literal != null) {
+                // **THE THIRD ROOT** (owner rulings R8 and R9). It replaces the conversation
+                // rather than covering it, which is what "on its own screen" means and what the
+                // two screens are built for: `outputScreen` carries its own nav header and back,
+                // so there is no second way out to keep in step.
+                //
+                // **THIS COMMENT USED TO CLAIM THE SCROLL SURVIVED BY ITSELF, AND IT DID NOT**
+                // (agents-tracker-jz0z). What stood here was "the conversation's own hosts are
+                // detached above and re-attached by the next draw with their scroll intact --
+                // [contentHost] keeps its child throughout, so coming back lands the reader where
+                // they left rather than at the top of the transcript." [contentHost] is a
+                // `FrameLayout`; it has no scroll position to keep. The offset lived on the
+                // `ScrollView` `conversationScaffoldView` had just built and this branch had just
+                // thrown away, so every trip into a tool's output returned the reader to the
+                // OLDEST message in the session -- while a comment justifying the design said the
+                // opposite, in as many words, for a whole wave. It is written down rather than
+                // quietly deleted because a load-bearing false claim is the failure class that
+                // cost this repo a P0 in the pairing-entry wave, and the correction is worth more
+                // than the tidiness.
+                //
+                // WHAT ACTUALLY CARRIES IT IS [conversationScrollY]: the offset is read off the
+                // scroll above, before this root replaces it, and handed back to
+                // `conversationScaffoldView` on the return journey.
+                literal
+            } else if (conversation) {
+                // **THE SECOND TOP-LEVEL COMPOSITION** (chat-surface-plan §5): a conversation is
+                // hosted by a root of its own rather than swapped in as `content` under the tab
+                // scaffold. It is not a second Activity and not a navigation library -- this
+                // Activity already hosts exactly one view and now swaps between two, and the back
+                // handling gains one case, the same shape it already has for three sub-states.
+                //
+                // WHAT THE OTHER COMPOSITION CANNOT DO, which is the whole reason for the branch:
+                // `phoneScaffoldView` wraps whatever it is handed in ONE ScrollView, so a
+                // session's notices, its conversation and its controls scrolled as a single
+                // document -- which is why the owner's screenshot of one session needed two
+                // screenshots, and why the composer, being the last child of that document, could
+                // only be reached by scrolling past the entire transcript.
+                conversationScaffoldView(
+                    context = activity,
+                    header = headerHost,
+                    content = contentHost,
+                    // NULL IS A STATE AND NOT AN ABSENCE. A session with no message sink draws no
+                    // bar at all rather than a disabled one (ADR-017), and the sentence saying why
+                    // is drawn by the column inside the scroll, where the reader is looking. The
+                    // predicate is the panel's own, so the two cannot disagree.
+                    composer = composerRegion.takeIf { next.composer },
+                    // KEPT, AND IT IS ONE DECISION PER PART RATHER THAN ONE DECISION (plan B.2).
+                    // The bar goes because a conversation is a place you go INTO; the strip stays
+                    // because a warning that belongs to one destination is a warning the others do
+                    // not have -- and dropping it here would make the one screen where a person is
+                    // TYPING the one screen that cannot tell them the link is gone.
+                    status = syncHost,
+                    // WHERE THE READER LANDS, WHICH ONLY THIS FUNCTION CAN ANSWER. The scaffold is
+                    // built fresh for an OPENING and for a RETURN alike and cannot tell them
+                    // apart; [conversationScrollY] is null for the first, so the conversation
+                    // opens at its newest message (agents-tracker-tu7z), and holds the offset read
+                    // above for the second (agents-tracker-jz0z).
+                    scrollY = conversationScrollY,
+                )
+            } else {
+                phoneScaffoldView(
+                    context = activity,
+                    content = contentHost,
+                    tabs = tabs,
+                    destination = destination,
+                    onSelectDestination = ::selectDestination,
+                    status = syncHost,
+                )
+            },
         )
+    }
+
+    /**
+     * Whether the CONVERSATION is what the window is showing, which is a different question from
+     * whether a session is open.
+     *
+     * IT IS DERIVED AND NOT LATCHED, deliberately: three fields already answer it between them and
+     * a fourth boolean would be a fourth thing to keep in step -- which is exactly how
+     * [pushDrillDown]'s predicate came to be written three times before it was written once.
+     * [detail] alone is NOT the answer, because a drill-down is state inside the Inbox tab and
+     * survives a trip to Activity or Settings ([selectDestination] keeps it on purpose); what the
+     * scaffold needs to know is what is on the glass right now.
+     *
+     * THE FALLBACK IS EXCLUDED BY THE THIRD CLAUSE. ADR-017 T1 routes a `terminal_fallback`
+     * session to the sanitized terminal, which is not a conversation and keeps the tab bar it
+     * always had: it is a destination's content, not a place you go into.
+     */
+    private val conversationOnScreen: Boolean
+        get() = contentShows == Destination.INBOX && detailDrawn != null && fallbackDrawn == null
+
+    /**
+     * The item whose literal is open on its own screen, or "" while the conversation itself is.
+     *
+     * IT IS AN ITEM ID AND NOT A ROUTE OBJECT, which is [openApproval]'s own rule: the id is what
+     * survives a redraw, and the route it names is re-resolved against the conversation ON EVERY
+     * DRAW. So a tool whose body the machine replaced shows the new body, and one whose block left
+     * the conversation entirely closes the screen instead of leaving a reader inside a page that
+     * no longer describes anything.
+     */
+    private var literalRouteItem: String = ""
+
+    /**
+     * R8 and R9's destination: open the literal this block routes to, on its own screen.
+     *
+     * **ONE HANDLER FOR TWO CALLBACKS, because the block already knows which it is.**
+     * `transcriptView` offers `onOutput` and `onDiff` separately -- correctly, since it draws two
+     * different affordances -- but what a route OPENS is decided by `TranscriptBlock.route`, and a
+     * surface that kept its own second copy of that decision would be the drift PB-DS-9 keeps out
+     * of call sites. Both callbacks point here.
+     *
+     * IT IS NOT A `press`, because nothing crosses the wire: the whole literal is already on this
+     * phone, carried on the route ([TranscriptRoute.Output] holds the tool's own body and
+     * [TranscriptRoute.Diff] the file's own diff). What would cross is IS-CAP-2's fetch for a
+     * CLIPPED body, and that is [fetchDetail], one affordance over, with its own refusal.
+     */
+    private fun openLiteral(itemId: String) {
+        literalRouteItem = itemId
+        // The menu cannot survive into a screen it did not open; nor can a preview of a gesture
+        // aimed at the conversation underneath.
+        closeConversationMenu()
+        Motion.clearPredictiveBack(contentHost)
+        render()
+    }
+
+    /** Leave the literal and come back to the conversation, at the place it was left. */
+    private fun closeLiteralScreen(): Boolean {
+        if (literalRouteItem.isEmpty()) return false
+        literalRouteItem = ""
+        render()
+        return true
+    }
+
+    /**
+     * The screen for [literalRouteItem], or null when there is nothing honest to draw.
+     *
+     * **NULL IS THE ANSWER FOR [TranscriptRoute.None] AND IT IS LOAD-BEARING.** `TranscriptView`
+     * refuses to draw an offer for a block that routes nowhere and calls an offer onto an empty
+     * page "the dead-chevron defect wearing a route"; a host that answered a route it could not
+     * fill would undo that from the other side, on a screen the reader has already committed to.
+     * Both halves of the pair now refuse the same case.
+     *
+     * THE DIFF'S TITLE IS THE CHANGE'S OWN PATH and never the sentence the screen wrote about it:
+     * `FileChangeChip.path` is the wire's own field, already carrying `<old> → <new>` for a
+     * rename, so what titles the screen is what the machine said changed.
+     */
+    private fun literalScreenOrNull(itemId: String): View? {
+        val block = detailDrawn?.transcript?.blocks?.firstOrNull { it.itemId == itemId } ?: return null
+        return when (val route = block.route) {
+            // A LAMBDA AND NOT A REFERENCE, because [closeLiteralScreen] answers whether there
+            // WAS a screen to close -- which is what the back gesture reads -- and a screen's
+            // `onBack` wants no answer at all.
+            is TranscriptRoute.Output ->
+                outputScreen(activity, block.line, route.text) { closeLiteralScreen() }
+            is TranscriptRoute.Diff ->
+                diffScreen(activity, block.fileChange?.path.orEmpty(), route.text) { closeLiteralScreen() }
+            else -> null
+        }
     }
 
     /**
@@ -2312,6 +2800,26 @@ class PhoneSurface(
         val open = detail ?: return null
         if (bridge == null) return null
         val control = bridge.sessionLease(open)
+        // THE ROSTER ROW, GUARDED, FOR THE HEADER'S DOT (chat-surface-plan §5). It is one read and
+        // it is guarded for `FacadeBridge.sessionTitle`'s own recorded reason: `App.Session`
+        // REFUSES an id the cached roster does not hold, and a drill-down on a session that has
+        // just left the roster is an ordinary race rather than a failure. An empty Group is what a
+        // refusal costs, and `SessionDetailScreen.of` is where that is turned into something the
+        // dot can draw -- never here, so there is one place answerable for the substitution.
+        //
+        // THE GROUP IS READ AND NEVER DERIVED, which is `TriageInbox`'s standing rule: the mark in
+        // the header is the mark on the row the reader tapped to get here, or the header is
+        // claiming a state of its own.
+        val row = try {
+            bridge.sessionRow(open)
+        } catch (unknown: Exception) {
+            null
+        }
+        // AT MOST ONE ENTRY AND STILL A MAP (`FacadeBridge.machineNames`): pairing is to one
+        // machine, but the roster is namespaced per machine, so a lookup that assumed one would
+        // label another machine's sessions with this machine's name. A miss renders the endpoint
+        // id, which is a fact and is what shipped before any name crossed the wire.
+        val machineNames = bridge.machineNames()
         // THE CONVERSATION, AND IT IS ONE READ RATHER THAN TWO. `App.ReadTranscript` is per session,
         // so there is no roster-wide page to filter down here -- and `TranscriptPageView.stale` is
         // the JOURNAL's own stale mark, read off the handle that carried the items, because an
@@ -2333,6 +2841,20 @@ class PhoneSurface(
                 // the identity every control on this screen acts on; only what is READ changes,
                 // and an unreadable roster leaves this empty so the id renders as it did before.
                 title = bridge.sessionTitle(open),
+                group = row?.group.orEmpty(),
+                // WHAT TO CALL THE MACHINE, decided by `MachineLabel` and by nothing here: the
+                // hostname it published, or the endpoint id where it published none. The half of
+                // the session id before the first "/" IS that endpoint id -- `mobile/app.go`
+                // derives a session's display title by cutting there and throwing this half away,
+                // so reading it is a parse of an identifier and not a derivation of state.
+                //
+                // A REQUEST IS FILED to lift the parse into `MachineLabel`, where the naming
+                // decision already lives: `TriageInboxScreen.machineOf` is the same three
+                // characters, private, one package over, and two copies of a rule is how the two
+                // drift. Until it lands this call site is the second copy and says so.
+                machineLabel = open.substringBefore('/', "").let { endpoint ->
+                    if (endpoint.isEmpty()) "" else MachineLabel.of(machineNames[endpoint].orEmpty(), endpoint)
+                },
                 // ONLINE IS THE LEASE MODEL'S AND NOT A SECOND OPINION. `SessionLease.online` is the
                 // transport fact `FacadeBridge` already derived, and it is the clause that decides
                 // whether a confirmed Stop is sent or discarded.
@@ -2363,6 +2885,22 @@ class PhoneSurface(
                 // from the machine's floor and is kept apart from it: the last page could not
                 // be held whole, so there IS more and this handset cannot show it.
                 atCapacity = bridge.historyAtCapacity(open),
+                // THE ANSWER THIS PHONE HAS SENT AND NOT SEEN RESOLVED ([answeringItemId] has the
+                // argument, including what is not yet reachable). A SET because the model takes
+                // one; at most one answer is ever in flight from this surface, because the sheet
+                // disables the control it was pressed on for as long as the work is crossing.
+                answering = answeringItemId.takeIf { it.isNotEmpty() }?.let(::setOf).orEmpty(),
+                // OWNER RULING R6: the message this phone has sent and not yet seen come back.
+                //
+                // WITHOUT IT THE MESSAGE IS NOWHERE. The draft is spent on the daemon's acceptance
+                // and the transcript will not carry the line until the agent echoes it, so between
+                // those two moments the reader has pressed send and has nothing on screen -- and
+                // if the echo never lands, what they typed is gone with no evidence it existed.
+                //
+                // SCOPED TO THE SESSION IT WAS SENT TO, like the two composer fields above: a
+                // pending bubble is a fact about ONE conversation and must not follow the reader
+                // into another one.
+                pendingSend = pendingSendFor(open),
             ),
             // PB-INPUT-2 REACHES THE USER HERE NOW, and that is the peek's deletion landing rather
             // than a new fact: the sentence and the Take control button were that screen's, and this
@@ -2710,35 +3248,45 @@ class PhoneSurface(
         if (routed == detailOutcomeDrawn && contentShows == Destination.INBOX &&
             sessionDetailRedraw(
                 contentHost, detailDrawn, panel, ::openApproval, ::toggleToolCard, ::fetchDetail,
+                // THE SAME PAIR THE COMPOSITION BELOW IS GIVEN, and `transcriptBlockViewCount`
+                // says why it must be: two of the transcript's offers exist only when there is a
+                // host for them, so a patch counting without them would splice one block's row
+                // into the middle of another.
+                onOutput = ::openLiteral, onDiff = ::openLiteral,
+                // R4's answer rides the patch path too: a decision rebuilt without it loses its
+                // buttons the moment the agent writes one more line.
+                onDecision = ::answerDecision,
             )
         ) {
             detailDrawn = panel
             // M2.5's placeholder is applied to the FIELD and not composed, which is why it rides
             // the patch: the bar is a slot this surface owns and a redraw never rebuilds it.
-            typed.hint = panel.composerPlaceholder
+            drawComposerRegion(panel)
+            // AND THE HEADER IS DRAWN ON THE PATCH PATH TOO, which is what the whitelist bought.
+            // `sessionDetailRedraw` accepts a difference in the subtitle and the dot's Group
+            // BECAUSE this call is what spends them -- admitting them without redrawing here would
+            // leave the state word frozen at whatever it said when the column was last rebuilt,
+            // which on a long-lived conversation is for the rest of the session. Its own guard
+            // makes this free whenever nothing the reader can see has moved.
+            drawConversationHeader(panel)
             return
         }
         detailDrawn = panel
         detailOutcomeDrawn = routed
         fallbackDrawn = null
-        typed.hint = panel.composerPlaceholder
+        drawComposerRegion(panel)
         loadEarlier.text = panel.loadEarlierLabel
         stop.text = panel.stopLabel
         kill.text = panel.killLabel
         resyncControl.text = panel.resyncLabel
         acknowledge.text = panel.acknowledgeLabel
+        drawConversationHeader(panel)
         hostContent(
             sessionDetailView(
                 context = activity,
                 panel = panel,
-                stop = stop,
-                kill = kill,
                 resync = resyncControl,
                 acknowledge = acknowledge,
-                // DERIVATION ROW 9'S BAR, ON THE SCREEN THAT PROMISES IT (agents-tracker-nx44.6).
-                // The field and Send used to hang under the triage inbox, which
-                // [detachHostedViews] takes off the window on the way in here.
-                composer = composer,
                 // THE SHEET, IN PLACE (agents-tracker-dwwv.2.4). The same host the inbox list
                 // places, re-parented here: answering the question this screen's own transcript
                 // just showed no longer means leaving it. See [approvalHost]'s own KDoc.
@@ -2747,7 +3295,6 @@ class PhoneSurface(
                 // is handed in rather than left behind, because Stop and Kill reach a machine from
                 // here and a refusal with nowhere to land is a control that fails silently.
                 outcome = routed,
-                onBack = ::closeSessionDetail,
                 onApproval = ::openApproval,
                 // ADR-014's page, M2.2's collapse and IS-CAP-2's fetch: the control is a slot this
                 // surface owns (the verb and its refusal are both this surface's), and the two
@@ -2756,8 +3303,203 @@ class PhoneSurface(
                 loadEarlier = loadEarlier,
                 onToolTap = ::toggleToolCard,
                 onDetail = ::fetchDetail,
+                // R8 AND R9 ARRIVING AT A HOST. `outputScreen` and `diffScreen` were built,
+                // covered and reachable from nothing; these two lines are what a reader taps to
+                // get to them, and `transcriptView` draws no offer at all without them.
+                onOutput = ::openLiteral,
+                onDiff = ::openLiteral,
+                // OWNER RULING R4, and the reason this is a callback rather than a control this
+                // surface builds: the choices are the CLI's own `decisions[]`, one to eight labels
+                // in the order the wire sent them, and IS-APR-4 keeps the verdict machine-side.
+                // The screen draws them; only this surface may reach `App.Approve` from one.
+                onDecision = ::answerDecision,
             ),
         )
+    }
+
+    /**
+     * The conversation's fixed header, rebuilt only when what it says has changed.
+     *
+     * THE GUARD IS [drawSync]'S AND IT IS LOAD-BEARING FOR A SECOND REASON HERE. The first is that
+     * one: [render] runs on every resume, after every action and on every journal event, and a
+     * header rebuilt unconditionally would re-lay out the top of a screen somebody is reading at
+     * whatever rate their agent produces work. The second is that both of this header's controls
+     * are SLOTS this surface owns -- a rebuild re-parents them, and the overflow is a 48 dp target
+     * a thumb may already be travelling towards. Three facts is the whole of what it draws, so
+     * "has anything a reader can see changed" is one comparison.
+     *
+     * IT IS DRAWN HERE AND NOT PATCHED BY `sessionDetailRedraw`, which is the other half of that
+     * function's D.2 decision. The header is not in the column the patch walks; it is redrawn on
+     * its own clock, above the scroll and outside it, exactly as the sync chrome already is -- and
+     * that is precisely what lets its two fields ride along in the patch's whitelist instead of
+     * forcing a full rebuild of the conversation at every turn boundary.
+     */
+    private fun drawConversationHeader(panel: SessionDetailPanel) {
+        val next = Triple(panel.title, panel.headerSubtitle, panel.headerGroup)
+        if (next == headerDrawn && headerHost.childCount > 0) return
+        headerDrawn = next
+        // THE WORDS A SCREEN READER GETS ARE THE PANEL'S, applied to the slots rather than
+        // composed into them: `overflowControl` and the kit's back control both refuse to author
+        // copy (PB-DS-9), and this is the call site that owes it.
+        back.contentDescription = panel.back
+        overflow.contentDescription = panel.menu
+        (back.parent as? ViewGroup)?.removeView(back)
+        (overflow.parent as? ViewGroup)?.removeView(overflow)
+        headerHost.removeAllViews()
+        headerHost.addView(
+            conversationHeader(
+                context = activity,
+                title = panel.title,
+                subtitle = panel.headerSubtitle,
+                group = panel.headerGroup,
+                back = back,
+                menu = overflow,
+            ),
+        )
+    }
+
+    /** What the conversation header last drew: the name, the subtitle, and the dot's Group. */
+    private var headerDrawn: Triple<String, String, String>? = null
+
+    /**
+     * The pinned region under the conversation: the pill, Stop, the bar, and what a bar that
+     * cannot send says under itself.
+     *
+     * **THE FIELD'S HINT IS THE SHUT SENTENCE WHERE THERE IS ONE.** `composerPlaceholder` answers
+     * "Message" or "Add feedback..." -- the two states of a composer that CAN send -- and for a
+     * bar that is on screen and cannot, the honest words are the ones `ComposerModel` already
+     * computed for that exact state. Offline is the only such bar (the other three shut states
+     * lose the bar entirely and say so inside the scroll), and before this the reader saw a
+     * composer visually identical to a live one.
+     *
+     * IT IS CALLED ON BOTH DRAW PATHS for the header's reason: what it spends is derived from the
+     * transcript, which is the one thing the patch lets through, so a region left un-drawn on the
+     * patch path would freeze at whatever it said when the column was last rebuilt.
+     *
+     * NOTHING HERE IS REBUILT. Three of the four children are permanent -- the composer holds what
+     * the user typed and Stop may be under a finger -- so what changes is a hint, a string and one
+     * insertion at index 0.
+     */
+    private fun drawComposerRegion(panel: SessionDetailPanel) {
+        val shut = panel.composerShut.takeIf { panel.composerIsBar }
+        typed.hint = shut?.placeholder ?: panel.composerPlaceholder
+        composerShutDetail.text = shut?.detail.orEmpty()
+        decisionPillControl.text = panel.decisionPillLabel
+        val wanted = panel.pendingDecisionId.isNotEmpty()
+        val shown = decisionPillControl.parent != null
+        if (wanted && !shown) {
+            composerRegion.addView(decisionPillControl, 0)
+            // CENTRED HERE, WHICH IS THE SCREEN'S HALF OF THE FENCE: `decisionPill` sets no
+            // gravity of its own and says so, because where a pill sits is arrangement and
+            // arrangement belongs to whoever placed it.
+            (decisionPillControl.layoutParams as? LinearLayout.LayoutParams)
+                ?.gravity = Gravity.CENTER_HORIZONTAL
+        } else if (!wanted && shown) {
+            composerRegion.removeView(decisionPillControl)
+        }
+    }
+
+    /**
+     * Whether the header's menu is open.
+     *
+     * IT IS THE SURFACE'S AND NOT THE COMPOSITION'S, which is [syncSheetOpen]'s reason exactly:
+     * the conversation is redrawn on every journal event, so a flag owned by a view would close
+     * the menu under a user who had just opened it, at whatever rate their agent happens to be
+     * producing work.
+     */
+    private var conversationMenuOpen = false
+
+    /** The header's overflow: open the menu, or close the one that is up. */
+    private fun toggleConversationMenu() {
+        conversationMenuOpen = !conversationMenuOpen
+        drawConversationMenu()
+    }
+
+    /**
+     * Close the menu, if one is open, and say whether there was one.
+     *
+     * THE ANSWER IS WHAT [closeDrillDown] READS. Back pops the innermost thing the user is
+     * standing in, and while a menu is up that is the menu -- a back gesture that left the
+     * conversation instead would take away the screen the user opened the menu on top of.
+     */
+    private fun closeConversationMenu(): Boolean {
+        if (!conversationMenuOpen) return false
+        conversationMenuOpen = false
+        drawConversationMenu()
+        return true
+    }
+
+    /**
+     * Put the menu on screen, or take it off.
+     *
+     * **IT IS BUILT PER OPEN AND NOT ONCE**, which is [drawApproval]'s ruling for its buttons and
+     * holds here for the same reason: a menu row holds nothing a user typed, and WHICH rows exist
+     * is a fact about the session that changes under it -- a fully loaded conversation has nothing
+     * older to fetch. A menu built once would draw a row it then had to refuse on tap, which is
+     * the dead-affordance defect `navHeaderDrill` already has a nullable parameter to avoid.
+     *
+     * **[SecureWindow.gate] IS ON THE MENU AND NOT ONLY ON [kill]** (PB-SEC-12 clause 1). The tap
+     * that ends a session is now the tap on a ROW, and the filter is a property of the view that
+     * receives the touch: a `ViewGroup` consults it before dispatching to its children, so gating
+     * the block covers every row in it. [touchFilteredActions] cannot hold this view -- it does
+     * not exist until the menu is opened -- which is why the gate is applied at the one place that
+     * builds it rather than being remembered about in a list.
+     *
+     * **THE CONFIRMATION IS UNCHANGED AND IS NOT REPEATED HERE.** Choosing `Kill session` presses
+     * the very control that already carries it, so the question, its wording and its consequence
+     * are exactly what shipped ([kill]'s `ask`). A second question authored at this seam would be
+     * two ceremonies for one act, and a menu that killed directly would be a menu that deleted the
+     * one that mattered.
+     */
+    private fun drawConversationMenu() {
+        menuHost.removeAllViews()
+        menuHost.isClickable = conversationMenuOpen
+        val panel = detailDrawn.takeIf { conversationMenuOpen } ?: return
+        // WHICH ROWS EXIST IS THE MODEL'S AND NOT THIS FILE'S (PB-DS-9): it is copy and
+        // arrangement, both assigned to the screen, and it is the one part of this menu a JVM test
+        // can reach -- `SessionDetailScreen.menuChoicesFor` carries the argument for every row it
+        // offers and for the two it refuses.
+        val choices = SessionDetailScreen.menuChoicesFor(panel)
+        val menu = SecureWindow.gate(conversationMenu(activity, choices, ::chooseFromMenu)).apply {
+            // THE BLOCK ABSORBS ITS OWN TAPS. Without this, a finger landing on the menu's inset
+            // rather than on one of its rows falls through to the scrim behind it and closes the
+            // menu -- a near-miss on `Load earlier messages` dismissing the thing the user was
+            // aiming at, which is the same class of defect the 48 dp row floor is there to stop.
+            isClickable = true
+        }
+        // ANCHORED UNDER THE CONTROL THAT OPENED IT, by where that control actually is on screen
+        // rather than by a height this file would have to know. The header is laid out by the time
+        // a finger can reach its overflow, so its own bottom edge is the honest anchor -- and a
+        // margin measured from a constant would drift the day the header gains a part.
+        val anchor = IntArray(2).also { headerHost.getLocationInWindow(it) }
+        val window = IntArray(2).also { windowRoot.getLocationInWindow(it) }
+        menuHost.addView(
+            menu,
+            FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
+                topMargin = anchor[1] - window[1] + headerHost.height
+            },
+        )
+    }
+
+    /**
+     * What a menu row MEANS, which is the only thing that leaves `conversationMenu`.
+     *
+     * EVERY ARM PRESSES A CONTROL THIS SURFACE ALREADY OWNS rather than repeating its verb, which
+     * is [repairSync]'s own arrangement and its reason: those controls carry the press plumbing
+     * PB-SEC-12 clause 1 and PB-APP-9 require -- the touch filter, the lane, the confirmation, the
+     * routed refusal onto the outcome line -- and a second call site typing `app.kill(...)` would
+     * have none of it.
+     *
+     * THE MENU CLOSES FIRST, AND ON EVERY ARM. A confirmation opening over a menu that is still up
+     * would put two decisions on screen at once, and the one underneath is the one the user has
+     * already made.
+     */
+    private fun chooseFromMenu(choice: String) {
+        closeConversationMenu()
+        when (choice) {
+            SessionDetailScreen.MENU_LOAD_EARLIER -> loadEarlier.performClick()
+            SessionDetailScreen.MENU_KILL -> kill.performClick()
+        }
     }
 
     /**
@@ -3227,6 +3969,12 @@ class PhoneSurface(
     private fun selectSession(id: String) {
         chosen = id
         detail = id
+        // [closeSessionDetail]'s argument, on the other end of the same journey: a menu opened
+        // over one session must not survive into another, where its rows would act on a session
+        // the user did not open it on -- and the same for a literal screen, whose item id belongs
+        // to a conversation the reader has just left.
+        closeConversationMenu()
+        literalRouteItem = ""
         render()
     }
 
@@ -3239,6 +3987,15 @@ class PhoneSurface(
      */
     internal fun closeSessionDetail() {
         detail = null
+        // AND SO DOES THE LITERAL SCREEN, which is a place INSIDE this conversation: carried
+        // across a departure it would put the reader back on a tool's output the next time they
+        // opened any session, with no conversation behind it to have come from.
+        literalRouteItem = ""
+        // AND THE MENU GOES WITH THE HEADER IT HANGS OFF. It is opened from a control that is
+        // about to leave the window, and a block left over the inbox would be three acts on a
+        // session the user is no longer looking at -- the proximity error PB-SYNC-2 forbids,
+        // wearing a menu.
+        closeConversationMenu()
         // AND THE UNSENT PRESS IS FORGOTTEN WITH THE SCREEN THAT REPORTED IT. It is the answer to
         // one press on one screen; carried across a departure it would greet the user on their
         // return with a failure from before they left.
@@ -3249,8 +4006,14 @@ class PhoneSurface(
         // about the session. Carried across a departure they would greet the user on their return
         // with a refusal from before they left, over a conversation they had rearranged.
         composerSendFor = ""
+        composerSentText = ""
         composerSendState = null
         composerRefusal = ""
+        // AND THE ANSWER IN FLIGHT IS FORGOTTEN WITH THE SCREEN, on the same argument: a lock is a
+        // fact about a press made on THIS visit, and one carried across a departure would greet
+        // the reader on their return with a decision frozen behind an answer they can no longer
+        // see the outcome of.
+        answeringItemId = ""
         expandedCards.clear()
         // THE PREVIEW IS UNDONE BEFORE THE NEXT SCREEN IS DRAWN INTO THE SAME HOST. A committed
         // gesture leaves [contentHost] at 90% and fully transparent, and the inbox is hosted in
@@ -3270,19 +4033,42 @@ class PhoneSurface(
      * which is what back does on the inbox, and is exactly the thing this callback exists to
      * prevent them confusing.
      *
+     * **THE CONVERSATION HAS NO TAB BAR AND THE SUBJECT IS STILL [contentHost]**, which is a
+     * decision rather than an oversight. What the reader is leaving is the CONVERSATION; the
+     * header names it and the composer types into it, and both are the frame around it in exactly
+     * the sense the bar is the frame around a destination. Shrinking all three would leave a
+     * one-line strip standing over a receding window, which reads as leaving the app -- the
+     * confusion the paragraph above exists to prevent, arriving by the other door. The platform's
+     * own choreography would pivot and translate as well; neither is here, for the reason
+     * `Motion.predictiveBack` records: this app's nav is one `FrameLayout` whose content is
+     * replaced, so there is no incoming view to fade up.
+     *
      * WHAT CROSSES FROM [PhoneActivity] IS A FLOAT, which is PB-SEC-11 and not style. That class is
      * exported with a LAUNCHER filter, so the gesture handler over there may touch local screen
      * state and nothing else; the view work lives here, one call away, exactly as
      * [closeSessionDetail]'s does.
      */
     internal fun previewBack(progress: Float) {
-        Motion.predictiveBack(activity, contentHost, progress)
+        Motion.predictiveBack(activity, previewSubject(), progress)
     }
 
     /** The gesture was abandoned: put the drill-down back exactly as it was. */
     internal fun cancelBackPreview() {
-        Motion.clearPredictiveBack(contentHost)
+        Motion.clearPredictiveBack(previewSubject())
     }
+
+    /**
+     * What the back gesture is previewed ON, which is not always [contentHost].
+     *
+     * R8'S OUTPUT AND R9'S DIFF ARE THE WHOLE ROOT, not a destination inside a scaffold: while one
+     * is up the conversation's hosts are detached, so a preview aimed at [contentHost] would move
+     * a view that is not on screen and the gesture would have no answer at all. What is being left
+     * there IS the window's one child, so that is the subject -- and it is correct rather than
+     * alarming for this screen's reason: back from a literal returns to the conversation, and the
+     * conversation is what will be underneath.
+     */
+    private fun previewSubject(): View =
+        if (literalRouteItem.isNotEmpty()) host.getChildAt(0) ?: contentHost else contentHost
 
     private fun selectScope(machine: String?) {
         scope = machine
@@ -3389,8 +4175,74 @@ class PhoneSurface(
      * is exactly the safety net a second tap during that window needs. [renderApprovalVerdict] is
      * where the claim is read back.
      */
+    /**
+     * Owner ruling R4's answer, reaching the machine from the card in the stream.
+     *
+     * **IT IS [approvalAction]'S VERB WITHOUT [approvalAction]'S BUTTON.** The sheet builds its own
+     * controls, so it could wrap them in [pressable] and inherit the whole dispatch. The inline
+     * card's choices are built by `transcriptView` out of the CLI's own `decisions[]`, which this
+     * surface never sees and must not author -- so what crosses is a callback, and the verb has to
+     * live here: `App.Approve` on the COMMAND plane, an operation id [renderApprovalVerdict] reads
+     * back, and refusals routed through PB-APP-9. None of those are a screen's to own.
+     *
+     * THE PRESSED VIEW IS PASSED IN rather than substituted, on `onDetail`'s precedent. [press]
+     * marks a control in flight and plays its haptic against it; naming any other control would be
+     * a lie about which one the finger landed on, and the transcript rebuilds these buttons on
+     * every redraw so this surface has no lasting handle to name instead.
+     *
+     * **SINGLE-FLIGHT IS THE MODEL'S HERE, NOT THE DISPATCH'S**, and that is the one real
+     * difference from the sheet. [pressable]'s guard is per CONTROL, and a control rebuilt by the
+     * next patch is a different object with no memory of being pressed. So the lock that matters
+     * is [answeringItemId] -> `TranscriptScreen.of(answering = ...)` -> `block.locked`, which is a
+     * fact about the QUESTION and survives every redraw of the button. Set before the press for
+     * `stop`'s reason exactly: read on the looper that owns the screen, never from a lane.
+     */
+    /**
+     * Owner ruling R6's bubble, or null when this phone is holding nothing for [session].
+     *
+     * IT IS BUILT FROM WHAT WAS ACTUALLY SENT, never from the field: [composerSendFor] records the
+     * session the send was addressed to and [composerSentText] the words that went, both captured
+     * at the press. Reading the composer here instead would draw whatever the reader has since
+     * started typing, attributed to a message they already sent.
+     *
+     * THE OPERATION ID IS THE JOIN. [composerOp] is the id the send was issued under, and the
+     * daemon stamps the echo with it (`stampComposerEchoLocked`), so the transcript can tell this
+     * copy from the record's own item without comparing words -- which would collapse two
+     * identical sends into one.
+     *
+     * A REFUSED SEND STILL DRAWS. The words stay with the reason beside them, because nothing is
+     * silently swallowed and nothing is queued: a message that cannot go is refused visibly and
+     * kept where they can send it again.
+     */
+    private fun pendingSendFor(session: String): PendingSend? {
+        if (composerSendFor != session || composerOp.isEmpty()) return null
+        return when (composerSendState) {
+            SendState.PENDING, SendState.SENT ->
+                PendingSend(composerOp, composerSentText)
+            SendState.REFUSED, SendState.STALE_TURN ->
+                PendingSend(composerOp, composerSentText, refused = true)
+            null -> null
+        }
+    }
+
+    private fun answerDecision(pressed: View, itemId: String, decision: ApprovalDecision) {
+        val target = session
+        answeringItemId = itemId
+        press(pressed) {
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.approve(target, itemId, decision.id) },
+                settle = { answer -> rememberApproval(answer) },
+            )
+        }
+    }
+
     private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
         actionButton(decision.label, CtaKind.MORE) {
+            // THE ANSWER IS IN FLIGHT FROM THIS INSTANT, and the item it answers is what the
+            // transcript needs to lock. Read here, on the looper that owns the screen, for
+            // [stop]'s reason exactly: a lane must never touch this.
+            answeringItemId = panel.itemId
             Press(
                 SendPlane.COMMAND,
                 verb = { app -> app.approve(panel.sessionId, panel.itemId, decision.id) },
@@ -3407,6 +4259,28 @@ class PhoneSurface(
         val issued = answer as? Op ?: return
         approveOp = issued.operationID
     }
+
+    /**
+     * The decision this phone has ANSWERED and not yet seen resolved, or "" when none is in
+     * flight.
+     *
+     * WHAT IT BUYS is the drawing's rule that every choice locks while one answer is crossing, so
+     * nothing reflows under a descending thumb and no second answer is sent to a question that
+     * already has one. `TranscriptScreen.of(answering = ...)` turns it into
+     * `TranscriptBlock.locked`.
+     *
+     * **IT IS A REAL PRODUCER AND ITS CONSUMER IS HALF-BUILT, WHICH IS WORTH SAYING OUT LOUD.**
+     * The choices a reader presses today are the SHEET's ([approvalHost]), composed under the
+     * transcript rather than inline at the item -- so `locked` is computed correctly and there are
+     * no inline choices for it to grey out yet. The inline decision card is Wave E's. When it
+     * lands, this latch is already the fact it needs; until then the lock is correct and
+     * invisible, which is a state named here rather than discovered later.
+     *
+     * IT IS CLEARED BY THE MACHINE'S ANSWER and by leaving the screen -- never by a timer. An
+     * answer that never resolves leaves the question locked, which is the safe direction: the
+     * alternative is a second answer to a question the machine may already have taken.
+     */
+    private var answeringItemId: String = ""
 
     /**
      * The keyboard's two controls, which were never part of the peek.
@@ -3778,6 +4652,10 @@ class PhoneSurface(
         }
         if (!verdict.answered) return
         approveSaid = approveOp
+        // THE LOCK ENDS WHERE THE ANSWER DOES, on the same fact and not one draw later: the
+        // machine has spoken about this approval, so the choices are no longer waiting on a reply
+        // this phone is holding.
+        answeringItemId = ""
         val notice = ApprovalSheetScreen.refusalNoticeFor(verdict)
         if (notice.isNotEmpty()) {
             say(PressFeedback.ofRefusal(notice, ApprovalSheetScreen.refusalDetailFor(verdict)))
@@ -4001,9 +4879,29 @@ class PhoneSurface(
         kind: CtaKind,
         ask: () -> String = { "" },
         plan: () -> Press?,
-    ): TextView = SecureWindow.gate(
-        ctaButton(activity, text, kind).apply {
-            setOnClickListener { control -> confirmThenPress(control, ask(), plan) }
+    ): TextView = pressable(ctaButton(activity, text, kind), ask, plan)
+
+    /**
+     * [actionButton]'s body, over a control the KIT chose rather than over a CTA.
+     *
+     * IT EXISTS BECAUSE THE DESIGN GAVE ONE VERB A DIFFERENT SHAPE. "Load earlier" is a PILL at the
+     * head of the list in the drawing, not a full-width button in the reading path, and
+     * `earlierChip` is what draws one -- but everything [actionButton] wraps a `ctaButton` in is
+     * about the PRESS and not about the appearance: PB-SEC-12 clause 1's touch filter, the
+     * confirmation, the lane, and the accessibility role a bare `TextView` cannot announce for
+     * itself. Splitting the two is what stops a chip that reaches a facade verb quietly shipping
+     * with none of it.
+     */
+    private fun <V : TextView> pressable(
+        control: V,
+        ask: () -> String = { "" },
+        plan: () -> Press?,
+    ): V = SecureWindow.gate(
+        control.apply {
+            // `pressed` AND NOT `control`: the outer parameter is this same view, and a lambda
+            // parameter shadowing it would read as two things at the seam where one of them
+            // decides what a press does.
+            setOnClickListener { pressed -> confirmThenPress(pressed, ask(), plan) }
             // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close it --
             // it has no click to hang the role on (`CtaButton`'s own KDoc) -- so the role is set
             // where the click is.
@@ -4367,3 +5265,13 @@ class PhoneSurface(
         const val ADD_MACHINE_KEY = "machines.add"
     }
 }
+
+/**
+ * The app host: whichever top-level composition the window is currently holding.
+ *
+ * INTERNAL AND OUTSIDE THE COMPANION, because the one caller beyond this file is a test in the
+ * same module and the companion is private. It is a TAG rather than an id for `ScaffoldTag`'s own
+ * reason: this app allocates no view ids, and a tag is what every other part of this window is
+ * found by.
+ */
+internal const val PHONE_APP_HOST = "phone.app.host"

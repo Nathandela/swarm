@@ -1,15 +1,30 @@
 package tui
 
-// agents-tracker-nx44.7 -- the board's half of the roster badge. A session a paired
-// device currently controls carries a small marker on its row, so the owner can see
-// at the board (not only after attaching) that the phone holds the lease.
+// agents-tracker-nx44.7 -- the board's half of the roster badge, after the marker stopped
+// being worded from a lease (conversation surface, Wave G item G.2; agents-tracker-tbpm.9).
 //
-// Shape-tolerant on purpose: the assertion requires the marker to be PRESENT and to
-// name the controlling surface ("phone"), not any particular wording -- the exact
-// token is a rendering choice.
+// WHAT THIS FILE USED TO PIN, AND WHAT BECAME OF EACH ASSERTION. Both tests were
+// shape-tolerant by design: they required the marker to be PRESENT and to name the phone,
+// "not any particular wording -- the exact token is a rendering choice". The wording turned
+// out to be the whole finding. `phone` alone, sitting beside "supervisor pending", reads as a
+// CONDITION rather than an event, and that is the presence claim plan G.5 rules out; the
+// signed copy is `phone sent HH:mm`. A shape-tolerant assertion could not tell the two apart,
+// so the replacement is a literal.
 //
-// RED today: SessionView has no RemoteControlled field, so this file does not
-// compile.
+//	TestRoster_RemoteControlledRowIsMarked      MOVED -> TestRoster_APhoneSentRowIsMarked,
+//	                                                     driven by the INSTANT rather than the
+//	                                                     lease flag, keeping its own subject:
+//	                                                     the marker is scoped to its row and
+//	                                                     not to the board.
+//	TestRoster_ControlMarkerCoexistsWithLineage MOVED -> g2_phonesentmarker_test.go's
+//	                                                     TestG2_TheMarkerCoexistsWithLineageAndSupervision,
+//	                                                     which runs the same check against a
+//	                                                     marker three times as wide.
+//
+// The lease itself is not deleted and this file does not claim it is: SessionView.RemoteControlled
+// still answers the supervision gate (ADR-010 Amendment 3 C3) and the roster poller's diff key.
+// What it no longer does is WORD a row, because a boolean cannot say when -- see
+// TestG2_ALeaseAloneDrawsNothing for that residue stated as its own assertion.
 
 import (
 	"strings"
@@ -19,42 +34,27 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
-func TestRoster_RemoteControlledRowIsMarked(t *testing.T) {
-	held := sWorking("endpoint/held1", "claude", "~/Code/x", "", time.Minute)
-	held.Name = "held-work"
-	held.RemoteControlled = true
+// TestRoster_APhoneSentRowIsMarked keeps this file's own subject: the marker belongs to the
+// ROW that earned it, not to the board. A marker that leaked onto a quiet session would tell
+// the owner a conversation is happening where none is.
+func TestRoster_APhoneSentRowIsMarked(t *testing.T) {
+	at := time.Date(2026, 8, 26, 9, 41, 0, 0, time.Local)
+	messaged := sWorking("endpoint/held1", "claude", "~/Code/x", "", time.Minute)
+	messaged.Name = "held-work"
+	messaged.RemoteActivityAt = &at
 
-	free := sWorking("endpoint/free2", "claude", "~/Code/x", "", time.Minute)
-	free.Name = "free-work"
+	quiet := sWorking("endpoint/free2", "claude", "~/Code/x", "", time.Minute)
+	quiet.Name = "free-work"
 
-	gm := generalModel{sessions: []protocol.SessionView{held, free}, width: testCols}
+	gm := generalModel{sessions: []protocol.SessionView{messaged, quiet}, width: testCols}
 
-	heldRow := stripANSI(gm.renderRow(held, held.Group, false))
-	if !strings.Contains(heldRow, "phone") {
-		t.Errorf("a remote-controlled session's row must carry a control marker naming the phone; got:\n%q", heldRow)
+	messagedRow := stripANSI(gm.renderRow(messaged, messaged.Group, false))
+	if !strings.Contains(messagedRow, "phone sent 09:41") {
+		t.Errorf("a session a phone has messaged must carry the marker and its time; got:\n%q", messagedRow)
 	}
 
-	freeRow := stripANSI(gm.renderRow(free, free.Group, false))
-	if strings.Contains(freeRow, "phone") {
-		t.Errorf("an uncontrolled session must carry no control marker; got:\n%q", freeRow)
-	}
-}
-
-// TestRoster_ControlMarkerCoexistsWithLineage: the marker is additive -- a row that
-// already shows a lineage badge keeps it.
-func TestRoster_ControlMarkerCoexistsWithLineage(t *testing.T) {
-	child := sWorking("endpoint/child9", "claude", "~/Code/x", "", time.Minute)
-	child.Name = "child-work"
-	child.SpawnedFrom = "parent1"
-	child.SpawnIntent = "handoff"
-	child.RemoteControlled = true
-
-	gm := generalModel{sessions: []protocol.SessionView{child}, width: testCols}
-	row := stripANSI(gm.renderRow(child, child.Group, false))
-	if !strings.Contains(row, "phone") {
-		t.Errorf("the control marker was dropped from a row that also carries lineage; got:\n%q", row)
-	}
-	if !strings.Contains(row, "from") || !strings.Contains(row, "parent1") {
-		t.Errorf("the control marker displaced the lineage badge; got:\n%q", row)
+	quietRow := stripANSI(gm.renderRow(quiet, quiet.Group, false))
+	if strings.Contains(quietRow, "phone") {
+		t.Errorf("a session no phone has messaged carries a marker; got:\n%q", quietRow)
 	}
 }

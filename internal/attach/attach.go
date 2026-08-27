@@ -259,9 +259,10 @@ func Run(cfg Config) (reason Reason, err error) {
 	curCols, curRows = cols, rows
 
 	// Input pump: raw keystrokes -> Session.Input, tight so echo latency stays low
-	// (N-2). The detach key, recognized as a discrete single-byte keypress, is NOT
-	// forwarded; it tears the loop down instead. In read-only mode nothing is
-	// forwarded (G3), but the detach key still detaches.
+	// (N-2). A narrow streaming filter recognizes the detach key in legacy and
+	// Kitty CSI-u form, carries split sequences across reads, and suppresses
+	// recognition inside bracketed paste. Every other byte is forwarded unchanged.
+	// In read-only mode nothing is forwarded (G3), but the detach key still detaches.
 	detachCh := make(chan struct{})
 	var detachOnce sync.Once
 	signalDetach := func() { detachOnce.Do(func() { close(detachCh) }) }
@@ -273,22 +274,16 @@ func Run(cfg Config) (reason Reason, err error) {
 		defer func() { _ = recover() }()
 		in := cfg.Term.In()
 		buf := make([]byte, inputBufSize)
+		filter := newDetachInputFilter(detachKey, func(p []byte) {
+			if !cfg.ReadOnly {
+				_ = cfg.Session.Input(append([]byte(nil), p...))
+			}
+		}, signalDetach)
 		for {
 			n, e := in.Read(buf)
-			// Detach recognition is deliberately solo-byte (D4 RULED,
-			// agents-tracker-rs8): only a read that yields the detach key ALONE
-			// (n==1) detaches. The pump has no bracketed-paste state machine, so
-			// scanning every read for the byte would risk detaching mid-paste on
-			// any input that happens to carry it; solo-read is overwhelmingly the
-			// common case for a real keypress, and a missed detach under an input
-			// flood is rare and recoverable by pressing again. Documented
-			// limitation, not a bug: revisit only on field evidence.
-			if n == 1 && buf[0] == detachKey {
-				signalDetach()
+			if n > 0 && filter.Feed(buf[:n]) {
+				signalDetach() // the timeout path signals through the filter callback
 				return
-			}
-			if n > 0 && !cfg.ReadOnly {
-				_ = cfg.Session.Input(append([]byte(nil), buf[:n]...))
 			}
 			if e != nil {
 				return
@@ -681,6 +676,11 @@ func (p *outParser) feedAll(b []byte) {
 
 // inGround reports whether the parser is between sequences — a safe injection point.
 func (p *outParser) inGround() bool { return p.st == ptGround }
+
+// inString reports whether the parser is inside a string sequence (OSC/DCS/APC/PM/
+// SOS), whose payload is free-form and may legally carry bytes that would otherwise
+// read as a keypress. The input filter uses it to avoid detaching on payload data.
+func (p *outParser) inString() bool { return p.st == ptStr || p.st == ptStrEsc }
 
 // keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q"). DEL (0x7f)
 // has no sensible Ctrl+<letter> form (0x7f|0x40 is 0x7f itself), so it is named "DEL".
