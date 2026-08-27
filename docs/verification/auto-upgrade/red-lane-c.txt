@@ -349,8 +349,15 @@ for six commits while cmd/swarm was red the whole time. A cross-package guard is
 invisible to a package-scoped test run, so a new package must run the repo suite
 at least once before it claims to be green.
 
-REPO-SUITE RESULT after the D5 fix. `go test ./...` on this branch reports
-cmd/swarm FAIL, in tests this lane does not touch: TestHandoffSupervision_*
+REPO-SUITE RESULT after the D5 fix. RETRACTED AND BEING RE-RUN -- see the
+correction at the end of this file. The run behind the paragraph below was piped
+through `head -20`, which closed the pipe, SIGPIPE'd go test and terminated the
+suite EARLY. Its output ends mid-report on TestStopRunningDaemon_PIDReuseSafety
+with no further packages, so it is not evidence that cmd/swarm was the only
+failing package. The isolation result further down is unaffected: that was a
+separate, untruncated, single-test run.
+
+The partial run reported cmd/swarm FAIL, in tests this lane does not touch: TestHandoffSupervision_*
 ThroughRealBinaries, six TestRunHook_* cases ("no hook callback reached the
 socket", each after a 10 s timeout), TestStopRunningDaemon_PIDReuseSafety, and a
 "TLS handshake error ... bad certificate" line. TestDaemonNeverSpawnsTheGateway
