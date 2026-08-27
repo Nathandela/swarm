@@ -321,7 +321,7 @@ func TestRule2SessionsErrorDefers(t *testing.T) {
 	}
 }
 
-// Rule 3. Nothing saved means the 0.13.0-to-0.13.1 hop has not been made by hand:
+// Rule 3. Nothing saved means the 0.13.x-to-0.13.2 hop has not been made by hand:
 // refuse (exit 3), leave the daemon running, and tell the owner what to run.
 func TestRule3NoSavedEnvRefusesAndNamesTheManualStep(t *testing.T) {
 	f := newFake()

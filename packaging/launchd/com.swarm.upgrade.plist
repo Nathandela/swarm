@@ -16,8 +16,8 @@
   are in docs/ops/auto-upgrade.md; they are not repeated here because XML forbids two
   hyphens in a row inside a comment, and every command involved spells a flag that way.
 
-  INSTALL THIS ONLY ONCE `swarm version` REPORTS 0.13.1 OR LATER (the plan's section 3,
-  "the hop"): a 0.13.0 `swarm daemon restart` ignores every argument, including the
+  INSTALL THIS ONLY ONCE `swarm version` REPORTS 0.13.2 OR LATER (the plan's section 3,
+  "the hop"): a 0.13.0 or 0.13.1 `swarm daemon restart` ignores every argument, including the
   unattended flag named in ProgramArguments below, and runs the full stop-and-spawn from
   whatever environment this timer's gui agent carries, which is not the owner's shell.
 
