@@ -542,11 +542,11 @@ object MachineRefusalCodes {
         "stale_preset" to "That setup changed. Check it and confirm again.",
         "outcome_unknown" to "Not sure it went through. Check before retrying.",
         "capability_refused" to "This session doesn't allow that from the phone.",
-        // The contract's row read "... Take control again."; that remedy names the verb owner
-        // ruling R1 (2026-08-26) removed from the product, and android/gate's
-        // r1_takecontrolgone_test.go bans the phrase on the chat path. The fact survives, the
-        // dead remedy does not; W5 owns the final words.
-        "stale_generation" to "Your turn at this terminal ended.",
+        // The contract's row read "Your turn at this terminal ended. Take control again."; that
+        // remedy names the verb owner ruling R1 (2026-08-26) removed from the product, and
+        // android/gate's r1_takecontrolgone_test.go bans the phrase on the chat path. The
+        // round-1 review reworded it (no "terminal", and it keeps a remedy).
+        "stale_generation" to "Your turn here ended. Start typing again.",
         "stale_instance" to "This session restarted. Open the new one.",
     )
 
