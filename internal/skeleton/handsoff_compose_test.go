@@ -247,6 +247,11 @@ func TestHandsOff_ComposesFivePointersLocalLineageAndTheChosenModel(t *testing.T
 	const local = "srclocal"
 	sourceCwd := filepath.Join(home, "work")
 	src := handsOffSource(local, sourceCwd, legacyClaudeID)
+	// Fixture completeness: a source that RAN in this directory implies it exists on
+	// disk, and the composer now stats it before launching the successor there.
+	if err := os.MkdirAll(sourceCwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	transcript := writeClaudeHistory(t, home, legacyClaudeID, sourceCwd, legacyCreatedAt.Add(time.Second), "", "")
 	resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
 
@@ -302,6 +307,11 @@ func TestHandsOff_UsesTheProviderCwdOfAWorktreeSource(t *testing.T) {
 	worktree := filepath.Join(repo, ".swarm", "worktrees", "wt1")
 	src := handsOffSource(local, repo, legacyClaudeID)
 	src.AgentCwd = worktree
+	// Fixture completeness: a source that RAN in this directory implies it exists on
+	// disk, and the composer now stats it before launching the successor there.
+	if err := os.MkdirAll(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	transcript := writeClaudeHistory(t, home, legacyClaudeID, worktree, legacyCreatedAt.Add(time.Second), "", "")
 	resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
 
@@ -317,6 +327,92 @@ func TestHandsOff_UsesTheProviderCwdOfAWorktreeSource(t *testing.T) {
 	}
 }
 
+// TestHandsOff_LaunchesTheSuccessorWhereTheSourceWasWorking closes a mismatch between
+// the two halves of the composition.
+//
+// The TUI has only a protocol.SessionView, which deliberately carries no AgentCwd -- four
+// reviewers rejected widening that frozen wire type -- so the client can only send
+// SessionView.Cwd, the LAUNCH cwd. For a worktree-isolated source that is the REPO ROOT,
+// while the agent ran in <repo>/.swarm/worktrees/<id>. The prompt already names the
+// worktree, because the daemon composes it from ProviderCwd.
+//
+// Left alone, the successor's process would start in the repo root while its prompt told
+// it to run git status somewhere else -- and a git worktree is a SEPARATE CHECKOUT, so
+// those are different files, potentially on different branches. The transcript it is about
+// to read describes the worktree. "Continue this work" would begin in the wrong tree.
+//
+// The daemon holds the value the client is missing, which is the whole reason composition
+// lives here, so it corrects the cwd rather than inheriting the client's approximation.
+// The hands-off form offers no cwd field, so this overrides no human choice.
+//
+// It also makes worktree and non-worktree sources behave the SAME way -- the successor
+// starts where the source was working -- rather than making the worktree case the odd one.
+// Two agents in one tree is the already-accepted E6 hazard, mitigated by the prompt's
+// warning, and it is no worse here than for an ordinary source.
+func TestHandsOff_LaunchesTheSuccessorWhereTheSourceWasWorking(t *testing.T) {
+	home := t.TempDir()
+	const local = "srclocal"
+
+	t.Run("worktree source launches in the worktree, not the repo root", func(t *testing.T) {
+		repo := filepath.Join(home, "repo")
+		worktree := filepath.Join(repo, ".swarm", "worktrees", "wt1")
+		if err := os.MkdirAll(worktree, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		src := handsOffSource(local, repo, legacyClaudeID)
+		src.AgentCwd = worktree
+		writeClaudeHistory(t, home, legacyClaudeID, worktree, legacyCreatedAt.Add(time.Second), "", "")
+		resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
+
+		// The client sends the repo root, which is all a SessionView can tell it.
+		got, err := composeHandsOffLaunch(handsOffSpec(testEndpoint, local, repo), testEndpoint, srcGetter(local, src), resolver)
+		if err != nil {
+			t.Fatalf("worktree source refused: %v", err)
+		}
+		if got.Cwd != worktree {
+			t.Fatalf("successor launches in %q; want the worktree %q the source actually ran in", got.Cwd, worktree)
+		}
+	})
+
+	t.Run("plain source is unchanged", func(t *testing.T) {
+		plain := filepath.Join(home, "plain")
+		if err := os.MkdirAll(plain, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		src := handsOffSource(local, plain, legacyClaudeID)
+		writeClaudeHistory(t, home, legacyClaudeID, plain, legacyCreatedAt.Add(time.Second), "", "")
+		resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
+
+		got, err := composeHandsOffLaunch(handsOffSpec(testEndpoint, local, plain), testEndpoint, srcGetter(local, src), resolver)
+		if err != nil {
+			t.Fatalf("plain source refused: %v", err)
+		}
+		if got.Cwd != plain {
+			t.Fatalf("successor launches in %q; want %q", got.Cwd, plain)
+		}
+	})
+
+	t.Run("a provider cwd that no longer exists is refused by name, not launched", func(t *testing.T) {
+		repo := filepath.Join(home, "repo2")
+		gone := filepath.Join(repo, ".swarm", "worktrees", "torn-down")
+		src := handsOffSource(local, repo, legacyClaudeID)
+		src.AgentCwd = gone
+		writeClaudeHistory(t, home, legacyClaudeID, gone, legacyCreatedAt.Add(time.Second), "", "")
+		resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
+
+		// The protocol layer os.Stats the CLIENT's cwd, never this override, so the
+		// override owes its own check -- otherwise a torn-down worktree reaches the
+		// spawn as an obscure exec failure instead of a named refusal.
+		_, err := composeHandsOffLaunch(handsOffSpec(testEndpoint, local, repo), testEndpoint, srcGetter(local, src), resolver)
+		if err == nil {
+			t.Fatal("a missing provider cwd composed a launch; want a named refusal")
+		}
+		if !strings.Contains(err.Error(), "handoff:") {
+			t.Fatalf("refusal %q is not named as a handoff refusal", err)
+		}
+	})
+}
+
 // TestHandsOff_RecoversAMissingConversationIDFromProviderHistory: capture is
 // hook-driven and a wedged agent fires no hooks, so an empty id is the COMMON case.
 // Recovery at handoff time is what makes the feature usable at all -- and unlike the
@@ -326,6 +422,11 @@ func TestHandsOff_RecoversAMissingConversationIDFromProviderHistory(t *testing.T
 	const local = "srclocal"
 	sourceCwd := filepath.Join(home, "work")
 	src := handsOffSource(local, sourceCwd, "")
+	// Fixture completeness: a source that RAN in this directory implies it exists on
+	// disk, and the composer now stats it before launching the successor there.
+	if err := os.MkdirAll(sourceCwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	transcript := writeClaudeHistory(t, home, legacyClaudeID, sourceCwd, legacyCreatedAt.Add(time.Second), "", "")
 	resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
 

@@ -1093,6 +1093,28 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 		return daemon.LaunchSpec{}, handsOffTranscriptError(source.AgentType, convID, outcome)
 	}
 
+	// STEP 5b. THE SUCCESSOR STARTS WHERE THE SOURCE WAS WORKING, not where the client
+	// guessed. The TUI holds only a protocol.SessionView, which carries no AgentCwd -- that
+	// frozen wire type was deliberately not widened -- so the client can send nothing but
+	// SessionView.Cwd, the LAUNCH cwd. For a worktree-isolated source that is the REPO
+	// ROOT while the agent ran under <repo>/.swarm/worktrees/<id>, and a git worktree is a
+	// SEPARATE CHECKOUT: different files, possibly a different branch. Inheriting the
+	// client's value would start the successor in one tree while the prompt named another
+	// and the transcript described the second -- "continue this work" beginning in the
+	// wrong place. The daemon holds the value the client is missing, which is the reason
+	// composition lives here at all, so it corrects rather than inherits. The hands-off
+	// form offers no cwd field, so this overrides no human choice, and it makes worktree
+	// and ordinary sources behave alike.
+	//
+	// The stat is owed HERE because the protocol layer stats the CLIENT's cwd and never
+	// this override: a worktree torn down since the source ended would otherwise surface
+	// as an obscure spawn failure instead of a named refusal (E7).
+	providerCwd := source.ProviderCwd()
+	if fi, err := os.Stat(providerCwd); err != nil || !fi.IsDir() {
+		return daemon.LaunchSpec{}, fmt.Errorf("handoff: the source's working directory %q is no longer a directory, so the successor has nowhere to continue", providerCwd)
+	}
+	spec.Cwd = providerCwd
+
 	// STEP 6. The prompt, from the daemon's embedded template, so no client can put
 	// words into the successor's opening instruction. Any client-supplied InitialPrompt
 	// is REPLACED rather than merged: the hands-off form offers no prompt field, and a
@@ -1101,7 +1123,7 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	prompt, err := renderHandsOffPrompt(handsOffPromptData{
 		ConversationID:  convID,
 		TranscriptPath:  transcript,
-		AgentCwd:        source.ProviderCwd(),
+		AgentCwd:        providerCwd,
 		SourceAgent:     source.AgentType,
 		SourceSessionID: local,
 	})
