@@ -54,8 +54,9 @@ Every wave runs the same way. None of this is optional.
    touched. From a worktree, pass `--db /Users/Nathan/Code/swarm/.beads/embeddeddolt` to every
    `bd` call; a zero-issue `bd` is a broken query, never evidence of absence.
 2. **One worktree per wave** under `.claude/worktrees/refit-w<n>`, branched from `main` at the
-   moment the wave starts. The main checkout is shared with another live session and is never
-   edited by a fleet.
+   moment the wave starts. The main checkout is shared with another live session, which may switch
+   its branch at any time; it is never edited by a fleet, and the orchestrator merges from its own
+   detached worktree (`.claude/worktrees/refit-main`, pushed as `HEAD:main`).
 3. **TDD, evidenced.** The RED run is captured (test names and the failure text) into
    `docs/verification/phone-refit-w<n>.md` (one file per wave) before GREEN begins. A test is never
    edited to pass; if a test seems wrong the fleet stops and reports. Tests listed as "must stay
@@ -245,6 +246,12 @@ stale_instance        This session restarted. Open the new one.
   `toToken` and present in `sentence`. `mobile/ksvb5_refusalcopy_test.go`: add
   `TestRefusalSentences_CoverEverySchemaCode` (reads the schema constants by value); `:62` untouched
   (the machine's own words are never replaced, they sit in the detail cell).
+- **The caller** (fleet W2 finding: the table had none). `ErrorRouter.routeMachineCode` returns
+  `unknown.copy(message = sentenceFor(code))` when the code has a sentence and no `toToken` row —
+  state and remedy stay UNKNOWN, words only; a code with no sentence returns `unknown` unchanged.
+  `SessionDetailPanel.composerVerdictFor` prefers the routed message over
+  `ComposerModel.noticeFor("REFUSED").copy` for an unmapped code, so `structured_unsupported` reads
+  "Chat is off for this session." under the composer.
 - **Done when** no refusal from a shipped daemon renders the UNKNOWN sentence; `toToken` still has
   three rows.
 
@@ -253,10 +260,17 @@ stale_instance        This session restarted. Open the new one.
   `SessionDetailPanel.kt:916` → `:1097-1100` → `SessionDetailView.kt:529-532`) **and** calls
   `say(PressFeedback.ofRefusal(...))`, which writes the outcome line (`:473-478`) and a toast with the
   same sentence.
-- **Target.** Delete the `say()` block; the composer notice is the single surface. `verdict.detail`
-  (the machine's words) still reaches the reader through the notice's detail cell.
-- **Tests first.** `SessionDetailViewTest.kt`: `a refused send says its sentence exactly once across
-  the view tree` (count of TextViews equal to `ComposerModel.noticeFor("INPUT_BUSY").copy` is 1).
+- **Target.** Delete the `say()` block; the composer notice is the single surface. **The notice
+  path carried no detail cell** (fleet W2 finding: only `ComposerModel.noticeFor(state).copy` crossed
+  `SessionDetail.composerRefusal` → `SessionDetailPanel.composerNotice` → `DetailTag.COMPOSER_NOTICE`),
+  so one is built: `composerRefusalDetail` through `SessionScreens.kt`, `SessionDetailPanel.kt`,
+  `SessionDetailView.kt` (a mono ink3 line directly under the notice, absent when empty) and
+  `PhoneSurface.kt` (set with the verdict, cleared where `composerRefusal` is). About fifteen lines;
+  those four files are W2.3's list.
+- **Tests first.** RED: an `android/gate` test that `renderComposerVerdict`'s body contains no
+  `say(` while `renderInterruptVerdict` still does (the control); `SessionDetailViewTest.kt`: `the
+  machine's words are drawn under the composer notice and absent when empty`. Fences (already green,
+  kept): `a refused send says its sentence exactly once across the view tree`.
   `SessionDetailComposerTest.kt:315` broadens: `DetailTag.OUTCOME` absent when
   `DetailTag.COMPOSER_NOTICE` present. `SessionDetailVerdictTest.kt:117` (refused Stop shows the
   reason) untouched: Stop is not a composer refusal and keeps `say()`.
