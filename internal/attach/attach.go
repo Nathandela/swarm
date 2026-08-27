@@ -259,9 +259,10 @@ func Run(cfg Config) (reason Reason, err error) {
 	curCols, curRows = cols, rows
 
 	// Input pump: raw keystrokes -> Session.Input, tight so echo latency stays low
-	// (N-2). The detach key, recognized as a discrete single-byte keypress, is NOT
-	// forwarded; it tears the loop down instead. In read-only mode nothing is
-	// forwarded (G3), but the detach key still detaches.
+	// (N-2). A narrow streaming filter recognizes the detach key in legacy and
+	// Kitty CSI-u form, carries split sequences across reads, and suppresses
+	// recognition inside bracketed paste. Every other byte is forwarded unchanged.
+	// In read-only mode nothing is forwarded (G3), but the detach key still detaches.
 	detachCh := make(chan struct{})
 	var detachOnce sync.Once
 	signalDetach := func() { detachOnce.Do(func() { close(detachCh) }) }
@@ -273,30 +274,16 @@ func Run(cfg Config) (reason Reason, err error) {
 		defer func() { _ = recover() }()
 		in := cfg.Term.In()
 		buf := make([]byte, inputBufSize)
-		var scan detachScanner
+		filter := newDetachInputFilter(detachKey, func(p []byte) {
+			if !cfg.ReadOnly {
+				_ = cfg.Session.Input(append([]byte(nil), p...))
+			}
+		}, signalDetach)
 		for {
 			n, e := in.Read(buf)
-			// Detach recognition is boundary-aware (ADR-019), superseding D4's
-			// solo-read test: the key counts wherever it lands in a read, as long
-			// as it is not inside a string sequence's payload or a bracketed
-			// paste. Bytes sharing a read with the keypress are the NORM, not an
-			// exotic flood — the attach passes the agent's mouse-tracking
-			// (CSI ?1003h) and focus-reporting (CSI ?1004h) mode sets straight
-			// through, so the terminal streams reports into stdin for the whole
-			// attach and the solo-read test lost the detach whenever one arrived
-			// alongside the key.
-			if i := scan.find(buf[:n], detachKey); i >= 0 {
-				// The bytes AHEAD of the key are real input and are still
-				// forwarded; the key itself never is, and whatever trails it is
-				// dropped — the attach is over.
-				if i > 0 && !cfg.ReadOnly {
-					_ = cfg.Session.Input(append([]byte(nil), buf[:i]...))
-				}
-				signalDetach()
+			if n > 0 && filter.Feed(buf[:n]) {
+				signalDetach() // the timeout path signals through the filter callback
 				return
-			}
-			if n > 0 && !cfg.ReadOnly {
-				_ = cfg.Session.Input(append([]byte(nil), buf[:n]...))
 			}
 			if e != nil {
 				return
@@ -692,7 +679,7 @@ func (p *outParser) inGround() bool { return p.st == ptGround }
 
 // inString reports whether the parser is inside a string sequence (OSC/DCS/APC/PM/
 // SOS), whose payload is free-form and may legally carry bytes that would otherwise
-// read as a keypress. Used by detachScanner, not by the output-side injection gate.
+// read as a keypress. The input filter uses it to avoid detaching on payload data.
 func (p *outParser) inString() bool { return p.st == ptStr || p.st == ptStrEsc }
 
 // keyLabel renders a control byte as a "Ctrl+X" hint (0x11 -> "Ctrl+Q"). DEL (0x7f)
@@ -705,60 +692,4 @@ func keyLabel(b byte) string {
 		return "Ctrl+" + string(rune(b|0x40))
 	}
 	return string(rune(b))
-}
-
-// ---------------------------------------------------------------------------
-// detachScanner — where the detach key is recognized in a raw keystroke read.
-// ---------------------------------------------------------------------------
-
-// bracketed-paste markers. Inside them the terminal is delivering pasted DATA, so a
-// detach byte there is text the user pasted, not a keypress.
-var pasteStart = []byte("\x1b[200~")
-var pasteEnd = []byte("\x1b[201~")
-
-// detachScanner finds the detach key in a raw input read. It carries escape-sequence
-// and bracketed-paste position ACROSS reads, because a terminal splits neither at a
-// read boundary for our convenience.
-//
-// Two gates keep the scan from firing on something that is not a keypress:
-//
-//   - Not inside a string sequence (OSC/DCS/APC/PM/SOS), whose free-form payload is
-//     the one place a terminal can legally hand us a C0 byte that is not a keypress.
-//     outParser already tracks the position for the output side.
-//   - Not pasting. Between the paste markers every byte is data and is forwarded.
-//
-// A CSI/ESC/nF sequence is deliberately NOT a gate: its bytes are drawn from
-// 0x20-0x7e, so a C0 byte appearing while one is open is a keypress the user made
-// DURING the report, not part of it. Gating on full GROUND instead lost exactly that
-// press whenever a report straddled a read boundary — measured 1 miss in 12 under a
-// continuous 500us motion stream, which is precisely the case the change is for.
-//
-// The paste markers are matched on a sliding window rather than through the parser,
-// so a marker split across two reads still flips the state (outParser tracks the
-// shape of a sequence, not its parameters).
-type detachScanner struct {
-	pos   outParser
-	paste bool
-	win   [6]byte // last 6 bytes seen, oldest first — the width of a paste marker
-}
-
-// find reports the index of the detach key in p, or -1 if this read carries no
-// keypress. It always consumes the whole read into the scanner state, EXCEPT when it
-// finds the key: the attach ends there, so the trailing bytes are never scanned.
-func (d *detachScanner) find(p []byte, key byte) int {
-	for i, b := range p {
-		payload := d.pos.inString()
-		d.pos.feed(b)
-		copy(d.win[:], d.win[1:])
-		d.win[len(d.win)-1] = b
-		switch {
-		case bytes.Equal(d.win[:], pasteStart):
-			d.paste = true
-		case bytes.Equal(d.win[:], pasteEnd):
-			d.paste = false
-		case !payload && !d.paste && b == key:
-			return i
-		}
-	}
-	return -1
 }

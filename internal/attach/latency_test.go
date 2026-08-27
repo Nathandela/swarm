@@ -31,7 +31,8 @@ func TestPassthrough_KeystrokeEchoLatencyP95(t *testing.T) {
 	ch := runInBackground(Config{Term: term, Session: sess})
 	eventually(t, func() bool { return len(term.outBytes()) > 0 }) // snapshot painted
 
-	// Each keystroke is a distinct 4-byte marker so its echo is unambiguous on Out.
+	// Each sample is a distinct printable marker so its echo is unambiguous on Out
+	// without accidentally synthesizing a control-key byte.
 	rec := &latencyRecorder{out: term.out, seen: make(map[string]time.Time)}
 	baseline := len(term.outBytes())
 	rec.baseline = baseline
