@@ -44,6 +44,7 @@ func fullMeta() Meta {
 		Env:            []string{"PATH=/usr/bin:/bin", "ANTHROPIC_API_KEY=sk-ant-test"},
 		CreatedAt:      time.Date(2026, 7, 16, 12, 30, 45, 123456789, time.UTC),
 		Status:         status.Status{Process: status.ProcessRunning, Turn: status.TurnIdle, Interaction: status.InteractionPermission},
+		GroupEnteredAt: time.Date(2026, 7, 16, 12, 45, 0, 456789123, time.UTC),
 		LastActivity:   time.Date(2026, 7, 16, 13, 0, 0, 987654321, time.UTC),
 		ShimPID:        4242,
 		ShimStartTime:  1_700_000_000,
@@ -90,12 +91,34 @@ func TestSaveLoadRoundTripAllFields(t *testing.T) {
 	}
 	for _, key := range []string{
 		"schema_version", "id", "agent_type", "cwd", "launch_options",
-		"env", "created_at", "status", "last_activity", "shim_pid",
+		"env", "created_at", "status", "group_entered_at", "last_activity", "shim_pid",
 		"shim_start_time", "conversation_id", "exit_code", "resumed_from",
 	} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("meta.json missing snake_case key %q", key)
 		}
+	}
+}
+
+func TestEffectiveGroupEnteredAt_LegacyFallback(t *testing.T) {
+	created := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	activity := created.Add(3 * time.Hour)
+	explicit := activity.Add(time.Hour)
+
+	for _, tc := range []struct {
+		name string
+		meta Meta
+		want time.Time
+	}{
+		{"explicit", Meta{CreatedAt: created, LastActivity: activity, GroupEnteredAt: explicit}, explicit},
+		{"legacy activity", Meta{CreatedAt: created, LastActivity: activity}, activity},
+		{"legacy creation", Meta{CreatedAt: created}, created},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.meta.EffectiveGroupEnteredAt(); !got.Equal(tc.want) {
+				t.Fatalf("EffectiveGroupEnteredAt = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
@@ -30,8 +31,17 @@ type resumeHistoryResult struct {
 	ConversationID string
 }
 
+// resumeHistoryResolver is the component that knows where a provider keeps its
+// conversation history on disk. It answers two questions about one session, and both
+// belong to it for the same reason -- the answer requires the provider's layout AND the
+// anchored traversal, and neither caller may hold either. Resolve says WHICH
+// conversation a session was; LocateTranscript says WHERE that conversation lives.
 type resumeHistoryResolver interface {
 	Resolve(persist.Meta) resumeHistoryResult
+	// LocateTranscript returns the absolute path of the transcript holding convID,
+	// having opened it under the anchor. Read its implementation comment before
+	// trusting the returned string: what the anchor buys is narrower than it looks.
+	LocateTranscript(m persist.Meta, convID string) (string, resumeHistoryOutcome)
 }
 
 type resumeHistoryLimits struct {
@@ -98,7 +108,12 @@ func (r *filesystemResumeHistoryResolver) Resolve(m persist.Meta) resumeHistoryR
 	default:
 		return resumeHistoryResult{Outcome: resumeHistoryUnsupported}
 	}
-	if !filepath.IsAbs(m.Cwd) {
+	// ProviderCwd, not Cwd: a provider files its history under the directory the AGENT
+	// ran in, which for a worktree-isolated session is <repo>/.swarm/worktrees/<id> and
+	// not the repo the launch was requested in. Reading Cwd here searched a directory
+	// the provider never wrote to, so recovery could not work for those sessions at all.
+	// The absoluteness gate applies to the value actually used, for the same reason.
+	if !filepath.IsAbs(m.ProviderCwd()) {
 		return resumeHistoryResult{Outcome: resumeHistoryNoMatch}
 	}
 	if !filepath.IsAbs(r.home) {
@@ -117,6 +132,161 @@ func (r *filesystemResumeHistoryResolver) Resolve(m persist.Meta) resumeHistoryR
 		return r.resolveCodex(home, budget, m)
 	}
 	return r.resolveClaude(home, budget, m)
+}
+
+// LocateTranscript answers the second question this resolver is the right place to
+// answer: not "which conversation was this session" but "where does that conversation
+// live". It walks to the file through the SAME anchored, budgeted os.Root traversal
+// Resolve uses, opens it, and returns its absolute path.
+//
+// WHAT THE ANCHORED WALK BUYS, AND WHAT IT DOES NOT. The traversal's guarantees --
+// os.SameFile inode identity, no symlink component, IsRegular, O_RDONLY|O_NONBLOCK
+// against a planted FIFO -- are properties of a FILE DESCRIPTOR, and this function
+// returns a STRING. None of them survive serialization into a name that another
+// process opens minutes later. Concretely, the returned path does NOT promise that the
+// file still exists at open time, that it is the same inode, that no component became a
+// symlink in between, that it is still a regular file, or that the successor's process
+// resolves the same string to the same file. What it does promise is confinement BY
+// CONSTRUCTION: swarm did not invent this path and did not follow a symlink to produce
+// it. Every segment is provably a single separator-free component -- homeAbs is Clean'd
+// and IsAbs-checked; ".claude" and "projects" are compile-time literals, and where
+// ".claude" is instead a stable alias, providerAliasTarget has already proved its
+// target a clean, ".."-free, strict descendant of that same home; ProjectDirName emits
+// only [A-Za-z0-9-] (one dash per non-alphanumeric rune, so no separator can survive
+// it); and a convID that passed IsCanonicalConversationID is 36 characters of lowercase
+// hex with dashes at fixed offsets. There is no input under which the assembled string
+// leaves the projects root. (The argument is the COMPONENTS', not filepath.Join's: Join
+// cleans, and cleaning is what would turn "../.." into an escape rather than stop it.)
+// The machinery's real job here is stopping a malformed or hostile input from steering
+// the DAEMON's own reads, and that job is done in full.
+//
+// The provider root is claude's, so this locator is claude's, exactly as resolveClaude
+// is. Codex files its history in dated directories under a different root and needs its
+// own locator when it is characterized.
+func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convID string) (string, resumeHistoryOutcome) {
+	if !adapter.IsCanonicalConversationID(convID) {
+		return "", resumeHistoryUnsafe
+	}
+	if m.AgentType != "claude" {
+		return "", resumeHistoryUnsupported
+	}
+	// Absence is the signal (ADR-010 section 5): an adapter without a characterized
+	// layout is not asserted into the interface, and a stub returning "" would look like
+	// an answer and send an anchored open at a directory named "".
+	ad, _ := registry.New(m.AgentType)
+	layout, ok := adapter.AsTranscriptLayout(ad)
+	if !ok {
+		return "", resumeHistoryUnsupported
+	}
+	cwd := m.ProviderCwd() // the directory the AGENT ran in; see Resolve
+	if !filepath.IsAbs(cwd) {
+		return "", resumeHistoryNoMatch
+	}
+	if !filepath.IsAbs(r.home) {
+		return "", resumeHistoryUnreadable
+	}
+	budget := &historyBudget{limits: r.limits}
+	if !budget.valid() {
+		return "", resumeHistoryUnsafe
+	}
+	home, outcome := r.openHome()
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	defer func() { _ = home.Close() }()
+	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
+	if !ok {
+		return "", outcome
+	}
+	defer closeProvider()
+	project, absDir, closeProject, outcome, ok := r.openProviderChild(provider, providerAbs, "projects", layout.ProjectDirName(filepath.Clean(cwd)))
+	if !ok {
+		return "", outcome
+	}
+	defer closeProject()
+	name := layout.TranscriptFileName(convID)
+	// One extra Lstat, for the MESSAGE and not for the safety: openCandidate answers
+	// Unreadable for both a missing file and an unreadable one, and "the transcript is
+	// not there" is the failure an owner will actually hit -- capture is hook-driven, so
+	// a session can hold an id whose file was since cleaned up. The safety decision is
+	// still openCandidate's, below.
+	if _, err := project.Lstat(name); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", resumeHistoryNoMatch
+		}
+		return "", resumeHistoryUnreadable
+	}
+	f, outcome := r.openCandidate(project, absDir, name, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	defer func() { _ = f.Close() }()
+	// A REGULAR FILE WITH THE RIGHT NAME IS NOT YET A TRANSCRIPT. Confinement, inode
+	// identity and regular-file status say the daemon reached the file it meant to; they
+	// say nothing about whether the file holds the conversation. A zero-byte file, one
+	// truncated by a crash, or one holding unrelated bytes would otherwise be reported as
+	// a successful handoff, and the successor would open it and find nothing -- which is
+	// the context-free launch E7 forbids, arrived at by a route the refusals did not
+	// cover. Found by adversarial review.
+	//
+	// The check stays inside "pointers only": it reads for IDENTITY, never for content,
+	// and nothing it reads reaches the prompt.
+	if outcome := claudeTranscriptNamesItsConversation(f, budget, convID); outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	return filepath.Join(absDir, name), resumeHistoryFound
+}
+
+// locateIdentityMaxRecords bounds how far into a transcript the identity check reads.
+// Claude writes sessionId in its very first record, so one is the expected cost; the
+// allowance exists only so a leading record without the field cannot defeat the check.
+// It matters because a hands-off source's transcript can be tens of megabytes and this
+// is a naming check, not a scan.
+const locateIdentityMaxRecords = 16
+
+// claudeTranscriptNamesItsConversation reports whether the open transcript actually
+// claims the conversation whose name it carries.
+//
+// It is deliberately NOT parseClaudeHistory. That function additionally matches the cwd
+// and the creation window, which is right when SEARCHING for an unknown id and wrong
+// here: the id is already known, and the window would reject a legitimate transcript
+// simply for being older than the swarm session that is handing off.
+//
+// A TRAILING PARTIAL RECORD IS BENIGN, and that is load-bearing rather than lenient: the
+// source may still be RUNNING and appending -- that is the primary case this feature
+// exists for -- so a half-written final line is the normal state of a live file, not
+// evidence of corruption. Only a complete record can satisfy the check; an incomplete one
+// simply ends the read.
+func claudeTranscriptNamesItsConversation(f *os.File, budget *historyBudget, want string) resumeHistoryOutcome {
+	if budget.limits.MaxRecordBytes > int64(int(^uint(0)>>1)-1) {
+		return resumeHistoryUnsafe
+	}
+	reader := bufio.NewReaderSize(f, int(budget.limits.MaxRecordBytes)+1)
+	for records := 0; records < locateIdentityMaxRecords; records++ {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			// EOF, whole or partial: no complete record named the conversation.
+			return resumeHistoryNoMatch
+		}
+		if int64(len(line)) > budget.limits.MaxRecordBytes || !budget.addBytes(len(line)) {
+			return resumeHistoryUnsafe
+		}
+		top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line[:len(line)-1]))))
+		if !ok {
+			continue // an unparseable record is not an identity; keep looking, bounded
+		}
+		raw, bearing := top["sessionId"]
+		if !bearing {
+			continue
+		}
+		if id, idOK := strictJSONString(raw); idOK && id == want {
+			return resumeHistoryFound
+		}
+		// A complete record naming a DIFFERENT conversation means this file is not the
+		// one the name promises. Refuse rather than keep hunting.
+		return resumeHistoryNoMatch
+	}
+	return resumeHistoryNoMatch
 }
 
 func (r *filesystemResumeHistoryResolver) openHome() (*os.Root, resumeHistoryOutcome) {
@@ -385,7 +555,7 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 		return resumeHistoryResult{Outcome: outcome}
 	}
 	defer closeSessions()
-	cleanCWD := filepath.Clean(m.Cwd)
+	cleanCWD := filepath.Clean(m.ProviderCwd())
 	var candidates []codexHistoryCandidate
 	for delta := -1; delta <= 1; delta++ {
 		day := m.CreatedAt.UTC().AddDate(0, 0, delta)
@@ -555,8 +725,23 @@ func resolveCodexCandidateGraph(candidates []codexHistoryCandidate) resumeHistor
 }
 
 func (r *filesystemResumeHistoryResolver) resolveClaude(home *os.Root, budget *historyBudget, m persist.Meta) resumeHistoryResult {
-	cleanCWD := filepath.Clean(m.Cwd)
-	projectName := encodeClaudeProjectCWD(cleanCWD)
+	cleanCWD := filepath.Clean(m.ProviderCwd())
+	// ONE DEFINITION, ASKED OF THE PROVIDER. The project-directory encoding is Claude's
+	// own knowledge, so it comes from the adapter's optional TranscriptLayout seam rather
+	// than from a private copy here: the hands-off composer needs the very same directory,
+	// and two copies of an encoder are two chances to disagree. The seam only NAMES the
+	// directory -- it opens nothing -- so every traversal below is still this resolver's
+	// anchored, budgeted os.Root walk.
+	//
+	// An unregistered agent type yields a nil Adapter, whose type assertion is false, so
+	// the one branch covers both "no such adapter" and "no characterized layout". Absence
+	// is the signal (ADR-010 section 5).
+	ad, _ := registry.New(m.AgentType)
+	layout, ok := adapter.AsTranscriptLayout(ad)
+	if !ok {
+		return resumeHistoryResult{Outcome: resumeHistoryUnsupported}
+	}
+	projectName := layout.ProjectDirName(cleanCWD)
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
 	if !ok {
 		return resumeHistoryResult{Outcome: outcome}
@@ -601,18 +786,6 @@ func (r *filesystemResumeHistoryResolver) resolveClaude(home *os.Root, budget *h
 	default:
 		return resumeHistoryResult{Outcome: resumeHistoryAmbiguous}
 	}
-}
-
-func encodeClaudeProjectCWD(cwd string) string {
-	var out strings.Builder
-	for _, r := range cwd {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			out.WriteRune(r)
-		} else {
-			out.WriteByte('-')
-		}
-	}
-	return out.String()
 }
 
 func parseClaudeHistoryName(name string) (string, bool, bool) {

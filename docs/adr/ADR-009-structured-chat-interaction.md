@@ -427,3 +427,74 @@ the same binding screen set, `309-313`→`:321-325`. And decision (8)'s in-body 
 clause, `ADR-007:450-453`→`:462-465`, which was the one the earlier pass found. The offset table, and
 the reason the rest of the repository was left un-renumbered, are at `ADR-007:8626` (B144's
 line-number note). No decision text moved.
+
+---
+
+## Amendment 2026-08-26 — decisions (5) and (6) described a lease the composer never took
+
+Owner ruling R1 of the conversation surface (`docs/specifications/chat-surface-plan.md` §2). This
+amendment is written **because the code changed and this document did not**, which is the drift
+CLAUDE.md forbids and which an audit of the record — not of the code — is what caught.
+
+### What these clauses said, and what was true
+
+Decision (5) called a composer send "lease-authorized and live-only like the keystrokes it replaces"
+(`:110`). Decision (6) went further and described a mechanism: "The chat composer acquires the lease
+per send under the hood" (`:121`), and "nothing leaves the phone until the lease generation is
+confirmed" (`:124-126`).
+
+**None of it was ever built.** `mobile/commands.go:387-398` — the composer send verb — never calls
+`Leases().Require`; the four real callers of that guard are at `:644`, `:676`, `:709` and `:770`, and
+every one of them is a raw-input verb. The daemon's lease gates exactly two things,
+`forwardInput` and `forwardResize` (`internal/protocol/server.go:957-1000`), and `composer_send` is
+neither. So the lease was absent at the phone, absent on the wire and absent at the daemon, while
+this document described its acquisition in the present tense for twelve days.
+
+### What R1 therefore is
+
+**R1 ratifies an undisclosed drift; it does not carry out a ruling.** The distinction is worth
+keeping because it changes who owes what: nobody decided to ship a lease-free composer, and no
+verification file recorded that one had shipped. The owner's ruling makes the shipped behaviour the
+intended behaviour, and this amendment is what stops the next reader deriving a lease from clauses
+(5) and (6) and "restoring" a mechanism that never ran.
+
+### The decision
+
+**A live session is typeable from the phone and from the terminal simultaneously, always.** There is
+no activation step, no acquisition, and no "take control" — that concept leaves the product. Clauses
+(5) and (6) are amended:
+
+- (5)'s "lease-authorized" is struck **for `composer_send` only**. The keystroke transport it
+  describes is untouched, and remains lease-authorized: `TerminalInputSink`
+  (`internal/protocol/remote_terminal.go:418-455`) still answers `CodeNotImplemented`, so the phone
+  has no raw-keystroke path to authorize, and ADR-017 amendment C0 parks that slice rather than
+  renouncing it.
+- (6)'s "acquires the lease per send under the hood" is struck. What survives, and is load-bearing,
+  is the sentence beside it: **"A send that cannot get a lease is shown refused, not silently
+  swallowed."** Generalised, that rule is *a send that cannot land is shown refused* — and it is
+  what `input_busy` now exercises (ADR-017 amendment, `:202`).
+
+### What replaced the lease, because something had to
+
+The lease had three consumers and only one of them was visible. Deleting it as UX would have
+silently broken the third:
+
+1. the board's remote marker (`internal/tui/general.go`) — replaced by an observed fact, Wave G;
+2. a grid-tap skip (`internal/skeleton/serve.go:617`);
+3. **`anyControlled` (`serve.go:613-620`)**, the gate on ADR-010 Amendment 3 C3 — *"the supervisor
+   never types into a session someone is driving"* (`internal/skeleton/supervision.go:9-10`).
+
+(3) is the one that mattered. A naive deletion would have let the passive supervisor type into a
+session the phone was chatting in. `internal/skeleton/phonepresence.go` supplies the replacement
+fact — the instant of the last accepted phone delivery, with a two-minute horizon — and
+`anyControlled` now reads it. That mechanism was built and proven load-bearing by a negative control
+**before** the lease was removed from the UX, not after.
+
+### What this does not decide
+
+It does not renounce the lease as a mechanism: it remains the authorization for raw input the day a
+raw-input path exists. It does not touch (5)'s Decision 1 keystroke transport, the no-offline-queue
+rule, or Decision G. And it does not make a send safe on its own — R1 is only sound because the PTY
+gained a single-message input transaction in the same wave (ADR-017 amendment, `:195-210`); without
+it, two simultaneously-typeable surfaces produce one concatenated submit and one empty one, which is
+`internal/skeleton/s0_writerserialise_test.go`'s failing-first evidence.

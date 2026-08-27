@@ -7,7 +7,7 @@ package daemon
 // THE DAEMON CARRIES THE PLAN, IT NEVER DERIVES IT. BackendSpec arrives on LaunchSpec exactly
 // as Argv and CaptureEvents do: the assembly resolves it from the session's adapter (through
 // adapter.ResolveBackend, which performs conformance obligations 9a and 9c) and this package
-// imports no adapter package at all.
+// resolves no adapter at all.
 //
 // WHY LIVENESS IS A FACT AND NOT A PROBE. The agent's documented last-resort residual -- an
 // uncatchable SIGKILL of the shim -- is bounded in practice by the PTY: the master closes and

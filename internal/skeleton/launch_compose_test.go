@@ -70,6 +70,47 @@ func TestComposeLaunchSpec_ValidClaudeResume(t *testing.T) {
 	}
 }
 
+func TestComposeLaunchSpec_ExternalClaudeResumeSeedsIdentity(t *testing.T) {
+	const conversationID = "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b"
+	spec := daemon.LaunchSpec{
+		AgentType: "claude",
+		Cwd:       "/work",
+		Options: map[string]string{
+			protocol.OptionResumeConversationID: conversationID,
+		},
+	}
+
+	got, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter("", persist.Meta{}), stubLookPath)
+	if err != nil {
+		t.Fatalf("external resume rejected: %v", err)
+	}
+	if got.ConversationID != conversationID {
+		t.Fatalf("ConversationID = %q, want %q", got.ConversationID, conversationID)
+	}
+	if got.ResumedFrom != "" {
+		t.Fatalf("ResumedFrom = %q; external resume has no swarm source", got.ResumedFrom)
+	}
+	if !argvContains(got.Argv, "--resume") || !argvContains(got.Argv, conversationID) || !argvContains(got.Argv, "--settings") {
+		t.Fatalf("external resume argv = %v; want hooks plus native identity", got.Argv)
+	}
+}
+
+func TestComposeLaunchSpec_ExternalResumeRejectsUnsafeIdentityAndMixedSource(t *testing.T) {
+	cases := []map[string]string{
+		{protocol.OptionResumeConversationID: "not-a-uuid"},
+		{
+			protocol.OptionResumeConversationID: "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b",
+			protocol.OptionResumeFrom:           protocol.NamespacedID(testEndpoint, "source"),
+		},
+	}
+	for _, options := range cases {
+		spec := daemon.LaunchSpec{AgentType: "claude", Cwd: "/work", Options: options}
+		if _, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter("", persist.Meta{}), stubLookPath); err == nil {
+			t.Fatalf("unsafe external resume accepted: %#v", options)
+		}
+	}
+}
+
 func TestComposeLaunchSpec_InvalidResumeRejected(t *testing.T) {
 	const local = "srclocal"
 	claudeSrc := endedClaudeSource(local)

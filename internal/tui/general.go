@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"cmp"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -55,7 +57,7 @@ type rowColumns struct {
 
 // generalModel is the grouped session board: the general view.
 type generalModel struct {
-	sessions []protocol.SessionView // in arrival order; grouped at render time
+	sessions []protocol.SessionView // newest category entry first; grouped at render time
 	sel      int                    // flat selection index across visible rows
 
 	confirm     bool   // a kill/delete confirm is pending
@@ -100,7 +102,33 @@ const bannerDuration = 4 * time.Second
 const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
-	return generalModel{sessions: sessions}
+	ordered := append([]protocol.SessionView(nil), sessions...)
+	sortSessions(ordered)
+	return generalModel{sessions: ordered}
+}
+
+func categoryEnteredAt(s protocol.SessionView) time.Time {
+	if !s.GroupEnteredAt.IsZero() {
+		return s.GroupEnteredAt
+	}
+	if !s.LastActivity.IsZero() {
+		return s.LastActivity
+	}
+	return s.CreatedAt
+}
+
+// sortSessions establishes the order used within every fixed display group:
+// newest category entry first, then newest creation, then id for stable ties.
+func sortSessions(sessions []protocol.SessionView) {
+	slices.SortFunc(sessions, func(a, b protocol.SessionView) int {
+		if c := categoryEnteredAt(b).Compare(categoryEnteredAt(a)); c != 0 {
+			return c
+		}
+		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 }
 
 // hasWorking reports whether the board currently has anything to animate. Keeping
@@ -116,7 +144,7 @@ func (m generalModel) hasWorking() bool {
 
 // selected returns the currently-selected session, or (zero, false) when the
 // board is empty. It walks sessions in display order (by group, fixed order,
-// then arrival order within each group — the same order restoreSel searches)
+// then newest category entry within each group — the same order restoreSel searches)
 // without building a full copy of the board (R4.1.2): m.sel is a position in
 // that order, and finding one element at a position needs no allocation.
 func (m generalModel) selected() (protocol.SessionView, bool) {
@@ -219,10 +247,14 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	selID := m.selectedID()
 
 	var oldGroup status.Group
+	needsSort := false
 	found := false
 	for i := range m.sessions {
 		if m.sessions[i].ID == s.ID {
 			oldGroup = m.sessions[i].Group
+			needsSort = oldGroup != s.Group ||
+				!categoryEnteredAt(m.sessions[i]).Equal(categoryEnteredAt(s)) ||
+				!m.sessions[i].CreatedAt.Equal(s.CreatedAt)
 			m.sessions[i] = s
 			found = true
 			break
@@ -230,6 +262,10 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	if !found {
 		m.sessions = append(m.sessions, s)
+		needsSort = true
+	}
+	if needsSort {
+		sortSessions(m.sessions)
 	}
 	m.restoreSel(selID)
 
@@ -336,15 +372,13 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editCursor = utf8.RuneCountInString(s.Name)
 		}
 	case k.Text == "h":
-		// Open the two-field supervised-handoff form against the selected source. Raw
-		// status gates this before any input is sent: the display group intentionally
-		// combines ordinary prompts with permission requests, but those are not equally
-		// safe places to submit an instruction.
+		// Open the handoff form against the selected source. ADR-010 Amendment 4 E2:
+		// this opens on ANY row -- ended, lost, busy and permission-blocked included.
+		// Raw status used to REFUSE here, which was inverted: it refused at precisely
+		// the moment a source cannot cooperate, the only moment a hands-off handoff is
+		// needed. Status now suggests the form's default method and never decides;
+		// the supervised method still revalidates the row at submit.
 		if s, ok := m.general.selected(); ok {
-			if allowed, why := handoffSourceEligibility(s); !allowed {
-				m.general.setBanner(why)
-				return m, nil
-			}
 			m.handoff = newHandoffModel(s, m.agents, m.detected, m.width)
 			m.screen = screenHandoff
 			m.detectGen++
@@ -823,8 +857,14 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	// it: the summary yields, then the markers themselves clamp, so the row never
 	// exceeds the terminal.
 	var markers []string
-	if s.RemoteControlled {
-		markers = append(markers, remoteControlMarker)
+	// THE INSTANT, NOT THE FLAG. RemoteControlled is still the daemon's answer to "is somebody
+	// driving this" -- it gates the supervisor and the roster poller's diff key -- but a row
+	// cannot be WORDED from a boolean, and a lease carries no instant to word it with. A row
+	// with a lease and no delivered message therefore says nothing, which is correct: there is
+	// no event to report, and no shipped client has taken a lease since R6 replaced
+	// take_control with composer_send.
+	if s.RemoteActivityAt != nil {
+		markers = append(markers, phoneSentMarker(*s.RemoteActivityAt))
 	}
 	if s.SupervisionPending {
 		markers = append(markers, supervisionMarker(s, m.sessions))
@@ -918,19 +958,37 @@ func confirmPrompt(s protocol.SessionView) string {
 	return "delete? y/n"
 }
 
-// remoteControlMarker says a phone is driving this session. A bare word, not a glyph:
-// the roster is read at a glance and a decorative symbol here would be one more thing to
-// learn. Device NAME display is deliberately out of scope -- the daemon answers a bare
-// bool, and naming the device needs a deviceID accessor plus a registry lookup that does
-// not exist yet.
+// phoneSentPrefix and phoneSentClock are the marker's two halves: what the phone DID, and
+// WHEN. Words, not a glyph: the roster is read at a glance and a decorative symbol here would
+// be one more thing to learn. Device NAME display is deliberately out of scope -- the daemon
+// reports the session's activity, and naming the device needs a deviceID accessor plus a
+// registry lookup that does not exist yet.
 //
-// IT NO LONGER SAYS "CONTROL" (conversation surface, Wave G). Control was a lease the
-// phone took, and R1 removes take-control from the product; what the daemon actually
-// observes now is a MESSAGE ARRIVING, and it ages out (skeleton.phoneActiveHorizon). So
-// the marker's presence is itself the recency claim -- it appears when a phone sends and
-// disappears a couple of minutes later -- and one word is the whole of what is known. It
-// is deliberately not "phone is here": presence is a fact nobody on this wire measures.
-const remoteControlMarker = "phone"
+// IT NO LONGER SAYS "CONTROL" (conversation surface, Wave G item G.2). Control was a lease the
+// phone took, and R1 removes take-control from the product; what the daemon actually observes
+// is a MESSAGE ARRIVING, at an instant, and it ages out (skeleton.phoneActiveHorizon).
+//
+// AND IT NO LONGER SAYS JUST "phone", which is the correction this pair exists for. The short
+// form was defended on the ground that the marker's own presence carries the recency claim --
+// it appears on a send and vanishes a couple of minutes later -- and that is true of the
+// mechanism and invisible to the reader, who sees one word and no horizon. Worse, a bare noun
+// sitting beside "supervisor pending" and "supervisor gone" reads as a CONDITION: a phone is
+// on this session. That is the presence claim plan G.5 rules out in as many words, and
+// nothing on this wire measures it. An event, with its time, says only what was seen.
+//
+// The clock is 24-hour and zero-padded so the column never ragged-edges and never needs an
+// am/pm a marker has no room for.
+const (
+	phoneSentPrefix = "phone sent "
+	phoneSentClock  = "15:04"
+)
+
+// phoneSentMarker is the row's words for a session a phone has messaged. The instant is
+// rendered in the READER'S zone: the daemon may be elsewhere, and the person reading the row
+// is comparing it against their own clock.
+func phoneSentMarker(at time.Time) string {
+	return phoneSentPrefix + at.Local().Format(phoneSentClock)
+}
 
 // supervisionPendingMarker and supervisionGoneMarker are the row's passive-supervision
 // words (ADR-010 Amendment 3 C3/C4): an attention event awaits delivery to the source,

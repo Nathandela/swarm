@@ -276,19 +276,21 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	id := d.freshIDLocked()
 	now := time.Now()
 	m := persist.Meta{
-		ID:            id,
-		AgentType:     spec.AgentType,
-		Name:          spec.Name, // user-provided label (P2); "" falls back to the agent name at display
-		Cwd:           spec.Cwd,
-		LaunchOptions: spec.Options,
-		Env:           PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
-		CreatedAt:     now,
-		LastActivity:  now,
-		ResumedFrom:   spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
-		SpawnedFrom:   spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)
-		SpawnIntent:   spec.SpawnIntent,
-		Supervision:   spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
-		Status:        status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
+		ID:             id,
+		AgentType:      spec.AgentType,
+		ConversationID: spec.ConversationID,
+		Name:           spec.Name, // user-provided label (P2); "" falls back to the agent name at display
+		Cwd:            spec.Cwd,
+		LaunchOptions:  spec.Options,
+		Env:            PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
+		CreatedAt:      now,
+		GroupEnteredAt: now,
+		LastActivity:   now,
+		ResumedFrom:    spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
+		SpawnedFrom:    spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)
+		SpawnIntent:    spec.SpawnIntent,
+		Supervision:    spec.Supervision, // how the source follows a handoff child (ADR-010 Amendment 3 C1)
+		Status:         status.Status{Process: status.ProcessRunning, Turn: status.TurnUnknown, Interaction: status.InteractionNone},
 	}
 	s := &session{meta: m, stop: make(chan struct{})}
 	d.sessions[id] = s // reserve the slot so a concurrent launch counts it against the cap
@@ -361,7 +363,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
 	// the AGENT's working directory. m.Cwd above already captured the caller's
 	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,
-	// not the persisted meta. Nothing has touched disk yet, so on error dropping
+	// not the persisted meta -- the override is recorded ALONGSIDE it as m.AgentCwd
+	// instead. Nothing has touched disk yet, so on error dropping
 	// the reservation is a clean abort — no orphan. preLaunchOK tracks whether the
 	// hook actually ran and succeeded: every later rollback in this function must
 	// compensate via PreDelete when it did (F2), since dropReserved erases the
@@ -376,6 +379,13 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		preLaunchOK = true
 		if cwd != "" {
 			spec.Cwd = cwd
+			// This is the ONLY moment the resolved agent cwd exists. Without stamping it
+			// here it is dropped when this function returns, and the directory a worktree
+			// session's agent actually ran in -- the one a provider files its history
+			// under -- becomes uncomputable by anyone, this daemon included. Meta.Cwd is
+			// deliberately left alone: rollbackReserved and Delete both anchor worktree
+			// teardown on it (PreDelete's worktree.Remove(m.Cwd, m.ID) is run -C the REPO).
+			m.AgentCwd = cwd
 		}
 	}
 

@@ -154,14 +154,34 @@ object TranscriptIncremental {
      * "At the end" is [TranscriptMutation.Append.tail], decided where the new read's length is
      * known, which is what lets ONE read that both trims the head and appends a message still do
      * the right thing on both halves.
+     *
+     * AND A THIRD RULE, WHICH IS THE COMMITTEE'S (plan §8): an UNANSWERED DECISION suppresses it
+     * entirely. Sticking to the bottom is what makes a conversation readable while an agent
+     * works, and it is exactly what carries a reader PAST the one item that is waiting on them --
+     * the agent asks, keeps working, and its next two messages push the question off the top
+     * while the reader watches the screen move. The suppression is here rather than at the call
+     * site because this predicate is where "should the screen move" is decided, and a caller that
+     * had to remember one extra condition is a caller that will forget it on the second surface.
+     *
+     * @param decisionPending [TranscriptPanel.pendingDecisionId] is not empty: some decision on
+     *  this transcript is unanswered. Defaulted so a surface that has no decisions to draw does
+     *  not have to say so.
      */
-    fun stickToBottom(atBottom: Boolean, mutations: List<TranscriptMutation>): Boolean =
-        atBottom && mutations.any { it is TranscriptMutation.Append && it.tail }
+    fun stickToBottom(
+        atBottom: Boolean,
+        mutations: List<TranscriptMutation>,
+        decisionPending: Boolean = false,
+    ): Boolean =
+        atBottom && !decisionPending && mutations.any { it is TranscriptMutation.Append && it.tail }
 
     /** The same predicate over what the screen draws. See [reconcileBlocks]. */
     @JvmName("stickToBottomAfterBlocks")
-    fun stickToBottom(atBottom: Boolean, mutations: List<BlockMutation>): Boolean =
-        atBottom && mutations.any { it is BlockMutation.Insert && it.tail }
+    fun stickToBottom(
+        atBottom: Boolean,
+        mutations: List<BlockMutation>,
+        decisionPending: Boolean = false,
+    ): Boolean =
+        atBottom && !decisionPending && mutations.any { it is BlockMutation.Insert && it.tail }
 
     /**
      * The reader's anchor, found again BY ID after a burst moved every position: the row a

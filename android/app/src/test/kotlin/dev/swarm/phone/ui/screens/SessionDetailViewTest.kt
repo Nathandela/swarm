@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
@@ -136,29 +137,30 @@ class SessionDetailViewTest {
     private fun view(
         panel: SessionDetailPanel = panel(),
         outcome: String = "",
-        onBack: () -> Unit = {},
-        takeControl: View = TextView(context),
-        release: View = TextView(context),
         resync: View = TextView(context),
         acknowledge: View = TextView(context),
-        composer: View = TextView(context),
         approval: View = FrameLayout(context),
         onApproval: ((String) -> Unit)? = null,
     ): View = sessionDetailView(
         context = context,
         panel = panel,
-        stop = TextView(context).apply { text = panel.stopLabel },
-        kill = TextView(context).apply { text = panel.killLabel },
         resync = resync,
         acknowledge = acknowledge,
-        composer = composer,
         approval = approval,
         outcome = outcome,
-        onBack = onBack,
         onApproval = onApproval,
     )
 
     private fun textOf(view: View?): String = (view as? TextView)?.text?.toString().orEmpty()
+
+    /** The first editable field anywhere under this view, which on this screen is the composer's. */
+    private fun View.firstFieldOrNull(): View? {
+        if (this is EditText) return this
+        if (this is ViewGroup) {
+            for (i in 0 until childCount) getChildAt(i).firstFieldOrNull()?.let { return it }
+        }
+        return null
+    }
 
     private fun View.allTagged(tag: String): List<View> {
         val found = mutableListOf<View>()
@@ -175,34 +177,48 @@ class SessionDetailViewTest {
         val root = view()
 
         listOf(
-            DetailTag.NAV to "C2.1 -- the drill-down header, per derivation section 4",
             DetailTag.TRANSCRIPT to "C2.3 -- the conversation, composed by transcriptView",
-            DetailTag.STOP to "PB-APP-3's persistent Stop",
-            DetailTag.KILL to "the escalation, behind its own confirmation",
+            DetailTag.APPROVAL to "ADR-009 (4)'s card, in place under the block that points at it",
         ).forEach { (tag, what) ->
             assertNotNull("the session detail renders nothing for $what", root.kitFind(tag))
         }
     }
 
+    /**
+     * The other half of the move, and the half a diff cannot tell from a deleted assertion.
+     *
+     * THREE ASSERTIONS LEFT THIS FILE WITH THEIR SUBJECTS (chat-surface-plan §5): that the drill
+     * header is composed here, that it comes FIRST and names the session, and that its chevron
+     * navigates. All three are MOVED rather than deleted -- the header is
+     * `conversationScaffoldView`'s fixed region now and `PhoneSurfaceConversationHostTest` makes
+     * every one of them over the app the user actually opens, where the header is real.
+     *
+     * WHAT STANDS HERE IS THE CLAIM IN THE OTHER DIRECTION, because a part that merely stopped
+     * being asserted is a part that can come back without anything failing: this column must
+     * compose NO header, NO composer and NO destructive control. A second title inside the scroll,
+     * under a header that already names the session, is the screen saying the same thing twice --
+     * and the two would disagree the first time one was redrawn without the other.
+     */
     @Test
-    fun `the header comes first and names the session`() {
+    fun `the scrolling column composes no header, no composer and no destructive control`() {
         val root = view()
-        val nav = root.kitRequire(DetailTag.NAV)
 
-        assertEquals("mbp/api", textOf(nav.kitRequire(KitTag.DRILL_TITLE)))
-    }
-
-    @Test
-    fun `the back control navigates, rather than being a chevron that does nothing`() {
-        var went = false
-        val root = view(onBack = { went = true })
-
-        root.kitRequire(DetailTag.NAV).kitRequire(KitTag.DRILL_BACK).performClick()
-
-        assertTrue(
-            "the drill-down chevron is drawn and wired to nothing, which is the defect " +
-                "agents-tracker-2yb reports: a control that looks like a control and does not act",
-            went,
+        assertNull(
+            "the conversation column still composes a drill header. It scrolls, so the session " +
+                "name and the way back slide off the top the moment a reader moves -- which is " +
+                "the defect the fixed header exists to close, reintroduced one level down",
+            root.kitFind(KitTag.DRILL_TITLE),
+        )
+        assertNull(
+            "the column composes a back control of its own, so there are two ways out of this " +
+                "screen and only one of them is where a reader looks for it",
+            root.kitFind(KitTag.DRILL_BACK),
+        )
+        assertNull(
+            "the column composes a text field, so the composer is inside the scroll again: " +
+                "reachable only by scrolling past the whole transcript, and unable to stay above " +
+                "the IME. The app has exactly one field on this screen and it is the composer's",
+            root.firstFieldOrNull(),
         )
     }
 
@@ -398,24 +414,19 @@ class SessionDetailViewTest {
     // ---- the composer, and the ledger it ships with (agents-tracker-hxv) ---
 
     /**
-     * THE DEFECT agents-tracker-nx44.6 REPORTS, AS AN ASSERTION. This screen's lease sentence
-     * promised that "what you type is sent live" while the app's only composer was parented at the
-     * bottom of the triage inbox -- and `PhoneSurface.detachHostedViews` takes that column off
-     * screen on the way into this one. The promise was here and the affordance was not.
+     * MOVED, WITH ITS SUBJECT (chat-surface-plan §5). This test read "the composer is on the
+     * screen a session is read and answered on" and asserted `DetailTag.COMPOSER` -- the defect
+     * agents-tracker-nx44.6 reported, where this screen promised that what you type is sent live
+     * while the app's only composer was parented at the bottom of the triage inbox.
+     *
+     * The composer is still on the screen a session is read on, and it is now PINNED there rather
+     * than being the last child of a document: `ConversationScaffoldViewTest` asserts it is
+     * outside the scroll and last in the composition, and `PhoneSurfaceConversationHostTest`
+     * asserts the app the user opens actually pins it. What is left here is the negative claim, in
+     * `the scrolling column composes no header, no composer and no destructive control` above --
+     * because a promise this file merely stopped making is a promise that can be quietly broken
+     * back.
      */
-    @Test
-    fun `the composer is on the screen a session is read and answered on`() {
-        val composer = TextView(context)
-
-        val placed = view(composer = composer).kitFind(DetailTag.COMPOSER)
-
-        assertSame(
-            "the session detail places no composer, so the one screen a session is read on has " +
-                "a transcript, a lease and no way to answer",
-            composer,
-            placed,
-        )
-    }
 
     /**
      * agents-tracker-hxv: the ledger "renders ABOVE the transcript, never over the composer -- it
@@ -437,11 +448,14 @@ class SessionDetailViewTest {
                 "that grows while the user reads it",
             order.indexOf(DetailTag.UNDELIVERED) < order.indexOf(DetailTag.TRANSCRIPT),
         )
-        assertTrue(
-            "the composer is not last, so a report about input already gone can cover the " +
-                "control the user is reaching for",
-            order.indexOf(DetailTag.COMPOSER) == order.size - 1,
-        )
+        // THE THIRD ASSERTION MOVED WITH THE COMPOSER. It read "the composer is not last, so a
+        // report about input already gone can cover the control the user is reaching for" over
+        // `order.indexOf(DetailTag.COMPOSER) == order.size - 1`. The composer cannot be covered by
+        // anything in this column any more -- it is a sibling of the scroll, not its last child --
+        // so the property holds by construction and is asserted where the construction is
+        // (`ConversationScaffoldViewTest.the composer is pinned below the list and not inside it`).
+        // What this file still owes is the half that is about THIS column: the ledger is above the
+        // conversation, which is the two assertions above.
     }
 
     @Test

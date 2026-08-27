@@ -19,9 +19,17 @@ package skeleton
 // devices -- a protocol, not a timestamp. So this records exactly what was seen: THIS PHONE
 // SENT SOMETHING, AT THIS INSTANT.
 //
-// The terminal renders it in those words ("phone sent 09:41"), never as "phone is here",
-// because the second names something nobody measured. When the presence protocol is built,
-// this is what it replaces.
+// The terminal renders it in those words -- the board row reads "phone sent 09:41"
+// (internal/tui, phoneSentMarker) -- and never as "phone is here", because the second names
+// something nobody measured. When the presence protocol is built, this is what it replaces.
+//
+// THAT SENTENCE WAS FALSE FOR THE LENGTH OF WAVE G AND IS NOW TRUE. It was written in the
+// present tense here, and twice more below, while the row shipped the bare noun `phone`: the
+// instant reached no further than this file, because SessionView carried only a bool. The
+// design-honesty review caught the gap between the three comments and the string. What made
+// the short form wrong is not terseness: a bare noun in a marker column, beside "supervisor
+// pending", reads as a CONDITION -- a phone is on this session -- which is the presence claim
+// the paragraph above spends itself refusing to make.
 
 import "time"
 
@@ -57,9 +65,30 @@ func (d *Daemon) phoneActivityAt(local string) time.Time {
 
 // phoneRecentlyActive is C3's half of the same record: within the horizon, somebody is
 // driving this session from a phone.
+//
+// It reads the SAME function the roster publishes rather than re-applying the horizon, so the
+// gate and the marker cannot drift apart. There is one horizon in this file and one place it
+// is applied; a second copy would be a second opinion about one record, which is the failure
+// mode the row's own test asserts against.
 func (d *Daemon) phoneRecentlyActive(local string) bool {
+	return !d.remoteActivityAt(local).IsZero()
+}
+
+// remoteActivityAt is what the ROSTER publishes: the instant, but only while it is still
+// inside the horizon -- so a row and the gate beside it can never disagree about one record.
+//
+// THE HORIZON IS APPLIED HERE AND NOT ON THE CLIENT, for the reason E6.9 gives about the
+// status Group: a client never re-derives what the daemon has already decided. A board that
+// held its own clock and its own copy of phoneActiveHorizon would be a second opinion about
+// the same fact, and the first opinion is the one anyControlled acts on (ADR-010 Amendment 3
+// C3). The zero time therefore means "no message in the window", which is all the row needs:
+// never and not-lately both draw nothing.
+func (d *Daemon) remoteActivityAt(local string) time.Time {
 	at := d.phoneActivityAt(local)
-	return !at.IsZero() && time.Since(at) < phoneActiveHorizon
+	if at.IsZero() || time.Since(at) >= phoneActiveHorizon {
+		return time.Time{}
+	}
+	return at
 }
 
 // forgetPhoneActivity drops a session's record when the session ends, so the map does not

@@ -4,6 +4,7 @@ const ErrClassAwaitingKey
 const ErrClassClosed
 const ErrClassDeviceUnsupported
 const ErrClassGrantLost
+const ErrClassInputBusy
 const ErrClassInternal
 const ErrClassInvalidRequest
 const ErrClassNoLease

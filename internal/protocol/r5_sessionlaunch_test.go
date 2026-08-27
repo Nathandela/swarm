@@ -396,6 +396,55 @@ func TestR5SessionLaunch_ForbiddenPresetOptionRefusedAtTheSameChokePoint(t *test
 	}
 }
 
+// TestR5SessionLaunch_HandoffFromPresetRefusedOnPresence closes a bypass an adversarial
+// review found: `session_launch` does NOT pass through handleLaunch, where the hands-off
+// handoff's tier, capability, empty-value and exclusion guards all live. It resolves a
+// signed preset, copies its options wholesale, and calls Launch directly. The only option
+// guard on this path is the value-aware denylist, and that denylist matches ONE forbidden
+// value per key -- it cannot express "every value of this key is forbidden".
+//
+// So an authored preset carrying handoff_from had two ways through:
+//
+//   - handoff_from=<id> executed an OWNER-TIER-ONLY feature from the REMOTE route, with
+//     CapHandsOffHandoff never negotiated;
+//   - handoff_from= (empty) reached the core, whose emptiness test read the key as ABSENT
+//     and composed an ordinary launch -- a context-free agent in the owner's checkout,
+//     the one outcome ADR-010 Amendment 4 E7 says must never happen.
+//
+// Refused on PRESENCE for exactly that reason: the empty case is the dangerous one, and a
+// value-shaped guard would have missed it.
+func TestR5SessionLaunch_HandoffFromPresetRefusedOnPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{"named source", "ep-1/source-session"},
+		{"empty value is the dangerous one", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := r5PresetView(t, "preset-handoff")
+			p.Options = map[string]string{OptionHandoffFrom: tc.value}
+			b := newR5Backend(p)
+			sock := serveRemoteAPI(t, b)
+			rc := rawDial(t, sock)
+			rep := rc.hello(Version, []string{CapRemoteGateway})
+
+			rc.writeControl(r5Frame(rep, "devA:01JHANDOFF", &schema.SessionLaunchReq{
+				PresetID: "preset-handoff", PresetRevision: "rev-1", Cols: 80, Rows: 24,
+			}))
+			got := rc.readControl()
+			if got.Op != OpError || got.ErrorCode != CodePolicy {
+				t.Fatalf("preset carrying %s=%q = op %q code %q, want error/policy: hands-off "+
+					"handoff is owner-tier only and session_launch does not pass through "+
+					"handleLaunch's tier guard", OptionHandoffFrom, tc.value, got.Op, got.ErrorCode)
+			}
+			if n := len(b.launchSpecs()); n != 0 {
+				t.Errorf("daemon Launch called %d times for a handoff_from preset, want 0", n)
+			}
+		})
+	}
+}
+
 // TestR5SessionLaunch_PresetRootOutsideAllowedRootsRefused: the machine-configured
 // allowed-root policy (R-POL.3) applies to the preset path unchanged: a preset whose
 // root falls outside the configured roots is refused CodePolicy before any launch.
