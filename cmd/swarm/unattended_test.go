@@ -505,8 +505,11 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 		if !strings.Contains(stderr, "no daemon holds the lock") {
 			t.Fatalf("stderr must report rule 0; got:\n%s", stderr)
 		}
-		if _, err := os.Stat(filepath.Join(dir, "daemon.pid")); err == nil {
-			t.Fatal("rule 0 must spawn nothing, but a daemon.pid appeared")
+		// A daemon spawned here would be owned by nobody, so it is killed before the
+		// failure is reported rather than left holding a PTY until the machine reboots.
+		if pid, ok := unattendedDaemonPID(dir); ok {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
+			t.Fatalf("rule 0 must spawn nothing, but daemon.pid appeared naming %d", pid)
 		}
 		if c, err := protocol.Dial(sock, nil); err == nil {
 			_ = c.Close()
