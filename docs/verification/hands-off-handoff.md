@@ -264,13 +264,14 @@ test.
 
 ---
 
-## 8b. Independent orchestrator verification, and a review that did not land
+## 8b. Orchestrator verification (standing in for two reviewers that did not report)
 
-Two adversarial reviewers were run over the committed work. **Neither delivered its
-findings** — both completed and went idle, and repeated requests for the report as plain
-text produced nothing. That is recorded rather than glossed: the sweep did NOT receive the
-independent adversarial review it was given, and what follows is the orchestrator's own
-verification standing in for it.
+A first pair of adversarial reviewers was run over the committed work and **neither
+delivered its findings** — both completed and went idle, and repeated requests produced
+nothing. What follows is the orchestrator's own verification, which stood in for them.
+
+A **second, genuinely external review did land** and is recorded in §8c. It found four
+HIGH-severity defects, all now fixed.
 
 Verified directly, not taken from any phase's report:
 
@@ -293,6 +294,69 @@ Verified directly, not taken from any phase's report:
 closed with no gap between them: the protocol layer tests the guards *and* asserts the
 option reaches `DaemonAPI.Launch` with its exact value; the skeleton layer tests
 composition and every refusal through the real `coreAPI.Launch` against a real state dir.
+
+---
+
+## 8c. The adversarial review that did land, and what it cost
+
+Run against the pushed branch by **codex (gpt-5.6-sol, read-only)** — a genuinely
+cross-vendor reviewer that had never seen this conversation and worked only from a
+self-contained brief plus the code. A Gemini reviewer was also launched and **produced
+nothing usable** (it exited after announcing intent, a headless tool-permission failure),
+so it is recorded as unavailable rather than as a clean bill of health.
+
+It found **four HIGH defects**. Every one is now fixed, each with a negative control.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | Successor launched in the wrong checkout for worktree sources | `6cb9f2d` |
+| 2 | Signed remote presets bypassed every hands-off guard | `f7a9e59` |
+| 3 | Cross-CLI confirmation authorized a *moving* target | `a58e084` |
+| 4 | Any regular file with the right name counted as a transcript | `152eb4b` |
+| 7 | The forgery guard missed U+2028/U+2029 | `c0b0747` |
+
+**Finding 1 was found independently by the orchestrator minutes earlier**, and the reviewer
+noticed the regression test appear in the tree mid-audit and said so rather than claiming
+it. Two routes to the same defect is the strongest signal in this document.
+
+**Finding 2 was the most serious.** `session_launch`, the signed remote-preset path, does
+not pass through `handleLaunch` where every hands-off guard lives; it copies preset options
+wholesale and calls `Launch` directly. A preset carrying `handoff_from=` *empty* reached the
+core, whose emptiness test read the key as absent, and launched a bare context-free agent —
+the exact outcome E7 forbids, reached past the capability gate built to prevent it. Fixed at
+**both** layers: the remote path refuses the key on presence, and the core now tests presence
+rather than emptiness, because the core is the only point every launch entry passes through.
+
+**Finding 3 needed no adversary** — an agent CLI merely had to stop being detected while the
+confirmation was on screen. The human approved showing a codex transcript to claude;
+detection then reselected codex; `y` would have launched codex, a target never confirmed and
+one that would not even have required a confirmation.
+
+**One finding was rejected, with reasons.** The reviewer proposed bumping `SchemaVersion`
+for the added `AgentCwd` field, because a rolled-back daemon rewrites `meta.json` and drops
+it. The premise is right and the cure is worse: `Load` refuses any meta whose version exceeds
+the build's, so a v2 stamp would make a rolled-back daemon fail to load **every** session the
+newer one wrote, rather than lose one optional field. Degraded beats unloadable. The reasoning
+is now recorded at the field itself so a future reader does not "fix" it and break rollback.
+
+**Two findings became tracked issues rather than merge blockers:**
+
+- `agents-tracker-hpga` (P1) — conversation-id capture treats canonical *syntax* as
+  provenance, so terminal content containing a real UUID can poison the write-once latch
+  before the authenticated hook arrives. Pre-existing and older than this branch; the branch's
+  guard fixes the syntax problem, not the trust-order one. Partially mitigated here: the
+  transcript is resolved under the source's own `ProviderCwd` and must now name its own
+  conversation, so a foreign id only survives if it ran in the same directory.
+- `agents-tracker-kx4m` (P2) — no real-CLI smoke proves a codex/agy/opencode target can
+  actually read a path under `~/.claude/projects/`. Not decidable by inspection.
+
+**What the reviewer could not break**, having tried: it could construct no confinement escape
+through cwd, conversation id, symlink components, FIFO replacement, or `filepath.Join`; it
+found the `LocateTranscript` component argument sound and the extra `Lstat` diagnostic rather
+than a TOCTOU regression (`openCandidate` repeats the stat and verifies `SameFile`); and it
+confirmed the `resolveSourceSession` extraction preserves resume semantics, the nil return on
+a rejected `SetConversationID`, the daemon-HOME choice, the local `spawned_from`, and the
+empty supervision.
 
 ---
 
