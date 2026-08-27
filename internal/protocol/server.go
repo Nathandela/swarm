@@ -1200,6 +1200,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleDelete(c)
 	case OpRename:
 		cc.handleRename(c)
+	case OpSetTag:
+		cc.handleSetTag(c)
 	case OpAttach:
 		cc.handleAttach(c)
 	case OpDetach:
@@ -1610,6 +1612,19 @@ func (cc *clientConn) handleRename(c Control) {
 	}
 	if err := cc.srv.d.Rename(local, SanitizeName(c.Name)); err != nil {
 		cc.replyError("rename: " + err.Error())
+		return
+	}
+	cc.replyOK(c.SessionID)
+}
+
+// handleSetTag persists a sanitized manual grouping label, mirroring handleRename.
+func (cc *clientConn) handleSetTag(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	if err := cc.srv.d.SetTag(local, strings.TrimSpace(SanitizeName(c.Tag))); err != nil {
+		cc.replyError("set_tag: " + err.Error())
 		return
 	}
 	cc.replyOK(c.SessionID)
@@ -2978,6 +2993,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		ID:             NamespacedID(endpointID, m.ID),
 		Agent:          m.AgentType,
 		Name:           m.Name, // P2: carry the persisted label; "" degrades to Agent at display
+		Tag:            m.Tag,
 		Cwd:            m.Cwd,
 		Status:         m.Status,
 		Group:          group,

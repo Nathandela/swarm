@@ -51,6 +51,7 @@ func (d *fixDaemon) Launch(daemon.LaunchSpec) (persist.Meta, error) {
 func (d *fixDaemon) Kill(string) error           { return nil }
 func (d *fixDaemon) Delete(string) error         { return nil }
 func (d *fixDaemon) Rename(string, string) error { return nil }
+func (d *fixDaemon) SetTag(string, string) error { return nil }
 func (d *fixDaemon) Attach(id string) (SessionStream, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -820,6 +821,7 @@ func (d *multiFixDaemon) Launch(daemon.LaunchSpec) (persist.Meta, error) {
 func (d *multiFixDaemon) Kill(string) error           { return nil }
 func (d *multiFixDaemon) Delete(string) error         { return nil }
 func (d *multiFixDaemon) Rename(string, string) error { return nil }
+func (d *multiFixDaemon) SetTag(string, string) error { return nil }
 func (d *multiFixDaemon) Attach(id string) (SessionStream, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

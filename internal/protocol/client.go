@@ -235,6 +235,18 @@ func (c *Client) Rename(id, name string) error {
 	return nil
 }
 
+// SetTag changes a session's manual grouping label. An empty tag clears it.
+func (c *Client) SetTag(id, tag string) error {
+	resp, err := c.request(Control{Op: OpSetTag, EndpointID: c.endpointID, SessionID: id, Tag: tag})
+	if err != nil {
+		return err
+	}
+	if resp.Op == OpError {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // ListDevices returns the daemon's paired-device roster (requires the negotiated
 // `pairing` capability).
 func (c *Client) ListDevices() ([]DeviceView, error) {

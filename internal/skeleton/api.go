@@ -590,6 +590,13 @@ func (a *coreAPI) Rename(id, name string) error {
 	}
 	return err
 }
+func (a *coreAPI) SetTag(id, tag string) error {
+	err := a.core.SetTag(id, tag)
+	if err == nil {
+		a.pokeWatch() // fan the new grouping metadata out now, not at the next poll tick
+	}
+	return err
+}
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 
 // ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a
@@ -1452,12 +1459,13 @@ func (a *coreAPI) isSupervisionPending(local string) bool {
 type rosterSnap struct {
 	status             status.Status
 	name               string
+	tag                string
 	controlled         bool
 	supervisionPending bool
 }
 
 // watch samples the roster and emits a meta whenever a session's status, display
-// label, remote-control OR supervision-pending state changes (the core exposes no push
+// label, tag, remote-control OR supervision-pending state changes (the core exposes no push
 // source, so changes are observed by polling). It mirrors protocol.FromDaemon's
 // watcher: dedup, retry a momentarily-full queue on the next poll (never drop a
 // change), and prune vanished sessions so the seen map stays bounded.
@@ -1471,7 +1479,7 @@ func (a *coreAPI) watch() {
 		present := map[string]struct{}{}
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
-			cur := rosterSnap{status: m.Status, name: m.Name, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID)}
+			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID)}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}
