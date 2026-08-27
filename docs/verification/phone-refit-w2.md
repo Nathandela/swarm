@@ -343,3 +343,103 @@ interaction.go restored
 Control 1 leaves the three other tests green (the envelopes are still dropped, the bracketed
 prompts still kept), so the failure isolates the closed-tag half of the rule; control 2 fails only
 the envelope table, so the bracketed-prompt control is not the filter's accident.
+
+## W2.2 Every machine reason gets plain words
+
+Tests written first: `MachineCodeRoutingTest.kt` gained `every daemon code this build ships has a
+sentence` (key set equals the eighteen literals; `sentenceFor` returns each row; an unseen code
+falls to the router's UNKNOWN sentence; `toToken` still has three rows); `:63` and `:69` untouched.
+`ErrorRoutingRefusalCopyTest.kt:165` (`the deliberate absences stay absent`) now also asserts
+`unavailable`/`invalid_field` are absent from `toToken` and present in `sentence`, with a one-line
+comment citing W2.2. `mobile/ksvb5_refusalcopy_test.go` gained `TestRefusalSentences_CoverEverySchemaCode`,
+which reads the eighteen `schema` constants by value and checks each has a row in the Kotlin
+table; `:62` untouched.
+
+### RED
+
+Go (`go test -count=1 ./mobile/ -run TestRefusalSentences_CoverEverySchemaCode`):
+
+```
+    ksvb5_refusalcopy_test.go:284: ErrorRouting.kt declares no `val sentence: Map<String, String> = mapOf(`
+--- FAIL: TestRefusalSentences_CoverEverySchemaCode (0.01s)
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	1.237s
+FAIL
+```
+
+Kotlin, on the serialised Gradle lane (`w2-gradle.sh --tests 'dev.swarm.phone.ui.*Routing*'`;
+the RED is the test source set failing to compile, so the filter only trims execution):
+
+```
+START=1787863105 (Thu Aug 27 22:38:25 CEST 2026)
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/ErrorRoutingRefusalCopyTest.kt:176:77 Unresolved reference 'sentence'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:95:51 Unresolved reference 'sentence'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:98:48 Unresolved reference 'sentenceFor'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:99:46 Unresolved reference 'sentence'.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:99:55 Cannot infer type for type parameter 'V'. Specify it explicitly.
+e: android/app/src/test/kotlin/dev/swarm/phone/ui/MachineCodeRoutingTest.kt:103:51 Unresolved reference 'sentenceFor'.
+BUILD FAILED in 2m 45s
+GRADLE_EXIT=1
+SUMMARY: xml files=0 stale(older than START)=0 tests=0 failures=0 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=1
+```
+
+### GREEN
+
+Go (`go test -race -count=1 ./mobile/ -run 'TestRefusalSentences_CoverEverySchemaCode|TestOutcomeOf_TheMachinesOwnWordsAreNotReplaced'`):
+
+```
+--- PASS: TestOutcomeOf_TheMachinesOwnWordsAreNotReplaced (0.00s)
+--- PASS: TestRefusalSentences_CoverEverySchemaCode (0.00s)
+ok  	github.com/Nathandela/swarm/mobile	2.428s
+```
+
+Kotlin, the whole suite on the serialised lane (`w2-gradle.sh`: waits for `pgrep -f gradle-wrapper.jar`
+to be empty, records START, runs `./gradlew --no-daemon :app:testDebugUnitTest --rerun-tasks --no-build-cache`,
+then checks every result XML is newer than START and the AAR did not move):
+
+```
+START=1787863777 (Thu Aug 27 22:49:37 CEST 2026)
+BUILD SUCCESSFUL in 39m 1s
+GRADLE_EXIT=0
+SUMMARY: xml files=202 stale(older than START)=0 tests=1590 failures=0 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=0
+```
+
+`go build ./...`, `go vet ./...` and `golangci-lint run ./...` (0 issues) were run with the
+`mobile/` test in the tree (recorded under W2.4's gates). `toToken` still has three rows.
+
+No production caller of `sentenceFor` lands in this wave: the contract names the table as a
+"copy-only sibling" and no caller, and the only `routeMachineCode` caller in the app
+(`SessionDetailPanel.composerVerdictFor`) keys `ComposerModel.noticeFor` on the routed state's
+name. "No refusal from a shipped daemon renders the UNKNOWN sentence" therefore still needs a
+caller (W5's words pass is the natural home); the table is ready for it.
+
+### Negative control (clean tree at 9bc0f7f2; the file restored with `git checkout --`)
+
+One perturbation, checked from both sides: the `stale_instance` row removed from
+`MachineRefusalCodes.sentence`.
+
+```
+## Negative control: one row (stale_instance) removed from MachineRefusalCodes.sentence
+ android/app/src/main/kotlin/dev/swarm/phone/ui/ErrorRouting.kt | 1 -
+ 1 file changed, 1 deletion(-)
+--- Go ---
+--- FAIL: TestRefusalSentences_CoverEverySchemaCode (0.00s)
+    ksvb5_refusalcopy_test.go:299: schema code "stale_instance" has no row in MachineRefusalCodes.sentence; a reader gets the UNKNOWN sentence for it
+FAIL
+FAIL	github.com/Nathandela/swarm/mobile	1.137s
+FAIL
+--- Kotlin (targeted, serialised lane) ---
+START=1787866677 (Thu Aug 27 23:37:57 CEST 2026)
+MachineCodeRoutingTest > every daemon code this build ships has a sentence FAILED
+    java.lang.AssertionError at MachineCodeRoutingTest.kt:95
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 1m 59s
+GRADLE_EXIT=1
+SUMMARY: xml files=4 stale(older than START)=0 tests=24 failures=1 errors=0
+AAR unchanged (mtime 1787859790)
+ErrorRouting.kt restored
+```

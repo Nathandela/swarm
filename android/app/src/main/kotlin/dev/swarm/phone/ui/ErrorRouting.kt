@@ -509,4 +509,41 @@ object MachineRefusalCodes {
         INPUT_BUSY to SwarmErrorTokens.INPUT_BUSY,
         RATE_LIMIT to SwarmErrorTokens.RATE_LIMITED,
     )
+
+    /**
+     * One plain sentence per code a shipped daemon can answer -- COPY ONLY (phone refit W2.2,
+     * agents-tracker-d45a.2). It is a sibling of [toToken] and not a widening of it: that table
+     * decides STATE AND REMEDY, and its own rule forbids a per-verb fact borrowing a generic
+     * remedy. This one decides words. The keys are the eighteen literals of
+     * `internal/protocol/schema` (the unit-test JVM loads no AAR, so they are spelled here;
+     * `mobile/ksvb5_refusalcopy_test.go` reads the schema constants by value and checks every
+     * one has a row). The sentences follow W5's rule -- short, from the user's side -- and
+     * "your computer" becomes the machine's label wherever a screen has it (W5.2).
+     */
+    internal val sentence: Map<String, String> = mapOf(
+        "stale_turn" to "Not sent. There's a new reply. Read it, then send again.",
+        "input_busy" to "Not sent. Finish typing on your computer first.",
+        "rate_limit" to "Too many requests. Wait a moment.",
+        "interrupt_unsupported" to "This agent can't be stopped from the phone.",
+        "unavailable" to "Your computer no longer has this.",
+        "structured_unsupported" to "Chat is off for this session.",
+        "policy" to "Your computer's rules don't allow this.",
+        "kill_switch" to "Remote control is off on your computer.",
+        "stale_approval" to "Already answered. Reload to see.",
+        "not_authorized" to "This phone isn't allowed to do that.",
+        "invalid_field" to "Your computer couldn't read that request.",
+        "op_not_implemented" to "Your computer can't do this yet.",
+        "unknown_preset" to "That setup is gone. Pick another.",
+        "stale_preset" to "That setup changed. Check it and confirm again.",
+        "outcome_unknown" to "Not sure it went through. Check before retrying.",
+        "capability_refused" to "This session doesn't allow that from the phone.",
+        "stale_generation" to "Your turn at this terminal ended. Take control again.",
+        "stale_instance" to "This session restarted. Open the new one.",
+    )
+
+    /**
+     * The sentence for [code]. UNKNOWN's sentence is reached only by a code this build has never
+     * seen, through [ErrorRouter.routeMachineCode]'s reserved row.
+     */
+    fun sentenceFor(code: String): String = sentence[code] ?: ErrorRouter.routeMachineCode(code).message
 }

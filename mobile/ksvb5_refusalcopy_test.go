@@ -25,6 +25,8 @@ package swarmmobile
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -259,5 +261,42 @@ func TestClockBannerText_WithoutAMeasurementTheSentenceKeepsItsRemedy(t *testing
 	if !strings.Contains(got, "automatic date and time") {
 		t.Errorf("clockBannerText with no measurement = %q: the remedy is the half that must "+
 			"survive, because it is the only thing the reader can act on", got)
+	}
+}
+
+// ---- W2.2: every machine reason gets plain words ---------------------------------------------
+
+// TestRefusalSentences_CoverEverySchemaCode (phone refit W2.2, agents-tracker-d45a.2): every
+// refusal code a shipped daemon can answer has a row in the phone's copy-only sentence table,
+// `MachineRefusalCodes.sentence` (android/.../ui/ErrorRouting.kt). The codes are read from the
+// schema constants BY VALUE, so a code added or respelled in Go is caught here before it reaches
+// a reader as the UNKNOWN sentence; the Kotlin side cannot read the schema (the unit-test JVM
+// loads no AAR), so the fence lives on the side that can.
+func TestRefusalSentences_CoverEverySchemaCode(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "android", "app", "src", "main", "kotlin",
+		"dev", "swarm", "phone", "ui", "ErrorRouting.kt"))
+	if err != nil {
+		t.Fatalf("read ErrorRouting.kt: %v", err)
+	}
+	const open = "val sentence: Map<String, String> = mapOf("
+	start := strings.Index(string(src), open)
+	if start < 0 {
+		t.Fatalf("ErrorRouting.kt declares no `%s`", open)
+	}
+	table := string(src)[start:]
+	if end := strings.Index(table, "\n    )"); end >= 0 {
+		table = table[:end]
+	}
+	for _, code := range []schema.ErrorCode{
+		schema.CodeStaleTurn, schema.CodeInterruptUnsupported, schema.CodeUnavailable,
+		schema.CodeStructuredUnsupported, schema.CodeInputBusy,
+		schema.CodePolicy, schema.CodeKillSwitch, schema.CodeRateLimit, schema.CodeStaleApproval,
+		schema.CodeNotAuthorized, schema.CodeInvalidField, schema.CodeNotImplemented,
+		schema.CodeUnknownPreset, schema.CodeStalePreset, schema.CodeOutcomeUnknown,
+		schema.CodeCapabilityRefused, schema.CodeStaleGeneration, schema.CodeStaleInstance,
+	} {
+		if !strings.Contains(table, `"`+string(code)+`" to `) {
+			t.Errorf("schema code %q has no row in MachineRefusalCodes.sentence; a reader gets the UNKNOWN sentence for it", code)
+		}
 	}
 }

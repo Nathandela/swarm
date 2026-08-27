@@ -171,6 +171,9 @@ class ErrorRoutingRefusalCopyTest {
                 ErrorState.UNKNOWN,
                 ErrorRouter.routeMachineCode(code).state,
             )
+            // W2.2 (phone-refit-playbook §3): absent from the routing table, present in the sentence table.
+            assertFalse("`$code` gained a routing row", MachineRefusalCodes.toToken.containsKey(code))
+            assertTrue("`$code` has no plain sentence", MachineRefusalCodes.sentence.containsKey(code))
         }
     }
 }

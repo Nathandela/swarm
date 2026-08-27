@@ -75,4 +75,32 @@ class MachineCodeRoutingTest {
             ErrorRouter.routeMachineCode(SwarmErrorTokens.OFFLINE).state,
         )
     }
+
+    /**
+     * W2.2 (phone-refit-playbook §3): every code a shipped daemon can answer has one plain
+     * sentence, in a COPY-ONLY sibling of [MachineRefusalCodes.toToken]. The routing table keeps
+     * its three rows (it decides state and remedy, and a per-verb fact may not borrow a generic
+     * remedy); the sentence table is what a screen says. UNKNOWN is reached only by a code this
+     * build has never seen.
+     */
+    @Test
+    fun `every daemon code this build ships has a sentence`() {
+        val shipped = setOf(
+            "stale_turn", "interrupt_unsupported", "unavailable", "structured_unsupported",
+            "input_busy", "policy", "kill_switch", "rate_limit", "stale_approval",
+            "not_authorized", "invalid_field", "op_not_implemented", "unknown_preset",
+            "stale_preset", "outcome_unknown", "capability_refused", "stale_generation",
+            "stale_instance",
+        )
+        assertEquals(shipped, MachineRefusalCodes.sentence.keys)
+        val unknown = ErrorRouter.routeMachineCode("some_future_code").message
+        for (code in shipped) {
+            val sentence = MachineRefusalCodes.sentenceFor(code)
+            assertEquals(MachineRefusalCodes.sentence.getValue(code), sentence)
+            assertTrue("`$code` has a blank sentence", sentence.isNotBlank())
+            assertTrue("`$code` renders the UNKNOWN sentence", sentence != unknown)
+        }
+        assertEquals(unknown, MachineRefusalCodes.sentenceFor("some_future_code"))
+        assertEquals("toToken decides state and remedy and stays three rows", 3, MachineRefusalCodes.toToken.size)
+    }
 }
