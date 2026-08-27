@@ -48,20 +48,38 @@ type Meta struct {
 	// written by the newer one, rather than merely losing an optional field. Dropping
 	// AgentCwd degrades ProviderCwd to Cwd -- today's behaviour before this field existed
 	// -- and the value is re-stamped on the next launch. Degraded beats unloadable.
-	AgentCwd       string            `json:"agent_cwd"` // resolved agent cwd when a pre-launch hook overrode Cwd; "" otherwise. See ProviderCwd.
-	LaunchOptions  map[string]string `json:"launch_options"`
-	Env            []string          `json:"env"`
-	CreatedAt      time.Time         `json:"created_at"`
-	Status         status.Status     `json:"status"`
-	LastActivity   time.Time         `json:"last_activity"`
-	ShimPID        int               `json:"shim_pid"`
-	ShimStartTime  int64             `json:"shim_start_time"`
-	ConversationID string            `json:"conversation_id"`
-	ExitCode       *int              `json:"exit_code"`
-	ResumedFrom    string            `json:"resumed_from"`
-	SpawnedFrom    string            `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
-	SpawnIntent    string            `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
-	Supervision    string            `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+	AgentCwd      string            `json:"agent_cwd"` // resolved agent cwd when a pre-launch hook overrode Cwd; "" otherwise. See ProviderCwd.
+	LaunchOptions map[string]string `json:"launch_options"`
+	Env           []string          `json:"env"`
+	CreatedAt     time.Time         `json:"created_at"`
+	Status        status.Status     `json:"status"`
+	// GroupEnteredAt is when Status last crossed a status.Derive display-group
+	// boundary. It is additive without a schema-version bump for the same rollback
+	// compatibility reason as AgentCwd above. Older records use LastActivity (then
+	// CreatedAt) as a stable best-effort fallback until their next write.
+	GroupEnteredAt time.Time `json:"group_entered_at"`
+	LastActivity   time.Time `json:"last_activity"`
+	ShimPID        int       `json:"shim_pid"`
+	ShimStartTime  int64     `json:"shim_start_time"`
+	ConversationID string    `json:"conversation_id"`
+	ExitCode       *int      `json:"exit_code"`
+	ResumedFrom    string    `json:"resumed_from"`
+	SpawnedFrom    string    `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)
+	SpawnIntent    string    `json:"spawn_intent"` // "handoff" or "delegate"; empty when SpawnedFrom is
+	Supervision    string    `json:"supervision"`  // "passive", "manual" or "none" on a handoff child (ADR-010 Amendment 3 C1); empty otherwise
+}
+
+// EffectiveGroupEnteredAt returns the durable ordering instant for a session.
+// Records written before GroupEnteredAt existed fall back deterministically,
+// without rewriting every meta.json merely because the daemon restarted.
+func (m Meta) EffectiveGroupEnteredAt() time.Time {
+	if !m.GroupEnteredAt.IsZero() {
+		return m.GroupEnteredAt
+	}
+	if !m.LastActivity.IsZero() {
+		return m.LastActivity
+	}
+	return m.CreatedAt
 }
 
 // ProviderCwd is the working directory the AGENT actually ran in: AgentCwd when a

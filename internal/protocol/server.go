@@ -2974,15 +2974,16 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		sentAt = &at
 	}
 	return &SessionView{
-		EndpointID:   endpointID,
-		ID:           NamespacedID(endpointID, m.ID),
-		Agent:        m.AgentType,
-		Name:         m.Name, // P2: carry the persisted label; "" degrades to Agent at display
-		Cwd:          m.Cwd,
-		Status:       m.Status,
-		Group:        group,
-		LastActivity: m.LastActivity,
-		CreatedAt:    m.CreatedAt,
+		EndpointID:     endpointID,
+		ID:             NamespacedID(endpointID, m.ID),
+		Agent:          m.AgentType,
+		Name:           m.Name, // P2: carry the persisted label; "" degrades to Agent at display
+		Cwd:            m.Cwd,
+		Status:         m.Status,
+		Group:          group,
+		GroupEnteredAt: m.EffectiveGroupEnteredAt(),
+		LastActivity:   m.LastActivity,
+		CreatedAt:      m.CreatedAt,
 		// Summary (V-4 one-line last-output) is derived from the session's grid by
 		// the status engine (Epic 7/10), which persist.Meta does not yet carry. Left
 		// "" until then rather than presented as a stale/empty live summary (F12).

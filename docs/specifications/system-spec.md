@@ -94,7 +94,7 @@ Derived view groups:
 
 ### General view (V)
 
-- **V-1** (Ubiquitous) The general view SHALL list all sessions grouped as Needs input / Working / Ready for review / Completed (derivation table above).
+- **V-1** (Ubiquitous) The general view SHALL list all sessions grouped as Needs input / Working / Ready for review / Completed (derivation table above). Within each group, sessions SHALL be ordered by the time they entered that group, newest first; attachment and unrelated metadata changes SHALL NOT reorder them.
 - **V-2** (Event) WHEN a status event arrives, the general view SHALL reflect it within 1 second without user action.
 - **V-3** (Ubiquitous) Navigation SHALL be keyboard-only: ↑/↓ (and j/k) move selection across groups, Enter attaches, Esc backs out/quits, Ctrl+X kills (one-key confirm), `n` opens the launch form.
 - **V-4** (Ubiquitous) Each row SHALL show: agent name, working directory (shortened), status, elapsed/last-activity time, and a one-line last-output summary derived heuristically from the grid (no LLM call).

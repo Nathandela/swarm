@@ -284,6 +284,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		LaunchOptions:  spec.Options,
 		Env:            PolicyEnv(spec.ClientEnv), // already resolved above; idempotent
 		CreatedAt:      now,
+		GroupEnteredAt: now,
 		LastActivity:   now,
 		ResumedFrom:    spec.ResumedFrom, // link a resume-as-new-session launch (R-2)
 		SpawnedFrom:    spec.SpawnedFrom, // link an agent-initiated spawn to its source (ADR-010 D4)

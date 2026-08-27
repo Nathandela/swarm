@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"cmp"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -55,7 +57,7 @@ type rowColumns struct {
 
 // generalModel is the grouped session board: the general view.
 type generalModel struct {
-	sessions []protocol.SessionView // in arrival order; grouped at render time
+	sessions []protocol.SessionView // newest category entry first; grouped at render time
 	sel      int                    // flat selection index across visible rows
 
 	confirm     bool   // a kill/delete confirm is pending
@@ -100,7 +102,33 @@ const bannerDuration = 4 * time.Second
 const tombstoneTTL = 10 * time.Second
 
 func newGeneralModel(sessions []protocol.SessionView) generalModel {
-	return generalModel{sessions: sessions}
+	ordered := append([]protocol.SessionView(nil), sessions...)
+	sortSessions(ordered)
+	return generalModel{sessions: ordered}
+}
+
+func categoryEnteredAt(s protocol.SessionView) time.Time {
+	if !s.GroupEnteredAt.IsZero() {
+		return s.GroupEnteredAt
+	}
+	if !s.LastActivity.IsZero() {
+		return s.LastActivity
+	}
+	return s.CreatedAt
+}
+
+// sortSessions establishes the order used within every fixed display group:
+// newest category entry first, then newest creation, then id for stable ties.
+func sortSessions(sessions []protocol.SessionView) {
+	slices.SortFunc(sessions, func(a, b protocol.SessionView) int {
+		if c := categoryEnteredAt(b).Compare(categoryEnteredAt(a)); c != 0 {
+			return c
+		}
+		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 }
 
 // hasWorking reports whether the board currently has anything to animate. Keeping
@@ -116,7 +144,7 @@ func (m generalModel) hasWorking() bool {
 
 // selected returns the currently-selected session, or (zero, false) when the
 // board is empty. It walks sessions in display order (by group, fixed order,
-// then arrival order within each group — the same order restoreSel searches)
+// then newest category entry within each group — the same order restoreSel searches)
 // without building a full copy of the board (R4.1.2): m.sel is a position in
 // that order, and finding one element at a position needs no allocation.
 func (m generalModel) selected() (protocol.SessionView, bool) {
@@ -219,10 +247,14 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	selID := m.selectedID()
 
 	var oldGroup status.Group
+	needsSort := false
 	found := false
 	for i := range m.sessions {
 		if m.sessions[i].ID == s.ID {
 			oldGroup = m.sessions[i].Group
+			needsSort = oldGroup != s.Group ||
+				!categoryEnteredAt(m.sessions[i]).Equal(categoryEnteredAt(s)) ||
+				!m.sessions[i].CreatedAt.Equal(s.CreatedAt)
 			m.sessions[i] = s
 			found = true
 			break
@@ -230,6 +262,10 @@ func (m *generalModel) apply(s protocol.SessionView) tea.Cmd {
 	}
 	if !found {
 		m.sessions = append(m.sessions, s)
+		needsSort = true
+	}
+	if needsSort {
+		sortSessions(m.sessions)
 	}
 	m.restoreSel(selID)
 
