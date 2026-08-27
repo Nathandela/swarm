@@ -103,4 +103,23 @@ class MachineCodeRoutingTest {
         assertEquals(unknown, MachineRefusalCodes.sentenceFor("some_future_code"))
         assertEquals("toToken decides state and remedy and stays three rows", 3, MachineRefusalCodes.toToken.size)
     }
+
+    /**
+     * W2.2's caller (phone-refit-playbook §3, "The caller"): a code with a sentence and no
+     * routing row keeps UNKNOWN's state and remedy and says its own words. Words only; a code
+     * with no sentence is the reserved row, unchanged.
+     */
+    @Test
+    fun `an unmapped code with a sentence keeps UNKNOWN's routing and says its sentence`() {
+        val unknown = ErrorRouter.routeMachineCode("some_future_code")
+        val routed = ErrorRouter.routeMachineCode("structured_unsupported")
+        assertEquals(ErrorState.UNKNOWN, routed.state)
+        assertEquals(unknown.remedy, routed.remedy)
+        assertEquals("Chat is off for this session.", routed.message)
+        assertEquals(unknown, ErrorRouter.routeMachineCode("some_future_code"))
+        assertTrue(
+            "the generic sentence is for a code this build has never seen, not for one it has words for",
+            routed.message != unknown.message,
+        )
+    }
 }

@@ -101,6 +101,26 @@ class SessionDetailVerdictTest {
         }
     }
 
+    /**
+     * W2.2's caller (phone-refit-playbook §3): an unmapped code with a sentence is still
+     * REFUSED, keeps the draft, and its notice is the code's own sentence rather than the generic
+     * composer copy; the refusal token carries the code so the panel can say the same sentence.
+     * A code this build has never seen keeps the generic copy.
+     */
+    @Test
+    fun `an unmapped code with a sentence says that sentence and keeps the draft`() {
+        val verdict = SessionDetailScreen.composerVerdictFor(outcome("structured_unsupported"), op)
+        assertEquals(SendState.REFUSED, verdict.state)
+        assertEquals("Chat is off for this session.", verdict.notice)
+        assertEquals("structured_unsupported", verdict.refusal)
+        assertFalse(verdict.clearsDraft)
+        assertEquals("the machine said so", verdict.detail)
+
+        val unseen = SessionDetailScreen.composerVerdictFor(outcome("some_future_code"), op)
+        assertEquals(ErrorState.UNKNOWN.name, unseen.refusal)
+        assertEquals(ComposerModel.noticeFor(ErrorState.UNKNOWN.name).copy, unseen.notice)
+    }
+
     @Test
     fun `an answer to somebody else's operation answers nothing here`() {
         val other = OperationOutcome(operationId = "op-someone-else", code = "ok", message = "")

@@ -277,7 +277,10 @@ data class ComposerVerdict(
     val answered: Boolean,
     /** The send's visible lifecycle state, or null while unanswered. */
     val state: SendState?,
-    /** PB-APP-9's routed ERROR STATE token, as `ComposerModel.noticeFor` speaks it. "" if accepted. */
+    /**
+     * PB-APP-9's routed ERROR STATE token, as `ComposerModel.noticeFor` speaks it -- or, for a
+     * daemon code with its own sentence and no routing row, that code (W2.2). "" if accepted.
+     */
     val refusal: String,
     /** Whether what the user typed is now spent. True on acceptance ONLY -- see the builder. */
     val clearsDraft: Boolean,
@@ -914,15 +917,20 @@ object SessionDetailScreen {
             SendState.REFUSED
         }
         val notice = ComposerModel.noticeFor(routed.state.name)
+        // W2.2's caller (phone-refit-playbook §3): an unmapped code with its own sentence says it
+        // (`routed.message` carries it; state and remedy stay UNKNOWN), and the refusal token
+        // carries the CODE so the panel can say the same sentence from
+        // `SessionDetail.composerRefusal`. A code this build has never seen keeps the generic copy.
+        val sentenced = routed.state == ErrorState.UNKNOWN && outcome.code in MachineRefusalCodes.sentence
         return ComposerVerdict(
             answered = true,
             state = state,
-            refusal = routed.state.name,
+            refusal = if (sentenced) outcome.code else routed.state.name,
             // NEVER on a refusal, and never conditional on WHICH refusal: a composer that ate
             // the user's words punishes them for the machine's answer, and `stale_turn` -- the
             // ordinary one -- is the case that makes it obvious.
             clearsDraft = false,
-            notice = notice.copy,
+            notice = if (sentenced) routed.message else notice.copy,
             detail = verdict.reason,
         )
     }
@@ -1097,7 +1105,10 @@ object SessionDetailScreen {
         composerNotice = if (detail.composerRefusal.isEmpty()) {
             ""
         } else {
-            ComposerModel.noticeFor(detail.composerRefusal).copy
+            // W2.2's caller: a daemon code with its own sentence says it; a routed state keeps
+            // the composer's own copy.
+            MachineRefusalCodes.sentence[detail.composerRefusal]
+                ?: ComposerModel.noticeFor(detail.composerRefusal).copy
         },
         composerRetainsDraft = ComposerModel.noticeFor(detail.composerRefusal).retainsDraft,
         composerShut = ComposerModel.shutCopyFor(

@@ -468,3 +468,77 @@ view test genuinely RED; (C) defer. Recommendation: B. The RED-able test that do
 PhoneSurface half is a Go gate in `android/gate/` reading `renderComposerVerdict`'s body
 (`r6SurfaceFunc`): it must not contain `say(`, while `renderInterruptVerdict` still does (a refused
 Stop keeps its toast).
+
+### The caller (orchestrator ruling, playbook as recorded on main at 5ee276f: "The caller")
+
+Tests written first: `MachineCodeRoutingTest.kt` `an unmapped code with a sentence keeps UNKNOWN's
+routing and says its sentence` (:63 and :69 untouched); `SessionDetailVerdictTest.kt` `an unmapped
+code with a sentence says that sentence and keeps the draft`; `SessionDetailComposerTest.kt` `an
+unmapped code with a sentence shows that sentence under the composer`.
+
+RED (`w2-gradle.sh --tests` over the three classes; 32 tests, the three new ones fail):
+
+```
+START=1787867164 (Thu Aug 27 23:46:04 CEST 2026)
+MachineCodeRoutingTest > an unmapped code with a sentence keeps UNKNOWN's routing and says its sentence FAILED
+SessionDetailComposerTest > an unmapped code with a sentence shows that sentence under the composer FAILED
+SessionDetailVerdictTest > an unmapped code with a sentence says that sentence and keeps the draft FAILED
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 2m 12s
+GRADLE_EXIT=1
+SUMMARY: xml files=3 stale(older than START)=0 tests=32 failures=3 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=1
+
+org.junit.ComparisonFailure: expected:<[Chat is off for this session].> but was:<[Something failed in a way the app does not recognise. Try again, and report it if it keeps happening].>
+org.junit.ComparisonFailure: expected:<[Chat is off for this session].> but was:<[Your message was refused and not delivered].>
+org.junit.ComparisonFailure: expected:<[Chat is off for this session].> but was:<[Your message was refused and not delivered].>
+```
+
+Implementation: `ErrorRouter.routeMachineCode` returns `unknown.copy(message = sentence)` for a code
+with a sentence and no `toToken` row (state and remedy stay UNKNOWN; the `sentence` map is read
+directly because `sentenceFor` falls back to `routeMachineCode` itself); a code with no sentence
+returns `unknown` unchanged. `SessionDetailPanel.composerVerdictFor` prefers the routed message for
+such a code and carries the CODE as the refusal token, and the panel builder says
+`MachineRefusalCodes.sentence[composerRefusal]` before `ComposerModel.noticeFor(...)`, so
+`structured_unsupported` reads "Chat is off for this session." under the composer.
+
+FOUND BY THE GO GATE, AND A DEVIATION FROM THE TABLE: `go test ./android/gate` failed
+`TestR1_NoProductionKotlinOffersTakeControl` (`r1_takecontrolgone_test.go:65` bans the literal
+"Take control" on the chat path, owner ruling R1 of 2026-08-26) on the contract's
+`stale_generation` row "Your turn at this terminal ended. Take control again." -- a remedy naming
+a verb the product no longer offers. The row now reads "Your turn at this terminal ended."; W5
+owns the final words. This gate had not been run after the table landed in 3ae018fc (only
+`mobile/`, build/vet/lint and the Kotlin suite were), so that commit trips it on its own; the
+caller commit corrects it.
+
+GREEN: `go test -count=1 ./android/gate` ok (9.3s, the R1 gate green again); `go test -race ./mobile`
+ok (43.9s); Kotlin, the whole suite on the lane:
+
+```
+START=1787867580 (Thu Aug 27 23:53:00 CEST 2026)
+BUILD SUCCESSFUL in 4m 26s
+GRADLE_EXIT=0
+SUMMARY: xml files=202 stale(older than START)=0 tests=1593 failures=0 errors=0
+AAR unchanged (mtime 1787859790)
+script exit=0
+```
+
+Negative control (clean tree at 90999445; the file restored with `git checkout --`): `routeMachineCode`
+perturbed back to plain `unknown` for an unmapped code. The routing and verdict tests fail; the panel
+test stays green because the builder reads the map itself, so the failure isolates the router.
+
+```
+## Negative control: routeMachineCode back to plain UNKNOWN for an unmapped code
+ android/app/src/main/kotlin/dev/swarm/phone/ui/ErrorRouting.kt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+START=1787867891 (Thu Aug 27 23:58:11 CEST 2026)
+MachineCodeRoutingTest > an unmapped code with a sentence keeps UNKNOWN's routing and says its sentence FAILED
+SessionDetailVerdictTest > an unmapped code with a sentence says that sentence and keeps the draft FAILED
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 2m 20s
+GRADLE_EXIT=1
+SUMMARY: xml files=3 stale(older than START)=0 tests=32 failures=2 errors=0
+AAR unchanged (mtime 1787859790)
+ErrorRouting.kt restored
+```

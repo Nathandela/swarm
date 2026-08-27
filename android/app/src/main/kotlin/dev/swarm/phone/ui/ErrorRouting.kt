@@ -424,7 +424,12 @@ object ErrorRouter {
      */
     fun routeMachineCode(code: String): RoutedError {
         val unknown = checkNotNull(byToken[SwarmErrorTokens.UNKNOWN])
-        val token = MachineRefusalCodes.toToken[code] ?: return unknown
+        // W2.2's caller (phone-refit-playbook §3): a code with a sentence and no routing row keeps
+        // UNKNOWN's state and remedy and says its own words -- words only, routing untouched. The
+        // map and not [MachineRefusalCodes.sentenceFor], whose fallback is this function; a code
+        // with no sentence is the reserved row, unchanged.
+        val token = MachineRefusalCodes.toToken[code]
+            ?: return MachineRefusalCodes.sentence[code]?.let { unknown.copy(message = it) } ?: unknown
         return byToken[token] ?: unknown
     }
 }
@@ -537,7 +542,11 @@ object MachineRefusalCodes {
         "stale_preset" to "That setup changed. Check it and confirm again.",
         "outcome_unknown" to "Not sure it went through. Check before retrying.",
         "capability_refused" to "This session doesn't allow that from the phone.",
-        "stale_generation" to "Your turn at this terminal ended. Take control again.",
+        // The contract's row read "... Take control again."; that remedy names the verb owner
+        // ruling R1 (2026-08-26) removed from the product, and android/gate's
+        // r1_takecontrolgone_test.go bans the phrase on the chat path. The fact survives, the
+        // dead remedy does not; W5 owns the final words.
+        "stale_generation" to "Your turn at this terminal ended.",
         "stale_instance" to "This session restarted. Open the new one.",
     )
 

@@ -294,6 +294,15 @@ class SessionDetailComposerTest {
         )
     }
 
+    /** W2.2's caller (phone-refit-playbook §3): `structured_unsupported` reads its sentence under the composer. */
+    @Test
+    fun `an unmapped code with a sentence shows that sentence under the composer`() {
+        val p = panel(sendState = SendState.REFUSED, refusal = "structured_unsupported")
+        assertEquals("Chat is off for this session.", p.composerNotice)
+        assertTrue(p.composerRetainsDraft)
+        assertNotNull(view(p).kitFind(DetailTag.COMPOSER_NOTICE))
+    }
+
     @Test
     fun `any other refusal keeps the draft too and says the message was not delivered`() {
         val p = panel(sendState = SendState.REFUSED, refusal = "OFFLINE")
