@@ -1,6 +1,6 @@
 # Auto-upgrade plan: the machine keeps pace with the phone
 
-**Bead**: agents-tracker-njan. **Status**: revision 5 after three audit rounds, 2026-08-27. **Decision record**: ADR-020 (same wave; the ADR README's "next free is 019" is stale, 019 exists).
+**Bead**: agents-tracker-njan. **Status**: revision 5 after three audit rounds, 2026-08-27. **Decision record**: [ADR-020](../adr/ADR-020-unattended-daemon-restart.md).
 
 Revision 4 moves the restart out of the cask and into the nightly timer. Revision 3 put it in the cask postflight, and a postflight runs only on the night a new cask is installed: a deferral there (sessions working at lid-open, the common case on a laptop) was permanent. The timer runs every night, and a "versions already match" rule makes the call idempotent. The cask, the goreleaser config and the Ruby are untouched. Revision 5 applies the third round's findings as edits: the timer is installed only once the linked binary understands `--unattended` (a 0.13.0 `daemon restart` ignores its flags), the gateway restarts in place with `kickstart -k` instead of a bootout-bootstrap pair, and a gateway restart failure fails the run. Section 7 keeps the ledger.
 
