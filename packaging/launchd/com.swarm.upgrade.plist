@@ -11,14 +11,10 @@
 
   This is a TEMPLATE, tracked here (packaging/, sibling of dist/, which is goreleaser's
   gitignored output; packaging/homebrew/swarm.rb is the same kind of tracked artifact).
-  It carries exactly two tokens, @PREFIX@ and @HOME@, filled in at install time (the
-  backslash below keeps this comment valid XML, which forbids two literal hyphens in a
-  row; bash strips it, so "-\-prefix" runs identically to the flag it spells):
-
-    sed -e "s|@HOME@|$HOME|g" -e "s|@PREFIX@|$(brew -\-prefix)|g" \
-        packaging/launchd/com.swarm.upgrade.plist \
-      > ~/Library/LaunchAgents/com.swarm.upgrade.plist
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarm.upgrade.plist
+  It carries exactly two tokens, @PREFIX@ (the Homebrew prefix) and @HOME@, filled in at
+  install time. The install command, the precondition and what the log's exit codes mean
+  are in docs/ops/auto-upgrade.md; they are not repeated here because XML forbids two
+  hyphens in a row inside a comment, and every command involved spells a flag that way.
 
   INSTALL THIS ONLY ONCE `swarm version` REPORTS 0.14.0 OR LATER (the plan's section 3,
   "the hop"): a 0.13.0 `swarm daemon restart` ignores every argument, including the

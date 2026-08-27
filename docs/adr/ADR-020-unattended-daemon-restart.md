@@ -89,8 +89,10 @@ binary:
    spawn. `TurnUnknown` derives to Working (every launch starts there,
    `internal/daemon/launch.go:293`), so a hung session defers every night
    until it is ended.
-3. **No `daemon.env` saved.** Exit **3**, the reason on stderr, nothing
-   done — the daemon keeps running.
+3. **No `daemon.env` saved, or an empty one.** Exit **3**, the reason on
+   stderr, nothing done — the daemon keeps running. Empty is refused for the
+   same reason as absent (an environment with no PATH and no HOME is not one
+   to spawn from), with a distinct reason line so the log tells the two apart.
 4. **Otherwise:** today's stop-and-spawn, with the spawn's environment taken
    from `daemon.env` plus the `SWARM_DAEMON_*` variables, and `DaemonBin`
    this executable exactly as invoked and UNRESOLVED
@@ -148,6 +150,17 @@ timer converging the running processes, is operations — recorded in
 - **The saved environment is only as fresh as the last interactive start.**
   Rotated keys reach phone-launched sessions only after a
   `swarm daemon restart` run from a terminal.
+- **The saved environment can be degraded, not just stale.** `daemon.env` is
+  rewritten on every start from that daemon's own environment. The timer never
+  starts a daemon (rule 0 exits instead), but D-1 does: any other `swarm`
+  client command run from a scrubbed context (a cron'd `swarm ls`) auto-starts
+  a daemon from launchd's environment and overwrites a good file with a
+  three-line one (system PATH, HOME, SHELL; no keys), which rule 3 does not
+  catch and every later converge reproduces while logging `converged`. Named,
+  not fixed: "poorer environment" and "interactive start" have no definitions
+  that survive a scripted `swarm ls` from the owner's own shell. The
+  operator rule is in `docs/ops/auto-upgrade.md`: nothing but this timer runs
+  `swarm` from launchd or cron.
 - **At lid-open the timer and the TUI's 5jl restart can race**: both do a
   stop-and-spawn, the daemon lock serializes them, and one exits 1. If the
   loser is the timer's converge, the gateway stays old against a

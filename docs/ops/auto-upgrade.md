@@ -20,6 +20,13 @@ full stop-and-spawn from the CALLER's environment — so a timer installed again
 would restart the daemon from launchd's bare environment (no PATH beyond the system default, no
 provider keys) every single night, not from a saved one. Do the one-time hop below first.
 
+**Nothing but this timer runs `swarm` from launchd or cron.** The daemon rewrites `daemon.env`
+from its own environment at every start, and any `swarm` client command auto-starts a daemon when
+none is running (D-1). A cron'd `swarm ls` on a morning the daemon happened to be down would start
+one from cron's environment and overwrite a good `daemon.env` with a three-line one (system PATH,
+HOME, SHELL, no provider keys); every later nightly converge would then spawn from that file and
+log `converged`. If that ever happens, `swarm daemon restart` from a terminal rewrites the file.
+
 ## The one-time hop to 0.14.0
 
 Run these from a terminal, in order, exactly once:
@@ -71,8 +78,8 @@ Both brew's output and `--unattended`'s own messages land in the same
   daemon was wedged (holding its lock but not answering a dial). Nothing was touched; it retries
   the next night. A session stuck in this state (an unresponsive turn) defers every night until it
   is ended.
-- **3 — refused, no saved environment.** No `daemon.env` has ever been written, so there is nothing
-  safe to spawn from. Run `swarm daemon restart` from a terminal once — that both fixes this and
+- **3 — refused, no usable saved environment.** No `daemon.env` has ever been written, or the file
+  exists but is empty (the log line says which), so there is nothing safe to spawn from. Run `swarm daemon restart` from a terminal once — that both fixes this and
   captures a fresh `daemon.env` — then the timer converges normally from then on.
 
 **A 04:00 run missed while the machine was asleep runs at the next wake instead** (`launchd`
