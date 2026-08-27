@@ -443,3 +443,28 @@ SUMMARY: xml files=4 stale(older than START)=0 tests=24 failures=1 errors=0
 AAR unchanged (mtime 1787859790)
 ErrorRouting.kt restored
 ```
+
+## W2.3 One refusal, said once -- NOT STARTED (contract premise wrong; ruling requested)
+
+Verified against the tree before any edit: `PhoneSurface.renderComposerVerdict` (`:4478-4497`) sets
+`composerRefusal` and calls `say(PressFeedback.ofRefusal(verdict.notice, verdict.detail))`; `say()`
+(`:5098`) writes `outcome.text` (drawn as `DetailTag.OUTCOME`) and a toast whose mono suffix is
+`verdict.detail`, the machine's words. The composer-notice path
+(`SessionDetail.composerRefusal` -> `SessionDetailPanel.composerNotice` (`:1097`) ->
+`SessionDetailView` `DetailTag.COMPOSER_NOTICE` (`:529`)) carries only
+`ComposerModel.noticeFor(state).copy`; no `noticeDetail` cell exists on that path (grep
+`composerDetail|noticeDetail` over the three files: nothing). So the contract's sentence "`verdict.detail`
+still reaches the reader through the notice's detail cell" is not true of the shipped code: deleting the
+`say()` block alone drops the machine's words for every composer refusal, the F4 defect class
+`android/gate/r6_chat_ui_test.go:334` fences. The two Kotlin tests the contract names build the view
+with `outcome = ""` and so already pass; they cannot be RED against a PhoneSurface-only change.
+
+Per fleet protocol item 3 and the wave's brief ("if the contract turns out to be wrong ... stop and say
+so; do not widen the wave"), W2.3 was not started. The orchestrator was sent the options: (A) delete
+`say()` as written and accept the loss of the words; (B) also add a `composerRefusalDetail` cell
+through `SessionScreens.kt`, `SessionDetailPanel.kt`, `SessionDetailView.kt` and `PhoneSurface.kt`
+(about fifteen lines, four files outside the list), which makes the contract's sentence true and the
+view test genuinely RED; (C) defer. Recommendation: B. The RED-able test that does exist for the
+PhoneSurface half is a Go gate in `android/gate/` reading `renderComposerVerdict`'s body
+(`r6SurfaceFunc`): it must not contain `say(`, while `renderInterruptVerdict` still does (a refused
+Stop keeps its toast).
