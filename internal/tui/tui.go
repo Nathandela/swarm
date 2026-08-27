@@ -72,6 +72,7 @@ const (
 	screenGeneral screen = iota
 	screenLaunch
 	screenHandoff
+	screenOptions
 	screenAttach
 )
 
@@ -178,6 +179,7 @@ type rootModel struct {
 	general generalModel
 	launch  launchModel
 	handoff handoffModel
+	options optionsModel
 	attach  attachModel
 
 	attachRunner AttachRunner // injected passthrough (nil -> Epic 7 placeholder)
@@ -577,6 +579,8 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateLaunch(msg)
 		case screenHandoff:
 			return m.updateHandoff(msg)
+		case screenOptions:
+			return m.updateOptions(msg)
 		case screenAttach:
 			return m.updateAttach(msg)
 		}
@@ -595,6 +599,8 @@ func (m rootModel) View() tea.View {
 		content = m.composeBoard(m.launch.view(), m.launch.hint())
 	case m.screen == screenHandoff:
 		content = m.composeBoard(m.handoff.view(), m.handoff.hint())
+	case m.screen == screenOptions:
+		content = m.composeBoard(m.options.view(), optionsHint)
 	case m.screen == screenAttach:
 		// The attach placeholder keeps its own minimal body; the real passthrough
 		// owns the terminal (internal/attach) and draws its own chrome bar (A-5).
@@ -639,7 +645,7 @@ func (m rootModel) generalStatus() string {
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
-	return "↑↓ move · ⏎ attach (ctrl+q returns) · g group · o order · t tag · e rename · n new · h handoff · ^x kill · esc quit"
+	return "↑↓ move · ⏎ attach (ctrl+q returns) · o options · t tag · e rename · n new · h handoff · ^x kill · esc quit"
 }
 
 // DaemonRestarter restarts the daemon and returns a freshly-connected client to the

@@ -43,7 +43,7 @@ func TestSessionLayoutGroupingModesAndSelectionIdentity(t *testing.T) {
 		t.Fatalf("default display order = %s", got)
 	}
 	m.sel = 1 // select b
-	m.cycleGrouping()
+	m.setLayout(groupByRepo, m.ordering)
 	if m.grouping != groupByRepo || strings.Join(m.sections, ",") != "repo-a,repo-b" {
 		t.Fatalf("repo grouping = mode %v sections %v", m.grouping, m.sections)
 	}
@@ -51,7 +51,7 @@ func TestSessionLayoutGroupingModesAndSelectionIdentity(t *testing.T) {
 		t.Fatalf("repo regroup moved selection identity to %q", got)
 	}
 
-	m.cycleGrouping()
+	m.setLayout(groupByTag, m.ordering)
 	if m.grouping != groupByTag || strings.Join(m.sections, ",") != "backend,frontend,(untagged)" {
 		t.Fatalf("tag grouping = mode %v sections %v", m.grouping, m.sections)
 	}
@@ -85,20 +85,10 @@ func TestSessionLayoutOrderingModes(t *testing.T) {
 	}
 }
 
-func TestSessionLayoutKeysAndTagEditAreBehavioral(t *testing.T) {
+func TestSessionTagEditIsBehavioral(t *testing.T) {
 	s := sWorking("endpoint/a", "claude", "/code/repo", "working", time.Minute)
 	f := newFakeClient(s)
 	m := newModel(t, f, detectMixed())
-
-	m = send(m, keyRune('g'))
-	m = send(m, keyRune('o'))
-	rm := m.(rootModel)
-	if rm.general.grouping != groupByRepo || rm.general.ordering != orderByActivity {
-		t.Fatalf("g/o keys yielded grouping=%v ordering=%v", rm.general.grouping, rm.general.ordering)
-	}
-	if got := stripANSI(rm.general.header()); !strings.Contains(got, "group: repo · order: activity") {
-		t.Fatalf("active layout is not visible in header: %q", got)
-	}
 
 	m = send(m, keyRune('t'))
 	m = sendType(m, "urgent")

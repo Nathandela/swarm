@@ -48,6 +48,13 @@ const (
 	untaggedGroup = "(untagged)"
 )
 
+// groupingLabels and orderingLabels name the modes for the options window's
+// pickers and the header's layout label (index = mode).
+var (
+	groupingLabels = [...]string{"status", "repo", "tag"}
+	orderingLabels = [...]string{"arrival", "activity", "created", "name"}
+)
+
 // Bounded row column widths for the general view (display cells). Agent, status,
 // and elapsed are semantic fields with known maximum values, so they never grow.
 // Name and cwd are the two flexible identity fields; rowColumnsFor gives them any
@@ -250,22 +257,16 @@ func (m *generalModel) refreshLayout(selectedID string) {
 	m.restoreSel(selectedID)
 }
 
-func (m *generalModel) cycleGrouping() {
+// setLayout applies a grouping and ordering pair, regrouping the board around
+// the same selected session.
+func (m *generalModel) setLayout(g groupingMode, o orderingMode) {
 	id := m.selectedID()
-	m.grouping = (m.grouping + 1) % 3
-	m.refreshLayout(id)
-}
-
-func (m *generalModel) cycleOrdering() {
-	id := m.selectedID()
-	m.ordering = (m.ordering + 1) % 4
+	m.grouping, m.ordering = g, o
 	m.refreshLayout(id)
 }
 
 func (m generalModel) layoutLabel() string {
-	groups := [...]string{"status", "repo", "tag"}
-	orders := [...]string{"arrival", "activity", "created", "name"}
-	return "group: " + groups[m.grouping] + " · order: " + orders[m.ordering]
+	return "group: " + groupingLabels[m.grouping] + " · order: " + orderingLabels[m.ordering]
 }
 
 // hasWorking reports whether the board currently has anything to animate. Keeping
@@ -508,10 +509,11 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.general.editBuf = s.Tag
 			m.general.editCursor = utf8.RuneCountInString(s.Tag)
 		}
-	case k.Text == "g":
-		m.general.cycleGrouping()
 	case k.Text == "o":
-		m.general.cycleOrdering()
+		// Open the options window seeded with the live layout (owner decision
+		// 2026-08-27: one form with arrow navigation, not one key per setting).
+		m.options = optionsModel{grouping: m.general.grouping, ordering: m.general.ordering}
+		m.screen = screenOptions
 	case k.Text == "h":
 		// Open the handoff form against the selected source. ADR-010 Amendment 4 E2:
 		// this opens on ANY row -- ended, lost, busy and permission-blocked included.

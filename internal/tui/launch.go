@@ -694,7 +694,7 @@ func (m launchModel) view() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
-	b.WriteString(m.fieldLine("directory", m.dirValue(), m.isDir()))
+	b.WriteString(fieldLine("directory", m.dirValue(), m.isDir()))
 	if m.isDir() && (len(m.dirCands) > 1 || m.dirFuzzy && len(m.dirCands) > 0) {
 		row := strings.Join(m.dirCands, "  ")
 		if m.width > 2+launchLabelW {
@@ -702,14 +702,14 @@ func (m launchModel) view() string {
 		}
 		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
 	}
-	b.WriteString(m.fieldLine("name", m.nameValue(), m.isName()))
-	b.WriteString(m.fieldLine("agent", m.agentValue(), m.isAgent()))
+	b.WriteString(fieldLine("name", m.nameValue(), m.isName()))
+	b.WriteString(fieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
 		focused := m.focus == 3+i
-		b.WriteString(m.fieldLine(spec.Label, m.optionValue(spec, focused), focused))
+		b.WriteString(fieldLine(spec.Label, m.optionValue(spec, focused), focused))
 	}
-	b.WriteString(m.fieldLine("prompt", m.promptValue(), m.isPrompt()))
-	b.WriteString(m.fieldLine("worktree", m.worktreeValue(), m.isWorktree()))
+	b.WriteString(fieldLine("prompt", m.promptValue(), m.isPrompt()))
+	b.WriteString(fieldLine("worktree", m.worktreeValue(), m.isWorktree()))
 
 	if note := m.agentNote(); note != "" {
 		b.WriteString("\n" + note + "\n")
@@ -783,7 +783,7 @@ func (m launchModel) agentNote() string {
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.
-func (m launchModel) fieldLine(label, value string, focused bool) string {
+func fieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
 		prefix = styleAmber.Render("▌") + " "
