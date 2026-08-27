@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -370,12 +371,24 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 		// was invoked through, not as the file it resolves to. argv[0] is what `ps`
 		// prints as the command, and it is what the daemon's os.Executable() returns on
 		// darwin (unresolved), which is what every later shim is spawned from.
+		//
+		// A darwin property, and only there: Linux's os.Executable() reads
+		// /proc/self/exe, which the kernel has already resolved, so the client cannot
+		// pass the link on even if it wanted to. The hazard is a Homebrew one (the
+		// Caskroom purge), so the property is asserted where the hazard lives; on
+		// Linux the case still proves everything else and says why this is skipped.
 		argv, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(newPID)).Output()
 		if err != nil {
 			t.Fatalf("ps -p %d: %v", newPID, err)
 		}
-		if got := strings.TrimSpace(string(argv)); !strings.HasPrefix(got, newLink+" ") {
-			t.Fatalf("the replacement's argv[0] must be the link %s; ps shows %q (resolving the link would pin every later shim to a directory the next upgrade purges)", newLink, got)
+		got := strings.TrimSpace(string(argv))
+		switch runtime.GOOS {
+		case "darwin":
+			if !strings.HasPrefix(got, newLink+" ") {
+				t.Fatalf("the replacement's argv[0] must be the link %s; ps shows %q (resolving the link would pin every later shim to a directory the next upgrade purges)", newLink, got)
+			}
+		default:
+			t.Logf("linked-path property not asserted on %s: os.Executable() is kernel-resolved there; ps shows %q", runtime.GOOS, got)
 		}
 
 		// The replacement's own environment, as the replacement itself recorded it.
