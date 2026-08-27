@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import dev.swarm.phone.ui.ApprovalDecision
+import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.approvalSheet
@@ -343,7 +344,15 @@ internal fun transcriptBlockViews(
             // not the same claim. A row says "here is a record"; a bubble says "somebody said
             // this".
             block.bubble ->
-                messageBubble(context, block.line, mono = block.command)
+                // R6's THREE STATES, and the default is the honest one for a block that came off
+                // the wire: it is in the record, so it settled. Only a [PendingSend] this phone is
+                // still holding draws anything else.
+                messageBubble(
+                    context,
+                    block.line,
+                    state = block.sendState ?: BubbleState.SETTLED,
+                    mono = block.command,
+                )
                     .apply { tag = TranscriptTag.BUBBLE }
             // R9's CHIP. The three cells are the model's, separate, because handing the row this
             // block's sentence and letting it split on the separator would be a view reading copy

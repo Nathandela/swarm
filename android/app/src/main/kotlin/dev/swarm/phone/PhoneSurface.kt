@@ -55,6 +55,7 @@ import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.overflowControl
 import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.textField
+import dev.swarm.phone.ui.screens.PendingSend
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
 import dev.swarm.phone.ui.screens.ApprovalSheetPanel
@@ -493,6 +494,7 @@ class PhoneSurface(
         // The last send's report goes the moment a new one is planned: a notice about a refusal
         // the user has already answered by typing again is a report of the wrong press.
         composerSendFor = target
+        composerSentText = line
         composerRefusal = ""
         composerSendState = SendState.PENDING
         Press(
@@ -1296,6 +1298,15 @@ class PhoneSurface(
      * planned and when the drill-down closes.
      */
     private var composerSendFor: String = ""
+
+    /**
+     * The words that were actually sent, captured at the press (owner ruling R6).
+     *
+     * IT IS NOT THE COMPOSER'S TEXT. The draft is spent on the daemon's acceptance and the reader
+     * is free to start typing the next line immediately; reading the field to draw the pending
+     * bubble would show them their NEXT message attributed to the one already in flight.
+     */
+    private var composerSentText: String = ""
 
     private var composerSendState: SendState? = null
 
@@ -2879,6 +2890,17 @@ class PhoneSurface(
                 // one; at most one answer is ever in flight from this surface, because the sheet
                 // disables the control it was pressed on for as long as the work is crossing.
                 answering = answeringItemId.takeIf { it.isNotEmpty() }?.let(::setOf).orEmpty(),
+                // OWNER RULING R6: the message this phone has sent and not yet seen come back.
+                //
+                // WITHOUT IT THE MESSAGE IS NOWHERE. The draft is spent on the daemon's acceptance
+                // and the transcript will not carry the line until the agent echoes it, so between
+                // those two moments the reader has pressed send and has nothing on screen -- and
+                // if the echo never lands, what they typed is gone with no evidence it existed.
+                //
+                // SCOPED TO THE SESSION IT WAS SENT TO, like the two composer fields above: a
+                // pending bubble is a fact about ONE conversation and must not follow the reader
+                // into another one.
+                pendingSend = pendingSendFor(open),
             ),
             // PB-INPUT-2 REACHES THE USER HERE NOW, and that is the peek's deletion landing rather
             // than a new fact: the sentence and the Take control button were that screen's, and this
@@ -3984,6 +4006,7 @@ class PhoneSurface(
         // about the session. Carried across a departure they would greet the user on their return
         // with a refusal from before they left, over a conversation they had rearranged.
         composerSendFor = ""
+        composerSentText = ""
         composerSendState = null
         composerRefusal = ""
         // AND THE ANSWER IN FLIGHT IS FORGOTTEN WITH THE SCREEN, on the same argument: a lock is a
@@ -4174,6 +4197,34 @@ class PhoneSurface(
      * fact about the QUESTION and survives every redraw of the button. Set before the press for
      * `stop`'s reason exactly: read on the looper that owns the screen, never from a lane.
      */
+    /**
+     * Owner ruling R6's bubble, or null when this phone is holding nothing for [session].
+     *
+     * IT IS BUILT FROM WHAT WAS ACTUALLY SENT, never from the field: [composerSendFor] records the
+     * session the send was addressed to and [composerSentText] the words that went, both captured
+     * at the press. Reading the composer here instead would draw whatever the reader has since
+     * started typing, attributed to a message they already sent.
+     *
+     * THE OPERATION ID IS THE JOIN. [composerOp] is the id the send was issued under, and the
+     * daemon stamps the echo with it (`stampComposerEchoLocked`), so the transcript can tell this
+     * copy from the record's own item without comparing words -- which would collapse two
+     * identical sends into one.
+     *
+     * A REFUSED SEND STILL DRAWS. The words stay with the reason beside them, because nothing is
+     * silently swallowed and nothing is queued: a message that cannot go is refused visibly and
+     * kept where they can send it again.
+     */
+    private fun pendingSendFor(session: String): PendingSend? {
+        if (composerSendFor != session || composerOp.isEmpty()) return null
+        return when (composerSendState) {
+            SendState.PENDING, SendState.SENT ->
+                PendingSend(composerOp, composerSentText)
+            SendState.REFUSED, SendState.STALE_TURN ->
+                PendingSend(composerOp, composerSentText, refused = true)
+            null -> null
+        }
+    }
+
     private fun answerDecision(pressed: View, itemId: String, decision: ApprovalDecision) {
         val target = session
         answeringItemId = itemId

@@ -4,6 +4,7 @@ import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.ApprovalItem
 import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.ItemFields
+import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.Markdown
 import dev.swarm.phone.ui.kit.MarkdownBlock
 import dev.swarm.phone.ui.kit.ToolCard
@@ -155,6 +156,29 @@ data class TranscriptPanel(
  * rather than a JournalRow" precisely so a new caller costs no new component, and `monoWell` is
  * "one component for every mono block in the app".
  */
+/**
+ * A message this phone has sent and not yet seen come back (owner ruling R6).
+ *
+ * **IT EXISTS BECAUSE THE MESSAGE OTHERWISE EXISTS NOWHERE.** The composer is cleared on the
+ * daemon's acceptance and a `user_message` reaches the transcript only on the agent's echo;
+ * between those two moments the reader has pressed send and has nothing on screen at all. If the
+ * echo never lands, what they typed is gone without evidence it was typed.
+ *
+ * IT IS MATCHED BY [operationId] AND NEVER BY TEXT. Two identical messages are ordinary -- a
+ * reader repeating themselves because the first drew no response is exactly the situation this
+ * defect produces -- and matching on words would settle the second against the first's echo and
+ * vanish it a second time. The id is the one the send was issued under, and the daemon stamps the
+ * echo with it.
+ *
+ * @param refused the machine turned it away having delivered nothing. The words stay on screen
+ *  with the retry: nothing is ever silently swallowed, and nothing is queued.
+ */
+data class PendingSend(
+    val operationId: String,
+    val text: String,
+    val refused: Boolean = false,
+)
+
 data class TranscriptBlock(
     /** IS-APR-1: the `item_id`, which is what a signed `ActionApprove` names as `interaction_id`. */
     val itemId: String,
@@ -359,6 +383,22 @@ data class TranscriptBlock(
      * bordered boxes each beginning with the same two words.
      */
     val bubble: Boolean = false,
+    /**
+     * Owner ruling R6: whether the agent's own record has caught up with this message yet.
+     *
+     * NULL FOR EVERYTHING THAT IS NOT THE READER'S OWN WORDS. A delivery state on the agent's
+     * prose would be a claim about a message this phone never sent.
+     *
+     * [BubbleState.SETTLED] for a `user_message` that is IN the transcript, because being in the
+     * transcript is what settling means -- including one typed at the terminal, which is in the
+     * agent's record by definition. Settling has no tick and no label; the drawing is explicit
+     * that "settling IS the acknowledgement".
+     *
+     * [BubbleState.PENDING] belongs only to a [PendingSend] this phone is holding: signed, away,
+     * and not yet echoed. It is NOT the daemon's acceptance -- that means bytes reached a PTY, and
+     * on the keystroke path the CLI acknowledges nothing at all.
+     */
+    val sendState: BubbleState? = null,
     /**
      * Whether the reader typed a MACHINE WORD -- a `/command` -- which the bubble draws in the
      * machine's own face.
@@ -698,6 +738,12 @@ object TranscriptScreen {
         atCapacity: Boolean = false,
         withoutDetail: Set<String> = emptySet(),
         answering: Set<String> = emptySet(),
+        /**
+         * A message this phone has sent and not yet seen echoed (owner ruling R6). Drawn as the
+         * reader's own bubble at the tail until an item carrying the same operation id arrives,
+         * at which point the wire's item REPLACES it rather than joining it.
+         */
+        pendingSend: PendingSend? = null,
     ): TranscriptPanel {
         // THE WIRE'S ORDER, KEPT. See the file KDoc: a conversation is read in the order it was
         // said, and `App.ReadTranscript` already walks the fold by ascending cursor.
@@ -710,9 +756,33 @@ object TranscriptScreen {
                 answering = answering,
             )
         }
+        // THE ECHO REPLACES IT, AND THE MATCH IS THE OPERATION ID.
+        //
+        // Once an item carries the id the send was issued under, the record has caught up and the
+        // local copy has nothing left to say -- keeping both would draw the reader's message
+        // twice. Matching on TEXT would be worse than useless here: a reader repeating themselves
+        // because the first send drew no response is precisely the situation this whole slice
+        // exists to prevent, and it would settle the second against the first's echo and vanish
+        // it again.
+        val settled = pendingSend != null && items.any { it.operationId == pendingSend.operationId }
+        val withPending = if (pendingSend == null || settled) {
+            blocks
+        } else {
+            blocks + TranscriptBlock(
+                // NOT AN ITEM ID, and it must not look like one: nothing on the wire has this
+                // block, so an id that could collide with a real `item_id` would let a patch
+                // rebind the record's own item onto a local draft.
+                itemId = "pending/" + pendingSend.operationId,
+                kind = USER_MESSAGE,
+                line = pendingSend.text,
+                bubble = true,
+                sendState = if (pendingSend.refused) BubbleState.REFUSED else BubbleState.PENDING,
+                command = pendingSend.text.startsWith(COMMAND_PREFIX),
+            )
+        }
         return TranscriptPanel(
             heading = HEADING,
-            blocks = blocks,
+            blocks = withPending,
             emptyCopy = EMPTY,
             // The turn the screen is DRAWING, which is what a send or a Stop tapped now is
             // rendered against -- the OPEN one, by IS-ENV-1's own rule. See [latestTurnId].
@@ -780,6 +850,11 @@ object TranscriptScreen {
                 kind = item.kind,
                 line = item.text,
                 bubble = true,
+                // IN THE TRANSCRIPT IS WHAT SETTLED MEANS (owner ruling R6). An item is here
+                // because the agent's own record carries it -- including a line typed at the
+                // terminal, which is in that record by definition. Settling has no tick and no
+                // label; what it costs is the PENDING mark going away.
+                sendState = BubbleState.SETTLED,
                 command = item.text.startsWith(COMMAND_PREFIX),
             )
 
