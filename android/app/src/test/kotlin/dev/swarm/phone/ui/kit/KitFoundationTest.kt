@@ -247,9 +247,19 @@ class KitFoundationTest {
         // 25.5 and the two answers separate: truncation says 25, rounding says 26, and rounding
         // is what an 8-bit alpha quantisation must do (it is what ColorMix does, once, at the end
         // of the blend, for the reason its own doc gives).
+        //
+        // AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4). What it said between
+        // ADR-009 and ADR-020:
+        //
+        //     (0.10f * 255f).roundToInt(),
+        //
+        // Slate's `--p-card-fx` is `inset 0 1px 0 rgba(238,242,248,0.08)`: the same single light
+        // source, cooler and a touch quieter on the darker ladder. Still a known answer typed
+        // independently of the reader, and 0.08 * 255 = 20.4 rounds and truncates alike, so the
+        // arithmetic note above is history rather than a live distinction at this value.
         assertEquals(
-            "the key light is a translucent linen, not the opaque one a missing alpha produces",
-            (0.10f * 255f).roundToInt(),
+            "the key light is a translucent ink, not the opaque one a missing alpha produces",
+            (0.08f * 255f).roundToInt(),
             Color.alpha(highlight.colour),
         )
     }

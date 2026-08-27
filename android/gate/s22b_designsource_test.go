@@ -75,7 +75,13 @@ const (
 // The spacing values themselves confirm the maquette is dp-equivalent rather than a scaled
 // drawing: it declares 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,24 against Substrate's
 // 2,4,5,7,8,9,10,11,12,13,14,15,16,18 -- the same ladder, at the same size, on the same grid.
-const s22bMaquetteRelPath = "docs/research/obsidian-maquette.html"
+//
+// ADR-020 D1 (2026-08-27, wave W4) moves the origin to docs/research/slate-maquette.html: a copy
+// of the Obsidian file with Slate values in `:root` and the slab's breathing (D2), and with the
+// same selectors and the same two block markers below, so every reader in this package that took
+// a geometry or a var() binding from the Obsidian maquette now takes it from the Slate one
+// without a row change. What this constant said before: "docs/research/obsidian-maquette.html".
+const s22bMaquetteRelPath = "docs/research/slate-maquette.html"
 
 // The maquette's phone-kit block: every component the app draws, and nothing else. It stops at
 // the mark, so the gallery furniture around the phones -- the page chrome the file marks "NOT

@@ -193,7 +193,11 @@ val policyTestResources = tasks.register<Sync>("policyTestResources") {
     // structure: the frame constants and the type ladder are still Substrate's, and the kit still
     // cites `.prow`, `.pdot` and `.workbar` for its geometry. The Go gate makes the same split and
     // records the three reasons at s22bMaquetteRelPath.
-    from(rootProject.layout.projectDirectory.dir("..").file("docs/research/obsidian-maquette.html"))
+    //
+    // ADR-020 D1 (2026-08-27, wave W4): the SLATE maquette replaces the Obsidian one here, as it
+    // does in tokens.json's `source` and in the Go gate's s22bMaquetteRelPath. Same selectors,
+    // same block markers, Slate values; the Obsidian file stays checked in as history.
+    from(rootProject.layout.projectDirectory.dir("..").file("docs/research/slate-maquette.html"))
     // ADR-009 D5 (O4): the MOTION REGISTER, which is a decision and not a drawing.
     //
     // WHY A THIRD KIND OF SOURCE. The maquette above draws the app at token fidelity and states

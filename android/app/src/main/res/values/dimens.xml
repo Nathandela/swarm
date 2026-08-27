@@ -92,9 +92,15 @@
       pipeline rather than four corners being re-chosen by eye. The fifth token's degeneracy is
       unchanged: p-dot-r is still 4px on a 7px box, so the dot is still an oval with no radius
       resource, and the paragraph above still holds word for word.
+
+      ADR-020 (W4, 2026-08-27): the four radii moved again with the skin (14/18/10/8 becomes
+      16/20/12/10), through the same join and for the same reason, so again none of them was
+      chosen here. The ten spacing steps and the frame constants above did not move: Slate's
+      breathing spends different steps of the same scale rather than adding to it (ADR-020 D2).
+      The fifth token is still 4px on a 7px box.
     -->
-    <dimen name="swarm_radius_card">14dp</dimen>
-    <dimen name="swarm_radius_sheet">18dp</dimen>
-    <dimen name="swarm_radius_button">10dp</dimen>
-    <dimen name="swarm_radius_chip">8dp</dimen>
+    <dimen name="swarm_radius_card">16dp</dimen>
+    <dimen name="swarm_radius_sheet">20dp</dimen>
+    <dimen name="swarm_radius_button">12dp</dimen>
+    <dimen name="swarm_radius_chip">10dp</dimen>
 </resources>

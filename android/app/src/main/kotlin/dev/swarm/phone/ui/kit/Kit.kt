@@ -397,19 +397,19 @@ internal object KitMetrics {
     const val KEY_LIGHT_DP = 1f
 
     /** origin: --p-card-fx alpha */
-    const val KEY_LIGHT_ALPHA = 0.10f
+    const val KEY_LIGHT_ALPHA = 0.08f
 
     /**
-     * The PROMOTED slab's key light: `--p-lit-fx` is `inset 0 1px 0 rgba(246,243,236,0.22)`.
+     * The PROMOTED slab's key light: `--p-lit-fx` is `inset 0 1px 0 rgba(238,242,248,0.18)`.
      *
-     * A SECOND ALPHA AND NOT A MULTIPLE OF THE FIRST. `0.22` is not `0.10` scaled by anything
+     * A SECOND ALPHA AND NOT A MULTIPLE OF THE FIRST. `0.18` is not `0.08` scaled by anything
      * meaningful, and writing it as one would make the promoted edge move whenever the resting one
      * did -- which is the opposite of what ADR-009 D4 asks for, since the whole statement is that
      * the two surfaces catch DIFFERENT amounts of the same light. `--p-lit-fx` is its own token
      * for that reason, and this is its alpha.
      *
-     * THE RGB IS NOT HERE, exactly as [CTA_BLOOM_ALPHA]'s is not: `rgba(246,243,236, ...)` is
-     * `--p-ink` to the digit, so the promoted edge is the linen resource at this alpha rather than
+     * THE RGB IS NOT HERE, exactly as [CTA_BLOOM_ALPHA]'s is not: `rgba(238,242,248, ...)` is
+     * `--p-ink` to the digit, so the promoted edge is the ink resource at this alpha rather than
      * a second place the ink is written down. Both surfaces resolve it from `swarm_text_primary`.
      *
      * `effect` in tokens.json, so PB-TOK-6's converters produce no `<color>` and no `<dimen>` for
@@ -417,7 +417,7 @@ internal object KitMetrics {
      *
      * origin: --p-lit-fx alpha
      */
-    const val LIT_KEY_LIGHT_ALPHA = 0.22f
+    const val LIT_KEY_LIGHT_ALPHA = 0.18f
 
     /** origin: --p-workbar stop */
     const val WORKBAR_FADE_STOP = 0.85f
@@ -436,8 +436,10 @@ internal object KitMetrics {
     const val GRAIN_ALPHA = 0.04f
 
     /**
-     * The badge's box. `--p-chip-r` is 8 dp, so a 16 dp box renders a pill -- the derivation is
-     * the row's, and the pill is a consequence rather than a fifth radius.
+     * The badge's box. `--p-chip-r` was 8 dp, so a 16 dp box rendered a pill; Slate's is 10 dp
+     * (ADR-020 D1) and the box is still 16, so the corner clamps at half the height and the box
+     * still renders a pill -- PB-DS-4's dot degeneracy one token over. The derivation is the
+     * row's, and the pill is a consequence rather than a fifth radius.
      *
      * derived: docs/design/substrate-components.md #3 Badge { height }
      */

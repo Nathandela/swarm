@@ -4134,9 +4134,24 @@ func TestPBDS7_TheMetricJoinCanActuallyFail(t *testing.T) {
 		// The other three did not move, and that is the useful part: --p-tabbg's alpha and
 		// --p-workbar's stop are unchanged by a skin that repainted both of their colours, so a
 		// reader that had started returning whatever it was handed would show up here.
+		//
+		// AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4). The alpha row moved a
+		// second time, to Slate's `inset 0 1px 0 rgba(238,242,248,0.08)`; what it said under
+		// Obsidian, quoted so the move is visible:
+		//
+		//	{"--p-card-fx", "alpha", 0.10},
+		//
+		// And --p-tabbg's alpha moved with it, by the playbook's amendment of 2026-08-27 (the bar
+		// cannot stop spending the resource, o3_material_test.go refuses a colour nothing draws, so
+		// the opacity moved into the token); what the row said before:
+		//
+		//	{"--p-tabbg", "alpha", 0.88},
+		//
+		// --p-workbar's stop is the neighbour that still did not move, for the same reason and to
+		// the same end.
 		{"--p-card-fx", "px", 1},
-		{"--p-card-fx", "alpha", 0.10},
-		{"--p-tabbg", "alpha", 0.88},
+		{"--p-card-fx", "alpha", 0.08},
+		{"--p-tabbg", "alpha", 1},
 		{"--p-workbar", "stop", 0.85},
 	} {
 		got, err := s23TokenMetric(tokens, c.token, c.part)

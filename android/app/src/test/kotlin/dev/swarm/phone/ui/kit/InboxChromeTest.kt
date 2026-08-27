@@ -332,9 +332,22 @@ class InboxChromeTest {
                 ),
             ),
         )
-        assertNotEquals(
-            "the tab bar is opaque. --p-tabbg is 88% for a reason the token was pinned for: a " +
-                "hero chip or a line of ink scrolling under the bar shows through as a tint.",
+        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What this asserted before:
+        //
+        //     assertNotEquals(
+        //         "the tab bar is opaque. --p-tabbg is 88% for a reason the token was pinned for: a " +
+        //             "hero chip or a line of ink scrolling under the bar shows through as a tint.",
+        //         KitOrigin.token("--p-bg"),
+        //         surface.fill,
+        //     )
+        //
+        // The translucency is now false by design: ADR-009 D4.5 banned the blur the 88% was paired
+        // with, and on a handset a translucency with nothing behind it read as a bar you see the
+        // list through. Slate's --p-tabbg is rgba(11,14,20,1), the ground's own value at full
+        // alpha, so the bar IS the ground and the claim inverts.
+        assertEquals(
+            "the tab bar is opaque and sits on the ground's own value (ADR-020 D1): --p-tabbg is " +
+                "--p-bg at alpha 1, so a line of ink scrolling under the bar does not show through.",
             KitOrigin.token("--p-bg"),
             surface.fill,
         )
@@ -464,7 +477,18 @@ class InboxChromeTest {
             // R.dimen.swarm_space_2 on both sides of it and certifies nothing about the design.
             Claim("badge padding-y (top)", dimenPx("swarm_space_2"), badge.paddingTop),
             Claim("badge padding-x (start)", dimenPx("swarm_space_6"), badge.paddingStart),
-            Claim("badge height", dimen("swarm_radius_chip") * 2f, badge.layoutParams.height.toFloat()),
+            // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What the height claim said:
+            //
+            //     Claim("badge height", dimen("swarm_radius_chip") * 2f, badge.layoutParams.height.toFloat()),
+            //
+            // That derived the height from the radius, which held only while `--p-chip-r` happened
+            // to be half of row 3's 16 (8 under Substrate and Obsidian). Slate's chip radius is 10,
+            // and a 16 dp box with a 10 dp corner still renders a pill -- the corner clamps at half
+            // the height, PB-DS-4's own degeneracy one token over -- so the pill is asserted as the
+            // PROPERTY it is, and the height against row 3's own figure, which
+            // android/gate/s23_kit_test.go joins to KitMetrics.BADGE_HEIGHT_DP.
+            Claim("badge height (row 3)", px(KitMetrics.BADGE_HEIGHT_DP), badge.layoutParams.height.toFloat()),
+            Claim("badge is a pill: the corner is at least half the height", true, surface.spec.radiusPx * 2f >= badge.layoutParams.height.toFloat()),
             Claim("badge radius", dimen("swarm_radius_chip"), surface.spec.radiusPx),
             Claim("badge has no border", 0, android.graphics.Color.alpha(surface.spec.stroke)),
             Claim("badge count", "3", badge.text.toString()),
@@ -603,10 +627,24 @@ class InboxChromeTest {
                 listOf(Claim("padding", dimenPx("swarm_space_8"), dimenPx("swarm_space_10"))),
             ).isNotEmpty(),
         )
+        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What this control said before:
+        //
+        //     assertTrue(
+        //         "an opaque tab bar passes the comparison against the 88% token",
+        //         mismatches(
+        //             listOf(Claim("fill", KitOrigin.rgbaToken("--p-tabbg"), KitOrigin.token("--p-bg"))),
+        //         ).isNotEmpty(),
+        //     )
+        //
+        // Same shape as the --p-hero/--p-att rewrite below: a discrimination control that was
+        // satisfiable by the skin. --p-tabbg is --p-bg at alpha 1 now (the bar is opaque by
+        // design), so that pair no longer differs and the control would fail on the correct
+        // reader. The property it defends -- the rgba reader can tell the bar's fill from another
+        // surface -- is checked against a pair ADR-020 keeps distinct: the bar and the card.
         assertTrue(
-            "an opaque tab bar passes the comparison against the 88% token",
+            "a tab bar painted one ladder step up passes the comparison against the bar's token",
             mismatches(
-                listOf(Claim("fill", KitOrigin.rgbaToken("--p-tabbg"), KitOrigin.token("--p-bg"))),
+                listOf(Claim("fill", KitOrigin.rgbaToken("--p-tabbg"), KitOrigin.token("--p-card"))),
             ).isNotEmpty(),
         )
         assertTrue(

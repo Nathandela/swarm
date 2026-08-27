@@ -22,7 +22,11 @@
     that is a RENDER of this file (store icon 512, feature graphic, screenshots) is phase O7's
     and is deliberately still green; the ADR records that divergence window as accepted.
 
-    Tokens: mark p-hero #C9A876, ground p-bg #0E0B08 (internal/design/tokens.json; the token names carry a leading
+    Re-materialled again 2026-08-27 for ADR-020 (Slate, wave W4). Same rule as ADR-009's: the
+    geometry is byte for byte what it was and only the two colours moved, because the tokens did.
+    Champagne on warm obsidian becomes slate blue on cool near-black.
+
+    Tokens: mark p-hero #8EB4E6, ground p-bg #0B0E14 (internal/design/tokens.json; the token names carry a leading
     double hyphen, elided here because XML forbids that sequence inside a comment).
     Adaptive mapping: the group below is the foreground layer, p-bg is the background layer.
     Safe zone: max r = 31.97 against the 33 the launcher mask guarantees, MEASURED from rendered
@@ -35,11 +39,11 @@
     cursor is 16 wide from x 61 rather than 18 from x 62 for exactly that reason; it costs two
     units of a bar nobody measures by eye and buys back the margin.
   -->
-  <rect id="bg" width="108" height="108" fill="#0E0B08"/>
+  <rect id="bg" width="108" height="108" fill="#0B0E14"/>
   <g id="fg">
     <path d="M 57 36 L 34 48 L 57 60 L 34 72"
-          fill="none" stroke="#C9A876" stroke-width="8.5" stroke-linecap="butt" stroke-linejoin="miter"/>
+          fill="none" stroke="#8EB4E6" stroke-width="8.5" stroke-linecap="butt" stroke-linejoin="miter"/>
     <!-- The cursor: one straight bar, on the zigzag's own baseline. -->
-    <rect x="61" y="67.75" width="16" height="8.5" fill="#C9A876"/>
+    <rect x="61" y="67.75" width="16" height="8.5" fill="#8EB4E6"/>
   </g>
 </svg>
