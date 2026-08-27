@@ -83,8 +83,7 @@ on the handset; versionCode 19 / 0.9.0 is on the Play internal track.
 
 ## 2. W1 Pin the frame
 
-Bead: `agents-tracker-d45a.1`. Worktree `refit-w1`. Files: `PhoneActivity.kt`, `ui/screens/PhoneScaffoldView.kt`,
-`ui/kit/Composer.kt`, `ui/kit/TabBar.kt`, their tests. Nothing under `docs/research/`, nothing in
+Bead: `agents-tracker-d45a.1`. Worktree `refit-w1`. Files: `PhoneActivity.kt`, `ui/screens/PhoneScaffoldView.kt`, their tests. Nothing under `docs/research/`, nothing in
 `tokens.json`.
 
 ### W1.1 The top inset is the platform's, not a floor
@@ -135,29 +134,17 @@ clipToPadding = false
   `clipChildren = false` before landing.
 - **Done when** both `ScrollView`s clip, both roots do not, and the badge/grain tests are unchanged.
 
-### W1.3 The composer bar is opaque
-- **Symptom.** `Composer.kt:291-296` fills with `swarm_tabbar_background` (`#E00E0B08`, 88%).
-- **Target.** `fill = Kit.colour(context, R.color.swarm_background)`. The token is **not retyped**:
-  `tokens_test.go:176` requires every value to equal the signed maquette, and `s23_kit_test.go:4139`
-  pins `--p-tabbg` alpha 0.88. The bar stops spending the token; the token keeps its row.
-  `composerRegion` needs no background of its own (`themes.xml:15` sets `colorBackground`).
-- **Tests first.** `ComposerTest.kt`: add `the composer bar is opaque` (`Color.alpha(fill) == 255`);
-  change `:73-87` to expect `swarm_background` and record why in its KDoc. Untouched: `:89`,
-  `ComposerSendStateTest.kt`, `ComposerShutReasonTest.kt`.
-- **Done when** `git diff` touches nothing under `docs/research/` or `internal/design/`, and the
-  `TOK|S23` gates are green.
-
-### W1.4 The tab bar, same treatment
-- **Current** (`TabBar.kt:114-118`) fills with `swarm_tabbar_background`. **Target:** `swarm_background`;
-  the KDoc at `:95-107` records the reversal (ADR-009 D4.5 banned the blur the 88% was paired with;
-  translucency without blur is a bar you read the list through).
-- **Tests first.** `InboxChromeTest.kt`: `:328` claim becomes `--p-bg`; `:335-340`'s
-  `assertNotEquals(--p-bg)` is inverted to `assertEquals` with a rewritten message; add
-  `the tab bar is opaque, so no row reads through it`. Untouched: `:329` (bottom air), `:343`.
-- **Gates.** `tabbar_test.go` reads glyphs and padding, not fill. `obsidian_contrast_test.go`: confirm
-  no pair keys `--p-tabbg` as a rendered ground.
-- **Done when** `swarm_tabbar_background` has zero Kotlin consumers and keeps `colors.xml:61` and
-  `design-tokens.tsv:65`.
+### W1.3 / W1.4 The bars' opacity is a token value (re-homed in W4.2)
+- **Finding (fleet W1, 2026-08-27).** `android/gate/o3_material_test.go:148`
+  (`TestPBDS5_EveryColourResourceIsSpentBySomethingThatDraws`) refuses any `<color>` nothing draws;
+  `swarm_tabbar_background`'s only consumers are `Composer.kt:292` and `TabBar.kt:115`. The bars
+  cannot stop spending it, and the Obsidian maquette cannot be edited.
+- **Ruling.** With W1.2 nothing scrolls under either bar (both are siblings of the `ScrollView`), so
+  the visible bleed is closed by W1.1 + W1.2 alone. The opacity is a token value and lands in W4.2:
+  the Slate maquette carries `--p-tabbg: rgba(11,14,20,1)`, `swarm_tabbar_background` becomes
+  `#FF0B0E14`, both bars keep spending it, `s23_kit_test.go:4139`'s alpha pin moves 0.88 → 1.0 under
+  ADR-020, and `InboxChromeTest.kt:335-340`'s translucency assertion inverts. No o3 exemption, no
+  dead row. W1's evidence file records the gate line and this ruling.
 
 **IME note.** `bottomInsetPx` (`PhoneActivity.kt:254-255`, `maxOf(bars.bottom, ime.bottom)`) is
 untouched; `ConversationScaffoldViewTest.kt:127-138` pins it through all four items.
@@ -398,7 +385,7 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
 --p-ink #eef2f8 --p-ink2 #9aa6ba  --p-ink3 #66718a
 --p-hero #8eb4e6  --p-hero-ink #0b1524  --p-att #8eb4e6  --p-cta-bg #8eb4e6  --p-cta-ink #0b1524
 --p-work #6fc3bc  --p-ok #8cc49a  --p-err #e5736b
---p-sheet-hi #1b2334  --p-sheet-lo #10141d  --p-tabbg rgba(11,14,20,0.88)   (unspent after W1; alpha kept for s23)
+--p-sheet-hi #1b2334  --p-sheet-lo #10141d  --p-tabbg rgba(11,14,20,1)   (opaque; see W1.3/W1.4 ruling)
 --p-card-fx inset 0 1px 0 rgba(238,242,248,0.08)   --p-lit-fx inset 0 1px 0 rgba(238,242,248,0.18)
 --p-cta-fx 0 0 18px rgba(142,180,230,0.22)         --p-workbar linear-gradient(90deg, #6fc3bc, transparent 85%)
 --p-sweep-fx sweep 500ms rgba(238,242,248,0.30)    --p-grain 0.04
@@ -418,7 +405,7 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
   #FF8EB4E6`, `swarm_hero_ink #FF0B1524`, `swarm_state_attention #FF8EB4E6`, `..._working #FF6FC3BC`,
   `..._ok #FF8CC49A`, `..._error #FFE5736B`, `swarm_cta_background #FF8EB4E6`, `swarm_cta_ink
   #FF0B1524`, `swarm_sheet_gradient_top #FF1B2334`, `..._bottom #FF10141D`, `swarm_tabbar_background
-  #E00B0E14`). `s16_tokens_test.go` needs no code change; its `colourTokenCount = 17` is a floor.
+  #FF0B0E14`, opaque). `s16_tokens_test.go` needs no code change; its `colourTokenCount = 17` is a floor.
 - **Done when** `go test ./android/gate/ -run 'PBTOK1|PBTOK5'` green with a comment-only TSV diff.
 
 ### W4.3 Derivations recompute themselves
