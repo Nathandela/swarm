@@ -34,7 +34,7 @@
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>@PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended</string>
+		<string>@PREFIX@/bin/brew update; @PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended</string>
 	</array>
 
 	<key>StartCalendarInterval</key>

@@ -1,8 +1,10 @@
 # Auto-upgrade runbook — the nightly timer on the owner's machine
 
-A `launchd` user-agent timer (`com.swarm.upgrade`) runs `brew upgrade --cask swarm` every night at
-04:00, then always runs `swarm daemon restart --unattended` regardless of whether brew found
-anything new, so a restart deferred one night still happens the next. `--unattended` converges the
+A `launchd` user-agent timer (`com.swarm.upgrade`) runs `brew update` and then
+`brew upgrade --cask swarm` every night at 04:00 (the explicit update matters: brew's own
+auto-update only fires when the last one is more than 24 hours old, which a daily timer can
+narrowly miss), then always runs `swarm daemon restart --unattended` regardless of whether brew
+found anything new, so a restart deferred one night still happens the next. `--unattended` converges the
 running daemon and gateway onto whatever binary is now installed, spawning the replacement from
 the environment the daemon saved the last time it started from a terminal — or it touches nothing
 at all if the processes already match or a session makes it unsafe to disturb them. Google Play

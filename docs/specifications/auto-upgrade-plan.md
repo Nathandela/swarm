@@ -33,7 +33,7 @@ The relay is out of scope (hand-run until SH6's VPS cutover; its skew is SH4's).
 
 ```
 Label                 com.swarm.upgrade
-ProgramArguments      ["/bin/sh", "-c", "@PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended"]
+ProgramArguments      ["/bin/sh", "-c", "@PREFIX@/bin/brew update; @PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended"]
                       (three array elements; a single element would make launchd exec a file literally named "/bin/sh -c ...")
 StartCalendarInterval Hour 4, Minute 0
 EnvironmentVariables  HOMEBREW_NO_INSTALL_CLEANUP=1   (cleanup exited 1 on an unrelated ghostscript file tonight, masking a successful install)
@@ -54,7 +54,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarm.upgrade.plist
 
 A launchd user agent carries HOME, USER, SHELL and TMPDIR (checked on the running gateway with `ps eww`), so brew's trust file and the daemon's default state dir resolve; what it lacks is the owner's PATH and credentials, which is L2's subject.
 
-Why brew and not a self-updater: brew is the documented install path; `brew upgrade` runs `brew update` first, so the tap's new cask is fetched; the cask is trusted by NAME (`~/.homebrew/trust.json` lists `nathandela/swarm/swarm`), so new releases stay trusted with no prompt. Why the timer and not the cask postflight: a postflight runs once, on install; `brew upgrade` skips a cask that is current (`Library/Homebrew/cask/upgrade.rb:39-70`), so nothing would ever retry a deferral. Why a template and not a unit rendered by `swarm remote init`: `internal/remote/supervise` is platform-symmetric; a brew timer is macOS-only. Why not `brew autoupdate`: it upgrades every formula and cask on the machine.
+Why brew and not a self-updater: brew is the documented install path. The chain runs `brew update` explicitly because `brew upgrade` auto-updates only when the last update is older than `HOMEBREW_AUTO_UPDATE_SECS` (86400 by default): a daily timer whose runs land 86,395 s apart skips it and sees nothing to upgrade, which is exactly what happened on the first deploy (revision 5 had claimed the auto-update; the deploy corrected it); the cask is trusted by NAME (`~/.homebrew/trust.json` lists `nathandela/swarm/swarm`), so new releases stay trusted with no prompt. Why the timer and not the cask postflight: a postflight runs once, on install; `brew upgrade` skips a cask that is current (`Library/Homebrew/cask/upgrade.rb:39-70`), so nothing would ever retry a deferral. Why a template and not a unit rendered by `swarm remote init`: `internal/remote/supervise` is platform-symmetric; a brew timer is macOS-only. Why not `brew autoupdate`: it upgrades every formula and cask on the machine.
 
 ### L2. `swarm daemon restart --unattended`: converge, or touch nothing
 

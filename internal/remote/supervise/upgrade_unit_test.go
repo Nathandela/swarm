@@ -40,11 +40,20 @@ func readUpgradeTemplate(t *testing.T) []byte {
 // brew's upgrade runs before the converge, joined by ";" and never "&&", so a brew upgrade
 // that finds swarm already current -- the common case -- still runs the converge.
 func checkUpgradeShellCommand(cmd string) error {
+	updateAt := strings.Index(cmd, "@PREFIX@/bin/brew update")
 	brewAt := strings.Index(cmd, "@PREFIX@/bin/brew upgrade --cask swarm")
 	restartAt := strings.Index(cmd, "@PREFIX@/bin/swarm daemon restart --unattended")
 	switch {
+	case updateAt == -1:
+		// brew's own auto-update runs only when the last one is older than
+		// HOMEBREW_AUTO_UPDATE_SECS (86400 by default), so a DAILY timer whose runs land
+		// 86395s apart skips it and `brew upgrade` sees nothing new. Seen on
+		// 2026-08-27: "the latest version is already installed" while the tap had moved.
+		return fmt.Errorf("missing an explicit brew update before the upgrade: %q", cmd)
 	case brewAt == -1:
 		return fmt.Errorf("missing the brew upgrade command: %q", cmd)
+	case updateAt >= brewAt:
+		return fmt.Errorf("brew update must run before brew upgrade: %q", cmd)
 	case restartAt == -1:
 		return fmt.Errorf("missing the daemon restart command: %q", cmd)
 	case brewAt >= restartAt:
