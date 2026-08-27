@@ -10,6 +10,7 @@
 - [Operator runbook](operations/operator-runbook.md) — install, pair, revoke, kill switch, device loss, push configuration (PB-OPS-2)
 - [Metadata disclosure](operations/metadata-disclosure.md) — the register of who observes what: the relay operator, the push provider, the gateway, a network observer, and (§5) a second model vendor, the one entry that receives session content rather than metadata (PB-OPS-3)
 - [Physical-handset gate](operations/physical-handset-gate.md) — **every step UNRUN**: the playbook 11.2 matrix as 95 executable PH-* rows (rewritten 2026-08-15 for gateway push, multi-machine, presets)
+- [Auto-upgrade runbook](ops/auto-upgrade.md) — the nightly `launchd` timer that upgrades the owner's machine and converges the daemon/gateway onto it, or touches nothing (ADR-020)
 
 ## The plan
 - [System specification](specifications/system-spec.md) — EARS requirements, diagrams, scenario table (Gate 2-approved)
@@ -36,6 +37,7 @@
 - [ADR-010](adr/ADR-010-adapter-structured-capture.md) — structured interaction capture as an optional, additive adapter-contract extension
 - [ADR-011](adr/ADR-011-multi-device-epochs.md) — multi-device epochs: per-device sender ids, inbound keys, seq spaces
 - [ADR-013](adr/ADR-013-mirror-capture-architecture.md) — Mirror capture architecture: structure beside the sacred PTY, the held hook rejected on co-presence grounds, the phone's answer typed into the CLI's own dialog
+- [ADR-020](adr/ADR-020-unattended-daemon-restart.md) — unattended daemon restart spawns from the saved environment, or touches nothing
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))
