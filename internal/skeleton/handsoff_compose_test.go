@@ -453,3 +453,85 @@ func TestHandsOff_LocateTranscriptRefusesANonCanonicalID(t *testing.T) {
 		}
 	}
 }
+
+// TestHandsOff_RefusesATranscriptThatDoesNotNameItsConversation closes a finding from
+// adversarial review: confinement, inode identity and regular-file status prove the daemon
+// reached the file it MEANT to, and prove nothing about whether that file holds the
+// conversation.
+//
+// Before this, a zero-byte file, a file truncated by a crash, or a file holding unrelated
+// bytes was reported as a SUCCESSFUL handoff. The successor would open it, find nothing,
+// and be exactly the context-free agent E7 forbids -- reached by a route none of the named
+// refusals covered, and reported to the owner as success.
+//
+// The check reads for IDENTITY only, never for content, so "pointers only" is intact:
+// nothing it reads reaches the prompt.
+func TestHandsOff_RefusesATranscriptThatDoesNotNameItsConversation(t *testing.T) {
+	write := func(t *testing.T, home, cwd, body string) {
+		t.Helper()
+		dir := claudeProjectDir(home, cwd)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, legacyClaudeID+".jsonl"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		body    string
+		refused bool
+	}{
+		{"empty file", "", true},
+		{"whitespace only", "\n\n", true},
+		{"not JSON at all", "this is not a transcript\n", true},
+		{
+			name:    "names a DIFFERENT conversation",
+			body:    `{"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","cwd":"/x"}` + "\n",
+			refused: true,
+		},
+		{
+			name:    "names its own conversation",
+			body:    `{"sessionId":"` + legacyClaudeID + `","cwd":"/x"}` + "\n",
+			refused: false,
+		},
+		{
+			// The source may still be RUNNING and appending -- the primary case for this
+			// feature -- so a half-written final line is the normal state of a live file,
+			// not corruption. A complete first record must still carry the day.
+			name:    "live file with a half-written trailing record",
+			body:    `{"sessionId":"` + legacyClaudeID + `","cwd":"/x"}` + "\n" + `{"type":"assis`,
+			refused: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			const local = "srclocal"
+			cwd := filepath.Join(home, "work")
+			if err := os.MkdirAll(cwd, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			write(t, home, cwd, tc.body)
+			src := handsOffSource(local, cwd, legacyClaudeID)
+			resolver := newFilesystemResumeHistoryResolver(home, generousResumeHistoryLimits())
+
+			got, err := composeHandsOffLaunch(handsOffSpec(testEndpoint, local, cwd), testEndpoint, srcGetter(local, src), resolver)
+			if tc.refused {
+				if err == nil {
+					t.Fatalf("a transcript that does not name its conversation composed a launch:\n%s", got.InitialPrompt)
+				}
+				if !strings.Contains(err.Error(), "handoff:") {
+					t.Fatalf("refusal %q is not named as a handoff refusal", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a valid transcript was refused: %v", err)
+			}
+			if !strings.Contains(got.InitialPrompt, legacyClaudeID) {
+				t.Fatalf("composed prompt does not carry the conversation id:\n%s", got.InitialPrompt)
+			}
+		})
+	}
+}

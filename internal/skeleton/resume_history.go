@@ -220,8 +220,73 @@ func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convI
 	if outcome != resumeHistoryFound {
 		return "", outcome
 	}
-	_ = f.Close()
+	defer func() { _ = f.Close() }()
+	// A REGULAR FILE WITH THE RIGHT NAME IS NOT YET A TRANSCRIPT. Confinement, inode
+	// identity and regular-file status say the daemon reached the file it meant to; they
+	// say nothing about whether the file holds the conversation. A zero-byte file, one
+	// truncated by a crash, or one holding unrelated bytes would otherwise be reported as
+	// a successful handoff, and the successor would open it and find nothing -- which is
+	// the context-free launch E7 forbids, arrived at by a route the refusals did not
+	// cover. Found by adversarial review.
+	//
+	// The check stays inside "pointers only": it reads for IDENTITY, never for content,
+	// and nothing it reads reaches the prompt.
+	if outcome := claudeTranscriptNamesItsConversation(f, budget, convID); outcome != resumeHistoryFound {
+		return "", outcome
+	}
 	return filepath.Join(absDir, name), resumeHistoryFound
+}
+
+// locateIdentityMaxRecords bounds how far into a transcript the identity check reads.
+// Claude writes sessionId in its very first record, so one is the expected cost; the
+// allowance exists only so a leading record without the field cannot defeat the check.
+// It matters because a hands-off source's transcript can be tens of megabytes and this
+// is a naming check, not a scan.
+const locateIdentityMaxRecords = 16
+
+// claudeTranscriptNamesItsConversation reports whether the open transcript actually
+// claims the conversation whose name it carries.
+//
+// It is deliberately NOT parseClaudeHistory. That function additionally matches the cwd
+// and the creation window, which is right when SEARCHING for an unknown id and wrong
+// here: the id is already known, and the window would reject a legitimate transcript
+// simply for being older than the swarm session that is handing off.
+//
+// A TRAILING PARTIAL RECORD IS BENIGN, and that is load-bearing rather than lenient: the
+// source may still be RUNNING and appending -- that is the primary case this feature
+// exists for -- so a half-written final line is the normal state of a live file, not
+// evidence of corruption. Only a complete record can satisfy the check; an incomplete one
+// simply ends the read.
+func claudeTranscriptNamesItsConversation(f *os.File, budget *historyBudget, want string) resumeHistoryOutcome {
+	if budget.limits.MaxRecordBytes > int64(int(^uint(0)>>1)-1) {
+		return resumeHistoryUnsafe
+	}
+	reader := bufio.NewReaderSize(f, int(budget.limits.MaxRecordBytes)+1)
+	for records := 0; records < locateIdentityMaxRecords; records++ {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			// EOF, whole or partial: no complete record named the conversation.
+			return resumeHistoryNoMatch
+		}
+		if int64(len(line)) > budget.limits.MaxRecordBytes || !budget.addBytes(len(line)) {
+			return resumeHistoryUnsafe
+		}
+		top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line[:len(line)-1]))))
+		if !ok {
+			continue // an unparseable record is not an identity; keep looking, bounded
+		}
+		raw, bearing := top["sessionId"]
+		if !bearing {
+			continue
+		}
+		if id, idOK := strictJSONString(raw); idOK && id == want {
+			return resumeHistoryFound
+		}
+		// A complete record naming a DIFFERENT conversation means this file is not the
+		// one the name promises. Refuse rather than keep hunting.
+		return resumeHistoryNoMatch
+	}
+	return resumeHistoryNoMatch
 }
 
 func (r *filesystemResumeHistoryResolver) openHome() (*os.Root, resumeHistoryOutcome) {
