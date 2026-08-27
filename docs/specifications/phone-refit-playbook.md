@@ -63,8 +63,11 @@ Every wave runs the same way. None of this is optional.
    untouched" are the negative controls of the wave.
 4. **Stage by exact path.** `git add <file>` only. Never `-A`, `.`, a directory, or `commit -a`.
 5. **Gate check and commit are separate tool calls.** Read the gate result, decide, then commit.
-6. **Gates.** Go: `go build ./... && go vet ./... && go test -race ./... && golangci-lint run`
-   (`export PATH="$HOME/go/bin:$PATH"`; version must match `.github/workflows/ci.yml`). Android:
+6. **Gates.** Go: `go build ./... && go vet ./... && golangci-lint run` (`export PATH="$HOME/go/bin:$PATH"`;
+   version must match `.github/workflows/ci.yml`) and, because this session runs inside a
+   swarm-supervised shell whose `SWARM_*` variables break the hook and daemon tests:
+   `env -u SWARM_HOOK_CAPTURE -u SWARM_SESSION_ID -u SWARM_HOOK_SEQ_FILE -u SWARM_HOOK_TOKEN -u SWARM_DAEMON_SOCK -u SWARM_SHIM_HOOK_SOCK go test -race -count=1 -timeout 40m ./...`.
+   A load-timing failure in an unrelated package is rerun once in isolation before it is red. Android:
    `. android/toolchain.env && cd android && ./gradlew --no-daemon testDebugUnitTest --rerun-tasks --no-build-cache`.
 7. **The Gradle lane is serialised across all worktrees.** Before running Gradle, confirm
    `pgrep -f gradle-wrapper.jar` is empty from a script file (not a typed command, which self-matches);
