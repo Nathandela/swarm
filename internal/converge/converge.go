@@ -62,7 +62,7 @@ type Deps struct {
 
 	// SavedEnv returns the environment the daemon saved when it last started
 	// interactively. Rule 3. An error satisfying errors.Is(err, os.ErrNotExist)
-	// means nothing was ever saved, which is the pre-0.14 machine.
+	// means nothing was ever saved, which is the pre-0.13.1 machine.
 	SavedEnv func() ([]string, error)
 
 	// RestartDaemon stops the running daemon and spawns a replacement from env,

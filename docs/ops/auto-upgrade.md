@@ -14,7 +14,7 @@ design.
 
 ## Precondition
 
-**Install the timer only once `swarm version` on this machine reports 0.14.0 or later.** A 0.13.0
+**Install the timer only once `swarm version` on this machine reports 0.13.1 or later.** A 0.13.0
 `swarm daemon restart` ignores every argument (`cmd/swarm/main.go:490-492`) and always runs the
 full stop-and-spawn from the CALLER's environment — so a timer installed against a 0.13.0 binary
 would restart the daemon from launchd's bare environment (no PATH beyond the system default, no
@@ -27,7 +27,7 @@ one from cron's environment and overwrite a good `daemon.env` with a three-line 
 HOME, SHELL, no provider keys); every later nightly converge would then spawn from that file and
 log `converged`. If that ever happens, `swarm daemon restart` from a terminal rewrites the file.
 
-## The one-time hop to 0.14.0
+## The one-time hop to 0.13.1
 
 Run these from a terminal, in order, exactly once:
 
@@ -39,7 +39,7 @@ swarm version
 ```
 
 The `swarm daemon restart` here is what saves `daemon.env` for the first time — every unattended
-restart after this one spawns from what it captures. Confirm `swarm version` reports 0.14.0 (or
+restart after this one spawns from what it captures. Confirm `swarm version` reports 0.13.1 (or
 later) before continuing.
 
 ## Installing the timer
