@@ -18,6 +18,7 @@ type Supervisor interface {
 	Install(Spec) error // write/refresh the unit; idempotent; files only
 	Ensure() error      // make the gateway running now; idempotent, never a restart
 	Stop() error        // return the unit to quiescent
+	Restart() error     // replace the running gateway IN PLACE; the unit stays loaded
 }
 
 // ErrNotInstalled is returned by Ensure/Stop when no unit has been installed for this
@@ -156,6 +157,41 @@ func (h *hostSupervisor) Stop() error {
 			return nil
 		}
 		return fmt.Errorf("supervise: systemctl disable: %w: %s", err, out)
+	}
+}
+
+// Restart replaces the running gateway IN PLACE, for the nightly converge
+// (auto-upgrade-plan.md L2 rule 4): once `swarm daemon restart --unattended` has confirmed
+// the new daemon is reachable, this is the call that moves the gateway onto the binary
+// `brew upgrade` just linked.
+//
+// IT IS NOT Stop-then-Ensure. That pair is restampGatewayUnit's (cmd/swarm/remote.go:
+// 1682-1685): it exists for a unit whose ProgramArguments/ExecStart now names a DIFFERENT
+// path, and reloading that claim means unloading the old one first -- which opens a window
+// with no gateway loaded at all, and a failed bootstrap in that window leaves the phone
+// dark until morning. A nightly upgrade restamps nothing: the unit still execs the same
+// linked path (resolveGatewayBinary's whole point), only the binary under that path
+// changed. `launchctl kickstart -k` and `systemctl restart` both replace the running
+// process without ever unloading the unit, so there is no such window.
+func (h *hostSupervisor) Restart() error {
+	if err := h.requireUnit(); err != nil {
+		return err
+	}
+	switch h.platform {
+	case PlatformLaunchd:
+		target := h.launchdDomain() + "/" + LaunchdLabel
+		if out, err := h.run("launchctl", "kickstart", "-k", target); err != nil {
+			return fmt.Errorf("supervise: launchctl kickstart -k: %w: %s", err, out)
+		}
+		return nil
+	default:
+		// Named the same way Stop names it -- by unit name, not the path Ensure's `enable`
+		// needs to link it into the search path the first time -- because restart, like
+		// disable, acts on a unit systemd has already loaded.
+		if out, err := h.run("systemctl", "--user", "restart", SystemdUnitName); err != nil {
+			return fmt.Errorf("supervise: systemctl restart: %w: %s", err, out)
+		}
+		return nil
 	}
 }
 

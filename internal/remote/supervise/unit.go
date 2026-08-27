@@ -287,6 +287,56 @@ func launchdExec(unit []byte) (string, error) {
 	return "", errors.New("supervise: this launchd unit names no ProgramArguments program")
 }
 
+// launchdProgramArguments returns EVERY string in a plist's ProgramArguments array, in
+// order -- the same walk launchdExec uses, generalized past the first element. It exists
+// for com.swarm.upgrade.plist (auto-upgrade-plan.md L1), whose ProgramArguments is a
+// three-element `/bin/sh -c <command>` rather than a single program path, so launchdExec's
+// "return on the first string" is not enough to check it. launchdExec itself is untouched.
+func launchdProgramArguments(unit []byte) ([]string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(unit))
+	key, inArgs := "", false
+	var args []string
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("supervise: read launchd unit: %w", err)
+		}
+		switch el := tok.(type) {
+		case xml.EndElement:
+			if el.Name.Local == "array" {
+				inArgs = false
+			}
+		case xml.StartElement:
+			switch el.Name.Local {
+			case "key":
+				var s string
+				if err := dec.DecodeElement(&s, &el); err != nil {
+					return nil, fmt.Errorf("supervise: read launchd unit: %w", err)
+				}
+				key = strings.TrimSpace(s)
+			case "array":
+				inArgs = key == "ProgramArguments"
+			case "string":
+				if !inArgs {
+					continue
+				}
+				var s string
+				if err := dec.DecodeElement(&s, &el); err != nil {
+					return nil, fmt.Errorf("supervise: read launchd unit: %w", err)
+				}
+				args = append(args, s)
+			}
+		}
+	}
+	if len(args) == 0 {
+		return nil, errors.New("supervise: this launchd unit names no ProgramArguments program")
+	}
+	return args, nil
+}
+
 // systemdExec returns the unit's ExecStart value. systemd ignores whitespace around the
 // separator, so this does too -- and the VALUE is then taken verbatim, for launchdExec's
 // reason.

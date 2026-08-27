@@ -19,4 +19,14 @@ package shimwire
 // before this split. No production code path selects a non-default value; the
 // shim/daemon handshake logic (shim/server.go, daemon/shimclient.go) is
 // untouched and still references shimwire.Version directly.
+//
+// A BUMP HERE DROPS EVERY RUNNING SESSION FROM THE BOARD ACROSS AN UNATTENDED
+// UPGRADE. dialShimHello's reconnect (internal/daemon/shimclient.go:59) rejects
+// a shim whose WireVersion does not equal this constant and the session is
+// marked lost, never driven over a mismatched protocol -- correct for a single
+// running daemon, but auto-upgrade-plan.md's nightly converge (L2) restarts the
+// daemon out from under shims that are still on the OLD Version, on a machine
+// with nobody there to notice. Bumping this constant must follow the drain
+// procedure in docs/ops/auto-upgrade.md, not land as an ordinary protocol
+// change.
 const Version = 1

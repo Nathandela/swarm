@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  swarm nightly auto-upgrade timer (docs/specifications/auto-upgrade-plan.md, L1). Runs a
+  brew cask upgrade for swarm, then converges the running gateway and daemon onto whatever
+  is now linked, every night at 04:00: a preference, not a guarantee, since launchd runs a
+  missed StartCalendarInterval job at the next wake, so on a laptop closed overnight this
+  runs at lid-open instead. The two steps in ProgramArguments below are joined by ";", not
+  "&&": the converge must run whether or not brew found anything to upgrade, or a deferred
+  night is never retried (see the plan's "why the timer and not the cask postflight").
+
+  This is a TEMPLATE, tracked here (packaging/, sibling of dist/, which is goreleaser's
+  gitignored output; packaging/homebrew/swarm.rb is the same kind of tracked artifact).
+  It carries exactly two tokens, @PREFIX@ and @HOME@, filled in at install time (the
+  backslash below keeps this comment valid XML, which forbids two literal hyphens in a
+  row; bash strips it, so "-\-prefix" runs identically to the flag it spells):
+
+    sed -e "s|@HOME@|$HOME|g" -e "s|@PREFIX@|$(brew -\-prefix)|g" \
+        packaging/launchd/com.swarm.upgrade.plist \
+      > ~/Library/LaunchAgents/com.swarm.upgrade.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarm.upgrade.plist
+
+  INSTALL THIS ONLY ONCE `swarm version` REPORTS 0.14.0 OR LATER (the plan's section 3,
+  "the hop"): a 0.13.0 `swarm daemon restart` ignores every argument, including the
+  unattended flag named in ProgramArguments below, and runs the full stop-and-spawn from
+  whatever environment this timer's gui agent carries, which is not the owner's shell.
+
+  A launchd user agent carries HOME, USER, SHELL and TMPDIR but not the owner's PATH or
+  credentials, hence @PREFIX@ rather than a bare `brew`/`swarm` on PATH; the daemon
+  restart's own unattended environment handling (L2) covers the rest.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.swarm.upgrade</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>@PREFIX@/bin/brew upgrade --cask swarm; @PREFIX@/bin/swarm daemon restart --unattended</string>
+	</array>
+
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOMEBREW_NO_INSTALL_CLEANUP</key>
+		<string>1</string>
+		<key>HOMEBREW_NO_ENV_HINTS</key>
+		<string>1</string>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>@HOME@/.local/state/swarm/upgrade.log</string>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/.local/state/swarm/upgrade.log</string>
+</dict>
+</plist>

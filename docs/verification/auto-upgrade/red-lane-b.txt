@@ -1,0 +1,10 @@
+# github.com/Nathandela/swarm/internal/remote/supervise [github.com/Nathandela/swarm/internal/remote/supervise.test]
+internal/remote/supervise/restart_test.go:84:16: sup.Restart undefined (type *hostSupervisor has no field or method Restart)
+internal/remote/supervise/restart_test.go:100:16: sup.Restart undefined (type *hostSupervisor has no field or method Restart)
+internal/remote/supervise/restart_test.go:116:13: sup.Restart undefined (type *hostSupervisor has no field or method Restart)
+internal/remote/supervise/restart_test.go:134:15: sup.Restart undefined (type *hostSupervisor has no field or method Restart)
+internal/remote/supervise/upgrade_unit_test.go:66:15: undefined: launchdProgramArguments
+internal/remote/supervise/upgrade_unit_test.go:89:15: undefined: launchdProgramArguments
+FAIL	github.com/Nathandela/swarm/internal/remote/supervise [build failed]
+ok  	github.com/Nathandela/swarm/internal/shimwire	0.881s
+FAIL
