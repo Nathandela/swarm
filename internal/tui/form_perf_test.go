@@ -106,9 +106,9 @@ func TestLaunch_ModelStringOptionEditable(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // directory -> name
-	m = send(m, keyTab) // name -> agent
-	m = send(m, keyTab) // agent -> model (string)
+	m = send(m, keyDown) // directory -> name
+	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // agent -> model (string)
 
 	m = sendType(m, "opus")
 	if got := launchOf(m).options["model"]; got != "opus" {
@@ -130,9 +130,9 @@ func TestLaunch_ModelSuggestionsCycle(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // directory -> name
-	m = send(m, keyTab) // name -> agent
-	m = send(m, keyTab) // agent -> model
+	m = send(m, keyDown) // directory -> name
+	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // agent -> model
 
 	// Suggest = [sonnet, opus, haiku]; from empty, right -> sonnet, right -> opus.
 	m = send(m, keyRight)
@@ -157,10 +157,10 @@ func TestLaunch_SpaceTogglesBoolOption(t *testing.T) {
 	m := newModel(t, newFakeClient(), detectEditable())
 	m = send(m, detectMsg{agents: detectEditable()()})
 	m = send(m, keyRune('n'))
-	m = send(m, keyTab) // directory -> name
-	m = send(m, keyTab) // name -> agent
-	m = send(m, keyTab) // agent -> model
-	m = send(m, keyTab) // model -> skip (bool)
+	m = send(m, keyDown) // directory -> name
+	m = send(m, keyDown) // name -> agent
+	m = send(m, keyDown) // agent -> model
+	m = send(m, keyDown) // model -> skip (bool)
 
 	if got := launchOf(m).options["dangerously-skip-permissions"]; got != "false" {
 		t.Fatalf("default skip = %q, want false", got)
@@ -225,16 +225,16 @@ func TestLaunch_HintFooterFollowsFocus(t *testing.T) {
 	if v := view(m); !strings.Contains(v, "type or paste") {
 		t.Fatalf("directory hint missing 'type or paste':\n%s", v)
 	}
-	m = send(m, keyTab) // name (text)
+	m = send(m, keyDown) // name (text)
 	if v := view(m); !strings.Contains(v, "type or paste") {
 		t.Fatalf("name hint missing 'type or paste':\n%s", v)
 	}
-	m = send(m, keyTab) // agent
+	m = send(m, keyDown) // agent
 	if v := view(m); !strings.Contains(v, "arrows change") {
 		t.Fatalf("agent hint missing 'arrows change':\n%s", v)
 	}
-	m = send(m, keyTab) // model (text)
-	m = send(m, keyTab) // skip (bool)
+	m = send(m, keyDown) // model (text)
+	m = send(m, keyDown) // skip (bool)
 	if v := view(m); !strings.Contains(v, "space toggle") {
 		t.Fatalf("bool hint missing 'space toggle':\n%s", v)
 	}

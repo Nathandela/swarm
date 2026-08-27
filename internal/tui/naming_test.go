@@ -38,7 +38,7 @@ func TestLaunch_NameFieldRendersAfterDirectory(t *testing.T) {
 // bracketed paste lands with newlines stripped (single-line), like directory/prompt.
 func TestLaunch_NameFieldEditable(t *testing.T) {
 	m := openLaunch(t, newFakeClient()) // focus starts on directory
-	m = send(m, keyTab)                 // directory -> name
+	m = send(m, keyDown)                // directory -> name
 	if !launchOf(m).isName() {
 		t.Fatalf("Tab from directory must focus the name field; focus=%d", launchOf(m).focus)
 	}
@@ -91,7 +91,7 @@ func TestLaunch_TypedNameSubmitted(t *testing.T) {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)
-	m = send(m, keyTab) // directory -> name
+	m = send(m, keyDown) // directory -> name
 	m = sendType(m, "my-session")
 
 	_, cmd := m.Update(keyEnter)
