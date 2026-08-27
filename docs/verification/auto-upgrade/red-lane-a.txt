@@ -1,0 +1,22 @@
+Auto-upgrade lane A (docs/specifications/auto-upgrade-plan.md L2) — failing-first evidence.
+
+Branch: worktree-agent-ab24aea231353c16b
+Tests: internal/daemon/unattended_test.go, written before any implementation existed.
+
+--------------------------------------------------------------------------------
+1. RED (undefined-only, the package norm: see internal/daemon/main_test.go header)
+--------------------------------------------------------------------------------
+
+$ go test -race ./internal/daemon/ -run 'TestOpenWritesSavedEnv|TestLoadSavedEnvMissing|TestSpawnDaemonEnvironment|TestLockFree'
+
+# github.com/Nathandela/swarm/internal/daemon [github.com/Nathandela/swarm/internal/daemon.test]
+internal/daemon/unattended_test.go:39:10: undefined: SavedEnvPath
+internal/daemon/unattended_test.go:50:14: undefined: LoadSavedEnv
+internal/daemon/unattended_test.go:65:15: undefined: LoadSavedEnv
+internal/daemon/unattended_test.go:77:14: undefined: LoadSavedEnv
+internal/daemon/unattended_test.go:106:4: unknown field Env in struct literal of type ClientConfig
+internal/daemon/unattended_test.go:150:7: undefined: LockFree
+internal/daemon/unattended_test.go:163:6: undefined: LockFree
+internal/daemon/unattended_test.go:170:7: undefined: LockFree
+FAIL	github.com/Nathandela/swarm/internal/daemon [build failed]
+FAIL

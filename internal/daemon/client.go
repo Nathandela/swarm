@@ -72,6 +72,15 @@ type ClientConfig struct {
 	DaemonBin  string
 	LogPath    string
 
+	// Env, when non-nil, is the environment the spawned daemon gets INSTEAD of the
+	// caller's, plus the SWARM_DAEMON_* variables the spawn always stamps. It exists
+	// for the unattended restart (auto-upgrade plan, L2), which runs from a launchd
+	// timer whose environment has neither the owner's PATH nor any credential, and
+	// which therefore spawns from the environment the daemon saved at its last start
+	// (LoadSavedEnv). Nil — every interactive path, where the caller IS the owner's
+	// shell — keeps the caller's environment, unchanged.
+	Env []string
+
 	// spawnDaemon overrides the production detached-spawn (test seam). Production
 	// uses defaultSpawnDaemon when this is nil.
 	spawnDaemon func(ClientConfig) error
@@ -175,7 +184,14 @@ func defaultSpawnDaemon(cfg ClientConfig) error {
 		return err
 	}
 	cmd := exec.Command(bin, "daemon")
-	cmd.Env = append(os.Environ(),
+	// A non-nil cfg.Env REPLACES the caller's environment (L2); nil inherits it, which
+	// is every interactive path. The base is copied, never appended to in place, so the
+	// four stamps can never scribble into the caller's backing array.
+	base := os.Environ()
+	if cfg.Env != nil {
+		base = append([]string(nil), cfg.Env...)
+	}
+	cmd.Env = append(base,
 		EnvStateDir+"="+cfg.StateDir,
 		EnvSocket+"="+cfg.SocketPath,
 		EnvLock+"="+cfg.LockPath,
@@ -250,6 +266,28 @@ func Restart(cfg ClientConfig) error {
 		time.Sleep(ensureBackoff)
 	}
 	return fmt.Errorf("daemon restart: replacement did not become reachable: %w", lastErr)
+}
+
+// LockFree reports whether NO daemon holds the singleton lock, which is the
+// unattended converge's rule 0: with no daemon there is nothing to converge, and
+// the next `swarm` command will spawn one from the owner's shell anyway (D-1).
+//
+// It is the lock that is consulted, not the pidfile, because the pidfile is
+// best-effort (daemon.go's writePIDFile ignores its error) while the flock is the
+// singleton itself. The lock is taken and released immediately, so this never
+// blocks a daemon that is starting.
+//
+// Only ErrAlreadyRunning — a live holder — reports false. Every other error, a
+// state dir that does not exist or one this user cannot open, also reports true:
+// none of them is evidence of a running daemon, and the safe reading of "I cannot
+// tell" is to touch nothing rather than to stop and respawn something unseen.
+func LockFree(cfg ClientConfig) bool {
+	f, err := acquireLock(cfg.LockPath)
+	if err == nil {
+		_ = releaseLock(f)
+		return true
+	}
+	return !errors.Is(err, ErrAlreadyRunning)
 }
 
 // waitLockFree polls until the daemon lock at path can be acquired — proof the old

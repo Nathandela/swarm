@@ -286,6 +286,14 @@ func Open(cfg Config) (*Daemon, error) {
 		deleted:  make(map[string]struct{}),
 	}
 	writePIDFile(cfg.StateDir) // best-effort; for `swarm daemon restart`
+	// Record the environment this daemon started with, so an unattended restart can
+	// spawn the replacement from it instead of from a timer's bare environment (L2).
+	// Best-effort like the pidfile: a daemon that serves is worth more than one that
+	// refuses to start over a file only tomorrow's converge reads, and its absence is
+	// exactly what makes that converge refuse.
+	if err := writeSavedEnv(cfg.StateDir); err != nil {
+		d.logf("save daemon environment: %v", err)
+	}
 
 	// Rebuild + reconnect BEFORE serving so List/Get are correct. A scan failure is
 	// fatal to Open: serving a blind, possibly-empty registry would silently drop
