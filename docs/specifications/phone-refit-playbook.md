@@ -450,6 +450,17 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
   → `{14}` only if no selector still declares 13/15; `wantMovers` re-derived and recorded;
   `s22b_designsource_test.go:78,88-89` path and block markers → slate; ratified exceptions register
   checked. `KitDensityTest.kt:160-174` claims updated to the new steps.
+- **Widened (fleet W4 finding, ruled 2026-08-27).** The kit call sites are joined by
+  `android/gate/s23_kit_test.go` (`s23Spacing` rows for `.prows {padding: 0 12px; gap: 8px}` and the
+  `s23DerivedSpacing` rows) and by `docs/design/substrate-components.md` rows #14 and #26 to the
+  older Substrate values, not to the maquette's `.slab`. Both are in W4.5's list: the rows are
+  re-pointed to `slate-maquette.html`'s `.slab` under an AUTHORIZED REWRITE note citing ADR-020 D2,
+  and the claims in `InboxRowTest`, `ActivityRowTest`, `MessageBubbleTest`, `KitDensityTest:299`
+  follow. No exemptions; a row that cannot be re-pointed to a declared design value stops the wave.
+- **Also ruled.** `--p-sweep-fx` keeps `rgba(255,252,244,0.30)` (ADR-009 D5 survives, sweep tint
+  included; `Motion.kt`/`o4_sweep_test.go` untouched). `dimens.xml`'s four `swarm_radius_*` values
+  follow the radius tokens (PB-DS-4), so its diff is not comment-only. `build.gradle.kts`'s staging
+  line and `DesignScale.kt` point at `slate-maquette.html`.
 - **Done when** `-run PBDS1` green with worst drift ≤ 1dp and `dimens.xml` diff comment-only.
 
 ### W4.6 Type: five rungs, all shifted
