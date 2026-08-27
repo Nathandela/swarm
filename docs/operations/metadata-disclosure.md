@@ -3,12 +3,16 @@
 **Scope: PB-OPS-3.** ADR-007 D11 states the rule this document obeys: *"the exposure is
 documented, retention is bounded, logs carry no bodies, and the 'managed hosting leaks nothing'
 claim is withdrawn."* D11 also forbids claiming **less** exposure than exists, which is why several
-entries below (§1a, §2b, §2c, §3, §4) are corrections to earlier, more flattering statements rather
-than new findings — §3 (2026-08-15, ADR-015) adds the gateway as a party this document previously
-had no occasion to name at all. That they keep being needed is itself the point: each was found by
-someone re-deriving a claim this document already made, and none was found by re-reading it.
+entries below (§1a, §2b, §2c, §3, §4, §5) are corrections to earlier, more flattering statements
+rather than new findings — §3 (2026-08-15, ADR-015) adds the gateway as a party this document
+previously had no occasion to name at all, and §5 (2026-08-26, ADR-010 Amendment 4) adds a party of
+a different kind: a second **model vendor**, the first entry here that receives session **content**
+rather than metadata, and the first with nothing to do with the remote transport. That they keep
+being needed is itself the point: each was found by someone re-deriving a claim this document
+already made, and none was found by re-reading it.
 
-E2EE hides payloads. It hides none of the following.
+E2EE hides payloads. It hides none of the following — and §5 is the entry E2EE never touched at
+all, because that disclosure happens on the machine, before anything is sealed.
 
 > **This document's ADR status.** PB-OPS-3's acceptance criterion is "ADR section consistent with
 > PB-PUSH-3 and ADR-007 D11". The section text is drafted in
@@ -363,3 +367,53 @@ Three limits that remain, stated because D11 forbids reading the table above as 
   connection has no on-path position for an observer to occupy. It is the gateway's normal
   configuration (`relay-runbook.md` §0).
 - **Traffic volume and timing are visible to a network observer regardless of TLS, at both hops.**
+
+---
+
+## 5. The target CLI's model vendor (hands-off handoff)
+
+> **ADDED BY ADR-010 Amendment 4 (2026-08-26):** New party, new section — and the only one in this
+> document that is neither about the remote transport nor about metadata. Everything above answers
+> "who watches the wire between the phone and the machine". This answers a question swarm only
+> started raising on 2026-08-26: what leaves the machine because swarm told an agent to read a
+> file. There is no relay, no gateway and no push provider in it. It is recorded here because this
+> is the project's register of who observes what, and D11's rule — never claim less exposure than
+> exists — does not stop being the rule when the observer is a model API rather than a relay
+> operator. The document's title is accordingly narrower than its contents; it is left as published
+> because a rename this section is not scoped to make. `docs/INDEX.md`'s entry, which described
+> this file as covering "the relay operator and the push provider", was broadened instead: an
+> index that under-describes the register is D11's own failure mode moved to the discovery layer,
+> where a reader scanning for "who observes what" never reaches the correction.
+
+A **hands-off handoff** launches a successor session and instructs it to READ the source session's
+local transcript file. swarm injects no content of its own — it hands over five pointers and
+nothing else (ADR-010 E5) — but the instruction IS the disclosure: the successor opens the file,
+and what it reads goes to its own provider's API in the ordinary course of thinking about it.
+
+| What | Where | Retention |
+|---|---|---|
+| **The source session's raw transcript**, in whatever part the successor chooses to read | The target CLI's provider API, under that vendor's own terms | Whatever that vendor retains; swarm neither sets it nor observes it |
+| **The source's working directory, agent name and swarm session id** | Same | Same |
+| **Anything the transcript happens to contain** — credentials pasted by a hurried human, environment dumps, proprietary file content, raw tool output | Same | Same |
+
+The third row is the one worth reading twice. A transcript is not a curated artifact; it is the raw
+record of a session, and it holds whatever was pasted into it and whatever a tool printed. Nothing
+in swarm redacts it, and nothing here can: swarm ships no filter recipe by decision (ADR-010 E5),
+so there is no filter to teach and no redaction seam to add one at.
+
+**A same-vendor handoff discloses nothing new.** Claude to Claude sends the transcript back to the
+provider that already holds the conversation it records. The exposure is created by a CROSS-vendor
+handoff, which is why the owner confirms that case explicitly at the form, with both providers
+named (ADR-010 E4), rather than swarm reading a target-CLI choice as consent to a disclosure the
+owner was not shown.
+
+**Scope today.** Only `claude` sources are supported in the first sweep (ADR-010 E7), so today's
+cross-vendor case is a Claude transcript read by codex, agy or opencode. Widening the source set
+widens this section's subject, not its rule.
+
+**What this section is not.** It is not a claim that swarm ships content anywhere on its own: the
+successor is a local process the owner launched, reading a local file the owner pointed it at, and
+the network hop is the one that CLI makes for any file it reads. It is named here anyway, because
+"the user's own tool would have done it too" is precisely the kind of reasoning D11 exists to
+refuse. The flow is new, swarm authored the instruction that starts it, and a reader of this
+document should not have to derive it from an ADR.

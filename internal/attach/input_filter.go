@@ -33,6 +33,7 @@ type detachInputFilter struct {
 	timer    *time.Timer
 	timerGen uint64
 	decoder  uv.EventDecoder
+	pos      outParser // ADR-019 string-payload gate, carried across reads
 }
 
 func newDetachInputFilter(key byte, forward func([]byte), detach func()) *detachInputFilter {
@@ -74,15 +75,21 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 			*out = append(*out, f.pending...)
 			f.pending = nil
 			f.inPaste = false
+			// Bracketed paste is an input framing mode: arbitrary pasted escape
+			// bytes do not carry parser state beyond its explicit end marker.
+			f.pos = outParser{}
 		}
 		return false
 	}
 
+	payload := f.pos.inString()
+
 	if len(f.pending) == 0 {
-		if b == f.key && b != '\x1b' {
+		if !payload && b == f.key && b != '\x1b' {
 			return true
 		}
-		if b == '\x1b' {
+		f.pos.feed(b)
+		if !payload && b == '\x1b' {
 			f.pending = append(f.pending, b)
 			return false
 		}
@@ -90,12 +97,20 @@ func (f *detachInputFilter) consumeByte(b byte, out *[]byte) bool {
 		return false
 	}
 
+	// ADR-019: CSI/ESC/nF reports use printable bytes. A C0 detach byte
+	// arriving while such a report is incomplete is a real keypress, not part
+	// of the report. Preserve the report prefix, withhold the key, and detach.
+	if !payload && b == f.key && b != '\x1b' {
+		*out = append(*out, f.pending...)
+		f.pending = nil
+		return true
+	}
+	f.pos.feed(b)
 	f.pending = append(f.pending, b)
 	if len(f.pending) == 2 && f.pending[1] != '[' {
-		first, second := f.pending[0], f.pending[1]
+		*out = append(*out, f.pending...)
 		f.pending = nil
-		*out = append(*out, first)
-		return f.consumeByte(second, out)
+		return false
 	}
 	if len(f.pending) >= 3 && isCSIFinal(f.pending[len(f.pending)-1]) {
 		seq := append([]byte(nil), f.pending...)

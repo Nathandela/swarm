@@ -158,6 +158,16 @@ func (cc *clientConn) handleSessionLaunch(c Control) {
 			return
 		}
 	}
+	// handoff_from is OWNER-TIER ONLY (ADR-010 Amendment 4 E1/E7) and this path does not
+	// pass through handleLaunch, where that tier guard lives. Refused on PRESENCE, not on
+	// value: an authored preset carrying the key at all is refused, whatever it holds.
+	// The value-aware denylist above cannot express this -- it matches one forbidden
+	// VALUE per key, and here every value is forbidden, including the empty string.
+	if _, present := p.Options[OptionHandoffFrom]; present {
+		cc.refuseSessionLaunch(c, CodePolicy,
+			"session_launch: preset option "+strconv.Quote(OptionHandoffFrom)+" is owner-tier only and not permitted on the remote tier")
+		return
+	}
 	// R-POL.3: the SAME machine-configured allowed-root policy, fail-closed absent
 	// (F4). The preset root is stored canonical (resolved at authoring and re-resolved
 	// by the preset source), so the path the policy checks is the path the shim gets

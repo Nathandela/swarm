@@ -36,6 +36,23 @@ const OptionWorktree = "worktree"
 // adapter's resume argv from the source conversation id.
 const OptionResumeFrom = "resume_from"
 
+// OptionResumeConversationID is the owner-tier-only launch-option key used to
+// adopt a provider-native conversation that is not already represented by a
+// swarm session. It is capability-gated so an older daemon cannot mistake the
+// request for a fresh launch.
+const OptionResumeConversationID = "resume_conversation_id"
+
+// OptionHandoffFrom is the owner-tier-only launch-option key of the hands-off
+// handoff (ADR-010 Amendment 4): it carries the NAMESPACED id of the SOURCE
+// session whose conversation the new session is told to go and read. Composition
+// -- resolving the source, its conversation identity and its transcript path --
+// is the assembly's, because only the daemon holds the resolved agent cwd; the
+// protocol layer declares the key, gates it, and forwards it verbatim. Like the
+// two resume keys it is capability-gated, so an older daemon cannot mistake the
+// request for a fresh launch; UNLIKE them, setting it to "" is an error rather
+// than a way of not setting it (ADR-010 Amendment 4 E7 -- see handleLaunch).
+const OptionHandoffFrom = "handoff_from"
+
 // remoteForbiddenOptions is the hard-coded, value-aware launch-option denylist for the
 // remote tier (R-POL.4): each guarded option key maps to its single forbidden value, so
 // the safe default of the same key ("dangerously-skip-permissions"=="false",
@@ -223,6 +240,7 @@ const maxCommandValidity = 1 * time.Hour
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
+	CapExternalResume, CapHandsOffHandoff,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -282,6 +300,15 @@ type Server struct {
 	// Amendment 3 C5): the assembly registers its supervisor's pending query here.
 	// Same shape and same reason for the atomic pointer as remoteControlledFn.
 	supervisionPendingFn atomic.Pointer[controlledFunc]
+	// remoteActivityFn is the source of SessionView.RemoteActivityAt (conversation surface,
+	// Wave G item G.2): WHEN a paired device last delivered a message, already bounded by the
+	// daemon's horizon. Same shape and same reason for the atomic pointer as the two above.
+	//
+	// It is a SECOND source rather than a widening of remoteControlledFn because the two
+	// answer different questions: that one gates the supervisor and the roster poller's diff
+	// key, this one supplies the words on a row. A lease has no instant, so neither can be
+	// derived from the other.
+	remoteActivityFn atomic.Pointer[activityFunc]
 
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
@@ -495,10 +522,11 @@ func (s *Server) distribute(m persist.Meta) {
 	// fast path below depends on the two branches stamping the same value.
 	controlled := s.remoteControlled(m.ID)
 	pending := s.supervisionPending(m.ID)
+	sentAt := s.remoteActivityAt(m.ID)
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled, pending)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled, pending, sentAt)})
 	}
 
 	s.subMu.Lock()
@@ -506,7 +534,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled, pending)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -631,6 +659,32 @@ func (s *Server) remoteControlled(local string) bool {
 		return (*p)(local)
 	}
 	return false
+}
+
+// activityFunc reports WHEN a session (by LOCAL id) last received a remote message, or the
+// zero time when none is in the daemon's window. Named so the setter can hand it to an
+// atomic.Pointer.
+type activityFunc func(local string) time.Time
+
+// SetRemoteActivityFunc registers the source of SessionView.RemoteActivityAt. Production
+// wires the assembly's own horizon-bounded read (skeleton.serve), so an owner's roster can
+// say when a phone last sent rather than merely that one did. nil clears it; unset, no row is
+// ever stamped.
+func (s *Server) SetRemoteActivityFunc(fn func(local string) time.Time) {
+	if fn == nil {
+		s.remoteActivityFn.Store(nil)
+		return
+	}
+	f := activityFunc(fn)
+	s.remoteActivityFn.Store(&f)
+}
+
+// remoteActivityAt answers the registered source, the zero time when none is registered.
+func (s *Server) remoteActivityAt(local string) time.Time {
+	if p := s.remoteActivityFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return time.Time{}
 }
 
 // SetSupervisionPendingFunc registers the source of SessionView.SupervisionPending
@@ -1272,6 +1326,67 @@ func (cc *clientConn) handleLaunch(c Control) {
 	// cannot alter the agent/cwd/options/prompt of a validly-signed launch.
 	if !cc.requireRemoteAuthz(c, ActionLaunch, LaunchSessionSentinel, LaunchContentHash(req)) {
 		return
+	}
+	// The hands-off handoff (ADR-010 Amendment 4). Guarded BEFORE the external-resume
+	// block so a request that carries both keys is refused for what it actually is --
+	// a caller bug -- rather than for whichever capability the client happened not to
+	// offer.
+	//
+	// PRESENCE, not emptiness, opens this block -- unlike the two resume keys below,
+	// which test `!= ""`. ADR-010 Amendment 4 E7 is specific to this flow: no refusal
+	// may degrade to a bare, context-free launch, because an agent loose in the owner's
+	// checkout with no idea what it is continuing is worse than no handoff at all -- the
+	// owner would believe the work was carried over. A caller that sets the key and
+	// computes an EMPTY source id has a bug, and reading that as "absent" would launch
+	// bare by a second route, past the capability gate that closes the first. So the key
+	// is refused present-but-empty and only a key that was never set is an ordinary
+	// launch. Options is a plain map[string]string over encoding/json, so a comma-ok
+	// lookup tells those two apart.
+	if handoffFrom, present := req.Options[OptionHandoffFrom]; present {
+		if cc.srv.remoteTier {
+			cc.replyErrorCode("launch: hands-off handoff is not permitted on the remote tier", CodePolicy)
+			return
+		}
+		// Checked before the capability, because a malformed value is a defect in THIS
+		// request whatever was negotiated, and naming the empty field is more actionable
+		// than naming a capability the client may well have offered.
+		if handoffFrom == "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" is empty; it must name the source session", CodeInvalidField)
+			return
+		}
+		// THE LOAD-BEARING GUARD. An older daemon does not know this option key, so it
+		// would silently IGNORE it and perform a BARE LAUNCH: a context-free agent loose
+		// in the user's checkout, which the design names as the worst available outcome.
+		// Negotiation converts that silent degrade into a refusal the client can see and
+		// act on before it launches anything.
+		if !cc.hasCap(CapHandsOffHandoff) {
+			cc.replyErrorCode("launch: hands-off handoff capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
+		// handoff_from, resume_from and resume_conversation_id are three different answers
+		// to "where does this session come from". Combining them is a caller bug, not a
+		// merge, so each pairing is refused BY NAME rather than resolved by a silent
+		// precedence rule. (The resume pair's own mutual exclusion lives one layer down,
+		// in the assembly's coreAPI.Launch, and takes the same "cannot be combined with"
+		// shape.)
+		if req.Options[OptionResumeFrom] != "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" cannot be combined with "+OptionResumeFrom, CodeInvalidField)
+			return
+		}
+		if req.Options[OptionResumeConversationID] != "" {
+			cc.replyErrorCode("launch: "+OptionHandoffFrom+" cannot be combined with "+OptionResumeConversationID, CodeInvalidField)
+			return
+		}
+	}
+	if req.Options[OptionResumeConversationID] != "" {
+		if cc.srv.remoteTier {
+			cc.replyErrorCode("launch: external resume is not permitted on the remote tier", CodePolicy)
+			return
+		}
+		if !cc.hasCap(CapExternalResume) {
+			cc.replyErrorCode("launch: external resume capability was not negotiated", CodeCapabilityRefused)
+			return
+		}
 	}
 	// R-POL.4/.2: on the remote tier refuse a dangerous option (value-aware, hard-coded)
 	// AFTER authz but BEFORE argv/cwd validation, so the policy refusal precedes the cwd
@@ -2841,14 +2956,23 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID))
+	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
+		cc.srv.remoteActivityAt(m.ID))
 }
 
 // stampView builds one general-view row (V-4) for the given endpoint id. It is
 // a free function (not just a *clientConn method) so distribute can stamp a
 // SHARED view once for every subscriber on a stable endpoint id (R3.3.1)
 // without needing a specific connection.
-func stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool) *SessionView {
+func stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool, remoteActivityAt time.Time) *SessionView {
+	// The zero time means "no message in the daemon's window" and must leave the field
+	// ABSENT, not present-and-zero: encoding/json does not omit a zero time.Time, so a value
+	// here would put "0001-01-01T00:00:00Z" onto every row of every roster frame.
+	var sentAt *time.Time
+	if !remoteActivityAt.IsZero() {
+		at := remoteActivityAt
+		sentAt = &at
+	}
 	return &SessionView{
 		EndpointID:   endpointID,
 		ID:           NamespacedID(endpointID, m.ID),
@@ -2870,6 +2994,10 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,
+		// The instant behind the board's words: "phone sent 09:41" (conversation surface,
+		// Wave G item G.2). Sampled at stamp time exactly like RemoteControlled, and already
+		// horizon-bounded by its source, so this layer holds no clock.
+		RemoteActivityAt: sentAt,
 		// ADR-010 Amendment 3 C5: the mode is persisted, the pending event is live
 		// supervisor state sampled by the caller exactly like RemoteControlled.
 		Supervision:        m.Supervision,

@@ -47,6 +47,9 @@ class EllipsizeTest {
     /** A string no cell in this design has room for. */
     private val long = "a-very-long-identifier-that-no-row-in-this-design-has-room-to-draw"
 
+    /** A second distinct string, so a two-cell component can be searched cell by cell. */
+    private val shortSubtitle = "working - nathans-mbp"
+
     private fun sessionRow(): View = sessionRow(
         context = context,
         project = long,
@@ -80,6 +83,39 @@ class EllipsizeTest {
             "$what wraps or clips instead of ending in an ellipsis, so a truncated name reads as " +
                 "a shorter name rather than as a name with more to it",
             TextUtils.TruncateAt.END,
+            text.ellipsize,
+        )
+    }
+
+    /**
+     * THE THIRD SHAPE, and it is a third SHAPE rather than a third leniency.
+     *
+     * [assertClamped] fixes two things at once -- one line, and the platform's mark at the END --
+     * and the second half is a claim about WHERE a name is distinguished. `Kit.identityCell`'s own
+     * argument is that the front of a name is what tells two apart, which is true of a project, a
+     * machine, a session and a tab. It is false of exactly one cell in this kit: a PATH, whose
+     * distinguishing half is its last segment. `ui/kit/Composer.kt` clipped at the end is
+     * `ui/kit/Compo...`, which has thrown away the part the reader was looking for.
+     *
+     * So this asserts the SAME line count and the SAME requirement that a truncation be visible --
+     * the property the suite exists for, that a shortened name never reads as a shorter name -- and
+     * differs only in which end gives. Nothing that faces [assertClamped] is moved here; row 31's
+     * path is the only cell that has ever needed it, and if a second one appears it should have to
+     * argue for itself the way that row does.
+     */
+    private fun assertClampedMidway(what: String, view: View?) {
+        val text = view as? TextView
+        assertTrue("$what is not a TextView, so nothing can be asserted about its lines", text != null)
+        assertEquals(
+            "$what draws more than one line: a path that wraps reshapes every row under it, " +
+                "exactly as a name does",
+            1,
+            text!!.maxLines,
+        )
+        assertEquals(
+            "$what does not clip in the MIDDLE, and it is a path: clipped at the end it loses " +
+                "its last segment, which is the only part that distinguishes two of them",
+            TextUtils.TruncateAt.MIDDLE,
             text.ellipsize,
         )
     }
@@ -141,4 +177,60 @@ class EllipsizeTest {
         assertWrapping("row 22's note under a well", readOnlyNote(context, long))
     }
 
+    // ---- the conversation surface (Wave C) ---------------------------------
+
+    /**
+     * THE SEVEN COMPONENTS THIS SUITE DID NOT COVER, added with the wave rather than after it.
+     *
+     * A hand-enumerated audit that silently omits new components is a gate that has stopped
+     * covering the thing it was written for -- the same shape as a registry claim over a file that
+     * does not exist. `messageBubble` and `conversationHeader` had been absent since they landed.
+     *
+     * ONE COMPONENT IS DELIBERATELY NOT HERE AND IT IS NOT AN EXEMPTION: `overflowControl` takes
+     * no string at all (`overflowControl(context)`), so there is no long value to hand it and
+     * nothing this suite can ask. It is out of scope by its signature rather than by permission.
+     */
+    @Test
+    fun `the conversation surface obeys the same two rules, and one path obeys a third`() {
+        val header = conversationHeader(
+            context, title = long, subtitle = shortSubtitle, group = "working", back = null, menu = null,
+        )
+        assertClamped("row 27's session name", header.firstTextSaying(long), 1)
+        assertClamped("row 27's machine and state line", header.firstTextSaying(shortSubtitle), 1)
+
+        val menu = conversationMenu(context, listOf(MenuChoice("id", long))) {}
+        assertClamped("row 28's menu row", menu.firstTextSaying(long), 1)
+
+        assertClamped("row 30's earlier chip", earlierChip(context, long), 1)
+        assertClamped("row 32's decision pill", decisionPill(context, long), 1)
+
+        val change = fileChangeRow(context, verb = "modify", path = long, counts = "+12 -24")
+        assertClamped("row 31's change verb", change.firstTextSaying("modify"), 1)
+        assertClamped("row 31's line counts", change.firstTextSaying("+12 -24"), 1)
+        assertClampedMidway("row 31's path", change.firstTextSaying(long))
+    }
+
+    @Test
+    fun `a message and a tear are prose, and neither may be clipped`() {
+        assertWrapping(
+            "row 26's bubble -- it is what a PERSON said, and half of somebody's own sentence " +
+                "hidden behind an ellipsis is the defect this suite exists to avoid, not the fix",
+            messageBubble(context, long),
+        )
+        assertWrapping(
+            "row 29's tear -- its label carries the repair, and a clamped divider would drop the " +
+                "one actionable word on the line rather than the tail of a name",
+            gapDivider(context, long).firstTextSaying(long),
+        )
+    }
+
+    /** The first TextView in this tree whose text is exactly [text]. */
+    private fun View.firstTextSaying(text: String): View? {
+        if (this is TextView && this.text?.toString() == text) return this
+        if (this !is android.view.ViewGroup) return null
+        for (i in 0 until childCount) {
+            getChildAt(i).firstTextSaying(text)?.let { return it }
+        }
+        return null
+    }
 }

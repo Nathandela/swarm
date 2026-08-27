@@ -241,6 +241,16 @@ class FacadeBridge(private val app: App) {
                     turnId = item.getTurnID(),
                     tsUnixMs = item.getTSUnixMs(),
                     source = item.getSource(),
+                    // AND THE SIXTH, WHICH THE COMMENT ABOVE ALREADY DESCRIBED AND THE LIST DID
+                    // NOT CARRY (owner ruling R6, 2026-08-26). `phonecore.Item.OperationID`,
+                    // `mobile.TranscriptItem.OperationID` and screen_coverage.tsv's
+                    // `transcript.read` row all argue this field out in full -- the daemon stamps
+                    // its own operation id onto the prompt the CLI echoes back, so the phone can
+                    // tell WHICH of its sends the agent received -- and `mobile/app.go` assigns
+                    // it. Every layer was complete except the one that hands the item to a
+                    // renderer, so R6's settle could never fire and a sent bubble stayed pending
+                    // forever. This finishes the sentence the comment above was already making.
+                    operationId = item.getOperationID(),
                 )
             },
             nextCursor = page.nextCursor(),

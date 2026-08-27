@@ -11,9 +11,11 @@ import dev.swarm.phone.ui.InteractionItem
 import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.kit.KitTag
+import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -70,14 +72,10 @@ class TranscriptIncrementalRedrawTest {
             sessionDetailView(
                 context = context,
                 panel = panel,
-                stop = TextView(context),
-                kill = TextView(context),
                 resync = TextView(context),
                 acknowledge = TextView(context),
-                composer = TextView(context),
                 approval = TextView(context),
                 outcome = "",
-                onBack = {},
             ),
         )
     }
@@ -210,12 +208,26 @@ class TranscriptIncrementalRedrawTest {
         )
     }
 
+    /**
+     * **MOVED, NOT DELETED** (chat-surface-plan Wave E). This test pinned that an incremental
+     * redraw never re-parents the composer or Stop, because both were children of the column this
+     * function rebuilds and one of them could be under a finger at the moment output arrived.
+     *
+     * THEY ARE NOT IN THIS COLUMN ANY MORE. The conversation is three regions now
+     * (`conversationScaffoldView`): a fixed header, a list that is the only thing that scrolls,
+     * and a pinned composer. The composer and Stop live in the scaffold, which no transcript
+     * redraw touches, so re-parenting them is not merely avoided -- it is unreachable.
+     *
+     * SO THE ASSERTION IS RE-AIMED AT WHAT NOW MAKES IT TRUE, rather than kept as a check that
+     * cannot fail. A test asserting a property guaranteed by construction passes forever and
+     * protects nothing; this asserts the construction instead. The identity-preservation claim
+     * itself is pinned where the views now live -- `PhoneSurfaceConversationHostTest` and
+     * `ConversationScaffoldViewTest`, both added in the commit that moved them.
+     */
     @Test
-    fun `the composer and the controls are still never re-parented`() {
+    fun `the composer and the controls are not in the redrawn column at all`() {
         val drawn = panelOf(item("a", "Running the suite."))
         val host = host(drawn)
-        val composer = host.kitRequire(DetailTag.COMPOSER)
-        val stop = host.kitRequire(DetailTag.STOP)
 
         assertTrue(
             sessionDetailRedraw(
@@ -225,8 +237,14 @@ class TranscriptIncrementalRedrawTest {
             ),
         )
 
-        assertSame(composer, host.kitRequire(DetailTag.COMPOSER))
-        assertSame(stop, host.kitRequire(DetailTag.STOP))
+        for (gone in listOf("detail.composer", "detail.stop", "detail.kill")) {
+            assertNull(
+                "`$gone` is back inside the column a redraw rebuilds. That is the arrangement " +
+                    "the owner photographed -- a composer reachable only by scrolling past the " +
+                    "whole transcript -- and it is what the three-region scaffold exists to end",
+                host.kitFind(gone),
+            )
+        }
     }
 
     @Test

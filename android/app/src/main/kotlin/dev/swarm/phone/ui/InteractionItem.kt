@@ -75,6 +75,40 @@ data class InteractionItem(
      * injection time. Empty where the wire carried none -- never invented.
      */
     val source: String = "",
+    /**
+     * WHICH of this phone's sends the agent echoed back (owner ruling R6, 2026-08-26), stamped by
+     * the daemon beside [source] at the same moment and for the same reason: it is the only party
+     * that watched the injection.
+     *
+     * IT IS WHAT LETS A SENT BUBBLE SETTLE HONESTLY. A `composer_send` is acknowledged when the
+     * daemon wrote bytes into a PTY, not when the CLI accepted them, so a bubble that settled on
+     * the acknowledgement would claim a delivery the wire cannot back -- ADR-009 (6)'s "delivery
+     * unknown rendered as sent is a lie", stated as a ruling. The echo is the delivery, and this
+     * is the only field on this boundary that says which echo.
+     *
+     * MATCHING ON [text] INSTEAD IS THE THING THAT MAY NOT BE DONE, and the daemon has probed
+     * why: an owner typing "yes" at the machine while a phone send of "yes" is pending produces
+     * two indistinguishable prompts and the phone would settle the wrong one. `skeleton/chat.go`
+     * refuses to rely on the text for exactly that reason.
+     *
+     * THE DEFAULT IS EMPTY AND IT MEANS "THIS PHONE DID NOT SEND THIS", WHICH IS NOT "NOT YET
+     * ECHOED". The two facts must never collapse, because one is permanent and the other is a
+     * moment in a send's life. An owner's own prompt typed at the machine has no operation id and
+     * never will; neither has an item from a turn nobody on this handset authored, nor any item at
+     * all from a machine that predates the field. None of those is a message waiting to settle,
+     * and a screen that read the absence as pendingness would draw *sending* over the whole of a
+     * conversation held at the keyboard. Pendingness is a property of a SEND this phone is holding
+     * -- it lives with the send, and this field is only what closes it.
+     *
+     * THE ABSENCE IS THEREFORE SHARED, which is the trap a matcher has to be written around: an
+     * equality that does not first require a non-empty id settles a pending send on whatever the
+     * agent said first.
+     *
+     * IT IS A TOP-LEVEL FIELD AND NOT ONE OF [fields]'. Section 3's fields are the CLI's, decoded
+     * out of [body]; this one is the daemon's, stamped at injection time, and it never rides in
+     * the item object.
+     */
+    val operationId: String = "",
 ) {
 
     /**
@@ -135,6 +169,30 @@ data class ItemFields(
     val diff: String = "",
     /** §3.7's steps, latest revision only -- IS-PLAN-1 discards a late lower one in the core. */
     val steps: List<PlanStep> = emptyList(),
+    /**
+     * §3.6's `interaction_id`: WHICH request this resolution resolves.
+     *
+     * IS-APR-1 IS THE WHOLE JOIN -- *"the item's `item_id` **is** the `interaction_id` of ADR-007
+     * D7"* -- so pairing a resolution to its decision card is an equality against that request's
+     * [InteractionItem.itemId], and there is no other way to do it. Without this the phone
+     * received the fact and dropped it: a settled card could say it was settled and never say
+     * where it was answered, because the record that knows is a DIFFERENT record.
+     *
+     * **IT IS NOT [interaction], AND THE TWO NAMES ARE ADJACENT BY ACCIDENT.** [interaction] is
+     * §3.8's `session_status` dimension -- `none` | `prompt` | `permission` | `unknown` -- a claim
+     * about what the SESSION is currently waiting on. This is §3.6's identity of ONE REQUEST. A
+     * reader who takes this for a typed-up spelling of that will pair a resolution to whichever
+     * card is on screen, and it will look right: the card settles, the words are the CLI's, and
+     * only the pairing is fiction. They are two keys and two fields for that reason, and
+     * `InteractionItemFieldsTest` checks the decoder in both directions rather than only in the
+     * one that was missing.
+     *
+     * §3.6's fourth field, `operation_id`, is still dropped. It says whether a phone's own
+     * `ActionApprove` drove the resolution, which is a further fact ("answered from THIS handset"
+     * versus "answered from another") that no screen asks for yet -- recorded rather than shipped
+     * ahead of its consumer, which is §3.5's own rule about a field with no reader.
+     */
+    val interactionId: String = "",
     /** §3.6: `allowed` | `denied` | `cancelled` | `superseded` | `expired` | `answered_locally`. */
     val decision: String = "",
     /** §3.6's `by`: `phone` | `owner` | `daemon` | `agent`. */
@@ -161,6 +219,7 @@ private fun decode(item: JSONObject): ItemFields = ItemFields(
     removed = item.optInt(REMOVED),
     diff = item.optString(DIFF_EXCERPT),
     steps = stepsOf(item.optJSONArray(STEPS)),
+    interactionId = item.optString(INTERACTION_ID),
     decision = item.optString(DECISION),
     by = item.optString(BY),
     process = item.optString(PROCESS),
@@ -218,7 +277,12 @@ private const val DECISION = "decision"
 private const val BY = "by"
 private const val PROCESS = "process"
 private const val TURN = "turn"
+// THESE TWO ARE UNRELATED AND THEIR SPELLINGS ARE ONE UNDERSCORE APART, which is why they are
+// declared adjacently rather than filed under their own sections: a reader who sees only one of
+// them may take it for the other. `interaction` is §3.8's session_status dimension; `interaction_id`
+// is §3.6's identity of one approval_request. See [ItemFields.interactionId].
 private const val INTERACTION = "interaction"
+private const val INTERACTION_ID = "interaction_id"
 private const val NOTE = "note"
 
 /**

@@ -15,6 +15,13 @@ import (
 	"sync"
 	"time"
 
+	// internal/adapter is imported for ONE pure syntax predicate,
+	// IsCanonicalConversationID (see SetConversationID). The layering rule this
+	// package states repeatedly is that the daemon never RESOLVES an adapter --
+	// argv, capture rows and backend plans are composed by the assembly and only
+	// carried here — and that rule is intact: nothing below constructs or consults
+	// an Adapter. internal/adapter depends only on internal/vt, so there is no cycle.
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/journal"
 	"github.com/Nathandela/swarm/internal/persist"
@@ -137,6 +144,10 @@ type LaunchSpec struct {
 	// InitialPrompt is the optional first prompt text. The Epic 9 adapter composes
 	// it into the agent argv; the daemon only carries it (F8).
 	InitialPrompt string
+	// ConversationID, when non-empty, is a provider-native identity already known
+	// before launch (for example, an owner-local import from another supervisor).
+	// The daemon seeds it into meta atomically with the new session reservation.
+	ConversationID string
 	// ResumedFrom, when non-empty, is the LOCAL id of a prior session this launch
 	// resumes (Epic 11 / R-2). The daemon stamps it into the new session's
 	// meta.ResumedFrom, linking the two; resolving the reference and composing the
@@ -155,13 +166,13 @@ type LaunchSpec struct {
 	// (ADR-010-adapter-structured-capture §6), injected into the agent env so its
 	// `swarm hook` keeps the CLI's own body for those events and no others. Resolved
 	// by the assembly from the adapter's SignalSources, exactly like Argv: the daemon
-	// imports no adapter package and only carries what it is given.
+	// resolves no adapter and only carries what it is given.
 	CaptureEvents []string
 	// Backend, when non-nil, is the session's RESOLVED backend plan (Wave R7, Mirror M4.1).
 	// The daemon CARRIES it and never derives it: the assembly resolves it from the
 	// session's adapter through adapter.ResolveBackend -- which performs the core's
 	// LookPath and session-dir containment checks -- exactly as it resolves Argv and
-	// CaptureEvents, because this package imports no adapter package.
+	// CaptureEvents, because this package resolves no adapter.
 	Backend *BackendSpec
 	// OperationID is the remote-launch idempotency key (`<device_id>:<client-ULID>`,
 	// R-IDP.2/.3): two Launches carrying the same non-empty key yield exactly one
@@ -406,7 +417,9 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 // output (Epic 11 / R-2) — the id a later resume replays. It is WRITE-ONCE: the
 // first non-empty capture wins and later captures are ignored, so the id never
 // flaps. The write goes through the sole meta writer under writeMu (G6, no second
-// writer); an unknown or tombstoned session and an empty id are no-ops.
+// writer); an unknown or tombstoned session and an empty id are no-ops. A capture
+// that cannot be this provider's id is refused before the latch (see below) and is
+// likewise a no-op, not an error.
 func (d *Daemon) SetConversationID(id, convID string) error {
 	if convID == "" {
 		return nil
@@ -422,6 +435,24 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 	if !ok {
 		d.writeMu.Unlock()
 		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	// VALIDATE BEFORE LATCHING. The transcript-tail scraper can extract something
+	// that is not an id at all — on the owner's machine two real claude sessions
+	// had latched the literal "./cmd/swarm/" — and because the latch is write-once,
+	// junk in the field means the AUTHORITATIVE hook-sourced id can never correct
+	// it. Refusing here, BEFORE the write-once branch, leaves the field EMPTY so
+	// that later capture still wins; write-once itself is untouched, only the set
+	// of values allowed to take the latch shrinks. The check is gated on agent type
+	// exactly as skeleton's validateStoredResumeConversationID gates it: claude and
+	// codex are the only providers whose id format is characterized, and refusing an
+	// uncharacterized provider's perfectly valid id would be a regression. A refusal
+	// returns nil because it is a policy outcome, not a fault: SetConversationID
+	// already answers nil whenever a capture does not become the stored id, and its
+	// callers log every error they get while the scraper retries on every transcript
+	// growth.
+	if (m.AgentType == "claude" || m.AgentType == "codex") && !adapter.IsCanonicalConversationID(convID) {
+		d.writeMu.Unlock()
+		return nil
 	}
 	if m.ConversationID != "" {
 		d.writeMu.Unlock()
