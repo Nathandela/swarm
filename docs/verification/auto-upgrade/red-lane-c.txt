@@ -291,3 +291,88 @@ lane neither this one nor lane A owns.
 
 Recorded for the orchestrator as a section 6 risk and, if the decision goes that
 way, an ADR-020 amendment. Not implemented in this lane.
+
+FOURTH RED -- an architectural guard this lane was failing from its first commit.
+Found by lane E (cmd/swarm wiring) on the merged tree, reproduced here.
+
+internal/converge imported internal/remote/supervise for one value:
+supervise.ErrNotInstalled, the benign arm of rule 4. cmd/swarm carries a
+source-tree walk (cmd/swarm/remote_supervise_test.go, TestDaemonNeverSpawnsTheGateway)
+that enforces ADR-007 D5 structurally, with an allowlist of exactly cmd/swarm,
+cmd/swarm-remote and internal/remote/supervise. D5 keeps the gateway out of the
+PTY-owning, agent-spawning daemon's address space; the walk is what makes that
+hold without anyone tracing transitive imports. Verbatim, on this branch before
+the fix:
+
+    $ go test -count=1 -run TestDaemonNeverSpawnsTheGateway ./cmd/swarm/
+    --- FAIL: TestDaemonNeverSpawnsTheGateway (0.25s)
+        remote_supervise_test.go:482: package internal/converge imports "github.com/Nathandela/swarm/internal/remote/supervise"; only the owner-invoked CLI and the gateway binary may (ADR-007 D5)
+    FAIL
+    FAIL    github.com/Nathandela/swarm/cmd/swarm   7.297s
+    FAIL
+
+Three shapes were available: add internal/converge to the guard's allowlist
+(which needs an ADR-007 note, because the guard encodes a decision rather than a
+convention, and which changes the guard's meaning from "these two binaries" to
+"these two binaries and whatever they import"); define a sentinel here and have
+the caller translate; or compare error strings, which is not a candidate.
+
+The second was taken, and this package's own doc comment is what settles it: it
+already claimed "the daemon, the socket and the platform supervisor stay out of
+this package entirely". The supervise import contradicted the design the package
+documents, and it was the sole dependency not expressed as a function value. The
+guard was right and this lane was wrong. converge now exports
+ErrGatewayNotInstalled; rule 4 matches on it; cmd/swarm translates at the
+boundary with fmt.Errorf("%w: %w", converge.ErrGatewayNotInstalled, err), which
+keeps errors.Is true for BOTH sentinels and preserves the supervisor's message
+and unit path in the log line.
+
+The red above is a compile-level red on the test side as well: pointing the
+existing rule-4 benign case at converge.ErrGatewayNotInstalled before the
+sentinel existed fails to build, which is the failing-first run for the new
+contract.
+
+    $ go test -race -count=1 ./internal/converge/
+    internal/converge/converge_test.go:437:59: undefined: converge.ErrGatewayNotInstalled
+    FAIL    github.com/Nathandela/swarm/internal/converge [build failed]
+
+After the fix, both gates pass: the converge suite (19 tests) and
+TestDaemonNeverSpawnsTheGateway in cmd/swarm.
+
+PROCESS NOTE, recorded because it is the real lesson. This lane's brief listed
+internal/remote/supervise as an import it MAY use, and the gates it named were
+scoped to ./internal/converge/. Both were followed, and both were wrong: the
+brief could not know about the D5 guard, and a package-scoped gate cannot see a
+repo-scoped invariant. CLAUDE.md asks for `go test ./...` before an epic closes;
+this lane ran `go build ./...` plus its own package and reported four green gates
+for six commits while cmd/swarm was red the whole time. A cross-package guard is
+invisible to a package-scoped test run, so a new package must run the repo suite
+at least once before it claims to be green.
+
+REPO-SUITE RESULT after the D5 fix. `go test ./...` on this branch reports
+cmd/swarm FAIL, in tests this lane does not touch: TestHandoffSupervision_*
+ThroughRealBinaries, six TestRunHook_* cases ("no hook callback reached the
+socket", each after a 10 s timeout), TestStopRunningDaemon_PIDReuseSafety, and a
+"TLS handshake error ... bad certificate" line. TestDaemonNeverSpawnsTheGateway
+-- the one this lane broke -- passes.
+
+Those failures are NOT this lane's, and that was established by isolation rather
+than by argument. internal/converge was moved out of the tree entirely and one
+failing test re-run:
+
+    $ mv internal/converge <scratch>/ && go test -count=1 \
+        -run 'TestRunHook_KeepsTheCLIsOwnBodyOnACaptureRow' ./cmd/swarm/
+    --- FAIL: TestRunHook_KeepsTheCLIsOwnBodyOnACaptureRow (10.03s)
+        hook_capture_test.go:115: no hook callback reached the socket
+    FAIL    github.com/Nathandela/swarm/cmd/swarm   11.661s
+    FAIL
+
+Identical failure with the package absent. The package was restored, the tree
+verified clean, and both gates re-run green. Supporting this: `git diff
+main...HEAD -- cmd/ internal/daemon/ internal/e2e/ internal/skeleton/
+internal/remote/` is empty, and no file under cmd/ imports internal/converge on
+this branch (the wiring is lane E's). The failure signature -- callbacks never
+arriving on a unix socket, real-binary spawns timing out -- reads as an
+environment limitation of this sandbox, not a logic failure, but this lane has
+NOT proven them pre-existing on a clean checkout of main and does not claim it.
+Whoever runs the merge gate should confirm on an unsandboxed checkout.
