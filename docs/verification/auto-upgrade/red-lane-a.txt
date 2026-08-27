@@ -115,3 +115,47 @@ $ go build ./...                                  # ok
 $ go vet ./internal/daemon/                       # ok
 $ go test -race ./internal/daemon/                # ok, whole package
 $ golangci-lint run ./internal/daemon/            # 0 issues
+
+--------------------------------------------------------------------------------
+6. KNOWN GAP — the property negative control F fences is also a hole
+--------------------------------------------------------------------------------
+
+Control F asserts that daemon.env is REWRITTEN on every daemon start, and would
+fail an implementation that wrote the file once. That is the plan's L2 as written
+("An interactive start refreshes it; a start from the file rewrites the same
+content") and it is what this lane implements. A reader should know it cuts both
+ways.
+
+A daemon started from a THIRD environment, neither the owner's shell nor the saved
+file, overwrites a good daemon.env with a degraded one. FilterEnv over a launchd
+agent's environment keeps PATH=/usr/bin:/bin:/usr/sbin:/sbin, HOME and SHELL, and
+drops both provider keys. The result is non-empty, so lane C's rule 3 (which
+refuses on an absent or EMPTY saved env) does not fire; rule 4 spawns from it; and
+section 1's failure is now written into the file that exists to prevent it. It is
+self-stabilising, because each later unattended restart rewrites the same degraded
+content and reports a successful converge.
+
+Scope, checked rather than assumed: cmd/swarm/main.go:266 (EnsureDaemon) and the
+two daemon.Restart call sites are the ONLY paths that start a daemon in this tree.
+Under the plan as designed the timer never spawns from launchd's environment --
+rule 0 exits before spawning, rules 1 and 2 cannot spawn, and rule 4 uses the saved
+slice. The exposure is any OTHER `swarm` client command run from a launchd or cron
+context, which D-1 auto-starts a daemon for.
+
+NOT FIXED HERE, deliberately. Every candidate fix contradicts L2's "rewritten on
+every start" and is a decision change above a lane's footprint. Section 6 of the
+plan names environment STALENESS (rotated keys) but not degradation, so there is no
+existing risk line to file it under either. Recorded in lane C's
+docs/verification/auto-upgrade/red-lane-c.txt as a known gap as well, from the
+converge side.
+
+One candidate has been floated for whoever owns ADR-020 -- refuse to overwrite when
+the incoming set is a strict subset of the stored one -- and it needs two caveats
+before anyone implements it. It must compare KEY SETS, not KEY=VALUE entries: in
+the poisoning case PATH is present on both sides with different values, so an
+entry-wise subset test does not fire at all. And it silently breaks the documented
+repair path, because an interactive restart that legitimately drops a variable (a
+deactivated conda env, an OPENAI_API_KEY the owner stopped exporting) is also a
+strict subset, so the file would refuse the owner's own refresh and freeze. The
+provenance of a start is not recoverable from comparing two environments; it is
+known only at the spawn site, which is cmd/swarm.
