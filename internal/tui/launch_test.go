@@ -63,8 +63,8 @@ func TestLaunch_AgentPickerGreysUnavailable(t *testing.T) {
 	}
 }
 
-// E7.5 / L-3 — a nonexistent working directory is refused with an inline error and
-// no launch is attempted.
+// E7.5 / L-3 — the first submit of a nonexistent working directory is refused
+// with an inline typo/create prompt and no launch is attempted.
 
 func TestLaunch_InvalidCwdRefused(t *testing.T) {
 	f := newFakeClient()
@@ -77,7 +77,7 @@ func TestLaunch_InvalidCwdRefused(t *testing.T) {
 		t.Fatalf("expected an inline cwd error mentioning existence:\n%s", v)
 	}
 	if reqs := f.launchReqs(); len(reqs) != 0 {
-		t.Fatalf("invalid cwd must not launch, got %v", reqs)
+		t.Fatalf("first submit of a missing cwd must not launch, got %v", reqs)
 	}
 }
 

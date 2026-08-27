@@ -106,7 +106,7 @@ Derived view groups:
 
 - **L-1** (Ubiquitous) The launch form SHALL collect: working directory (free text, `~` expansion), agent (from detected CLIs), model/options rendered from the adapter's **declarative options schema**, optional initial prompt, worktree toggle (when the epic ships).
 - **L-2** (Ubiquitous) The agent picker SHALL offer only CLIs detected on PATH (with version check against the adapter's supported range); supported-but-missing CLIs appear greyed with an install hint.
-- **L-3** (Unwanted) IF the working directory does not exist or is not a directory, THEN the form SHALL show an inline error and refuse to launch (and the daemon re-validates, P-6).
+- **L-3** (Unwanted) IF the working directory is not a directory, THEN the form SHALL show an inline error and refuse to launch. IF it does not exist, THEN the first submit SHALL refuse to launch, show edit-distance-ranked sibling-directory suggestions when available, and require an immediately consecutive submit to create the unchanged path; choosing a suggestion SHALL use the existing directory instead. The daemon re-validates the resulting path (P-6).
 
 > See ADR-007 B144 (2026-08-15): L-1..L-3 describe the owner-tier form. A phone-initiated remote launch chooses a daemon-authored preset and an initial prompt (`launch_presets`, `session_launch`) and supplies no free cwd/argv/env; its exit criteria are the playbook waves (implementation-goals.md Epic 15).
 
@@ -252,7 +252,7 @@ sequenceDiagram
 | 10 | Sessions running | Daemon killed -9, restarted | Shims kept agents alive; daemon reconnects; nothing lost | D-4, D-5 |
 | 11 | Sessions running | `brew upgrade swarm` + daemon restart | Same as 10 — upgrade is safe and says so | D-5, D-8 |
 | 12 | Machine rebooted | swarm reopened | Sessions marked lost, transcripts intact, resume offered where supported | D-4, R-2 |
-| 13 | Launch form | Nonexistent dir | Inline error; daemon re-validates too | L-3, P-6 |
+| 13 | Launch form | Nonexistent dir | Close sibling suggestions appear; arrows choose one, or a second consecutive Enter confirms creation; daemon re-validates | L-3, P-6 |
 | 14 | agy not installed | Launch form opened | Greyed with install hint | L-2 |
 | 15 | Spinner runs overnight | — | Transcript capped/rotated; near-zero client-idle CPU | S-5, N-3 |
 | 16 | Second client attaches | — | Lease refused/transferred explicitly; stale input rejected | P-5 |

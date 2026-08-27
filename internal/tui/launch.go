@@ -3,10 +3,12 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	edlib "github.com/hbollon/go-edlib"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -31,6 +33,8 @@ type launchModel struct {
 	dirCands  []string // candidate basenames for the typed cwd prefix, ReadDir (sorted) order
 	dirGhost  string   // completion remainder rendered after the cursor
 	dirParent string   // typed-form parent prefix incl trailing "/", never tilde-expanded
+	dirFuzzy  bool     // dirCands came from a typo check, so even one candidate renders and arrows choose it
+	createCwd string   // expanded missing path armed by the immediately preceding Enter
 
 	apiKeyInEnv bool // ANTHROPIC_API_KEY present in the client env (auth indicator)
 
@@ -190,6 +194,11 @@ func (m launchModel) focusedOptionOfType(typ string) (int, bool) {
 
 func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	lm := &m.launch
+	if k.Code != tea.KeyEnter {
+		// Creation is deliberately a consecutive-Enter confirmation. Navigation,
+		// editing, or pasting makes the user reconfirm the path.
+		lm.createCwd = ""
+	}
 	switch {
 	case k.Code == tea.KeyEsc:
 		cmd := m.enterGeneral()
@@ -297,6 +306,16 @@ func (m *launchModel) paste(s string) {
 // paths without re-reading the directory, so the menu stays anchored to the prefix
 // that produced it. Left never accepts a ghost — only Right does.
 func (m *launchModel) cycleDirCompletion(forward bool) {
+	if m.dirFuzzy && len(m.dirCands) > 0 {
+		fullPaths := make([]string, len(m.dirCands))
+		for i, c := range m.dirCands {
+			fullPaths[i] = m.dirParent + c
+		}
+		m.cwd = cycleValue(fullPaths, m.cwd, forward)
+		m.createCwd = ""
+		m.errMsg = ""
+		return
+	}
 	if forward && m.dirGhost != "" {
 		m.cwd += m.dirGhost
 		m.errMsg = ""
@@ -398,8 +417,27 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	info, err := os.Stat(expanded)
-	if err != nil || !info.IsDir() {
-		lm.errMsg = "directory " + expanded + " does not exist"
+	if err != nil {
+		if !os.IsNotExist(err) {
+			lm.errMsg = "cannot access directory " + expanded + ": " + err.Error()
+			return m, nil
+		}
+		if lm.createCwd != expanded {
+			lm.armDirectoryCreation(expanded)
+			return m, nil
+		}
+		if err := os.MkdirAll(expanded, 0o755); err != nil {
+			lm.errMsg = "cannot create directory " + expanded + ": " + err.Error()
+			return m, nil
+		}
+		info, err = os.Stat(expanded)
+		if err != nil {
+			lm.errMsg = "cannot access created directory " + expanded + ": " + err.Error()
+			return m, nil
+		}
+	}
+	if !info.IsDir() {
+		lm.errMsg = expanded + " exists but is not a directory"
 		return m, nil
 	}
 	if lm.agentIdx < 0 || lm.agentIdx >= len(lm.agents) || !lm.agents[lm.agentIdx].usable() {
@@ -495,6 +533,8 @@ func dropLast(s string) string {
 // match the typed base name. Called after every edit of cwd while the directory
 // field is focused; never at form open, so a fresh form touches no filesystem.
 func (m *launchModel) refreshDirCompletion() {
+	m.dirFuzzy = false
+	m.createCwd = ""
 	i := strings.LastIndex(m.cwd, "/")
 	if i < 0 {
 		m.dirCands, m.dirGhost, m.dirParent = nil, "", ""
@@ -533,6 +573,95 @@ func (m *launchModel) refreshDirCompletion() {
 	}
 }
 
+// armDirectoryCreation turns a missing path into a typo guard instead of a hard
+// stop. Close sibling directory names are ranked by edit distance and exposed
+// through the existing arrow picker; the exact missing path is armed for creation
+// only by an immediately consecutive Enter.
+func (m *launchModel) armDirectoryCreation(expanded string) {
+	if len(m.dirCands) > 0 && !m.dirFuzzy {
+		// Prefix completion already has a stronger answer than fuzzy matching.
+		// Keep its ghost/menu intact so Right retains its established drill-down
+		// behavior, while still making a second Enter an explicit create.
+		m.createCwd = expanded
+		m.errMsg = "directory " + expanded + " does not exist; arrows complete or enter again to create"
+		return
+	}
+	typed := strings.TrimSpace(m.cwd)
+	i := strings.LastIndex(typed, "/")
+	if i >= 0 {
+		m.dirParent = typed[:i+1]
+	} else {
+		m.dirParent = ""
+	}
+	m.dirCands = fuzzySiblingDirectories(filepath.Dir(expanded), filepath.Base(expanded))
+	m.dirGhost = ""
+	m.dirFuzzy = len(m.dirCands) > 0
+	m.createCwd = expanded
+	if len(m.dirCands) > 0 {
+		m.errMsg = "directory " + expanded + " does not exist; did you mean " +
+			strings.Join(m.dirCands, ", ") + "? arrows choose or enter again to create"
+		return
+	}
+	m.errMsg = "directory " + expanded + " does not exist; enter again to create"
+}
+
+type fuzzyDirectory struct {
+	name     string
+	distance int
+}
+
+// fuzzySiblingDirectories returns at most five visible directories whose names
+// are close enough to typed to plausibly be typos. Ranking is stable: smallest
+// edit distance first, then lexical name.
+func fuzzySiblingDirectories(parent, typed string) []string {
+	entries, err := os.ReadDir(parent)
+	if err != nil || typed == "" || typed == "." || typed == string(filepath.Separator) {
+		return nil
+	}
+	threshold := (len([]rune(typed)) + 2) / 3
+	if threshold < 1 {
+		threshold = 1
+	}
+	if threshold > 3 {
+		threshold = 3
+	}
+	lowerTyped := strings.ToLower(typed)
+	var ranked []fuzzyDirectory
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(typed, ".") {
+			continue
+		}
+		isDir := entry.IsDir()
+		if !isDir && entry.Type()&os.ModeSymlink != 0 {
+			if info, statErr := os.Stat(filepath.Join(parent, name)); statErr == nil {
+				isDir = info.IsDir()
+			}
+		}
+		if !isDir {
+			continue
+		}
+		distance := edlib.DamerauLevenshteinDistance(lowerTyped, strings.ToLower(name))
+		if distance <= threshold {
+			ranked = append(ranked, fuzzyDirectory{name: name, distance: distance})
+		}
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].distance != ranked[j].distance {
+			return ranked[i].distance < ranked[j].distance
+		}
+		return ranked[i].name < ranked[j].name
+	})
+	if len(ranked) > 5 {
+		ranked = ranked[:5]
+	}
+	result := make([]string, len(ranked))
+	for i := range ranked {
+		result[i] = ranked[i].name
+	}
+	return result
+}
+
 // longestCommonPrefix returns the longest string prefix shared by every entry in
 // ss (ss is non-empty).
 func longestCommonPrefix(ss []string) string {
@@ -566,7 +695,7 @@ func (m launchModel) view() string {
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
 	b.WriteString(m.fieldLine("directory", m.dirValue(), m.isDir()))
-	if m.isDir() && len(m.dirCands) > 1 {
+	if m.isDir() && (len(m.dirCands) > 1 || m.dirFuzzy && len(m.dirCands) > 0) {
 		row := strings.Join(m.dirCands, "  ")
 		if m.width > 2+launchLabelW {
 			row = clampCells(row, m.width-(2+launchLabelW))
@@ -600,6 +729,15 @@ func (m launchModel) view() string {
 // toggle with Space. The tab/enter/esc tail is constant across fields.
 func (m launchModel) hint() string {
 	const tail = " · tab/↑↓ next · enter launch · esc cancel"
+	if m.isDir() && m.createCwd != "" {
+		if m.dirFuzzy {
+			return "arrows choose · enter create directory · esc cancel"
+		}
+		if m.dirGhost != "" || len(m.dirCands) > 0 {
+			return "arrows complete · enter create directory · esc cancel"
+		}
+		return "enter create directory · esc cancel"
+	}
 	if m.isDir() && (m.dirGhost != "" || len(m.dirCands) > 1) {
 		return "arrows complete" + tail
 	}
