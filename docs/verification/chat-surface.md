@@ -349,7 +349,7 @@ with nothing failing.
 3. **Overclaimed, and caught by the lane whose script it was.** The restored sentence said "checked
    in both directions" over a check covering **3 of 27 rows in one direction**. That is this wave's
    own defect one layer up. Widened to 13 rows / 18 bindings by sweeping the sheet against
-   production Kotlin; the checker now prints `N binding(s) checked across 13 of 28 tabled row(s),
+   production Kotlin; the checker now prints `N binding(s) checked across the rows whose screens are built tabled row(s),
    ONE DIRECTION` on every run, and the sheet says "in part" with the missing half described.
 
 **The widening exposed a vacuity nobody had spotted.** The check matched whole files including

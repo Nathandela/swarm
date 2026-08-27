@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -116,12 +117,19 @@ func (d *Daemon) resolveChatSession(machine, session string) (string, error) {
 	return local, nil
 }
 
-// testHookComposerCheckedNotYetDelivered, when non-nil, is invoked inside composerSend after
+// testHookComposerCheckedNotYetDelivered, when set, is invoked inside composerSend after
 // expected_turn has been verified and itemMu released, and before anything is delivered. That
 // gap is the whole subject of the re-check below, and nothing observable from outside the
 // package can be parked in it: the seam exists so the interleaving is DRIVEN rather than
-// raced. Always nil in production (mirroring internal/shim's testHookAfterPTYResize).
-var testHookComposerCheckedNotYetDelivered func(local string)
+// raced. Always unset in production (mirroring internal/shim's testHookAfterPTYResize).
+//
+// IT IS AN ATOMIC AND NOT A BARE VAR because the two accesses genuinely race. Tests install
+// and clear it from the test goroutine while composerSend reads it on whichever goroutine is
+// serving the send, and a t.Cleanup that clears it runs BEFORE the rig teardown registered
+// ahead of it -- cleanups are LIFO -- so the daemon is still running sends at the moment the
+// hook is nilled. -race reports it, and a scaffolding race in a package whose own subject is
+// concurrency teaches the next reader to skim -race output.
+var testHookComposerCheckedNotYetDelivered atomic.Pointer[func(local string)]
 
 // composerSend applies one accepted composer_send (Mirror M2.4). The precondition and the
 // injection record are taken under ONE itemMu hold, so the turn the send was checked
@@ -190,8 +198,8 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 	d.pendingSends[local] = q
 	d.itemMu.Unlock()
 
-	if testHookComposerCheckedNotYetDelivered != nil {
-		testHookComposerCheckedNotYetDelivered(local)
+	if hook := testHookComposerCheckedNotYetDelivered.Load(); hook != nil {
+		(*hook)(local)
 	}
 	if err := d.deliverComposerText(local, sink, current, native, req.Text, pending.clientRef); err != nil {
 		// The message never reached the agent, so the correlation recorded above will never
@@ -293,18 +301,30 @@ func (d *Daemon) turnMovedSince(local, expectedTurn string) bool {
 //
 // IT RE-READS THE TURN FIRST (Slice 0, agents-tracker-bzfe). composerSend verifies
 // expected_turn under itemMu and must release the lock before delivering -- neither sink can
-// be driven with a daemon-wide mutex held -- so the verified fact is already a moment old
-// when it is acted on, and the gap holds a tap subscribe plus a shimwire round trip on one
-// arm and a whole JSON-RPC round trip on the other. A turn opens on a user_message and closes
-// on a terminal agent_message (IS-ENV-1), both asynchronous to this path, so the owner asking
-// a question at the terminal or the agent simply finishing moves it. This narrows the window
-// to the delivery call itself and answers IS-LIFE-5's rule -- "refused, never misapplied" --
-// with the code the precondition already uses.
+// be driven with a daemon-wide mutex held -- so the verified fact is already a moment old when
+// it is acted on. A turn opens on a user_message and closes on a terminal agent_message
+// (IS-ENV-1), both asynchronous to this path, so the owner asking a question at the terminal
+// or the agent simply finishing moves it. Re-reading here answers IS-LIFE-5's rule --
+// "refused, never misapplied" -- with the code the precondition already uses.
 //
-// WHAT IT STILL DOES NOT CLOSE, disclosed rather than implied: the write itself is not inside
-// this read. A turn that moves while the bytes are crossing the PTY is not reachable from
-// here, and it is not reachable from anywhere else either -- undoing a partial write is not a
-// thing a PTY offers. What the two arms DO close is the far larger window in front of it.
+// WHAT THE RE-READ CLOSES, MEASURED IN INSTRUCTIONS AND NOT IN ROUND TRIPS. A turn only moves
+// under itemMu. The only interval in which one can move unobserved is therefore the interval
+// composerSend spends OUTSIDE that lock before this function retakes it: its Unlock, a hook
+// load, a nil test, a call. Short in instructions and not bounded in time -- a goroutine can
+// be descheduled anywhere inside it -- which is exactly why the tests DRIVE that interleaving
+// through testHookComposerCheckedNotYetDelivered rather than wait for it. Cheap to close and
+// worth closing: a send resumed after the turn it was written against has closed is
+// "misapplied" whatever the odds were.
+//
+// WHAT IT DOES NOT CLOSE IS THE LARGER HALF, and an earlier version of this comment had the
+// two the wrong way round. It named the tap subscribe and the shimwire round trip on one arm,
+// and the whole JSON-RPC round trip to another process on the other, as the windows the check
+// shuts. Every one of those is BELOW this line: they are the delivery, they run after the
+// re-read, and they stay open. A turn that moves while the bytes are crossing the PTY is not
+// reachable from here, and it is not reachable from anywhere else either -- undoing a partial
+// write is not a thing a PTY offers. The honest summary is narrow: the last look at the turn
+// moves from before composerSend's bookkeeping to immediately before the write, and the write
+// itself remains uncovered.
 func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTurn, nativeTurn, text, clientRef string) error {
 	if d.turnMovedSince(local, expectedTurn) {
 		return errTurnMoved

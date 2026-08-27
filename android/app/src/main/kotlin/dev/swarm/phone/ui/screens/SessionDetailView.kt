@@ -228,8 +228,14 @@ object DetailTag {
 
     /**
      * ADR-009 (6)'s visible per-send report: pending, sent, or refused with the gentle
-     * `stale_turn` wording. Above the bar, which is where every notice on this screen sits
-     * relative to what it qualifies.
+     * `stale_turn` wording.
+     *
+     * **IT IS NOT "ABOVE THE BAR" AND HAS NOT BEEN SINCE THE BAR LEFT** (plan H.7). This line
+     * read "Above the bar, which is where every notice on this screen sits relative to what it
+     * qualifies", and the bar it named is `conversationScaffoldView`'s pinned region now -- not
+     * on this screen at all -- so the sentence explained a position that had stopped existing.
+     * Where these two lines actually belong is the drawing's own answer and it is neither here
+     * nor the pinned region; the composition below carries it, at the site that adds them.
      */
     const val COMPOSER_NOTICE = "detail.composer.notice"
 
@@ -464,10 +470,28 @@ fun sessionDetailView(
     // without leaving the reading position; Kill is the header's overflow menu, behind exactly
     // the question it already ships. `ctaStack` has no caller on this screen any more, and the
     // reading flow costs nothing for either of the two controls that survived.
-    // ADR-009 (6)'s VISIBLE SEND, above the bar it reports on -- the same placement rule every
-    // other notice on this screen follows. It is the ERROR variant only for a refusal; a pending
-    // or delivered send is this screen reporting its own state, and painting that `--p-err` would
-    // report a refusal nobody made (see [outcome]'s own paragraph).
+    // ADR-009 (6)'s VISIBLE SEND, AT THE FOOT OF THE COLUMN AND DIRECTLY UNDER THE CONVERSATION
+    // IT REPORTS ON. What stood here was "above the bar it reports on -- the same placement rule
+    // every other notice on this screen follows", and it was false from the moment the bar left:
+    // the bar is `PhoneSurface.composerRegion`, pinned by `conversationScaffoldView` OUTSIDE this
+    // scroll, so there is nothing on this screen for these two lines to be above. A placement
+    // rule quoted about a component that is no longer here is how a file comes to explain a
+    // position nobody chose.
+    //
+    // **AND THEY ARE NOT FOLLOWING THE BAR OUT, BECAUSE THE DRAWING DOES NOT PUT THEM THERE**
+    // (plan H.7, and `docs/design/conversation-drawing.html` is authoritative for where a tabled
+    // string is drawn). All three of these sentences are sited on the MESSAGE and not on the
+    // chrome: `bubble.pending`, `bubble.refused` and `bubble.stale` are the line drawn directly
+    // beneath the sender's own bubble, inside the list, beside the bubble they are about. Pinning
+    // them under the composer would put tabled copy somewhere the sheet draws nothing, and the
+    // slice that settles a bubble against its own echo (plan H.4) would then have to take it back
+    // -- or, worse, would leave one send reported in two places at once, which is the plan's
+    // defect 2 exactly. They stay at the foot of the column until that slice moves them onto the
+    // bubble, which is a move this file does not own the transcript to make.
+    //
+    // It is the ERROR variant only for a refusal; a pending or delivered send is this screen
+    // reporting its own state, and painting that `--p-err` would report a refusal nobody made
+    // (see [outcome]'s own paragraph).
     // **A LABEL NAMES A STATE, A NOTICE EXPLAINS ONE, AND NO STATE GETS BOTH** (owner ruling, this
     // wave). `stateLabel` keeps "Sending" because that names a state and explains nothing;
     // `SENT` has no words at all -- a settled bubble is DRAWN, not narrated -- and the two

@@ -8,10 +8,20 @@ package skeleton
 // THE GAP, AND IT IS A LIVE ONE. composerSend verifies expected_turn against the daemon's own
 // turn state under itemMu, RELEASES the lock, and only then delivers (chat.go: the unlock at
 // the end of the precondition block, the deliverComposerText call on the line after it). The
-// verified fact is therefore stale by the time it is acted on, and the gap is not
-// instantaneous on either sink: the keystroke arm has a tap subscribe and a shimwire round
-// trip in front of the write, and the backend arm has a whole JSON-RPC round trip to another
-// process.
+// verified fact is therefore stale by the time it is acted on.
+//
+// HOW BIG THE GAP IS, SAID HONESTLY, because this header used to overstate it and so did the
+// comment on deliverComposerText. A turn only moves under itemMu, so the unguarded interval is
+// exactly the one composerSend spends outside that lock: an unlock, a hook load, a nil test, a
+// call. Both files used to describe the gap as holding "a tap subscribe and a shimwire round
+// trip" on one arm and "a whole JSON-RPC round trip" on the other. Those are the DELIVERY.
+// They run AFTER the re-check, they are the window that stays open, and naming them as the
+// window that closed made a few instructions read as three orders of magnitude more.
+//
+// A SHORT WINDOW IS NOT A CLOSED ONE, which is why the tests below still exist: a goroutine
+// can be descheduled anywhere inside it, and a send that resumes after the turn it was written
+// against has closed is misapplied whatever the odds were. The tests DRIVE that interleaving
+// through the seam rather than wait for it.
 //
 // WHAT MOVES IN THAT GAP IS NOT EXOTIC. The turn opens on a user_message and closes on a
 // terminal agent_message (IS-ENV-1) -- so the owner asking a question at the terminal, or the
@@ -30,8 +40,9 @@ package skeleton
 // THE SEAM. testHookComposerCheckedNotYetDelivered parks the test INSIDE the gap. Racing it
 // with sleeps would be dishonest in both directions -- a sleep long enough to be reliable
 // lands after the write has begun, and a sleep short enough to land before it is a coin toss.
-// The hook runs on the CALLER's goroutine, so everything below is ordinary sequential test
-// code with no goroutine of its own.
+// The hook runs on the CALLER's goroutine, so every turn test below is ordinary sequential
+// test code with no goroutine of its own. The one exception is the seam's own race test, which
+// is about the variable rather than the turn and needs two goroutines to say anything.
 
 import (
 	"fmt"
@@ -43,25 +54,72 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
+// armSeam and disarmSeam are the only two writes any test makes to the package's delivery-gap
+// hook. They exist as a pair so the synchronisation lives in ONE place: every test below
+// installs the seam and every test clears it, and a hook a daemon goroutine reads while a test
+// writes it is a data race whatever the test meant by it.
+func armSeam(fn func(string)) { testHookComposerCheckedNotYetDelivered.Store(&fn) }
+func disarmSeam()             { testHookComposerCheckedNotYetDelivered.Store(nil) }
+
 // inTheDeliveryGap installs a one-shot seam that runs `move` after composerSend has verified
 // expected_turn and before it has delivered anything, then removes it.
 func inTheDeliveryGap(t *testing.T, move func()) {
 	t.Helper()
 	fired := false
-	testHookComposerCheckedNotYetDelivered = func(string) {
+	armSeam(func(string) {
 		if fired {
 			return
 		}
 		fired = true
 		move()
-	}
+	})
 	t.Cleanup(func() {
-		testHookComposerCheckedNotYetDelivered = nil
+		disarmSeam()
 		if !fired {
 			t.Error("the delivery gap was never entered, so this test proved nothing: " +
 				"composerSend returned before it reached the seam")
 		}
 	})
+}
+
+// TestSlice0_TheSeamIsSafeToClearWhileASendIsInFlight is about the seam itself and not about
+// the turn.
+//
+// THE HOOK IS PACKAGE STATE A TEST WRITES AND A DAEMON GOROUTINE READS, and until this test
+// there was nothing between the two. Every delivery-gap test above clears it from t.Cleanup,
+// cleanups run LIFO, and the rig each test builds registers its teardown FIRST -- so the hook
+// is nilled while the daemon is still running, and any send still inside composerSend at that
+// instant reads the variable the cleanup is writing. Low probability and entirely real: -race
+// reports it, and a gate that reports a race on its own scaffolding teaches the next reader to
+// ignore -race output.
+//
+// This drives the same collision on purpose rather than waiting for teardown to find it: real
+// sends on one goroutine, the arm/clear a cleanup performs on the other, no synchronisation
+// between them beyond whatever the hook itself provides. Under -race it either reports or it
+// does not; nothing here asserts on a turn.
+func TestSlice0_TheSeamIsSafeToClearWhileASendIsInFlight(t *testing.T) {
+	r := newR7ComposerRig(t, true)
+	daemonTurn := r7OpenNativeTurn(t, r)
+	t.Cleanup(disarmSeam)
+
+	sends := make(chan struct{})
+	go func() {
+		defer close(sends)
+		for i := 0; i < 64; i++ {
+			// The outcome is deliberately unread: this test is about the seam variable,
+			// not the turn, and a send refused for any reason has still read the hook.
+			_, _ = r.sendBare(daemonTurn, "a message", fmt.Sprintf("devA:01JS0SEAMRACE%010d", i))
+		}
+	}()
+	for {
+		select {
+		case <-sends:
+			return
+		default:
+		}
+		armSeam(func(string) {})
+		disarmSeam()
+	}
 }
 
 // assertNoBackendCall proves the RPC never went out.

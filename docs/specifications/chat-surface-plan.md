@@ -347,3 +347,72 @@ drawing names. The owner's physical demonstration (`agents-tracker-11un`) is the
    the copy-gate claim, the borrowed tear wording). **That does not discharge Fable's pass** — re-run it
    against the drawing when credits return, per the standing owner instruction that Fable is a permanent
    committee member.
+
+---
+
+## 14. Wave H — the committee's ledger (2026-08-26, post-implementation audit)
+
+The audit committee sat again after Waves A-G landed and 1,570 Kotlin tests went green. It found
+that **the wave built the shape of a chat surface and not the behaviour the owner described.** Three
+findings are blocking, and the first is the owner's original complaint, untouched.
+
+Seats: Sonnet and Opus reported. Codex hit its usage limit mid-review; agy was auto-denied headless;
+**Fable's design-honesty seat was vacant for the third time** (standing risk 5 still open).
+
+### The ordering constraint that must not be broken
+
+**R4's buttons are wired BEFORE the sheet is deleted.** The inline `decisionCard` computes
+`val answer = if (block.approval) onDecision else null`, and `onDecision` is not a parameter of
+`sessionDetailView` and is never passed — so the card has **no buttons** and falls back to a tap that
+scrolls to the sheet. Deleting the sheet first was attempted on 2026-08-26 and reverted: it makes
+every approval unanswerable from the phone, and IS-LIFE-2's exactly-once resolution would never
+arrive from this side. H.3 is one slice, wiring first, deletion second.
+
+### The slices, in dependency order
+
+| # | Bead | What | Where | Done when |
+|---|---|---|---|---|
+| H.1 | `tu7z` **P0** | A conversation opens at its **newest** message | `PhoneScaffoldView.kt`, `SessionDetailView.kt` | a test asserts the scroll position on open, after output, and across a rebuild |
+| H.2 | `jz0z` **P1** | Scroll survives a scaffold rebuild; the comment claiming it already does is corrected | `PhoneSurface.kt`, `PhoneScaffoldView.kt` | opening an R8 output or R9 diff and returning lands where the reader left |
+| H.3 | `ryuk` **P0** | R4 delivered: `onDecision` wired to the inline card, buttons reach `App.Approve`, **then** the sheet is deleted | `SessionDetailView.kt`, `PhoneSurface.kt`, `ApprovalSheet*` | `SessionDetailOneDecisionTest` green AND an inline choice reaches the facade |
+| H.4 | `svph` **P0** | R6 delivered: a bubble is pending until its own echo | `TranscriptPanel.kt`, `SessionDetailPanel.kt`, `PhoneSurface.kt` | a sent message is visible as a pending bubble before the echo, and never vanishes |
+| H.5 | `3jop` **P1** | The copy gate's negative controls stop passing vacuously | `internal/verify/`, `scripts/` | a mutation-free run of each control **passes**, proving the control discriminates |
+| H.6 | `t8u6` **P1** | A rotation keeps the conversation, the draft and the screen sub-state | `PhoneActivity.kt`, `PhoneSurface.kt` | the draft survives a recreate |
+| H.7 | S4 | ~~The composer's status and refusal lines follow the bar out of the scroll~~ **CLOSED BY ARGUMENT, folded into H.4** | `SessionDetailView.kt` | the false placement comment is corrected; the strings stay put |
+| H.8 | S8 | An unknown session group stops drawing the finished dot | `SessionDetailPanel.kt` | an unrecognised group renders as unknown, never as `completed` |
+| H.9 | S6 | The `stale_turn` re-check comment says what it closes; the test hook stops racing teardown | `internal/skeleton/chat.go`, `s0_turnmoved_test.go` | the prose matches the mechanism |
+| H.10 | S5 | The overflow menu stops double-counting the top inset | `PhoneSurface.kt` | owed to the handset run; unreachable from Robolectric |
+| H.11 | — | Waves B and E get the evidence sections the plan requires | `docs/verification/chat-surface.md` | §12's rule is met for every wave |
+
+### H.7 was wrong, and the lane that was given it said so
+
+The finding framed `bubble.pending` / `bubble.refused` / `bubble.stale` as **chrome** stranded inside
+the scroll, and prescribed pinning them under the composer. The lane checked the sheet instead of
+building it: the drawing draws all three as `.undermsg` **directly under the sender's own bubble**,
+and the copy table sites them as bubble rows. They are message copy.
+
+Pinning them under the bar would put tabled copy where the sheet draws nothing, and **H.4 would have
+to take it straight back** — or leave one send reported in two places, which is this plan's own
+defect 2. So H.7 is closed by argument and its substance folds into H.4: a send's state belongs on
+the send.
+
+What survives from the finding is real and is fixed: the comment at the placement site claimed the
+lines sat *"above the bar it reports on — the same placement rule every other notice on this screen
+follows"*, and the bar had been moved to the scaffold's pinned region a wave earlier. **The comment
+was the defect**, not the placement.
+
+Costed and rejected, recorded so nobody re-derives it: pinning them needs TWO permanent views in
+`composerRegion`, not one, because folding them into `composerShutDetail` would paint a refusal in
+INFO ink or the offline sentence in `--p-err`.
+
+### Three rules this wave adopts, each from a specific failure
+
+1. **A removed parameter breaks files no lane owns.** The only compile breakage across six lanes was
+   three unowned test files still passing `stop`/`kill`/`composer`/`onBack` to `sessionDetailView`.
+   Before removing a parameter, sweep every caller in `app/src/test` — `ScreenAirSweepTest.kt` first,
+   every time.
+2. **A reviewer's finding is verified before it is acted on.** The duplicate-decision finding was
+   right about the duplication and wrong about the danger, and acting on it unverified would have
+   shipped a worse defect than it fixed.
+3. **A behavioural claim needs a behavioural test.** No test in the suite asserts a scroll position,
+   which is why a green 1,570 said nothing about the screen opening at the wrong end.

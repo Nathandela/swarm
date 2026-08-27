@@ -381,6 +381,23 @@ func normalizeScreenItem(t *testing.T, it *swarmmobile.TranscriptItem, ids map[s
 	if _, has := body["operation_id"]; has {
 		body["operation_id"] = fixedOperationID
 	}
+	// THE ITEM-LEVEL FIELD NEEDS THE SAME TREATMENT AS THE ONE IN THE BODY, and it did not get it
+	// when the field was added.
+	//
+	// `OperationID` reached `TranscriptItem` so the phone could settle a sent bubble against the
+	// agent's own echo (owner ruling R6). The body's copy has been normalised since this file was
+	// written; the new field was not, so the golden captured whichever id that run happened to
+	// mint -- a fresh 32 hex characters every time. The result was a byte-exact golden that could
+	// only ever match the run that wrote it, failing forever afterwards while pointing at a diff
+	// whose only difference was a random number.
+	//
+	// It is a REAL id in production and carries a real fact; what it must not do is enter a
+	// recorded crossing that is compared byte for byte. Normalised here rather than dropped,
+	// because dropping it would stop the recording asserting the field crosses at all -- which is
+	// the whole reason it was added.
+	if it.OperationID != "" {
+		it.OperationID = fixedOperationID
+	}
 	// json.Marshal sorts map keys, which is what makes the re-encoded body byte-stable. The
 	// producer already emits sorted keys (see the recorded probe in the evidence file), so this
 	// reproduces its own ordering rather than imposing a new one.

@@ -10,6 +10,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -833,6 +834,17 @@ class PhoneSurface(
      */
     private var detail: String? = null
         set(value) {
+            // THE REMEMBERED SCROLL BELONGS TO ONE CONVERSATION, AND THIS IS THE ONE PLACE THAT
+            // KNOWS WHICH ONE IS OPEN. Every departure and every switch goes through this setter
+            // -- the chevron, the back gesture, re-tapping the Inbox tab, a row tap on the list,
+            // and the core refusing on a later resume -- so clearing here cannot be forgotten on
+            // one of them, which is the failure mode a clause added beside each of those five
+            // call sites has. Left standing, the offset would open the NEXT session at the place
+            // the reader left the last one, which on a shorter conversation is its end and on a
+            // longer one is the middle of somebody else's work. [conversationScrollY] argues the
+            // other half: what makes it survive a REBUILD is that a rebuild does not come
+            // through here.
+            if (value != field) conversationScrollY = null
             field = value
             pushDrillDown()
         }
@@ -1004,6 +1016,32 @@ class PhoneSurface(
      * between opening a session and closing it.
      */
     private var scaffoldDrawn: ScaffoldKey? = null
+
+    /**
+     * Where the reader was in the conversation when its scaffold was last discarded, or null when
+     * the next conversation to be drawn is being OPENED rather than returned to.
+     *
+     * **IT IS A NUMBER THE SURFACE CARRIES BECAUSE THE VIEW THAT HELD IT IS GONE**
+     * (agents-tracker-jz0z). [ScaffoldKey] includes `literal` and `composer`, so opening an R8
+     * output screen or an R9 diff and coming back rebuilds the scaffold, as does a session losing
+     * its message sink -- and `conversationScaffoldView` builds a fresh `ScrollView` per call, so
+     * the offset dies with the one that is discarded. [contentHost] surviving the rebuild does not
+     * save it: a `FrameLayout` has no scroll position, and the comment in [drawScaffold] that said
+     * otherwise stood in this file for a whole wave while the screen it described was dumping
+     * readers at the top of the transcript.
+     *
+     * **NULL IS A STATE AND NOT AN ABSENCE**, which is the whole of H.1 (agents-tracker-tu7z):
+     * a conversation with nothing to restore opens at its NEWEST message, because the transcript
+     * is oldest-at-top and the alternative -- the one that shipped -- is a reader landing on the
+     * first messages of a session and never being scrolled again.
+     *
+     * IT IS CLEARED BY [detail]'S SETTER AND WRITTEN BY [drawScaffold], which is the split that
+     * makes it correct: a rebuild is not a change of conversation and does not go through the
+     * setter, and a departure is, and does. Kept while the reader is off on Activity or Settings
+     * with a session still open, for the reason `selectDestination` already gives about the
+     * drill-down itself: checking the feed mid-session is not leaving the session.
+     */
+    private var conversationScrollY: Int? = null
 
     /**
      * The four facts that decide which root the window holds, and what is in it.
@@ -2303,6 +2341,27 @@ class PhoneSurface(
             literal = literalRouteItem,
         )
         if (next == scaffoldDrawn && host.childCount > 0) return
+        // WHERE THE READER WAS, READ OFF THE SCROLL THAT IS ABOUT TO BE DISCARDED
+        // (agents-tracker-jz0z). It is taken HERE, past the early return and before
+        // [scaffoldDrawn] is overwritten, because both facts it needs are only true at this
+        // point: that a rebuild is actually happening, and which composition is being torn down.
+        //
+        // TWO GUARDS, AND EACH ANSWERS A CASE THAT WOULD OTHERWISE PUT A READER SOMEWHERE THEY
+        // HAVE NEVER BEEN. The first is that the composition being discarded was the
+        // CONVERSATION: on a tab destination [contentHost] hangs inside `phoneScaffoldView`'s
+        // scroll instead, and reading that would carry how far down the Activity journal someone
+        // had scrolled into the transcript they return to. The second is that the drill-down is
+        // still open: [closeSessionDetail] clears the memory through [detail]'s setter and then
+        // renders, so a read here would resurrect the offset one line after it was deliberately
+        // dropped, and the next session opened would land at the previous one's position.
+        //
+        // A NULL PARENT NEEDS NO GUARD OF ITS OWN and that is not an accident: while an R8 or R9
+        // screen is up the conversation's hosts are detached and [contentHost] has no parent at
+        // all, so the return journey reads nothing and the offset taken on the way IN is still
+        // the one that gets restored.
+        if (scaffoldDrawn?.conversation == true && detail != null) {
+            (contentHost.parent as? ScrollView)?.let { conversationScrollY = it.scrollY }
+        }
         scaffoldDrawn = next
         // EVERY LONG-LIVED HOST SURVIVES THE REBUILD, and each has to be taken out of the scaffold
         // that is about to be discarded: Android refuses an `addView` of a child that still claims
@@ -2325,10 +2384,25 @@ class PhoneSurface(
                 // **THE THIRD ROOT** (owner rulings R8 and R9). It replaces the conversation
                 // rather than covering it, which is what "on its own screen" means and what the
                 // two screens are built for: `outputScreen` carries its own nav header and back,
-                // so there is no second way out to keep in step. The conversation's own hosts are
+                // so there is no second way out to keep in step.
+                //
+                // **THIS COMMENT USED TO CLAIM THE SCROLL SURVIVED BY ITSELF, AND IT DID NOT**
+                // (agents-tracker-jz0z). What stood here was "the conversation's own hosts are
                 // detached above and re-attached by the next draw with their scroll intact --
                 // [contentHost] keeps its child throughout, so coming back lands the reader where
-                // they left rather than at the top of the transcript.
+                // they left rather than at the top of the transcript." [contentHost] is a
+                // `FrameLayout`; it has no scroll position to keep. The offset lived on the
+                // `ScrollView` `conversationScaffoldView` had just built and this branch had just
+                // thrown away, so every trip into a tool's output returned the reader to the
+                // OLDEST message in the session -- while a comment justifying the design said the
+                // opposite, in as many words, for a whole wave. It is written down rather than
+                // quietly deleted because a load-bearing false claim is the failure class that
+                // cost this repo a P0 in the pairing-entry wave, and the correction is worth more
+                // than the tidiness.
+                //
+                // WHAT ACTUALLY CARRIES IT IS [conversationScrollY]: the offset is read off the
+                // scroll above, before this root replaces it, and handed back to
+                // `conversationScaffoldView` on the return journey.
                 literal
             } else if (conversation) {
                 // **THE SECOND TOP-LEVEL COMPOSITION** (chat-surface-plan §5): a conversation is
@@ -2358,6 +2432,12 @@ class PhoneSurface(
                     // not have -- and dropping it here would make the one screen where a person is
                     // TYPING the one screen that cannot tell them the link is gone.
                     status = syncHost,
+                    // WHERE THE READER LANDS, WHICH ONLY THIS FUNCTION CAN ANSWER. The scaffold is
+                    // built fresh for an OPENING and for a RETURN alike and cannot tell them
+                    // apart; [conversationScrollY] is null for the first, so the conversation
+                    // opens at its newest message (agents-tracker-tu7z), and holds the offset read
+                    // above for the second (agents-tracker-jz0z).
+                    scrollY = conversationScrollY,
                 )
             } else {
                 phoneScaffoldView(

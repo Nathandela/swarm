@@ -230,6 +230,42 @@ class SessionDetailComposerTest {
         )
     }
 
+    /**
+     * **THE COLD OPEN IS A DECISION HERE, NOT A FALL-THROUGH** (owner ruling, this wave).
+     *
+     * WHAT THIS IS AGAINST. `openTurnOf` answers `""` for an empty item list and for a closed
+     * turn alike, so a session no item has reached yet resolves to the same value an idle one
+     * does. The HEADER stopped claiming a state from that (`SessionDetailHeaderTest`'s no-record
+     * test) and the placeholder deliberately did NOT follow it out, so this asserts the branch
+     * that was left behind -- otherwise "Message" on a cold open is a side effect of an empty
+     * list, and the next reader to notice the divergence removes it as an inconsistency.
+     *
+     * WHY THE TWO DIVERGE, which is the whole reason this test exists beside the one above. The
+     * header word REPORTS what the agent is doing; the placeholder INVITES an action that is
+     * genuinely available in both states. "Message" on a cold-opened working session is a weaker
+     * claim than `idle` on one, because typing really is available -- and the costs are not
+     * symmetric either: dropping the state word costs nothing, since the machine name still
+     * carries the line, while dropping the hint costs a label outright. `PhoneSurface.field`'s
+     * own rule settles that half: the hint IS the label on this surface, so a field added without
+     * one is a box a user cannot identify. No fourth composer state was tabled for it, because a
+     * string saying "I do not know whether this agent is working" says less than the two we have
+     * on a control whose only job is to invite typing.
+     *
+     * IT ASSERTS THE DECISION AND NOT THE STRING, which is why it spends `placeholderFor(false)`
+     * rather than "Message": the copy is `ComposerModel`'s and the sheet's, and a literal here
+     * would be a second place to change it.
+     */
+    @Test
+    fun `a session this phone holds no record of invites a message rather than feedback`() {
+        assertEquals(
+            "a cold-opened session drew the WORKING placeholder, or something that is neither -- " +
+                "the hint on a session no item has reached yet is the idle invitation, decided " +
+                "rather than inherited from an empty list",
+            ComposerModel.placeholderFor(false),
+            panel(items = emptyList()).composerPlaceholder,
+        )
+    }
+
     // ---- M2.4: the visible per-send lifecycle --------------------------------
 
     @Test

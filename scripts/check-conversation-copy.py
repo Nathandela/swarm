@@ -18,6 +18,7 @@ script; promoted here, given a root argument so it can be run against a mutated 
 wired to internal/verify/conversation_copy_test.go.
 
 Usage: check-conversation-copy.py <repo-root>
+       check-conversation-copy.py --inputs   # every file the check reads, one per line
 """
 import html
 import os
@@ -39,6 +40,13 @@ K = "android/app/src/main/kotlin/dev/swarm/phone/"
 # tree actually ships today; the sheet has more, and the checker prints the ratio on every run
 # precisely so a green result is never read as "the whole sheet is checked".
 BOUND = {
+    # ONE WORD, AND IT IS THE WHOLE OF R6: a bubble is pending until its own echo, and this is
+    # what the reader sees while it waits. It went unbound until 2026-08-26 for a reason that
+    # was never stated on the run -- seven characters, under the substring floor below -- so the
+    # row the pending-bubble ruling turns on was the one row nobody was checking. It is compared
+    # as the quoted Kotlin literal now (see `comparison`). If the label ever moves off the
+    # composer kit and onto the transcript, this binding moves with it; that is the gate working.
+    "bubble.pending":         [K + "ui/kit/Composer.kt"],
     "bubble.refused":         [K + "ui/ErrorRouting.kt", K + "ui/kit/Composer.kt"],
     "bubble.stale":           [K + "ui/ErrorRouting.kt", K + "ui/kit/Composer.kt"],
     "composer.ended":         [K + "ui/kit/Composer.kt"],
@@ -74,6 +82,24 @@ BOUND = {
     # and with the reason recorded beside it, and it binds.
 }
 
+def inputs():
+    """Every file this check reads, the drawing first.
+
+    THE MUTATION HARNESS COPIES EXACTLY THIS LIST, and derives it from here rather than
+    repeating it. It repeated it once: internal/verify/conversation_copy_test.go named four
+    files while BOUND named five, so every mutation run died on the two it could not open --
+    which made each negative control pass on a rejection its mutation had not caused, and one
+    of them would have passed against an unmutated tree (agents-tracker-3jop). A second copy
+    of this list is a second thing to keep in step, and it did not stay in step.
+    """
+    out = [DRAWING]
+    for files in BOUND.values():
+        for rel in files:
+            if rel not in out:
+                out.append(rel)
+    return out
+
+
 # WHAT THIS CHECK DOES NOT DO, stated here because the drawing's own claim depends on it.
 #
 # IT CHECKS ONE DIRECTION. It asks "does the tabled string appear in the file that must carry
@@ -105,6 +131,44 @@ def code_only(src):
     )
 
 
+SUBSTRING_FLOOR = 12
+
+# A bare substring search for a SHORT word proves nothing: `sending` matches inside `resending`
+# and inside any identifier that happens to contain it, so a pass would say only that the
+# letters occur somewhere. That is the real reason for a length floor, and it is a reason to
+# compare short cells DIFFERENTLY rather than to drop them.
+
+
+def comparison(cell):
+    """How one tabled cell is compared against the source: (needle, how, why-not).
+
+    TWO CELLS ARE NOT COMPARED, FOR TWO DIFFERENT REASONS, and reporting either under the
+    other's name is a lie the run tells about its own coverage. Until 2026-08-26 every skip
+    printed "template only", which is true of `<change> - <path> - +N -M` and false of
+    `sending`: the second is a literal, it has bytes, and they are the bytes on screen. The
+    row that ruling belongs to went unchecked while the run described it as a limit of the
+    check (agents-tracker-3jop).
+
+    A TEMPLATE cannot be compared at all -- the whole sentence is assembled at render and
+    exists nowhere as a contiguous string. A SHORT LITERAL can, as the quoted Kotlin literal
+    the source must write, which is exact where a bare substring would be incidental.
+    """
+    if not cell:
+        return None, "", ("an empty cell, which every file on earth carries: comparing it "
+                          "would print OK and mean nothing")
+    if "<" in cell or ">" in cell:
+        return None, "", ("a <placeholder> template: the sentence is composed at render and "
+                          "exists nowhere as contiguous bytes")
+    if len(cell) >= SUBSTRING_FLOOR:
+        return cell, "", ""
+    if '"' in cell or "\\" in cell or "$" in cell:
+        return None, "", ("a short literal carrying a quote, a backslash or a Kotlin template "
+                          "mark, which this checker cannot requote for an exact comparison")
+    return '"%s"' % cell, ("as the quoted Kotlin literal, being under the %d-character floor "
+                           "where a bare substring would match inside an identifier"
+                           % SUBSTRING_FLOOR), ""
+
+
 ROW = re.compile(r'<tr><td class="k">([a-z0-9.]+)</td><td>(.*?)</td><td>(.*?)</td></tr>', re.S)
 
 
@@ -126,9 +190,12 @@ def tabled_copy(root):
 
 def main(argv):
     if len(argv) != 2:
-        print(__doc__.strip().splitlines()[-1])
+        print("\n".join(__doc__.strip().splitlines()[-2:]))
         return 2
     root = argv[1]
+    if root == "--inputs":
+        print("\n".join(inputs()))
+        return 0
     tabled = tabled_copy(root)
     if tabled is None:
         return 1
@@ -150,22 +217,35 @@ def main(argv):
             continue
         # EVERY bold cell, not just the first. Several rows table a placeholder AND the
         # sentence under it; checking one of two silently halves the coverage while looking
-        # complete. A cell carrying a <placeholder> is a template, not a literal, and is
-        # skipped -- it has no bytes to compare.
-        cells = [c for c in tabled[key]
-                 if len(c) >= 12 and "<" not in c and ">" not in c]
-        if not cells:
-            print("\n%s\n  no literal cell to compare (template only)" % key)
+        # complete. Each cell reports how it was compared, or why it could not be.
+        cells = [(c,) + comparison(c) for c in tabled[key]]
+        if not any(needle for _c, needle, _how, _why in cells):
+            # A BINDING THAT COMPARES NOTHING IS NOT A NOTE. Naming a file in BOUND asserts
+            # that the file carries this copy; if no cell can be compared, the assertion is
+            # never made, and the run reads exactly like one where it held.
+            print("\nNOTHING TO COMPARE  %s: bound to %d file(s), and no cell of its row can"
+                  % (key, len(files)))
+            print("                    be compared, so the binding asserts nothing.")
+            for cell, _needle, _how, why in cells:
+                print("                    %r: %s" % (cell, why))
+            print("                    Either the row stopped tabling a literal, or the")
+            print("                    binding belongs on a row that still does.")
+            faults += 1
             continue
         print("\n%s" % key)
-        for sentence in cells:
+        for sentence, needle, how, why in cells:
+            if not needle:
+                print("  not compared: %r -- %s" % (sentence, why))
+                continue
             exotic = [hex(ord(c)) for c in sentence if ord(c) > 127]
             print("  extracted : %r\n  codepoints: %s"
                   % (sentence, exotic or "all ASCII"))
+            if how:
+                print("  compared  : %r %s" % (needle, how))
             for rel in files:
                 path = os.path.join(root, rel)
                 try:
-                    carried = sentence in code_only(open(path, encoding="utf-8").read())
+                    carried = needle in code_only(open(path, encoding="utf-8").read())
                 except OSError as exc:
                     print("  UNREADABLE %s (%s)" % (rel, exc))
                     faults += 1
