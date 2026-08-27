@@ -1,0 +1,85 @@
+Auto-upgrade lane E (docs/specifications/auto-upgrade-plan.md revision 5, section 3 L2)
+— failing-first evidence (GG-5).
+
+Branch: worktree-agent-aa815097c0f66cf43
+Test:   cmd/swarm/unattended_test.go, written before cmd/swarm/unattended.go existed and
+        before runDaemon learned about `restart --unattended`.
+
+WHAT THE PRE-WIRING TREE DOES. runDaemon (cmd/swarm/main.go:489) matched only
+args[0] == "restart" and IGNORED every argument after it, so both
+`swarm daemon restart --unattended` and `swarm daemon restart --bogus` performed a plain
+D-8 stop-and-spawn from the CALLER's environment and exited 0 with an empty stderr. That
+is exactly what the six cases below catch: no exit code, no reason line, and a daemon
+restarted where nothing should have moved.
+
+Note on the environment: this run was preceded by clearing 493 orphaned `swarm shim`
+processes left behind by earlier test runs on this machine. macOS caps PTYs at
+kern.tty.ptmx_max = 511 and 506 were held, so every session launch — this test's case 3
+and the pre-existing cmd/swarm TestAttachDialer_AttachesAfterAutoUpgrade alike — failed
+with "shim: start agent: device not configured". That is a machine condition, not a
+property of the tree under test.
+
+--------------------------------------------------------------------------------
+RED
+--------------------------------------------------------------------------------
+
+$ go test -count=1 -run 'TestUnattendedRestart_AgainstRealDaemons' -v ./cmd/swarm/
+
+=== RUN   TestUnattendedRestart_AgainstRealDaemons
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case1_restart_spawns_the_replacement_from_the_saved_environment
+    unattended_test.go:316: `swarm daemon restart --unattended` exit=0 stderr=""
+    unattended_test.go:322: stderr must contain "converged"; got:
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case2_a_second_run_against_this_build_touches_nothing
+    unattended_test.go:377: case 1 did not converge the daemon
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case3_a_live_session_defers_the_converge
+    unattended_test.go:429: `swarm daemon restart --unattended` exit=0 stderr=""
+    unattended_test.go:431: exit = 0, want 2 (deferred); stderr:
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case4_no_saved_environment_is_refused
+    unattended_test.go:465: `swarm daemon restart --unattended` exit=0 stderr=""
+    unattended_test.go:467: exit = 0, want 3 (refused); stderr:
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case5_no_daemon_converges_and_spawns_nothing
+    unattended_test.go:500: `swarm daemon restart --unattended` exit=0 stderr=""
+    unattended_test.go:506: stderr must report rule 0; got:
+=== RUN   TestUnattendedRestart_AgainstRealDaemons/case6_an_unknown_argument_is_a_usage_error
+    unattended_test.go:522: `swarm daemon restart --bogus` exit=0 stderr=""
+    unattended_test.go:524: exit = 0, want 2 (usage error); stderr:
+--- FAIL: TestUnattendedRestart_AgainstRealDaemons (7.57s)
+    --- FAIL: TestUnattendedRestart_AgainstRealDaemons/case1_restart_spawns_the_replacement_from_the_saved_environment (1.43s)
+    --- SKIP: TestUnattendedRestart_AgainstRealDaemons/case2_a_second_run_against_this_build_touches_nothing (0.00s)
+    --- FAIL: TestUnattendedRestart_AgainstRealDaemons/case3_a_live_session_defers_the_converge (0.31s)
+    --- FAIL: TestUnattendedRestart_AgainstRealDaemons/case4_no_saved_environment_is_refused (0.25s)
+    --- FAIL: TestUnattendedRestart_AgainstRealDaemons/case5_no_daemon_converges_and_spawns_nothing (0.09s)
+    --- FAIL: TestUnattendedRestart_AgainstRealDaemons/case6_an_unknown_argument_is_a_usage_error (0.17s)
+FAIL
+FAIL	github.com/Nathandela/swarm/cmd/swarm	8.959s
+FAIL
+
+--------------------------------------------------------------------------------
+Reading of the red run, case by case
+--------------------------------------------------------------------------------
+
+case1  exit 0 with an EMPTY stderr: the plain restart ran and reported nothing, so
+       neither "converged" nor "restarted from the saved environment" is present. The
+       replacement was spawned from the launchd-like caller environment, which is the
+       defect L2 exists to prevent.
+case2  skipped, because case 1 never converged the daemon and there is nothing for a
+       second run to be idempotent about.
+case3  exit 0 against a daemon with a LIVE fake session: rule 2 does not exist, so the
+       session was interrupted rather than the converge deferred (want exit 2).
+case4  exit 0 with daemon.env deleted: rule 3 does not exist, so the daemon was restarted
+       from the timer's own bare environment instead of being refused (want exit 3).
+case5  exit 0 but with no reason line, and a daemon SPAWNED into an empty state dir:
+       rule 0 does not exist (want exit 0, "no daemon holds the lock", nothing spawned).
+case6  `daemon restart --bogus` exit 0: the unknown argument was swallowed and the daemon
+       was restarted (want exit 2 and the usage line).
+
+--------------------------------------------------------------------------------
+One test bug fixed BEFORE the implementation was written (TDD phase 2)
+--------------------------------------------------------------------------------
+
+The first draft of case 3 polled the on-disk roster for the id `Client.Launch` returns.
+That id is federation-namespaced ("<endpoint>/<local>", protocol.NamespacedID), while the
+persisted meta.json — the roster the converge's rule 2 reads — carries the LOCAL id, so
+the poll could never match and the case failed with "never appeared busy" instead of on
+the missing wiring. The test now derives the local id and asserts on that, which is also
+the id the deferral line names.

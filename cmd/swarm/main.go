@@ -481,14 +481,27 @@ func archAugmentedReason(base string, det adapter.Detection, translated bool) st
 }
 
 // runDaemon runs the `swarm daemon` role. `swarm daemon restart` performs the
-// D-8 safe restart. A plain `swarm daemon` stands up the FULL assembly
+// D-8 safe restart from the CALLER's environment (the owner's shell), and
+// `swarm daemon restart --unattended` performs the nightly converge instead
+// (auto-upgrade plan L2, ADR-020). A plain `swarm daemon` stands up the FULL assembly
 // (internal/skeleton) from its SWARM_DAEMON_* environment (set by the client's
 // detached auto-start, D-1) and serves until signalled; with no such configuration
 // it is a no-op stub, since the daemon is never started bare by a user — the
 // client auto-starts it.
 func runDaemon(args []string, _, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "restart" {
-		return runDaemonRestart(stderr)
+		switch {
+		case len(args) == 1:
+			return runDaemonRestart(stderr)
+		case len(args) == 2 && args[1] == "--unattended":
+			return runDaemonRestartUnattended(stderr)
+		default:
+			// 2 is this binary's usage-error status and also converge.ExitDeferred; the
+			// plist template is tested to carry the exact flag, and this stderr line is
+			// what tells the two apart in the timer's log.
+			_, _ = fmt.Fprintln(stderr, daemonRestartUsage)
+			return 2
+		}
 	}
 	cfg, ok := skeletonConfigFromEnv()
 	if !ok {
