@@ -738,7 +738,30 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
 	// hands the shim, so the binary this resolves is the binary the agent runs.
 	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
-	if spec.Options[protocol.OptionHandoffFrom] != "" {
+	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
+	// because it is the ONLY point every launch entry passes through. handleLaunch has
+	// the same presence check, but `session_launch` (the signed remote-preset path) does
+	// not go through handleLaunch at all: it copies a preset's options wholesale and
+	// calls Launch directly. A preset carrying `handoff_from=` would therefore arrive
+	// here with the key PRESENT and EMPTY, and an emptiness test would read it as absent
+	// and compose an ordinary launch -- a context-free agent in the owner's checkout,
+	// which is the one outcome ADR-010 Amendment 4 E7 says must never happen. A key that
+	// was never set is still an ordinary launch; a key set to "" is a caller bug and is
+	// refused by name.
+	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
+	// because it is the ONLY point every launch entry passes through. handleLaunch has
+	// the same presence check, but `session_launch` (the signed remote-preset path) does
+	// not go through handleLaunch at all: it copies a preset's options wholesale and
+	// calls Launch directly. A preset carrying `handoff_from=` would therefore arrive
+	// here with the key PRESENT and EMPTY, and an emptiness test would read it as absent
+	// and compose an ordinary launch -- a context-free agent in the owner's checkout,
+	// which is the one outcome ADR-010 Amendment 4 E7 says must never happen. A key that
+	// was never set is still an ordinary launch; a key set to "" is a caller bug and is
+	// refused by name.
+	if handoffFrom, present := spec.Options[protocol.OptionHandoffFrom]; present {
+		if handoffFrom == "" {
+			return persist.Meta{}, fmt.Errorf("handoff: %s is empty; it must name the source session", protocol.OptionHandoffFrom)
+		}
 		composed, err := composeHandsOffLaunch(spec, a.endpointID, a.core.Get, a.historyResolver)
 		if err != nil {
 			return persist.Meta{}, err
