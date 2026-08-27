@@ -451,6 +451,40 @@ func TestRefusedHelloSpawnsOnceAndOnlyAfterTheDiskChecks(t *testing.T) {
 	}
 }
 
+// A dependency the caller forgot to wire must fail the run loudly and BEFORE
+// anything is touched. A panic would exit the process with status 2, which is
+// exactly the code that means "nothing was touched, try again tomorrow" -- so an
+// unguarded nil would have the job lie to launchd every night, forever.
+func TestMissingDependencyFailsBeforeTouchingAnything(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		blank func(d *converge.Deps)
+	}{
+		{"LockFree", func(d *converge.Deps) { d.LockFree = nil }},
+		{"Hello", func(d *converge.Deps) { d.Hello = nil }},
+		{"Sessions", func(d *converge.Deps) { d.Sessions = nil }},
+		{"SavedEnv", func(d *converge.Deps) { d.SavedEnv = nil }},
+		{"RestartDaemon", func(d *converge.Deps) { d.RestartDaemon = nil }},
+		{"RestartGateway", func(d *converge.Deps) { d.RestartGateway = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			d := f.deps()
+			tc.blank(&d)
+
+			if got := converge.Run(d); got != converge.ExitFailed {
+				t.Errorf("Run with a nil %s = %d, want ExitFailed (%d)", tc.name, got, converge.ExitFailed)
+			}
+			if len(f.trace) != 0 {
+				t.Errorf("Run with a nil %s called %v; a misconfigured run must touch nothing", tc.name, f.trace)
+			}
+			if line := f.reason(t); !strings.Contains(line, tc.name) {
+				t.Errorf("reason = %q, want it to name the missing dependency %q", line, tc.name)
+			}
+		})
+	}
+}
+
 // A nil Log must not panic the nightly job: the exit code is the timer's result
 // and is never traded for a logging accident.
 func TestNilLogDoesNotPanic(t *testing.T) {

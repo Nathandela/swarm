@@ -95,6 +95,27 @@ const (
 // spawns nothing before rule 4, and writes exactly one reason line to d.Log
 // before returning.
 func Run(d Deps) int {
+	// Preflight. A dependency the caller forgot to wire would panic, and a Go
+	// panic leaves the process with status 2 -- the one code that tells the timer
+	// "nothing was touched, try again tomorrow". That would be a lie, possibly
+	// after the daemon had already been stopped, so a misconfigured run refuses
+	// before it touches anything.
+	for _, dep := range []struct {
+		name    string
+		missing bool
+	}{
+		{"LockFree", d.LockFree == nil},
+		{"Hello", d.Hello == nil},
+		{"Sessions", d.Sessions == nil},
+		{"SavedEnv", d.SavedEnv == nil},
+		{"RestartDaemon", d.RestartDaemon == nil},
+		{"RestartGateway", d.RestartGateway == nil},
+	} {
+		if dep.missing {
+			return say(d.Log, ExitFailed, "failed: converge is misconfigured, Deps.%s is nil; nothing was touched", dep.name)
+		}
+	}
+
 	// Rule 0: no daemon is running, so there is nothing to converge. The next
 	// `swarm` command starts one from the owner's shell (D-1), with the owner's
 	// environment; starting one HERE would pin it to the timer's.

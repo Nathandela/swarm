@@ -5,17 +5,18 @@ package converge_test
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/converge"
-	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/version"
+	"github.com/Nathandela/swarm/internal/wire"
 )
 
 // SessionsFromStore must read the SAME meta.json the daemon writes, and carry
@@ -82,24 +83,6 @@ func TestSessionsFromStoreOnAnEmptyDirReturnsNoSessions(t *testing.T) {
 	}
 }
 
-// helloStub is the smallest protocol.DaemonAPI that can answer a hello: the
-// handshake never touches a session op.
-type helloStub struct{}
-
-func (helloStub) List() []persist.Meta { return nil }
-func (helloStub) Launch(daemon.LaunchSpec) (persist.Meta, error) {
-	return persist.Meta{}, errors.New("helloStub: launch not implemented")
-}
-func (helloStub) Kill(string) error   { return errors.New("helloStub: kill not implemented") }
-func (helloStub) Delete(string) error { return errors.New("helloStub: delete not implemented") }
-func (helloStub) Rename(string, string) error {
-	return errors.New("helloStub: rename not implemented")
-}
-func (helloStub) Attach(string) (protocol.SessionStream, error) {
-	return nil, errors.New("helloStub: attach not implemented")
-}
-func (helloStub) Events() <-chan persist.Meta { return nil }
-
 // tmpSock returns a short socket path: a unix socket path is capped near 104
 // bytes, and the per-test temp dir is far too long on darwin. Mirrors
 // internal/protocol's own test harness.
@@ -113,23 +96,64 @@ func tmpSock(t *testing.T) string {
 	return filepath.Join(dir, "d.sock")
 }
 
-// HelloVia must report the build version the daemon answered with -- that value
-// is what rule 1 compares against Deps.Version, so an adapter that returned the
-// caller's own version would make the converge a permanent no-op.
-func TestHelloViaReturnsTheServedBuildVersion(t *testing.T) {
+// serveHello stands up a daemon that answers one hello stamped with build, and
+// returns its socket path. It speaks the wire by hand rather than running
+// protocol.Serve because a real Server can only ever answer with the TEST
+// binary's own version.Version -- which is exactly the value a broken HelloVia
+// would return, so a real server could not tell the two apart.
+func serveHello(t *testing.T, build string) string {
+	t.Helper()
 	sock := tmpSock(t)
-	srv, err := protocol.Serve(helloStub{}, sock)
+	ln, err := net.Listen("unix", sock)
 	if err != nil {
-		t.Fatalf("Serve: %v", err)
+		t.Fatalf("listen on %s: %v", sock, err)
 	}
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
-	got, err := converge.HelloVia(sock)()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, _, err := wire.ReadFrame(conn); err != nil { // the client's hello
+			return
+		}
+		payload, err := protocol.EncodeControl(protocol.Control{
+			Op:              protocol.OpHello,
+			EndpointID:      "ep-fake",
+			ProtocolVersion: protocol.Version,
+			BuildVersion:    build,
+		})
+		if err != nil {
+			return
+		}
+		if err := wire.WriteFrame(conn, wire.TControl, payload); err != nil {
+			return
+		}
+		_, _, _ = wire.ReadFrame(conn) // block until the client closes
+	}()
+	return sock
+}
+
+// HelloVia must report the build version the DAEMON answered with. That value is
+// the whole of rule 1's premise: an adapter that reported this binary's own
+// version instead would make every hello look converged and the nightly job a
+// permanent no-op. The served version is deliberately neither version.Version
+// nor anything this binary knows.
+func TestHelloViaReturnsTheServedBuildVersion(t *testing.T) {
+	const servedBuild = "v0.0.0-served-by-the-daemon"
+	if servedBuild == version.Version {
+		t.Fatalf("the fixture must differ from this binary's own version %q", version.Version)
+	}
+
+	got, err := converge.HelloVia(serveHello(t, servedBuild))()
 	if err != nil {
 		t.Fatalf("HelloVia against a live daemon: %v", err)
 	}
-	if got != version.Version {
-		t.Errorf("HelloVia = %q, want the served build version %q", got, version.Version)
+	if got != servedBuild {
+		t.Errorf("HelloVia = %q, want the SERVED build version %q (this binary is %q)",
+			got, servedBuild, version.Version)
 	}
 }
 
