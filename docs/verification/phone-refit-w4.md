@@ -320,3 +320,38 @@ The Slate ledger, as the gate prints it over the joined origin before the file w
 
 All 16 ink pairs and all 10 indicator pairs clear their floors. The tight pair is `--p-ink3` on
 `--p-elev` at |Lc| 25.2 against 24.0 (headroom 1.2); every other pair's headroom is at least 5.9.
+
+**Rename and re-derivation.** `obsidian_contrast_test.go` became `slate_contrast_test.go`; the
+identifiers `obsidian*` became `slate*` and the tests `TestADR009D8_*` became `TestADR020_*`; every
+ADR-009 D8.1 citation stays as the floors' history and each floor's comment gained a Slate column.
+The in-memory controls that named Obsidian's ladder were retargeted to Slate's (`#131824`/`#1b2334`,
+`#131824`/`#0b0e14`, `rgba(11,14,20,1)`), quoted in place.
+
+**RED** — the champagne proof's own claim (ceiling below the retired large floor of 60), written
+first against the live `--p-hero` read through the join (`go test ./android/gate/ -run
+'ADR020_AFloorNoInkCanReach' -count=1`):
+
+```
+--- FAIL: TestADR020_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.05s)
+    slate_contrast_test.go:974: apcaCeiling(--p-hero #8eb4e6) = 62.04, at or above the RETIRED large floor of 60 (the champagne proof's claim, applied to the live fill). ADR-020 re-derived this proof on a fill that clears it (62.04 on #8eb4e6); a fill that does not is the champagne case again and the proof must be re-derived, not inherited.
+FAIL
+FAIL	github.com/Nathandela/swarm/android/gate	4.028s
+FAIL
+```
+
+**GREEN** — the proof re-derived: the champagne sweep stays as the amendment's evidence (59.73 on
+`#c9a876`, a constant), and the live fill is held to what is true of it: its ceiling (62.04) is
+below the retired body floor of 75, at or above the retired large floor of 60, and above the CTA
+floor of 55, which the live pair clears at 60.9. The four near-black grounds are Slate's (ceilings
+105.3 to 107.7 against the primary floor of 90).
+
+```
+--- PASS: TestADR020_EveryInkOnSurfacePairClearsItsAPCAFloor (0.05s)
+--- PASS: TestADR020_EveryRoleFloorIsDeclaredAgainstItsRung (0.00s)
+--- PASS: TestADR020_TheStateIndicatorsClearWCAGNonTextContrast (0.00s)
+--- PASS: TestADR020_TheContrastCheckerCanActuallyFail (0.00s)
+--- PASS: TestADR020_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.00s)
+ok  	github.com/Nathandela/swarm/android/gate	3.990s
+```
+
+`go vet ./android/gate/` and `golangci-lint run ./android/gate/` clean after the rename.
