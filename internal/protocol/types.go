@@ -34,6 +34,7 @@ const (
 	OpKill      = "kill"
 	OpDelete    = "delete"
 	OpRename    = "rename"
+	OpSetTag    = "set_tag"
 	OpAttach    = "attach"
 	OpDetach    = "detach"
 	OpResize    = "resize"

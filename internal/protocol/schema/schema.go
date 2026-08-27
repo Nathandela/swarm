@@ -50,7 +50,9 @@ type Control struct {
 	// and sanitized server-side (sanitizeName) before it reaches the daemon, exactly
 	// like the label in a launch request. Restored in the 2026-08-02 merge: the schema
 	// split forked before rename landed on main and the port predated the field.
-	Name     string        `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Tag is the manual grouping label carried on set_tag. Empty clears it.
+	Tag      string        `json:"tag,omitempty"`
 	Launch   *LaunchReq    `json:"launch,omitempty"`
 	Sessions []SessionView `json:"sessions,omitempty"`
 	Session  *SessionView  `json:"session,omitempty"`
@@ -231,6 +233,7 @@ type SessionView struct {
 	ID             string        `json:"id"` // namespaced: <endpoint_id>/<local>
 	Agent          string        `json:"agent"`
 	Name           string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
+	Tag            string        `json:"tag,omitempty"`  // user-assigned grouping label; empty means untagged
 	Cwd            string        `json:"cwd"`
 	Status         status.Status `json:"status"`           // the three raw dims
 	Group          status.Group  `json:"group"`            // precomputed server-side (E6.9)

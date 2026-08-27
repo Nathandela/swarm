@@ -512,6 +512,39 @@ func (d *Daemon) Rename(id, name string) error {
 	return nil
 }
 
+// SetTag updates a session's manual grouping label. It follows the same durable,
+// observable single-writer path as Rename; an empty tag clears the assignment.
+func (d *Daemon) SetTag(id, tag string) error {
+	d.writeMu.Lock()
+	d.mu.Lock()
+	sess, ok := d.sessions[id]
+	var m persist.Meta
+	if ok {
+		m = sess.meta
+	}
+	d.mu.Unlock()
+	if !ok {
+		d.writeMu.Unlock()
+		return fmt.Errorf("daemon: unknown session %q", id)
+	}
+	if m.Tag == tag {
+		d.writeMu.Unlock()
+		return nil
+	}
+	m.Tag = tag
+	m.SchemaVersion = persist.SchemaVersion
+	m.Env = persist.FilterEnv(m.Env)
+	written, err := d.saveMetaLocked(&m)
+	d.writeMu.Unlock()
+	if err != nil || !written {
+		return err
+	}
+	if d.cfg.onMetaSave != nil {
+		d.cfg.onMetaSave(m)
+	}
+	return nil
+}
+
 // Close is a clean shutdown: stop serving and release the singleton (flock +
 // socket). Running shims are independent and survive; their monitors are stopped
 // without finalizing them. The lock is released so a fresh daemon can take over.

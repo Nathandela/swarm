@@ -590,6 +590,13 @@ func (a *coreAPI) Rename(id, name string) error {
 	}
 	return err
 }
+func (a *coreAPI) SetTag(id, tag string) error {
+	err := a.core.SetTag(id, tag)
+	if err == nil {
+		a.pokeWatch() // fan the new grouping metadata out now, not at the next poll tick
+	}
+	return err
+}
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 
 // ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a

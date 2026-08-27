@@ -503,6 +503,16 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.general.applyName(msg.id, msg.name)
 		return m, nil
 
+	case tagDoneMsg:
+		if msg.err != nil {
+			return m, m.general.setBanner("tag failed: " + msg.err.Error())
+		}
+		m.general.applyTag(msg.id, msg.tag)
+		if msg.tag == "" {
+			return m, m.general.setBanner("session tag cleared")
+		}
+		return m, m.general.setBanner("session tagged " + msg.tag)
+
 	case bannerExpireMsg:
 		// The transient banner reached its expiry; re-emit the general frame so the
 		// (now wall-clock-expired) banner disappears. Mirrors repaintMsg's full
@@ -621,14 +631,15 @@ func (m rootModel) generalStatus() string {
 		return "daemon connection lost - restart swarm"
 	}
 	if m.general.editing {
+		if m.general.editTag {
+			return "edit tag · type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
+		}
 		return "type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
 	}
 	if m.general.confirm {
 		return "y confirm   n cancel"
 	}
-	// The attach hint teaches the detach key inline (ctrl+q returns), since the attach
-	// chrome now defaults off (ADR-006, item 5) and no longer carries the hint itself.
-	return "↑↓ navigate   ⏎ attach (ctrl+q returns)   e rename   n new   h handoff   ctrl+x kill   esc quit"
+	return "↑↓ move · ⏎ attach (ctrl+q returns) · g group · o order · t tag · e rename · n new · h handoff · ^x kill · esc quit"
 }
 
 // DaemonRestarter restarts the daemon and returns a freshly-connected client to the

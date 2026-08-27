@@ -68,6 +68,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `cols`             | int             | terminal columns, carried on `resize` (and inside `launch`)               |
 | `rows`             | int             | terminal rows, carried on `resize` (and inside `launch`)                  |
 | `name`             | string          | new session label, carried on `rename`; sanitized + length-capped server-side (P2) |
+| `tag`              | string          | manual grouping label, carried on `set_tag`; empty clears it              |
 | `launch`           | `*LaunchReq`    | the launch request, carried on `launch`                                   |
 | `sessions`         | `[]SessionView` | the session roster, carried on the `list` reply                           |
 | `session`          | `*SessionView`  | one session view, carried on the `launch` reply and on `event`            |
@@ -176,6 +177,7 @@ alongside the group.
 | `id`            | string          | namespaced session id `<endpoint_id>/<local>`                 |
 | `agent`         | string          | agent type (e.g. `claude`, `codex`)                           |
 | `name`          | string          | user-provided session label; empty/absent falls back to `agent` (P2) |
+| `tag`           | string          | user-assigned grouping label; empty/absent means untagged            |
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
 | `group`         | `status.Group`  | the daemon-computed display group (E6.9)                      |
@@ -523,6 +525,13 @@ with `ok` (or `error`). A label is cosmetic, so a hostile or over-long value is
 sanitized rather than rejected. An **older daemon** that predates this op replies
 with `error` ("unknown op"), which the client surfaces (skew-safe) rather than
 crashing.
+
+### `set_tag`
+
+The client sends `set_tag` with a `session_id` and the new `tag`. The daemon
+sanitizes the tag as a single-line cosmetic label, persists it in session meta,
+and broadcasts a roster `event` so every client converges. An empty tag clears the
+assignment. Older daemons reply with `error`, which the client surfaces.
 
 ### `attach`
 

@@ -38,7 +38,8 @@ type Meta struct {
 	SchemaVersion int    `json:"schema_version"`
 	ID            string `json:"id"`
 	AgentType     string `json:"agent_type"`
-	Name          string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
+	Name          string `json:"name"`          // user-provided session label; "" falls back to AgentType at display time
+	Tag           string `json:"tag,omitempty"` // user-assigned grouping label; empty means untagged
 	Cwd           string `json:"cwd"`
 	// AgentCwd is additive and DELIBERATELY DID NOT BUMP SchemaVersion. An adversarial
 	// review proposed bumping it, reasoning that a rolled-back old daemon would rewrite

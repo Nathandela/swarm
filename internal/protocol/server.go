@@ -1200,6 +1200,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleDelete(c)
 	case OpRename:
 		cc.handleRename(c)
+	case OpSetTag:
+		cc.handleSetTag(c)
 	case OpAttach:
 		cc.handleAttach(c)
 	case OpDetach:
@@ -1610,6 +1612,26 @@ func (cc *clientConn) handleRename(c Control) {
 	}
 	if err := cc.srv.d.Rename(local, SanitizeName(c.Name)); err != nil {
 		cc.replyError("rename: " + err.Error())
+		return
+	}
+	cc.replyOK(c.SessionID)
+}
+
+// handleSetTag persists a sanitized manual grouping label. The optional daemon
+// surface keeps older/custom DaemonAPI implementations source-compatible and
+// gives a clear refusal when tagging is unavailable.
+func (cc *clientConn) handleSetTag(c Control) {
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	tagger, ok := cc.srv.d.(interface{ SetTag(string, string) error })
+	if !ok {
+		cc.replyError("set_tag: not supported")
+		return
+	}
+	if err := tagger.SetTag(local, SanitizeName(c.Tag)); err != nil {
+		cc.replyError("set_tag: " + err.Error())
 		return
 	}
 	cc.replyOK(c.SessionID)
@@ -2978,6 +3000,7 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		ID:             NamespacedID(endpointID, m.ID),
 		Agent:          m.AgentType,
 		Name:           m.Name, // P2: carry the persisted label; "" degrades to Agent at display
+		Tag:            m.Tag,
 		Cwd:            m.Cwd,
 		Status:         m.Status,
 		Group:          group,
