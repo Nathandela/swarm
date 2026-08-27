@@ -83,7 +83,7 @@ class TranscriptViewDecisionTest {
     private fun view(
         blocks: List<TranscriptBlock> = listOf(decision()),
         onApproval: ((String) -> Unit)? = null,
-        onDecision: ((String, ApprovalDecision) -> Unit)? = null,
+        onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
     ): View = transcriptView(
         context = context,
         panel = panel(blocks),
@@ -128,7 +128,7 @@ class TranscriptViewDecisionTest {
      */
     @Test
     fun `the decision is answered where it was asked, with the CLI's own labels in wire order`() {
-        val root = view(onDecision = { _, _ -> })
+        val root = view(onDecision = { _, _, _ -> })
 
         assertNotNull(
             "the decision is still drawn as a row that POINTS at a sheet. Owner ruling R7 is one " +
@@ -153,7 +153,7 @@ class TranscriptViewDecisionTest {
      */
     @Test
     fun `the card authors no verdict of its own`() {
-        val drawn = view(onDecision = { _, _ -> }).kitRequire(TranscriptTag.APPROVAL).wordsIn()
+        val drawn = view(onDecision = { _, _, _ -> }).kitRequire(TranscriptTag.APPROVAL).wordsIn()
 
         listOf("Allow", "Deny", "Approve", "Reject").forEach { verdict ->
             assertFalse(
@@ -179,7 +179,7 @@ class TranscriptViewDecisionTest {
      */
     @Test
     fun `there is no way to dismiss a decision, only to answer it`() {
-        val card = view(onDecision = { _, _ -> }).kitRequire(TranscriptTag.APPROVAL)
+        val card = view(onDecision = { _, _, _ -> }).kitRequire(TranscriptTag.APPROVAL)
 
         val controls = mutableListOf<View>()
         fun walk(v: View) {
@@ -204,7 +204,7 @@ class TranscriptViewDecisionTest {
     @Test
     fun `answering names the item and the decision the machine offered`() {
         var answered: Pair<String, ApprovalDecision>? = null
-        val root = view(onDecision = { id, choice -> answered = id to choice })
+        val root = view(onDecision = { _, id, choice -> answered = id to choice })
 
         root.allTagged(TranscriptTag.DECISION_CHOICE)[1].performClick()
 
@@ -229,7 +229,7 @@ class TranscriptViewDecisionTest {
     @Test
     fun `the literal is drawn inside the card, whole, and never in a well below it`() {
         val long = (1..40).joinToString("\n") { "rm -rf /very/long/path/number/$it" }
-        val root = view(listOf(decision(literal = long)), onDecision = { _, _ -> })
+        val root = view(listOf(decision(literal = long)), onDecision = { _, _, _ -> })
 
         assertEquals(
             "the command the reader is being asked to approve is truncated, or is drawn somewhere " +
@@ -246,7 +246,7 @@ class TranscriptViewDecisionTest {
 
     @Test
     fun `a decision whose action names no literal draws no empty well`() {
-        val root = view(listOf(decision(literal = "")), onDecision = { _, _ -> })
+        val root = view(listOf(decision(literal = "")), onDecision = { _, _, _ -> })
 
         assertNull(
             "a recessed box saying nothing is drawn in the shape of a command that is blank",
@@ -266,7 +266,7 @@ class TranscriptViewDecisionTest {
     @Test
     fun `an answer in flight locks every choice and not only the one that was tapped`() {
         var answered = 0
-        val root = view(listOf(decision(locked = true)), onDecision = { _, _ -> answered++ })
+        val root = view(listOf(decision(locked = true)), onDecision = { _, _, _ -> answered++ })
 
         val choices = root.allTagged(TranscriptTag.DECISION_CHOICE)
         assertEquals(
@@ -312,7 +312,7 @@ class TranscriptViewDecisionTest {
                     unrenderable = true,
                 ),
             ),
-            onDecision = { _, _ -> },
+            onDecision = { _, _, _ -> },
         )
 
         val card = root.kitRequire(TranscriptTag.UNRENDERABLE)
@@ -351,7 +351,7 @@ class TranscriptViewDecisionTest {
                 decision(),
                 TranscriptBlock(itemId = "01C", kind = "agent_message", line = "Standing by."),
             ),
-            onDecision = { _, _ -> },
+            onDecision = { _, _, _ -> },
         )
 
         val card = root.kitRequire(TranscriptTag.APPROVAL)

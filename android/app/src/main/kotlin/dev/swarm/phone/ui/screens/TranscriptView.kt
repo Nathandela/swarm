@@ -248,7 +248,7 @@ fun transcriptView(
     onRepair: (() -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
-    onDecision: ((String, ApprovalDecision) -> Unit)? = null,
+    onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -316,7 +316,7 @@ internal fun transcriptBlockViews(
     onRepair: (() -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
-    onDecision: ((String, ApprovalDecision) -> Unit)? = null,
+    onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
 ): List<View> {
     val views = mutableListOf<View>()
     // BOUND BEFORE THE `when`, so the arm that uses it never depends on a smart cast surviving a
@@ -476,7 +476,7 @@ private fun decisionCard(
     context: Context,
     block: TranscriptBlock,
     onApproval: ((String) -> Unit)?,
-    onDecision: ((String, ApprovalDecision) -> Unit)?,
+    onDecision: ((View, String, ApprovalDecision) -> Unit)?,
 ): View {
     // AN UNRENDERABLE REQUEST IS NEVER ANSWERABLE HERE, whatever the host wired: the body did not
     // decode, so there is no `decisions[]` to press and no id to name. `block.approval` is the
@@ -530,7 +530,12 @@ private fun decisionCard(
                                 // machine.
                                 filterTouchesWhenObscured = true
                                 isEnabled = !block.locked
-                                if (!block.locked) setOnClickListener { send(block.itemId, choice) }
+                                // THE PRESSED VIEW RIDES WITH THE IDS, on `onDetail`'s own precedent one file over.
+                                // The host's dispatch marks a control in flight and plays its haptic
+                                // against the thing the finger landed on; without the view it would
+                                // have to name some other control, which is a lie about which one
+                                // was pressed.
+                                if (!block.locked) setOnClickListener { pressed -> send(pressed, block.itemId, choice) }
                             },
                         )
                     }

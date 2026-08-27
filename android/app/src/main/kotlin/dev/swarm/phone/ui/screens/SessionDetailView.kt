@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.noticeDetail
@@ -337,6 +338,25 @@ fun sessionDetailView(
      */
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
+    /**
+     * Owner ruling R4's answer, called with the block's `item_id` and the choice the reader
+     * pressed: the question is a message in the stream **carrying its own buttons**.
+     *
+     * IT IS A SLOT FOR [onApproval]'S REASON AND THE VERB IS THE SURFACE'S. Answering reaches
+     * `App.Approve` on the COMMAND plane, claims an operation id the surface reads back, and its
+     * refusals route through PB-APP-9 -- none of which this column may own.
+     *
+     * **NULL DRAWS THE QUESTION AND NO BUTTONS, AND THAT WAS THE SHIPPED STATE.** `decisionCard`
+     * resolves `answer = if (block.approval) onDecision else null`, so until this parameter
+     * existed the card fell back to being wholly tappable: a pointer to a sheet, on a screen whose
+     * whole purpose is that the question is answered where it was asked. The stream got the
+     * question and the buttons stayed behind (`agents-tracker-ryuk`).
+     *
+     * THE CHOICES ARE THE CLI'S, NEVER THIS SIDE'S. One to eight labels in the order the wire sent
+     * them; IS-APR-4 keeps the verdict machine-side and `interaction_chain_e2e_test.go` fails the
+     * build if one rides along. "Allow/Deny" is precisely the copy this surface may not author.
+     */
+    onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -420,7 +440,7 @@ fun sessionDetailView(
     column.addView(
         transcriptView(
             context, panel.transcript, onApproval, onToolTap, onDetail,
-            onOutput = onOutput, onDiff = onDiff,
+            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
         ).apply { tag = DetailTag.TRANSCRIPT },
     )
 
@@ -616,6 +636,14 @@ fun sessionDetailRedraw(
      */
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
+    /**
+     * **THE SAME HANDLER THE COMPOSITION WAS GIVEN**, for the reason recorded above [onOutput]:
+     * a block rebuilt without a handler the column was composed with is a different view for the
+     * same block. Here the cost is sharper than a miscount -- a decision that loses its buttons on
+     * the first incremental update is worse than one that never had them, because the reader
+     * watched them disappear while the agent was still waiting.
+     */
+    onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
 ): Boolean {
     if (drawn == null) return false
     // THE FIELDS A NEW CONVERSATION MOVES ON ITS OWN, and no others. Wave R6 gave the panel four
@@ -651,7 +679,7 @@ fun sessionDetailRedraw(
         slot.removeAllViews()
         val rebuilt = transcriptView(
             slot.context, next.transcript, onApproval, onToolTap, onDetail,
-            onOutput = onOutput, onDiff = onDiff,
+            onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
         )
         (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
         slot.addView(rebuilt)
@@ -661,6 +689,7 @@ fun sessionDetailRedraw(
         list, drawn.transcript.blocks, next.transcript.blocks, onApproval, onToolTap, onDetail,
         onOutput = onOutput,
         onDiff = onDiff,
+        onDecision = onDecision,
         // THE SUPPRESSION IS PASSED IN, NOT DERIVED HERE. "Auto-scroll to the newest message is
         // suppressed while a decision is unanswered" is the drawing's own rule, and it is inert
         // unless somebody spends it: a transcript that kept following the agent would carry the
@@ -696,6 +725,9 @@ private fun patchConversation(
     onDetail: ((View, String) -> Unit)?,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
+    // Carried for the same reason as the two above: a block rebuilt here must be the block the
+    // column composed, and a decision rebuilt without its handler loses its buttons mid-question.
+    onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
     decisionPending: Boolean = false,
 ) {
     val mutations = TranscriptIncremental.reconcileBlocks(drawn, next)
@@ -716,12 +748,12 @@ private fun patchConversation(
                 if (mutation.index >= current.size) continue
                 val at = childOffsetOf(current, mutation.index, onDetail, onOutput)
                 removeRun(list, at, transcriptBlockViewCount(current[mutation.index], onDetail, onOutput))
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
                 current[mutation.index] = mutation.block
             }
             is BlockMutation.Insert -> {
                 val at = childOffsetOf(current, minOf(mutation.index, current.size), onDetail, onOutput)
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
                 current.add(minOf(mutation.index, current.size), mutation.block)
             }
         }
@@ -758,10 +790,11 @@ private fun insertRun(
     onDetail: ((View, String) -> Unit)?,
     onOutput: ((String) -> Unit)?,
     onDiff: ((String) -> Unit)?,
+    onDecision: ((View, String, ApprovalDecision) -> Unit)?,
 ) {
     transcriptBlockViews(
         list.context, block, onApproval, onToolTap, onDetail,
-        onOutput = onOutput, onDiff = onDiff,
+        onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
     ).forEachIndexed { offset, view -> list.addView(view, at + offset) }
 }
 

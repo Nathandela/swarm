@@ -3231,6 +3231,9 @@ class PhoneSurface(
                 // host for them, so a patch counting without them would splice one block's row
                 // into the middle of another.
                 onOutput = ::openLiteral, onDiff = ::openLiteral,
+                // R4's answer rides the patch path too: a decision rebuilt without it loses its
+                // buttons the moment the agent writes one more line.
+                onDecision = ::answerDecision,
             )
         ) {
             detailDrawn = panel
@@ -3283,6 +3286,11 @@ class PhoneSurface(
                 // get to them, and `transcriptView` draws no offer at all without them.
                 onOutput = ::openLiteral,
                 onDiff = ::openLiteral,
+                // OWNER RULING R4, and the reason this is a callback rather than a control this
+                // surface builds: the choices are the CLI's own `decisions[]`, one to eight labels
+                // in the order the wire sent them, and IS-APR-4 keeps the verdict machine-side.
+                // The screen draws them; only this surface may reach `App.Approve` from one.
+                onDecision = ::answerDecision,
             ),
         )
     }
@@ -4144,6 +4152,40 @@ class PhoneSurface(
      * is exactly the safety net a second tap during that window needs. [renderApprovalVerdict] is
      * where the claim is read back.
      */
+    /**
+     * Owner ruling R4's answer, reaching the machine from the card in the stream.
+     *
+     * **IT IS [approvalAction]'S VERB WITHOUT [approvalAction]'S BUTTON.** The sheet builds its own
+     * controls, so it could wrap them in [pressable] and inherit the whole dispatch. The inline
+     * card's choices are built by `transcriptView` out of the CLI's own `decisions[]`, which this
+     * surface never sees and must not author -- so what crosses is a callback, and the verb has to
+     * live here: `App.Approve` on the COMMAND plane, an operation id [renderApprovalVerdict] reads
+     * back, and refusals routed through PB-APP-9. None of those are a screen's to own.
+     *
+     * THE PRESSED VIEW IS PASSED IN rather than substituted, on `onDetail`'s precedent. [press]
+     * marks a control in flight and plays its haptic against it; naming any other control would be
+     * a lie about which one the finger landed on, and the transcript rebuilds these buttons on
+     * every redraw so this surface has no lasting handle to name instead.
+     *
+     * **SINGLE-FLIGHT IS THE MODEL'S HERE, NOT THE DISPATCH'S**, and that is the one real
+     * difference from the sheet. [pressable]'s guard is per CONTROL, and a control rebuilt by the
+     * next patch is a different object with no memory of being pressed. So the lock that matters
+     * is [answeringItemId] -> `TranscriptScreen.of(answering = ...)` -> `block.locked`, which is a
+     * fact about the QUESTION and survives every redraw of the button. Set before the press for
+     * `stop`'s reason exactly: read on the looper that owns the screen, never from a lane.
+     */
+    private fun answerDecision(pressed: View, itemId: String, decision: ApprovalDecision) {
+        val target = session
+        answeringItemId = itemId
+        press(pressed) {
+            Press(
+                SendPlane.COMMAND,
+                verb = { app -> app.approve(target, itemId, decision.id) },
+                settle = { answer -> rememberApproval(answer) },
+            )
+        }
+    }
+
     private fun approvalAction(panel: ApprovalSheetPanel, decision: ApprovalDecision): View =
         actionButton(decision.label, CtaKind.MORE) {
             // THE ANSWER IS IN FLIGHT FROM THIS INSTANT, and the item it answers is what the
