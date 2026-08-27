@@ -80,6 +80,9 @@ type Config struct {
 	// just-saved meta (test seam E5.3). It observes the reconnect-before-lost
 	// ordering: a live shim is never persisted as lost.
 	onMetaSave func(persist.Meta)
+	// groupNow is a test clock for category transitions. Production leaves it nil
+	// and uses time.Now.
+	groupNow func() time.Time
 
 	// PreLaunch and PreDelete are optional launch-time isolation hooks (Epic 12):
 	// the daemon core calls them generically and carries no worktree-specific
@@ -402,7 +405,7 @@ func (d *Daemon) SetStatus(id string, s status.Status) error {
 	}
 	m.Status = next
 	m.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -460,7 +463,7 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 	}
 	m.ConversationID = convID
 	m.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -498,7 +501,7 @@ func (d *Daemon) Rename(id, name string) error {
 	m.Name = name
 	m.SchemaVersion = persist.SchemaVersion
 	m.Env = persist.FilterEnv(m.Env)
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -564,7 +567,7 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 	m.SchemaVersion = persist.SchemaVersion
 
 	d.writeMu.Lock()
-	written, err := d.saveMetaLocked(m)
+	written, err := d.saveMetaLocked(&m)
 	d.writeMu.Unlock()
 	if err != nil || !written {
 		return err
@@ -593,7 +596,7 @@ func (d *Daemon) saveMeta(m persist.Meta) error {
 // constructs a Meta from a raw, unfiltered env source must filter before
 // reaching here, or the unfiltered value will reach the in-memory registry
 // (store.Save only protects disk, since it filters its own copy of m).
-func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
+func (d *Daemon) saveMetaLocked(m *persist.Meta) (written bool, err error) {
 	if d.isDeleted(m.ID) {
 		return false, nil // session was deleted; do not resurrect its on-disk state
 	}
@@ -609,18 +612,41 @@ func (d *Daemon) saveMetaLocked(m persist.Meta) (written bool, err error) {
 	}
 	d.mu.Unlock()
 
+	// Category-entry time changes only when the derived display group changes.
+	// Every durable meta mutation passes this choke point, so unrelated writes
+	// (rename, conversation-id capture, activity within one group) preserve it.
+	if prevExists {
+		if status.Derive(prev.Status) != status.Derive(m.Status) {
+			m.GroupEnteredAt = d.categoryNow()
+		} else {
+			m.GroupEnteredAt = prev.EffectiveGroupEnteredAt()
+		}
+	} else if m.GroupEnteredAt.IsZero() {
+		m.GroupEnteredAt = m.EffectiveGroupEnteredAt()
+		if m.GroupEnteredAt.IsZero() {
+			m.GroupEnteredAt = d.categoryNow()
+		}
+	}
+
 	// WAL: the journal record is durable BEFORE the meta write, so a crash may leave a
 	// journal record without meta (tolerable) but never meta without journal (A7).
-	if rec, ok := journalRecordFor(prev, prevExists, m); ok {
+	if rec, ok := journalRecordFor(prev, prevExists, *m); ok {
 		if _, jerr := d.journal.Append(rec); jerr != nil {
 			return false, jerr
 		}
 	}
-	if err := d.store.Save(m); err != nil {
+	if err := d.store.Save(*m); err != nil {
 		return false, err
 	}
-	d.putMem(m)
+	d.putMem(*m)
 	return true, nil
+}
+
+func (d *Daemon) categoryNow() time.Time {
+	if d.cfg.groupNow != nil {
+		return d.cfg.groupNow()
+	}
+	return time.Now()
 }
 
 // processRank orders the process dimension for the terminal-write precedence
@@ -666,7 +692,7 @@ func (d *Daemon) finalizeTerminal(id string, compute func(cur persist.Meta) pers
 		return // would not advance the terminal state: refuse (S1)
 	}
 	next.SchemaVersion = persist.SchemaVersion
-	written, err := d.saveMetaLocked(next)
+	written, err := d.saveMetaLocked(&next)
 	d.writeMu.Unlock()
 	if err != nil {
 		d.logf("finalize: persist terminal meta for %s: %v", id, err)

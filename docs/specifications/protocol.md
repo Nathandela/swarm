@@ -179,6 +179,7 @@ alongside the group.
 | `cwd`           | string          | the session's working directory                               |
 | `status`        | `status.Status` | the three raw dimensions (process, turn, interaction)         |
 | `group`         | `status.Group`  | the daemon-computed display group (E6.9)                      |
+| `group_entered_at` | time          | when the session entered `group`; used for newest-first ordering within that group |
 | `last_activity` | time            | timestamp of the session's last activity                      |
 | `created_at`    | time            | session creation timestamp                                    |
 | `summary`       | string          | V-4 one-line last-output summary                              |

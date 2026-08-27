@@ -227,16 +227,17 @@ type AgentInstanceRef struct {
 // namespaced id + endpoint id + the daemon-computed status Group (E6.9 — clients
 // never call status.Derive), alongside the three raw status dimensions.
 type SessionView struct {
-	EndpointID   string        `json:"endpoint_id"`
-	ID           string        `json:"id"` // namespaced: <endpoint_id>/<local>
-	Agent        string        `json:"agent"`
-	Name         string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
-	Cwd          string        `json:"cwd"`
-	Status       status.Status `json:"status"` // the three raw dims
-	Group        status.Group  `json:"group"`  // precomputed server-side (E6.9)
-	LastActivity time.Time     `json:"last_activity"`
-	CreatedAt    time.Time     `json:"created_at"`
-	Summary      string        `json:"summary"` // V-4 one-line last-output summary
+	EndpointID     string        `json:"endpoint_id"`
+	ID             string        `json:"id"` // namespaced: <endpoint_id>/<local>
+	Agent          string        `json:"agent"`
+	Name           string        `json:"name,omitempty"` // user-provided label; empty (or absent, from an older daemon) falls back to Agent at display
+	Cwd            string        `json:"cwd"`
+	Status         status.Status `json:"status"`           // the three raw dims
+	Group          status.Group  `json:"group"`            // precomputed server-side (E6.9)
+	GroupEnteredAt time.Time     `json:"group_entered_at"` // when the session entered Group; drives newest-first ordering
+	LastActivity   time.Time     `json:"last_activity"`
+	CreatedAt      time.Time     `json:"created_at"`
+	Summary        string        `json:"summary"` // V-4 one-line last-output summary
 	// SpawnedFrom / SpawnIntent expose the session's lineage (ADR-010 D4) so the
 	// roster can show where a session came from. Both are omitempty: an ordinary
 	// session's row serializes exactly as it did before the fields existed.
