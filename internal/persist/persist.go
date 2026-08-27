@@ -35,11 +35,19 @@ var writeTemp = func(f *os.File, data []byte) (int, error) { return f.Write(data
 // explicit snake_case JSON tag: the on-disk key set is the durable data
 // contract, so tags are deliberately not omitempty — the key is always present.
 type Meta struct {
-	SchemaVersion  int               `json:"schema_version"`
-	ID             string            `json:"id"`
-	AgentType      string            `json:"agent_type"`
-	Name           string            `json:"name"` // user-provided session label; "" falls back to AgentType at display time
-	Cwd            string            `json:"cwd"`
+	SchemaVersion int    `json:"schema_version"`
+	ID            string `json:"id"`
+	AgentType     string `json:"agent_type"`
+	Name          string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
+	Cwd           string `json:"cwd"`
+	// AgentCwd is additive and DELIBERATELY DID NOT BUMP SchemaVersion. An adversarial
+	// review proposed bumping it, reasoning that a rolled-back old daemon would rewrite
+	// meta.json from its own struct and drop the field. That is true, and bumping is the
+	// worse cure: Load REFUSES any meta whose schema_version exceeds the build's (see
+	// below), so a v2 stamp would make a rolled-back daemon fail to load EVERY session
+	// written by the newer one, rather than merely losing an optional field. Dropping
+	// AgentCwd degrades ProviderCwd to Cwd -- today's behaviour before this field existed
+	// -- and the value is re-stamped on the next launch. Degraded beats unloadable.
 	AgentCwd       string            `json:"agent_cwd"` // resolved agent cwd when a pre-launch hook overrode Cwd; "" otherwise. See ProviderCwd.
 	LaunchOptions  map[string]string `json:"launch_options"`
 	Env            []string          `json:"env"`
