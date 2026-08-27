@@ -142,7 +142,7 @@ var syntheticPromptTags = map[string]bool{
 
 // isSyntheticPrompt reports whether prompt is one of the CLI's own envelopes: it OPENS with a
 // listed tag (attributes allowed) AND that tag is CLOSED in the same prompt. An unclosed tag is
-// somebody asking about the tag, and is kept.
+// somebody asking about the tag, and is the owner's message.
 func isSyntheticPrompt(prompt string) bool {
 	if !strings.HasPrefix(prompt, "<") {
 		return false
@@ -172,12 +172,20 @@ func (claudeAdapter) Interactions(p adapter.HookPayload) []adapter.Interaction {
 
 	switch p.Event {
 	case "UserPromptSubmit":
-		if b.Prompt == "" || isSyntheticPrompt(b.Prompt) {
+		if b.Prompt == "" {
 			return nil
 		}
 		// SourceOwner, not SourcePhone: the phone authors no prompt (D7/B43 freezes remote input
 		// to live keystrokes), so everything this hook reports was typed at the machine.
-		return []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: b.Prompt, Source: adapter.SourceOwner}}
+		source := adapter.SourceOwner
+		if isSyntheticPrompt(b.Prompt) {
+			// The CLI's own envelope (W2.4, round-1 review ruling): KEEP THE TURN, DROP THE
+			// BUBBLE. A user_message is the only turn-opening signal this CLI gives, so the
+			// envelope is shaped as one with SourceSynthetic; the daemon opens the turn on it
+			// and never persists or publishes it, so nothing reaches the phone as a message.
+			source = adapter.SourceSynthetic
+		}
+		return []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: b.Prompt, Source: source}}
 
 	case "PreToolUse":
 		if b.ToolName == "" {

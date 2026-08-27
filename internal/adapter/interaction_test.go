@@ -83,6 +83,9 @@ func TestInteractionKindsAndStatuses_MatchTheSchema(t *testing.T) {
 		{SourcePhone, "phone"},
 		{SourceOwner, "owner"},
 		{SourceDerived, "derived"},
+		// Phone refit W2.4, round-1 review ruling: the CLI's own envelope opens a turn and is
+		// never a message on the wire.
+		{SourceSynthetic, "synthetic"},
 		{DescriptorCapture, "capture"},
 		{CaptureRaw, "raw"},
 	} {
@@ -325,5 +328,15 @@ func captureFixture() Fixture {
 			{Event: "PermissionRequest", Raw: json.RawMessage(`{"tool":"Bash","ref":"bash-1"}`), ReceivedAtMs: 1710000000300},
 			{Event: "Stop", Raw: json.RawMessage(`{"reason":"done"}`), ReceivedAtMs: 1710000000400},
 		},
+	}
+}
+
+// TestValidate_AdmitsTheSyntheticSource -- phone refit W2.4, round-1 review ruling: a
+// user_message whose Source is SourceSynthetic is a VALID shape (the daemon needs it to open
+// the turn) even though it never reaches the wire; Validate must not drop it as unshapeable.
+func TestValidate_AdmitsTheSyntheticSource(t *testing.T) {
+	in := Interaction{Kind: KindUserMessage, Text: "<system-reminder>x</system-reminder>", Source: SourceSynthetic}
+	if err := in.Validate(); err != nil {
+		t.Fatalf("Validate rejected a synthetic user_message: %v", err)
 	}
 }

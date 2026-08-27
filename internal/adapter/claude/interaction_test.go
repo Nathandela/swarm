@@ -389,25 +389,34 @@ func promptPayload(t *testing.T, prompt string) adapter.HookPayload {
 	return adapter.HookPayload{Event: "UserPromptSubmit", Raw: raw}
 }
 
-func TestUserPromptSubmit_SyntheticEnvelopesShapeNothing(t *testing.T) {
+// TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage. AMENDED by the round-1
+// review (orchestrator ruling): the contract said "shapes zero items", but a user_message is
+// Claude's ONLY turn-opening signal (internal/skeleton/interaction.go turnIDLocked; the adapter
+// sets TurnRef nowhere), so a session whose work starts from an envelope would open no turn,
+// its tool items would carry turn_id "", the phone would draw it idle and Stop would be
+// refused. Keep the turn, drop the bubble: the envelope is shaped as a user_message with
+// SourceSynthetic, and the daemon opens the turn on it and neither persists nor publishes it.
+func TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage(t *testing.T) {
 	src, ok := adapter.AsInteractionSource(New())
 	if !ok {
 		t.Fatal("claude is not an InteractionSource")
 	}
+	check := func(t *testing.T, prompt string) {
+		t.Helper()
+		got := src.Interactions(promptPayload(t, prompt))
+		want := []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: prompt, Source: adapter.SourceSynthetic}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("an envelope shaped %+v, want exactly one synthetic user_message %+v: the turn "+
+				"must open on it and nothing may reach the wire as the owner's words", got, want)
+		}
+	}
 	for _, tag := range recordedSyntheticTags {
 		t.Run(tag, func(t *testing.T) {
-			prompt := "<" + tag + ">\nwhat the CLI put in its own envelope\n</" + tag + ">"
-			if got := src.Interactions(promptPayload(t, prompt)); len(got) != 0 {
-				t.Fatalf("a <%s> envelope shaped %d item(s), want 0: the CLI's own prompt was drawn "+
-					"as a message the owner typed: %+v", tag, len(got), got)
-			}
+			check(t, "<"+tag+">\nwhat the CLI put in its own envelope\n</"+tag+">")
 		})
 	}
 	// An envelope that carries attributes on its opening tag is the same envelope.
-	attributed := `<teammate-message teammate_id="team-lead" summary="assign">start on task 1</teammate-message>`
-	if got := src.Interactions(promptPayload(t, attributed)); len(got) != 0 {
-		t.Fatalf("an attributed <teammate-message> envelope shaped %d item(s), want 0: %+v", len(got), got)
-	}
+	check(t, `<teammate-message teammate_id="team-lead" summary="assign">start on task 1</teammate-message>`)
 }
 
 // TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept is the negative control, and the
@@ -458,5 +467,15 @@ func TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept(t *testing.T) {
 	}
 	if !isSyntheticPrompt("<system-reminder>\nbody\n</system-reminder>") {
 		t.Error("CONTROL BROKEN: a closed <system-reminder> envelope is not synthetic")
+	}
+	src, ok := adapter.AsInteractionSource(New())
+	if !ok {
+		t.Fatal("claude is not an InteractionSource")
+	}
+	const asked = "<system-reminder> keeps showing up in my transcripts, what is it?"
+	got := src.Interactions(promptPayload(t, asked))
+	want := []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: asked, Source: adapter.SourceOwner}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("an unclosed envelope shaped %+v, want the owner's own message %+v", got, want)
 	}
 }

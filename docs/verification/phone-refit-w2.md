@@ -641,3 +641,135 @@ SessionDetailView.kt restored
 
 In control 2 the fence `a refused send says its sentence exactly once across the view tree` and
 the broadened `SessionDetailComposerTest:315` stay green, so the failure isolates the detail cell.
+
+## Round-1 review fixes
+
+### W2.4 amended: keep the turn, drop the bubble
+
+WHY THE CONTRACT'S "shapes zero items" WAS AMENDED, AND BY WHOM. Round-1 review (both reviewers,
+orchestrator ruling of 2026-08-28): `internal/skeleton/interaction.go` `turnIDLocked` opens a turn
+on every `KindUserMessage` and the Claude adapter sets `TurnRef` nowhere, so a user_message is the
+ONLY turn-opening signal Claude gives. W2.4 as first shipped (33ca6d6d) shaped the CLI's envelopes
+as nothing, so a session whose work starts from a teammate-message / task-notification /
+command-name envelope opened NO turn: its tool items carried `turn_id ""`, the phone drew it idle,
+and Stop was refused (`chat.go` stale_turn / empty expected_turn). Ruling: the adapter returns the
+envelope as a `KindUserMessage` with the new `adapter.SourceSynthetic` (admitted by `Validate`);
+the daemon runs the turn-open logic on it (`openSyntheticTurn` -> `turnIDLocked`) and neither
+persists nor publishes it. `SourceSynthetic` never reaches the wire, so interaction-schema.md
+§3.1's `phone|owner|derived` stays the wire's whole vocabulary.
+
+Tests written first: `internal/adapter/interaction_test.go` (constant table gains
+`{SourceSynthetic, "synthetic"}`; `TestValidate_AdmitsTheSyntheticSource`);
+`internal/adapter/claude/interaction_test.go` (`TestUserPromptSubmit_SyntheticEnvelopesShapeNothing`
+becomes `TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage`: each envelope shapes
+exactly one item with `Source == SourceSynthetic`; the two negative controls -- a real prompt
+containing `<`, an unclosed envelope -- shape `SourceOwner`);
+`internal/skeleton/synthetic_turn_test.go` `TestSyntheticPrompt_OpensATurnAndPublishesNoMessage`
+(through the SHIPPED adapter: the next tool item carries the fresh non-empty turn id; the
+published stream holds no user_message, re-read after three append windows).
+
+RED (compile, then behavioural once only the vocabulary existed, then the daemon):
+
+```
+## adapter
+# github.com/Nathandela/swarm/internal/adapter [github.com/Nathandela/swarm/internal/adapter.test]
+internal/adapter/interaction_test.go:88:4: undefined: SourceSynthetic
+internal/adapter/interaction_test.go:338:97: undefined: SourceSynthetic
+FAIL	github.com/Nathandela/swarm/internal/adapter [build failed]
+FAIL
+## adapter/claude
+# github.com/Nathandela/swarm/internal/adapter/claude [github.com/Nathandela/swarm/internal/adapter/claude.test]
+internal/adapter/claude/interaction_test.go:407:95: undefined: adapter.SourceSynthetic
+FAIL	github.com/Nathandela/swarm/internal/adapter/claude [build failed]
+FAIL
+## skeleton
+=== RUN   TestSyntheticPrompt_OpensATurnAndPublishesNoMessage
+    synthetic_turn_test.go:43: a synthetic prompt opened no turn: every tool item that follows carries turn_id "", the phone draws the session idle, and Stop is refused for want of a turn to name
+--- FAIL: TestSyntheticPrompt_OpensATurnAndPublishesNoMessage (4.08s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	6.196s
+FAIL
+
+## adapter (vocabulary only)
+ok  	github.com/Nathandela/swarm/internal/adapter	0.777s
+## adapter/claude: behavioural RED with the vocabulary present
+    interaction_test.go:415: an envelope shaped [], want exactly one synthetic user_message [{Kind:user_message Status: Ref: ClientRef: TurnRef: Text:<system-reminder>
+    interaction_test.go:415: an envelope shaped [], want exactly one synthetic user_message [{Kind:user_message Status: Ref: ClientRef: TurnRef: Text:<task-notification>
+    interaction_test.go:415: an envelope shaped [], want exactly one synthetic user_message [{Kind:user_message Status: Ref: ClientRef: TurnRef: Text:<teammate-message>
+    (... one line per recorded tag, 14 in all)
+```
+
+GREEN (`go test -race`; build/vet/lint with a per-worktree `GOLANGCI_LINT_CACHE`, review item 4):
+
+```
+## GREEN
+ok  	github.com/Nathandela/swarm/internal/adapter	2.086s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	2.601s
+--- PASS: TestSyntheticPrompt_OpensATurnAndPublishesNoMessage (4.62s)
+ok  	github.com/Nathandela/swarm/internal/skeleton	7.339s
+## build/vet/lint (GOLANGCI_LINT_CACHE=/private/tmp/claude-501/-Users-Nathan-Code-swarm/fff31caf-df8b-416f-8990-ecc58eb0dcaf/scratchpad/golangci-cache)
+build exit=0
+vet exit=0
+0 issues.
+lint exit=0
+```
+
+Gate (`go test -race -count=1 -timeout 40m`, env-unset prefix, the touched packages and their
+importers):
+
+```
+load at start: { 18.43 10.83 8.07 } (Fri Aug 28 00:26:45 CEST 2026)
+ok  	github.com/Nathandela/swarm/internal/adapter	2.726s
+ok  	github.com/Nathandela/swarm/internal/adapter/agy	2.627s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	3.078s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	2.651s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	10.688s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	2.584s
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	2.775s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	2.339s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	1.880s
+ok  	github.com/Nathandela/swarm/internal/skeleton	421.562s
+ok  	github.com/Nathandela/swarm/cmd/swarm	66.559s
+ok  	github.com/Nathandela/swarm/cmd/swarm-char	10.039s
+ok  	github.com/Nathandela/swarm/android/gate	108.333s
+ok  	github.com/Nathandela/swarm/mobile	56.540s
+test exit=0
+```
+
+Negative controls (clean tree at f8808cd3; each file restored with `git checkout --`):
+
+```
+## Negative control 1: the daemon drops the synthetic message WITHOUT opening the turn
+ internal/skeleton/interaction.go | 1 -
+ 1 file changed, 1 deletion(-)
+    synthetic_turn_test.go:43: a synthetic prompt opened no turn: every tool item that follows carries turn_id "", the phone draws the session idle, and Stop is refused for want of a turn to name
+--- FAIL: TestSyntheticPrompt_OpensATurnAndPublishesNoMessage (3.25s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	4.965s
+FAIL
+interaction.go restored
+
+## Negative control 2: the adapter shapes the envelope as the OWNER's message
+ internal/adapter/claude/interaction.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+--- FAIL: TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage (0.01s)
+FAIL
+FAIL
+    synthetic_turn_test.go:54: the first published item is a "user_message"; the envelope reached the wire as a message
+--- FAIL: TestSyntheticPrompt_OpensATurnAndPublishesNoMessage (2.32s)
+FAIL
+FAIL	github.com/Nathandela/swarm/internal/skeleton	3.970s
+FAIL
+ M internal/skeleton/chat.go
+ M internal/skeleton/sessiontap.go
+claude/interaction.go restored
+```
+
+### Docs (round-1 item 2)
+
+`internal/skeleton/chat.go` ("THE QUESTION THAT IS ANSWERABLE") now says that `control_input`
+frames are written but not counted, and names the residual (an approval key on an already-closed
+dialog, one uncounted character); `internal/skeleton/sessiontap.go`'s mode note says readWrite
+also forwards Submit and ControlKeys. Round-1 item 3 (control_input is fire-and-forget, the PTY
+write error discarded exactly as for TDataIn) is recorded on the bead. Round-1 item 4: every lint
+run from here on uses a per-worktree `GOLANGCI_LINT_CACHE` under the scratchpad.

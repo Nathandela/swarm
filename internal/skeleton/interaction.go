@@ -222,6 +222,14 @@ func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p ada
 			log.Printf("interaction: %s dropped an unshapeable item: %v", p.Event, err)
 			continue
 		}
+		if in.Kind == adapter.KindUserMessage && in.Source == adapter.SourceSynthetic {
+			// KEEP THE TURN, DROP THE BUBBLE (phone refit W2.4, round-1 review ruling). The
+			// CLI's own envelope is its only turn-opening signal, so the turn opens here exactly
+			// as it would on the owner's prompt -- and the item is neither persisted nor
+			// published: nothing reaches the wire or the phone, and no cursor is burned.
+			d.openSyntheticTurn(sessionID, in)
+			continue
+		}
 		payload, resolved, err := d.shapeItem(sessionID, in, p)
 		if err != nil {
 			log.Printf("interaction: %s could not be shaped: %v", p.Event, err)
@@ -238,6 +246,16 @@ func (d *Daemon) captureInteractions(sessionID string, ad adapter.Adapter, p ada
 		n++
 	}
 	return n
+}
+
+// openSyntheticTurn runs the turn-open half of shapeItem for a SourceSynthetic user_message
+// and nothing else: no item id, no journal record, no composer-echo correlation (an envelope
+// echoes no phone send).
+func (d *Daemon) openSyntheticTurn(sessionID string, in adapter.Interaction) {
+	d.itemMu.Lock()
+	defer d.itemMu.Unlock()
+	d.initInteractionsLocked()
+	d.turnIDLocked(sessionID, in)
 }
 
 // shapeItem builds §2's envelope around the adapter's normalized fields and returns the item
