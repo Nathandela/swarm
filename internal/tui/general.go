@@ -580,7 +580,9 @@ func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		id, value, editingTag := m.general.editID, m.general.editBuf, m.general.editTag
 		m.general.closeEdit()
 		if editingTag {
-			return m, setTagCmd(m.client, id, value)
+			// Trim here too (the daemon trims as well) so the optimistic apply and
+			// the banner see the cleared tag a blank edit means.
+			return m, setTagCmd(m.client, id, strings.TrimSpace(value))
 		}
 		return m, renameCmd(m.client, id, value)
 	case k.Code == tea.KeyEsc:
