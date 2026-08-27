@@ -57,7 +57,7 @@ Every wave runs the same way. None of this is optional.
    moment the wave starts. The main checkout is shared with another live session and is never
    edited by a fleet.
 3. **TDD, evidenced.** The RED run is captured (test names and the failure text) into
-   `docs/verification/phone-refit.md` under the wave's heading before GREEN begins. A test is never
+   `docs/verification/phone-refit-w<n>.md` (one file per wave) before GREEN begins. A test is never
    edited to pass; if a test seems wrong the fleet stops and reports. Tests listed as "must stay
    untouched" are the negative controls of the wave.
 4. **Stage by exact path.** `git add <file>` only. Never `-A`, `.`, a directory, or `commit -a`.
@@ -77,7 +77,7 @@ Every wave runs the same way. None of this is optional.
 10. **Close.** Evidence section written, bead closed, `git push` green, worktree removed.
 
 Global definition of done for the session: every wave's "Done when" is true; all four Go gates and
-the Kotlin suite are green on `main`; `docs/verification/phone-refit.md` has a section per wave with
+the Kotlin suite are green on `main`; `docs/verification/phone-refit-w<n>.md` exists for every wave with
 RED evidence and one negative control per behavioural change; the owner has seen the eight screens
 on the handset; versionCode 19 / 0.9.0 is on the Play internal track.
 
