@@ -308,7 +308,16 @@ case "UserPromptSubmit":
   `<title>Foo</title> what does this render?`), `TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept`.
   `:232`/`:259` golden corpus tests change only if a recorded fixture opens with a listed tag; `:54`
   untouched.
-- **Done when** each listed tag shapes zero items, both negative controls shape one, and
+- **Amended by round-1 review (2026-08-28).** Dropping the envelope outright also drops Claude's
+  only turn-opening signal (`internal/skeleton/interaction.go:358` opens a turn on every
+  `KindUserMessage`; the adapter sets `TurnRef` nowhere), so a session driven by a teammate message
+  or task notification would open no turn and Stop would be refused. Ruling: keep the turn, drop the
+  bubble. The adapter returns the envelope as a `KindUserMessage` with `Source: SourceSynthetic`
+  (new constant, admitted by `Validate`); the daemon opens the turn for it but neither persists nor
+  publishes it. Tests: each listed tag shapes one `SourceSynthetic` item; the skeleton opens a fresh
+  turn and publishes no `user_message`.
+- **Done when** each listed tag shapes one synthetic item that never reaches the wire, the next tool
+  item carries a fresh turn id, both negative controls shape one `SourceOwner` item, and
   `Interactions` stays pure and total.
 
 ## 4. W3 One button
