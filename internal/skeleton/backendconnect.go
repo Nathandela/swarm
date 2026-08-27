@@ -5,7 +5,7 @@ package skeleton
 // endpoint, joining the thread, releasing the shim's go-ahead, and pumping its frames.
 //
 // THIS IS THE ONE FILE THAT HOLDS BOTH HALVES, and it has to be, for the reason ADR-001 gives:
-// internal/daemon owns lifecycle and imports no adapter package, internal/adapter describes and
+// internal/daemon owns lifecycle and resolves no adapter, internal/adapter describes and
 // owns no fd, internal/appserver owns one socket and knows nothing about sessions. Only the
 // assembly has all three, and skeleton.Daemon IS the assembled daemon, so nothing is smuggled
 // up a layer by putting the join here.

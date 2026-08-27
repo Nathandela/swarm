@@ -38,6 +38,10 @@ const hookCommandPrefix = "swarm hook "
 // rendered grid and the raw capture; the id is the token that follows it.
 const sessionMarker = "Session "
 
+// transcriptExt is the suffix Claude Code gives each conversation transcript inside
+// a project directory (the stem is the session id).
+const transcriptExt = ".jsonl"
+
 // hookEvents are Claude Code's settings-configured hook events and their status
 // mapping (the engine's generic "turn"/"interaction" dimensions). The values are
 // the status-package string constants, spelled literally so this package depends
@@ -207,6 +211,47 @@ func (claudeAdapter) ExtractConversationID(grid *vt.Snap, tail []byte) (string, 
 // pure parser is invoked.
 func (claudeAdapter) ConversationIDFromEvent(p adapter.HookPayload) (string, bool) {
 	return adapter.CanonicalTopLevelConversationID(p.Raw, "session_id")
+}
+
+// ProjectDirName makes the claude adapter an adapter.TranscriptLayout: Claude Code
+// files a cwd's transcripts under ~/.claude/projects/<encoded cwd>/, and this is
+// that encoding. Every character that is not an ASCII letter or digit becomes one
+// '-'; nothing else changes, and the value is not cleaned (the caller cleans its
+// own cwd, as resolveClaude does).
+//
+// THE ENCODER IS RUNE-WISE, AND THAT IS MEASURED, NOT ASSUMED. Running the real
+// `claude` CLI on 2026-08-26 with cwd "/Users/Nathan/.claude/jobs/20bd7184/tmp/
+// café.tëst/测试" produced the directory
+// "-Users-Nathan--claude-jobs-20bd7184-tmp-caf--t-st---": the two-byte 'é' and each
+// three-byte ideograph yielded exactly ONE dash. A byte-wise loop would have
+// written "caf---t--st" and seven trailing dashes, so ranging over runes here is
+// the behavior the CLI actually has rather than the one Go makes convenient.
+func (claudeAdapter) ProjectDirName(cwd string) string {
+	var out strings.Builder
+	for _, r := range cwd {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			out.WriteRune(r)
+		} else {
+			out.WriteByte('-')
+		}
+	}
+	return out.String()
+}
+
+// TranscriptFileName is the layout's second half: within a project directory,
+// Claude Code names each conversation's transcript "<sessionId>.jsonl" (observed
+// 2026-08-26, "f41b0e35-6fa4-4c8b-bfea-8687b311255b.jsonl", whose stem is exactly
+// the record's own sessionId).
+//
+// THE DIRECTORY IS NOT FLAT -- that same capture found a `memory` entry beside the
+// transcript -- so a resolver must name this file EXACTLY and never glob.
+//
+// It does not validate convID, deliberately: this is a naming rule, not a gate.
+// The caller owes adapter.IsCanonicalConversationID before it and an os.Root
+// anchor after it, because filepath.Join CLEANS and an id like "../../etc/passwd"
+// would otherwise resolve clean outside the projects root.
+func (claudeAdapter) TranscriptFileName(convID string) string {
+	return convID + transcriptExt
 }
 
 // hookSettingsJSON renders the inline --settings value that installs the swarm

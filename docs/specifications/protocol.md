@@ -224,6 +224,26 @@ validates the canonical identity, composes the adapter's resume argv, persists t
 identity with the launch, and reuses an existing row with the same provider and
 identity. The two resume keys are mutually exclusive.
 
+A third option key is reserved for the hands-off handoff (ADR-010 Amendment 4).
+`handoff_from` carries the NAMESPACED id of the SOURCE session whose conversation
+the new session is told to go and read; the source is never signalled, stopped or
+asked to cooperate. It is accepted only on the owner tier when `hands-off-handoff`
+was negotiated during `hello`; it is refused with `capability_refused` otherwise
+and with `policy` on the remote tier, in both cases with no daemon side effect.
+`handoff_from`, `resume_from` and `resume_conversation_id` are three different
+answers to where a session comes from, so all three are mutually exclusive;
+pairing `handoff_from` with either resume key is refused `invalid_field` naming
+both keys, and the resume pair's own exclusion is the one stated above. Unlike
+the two resume keys, `handoff_from` distinguishes PRESENT-BUT-EMPTY from ABSENT
+and fails closed on the former: an empty value is refused `invalid_field`, while
+a key that was never set is an ordinary launch requiring no capability. ADR-010
+Amendment 4 E7 is the reason -- no refusal in this flow may degrade to a bare,
+context-free launch, and reading an empty source id as "absent" would reach one
+past the capability gate. The assembly
+resolves the source, its conversation identity and its transcript path, and
+composes the successor's prompt daemon-side; nothing about the handoff reaches
+`SessionView` or any other roster, list or event message.
+
 > AMENDED BY ADR-007 B144 (2026-08-15): `LaunchReq` above is the owner-tier form's request — free
 > `cwd`, `options`, `env`. B144's preset model arrives with the R1/R5 skeleton as a **separate**
 > remote-tier op, `session_launch(machine, operation_id, profile, preset_id, preset_revision,
@@ -383,6 +403,14 @@ The owner CLI offers `external-resume` only for provider-session adoption. Its
 absence is a compatibility boundary, not a best-effort downgrade: a reattach
 client must refuse before discovery or launch rather than let an older daemon
 interpret the reserved option as a fresh session.
+
+The owner CLI offers `hands-off-handoff` only when it is about to send a
+`handoff_from` launch, and its absence is the same kind of compatibility boundary
+for the same reason, stated more sharply: an older daemon does not know the option
+key and would silently ignore it, launching a context-free agent into the user's
+checkout. The client must refuse rather than launch. The capability is advertised
+on both tiers because `serverCaps` is tier-independent, but the option itself is
+refused `policy` on the remote tier, so negotiating it there grants nothing.
 
 ### `list`
 

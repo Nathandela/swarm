@@ -144,6 +144,18 @@ func (r *perSourceBlockingResolver) Resolve(m persist.Meta) resumeHistoryResult 
 	return r.results[m.ID]
 }
 
+// Both fakes exist to control the RECOVERY outcome and nothing else. They locate no
+// transcript, which is the fail-closed answer: a hands-off handoff composed against
+// one of these rigs refuses by name rather than pointing a successor at a path no
+// resolver stood behind.
+func (r *perSourceBlockingResolver) LocateTranscript(persist.Meta, string) (string, resumeHistoryOutcome) {
+	return "", resumeHistoryUnsupported
+}
+
+func (f *fakeResumeHistoryResolver) LocateTranscript(persist.Meta, string) (string, resumeHistoryOutcome) {
+	return "", resumeHistoryUnsupported
+}
+
 func (f *fakeResumeHistoryResolver) Resolve(persist.Meta) resumeHistoryResult {
 	f.mu.Lock()
 	f.calls++

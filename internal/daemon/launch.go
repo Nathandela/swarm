@@ -362,7 +362,8 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// Epic 12: an optional pre-launch hook (e.g. worktree isolation) may override
 	// the AGENT's working directory. m.Cwd above already captured the caller's
 	// spec.Cwd, so overriding spec.Cwd here reaches only the later spawnShim call,
-	// not the persisted meta. Nothing has touched disk yet, so on error dropping
+	// not the persisted meta -- the override is recorded ALONGSIDE it as m.AgentCwd
+	// instead. Nothing has touched disk yet, so on error dropping
 	// the reservation is a clean abort — no orphan. preLaunchOK tracks whether the
 	// hook actually ran and succeeded: every later rollback in this function must
 	// compensate via PreDelete when it did (F2), since dropReserved erases the
@@ -377,6 +378,13 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		preLaunchOK = true
 		if cwd != "" {
 			spec.Cwd = cwd
+			// This is the ONLY moment the resolved agent cwd exists. Without stamping it
+			// here it is dropped when this function returns, and the directory a worktree
+			// session's agent actually ran in -- the one a provider files its history
+			// under -- becomes uncomputable by anyone, this daemon included. Meta.Cwd is
+			// deliberately left alone: rollbackReserved and Delete both anchor worktree
+			// teardown on it (PreDelete's worktree.Remove(m.Cwd, m.ID) is run -C the REPO).
+			m.AgentCwd = cwd
 		}
 	}
 

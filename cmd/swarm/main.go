@@ -168,7 +168,7 @@ func runTUI(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
 	}
-	client, err := dialClient([]string{"attach", "subscribe"})
+	client, err := dialClient(tuiCaps())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "swarm: %v\n", err)
 		return 1
@@ -234,6 +234,26 @@ func clientConfig() (daemon.ClientConfig, error) {
 	}, nil
 }
 
+// tuiCaps is the capability set the TUI's ROSTER client offers at hello. It has ONE
+// definition because the TUI dials twice — runTUI for the long-lived client, and
+// daemonRestarter for the replacement client after a daemon auto-upgrade — and a set
+// that is right in one place and wrong in the other yields a feature that works until
+// the daemon upgrades itself and then silently starts refusing.
+//
+// CapHandsOffHandoff is offered because the TUI's handoff form can submit a
+// `handoff_from` launch (ADR-010 Amendment 4 E1) and the daemon refuses that option
+// CodeCapabilityRefused when it was not negotiated. Unlike the one-shot `swarm
+// reattach` verb, which negotiates external-resume immediately before its launch, the
+// TUI dials once at startup and cannot re-hello per launch, so it offers the
+// capability up front; a daemon that does not know it simply does not intersect it,
+// which is exactly the signal the form's refusal is built on.
+//
+// attachDialer's per-attach dial deliberately does NOT use this set: it offers
+// {"attach"} and never submits a launch.
+func tuiCaps() []string {
+	return []string{"attach", "subscribe", protocol.CapHandsOffHandoff}
+}
+
 // dialClient ensures a daemon is running (auto-start, D-1) and returns a connected
 // protocol client to it, offering caps. EnsureDaemon only spawns one when the socket
 // does not answer. It builds its own ClientConfig so the remote subcommands can call
@@ -284,7 +304,7 @@ func daemonRestarter(cc daemon.ClientConfig) tui.DaemonRestarter {
 		if err := daemon.Restart(cc); err != nil {
 			return nil, err
 		}
-		c, err := protocol.Dial(cc.SocketPath, []string{"attach", "subscribe"})
+		c, err := protocol.Dial(cc.SocketPath, tuiCaps())
 		if err != nil {
 			return nil, err
 		}

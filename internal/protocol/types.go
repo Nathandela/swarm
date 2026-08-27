@@ -188,6 +188,11 @@ const (
 	// provider-native conversation id that was discovered outside swarm. Older
 	// daemons do not negotiate it, so a new CLI cannot silently fresh-launch.
 	CapExternalResume = "external-resume"
+	// CapHandsOffHandoff permits an owner-tier client to launch a successor session
+	// that is handed the SOURCE session's conversation pointers (ADR-010 Amendment 4,
+	// the `handoff_from` launch option). Older daemons do not negotiate it, so a new
+	// CLI cannot silently degrade to a bare, context-free launch.
+	CapHandsOffHandoff = "hands-off-handoff"
 )
 
 // The closed spawn-intent vocabulary (ADR-010 D4), re-exported from the schema
