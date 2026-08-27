@@ -257,8 +257,37 @@ The invariant belongs where the file is written, not where it is read. A
 predicate on the read side is a proxy for a write-side rule, and lane A declined
 to change the write side because both candidate fixes contradict the plan's
 "rewritten on every start" -- a decision change above a lane's footprint. The
-same reasoning disqualifies a proxy for it here, with the added cost that the
-proxy is a heuristic where the write-side rule would be exact.
+same reasoning disqualifies a proxy for it here.
+
+WHAT THE WRITE-SIDE RULE IS NOT. An earlier draft of this section said the
+write-side rule would be "exact" where a read-side one guesses. That was too
+strong. The form proposed for it -- refuse to overwrite when the incoming set is
+a strict subset of the stored one -- has two defects, both found by lane A after
+this section was first committed:
+
+  1. It must compare KEY SETS, not KEY=VALUE entries. In the poisoning case PATH
+     is present on BOTH sides with different values (a homebrew prefix against
+     /usr/bin:/bin:/usr/sbin:/sbin), so an entry-wise subset test never fires: it
+     fails to detect precisely the case it was written for. The distinction is
+     invisible until someone implements it.
+  2. Even in its key-set form it silently breaks the documented repair path. An
+     interactive restart that legitimately drops a variable -- a deactivated
+     conda env, an OPENAI_API_KEY the owner stopped exporting -- is also a strict
+     subset by keys, so the guard refuses the owner's own refresh, and after a
+     permanent unset the file can never update again. The plan's answer to a
+     stale saved env is `swarm daemon restart` from a terminal; a guard that can
+     make that command silently do nothing is a worse failure than the one it
+     prevents, because the owner has been told it works.
+
+It therefore trades a rare silent degradation for a rare silent
+refusal-to-repair, which is not a clear win. The deeper reason both proposals
+fail: content cannot recover provenance. Comparing two environments cannot tell
+you WHO started the daemon, and that is the only thing separating the owner's
+terminal from a launchd context. Provenance is known at the spawn site --
+cmd/swarm knows how it was invoked, and could mark the spawn so that only an
+interactive start refreshes the file. That form is exact where both read-side and
+content-comparison guards guess, and it is squarely ADR-020's to decide, in a
+lane neither this one nor lane A owns.
 
 Recorded for the orchestrator as a section 6 risk and, if the decision goes that
 way, an ADR-020 amendment. Not implemented in this lane.
