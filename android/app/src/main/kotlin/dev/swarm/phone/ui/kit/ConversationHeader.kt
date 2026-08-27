@@ -30,6 +30,11 @@ fun conversationHeader(
     context: Context,
     title: CharSequence,
     subtitle: CharSequence,
+    /**
+     * The roster's Group for this session, or **empty where the roster has none** -- an orphaned
+     * row, or a Group a newer daemon authored and this build cannot name. Empty draws no dot
+     * rather than a substituted one; see the argument at the call site below.
+     */
     group: String,
     back: View?,
     menu: View?,
@@ -83,7 +88,19 @@ fun conversationHeader(
             addView(
                 KitStack(context, LinearLayout.HORIZONTAL, Kit.dimenPx(context, R.dimen.swarm_space_6)).apply {
                     gravity = Gravity.CENTER_VERTICAL
-                    addView(statusDot(context, group))
+                    // NO GROUP, NO DOT (Wave H, H.8). An empty [group] is the roster having no
+                    // fact about this session -- the orphan race where the row is gone, or a
+                    // Group from a newer daemon this build does not know -- and the absence of a
+                    // record is drawn as the absence of a mark (ADR-009 D2's `.pdot.unknown`).
+                    //
+                    // IT MAY NOT BE SUBSTITUTED, and `presenceDot`'s KDoc already ruled on this
+                    // exact move: rendering an unknown as `statusDot(ctx, "completed")` gives
+                    // every correct pixel and is the phone INVENTING a Group. Groups are derived
+                    // server-side and rendered verbatim (PB-TOK-8), so there is nothing here to
+                    // derive one from. And the substitute is not neutral -- grey is `completed`,
+                    // the claim that the agent FINISHED, which would be drawn beside a state word
+                    // that may read `working`.
+                    if (group.isNotEmpty()) addView(statusDot(context, group))
                     addView(
                         Kit.textView(context).apply {
                             setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)

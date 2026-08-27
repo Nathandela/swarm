@@ -19,6 +19,13 @@ import org.junit.Test
  * an `else -> OFFLINE` arm reads as tidy and tells the user to wait out a fault waiting cannot
  * fix. What keeps an unrecognised refusal legible is not this table but the machine's own
  * words, which every caller renders verbatim in the detail cell beside the sentence.
+ *
+ * THE TABLE GAINED A THIRD ROW SINCE THIS FILE WAS WRITTEN -- `input_busy`, Slice 0's refusal --
+ * and its coverage is [ErrorRoutingRefusalCopyTest] rather than another case here. That file owns
+ * the drawing's tabled sentences and the admission argument for why a verb-specific code earns a
+ * state at all; this one owns the vocabulary boundary and the reserved row. Adding an
+ * `input_busy` case below would be a second assertion about one decision, which is how two tests
+ * come to disagree.
  */
 class MachineCodeRoutingTest {
 
@@ -27,9 +34,23 @@ class MachineCodeRoutingTest {
         val routed = ErrorRouter.routeMachineCode("stale_turn")
         assertEquals(ErrorState.STALE_TURN, routed.state)
         assertEquals(Remedy.REFRESH, routed.remedy)
+        // MOVED, NOT DELETED. The line here was:
+        //
+        //     routed.message.contains("Nothing was typed"),
+        //
+        // and it went when the row's words became the conversation drawing's `bubble.stale`
+        // sentence, which is captioned "shipped copy, kept" and matched none of the four wordings
+        // of this fact the app was carrying. The ASSERTION'S INTENT SURVIVES INTACT -- the copy
+        // must never claim the message was delivered -- and only its literal did not.
+        //
+        // AND THE REPLACEMENT IS THE STRONGER GUARD, which is why this is worth a comment rather
+        // than a quiet edit. `startsWith("Not sent")` cannot be satisfied by copy that claims
+        // delivery: the sentence has to OPEN by saying the message did not go. A `contains` on a
+        // fragment could sit inside almost any sentence built around it -- including one that led
+        // with the cause and read as an explanation of a delivery that happened.
         assertTrue(
             "the gentle copy must never claim the message was delivered",
-            routed.message.contains("Nothing was typed"),
+            routed.message.startsWith("Not sent"),
         )
     }
 

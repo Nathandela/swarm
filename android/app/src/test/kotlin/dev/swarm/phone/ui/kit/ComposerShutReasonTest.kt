@@ -132,6 +132,25 @@ class ComposerShutReasonTest {
     }
 
     @Test
+    fun anEndedSessionSaysOneThingAndStopsThere() {
+        val ended = ComposerModel.shutCopyFor(ComposerAvailability.ENDED)!!
+        assertEquals(
+            "the drawing tables `composer.ended` as this placeholder alone, and draws no " +
+                "composer for the state at all",
+            "This session has ended",
+            ended.placeholder,
+        )
+        assertTrue(
+            "it is the one shut state with no remedy on the other side -- the other three all " +
+                "end in `and you can still type at your machine`, and there is nothing here to " +
+                "type AT. A second line can only restate the first in more words, and the one " +
+                "that shipped (`Its conversation is kept; there is nothing to type into.`) was " +
+                "on screen and on no copy sheet",
+            ended.detail.isEmpty(),
+        )
+    }
+
+    @Test
     fun theOfflineSentenceSaysNothingIsHeld() {
         val copy = ComposerModel.shutCopyFor(ComposerAvailability.OFFLINE)!!
         assertTrue(

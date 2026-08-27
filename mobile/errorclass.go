@@ -166,6 +166,16 @@ const (
 	// own class rather than ErrClassUnknown or ErrClassInternal.
 	ErrClassStaleTurn = "swarm/stale-turn"
 
+	// ErrClassInputBusy is the shim's input_busy refusal of a composer send (Slice 0,
+	// agents-tracker-bzfe): the PTY's only serialized writer found bytes written since the
+	// last submit, so it refused HAVING WRITTEN NOTHING rather than joining this message to
+	// somebody's half-typed line. Its own class for the reason ErrClassStaleTurn is: the
+	// remedy is specific and mild and belongs to nobody's mistake -- the terminal's line
+	// simply was not clean, and it will be the moment whoever is typing presses enter. It
+	// errs safe by construction: a draft typed and deleted back to empty still refuses,
+	// because the count measures bytes written and not what survives on the line.
+	ErrClassInputBusy = "swarm/input-busy"
+
 	// ErrClassRateLimited is a bound this phone enforces on itself (the §6.0 resync budget).
 	// Retryable, but only after waiting -- "asking harder" is what the bound exists to stop.
 	ErrClassRateLimited = "swarm/rate-limited"
@@ -221,6 +231,7 @@ var errClasses = []string{
 	ErrClassNotFound,
 	ErrClassInternal,
 	ErrClassStaleTurn,
+	ErrClassInputBusy,
 	ErrClassNoLease,
 	ErrClassOffline,
 	ErrClassRevoked,

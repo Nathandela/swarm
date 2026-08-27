@@ -705,22 +705,14 @@ class ScreenAirSweepTest {
     private fun sessionDetail(): View = sessionDetailView(
         context = context,
         panel = detailPanel(),
-        stop = ctaButton(context, "Stop", CtaKind.DENY),
-        kill = ctaButton(context, "Kill session", CtaKind.DENY),
         resync = ctaButton(context, "Fetch what is missing", CtaKind.MORE),
         acknowledge = ctaButton(context, "Clear", CtaKind.MORE),
-        composer = composerBar(
-            context,
-            textField(context, "Type a line"),
-            ctaButton(context, "Send line", CtaKind.APPROVE),
-        ),
         // EMPTY, DELIBERATELY: the sheet's own air is the "Approval sheet" destination's claim
         // below (`approvalSheet()`), the same fixture `PhoneSurface.drawApproval` composes into
         // this host when a session is blocked on one. A session detail with nothing pending is
         // the common case, and an empty host sweeps to nothing rather than vacuously.
         approval = FrameLayout(context),
         outcome = "The machine refused: remote control is disabled.",
-        onBack = {},
     )
 
     /** Every conditional block on the detail screen drawn at once, so nothing is swept vacuously. */

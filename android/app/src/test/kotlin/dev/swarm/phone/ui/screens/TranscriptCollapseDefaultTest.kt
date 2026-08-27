@@ -117,6 +117,16 @@ class TranscriptCollapseDefaultTest {
         )
     }
 
+    /**
+     * AMENDED FOR OWNER RULING R9 (2026-08-26). MOVED, not deleted.
+     *
+     * The rule this test states is that a file change is never folded away by a DEFAULT the
+     * reader did not choose -- and it still holds, in a stronger form: the change is not
+     * collapsible at all, and it is never grouped. What moved is the diff, which now opens on its
+     * own screen instead of being drawn in the flow (`TranscriptRoute.Diff`). The old assertion
+     * read the diff off the well, so it is re-aimed at the route rather than dropped: a file
+     * change that offered NOTHING would be exactly the hiding this test was written against.
+     */
     @Test
     fun `a file change is never hidden by the default`() {
         val fileChange = InteractionItem(
@@ -125,10 +135,21 @@ class TranscriptCollapseDefaultTest {
             body = """{"change":"modify","path":"ui/kit/Composer.kt","diff_excerpt":"- old line\n+ new line","added":12,"removed":4}""",
         )
         val b = blocksOf(fileChange).single()
+        assertFalse(
+            "a file change offers to fold, so R3's default reaches it and a wide refactor " +
+                "becomes a column of closed chevrons",
+            b.expandable,
+        )
         assertTrue(
-            "a diff is the only rendering of what actually changed on disk. Folding it behind " +
-                "a default would hide the one thing a file change is FOR",
-            b.well.isNotEmpty(),
+            "a diff is the only rendering of what actually changed on disk. Folding it behind a " +
+                "default -- or routing it nowhere -- hides the one thing a file change is FOR",
+            b.route is TranscriptRoute.Diff,
+        )
+        assertEquals(
+            "the chip lost the counts, which are what tell a reader whether a change is worth " +
+                "opening before they open it",
+            "+12 -4",
+            b.fileChange?.counts,
         )
     }
 

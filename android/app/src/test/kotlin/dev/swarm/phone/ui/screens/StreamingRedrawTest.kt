@@ -154,14 +154,10 @@ class StreamingRedrawTest {
             sessionDetailView(
                 context = context,
                 panel = panel,
-                stop = TextView(context),
-                kill = TextView(context),
                 resync = TextView(context),
                 acknowledge = TextView(context),
-                composer = TextView(context),
                 approval = TextView(context),
                 outcome = "",
-                onBack = {},
                 onApproval = onApproval,
             ),
         )

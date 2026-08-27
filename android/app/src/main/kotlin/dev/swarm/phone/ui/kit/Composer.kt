@@ -142,7 +142,7 @@ object ComposerModel {
             placeholder = "Not connected to your machine",
             // Input is live-only and never queued (ADR-007 B43). A composer that went quiet
             // without saying so invites the reader to believe their words are waiting.
-            detail = "Messages are never held - nothing is sent when the link returns.",
+            detail = "Messages are never held — nothing is sent when the link returns.",
         )
         ComposerAvailability.TORN -> ComposerShut(
             placeholder = "This session's record has a gap",
@@ -156,19 +156,70 @@ object ComposerModel {
         )
         ComposerAvailability.ENDED -> ComposerShut(
             placeholder = "This session has ended",
-            detail = "Its conversation is kept; there is nothing to type into.",
+            // NO SECOND SENTENCE, and [ComposerShut]'s own KDoc has always said why: "three
+            // of the four reasons have a real remedy nearby". This is the fourth. Offline,
+            // torn and no-chat all end in "and you can still type at your machine"; an ended
+            // session has nothing on the other side to type AT, so a second line here can
+            // only restate the first in more words. The owner-signed drawing tables
+            // `composer.ended` as the placeholder alone and draws NO COMPOSER for this state
+            // at all -- "Its conversation is kept; there is nothing to type into." was on
+            // screen and on no copy sheet.
+            detail = "",
         )
     }
 
     /**
      * The send item's state label. Each state is tellable apart: "delivery unknown" rendered
      * as "sent" is a lie (ADR-009 (6)).
+     *
+     * **AND THE SENTENCE ABOVE USED TO SIT DIRECTLY OVER THE LIE IT NAMES.** `SENT` returned
+     * the word "Sent". What PRODUCES `SENT` is `composerVerdictFor` on `verdict.accepted` --
+     * the daemon's OK for `composer_send`, which means the daemon wrote bytes into a PTY. That
+     * is not delivery, and there is no layer beneath this one that knows better: on the
+     * keystroke path the CLI acknowledges nothing at all. "Sent" was the strongest claim on
+     * the screen standing on the weakest fact on the wire, which is the exact shape of the
+     * defect the first paragraph names.
+     *
+     * **SO THE SETTLED STATE HAS NO LABEL, AND THAT IS THE DRAWING'S OWN COPY**: "No tick, no
+     * label. Settling IS the acknowledgement." Owner ruling R6 moves the acknowledgement to
+     * the agent's own echo -- the bubble stays [BubbleState.PENDING] under `sending` until the
+     * transcript reflects the prompt back, and then it simply settles. The empty string is not
+     * a missing label; it is the whole of what this build can honestly say about a message it
+     * has stopped worrying about, and the state is still tellable apart from every other one
+     * -- by the bubble's SURFACE, which is where derivation row 26 puts the difference.
+     *
+     * ## A LABEL NAMES A STATE, A NOTICE EXPLAINS ONE, AND NO STATE GETS BOTH
+     *
+     * (Owner ruling, this wave, on the composer's voice.) This function and [noticeFor] are
+     * two renderings of one send, and the panel draws both at once --
+     * `SessionDetailPanel.kt` fills `composerStateLabel` from here and `composerNotice` from
+     * there. So every state that had words in both said the same thing twice, in two
+     * wordings: the label `Not sent - the conversation moved on` sat directly above the notice
+     * `Not sent - the conversation moved on. Read the latest turn and send again.`, and after
+     * INPUT_BUSY joined REFUSED the label `Not sent` became a verbatim prefix of
+     * `Not sent - the terminal's input line was not empty.` The drawing draws ONE line under a
+     * refused bubble, and this is the rule that produces one.
+     *
+     * **PENDING IS THE ONLY STATE THAT KEEPS A LABEL**, because `sending` NAMES the state and
+     * explains nothing -- there is no remedy to offer while a message is in flight, and
+     * [noticeFor] has no arm for it. It is lower case because the copy sheet's `bubble.pending`
+     * row is, and this file's copy is now extracted from that sheet rather than typed.
+     *
+     * **EVERYTHING WITH A REMEDY SPEAKS THROUGH [noticeFor]**, which is where the sheet's
+     * sentences live and where the refusal taxonomy is single. REFUSED and STALE_TURN keep
+     * their words in the fullest sense -- a send that cannot get through is still shown
+     * refused and never silently swallowed -- they just say them once, in the place that can
+     * also say WHY. SENT has neither, because there is nothing to explain about a message the
+     * agent has echoed back.
      */
     fun stateLabel(state: SendState): String = when (state) {
-        SendState.PENDING -> "Sending"
-        SendState.SENT -> "Sent"
-        SendState.REFUSED -> "Not sent"
-        SendState.STALE_TURN -> "Not sent - the conversation moved on"
+        // The copy sheet's `bubble.pending`, lower case, and the one surviving label.
+        SendState.PENDING -> "sending"
+        // Empty, deliberately, all three. A settled bubble is DRAWN and not narrated; the two
+        // refusals are EXPLAINED, once, by `noticeFor`. See the KDoc.
+        SendState.SENT -> ""
+        SendState.REFUSED -> ""
+        SendState.STALE_TURN -> ""
     }
 
     /**
@@ -177,11 +228,37 @@ object ComposerModel {
      * the text was sent, and the draft is RETAINED for a re-send against the refreshed turn.
      * Every other refusal keeps the draft too (a refusal that eats the user's words punishes
      * them for the machine's answer), with the generic copy.
+     *
+     * **THE KEY IS THE `ErrorState` ENUM NAME AND NOT A MESSAGE**, which is what makes this the
+     * ONE place a refusal acquires its sentence: the chain is `composerVerdictFor` ->
+     * `ErrorRouter.routeMachineCode(outcome.code)` -> here. A cause with no arm does not fail
+     * loudly -- it falls to `else` and reads as the generic refusal, which is how a machine
+     * answer this product went to some trouble to produce can arrive on screen saying nothing
+     * particular. That is exactly what happened to INPUT_BUSY.
+     *
+     * **INPUT_BUSY IS SLICE 0'S WHOLE POINT REACHING THE READER.** The shim refuses rather than
+     * joining the reader's words to somebody's half-typed line, having written nothing -- and
+     * a person who is told only "your message was refused" cannot tell that from a dropped
+     * link, an expired session or a bug. The sentence names the one fact the shim actually
+     * knows: nobody has written to this PTY since the last submit, so the line was not empty.
+     *
+     * **AND THERE IS NO `SendState` FOR IT** (owner ruling, this wave). REFUSED plus the copy
+     * carries the reason, which is what derivation row 26 and the drawing specify:
+     * `bubble.refused` is ONE state whose sentence varies, not a state per cause. A SendState
+     * per machine code would put the refusal taxonomy in two places -- this `when` and that
+     * enum -- and guarantee the two drift.
      */
     fun noticeFor(code: String): ComposerNotice = when (code) {
+        // The drawing's `bubble.stale` row, verbatim, and the row's own note is "shipped copy,
+        // kept" -- so what shipped had drifted from what the sheet records. The em dash is
+        // U+2014 and the apostrophe is straight, as the copy table writes them.
         "STALE_TURN" -> ComposerNotice(
-            copy = "The conversation moved on before your message landed. Nothing was " +
-                "delivered; read the latest turn and press send again.",
+            copy = "Not sent — the conversation moved on. Read the latest turn and send again.",
+            retainsDraft = true,
+        )
+        // The drawing's `bubble.refused` row, verbatim.
+        "INPUT_BUSY" -> ComposerNotice(
+            copy = "Not sent — the terminal's input line was not empty.",
             retainsDraft = true,
         )
         else -> ComposerNotice(

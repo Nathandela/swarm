@@ -57,6 +57,17 @@ class SessionDetailComposerTest {
         kind = "agent_message", text = text, turnId = turn,
     )
 
+    /**
+     * An agent message that CLOSED its turn, which is what a settled reply is (IS-ENV-1).
+     *
+     * IT IS A SECOND HELPER AND NOT A DEFAULT ON [agent], because the two are used for opposite
+     * purposes in this file: B7's `expectedTurn` fixture needs a turn that is still OPEN, and the
+     * placeholder's idle case needs one that is closed. A single helper doing both by accident is
+     * how a fixture comes to assert the wrong state without saying so.
+     */
+    private fun settledAgent(text: String, turn: String = "turn-a") =
+        agent(text, turn).copy(status = "completed")
+
     private fun runningTool() = InteractionItem(
         sessionId = session, itemId = "t-run", cursor = 2, kind = "tool_run",
         status = "in_progress", toolKind = "execute", turnId = "turn-a",
@@ -99,37 +110,72 @@ class SessionDetailComposerTest {
         capabilities = SessionCapabilityFacts(structuredChat = structuredChat),
     )
 
-    private fun view(p: SessionDetailPanel, composer: View = TextView(context)): View =
+    private fun view(p: SessionDetailPanel): View =
         sessionDetailView(
             context = context,
             panel = p,
-            stop = TextView(context),
-            kill = TextView(context),
             resync = TextView(context),
             acknowledge = TextView(context),
-            composer = composer,
             loadEarlier = TextView(context),
             approval = TextView(context),
             outcome = "",
-            onBack = {},
         )
 
     // ---- M2.4: the composer exists, or honestly does not --------------------
 
+    /**
+     * MOVED, WITH THE BAR ITSELF (chat-surface-plan §5). These two asserted `DetailTag.COMPOSER`
+     * inside this column; the bar is `conversationScaffoldView`'s pinned region now, and what
+     * decides whether a session gets one is [SessionDetailPanel.composerIsBar] -- ONE predicate,
+     * read by this column to decide whether to draw the sentence and by `PhoneSurface` to decide
+     * whether to pin the bar. So the fact under test is unchanged and its subject is the
+     * predicate rather than a tag, which is what these two assert now. That the pinned region
+     * actually appears is `PhoneSurfaceConversationHostTest`'s.
+     */
     @Test
     fun `an online session with a structured record offers the composer`() {
         assertEquals(ComposerAvailability.AVAILABLE, panel().composerAvailability)
-        assertNotNull(view(panel()).kitFind(DetailTag.COMPOSER))
+        assertTrue(
+            "a healthy session is not offered the composer bar at all",
+            panel().composerIsBar,
+        )
+        assertNull(
+            "the column draws the no-composer sentence over a session that HAS a composer, so " +
+                "the reader is told they cannot type into a session they can type into",
+            view(panel()).kitFind(DetailTag.COMPOSER_ABSENT),
+        )
     }
 
     @Test
     fun `an offline session keeps the composer and says the send will not go`() {
         val p = panel(online = false)
         assertEquals(ComposerAvailability.OFFLINE, p.composerAvailability)
-        assertNotNull(
+        assertTrue(
             "an offline composer was removed. The draft is still worth typing -- the link comes " +
                 "back -- and a control that vanishes teaches the user the feature is gone",
-            view(p).kitFind(DetailTag.COMPOSER),
+            p.composerIsBar,
+        )
+        assertNull(
+            "an offline session drew the no-composer sentence, which is the removal above " +
+                "wearing a paragraph",
+            view(p).kitFind(DetailTag.COMPOSER_ABSENT),
+        )
+        // **D.10, AT THE LEVEL A JVM CAN SEE IT.** The bar staying is only half the state: the
+        // two sentences `ComposerModel` computes for OFFLINE were read by NOTHING, because the
+        // hint came from `placeholderFor(working)` and `composerShut` was discarded on this arm.
+        // The second of them is the one fact on the sheet a reader cannot deduce from a greyed
+        // field. `PhoneSurface.drawComposerRegion` is what spends them -- the field's hint and the
+        // line under the bar -- and this is the fact it spends.
+        assertNotNull(
+            "an offline session has no shut copy at all, so the bar it keeps has nothing true to " +
+                "say inside it",
+            p.composerShut,
+        )
+        assertTrue(
+            "the offline copy does not say that nothing is held. A composer that looks live and " +
+                "says only \"not connected\" invites a message the reader believes will go when " +
+                "the link returns, and it never will",
+            p.composerShut!!.detail.isNotEmpty(),
         )
     }
 
@@ -146,9 +192,10 @@ class SessionDetailComposerTest {
             p.composerAvailability,
         )
         val root = view(p)
-        assertNull(
-            "the composer is still on screen over a session whose structured record tore",
-            root.kitFind(DetailTag.COMPOSER),
+        assertTrue(
+            "the composer bar is still offered over a session whose structured record tore, so " +
+                "the surface pins a control promising a verb the session structurally lacks",
+            !p.composerIsBar,
         )
         assertNotNull(
             "the composer vanished with no explanation, which reads as a bug rather than as a " +
@@ -159,14 +206,63 @@ class SessionDetailComposerTest {
 
     // ---- M2.5: the placeholder is status-driven ------------------------------
 
+    /**
+     * **THE SOURCE OF "working" CHANGED UNDER THIS TEST AND THE FIXTURE MOVED WITH IT** (plan
+     * D.1). The placeholder read `blocks.any { it.running }`; it reads the OPEN TURN now, which is
+     * the same value the header word, the working line and Stop read. So the idle case is a turn
+     * that CLOSED rather than a list with no running tool in it, and the working case is a turn
+     * that is still open rather than a tool that happens to be in progress. What is asserted is
+     * unchanged; what it is asserted over is now the fact the daemon itself matches on.
+     */
     @Test
     fun `the placeholder invites a message when idle and feedback while working`() {
-        assertEquals(ComposerModel.placeholderFor(false), panel().composerPlaceholder)
+        assertEquals(
+            "a session whose last turn is over still invites feedback into it, so the composer " +
+                "reads as though the agent were working with nothing running",
+            ComposerModel.placeholderFor(false),
+            panel(items = listOf(settledAgent("hello"))).composerPlaceholder,
+        )
         assertEquals(
             "a working agent still takes input, as feedback into the running turn, and the " +
                 "placeholder must not imply the composer is closed",
             ComposerModel.placeholderFor(true),
-            panel(items = listOf(agent("hello"), runningTool())).composerPlaceholder,
+            panel(items = listOf(settledAgent("hello"), runningTool())).composerPlaceholder,
+        )
+    }
+
+    /**
+     * **THE COLD OPEN IS A DECISION HERE, NOT A FALL-THROUGH** (owner ruling, this wave).
+     *
+     * WHAT THIS IS AGAINST. `openTurnOf` answers `""` for an empty item list and for a closed
+     * turn alike, so a session no item has reached yet resolves to the same value an idle one
+     * does. The HEADER stopped claiming a state from that (`SessionDetailHeaderTest`'s no-record
+     * test) and the placeholder deliberately did NOT follow it out, so this asserts the branch
+     * that was left behind -- otherwise "Message" on a cold open is a side effect of an empty
+     * list, and the next reader to notice the divergence removes it as an inconsistency.
+     *
+     * WHY THE TWO DIVERGE, which is the whole reason this test exists beside the one above. The
+     * header word REPORTS what the agent is doing; the placeholder INVITES an action that is
+     * genuinely available in both states. "Message" on a cold-opened working session is a weaker
+     * claim than `idle` on one, because typing really is available -- and the costs are not
+     * symmetric either: dropping the state word costs nothing, since the machine name still
+     * carries the line, while dropping the hint costs a label outright. `PhoneSurface.field`'s
+     * own rule settles that half: the hint IS the label on this surface, so a field added without
+     * one is a box a user cannot identify. No fourth composer state was tabled for it, because a
+     * string saying "I do not know whether this agent is working" says less than the two we have
+     * on a control whose only job is to invite typing.
+     *
+     * IT ASSERTS THE DECISION AND NOT THE STRING, which is why it spends `placeholderFor(false)`
+     * rather than "Message": the copy is `ComposerModel`'s and the sheet's, and a literal here
+     * would be a second place to change it.
+     */
+    @Test
+    fun `a session this phone holds no record of invites a message rather than feedback`() {
+        assertEquals(
+            "a cold-opened session drew the WORKING placeholder, or something that is neither -- " +
+                "the hint on a session no item has reached yet is the idle invitation, decided " +
+                "rather than inherited from an empty list",
+            ComposerModel.placeholderFor(false),
+            panel(items = emptyList()).composerPlaceholder,
         )
     }
 
@@ -203,6 +299,36 @@ class SessionDetailComposerTest {
         val p = panel(sendState = SendState.REFUSED, refusal = "OFFLINE")
         assertEquals(ComposerModel.noticeFor("OFFLINE").copy, p.composerNotice)
         assertTrue(p.composerRetainsDraft)
+    }
+
+    /**
+     * FAILING-FIRST for the owner's label/notice ruling: **a label names a state, a notice
+     * explains one, and no state gets both.**
+     *
+     * WHAT IT IS AGAINST. `stateLabel(STALE_TURN)` is "Not sent - the conversation moved on" and
+     * `noticeFor("STALE_TURN")` is the sentence that says the same thing and then says what to do
+     * about it. Drawn together they are two near-duplicate wordings under one bubble, which reads
+     * as two failures. The notice wins because it is the half that carries the remedy; the label
+     * survives alone for `PENDING`, which names a state and explains nothing.
+     */
+    @Test
+    fun `a refusal says one thing, not the same thing twice`() {
+        val refused = view(panel(sendState = SendState.STALE_TURN, refusal = "STALE_TURN"))
+
+        assertNotNull(
+            "the refusal's remedy is not on screen at all",
+            refused.kitFind(DetailTag.COMPOSER_NOTICE),
+        )
+        assertNull(
+            "the send's state label is drawn ABOVE the notice that explains the same refusal, so " +
+                "one failed send reports itself twice in two near-identical wordings",
+            refused.kitFind(DetailTag.COMPOSER_STATE),
+        )
+        assertNotNull(
+            "a send still crossing draws nothing at all, though \"Sending\" names a state and " +
+                "explains none -- it is the one label with no notice to be duplicated by",
+            view(panel(sendState = SendState.PENDING)).kitFind(DetailTag.COMPOSER_STATE),
+        )
     }
 
     @Test

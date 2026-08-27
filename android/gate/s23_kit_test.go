@@ -218,6 +218,107 @@ var s23Inbox = []s23Component{
 			"keeps one target size and one wording rule.",
 	},
 	{
+		Factory: "overflowControl",
+		File:    "ConversationMenu.kt",
+		Derived: "#28 Conversation menu",
+		Why: "the header's trailing control, and the whole of what owner ruling R2 does with the " +
+			"CTA stack: Take control, Stop and Kill were three full-width buttons costing 160 dp " +
+			"of the reading path on a screen that had roughly 150 dp left for the conversation, " +
+			"and this is the 48 dp square that replaces the one of them that survives. It is a " +
+			"SEPARATE FACTORY from `conversationMenu` and not the same view, which is the same " +
+			"split `syncPill` and `syncStrip` are: one is on screen always and the other only " +
+			"while it is open, and a component that was both would be a menu with a permanent " +
+			"row of its own. It draws the glyph and nothing else -- no tap, no anchor, no popup " +
+			"-- because what an overflow OPENS is the screen's, exactly as `navHeaderDrill` " +
+			"leaves its back control's destination to the destination that has one.",
+	},
+	{
+		Factory: "conversationMenu",
+		File:    "ConversationMenu.kt",
+		Derived: "#28 Conversation menu",
+		Why: "everything that is not reading or typing, and the one component in this kit that " +
+			"handles its own taps -- because its rows are built FROM data a caller passes, so a " +
+			"screen cannot attach a listener to a row it did not build, and the alternative is a " +
+			"screen composing the rows itself, which is a screen authoring a component's " +
+			"composition. The choices are the CALLER's for PB-DS-9's reason (they are copy) and " +
+			"because which of them exist is a fact about a session: an ended session has no kill. " +
+			"There is NO TERMINAL-VIEW ROUTE and that is a refusal rather than an omission -- " +
+			"ADR-017:60-65 forbids a raw-terminal route on a structured session, so drawing one " +
+			"would be a door onto a room that is not there. Repair is not here either: it lives " +
+			"on the tear, where the tear is (`gapDivider`), because two affordances for one " +
+			"live-only operation are two pending states for one act. The surface is " +
+			"`toastSurface` unchanged, which is §2's reuse rule doing its job -- a floating " +
+			"elevated block with the card's hairline, radius and key light is what row 1 already " +
+			"specifies, and a menu is the same kind of object over the same ground.",
+	},
+	{
+		Factory: "gapDivider",
+		File:    "GapDivider.kt",
+		Derived: "#29 Gap divider",
+		Why: "the record has a hole, said at the place the record tore. Today the phone draws a " +
+			"paragraph of apology and two full-width buttons ABOVE the conversation -- a notice " +
+			"with no position, standing where the reader is trying to read -- and what a reader " +
+			"needs at a tear is to know the record is not continuous, not an essay about why. It " +
+			"is `notice(ERROR)`'s voice at `notice(ERROR)`'s type role with the paragraph " +
+			"replaced by a rule: same `Body.Secondary`, same `--p-err`, and two hairlines that " +
+			"take the width the sentence used to. The rules take `Kit.errorBorder`, which is row " +
+			"12's checked `color-mix(--p-err 36%, --p-hair)` spent a third time rather than a " +
+			"fourth hand mix -- the drawing writes `rgba(--p-err, 0.32)` and PB-TOK-7 forbids " +
+			"typing an alpha that is a function of a token. It is DISTINCT FROM THE SYNC NOTICE " +
+			"and must not borrow its drawing: a stale stream has no position, so it cannot claim " +
+			"one, and that notice stays the full-width sentence it is.",
+	},
+	{
+		Factory: "earlierChip",
+		File:    "EarlierChip.kt",
+		Derived: "#30 Earlier chip",
+		Why: "the offer to fetch older messages, at the HEAD of the list rather than in the " +
+			"reading path. It is row 10's floating `.chip` in a new position and not a new " +
+			"surface -- `chipSurface(selected = false)`, `Label.Chip` / `--p-ink2`, the same " +
+			"construction `syncPill` already spends -- which is §2's reuse rule and is why this " +
+			"row states its type and its metrics by citing that one. What is NEW is the " +
+			"honesty rule rather than the paint: the chip is drawn only when the machine says " +
+			"there is something older to fetch, and when it says nothing older is retained the " +
+			"chip is ABSENT rather than present and dead. A full-width button here would be a " +
+			"third control in a column whose whole defect was three controls.",
+	},
+	{
+		Factory: "fileChangeRow",
+		File:    "FileChangeRow.kt",
+		Derived: "#31 File change row",
+		Why: "owner ruling R9: a file change is a chip in the flow carrying the verb, the path " +
+			"and `+N -M`, and its diff opens on its own screen. Today `TranscriptPanel.kt:465` " +
+			"draws a unified diff inline, unconditionally, so a wide refactor costs a screen per " +
+			"file on the one surface whose purpose is continuous reading; this costs one line " +
+			"per file. It takes `activityRow`'s card, padding and gap verbatim -- `cardSurface`, " +
+			"`space_10` x `space_12`, `space_10` -- because it sits AMONG tool rows in the same " +
+			"stream and a tighter box would read as a different kind of object rather than as " +
+			"the same kind carrying different cells. The path ellipsizes at the MIDDLE and every " +
+			"other identity in this kit ellipsizes at the end: `Kit.identityCell`'s rule is that " +
+			"the front of a name distinguishes two, and a path is the one identity here whose " +
+			"distinguishing half is its LAST segment. The counts are ONE wire-authored string in " +
+			"one ink: the drawing tints `+N` and `-M` separately and doing that would mean " +
+			"splitting the machine's own words to decide which half is which, which is the parse " +
+			"IS-TOOL-1 refuses one hop earlier. The sign carries the direction. NEVER GROUPED, " +
+			"because a count of files is not a record of what changed.",
+	},
+	{
+		Factory: "decisionPill",
+		File:    "DecisionPill.kt",
+		Derived: "#32 Decision pill",
+		Why: "the only persistent affordance in the whole reading flow, and it is persistent for " +
+			"exactly as long as an unanswered decision is OFF SCREEN. `pillSurface` at " +
+			"`--p-hero` is the recipe row 3's badge already uses, so this mints nothing: the " +
+			"champagne means \"you\" in this skin (ADR-009 D6) and a question the agent is " +
+			"blocked on is the strongest reading of that there is. It carries NO `--p-cta-fx` " +
+			"bloom, which is the standing rule rather than a taste: nothing glows unless it is " +
+			"alive, ruling R8 narrowed the one glow this app has to the session that needs you, " +
+			"and a second champagne halo on the same screen would dilute the first. The arrow " +
+			"the drawing puts after the words is NOT here -- the copy table records `Decision " +
+			"needed` and a string not tabled there is not on screen -- and the words themselves " +
+			"are the caller's, because they are copy.",
+	},
+	{
 		Factory: "navHeaderDrill",
 		File:    "NavHeaderDrill.kt",
 		Derived: "§4 Drill-down nav header",
@@ -1715,6 +1816,39 @@ var s23DerivedSpacing = []struct {
 	// consistent with and nothing but its own padding separating it from the screen behind it.
 	{"Toast.kt", "#1 Toast", "padding-y", "swarm_space_10"},
 	{"Toast.kt", "#1 Toast", "padding-x", "swarm_space_16"},
+	// THE CONVERSATION SURFACE'S SEVEN, added with the rows rather than after them (Wave C).
+	// Rows 26-32 all state their padding in the shorthand this reader was built for, so the join
+	// is available and taking it is the difference between a table that covers the kit and one
+	// that covers the part of the kit that existed when it was written.
+	//
+	// ROW 28 STATES TWO PADDINGS AND THIS READER TAKES THE FIRST MATCH -- the same hazard row 9
+	// and row 13 are recorded for one screen up, and here it resolves correctly by construction:
+	// the block's own inset is written `block padding `space_4``, with no `x` and therefore no
+	// match, so the first thing the shorthand can read is the ROW padding, which is what every
+	// menu line spends. If the block's inset ever acquires a horizontal partner it would become
+	// the first match and this pair would silently start checking the container against the line.
+	{"ConversationMenu.kt", "#28 Conversation menu", "padding-y", "swarm_space_8"},
+	{"ConversationMenu.kt", "#28 Conversation menu", "padding-x", "swarm_space_10"},
+	{"EarlierChip.kt", "#30 Earlier chip", "padding-y", "swarm_space_8"},
+	{"EarlierChip.kt", "#30 Earlier chip", "padding-x", "swarm_space_12"},
+	// Row 31 states row 14's own two steps, which is the row's whole argument rather than a
+	// coincidence: the file change sits AMONG activity rows in one stream, so a tighter box would
+	// make it read as a different kind of object. The join is what stops the two drifting.
+	{"FileChangeRow.kt", "#31 File change row", "padding-y", "swarm_space_10"},
+	{"FileChangeRow.kt", "#31 File change row", "padding-x", "swarm_space_12"},
+	{"DecisionPill.kt", "#32 Decision pill", "padding-y", "swarm_space_6"},
+	{"DecisionPill.kt", "#32 Decision pill", "padding-x", "swarm_space_14"},
+	// AND THE TWO THAT LANDED EARLIER IN THE SAME WAVE. Neither was joined when it shipped, which
+	// is the same omission this block exists to end -- a bubble and a header whose only
+	// specification is prose in a table, with nothing reading the table.
+	{"MessageBubble.kt", "#26 Message bubble", "padding-y", "swarm_space_8"},
+	{"MessageBubble.kt", "#26 Message bubble", "padding-x", "swarm_space_12"},
+	{"ConversationHeader.kt", "#27 Conversation header", "padding-y", "swarm_space_10"},
+	{"ConversationHeader.kt", "#27 Conversation header", "padding-x", "swarm_space_18"},
+	// GapDivider.kt IS DELIBERATELY NOT IN THIS TABLE and is in s23DerivedEdge instead: row 29
+	// states no padding at all, because the component has none -- it is two rules and a word, and
+	// what it does state is a GAP. Recorded here so the absence reads as a known shape rather
+	// than as a component nobody joined, which is EmptyState.kt's precedent two entries up.
 	// Row 13's padding is the same pair again, and the device row spends it through `settingsRow`
 	// rather than through a component of its own -- so the join that holds it is row 15's, above.
 	// DenyChip.kt is absent from this table for a different reason: row 13 states the chip's
@@ -1837,6 +1971,14 @@ var s23DerivedEdge = []struct {
 	// difference is what `.cards` becoming `.prows` (§6) costs on this one screen.
 	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "top", "swarm_space_8"},
 	{"KillSwitchPanel.kt", "#12 Kill-switch panel", "sides", "swarm_space_14"},
+	// Row 29's ONLY spacing cell. The gap divider has no padding -- it is two rules and a word --
+	// so the shorthand reader has nothing to read and this is the reader that can hold it. The
+	// step is the one row 11 already rounds the same drawing value to (9 -> `space_8`), which is
+	// why the row cites it rather than choosing.
+	{"GapDivider.kt", "#29 Gap divider", "gap", "swarm_space_8"},
+	// Row 31's gap, beside its padding in s23DerivedSpacing: row 14's `space_10` between the
+	// verb, the path and the counts, so the three cells sit apart exactly as an activity row's do.
+	{"FileChangeRow.kt", "#31 File change row", "gap", "swarm_space_10"},
 }
 
 // s23DocEdgeStep reads one edge's step out of a row.
@@ -2522,6 +2664,54 @@ var s23TouchTargets = []s23TouchTarget{
 			"other target on this row and it is navHeaderDrill's, unchanged and shared: backControl " +
 			"became internal rather than being copied precisely so the way out of a drill-down " +
 			"keeps one target size wherever it is drawn.",
+	},
+	{
+		Row:     "#28 Conversation menu",
+		Factory: "conversationMenu",
+		Why: "row 28 states one floor and TWO controls answer to it, which is why the entry names " +
+			"the menu rather than the glyph: `overflowControl` is a 48 dp square around a glyph " +
+			"with no fill of its own, and every menu row is a 48 dp line around a label with no " +
+			"fill of its own. Both are in ConversationMenu.kt, and the file is what this check " +
+			"reads -- CtaButton.kt's two factories are the precedent. A menu row is the one " +
+			"control in this kit where the floor is load-bearing rather than generous: the rows " +
+			"are 12.5 sp text at `space_8` of padding, so the drawn line is under 34 dp, and the " +
+			"row directly under a mis-aimed tap on `Load earlier messages` is `Kill session`.",
+	},
+	{
+		Row:     "#29 Gap divider",
+		Factory: "gapDivider",
+		Why: "the divider carries the repair, because the menu deliberately does not -- one " +
+			"affordance per operation, sited where the tear is. So the whole line is the control " +
+			"and the whole line takes the floor, which is `syncStrip`'s ruling: a mark that hugs " +
+			"one short word is exactly the shape that measures too small to hit, and an inline " +
+			"link cannot carry a target at all (row 22's own argument for turning `[Take " +
+			"control]` into a standalone button). A minimum and not a size -- the drawn rule and " +
+			"the word are unchanged, and what grows is the air a finger may land in.",
+	},
+	{
+		Row:     "#30 Earlier chip",
+		Factory: "earlierChip",
+		Why: "row 10 states `targets >=48` for the floating chip and this is that chip, so the " +
+			"floor arrives with the shape rather than being decided here. `syncPill` is the " +
+			"precedent in both directions: same surface, same hugging width, same reason -- a " +
+			"pill sized to one short line of copy is the control that measures short by " +
+			"construction.",
+	},
+	{
+		Row:     "#31 File change row",
+		Factory: "fileChangeRow",
+		Why: "the row opens a diff on its own screen, so it is a control and not a record. Its " +
+			"card and padding are row 14's, and row 14 states no floor because an activity row " +
+			"is not tappable -- which is the whole reason this row states one: the same drawing " +
+			"in the same stream, with a destination behind it.",
+	},
+	{
+		Row:     "#32 Decision pill",
+		Factory: "decisionPill",
+		Why: "the pill scrolls the list to the unanswered decision, so it is a control, and it " +
+			"is the one control on this screen a person reaches for while the agent is working. " +
+			"`denyChip`'s terms: the floor is a minimum and not a size, so the drawing is " +
+			"unchanged wherever the metrics already clear it.",
 	},
 	{
 		Row:     "#4 Toggle",

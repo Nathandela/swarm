@@ -1,0 +1,870 @@
+<title>Conversation Surface Drawing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  /* Obsidian tokens, read from android/app/src/main/res/values/colors.xml,
+     which is gate-locked to internal/design/tokens.json. Nothing invented. */
+  :root {
+    --bg:#0E0B08; --card:#171310; --elev:#1F1A13; --well:#090705; --hair:#2E271D;
+    --ink:#F6F3EC; --ink2:#A69D8E; --ink3:#746B5D;
+    --hero:#C9A876; --hero-ink:#1A1206;
+    --work:#6FA7A4; --ok:#8CAF8E; --err:#D96A62;
+    --lit: rgba(246,243,236,0.22);
+    --page: clamp(320px, 94vw, 1240px);
+    --col:  clamp(320px, 92vw, 700px);
+    --f-display:"Fraunces","Iowan Old Style",Georgia,serif;
+    --f-body:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,sans-serif;
+    --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:var(--f-body);font-size:17px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(1200px 700px at 50% -10%, rgba(201,168,118,.06), transparent 62%);
+  }
+  main{position:relative;z-index:1}
+  .wrap{width:var(--page);margin:0 auto;padding:0 4px}
+  .col{width:var(--col);margin:0 auto}
+  h1,h2,h3,h4{font-family:var(--f-display);font-weight:600;text-wrap:balance}
+  h1{font-size:clamp(2.4rem,5.6vw,4rem);line-height:1.03;letter-spacing:-.02em;margin:0 0 .6rem}
+  h2{font-size:clamp(1.6rem,3.2vw,2.3rem);line-height:1.12;letter-spacing:-.015em;margin:0 0 .4rem}
+  h3{font-size:1.12rem;margin:0 0 .35rem;letter-spacing:-.005em}
+  p{margin:0 0 1rem;color:var(--ink2)}
+  p.lead{color:var(--ink);font-size:1.14rem}
+  strong,b{color:var(--ink);font-weight:600}
+  em{color:var(--ink);font-style:italic}
+  code,.mono{font-family:var(--f-mono);font-size:.86em}
+  p code,li code,td code{background:var(--well);border:1px solid var(--hair);border-radius:4px;padding:1px 5px;color:var(--ink2)}
+  .eyebrow{font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink3);font-weight:600;margin:0 0 1rem}
+  .eyebrow.hero{color:var(--hero)}
+  section{padding:clamp(3rem,7vw,5.5rem) 0}
+  .rule{height:1px;background:var(--hair);border:0;margin:0}
+
+  /* ---------- specimen sheet ---------- */
+  .spec{
+    border:1px solid var(--hair);border-radius:14px;background:var(--card);
+    overflow:hidden;margin-bottom:1.4rem;
+  }
+  .spec > header{
+    display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap;
+    padding:.85rem 1.1rem;border-bottom:1px solid var(--hair);background:var(--elev);
+  }
+  .spec > header .nm{font-family:var(--f-mono);font-size:.86rem;color:var(--hero)}
+  .spec > header .ds{font-size:.87rem;color:var(--ink2);flex:1;min-width:220px}
+  .spec > header .og{font-family:var(--f-mono);font-size:.68rem;color:var(--ink3);letter-spacing:.04em}
+  .spec .states{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:1px;background:var(--hair);
+  }
+  .state{background:var(--card);padding:1rem 1.1rem 1.2rem}
+  .state .lb{
+    font-family:var(--f-mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink3);margin-bottom:.75rem;display:block;
+  }
+  .state .nt{font-size:.82rem;color:var(--ink3);line-height:1.45;margin-top:.7rem}
+  .state .nt b{color:var(--ink2);font-weight:600}
+
+  /* stage: a fragment of the real screen, at real scale */
+  .stage{
+    background:var(--bg);border-radius:10px;padding:10px 11px;
+    font-size:12.5px;line-height:1.42;
+  }
+
+  /* ---------- component visuals (the real thing, scaled) ---------- */
+  .msg{display:flex;margin-bottom:8px}
+  .msg.me{justify-content:flex-end}
+  .bubble{
+    background:var(--elev);border-radius:14px 14px 4px 14px;padding:8px 11px;
+    max-width:82%;color:var(--ink);font-size:12.5px;
+  }
+  .bubble.cmd{font-family:var(--f-mono);font-size:11px}
+  .bubble.pending{opacity:.55;border:1px dashed var(--hair)}
+  .bubble.refused{border:1px solid rgba(217,106,98,.45)}
+  .undermsg{
+    text-align:right;font-size:9.5px;color:var(--ink3);margin:-4px 0 8px;font-family:var(--f-mono);
+  }
+  .undermsg.err{color:var(--err);font-family:var(--f-body);font-size:10.5px}
+  .undermsg u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+
+  .prose{color:var(--ink);font-size:12.5px}
+  .prose p{color:var(--ink);margin:0 0 6px;font-size:12.5px;line-height:1.5}
+  .prose ul{margin:0 0 6px;padding-left:15px}
+  .prose li{font-size:12.5px;margin-bottom:2px;color:var(--ink)}
+  .prose pre{
+    background:var(--well);border:1px solid var(--hair);border-radius:6px;
+    font-family:var(--f-mono);font-size:10px;color:var(--ink2);padding:7px 8px;margin:0 0 6px;
+    overflow-x:auto;
+  }
+
+  .tool{
+    display:flex;align-items:center;gap:8px;padding:7px 9px;
+    border:1px solid var(--hair);border-radius:9px;background:var(--card);
+    color:var(--ink2);font-size:11.5px;margin-bottom:8px;
+  }
+  .tool .gl{font-family:var(--f-mono);color:var(--hero);width:13px;text-align:center;flex:none;font-size:11px}
+  .tool .lbl{flex:1;color:var(--ink)}
+  .tool .lbl .dim{color:var(--ink3)}
+  .tool .mk{font-size:10px;flex:none}
+  .tool .chev{color:var(--ink3);font-size:12px;flex:none}
+  .tool.run .gl{color:var(--work)}
+  .tool.fail{border-color:rgba(217,106,98,.42)}
+  .tool.fail .gl{color:var(--err)}
+  .tool.fail .mk{color:var(--err)}
+  .tool.open{display:block;padding:0;overflow:hidden}
+  .tool.open .hd{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--hair);color:var(--ink);font-size:11.5px}
+  .tool.open .hd .chev{margin-left:auto}
+  .tool.open .bd{background:var(--well);font-family:var(--f-mono);font-size:10px;color:var(--ink2);padding:8px 9px;white-space:pre;overflow-x:auto;line-height:1.55}
+  .tool.open .cl{padding:5px 9px 7px;font-size:10px;color:var(--ink3)}
+
+  .decide{
+    border:1px solid rgba(201,168,118,.45);border-radius:12px;
+    background:linear-gradient(180deg, rgba(201,168,118,.13), rgba(201,168,118,.03));
+    box-shadow: inset 0 1px 0 var(--lit);
+    padding:10px 11px 11px;margin-bottom:8px;
+  }
+  .decide .q{color:var(--ink);font-size:12.5px;font-weight:500;margin-bottom:2px}
+  .decide .ctx{font-size:10px;color:var(--ink3);margin-bottom:6px;font-family:var(--f-mono)}
+  .decide .lit{
+    font-family:var(--f-mono);font-size:10px;color:var(--ink2);background:var(--well);
+    border:1px solid var(--hair);border-radius:6px;padding:6px 7px;margin-bottom:9px;
+    white-space:pre-wrap;word-break:break-all;
+  }
+  .decide .opts{display:flex;flex-direction:column;gap:6px}
+  .decide button{
+    font-family:var(--f-body);font-size:11.5px;font-weight:600;padding:9px 10px;
+    border-radius:8px;border:1px solid var(--hair);background:var(--elev);color:var(--ink);
+    text-align:left;width:100%;
+  }
+  .decide button.first{background:var(--hero);color:var(--hero-ink);border-color:var(--hero)}
+  .decide button:disabled{opacity:.45}
+  .decide .ft{font-size:9.5px;color:var(--ink3);margin-top:8px}
+  .decide.settled{
+    border-color:var(--hair);background:var(--card);box-shadow:none;
+  }
+  .decide.settled .q{color:var(--ink2)}
+
+  .working{display:flex;align-items:center;gap:8px;color:var(--work);font-size:11.5px;padding:2px 0 6px}
+  .working .sp{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--work);border-top-color:transparent;animation:spin 1.1s linear infinite;flex:none}
+  .working.att{color:var(--hero)}
+  .working.att .sp{border-color:var(--hero);border-top-color:transparent;animation:none}
+  .working .el{margin-left:auto;color:var(--ink3);font-family:var(--f-mono);font-size:10px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){.working .sp{animation:none}}
+
+  .gap{display:flex;align-items:center;gap:9px;margin:10px 0;color:var(--err);font-size:10.5px}
+  .gap::before,.gap::after{content:"";height:1px;background:rgba(217,106,98,.32);flex:1}
+  .gap u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+  .sync{
+    border:1px solid rgba(217,106,98,.3);background:rgba(217,106,98,.06);border-radius:8px;
+    padding:6px 9px;font-size:10.5px;color:var(--ink2);margin-bottom:8px;
+  }
+
+  .chip{
+    display:block;margin:2px auto 10px;padding:5px 13px;border:1px solid var(--hair);
+    border-radius:999px;background:var(--card);color:var(--ink2);font-size:10.5px;width:fit-content;
+  }
+  .stamp{text-align:center;color:var(--ink3);font-family:var(--f-mono);font-size:9.5px;margin:10px 0 8px}
+  .day{text-align:center;color:var(--ink3);font-size:9.5px;letter-spacing:.1em;margin:12px 0 9px;text-transform:uppercase}
+
+  .head{
+    display:flex;align-items:center;gap:10px;padding:9px 11px;
+    border-bottom:1px solid var(--hair);background:var(--bg);border-radius:8px 8px 0 0;
+  }
+  .head .chev{color:var(--ink2);font-size:15px;line-height:1}
+  .head .id{flex:1;min-width:0}
+  .head .id .n{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .head .id .m{font-family:var(--f-mono);font-size:9.5px;color:var(--ink3);display:flex;align-items:center;gap:5px;margin-top:1px}
+  .head .kb{color:var(--ink2);font-size:15px;letter-spacing:.5px}
+  .sdot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:none}
+  .sdot.work{background:var(--work)}.sdot.idle{background:var(--ink3)}
+  .sdot.off{background:var(--err)}.sdot.att{background:var(--hero)}.sdot.end{background:var(--ink3);opacity:.5}
+
+  .comp{border-top:1px solid var(--hair);padding:9px 9px 4px;background:var(--bg);border-radius:0 0 8px 8px}
+  .cbar{display:flex;align-items:center;gap:8px;border:1px solid var(--hair);background:var(--card);border-radius:20px;padding:6px 7px 6px 12px}
+  .cbar .ph{flex:1;color:var(--ink3);font-size:12.5px}
+  .cbar .ph.typed{color:var(--ink)}
+  .cbar .pl{color:var(--ink2);font-size:15px;line-height:1}
+  .cb{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--hero);color:var(--hero-ink);font-size:12px;flex:none}
+  .cb.stop{background:var(--ink);color:var(--bg)}
+  .cb.stop i{width:9px;height:9px;background:currentColor;border-radius:2px;display:block}
+  .cb.off{background:var(--elev);color:var(--ink3)}
+  .cb.ghost{background:transparent;border:1px solid var(--hair);color:var(--ink2)}
+  .why{color:var(--ink3);font-size:10.5px;padding:7px 4px 4px;text-align:center}
+  .why u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+
+  .menu{
+    border:1px solid var(--hair);border-radius:10px;background:var(--elev);
+    padding:5px;width:210px;margin-left:auto;
+  }
+  .menu div{padding:8px 10px;font-size:12px;color:var(--ink);border-radius:7px}
+  .menu div.danger{color:var(--err)}
+  .menu div + div{border-top:1px solid var(--hair)}
+
+  .pill{
+    display:flex;align-items:center;gap:7px;width:fit-content;margin:0 auto;
+    background:var(--hero);color:var(--hero-ink);border-radius:999px;
+    padding:6px 13px;font-size:11px;font-weight:600;
+  }
+
+  /* ---------- tables & lists ---------- */
+  .tablewrap{overflow-x:auto;border:1px solid var(--hair);border-radius:10px}
+  table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:600px}
+  th,td{text-align:left;padding:.6rem .8rem;border-bottom:1px solid var(--hair);vertical-align:top}
+  th{font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;color:var(--ink3);font-weight:600;background:var(--card)}
+  td{color:var(--ink2)}
+  td b{color:var(--ink)}
+  td.k{font-family:var(--f-mono);color:var(--hero);font-size:.8rem;white-space:nowrap}
+  tr:last-child td{border-bottom:0}
+  ul.plain{list-style:none;padding:0;margin:0}
+  ul.plain li{padding:.55rem 0 .55rem 1.4rem;border-bottom:1px solid var(--hair);color:var(--ink2);font-size:.94rem;position:relative}
+  ul.plain li:last-child{border-bottom:0}
+  ul.plain li::before{content:"—";position:absolute;left:0;color:var(--ink3)}
+  ul.plain li b{color:var(--ink)}
+
+  .note{
+    border:1px solid rgba(201,168,118,.38);border-radius:12px;
+    background:linear-gradient(180deg,rgba(201,168,118,.08),rgba(201,168,118,.02));
+    padding:1.2rem 1.3rem;
+  }
+  .note h3{color:var(--hero)}
+  .note p:last-child{margin-bottom:0}
+
+  .term{
+    background:var(--well);border:1px solid var(--hair);border-radius:10px;
+    font-family:var(--f-mono);font-size:12.5px;line-height:1.62;color:var(--ink2);
+    overflow-x:auto;padding:14px 16px;
+  }
+  .term pre{margin:0;white-space:pre}
+  .term .hero{color:var(--hero)}.term .work{color:var(--work)}.term .ok{color:var(--ok)}
+  .term .dim{color:var(--ink3)}.term .ink{color:var(--ink)}
+  .term .sel{background:var(--elev);color:var(--ink)}
+  .term .hint{background:var(--elev);color:var(--ink2);display:block;margin-top:10px;padding:3px 8px;border-radius:4px}
+
+  footer{border-top:1px solid var(--hair);padding:2.5rem 0 4rem;color:var(--ink3);font-size:.85rem}
+  :focus-visible{outline:2px solid var(--hero);outline-offset:2px}
+</style>
+
+<main>
+
+<section style="padding-top:clamp(3rem,8vw,6rem)">
+  <div class="col">
+    <p class="eyebrow hero">swarm · the drawing the code cites</p>
+    <h1>The conversation surface, component by component.</h1>
+    <p class="lead">Every element the phone will draw, in each state it can be in, with the exact words it says. Nothing here is decoration. The build gate is bidirectional over the <i>derivation</i> record — a kit component cannot exist without a row in <code>docs/design/substrate-components.md</code>, and a row cannot outlive its component. <b>Copy is byte-checked against this sheet, in part</b> &mdash; <code>scripts/check-conversation-copy.py</code>, gated in <code>internal/verify/conversation_copy_test.go</code>, compares the rows whose screens are built the rows whose screens are built today) in <i>one</i> direction, and prints that ratio on every run so a green result is never mistaken for the whole sheet.</p>
+    <p>The flow argument, the audit committee's findings, and the rulings that produced this drawing are in the <a href="https://claude.ai/code/artifact/7830b3ff-65bb-4710-8fff-448335b944b7">flow document</a>. This is the part you sign.</p>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ THE SCREEN ============ -->
+<section>
+  <div class="col">
+    <p class="eyebrow">01 · the whole</p>
+    <h2>One screen, three regions, nothing else</h2>
+    <p class="lead">A fixed header. A message list that is the only thing that scrolls. A composer that stays above the keyboard. The connection strip survives above all three — it is the only warning the app has, and this is the one screen where you are typing.</p>
+  </div>
+
+  <div class="col" style="margin-top:2rem">
+    <div class="spec">
+      <header>
+        <span class="nm">conversationScreen</span>
+        <span class="ds">The whole surface, at rest and at work.</span>
+        <span class="og">origin: new · replaces sessionDetailView</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">Reading · agent idle</span>
+          <div class="stage" style="padding:0">
+            <div class="head">
+              <span class="chev">‹</span>
+              <div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> idle · nathan-mbp</div></div>
+              <span class="kb">⋮</span>
+            </div>
+            <div style="padding:10px 11px 4px">
+              <div class="stamp">09:32</div>
+              <div class="msg me"><div class="bubble cmd">/login</div></div>
+              <div class="tool"><span class="gl">$</span><span class="lbl">Bash <span class="dim">test -f debug/8288d959.txt</span></span><span class="chev">›</span></div>
+              <div class="prose">
+                <p>Login succeeded. Debug logging is active, but the file was just created and is empty.</p>
+              </div>
+            </div>
+            <div class="comp"><div class="cbar"><span class="ph">Message</span><span class="cb">↑</span></div></div>
+          </div>
+        </div>
+        <div class="state">
+          <span class="lb">Working · a decision waiting below</span>
+          <div class="stage" style="padding:0">
+            <div class="head">
+              <span class="chev">‹</span>
+              <div class="id"><div class="n">codex-swarm-relay</div><div class="m"><span class="sdot att"></span> needs you · nathan-mbp</div></div>
+              <span class="kb">⋮</span>
+            </div>
+            <div style="padding:10px 11px 4px">
+              <div class="msg me"><div class="bubble">check the relay logs too</div></div>
+              <div class="tool run"><span class="gl">$</span><span class="lbl">Running <span class="dim">tail -n 200 relay.log</span></span><span class="chev">›</span></div>
+              <div class="prose"><p>Found a reconnect storm at 03:14. I need to clear the stale database before the migration.</p></div>
+              <div class="pill">Decision needed ↓</div>
+            </div>
+            <div class="comp"><div class="cbar"><span class="ph">Add feedback…</span><span class="cb stop"><i></i></span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col" style="margin-top:1.6rem">
+    <div class="note">
+      <h3>Three structural rules, and they are the reason for the whole slice</h3>
+      <p><b>Only the list scrolls.</b> Today one scroll wraps the entire page, so the notices, the conversation and the controls move as one document. That is what made your screen take two screenshots.</p>
+      <p><b>The tab bar goes; the connection strip stays.</b> The strip lives above the destination for a recorded reason — a warning that belongs to one screen is a warning the others do not have. Dropping it here would make the screen where you type the only screen that cannot tell you the link is down.</p>
+      <p><b>The composer never scrolls away.</b> It pins above the keyboard. Today it is the last child of the page, below the whole transcript and below three buttons.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ COMPONENTS ============ -->
+<section>
+  <div class="wrap">
+    <div class="col" style="margin-bottom:2.2rem">
+      <p class="eyebrow">02 · the parts</p>
+      <h2>Every component, every state</h2>
+      <p class="lead">Read each strip as: what it is called, what it is for, and where its look comes from. A state that is not drawn here is a state the screen may not enter.</p>
+    </div>
+
+    <!-- HEADER -->
+    <div class="spec">
+      <header>
+        <span class="nm">conversationHeader</span>
+        <span class="ds">Who you are talking to, on which machine, and what it is doing right now.</span>
+        <span class="og">origin: navHeaderDrill + presenceDot</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">idle</span>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> idle · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <p class="nt">The machine name is always shown. With several machines paired, it is the only thing that tells two identically named sessions apart.</p>
+        </div>
+        <div class="state">
+          <span class="lb">working</span>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">codex-swarm-relay</div><div class="m"><span class="sdot work"></span> working · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <p class="nt"><b>Read from the open turn</b>, never from “some tool is running” — an agent that is only thinking has no open tool, and a tool whose completion never arrived would read working forever.</p>
+        </div>
+        <div class="state">
+          <span class="lb">offline</span>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">claude-soml-ia</div><div class="m"><span class="sdot off"></span> not connected · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <p class="nt">“Not connected” is about the link to the machine, and the composer says the same thing in its own words rather than staying silent.</p>
+        </div>
+        <div class="state">
+          <span class="lb">ended</span>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">agy-quiet-training</div><div class="m"><span class="sdot end"></span> ended · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <p class="nt">An ended session keeps its whole conversation and loses its composer. It is a record, and it says so.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- OVERFLOW -->
+    <div class="spec">
+      <header>
+        <span class="nm">conversationMenu</span>
+        <span class="ds">Everything that is not reading or typing. Nothing here costs vertical space in the flow.</span>
+        <span class="og">origin: new · absorbs the CTA stack</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">live session</span>
+          <div class="menu">
+            <div>Session details</div>
+            <div>Load earlier messages</div>
+            <div class="danger">Kill session</div>
+          </div>
+          <p class="nt"><b>Repair is not here.</b> It lives on the tear, where the tear is. One affordance per operation — two would create competing pending states for one live-only action.</p>
+        </div>
+        <div class="state">
+          <span class="lb">confirm, unchanged</span>
+          <div class="stage">
+            <div style="border:1px solid var(--hair);border-radius:10px;background:var(--elev);padding:11px 12px">
+              <div style="font-size:12px;color:var(--ink);margin-bottom:9px">End this session? The agent stops and the session is gone; this cannot be undone.</div>
+              <div style="display:flex;gap:7px"><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid var(--hair);background:var(--card);color:var(--ink);font-family:var(--f-body)">Cancel</button><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid rgba(217,106,98,.4);background:rgba(217,106,98,.1);color:var(--err);font-family:var(--f-body);font-weight:600">Kill session</button></div>
+            </div>
+          </div>
+          <p class="nt">The words are the ones that ship today. Kill moves; its question does not change.</p>
+        </div>
+        <div class="state">
+          <span class="lb">what is never here</span>
+          <p class="nt" style="margin-top:0"><b>No “terminal view”.</b> A healthy structured session may not offer a route to the raw terminal — the capability rules forbid it, and offering it would be a door onto a room that is not there.<br><br><b>No “release control”, no “take control”.</b> Both concepts leave the product.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- BUBBLE -->
+    <div class="spec">
+      <header>
+        <span class="nm">messageBubble</span>
+        <span class="ds">What you said. Right-aligned, and honest about whether it arrived.</span>
+        <span class="og">origin: new · needs a maquette row</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">pending — sent, not yet echoed</span>
+          <div class="stage">
+            <div class="msg me"><div class="bubble pending">check the relay logs too</div></div>
+            <div class="undermsg">sending</div>
+          </div>
+          <p class="nt"><b>This is the ruling that matters.</b> A send is acknowledged when the daemon wrote bytes into a terminal — not when the agent accepted them. So the bubble stays unsettled until the agent's own transcript echoes the prompt back.</p>
+        </div>
+        <div class="state">
+          <span class="lb">settled — the agent echoed it</span>
+          <div class="stage">
+            <div class="msg me"><div class="bubble">check the relay logs too</div></div>
+          </div>
+          <p class="nt">No tick, no label. Settling <em>is</em> the acknowledgement, and it is backed by the echo that already stamps a message as phone-authored.</p>
+        </div>
+        <div class="state">
+          <span class="lb">refused</span>
+          <div class="stage">
+            <div class="msg me"><div class="bubble refused">check the relay logs too</div></div>
+            <div class="undermsg err">Not sent — the terminal's input line was not empty. <u>Try again</u></div>
+          </div>
+          <p class="nt">A refusal keeps your words on screen and offers the retry. Nothing is ever silently swallowed, and nothing is queued while offline.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROSE -->
+    <div class="spec">
+      <header>
+        <span class="nm">agentProse</span>
+        <span class="ds">What the agent said. Full width, no box, markdown as markdown.</span>
+        <span class="og">origin: markdownBody (shipped)</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">ordinary</span>
+          <div class="stage">
+            <div class="prose">
+              <p>Login succeeded. Two things worth knowing:</p>
+              <ul><li><b>Debug logging</b> is active but empty.</li><li><b>Daemon log</b> scanned, zero hits.</li></ul>
+            </div>
+          </div>
+          <p class="nt">No attribution line. On a screen with one agent and one person, a name on every message is noise — the side of the screen already says who spoke.</p>
+        </div>
+        <div class="state">
+          <span class="lb">with code</span>
+          <div class="stage">
+            <div class="prose">
+              <p>The guard is one line:</p>
+              <pre>if sinceSubmit != 0 { return errBusy }</pre>
+            </div>
+          </div>
+          <p class="nt">Fenced blocks keep the mono well they already have. Prose is parsed; a tool's target and a decision's verdict are wire values and are never run through the parser.</p>
+        </div>
+        <div class="state">
+          <span class="lb">from a newer swarm</span>
+          <div class="stage">
+            <div class="prose"><p>The migration finished cleanly.</p></div>
+            <div style="font-size:10px;color:var(--ink3);font-family:var(--f-mono)">from a newer version of swarm</div>
+          </div>
+          <p class="nt">An item this build only partly understands is drawn as far as it is understood and marked. It is never dropped and never breaks the stream.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOOL -->
+    <div class="spec">
+      <header>
+        <span class="nm">toolCard</span>
+        <span class="ds">What the agent did. Collapsed by default — the single biggest cause of the wall of text.</span>
+        <span class="og">origin: toolCard (shipped) · default inverted</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">collapsed · finished</span>
+          <div class="stage"><div class="tool"><span class="gl">$</span><span class="lbl">Bash <span class="dim">go test ./internal/skeleton</span></span><span class="chev">›</span></div></div>
+          <p class="nt">Glyph, tool, target. The target is the wire's own words — this side never writes a summary of what a command does.</p>
+        </div>
+        <div class="state">
+          <span class="lb">collapsed · running</span>
+          <div class="stage"><div class="tool run"><span class="gl">$</span><span class="lbl">Running <span class="dim">tail -n 200 relay.log</span></span><span class="chev">›</span></div></div>
+          <p class="nt">A running card is visibly different from a finished one — the defect that shipped once, where both drew identically.</p>
+        </div>
+        <div class="state">
+          <span class="lb">collapsed · failed</span>
+          <div class="stage"><div class="tool fail"><span class="gl">!</span><span class="lbl">Bash <span class="dim">go vet ./...</span></span><span class="mk">failed</span><span class="chev">›</span></div></div>
+          <p class="nt"><b>A collapsed card may never look successful.</b> The leading mobile client hides failures behind a count; that is the gap this drawing closes.</p>
+        </div>
+        <div class="state">
+          <span class="lb">collapsed · clipped</span>
+          <div class="stage"><div class="tool"><span class="gl">$</span><span class="lbl">Bash <span class="dim">grep -nE ERROR daemon.log</span></span><span class="mk" style="color:var(--ink3)">clipped</span><span class="chev">›</span></div></div>
+          <p class="nt"><b>Collapse must not hide truncation.</b> The offer to fetch the whole body is drawn only when a card is open, so the closed line carries the fact instead.</p>
+        </div>
+        <div class="state">
+          <span class="lb">open</span>
+          <div class="stage">
+            <div class="tool open">
+              <div class="hd"><span class="gl">$</span><span>Bash</span><span class="chev">⌄</span></div>
+              <div class="bd">$ grep -nE '\[ERROR\]|\[WARN\]' daemon.log
+---counts---
+0</div>
+              <div class="cl">Clipped at 4 KB. Tap to fetch the whole of it from your machine.</div>
+            </div>
+          </div>
+          <p class="nt">A card you opened stays open. Nothing the agent does reopens one you closed, and nothing closes one you opened.</p>
+        </div>
+        <div class="state">
+          <span class="lb">open · long output</span>
+          <div class="stage">
+            <div class="tool open">
+              <div class="hd"><span class="gl">$</span><span>Bash</span><span class="chev">⌄</span></div>
+              <div class="bd">=== RUN   TestComposerSend_Serialises
+--- PASS: TestComposerSend_Serialises (0.31s)
+=== RUN   TestComposerSend_RefusesOnDirty
+--- PASS: TestComposerSend_RefusesOnDirty (0.02s)</div>
+              <div class="cl" style="color:var(--hero)">Open in full · 214 more lines</div>
+            </div>
+          </div>
+          <p class="nt">Twenty lines open in place; past that the card shows the head and offers the whole of it on its own screen. Short output stays short, and a long test run never rebuilds the wall one tap deeper.</p>
+        </div>
+        <div class="state">
+          <span class="lb">a file change is a chip, not a diff</span>
+          <div class="stage">
+            <div class="tool"><span class="gl">E</span><span class="lbl">modify <span class="dim">ui/kit/Composer.kt</span></span><span class="mk" style="color:var(--ok)">+12</span><span class="mk" style="color:var(--err)">−24</span><span class="chev">›</span></div>
+            <div class="tool"><span class="gl">E</span><span class="lbl">rename <span class="dim">SessionDetailView.kt → ConversationView.kt</span></span><span class="chev">›</span></div>
+          </div>
+          <p class="nt">One tappable line per file, carrying the counts, opening a diff on its own screen with room to scroll sideways. A wide refactor costs one line per file instead of a screen per file — and a file change is still never folded into a group, because a count of files is not a record of what changed.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- DECISION -->
+    <div class="spec">
+      <header>
+        <span class="nm">decisionCard</span>
+        <span class="ds">The question the agent is blocked on, answered where it was asked.</span>
+        <span class="og">origin: approvalSheet material, inline · D4.4 amended</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">unresolved</span>
+          <div class="stage">
+            <div class="decide">
+              <div class="q">Run this command?</div>
+              <div class="ctx">codex-swarm-relay · nathan-mbp</div>
+              <div class="lit">rm -rf ~/.swarm-relay/relay.db</div>
+              <div class="opts">
+                <button class="first">Yes</button>
+                <button>Yes, and don't ask again this session</button>
+                <button>No, and tell Codex what to do differently</button>
+              </div>
+              <div class="ft">asked 09:44 · answerable here or at the terminal</div>
+            </div>
+          </div>
+          <p class="nt"><b>The buttons are the agent's, not ours.</b> One to eight labels, in the order the CLI sent them, at the weight the CLI gave them. This surface is forbidden from authoring a verdict, and a build test enforces it.</p>
+        </div>
+        <div class="state">
+          <span class="lb">answering</span>
+          <div class="stage">
+            <div class="decide">
+              <div class="q">Run this command?</div>
+              <div class="lit">rm -rf ~/.swarm-relay/relay.db</div>
+              <div class="opts">
+                <button class="first" disabled>Yes</button>
+                <button disabled>Yes, and don't ask again this session</button>
+              </div>
+              <div class="ft">sending your answer…</div>
+            </div>
+          </div>
+          <p class="nt">Every choice locks while one answer is in flight. The card keeps its full height throughout, so nothing reflows under a descending thumb.</p>
+        </div>
+        <div class="state">
+          <span class="lb">answered — here or at the machine</span>
+          <div class="stage">
+            <div class="decide settled">
+              <div class="q">Run this command?</div>
+              <div class="lit">rm -rf ~/.swarm-relay/relay.db</div>
+              <div class="ft" style="color:var(--ok)">Yes · answered at your machine, 09:45</div>
+            </div>
+          </div>
+          <p class="nt">It stays in the conversation, because it is what was asked. It stops being a decision the instant it resolves anywhere — the phone and the terminal both answer, and whichever lands first wins.</p>
+        </div>
+        <div class="state">
+          <span class="lb">a kind this build cannot draw</span>
+          <div class="stage">
+            <div class="decide settled">
+              <div class="q">This version of swarm cannot show this question.</div>
+              <div class="ft">Answer it at your machine, or update the app.</div>
+            </div>
+          </div>
+          <p class="nt">Never a dead end. A question this build cannot render says so and offers a way out, so a session is never stuck behind a card that cannot be answered.</p>
+        </div>
+        <div class="state">
+          <span class="lb">offscreen</span>
+          <div class="stage"><div class="pill">Decision needed ↓</div></div>
+          <p class="nt">The one persistent affordance in the flow. It appears only while an unanswered decision is off screen, and it scrolls to it. Auto-scroll to the newest message is suppressed while a decision is unanswered.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- WORKING -->
+    <div class="spec">
+      <header>
+        <span class="nm">workingLine</span>
+        <span class="ds">The agent is busy and has nothing to say yet. One line at the tail of the list.</span>
+        <span class="og">origin: workingBar (shipped)</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">working</span>
+          <div class="stage"><div class="working"><span class="sp"></span> Working <span class="el">1m 12s</span></div></div>
+          <p class="nt">The elapsed time is the whole of the progress report. It is honest with nothing to show, which is exactly when a chat surface is worst.</p>
+        </div>
+        <div class="state">
+          <span class="lb">blocked on you</span>
+          <div class="stage"><div class="working att"><span class="sp"></span> Waiting for your answer</div></div>
+          <p class="nt">Different colour, different word, no spinner. Nothing is happening, and pretending otherwise would be the ordinary lie of a progress indicator.</p>
+        </div>
+        <div class="state">
+          <span class="lb">absent</span>
+          <p class="nt" style="margin-top:0">An idle session draws no line at all. The absence of a working line is the statement that nothing is running — which is why it may never be left behind by a missed completion.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- RECORD -->
+    <div class="spec">
+      <header>
+        <span class="nm">gapDivider · syncNotice · earlierChip</span>
+        <span class="ds">What the record does not have, said where it is missing.</span>
+        <span class="og">origin: notice(ERROR) (shipped) · redrawn thin</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">a proven gap, in position</span>
+          <div class="stage"><div class="prose"><p>…finished the migration.</p></div><div class="gap">records missing · <u>repair</u></div><div class="prose"><p>Ready for the next step.</p></div></div>
+          <p class="nt">One line, at the place the record tore, carrying its own repair. Today this is a paragraph and two full-width buttons standing above the conversation.</p>
+        </div>
+        <div class="state">
+          <span class="lb">a stale stream, no position</span>
+          <div class="stage"><div class="sync">This view may be missing events. It repairs itself when the link recovers.</div></div>
+          <p class="nt">A different fact from the tear, and it must not borrow the tear's drawing: a stale stream has no position, so it cannot claim one.</p>
+        </div>
+        <div class="state">
+          <span class="lb">more to load</span>
+          <div class="stage"><div class="chip">Load earlier messages</div><div class="stamp">09:31</div></div>
+          <p class="nt">A chip at the head of the list, offered only when there is genuinely something older to fetch. When the machine says nothing older is retained, the chip is not drawn at all rather than drawn dead.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- COMPOSER -->
+    <div class="spec">
+      <header>
+        <span class="nm">composer</span>
+        <span class="ds">The one control on the screen. It never scrolls away, and it never promises what it cannot do.</span>
+        <span class="og">origin: composerBar (shipped) · pinned + stop</span>
+      </header>
+      <div class="states">
+        <div class="state">
+          <span class="lb">idle</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph">Message</span><span class="cb">↑</span></div></div>
+          <p class="nt">Placeholder and behaviour already ship, word for word. What is new is that it is reachable without pressing anything first.</p>
+        </div>
+        <div class="state">
+          <span class="lb">working · empty</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph">Add feedback…</span><span class="cb stop"><i></i></span></div></div>
+          <p class="nt">An empty composer while the agent works is the one case where the button is Stop.</p>
+        </div>
+        <div class="state">
+          <span class="lb">working · you started typing</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph typed">also check the relay pin</span><span class="cb stop ghost" style="width:24px;height:24px"><i style="width:7px;height:7px;background:currentColor;border-radius:2px;display:block"></i></span><span class="cb">↑</span></div></div>
+          <p class="nt"><b>Send takes priority the moment there is text</b>, so feedback into a running turn is possible — and Stop stays reachable beside it. Which one fires is read from the field at the instant of the press, never from remembered state: the reference client records that without the live read, a fast typist tapping send aborts the agent.</p>
+        </div>
+        <div class="state">
+          <span class="lb">not connected</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Not connected to your machine</span><span class="cb off">↑</span></div><p class="why">Messages are never held — nothing is sent when the link returns.</p></div>
+          <p class="nt">Today an offline session draws a composer identical to a live one. The state that would say otherwise is computed and read by nothing.</p>
+        </div>
+        <div class="state">
+          <span class="lb">record torn</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">This session's record has a gap</span><span class="cb off">↑</span></div><p class="why">Still typeable at your machine. <u>Repair</u></p></div>
+          <p class="nt">One of four distinct reasons, each with its own sentence. Today all four share a single sentence that accuses the record of breaking.</p>
+        </div>
+        <div class="state">
+          <span class="lb">no chat surface · ended</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">This agent reports no chat surface</span><span class="cb off">↑</span></div><p class="why">You can watch it here, and type at your machine.</p></div>
+          <p class="nt">And an ended session says <em>“This session has ended”</em> with no composer at all. Four reasons, four sentences, none of them offering a step that cannot produce typing.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ COPY ============ -->
+<section>
+  <div class="col">
+    <p class="eyebrow">03 · the words</p>
+    <h2>Every string, exactly</h2>
+    <p class="lead">These are the strings, and anything not on this sheet does not belong on the screen. <b>A row bound to a source file is compared byte for byte</b>, and the checker prints each sentence's non-ASCII codepoints, because the failure mode is the near-miss: an en dash for an em dash renders identically and is not the same string. A row not yet bound to a file is reviewed rather than checked &mdash; tabled copy for a screen nobody has built yet is legitimate, and the binding is added when the screen is.</p>
+
+    <p class="lead" style="margin-top:.6rem"><b>What it does not do, stated because the claim above depends on it.</b> It asks whether a tabled sentence appears in the file that must carry it. It does <i>not</i> ask whether every string on those screens is on this sheet &mdash; the direction that catches a sixth wording being added tomorrow, and the direction that would have passed all four of this tree's rival stale-turn sentences, because one of them was right. That half wants a literal sweep with an allowlist, and it is real work rather than a widening. It is tracked, not pretended.</p>
+
+    <p class="lead" style="margin-top:.6rem">This sheet claimed such a gate before it had one, and the claim was empty: a sentence shipped in the composer that appears on no row here, and nothing failed. It was retracted, and then the gate was built &mdash; which is the better repair. The sheet now says something true because the check exists, rather than something weaker so that it could be true.</p>
+  </div>
+
+  <div class="col" style="margin-top:1.8rem">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Where</th><th>Says</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td class="k">header.state</td><td><b>idle · working · needs you · not connected · ended</b></td><td>read from the open turn and the link, never from “a tool is running”</td></tr>
+          <tr><td class="k">bubble.pending</td><td><b>sending</b></td><td>signed and away; the agent has not echoed it</td></tr>
+          <tr><td class="k">bubble.refused</td><td><b>Not sent — the terminal's input line was not empty.</b></td><td>the machine refused rather than joining your words to someone's half-typed line</td></tr>
+          <tr><td class="k">bubble.stale</td><td><b>Not sent — the conversation moved on. Read the latest turn and send again.</b></td><td>shipped copy, kept</td></tr>
+          <tr><td class="k">tool.clipped</td><td><b>clipped</b> · opened: <b>Clipped at N KB. Tap to fetch the whole of it from your machine.</b></td><td>the body was cut to a cap and the machine still holds the rest</td></tr>
+          <tr><td class="k">tool.failed</td><td><b>failed</b> · <b>declined</b></td><td>the wire's own status, never a word of ours. The vocabulary is four values and no more &mdash; <b>in_progress | completed | failed | declined</b>. An earlier draft of this row tabled <i>timed out</i>, which appears nowhere on the wire; it was struck rather than implemented, because a status this side invents is exactly what the caption forbids</td></tr>
+          <tr><td class="k">tool.more</td><td><b>Open in full · N more lines</b>, and <b>Open in full · 1 more line</b></td><td>the output is longer than the in-place bound (20 lines). The singular is tabled because the template had no form for it and rendered "1 more lines"</td></tr>
+          <tr><td class="k">filechange</td><td><b>&lt;change&gt; · &lt;path&gt; · +N -M</b>, and <b>&lt;old&gt; -&gt; &lt;new&gt;</b> for a rename</td><td>the change verb is the wire's own word; the counts are the wire's own numbers. <b>ASCII, not U+2212 and U+2192</b>: this sheet drew the typographic marks, the shipping code has always drawn the ASCII ones, and an absent glyph in the mono face renders as tofu on a handset. The sheet moved rather than the proven code</td></tr>
+          <tr><td class="k">decision.footer</td><td><b>asked HH:mm</b></td><td>unresolved. <b>The clause &ldquo;answerable here or at the terminal&rdquo; is struck</b>: it is a capability claim, and this card draws identically on an offline session and on one whose composer is shut, where answering here is impossible. Unlike a settled row, this one is on screen precisely while the reader is deciding whether to act, so a false claim there is the most expensive kind. The time asked is a fact the model holds. <b>The settled sentences carry no time</b>, deliberately: the block already draws a timestamp at its turn boundary, and a second one inside the sentence is the same fact in two voices &mdash; the rule that produced five wordings of a moved turn</td></tr>
+          <tr><td class="k">decision.settled</td><td><b>allowed · answered on this phone</b> &nbsp;/&nbsp; <b>denied · answered on this phone</b></td><td>keyed on <b>by</b>. The verdict token is the wire's own and is printed only where one exists &mdash; which is the <i>phone</i> path alone</td></tr>
+          <tr><td class="k">decision.settled.owner</td><td><b>answered at your machine</b></td><td>no verdict token, because there is none: <code>answered_locally</code> resolves precisely when the daemon did <i>not</i> type the answer and observes only that the session left the waiting state, never which button was pressed. Printing the token here would dress a non-verdict as a decision</td></tr>
+          <tr><td class="k">decision.closed</td><td><b>cancelled · never answered</b> &nbsp;/&nbsp; <b>superseded · never answered</b> &nbsp;/&nbsp; <b>expired · never answered</b></td><td>the three resolutions that are <i>not</i> answers. Every request reaches one of six ends, and these three may never borrow an answer's words</td></tr>
+          <tr><td class="k">decision.settled.unknown</td><td><b>&lt;decision&gt; · &lt;by&gt;</b></td><td>a vocabulary this build does not know keeps the wire's own two words rather than guessing a sentence. The table is not exhaustive-or-die</td></tr>
+          <tr><td class="k">decision.unknown</td><td><b>This version of swarm cannot show this question. Answer it at your machine, or update the app.</b></td><td>a request kind this build does not render</td></tr>
+          <tr><td class="k">decision.pill</td><td><b>Decision needed</b></td><td>an unanswered decision is off screen</td></tr>
+          <tr><td class="k">working</td><td><b>Working</b> + elapsed · <b>Waiting for your answer</b></td><td>a turn is open · a decision is unanswered</td></tr>
+          <tr><td class="k">gap</td><td><b>records missing · repair</b></td><td>a proven, positioned tear in the record</td></tr>
+          <tr><td class="k">sync</td><td><b>This view may be missing events. It repairs itself when the link recovers.</b></td><td>the stream is stale but no tear is positioned</td></tr>
+          <tr><td class="k">earlier</td><td><b>Load earlier messages</b></td><td>there is something older and this phone can hold it</td></tr>
+          <tr><td class="k">composer.idle</td><td><b>Message</b></td><td>shipped, kept</td></tr>
+          <tr><td class="k">composer.working</td><td><b>Add feedback…</b></td><td>shipped, kept</td></tr>
+          <tr><td class="k">composer.offline</td><td><b>Not connected to your machine</b> / <b>Messages are never held — nothing is sent when the link returns.</b></td><td>link down</td></tr>
+          <tr><td class="k">composer.torn</td><td><b>This session's record has a gap</b> / <b>Still typeable at your machine.</b></td><td>a proven structured gap</td></tr>
+          <tr><td class="k">composer.nochat</td><td><b>This agent reports no chat surface</b> / <b>You can watch it here, and type at your machine.</b></td><td>the capability record says no structured chat</td></tr>
+          <tr><td class="k">composer.ended</td><td><b>This session has ended</b></td><td>no composer is drawn</td></tr>
+          <tr><td class="k">empty</td><td><b>No messages for this session have reached this phone yet.</b></td><td>shipped, kept — it says what this phone holds, never what the machine did</td></tr>
+          <tr><td class="k">menu.a11y</td><td><b>Session menu</b></td><td>the overflow control is a bare glyph (U+22EE) and announces nothing without it. Signed here rather than authored in code, because copy is the screen's and an invented string is an unrecorded one</td></tr>
+          <tr><td class="k">kill.confirm</td><td><b>End this session? The agent stops and the session is gone; this cannot be undone.</b></td><td>shipped, kept</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ BEHAVIOUR ============ -->
+<section>
+  <div class="col">
+    <p class="eyebrow">04 · the rules that are not visual</p>
+    <h2>What the drawing also decides</h2>
+  </div>
+  <div class="col" style="margin-top:1.6rem">
+    <ul class="plain">
+      <li><b>Stick to the bottom only if you were already there.</b> Scrolled up, new messages land below without moving you. Never while a decision is unanswered.</li>
+      <li><b>Loading earlier preserves your place.</b> Prepending history keeps the item you were reading under your thumb.</li>
+      <li><b>A collapsed card stays collapsed and an open one stays open,</b> across incremental updates and across a rebuild.</li>
+      <li><b>Every target is at least 48 dp.</b> The reference client ships 32 to 34 and is below every published minimum; error rates roughly treble under 44.</li>
+      <li><b>Every privileged control filters obscured touches,</b> as they do today. Send is a privileged control.</li>
+      <li><b>The decision announces itself to a screen reader</b> when it arrives, and reads in order with the message it belongs to.</li>
+      <li><b>Nothing is queued on the phone.</b> Input is live-only; a message that cannot go is refused visibly and kept in the field.</li>
+      <li><b>The list holds up to 200 live and 200 backfilled items with no recycling today.</b> The new layout is measured for jank and memory before it is called done.</li>
+    </ul>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ TERMINAL ============ -->
+<section>
+  <div class="col">
+    <p class="eyebrow">05 · the other end</p>
+    <h2>What the terminal draws, and what it may not</h2>
+    <p class="lead">Nothing is switched on. Two repairs, and one refusal.</p>
+  </div>
+
+  <div class="col" style="margin-top:1.8rem">
+    <div class="term">
+<pre><span class="dim">  NAME                     AGENT   STATUS      CWD</span>
+<span class="sel">▸ claude-NewLatexCV        claude  <span class="work">working</span>     ~/Code/swarm         <span class="hero">phone sent 09:41</span></span>
+  codex-swarm-relay        codex   <span class="hero">needs you</span>   ~/Code/swarm
+  claude-soml-ia           claude  <span class="ok">idle</span>        ~/Code/soml-ia
+<span class="hint">claude-NewLatexCV   ctrl+q returns to swarm       phone sent 2 messages · 09:41</span></pre>
+    </div>
+  </div>
+
+  <div class="col" style="margin-top:1.6rem">
+    <ul class="plain">
+      <li><b><code>phone control</code> becomes <code>phone sent HH:mm</code>.</b> The old marker was driven by the lease this wave deletes. The new one reports the fact we actually have: this phone sent, recently.</li>
+      <li><b><code>took over from phone</code> is deleted, not reworded.</b> It claims an eviction that was disproved — both streams survive, in both orders — and it is sampled once before dialling, so it could not be true later even if it were true then.</li>
+      <li><b>It is not <code>phone is here</code>.</b> That is a presence claim, and presence needs begin, renew and end, an expiry, session binding, cleanup on transport loss and aggregation across devices. None of it exists. We do not name a fact we do not have.</li>
+      <li><b>Nothing is written into the terminal's own output.</b> No prefix, no colour, no marker on the line: prefixing changes the prompt the agent receives, and writing display bytes corrupts the CLI's screen. The report lives in swarm's reserved row, which swarm owns.</li>
+    </ul>
+  </div>
+</section>
+
+<hr class="rule">
+
+<!-- ============ SIGNATURE ============ -->
+<section>
+  <div class="col">
+    <p class="eyebrow">06 · what signing means</p>
+    <h2>The parts that need a row before code exists</h2>
+    <p class="lead">Components are checked against the signed drawing in both directions: one cannot exist without a row here, and a row cannot survive its component. These are the rows this wave adds.</p>
+  </div>
+
+  <div class="col" style="margin-top:1.8rem">
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Component</th><th>Status</th><th>Where its look comes from</th></tr></thead>
+        <tbody>
+          <tr><td class="k">conversationScreen</td><td><b>new composition</b></td><td>a destination that owns its scroll and drops the bar, keeping the connection strip</td></tr>
+          <tr><td class="k">conversationHeader</td><td><b>new</b></td><td>the drill header's material, plus the presence dot already in the kit</td></tr>
+          <tr><td class="k">conversationMenu</td><td><b>new</b></td><td>the elevated surface and hairline already used for grouped rows</td></tr>
+          <tr><td class="k">messageBubble</td><td><b>new</b></td><td>the elevated surface at the card radius; no such component exists today</td></tr>
+          <tr><td class="k">decisionCard</td><td>existing material, new place</td><td>the approval card's gradient and key-light edge, drawn inline at the item</td></tr>
+          <tr><td class="k">gapDivider</td><td>redrawn</td><td>the error notice, reduced from a paragraph to a rule with a word on it</td></tr>
+          <tr><td class="k">earlierChip</td><td><b>new</b></td><td>the pill shape the sync badge already uses</td></tr>
+          <tr><td class="k">decisionPill</td><td><b>new</b></td><td>the champagne call-to-action, at pill radius</td></tr>
+          <tr><td class="k">composer (pinned, with stop)</td><td>extended</td><td>the shipped bar, plus a stop affordance and the inset behaviour it has never needed</td></tr>
+          <tr><td class="k">toolCard</td><td>default inverted</td><td>no visual change; the closed state gains a status and clipped mark</td></tr>
+          <tr><td class="k">fileChangeRow</td><td><b>new</b></td><td>the tool row's shape, carrying the change verb, the path and the line counts</td></tr>
+          <tr><td class="k">outputScreen</td><td><b>new screen</b></td><td>one tool run's whole output, in the mono well the app already has, scrollable both ways</td></tr>
+          <tr><td class="k">diffScreen</td><td><b>new screen</b></td><td>one file's unified diff, same well, same rules</td></tr>
+          <tr><td class="k">workingLine</td><td>reused</td><td>the shipped working bar, at the tail of the list</td></tr>
+          <tr><td class="k">daySeparator</td><td><b>deferred</b></td><td>not in this wave</td></tr>
+          <tr><td class="k">grouped tool row</td><td><b>deferred</b></td><td>needs stable identity across items, and a machine-authored sensitivity field before anything destructive may be folded</td></tr>
+          <tr><td class="k">inbox conversation row</td><td><b>deferred</b></td><td>last-message preview and time are not fields that exist on the wire</td></tr>
+          <tr><td class="k">terminal presence</td><td><b>deferred</b></td><td>needs a presence protocol; the “recently sent” marker ships instead</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col" style="margin-top:2rem">
+    <div class="note">
+      <h3>One thing goes in before any of this</h3>
+      <p>A message from the phone is not serialised against another message from the phone: two sends interleave into one submitted concatenation and one empty submit. It is live today, and ungating the composer is exactly what makes people send three messages in a row.</p>
+      <p>It is not part of this drawing and does not wait for it.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="col">
+    <p style="margin:0 0 .4rem"><span class="mono">swarm · conversation surface drawing · agents-tracker-tbpm</span></p>
+    <p style="margin:0">Palette read from the product's own Obsidian tokens. Shipped copy kept verbatim wherever it exists. Every deferral on this sheet is named rather than omitted.</p>
+  </div>
+</footer>
+
+</main>

@@ -1131,15 +1131,25 @@ var s24ScreenComponents = map[string]map[string]string{
 	// screen now places, so §2's reuse rule is satisfied one file over rather than dropped.
 	//
 	// WHAT IS LEFT HERE IS ONE FACTORY, and that is honest rather than thin. Everything else on
-	// this screen is either a slot the surface owns (Take control, Stop, Kill -- they reach facade
+	// this screen is either a slot the surface owns (Stop, Kill -- they reach facade
 	// verbs, carry PB-SEC-12 clause 1's touch filter and must survive a redraw, which is
 	// `PairingPanelView`'s arrangement), a bare notice `TextView` (there is no body-copy component
 	// in the kit and this file says so in as many words), or the transcript's own composition. The
 	// composer is absent for a third reason: derivation row 9's bar has no kit factory at all, and
 	// it ships with PB-INPUT-1's undelivered-input ledger or not at all (agents-tracker-hxv).
+	//
+	// **`navHeaderDrill` IS MOVED OUT OF THIS ROW, NOT DELETED FROM THE PRODUCT**
+	// (docs/specifications/chat-surface-plan.md §5, owner ruling on the conversation surface). The
+	// conversation's header is `conversationHeader` in `conversationScaffoldView`'s FIXED region
+	// now, composed by `PhoneSurface` -- because a header inside the scrolling column slid away
+	// with the conversation, taking the session name and the way out with it. This table asks what
+	// a SCREEN FILE spends, and a component this file no longer composes is a requirement it
+	// cannot meet by obeying the decision -- the same shape as `monoWell`'s removal one paragraph
+	// up. `navHeaderDrill` keeps three rows of its own below (the switcher, the level under it and
+	// the fallback header), so the component is still fenced; what changed is which screen answers
+	// for the conversation's header.
 	"dev/swarm/phone/ui/screens/SessionDetailView.kt": {
-		"navHeaderDrill": "C2.1 `.navhead` -- the chevron and the session it names, per §4",
-		"notice":         "§4 Notice line -- the stale, not-sent, lease and outcome lines",
+		"notice": "§4 Notice line -- the stale, not-sent, composer-state and outcome lines",
 	},
 	// C2.3 as ADR-009 (1) redraws it: "the phone's only session surface is a structured chat
 	// transcript". The four components below are the session log's, reused verbatim -- the heading,
@@ -1299,6 +1309,29 @@ var s24ScreenComponents = map[string]map[string]string{
 		"sectionLabel":   "the heading over the machine's own screen",
 		"readOnlyNote":   "T6-b's read-only state, STATED rather than inferred from a missing keyboard",
 		"ctaButton":      "T6's in-view Release -- never a drawer entry and never a second navigation step",
+	},
+	// WAVE E's TWO NEW SCREENS (owner rulings R8 and R9, docs/specifications/chat-surface-plan.md
+	// §8). They exist because the conversation deliberately will not carry two bodies: an opened
+	// tool run is bounded at twenty lines in the flow and a file change is one chip, and BOTH of
+	// those are only allowed to be reading decisions because the whole of what they hold is one
+	// tap away. A screen that dropped its well would leave the bound as a truncation the phone
+	// invented, which IS-TOOL-3 forbids one field over.
+	//
+	// THE ROWS ARE DELIBERATELY ASYMMETRIC, and that is the composition rather than an omission.
+	// The two screens share ONE arrangement -- `literalScreen`, in OutputScreen.kt, because the
+	// drawing tables the diff screen as "same well, same rules" and two copies of an identical
+	// composition drift on the first edit -- so the header, the scroll and the screen air are
+	// spent there and this table asks for them where they are spent. What each screen owns and is
+	// asked for separately is its OWN well, which is also what keeps either from being fenced by a
+	// claim about a factory only the other file calls.
+	"dev/swarm/phone/ui/screens/OutputScreen.kt": {
+		"navHeaderDrill":       "the drill header, whose title is the sentence the conversation already drew for the row",
+		"monoWell":             "R8's whole body -- the app's one mono block, never a second one for a screen",
+		"scrolledHorizontally": "agents-tracker-ksvb.7 -- a line past the viewport is otherwise silently clipped",
+		"screenAir":            "the owner's 2026-08-09 ruling: a body that carries no edge of its own is given one",
+	},
+	"dev/swarm/phone/ui/screens/DiffScreen.kt": {
+		"monoWell": "R9's routed `diff_excerpt`, drawn byte for byte in the app's one mono block",
 	},
 	"dev/swarm/phone/ui/screens/PairOnlyView.kt": {
 		"navHeader":  "the screen's own title -- there is nothing to drill back to",
