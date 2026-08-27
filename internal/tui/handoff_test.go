@@ -268,7 +268,7 @@ func TestHandoff_SupervisedSubmitStillRevalidates(t *testing.T) {
 			// open form, hands off with the other method.
 			m3 := selectMethod(t, m2, handoffMethodHandsOff)
 			m3 = send(m3, keyEnter)
-			if !m3.(rootModel).handoff.confirmCross {
+			if !m3.(rootModel).handoff.confirmPending() {
 				t.Fatal("codex source handed to a claude target without the E4 confirmation")
 			}
 			_, cmd = m3.Update(keyRune('y'))

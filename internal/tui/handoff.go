@@ -40,9 +40,14 @@ type handoffModel struct {
 	method      string
 	focus       int // 0 target, 1 model, 2 supervision, 3 method
 
-	// confirmCross is the pending E4 disclosure confirmation: a cross-CLI hands-off
-	// submit takes an explicit yes before anything launches.
-	confirmCross bool
+	// confirmTarget and confirmModel are the pending E4 disclosure confirmation, and they
+	// hold WHAT WAS ASKED rather than merely THAT something was asked. A bare boolean
+	// authorized "a launch" instead of "this launch": a detectMsg arriving while the
+	// question was on screen could reselect a different target underneath it, and the
+	// human's yes would then apply to a CLI they were never shown. A disclosure decision
+	// has to name what it authorizes. Empty confirmTarget means nothing is pending.
+	confirmTarget string
+	confirmModel  string
 
 	errMsg string
 	width  int
@@ -151,6 +156,15 @@ func handoffModelValues(spec adapter.OptionSpec) []string {
 // edited model when the same target remains usable.
 func (m *handoffModel) refreshAgents(agents []AgentInfo) {
 	previousTarget, previousModel := m.targetName(), m.model
+	// Belt to the frozen pair's braces: if a pending disclosure confirmation's subject
+	// moves underneath it, cancel it outright and say so, rather than leaving a question
+	// on screen that names one target while the form has selected another.
+	defer func() {
+		if m.confirmPending() && (m.targetName() != m.confirmTarget || m.model != m.confirmModel) {
+			m.confirmTarget, m.confirmModel = "", ""
+			m.errMsg = "target changed while the cross-CLI confirmation was open - nothing launched, review and submit again"
+		}
+	}()
 	m.agents = append([]AgentInfo(nil), agents...)
 	m.detected = true
 	m.targetIdx = -1
@@ -220,6 +234,9 @@ func (m *handoffModel) cycleSupervision(forward bool) {
 	m.errMsg = ""
 }
 
+// confirmPending reports whether an E4 disclosure confirmation is awaiting an answer.
+func (m handoffModel) confirmPending() bool { return m.confirmTarget != "" }
+
 func (m *handoffModel) cycleMethod(forward bool) {
 	m.method = cycleValue(handoffMethods, m.method, forward)
 	m.errMsg = ""
@@ -253,7 +270,7 @@ func (m handoffModel) view() string {
 	}
 	// E4: the disclosure question, naming both CLIs. It is a separate thing from the
 	// warning above -- that one is informational, this one blocks the submit.
-	if m.confirmCross {
+	if m.confirmPending() {
 		b.WriteString("\n" + m.clampLine("  "+styleAmber.Render(m.crossCLIQuestion())) + "\n")
 	}
 	if m.errMsg != "" {
@@ -269,7 +286,7 @@ func (m handoffModel) view() string {
 const handoffRunningWarning = "the source may still be running and editing this checkout - the successor is told to check git status first"
 
 func (m handoffModel) crossCLIQuestion() string {
-	return "cross-CLI handoff: " + m.targetName() + " will be told to read a transcript written by " +
+	return "cross-CLI handoff: " + m.confirmTarget + " will be told to read a transcript written by " +
 		m.sourceAgent + " - y confirm, n cancel"
 }
 
@@ -332,7 +349,7 @@ func (m handoffModel) methodValue() string {
 }
 
 func (m handoffModel) hint() string {
-	if m.confirmCross {
+	if m.confirmPending() {
 		return "y confirm the cross-CLI transcript disclosure · n or esc cancel"
 	}
 	switch m.focus {
@@ -355,13 +372,15 @@ func (m rootModel) updateHandoff(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// kill/delete confirm: it decides whether one vendor's raw transcript is shown to
 	// another, so no keypress may leak into the form beneath it and nothing but an
 	// explicit yes launches. Cancelling launches nothing at all.
-	if h.confirmCross {
+	if h.confirmPending() {
 		switch {
 		case k.Text == "y":
-			h.confirmCross = false
-			return m.launchHandsOff()
+			target, model := h.confirmTarget, h.confirmModel
+			h.confirmTarget, h.confirmModel = "", ""
+			// The FROZEN pair, not the live selection: what launches is what was shown.
+			return m.launchHandsOffWith(target, model)
 		case k.Text == "n", k.Code == tea.KeyEsc:
-			h.confirmCross = false
+			h.confirmTarget, h.confirmModel = "", ""
 		}
 		return m, nil
 	}
@@ -468,15 +487,18 @@ func (m rootModel) submitHandsOff() (tea.Model, tea.Cmd) {
 	// vendor boundary and the conservative rule is the honest one. A same-CLI handoff
 	// takes no confirmation -- the content reaches nobody new.
 	if h.targetName() != h.sourceAgent {
-		h.confirmCross = true
+		h.confirmTarget, h.confirmModel = h.targetName(), h.model
 		return m, nil
 	}
-	return m.launchHandsOff()
+	return m.launchHandsOffWith(h.targetName(), h.model)
 }
 
-func (m rootModel) launchHandsOff() (tea.Model, tea.Cmd) {
+// launchHandsOffWith issues the one launch against an EXPLICIT target and model rather
+// than re-reading the form, so a confirmed launch cannot drift between the question and
+// the answer.
+func (m rootModel) launchHandsOffWith(target, model string) (tea.Model, tea.Cmd) {
 	h := &m.handoff
-	cmd := handsOffLaunchCmd(m.client, h.sourceID, h.sourceCwd, h.targetName(), h.model, m.width, m.height)
+	cmd := handsOffLaunchCmd(m.client, h.sourceID, h.sourceCwd, target, model, m.width, m.height)
 	return m, tea.Batch(cmd, m.enterGeneral())
 }
 

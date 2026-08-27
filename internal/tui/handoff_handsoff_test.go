@@ -285,7 +285,7 @@ func TestHandsOff_CapabilityNotNegotiatedRefusesVisibly(t *testing.T) {
 		// The capability refusal precedes the cross-CLI disclosure confirmation: never
 		// ask the owner to approve a disclosure that cannot happen (source codex,
 		// target claude here).
-		if rm.handoff.confirmCross {
+		if rm.handoff.confirmPending() {
 			t.Error("an unsupported daemon still asked for the cross-CLI confirmation")
 		}
 		if !strings.Contains(strings.ToLower(view(m2)), "hands-off") {
@@ -330,7 +330,7 @@ func TestHandsOff_CrossCLIConfirmation(t *testing.T) {
 		m = selectMethod(t, openForm(m), handoffMethodHandsOff)
 		m2, cmd := m.Update(keyEnter)
 		execCmd(cmd)
-		if m2.(rootModel).handoff.confirmCross {
+		if m2.(rootModel).handoff.confirmPending() {
 			t.Fatal("a claude-to-claude handoff asked for a cross-CLI confirmation")
 		}
 		if reqs := f.launchReqs(); len(reqs) != 1 {
@@ -344,7 +344,7 @@ func TestHandsOff_CrossCLIConfirmation(t *testing.T) {
 		m2, cmd := m.Update(keyEnter)
 		execCmd(cmd)
 		rm := m2.(rootModel)
-		if !rm.handoff.confirmCross {
+		if !rm.handoff.confirmPending() {
 			t.Fatal("a codex-to-claude handoff did not take a confirmation")
 		}
 		assertNothingIssued(t, f.fakeClient)
@@ -372,13 +372,13 @@ func TestHandsOff_CrossCLIConfirmation(t *testing.T) {
 			m := newModel(t, f, handoffAgents())
 			m = selectMethod(t, openForm(m), handoffMethodHandsOff)
 			m = send(m, keyEnter)
-			if !m.(rootModel).handoff.confirmCross {
+			if !m.(rootModel).handoff.confirmPending() {
 				t.Fatal("cross-CLI submit did not take a confirmation")
 			}
 			m2, cmd := m.Update(cancel)
 			execCmd(cmd)
 			assertNothingIssued(t, f.fakeClient)
-			if rm := m2.(rootModel); rm.handoff.confirmCross {
+			if rm := m2.(rootModel); rm.handoff.confirmPending() {
 				t.Errorf("%v left the confirmation open", cancel)
 			}
 		}
@@ -453,5 +453,64 @@ func assertNothingIssued(t *testing.T, f *fakeClient) {
 	}
 	if calls := f.sendInputCalls(); len(calls) != 0 {
 		t.Fatalf("refusal signalled the source: %+v", calls)
+	}
+}
+
+// TestHandsOff_ConfirmationDoesNotAuthorizeAMovingTarget closes a finding from adversarial
+// review: the E4 disclosure confirmation used to be a bare boolean, so it authorized
+// "a launch" rather than "THIS launch".
+//
+// The concrete sequence, which needs no adversary -- an agent CLI merely has to stop being
+// detected while the question is on screen:
+//
+//  1. source is codex, target is claude, so the form asks the human to approve showing a
+//     codex transcript to claude;
+//  2. a detectMsg arrives saying claude is no longer usable;
+//  3. refreshAgents silently reselects the next usable CLI -- codex -- and resets the model;
+//  4. the pending confirmation is still true, so `y` launches CODEX.
+//
+// The human approved a cross-vendor disclosure to claude and the machine would have
+// launched a different target entirely -- one that, being the same CLI as the source, would
+// not even have required a confirmation. A disclosure decision has to name what it
+// authorizes, so the confirmation now freezes the target and model it was asked about and
+// is cancelled outright if either moves underneath it.
+func TestHandsOff_ConfirmationDoesNotAuthorizeAMovingTarget(t *testing.T) {
+	onlyCodex := func() []AgentInfo {
+		all := handoffAgents()()
+		out := make([]AgentInfo, 0, len(all))
+		for _, a := range all {
+			if a.Name == "claude" {
+				a.Installed = false // claude just stopped being usable
+			}
+			out = append(out, a)
+		}
+		return out
+	}
+
+	f := newHandsOffClient(sPrompt("endpoint/source", "codex", "/repo", "q", time.Minute))
+	m := newModel(t, f, handoffAgents())
+	m = selectMethod(t, openForm(m), handoffMethodHandsOff) // target claude, source codex
+
+	m2, cmd := m.Update(keyEnter)
+	execCmd(cmd)
+	if !m2.(rootModel).handoff.confirmPending() {
+		t.Fatal("a codex-to-claude handoff did not take a confirmation")
+	}
+
+	// The target moves while the question is on screen.
+	m3 := send(m2, detectMsg{gen: m2.(rootModel).detectGen, agents: onlyCodex()})
+
+	m4, cmd := m3.Update(keyRune('y'))
+	execCmd(cmd)
+
+	if reqs := f.launchReqs(); len(reqs) != 0 {
+		t.Fatalf("y launched %d session(s) after the confirmed target changed: %+v\n"+
+			"the human approved a disclosure to claude; this would launch something else", len(reqs), reqs)
+	}
+	if m4.(rootModel).handoff.confirmPending() {
+		t.Error("the stale confirmation is still pending; it must be cancelled when its target moves")
+	}
+	if got := strings.ToLower(view(m4)); !strings.Contains(got, "changed") && !strings.Contains(got, "cancel") {
+		t.Errorf("the human is not told why the confirmation went away:\n%s", got)
 	}
 }
