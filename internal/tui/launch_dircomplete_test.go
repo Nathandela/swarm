@@ -209,6 +209,38 @@ func TestDirCompleteRightAcceptsGhostAndDrillsDown(t *testing.T) {
 	}
 }
 
+// Tab has shell-like semantics in the directory field: it accepts the same ghost
+// as Right and remains on the directory field rather than navigating the form.
+func TestDirCompleteTabAcceptsGhostWithoutChangingFocus(t *testing.T) {
+	dir := dirFixture(t)
+	m := openDirField(t)
+	m = sendType(m, dir+"/bet") // ghost "a/"
+
+	m = send(m, keyTab)
+	lm := launchOf(m)
+	if lm.cwd != dir+"/beta/" {
+		t.Fatalf("Tab must append the path ghost; cwd = %q, want %q", lm.cwd, dir+"/beta/")
+	}
+	if !lm.isDir() {
+		t.Fatalf("Tab path completion changed focus to %d; want directory field", lm.focus)
+	}
+	if lm.dirGhost != "inner/" {
+		t.Fatalf("Tab completion must drill down and recompute; ghost = %q, want inner/", lm.dirGhost)
+	}
+}
+
+// Outside the directory field Tab is inert. Up/Down are the only field-navigation
+// keys, avoiding accidental option changes when muscle memory asks for completion.
+func TestLaunchTabDoesNotNavigateNonDirectoryFields(t *testing.T) {
+	m := openLaunch(t, newFakeClient())
+	m = send(m, keyDown) // directory -> name
+	before := launchOf(m).focus
+	m = send(m, keyTab)
+	if got := launchOf(m).focus; got != before {
+		t.Fatalf("Tab on name changed focus from %d to %d", before, got)
+	}
+}
+
 // With the ghost exhausted and several candidates left, Right/Left CYCLE the typed
 // text through the candidate full paths. The menu stays anchored to the prefix that
 // produced it: cycling never re-reads the directory, so the alternatives survive.
@@ -263,7 +295,7 @@ func TestDirCompleteCandidateRowRendersUnderDirectory(t *testing.T) {
 	}
 
 	// Blur: the row belongs to the focused directory field.
-	blurred := send(m, keyTab)
+	blurred := send(m, keyDown)
 	if got := rowUnder(t, view(blurred), "directory"); !strings.Contains(got, "name") {
 		t.Fatalf("the candidate row must disappear when the directory field blurs, got %q", got)
 	}
@@ -301,8 +333,8 @@ func TestDirCompleteCandidateRowClampsToWidth(t *testing.T) {
 
 // The footer teaches the arrows exactly when they DO something on the directory
 // field, and is otherwise untouched.
-func TestDirCompleteHintAdvertisesArrows(t *testing.T) {
-	const tail = " · tab/↑↓ next · enter launch · esc cancel"
+func TestDirCompleteHintAdvertisesCompletionKeys(t *testing.T) {
+	const tail = " · ↑↓ next · enter launch · esc cancel"
 
 	m := openLaunch(t, newFakeClient()) // prefilled cwd, no completion computed yet
 	if got := launchOf(m).hint(); got != "type or paste"+tail {
@@ -312,12 +344,12 @@ func TestDirCompleteHintAdvertisesArrows(t *testing.T) {
 	dir := dirFixture(t)
 	m = openDirField(t)
 	m = sendType(m, dir+"/alph") // ghost "a" AND two candidates
-	if got := launchOf(m).hint(); got != "arrows complete"+tail {
-		t.Fatalf("hint with a completion = %q, want %q", got, "arrows complete"+tail)
+	if got := launchOf(m).hint(); got != "tab/←→ complete"+tail {
+		t.Fatalf("hint with a completion = %q, want %q", got, "tab/←→ complete"+tail)
 	}
 
-	m = send(m, keyTab) // off the directory field: the arrows mean nothing again
-	if got := launchOf(m).hint(); got == "arrows complete"+tail {
+	m = send(m, keyDown) // off the directory field: completion keys mean nothing again
+	if got := launchOf(m).hint(); got == "tab/←→ complete"+tail {
 		t.Fatalf("the completion hint must not survive a blur, got %q", got)
 	}
 }
