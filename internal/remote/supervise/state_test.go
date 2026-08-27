@@ -171,6 +171,11 @@ func (f *fakeSupervisor) Stop() error {
 	return nil
 }
 
+func (f *fakeSupervisor) Restart() error {
+	f.calls = append(f.calls, "restart")
+	return nil
+}
+
 func (f *fakeSupervisor) starts() int {
 	n := 0
 	for _, c := range f.calls {

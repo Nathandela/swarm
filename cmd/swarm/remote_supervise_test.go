@@ -73,6 +73,11 @@ func (f *fakeGatewaySupervisor) Stop() error {
 	return nil
 }
 
+func (f *fakeGatewaySupervisor) Restart() error {
+	f.calls = append(f.calls, "restart")
+	return nil
+}
+
 func (f *fakeGatewaySupervisor) count(name string) int {
 	n := 0
 	for _, c := range f.calls {
