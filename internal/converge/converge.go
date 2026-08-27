@@ -167,6 +167,19 @@ func Run(d Deps) int {
 		}
 		return say(d.Log, ExitFailed, "failed: cannot read the saved daemon environment: %v", err)
 	}
+	// A daemon.env that exists but holds nothing reads back as an empty slice with
+	// no error (a crash between the write and the rename, or anyone truncating the
+	// file). Spawning from it is strictly worse than the launchd environment this
+	// layer exists to avoid: the replacement would carry only the SWARM_DAEMON_*
+	// stamps its spawner adds -- no PATH, no HOME, no keys. It is refused on the
+	// same terms as a file that was never written, because the owner's fix is the
+	// same one.
+	if len(env) == 0 {
+		return say(d.Log, ExitRefused,
+			"refused: the saved daemon environment is empty, so a replacement would start with no PATH, "+
+				"no HOME and no keys; the owner must run `swarm daemon restart` from a terminal once, "+
+				"then this runs unattended")
+	}
 
 	// Rule 4: the only rule that moves anything. The gateway follows the daemon or
 	// nothing moves, and a new daemon behind a dead gateway is never success.

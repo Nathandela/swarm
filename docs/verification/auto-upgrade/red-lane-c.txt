@@ -176,9 +176,45 @@ version.Version instead of the reply's BuildVersion fails it. Verbatim:
 
 Reverted the same way; green again.
 
-GATES on the final tree (commit bcc8142 plus this file):
+THIRD RED -- rule 3's predicate was too narrow, found by lane A (internal/daemon)
+reviewing this lane's contract against its own LoadSavedEnv. That function has
+three outcomes, not two: absent (error, errors.Is os.ErrNotExist), present with
+lines (slice, nil), and present but EMPTY (empty slice, NO error). The third fell
+through to rule 4 and spawned a daemon whose whole environment was the
+SWARM_DAEMON_* stamps -- no PATH, no HOME, no keys, which is worse than the
+launchd environment layer L2 exists to avoid. Reachable from a crash between the
+write and the rename, or from anyone truncating the file.
+
+The test was written first. Its failure is also the cleanest statement of the
+bug, because the log line the old code emitted was a lie: it reported spawning
+"from the saved environment" when the saved environment was empty. Verbatim:
+
+    $ go test -race -count=1 -run TestRule3EmptySavedEnvRefuses ./internal/converge/
+    --- FAIL: TestRule3EmptySavedEnvRefuses (0.01s)
+        --- FAIL: TestRule3EmptySavedEnvRefuses/a_truncated_file_reads_back_as_an_empty_slice (0.00s)
+            converge_test.go:364: Run with an empty saved env = 0, want ExitRefused (3)
+            converge_test.go:367: an empty saved environment must never be spawned from
+            converge_test.go:370: a refusal touches nothing
+            converge_test.go:374: refusal reason = "converged: daemon restarted from the saved environment and gateway restarted in place; this binary is v9.9.9-installed", want it to say the saved environment is empty, so the log tells it from a file that was never written
+            converge_test.go:378: refusal reason = "converged: daemon restarted from the saved environment and gateway restarted in place; this binary is v9.9.9-installed", want it to name the owner's one manual step
+        --- FAIL: TestRule3EmptySavedEnvRefuses/a_nil_slice_with_no_error (0.00s)
+            (identical, five failures)
+    FAIL
+    FAIL    github.com/Nathandela/swarm/internal/converge    0.912s
+    FAIL
+
+Rule 3 now refuses on `err != nil` OR `len(env) == 0`, with a distinct reason
+line so the nightly log tells an empty file from an absent one. Exit 3 rather
+than 1 is deliberate: nothing was touched, and the owner's fix is the same single
+`swarm daemon restart` from a terminal. This widens the plan's rule 3 ("No
+daemon.env saved") to "no USABLE daemon.env saved"; it is the same refusal for
+the same reason, so it is a predicate widening rather than a decision change, and
+no ADR amendment is proposed.
+
+GATES on the final tree:
 
     $ go build ./...                                    -> clean
     $ go vet ./internal/converge/                       -> clean
-    $ go test -race -count=1 ./internal/converge/        -> ok  1.866s
+    $ go test -race -count=1 ./internal/converge/       -> ok  2.055s, 19/19 pass
     $ golangci-lint run ./internal/converge/            -> 0 issues.
+    $ gofmt -l internal/converge/                       -> empty
