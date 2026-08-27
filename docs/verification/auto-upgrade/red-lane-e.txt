@@ -83,3 +83,15 @@ persisted meta.json — the roster the converge's rule 2 reads — carries the L
 the poll could never match and the case failed with "never appeared busy" instead of on
 the missing wiring. The test now derives the local id and asserts on that, which is also
 the id the deferral line names.
+
+== Orchestrator addition: the linked-path property (plan section 3 L2, test table row "cmd/swarm: DaemonBin unresolved") ==
+
+Case 1 now invokes the new binary through a symlink (<bindir>/linked/swarm -> swarm-new) and
+asserts the replacement daemon's argv[0], as `ps -o command= -p <pid>` prints it, is the LINK.
+Green on first run (the wiring passes os.Executable() through unresolved).
+
+Negative control, in this worktree with a clean tree, reverted with `git checkout -- cmd/swarm/unattended.go`:
+perturbation = `c.DaemonBin, _ = filepath.EvalSymlinks(c.DaemonBin)` after `c.Env = env` in unattended.go.
+
+--- FAIL: TestUnattendedRestart_AgainstRealDaemons (12.23s)
+        unattended_test.go:374: the replacement's argv[0] must be the link /tmp/TestUnattendedRestart_AgainstRealDaemons867259922/001/linked/swarm; ps shows "/private/tmp/TestUnattendedRestart_AgainstRealDaemons867259922/001/swarm-new daemon" (resolving the link would pin every later shim to a directory the next upgrade purges)

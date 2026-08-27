@@ -290,6 +290,20 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 	binDir := t.TempDir()
 	oldBin := buildStampedSwarm(t, binDir, "swarm-old", unattendedOldVersion)
 	newBin := buildStampedSwarm(t, binDir, "swarm-new", unattendedNewVersion)
+	// The converge is invoked through a SYMLINK to the new binary, the shape Homebrew
+	// installs (/usr/local/bin/swarm -> Caskroom/swarm/<ver>/swarm). The plan's
+	// linked-path property (section 3 L2) says the replacement daemon must be spawned
+	// as the LINK, never the resolved target: the daemon spawns every shim from its own
+	// executable path (main.go's ShimBinary), and a daemon pinned to a Caskroom
+	// directory can launch nothing once the next upgrade purges it. Case 1 asserts the
+	// replacement's argv[0] is this link.
+	newLink := filepath.Join(binDir, "linked", "swarm")
+	if err := os.MkdirAll(filepath.Dir(newLink), 0o755); err != nil {
+		t.Fatalf("mkdir for the link: %v", err)
+	}
+	if err := os.Symlink(newBin, newLink); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", newLink, newBin, err)
+	}
 	fakeAgent := filepath.Join(binDir, "swarm-fake-agent")
 	buildBinary(t, fakeAgent, "github.com/Nathandela/swarm/cmd/swarm-fake-agent")
 
@@ -313,7 +327,7 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 			t.Fatalf("no daemon.pid under %s", d.stateDir)
 		}
 
-		code, stderr := runSwarmUnattended(t, newBin, d.callerEnv, "daemon", "restart", "--unattended")
+		code, stderr := runSwarmUnattended(t, newLink, d.callerEnv, "daemon", "restart", "--unattended")
 		if code != 0 {
 			t.Fatalf("exit = %d, want 0; stderr:\n%s", code, stderr)
 		}
@@ -347,6 +361,18 @@ func TestUnattendedRestart_AgainstRealDaemons(t *testing.T) {
 			t.Fatalf("daemon.pid still names the original daemon %d", oldPID)
 		}
 		convergedPID = newPID
+
+		// The linked-path property: the replacement was spawned as the LINK the converge
+		// was invoked through, not as the file it resolves to. argv[0] is what `ps`
+		// prints as the command, and it is what the daemon's os.Executable() returns on
+		// darwin (unresolved), which is what every later shim is spawned from.
+		argv, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(newPID)).Output()
+		if err != nil {
+			t.Fatalf("ps -p %d: %v", newPID, err)
+		}
+		if got := strings.TrimSpace(string(argv)); !strings.HasPrefix(got, newLink+" ") {
+			t.Fatalf("the replacement's argv[0] must be the link %s; ps shows %q (resolving the link would pin every later shim to a directory the next upgrade purges)", newLink, got)
+		}
 
 		// The replacement's own environment, as the replacement itself recorded it.
 		if got := inodeOf(t, savedPath); got == beforeIno {
