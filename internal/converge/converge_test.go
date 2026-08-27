@@ -342,6 +342,45 @@ func TestRule3NoSavedEnvRefusesAndNamesTheManualStep(t *testing.T) {
 	}
 }
 
+// A daemon.env that EXISTS but holds nothing is not an error and not a missing
+// file: the read succeeds and returns an empty slice. Spawning from it would put
+// the daemon under an environment of nothing but the SWARM_DAEMON_* stamps -- no
+// PATH, no HOME, no keys -- which is strictly worse than the launchd environment
+// this whole layer exists to avoid. It is refused on the same terms as a file
+// that was never written, because the owner's fix is the same one.
+func TestRule3EmptySavedEnvRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+	}{
+		{"a truncated file reads back as an empty slice", []string{}},
+		{"a nil slice with no error", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			f.env, f.envErr = tc.env, nil
+
+			if got := converge.Run(f.deps()); got != converge.ExitRefused {
+				t.Errorf("Run with an empty saved env = %d, want ExitRefused (%d)", got, converge.ExitRefused)
+			}
+			if f.called("RestartDaemon") {
+				t.Error("an empty saved environment must never be spawned from")
+			}
+			if f.called("RestartGateway") {
+				t.Error("a refusal touches nothing")
+			}
+			line := f.reason(t)
+			if !strings.Contains(line, "empty") {
+				t.Errorf("refusal reason = %q, want it to say the saved environment is empty, "+
+					"so the log tells it from a file that was never written", line)
+			}
+			if !strings.Contains(line, "swarm daemon restart") {
+				t.Errorf("refusal reason = %q, want it to name the owner's one manual step", line)
+			}
+		})
+	}
+}
+
 // Any other failure to read the saved env is a real failure, not a refusal.
 func TestRule3UnreadableSavedEnvFails(t *testing.T) {
 	f := newFake()
