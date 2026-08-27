@@ -205,7 +205,14 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case k.Code == tea.KeyEnter:
 		return m.submitLaunch()
-	case k.Code == tea.KeyTab || k.Code == tea.KeyDown:
+	case k.Code == tea.KeyTab:
+		// Tab is reserved for shell-like path completion in the directory field.
+		// Field navigation stays on Up/Down, so a completion attempt can never
+		// unexpectedly move the user into another form control.
+		if lm.isDir() {
+			lm.cycleDirCompletion(true)
+		}
+	case k.Code == tea.KeyDown:
 		lm.moveFocus(1)
 	case k.Code == tea.KeyUp:
 		lm.moveFocus(-1)
@@ -728,18 +735,18 @@ func (m launchModel) view() string {
 // or paste, the agent and choice pickers to use the arrows, and bool options to
 // toggle with Space. The tab/enter/esc tail is constant across fields.
 func (m launchModel) hint() string {
-	const tail = " · tab/↑↓ next · enter launch · esc cancel"
+	const tail = " · ↑↓ next · enter launch · esc cancel"
 	if m.isDir() && m.createCwd != "" {
 		if m.dirFuzzy {
-			return "arrows choose · enter create directory · esc cancel"
+			return "tab/←→ choose · enter create directory · esc cancel"
 		}
 		if m.dirGhost != "" || len(m.dirCands) > 0 {
-			return "arrows complete · enter create directory · esc cancel"
+			return "tab/←→ complete · enter create directory · esc cancel"
 		}
 		return "enter create directory · esc cancel"
 	}
 	if m.isDir() && (m.dirGhost != "" || len(m.dirCands) > 1) {
-		return "arrows complete" + tail
+		return "tab/←→ complete" + tail
 	}
 	if m.isAgent() || m.isChoiceFocused() {
 		return "arrows change" + tail

@@ -123,10 +123,10 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 	}
 	m = sendType(m, dir)
 	// Field order: directory -> name -> agent -> (Model option) -> prompt. Tab four times.
-	m = send(m, keyTab) // name (leave empty -> defaults at submit)
-	m = send(m, keyTab) // agent (leave default claude)
-	m = send(m, keyTab) // Model option (leave default opus)
-	m = send(m, keyTab) // prompt
+	m = send(m, keyDown) // name (leave empty -> defaults at submit)
+	m = send(m, keyDown) // agent (leave default claude)
+	m = send(m, keyDown) // Model option (leave default opus)
+	m = send(m, keyDown) // prompt
 	m = sendType(m, "Fix the failing CI")
 
 	_, cmd := m.Update(keyEnter)
@@ -151,8 +151,8 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 	}
 }
 
-// v0.3 / form-nav — UP/DOWN move the field focus like Tab (down = next field, up =
-// previous), with the same wrap semantics; Tab still works. detectMixed carries one
+// v0.3 / form-nav — UP/DOWN move the field focus (down = next field, up =
+// previous), with wrap semantics. Tab is reserved for directory completion. detectMixed carries one
 // option, so the L-1 field order is directory(0), name(1), agent(2), Model(3),
 // prompt(4), worktree(5).
 func TestLaunch_ArrowsNavigateFields(t *testing.T) {
@@ -180,7 +180,7 @@ func TestLaunch_ArrowsNavigateFields(t *testing.T) {
 	if f := launchOf(m).focus; f != 0 {
 		t.Fatalf("KeyDown from the last field should wrap to the first (0), got %d", f)
 	}
-	// The footer advertises the up/down affordance alongside tab.
+	// The footer advertises the up/down navigation affordance.
 	if v := view(m); !strings.Contains(v, "↑↓") {
 		t.Fatalf("footer must advertise up/down field navigation:\n%s", v)
 	}
