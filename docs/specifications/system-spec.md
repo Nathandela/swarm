@@ -82,6 +82,7 @@ Derived view groups:
 
   > AMENDED BY ADR-007 B144 (2026-08-15): owner tier only. The remote tier's `session_launch` composes environment from daemon-authored launch-preset policy, never a phone-supplied env.
 - **S-7** (Ubiquitous) The daemon SHALL enforce a configurable max concurrent session count and reject launches over it with a clear inline error.
+- **S-8** (Event) WHEN a named Claude session is launched or resumed, Swarm SHALL pass the label through Claude's native name flag. WHEN a named Codex thread becomes available or either side renames it, Swarm SHALL synchronize the label over Codex's structured app-server naming methods without injecting terminal keystrokes; provider-originated labels SHALL be sanitized before persistence.
 
 ### Client protocol (P) (ADR-002)
 

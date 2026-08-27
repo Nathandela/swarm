@@ -75,7 +75,7 @@ func daemonLaunchSpec(req *LaunchReq, remote bool, operationID string) daemon.La
 	}
 	return daemon.LaunchSpec{
 		AgentType: req.Agent,
-		Name:      sanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
+		Name:      SanitizeName(req.Name), // P2: re-validate the label server-side (E6.6)
 		Cwd:       req.Cwd,
 		ClientEnv: clientEnv,
 		Cols:      req.Cols,
@@ -115,12 +115,12 @@ func validSupervision(mode string) bool {
 	return false
 }
 
-// sanitizeName re-validates a client-supplied session name (E6.6/P-6): it strips
+// SanitizeName re-validates an externally supplied session name (E6.6/P-6): it strips
 // control characters and caps the value to maxNameRunes, so a persisted/displayed
 // name is always a single line of printable text regardless of what the client
 // sent. It is a cosmetic label, so a hostile or over-long value is sanitized rather
 // than rejected — the launch never fails over a display field.
-func sanitizeName(s string) string {
+func SanitizeName(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
@@ -1608,7 +1608,7 @@ func (cc *clientConn) handleRename(c Control) {
 	if !ok {
 		return
 	}
-	if err := cc.srv.d.Rename(local, sanitizeName(c.Name)); err != nil {
+	if err := cc.srv.d.Rename(local, SanitizeName(c.Name)); err != nil {
 		cc.replyError("rename: " + err.Error())
 		return
 	}

@@ -131,6 +131,9 @@ func (claudeAdapter) Command(spec adapter.LaunchSpec) ([]string, error) {
 		return nil, err
 	}
 	argv := []string{binary, "--settings", settings}
+	if spec.Name != "" {
+		argv = append(argv, "--name", spec.Name)
+	}
 	argv = append(argv, optionFlags(spec.Options)...)
 	if spec.InitialPrompt != "" {
 		argv = append(argv, spec.InitialPrompt)
@@ -191,6 +194,9 @@ func (claudeAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 		return nil, err
 	}
 	argv := []string{binary, "--settings", settings}
+	if spec.Name != "" {
+		argv = append(argv, "--name", spec.Name)
+	}
 	argv = append(argv, optionFlags(spec.Options)...)
 	argv = append(argv, "--resume", spec.ConversationID)
 	return argv, nil
