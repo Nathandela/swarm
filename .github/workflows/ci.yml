@@ -251,7 +251,9 @@ jobs:
       - name: Validate .goreleaser.yaml
         run: goreleaser check
       - name: Snapshot release (build + archive + checksum, no publish)
-        run: goreleaser release --snapshot --clean --skip=publish
+        # --skip=sign: the checksums signature (lifecycle R2) needs the release
+        # secret, which PR-triggered runs must never hold; the publish job signs.
+        run: goreleaser release --snapshot --clean --skip=publish --skip=sign
       - name: Assert 3 artifacts (darwin universal + 2 linux) + a checksums file exist (E13.1, h07)
         run: |
           count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)

@@ -58,4 +58,9 @@ jobs:
           # GITHUB_TOKEN cannot push the cask to a different repo. Referenced by
           # .goreleaser.yaml homebrew_casks.repository.token.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # The checksums-signing seed (lifecycle R2): base64 ed25519 seed, read
+          # by scripts/signchecksums via .goreleaser.yaml signs. Absent or empty,
+          # the signer refuses and the release fails -- an unsigned release is a
+          # release every fleet machine would refuse to stage anyway.
+          SWARM_RELEASE_SIGNING_KEY: ${{ secrets.SWARM_RELEASE_SIGNING_KEY }}
         run: goreleaser release --clean

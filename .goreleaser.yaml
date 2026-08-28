@@ -129,6 +129,20 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+# The release signs its checksums (lifecycle R2): checksums.txt.sig is base64 of
+# a raw ed25519 signature over checksums.txt, produced by scripts/signchecksums
+# from the SWARM_RELEASE_SIGNING_KEY secret (release.yml exports it) and
+# verified on every machine by internal/upgrade.VerifyChecksums before anything
+# from a release archive is trusted. sha256 alone only proves the tarball
+# matches a checksums file fetched from the SAME origin; the signature is what
+# binds both to the release pipeline.
+signs:
+  - id: checksums-ed25519
+    artifacts: checksum
+    cmd: go
+    args: ["run", "./scripts/signchecksums", "--in", "${artifact}", "--out", "${signature}"]
+    signature: "${artifact}.sig"
+
 # Homebrew tap (E13.3), via the current (non-deprecated) `homebrew_casks`
 # config — goreleaser deprecated the older `brews:` Formula pipe in favor of
 # this one; a plain CLI binary (no .app bundle) works the same way, just via a
