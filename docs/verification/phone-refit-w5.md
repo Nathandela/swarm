@@ -606,6 +606,18 @@ longer matches the code); GREEN is the same test passing after.
 | 6 | SF6 -- `CONFIRM_COST`'s KDoc argues for the deleted "keys" clause | `352ab2a7` | evidence: `PairedMachineRowTest` pins `contains("pair")`/`contains("new code")`, not "keys," so nothing pinned the KDoc's argument | KDoc now states the table's ruling (row 37) instead of re-litigating it; same 11 tests green | none |
 | 7 | NOTE 7 pt.2 -- `MachinesPanelScreen.ADD_ID_HINT` still said "Machine id" | `31ae5a1b` | new `MachinesPanelScreenTest` assertion failed against "Machine id" | passes against "Computer id" | `MachinesPanelScreenTest.kt`: +1 assertion in `everyAffordanceCarriesRecordedCopy` (no prior coverage) |
 | 8 (mine) | `switchedTo`/`brokenNotice` interpolate a wire-omitempty name with `ifEmpty`, which a whitespace-only name slips past | `31ae5a1b` | 2 new `MachinesPanelRound3Test` tests (blank + whitespace-only name, one test per site) failed against the un-guarded interpolation | both pass against `ifBlank` guards (`switchedTo` falls back to "this computer"; `brokenNotice` falls back to `row.machineId` first, matching FORGET_CONFIRM/ADD_CONFIRM's existing pattern) | `MachinesPanelRound3Test.kt`: +2 tests |
+| 9 | reviewer's own audit -- `PairedMachineRowTest`'s confirmation clause weakened from `contains("pairing")` to `contains("pair")` when the "keys" test was removed, a strictly looser substring satisfied by "repair"/"paired"/"pairing" too | `bcf76498` | substring evidence, not a code RED (no production behavior changed): the old check passes against three decoy sentences that do not carry `CONFIRM_COST`'s text at all; the tightened check correctly rejects all three | tightened check passes against the real constant; same 11 `PairedMachineRowTest` tests green | `PairedMachineRowTest.kt`: replaced 2 assertions (`contains("pair")` + `contains("new code")`) with 1 (`contains("You'll need a new code to pair again.")`) |
+
+Items 9 and 10 arrived after the first six-commit push (`b74b9dd3`), which the lead then merged into
+`main` (`6d398297`) as-is; item 9 landed as its own follow-up commit in worktree `refit-w5b`, branch
+`refit/w5b`, for the lead to fast-forward into `main`. Item 10 -- confirm the Kotlin `--tests` list for
+this round was built from declared class names (`grep '^class \|^internal class '`), not filenames, so
+no class was silently skipped the way a file/class name mismatch can cause -- required no code change:
+all 18 classes run in the original round declare exactly one class each, matching their filename; the
+two files the lead named as a general risk (`MachineAndLaunchTest.kt` -> `MachinePaneTest`,
+`LaunchScreenTest`; `PairingFlowTest.kt` -> `PairingPermissionTest`, `PairingStepTest`,
+`PairingRelayUnreachableMessageTest`) were checked by content grep and reference nothing this round
+touched.
 
 ### SHOULD-FIX 2: stopped at the BOUND
 
@@ -665,6 +677,12 @@ stale), `tests=156 failures=0 errors=0 skipped=0`, `app/libs/swarm.aar` mtime un
 `SyncStatusViewTest`, `ErrorRoutingRefusalCopyTest` (existing coverage of the same production
 files, run for regression, all pre-existing green and still green).
 
+Item 9's own rerun (worktree `refit-w5b`, branch `refit/w5b`, off `main` at `6d398297`, lane waited
+on from a script file -- `refit-main` was mid-`bundleRelease` at the time): `PairedMachineRowTest`
+alone (the file's only declared class, confirmed by `grep '^class '`), `BUILD SUCCESSFUL`,
+`tests=11 failures=0 errors=0 skipped=0`, result XML newer than the start stamp,
+`app/libs/swarm.aar` mtime unchanged (`1787956965`, this worktree's own copy).
+
 ## Commits (review round)
 
 ```
@@ -673,4 +691,11 @@ aa0efb78 Ban the last two W5.1 words: relay and machine (SHOULD-FIX 3, NOTE 7 pt
 88ac502a PairOnlyScreen: the colon points at the well again (SHOULD-FIX 4)
 352ab2a7 PairedMachineRow: delete a dead constant, rewrite a stale KDoc (SF5, SF6)
 31ae5a1b MachinesPanelScreen: computer id, and a blank name never renders bare (NOTE 7 pt.2, +2 sites)
+```
+
+The six above merged into `main` at `6d398297` unchanged (`git diff` against the equivalent commit
+is empty for every file this round touches). Item 9 followed as its own commit, in `refit-w5b`:
+
+```
+bcf76498 PairedMachineRowTest: pin the confirmation sentence, not a "pair" substring
 ```
