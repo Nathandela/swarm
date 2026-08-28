@@ -112,6 +112,30 @@ class TranscriptTurnAndAnchorTest {
         assertEquals("", panel.latestTurnId)
     }
 
+    /**
+     * Phone refit W3.2's FENCE (W2 round-2 review, 2026-08-28). A turn the daemon opened on the
+     * CLI's own envelope publishes no `user_message` (W2.4: the synthetic prompt opens the turn
+     * and is neither persisted nor published), so the first item this phone sees for it is a
+     * tool run carrying the turn. The turn is OPEN from that item: a turn is open when the
+     * newest item carries a `turn_id` and is not a terminal `agent_message`, whether or not a
+     * `user_message` began it. A "tightening" that made a `user_message` the only opener would
+     * draw such a session idle and refuse its Stop for want of a turn to name -- the round-1
+     * defect, reproduced in the model.
+     */
+    @Test
+    fun `a turn the daemon opened on the CLI's own envelope reads open from its first tool item`() {
+        val panel = TranscriptScreen.of(
+            listOf(item("t1", "tool_run", turn = "turn-c", status = "in_progress")),
+        )
+        assertEquals(
+            "a turn with no user_message in front of it read as closed, so a session working " +
+                "from a teammate-message or task-notification envelope draws idle and the one " +
+                "button offers Send where it owes Stop",
+            "turn-c",
+            panel.latestTurnId,
+        )
+    }
+
     // ---- 2. what "load earlier" pages before ---------------------------------
 
     @Test

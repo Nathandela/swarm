@@ -85,9 +85,12 @@ data class TranscriptPanel(
      * finishes, you read the answer, you reply from the phone, refused -- the ORDINARY path, and
      * re-reading the transcript (the refusal's own stated remedy) could not change the answer.
      *
-     * So this mirrors IS-ENV-1's rule instead of sampling a row: a turn OPENS on a `user_message`
-     * and CLOSES on any terminal `agent_message`. Empty means no turn is open -- an idle session
-     * -- which is the value the daemon matches, never a default this screen invented.
+     * So this mirrors IS-ENV-1's rule instead of sampling a row: a turn is OPEN when the newest
+     * item carries a `turn_id` and is not a terminal `agent_message`, whether or not a
+     * `user_message` began it -- a turn the daemon opened on the CLI's own envelope (phone refit
+     * W2.4) publishes no `user_message` and reads open from its first tool item. Empty means no
+     * turn is open -- an idle session -- which is the value the daemon matches, never a default
+     * this screen invented.
      */
     val latestTurnId: String = "",
     /**
@@ -804,10 +807,12 @@ object TranscriptScreen {
      * IS-ENV-1's rule, mirrored: the turn that is OPEN over these items, or "" for an idle
      * session. See [TranscriptPanel.latestTurnId] for why sampling the last row was wrong.
      *
-     * IT IS THE DAEMON'S `turnIDLocked` LINE FOR LINE -- a `user_message` opens a turn, every
-     * item inside it carries that turn, and a terminal `agent_message` closes it -- because the
-     * value this produces is compared against that function's own state by the daemon, and two
-     * rules that were meant to agree are the thing that disagreed here.
+     * IT IS THE DAEMON'S `turnIDLocked` LINE FOR LINE -- every item inside a turn carries that
+     * turn, so the newest item's `turn_id` IS the open turn, and a terminal `agent_message`
+     * closes it; a `user_message` is the usual opener and not the only one (W2.4's synthetic
+     * prompt opens a turn and is never published) -- because the value this produces is compared
+     * against that function's own state by the daemon, and two rules that were meant to agree
+     * are the thing that disagreed here.
      */
     private fun openTurnOf(items: List<InteractionItem>): String {
         var open = ""
