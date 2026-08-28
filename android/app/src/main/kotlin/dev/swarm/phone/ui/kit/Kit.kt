@@ -12,6 +12,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.ColorRes
 import androidx.annotation.DimenRes
+import androidx.annotation.StyleRes
+import androidx.core.widget.TextViewCompat
 import dev.swarm.phone.R
 import kotlin.math.roundToInt
 
@@ -65,6 +67,42 @@ internal object Kit {
      */
     fun textView(context: Context): TextView = TextView(context).apply {
         includeFontPadding = false
+    }
+
+    /**
+     * A text role put on a view: the appearance AND the leading, which the platform splits.
+     *
+     * **`android:lineHeight` IS A `TextView` ATTRIBUTE, NOT A `TextAppearance` ONE.**
+     * `setTextAppearance` reads `R.styleable.TextAppearance` -- size, weight, family, tracking,
+     * colour, features -- and a `lineHeight` item in the same style is not on that list, so on a
+     * framework `TextView` it is silently dropped. The five leadings `type.xml` states were
+     * dropped on every view in this kit: the W4 evidence measured a styled notice at the same
+     * 16 px as a bare view. The XML said 19.6sp; nothing drew it.
+     *
+     * This reads the one attribute the platform leaves behind, from the same style, and spends it
+     * through `TextViewCompat.setLineHeight`, which is the platform's own arithmetic for an
+     * absolute line box (`lineSpacingExtra` = the stated height minus the font's). A style that
+     * states no leading leaves the view exactly as `setTextAppearance` left it, so the helper is a
+     * no-op across the rest of the ladder and the goldens cannot move.
+     *
+     * IT IS THE KIT'S ONLY WAY OF STYLING A VIEW, for [textView]'s reason: a leading half the kit
+     * applies is worse than one none of it does, and a shared call cannot be half-applied by
+     * forgetting a line. `android/gate/w8_leading_test.go` refuses a bare `setTextAppearance(`
+     * anywhere in this package but here.
+     *
+     * IT IS HERE AND NOT A TOP-LEVEL FUNCTION for [focusable]'s reason.
+     */
+    fun appearance(view: TextView, @StyleRes style: Int) {
+        view.setTextAppearance(style)
+        val leading = view.context
+            .obtainStyledAttributes(style, intArrayOf(android.R.attr.lineHeight))
+        try {
+            if (leading.hasValue(0)) {
+                TextViewCompat.setLineHeight(view, leading.getDimensionPixelSize(0, 0))
+            }
+        } finally {
+            leading.recycle()
+        }
     }
 
     /**

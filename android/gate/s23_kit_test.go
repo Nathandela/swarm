@@ -3468,7 +3468,9 @@ func s23BoundLiterals(sources map[string]string, owned map[string]bool) map[stri
 // at all, so the one place a metric is supposed to live pays nothing for this table's existence.
 var s23LiteralExemptions = map[string]string{
 	"0": "zero has no unit, so 0 px and 0 dp are the same distance and there is no design value " +
-		"for it to disagree with. Used for a weighted width, a suppressed border, a zero padding.",
+		"for it to disagree with. Used for a weighted width, a suppressed border, a zero padding, " +
+		"and as the index and the absent-value default of the one attribute `Kit.appearance` asks " +
+		"a style for (W8.1).",
 	"0f": "the same, as a Float: a zero shadow offset, a suppressed key light, a gradient's first " +
 		"stop.",
 	"1": "`1 - fraction` in ColorMix: the complement of a share. It is arithmetic on a ratio and " +
