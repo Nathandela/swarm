@@ -464,7 +464,7 @@ object SettingsPanelScreen {
         notices = listOf(
             settings.notificationsBlockedNotice,
             settings.deliveryBlockedNotice,
-            settings.pendingNotice,
+            settings.pendingNoticeFor(machine.orEmpty()),
         ).filter { it.isNotEmpty() },
         disclosure = settings.pushDelayDisclosure,
         machineSection = machine?.let {

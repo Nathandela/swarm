@@ -1104,7 +1104,7 @@ object SessionDetailScreen {
             // W2.2's caller: a daemon code with its own sentence says it; a routed state keeps
             // the composer's own copy.
             MachineRefusalCodes.sentence[detail.composerRefusal]
-                ?: ComposerModel.noticeFor(detail.composerRefusal).copy
+                ?: ComposerModel.noticeFor(detail.composerRefusal, detail.machineLabel).copy
         },
         composerNoticeDetail = if (detail.composerRefusal.isEmpty()) "" else detail.composerRefusalDetail,
         composerRetainsDraft = ComposerModel.noticeFor(detail.composerRefusal).retainsDraft,

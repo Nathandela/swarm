@@ -174,11 +174,11 @@ data class SettingsScreen(
     )
 
     val pendingNotice: String
-        get() = if (pendingSync) {
-            "Saved. Waiting for your computer to confirm."
-        } else {
-            ""
-        }
+        get() = pendingNoticeFor("")
+
+    /** [pendingNotice] over the computer's name where the panel knows it (phone refit W5.2). */
+    fun pendingNoticeFor(machine: String): String =
+        if (pendingSync) "Saved. Waiting for ${machine.ifEmpty { "your computer" }} to confirm." else ""
 
     fun withNotificationPermission(state: PermissionState): SettingsScreen =
         copy(notificationPermission = state)

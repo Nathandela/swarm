@@ -390,4 +390,27 @@ class SessionDetailComposerTest {
         assertFalse(p.offersLoadEarlier)
         assertNull(view(p).kitFind(DetailTag.LOAD_EARLIER))
     }
+    /** Phone refit W5.2: the detail's own machine label reaches the composer's refusal. */
+    @Test
+    fun `the composer's refusal names the computer the header names`() {
+        val named = SessionDetailScreen.of(
+            SessionDetail(
+                sessionId = session,
+                online = true,
+                journalStale = false,
+                title = "api refactor",
+                machineLabel = "MacBookPro",
+                composerRefusal = "INPUT_BUSY",
+            ),
+            TranscriptScreen.of(listOf(agent("hello"))),
+            SessionLease(sessionId = session, online = true),
+            capabilities = SessionCapabilityFacts(structuredChat = true),
+        )
+        assertEquals("Not sent. Finish typing on MacBookPro first.", named.composerNotice)
+        assertEquals(
+            "a detail whose machine this phone cannot name says your computer",
+            "Not sent. Finish typing on your computer first.",
+            panel(refusal = "INPUT_BUSY").composerNotice,
+        )
+    }
 }

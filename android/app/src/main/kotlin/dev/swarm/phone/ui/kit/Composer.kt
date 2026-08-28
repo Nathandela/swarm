@@ -252,7 +252,7 @@ object ComposerModel {
      * per machine code would put the refusal taxonomy in two places -- this `when` and that
      * enum -- and guarantee the two drift.
      */
-    fun noticeFor(code: String): ComposerNotice = when (code) {
+    fun noticeFor(code: String, machine: String = ""): ComposerNotice = when (code) {
         // The drawing's `bubble.stale` row, verbatim, and the row's own note is "shipped copy,
         // kept" -- so what shipped had drifted from what the sheet records. The em dash is
         // U+2014 and the apostrophe is straight, as the copy table writes them.
@@ -260,9 +260,15 @@ object ComposerModel {
             copy = "Not sent. There's a new reply. Read it, then send again.",
             retainsDraft = true,
         )
-        // The drawing's `bubble.refused` row, verbatim.
+        // The drawing's `bubble.refused` row, verbatim, where the screen cannot name the
+        // computer -- one contiguous literal so the copy checker binds it -- and the same
+        // sentence over the name where it can (phone refit W5.2).
         "INPUT_BUSY" -> ComposerNotice(
-            copy = "Not sent. Finish typing on your computer first.",
+            copy = if (machine.isEmpty()) {
+                "Not sent. Finish typing on your computer first."
+            } else {
+                "Not sent. Finish typing on $machine first."
+            },
             retainsDraft = true,
         )
         else -> ComposerNotice(
