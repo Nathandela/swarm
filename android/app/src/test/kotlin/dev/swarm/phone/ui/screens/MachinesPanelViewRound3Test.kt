@@ -102,6 +102,8 @@ class MachinesPanelViewRound3Test {
     fun theAddFormCarriesItsLimitsUnderIt() {
         val form = TextView(context).apply { text = "form-probe" }
         val screen = view(listOf(row("m-a", "laptop")), addForm = form)
+        // W7.6: the form block is composed by the header's Add action.
+        screen.findViewWithTag<View>(MachinesTag.ADD_TOGGLE)!!.performClick()
         val order = screen.flatten()
         val texts = screen.texts()
 

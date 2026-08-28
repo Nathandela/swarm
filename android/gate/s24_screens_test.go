@@ -1268,8 +1268,12 @@ var s24ScreenComponents = map[string]map[string]string{
 		"ctaButton":      "the aggregate inbox entry and the Add computer submit",
 		"sessionList":    "`.prows` -- the switcher's rows, carrying the gap and the side padding",
 		"settingsRow":    "derivation row 15 -- one per pairing, the row IS the switch control",
-		"denyChip":       "the per-row phone-side Forget (playbook 4.9), destructive polarity",
-		"notice":         "§4 Notice line -- ADR-018's cap sentence, the add form's limits, a broken row's own fault",
+		// phone-refit-playbook W7.6: Forget moved off the row into the row's menu. The overflow
+		// is the row's trailing control and the menu's one item carries the destructive polarity
+		// (MenuChoice.destructive), where `denyChip` carried it before.
+		"overflowControl":  "the per-row overflow that opens the row's menu (W7.6)",
+		"conversationMenu": "the row menu, one item: the per-row phone-side Forget (playbook 4.9), destructive polarity",
+		"notice":           "§4 Notice line -- ADR-018's cap sentence, the add form's limits, a broken row's own fault",
 	},
 	// Wave R5's preset launch flow (round 2; bead agents-tracker-hggx.6, playbook 4.3): the
 	// REMOTE launch UX, composed above the free-form form in the same launch host. Like the

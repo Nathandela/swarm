@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.content.res.ColorStateList
 import android.view.Gravity
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.swarm.phone.R
@@ -71,7 +72,17 @@ import dev.swarm.phone.R
  * container while the thing under the finger stayed 24 dp -- the wrapper that satisfies a rule
  * nothing else obeys.
  */
-fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): LinearLayout =
+/**
+ * @param trailing a header ACTION, or null for none -- `navHeader`'s slot, on the same terms
+ *  (phone-refit-playbook W7.6): the control is the caller's and this row only places it, last.
+ *  The Computers screen is the drill header's first caller to pass one (its Add action).
+ */
+fun navHeaderDrill(
+    context: Context,
+    back: CharSequence?,
+    title: CharSequence,
+    trailing: View? = null,
+): LinearLayout =
     KitStack(
         context,
         LinearLayout.HORIZONTAL,
@@ -112,6 +123,14 @@ fun navHeaderDrill(context: Context, back: CharSequence?, title: CharSequence): 
                 Kit.identityCell(this)
             },
         )
+        trailing?.let {
+            addView(
+                it.apply {
+                    // Its own width, never the row's, for navHeader's reason.
+                    layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
+                },
+            )
+        }
     }
 
 /**

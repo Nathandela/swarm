@@ -92,6 +92,8 @@ class MachinesPanelViewRound2Test {
     fun theAddFormSlotHostsTheFormItWasHanded() {
         val form = TextView(context).apply { text = "form-probe" }
         val screen = view(listOf(row("m-a")), nowUnixMs = 10_000L, addForm = form)
+        // W7.6: the form block is composed by the header's Add action.
+        screen.findViewWithTag<View>(MachinesTag.ADD_TOGGLE)!!.performClick()
         assertTrue(
             "the addForm handed to the NAMED slot is not in the composed tree; the slot " +
                 "exists so the surface-owned fields survive a redraw, and a slot that drops " +
