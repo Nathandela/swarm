@@ -82,6 +82,7 @@ cea399bc Computers: Add behind the header action, Forget behind the row menu    
 35444177 Inbox: empty sections collapse, except Needs you                       (W7.2)
 8c82216c Inbox: every row's second line says state and age                      (W7.1 Kotlin)
 eaf1c9bd Activity: by day, with a time, tappable                                (W7.4 Kotlin)
+3ef888a1 Pin the bytes an unstamped record wrote before the stamps existed      (ruling, constraint 2)
 ```
 
 W7.3 lands nothing, as the contract says: the launch panel keeps its place under the list.
@@ -181,6 +182,53 @@ regenerated with `-update-surface`, ok after; diff is `+field JournalEntry.TSUni
 
 (A first attempt at Go-1 substituted `time.Time{}` and failed to BUILD -- that file does not import
 `time` -- so it was discarded as invalid and redone by deleting the line.)
+
+### Orchestrator ruling (received after the branch was first pushed): byte identity as a control
+
+The ruling accepted the carriage and asked for three things. (1) One Go commit of its own with
+its own RED and the golden's diff shown: `dc1bf6d8`, above. (2) Byte identity as a NEGATIVE
+CONTROL: one test that a record with zero stamps serialises to exactly the bytes it did before,
+and one that a persisted phonecore cache without the field still loads -- the ruling asked for
+these in the same commit, and they are in `3ef888a1` instead, because `dc1bf6d8` had already been
+pushed under six later commits when the ruling arrived and this branch is not rewritten.
+(3) Nothing non-additive: no field renamed or reordered, no existing JSON key changed, no
+behaviour change when the stamps are absent (the pins below are that proof); `mobile/relay.go` was
+touched for exactly one line, `TSUnixMs: unixMs(rec.TS)` in `onJournal`, because that is the only
+site where a wire record becomes a facade `JournalEntry`.
+
+The pinned literals were MEASURED, not typed: a detached worktree of `1a0e7b29` ran a throwaway
+`go run` that marshalled the three shapes (`w7-base-bytes.txt` in the scratchpad):
+
+```
+wire:    {"cursor":3,"session_id":"m/s1","type":"launched","group":"working","agent":"claude","name":"api"}
+journal: {"schema_version":1,"cursor":3,"ts":"0001-01-01T00:00:00Z","session_id":"m/s1","type":"launched","group":"working","agent":"claude","name":"api"}
+cache:   {"SessionID":"m/s1","Group":"working","Agent":"claude","Name":"api","Present":true,"Capabilities":null}
+```
+
+(The journal line's zero `ts` is the pre-existing `TS` field's own behaviour, untouched; what the
+pin holds is that `last_activity` is absent.) Tests, all green on the final tree:
+`TestJournalRecordUnstampedBytesAreUnchanged` (schema), `TestRecordUnstampedLineIsUnchanged`
+(journal), `TestCachedSessionUnstampedBytesAreUnchanged` and
+`TestPersistedCacheWithoutTheStampStillLoads` (phonecore; the second decodes the base literal inside
+the `sessions` container and finds every field and a zero stamp).
+
+Negative control Go-3 (`omitzero` stripped from the three new tags, then `git checkout --`, 0 dirty):
+
+```
+--- FAIL: TestJournalRecordUnstampedBytesAreUnchanged (0.01s)
+    stamps_test.go:62: an unstamped record serialises as
+          {"cursor":3,...,"name":"api","ts":"0001-01-01T00:00:00Z","last_activity":"0001-01-01T00:00:00Z"}
+        want the bytes main@1a0e7b29 wrote
+          {"cursor":3,"session_id":"m/s1","type":"launched","group":"working","agent":"claude","name":"api"}
+--- FAIL: TestRecordUnstampedLineIsUnchanged (0.01s)
+    stampbytes_test.go:20: ... ,"name":"api","last_activity":"0001-01-01T00:00:00Z"}  want ... ,"name":"api"}
+--- FAIL: TestCachedSessionUnstampedBytesAreUnchanged (0.01s)
+    stampfold_test.go:54: ... ,"Capabilities":null,"last_activity":"0001-01-01T00:00:00Z"}  want ... ,"Capabilities":null}
+```
+
+Gates after `3ef888a1`: `go build` exit=0, `go vet` exit=0, `golangci-lint` 0 issues; `go test -race`
+on schema, journal and phonecore ok. The commit changes no exported surface, so the AAR built at
+`dc1bf6d8` is still the artifact PB-BIND-7 measures against, unchanged.
 
 ## Kotlin runs
 
