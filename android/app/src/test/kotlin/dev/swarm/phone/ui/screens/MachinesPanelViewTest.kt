@@ -365,6 +365,44 @@ class MachinesPanelViewTest {
     }
 
     /** [view] is on this screen: composed under it, with nothing along the way hidden. */
+    @Test
+    fun `the open add form survives a redraw`() {
+        // W7 review defect: the surface rebuilds this view whenever the panel or the minute
+        // changes, so a form composed only by the toggle's own click vanished under a user who
+        // was typing into it. The open state lives on the SURFACE (beside the form's fields),
+        // arrives here as `addFormOpen`, and the toggle flips it through `onToggleAddForm`.
+        val form = TextView(context).apply { text = "form-probe" }
+        var open = false
+        fun draw(): View = machinesPanelView(
+            context = context,
+            panel = MachinesPanelScreen.of(listOf(row("m-a", "laptop")), cap = 3),
+            onAddComputer = {},
+            onSwitchComputer = {},
+            onForgetComputer = {},
+            onOpenGlobalInbox = {},
+            addForm = form.also { (it.parent as? ViewGroup)?.removeView(it) },
+            addFormOpen = open,
+            onToggleAddForm = { open = !open },
+            nowUnixMs = 10_000L,
+        )
+
+        val first = draw()
+        assertFalse("the form is on screen before Add was pressed", first.isShowing(form))
+        first.tapTagged(MachinesTag.ADD_TOGGLE)
+        assertTrue("pressing Add did not flip the surface's open state", open)
+
+        val redrawn = draw()
+        assertTrue(
+            "the open add form collapsed on the next redraw; the block must be composed at draw " +
+                "from the surface's state, not only by the toggle's click",
+            redrawn.isShowing(form),
+        )
+
+        redrawn.tapTagged(MachinesTag.ADD_TOGGLE)
+        assertFalse("pressing Add again did not close the form on the surface", open)
+        assertFalse("a closed form is still on screen after a redraw", draw().isShowing(form))
+    }
+
     private fun View.isShowing(view: View): Boolean {
         if (!flatten().contains(view)) return false
         var v: View? = view

@@ -102,6 +102,12 @@ object MachinesTag {
  *  the launch form's), placed inside the form block under [MachinesPanelScreen.ADD_LABEL]'s
  *  control -- a NAMED slot, never an anonymous `below:` column. Null composes no form fields; the
  *  block still carries the CTA and the limits.
+ * @param addFormOpen whether the add block is on screen (W7 review): the state lives on the
+ *  SURFACE beside the form's fields, because the surface rebuilds this view whenever the panel
+ *  or the minute changes, and a block composed only by the toggle's own click vanished under a
+ *  user who was typing into it. True composes the block at draw; the header's Add action flips
+ *  the state through [onToggleAddForm] and composes or removes the block on this draw too, so
+ *  the press is seen at once and survives the next redraw.
  * @param nowUnixMs this phone's clock, for the row's last-sync age alone (round 2: playbook
  *  4.2:198's third row fact, previously not rendered). A parameter rather than a read so the
  *  JVM suite can freeze the words -- the surface passes the same `System.currentTimeMillis()`
@@ -117,6 +123,8 @@ fun machinesPanelView(
     onOpenGlobalInbox: () -> Unit,
     onBack: (() -> Unit)? = null,
     addForm: View? = null,
+    addFormOpen: Boolean = false,
+    onToggleAddForm: () -> Unit = {},
     nowUnixMs: Long = System.currentTimeMillis(),
 ): View {
     val column = LinearLayout(context).apply {
@@ -124,11 +132,12 @@ fun machinesPanelView(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    // THE FORM BLOCK IS COMPOSED WHEN ADD IS PRESSED AND REMOVED WHEN IT IS PRESSED AGAIN --
+    // THE FORM BLOCK IS COMPOSED WHEN THE SURFACE SAYS IT IS OPEN AND REMOVED WHEN IT IS NOT --
     // never hidden. PB-DS-9's fence (android/gate/s24_screens_test.go): a screen states what is
     // on it by composing it, and a second statement that hides what it just added is the shape
     // three `render*Step` functions had. So at rest the block does not exist on the screen, and
-    // a healthy panel is its rows and nothing below them.
+    // a healthy panel is its rows and nothing below them. The open state is the surface's
+    // (`addFormOpen`), so a redraw between two keystrokes composes the block again.
     val formBlock = addFormBlock(context, addForm, onAddComputer)
     column.addView(
         navHeaderDrill(
@@ -138,6 +147,7 @@ fun machinesPanelView(
             trailing = ctaButton(context, ADD_TOGGLE_LABEL, CtaKind.MORE).apply {
                 tag = MachinesTag.ADD_TOGGLE
                 setOnClickListener {
+                    onToggleAddForm()
                     if (formBlock.parent == null) column.addView(formBlock) else column.removeView(formBlock)
                 }
             },
@@ -202,7 +212,9 @@ fun machinesPanelView(
     column.addView(list)
 
     // BEHIND THE HEADER'S ACTION (W7.6): the form block joins the column under the rows when
-    // Add is pressed (see the header above), and nothing is composed below the rows until then.
+    // Add is pressed (see the header above) and on every draw the surface says it is open;
+    // nothing is composed below the rows otherwise.
+    if (addFormOpen) column.addView(formBlock)
     return column
 }
 
