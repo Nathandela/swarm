@@ -29,15 +29,19 @@ import dev.swarm.phone.ui.PairingStep
  * promise something the daemon refuses on the first press. There is replace, and it says what it
  * costs before anyone presses it.
  *
- * AND IT ASKS (agents-tracker-mrq5). Saying what it costs is what the row does at rest; the
- * confirmation is what it does at the moment of the press, and the two are not the same sentence --
- * [PairedMachineRow.replaceConfirmation] names the machine and names the key purge, which the
- * sublabel does not, because a user reading a dialog has stopped reading the row underneath it.
+ * AND IT ASKS (agents-tracker-mrq5). Saying what it costs is what the row does at rest -- and
+ * since W5.4 (row 36) the row states no cost at all, so the confirmation is the only place either
+ * fact reaches the user: [PairedMachineRow.replaceConfirmation] names the machine, and names the
+ * way back (a new code), because a user reading a dialog has stopped reading the row underneath it.
  */
 data class PairedMachineRow(
     /** [PairingPanelScreen.titleFor] for a completed pairing: the machine, named. */
     val label: String,
-    /** What replacing costs, in the order the daemon performs it. */
+    /**
+     * Empty (phone refit W5.4, row 36): the row is the computer's name and nothing under it.
+     * The cost of replacing is [PairedMachineRow.replaceConfirmation]'s to state, once, at the
+     * press.
+     */
     val sublabel: String,
     /** The one control the row offers. */
     val replaceLabel: String,
