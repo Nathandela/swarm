@@ -184,4 +184,12 @@ func (d *Daemon) SendBackendAttach(id string, agentArgs []string) error {
 // It exists because the two facts live in different packages and neither may import the
 // other: only the core knows the socket path, and only the assembly may touch an adapter.
 // A nil planner, or a nil spec, is a session with no backend -- the ordinary case.
-type BackendPlanner func(agentType, sessionDir, socketPath string) (*BackendSpec, error)
+//
+// agentEnv is the launch's RESOLVED agent environment (PolicyEnv already applied), so the
+// planner resolves the backend program against the same PATH the agent itself runs with --
+// not the daemon's own. A daemon started outside a login shell carries a PATH that may not
+// see the agent binary at all, while the launch's client env does; resolving against the
+// daemon's env in that case planned no backend for a session whose agent ran fine. A nil
+// agentEnv (a caller predating the launch path, or a test) lets the assembly fall back to
+// daemon policy.
+type BackendPlanner func(agentType, sessionDir, socketPath string, agentEnv []string) (*BackendSpec, error)

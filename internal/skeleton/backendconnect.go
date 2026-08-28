@@ -83,7 +83,7 @@ func (e errBackendProbe) Error() string { return string(e) }
 //
 // An adapter that proves no BackendSource answers (nil, nil), which is the ORDINARY case and
 // never a defect: most CLIs need no backend at all.
-func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string) (*daemon.BackendSpec, error) {
+func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string, agentEnv []string) (*daemon.BackendSpec, error) {
 	ad, ok := registry.New(agentType)
 	if !ok {
 		return nil, nil
@@ -98,7 +98,11 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string) (*
 	if err := adapter.CheckBackendPlan(src, spec); err != nil {
 		return nil, err
 	}
-	plan, ok, err := adapter.ResolveBackend(src, backendProber{env: d.launchEnv()}, spec, sessionDir)
+	env := agentEnv
+	if env == nil {
+		env = d.launchEnv()
+	}
+	plan, ok, err := adapter.ResolveBackend(src, backendProber{env: env}, spec, sessionDir)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -109,10 +113,12 @@ func (d *Daemon) planSessionBackend(agentType, sessionDir, socketPath string) (*
 	}, nil
 }
 
-// launchEnv is the environment the backend's program name is resolved against: the daemon's
-// own, filtered by the launch-environment policy, which is the same set the core hands the
-// shim. Nothing else is available here -- the client's env belongs to one launch request and
-// the planner runs per session, after that request has been composed.
+// launchEnv is the FALLBACK environment the backend's program name is resolved against when
+// a caller supplies none: the daemon's own, filtered by the launch-environment policy. The
+// core's launch path always supplies the session's resolved agent env (the client's when one
+// was sent, daemon policy otherwise), so on that path the program this resolves is exactly
+// the program the agent itself runs -- a daemon whose own PATH cannot see the agent binary
+// no longer plans no backend for a session whose agent resolves fine.
 func (d *Daemon) launchEnv() []string { return daemon.PolicyEnv(nil) }
 
 // connectSessionBackend is started for every session the core reports as LAUNCHED. For a

@@ -534,7 +534,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	// adapter and could not.
 	backendSock := backendSocketPath(d.cfg.StateDir, id)
 	if spec.Backend == nil && d.cfg.BackendPlanner != nil {
-		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock)
+		plan, perr := d.cfg.BackendPlanner(spec.AgentType, dir, backendSock, spec.ClientEnv)
 		if perr != nil {
 			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
 			// the session still launches, degraded, exactly as a pre-R7 session of the same
