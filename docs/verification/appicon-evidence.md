@@ -122,3 +122,28 @@ go test ./android/gate/ -count=1                   ok   4.641s
 
 739/0 is the baseline unchanged, which is the expected result: this slice moves a resource that no
 Kotlin test reads.
+
+## Slate re-render (ADR-021, 2026-08-27; wave W4)
+
+The figures above are the Substrate render as it was approved (`swarm_hero` `#ff53ce7c`,
+`swarm_background` `#ff08090a`). ADR-021 D4 repaints the mark without redrawing it, and the
+current assets are:
+
+- `docs/design/icon-candidates/solid-wedge.svg`: literals `#0E0B08` to `#0B0E14` (ground) and
+  `#C9A876` to `#8EB4E6` (mark, twice) plus its token comment, in the same commit as
+  `internal/design/tokens.json`; geometry byte-identical. `ic_launcher_foreground.xml` and
+  `mipmap-anydpi-v26/*.xml` unchanged: `@color/swarm_hero` and `@color/swarm_background` now
+  resolve to `#FF8EB4E6` and `#FF0B0E14` through `colors.xml`.
+- `docs/design/store-assets/icon-512.png` and `docs/ops/play-assets/play-store-icon-512.png`
+  (a byte copy) re-rendered from the Slate SVG with `rsvg-convert -w 512 -h 512` at the framing
+  recorded above (`viewBox 15.54 18.37 72 72`), RGB without alpha, 512x512, 6261 bytes.
+- The XOR check re-run as described above (marks binarised on luminance, 3x3 erosion):
+
+```
+new store icon vs previous store icon (same framing, new colours): XOR 575 px of 262144 = 0.219 %; surviving 3x3 erosion: 0
+new store icon vs canvas-centred render, bbox-aligned (shift 17,-2 px): XOR 743 px of 262144 = 0.283 %; surviving 3x3 erosion: 0
+new mark bbox in canvas units: x 24.82..76.99 y 32.29..76.31
+```
+
+Same drawing, same framing, new material. `go test ./android/gate/ -run Icon` is green with zero
+edits under `res/`. The full record is `docs/verification/phone-refit-w4.md`, section W4.7.

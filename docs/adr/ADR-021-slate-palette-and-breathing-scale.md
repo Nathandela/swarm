@@ -156,10 +156,14 @@ accent-text 50, error-text 38, indicators WCAG 3.0).
 
 - The palette, the density and the ladder move through the existing pipeline with zero new
   mechanism: a new maquette, one JSON, and every downstream file moved because a gate demanded it.
-- Every ink pair measures higher on Slate than on Obsidian except the CTA label, which rises too:
-  ink `-98.8`, ink2 `-53.3`, ink3 `-27.5`, hero as text `-60.0`, err as text `-45.2`, hero-ink on
-  hero `+60.9` (all on `--p-bg`, APCA Lc; negative is light-on-dark). The indicators sit at 3.6:1
-  to 9.6:1. The contrast gate is proof this is an accessibility improvement, not a repaint.
+- Every ink role measures higher on Slate than on Obsidian except `--p-ink`, which measures
+  slightly lower (Obsidian `-100.0..-98.7`, Slate `-98.9..-96.5` across the four grounds) and
+  still clears the primary floor of 90 by 6.5 or more; the CTA label rises too (`+58.8` to
+  `+60.9`). On `--p-bg`: ink `-98.8`, ink2 `-53.3`, ink3 `-27.5`, hero as text `-60.0`, err as
+  text `-45.2`, hero-ink on hero `+60.9` (APCA Lc; negative is light-on-dark). The indicators sit
+  at 3.6:1 to 9.6:1. The contrast gate is proof this is an accessibility improvement, not a
+  repaint; the per-role Obsidian and Slate ranges are kept beside each floor in
+  `android/gate/slate_contrast_test.go`.
 
 **Negative / accepted.**
 
@@ -172,15 +176,20 @@ accent-text 50, error-text 38, indicators WCAG 3.0).
   retired large floor of 60 that the champagne fill missed by 0.3, so that half of the proof is
   historical and is quoted as such in `slate_contrast_test.go`. The CTA floor of 55 is reachable
   and the live pair measures 60.9.
-- **The Android kit's spacing joins do not yet cite the slab.** `sessionList`, `activityRow` and
-  `messageBubble` are joined by `android/gate/s23_kit_test.go` to Substrate's `.prows` rule and to
-  `docs/design/substrate-components.md` rows 14 and 26, not to the maquette's `.slab`; the
-  maquette and the ledger carry D2 and the components follow once those joins are re-pointed,
-  which is outside wave W4's files and is recorded in its evidence as the open half of D2.
+- **The kit's spacing joins cite the slab, and one row is left behind on purpose.** Under the
+  lead's W4.5 ruling the joins were re-pointed in the same wave (`98e19397`): `s23Spacing`'s
+  `.prows` rows in `android/gate/s23_kit_test.go` read `.slab { margin }` out of the Slate
+  maquette, `s23DerivedSpacing`'s rows 14 and 26 and `docs/design/substrate-components.md` rows
+  14 and 26 state `space_12` x `space_16` with the slab named as the source, and `sessionList`,
+  `activityRow` and `messageBubble` spend those steps. Row 31 (the file-change row, "row 14's
+  activity row, verbatim") keeps `space_10` x `space_12` pending its own ruling, and
+  `sessionRow`'s own `.prow` padding did not move.
 - **Every verification screenshot under `docs/verification/` and `docs/design/store-assets/
   screenshots/` is stale** until the O7-style device pass is re-run on Slate.
-- `docs/design/conversation-drawing.html` and `docs/design/substrate-components.md` still quote
-  Obsidian literals in prose and in a CSS block nothing reads; they are records, left as published.
+- `docs/design/conversation-drawing.html` keeps an Obsidian `:root` block nothing reads; it is
+  W5's file and is left as published for W5's brief. `docs/design/substrate-components.md`'s two
+  live Obsidian figures -- the section 1.1 contrast note and row 23's focus-ring ratios -- were
+  re-measured on Slate in W4 (`fb439c52`), with the Obsidian figures quoted as history.
 - The Slate maquette's own font sizes are a redraw at the Obsidian ladder (the nav title is 22px
   where the app now renders 24sp). The type authority has been ADR-012's table since R1 and is
   unaffected; the discrepancy is the same one ADR-012 already records for the Obsidian file.
