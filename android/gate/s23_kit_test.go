@@ -447,7 +447,7 @@ var s23Inbox = []s23Component{
 			"parameter moves the ink and nothing else because a refusal is the same KIND of " +
 			"sentence in another voice, and this is not a sentence -- it is the machine's own " +
 			"register, mono and tertiary, under prose that is neither. `--p-ink3` is below APCA's " +
-			"absolute 30 and is taken here on obsidian_contrast_test.go's standing rule rather " +
+			"absolute 30 and is taken here on slate_contrast_test.go's standing rule rather " +
 			"than by exception: the head sentence carries the user's next act, so this line is " +
 			"diagnostic and never the sole carrier of required information.",
 	},

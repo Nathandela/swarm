@@ -24,9 +24,10 @@ import dev.swarm.phone.R
  * **BOTH COLOURS ARE `var`, AND THE THUMB'S DOES CHANGE.** This KDoc used to say the opposite in
  * capitals -- "THE COLOUR IS A `var` AND THE THUMB'S NEVER CHANGES. Row 4 gives the thumb
  * `--p-ink` in both states" -- which was row 4's specification for a control Substrate never drew.
- * The maquette gives the thumb `--p-ink3` off and `--p-hero-ink` on, and it has to: a linen thumb
- * on a champagne track is light-on-light, the one contrast pair the fill's own ceiling makes
- * unwinnable (ADR-009 D8.1's amendment measures max |Lc| on `#c9a876` at 59.73). So three colours
+ * The maquette gives the thumb `--p-ink3` off and `--p-hero-ink` on, and it has to: a pale thumb
+ * on the accent track is light-on-light, the one contrast pair the fill's own ceiling makes
+ * unwinnable (ADR-009 D8.1's amendment measured max |Lc| on champagne `#c9a876` at 59.73; ADR-020
+ * re-measured it on slate `#8eb4e6` at 62.04, with pure white reaching only 46.58). So three colours
  * cross between the two states -- this drawable's fill, this drawable's border, and the thumb's
  * own fill -- each through [Motion.colorTransition], which reports values to a lambda rather than
  * applying them to a view. That indirection is the reason this is a shaped drawable at all:

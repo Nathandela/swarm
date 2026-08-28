@@ -437,3 +437,83 @@ COUNTS: tests=48 failures=3 errors=0 skipped=0
 `KitDensityTest:299`'s row-26 padding-x becomes `space_16`; each under an AUTHORIZED REWRITE note
 quoting the old claim. `MessageBubbleTest` carries no padding claim. The full Kotlin run on the
 committed tree is run 3 in the gate table.
+
+## W4.6 Type: five rungs, all shifted
+
+**--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:197 TextAppearance.Swarm.Body.Message (origin `.m2`) is 12.5sp; ADR-012 phase 2 puts it on the 14sp rung (the design draws 12.5px). A size is not this file's to choose: it is the design's rule and the ruled ladder, and this style agrees with neither.
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:197 TextAppearance.Swarm.Body.Message (origin `.m2`) has line height 18.125sp; the design's multiplier on the size this style renders at is 1.45 x 14sp = 20.3sp
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:206 TextAppearance.Swarm.Body.Secondary (origin `.prow .ln`) is 12.5sp; ADR-012 phase 2 puts it on the 14sp rung (the design draws 12px). A size is not this file's to choose: it is the design's rule and the ruled ladder, and this style agrees with neither.
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:206 TextAppearance.Swarm.Body.Secondary (origin `.prow .ln`) has line height 17.5sp; the design's multiplier on the size this style renders at is 1.4 x 14sp = 19.599999999999998sp
+    [... 21 PB-DS-2 faults in all: the sixteen sizes and the five leadings ...]** -- ADR-012 amended first (P10, ruling R9, the new machine-read table; R1's table struck
+through so neither reader parses a style on two rungs), `type.xml` untouched
+(`go test ./android/gate/ -run PBDS2`):
+
+```
+--- FAIL: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.02s)
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:197 TextAppearance.Swarm.Body.Message (origin `.m2`) is 12.5sp; ADR-012 phase 2 puts it on the 14sp rung (the design draws 12.5px). A size is not this file's to choose: it is the design's rule and the ruled ladder, and this style agrees with neither.
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:197 TextAppearance.Swarm.Body.Message (origin `.m2`) has line height 18.125sp; the design's multiplier on the size this style renders at is 1.45 x 14sp = 20.3sp
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:206 TextAppearance.Swarm.Body.Secondary (origin `.prow .ln`) is 12.5sp; ADR-012 phase 2 puts it on the 14sp rung (the design draws 12px). A size is not this file's to choose: it is the design's rule and the ruled ladder, and this style agrees with neither.
+    s22b_type_test.go:755: PB-DS-2: android/app/src/main/res/values/type.xml:206 TextAppearance.Swarm.Body.Secondary (origin `.prow .ln`) has line height 17.5sp; the design's multiplier on the size this style renders at is 1.4 x 14sp = 19.599999999999998sp
+    [... 21 PB-DS-2 faults in all: the sixteen sizes and the five leadings ...]
+```
+
+**--- PASS: TestPBDS2_TheSansHeaderOverrideIsRuled (0.01s)
+--- PASS: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.03s)
+--- PASS: TestPBDS2_TheLadderIsTheFiveRuledRungs (0.00s)
+--- PASS: TestPBDS2_EveryStyleIsClaimedByExactlyOneClass (0.00s)
+--- PASS: TestPBDS2_TheAddedStylesAreTheOnesTheDocumentAdds (0.01s)
+--- PASS: TestPBDS2_TheDerivedReadersRefusePerturbedInput (0.00s)
+--- PASS: TestPBDS2_TheRungReadersRefusePerturbedInput (0.00s)
+--- PASS: TestPBDS2_NoTextStyleCarriesAColour (0.00s)
+--- PASS: TestPBDS2_TheDocChromeExclusionIsStillTrue (0.00s)
+--- PASS: TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecordDecides (0.00s)
+--- PASS: TestPBDS2_TheRenderEqualityRefusesAPerturbedPair (0.00s)
+--- PASS: TestPBDS3_TheSubstitutionIsTheOneTheADRRecords (0.00s)
+--- PASS: TestPBDS3_ExactlyTheDecidedFontsAreBundled (0.00s)
+--- PASS: TestPBDS3_EveryMonoRuleBecomesAMonoStyle (0.00s)
+ok  	github.com/Nathandela/swarm/android/gate	0.949s** -- `type.xml`: display 24 / title 15 / body 14 / code 12.5 / micro 11, every
+`android:lineHeight` recomputed on the rung (`Body.Message` 20.3sp, `Body.Secondary` 19.6sp,
+`Mono.Code` 18.75sp, `Mono.CodeSmall` 19.375sp, `Mono.Fine` 17.6sp); `Display.SAS` 34sp untouched;
+a header paragraph names the ruling. `DesignScaleResolutionTest`'s rung known answers (22/10)
+move to 24/11 under an AUTHORIZED VALUE MIGRATION note. Every PB-DS-2 and PB-DS-3 test passes,
+`TestPBDS2_TheRungReadersRefusePerturbedInput` and `TestPBDS2_TheRenderEqualityRefusesAPerturbedPair`
+untouched:
+
+```
+--- PASS: TestPBDS2_TheSansHeaderOverrideIsRuled (0.01s)
+--- PASS: TestPBDS2_TheTypeScaleJoinsTheDesignBidirectionally (0.03s)
+--- PASS: TestPBDS2_TheLadderIsTheFiveRuledRungs (0.00s)
+--- PASS: TestPBDS2_EveryStyleIsClaimedByExactlyOneClass (0.00s)
+--- PASS: TestPBDS2_TheAddedStylesAreTheOnesTheDocumentAdds (0.01s)
+--- PASS: TestPBDS2_TheDerivedReadersRefusePerturbedInput (0.00s)
+--- PASS: TestPBDS2_TheRungReadersRefusePerturbedInput (0.00s)
+--- PASS: TestPBDS2_NoTextStyleCarriesAColour (0.00s)
+--- PASS: TestPBDS2_TheDocChromeExclusionIsStillTrue (0.00s)
+--- PASS: TestPBDS2_TheUnimplementedRulesAreTheOnesTheRecordDecides (0.00s)
+--- PASS: TestPBDS2_TheRenderEqualityRefusesAPerturbedPair (0.00s)
+--- PASS: TestPBDS3_TheSubstitutionIsTheOneTheADRRecords (0.00s)
+--- PASS: TestPBDS3_ExactlyTheDecidedFontsAreBundled (0.00s)
+--- PASS: TestPBDS3_EveryMonoRuleBecomesAMonoStyle (0.00s)
+ok  	github.com/Nathandela/swarm/android/gate	0.949s
+```
+
+## W4.8 ADR-020 and the Kotlin literals
+
+The Go-gated literals (`SwarmTheme.EXPECTED_DARK_COLORS`, `Kit.kt`'s two key-light alphas and the
+`rgba(238,242,248,...)` prose) landed with the origin in commit A, because the Go gates read them;
+ADR-020 (Status Accepted, D1-D4, supersedes/survives, consequences, alternatives) and the README
+row with "next FREE" 021 landed there too, so every AUTHORIZED REWRITE note cites a record that
+exists in the same commit. What is left here is prose: `Toggle.kt` and `ToggleTest.kt` carry the
+ceiling re-measured on `#8eb4e6` (62.04, white 46.58) beside the champagne 59.73 they quote,
+`MessageBubble.kt`'s radius ladder reads 16 / 20 / 12 / 10, and the `s23_kit_test.go` message that
+named `obsidian_contrast_test.go` names `slate_contrast_test.go`.
+
+The done-when grep, `grep -rn "c9a876\|C9A876\|0e0b08\|0E0B08" android/ internal/ docs/design/`
+(build directories excluded), returns quoted history inside the wave's files -- the AUTHORIZED
+REWRITE quotes in `derive_test.go`, the champagne evidence constant in `slate_contrast_test.go`,
+the Toggle prose, the TSV's `--p-tabbg` note (a row cell, not a comment line, so it stays) -- and
+three live literals in files the wave has no right to edit, reported rather than touched:
+`docs/design/conversation-drawing.html:10,12` (an Obsidian CSS block nothing reads),
+`docs/design/substrate-components.md:80` and row 23 (contrast figures measured on Obsidian). ADR-020
+lists them under Consequences.
