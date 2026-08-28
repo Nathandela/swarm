@@ -107,12 +107,25 @@ class ScreenAirSweepTest {
     private fun air(): Int = context.resources.getDimensionPixelSize(R.dimen.swarm_space_12)
 
     /**
-     * The two steps a COLUMN is allowed to spend as the screen's own side air: the destinations'
-     * `swarm_space_12` and the pairing scaffold's ruled `swarm_space_24` (derivation row 18).
-     * Either one, once -- a path that crosses two of them is the F2 doubling.
+     * The steps a COLUMN is allowed to spend as the screen's own side air: the destinations'
+     * `swarm_space_12`, `sessionList`'s `swarm_space_16` and the pairing scaffold's ruled
+     * `swarm_space_24` (derivation row 18). Any one of them, once -- a path that crosses two of
+     * them is the F2 doubling.
+     *
+     * AUTHORIZED REWRITE, ADR-020 D2 (2026-08-28, wave W4, lead's ruling). What this set was:
+     *
+     *     setOf(swarm_space_12, swarm_space_24)
+     *
+     * `swarm_space_12` was named here because it was the step `sessionList` spent; W4.5 moved that
+     * container to `swarm_space_16` (the Slate maquette's `.slab { margin: 0 16px 14px }`), and a
+     * step the Inbox's own row container spends is an air spend by this file's own definition.
+     * The ruled floor [air] is untouched: 16 clears it. Nothing else spends 16 on an unpainted
+     * box -- the activity row, the bubble and the toast pay it inside a painted one -- so the
+     * count on every destination is what it was before the move.
      */
     private fun airSteps(): Set<Int> = setOf(
         context.resources.getDimensionPixelSize(R.dimen.swarm_space_12),
+        context.resources.getDimensionPixelSize(R.dimen.swarm_space_16),
         context.resources.getDimensionPixelSize(R.dimen.swarm_space_24),
     )
 
