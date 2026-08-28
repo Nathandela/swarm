@@ -23,7 +23,9 @@ import dev.swarm.phone.R
  * than economy. This row sits AMONG tool rows in the same stream; a tighter box or a different
  * fill would make it read as a different KIND of object, when what it actually is is the same kind
  * of object carrying different cells. Row 14's `--p-card`, `--p-hair`, `--p-card-r` and key light,
- * at `space_10` x `space_12` with a `space_10` gap.
+ * at `space_12` x `space_16` with a `space_10` gap. The pair stayed `space_10` x `space_12` for one
+ * wave after ADR-021 D2 (2026-08-27) widened the activity row, pending this row's own ruling; W8.2
+ * (2026-08-28) is that ruling, because the stream showed exactly what the sentence above predicts.
  *
  * **THE PATH ELLIPSIZES AT THE MIDDLE, AND IT IS THE ONLY IDENTITY IN THIS KIT THAT DOES.**
  * [Kit.identityCell]'s rule is that a name is distinguished by its FRONT, which is true of a
@@ -67,10 +69,10 @@ fun fileChangeRow(
     gravity = Gravity.CENTER_VERTICAL
     background = cardSurface(context, attention = false)
     setPaddingRelative(
+        Kit.dimenPx(context, R.dimen.swarm_space_16),
         Kit.dimenPx(context, R.dimen.swarm_space_12),
-        Kit.dimenPx(context, R.dimen.swarm_space_10),
+        Kit.dimenPx(context, R.dimen.swarm_space_16),
         Kit.dimenPx(context, R.dimen.swarm_space_12),
-        Kit.dimenPx(context, R.dimen.swarm_space_10),
     )
     // The row opens a diff, so it is a control and not a record -- which is the one thing that
     // separates it from the activity row it is otherwise drawn as. Row 14 states no floor because

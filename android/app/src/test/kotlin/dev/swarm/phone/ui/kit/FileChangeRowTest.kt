@@ -103,14 +103,16 @@ class FileChangeRowTest {
             cardSurface(context, attention = false).spec,
             (row.background as SubstrateSurface).spec,
         )
+        // W8.2 (2026-08-28): row 14 took the Slate slab's `space_12` x `space_16` under ADR-021 D2
+        // and this row followed one wave later; the steps were `space_10` x `space_12`.
         assertEquals(
             "row 14's own horizontal step",
-            Kit.dimenPx(context, R.dimen.swarm_space_12),
+            Kit.dimenPx(context, R.dimen.swarm_space_16),
             row.paddingStart,
         )
         assertEquals(
             "and its vertical one",
-            Kit.dimenPx(context, R.dimen.swarm_space_10),
+            Kit.dimenPx(context, R.dimen.swarm_space_12),
             row.paddingTop,
         )
     }

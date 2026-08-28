@@ -291,9 +291,9 @@ var s23Inbox = []s23Component{
 			"draws a unified diff inline, unconditionally, so a wide refactor costs a screen per " +
 			"file on the one surface whose purpose is continuous reading; this costs one line " +
 			"per file. It takes `activityRow`'s card, padding and gap verbatim -- `cardSurface`, " +
-			"`space_10` x `space_12`, `space_10` (row 14's pair until ADR-021 D2 widened the " +
-			"activity row to `space_12` x `space_16`; this row keeps the tighter box pending its " +
-			"own ruling) -- because it sits AMONG tool rows in the same " +
+			"`space_12` x `space_16`, `space_10` (row 14's pair; it kept the pre-ADR-021 " +
+			"`space_10` x `space_12` for one wave after D2 widened the activity row, until W8.2 " +
+			"(2026-08-28) ruled that it follows) -- because it sits AMONG tool rows in the same " +
 			"stream and a tighter box would read as a different kind of object rather than as " +
 			"the same kind carrying different cells. The path ellipsizes at the MIDDLE and every " +
 			"other identity in this kit ellipsizes at the end: `Kit.identityCell`'s rule is that " +
@@ -1866,8 +1866,16 @@ var s23DerivedSpacing = []struct {
 	// Row 31 states row 14's own two steps, which is the row's whole argument rather than a
 	// coincidence: the file change sits AMONG activity rows in one stream, so a tighter box would
 	// make it read as a different kind of object. The join is what stops the two drifting.
-	{"FileChangeRow.kt", "#31 File change row", "padding-y", "swarm_space_10"},
-	{"FileChangeRow.kt", "#31 File change row", "padding-x", "swarm_space_12"},
+	//
+	// AUTHORIZED REWRITE, phone refit W8.2 (2026-08-28). ADR-021 D2 widened row 14 to the Slate
+	// slab's `space_12` x `space_16` and this row kept the tighter box for one wave, pending its
+	// own ruling -- and the stream showed exactly what the sentence above predicts. Row 31 states
+	// row 14's pair again; what these two rows said before:
+	//
+	//	{"FileChangeRow.kt", "#31 File change row", "padding-y", "swarm_space_10"},
+	//	{"FileChangeRow.kt", "#31 File change row", "padding-x", "swarm_space_12"},
+	{"FileChangeRow.kt", "#31 File change row", "padding-y", "swarm_space_12"},
+	{"FileChangeRow.kt", "#31 File change row", "padding-x", "swarm_space_16"},
 	{"DecisionPill.kt", "#32 Decision pill", "padding-y", "swarm_space_6"},
 	{"DecisionPill.kt", "#32 Decision pill", "padding-x", "swarm_space_14"},
 	// AND THE TWO THAT LANDED EARLIER IN THE SAME WAVE. Neither was joined when it shipped, which

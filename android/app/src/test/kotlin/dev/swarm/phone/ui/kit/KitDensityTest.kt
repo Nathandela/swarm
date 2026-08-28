@@ -293,7 +293,10 @@ class KitDensityTest {
                     // And the steps whose rounding is visible at this density.
                     Claim("row 28 block padding", dimenPx("swarm_space_4"), menu.paddingStart),
                     Claim("row 30 chip padding-x", dimenPx("swarm_space_12"), chip.paddingStart),
-                    Claim("row 31 row padding-x", dimenPx("swarm_space_12"), change.paddingStart),
+                    // W8.2 (2026-08-28): row 31 follows row 14 to `space_12` x `space_16`. The x
+                    // step is whole at this density now, so the claim moves to the y step, which
+                    // is the one that can still fail here; it was padding-x at `space_12`.
+                    Claim("row 31 row padding-y", dimenPx("swarm_space_12"), change.paddingTop),
                     Claim("row 32 pill padding-y", dimenPx("swarm_space_6"), pill.paddingTop),
                     Claim("row 32 pill padding-x", dimenPx("swarm_space_14"), pill.paddingStart),
                     // ADR-021 D2 (2026-08-27): row 26's padding-x is `space_16`; it was `space_12`.
