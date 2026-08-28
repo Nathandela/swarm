@@ -1,6 +1,6 @@
 # ADR-012: Type ladder consolidation — phase 1 (safe merges) and phase 2 (the ruled ladder)
 
-**Status**: Accepted. Phase 1 (T1–T5) took the two merges that moved no pixel. Phase 2 (P1–P8, below) implements the owner rulings of 2026-08-09 and is where every question phase 1 refused to answer is answered.
+**Status**: Accepted. Phase 1 (T1–T5) took the two merges that moved no pixel. Phase 2 (P1–P8, below) implements the owner rulings of 2026-08-09 and is where every question phase 1 refused to answer is answered. **Amended 2026-08-27 by [ADR-020](ADR-020-slate-palette-and-breathing-scale.md) D3: P10 (ruling R9) shifts all five rungs one step up; the rung table under P10 is the machine-read one.**
 **Date**: 2026-08-09 (phase 1), amended the same day with phase 2
 **Filename**: still `...-phase-1.md`. The path is cited from `type.xml`, from `android/gate/s22b_type_test.go`, from the Robolectric suite and from three beads; renaming the file to match its contents would break four joins to save one word. The title above is the record of what it is.
 **Amends**: [ADR-009](ADR-009-obsidian-visual-direction.md) D7's parenthetical "Type scale structure (19 styles, ...) is unchanged" — the count becomes 17. D7's decisions themselves are untouched: no size, weight, tracking, family or feature string moves here.
@@ -235,6 +235,12 @@ MULTIPLIER still come from the rule each style cites, unchanged and unchangeable
 
 ### The rung table
 
+> **SUPERSEDED 2026-08-27 by P10 below (ADR-020 D3, ruling R9).** The rows are struck through so
+> that the two machine readers (`android/gate/s22b_type_test.go`, the Robolectric suite's
+> `TypeScale`) take P10's table and not this one: both refuse a style that stands on two rungs, so
+> the retired table has to stop parsing as rows. Every cell is otherwise as R1 ruled it, because
+> this is the record of what R1 ruled.
+
 Machine-read. `android/gate/s22b_type_test.go` and the Robolectric suite both parse it; the ADR is
 staged onto the unit-test classpath for that second reader, beside `type.xml` and the design
 source, so the text half and the resolved half cannot be reading two different tables.
@@ -247,22 +253,22 @@ chose.
 
 | Ladder style | Origin | Design px | Rung | sp | Move |
 | --- | --- | --- | --- | --- | --- |
-| `Display.NavTitle` | `.pnav .big` | 27 | display | 22 | -5 (R3) |
-| `Title.Sheet` | `.sheet2 h4` | 15.5 | title | 14 | -1.5 (R1) |
-| `Title.Row` | `.prow .pj` | 14 | title | 14 | 0 |
-| `Label.Button` | `.acts2 button` | 13.5 | title | 14 | +0.5 (R1) |
-| `Body.Message` | `.m2` | 12.5 | body | 12.5 | 0 |
-| `Body.Secondary` | `.prow .ln` | 12 | body | 12.5 | +0.5 (R1) |
-| `Mono.InlineStrong` | `.prow .ln b` | 11.5 | code | 11.5 | 0 |
-| `Mono.Code` | `.sheet2 .cmd` | 11.5 | code | 11.5 | 0 |
-| `Label.Chip` | `.chip` | 11 | code | 11.5 | +0.5 (R1) |
-| `Mono.CodeSmall` | `.tcard .b` | 11 | code | 11.5 | +0.5 (R1) |
-| `Label.Section` | `.plabel` | 10.5 | micro | 10 | -0.5 (R1) |
-| `Mono.Meta` | `.sheet2 .ctx` | 10.5 | micro | 10 | -0.5 (R1) |
-| `Label.Live` | `.pnav .live` | 10 | micro | 10 | 0 |
-| `Mono.Agent` | `.prow .ag` | 10 | micro | 10 | 0 |
-| `Label.Tab` | `.ptabs div` | 9.5 | micro | 10 | +0.5 (R1) |
-| `Mono.Fine` | `.sheet2 .bind` | 9.5 | micro | 10 | +0.5 (R1) |
+| ~~`Display.NavTitle`~~ | `.pnav .big` | 27 | display | 22 | -5 (R3) |
+| ~~`Title.Sheet`~~ | `.sheet2 h4` | 15.5 | title | 14 | -1.5 (R1) |
+| ~~`Title.Row`~~ | `.prow .pj` | 14 | title | 14 | 0 |
+| ~~`Label.Button`~~ | `.acts2 button` | 13.5 | title | 14 | +0.5 (R1) |
+| ~~`Body.Message`~~ | `.m2` | 12.5 | body | 12.5 | 0 |
+| ~~`Body.Secondary`~~ | `.prow .ln` | 12 | body | 12.5 | +0.5 (R1) |
+| ~~`Mono.InlineStrong`~~ | `.prow .ln b` | 11.5 | code | 11.5 | 0 |
+| ~~`Mono.Code`~~ | `.sheet2 .cmd` | 11.5 | code | 11.5 | 0 |
+| ~~`Label.Chip`~~ | `.chip` | 11 | code | 11.5 | +0.5 (R1) |
+| ~~`Mono.CodeSmall`~~ | `.tcard .b` | 11 | code | 11.5 | +0.5 (R1) |
+| ~~`Label.Section`~~ | `.plabel` | 10.5 | micro | 10 | -0.5 (R1) |
+| ~~`Mono.Meta`~~ | `.sheet2 .ctx` | 10.5 | micro | 10 | -0.5 (R1) |
+| ~~`Label.Live`~~ | `.pnav .live` | 10 | micro | 10 | 0 |
+| ~~`Mono.Agent`~~ | `.prow .ag` | 10 | micro | 10 | 0 |
+| ~~`Label.Tab`~~ | `.ptabs div` | 9.5 | micro | 10 | +0.5 (R1) |
+| ~~`Mono.Fine`~~ | `.sheet2 .bind` | 9.5 | micro | 10 | +0.5 (R1) |
 
 Sixteen rows for the sixteen styles that cite `origin:`. `Display.SAS` has none and is the one
 style outside the ladder — see P7.
@@ -428,6 +434,58 @@ rule alone can state once the rule and the ruling disagree. The table has one ro
 entry is checked against this section's own text (the `### P9 — R2:` heading above) so a family
 that moved without a citation behind it fails exactly as an uncited size move does in the rung
 table.
+
+
+### P10 — R9: the five rungs shift one step up (ADR-020 D3, 2026-08-27)
+
+Owner ruling of 2026-08-27, recorded in `docs/specifications/phone-refit-playbook.md` section 5
+and decided by [ADR-020](ADR-020-slate-palette-and-breathing-scale.md) D3: on the handset the
+ladder R1 ruled reads one rung too small, so every rung moves up and the ladder keeps its shape.
+R1's structure is untouched — five rungs, sizes read out of this record and everything else out of
+the cited rule — and R1's table above is superseded in its numbers only.
+
+| Rung | R1 sp | R9 sp | What it sets |
+| --- | --- | --- | --- |
+| micro | 10 | 11 | tabs, counters, agent names, section labels, meta |
+| code | 11.5 | 12.5 | terminal text, chips |
+| body | 12.5 | 14 | all running text |
+| title | 14 | 15 | row titles, buttons, sheet headings |
+| display | 22 | 24 | screen titles |
+
+Gaps 1.5 / 1.5 / 1 / 9: every rung is at least the point apart that R1's finding requires. R3's
+display rung and R4's drill-title placement move with it (24 for both headers and the approval
+sheet's question); P6's leadings are recomputed on the new rungs by both gates, as before.
+
+**The rung table, as amended.** Machine-read by the same two readers, under the same rules: the
+`Design px` column is still the cited rule's and is held to the Substrate artifact; `Move` is `sp −
+design px`; and every row now moves, so every row cites R9 — the one ruling that authorized the
+whole shift, in place of R1 and R3.
+
+| Ladder style | Origin | Design px | Rung | sp | Move |
+| --- | --- | --- | --- | --- | --- |
+| `Display.NavTitle` | `.pnav .big` | 27 | display | 24 | -3 (R9) |
+| `Title.Sheet` | `.sheet2 h4` | 15.5 | title | 15 | -0.5 (R9) |
+| `Title.Row` | `.prow .pj` | 14 | title | 15 | +1 (R9) |
+| `Label.Button` | `.acts2 button` | 13.5 | title | 15 | +1.5 (R9) |
+| `Body.Message` | `.m2` | 12.5 | body | 14 | +1.5 (R9) |
+| `Body.Secondary` | `.prow .ln` | 12 | body | 14 | +2 (R9) |
+| `Mono.InlineStrong` | `.prow .ln b` | 11.5 | code | 12.5 | +1 (R9) |
+| `Mono.Code` | `.sheet2 .cmd` | 11.5 | code | 12.5 | +1 (R9) |
+| `Label.Chip` | `.chip` | 11 | code | 12.5 | +1.5 (R9) |
+| `Mono.CodeSmall` | `.tcard .b` | 11 | code | 12.5 | +1.5 (R9) |
+| `Label.Section` | `.plabel` | 10.5 | micro | 11 | +0.5 (R9) |
+| `Mono.Meta` | `.sheet2 .ctx` | 10.5 | micro | 11 | +0.5 (R9) |
+| `Label.Live` | `.pnav .live` | 10 | micro | 11 | +1 (R9) |
+| `Mono.Agent` | `.prow .ag` | 10 | micro | 11 | +1 (R9) |
+| `Label.Tab` | `.ptabs div` | 9.5 | micro | 11 | +1.5 (R9) |
+| `Mono.Fine` | `.sheet2 .bind` | 9.5 | micro | 11 | +1.5 (R9) |
+
+Sixteen rows, as before; `Display.SAS` stays off the ladder at 34 sp (P7). The leadings that
+follow: `Body.Message` 1.45 × 14 = 20.3sp, `Body.Secondary` 1.4 × 14 = 19.6sp, `Mono.Code` 1.5 ×
+12.5 = 18.75sp, `Mono.CodeSmall` 1.55 × 12.5 = 19.375sp, `Mono.Fine` 1.6 × 11 = 17.6sp.
+
+P7's disclosed pair (`Mono.Agent` and `Mono.Meta`, render-identical on the micro rung) is
+unchanged by this: both move to 11 together, and the naming question stays open where P7 left it.
 
 ## Consequences
 

@@ -309,15 +309,21 @@ class DesignScaleResolutionTest {
         // a rung reader that fell back to the design px for everything would make every size
         // assertion in this suite an assertion about the ladder R1 retired, and would do it
         // silently.
+        //
+        // AUTHORIZED VALUE MIGRATION, ADR-020 D3 (2026-08-27, ruling R9, ADR-012 P10): the display
+        // rung is 24 and the micro rung is 11. What the two known answers said under R1:
+        //
+        //     "`.pnav .big` renders on the 22 sp display rung", 22f,
+        //     "`.ptabs div` renders on the 10 sp micro rung", 10f,
         assertEquals(
-            "`.pnav .big` renders on the 22 sp display rung",
-            22f,
+            "`.pnav .big` renders on the 24 sp display rung",
+            24f,
             TypeScale.renderedSizeSp(".pnav .big"),
             0f,
         )
         assertEquals(
-            "`.ptabs div` renders on the 10 sp micro rung",
-            10f,
+            "`.ptabs div` renders on the 11 sp micro rung",
+            11f,
             TypeScale.renderedSizeSp(".ptabs div"),
             0f,
         )
