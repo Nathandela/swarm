@@ -207,6 +207,23 @@ class TranscriptPanelTest {
     }
 
     @Test
+    fun `the grey line skips a blank first line`() {
+        // W6 review round, fix 4: the grey line is the first line that SAYS something. A tool
+        // whose output opens with a newline, or a command pasted with leading whitespace, still
+        // gets a line, and the line carries no whitespace of its own.
+        fun block(kind: String, body: String) = blockOf(item("tool_run", body = body, toolKind = kind))
+
+        assertEquals(
+            "ok  swarm",
+            block("read", """{"tool":"Read","action":{"type":"read","path":"x"},"output_excerpt":"\n\nok  swarm\n"}""").secondary,
+        )
+        assertEquals(
+            "go test ./...",
+            block("execute", """{"tool":"Bash","action":{"type":"execute","command":"\n  go test ./...\n"}}""").secondary,
+        )
+    }
+
+    @Test
     fun `a truncated tool output shows the CLI's own marker verbatim`() {
         // IS-TOOL-3: the marker is the CLI's text, shown as-is, and the item never claims to hold
         // the output it only saw a marker for.

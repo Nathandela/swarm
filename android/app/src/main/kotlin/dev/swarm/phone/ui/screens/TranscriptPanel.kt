@@ -1326,7 +1326,9 @@ object TranscriptScreen {
     private fun hostOf(url: String): String =
         runCatching { URI(url).host }.getOrNull().orEmpty().ifEmpty { url }
 
-    private fun firstLine(text: String): String = text.lineSequence().first()
+    /** The first line that says something: blank lines skipped, the line's own edges trimmed. */
+    private fun firstLine(text: String): String =
+        text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
 
     /** The same, for a mono block, where the machine's own line breaks are the structure. */
     private fun lines(vararg parts: String): String =
