@@ -194,4 +194,37 @@ class MachinesPanelRound3Test {
             MachinesPanelScreen.ADD_IN_FLIGHT,
         )
     }
+
+    // -------------------------------------------------------------------
+    // W5 review round (2026-08-29), item 7: switchedTo and brokenNotice interpolate a name
+    // the wire allows to be empty (display_name is omitempty). FORGET_CONFIRM and ADD_CONFIRM
+    // already guard with ifEmpty, and a whitespace-only name ("Forget  ?") slips past ifEmpty --
+    // both sites need ifBlank instead.
+    // -------------------------------------------------------------------
+
+    @Test
+    fun aBlankOrWhitespaceOnlyNameFallsBackToThisComputerOnSwitch() {
+        for (name in listOf("", " ")) {
+            assertEquals(
+                "switchedTo must not interpolate a blank or whitespace-only name ('$name') into " +
+                    "the sentence; machine id is not in reach at this call, so the fallback is " +
+                    "'this computer'",
+                "Now viewing this computer.",
+                MachinesPanelScreen.switchedTo(name),
+            )
+        }
+    }
+
+    @Test
+    fun aBlankOrWhitespaceOnlyDisplayNameFallsBackToTheMachineIdOnBrokenNotice() {
+        for (name in listOf("", " ")) {
+            val broken = row("m-broken", connected = false).copy(displayName = name, broken = true)
+            assertEquals(
+                "brokenNotice must fall back to the machine id when the display name is blank " +
+                    "or whitespace-only ('$name'), the way it is in reach here",
+                "Can't open m-broken. Forget it or pair again.",
+                MachinesPanelScreen.brokenNotice(broken),
+            )
+        }
+    }
 }

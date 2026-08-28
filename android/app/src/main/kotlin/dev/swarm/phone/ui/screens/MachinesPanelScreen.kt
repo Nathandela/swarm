@@ -47,7 +47,7 @@ object MachinesPanelScreen {
     const val ADD_LABEL = "Add computer"
 
     /** What belongs in the add form's first field. The id is the pairing's identity (MM4). */
-    const val ADD_ID_HINT = "Machine id"
+    const val ADD_ID_HINT = "Computer id"
 
     /** The add form's optional display name; a machine may publish none. */
     const val ADD_NAME_HINT = "Computer name (optional)"
@@ -127,9 +127,14 @@ object MachinesPanelScreen {
      * overstates what happened: `mobile/machines.go:19-21` -- SelectMachine records the viewed
      * pairing and feeds the least-recently-viewed connection policy; it does NOT re-target the
      * App's live relay session yet.
+     *
+     * GUARDED THE WAY [FORGET_CONFIRM] AND [ADD_CONFIRM] ALREADY ARE (W5 review round,
+     * 2026-08-29): `display_name` is wire `omitempty`, and machine id is not in reach at this
+     * call, so a blank or whitespace-only name falls back to "this computer" -- `ifBlank`, not
+     * `ifEmpty`, because a whitespace-only name would otherwise render "Now viewing  .".
      */
     fun switchedTo(displayName: String): String =
-        "Now viewing $displayName."
+        "Now viewing ${displayName.ifBlank { "this computer" }}."
 
     /** The aggregate inbox destination across every pairing (inbox.global). */
     const val GLOBAL_INBOX_LABEL = "All sessions"
@@ -208,10 +213,16 @@ object MachinesPanelScreen {
      * reaching for the wholesale remedy that destroys every pairing (MM8, machines.recovery --
      * the same sentence App.SelectMachine's refusal carries). Null on a healthy row: a fault
      * sentence over a working pairing is the dishonest rendering in the other direction.
+     *
+     * GUARDED LIKE [switchedTo] (W5 review round, 2026-08-29), one layer deeper: `display_name`
+     * is wire `omitempty`, but `row.machineId` -- the pairing's own identity (MM4) -- IS in
+     * reach here, so a blank or whitespace-only display name falls back to it before falling
+     * back to "this computer".
      */
     fun brokenNotice(row: MachineRowModel): String? {
         if (!row.broken) return null
-        return "Can't open ${row.displayName}. Forget it or pair again."
+        val name = row.displayName.ifBlank { row.machineId.ifBlank { "this computer" } }
+        return "Can't open $name. Forget it or pair again."
     }
 
     /** ADR-018's cap sentence, stating the number the rows were arbitrated under. */

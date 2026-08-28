@@ -107,6 +107,13 @@ class MachinesPanelScreenTest {
             MachinesPanelScreen.ADD_LABEL,
         )
         assertEquals(
+            "the add form's id field says 'machine' on a screen whose own title, refusal and " +
+                "every other row already say 'computer' (W5.1's word list; W5 review round " +
+                "NOTE 7, 2026-08-29)",
+            "Computer id",
+            MachinesPanelScreen.ADD_ID_HINT,
+        )
+        assertEquals(
             "playbook 4.9's own words, phone-side and distinct from machine-side revoke",
             "Forget this computer",
             MachinesPanelScreen.FORGET_LABEL,
