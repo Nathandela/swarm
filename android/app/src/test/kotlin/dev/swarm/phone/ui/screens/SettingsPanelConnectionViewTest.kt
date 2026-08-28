@@ -104,7 +104,10 @@ class SettingsPanelConnectionViewTest {
     }
 
     @Test
-    fun `the section carries its own heading, above the row`() {
+    fun `the computer card leads, under its own heading, and the pairing row trails`() {
+        // phone-refit-playbook W7.5: this used to pin Pairing -> Connection -> preferences. The
+        // computer card (this section's row) now leads and the pairing row -- the one carrying
+        // the destructive Replace control -- is the last thing on the screen.
         val order = mutableListOf<String>()
         fun walk(v: View) {
             (v.tag as? String)?.let { if (it in SettingsTag.COMPOSITION) order += it }
@@ -116,15 +119,25 @@ class SettingsPanelConnectionViewTest {
             listOf(
                 SettingsTag.NAV,
                 SettingsTag.SECTION_LABEL,
-                SettingsTag.MACHINE_ROW,
-                SettingsTag.SECTION_LABEL,
                 SettingsTag.CONNECTION_ROW,
                 SettingsTag.SECTION_LABEL,
                 SettingsTag.ROW,
                 SettingsTag.ROW,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.MACHINE_ROW,
             ),
             order,
         )
+    }
+
+    @Test
+    fun `the computer card carries exactly one status line`() {
+        // W7.5's card is name, presence dot, ONE status line. A guard rather than a change: the
+        // kit's machine row already draws one `MACHINE_META` line, and this pins that the fold
+        // did not add a second (the old Computers row's sublabel, say) under it.
+        val row = view(panel()).allTagged(SettingsTag.CONNECTION_ROW).single()
+
+        assertEquals(1, row.allTagged(KitTag.MACHINE_META).size)
     }
 
     // ---- silence is the healthy state --------------------------------------

@@ -7,7 +7,10 @@ import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.runtime.PermissionState
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.ClockBanner
+import dev.swarm.phone.ui.MachineFreshness
 import dev.swarm.phone.ui.SettingsScreen
+import dev.swarm.phone.ui.StreamView
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
@@ -369,5 +372,108 @@ class SettingsPanelViewTest {
 
         assertSame(trailing, root.getChildAt(root.childCount - 1))
         assertNotNull("hosting the remainder dropped the screen", root.kitFind(SettingsTag.NAV))
+    }
+
+    // ---- W7.5: computer first, destructive last ---------------------------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). The order used to be the view's own: Pairing (with Replace)
+    // -> Connection -> Computers row -> Notifications. phone-refit-playbook W7.5 puts the computer
+    // card first (the connection row, with the Computers chevron folded onto it), the remote
+    // access panel next and only when the switch is off, the two notification switches after,
+    // and "Replace this computer" -- the one destructive control -- last. View only: the model
+    // still emits one section (`SettingsPanelScreenTest` is the untouched proof).
+
+    private fun paired(killSwitchEngaged: Boolean): SettingsPanel = SettingsPanelScreen.of(
+        SettingsScreen(alerts = true, mentions = true),
+        machine = "nathans-mbp",
+        connection = SettingsPanelScreen.connectionOf(
+            machineId = "ep-1a2b3c4d",
+            machineName = "nathans-mbp",
+            presence = "online",
+            freshness = MachineFreshness(silent = false, lastHeardUnixMs = 1_000L),
+            streams = listOf("journal", "terminal", "reply", "grant").map { name ->
+                StreamView(stream = name, stale = false, resyncPending = false)
+            },
+            clock = ClockBanner.of(""),
+            killSwitchEngaged = killSwitchEngaged,
+            nowUnixMs = 1_754_000_000_000L,
+        ),
+    )
+
+    private val ORDERED_TAGS = setOf(
+        SettingsTag.NAV,
+        SettingsTag.SECTION_LABEL,
+        SettingsTag.CONNECTION_ROW,
+        SettingsTag.MACHINES_ENTRY,
+        SettingsTag.REMOTE_ACCESS,
+        SettingsTag.ROW,
+        SettingsTag.MACHINE_ROW,
+        SettingsTag.REPLACE,
+    )
+
+    private fun tagOrder(root: View): List<String> {
+        val order = mutableListOf<String>()
+        fun walk(v: View) {
+            (v.tag as? String)?.let { if (it in ORDERED_TAGS) order += it }
+            if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        return order
+    }
+
+    @Test
+    fun `the section order is computer, remote access, notifications, replace`() {
+        val root = settingsPanelView(
+            context = context,
+            panel = paired(killSwitchEngaged = true),
+            rowFor = { stubControl(context) },
+            onOpenMachines = {},
+        )
+
+        assertEquals(
+            "phone-refit-playbook W7.5: the computer card leads (the connection row carrying the " +
+                "Computers chevron), the remote access panel follows it, the two switches come " +
+                "next, and the destructive Replace control is the last thing on the screen",
+            listOf(
+                SettingsTag.NAV,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.CONNECTION_ROW,
+                SettingsTag.MACHINES_ENTRY,
+                SettingsTag.REMOTE_ACCESS,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.ROW,
+                SettingsTag.ROW,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.MACHINE_ROW,
+                SettingsTag.REPLACE,
+            ),
+            tagOrder(root),
+        )
+    }
+
+    @Test
+    fun `a working switch draws no remote access block between the card and the switches`() {
+        val root = settingsPanelView(
+            context = context,
+            panel = paired(killSwitchEngaged = false),
+            rowFor = { stubControl(context) },
+            onOpenMachines = {},
+        )
+
+        assertEquals(
+            listOf(
+                SettingsTag.NAV,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.CONNECTION_ROW,
+                SettingsTag.MACHINES_ENTRY,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.ROW,
+                SettingsTag.ROW,
+                SettingsTag.SECTION_LABEL,
+                SettingsTag.MACHINE_ROW,
+                SettingsTag.REPLACE,
+            ),
+            tagOrder(root),
+        )
     }
 }
