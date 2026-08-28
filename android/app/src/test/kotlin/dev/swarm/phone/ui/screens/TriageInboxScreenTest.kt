@@ -38,6 +38,7 @@ class TriageInboxScreenTest {
         need: String = "doing something",
         present: Boolean = true,
         agent: String = "claude",
+        stateSinceUnixMs: Long = 0L,
     ) = SessionRow(
         id = id,
         title = id.substringAfter('/'),
@@ -45,17 +46,24 @@ class TriageInboxScreenTest {
         need = need,
         present = present,
         agent = agent,
+        stateSinceUnixMs = stateSinceUnixMs,
     )
+
+    /** A fixed "now" so an age is a fact about the fixture and not about the wall clock. */
+    private val NOW = 1_754_000_000_000L
 
     private fun screenOf(
         rows: List<SessionRow>,
         stale: Boolean = false,
         scope: String? = null,
         selected: String? = null,
+        machineNames: Map<String, String> = emptyMap(),
     ) = TriageInboxScreen.of(
         inbox = TriageInbox.from(rows, journalStale = stale),
         scope = scope,
         selectedSession = selected,
+        machineNames = machineNames,
+        nowUnixMs = NOW,
     )
 
     // ---- promotion --------------------------------------------------------
@@ -132,29 +140,22 @@ class TriageInboxScreenTest {
     }
 
     @Test
-    fun `an empty section is still a section and says so`() {
-        // One session, in one group. The other three sections have nothing in them and must
-        // survive anyway -- with a heading a user can read and copy that says what the emptiness
-        // means, which is the whole reason PB-DS-9 names this case.
+    fun `an empty needs-you section is still a section and says Nothing waiting`() {
+        // One session, in Working. The Needs you section has nothing in it and must survive
+        // anyway -- with a heading a user can read and copy that says what the emptiness
+        // means. W7.2 collapses the OTHER empty sections in the view; the model still emits
+        // all four (the test below), and this one is about the section the view keeps.
         val screen = screenOf(listOf(row("mbp/one", "working")))
 
-        val empty = screen.sections.filter { it.rows.isEmpty() }
+        val needsYou = screen.sections.single { it.group == "needs_input" }
+        assertTrue("the needs-you section is not empty for a working-only roster", needsYou.rows.isEmpty())
+        assertEquals("Needs you", needsYou.heading)
         assertEquals(
-            "sections vanished when they emptied: ${screen.sections.map { it.group }}",
-            3,
-            empty.size,
+            "'nothing is waiting on me' is the most useful fact this screen can report, and it " +
+                "is reported by this copy",
+            "Nothing waiting",
+            needsYou.emptyCopy,
         )
-        empty.forEach { section ->
-            assertTrue(
-                "the ${section.group} section is empty and carries no heading",
-                section.heading.isNotBlank(),
-            )
-            assertTrue(
-                "the ${section.group} section is empty and says nothing about it, so it renders " +
-                    "as a bare heading over nothing",
-                section.emptyCopy.isNotBlank(),
-            )
-        }
     }
 
     @Test
@@ -228,7 +229,9 @@ class TriageInboxScreenTest {
 
     @Test
     fun `a row carries the wire's own words and invents nothing`() {
-        val screen = screenOf(listOf(row("mbp/api", "needs_input", need = "wants to run: git push")))
+        // Scoped to the machine: in the All scope W7.1 appends the machine to this line, and
+        // this test is about the TOKEN being carried verbatim, not about the suffix.
+        val screen = screenOf(listOf(row("mbp/api", "needs_input", need = "wants to run: git push")), scope = "mbp")
         val rendered = screen.sections.first { it.group == "needs_input" }.rows.single()
 
         assertEquals("mbp/api", rendered.id)
@@ -667,5 +670,86 @@ class TriageInboxScreenTest {
                 TriageInboxScreen.emptyCopyFor(group),
             )
         }
+    }
+
+    // ---- W7.1: every row's second line says state and age ---------------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). The need line used to be the bare vocabulary phrase, or an
+    // empty string when the roster had not yet carried a record type for the session. It is now
+    // the state word, the age since the MACHINE's own stamp (Session.LastActivityUnixMs, 0 when
+    // absent -- no epoch is ever drawn), and in the All scope the machine.
+
+    private val FOUR_MINUTES = 4 * 60_000L
+
+    @Test
+    fun `the need line is the state word and the age`() {
+        val screen = screenOf(
+            listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES)),
+            scope = "mbp",
+        )
+
+        assertEquals(
+            "Working · 4m",
+            screen.sections.single { it.group == "working" }.rows.single().need,
+        )
+    }
+
+    @Test
+    fun `an absent stamp draws no age rather than the epoch`() {
+        val screen = screenOf(
+            listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = 0L)),
+            scope = "mbp",
+        )
+        val need = screen.sections.single { it.group == "working" }.rows.single().need
+
+        assertEquals(
+            "a zero stamp is ABSENT, and an age computed from it would be the epoch's -- " +
+                "decades, drawn as fact",
+            "Working",
+            need,
+        )
+    }
+
+    @Test
+    fun `the All scope appends the machine`() {
+        val rows = listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES))
+
+        assertEquals(
+            "Working · 4m · Nathan's MBP",
+            screenOf(rows, scope = null, machineNames = mapOf("mbp" to "Nathan's MBP"))
+                .sections.single { it.group == "working" }.rows.single().need,
+        )
+        assertEquals(
+            "a machine the phone holds no name for renders its endpoint id, MachineLabel's own " +
+                "fallback -- never nothing and never a made-up name",
+            "Working · 4m · mbp",
+            screenOf(rows, scope = null).sections.single { it.group == "working" }.rows.single().need,
+        )
+    }
+
+    @Test
+    fun `a row whose records carried no need still says its state`() {
+        // A session that reached the phone only through the roster has no journal record type
+        // yet (mobile/app.go's a.needs is fed by events alone), and its line used to be blank.
+        // Its Group is verbatim from the wire, and the Group IS its state.
+        val screen = screenOf(listOf(row("mbp/one", "working", need = "")), scope = "mbp")
+
+        assertEquals("Working", screen.sections.single { it.group == "working" }.rows.single().need)
+    }
+
+    @Test
+    fun `twins show different ages`() {
+        val screen = screenOf(
+            listOf(
+                row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES),
+                row("mbp/two", "working", need = "group_transition", stateSinceUnixMs = NOW - 3 * 60 * 60_000L),
+            ),
+            scope = "mbp",
+        )
+
+        assertEquals(
+            listOf("Working · 4m", "Working · 3h"),
+            screen.sections.single { it.group == "working" }.rows.map { it.need },
+        )
     }
 }

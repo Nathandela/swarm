@@ -32,12 +32,17 @@ import dev.swarm.phone.R
  *  IT SITS AFTER THE LIVE COUNTER, so the two trailing readouts read outward from the screen: the
  *  counter is about what is happening IN this screen, the pill about whether the screen can be
  *  trusted at all.
+ * @param trailing a header ACTION, or null for none (phone-refit-playbook W7.6). A slot on the
+ *  same terms as [status]: the control is the caller's, with its click and its destination, and
+ *  this row only places it -- LAST, after the readouts, because an action is what a thumb reaches
+ *  for at the end of the row. The default draws nothing, so every existing header is unchanged.
  */
 fun navHeader(
     context: Context,
     title: CharSequence,
     live: CharSequence?,
     status: View? = null,
+    trailing: View? = null,
 ): LinearLayout =
     LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -74,6 +79,17 @@ fun navHeader(
                 it.apply {
                     (layoutParams as? LinearLayout.LayoutParams)?.marginStart =
                         Kit.dimenPx(context, R.dimen.swarm_space_10)
+                },
+            )
+        }
+        trailing?.let {
+            addView(
+                it.apply {
+                    // Its own width, never the row's: a CTA arrives MATCH_PARENT and would take
+                    // the title's remaining width with it.
+                    layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply {
+                        marginStart = Kit.dimenPx(context, R.dimen.swarm_space_10)
+                    }
                 },
             )
         }

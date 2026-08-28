@@ -114,6 +114,13 @@ type Session struct {
 	// watch and may not control (T6-b).
 	StructuredChat  bool
 	TerminalControl bool
+	// StateSinceUnixMs is the MACHINE's stamp of when the session entered its current state
+	// (persist.Meta.EffectiveGroupEnteredAt(), carried on the roster and the journalworthy
+	// transitions), in Unix milliseconds so Kotlin can age a row from it: the age is time IN
+	// the state the row shows, not time since launch. 0 is ABSENT: no record has carried a
+	// stamp for this session, and Kotlin draws no age for 0 -- never the epoch
+	// (phone-refit-playbook W7.1).
+	StateSinceUnixMs int64
 }
 
 // SessionList is a roster HANDLE. gomobile has no bound list type, so a collection
@@ -227,6 +234,11 @@ type JournalEntry struct {
 	SessionID string
 	Type      string
 	Group     string
+	// TSUnixMs is the daemon's own stamp of when the record was appended, in Unix
+	// milliseconds; 0 is absent (a daemon predating the wire field), and Kotlin draws no
+	// time for 0 -- the cursor beside it is a sequence number and is never shown as one
+	// (phone-refit-playbook W7.4).
+	TSUnixMs int64
 }
 
 // JournalPage is a journal page HANDLE, for the same reason as SessionList.

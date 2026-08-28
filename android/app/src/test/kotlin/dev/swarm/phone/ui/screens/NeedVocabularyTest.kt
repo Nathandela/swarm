@@ -74,6 +74,7 @@ class NeedVocabularyTest {
             need = need,
             present = true,
             agent = "claude",
+            stateSinceUnixMs = 0L,
         )
         val screen = TriageInboxScreen.of(TriageInbox.from(listOf(session), journalStale = false))
         return screen.sections.first { it.group == group }.rows.single()
@@ -82,10 +83,12 @@ class NeedVocabularyTest {
     @Test
     fun `the inbox row's need line is the human phrase for the wire's record type`() {
         CASES.forEach { case ->
+            // W7.1: the row's line is now `phrase · age · machine`, so the table is checked
+            // against the phrase lookup itself; the composition is TriageInboxScreenTest's.
             assertEquals(
-                "token '${case.token}' did not map to its recorded phrase on the inbox row",
+                "token '${case.token}' did not map to its recorded phrase",
                 case.phrase,
-                inboxRowFor(need = case.token).need,
+                TriageInboxScreen.needCopy(case.token, "needs_input"),
             )
         }
     }
@@ -149,7 +152,7 @@ class NeedVocabularyTest {
             assertEquals(
                 "group '$group' did not map to its recorded need-line phrase",
                 phrase,
-                inboxRowFor(need = "group_transition", group = group).need,
+                TriageInboxScreen.needCopy("group_transition", group),
             )
         }
     }

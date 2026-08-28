@@ -1,5 +1,6 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.MachineFreshness
 import dev.swarm.phone.ui.MachineLabel
 import dev.swarm.phone.ui.TriageInbox
 
@@ -103,15 +104,20 @@ data class InboxRow(
      */
     val agent: String,
     /**
-     * `.prow .ln` -- the human phrase for the wire's journal record type
-     * (agents-tracker-ksvb.2's vocabulary, [needCopy]), or the type ITSELF where this screen does
-     * not recognise it.
+     * `.prow .ln` -- the row's second line, always: the STATE WORD, the AGE, and in the All
+     * scope the MACHINE, joined by ` · ` (phone-refit-playbook W7.1).
      *
-     * THE FALLBACK CARRIES FORWARD [dev.swarm.phone.ui.SessionRow.need]'S OWN RULE rather than
-     * replacing it: that field -- what this one is built from -- keeps "the journal record type
-     * verbatim, never an invented phrase" for exactly the case this screen cannot place, so a token
-     * outside the seven this build knows renders as the wire sent it, never a guessed English
-     * sentence that would fail silently the day the server adds one.
+     * The state word is the human phrase for the wire's journal record type
+     * (agents-tracker-ksvb.2's vocabulary, [TriageInboxScreen.needCopy]), the type ITSELF where
+     * this screen does not recognise it, and the Group's own word where the roster has not yet
+     * carried a type at all. THE FALLBACK CARRIES FORWARD [dev.swarm.phone.ui.SessionRow.need]'S
+     * OWN RULE rather than replacing it: a token outside the seven this build knows renders as
+     * the wire sent it, never a guessed English sentence that would fail silently the day the
+     * server adds one.
+     *
+     * The age is time IN THE CURRENT STATE, counted from the MACHINE's stamp of entering it
+     * ([dev.swarm.phone.ui.SessionRow.stateSinceUnixMs]), and is absent, not the epoch's, when
+     * the stamp is 0.
      */
     val need: String,
     val group: String,
@@ -248,11 +254,23 @@ object TriageInboxScreen {
      * would put an invented phrase on screen the moment the server adds one, and the failure would
      * be silent -- every field still a plain string, nothing to throw on.
      */
-    private fun needCopy(need: String, group: String): String = if (need == GROUP_TRANSITION) {
-        GROUP_TRANSITION_VOCABULARY[group] ?: need
-    } else {
-        NEED_VOCABULARY[need] ?: need
+    fun needCopy(need: String, group: String): String = when {
+        // A session the roster carried before any event did has no record type yet (W7.1); its
+        // Group is verbatim from the wire, and the Group IS its state.
+        need == GROUP_TRANSITION || need.isEmpty() -> GROUP_TRANSITION_VOCABULARY[group] ?: need
+        else -> NEED_VOCABULARY[need] ?: need
     }
+
+    /**
+     * The time in the current state since the machine's stamp of entering it, in
+     * `MachineFreshness`'s own units (`4m`, `3h`, `2d`), or "" for 0 -- a zero stamp is ABSENT
+     * and no age is drawn for it, never the epoch's.
+     */
+    private fun ageOf(stateSinceUnixMs: Long, nowUnixMs: Long): String =
+        MachineFreshness(silent = false, lastHeardUnixMs = stateSinceUnixMs).sinceLastHeard(nowUnixMs)
+
+    /** The separator between the need line's facts. `PeekPanelScreen` sets the idiom. */
+    private const val FIELD_SEPARATOR = " · "
 
     /**
      * `Inbox` (on) - `Activity` - `Settings`.
@@ -288,12 +306,16 @@ object TriageInboxScreen {
      *  this parameter existed. It is a MAP rather than a single name because the roster is
      *  namespaced per machine and nothing here may assume there is only one; the phone is paired
      *  to one machine today, and a chip bar that hard-coded that would be wrong silently.
+     * @param nowUnixMs this phone's clock, for the row's age alone (W7.1). A parameter so the JVM
+     *  suite can freeze the words; the default keeps a caller with no opinion honest rather than
+     *  frozen at the epoch.
      */
     fun of(
         inbox: TriageInbox,
         scope: String? = null,
         selectedSession: String? = null,
         machineNames: Map<String, String> = emptyMap(),
+        nowUnixMs: Long = System.currentTimeMillis(),
     ): InboxScreen {
         val sections = inbox.sections.map { section ->
             InboxSection(
@@ -307,7 +329,19 @@ object TriageInboxScreen {
                             id = row.id,
                             project = row.title,
                             agent = row.agent,
-                            need = needCopy(row.need, row.group),
+                            // STATE · AGE · MACHINE (W7.1). The machine only in the All scope,
+                            // where rows from different machines share one list; under a
+                            // chip it would repeat the chip. It reads the NAME and the row
+                            // keeps the id, the scope bar's own rule (agents-tracker-ksvb.1).
+                            need = listOfNotNull(
+                                needCopy(row.need, row.group),
+                                ageOf(row.stateSinceUnixMs, nowUnixMs),
+                                if (scope == null) {
+                                    machineOf(row.id)?.let { MachineLabel.of(machineNames[it].orEmpty(), it) }
+                                } else {
+                                    null
+                                },
+                            ).filter { it.isNotEmpty() }.joinToString(FIELD_SEPARATOR),
                             group = row.group,
                             stateDescription = headingOf(section.group),
                             selected = row.id == selectedSession,
@@ -520,6 +554,9 @@ object TriageInboxScreen {
      * and the lit slab are two instruments reporting the same fact at two scales -- one across the
      * whole app, one on the row itself -- and giving them a constant each is giving them a chance
      * to disagree.
+     *
+     * PUBLIC SINCE W7.2, for the same reason: the view keeps exactly one section on screen when
+     * it is empty, and which one is this decision a third time, not a fresh `== "needs_input"`.
      */
-    private const val BLOCKED = "needs_input"
+    const val BLOCKED = "needs_input"
 }

@@ -54,7 +54,7 @@ class TriageInboxViewTest {
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
     private fun row(id: String, group: String, need: String = "doing something", present: Boolean = true) =
-        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude")
+        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude", stateSinceUnixMs = 0L)
 
     private fun screen(
         rows: List<SessionRow>,
@@ -141,29 +141,47 @@ class TriageInboxViewTest {
         )
     }
 
+    // ---- W7.2: empty sections collapse, except Needs you ----------------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). The two tests this pair replaces pinned four headings and
+    // three empty captions on a one-session inbox; phone-refit-playbook W7.2 collapses every
+    // empty section but the one whose emptiness is the fact this screen exists to report.
+
     @Test
-    fun `every group renders a heading, in the model's order, empty or not`() {
-        val root = view(listOf(row("mbp/one", "working")))
+    fun `an empty non-blocked section draws no heading at all`() {
+        val root = view(listOf(row("mbp/one", "needs_input")))
 
         assertEquals(
-            "the headings on screen are not TriageInbox.TRIAGE_ORDER's four -- an empty section " +
-                "was dropped, which is the failure PB-DS-9 names by name",
-            TriageInbox.TRIAGE_ORDER.map { TriageInboxScreen.headingFor(it) },
+            "an empty Working, Ready for review or Done section still draws its heading (and a " +
+                "caption under it), so a one-session inbox is three headings over nothing " +
+                "(phone-refit-playbook W7.2)",
+            listOf(TriageInboxScreen.headingFor("needs_input")),
             root.allTagged(InboxTag.SECTION_LABEL).map { textOf(it) },
+        )
+        assertEquals(
+            "an empty non-blocked section drew its empty caption",
+            emptyList<String>(),
+            root.allTagged(InboxTag.SECTION_EMPTY).map { textOf(it) },
         )
     }
 
     @Test
-    fun `an empty section renders its own copy under its own heading`() {
+    fun `an empty needs-you still says Nothing waiting`() {
         val root = view(listOf(row("mbp/one", "working")))
-        val empties = root.allTagged(InboxTag.SECTION_EMPTY).map { textOf(it) }
 
         assertEquals(
-            "an empty section put nothing on screen where its copy belongs, so it reads as a " +
-                "heading over nothing",
-            TriageInbox.TRIAGE_ORDER.filter { it != "working" }
-                .map { TriageInboxScreen.emptyCopyFor(it) },
-            empties,
+            "the empty Needs you section collapsed with the others. 'Nothing is waiting on me' " +
+                "is the most useful fact this screen can report, and it must stay " +
+                "distinguishable from 'that section scrolled away' (phone-refit-playbook W7.2)",
+            listOf(
+                TriageInboxScreen.headingFor("needs_input"),
+                TriageInboxScreen.headingFor("working"),
+            ),
+            root.allTagged(InboxTag.SECTION_LABEL).map { textOf(it) },
+        )
+        assertEquals(
+            listOf(TriageInboxScreen.emptyCopyFor("needs_input")),
+            root.allTagged(InboxTag.SECTION_EMPTY).map { textOf(it) },
         )
     }
 
@@ -174,6 +192,8 @@ class TriageInboxViewTest {
                 row("mbp/one", "working", need = "writing pairing tests"),
                 row("mbp/two", "working", need = "refactoring auth middleware"),
             ),
+            // Scoped: in the All scope W7.1 appends the machine to the need line.
+            scope = "mbp",
         )
         val rows = root.allTagged(InboxTag.ROW)
 
@@ -188,8 +208,9 @@ class TriageInboxViewTest {
         )
         assertEquals(
             "the section holding both rows also drew its empty copy, so a populated section " +
-                "tells the user it has nothing in it",
-            TriageInbox.TRIAGE_ORDER.size - 1,
+                "tells the user it has nothing in it -- or an empty non-blocked section drew " +
+                "one, which W7.2 collapses. Only the empty Needs you section says so",
+            1,
             root.allTagged(InboxTag.SECTION_EMPTY).size,
         )
     }

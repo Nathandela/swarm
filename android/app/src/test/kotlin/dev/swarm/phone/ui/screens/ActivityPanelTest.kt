@@ -28,17 +28,31 @@ class ActivityPanelTest {
 
     private fun page(
         rows: List<JournalRow> = listOf(
-            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = ""),
-            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "working"),
-            JournalRow(cursor = 3, sessionId = "swarm", type = "group_transition", group = "needs_input"),
+            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = "", tsUnixMs = 0L),
+            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "working", tsUnixMs = 0L),
+            JournalRow(cursor = 3, sessionId = "swarm", type = "group_transition", group = "needs_input", tsUnixMs = 0L),
         ),
         stale: Boolean = false,
     ) = JournalPageView(rows = rows, nextCursor = rows.maxOfOrNull { it.cursor } ?: 0, stale = stale)
 
+    /**
+     * W7.4: a fixed "now", built in the default zone at NOON so "today" and "yesterday" are facts
+     * about the fixture in every zone the JVM might run in, never about the wall clock.
+     */
+    private val NOW: Long = java.util.Calendar.getInstance().apply {
+        set(2026, java.util.Calendar.AUGUST, 28, 12, 0, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    private val HOUR = 60 * 60_000L
+    private val DAY = 24 * HOUR
+
     private fun panel(
         rows: List<JournalRow> = page().rows,
         stale: Boolean = false,
-    ) = ActivityPanelScreen.of(page(rows, stale))
+    ) = ActivityPanelScreen.of(page(rows, stale), nowUnixMs = NOW)
+
+    private fun stamped(cursor: Long, session: String, type: String, group: String, ts: Long) =
+        JournalRow(cursor = cursor, sessionId = session, type = type, group = group, tsUnixMs = ts)
 
     private val ActivityPanel.only: ActivitySection get() = sections.single()
 
@@ -52,15 +66,22 @@ class ActivityPanelTest {
      * and the second is a claim about importance, and nothing on the wire computes either.
      */
     @Test
-    fun `the panel renders one section, because nothing supports the mock's two`() {
-        val sections = panel().sections
+    fun `one section per day`() {
+        // W7.4: the sections are DAYS, from the daemon's own record stamp. Three records on one
+        // day are one section; the mock's two headings are still claims about seen-ness and
+        // salience that nothing on the wire supports, and are still not reproduced.
+        val sections = panel(
+            rows = listOf(
+                stamped(1, "quanthome", "launched", "", NOW - 3 * HOUR),
+                stamped(2, "blog", "group_transition", "working", NOW - 2 * HOUR),
+                stamped(3, "swarm", "group_transition", "needs_input", NOW - HOUR),
+            ),
+        ).sections
 
         assertEquals(
-            "the panel split its rows into ${sections.size} sections. The journal carries no " +
-                "seen-ness and no salience, so any split is a grouping invented to match a " +
-                "drawing -- which is worse than one honest section",
-            1,
-            sections.size,
+            "three records stamped on one day were split into ${sections.map { it.heading }}",
+            listOf("Today"),
+            sections.map { it.heading },
         )
         listOf("While you were away", "Informative").forEach { heading ->
             assertFalse(
@@ -70,14 +91,6 @@ class ActivityPanelTest {
         }
     }
 
-    /**
-     * The mock's `HH:MM` gutter.
-     *
-     * `internal/journal.Record` HAS a `TS time.Time` and `protocol.JournalRecord` -- the form the
-     * phone is served -- drops it. The `Cursor` beside it is a monotonic sequence number, and the
-     * defect this forecloses is formatting one as a clock: a real field's value presented as a
-     * fact it is not.
-     */
     @Test
     fun `no row renders its cursor, because a cursor is not a time`() {
         panel().only.rows.forEach { entry ->
@@ -105,7 +118,7 @@ class ActivityPanelTest {
      * every row shares.
      */
     @Test
-    fun `the emphasis is the session, then the Group, then nothing`() {
+    fun `the emphasis is the session, or nothing`() {
         val rows = panel().only.rows.associateBy { it.cursor }
 
         assertEquals(
@@ -115,17 +128,18 @@ class ActivityPanelTest {
             rows.getValue(3L).emphasis,
         )
         assertEquals("blog", rows.getValue(2L).emphasis)
-        assertEquals(
-            "a record with a Group and no session must fall back to the Group, not to nothing",
-            "working",
-            panel(rows = listOf(JournalRow(cursor = 9, sessionId = "", type = "x", group = "working")))
+        assertNull(
+            "a record with a Group and no session was emphasised. W7.4's body is `session · " +
+                "word` and the Group is folded into the word, so a Group emphasis would name a " +
+                "span the body no longer holds -- which `activityRow` refuses",
+            panel(rows = listOf(JournalRow(cursor = 9, sessionId = "", type = "x", group = "working", tsUnixMs = 0L)))
                 .only.rows.single().emphasis,
         )
         assertNull(
             "a record with neither a session nor a Group was emphasised anyway. There is nothing " +
                 "on it to put the eye on, and emphasising the type would put it on the one word " +
                 "every row shares",
-            panel(rows = listOf(JournalRow(cursor = 8, sessionId = "", type = "x", group = "")))
+            panel(rows = listOf(JournalRow(cursor = 8, sessionId = "", type = "x", group = "", tsUnixMs = 0L)))
                 .only.rows.single().emphasis,
         )
     }
@@ -133,18 +147,97 @@ class ActivityPanelTest {
     // ---- what it does render ---------------------------------------------------
 
     @Test
-    fun `each row is its record's SessionID, Type and Group, verbatim`() {
+    fun `each row is its session and the W5 word`() {
+        // W7.4: `session · word`, where the word is W5's vocabulary for what happened --
+        // `started`, `finished`, `needs you`, `connection lost` -- and a group_transition reads
+        // by the Group it names. A type this build does not know renders verbatim, the inbox's
+        // own rule, so a server that adds one cannot make this screen lie.
         val rows = panel().only.rows.associateBy { it.cursor }
 
-        assertEquals("quanthome · launched", rows.getValue(1L).body)
-        assertEquals("swarm · group_transition · needs_input", rows.getValue(3L).body)
+        assertEquals("quanthome · started", rows.getValue(1L).body)
+        assertEquals("blog · working", rows.getValue(2L).body)
+        assertEquals("swarm · needs you", rows.getValue(3L).body)
+        assertEquals(
+            listOf("api · finished", "api · connection lost", "api · a_future_type"),
+            panel(
+                rows = listOf(
+                    JournalRow(cursor = 1, sessionId = "api", type = "exited", group = "", tsUnixMs = 0L),
+                    JournalRow(cursor = 2, sessionId = "api", type = "lost", group = "", tsUnixMs = 0L),
+                    JournalRow(cursor = 3, sessionId = "api", type = "a_future_type", group = "", tsUnixMs = 0L),
+                ),
+            ).only.rows.sortedBy { it.cursor }.map { it.body },
+        )
     }
 
-    /**
-     * The emphasis has to be findable IN the body, because `activityRow` spans a substring of it
-     * and fails loudly on one it cannot find. A model that produced the two independently could
-     * pass every claim above and crash the screen.
-     */
+    // ---- W7.4: by day, with a time ---------------------------------------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5). `JournalRow.tsUnixMs` is the daemon's own record stamp,
+    // 0 where the wire carried none; the screen groups by day, newest day first, and a row
+    // carries the time `ToolCard.timestampLabel` formats -- "" for 0, so the epoch is never drawn.
+
+    @Test
+    fun `rows are grouped by day newest day first`() {
+        val sections = panel(
+            rows = listOf(
+                stamped(1, "quanthome", "launched", "", NOW - DAY - HOUR),
+                stamped(2, "blog", "group_transition", "working", NOW - 3 * HOUR),
+                stamped(3, "swarm", "group_transition", "needs_input", NOW - HOUR),
+                stamped(4, "api", "exited", "", NOW - DAY),
+            ),
+        ).sections
+
+        assertEquals(listOf("Today", "Yesterday"), sections.map { it.heading })
+        assertEquals(
+            "within a day the feed still reads newest first",
+            listOf(3L, 2L),
+            sections[0].rows.map { it.cursor },
+        )
+        assertEquals(listOf(4L, 1L), sections[1].rows.map { it.cursor })
+    }
+
+    @Test
+    fun `a stamped row carries its time`() {
+        val ts = NOW - HOUR
+        val row = panel(rows = listOf(stamped(1, "quanthome", "launched", "", ts))).sections.single().rows.single()
+
+        assertEquals(dev.swarm.phone.ui.kit.ToolCard.timestampLabel(ts), row.time)
+        assertTrue("the time is empty for a stamped row", row.time.isNotEmpty())
+        assertFalse(
+            "the time was spliced into the body; it is a cell of its own (`activityRow`'s " +
+                "timestamp), so a cursor test on the body cannot mistake it for a number",
+            row.body.contains(row.time),
+        )
+    }
+
+    @Test
+    fun `an absent stamp renders no time and no day heading`() {
+        val sections = panel(rows = page().rows).sections
+
+        assertEquals("zero-stamp rows fall into one trailing section", 1, sections.size)
+        assertTrue(
+            "an unstamped section was headed with a day (${sections.single().heading}); the " +
+                "phone has no basis for one",
+            sections.single().heading !in setOf("Today", "Yesterday"),
+        )
+        sections.single().rows.forEach { entry ->
+            assertEquals("row ${entry.cursor} drew a time from a zero stamp", "", entry.time)
+        }
+    }
+
+    @Test
+    fun `zero-stamp rows trail the stamped days`() {
+        val sections = panel(
+            rows = listOf(
+                JournalRow(cursor = 1, sessionId = "old", type = "launched", group = "", tsUnixMs = 0L),
+                stamped(2, "swarm", "group_transition", "needs_input", NOW - HOUR),
+            ),
+        ).sections
+
+        assertEquals(2, sections.size)
+        assertEquals("Today", sections[0].heading)
+        assertEquals(listOf(1L), sections[1].rows.map { it.cursor })
+    }
+
     @Test
     fun `every emphasis occurs in the body it emphasises`() {
         panel().only.rows.forEach { entry ->

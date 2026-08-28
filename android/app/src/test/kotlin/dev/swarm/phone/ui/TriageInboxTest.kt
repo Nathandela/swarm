@@ -25,7 +25,7 @@ import org.junit.Test
 class TriageInboxTest {
 
     private fun session(id: String, group: String, need: String = "", present: Boolean = true) =
-        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude")
+        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude", stateSinceUnixMs = 0L)
 
     /**
      * All four Groups, each its own section, in a fixed order.

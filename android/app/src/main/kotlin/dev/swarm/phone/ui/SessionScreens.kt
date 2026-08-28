@@ -39,6 +39,13 @@ data class JournalRow(
     val type: String,
     /** `swarmmobile.JournalEntry.Group`, verbatim. */
     val group: String,
+    /**
+     * `swarmmobile.JournalEntry.TSUnixMs`, verbatim: the daemon's own stamp of when the record
+     * was appended, in Unix milliseconds, and 0 MEANS THE WIRE CARRIED NONE (a daemon predating
+     * the stamp). The activity row draws no time for 0 (phone-refit-playbook W7.4). No default,
+     * for [sessionId]'s reason.
+     */
+    val tsUnixMs: Long,
 )
 
 /**

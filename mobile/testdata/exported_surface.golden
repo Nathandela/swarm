@@ -49,6 +49,7 @@ field InboxItem.Title string
 field JournalEntry.Cursor int64
 field JournalEntry.Group string
 field JournalEntry.SessionID string
+field JournalEntry.TSUnixMs int64
 field JournalEntry.Type string
 field LaunchSpec.Agent string
 field LaunchSpec.Cols int
@@ -102,6 +103,7 @@ field Session.Present bool
 field Session.Provider string
 field Session.ProviderVersion string
 field Session.SessionInstance string
+field Session.StateSinceUnixMs int64
 field Session.StructuredChat bool
 field Session.TerminalControl bool
 field Session.Title string

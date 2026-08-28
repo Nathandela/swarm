@@ -156,12 +156,13 @@ object SettingsTag {
     const val CONNECTION_CLOCK = "settings.connection.clock"
 
     /**
-     * Wave R4's machine-switcher entry (bead agents-tracker-0ox9): the row that leads to the
-     * Computers screen, named by [MachinesPanelScreen.ENTRY_LABEL] -- the model's recorded copy,
-     * spent here rather than typed here (defect shape 1, agents-tracker-64rf).
+     * Wave R4's machine-switcher entry (bead agents-tracker-0ox9): since W7.5 the CHEVRON on the
+     * computer card that leads to the Computers screen, announcing [MachinesPanelScreen.ENTRY_LABEL]
+     * -- the model's recorded copy, spent here rather than typed here (defect shape 1,
+     * agents-tracker-64rf). It was a row of its own under the connection section.
      *
      * It is NOT [ROW] ([MACHINE_ROW]'s reason): that tag marks the push toggles, and a caller
-     * reaching for a preference must not be handed a navigation row.
+     * reaching for a preference must not be handed a navigation control.
      */
     const val MACHINES_ENTRY = "settings.machines.entry"
 
@@ -175,7 +176,11 @@ object SettingsTag {
      */
     const val REMOTE_ACCESS = "settings.connection.remote"
 
-    /** The parts whose ON-SCREEN ORDER is the recorded composition. */
+    /**
+     * The parts whose ON-SCREEN ORDER is the recorded composition. Since W7.5 that order is
+     * computer card ([CONNECTION_ROW]), remote access, the switches ([ROW]), then the pairing
+     * row ([MACHINE_ROW]) with its Replace control last.
+     */
     val COMPOSITION: Set<String> = setOf(NAV, SECTION_LABEL, MACHINE_ROW, CONNECTION_ROW, ROW)
 }
 
@@ -209,10 +214,11 @@ object SettingsTag {
  *  it says changes on the surface's clock and this panel redraws itself, so a panel that built one
  *  would rebuild the mark under whoever is pressing it.
  * @param onOpenMachines where the machine-switcher entry goes (bead agents-tracker-0ox9), or null
- *  for a host with no switcher to navigate to, which composes NO entry rather than a row that
- *  does nothing -- `navHeaderDrill(back = null)`'s own ruling, one screen over. The row's words
- *  are [MachinesPanelScreen]'s recorded copy, so the entry is findable by the name the model
- *  froze (defect shape 1).
+ *  for a host with no switcher to navigate to, which composes NO entry rather than a control that
+ *  does nothing -- `navHeaderDrill(back = null)`'s own ruling, one screen over. Since W7.5 the
+ *  entry is the chevron on the computer card ([computerCard]); it announces
+ *  [MachinesPanelScreen]'s recorded copy, so it is findable by the name the model froze (defect
+ *  shape 1).
  */
 fun settingsPanelView(
     context: Context,
@@ -235,52 +241,31 @@ fun settingsPanelView(
     // has nothing in flight to report.
     column.addView(navHeader(context, panel.title, null, status).apply { tag = SettingsTag.NAV })
 
-    // FIRST, above the preferences. This is where the pairing entry point lives once a phone is
-    // paired (agents-tracker-64rf), and the defect it answers is an owner not finding it -- so it
-    // is not put under two switches. The heading is a `.seclabel` like any other, so it carries the
-    // same tag: the section order is then readable off the composition.
-    panel.machineSection?.let { section ->
-        column.addView(
-            sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
-        )
-        column.addView(
-            settingsRow(
-                context = context,
-                label = section.row.label,
-                sublabel = section.row.sublabel,
-                // Row 13's arrangement, reused: the `.a2-no` treatment at chip metrics, for the
-                // same class of action as Revoke -- because it IS the revoke. The control is the
-                // caller's; this places it and tags it.
-                trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
-            ).apply { tag = SettingsTag.MACHINE_ROW }.screenAir(),
-        )
-    }
-
-    // UNDER THE PAIRING SECTION AND ABOVE THE PREFERENCES (agents-tracker-nx44.3). The row above
-    // says which computer this phone is PINNED to; this says whether that computer is currently
-    // reachable and whether what the app is showing came from it, so it qualifies the row above
-    // and has to follow it. The preferences are a different subject and trail both.
+    // (1) THE COMPUTER CARD LEADS (phone-refit-playbook W7.5): which computer this phone is
+    // attached to, whether it is reachable, and the way to the other computers -- one card, with
+    // the Computers chevron on it. The order used to be the view's own: Pairing (with Replace) ->
+    // Connection -> a separate Computers row -> Notifications, which put the one destructive
+    // control on the screen above everything a person comes here to read.
     panel.connection?.let { section ->
         column.addView(
             sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
         )
-        column.addView(
-            machineRow(
-                context = context,
-                machine = section.machine.name,
-                presence = section.machine.presenceLine,
-                mark = section.machine.mark,
-                // Row 11's `endpoint id` cell, or nothing where the model says the id is already
-                // in the name cell. The decision is the model's; this carries it.
-                endpoint = section.machine.endpoint,
-                // THE MODEL'S OWN CALL, carried rather than re-decided here. Null while the line
-                // under the mark still says presence in words, including whose word it is -- a
-                // described dot there would say it twice. Non-null exactly where a healthy machine
-                // has printed nothing, which is the one case left where the dot is the only thing
-                // on screen carrying the state.
-                presenceDescription = section.machine.presenceDescription,
-            ).apply { tag = SettingsTag.CONNECTION_ROW }.screenAir(),
-        )
+        val card = machineRow(
+            context = context,
+            machine = section.machine.name,
+            presence = section.machine.presenceLine,
+            mark = section.machine.mark,
+            // Row 11's `endpoint id` cell, or nothing where the model says the id is already
+            // in the name cell. The decision is the model's; this carries it.
+            endpoint = section.machine.endpoint,
+            // THE MODEL'S OWN CALL, carried rather than re-decided here. Null while the line
+            // under the mark still says presence in words, including whose word it is -- a
+            // described dot there would say it twice. Non-null exactly where a healthy machine
+            // has printed nothing, which is the one case left where the dot is the only thing
+            // on screen carrying the state.
+            presenceDescription = section.machine.presenceDescription,
+        ).apply { tag = SettingsTag.CONNECTION_ROW }
+        column.addView(computerCard(context, card, onOpenMachines).screenAir())
         // THE TWO FAULT LINES ARE PLACED ONLY WHEN THERE IS A FAULT. `notice` with an empty string
         // draws a `TextView` that still takes its line height and its gap, so an unconditional
         // placement puts a blank strip under the machine of every healthy phone -- the always-on
@@ -295,11 +280,10 @@ fun settingsPanelView(
                 notice(context, line).apply { tag = SettingsTag.CONNECTION_CLOCK }.screenAir(),
             )
         }
-        // ROW 12'S PANEL, AND ONLY WHERE THE SWITCH IS OFF (agents-tracker-2pnu F5). It is the
-        // last block in the section because it is the heaviest thing on the screen -- the one
-        // component in the kit with an `--p-err` border -- and it qualifies everything above it:
-        // a machine that refuses every command is why the phone is not getting what it asked for.
-        // The model decides whether there is anything to say; a null here is a working switch.
+        // (2) ROW 12'S PANEL, AND ONLY WHERE THE SWITCH IS OFF (agents-tracker-2pnu F5). It
+        // follows the card it qualifies: a machine that refuses every command is why the phone
+        // is not getting what it asked for. The model decides whether there is anything to say;
+        // a null here is a working switch, and a working switch draws nothing at all.
         section.remoteAccess?.let { row ->
             column.addView(
                 killSwitchPanel(
@@ -312,25 +296,7 @@ fun settingsPanelView(
         }
     }
 
-    // UNDER THE MACHINE CLUSTER AND ABOVE THE PREFERENCES (bead agents-tracker-0ox9). The two
-    // sections above are about the computer this phone is pinned to; this row is where the OTHER
-    // computers live -- add, switch, forget, and the aggregate inbox behind them -- so it follows
-    // the cluster it extends. It is a NAMED row in the composition, never an anonymous slot: the
-    // burial that made the pairing panel unfindable (agents-tracker-64rf) is the defect shape this
-    // placement exists to refuse.
-    onOpenMachines?.let { open ->
-        column.addView(
-            settingsRow(
-                context = context,
-                label = MachinesPanelScreen.ENTRY_LABEL,
-                sublabel = MachinesPanelScreen.ENTRY_SUBLABEL,
-            ).apply {
-                tag = SettingsTag.MACHINES_ENTRY
-                setOnClickListener { open() }
-            }.screenAir(),
-        )
-    }
-
+    // (3) THE PREFERENCES: two switches, then the disclosure and the fault notices about them.
     panel.sections.forEach { section ->
         column.addView(
             sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
@@ -377,9 +343,64 @@ fun settingsPanelView(
         )
     }
 
+    // (4) REPLACE THIS COMPUTER, LAST. The pairing row is the one destructive control on the
+    // screen (replacing revokes this device), so it trails everything a person reads and sets.
+    // The control itself is unchanged: the caller's, tagged [SettingsTag.REPLACE] once placed,
+    // carrying its facade verb and PB-SEC-12 clause 1's touch filter from construction.
+    panel.machineSection?.let { section ->
+        column.addView(
+            sectionLabel(context, section.heading).apply { tag = SettingsTag.SECTION_LABEL },
+        )
+        column.addView(
+            settingsRow(
+                context = context,
+                label = section.row.label,
+                sublabel = section.row.sublabel,
+                // Row 13's arrangement, reused: the `.a2-no` treatment at chip metrics, for the
+                // same class of action as Revoke -- because it IS the revoke. The control is the
+                // caller's; this places it and tags it.
+                trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
+            ).apply { tag = SettingsTag.MACHINE_ROW }.screenAir(),
+        )
+    }
+
     below?.let { column.addView(it) }
     return column
 }
+
+/**
+ * W7.5's computer card: the connection row, with the way to the Computers screen ON it.
+ *
+ * THE CHEVRON IS THE ENTRY (bead agents-tracker-0ox9's row, folded). It is a `ctaButton` of the
+ * MORE kind -- the kit's own secondary control, at the kit's own metrics -- drawn as the card's
+ * full-height end cell, announcing [MachinesPanelScreen.ENTRY_LABEL] so it is findable by the
+ * name the model froze (defect shape 1, agents-tracker-64rf). The card itself takes the same tap,
+ * so the whole row is the target and the glyph is the affordance. A host with no switcher to
+ * navigate to composes NO chevron rather than one that does nothing -- `navHeaderDrill(back =
+ * null)`'s ruling -- and then the card is just the card.
+ *
+ * NOTHING HERE IS A DIMENSION: the wrapper is a bare row, the card keeps its weight and the
+ * chevron its wrap width; every length is the kit's. The gap between the two is the chevron's own
+ * padding, which is why it is a bordered cell and not a floating glyph.
+ */
+private fun computerCard(context: Context, card: View, onOpenMachines: (() -> Unit)?): View {
+    val open = onOpenMachines ?: return card
+    card.setOnClickListener { open() }
+    val chevron = ctaButton(context, CHEVRON, CtaKind.MORE).apply {
+        tag = SettingsTag.MACHINES_ENTRY
+        contentDescription = MachinesPanelScreen.ENTRY_LABEL
+        setOnClickListener { open() }
+    }
+    return LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+        addView(card.apply { layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f) })
+        addView(chevron.apply { layoutParams = LinearLayout.LayoutParams(WRAP, MATCH) })
+    }
+}
+
+/** The forward chevron: copy, not a drawable, so a screen may say it. */
+private const val CHEVRON = "\u203A"
 
 /**
  * Make the row ONE accessibility node, which is derivation row 15's "the whole row is one >=48 dp

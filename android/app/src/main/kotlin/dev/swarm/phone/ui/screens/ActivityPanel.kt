@@ -2,13 +2,18 @@ package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.ui.JournalPageView
 import dev.swarm.phone.ui.JournalRow
+import dev.swarm.phone.ui.kit.ToolCard
+import java.text.DateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 /**
  * Phase B slice S25 -- PB-DS-9: the ACTIVITY screen's model.
  *
  * WHY THERE IS A MODEL BESIDE [JournalPageView]. That one answers what the PAGE is: the records,
  * where the next read resumes, and whether the stream they came from has a hole. This answers what
- * the SCREEN says about it -- the title, the section it renders under, what each record reads as,
+ * the SCREEN says about it -- the title, the sections it renders under, what each record reads as,
  * which word in it is emphasised, and what the screen says when the page is empty or holed. Every
  * one of those is copy or arrangement, and PB-DS-9 assigns both to the screen.
  *
@@ -16,53 +21,54 @@ import dev.swarm.phone.ui.JournalRow
  * ([SettingsPanelScreen], [PeekPanelScreen], [TriageInboxScreen]). No Android import, so the
  * interesting half is checkable without a device.
  *
- * ## What the mock draws that the journal cannot supply
+ * ## What the mock draws and what the journal supplies
  *
  * The retired mock's `renderActivity()` is evidence of INTENT and nothing more; `.arow` is not a
- * Substrate rule. It draws six rows, and three of the things it draws have no source on the wire.
- * `swarmmobile.JournalEntry` is `(Cursor, SessionID, Type, Group)` and that is the entire record.
- * Each of these is recorded here rather than filled in, because a screen that is pixel-accurate to
- * its design and still lying is the defect class this project has spent the most effort on
- * (ADR-007 B135, and §8.8 of the design doc).
+ * Substrate rule. It draws six rows, and each of the things it draws is recorded here against
+ * what the wire actually carries, because a screen that is pixel-accurate to its design and still
+ * lying is the defect class this project has spent the most effort on (ADR-007 B135, and §8.8 of
+ * the design doc).
  *
- * - **The `HH:MM` timestamp.** `internal/journal.Record` HAS a `TS time.Time`, and
- *   `protocol.JournalRecord` -- the wire form the phone is served -- DROPS IT. So there is no time
- *   on this handset to render, and the `Cursor` beside it is a monotonic sequence number, not a
- *   clock: formatting one as a time would be a fabricated fact wearing a real field's value.
- *   [ActivityEntry] therefore has no timestamp and the view passes none. The row's cell survives
- *   as an empty column at zero cost, because derivation row 14 makes that column wrap-content
- *   rather than the mock's fixed 52 dp -- see `activityRow`.
+ * - **The `HH:MM` timestamp** -- SUPPLIED SINCE W7.4. `protocol.JournalRecord` used to drop
+ *   `internal/journal.Record`'s `TS`; it now carries it (`ts`, omitted when zero), and
+ *   `JournalRow.tsUnixMs` is that stamp, 0 where the wire carried none. The time on a row is
+ *   `ToolCard.timestampLabel` over the DAEMON's stamp, "" for 0 -- and the `Cursor` beside it is
+ *   still a monotonic sequence number, not a clock: it is never formatted as a time, and a row
+ *   with no stamp draws no time rather than one manufactured on the handset.
  * - **The `While you were away` / `Informative` split.** Nothing in the journal marks a record as
  *   seen, acknowledged, salient or slept-through: there is no read cursor for the USER (the
  *   cursor is the transport's), no ack that reaches the phone, and no severity. The first heading
  *   is a claim about time the phone cannot make and the second is a claim about importance nobody
- *   computes. Reproducing them would be a grouping invented to match a drawing, so this panel
- *   renders ONE section. A salience split could be faked out of `Type` -- `presence` is chatter
- *   and a `group_transition` into `needs_input` is not -- and it would be a different split than
- *   the one the mock's words promise, which is worse than no split at all.
- * - **Which session an event is about.** This is the one gap that is not the wire's fault and it
- *   is the most damaging of the three: `swarmmobile.JournalEntry` DOES carry `SessionID`, and
- *   `FacadeBridge.journal` drops it on the way into [JournalRow]. So the feed can say a session
- *   was launched and cannot say which -- and the mock's emphasised span, which is the project
- *   name in every row it draws, has nothing real to be. Fixing it is one field on [JournalRow] and
- *   one line in `FacadeBridge`, in files this slice does not own.
+ *   computes. Reproducing them would be a grouping invented to match a drawing. What the wire DOES
+ *   support since W7.4 is a grouping by DAY, from the daemon's stamp: `Today`, `Yesterday`, then
+ *   the date, newest day first, with the rows the wire did not stamp in one trailing section under
+ *   the product's own name for the stream. A salience split could be faked out of `Type` --
+ *   `presence` is chatter and a `group_transition` into `needs_input` is not -- and it would be a
+ *   different split than the one the mock's words promise, which is worse than no split at all.
+ * - **Which session an event is about.** `swarmmobile.JournalEntry` carries `SessionID`, and for
+ *   a while `FacadeBridge.journal` dropped it on the way into [JournalRow], so the feed could say
+ *   a session was launched and not which -- and the mock's emphasised span, which is the project
+ *   name in every row it draws, had nothing real to be. It is one field on [JournalRow] and one
+ *   line in `FacadeBridge`, and since W7.4 it is also what tapping the row opens.
  *
  * ## What each row therefore says
  *
- * The record's `Type`, and its `Group` where it carries one, VERBATIM. That is not a shortfall of
- * effort, it is [dev.swarm.phone.ui.screens.InboxRow.need]'s own rule -- "the journal record type
- * verbatim, never an invented phrase" -- and the reason behind it is stronger here than there.
- * `swarmmobile` says `Type` and `Group` are "verbatim from the wire"; a table turning them into
- * English would have to fail loudly on a value it did not know, the way `Kit.groupColour` does,
- * and a server that adds a record type would then take the activity screen down. Rendering what
+ * `session · word` (W7.4), where the word is W5's vocabulary for what happened -- `started`,
+ * `finished`, `needs you`, `connection lost` -- and a `group_transition` reads by the Group it
+ * names, the inbox's own lookup one register down. A type this build does not know renders
+ * VERBATIM, which is [dev.swarm.phone.ui.screens.InboxRow.need]'s own rule -- "the journal record
+ * type verbatim, never an invented phrase" -- and the reason behind it is stronger here than
+ * there: a table that failed loudly on a value it did not know, the way `Kit.groupColour` does,
+ * would let a server that adds a record type take the activity screen down. Rendering what
  * arrived costs a reader some polish and cannot become a lie.
  */
 data class ActivityPanel(
     /** The activity tab's own `.pnav .big`. */
     val title: String,
     /**
-     * ONE section, always. See the class comment: the mock's two headings are claims about
-     * seen-ness and salience that nothing on the wire supports.
+     * One section per DAY the daemon stamped, newest day first, then one trailing section for the
+     * rows it did not stamp (W7.4). See the class comment: the mock's two headings are claims about
+     * seen-ness and salience that nothing on the wire supports; a day is a claim the stamp does.
      */
     val sections: List<ActivitySection>,
     /**
@@ -93,30 +99,31 @@ data class ActivitySection(
 /**
  * One journal record as the row renders it: derivation table row 14.
  *
- * THERE IS NO TIMESTAMP FIELD, and its absence is the assertion. The wire carries no time (class
- * comment), so a nullable field here would be a slot that is structurally always null and reads,
- * to the next person, as one somebody forgot to fill.
+ * THE TIME IS A CELL AND NOT PART OF [body], for `activityRow`'s reason: the sentence is copy the
+ * screen wrote and the cell is the daemon's stamp, and a test reading the body for a cursor must
+ * not mistake a clock for a number.
  */
 data class ActivityEntry(
     /** `JournalRow.cursor`. Identity and order, never rendered -- it is a sequence, not a time. */
     val cursor: Long,
-    /** The sentence the row shows: `Type`, and `Group` after it where the record carries one. */
+    /** `JournalRow.sessionId`, verbatim: what tapping the row opens (W7.4); "" for a session-neutral record. */
+    val sessionId: String,
+    /** `ToolCard.timestampLabel` over the daemon's stamp; "" where the wire carried none (W7.4). */
+    val time: String,
+    /** The sentence the row shows: the session, then W5's word for what happened. */
     val body: String,
     /**
      * The span of [body] that takes `.ln b`, or null where the record has nothing to emphasise.
      *
      * IT IS THE SESSION AND NOT AN INVENTED HIGHLIGHT. The mock emphasises the project name --
      * the thing each row is ABOUT -- and `SessionID` is the identifier this product has for that.
-     * It reaches the screen as of the `JournalRow.sessionId` fix; before it, this was the `Group`,
-     * because the facade carried the session and `FacadeBridge.journal` dropped it, so the feed
-     * could say a session launched and not which one.
      *
      * It suits the role: `.ln b` is MONOSPACE, and a wire token is what a monospace emphasis is
      * for -- an English phrase set in mono reads as a mistake.
      *
-     * Falls back to the `Group` where a record carries no session, and to null where it carries
-     * neither, rather than promoting the type for want of anything better -- which would put the
-     * eye on the one word every row shares.
+     * Null where a record carries no session (W7.4; it used to fall back to the Group, which the
+     * body no longer holds as a span of its own), rather than promoting the word for want of
+     * anything better -- which would put the eye on the one thing every row of its kind shares.
      */
     val emphasis: String?,
 )
@@ -127,15 +134,43 @@ object ActivityPanelScreen {
     private const val TITLE = "Activity"
 
     /**
-     * The one section's heading.
+     * The unstamped section's heading (W7.4: the trailing section, for rows the wire did not
+     * stamp; before W7.4 the one section).
      *
      * AUTHORED, AND NAMING THE SOURCE RATHER THAN THE READER'S SITUATION. The mock's two headings
      * are dropped for the reason the class comment gives, and a replacement had to say something
      * true about what is under it. "Journal" is the product's own name for this record stream --
      * `internal/journal`, `App.ReadJournal`, `JournalPage` -- so it is a word the log can be
-     * checked against, and it makes no claim about when the user last looked.
+     * checked against, and it makes no claim about when the user last looked, nor about a day.
      */
     private const val SECTION = "Journal"
+
+    /** The day headings a stamp supports (W7.4). Any other day is its date. */
+    private const val TODAY = "Today"
+    private const val YESTERDAY = "Yesterday"
+
+    /**
+     * W5's vocabulary for what happened, by record type; a `group_transition` reads by the Group
+     * it names ([GROUP_WORDS]). The inbox's own table (`TriageInboxScreen.needCopy`) is the same
+     * lookup one register up; this one is lower case because it sits mid-sentence after the id.
+     */
+    private val WORDS: Map<String, String> = mapOf(
+        "launched" to "started",
+        "exited" to "finished",
+        "lost" to "connection lost",
+        "deleted" to "deleted",
+        "presence" to "connection updated",
+        "roster" to "synced",
+    )
+
+    private val GROUP_WORDS: Map<String, String> = mapOf(
+        "needs_input" to "needs you",
+        "working" to "working",
+        "ready_for_review" to "ready for review",
+        "completed" to "done",
+    )
+
+    private const val GROUP_TRANSITION = "group_transition"
 
     /**
      * What the section says when the page is empty.
@@ -159,28 +194,72 @@ object ActivityPanelScreen {
         "Some entries are missing: the event stream from your machine had a gap that has not " +
             "been repaired, so this is not a complete history."
 
-    /** The separator between a record's type and its group. `PeekPanelScreen` sets the idiom. */
+    /** The separator between a record's session and its word. `PeekPanelScreen` sets the idiom. */
     private const val FIELD_SEPARATOR = " · "
 
-    fun of(page: JournalPageView): ActivityPanel = ActivityPanel(
-        title = TITLE,
-        sections = listOf(
-            ActivitySection(
-                heading = SECTION,
-                // NEWEST FIRST, which is the one arrangement decision this screen makes.
-                // `ReadJournal` walks the page cache in ascending cursor order, because that is
-                // what a cursor is for; a feed is read from the top and the top is what just
-                // happened. The mock draws the same order (09:38 down to 08:55) and it is the
-                // only part of its composition this panel keeps unchanged.
-                rows = page.rows.sortedByDescending { it.cursor }.map(::entryFor),
-                emptyCopy = EMPTY,
-            ),
-        ),
-        staleNotice = if (page.stale) STALE_NOTICE else "",
-    )
+    /**
+     * @param nowUnixMs this phone's clock, for naming a day `Today` or `Yesterday` alone (W7.4);
+     *  the stamps themselves are the daemon's. A parameter so the JVM suite can freeze the words.
+     */
+    fun of(page: JournalPageView, nowUnixMs: Long = System.currentTimeMillis()): ActivityPanel {
+        // NEWEST FIRST, which is the one arrangement decision this screen makes. `ReadJournal`
+        // walks the page cache in ascending cursor order, because that is what a cursor is for;
+        // a feed is read from the top and the top is what just happened. The mock draws the same
+        // order (09:38 down to 08:55) and it is the only part of its composition this panel keeps
+        // unchanged. W7.4 adds the day above it: the days are ordered by the stamp and the rows
+        // within a day still by cursor, so two clocks never argue over one list.
+        val newestFirst = page.rows.sortedByDescending { it.cursor }
+        val (stamped, unstamped) = newestFirst.partition { it.tsUnixMs > 0L }
+        val days = stamped.groupBy { dayOf(it.tsUnixMs) }.entries
+            .sortedByDescending { it.key }
+            .map { (day, rows) ->
+                ActivitySection(
+                    heading = dayHeading(day, rows.first().tsUnixMs, nowUnixMs),
+                    rows = rows.map(::entryFor),
+                    emptyCopy = EMPTY,
+                )
+            }
+        // THE UNSTAMPED ROWS TRAIL, under the stream's own name: a daemon predating the stamp
+        // sends none, and its whole page lands here -- which is exactly what this screen drew
+        // before W7.4. An empty page is this section too, so row 8's empty state has a heading.
+        val trailing = if (unstamped.isNotEmpty() || days.isEmpty()) {
+            listOf(ActivitySection(heading = SECTION, rows = unstamped.map(::entryFor), emptyCopy = EMPTY))
+        } else {
+            emptyList()
+        }
+        return ActivityPanel(
+            title = TITLE,
+            sections = days + trailing,
+            staleNotice = if (page.stale) STALE_NOTICE else "",
+        )
+    }
+
+    /** The calendar day a stamp falls on, in this phone's zone: `year * 1000 + dayOfYear`. */
+    private fun dayOf(unixMs: Long): Long = Calendar.getInstance().run {
+        timeInMillis = unixMs
+        get(Calendar.YEAR) * 1000L + get(Calendar.DAY_OF_YEAR)
+    }
+
+    private fun dayHeading(day: Long, unixMs: Long, nowUnixMs: Long): String {
+        val yesterday = Calendar.getInstance().run {
+            timeInMillis = nowUnixMs
+            add(Calendar.DAY_OF_YEAR, -1)
+            timeInMillis
+        }
+        return when (day) {
+            dayOf(nowUnixMs) -> TODAY
+            dayOf(yesterday) -> YESTERDAY
+            else -> DateFormat.getDateInstance(DateFormat.MEDIUM, Locale.getDefault()).format(Date(unixMs))
+        }
+    }
+
+    private fun wordFor(row: JournalRow): String = when (row.type) {
+        GROUP_TRANSITION -> GROUP_WORDS[row.group] ?: row.type
+        else -> WORDS[row.type] ?: row.type
+    }
 
     /**
-     * @return the record as one sentence, plus the span of it the row emphasises.
+     * @return the record as one sentence, its time, plus the span of it the row emphasises.
      *
      * The emphasis is a SUBSTRING of the body rather than a fragment beside it, which is what
      * `activityRow` takes and why: `.ln b` is inline, so the component needs to know which part of
@@ -188,13 +267,12 @@ object ActivityPanelScreen {
      */
     private fun entryFor(row: JournalRow): ActivityEntry {
         val session = row.sessionId.ifEmpty { null }
-        val group = row.group.ifEmpty { null }
         return ActivityEntry(
             cursor = row.cursor,
-            body = listOfNotNull(session, row.type, group).joinToString(FIELD_SEPARATOR),
-            // The SESSION, now that one reaches this screen. It is what the mock emphasises -- the
-            // thing the row is about -- and it falls back to the Group only where the record
-            // carries no session, so the eye still lands on a wire token rather than on a type.
+            sessionId = row.sessionId,
+            time = ToolCard.timestampLabel(row.tsUnixMs),
+            body = listOfNotNull(session, wordFor(row)).joinToString(FIELD_SEPARATOR),
+            // The SESSION: what the mock emphasises -- the thing the row is about.
             //
             // IT STAYS THE RAW SESSION ID, and that is agents-tracker-ksvb.1's explicit ruling
             // rather than a site nobody got to. Every other surface in this app now prefers the
@@ -205,10 +283,11 @@ object ActivityPanelScreen {
             // the id. A label here would make the one surface whose job is correlation the one
             // surface that cannot be correlated.
             //
-            // `JournalRow` also carries no title to prefer, and that is downstream of the same
-            // ruling rather than the reason for it: `swarmmobile.JournalEntry` is the wire's
-            // record shape, and a name on it would exist only to be ignored here.
-            emphasis = session ?: group,
+            // NULL WHERE A RECORD CARRIES NO SESSION (W7.4). It used to fall back to the Group, and
+            // the Group is now folded into the word, so a Group emphasis would name a span the body
+            // no longer holds -- which `activityRow` refuses, loudly. Promoting the word instead
+            // would put the eye on the one thing every row of its kind shares.
+            emphasis = session,
         )
     }
 }

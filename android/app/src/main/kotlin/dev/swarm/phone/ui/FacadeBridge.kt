@@ -188,6 +188,8 @@ class FacadeBridge(private val app: App) {
                     sessionId = entry.getSessionID(),
                     type = entry.getType(),
                     group = entry.getGroup(),
+                    // The daemon's own record stamp, 0 where the wire carried none (W7.4).
+                    tsUnixMs = entry.getTSUnixMs(),
                 )
             },
             nextCursor = page.nextCursor(),
@@ -712,6 +714,8 @@ class FacadeBridge(private val app: App) {
         // fact, not a gap to fill: substituting the title or the id here would put a fabricated
         // identity in the one cell a reader trusts to name the agent.
         agent = session.getAgent(),
+        // The machine's stamp of the current state, 0 where the wire carried none (W7.1).
+        stateSinceUnixMs = session.getStateSinceUnixMs(),
     )
 
     /**

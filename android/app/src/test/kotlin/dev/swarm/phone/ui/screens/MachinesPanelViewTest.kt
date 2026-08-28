@@ -7,6 +7,7 @@ import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,6 +102,8 @@ class MachinesPanelViewTest {
     fun addComputerIsFindableByItsRecordedCopyAndFires() {
         var added = 0
         val screen = view(listOf(row("m-a", "laptop")), onAddComputer = { added++ })
+        // W7.6: the form and its CTA are behind the header's Add action.
+        screen.tapTagged(MachinesTag.ADD_TOGGLE)
         screen.tapControl(MachinesPanelScreen.ADD_LABEL)
         assertEquals(
             "pressing '${MachinesPanelScreen.ADD_LABEL}' did nothing; playbook 4.1 step 4 is " +
@@ -143,6 +146,8 @@ class MachinesPanelViewTest {
             listOf(row("m-a", "laptop")),
             onForgetComputer = { forgotten += it },
         )
+        // W7.6: Forget is behind the row's overflow menu, not on the row.
+        screen.tapTagged(MachinesTag.ROW_MENU)
         screen.tapControl(MachinesPanelScreen.FORGET_LABEL)
         assertEquals(
             "'${MachinesPanelScreen.FORGET_LABEL}' did not reach the row's machine id; " +
@@ -264,6 +269,7 @@ class MachinesPanelViewTest {
             listOf(brokenRow("m-b", "desk", reason = "the sealed blob refused to open")),
             onForgetComputer = { forgotten += it },
         )
+        screen.tapTagged(MachinesTag.ROW_MENU)
         screen.tapControl(MachinesPanelScreen.FORGET_LABEL)
         assertEquals(
             "the broken row does not offer Forget; forget-or-re-pair are the broken pairing's " +
@@ -272,6 +278,145 @@ class MachinesPanelViewTest {
             listOf("m-b"),
             forgotten,
         )
+    }
+
+    // -------------------------------------------------------------------
+    // phone-refit-playbook W7.6: Add behind the header, Forget behind the row.
+    // FAILING-FIRST (TDD RED, GG-5).
+    // -------------------------------------------------------------------
+
+    @Test
+    fun `the add form is hidden until the header action is pressed`() {
+        val form = TextView(context).apply { text = "form-probe" }
+        val screen = machinesPanelView(
+            context = context,
+            panel = MachinesPanelScreen.of(listOf(row("m-a", "laptop")), cap = 3),
+            onAddComputer = {},
+            onSwitchComputer = {},
+            onForgetComputer = {},
+            onOpenGlobalInbox = {},
+            addForm = form,
+            nowUnixMs = 10_000L,
+        )
+        val toggle = screen.flatten().firstOrNull { it.tag == MachinesTag.ADD_TOGGLE }
+        assertNotNull("the header carries no Add action (MachinesTag.ADD_TOGGLE)", toggle)
+        assertEquals("Add", (toggle as TextView).text.toString())
+
+        // ON SCREEN MEANS COMPOSED. PB-DS-9's fence forbids a screen hiding what it added, so
+        // the form block is composed by the action and removed by it, never made invisible.
+        assertFalse(
+            "the add form is on screen at rest; W7.6 puts it behind the header's Add action so " +
+                "a healthy panel is its rows and nothing below them",
+            screen.isShowing(form),
+        )
+        assertTrue(
+            "the form's CTA is on screen while the form is not",
+            screen.texts().none { it == MachinesPanelScreen.ADD_LABEL },
+        )
+
+        toggle.performClick()
+        assertTrue("pressing Add did not compose the form", screen.isShowing(form))
+        assertTrue(
+            "pressing Add did not compose the form's CTA",
+            screen.texts().any { it == MachinesPanelScreen.ADD_LABEL },
+        )
+
+        toggle.performClick()
+        assertFalse("pressing Add again did not remove the form", screen.isShowing(form))
+    }
+
+    @Test
+    fun `forget is not on the row, it is in the row menu`() {
+        val forgotten = mutableListOf<String>()
+        val screen = view(listOf(row("m-a", "laptop")), onForgetComputer = { forgotten += it })
+
+        assertTrue(
+            "'${MachinesPanelScreen.FORGET_LABEL}' is drawn on the row at rest; the destructive " +
+                "control belongs behind the row's overflow menu (W7.6)",
+            screen.texts().none { it == MachinesPanelScreen.FORGET_LABEL },
+        )
+        screen.tapTagged(MachinesTag.ROW_MENU)
+        val forget = screen.clickableFor(MachinesPanelScreen.FORGET_LABEL)
+        assertTrue(
+            "the menu's Forget row does not filter obscured touches (PB-SEC-12 clause 1); the " +
+                "control moved and its defence did not move with it",
+            forget.filterTouchesWhenObscured,
+        )
+        forget.performClick()
+        assertEquals(listOf("m-a"), forgotten)
+    }
+
+    @Test
+    fun `a healthy two-computer panel draws two rows and nothing below them`() {
+        val screen = view(listOf(row("m-a", "laptop"), row("m-b", "desk"))) as ViewGroup
+        val rows = screen.flatten().filter { it.tag == MachinesTag.ROW }
+        assertEquals(2, rows.size)
+
+        val column = (0 until screen.childCount).map { screen.getChildAt(it) }
+        val list = column.single { child -> child is ViewGroup && rows.all { it.parent === child } }
+        val below = column.drop(column.indexOf(list) + 1).filter { it.visibility == View.VISIBLE }
+        assertEquals(
+            "a healthy panel draws ${below.size} visible view(s) under its rows: " +
+                "${below.map { (it as? TextView)?.text ?: it.javaClass.simpleName }}; W7.6 " +
+                "wants two rows and nothing below them",
+            emptyList<View>(),
+            below,
+        )
+    }
+
+    /** [view] is on this screen: composed under it, with nothing along the way hidden. */
+    @Test
+    fun `the open add form survives a redraw`() {
+        // W7 review defect: the surface rebuilds this view whenever the panel or the minute
+        // changes, so a form composed only by the toggle's own click vanished under a user who
+        // was typing into it. The open state lives on the SURFACE (beside the form's fields),
+        // arrives here as `addFormOpen`, and the toggle flips it through `onToggleAddForm`.
+        val form = TextView(context).apply { text = "form-probe" }
+        var open = false
+        fun draw(): View = machinesPanelView(
+            context = context,
+            panel = MachinesPanelScreen.of(listOf(row("m-a", "laptop")), cap = 3),
+            onAddComputer = {},
+            onSwitchComputer = {},
+            onForgetComputer = {},
+            onOpenGlobalInbox = {},
+            addForm = form.also { (it.parent as? ViewGroup)?.removeView(it) },
+            addFormOpen = open,
+            onToggleAddForm = { open = !open },
+            nowUnixMs = 10_000L,
+        )
+
+        val first = draw()
+        assertFalse("the form is on screen before Add was pressed", first.isShowing(form))
+        first.tapTagged(MachinesTag.ADD_TOGGLE)
+        assertTrue("pressing Add did not flip the surface's open state", open)
+
+        val redrawn = draw()
+        assertTrue(
+            "the open add form collapsed on the next redraw; the block must be composed at draw " +
+                "from the surface's state, not only by the toggle's click",
+            redrawn.isShowing(form),
+        )
+
+        redrawn.tapTagged(MachinesTag.ADD_TOGGLE)
+        assertFalse("pressing Add again did not close the form on the surface", open)
+        assertFalse("a closed form is still on screen after a redraw", draw().isShowing(form))
+    }
+
+    private fun View.isShowing(view: View): Boolean {
+        if (!flatten().contains(view)) return false
+        var v: View? = view
+        while (v != null && v !== this) {
+            if (v.visibility != View.VISIBLE) return false
+            v = v.parent as? View
+        }
+        return true
+    }
+
+    private fun View.tapTagged(tag: String) {
+        val control = flatten().firstOrNull { it.tag == tag }
+        assertNotNull("no view on the machines screen carries the tag $tag", control)
+        control!!.performClick()
     }
 
     // -------------------------------------------------------------------

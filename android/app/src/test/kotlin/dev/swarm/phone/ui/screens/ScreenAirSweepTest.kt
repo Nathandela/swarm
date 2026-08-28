@@ -637,6 +637,7 @@ class ScreenAirSweepTest {
                         need = "waiting on you",
                         present = true,
                         agent = "claude",
+                        stateSinceUnixMs = 0L,
                     ),
                 ),
                 journalStale = true,
@@ -653,7 +654,7 @@ class ScreenAirSweepTest {
             sections = listOf(
                 ActivitySection(
                     heading = "TODAY",
-                    rows = listOf(ActivityEntry(cursor = 1, body = "api launched", emphasis = "api")),
+                    rows = listOf(ActivityEntry(cursor = 1, sessionId = "api", time = "09:38", body = "api launched", emphasis = "api")),
                     emptyCopy = "Nothing has happened yet.",
                 ),
                 ActivitySection(heading = "EARLIER", rows = emptyList(), emptyCopy = "Nothing here."),

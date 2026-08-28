@@ -112,7 +112,7 @@ class HumanNamesTest {
 
     private fun roster(vararg ids: String) = TriageInbox.from(
         ids.map { id ->
-            SessionRow(id = id, title = "api refactor", group = "working", need = "launched", present = true, agent = "claude")
+            SessionRow(id = id, title = "api refactor", group = "working", need = "launched", present = true, agent = "claude", stateSinceUnixMs = 0L)
         },
         journalStale = false,
     )
@@ -205,6 +205,7 @@ class HumanNamesTest {
                     need = "group_transition",
                     present = true,
                     agent = "claude",
+                    stateSinceUnixMs = 0L,
                 ),
             ),
             journalStale = false,
@@ -240,7 +241,7 @@ class HumanNamesTest {
         val panel = ActivityPanelScreen.of(
             JournalPageView(
                 rows = listOf(
-                    JournalRow(cursor = 9, sessionId = "ep-1a2b3c4d/kx7q2m4v9p1s6t8w", type = "launched", group = "working"),
+                    JournalRow(cursor = 9, sessionId = "ep-1a2b3c4d/kx7q2m4v9p1s6t8w", type = "launched", group = "working", tsUnixMs = 0L),
                 ),
                 nextCursor = 9,
                 stale = false,

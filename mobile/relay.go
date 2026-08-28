@@ -1324,6 +1324,7 @@ func (a *App) onJournal(rec schema.JournalRecord) {
 		SessionID: rec.SessionID,
 		Type:      rec.Type,
 		Group:     string(rec.Group),
+		TSUnixMs:  unixMs(rec.TS), // the daemon's stamp, 0 where the wire carried none (W7.4)
 	}
 	a.mu.Lock()
 	a.journal = append(a.journal, entry)

@@ -104,8 +104,19 @@ type Record struct {
 	//
 	// Adding it did NOT bump SchemaVersion, and internal/journal/namefield_test.go pins why in
 	// both directions, exactly as agentfield_test.go did for Agent.
-	Name    string          `json:"name,omitempty"`
-	Payload json.RawMessage `json:"payload,omitempty"` // opaque per-type extra
+	Name string `json:"name,omitempty"`
+	// StateSince is the MACHINE's own stamp of when the session entered its CURRENT state --
+	// persist.Meta.EffectiveGroupEnteredAt(), with that method's own fallbacks for records
+	// written before GroupEnteredAt existed -- set at exactly the sites Agent and Name are
+	// (the roster snapshot and the four journalworthy transitions), so the phone can age a
+	// row from a clock it did not invent (phone-refit-playbook W7.1). It is NOT LastActivity:
+	// that is written only at launch and exit, so "Waiting on you · 3h" would have meant
+	// "launched 3h ago" and twins launched together would age identically. Zero means the
+	// meta carried no instant at all, and it is omitzero so a record without one serialises
+	// as it did before the field existed. It is distinct from TS, which is when THIS RECORD
+	// was appended.
+	StateSince time.Time       `json:"state_since,omitzero"`
+	Payload    json.RawMessage `json:"payload,omitempty"` // opaque per-type extra
 }
 
 // Resume is the atomic result of ReadFrom: the snapshot roster as of the read

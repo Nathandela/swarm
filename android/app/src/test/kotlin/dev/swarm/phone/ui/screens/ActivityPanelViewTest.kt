@@ -41,16 +41,67 @@ class ActivityPanelViewTest {
 
     private fun panel(
         rows: List<JournalRow> = listOf(
-            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = ""),
-            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "needs_input"),
+            JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = "", tsUnixMs = 0L),
+            JournalRow(cursor = 2, sessionId = "blog", type = "group_transition", group = "needs_input", tsUnixMs = 0L),
         ),
         stale: Boolean = false,
     ) = ActivityPanelScreen.of(
         JournalPageView(rows = rows, nextCursor = rows.size.toLong(), stale = stale),
     )
 
-    private fun view(panel: ActivityPanel, below: View? = null): View =
-        activityPanelView(context = context, panel = panel, below = below)
+    private fun view(
+        panel: ActivityPanel,
+        below: View? = null,
+        onSelectSession: (String) -> Unit = {},
+    ): View = activityPanelView(
+        context = context,
+        panel = panel,
+        below = below,
+        onSelectSession = onSelectSession,
+    )
+
+    // ---- W7.4: tappable rows, and the time cell for a stamped row ------------
+    //
+    // FAILING-FIRST (TDD RED, GG-5).
+
+    @Test
+    fun `a row opens its session`() {
+        var chosen: String? = null
+        val root = view(panel(), onSelectSession = { chosen = it })
+
+        // Newest first: cursor 2 (blog) is drawn above cursor 1 (quanthome).
+        root.allTagged(ActivityTag.ROW)[1].performClick()
+
+        assertEquals(
+            "tapping an activity row did not open the session it names, or opened the wrong one",
+            "quanthome",
+            chosen,
+        )
+    }
+
+    @Test
+    fun `a stamped row draws its time under its day heading`() {
+        val now = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.AUGUST, 28, 12, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val ts = now - 60 * 60_000L
+        val stamped = ActivityPanelScreen.of(
+            JournalPageView(
+                rows = listOf(JournalRow(cursor = 1, sessionId = "quanthome", type = "launched", group = "", tsUnixMs = ts)),
+                nextCursor = 1,
+                stale = false,
+            ),
+            nowUnixMs = now,
+        )
+        val root = view(stamped)
+
+        assertEquals(listOf("Today"), root.allTagged(ActivityTag.SECTION_LABEL).map { textOf(it) })
+        assertEquals(
+            listOf(dev.swarm.phone.ui.kit.ToolCard.timestampLabel(ts)),
+            root.allTagged(KitTag.ACTIVITY_TIME).map { textOf(it) },
+        )
+    }
 
     private fun View.allTagged(tag: String): List<View> {
         val found = mutableListOf<View>()

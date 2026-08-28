@@ -897,6 +897,17 @@ class PhoneSurface(
      */
     private var machinesAgeMinute = 0L
 
+    /**
+     * Whether the Computers screen's add block is open (W7 review): held HERE, beside the form's
+     * own fields in [addComputerHost], because [drawMachines] rebuilds the view whenever the panel
+     * or the minute changes and a block that only the toggle's click composed vanished under a
+     * user who was typing. The view composes the block at draw from this, and [toggleAddForm]
+     * is how the header's action flips it. `machinesAddFormDrawn` is the value the last draw
+     * used, so a flip is a redraw like any other change.
+     */
+    private var addFormOpen = false
+    private var machinesAddFormDrawn = false
+
     /** What the aggregate inbox last drew, for [inboxDrawn]'s reason. */
     private var globalInboxDrawn: List<GlobalInboxRowModel>? = null
 
@@ -3591,8 +3602,10 @@ class PhoneSurface(
         // which has already written PB-APP-9's routed failure onto [status]; this is the same
         // sentence the Inbox tab already carries, not a second one invented here.
         hostContent(
-            panel?.let { activityPanelView(activity, it, status = statusSlot()) }
-                ?: emptyState(activity, status.text.toString()),
+            panel?.let {
+                // W7.4: a row is a way into its session, by the inbox row's own rule.
+                activityPanelView(activity, it, status = statusSlot(), onSelectSession = ::selectSession)
+            } ?: emptyState(activity, status.text.toString()),
         )
     }
 
@@ -3641,12 +3654,13 @@ class PhoneSurface(
         val now = System.currentTimeMillis()
         val minute = now / 60_000L
         if (panel == machinesDrawn && minute == machinesAgeMinute && globalInboxDrawn == null &&
-            contentShows == Destination.SETTINGS
+            addFormOpen == machinesAddFormDrawn && contentShows == Destination.SETTINGS
         ) {
             return
         }
         machinesDrawn = panel
         machinesAgeMinute = minute
+        machinesAddFormDrawn = addFormOpen
         globalInboxDrawn = null
         hostContent(
             machinesPanelView(
@@ -3658,9 +3672,16 @@ class PhoneSurface(
                 onOpenGlobalInbox = ::openGlobalInbox,
                 onBack = ::closeMachines,
                 addForm = addComputerSlot(),
+                addFormOpen = addFormOpen,
+                onToggleAddForm = ::toggleAddForm,
                 nowUnixMs = now,
             ),
         )
+    }
+
+    /** The Computers header's Add action: flip the surface's state; the view shows the press itself. */
+    private fun toggleAddForm() {
+        addFormOpen = !addFormOpen
     }
 
     /**
