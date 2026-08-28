@@ -436,3 +436,146 @@ d69bbcfa Drawing sheet: Slate palette, per ADR-021 (W5.4)
   table row, drawn as a notice with no well; the noun moved to "your computer".
 - `PairOnlyScreen`: a revoke notice that also reports a purge failure puts the purge sentence
   between the colon and the well (the notice is one string); an edge case, recorded.
+
+## Rulings landed after the first push (`992f2b00`)
+
+Three orchestrator rulings arrived after the evidence above was committed and pushed; each landed
+as its own commit, then the gates were re-run and this addendum written.
+
+### The s24 inventory edit, reverted (`9fcdc6c1`)
+
+The 2-line edit dropped `TranscriptView.kt`'s required `sectionLabel` row from
+`android/gate/s24_screens_test.go`'s PB-DS-6 kit-reach inventory -- a composition requirement
+W5.3's label removal made false, not a literal the table moved. Per the rule ("anything but a
+literal the wave's table moved: revert it and stop on it") it is reverted and stopped on:
+`TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit` is red on the branch
+(`TranscriptView.kt: does not reach sectionLabel -- the heading over the conversation`) until the
+orchestrator rules on the row.
+
+### The w6o3 gate, amended per ruling (a) (`b0d5e40d`)
+
+Changed anchor, guarantee preserved: the gate's guarantee is the ORDER (the remedy is stated
+before the control that needs it), not the sentence. `w6o3CopyFaults` reads the four-part
+`PairOnlyCopy(title, body, control, command)`; both machine-side steps must be in the command
+slot, must not be in the body (W5.1 as a fence), must not be on the control; `w6o3Text` resolves
+a `$CONST` template inside a literal so the well's two lines stay spelled once; a new
+`w6o3OrderFaults` reads `PairOnlyView.kt` and requires `monoWell(context, copy.command)` between
+`PairOnlyTag.BODY` and `PairOnlyTag.CTA`. `TestW6O3_TheCopyScanDiscriminates` cuts the empty
+well, the steps in the body, the steps on the control and the three-part copy;
+`TestW6O3_TheOrderScanDiscriminates` cuts the well below the control and no well.
+
+RED (the gate before the amendment, from the first `go test -race ./...` run):
+
+```
+--- FAIL: TestW6O3_TheRemedyIsStatedBeforeTheControlThatNeedsIt (0.00s)
+    w6o3_terminalpaironly_test.go:287: agents-tracker-w6o3: the repair_required screen offers a bare pairing control:
+          dev/swarm/phone/ui/screens/PairOnlyScreen.kt: the REPAIR_REQUIRED arm does not compose a three-part PairOnlyCopy, so this fence cannot tell the body from the control
+```
+
+GREEN: the five `TestW6O3_*` pass. Negative controls, in place on the tree, each restored with
+`git checkout --` (0 dirty after, gate green after):
+
+```
+== control 1: the commands back in the body sentence (REPAIR_REQUIRED_CAUSE + " $UNREGISTER_COMMANDS")
+    PairOnlyScreen.kt: repair_required puts `swarm remote devices` in the BODY sentence. A command is a well's text and never a sentence's (phone refit W5.1): ...
+    PairOnlyScreen.kt: repair_required puts `swarm remote revoke` in the BODY sentence. ...
+== control 2: the command slot emptied (command = "")
+    PairOnlyScreen.kt: repair_required's well never names `swarm remote devices`. The machine still holds this device's registration and `swarm remote pair` is refused while it does (PB-STATE-10), ...
+    PairOnlyScreen.kt: repair_required's well never names `swarm remote revoke`. ...
+== control 3: the well drawn below the CTA (the `copy.command` block moved after the ctaButton)
+    PairOnlyView.kt: the command's well is drawn outside the body-then-control order (body at 2808, well at 3646, control at 2940). A remedy shown after the control is a decoration, ...
+```
+
+`{device}` out of reach (accepted by the ruling): the well carries `swarm remote devices` then
+`swarm remote revoke <device-id>`, one per line; recorded as a table row applied differently.
+
+### W5.2 names the machine where the row is known (`86ff83eb`)
+
+Tests first: `MachinesPanelRound2Test` asserts `FORGET_CONFIRM("desk")` == "Forget desk? You can
+pair it again later."; `MachinesPanelRound3Test` asserts `ADD_CONFIRM("laptop")` == "Add laptop?
+The app reconnects for a moment."; `SessionDetailVerdictTest` asserts
+`historyCapacityNotice("MacBookPro")` names it; `SessionDetailHeaderTest` gains `the panel
+carries the machine label it was built from`.
+
+RED (lane `w52fu-red`, compile):
+
+```
+e: MachinesPanelRound2Test.kt:55:33 Expression 'FORGET_CONFIRM' of type 'String' cannot be invoked as a function.
+e: MachinesPanelRound3Test.kt:161:33 Expression 'ADD_CONFIRM' of type 'String' cannot be invoked as a function.
+e: SessionDetailHeaderTest.kt:424:59 Unresolved reference 'machineLabel'.
+e: SessionDetailVerdictTest.kt:163:55 Too many arguments for 'fun historyCapacityNotice(): String'.
+```
+
+GREEN (lane `w52fu-green`): `tests=69 failures=0` over MachinesPanelRound2Test,
+MachinesPanelRound3Test, MachinesPanelViewTest, MachinesPanelViewRound3Test,
+SessionDetailVerdictTest, SessionDetailHeaderTest, SessionDetailPanelTest; `TestR4D3*` green.
+
+Applied differently, and why: `FORGET_CONFIRM` and `ADD_CONFIRM` are function-typed `val`s
+under their old names rather than renamed functions, because `android/gate/r4_d3_round2_test.go`
+and `r4_d3_round3_test.go` require the token in `forgetComputer`/`addComputer`'s block and a
+`(const )?val FORGET_CONFIRM` declaration that production spends. The forget name is the pressed
+row's `displayName` looked up in `machinesDrawn` (the press is on a drawn row; the id is what
+the callback carries); the add name is the typed name, or the typed id. `historyCapacityNotice`
+names the drawn panel's `machineLabel` only where the drawn panel is the session whose history
+hit capacity (`detailDrawn?.takeIf { it.sessionId == target }`), "your computer" otherwise; the
+panel gained the field because the label was composed at `PhoneSurface:2939` into a
+`SessionDetail` the surface does not retain. `LaunchPresetScreen` stays "your computer" (ruled).
+
+Negative control for the follow-up (lane `w52fu-controls`; `FORGET_CONFIRM` and
+`historyCapacityNotice` made to ignore the name; both files restored, 0 dirty):
+
+```
+FAILURE MachinesPanelRound2Test > theForgetQuestionNamesWhatItDestroysAndWhatItDoesNot
+    org.junit.ComparisonFailure: ... expected:<Forget [desk]? You can pair it ag...> but was:<Forget [this computer]? ...>
+FAILURE SessionDetailVerdictTest > the phone says why it stopped offering more history, rather than just stopping
+    java.lang.AssertionError: the sentence does not name the computer the rest is on when the screen knows it (W5.2)
+```
+
+### Changed assertions and anchors from the rulings
+
+| step | file | before | after |
+|---|---|---|---|
+| ruling (a) | `android/gate/w6o3_terminalpaironly_test.go` | `w6o3CopyFaults`: three-part `PairOnlyCopy`, both steps required IN the body, forbidden on the control | four-part copy; both steps required in the `command` slot, forbidden in the body and on the control; `w6o3OrderFaults` over `PairOnlyView.kt` (well between BODY and CTA); discriminators for each cut. Guarantee preserved: the remedy is stated before the control. |
+| W5.2 follow-up | `ui/screens/MachinesPanelRound2Test.kt` | `"Forget this computer? You can pair it again later.", MachinesPanelScreen.FORGET_CONFIRM` | `"Forget desk? You can pair it again later.", MachinesPanelScreen.FORGET_CONFIRM("desk")` |
+| W5.2 follow-up | `ui/screens/MachinesPanelRound3Test.kt` | `"Add this computer? The app reconnects for a moment.", MachinesPanelScreen.ADD_CONFIRM` | `"Add laptop? The app reconnects for a moment.", MachinesPanelScreen.ADD_CONFIRM("laptop")` |
+| W5.2 follow-up | `ui/screens/SessionDetailVerdictTest.kt` | (no clause) | `historyCapacityNotice("MacBookPro").contains("on MacBookPro")` |
+| W5.2 follow-up | `ui/screens/SessionDetailHeaderTest.kt` | (no test) | `the panel carries the machine label it was built from` |
+| s24 (reverted) | `android/gate/s24_screens_test.go` | at `a1507537` | at `a1507537` (the 2-line inventory edit of `6b4e12e3` reverted in `9fcdc6c1`, pending a ruling) |
+
+### Gates on the final tree (`86ff83eb`)
+
+```
+go build ./...        exit=0
+go vet ./...          exit=0
+golangci-lint run     0 issues.   exit=0
+Kotlin full suite (lane `full3`): gradle exit=0, tests=1648 failures=0 errors=0 skipped=0, xml fresh 205/205, aar unmoved
+go test -race -count=1 -timeout 40m ./...  (run 2, concurrent with the Kotlin suite; 140 stale *.test
+    processes from other sessions were resident on the machine)   exit=1
+    59 packages ok; FAIL:
+    android/gate      TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit only (the s24 revert, pending ruling);
+                      TestW6O3_* and TestR4D3* green
+    internal/upgrade  the same two as before (pre-existing on main, environmental)
+    internal/attach, internal/converge, internal/daemon   the 40m wall clock (2640s each)
+    internal/skeleton TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing/a_rewritten_content_hash
+                      (approval_validate_r4_test.go:168: error_code = "invalid_field"; want "stale_approval")
+    ONE isolated rerun of those four (go test -race -timeout 25m, lane idle):
+        attach ok 4.3s, converge ok 2.3s, daemon ok 61.3s;
+        skeleton FAIL on a different test, TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner
+        (s18_sec6_adversarial_test.go:325: gateway service did not stop within 2s of cancel) -- the S18
+        timing red the brief lists as known. W5's diff on all five packages is empty, and skeleton was
+        ok (457.5s) in the first full run on this branch (`w5-gorace.log`).
+```
+
+## Commits (final)
+
+```
+059765b7 Say it in the reader's words, on every screen (W5.4)
+6028c7d9 Name the computer where the screen knows it (W5.2)
+6b4e12e3 Drop the chrome the words no longer need (W5.3)
+d69bbcfa Drawing sheet: Slate palette, per ADR-021 (W5.4)
+3b7662d4 Move the clauses the full suite still pinned to old words (W5.5)
+992f2b00 Record W5's verification evidence
+9fcdc6c1 Revert the s24 inventory row edit, pending a ruling
+b0d5e40d Amend the w6o3 gate: the remedy is the well, before the control
+86ff83eb W5.2 names the machine where the row is known
+```
