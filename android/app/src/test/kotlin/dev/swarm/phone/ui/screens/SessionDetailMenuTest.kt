@@ -27,6 +27,8 @@ class SessionDetailMenuTest {
         atFloor: Boolean = false,
         online: Boolean = true,
         ended: Boolean = false,
+        // Phone refit W3.1: an open turn, which is the one fact the menu's Stop row reads.
+        working: Boolean = false,
     ): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
             sessionId = "ep-9f2a/NewLatexCV",
@@ -44,6 +46,7 @@ class SessionDetailMenuTest {
                     itemId = "i-1",
                     cursor = 1,
                     kind = "user_message",
+                    turnId = if (working) "turn-a" else "",
                     body = """{"text":"check the relay logs"}""",
                 ),
             ),
@@ -74,6 +77,29 @@ class SessionDetailMenuTest {
             "more than one row claims to be destructive, which spends the one mark that means it",
             1,
             rows.count { it.destructive },
+        )
+    }
+
+    /**
+     * Phone refit W3.1: the full-width Stop left the composer, and Stop STAYS REACHABLE from the
+     * header menu while the agent works -- the row presses the same interrupt the square does.
+     * It is offered on the one fact the square reads ([SessionDetailPanel.composerWorking]), so
+     * the menu and the square cannot disagree; and it wears a route's ink, not `--p-err`: Kill
+     * keeps the one mark that means it.
+     */
+    @Test
+    fun `Stop is offered only while the session works`() {
+        assertFalse(
+            "an idle session offers Stop, a tap that can only be refused for want of a turn to name",
+            SessionDetailScreen.menuChoicesFor(panel()).any { it.id == SessionDetailScreen.MENU_STOP },
+        )
+
+        val stop = SessionDetailScreen.menuChoicesFor(panel(working = true))
+            .single { it.id == SessionDetailScreen.MENU_STOP }
+        assertEquals(SessionDetailScreen.COMPOSER_STOP, stop.label.toString())
+        assertFalse(
+            "Stop is drawn as the act that cannot be undone; that mark is Kill's alone",
+            stop.destructive,
         )
     }
 

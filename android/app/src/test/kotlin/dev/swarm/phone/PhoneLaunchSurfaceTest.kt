@@ -272,10 +272,11 @@ class PhoneLaunchSurfaceTest {
          *    way into the drill-down, which is the ONE screen whose lease sentence promises that
          *    what you type is sent live. So the surface promised typing where there was no field
          *    and offered a field where there was no promise. Both are `ui/kit/Composer.kt`'s bar on
-         *    the session detail now, and the send control keeps PB-SEC-12 clause 1's touch filter
-         *    because `PhoneSurface` still builds it and still lists it in
-         *    `touchFilteredActions` -- the coverage moved, it never lapsed. The label assertion in
-         *    `PhoneSurfaceControlsTest` reads that list and is untouched.
+         *    the session detail now -- the control is the bar's 40 dp square since phone refit W3,
+         *    spoken "Send" or "Stop" rather than labelled -- and it keeps PB-SEC-12 clause 1's
+         *    touch filter because `PhoneSurface` still builds it and still lists it in
+         *    `touchFilteredActions`; the coverage moved, it never lapsed. `PhoneSurfaceControlsTest`
+         *    reads the control by its description.
          *
          * ALL FOUR MOVES ARE THE PRODUCT BEING CORRECTED, NOT THE SCAN BREAKING. The distinction the
          * floor exists to draw is between "the surface shrank" and "the walk stopped reading the

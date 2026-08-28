@@ -6,6 +6,7 @@ import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.UndeliveredInput
 import dev.swarm.phone.ui.UndeliveredLedger
+import dev.swarm.phone.ui.kit.ComposerModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -113,6 +114,44 @@ class SessionDetailPanelTest {
             panel.killConfirmation.isNotEmpty(),
         )
     }
+
+    /**
+     * Phone refit W3.2: WORKING COMES FROM ONE SOURCE. The header's word, the field's placeholder,
+     * the menu's Stop row and the composer's square all read the open turn, so none of them can
+     * disagree about whether this session is busy (tbpm.4's hazard, closed at the model).
+     */
+    @Test
+    fun `composerWorking is the open turn, the same fact the header reads`() {
+        val working = panelOver(
+            item("u1", "user_message", turn = "turn-a"),
+            item("t1", "tool_run", turn = "turn-a", status = "in_progress"),
+        )
+        assertTrue("an open turn does not read as working", working.composerWorking)
+        assertTrue(
+            "the header does not say working over the very turn the composer reads as open",
+            working.headerSubtitle.contains("working"),
+        )
+        assertEquals(ComposerModel.placeholderFor(working = true), working.composerPlaceholder)
+
+        val idle = panelOver(
+            item("u1", "user_message", turn = "turn-a"),
+            item("a1", "agent_message", turn = "turn-a", status = "completed"),
+        )
+        assertFalse("a closed turn still reads as working", idle.composerWorking)
+        assertFalse(idle.headerSubtitle.contains("working"))
+        assertEquals(ComposerModel.placeholderFor(working = false), idle.composerPlaceholder)
+    }
+
+    private fun item(id: String, kind: String, turn: String, status: String = "") = InteractionItem(
+        sessionId = "mbp/api", itemId = id, cursor = 1, kind = kind,
+        status = status, turnId = turn, text = "words",
+    )
+
+    private fun panelOver(vararg items: InteractionItem) = SessionDetailScreen.of(
+        detail(),
+        TranscriptScreen.of(items.toList()),
+        SessionLease(sessionId = "mbp/api", online = true),
+    )
 
     /**
      * THE PRESS IS PART OF THIS TEST NOW, and agents-tracker-4lta is why. The middle assertion read:

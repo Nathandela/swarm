@@ -209,9 +209,6 @@ data class SessionDetail(
     /** PB-APP-8: a journal with a hole is never shown as a complete history. */
     val stale: Boolean get() = journalStale
 
-    /** Stop is PERSISTENT -- on screen in every state, per PB-APP-3. */
-    val stopVisible: Boolean = true
-
     /** ADR-007 D7 has no queue for input, and this screen must not invent one. */
     val stopQueued: Boolean = false
 
@@ -278,20 +275,22 @@ data class SessionDetail(
                 "connection is back."
 
         /**
-         * What a toast says once the interrupt is away.
+         * What the screen says, once, under the composer, when the interrupt is away (phone refit
+         * W3.4, owner ruling). It is here rather than in the surface because copy belongs to the
+         * screen model (PB-DS-9), and it is no longer a toast: `PhoneSurface.rememberInterrupt`
+         * draws it as a notice line the composer region holds, and the next draw on which the
+         * conversation has moved takes it off.
          *
-         * IT IS THE MOCK'S OWN WORDS, `toast("Interrupt sent")`, and it is here rather than in the
-         * surface because copy belongs to the screen model (PB-DS-9). It is the ONLY press on this
-         * surface the design wrote a confirmation for that is not one of the two
-         * agents-tracker-qlf9 owns; the rest stay silent, because a "done" nobody specified is a
-         * sentence invented to fill a gap.
-         *
-         * IT SAYS "SENT" AND NOT "STOPPED", which is the whole of what this phone knows. The
-         * interrupt is 0x03 on the live plane; whether the agent honoured it is a fact that
-         * arrives later, in the journal, and a confirmation claiming otherwise would be the screen
-         * asserting an outcome it has not been told.
+         * IT IS THE SEALING AND NOT THE AGENT'S ANSWER, which is the whole of what this phone
+         * knows at that moment: `App.Interrupt` returns when the envelope is appended, and
+         * whether the agent honoured the cancel sequence arrives later, in the journal. The word
+         * is the reader's word for the press they made -- the thing they did was stop -- and the
+         * honesty argument that used to hold "Interrupt sent" to the wire's register still holds
+         * where it matters: a refused interrupt (`interrupt_unsupported`, `stale_turn`) is
+         * reported through `renderInterruptVerdict`, on the outcome line, in the machine's own
+         * terms, and a confirmation is never a claim the machine has not made.
          */
-        const val INTERRUPT_SENT = "Interrupt sent"
+        const val INTERRUPT_SENT = "Stopped"
     }
 }
 

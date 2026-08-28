@@ -148,8 +148,8 @@ class PbE2E2PairAndTypeTest {
             // not a courtesy wait -- it is the requirement, asserted. The take_control reply is
             // what opens it, it arrives on a Go goroutine after this press returns, and the
             // screen redraws on the outcome event that carries it.
-            app.awaitPressable(
-                "Send line",
+            app.awaitDescribedPressable(
+                "Send",
                 "the machine never confirmed the control lease, so the keyboard stayed shut. " +
                     "PB-INPUT-2 refuses every keystroke until the confirmation lands, and the " +
                     "confirmation is the take_control operation's own outcome (PB-SYNC-2 claims " +
@@ -159,7 +159,7 @@ class PbE2E2PairAndTypeTest {
 
             // ---- types -------------------------------------------------------------------
             app.type(SESSION_PROMPT, "echo swarm-pb-e2e-2")
-            app.press("Send line")
+            app.pressDescribed("Send")
 
             // A refusal would be on screen: every gated control routes its failure through
             // PB-APP-9's table rather than swallowing it, so an empty outcome line is the

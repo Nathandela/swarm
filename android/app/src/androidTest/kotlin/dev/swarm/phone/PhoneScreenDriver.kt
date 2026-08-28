@@ -169,6 +169,62 @@ object PhoneScreenDriver {
     }
 
     /** Type into the field a user would type into, found by its hint. */
+    /**
+     * [awaitPressable] for a control that SPEAKS rather than reads (phone refit W3): the
+     * composer's one control is a glyph, and its words are its content description -- "Send",
+     * or "Stop" while the agent works and the field is empty.
+     */
+    fun ActivityScenario<PhoneActivity>.awaitDescribedPressable(description: String, why: String) {
+        val deadline = SystemClock.uptimeMillis() + PATIENCE_MILLIS
+        var ready = false
+        while (SystemClock.uptimeMillis() < deadline) {
+            onActivity { activity ->
+                ready = activity.describedControls().any {
+                    it.contentDescription?.toString() == description &&
+                        it.visibility == View.VISIBLE && it.isEnabled
+                }
+            }
+            if (ready) return
+            Thread.sleep(200)
+        }
+        fail(
+            "PB-E2E-2: no control described \"$description\" became pressable. $why\n" +
+                "the screen said:\n${textOnScreen()}",
+        )
+    }
+
+    /** [press], by content description, for the same control. */
+    fun ActivityScenario<PhoneActivity>.pressDescribed(description: String) {
+        var pressed = false
+        onActivity { activity ->
+            val control = activity.describedControls().firstOrNull {
+                it.contentDescription?.toString() == description && it.visibility == View.VISIBLE
+            }
+            if (control != null && control.isEnabled) {
+                control.performClick()
+                pressed = true
+            }
+        }
+        if (!pressed) {
+            var seen = ""
+            onActivity { activity ->
+                seen = activity.describedControls().joinToString("\n") {
+                    "${it.contentDescription} visible=${it.visibility == View.VISIBLE} " +
+                        "enabled=${it.isEnabled}"
+                }
+            }
+            fail(
+                "PB-E2E-2: no enabled, visible control described \"$description\" on screen, so " +
+                    "the action this clause of the requirement names cannot be performed.\n" +
+                    "the controls present were:\n$seen",
+            )
+        }
+    }
+
+    /** Every clickable view that speaks, whatever its type. */
+    internal fun Activity.describedControls(): List<View> = controls()
+        .filter { it.hasOnClickListeners() && !it.contentDescription.isNullOrEmpty() }
+
     fun ActivityScenario<PhoneActivity>.type(hint: String, text: String) {
         var typed = false
         onActivity { activity ->

@@ -23,6 +23,12 @@ package gate
 //
 // IT ASKS FOR AN EXPLICIT ARM AND NOT FOR PARTICULAR WORDS. The sentence is the screen model's
 // (PB-DS-9), and it is asserted against the model rather than against a second copy of itself here.
+//
+// RE-ANCHORED BY PHONE REFIT W3 (agents-tracker-d45a.3). The full-width Stop (`val stop =
+// actionButton(...)`) left the composer region; the interrupt is planned once, in
+// `PhoneSurface.interruptPlan()`, and pressed from the composer's square while the agent works
+// and the field is empty, and from the header menu's Stop row. The four assertions below are
+// unchanged; only the subject they read moved.
 
 import (
 	"strings"
@@ -33,15 +39,15 @@ import (
 func TestT4LTA_AnOfflineStopPressSaysSoRatherThanResolvingToNothing(t *testing.T) {
 	code := d0b8Code(t, d0b8PhoneSurface)
 
-	at := strings.Index(code, "val stop = actionButton")
+	at := strings.Index(code, "private fun interruptPlan(")
 	if at < 0 {
-		t.Fatal("agents-tracker-4lta: PhoneSurface.kt no longer builds its Stop with actionButton, " +
-			"so this fence's subject has changed shape. A fence whose subject silently " +
-			"disappeared reports clean forever")
+		t.Fatal("agents-tracker-4lta: PhoneSurface.kt no longer plans its interrupt in " +
+			"interruptPlan(), so this fence's subject has changed shape. A fence whose subject " +
+			"silently disappeared reports clean forever")
 	}
 	plan, ok := d0b8Balanced(code, at, '{', '}')
 	if !ok {
-		t.Fatal("agents-tracker-4lta: the Stop control passes no plan lambda this fence can read")
+		t.Fatal("agents-tracker-4lta: interruptPlan() has no body this fence can read")
 	}
 
 	if !strings.Contains(plan, "StopAction.NOT_SENT") {

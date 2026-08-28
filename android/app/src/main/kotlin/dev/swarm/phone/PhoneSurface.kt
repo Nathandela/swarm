@@ -2,6 +2,8 @@ package dev.swarm.phone
 
 import android.graphics.Rect
 import android.os.SystemClock
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -9,6 +11,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -36,6 +39,7 @@ import dev.swarm.phone.ui.SessionDetail
 import dev.swarm.phone.ui.SyncStatus
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
+import dev.swarm.phone.ui.kit.ComposerActionGlyph
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
@@ -43,6 +47,7 @@ import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.SendState
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ToastHost
+import dev.swarm.phone.ui.kit.composerAction
 import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.conversationHeader
 import dev.swarm.phone.ui.kit.conversationMenu
@@ -343,34 +348,32 @@ class PhoneSurface(
     // return to android/unbound-verbs.tsv, where ReleaseControl already sat.
 
     /**
-     * PB-APP-3's persistent Stop, and the one control on this surface whose PRESS DOES TWO
-     * DIFFERENT THINGS -- because [SessionDetail.stop] says so, not because this file chose it.
-     * Without a lease the model refuses the keystroke and offers the step that would make it work,
-     * which is take_control; with one it asks first and then interrupts.
+     * The interrupt, planned ONCE for the two things that press it: the composer's square while
+     * the agent works and the field is empty ([send]), and the header menu's Stop row
+     * ([chooseFromMenu]). Phone refit W3 (owner ruling): the full-width Stop above the bar is
+     * gone, no question stands in front of the interrupt, and what the press says is one word
+     * under the composer ([rememberInterrupt]).
      *
      * IT INTERRUPTS THROUGH `App.Interrupt` AND NOT BY WRITING ANY BYTE ITSELF, which since Wave
-     * R6 is the SIGNED turn_interrupt op (`mobile/commands.go`, Mirror M2.4): the daemon types the
-     * session adapter's own recorded cancel sequence, so a phone that composed a keystroke here
-     * would be guessing a key the daemon refuses to guess. The lease-gated stop model this plan
-     * still branches on ([SessionDetail.stop]'s ACQUIRE_LEASE_FIRST arm) is stricter than the op
-     * requires -- the signed op needs no lease -- and relaxing it is the wave's disclosed
-     * view-side residual (docs/verification/r6-chat.md).
+     * R6 is the SIGNED turn_interrupt op (`mobile/commands.go`, Mirror M2.4): the daemon types
+     * the session adapter's own recorded cancel sequence, so a phone that composed a keystroke
+     * here would be guessing a key the daemon refuses to guess. The op takes no lease (owner
+     * ruling R1), and the only question left is the link's ([SessionDetail.confirmStop]).
      *
-     * IT IS `.a2-no` (agents-tracker-ksvb.4). Both of its arms end a thing the user started -- an
-     * interrupt, or the lease step that leads to one -- and the deny treatment is what the design
-     * gives an action whose result cannot be taken back. [kill] is the same treatment and the
-     * confirmation is what separates them, not the colour.
+     * THE BRANCH IS TAKEN ON THE MAIN THREAD, and it has to be: `detailDrawn` is the panel this
+     * surface last drew, written by `render` and owned by the looper. Reading it from a lane
+     * would be a data race on the fact that decides what this press does.
+     *
+     * AND IT NAMES THE TURN IT WAS DRAWN AGAINST (Wave R6 review finding B7). `App.Interrupt`
+     * REQUIRES a non-empty expected_turn: a Stop rendered against turn A that lands in turn B
+     * types the adapter's cancel sequence into whatever the machine is doing NOW -- which in
+     * playbook 8.1 is the turn the owner just started at the terminal, where the cancel key
+     * clears their half-typed line. The turn is read HERE, on the looper that owns it.
      */
-    private val stop = actionButton(SLOT_LABEL, CtaKind.DENY, ask = ::stopQuestion) {
-        // THE BRANCH IS TAKEN ON THE MAIN THREAD, and it has to be: `detailDrawn` is the panel
-        // this surface last drew, written by `render` and owned by the looper. Reading it from a
-        // lane would be a data race on the fact that decides which of two different things this
-        // one control does.
+    private fun interruptPlan(): Press? {
         val target = session
         val turn = detailDrawn?.expectedTurn.orEmpty()
-        when (detailDrawn?.confirmedStopAction) {
-            // The one control on this surface whose two arms are on two different PLANES, which
-            // is why the plane is chosen per press rather than per control.
+        return when (detailDrawn?.confirmedStopAction) {
             StopAction.SEND_INTERRUPT -> {
                 stopNotSentFor = ""
                 Press(
@@ -379,43 +382,27 @@ class PhoneSurface(
                     // press rides the command lane like every other signed verb (s25's fence
                     // is what holds the declaration to the verb's real destination policy).
                     SendPlane.COMMAND,
-                    // AND IT NAMES THE TURN IT WAS DRAWN AGAINST (Wave R6 review finding B7).
-                    // `App.Interrupt` REQUIRES a non-empty expected_turn: Stop and Send are
-                    // tapped under one race, and a Stop rendered against turn A that lands in
-                    // turn B types the adapter's cancel sequence into whatever the machine is
-                    // doing NOW -- which in playbook 8.1 is the turn the owner just started at
-                    // the terminal, where the cancel key clears their half-typed line. The turn
-                    // is read HERE, from the panel this surface last drew, on the looper that
-                    // owns it, for the same reason the branch above is.
                     verb = { app -> app.interrupt(target, turn) },
-                    // The one press on this surface the design wrote a confirmation for. Without
-                    // it, an interrupt that reached the machine and an interrupt still crossing
-                    // look identical: the outcome line is cleared for both and the button comes
-                    // back enabled either way.
-                    //
-                    // AND IT REPORTS ON THE SEALING, WHICH IS WHY THE VERDICT BELOW EXISTS
-                    // (review round 2). `App.Interrupt` returns the moment the envelope is
-                    // appended, so this sentence is true of the phone and says nothing about
-                    // the machine; `interrupt_unsupported` and `stale_turn` are facts only the
-                    // machine has, and [renderInterruptVerdict] is where they reach the reader.
-                    confirmation = SessionDetail.INTERRUPT_SENT,
+                    // SILENT HERE, BY DECISION (W3.4). `App.Interrupt` returns the moment the
+                    // envelope is appended, so the sealing is a fact about the phone; the settle
+                    // draws it under the composer, never as row 1's toast. `interrupt_unsupported`
+                    // and `stale_turn` are facts only the machine has, and [renderInterruptVerdict]
+                    // is where they reach the reader.
+                    confirmation = "",
                     settle = { answer -> rememberInterrupt(answer) },
                 )
             }
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
-            // D7). IT USED TO BE `else -> null` (agents-tracker-4lta), deferring to a notice that
-            // was already on screen before the press -- so the press wrote nothing, sent nothing
-            // and left the screen identical, which is a dead control on a confirmed press. The
-            // press is now recorded, so PB-INPUT-1's notice becomes a report of something that
-            // happened, and it is said out loud where the finger was: Stop sits below the
-            // transcript and the notice above it.
+            // D7). The press is recorded and said out loud where the finger was
+            // (agents-tracker-4lta), so PB-INPUT-1's notice becomes a report of something that
+            // happened rather than a sentence that was already on screen.
             StopAction.NOT_SENT -> {
                 stopNotSentFor = target
                 say(PressFeedback.ofUnsent(SessionDetail.NOT_SENT_NOTICE))
                 null
             }
-            // CONFIRM never reaches here -- it is what `stop()` answers, and this reads the answer
-            // to the question it produced -- and KILL belongs to the other control entirely.
+            // CONFIRM is the model's arm and never this surface's: the square resolves it
+            // directly (W3.3), and `confirmStop()` answers only the two above.
             else -> null
         }
     }
@@ -430,9 +417,9 @@ class PhoneSurface(
      * confirmation that read the same for both would train the user to dismiss the one that
      * matters.
      *
-     * IT IS `.a2-no`, THE SAME TREATMENT AS [stop], and the sameness is deliberate: two destructive
-     * controls in one stack that were painted differently would be claiming a difference the design
-     * has no register for. What distinguishes them is the question above.
+     * IT IS `.a2-no`, the treatment the full-width Stop shared until phone refit W3 took that
+     * control off the composer: an action whose result cannot be taken back. What separates it
+     * from the square that stops now is the question above, not the colour.
      */
     private val kill = actionButton(
         SLOT_LABEL,
@@ -480,48 +467,104 @@ class PhoneSurface(
      * ksvb.4 named is the one that landed: this field and this button are derivation row 9's
      * composer now, on the session detail, and the launch form keeps the column to itself.
      */
-    // THE LABEL IS UNCHANGED AND THE VERB UNDER IT IS NOT (Mirror M2.4). PB-E2E-2's smoke names
-    // this control by its words (`PhoneSurfaceControlsTest`), and the words are still true: what
-    // the machine does with a `composer_send` is type the line into the session's own composer and
-    // submit it, so "Send line" describes the effect exactly as it did over the keystroke path.
-    // What changed is that it no longer needs a lease, no longer rides the live input plane, and
-    // is refused legibly rather than silently when the conversation has moved on.
-    private val send = actionButton("Send line", CtaKind.APPROVE) {
-        // Read here, on the looper that owns the field. The lane never touches a View.
-        val target = session
-        val line = typed.text.toString()
-        val turn = detailDrawn?.expectedTurn.orEmpty()
-        // The last send's report goes the moment a new one is planned: a notice about a refusal
-        // the user has already answered by typing again is a report of the wrong press.
-        composerSendFor = target
-        composerSentText = line
-        composerRefusal = ""
-        composerRefusalDetail = ""
-        composerSendState = SendState.PENDING
-        Press(
-            // COMMAND, and the plane change IS the verb change: `composer_send` is a SIGNED
-            // operation that resolves, so it rides the lane that polls `awaitConn` for a
-            // connection, exactly like every other signed verb on this surface.
-            SendPlane.COMMAND,
-            verb = { app -> app.composerSend(target, turn, line) },
-            // THE FACADE'S OWN refusals, and ONLY those: a phone with no link, an unreconciled
-            // handset, an empty line. They are the ones that resolve without the machine, so
-            // they are the ones this hook can answer -- see [rememberComposerSend] for the
-            // refusals that arrive later, which is every refusal the daemon authors.
-            refused = { routed ->
-                composerSendState = SendState.REFUSED
-                composerRefusal = routed.state.name
+    /**
+     * The composer's ONE control, and the whole of phone refit W3 (owner ruling): a 40 dp square
+     * that sends what is in the field, or interrupts the agent when the session is WORKING and
+     * the field is EMPTY -- both read AT PRESS TIME from the live field and the last-drawn panel,
+     * on the looper that owns them. A fast typist whose tap lands after their first character
+     * sends; a tap on an empty field over a working agent stops. [drawComposerAction] keeps the
+     * glyph and the spoken word on the same predicate on every draw and on every text change, so
+     * what the finger presses is what the eye was shown.
+     *
+     * THE SEND HALF IS UNCHANGED (Mirror M2.4): what the machine does with a `composer_send` is
+     * type the line into the session's own composer and submit it; it is a SIGNED operation that
+     * resolves, so it rides the command lane, it needs no lease, and it is refused legibly rather
+     * than silently when the conversation has moved on. The stop half is [interruptPlan], which
+     * the header menu's Stop row presses too.
+     *
+     * IT IS AN `ImageView` THE KIT BUILT, WITH [pressable]'S PLUMBING: PB-SEC-12 clause 1's touch
+     * filter, the lane, the accessibility role. The words it speaks are the screen's
+     * ([SessionDetailScreen.COMPOSER_SEND], [SessionDetailScreen.COMPOSER_STOP]) and the glyphs
+     * are the kit's ([ComposerActionGlyph]); this file names neither a drawable nor a colour.
+     */
+    private val send: ImageView = pressable(composerAction(activity)) {
+        if (stopping()) {
+            interruptPlan()
+        } else {
+            // Read here, on the looper that owns the field. The lane never touches a View.
+            val target = session
+            val line = typed.text.toString()
+            val turn = detailDrawn?.expectedTurn.orEmpty()
+            // The last send's report goes the moment a new one is planned: a notice about a
+            // refusal the user has already answered by typing again is a report of the wrong
+            // press.
+            composerSendFor = target
+            composerSentText = line
+            composerRefusal = ""
+            composerRefusalDetail = ""
+            composerSendState = SendState.PENDING
+            Press(
+                // COMMAND, and the plane change IS the verb change: `composer_send` is a SIGNED
+                // operation that resolves, so it rides the lane that polls `awaitConn` for a
+                // connection, exactly like every other signed verb on this surface.
+                SendPlane.COMMAND,
+                verb = { app -> app.composerSend(target, turn, line) },
+                // THE FACADE'S OWN refusals, and ONLY those: a phone with no link, an
+                // unreconciled handset, an empty line. They are the ones that resolve without
+                // the machine, so they are the ones this hook can answer -- see
+                // [rememberComposerSend] for the refusals that arrive later, which is every
+                // refusal the daemon authors.
+                refused = { routed ->
+                    composerSendState = SendState.REFUSED
+                    composerRefusal = routed.state.name
+                },
+                // THE SETTLE LATCHES THE OPERATION AND CHANGES NOTHING ELSE (review round 2).
+                //
+                // IT USED TO SET `SendState.SENT` AND RUN `typed.text.clear()` HERE, under a
+                // comment reading "THE FIELD IS EMPTIED ONLY ON THE MACHINE'S ACCEPTANCE" --
+                // which was false. `VerbDispatch.press` settles on the FACADE CALL returning, and
+                // `App.ComposerSend` returns its `Op` the instant the envelope is appended to the
+                // mailbox. So the composer reported a send as delivered on LOCAL SEALING, and a
+                // send the daemon went on to refuse was shown as sent with the user's words
+                // already erased.
+                settle = { answer -> rememberComposerSend(answer) },
+            )
+        }
+    }
+
+    /**
+     * Whether the square STOPS rather than sends, read from the live field: the session works --
+     * ONE source, [SessionDetailPanel.composerWorking], the fact the header word and the
+     * placeholder read -- and nothing is typed.
+     */
+    private fun stopping(): Boolean = detailDrawn?.composerWorking == true && typed.text.isBlank()
+
+    /**
+     * The square's glyph and spoken word, on [stopping]'s predicate: square + "Stop" when the
+     * agent works and the field is empty, arrow + "Send" otherwise. Called on every draw of the
+     * composer region and on every text change, so the control never shows one thing and does
+     * another.
+     */
+    private fun drawComposerAction() {
+        val glyph = if (stopping()) ComposerActionGlyph.STOP else ComposerActionGlyph.SEND
+        send.setImageLevel(glyph.ordinal)
+        send.contentDescription = when (glyph) {
+            ComposerActionGlyph.STOP -> SessionDetailScreen.COMPOSER_STOP
+            ComposerActionGlyph.SEND -> SessionDetailScreen.COMPOSER_SEND
+        }
+    }
+
+    init {
+        // THE FIELD IS READ LIVE (owner ruling, W3.2): the moment there is a draft the control is
+        // Send, and the moment it is cleared the control is Stop again.
+        typed.addTextChangedListener(
+            object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) = drawComposerAction()
             },
-            // THE SETTLE LATCHES THE OPERATION AND CHANGES NOTHING ELSE (review round 2).
-            //
-            // IT USED TO SET `SendState.SENT` AND RUN `typed.text.clear()` HERE, under a comment
-            // reading "THE FIELD IS EMPTIED ONLY ON THE MACHINE'S ACCEPTANCE" -- which was false.
-            // `VerbDispatch.press` settles on the FACADE CALL returning, and `App.ComposerSend`
-            // returns its `Op` the instant the envelope is appended to the mailbox. So the
-            // composer reported a send as delivered on LOCAL SEALING, and a send the daemon went
-            // on to refuse was shown as sent with the user's words already erased.
-            settle = { answer -> rememberComposerSend(answer) },
         )
+        drawComposerAction()
     }
 
     /**
@@ -608,39 +651,14 @@ class PhoneSurface(
     }
 
     /**
-     * What the conversation pins under the thumb: Stop, and the bar that sends a line.
-     *
-     * **WHY THE TWO ARE ONE REGION.** Owner ruling R2 puts Stop with the composer and Kill in the
-     * header's menu, so that neither costs vertical space in the READING FLOW. The scaffold has
-     * one pinned slot below its scroll ([conversationScaffoldView]), and this is what goes in it.
-     * Everything else that stood between the transcript and the composer -- Take control, Release,
-     * Kill -- is gone from the product or gone from the column.
-     *
-     * **IT IS A CONTAINER THIS SURFACE OWNS, AND IT IS THE LANDING PAD FOR A KIT CHANGE RATHER
-     * THAN THE FINAL SHAPE.** Ruling R2 as the committee amended it puts the stop affordance
-     * INSIDE the bar -- an empty composer while the agent works shows Stop, a non-empty one shows
-     * Send with Stop still reachable, and which fires is read from the live field at press time.
-     * That is `ui/kit/Composer.kt`'s to build (chat-surface-plan §6, `composerBar` "extended with
-     * the stop affordance"), and when it lands this container collapses to the bar alone and
-     * [stop] is handed to it. Until then Stop is a sibling ABOVE the bar rather than a child of
-     * it: still pinned, still one thumb-reach from anywhere in the conversation, and never again
-     * below a transcript.
-     *
-     * **STOP IS STILL ON SCREEN IN EVERY STATE**, which is PB-APP-3 and is not this slice's to
-     * revisit -- `SessionDetail.stopVisible` is a `val` and not a condition, and the recorded
-     * argument is that hiding it removes the one control that tells a reader what to do next. So
-     * the region does not learn to drop it on an idle session; what it costs is one control's
-     * height OUTSIDE the scroll, against the 160 dp of stacked CTAs it replaces INSIDE it.
-     */
-    /**
      * The drawing's one persistent affordance: *Decision needed*, above the composer, while the
      * machine is blocked on this reader.
      *
      * IT IS ADDED AND REMOVED RATHER THAN HIDDEN, which is this surface's standing rule ("a view
      * that is not on screen is a view this did not add") -- and it is the ONE child of
-     * [composerRegion] that moves, deliberately: the other three must never be re-parented, because
-     * one of them holds what the user has typed and another may be under a finger. Inserting at
-     * index 0 touches none of them.
+     * [composerRegion] that moves on the model's say-so, deliberately: the bar and its notice are
+     * permanent, because the bar holds what the user has typed. Inserting at index 0 touches
+     * neither. ([stoppedNotice] comes and goes on the same rule, at the end of the region.)
      *
      * **WHAT IT DOES NOT YET DO, NAMED RATHER THAN IMPLIED.** The drawing shows it only while the
      * unanswered decision is OFF SCREEN. That needs the scroll position of the block, which is a
@@ -668,18 +686,48 @@ class PhoneSurface(
      * defect the wave exists to close, inside the wave.
      *
      * IT IS A `notice` AND NOT A SLOT THAT COMES AND GOES, because an empty one draws no height at
-     * all -- `notice` spends no padding -- so the region's four children never change and the
-     * composer is never re-parented. The three shut states that lose the bar say the same two
+     * all -- `notice` spends no padding -- so the region's permanent children never change and
+     * the composer is never re-parented. The three shut states that lose the bar say the same two
      * sentences INSIDE the scroll instead, where the composer would have been
      * (`DetailTag.COMPOSER_ABSENT`); this is the fourth, which keeps its bar.
      */
     private val composerShutDetail: TextView = noticeLine()
 
+    /**
+     * "Stopped", once, under the composer (phone refit W3.4): the SEALING of the interrupt, drawn
+     * where the finger was and never as a toast.
+     *
+     * IT IS ADDED AND REMOVED RATHER THAN HIDDEN, [decisionPillControl]'s arrangement for its
+     * reason: a view that is not on screen is a view this surface did not add. [rememberInterrupt]
+     * adds it when the envelope is sealed and writes the word; the next [drawComposerRegion] --
+     * the next draw on which the conversation has moved, which for a Stop that landed is the turn
+     * closing -- takes it off. It is the sealing and not the agent's answer: `interrupt_unsupported`
+     * and `stale_turn` arrive later through [renderInterruptVerdict] and say so on the outcome line.
+     */
+    private val stoppedNotice: TextView = noticeLine().apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+        screenAir()
+    }
+
+    /**
+     * What the conversation pins under the thumb: the bar that sends a line, and the notice under
+     * it.
+     *
+     * **IT IS ONE REGION BECAUSE IT IS ONE CONTROL** (phone refit W3, owner ruling). Ruling R2 put
+     * Stop with the composer and Kill in the header's menu so that neither costs vertical space
+     * in the READING FLOW; W3 finishes the thought: the full-width Stop that stood above the bar
+     * is gone, and stopping is what the bar's own square does while the agent works and the field
+     * is empty ([send]). Stop stays reachable from the header menu for a reader with a draft in
+     * the field ([chooseFromMenu]). The scaffold has one pinned slot below its scroll
+     * ([conversationScaffoldView]), and this is what goes in it.
+     *
+     * NOTHING HERE IS REBUILT. The bar is permanent -- it holds what the user typed -- and so is
+     * the notice under it; what comes and goes is the decision pill at index 0 and, after a Stop,
+     * [stoppedNotice] at the end.
+     */
     private val composerRegion: LinearLayout = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-        addView(stop)
-        stop.screenAir()
         addView(composer)
         addView(composerShutDetail)
         composerShutDetail.screenAir()
@@ -1728,7 +1776,7 @@ class PhoneSurface(
     // every row. [kill] itself stays in this list and stays gated -- it is still the control the
     // row presses, and it is still what carries the confirmation.
     val touchFilteredActions: List<View> =
-        listOf(send, stop, kill, launch, resyncControl, acknowledge) +
+        listOf(send, kill, launch, resyncControl, acknowledge) +
             pairing.touchFilteredActions + settings.touchFilteredActions
 
     /**
@@ -3246,7 +3294,16 @@ class PhoneSurface(
         }
     }
 
-    private fun drawDetail(panel: SessionDetailPanel) {
+    /**
+     * Draw one conversation: the fixed header, the pinned composer region, and the column.
+     *
+     * `internal` FOR ONE READER (phone refit W3.2): `PhoneSurfaceControlsTest`, on a JVM whose
+     * `PhoneRuntime` answers Unavailable and so can never open a drill-down, builds a surface of
+     * its own and draws a real `SessionDetailScreen.of(...)` panel through this -- the production
+     * path -- to see what the composer's square says over a working agent. The body is exactly
+     * what [drawContent] calls.
+     */
+    internal fun drawDetail(panel: SessionDetailPanel) {
         val routed = outcome.text.toString()
         if (panel == detailDrawn && routed == detailOutcomeDrawn &&
             contentShows == Destination.INBOX
@@ -3292,7 +3349,6 @@ class PhoneSurface(
         fallbackDrawn = null
         drawComposerRegion(panel)
         loadEarlier.text = panel.loadEarlierLabel
-        stop.text = panel.stopLabel
         kill.text = panel.killLabel
         resyncControl.text = panel.resyncLabel
         acknowledge.text = panel.acknowledgeLabel
@@ -3378,8 +3434,9 @@ class PhoneSurface(
     private var headerDrawn: Triple<String, String, String>? = null
 
     /**
-     * The pinned region under the conversation: the pill, Stop, the bar, and what a bar that
-     * cannot send says under itself.
+     * The pinned region under the conversation: the pill, the bar, what a bar that cannot send
+     * says under itself, and the square's own glyph and word -- and the sealing's one word,
+     * taken off (phone refit W3.4).
      *
      * **THE FIELD'S HINT IS THE SHUT SENTENCE WHERE THERE IS ONE.** `composerPlaceholder` answers
      * "Message" or "Add feedback..." -- the two states of a composer that CAN send -- and for a
@@ -3392,11 +3449,13 @@ class PhoneSurface(
      * transcript, which is the one thing the patch lets through, so a region left un-drawn on the
      * patch path would freeze at whatever it said when the column was last rebuilt.
      *
-     * NOTHING HERE IS REBUILT. Three of the four children are permanent -- the composer holds what
-     * the user typed and Stop may be under a finger -- so what changes is a hint, a string and one
-     * insertion at index 0.
+     * NOTHING HERE IS REBUILT. The bar and its notice are permanent -- the composer holds what the
+     * user typed -- so what changes is a hint, a string, the square's glyph, one insertion at
+     * index 0 and one removal at the end.
      */
     private fun drawComposerRegion(panel: SessionDetailPanel) {
+        // "Stopped" was said once, for the conversation as it stood; it has moved on.
+        if (stoppedNotice.parent != null) composerRegion.removeView(stoppedNotice)
         val shut = panel.composerShut.takeIf { panel.composerIsBar }
         typed.hint = shut?.placeholder ?: panel.composerPlaceholder
         composerShutDetail.text = shut?.detail.orEmpty()
@@ -3413,6 +3472,9 @@ class PhoneSurface(
         } else if (!wanted && shown) {
             composerRegion.removeView(decisionPillControl)
         }
+        // The square follows the panel it was just drawn against (W3.2): `detailDrawn` is set
+        // before this runs on both draw paths.
+        drawComposerAction()
     }
 
     /**
@@ -3514,6 +3576,11 @@ class PhoneSurface(
         closeConversationMenu()
         when (choice) {
             SessionDetailScreen.MENU_LOAD_EARLIER -> loadEarlier.performClick()
+            // STOP PRESSES THE PLAN AND NOT THE SQUARE'S CLICK (phone refit W3.1): the square
+            // reads the live field and SENDS when there is a draft, and a menu Stop must
+            // interrupt whatever is typed. It goes through the same [press] the square uses,
+            // against the same control, so it keeps every piece of that plumbing.
+            SessionDetailScreen.MENU_STOP -> press(send, ::interruptPlan)
             SessionDetailScreen.MENU_KILL -> kill.performClick()
         }
     }
@@ -4222,7 +4289,7 @@ class PhoneSurface(
      * next patch is a different object with no memory of being pressed. So the lock that matters
      * is [answeringItemId] -> `TranscriptScreen.of(answering = ...)` -> `block.locked`, which is a
      * fact about the QUESTION and survives every redraw of the button. Set before the press for
-     * `stop`'s reason exactly: read on the looper that owns the screen, never from a lane.
+     * [interruptPlan]'s reason exactly: read on the looper that owns the screen, never from a lane.
      */
     /**
      * Owner ruling R6's bubble, or null when this phone is holding nothing for [session].
@@ -4268,7 +4335,7 @@ class PhoneSurface(
         actionButton(decision.label, CtaKind.MORE) {
             // THE ANSWER IS IN FLIGHT FROM THIS INSTANT, and the item it answers is what the
             // transcript needs to lock. Read here, on the looper that owns the screen, for
-            // [stop]'s reason exactly: a lane must never touch this.
+            // [interruptPlan]'s reason exactly: a lane must never touch this.
             answeringItemId = panel.itemId
             Press(
                 SendPlane.COMMAND,
@@ -4312,10 +4379,10 @@ class PhoneSurface(
     /**
      * The keyboard's two controls, which were never part of the peek.
      *
-     * They are inventory C2's composer -- derivation row 9 specifies a translucent bar with a
-     * recessed field, a voice glyph and a stop control -- and C2 is unbuilt, so what is here is a
-     * field and a button standing in for it. They stay in the unrecomposed remainder rather than
-     * being composed into a panel that does not specify them.
+     * They are row 9's composer: the field, and the one control that sends or stops (phone refit
+     * W3). Offline shuts both -- `SessionLease.keyboardEnabled` is the link -- so an offline Stop
+     * reaches [interruptPlan]'s NOT_SENT arm from the header menu's row alone, where it is
+     * reported rather than sealed.
      */
     private fun setKeyboardEnabled(enabled: Boolean) {
         send.enable(enabled)
@@ -4458,19 +4525,6 @@ class PhoneSurface(
     }
 
     /**
-     * What Stop asks before it acts, which is nothing at all for an observer.
-     *
-     * [SessionDetail.stop] resolves to CONFIRM only once the lease is held; without one the press
-     * is the take_control the label offers, and a confirmation over "shall I take control" would
-     * be a question about a step the user just chose by reading the button.
-     */
-    private fun stopQuestion(): String = detailDrawn
-        ?.takeIf { it.stopAction == StopAction.CONFIRM }
-        ?.stopConfirmation
-        .orEmpty()
-
-
-    /**
      * PB-APP-9 for the two session controls that used to answer with nothing: the machine's
      * verdict on the kill and on the take_control this surface issued (agents-tracker-qlf9).
      *
@@ -4538,7 +4592,7 @@ class PhoneSurface(
         if (!verdict.answered) return
         interruptSaid = interruptOp
         // SILENT ON ACCEPTED: the turn's own terminal item is the confirmation, and the press
-        // already said the interrupt went (SessionDetail.INTERRUPT_SENT).
+        // already said Stopped under the composer (SessionDetail.INTERRUPT_SENT).
         val notice = SessionDetailScreen.interruptNoticeFor(verdict)
         if (notice.isNotEmpty()) {
             say(PressFeedback.ofRefusal(notice, SessionDetailScreen.interruptDetailFor(verdict)))
@@ -4642,11 +4696,22 @@ class PhoneSurface(
         composerOp = issued.operationID
     }
 
-    /** Latch the turn_interrupt this surface issued. */
+    /**
+     * Latch the turn_interrupt this surface issued, and say ONCE, under the composer, that it
+     * went (phone refit W3.4).
+     *
+     * THE WORD IS THE SEALING'S AND NOT THE AGENT'S: `App.Interrupt` returns the moment the
+     * envelope is appended, and [SessionDetail.INTERRUPT_SENT]'s own KDoc keeps that argument.
+     * It is drawn in place -- [stoppedNotice] joins [composerRegion] and the next region draw
+     * takes it off -- and never as row 1's toast; the machine's refusal, when there is one,
+     * arrives through [renderInterruptVerdict].
+     */
     private fun rememberInterrupt(answer: Any?) {
         val issued = answer as? Op ?: return
         interruptOp = issued.operationID
         interruptSaid = ""
+        stoppedNotice.text = SessionDetail.INTERRUPT_SENT
+        if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice)
     }
 
     /** Latch the history read this surface issued, and whether its refusal speaks. */
@@ -4858,10 +4923,10 @@ class PhoneSurface(
         // rather than a control this function has to remember to leave alone: it is the panic
         // action, and a phone whose session list is empty -- or whose machine is unreachable -- is
         // exactly the state its owner may need it in.
-        // The session detail's two, which cannot in fact be on screen while this is false -- an
-        // open drill-down IS the target, so the roster cannot be empty under one. They are here
-        // because they act on the chosen session, which is what this function is about.
-        stop.enable(enabled)
+        // Kill, which cannot in fact be on screen while this is false -- an open drill-down IS
+        // the target, so the roster cannot be empty under one. It is here because it acts on the
+        // chosen session, which is what this function is about. The composer's square is the
+        // keyboard's ([setKeyboardEnabled]), since phone refit W3 made it the one control.
         kill.enable(enabled)
         // THE REPAIR AND THE ACKNOWLEDGEMENT ARE NOT IN THIS FUNCTION and the omission is
         // deliberate: neither acts on a session. `App.Resync` mends the transport's own read
@@ -4920,8 +4985,12 @@ class PhoneSurface(
      * confirmation, the lane, and the accessibility role a bare `TextView` cannot announce for
      * itself. Splitting the two is what stops a chip that reaches a facade verb quietly shipping
      * with none of it.
+     *
+     * AND OVER ANY VIEW, NOT ONLY A `TextView` (phone refit W3.2): the composer's square is an
+     * `ImageView`, and nothing in this body reads text -- the delegate that announces `Button`
+     * is a View's.
      */
-    private fun <V : TextView> pressable(
+    private fun <V : View> pressable(
         control: V,
         ask: () -> String = { "" },
         plan: () -> Press?,
@@ -4991,7 +5060,7 @@ class PhoneSurface(
      * changes on screen -- and only the middle one leaves the main thread.
      *
      * @param plane which of the facade's two send planes the verb resolves through. It is
-     *  declared per press and not per control because [stop] is on both:
+     *  declared per press and not per control because the full-width Stop used to be on both:
      *  `mobile/commands.go`'s command path polls `awaitConn` for a connection and its live path
      *  deliberately does not (ADR-007 D7), and the two must not share a lane.
      * @param verb the facade call, and NOTHING else. It runs on a lane. It must not touch a View.

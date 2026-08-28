@@ -134,10 +134,6 @@ data class SessionDetailPanel(
     val transcript: TranscriptPanel,
     /** What pressing Stop does NOW, from the model that decides it. */
     val stopAction: StopAction,
-    /** What the Stop control reads as, which differs for an observer -- see [SessionDetailScreen]. */
-    val stopLabel: String,
-    /** What the confirmation asks before a Stop is sent. */
-    val stopConfirmation: String,
     /** What pressing Stop THROUGH the confirmation would do, including refusing while offline. */
     val confirmedStopAction: StopAction,
     val killLabel: String,
@@ -262,6 +258,17 @@ data class SessionDetailPanel(
      */
     val composerIsBar: Boolean
         get() = composerShut == null || composerAvailability == ComposerAvailability.OFFLINE
+
+    /**
+     * Whether the agent is inside a turn: the ONE source of "working" for this screen (phone refit
+     * W3.2, tbpm.4's hazard closed at the model). [SessionDetailScreen.headerStateFor]'s word,
+     * [composerPlaceholder], the menu's Stop row and the composer's square all read the open turn
+     * -- the value `composer_send` and `turn_interrupt` are drawn against -- so none of them can
+     * disagree about whether this session is busy. It is derived from [transcript], which
+     * `sessionDetailRedraw`'s patch admits, so it rides the patch path with the placeholder
+     * rather than forcing a rebuild of the conversation at every turn boundary.
+     */
+    val composerWorking: Boolean = transcript.latestTurnId.isNotEmpty()
 }
 
 /**
@@ -331,19 +338,6 @@ object SessionDetailScreen {
      * conversation started rather than how old a record is.
      */
     private const val LOAD_EARLIER = "Load earlier messages"
-
-    private const val STOP = "Stop"
-
-    /**
-     * The confirmation before an interrupt goes out.
-     *
-     * It names what will actually happen -- an interrupt, the same key a person would press at the
-     * terminal -- rather than "are you sure", which asks the user to confirm something the sentence
-     * never told them.
-     */
-    private const val STOP_CONFIRMATION =
-        "Interrupt what this session is doing? This sends Ctrl-C, the same key you would press at " +
-            "the terminal."
 
     private const val KILL = "Kill session"
 
@@ -470,7 +464,17 @@ object SessionDetailScreen {
      * and they are spelled once, here, beside the function that mints them.
      */
     const val MENU_LOAD_EARLIER = "conversation.menu.earlier"
+    const val MENU_STOP = "conversation.menu.stop"
     const val MENU_KILL = "conversation.menu.kill"
+
+    /**
+     * What the composer's one control SAYS (phone refit W3.2): a glyph speaks through its content
+     * description, and the words are copy, so they are the screen's (PB-DS-9). "Send" while the
+     * field has a draft or the agent is idle; "Stop" over a working agent and an empty field. The
+     * menu's Stop row reads the same word.
+     */
+    const val COMPOSER_SEND = "Send"
+    const val COMPOSER_STOP = "Stop"
 
     /**
      * The rows this session's header menu has -- which is a fact about the session, and therefore
@@ -497,11 +501,17 @@ object SessionDetailScreen {
      * once the machine has declared the floor -- a tap that can only come back empty is the same
      * dead affordance one row up.
      *
-     * KILL IS ALWAYS OFFERED, because [SessionDetail.stopVisible]'s argument applies to the
-     * escalation too: the reader who most needs it is the one whose session is not answering.
-     * What guards it is the question it has always carried, not its absence.
+     * STOP IS OFFERED WHILE THE AGENT WORKS (phone refit W3.1), on the one fact the composer's
+     * square reads ([SessionDetailPanel.composerWorking]), and it presses the same interrupt:
+     * the square stops only over an EMPTY field, and a reader with a draft in the field still
+     * needs a way to stop. It wears a route's ink; the mark for an act that cannot be undone
+     * stays Kill's. First, because it is the most urgent thing a working session can want.
+     *
+     * KILL IS ALWAYS OFFERED, because the reader who most needs it is the one whose session is
+     * not answering. What guards it is the question it has always carried, not its absence.
      */
     fun menuChoicesFor(panel: SessionDetailPanel): List<MenuChoice> = buildList {
+        if (panel.composerWorking) add(MenuChoice(MENU_STOP, COMPOSER_STOP))
         if (panel.offersLoadEarlier) add(MenuChoice(MENU_LOAD_EARLIER, panel.loadEarlierLabel))
         add(MenuChoice(MENU_KILL, panel.killLabel, destructive = true))
     }
@@ -1021,8 +1031,6 @@ object SessionDetailScreen {
         // ONE WORDING NOW (owner ruling R1). The other was STOP_NEEDS_LEASE -- "Take control to
         // stop this" -- shown to a reader holding no lease, which was every reader: a fake
         // precondition in front of a real Stop, since turn_interrupt takes no lease either.
-        stopLabel = STOP,
-        stopConfirmation = STOP_CONFIRMATION,
         confirmedStopAction = detail.confirmStop(),
         killLabel = KILL,
         killConfirmation = KILL_CONFIRMATION,

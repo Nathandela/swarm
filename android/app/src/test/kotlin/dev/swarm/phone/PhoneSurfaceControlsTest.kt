@@ -5,14 +5,28 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CompoundButton
 import android.widget.EditText
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
+import dev.swarm.phone.ui.InteractionItem
+import dev.swarm.phone.ui.SessionDetail
+import dev.swarm.phone.ui.SessionLease
+import dev.swarm.phone.ui.kit.ComposerActionGlyph
 import dev.swarm.phone.ui.kit.CtaSurface
+import dev.swarm.phone.ui.kit.TopRule
 import dev.swarm.phone.ui.screens.PairingPanelScreen
+import dev.swarm.phone.ui.screens.SessionCapabilityFacts
+import dev.swarm.phone.ui.screens.SessionDetailPanel
+import dev.swarm.phone.ui.screens.SessionDetailScreen
+import dev.swarm.phone.ui.screens.TranscriptScreen
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowDialog
 
 /**
  * Phase B slice S19 -- PB-E2E-2's in-app actions have SUBJECTS, and every one of them is
@@ -46,8 +60,8 @@ class PhoneSurfaceControlsTest {
      * the rest are literals. The split is not inconsistency; it is where each label's second copy
      * lives.
      *
-     * THE SIX LITERALS HAVE A COPY THIS FILE CANNOT SEE. `Use this code`, `Join this destination`,
-     * `They match`, `Take control` and `Send line` are pressed BY LITERAL in the instrumented smoke
+     * THE LITERALS HAVE A COPY THIS FILE CANNOT SEE. `Use this code`, `Join this destination` and
+     * `They match` are pressed BY LITERAL in the instrumented smoke
      * (`PbE2E2PairAndTypeTest`, `PbE2E2ResumeTest`), which runs on a device and cannot be typechecked
      * against the app. For those, this ledger's independent transcription is the cheap half of a
      * two-sided pin: a label changed in `PairingSurface` and not in the smoke fails HERE, on a JVM in
@@ -83,7 +97,11 @@ class PhoneSurfaceControlsTest {
         // lease at any layer and the composer is live on any session with a link and a sink.
         // PB-E2E-2's scenario is amended in docs/specifications/remote-phaseB-requirements.md
         // beside PB-INPUT-2, which is where the lease's disappearance is argued.
-        "Send line" to "\"types\": there is no control that sends a keystroke",
+        // "Send line" WAS HERE, for PB-E2E-2's "types" clause. Phone refit W3 made the composer's
+        // control a glyph that SPEAKS rather than a label that reads -- "Send", or "Stop" over a
+        // working agent and an empty field -- so the smoke presses it by content description
+        // (`PhoneScreenDriver.pressDescribed`) and the pin is the surface tests below, which read
+        // `SessionDetailScreen.COMPOSER_SEND` off the very control.
     )
 
     @Test
@@ -179,6 +197,184 @@ class PhoneSurfaceControlsTest {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Phone refit W3 (agents-tracker-d45a.3): one button. The conversation pins ONE region under
+    // the thumb, and it holds the composer bar and the notice under it -- the full-width Stop
+    // that stood above the bar is gone, and stopping is what the bar's own control does while the
+    // agent works and the field is empty.
+    //
+    // THESE DRIVE A SURFACE OF THEIR OWN. `PhoneRuntime.phone()` answers Unavailable on every JVM
+    // run, so the Activity's surface can never open a drill-down; a surface built here
+    // (`SettingsSurfaceReadTest`'s arrangement) still owns the same long-lived controls, and its
+    // draw path is the production one.
+    // -----------------------------------------------------------------------
+
+    /** W3.1: the region is the bar and its notice; nothing stands above the bar any more. */
+    @Test
+    fun `the composer region is the bar and its notice`() {
+        withSurface { _, surface ->
+            val region = surface.composerRegion()
+            assertEquals(
+                "the pinned region under the conversation holds more than the composer bar and " +
+                    "the notice under it, so something is still standing between the transcript " +
+                    "and the field -- the full-width Stop the one-button ruling removes. Its " +
+                    "children were:\n" +
+                    (0 until region.childCount).joinToString("\n") {
+                        region.getChildAt(it).javaClass.simpleName
+                    },
+                2,
+                region.childCount,
+            )
+        }
+    }
+
+    /**
+     * W3.2: the glyph and the spoken word follow ONE predicate -- the session works
+     * ([SessionDetailPanel.composerWorking], the same fact the header and the placeholder read)
+     * and the field is empty -- on every draw.
+     */
+    @Test
+    fun `the one composer control speaks Send when idle and Stop when the session works and the field is empty`() {
+        withSurface { _, surface ->
+            val action = surface.composerAction()
+            assertEquals(
+                "a surface with no conversation drawn does not offer Send, so the control has " +
+                    "no words before the first panel lands",
+                SessionDetailScreen.COMPOSER_SEND,
+                action.contentDescription?.toString(),
+            )
+            assertEquals(ComposerActionGlyph.SEND.ordinal, action.drawable.level)
+
+            surface.drawDetail(panelWith(openTurn))
+            assertEquals(
+                "the session works and the field is empty, and the control still says Send: " +
+                    "the one thing a reader can do to a working agent from here is stop it",
+                SessionDetailScreen.COMPOSER_STOP,
+                action.contentDescription?.toString(),
+            )
+            assertEquals(ComposerActionGlyph.STOP.ordinal, action.drawable.level)
+
+            surface.drawDetail(panelWith(closedTurn))
+            assertEquals(
+                "the turn closed and the control still says Stop, so it offers to interrupt an " +
+                    "agent that is not doing anything",
+                SessionDetailScreen.COMPOSER_SEND,
+                action.contentDescription?.toString(),
+            )
+            assertEquals(ComposerActionGlyph.SEND.ordinal, action.drawable.level)
+        }
+    }
+
+    /**
+     * W3.2's "Done when": a fast typist's tap never aborts the agent. The field is read LIVE, on
+     * every text change, so the moment there is a draft the control is Send again -- and the
+     * moment the draft is cleared it is Stop again.
+     */
+    @Test
+    fun `typing into the field turns Stop back into Send`() {
+        withSurface { _, surface ->
+            val action = surface.composerAction()
+            surface.drawDetail(panelWith(openTurn))
+            assertEquals(SessionDetailScreen.COMPOSER_STOP, action.contentDescription?.toString())
+
+            surface.composerField().setText("keep going, but skip the tests")
+            assertEquals(
+                "there is a draft in the field and the control still says Stop, so a typist " +
+                    "who taps after their first word interrupts the agent instead of sending",
+                SessionDetailScreen.COMPOSER_SEND,
+                action.contentDescription?.toString(),
+            )
+            assertEquals(ComposerActionGlyph.SEND.ordinal, action.drawable.level)
+
+            surface.composerField().setText("")
+            assertEquals(SessionDetailScreen.COMPOSER_STOP, action.contentDescription?.toString())
+            assertEquals(ComposerActionGlyph.STOP.ordinal, action.drawable.level)
+        }
+    }
+
+    /**
+     * W3.3: no confirmation before Stop. The press goes straight to the plan; `confirmThenPress`
+     * opens its dialog only for a control that passes an `ask`, and the square passes none.
+     *
+     * WHAT THIS CANNOT SEE, SAID PLAINLY: the verb. `PhoneRuntime.phone()` answers Unavailable
+     * here, so the press stops at the runtime gate before any plan runs; that `app.interrupt(`
+     * is what the plan reaches is `android/gate/w34_onebutton_test.go`'s and r6's to read.
+     */
+    @Test
+    fun `pressing the square while the session works interrupts without asking`() {
+        withSurface { _, surface ->
+            val action = surface.composerAction()
+            surface.drawDetail(panelWith(openTurn))
+            assertEquals(SessionDetailScreen.COMPOSER_STOP, action.contentDescription?.toString())
+
+            action.performClick()
+
+            assertNull(
+                "a question stood between the press and the interrupt. Owner ruling (W3.3): the " +
+                    "square resolves the model's CONFIRM arm directly, and a dialog over a " +
+                    "working agent is a second tap the ruling removed",
+                ShadowDialog.getLatestDialog(),
+            )
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Building a conversation for the surface to draw: the real screen model over real items,
+    // never a hand-made panel.
+    // -----------------------------------------------------------------------
+
+    private val session = "mbp/swarm"
+
+    private fun item(id: String, kind: String, turn: String, status: String = "") = InteractionItem(
+        sessionId = session, itemId = id, cursor = 1, kind = kind,
+        status = status, turnId = turn, text = "words",
+    )
+
+    /** A turn the agent is still inside: the header says working, and the square owes Stop. */
+    private val openTurn = listOf(
+        item("u1", "user_message", turn = "turn-a"),
+        item("t1", "tool_run", turn = "turn-a", status = "in_progress"),
+    )
+
+    /** The same turn, closed by its terminal agent_message: idle, and the square owes Send. */
+    private val closedTurn = listOf(
+        item("u1", "user_message", turn = "turn-a"),
+        item("a1", "agent_message", turn = "turn-a", status = "completed"),
+    )
+
+    private fun panelWith(items: List<InteractionItem>): SessionDetailPanel = SessionDetailScreen.of(
+        SessionDetail(
+            sessionId = session, online = true, journalStale = false,
+            title = "claude-swarm", group = "working", machineLabel = "mbp",
+        ),
+        TranscriptScreen.of(items),
+        SessionLease(sessionId = session, online = true),
+        capabilities = SessionCapabilityFacts(structuredChat = true),
+    )
+
+    private fun PhoneSurface.composerAction(): ImageView = composerBar().getChildAt(1) as ImageView
+
+    private fun PhoneSurface.composerField(): EditText = composerBar().getChildAt(0) as EditText
+
+    private fun withSurface(assertions: (PhoneActivity, PhoneSurface) -> Unit) {
+        ActivityScenario.launch(PhoneActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                assertions(activity, PhoneSurface(activity, PhoneRuntime(activity), VerbDispatch.direct()))
+            }
+        }
+    }
+
+    /**
+     * The composer bar, found by the one thing only it is: the kit's `TopRule` surface around a
+     * touch-filtered control. Its parent is the region the conversation pins.
+     */
+    private fun PhoneSurface.composerBar(): LinearLayout = touchFilteredActions
+        .map { it.parent }
+        .filterIsInstance<LinearLayout>()
+        .first { it.background is TopRule }
+
+    private fun PhoneSurface.composerRegion(): ViewGroup = composerBar().parent as ViewGroup
 
     private fun View.flatten(): List<View> = when (this) {
         is ViewGroup -> listOf(this) + (0 until childCount).flatMap { getChildAt(it).flatten() }

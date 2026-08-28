@@ -42,25 +42,12 @@ class SessionDetailTest {
         stopNotSent = stopNotSent,
     )
 
-    /**
-     * Stop is PERSISTENT -- on screen in every state, per PB-APP-3.
-     *
-     * BOTH THE SNAPSHOT AND THE JOURNAL HALVES OF THIS ASSERTION ARE DELETED, and each is deleted
-     * for its own reason. The snapshot card: `docs/adr/ADR-009-structured-chat-interaction.md` (1)
-     * leaves "no terminal emulation and no raw grid anywhere in the app" and (3) dates the well's
-     * removal to slice I1's exit, so `snapshotText` and `hasSnapshotCard` are gone from the model.
-     * The journal: IS-SS-1 splits the roster from the conversation ("a client renders the roster
-     * from the latter and the transcript from the former"), so `SessionDetail` never carries the
-     * conversation either -- it is [TranscriptPanel]'s now, handed to `SessionDetailScreen.of`
-     * alongside this model rather than folded through it. `TranscriptPanelTest` and
-     * `TranscriptViewTest` are where that coverage lives now. What is left here, and what this
-     * asserts, is the one property `SessionDetail` alone still owns: Stop is on screen in EVERY
-     * state.
-     */
-    @Test
-    fun `stop is persistent regardless of what the session has done`() {
-        assertTrue("Stop is PERSISTENT: it is on screen in every state", detail().stopVisible)
-    }
+    // DELETED (phone refit W3.1, owner ruling): "stop is persistent regardless of what the
+    // session has done". It asserted `SessionDetail.stopVisible`, a `val` that was never a
+    // condition, over a full-width Stop that no longer exists: the composer's one control stops
+    // while the agent works and the field is empty, and the header menu offers Stop on the same
+    // fact (SessionDetailMenuTest, `Stop is offered only while the session works`). PB-APP-3's
+    // argument -- a reader must always have a way to stop -- is carried by those two now.
 
     // DELETED (owner ruling R1): "stop without a lease offers take control rather than doing
     // nothing". The precondition it asserted was fake -- turn_interrupt takes no lease at any
@@ -78,6 +65,17 @@ class SessionDetailTest {
             byteArrayOf(0x03).toList(),
             d.interruptBytes().toList(),
         )
+    }
+
+    /**
+     * Phone refit W3.4: what the phone says once the interrupt is sealed is one word, drawn once
+     * under the composer. It is still the SEALING and not the agent's answer -- the KDoc on the
+     * constant keeps that argument -- but "Interrupt sent" was the wire's register, and the
+     * reader's question is whether the thing stopped.
+     */
+    @Test
+    fun `the sealed interrupt says Stopped`() {
+        assertEquals("Stopped", SessionDetail.INTERRUPT_SENT)
     }
 
     /**

@@ -676,6 +676,9 @@ fun sessionDetailRedraw(
     // composed here, and unlike `composerAvailability` they add and remove nothing. Admitting
     // them is what keeps the reader's place across a turn opening and closing; refusing them
     // would rebuild the conversation at exactly the rate the state word changes.
+    //
+    // `composerWorking` (phone refit W3.2) is DERIVED from `transcript` and so rides with it: the
+    // composer's square and the menu's Stop row read it on the patch path, as the placeholder does.
     val patchable = drawn.copy(
         transcript = next.transcript,
         composerPlaceholder = next.composerPlaceholder,
