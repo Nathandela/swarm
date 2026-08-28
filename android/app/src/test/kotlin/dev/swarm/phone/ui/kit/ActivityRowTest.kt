@@ -96,7 +96,7 @@ class ActivityRowTest {
     // ---- the card is `.prow`'s, which is row 14's first four cells --------------
 
     /**
-     * AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4). Row 14's padding is the Slate slab's
+     * AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4). Row 14's padding is the Slate slab's
      * `space_12` x `space_16` now, and no longer the session row's. What the test was called and
      * what its four padding claims said before:
      *

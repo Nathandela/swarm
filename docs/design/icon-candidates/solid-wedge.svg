@@ -22,7 +22,7 @@
     that is a RENDER of this file (store icon 512, feature graphic, screenshots) is phase O7's
     and is deliberately still green; the ADR records that divergence window as accepted.
 
-    Re-materialled again 2026-08-27 for ADR-020 (Slate, wave W4). Same rule as ADR-009's: the
+    Re-materialled again 2026-08-27 for ADR-021 (Slate, wave W4). Same rule as ADR-009's: the
     geometry is byte for byte what it was and only the two colours moved, because the tokens did.
     Champagne on warm obsidian becomes slate blue on cool near-black.
 

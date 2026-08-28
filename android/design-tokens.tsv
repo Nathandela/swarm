@@ -43,7 +43,7 @@
 # correctly. So they sit beside --p-card-fx, --p-cta-fx, --p-grain and --p-workbar, which have
 # never had rows either, and O3/O4 give them Kotlin homes with their own gates.
 #
-# ADR-020 (W4, 2026-08-27): THE SKIN IS SLATE, AND AGAIN NOT ONE ROW MOVED. Nineteen colour values
+# ADR-021 (W4, 2026-08-27): THE SKIN IS SLATE, AND AGAIN NOT ONE ROW MOVED. Nineteen colour values
 # and seven non-colour values changed in the origin (now docs/research/slate-maquette.html via
 # internal/design/tokens.json); the join below is byte for byte what ADR-009 left, because the
 # join records which token a resource IS and a skin change is exactly the thing it must survive.

@@ -332,7 +332,7 @@ class InboxChromeTest {
                 ),
             ),
         )
-        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What this asserted before:
+        // AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27, wave W4). What this asserted before:
         //
         //     assertNotEquals(
         //         "the tab bar is opaque. --p-tabbg is 88% for a reason the token was pinned for: a " +
@@ -346,7 +346,7 @@ class InboxChromeTest {
         // list through. Slate's --p-tabbg is rgba(11,14,20,1), the ground's own value at full
         // alpha, so the bar IS the ground and the claim inverts.
         assertEquals(
-            "the tab bar is opaque and sits on the ground's own value (ADR-020 D1): --p-tabbg is " +
+            "the tab bar is opaque and sits on the ground's own value (ADR-021 D1): --p-tabbg is " +
                 "--p-bg at alpha 1, so a line of ink scrolling under the bar does not show through.",
             KitOrigin.token("--p-bg"),
             surface.fill,
@@ -477,7 +477,7 @@ class InboxChromeTest {
             // R.dimen.swarm_space_2 on both sides of it and certifies nothing about the design.
             Claim("badge padding-y (top)", dimenPx("swarm_space_2"), badge.paddingTop),
             Claim("badge padding-x (start)", dimenPx("swarm_space_6"), badge.paddingStart),
-            // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What the height claim said:
+            // AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27, wave W4). What the height claim said:
             //
             //     Claim("badge height", dimen("swarm_radius_chip") * 2f, badge.layoutParams.height.toFloat()),
             //
@@ -627,7 +627,7 @@ class InboxChromeTest {
                 listOf(Claim("padding", dimenPx("swarm_space_8"), dimenPx("swarm_space_10"))),
             ).isNotEmpty(),
         )
-        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What this control said before:
+        // AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27, wave W4). What this control said before:
         //
         //     assertTrue(
         //         "an opaque tab bar passes the comparison against the 88% token",
@@ -640,7 +640,7 @@ class InboxChromeTest {
         // satisfiable by the skin. --p-tabbg is --p-bg at alpha 1 now (the bar is opaque by
         // design), so that pair no longer differs and the control would fail on the correct
         // reader. The property it defends -- the rgba reader can tell the bar's fill from another
-        // surface -- is checked against a pair ADR-020 keeps distinct: the bar and the card.
+        // surface -- is checked against a pair ADR-021 keeps distinct: the bar and the card.
         assertTrue(
             "a tab bar painted one ladder step up passes the comparison against the bar's token",
             mismatches(
@@ -689,7 +689,7 @@ class InboxChromeTest {
             KitOrigin.cssColour(".ptabs div", "color"),
             KitOrigin.cssColour(".ptabs div.on", "color"),
         )
-        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What the closing guard said:
+        // AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27, wave W4). What the closing guard said:
         //
         //     assertNotEquals(
         //         "--p-tabbg resolves to the same value as --p-bg, so the translucency assertion above " +

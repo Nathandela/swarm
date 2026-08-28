@@ -437,7 +437,7 @@ internal object KitMetrics {
 
     /**
      * The badge's box. `--p-chip-r` was 8 dp, so a 16 dp box rendered a pill; Slate's is 10 dp
-     * (ADR-020 D1) and the box is still 16, so the corner clamps at half the height and the box
+     * (ADR-021 D1) and the box is still 16, so the corner clamps at half the height and the box
      * still renders a pill -- PB-DS-4's dot degeneracy one token over. The derivation is the
      * row's, and the pill is a consequence rather than a fifth radius.
      *

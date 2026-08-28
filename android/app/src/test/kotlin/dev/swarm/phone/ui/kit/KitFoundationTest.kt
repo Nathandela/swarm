@@ -248,8 +248,8 @@ class KitFoundationTest {
         // is what an 8-bit alpha quantisation must do (it is what ColorMix does, once, at the end
         // of the blend, for the reason its own doc gives).
         //
-        // AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4). What it said between
-        // ADR-009 and ADR-020:
+        // AUTHORIZED VALUE MIGRATION, ADR-021 D1 (2026-08-27, wave W4). What it said between
+        // ADR-009 and ADR-021:
         //
         //     (0.10f * 255f).roundToInt(),
         //

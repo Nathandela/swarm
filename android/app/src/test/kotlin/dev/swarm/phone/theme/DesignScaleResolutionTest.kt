@@ -286,7 +286,7 @@ class DesignScaleResolutionTest {
         // They are NOT rewritten to read the value they check -- that would be the reader
         // certifying itself, which is the exact defect this test exists to catch. The sizes below
         // (27px, 9.5px) are unchanged, because ADR-009 moves material and not the type scale.
-        // AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4): the two radii moved a
+        // AUTHORIZED VALUE MIGRATION, ADR-021 D1 (2026-08-27, wave W4): the two radii moved a
         // second time, 14/18 to 16/20. What the two lines said under Obsidian:
         //
         //     assertEquals("--p-card-r is 14px in the origin", 14f, DesignScale.tokenPx("--p-card-r"), 0f)
@@ -310,7 +310,7 @@ class DesignScaleResolutionTest {
         // assertion in this suite an assertion about the ladder R1 retired, and would do it
         // silently.
         //
-        // AUTHORIZED VALUE MIGRATION, ADR-020 D3 (2026-08-27, ruling R9, ADR-012 P10): the display
+        // AUTHORIZED VALUE MIGRATION, ADR-021 D3 (2026-08-27, ruling R9, ADR-012 P10): the display
         // rung is 24 and the micro rung is 11. What the two known answers said under R1:
         //
         //     "`.pnav .big` renders on the 22 sp display rung", 22f,

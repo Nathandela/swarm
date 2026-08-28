@@ -212,7 +212,7 @@ class ToggleTest {
      * content in. It has to be: a pale thumb on the accent track is light-on-light, the one
      * contrast pair the fill's own ceiling makes unwinnable (ADR-009 D8.1's amendment measured the
      * maximum reachable |Lc| on champagne `#c9a876` at 59.73, with pure white reaching only 49;
-     * ADR-020 re-measured it on slate `#8eb4e6` at 62.04, white reaching 46.58).
+     * ADR-021 re-measured it on slate `#8eb4e6` at 62.04, white reaching 46.58).
      */
     @Test
     fun `the thumb crosses between the two inks the maquette gives it`() {

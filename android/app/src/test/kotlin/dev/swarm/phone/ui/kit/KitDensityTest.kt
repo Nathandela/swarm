@@ -296,7 +296,7 @@ class KitDensityTest {
                     Claim("row 31 row padding-x", dimenPx("swarm_space_12"), change.paddingStart),
                     Claim("row 32 pill padding-y", dimenPx("swarm_space_6"), pill.paddingTop),
                     Claim("row 32 pill padding-x", dimenPx("swarm_space_14"), pill.paddingStart),
-                    // ADR-020 D2 (2026-08-27): row 26's padding-x is `space_16`; it was `space_12`.
+                    // ADR-021 D2 (2026-08-27): row 26's padding-x is `space_16`; it was `space_12`.
                     Claim("row 26 bubble padding-x", dimenPx("swarm_space_16"), bubble.paddingStart),
                 ),
             ),

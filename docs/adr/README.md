@@ -27,7 +27,8 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [017](ADR-017-terminal-fallback-capability.md) | Capability-driven terminal fallback — the sanitized terminal returns, for the sessions that cannot be chat, and for nothing else. **Amended 2026-08-20 (Wave R8):** T2-a/T2-b/T2-c, T4-a/T4-b/T4-c, T5-a, T6-a..T6-f, T8-a/T8-b and the gate note — every one a fail-closed narrowing, and the two owner questions it left open are answered. **Amended again 2026-08-20 (Wave R8 CLOSING round), C0-C7: the wave lands as the READ HALF ONLY.** The control half — `terminal_input`, the generation/keepalive plane, any take-control affordance — is PARKED with written preconditions (C1: raw input is bearer-authorised); T8's transport-loss row is WITHDRAWN as unbuildable and its replacement row is a sweep, not a synchronous sever. C8 adds the facade-seam rule for the staleness fields. The raw-input attack surface in the shipped product is ZERO | Accepted | 2026-08-14 |
 | [018](ADR-018-multi-machine-pairings.md) | Multi-machine pairings — one phone, N independent single-device relationships | Accepted | 2026-08-14 |
 | [019](ADR-019-boundary-aware-detach-recognition.md) | Detach recognition becomes boundary-aware — the solo-read test (D4) is superseded | Accepted | 2026-08-26 |
-| [020](ADR-020-slate-palette-and-breathing-scale.md) | Slate palette and the breathing scale — a cool ladder, wider steps, one rung up (supersedes ADR-009-obsidian D1, D3 values, colour half of D4) | Accepted | 2026-08-27 |
+| [020](ADR-020-unattended-daemon-restart.md) | Unattended daemon restart spawns from the saved environment, or touches nothing | Proposed (owner sign-off pending) | 2026-08-27 |
+| [021](ADR-021-slate-palette-and-breathing-scale.md) | Slate palette and the breathing scale — a cool ladder, wider steps, one rung up (supersedes ADR-009-obsidian D1, D3 values, colour half of D4) | Accepted | 2026-08-27 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
 independently before merging (007/008 the main and remote-control lines, 2026-08-02; 009/010 the
@@ -41,7 +42,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number (the next FREE one is ADR-021: 013 was minted for the Mirror capture architecture, 014 for paged interaction history, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 for boundary-aware detach recognition and 020 for the Slate palette).
+1. Next sequential number (the next FREE one is ADR-022: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, and 021 for the Slate palette and breathing scale).
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

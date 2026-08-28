@@ -112,7 +112,7 @@ class ScreenAirSweepTest {
      * `swarm_space_24` (derivation row 18). Any one of them, once -- a path that crosses two of
      * them is the F2 doubling.
      *
-     * AUTHORIZED REWRITE, ADR-020 D2 (2026-08-28, wave W4, lead's ruling). What this set was:
+     * AUTHORIZED REWRITE, ADR-021 D2 (2026-08-28, wave W4, lead's ruling). What this set was:
      *
      *     setOf(swarm_space_12, swarm_space_24)
      *

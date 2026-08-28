@@ -1,6 +1,6 @@
 # ADR-012: Type ladder consolidation — phase 1 (safe merges) and phase 2 (the ruled ladder)
 
-**Status**: Accepted. Phase 1 (T1–T5) took the two merges that moved no pixel. Phase 2 (P1–P8, below) implements the owner rulings of 2026-08-09 and is where every question phase 1 refused to answer is answered. **Amended 2026-08-27 by [ADR-020](ADR-020-slate-palette-and-breathing-scale.md) D3: P10 (ruling R9) shifts all five rungs one step up; the rung table under P10 is the machine-read one.**
+**Status**: Accepted. Phase 1 (T1–T5) took the two merges that moved no pixel. Phase 2 (P1–P8, below) implements the owner rulings of 2026-08-09 and is where every question phase 1 refused to answer is answered. **Amended 2026-08-27 by [ADR-021](ADR-021-slate-palette-and-breathing-scale.md) D3: P10 (ruling R9) shifts all five rungs one step up; the rung table under P10 is the machine-read one.**
 **Date**: 2026-08-09 (phase 1), amended the same day with phase 2
 **Filename**: still `...-phase-1.md`. The path is cited from `type.xml`, from `android/gate/s22b_type_test.go`, from the Robolectric suite and from three beads; renaming the file to match its contents would break four joins to save one word. The title above is the record of what it is.
 **Amends**: [ADR-009](ADR-009-obsidian-visual-direction.md) D7's parenthetical "Type scale structure (19 styles, ...) is unchanged" — the count becomes 17. D7's decisions themselves are untouched: no size, weight, tracking, family or feature string moves here.
@@ -235,7 +235,7 @@ MULTIPLIER still come from the rule each style cites, unchanged and unchangeable
 
 ### The rung table
 
-> **SUPERSEDED 2026-08-27 by P10 below (ADR-020 D3, ruling R9).** The rows are struck through so
+> **SUPERSEDED 2026-08-27 by P10 below (ADR-021 D3, ruling R9).** The rows are struck through so
 > that the two machine readers (`android/gate/s22b_type_test.go`, the Robolectric suite's
 > `TypeScale`) take P10's table and not this one: both refuse a style that stands on two rungs, so
 > the retired table has to stop parsing as rows. Every cell is otherwise as R1 ruled it, because
@@ -436,10 +436,10 @@ that moved without a citation behind it fails exactly as an uncited size move do
 table.
 
 
-### P10 — R9: the five rungs shift one step up (ADR-020 D3, 2026-08-27)
+### P10 — R9: the five rungs shift one step up (ADR-021 D3, 2026-08-27)
 
 Owner ruling of 2026-08-27, recorded in `docs/specifications/phone-refit-playbook.md` section 5
-and decided by [ADR-020](ADR-020-slate-palette-and-breathing-scale.md) D3: on the handset the
+and decided by [ADR-021](ADR-021-slate-palette-and-breathing-scale.md) D3: on the handset the
 ladder R1 ruled reads one rung too small, so every rung moves up and the ladder keeps its shape.
 R1's structure is untouched — five rungs, sizes read out of this record and everything else out of
 the cited rule — and R1's table above is superseded in its numbers only.

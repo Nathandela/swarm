@@ -76,7 +76,7 @@ const (
 // drawing: it declares 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,24 against Substrate's
 // 2,4,5,7,8,9,10,11,12,13,14,15,16,18 -- the same ladder, at the same size, on the same grid.
 //
-// ADR-020 D1 (2026-08-27, wave W4) moves the origin to docs/research/slate-maquette.html: a copy
+// ADR-021 D1 (2026-08-27, wave W4) moves the origin to docs/research/slate-maquette.html: a copy
 // of the Obsidian file with Slate values in `:root` and the slab's breathing (D2), and with the
 // same selectors and the same two block markers below, so every reader in this package that took
 // a geometry or a var() binding from the Obsidian maquette now takes it from the Slate one

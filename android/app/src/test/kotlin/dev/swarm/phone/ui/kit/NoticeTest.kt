@@ -76,7 +76,7 @@ class NoticeTest {
     }
 
     /*
-     * DELETED, ADR-020 D3 (2026-08-28, wave W4, lead's ruling): `the notice is smaller than the
+     * DELETED, ADR-021 D3 (2026-08-28, wave W4, lead's ruling): `the notice is smaller than the
      * platform default it used to render at`. What it asserted:
      *
      *     val ladderPx = line().textSize

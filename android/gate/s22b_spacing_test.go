@@ -20,8 +20,8 @@ package gate
 // WHERE THE EXPECTED NUMBERS COME FROM. Not from here. The ten scale steps are the decision and
 // are named in the requirement, so they are named here; everything they are checked AGAINST is
 // computed at test time by s22b_designsource_test.go. The drift ledger reads the phone-kit block
-// of docs/research/slate-maquette.html, which ADR-020 D1 makes the normative design source (ADR-009
-// D2's arrangement, ADR-020's file);
+// of docs/research/slate-maquette.html, which ADR-021 D1 makes the normative design source (ADR-009
+// D2's arrangement, ADR-021's file);
 // the four radii read internal/design/tokens.json, which transcribes the same maquette; the three
 // frame constants and the dot's degeneracy still read the older directions artifact, for the two
 // reasons set out at s22bMaquetteRelPath -- neither is a skin value and the maquette states
@@ -70,7 +70,7 @@ import (
 // (`.trow .lbl .l2` and `.mrow .m1 .s`) are both 2px. Absorbing down makes the three consistent;
 // absorbing up would leave one of them alone at 4dp for no reason a reader could name.
 //
-// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4). The Slate maquette's slab spends `margin:
+// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4). The Slate maquette's slab spends `margin:
 // 0 16px 14px; padding: 12px 16px` where the Obsidian one spent `0 14px 10px` / `13px 15px`, and
 // 15px was the slab's alone: no other rule in the kit block declares it, so the design no longer
 // declares it and the row that absorbed it can no longer claim to. What the row said before:
@@ -78,7 +78,7 @@ import (
 //	{"swarm_space_14", 14, []float64{14, 15}},
 //
 // 13px stays (`.cta`, `.trow`, `.field .fbox`, `.deny-chip` still declare it), so `swarm_space_12`
-// still absorbs it. No step is added and none is removed: ADR-020 D2 breathes by spending wider
+// still absorbs it. No step is added and none is removed: ADR-021 D2 breathes by spending wider
 // steps of the same scale, which is why this ledger changed by one literal and dimens.xml's ten
 // steps did not change at all.
 var s22bScale = []struct {
@@ -415,7 +415,7 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	// without a footnote for the first time. The 2dp mover is gone -- nothing in the maquette
 	// drifts further than 1dp -- so seven movers, all of them by one.
 	//
-	// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4): SIX. What this said before:
+	// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4): SIX. What this said before:
 	//
 	//	const wantMovers = 7
 	//
@@ -427,7 +427,7 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	if len(movers) != wantMovers {
 		t.Errorf("PB-DS-1: %d of %d maquette spacing values move onto the scale, want %d.\n"+
 			"\tmoved: %s\n"+
-			"PB-DS-1's ledger is six movers (ADR-020 D2); a different count means the design moved and "+
+			"PB-DS-1's ledger is six movers (ADR-021 D2); a different count means the design moved and "+
 			"nobody re-took the decision.",
 			len(movers), len(values), wantMovers, strings.Join(movers, ", "))
 	}

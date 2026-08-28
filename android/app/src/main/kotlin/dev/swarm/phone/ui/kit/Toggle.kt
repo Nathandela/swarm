@@ -26,7 +26,7 @@ import dev.swarm.phone.R
  * `--p-ink` in both states" -- which was row 4's specification for a control Substrate never drew.
  * The maquette gives the thumb `--p-ink3` off and `--p-hero-ink` on, and it has to: a pale thumb
  * on the accent track is light-on-light, the one contrast pair the fill's own ceiling makes
- * unwinnable (ADR-009 D8.1's amendment measured max |Lc| on champagne `#c9a876` at 59.73; ADR-020
+ * unwinnable (ADR-009 D8.1's amendment measured max |Lc| on champagne `#c9a876` at 59.73; ADR-021
  * re-measured it on slate `#8eb4e6` at 62.04, with pure white reaching only 46.58). So three colours
  * cross between the two states -- this drawable's fill, this drawable's border, and the thumb's
  * own fill -- each through [Motion.colorTransition], which reports values to a lambda rather than

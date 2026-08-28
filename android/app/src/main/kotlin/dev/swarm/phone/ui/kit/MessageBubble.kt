@@ -24,7 +24,7 @@ import dev.swarm.phone.R
  * different claims and the reuse rule (§2) does not reach across them -- the same rule that made
  * `monoWell` one component for every mono block is what makes this a second one.
  *
- * NO TAIL. Row 26 argues it: this skin's radius ladder is 16 / 20 / 12 / 10 (ADR-020; Obsidian's
+ * NO TAIL. Row 26 argues it: this skin's radius ladder is 16 / 20 / 12 / 10 (ADR-021; Obsidian's
  * was 14 / 18 / 10 / 8) and has nothing small
  * enough to read as a tail, so a tail would either look slightly wrong at `--p-chip-r` or invent
  * a step. Alignment and fill already say who spoke.
@@ -75,7 +75,7 @@ fun messageBubble(
     )
     this.text = text
     background = bubbleSurface(context, state)
-    // Row 26's padding and gap since ADR-020 D2 (2026-08-27): the Slate slab's `space_12` x
+    // Row 26's padding and gap since ADR-021 D2 (2026-08-27): the Slate slab's `space_12` x
     // `space_16` and its 14 dp margin, where the row spent `space_8` x `space_12` and `space_8`.
     setPaddingRelative(
         Kit.dimenPx(context, R.dimen.swarm_space_16),

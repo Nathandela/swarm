@@ -164,7 +164,7 @@ fun sessionRow(
  * rows -- PB-DS-6's whole claim is that a screen composes components and passes data, and a
  * container is where that claim is usually lost.
  *
- * THE STEPS ARE THE SLATE MAQUETTE'S (ADR-020 D2, 2026-08-27): `.slab { margin: 0 16px 14px }`,
+ * THE STEPS ARE THE SLATE MAQUETTE'S (ADR-021 D2, 2026-08-27): `.slab { margin: 0 16px 14px }`,
  * 16 dp at the sides and 14 dp between rows, where `.prows` spent 12 dp and an 8 dp gap. The
  * container is still `.prows`'s idea and keeps that origin; what it spends is the slab's margin,
  * which `android/gate/s23_kit_test.go` reads out of the maquette rather than the artifact.

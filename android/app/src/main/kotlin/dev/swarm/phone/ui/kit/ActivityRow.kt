@@ -22,7 +22,7 @@ import dev.swarm.phone.R
  * ITS CARD IS `cardSurface` RATHER THAN A SECOND DERIVATION OF THE SAME FOUR VALUES. Row 14 asks
  * for `--p-card`, a 1 dp `--p-hair` border, `--p-card-r` and the `--p-card-fx` key light, which is
  * the session row's surface exactly. Its padding was the session row's `space_10` x `space_12`
- * until ADR-020 D2 (2026-08-27) gave it the Slate slab's `space_12` x `space_16`, the breathing the
+ * until ADR-021 D2 (2026-08-27) gave it the Slate slab's `space_12` x `space_16`, the breathing the
  * owner ruled for the rows a person reads. The mock drew this row at radius 12 with 11/13 padding and no border at all; none of
  * that survives, because §2's reuse rule is what stops the app having two card radii one screen
  * apart and a second place the card fill has to be changed. What is left for this file to decide

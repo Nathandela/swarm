@@ -42,21 +42,21 @@ const (
 	designHTMLRef   = "docs/research/slate-maquette.html"
 	// htmlTokenCount is the count the maquette's :root block declares: ADR-009 D3's 31
 	// inherited tokens plus the four it adds (--p-lit-fx, --p-sweep-fx, --p-sheet-hi,
-	// --p-sheet-lo). ADR-020 D1 changes values and adds no token, so the count holds.
+	// --p-sheet-lo). ADR-021 D1 changes values and adds no token, so the count holds.
 	htmlTokenCount = 35
 )
 
-// AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27). What the two path constants and the map below
-// said between ADR-009 and ADR-020, quoted so this move is visible rather than inferred:
+// AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27). What the two path constants and the map below
+// said between ADR-009 and ADR-021, quoted so this move is visible rather than inferred:
 //
 //	designHTMLPath  = "../../docs/research/obsidian-maquette.html"
 //	designHTMLRef   = "docs/research/obsidian-maquette.html"
 //	var skinSelector = map[string]string{"obsidian": ":root"}
 //
-// ADR-020 D1 makes docs/research/slate-maquette.html the normative design source: a NEW file,
+// ADR-021 D1 makes docs/research/slate-maquette.html the normative design source: a NEW file,
 // not a second block in the Obsidian one, because parseSkinTokens takes the first `:root` it
 // meets and two blocks in one file would let the JSON match whichever came first. The Obsidian
-// maquette stays checked in as the record of the direction ADR-020 supersedes.
+// maquette stays checked in as the record of the direction ADR-021 supersedes.
 
 // AUTHORIZED REWRITE, ADR-009 D8.3 and the plan's O2.3. What the three constants above and the
 // map below used to say, quoted so the move is visible rather than inferred:
@@ -189,7 +189,7 @@ func TestTokenSourceMatchesChosenSkinInDesignHTML(t *testing.T) {
 	src := loadTokenSource(t)
 	selector, ok := skinSelector[src.Skin]
 	if !ok {
-		t.Fatalf("PB-TOK-2/ADR-020 D1: recorded skin %q has no block in %s. The skin is a "+
+		t.Fatalf("PB-TOK-2/ADR-021 D1: recorded skin %q has no block in %s. The skin is a "+
 			"DECISION, so adding one here is an ADR's job, not a JSON edit's.",
 			src.Skin, designHTMLRef)
 	}
@@ -219,7 +219,7 @@ func TestTokenSourceMatchesChosenSkinInDesignHTML(t *testing.T) {
 // a source it cannot read. Both would be green forever. So the design source is perturbed IN
 // MEMORY -- one hex digit of --p-bg, and one token deleted -- and the comparison must notice.
 //
-// NOTHING HERE TOUCHES THE FILE. The maquette is the signed design source (ADR-009 D2, ADR-020 D1); a
+// NOTHING HERE TOUCHES THE FILE. The maquette is the signed design source (ADR-009 D2, ADR-021 D1); a
 // control that wrote to it to prove a fence works is a control that ends up committed, which is
 // a mistake this repository has paid for. The perturbation is a strings.Replace on a copy.
 func TestTheDriftCheckCanActuallyFail(t *testing.T) {
@@ -271,10 +271,10 @@ func TestTheDriftCheckCanActuallyFail(t *testing.T) {
 	}
 }
 
-// PB-TOK-2 / ADR-020 D1: the chosen skin is Slate, and the theme is pinned
+// PB-TOK-2 / ADR-021 D1: the chosen skin is Slate, and the theme is pinned
 // dark (light mode is deferred to Phase C per requirements section 5).
 //
-// AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27). What this test asserted before, quoted so the
+// AUTHORIZED REWRITE, ADR-021 D1 (2026-08-27). What this test asserted before, quoted so the
 // pin's second move is visible rather than inferred:
 //
 //	func TestChosenSkinIsObsidianAndPinnedDark(t *testing.T) {
@@ -298,7 +298,7 @@ func TestTheDriftCheckCanActuallyFail(t *testing.T) {
 func TestChosenSkinIsSlateAndPinnedDark(t *testing.T) {
 	src := loadTokenSource(t)
 	if src.Skin != "slate" {
-		t.Errorf("PB-TOK-2/ADR-020 D1: skin must be \"slate\", got %q", src.Skin)
+		t.Errorf("PB-TOK-2/ADR-021 D1: skin must be \"slate\", got %q", src.Skin)
 	}
 	if src.Mode != "dark" {
 		t.Errorf("PB-TOK-2: mode must be pinned to \"dark\", got %q", src.Mode)

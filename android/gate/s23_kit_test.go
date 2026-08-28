@@ -291,7 +291,7 @@ var s23Inbox = []s23Component{
 			"draws a unified diff inline, unconditionally, so a wide refactor costs a screen per " +
 			"file on the one surface whose purpose is continuous reading; this costs one line " +
 			"per file. It takes `activityRow`'s card, padding and gap verbatim -- `cardSurface`, " +
-			"`space_10` x `space_12`, `space_10` (row 14's pair until ADR-020 D2 widened the " +
+			"`space_10` x `space_12`, `space_10` (row 14's pair until ADR-021 D2 widened the " +
 			"activity row to `space_12` x `space_16`; this row keeps the tighter box pending its " +
 			"own ruling) -- because it sits AMONG tool rows in the same " +
 			"stream and a tighter box would read as a different kind of object rather than as " +
@@ -592,7 +592,7 @@ var s23Inbox = []s23Component{
 		File:    "SessionRow.kt",
 		Origin:  ".prows",
 		Why: "the rows' container carries the side padding and the gap between rows (16dp and " +
-			"14dp since ADR-020 D2, the Slate slab's margin; 12dp and the 7px gap under Substrate). " +
+			"14dp since ADR-021 D2, the Slate slab's margin; 12dp and the 7px gap under Substrate). " +
 			"Without it a screen types both, which is the PB-DS-6 violation the kit exists to prevent",
 	},
 	{
@@ -1527,7 +1527,7 @@ func TestPBDS6_NoRawDimensionIsTypedInTheKit(t *testing.T) {
 // that declaration -- which is a decision a reviewer can disagree with, and which no amount of
 // scanning could infer.
 //
-// A ROW MAY NAME THE SLATE MAQUETTE INSTEAD OF THE SHARED BLOCK (ADR-020 D2, 2026-08-27), and it
+// A ROW MAY NAME THE SLATE MAQUETTE INSTEAD OF THE SHARED BLOCK (ADR-021 D2, 2026-08-27), and it
 // says so with `Maquette: true` rather than by falling back: the two sources name the same
 // component differently (`.prows`/`.prow` in the artifact, `.slab` in the maquette), so a lookup
 // that tried both would answer from whichever file happened to declare the selector and stop
@@ -1552,7 +1552,7 @@ var s23Spacing = []struct {
 	{"SessionRow.kt", ".prow", "padding", 1, "swarm_space_12", false},
 	{"SessionRow.kt", ".prow .t", "gap", 0, "swarm_space_8", false},
 	{"SessionRow.kt", ".prow .ln", "margin-top", 0, "swarm_space_4", false},
-	// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4). The list's side inset and the gap
+	// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4). The list's side inset and the gap
 	// between rows are the Slate maquette's `.slab { margin: 0 16px 14px }` -- field 1 is the
 	// sides, field 2 is the bottom, which between stacked slabs is the gap. What the two rows
 	// said before, joined to Substrate's `.prows { padding: 0 12px; gap: 8px }`:
@@ -1561,7 +1561,7 @@ var s23Spacing = []struct {
 	//	{"SessionRow.kt", ".prows", "gap", 0, "swarm_space_8", false},
 	//
 	// The container is still `.prows`'s idea (the factory table keeps that origin); the STEPS it
-	// spends are the maquette's, which is the file ADR-020 D1 makes normative.
+	// spends are the maquette's, which is the file ADR-021 D1 makes normative.
 	{"SessionRow.kt", ".slab", "margin", 1, "swarm_space_16", true},
 	{"SessionRow.kt", ".slab", "margin", 2, "swarm_space_14", true},
 	{"WorkingBar.kt", ".workbar", "margin", 0, "swarm_space_2", false},
@@ -1820,14 +1820,14 @@ var s23DerivedSpacing = []struct {
 	// silently check the bar's padding against the field's component.
 	{"TextField.kt", "#9 Composer", "padding-y", "swarm_space_8"},
 	{"TextField.kt", "#9 Composer", "padding-x", "swarm_space_14"},
-	// Row 14 stated the same two steps the session row spends until ADR-020 D2 (2026-08-27): the
+	// Row 14 stated the same two steps the session row spends until ADR-021 D2 (2026-08-27): the
 	// activity row's card IS `.prow`'s, so `cardSurface` paints it and this join is what stops the
 	// padding beside it being retyped. These rows cited `§4 Activity row` for part of a day, while
 	// the derivation table carried the activity row twice; the §4 duplicate is deleted and row 14
 	// is the authority, which is also the reference s23FindRow can resolve unambiguously -- see
 	// the scoping note on that function.
 	//
-	// AUTHORIZED REWRITE, ADR-020 D2. Row 14 now states the Slate slab's `space_12` x `space_16`
+	// AUTHORIZED REWRITE, ADR-021 D2. Row 14 now states the Slate slab's `space_12` x `space_16`
 	// (the maquette's `.slab { padding: 12px 16px }`); what these two rows said before:
 	//
 	//	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_10"},
@@ -1873,7 +1873,7 @@ var s23DerivedSpacing = []struct {
 	// AND THE TWO THAT LANDED EARLIER IN THE SAME WAVE. Neither was joined when it shipped, which
 	// is the same omission this block exists to end -- a bubble and a header whose only
 	// specification is prose in a table, with nothing reading the table.
-	// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27): row 26 now states the Slate slab's
+	// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27): row 26 now states the Slate slab's
 	// `space_12` x `space_16`; what these two rows said before:
 	//
 	//	{"MessageBubble.kt", "#26 Message bubble", "padding-y", "swarm_space_8"},
@@ -4172,7 +4172,7 @@ func TestPBDS7_TheMetricJoinCanActuallyFail(t *testing.T) {
 		// --p-workbar's stop are unchanged by a skin that repainted both of their colours, so a
 		// reader that had started returning whatever it was handed would show up here.
 		//
-		// AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4). The alpha row moved a
+		// AUTHORIZED VALUE MIGRATION, ADR-021 D1 (2026-08-27, wave W4). The alpha row moved a
 		// second time, to Slate's `inset 0 1px 0 rgba(238,242,248,0.08)`; what it said under
 		// Obsidian, quoted so the move is visible:
 		//

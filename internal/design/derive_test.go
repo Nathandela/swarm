@@ -104,7 +104,7 @@ func TestPBTOK7_TheThreeArtifactDerivationsAreComputedFromTheTokens(t *testing.T
 	// rounded to 0x80=128, and `#B3C9A876` becomes `#80C9A876`. `--p-att`'s own RGB (`C9A876`)
 	// does not move -- R8 changed the SHARE, not the base colour.
 	//
-	// AUTHORIZED VALUE MIGRATION, ADR-020 D1 (2026-08-27, wave W4). What the three rows read
+	// AUTHORIZED VALUE MIGRATION, ADR-021 D1 (2026-08-27, wave W4). What the three rows read
 	// under Obsidian, quoted so this move is visible too:
 	//
 	//	{"attention-row-border", "#66553D"},

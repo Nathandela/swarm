@@ -1,8 +1,14 @@
 # Phone refit W4 — Slate and breathing: RED evidence and gate record
 
 Bead `agents-tracker-d45a.4` · playbook `docs/specifications/phone-refit-playbook.md` section 5 ·
-ADR: [ADR-020](../adr/ADR-020-slate-palette-and-breathing-scale.md) · worktree `refit-w4`,
+ADR: [ADR-021](../adr/ADR-021-slate-palette-and-breathing-scale.md) · worktree `refit-w4`,
 branch `refit/w4` · 2026-08-27.
+
+**Renumbered 2026-08-28 at review:** `main` already carried ADR-020 (the unattended daemon
+restart), so the Slate decision is ADR-021. Every citation on this branch, including the test
+identifiers (`TestADR021_*`) and the RED/GREEN output quoted below, was renumbered in one pass
+(`git grep` for the Slate `ADR-020` is empty); output quoted here therefore reads `ADR-021` where
+the gate printed `ADR-020` at the time it ran.
 
 Every RED below was captured before the GREEN edit that follows it, by running the affected
 gate against the tree as it stood. Where a gate could not see the change, the new assertion was
@@ -22,11 +28,11 @@ JSON existed (`go test ./internal/design/ -count=1`):
 --- FAIL: TestTokenSourceExistsAndMatchesSchema (0.00s)
     tokens_test.go:174: PB-TOK-1: source must reference "docs/research/slate-maquette.html", got "docs/research/obsidian-maquette.html"
 --- FAIL: TestTokenSourceMatchesChosenSkinInDesignHTML (0.00s)
-    tokens_test.go:192: PB-TOK-2/ADR-020 D1: recorded skin "obsidian" has no block in docs/research/slate-maquette.html. The skin is a DECISION, so adding one here is an ADR's job, not a JSON edit's.
+    tokens_test.go:192: PB-TOK-2/ADR-021 D1: recorded skin "obsidian" has no block in docs/research/slate-maquette.html. The skin is a DECISION, so adding one here is an ADR's job, not a JSON edit's.
 --- FAIL: TestTheDriftCheckCanActuallyFail (0.00s)
     tokens_test.go:226: design source docs/research/slate-maquette.html not readable: open ../../docs/research/slate-maquette.html: no such file or directory
 --- FAIL: TestChosenSkinIsSlateAndPinnedDark (0.00s)
-    tokens_test.go:301: PB-TOK-2/ADR-020 D1: skin must be "slate", got "obsidian"
+    tokens_test.go:301: PB-TOK-2/ADR-021 D1: skin must be "slate", got "obsidian"
 FAIL
 FAIL	github.com/Nathandela/swarm/internal/design	0.661s
 FAIL
@@ -206,7 +212,7 @@ FAIL
 `s23_kit_test.go`'s known-answer `{"--p-tabbg", "alpha", 0.88}` to `1` under an AUTHORIZED REWRITE
 note; `Composer.kt:292` and `TabBar.kt:115` untouched. `InboxChromeTest`'s `assertNotEquals(--p-bg,
 fill)` is false by design now (the fill IS the ground) and is inverted to `assertEquals` with the
-rewritten message citing ADR-020 D1; its RED and GREEN are Kotlin-lane runs recorded below. The
+rewritten message citing ADR-021 D1; its RED and GREEN are Kotlin-lane runs recorded below. The
 `design-tokens.tsv` row for `--p-tabbg` keeps its note (`rgba(14,11,8,0.88) -> #E00E0B08`) as a
 row cell is not a comment line; it is history and reads as such.
 
@@ -219,7 +225,7 @@ row cell is not a comment line; it is history and reads as such.
    `KitDensityTest:299`. Section W4.5 below records it.
 2. **`--p-sweep-fx` keeps `rgba(255,252,244,0.30)`**: ADR-009 D5 survives with its sweep tint, and
    `Motion.kt`'s tint constants and D5's register row are joined to the token by `o4_sweep_test.go`
-   and `MotionTest`, neither in this wave. Recorded in ADR-020 D1.
+   and `MotionTest`, neither in this wave. Recorded in ADR-021 D1.
 3. **Both forced deviations accepted**: the four `swarm_radius_*` dimens follow the radius tokens
    under PB-DS-4; `android/app/build.gradle.kts`'s staging line and `DesignScale.kt` point at
    `slate-maquette.html`.
@@ -274,7 +280,7 @@ The first is the `assertNotEquals(--p-bg, fill)` the amendment predicted, now fa
 inverted. The second is the same file's negative control, whose perturbation was `fill
 rgbaToken(--p-tabbg)` against `token(--p-bg)`: a discrimination satisfiable by the skin rather than
 by the reader, the same defect the file already records for `--p-hero`/`--p-att` under ADR-009.
-**GREEN edit:** the control is retargeted to `--p-card`, a pair ADR-020 keeps distinct, under an
+**GREEN edit:** the control is retargeted to `--p-card`, a pair ADR-021 keeps distinct, under an
 AUTHORIZED REWRITE note quoting the old form. No exemption was added. The full runs on the committed tree are
 recorded under "The gates on the committed tree" at the end.
 
@@ -322,18 +328,18 @@ All 16 ink pairs and all 10 indicator pairs clear their floors. The tight pair i
 `--p-elev` at |Lc| 25.2 against 24.0 (headroom 1.2); every other pair's headroom is at least 5.9.
 
 **Rename and re-derivation.** `obsidian_contrast_test.go` became `slate_contrast_test.go`; the
-identifiers `obsidian*` became `slate*` and the tests `TestADR009D8_*` became `TestADR020_*`; every
+identifiers `obsidian*` became `slate*` and the tests `TestADR009D8_*` became `TestADR021_*`; every
 ADR-009 D8.1 citation stays as the floors' history and each floor's comment gained a Slate column.
 The in-memory controls that named Obsidian's ladder were retargeted to Slate's (`#131824`/`#1b2334`,
 `#131824`/`#0b0e14`, `rgba(11,14,20,1)`), quoted in place.
 
 **RED** — the champagne proof's own claim (ceiling below the retired large floor of 60), written
 first against the live `--p-hero` read through the join (`go test ./android/gate/ -run
-'ADR020_AFloorNoInkCanReach' -count=1`):
+'ADR021_AFloorNoInkCanReach' -count=1`):
 
 ```
---- FAIL: TestADR020_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.05s)
-    slate_contrast_test.go:974: apcaCeiling(--p-hero #8eb4e6) = 62.04, at or above the RETIRED large floor of 60 (the champagne proof's claim, applied to the live fill). ADR-020 re-derived this proof on a fill that clears it (62.04 on #8eb4e6); a fill that does not is the champagne case again and the proof must be re-derived, not inherited.
+--- FAIL: TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.05s)
+    slate_contrast_test.go:974: apcaCeiling(--p-hero #8eb4e6) = 62.04, at or above the RETIRED large floor of 60 (the champagne proof's claim, applied to the live fill). ADR-021 re-derived this proof on a fill that clears it (62.04 on #8eb4e6); a fill that does not is the champagne case again and the proof must be re-derived, not inherited.
 FAIL
 FAIL	github.com/Nathandela/swarm/android/gate	4.028s
 FAIL
@@ -346,11 +352,11 @@ floor of 55, which the live pair clears at 60.9. The four near-black grounds are
 105.3 to 107.7 against the primary floor of 90).
 
 ```
---- PASS: TestADR020_EveryInkOnSurfacePairClearsItsAPCAFloor (0.05s)
---- PASS: TestADR020_EveryRoleFloorIsDeclaredAgainstItsRung (0.00s)
---- PASS: TestADR020_TheStateIndicatorsClearWCAGNonTextContrast (0.00s)
---- PASS: TestADR020_TheContrastCheckerCanActuallyFail (0.00s)
---- PASS: TestADR020_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.00s)
+--- PASS: TestADR021_EveryInkOnSurfacePairClearsItsAPCAFloor (0.05s)
+--- PASS: TestADR021_EveryRoleFloorIsDeclaredAgainstItsRung (0.00s)
+--- PASS: TestADR021_TheStateIndicatorsClearWCAGNonTextContrast (0.00s)
+--- PASS: TestADR021_TheContrastCheckerCanActuallyFail (0.00s)
+--- PASS: TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette (0.00s)
 ok  	github.com/Nathandela/swarm/android/gate	3.990s
 ```
 
@@ -486,11 +492,11 @@ untouched:
 ok  	github.com/Nathandela/swarm/android/gate	0.949s
 ```
 
-## W4.8 ADR-020 and the Kotlin literals
+## W4.8 ADR-021 and the Kotlin literals
 
 The Go-gated literals (`SwarmTheme.EXPECTED_DARK_COLORS`, `Kit.kt`'s two key-light alphas and the
 `rgba(238,242,248,...)` prose) landed with the origin in commit A, because the Go gates read them;
-ADR-020 (Status Accepted, D1-D4, supersedes/survives, consequences, alternatives) and the README
+ADR-021 (Status Accepted, D1-D4, supersedes/survives, consequences, alternatives) and the README
 row with "next FREE" 021 landed there too, so every AUTHORIZED REWRITE note cites a record that
 exists in the same commit. What is left here is prose: `Toggle.kt` and `ToggleTest.kt` carry the
 ceiling re-measured on `#8eb4e6` (62.04, white 46.58) beside the champagne 59.73 they quote,
@@ -503,22 +509,22 @@ REWRITE quotes in `derive_test.go`, the champagne evidence constant in `slate_co
 the Toggle prose, the TSV's `--p-tabbg` note (a row cell, not a comment line, so it stays) -- and
 three live literals in files the wave has no right to edit, reported rather than touched:
 `docs/design/conversation-drawing.html:10,12` (an Obsidian CSS block nothing reads),
-`docs/design/substrate-components.md:80` and row 23 (contrast figures measured on Obsidian). ADR-020
+`docs/design/substrate-components.md:80` and row 23 (contrast figures measured on Obsidian). ADR-021
 lists them under Consequences.
 
 ## The commits
 
 | SHA | Subject | Section |
 |---|---|---|
-| `6be8db30` | Move the phone skin to Slate: origin, join, mark, derivations (ADR-020) | W4.1, W4.2, W4.3, W4.7, W4.8 (Go-gated literals, ADR-020, README), the radius deviation, the tab-bar amendment |
+| `6be8db30` | Move the phone skin to Slate: origin, join, mark, derivations (ADR-021) | W4.1, W4.2, W4.3, W4.7, W4.8 (Go-gated literals, ADR-021, README), the radius deviation, the tab-bar amendment |
 | `fc07ad98` | Rename the contrast gate for Slate and re-derive the ceiling proof | W4.4 |
 | `d0ff31a1` | Fix the InboxChromeTest control guard for the opaque tab bar | the tab-bar amendment's Kotlin control |
-| `98e19397` | Breathing: the slab spends wider steps and the components follow (ADR-020 D2) | W4.5 (widened by ruling 1) |
-| `afa25ed7` | Shift the type ladder one rung up: 24 / 15 / 14 / 12.5 / 11 (ADR-020 D3, ruling R9) | W4.6 |
+| `98e19397` | Breathing: the slab spends wider steps and the components follow (ADR-021 D2) | W4.5 (widened by ruling 1) |
+| `afa25ed7` | Shift the type ladder one rung up: 24 / 15 / 14 / 12.5 / 11 (ADR-021 D3, ruling R9) | W4.6 |
 | `faf4e589` | Re-measure the Toggle ceiling on Slate and settle the remaining prose | W4.8 (prose) |
 | `fb439c52` | Re-measure the focus ring's contrast on Slate in substrate-components row 23 and its 1.1 note | W4.8 done-when grep (ruling 2) |
-| `913c4b5a` | Count sessionList's space_16 as the screen's side air in the sweep (ADR-020 D2) | Kotlin gate, run 1-2 RED (ruling 3) |
-| `b7eccbf1` | Delete the notice's size guard: on the body rung nothing can tell a dropped appearance (ADR-020 D3) | Kotlin gate, run 1-2 RED (ruling 4) |
+| `913c4b5a` | Count sessionList's space_16 as the screen's side air in the sweep (ADR-021 D2) | Kotlin gate, run 1-2 RED (ruling 3) |
+| `b7eccbf1` | Delete the notice's size guard: on the body rung nothing can tell a dropped appearance (ADR-021 D3) | Kotlin gate, run 1-2 RED (ruling 4) |
 
 Every file in every commit is in section 5's list as widened by the rulings above; the
 untracked `.lintcache/` (the lint cache the gate runs with) was never staged. The evidence
@@ -535,7 +541,7 @@ the committed tree (`go test ./internal/design/ ./android/gate/ -run 'CanActuall
 | W4.1 origin and skin | `TestTheDriftCheckCanActuallyFail`, `TestPBTOK6_TheKindCheckCanActuallyFail` |
 | W4.2 the nineteen colours | `TestPBTOK1_TheComparisonCanActuallyFail` |
 | W4.3 derivations | `TestPBTOK7_TheBlendCanActuallyFail` |
-| W4.4 contrast on Slate | `TestADR020_TheContrastCheckerCanActuallyFail` |
+| W4.4 contrast on Slate | `TestADR021_TheContrastCheckerCanActuallyFail` |
 | W4.5 spacing steps | `TestPBDS1_TheAbsorptionLedgerCanActuallyFail`, `TestPBDS6_TheDpScanCanActuallyFail`, `TestPBDS7_TheCrossChecksCanActuallyFail` |
 | W4.6 the ladder | `TestPBDS2_TheRungReadersRefusePerturbedInput`, `TestPBDS2_TheRenderEqualityRefusesAPerturbedPair` |
 | W4.7 the mark | `TestLauncherIconComparisonCanActuallyFail` |
@@ -571,7 +577,7 @@ ok  	github.com/Nathandela/swarm/internal/design	0.912s
 --- PASS: TestPBDS7_TheCrossChecksCanActuallyFail (0.05s)
 --- PASS: TestPBDS6_TheDpScanCanActuallyFail (0.00s)
 --- PASS: TestPBDS6_TheAnnotationParserCanActuallyFail (0.00s)
---- PASS: TestADR020_TheContrastCheckerCanActuallyFail (0.00s)
+--- PASS: TestADR021_TheContrastCheckerCanActuallyFail (0.00s)
 ok  	github.com/Nathandela/swarm/android/gate	3.248s
 ```
 
@@ -610,7 +616,7 @@ value-aliases `--p-hero`:
 ```
         	--p-att   on --p-bg     9.03:1  (Group NeedsInput status dot)
         	--p-att   on --p-card   8.30:1  (Group NeedsInput status dot)
---- PASS: TestADR020_TheStateIndicatorsClearWCAGNonTextContrast (0.01s)
+--- PASS: TestADR021_TheStateIndicatorsClearWCAGNonTextContrast (0.01s)
     zz_tmp_hero_ratio_test.go:14: --p-hero #8eb4e6 on --p-bg   9.03:1
     zz_tmp_hero_ratio_test.go:14: --p-hero #8eb4e6 on --p-card 8.30:1
     zz_tmp_hero_ratio_test.go:14: --p-hero #8eb4e6 on --p-elev 7.35:1
@@ -666,7 +672,7 @@ SUMMARY tests=1589 failures=2 errors=0 skipped=0 fresh=202/202 aar_moved=no
 KOTLIN GATE DONE 2026-08-28 07:38:12
 ```
 
-Both runs fail the same two tests, and both are guards whose premise ADR-020 moved rather than
+Both runs fail the same two tests, and both are guards whose premise ADR-021 moved rather than
 defects in a component; they are the RED for the two rewrites that follow, each ruled on by the
 lead before the test was touched:
 
@@ -678,19 +684,19 @@ ScreenAirSweepTest > the sweep can see a flush leaf and a doubled one FAILED
 ```
 
 - `ScreenAirSweepTest.airSteps()` (`:114`) is `setOf(space_12, space_24)`, "the destinations'
-  `swarm_space_12`" -- the step `sessionList` spent until W4.5 moved it to `space_16` (ADR-020 D2,
+  `swarm_space_12`" -- the step `sessionList` spent until W4.5 moved it to `space_16` (ADR-021 D2,
   ruling 1). The file's own negative control nests one `sessionList` in another and expects two
   air spends; at 16 neither registers. The ruled floor `air()` = `space_12` is untouched and every
   real-screen sweep in the file passes.
 - `NoticeTest:90` asserts `line().textSize < TextView(context).textSize`. The notice is
-  `Body.Secondary`, which R9 (ADR-020 D3) put on the 14sp body rung; a bare `TextView` is 14sp.
+  `Body.Secondary`, which R9 (ADR-021 D3) put on the 14sp body rung; a bare `TextView` is 14sp.
   The guard exists so a dropped `TextAppearance` would be caught by rendering BIGGER; size alone
   can no longer carry that.
 
 ### The sweep: ruled, rewritten, green (`913c4b5a`)
 
 Lead's ruling (2026-08-28): `airSteps()` becomes `setOf(space_12, space_16, space_24)`, the old set
-quoted, the KDoc naming `space_16` as `sessionList`'s step under ADR-020 D2; the whole file rerun.
+quoted, the KDoc naming `space_16` as `sessionList`'s step under ADR-021 D2; the whole file rerun.
 Targeted lane run (`:app:testDebugUnitTest --tests ScreenAirSweepTest --tests NoticeTest --rerun-tasks --no-build-cache`,
 lane waited for 08:48-08:53, run 08:53:22-08:57:45):
 
@@ -741,7 +747,7 @@ test would pass too. The guard's "is it styled at all" half has no attribute lef
 of D3 rather than a defect the wave introduced. Reported to the lead for a second ruling.
 
 **Side finding, outside this wave's files:** every `android:lineHeight` in `type.xml` (the leadings
-ADR-012 P6 and ADR-020 D3 recompute, which `DesignScaleResolutionTest` asserts from the XML text)
+ADR-012 P6 and ADR-021 D3 recompute, which `DesignScaleResolutionTest` asserts from the XML text)
 never renders on a `Kit.textView` view. Pre-existing since the leadings were introduced; a bead,
 not a W4 change.
 
@@ -761,7 +767,7 @@ proceed otherwise.
 
 - **`android:lineHeight` never renders on a `Kit.textView` view.** Every `TextAppearance.Swarm.*`
   leading in `type.xml` (`Body.Message` 20.3sp, `Body.Secondary` 19.6sp, `Mono.Code` 18.75sp,
-  `Mono.CodeSmall` 19.375sp, `Mono.Fine` 17.6sp; the values ADR-012 P6 introduced and ADR-020 D3
+  `Mono.CodeSmall` 19.375sp, `Mono.Fine` 17.6sp; the values ADR-012 P6 introduced and ADR-021 D3
   recomputed) is applied through `setTextAppearance` on a framework `TextView`, and `lineHeight`
   is a `TextView` attribute rather than a `TextAppearance` one, so it is dropped on a device as
   under Robolectric. Measured on the notice (`Body.Secondary`) against a bare `TextView` in the

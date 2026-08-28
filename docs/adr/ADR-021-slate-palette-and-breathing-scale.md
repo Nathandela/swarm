@@ -1,4 +1,4 @@
-# ADR-020: Slate palette and the breathing scale — a cool ladder, wider steps, one rung up
+# ADR-021: Slate palette and the breathing scale — a cool ladder, wider steps, one rung up
 
 Status: Accepted (owner decision, 2026-08-27)
 Date: 2026-08-27

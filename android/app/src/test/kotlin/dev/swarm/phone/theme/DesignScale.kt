@@ -51,7 +51,7 @@ object DesignScale {
      * labels, not `<svg>`) -- is still the directions artifact's, and re-pointing those at a
      * drawing that does not contain them would be inventing values rather than reading them.
      *
-     * ADR-020 D1 (2026-08-27, wave W4): the resource is the SLATE maquette, a copy of the
+     * ADR-021 D1 (2026-08-27, wave W4): the resource is the SLATE maquette, a copy of the
      * Obsidian one with the values moved and the same selectors and block markers, staged by
      * app/build.gradle.kts in the Obsidian file's place. What this constant said before:
      * "obsidian-maquette.html".
