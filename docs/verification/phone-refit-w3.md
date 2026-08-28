@@ -601,3 +601,138 @@ AAR unchanged (mtime 1787894314)
 
 (1604 + the review round's three cases.) Branch `refit/w3` after the round: 00bb0902, aa2b04af, d2477292, 7578281e,
 53a83424, aaa929c7, plus this file's own commit. Still not merged, not rebased, bead open for the orchestrator.
+
+### Residual: the notice carries its session -- commit a4ec0fda
+
+**The defect** (the reviewer's re-check, in a probe). `drawStopped()` recorded
+`detailDrawn?.transcript?.latestTurnId.orEmpty()` at settle time. The settle lands whenever the command lane
+answers: after the drill-down closed (`drawInbox` nulls `detailDrawn`; `awaitConn` can wait up to 5 s on a flapping
+link and `VerbDispatch.press` still runs the settle, since `attached` clears only on pause), or while ANOTHER
+conversation is drawn. Over the inbox it recorded turn `""` and added the notice, and the next drill-down opened on
+an idle session kept it (`"" == ""`): "Stopped" under a composer that was never stopped. Over another working
+session the word went under that one, over its own open turn. Before 53a83424 the next draw cleared any stale
+notice, so the exposure came with the lifetime fix.
+
+**The fix** (`stopNotSentFor == open`'s idiom: a press fact names the session it was made on). `interruptPlan`'s
+`target` rides the settle: `rememberInterrupt(answer, target)` -> `drawStopped(target)`. `drawStopped(target)`:
+`val drawn = detailDrawn ?: return`; `if (drawn.sessionId != target) return`; then `stoppedOverSession = target`,
+`stoppedOverTurn = drawn.transcript.latestTurnId`, the existing write and `addView`. `drawComposerRegion` removes the
+notice when `panel.sessionId != stoppedOverSession || panel.transcript.latestTurnId != stoppedOverTurn`, resetting
+both. No flags, no timers.
+
+**One thing the ruling presumed that the tree did not have, stated.** `SessionDetailPanel` carried no session
+identity (its fields run title, back, menu, header..., transcript, the Stop/Kill facts, the composer facts,
+`expectedTurn`), and the surface's own `session` var is set only by a Ready render, which no JVM test reaches. The
+panel now carries `val sessionId: String` (first field, from `SessionDetail.sessionId` in `SessionDetailScreen.of`,
+the panel's only constructor site), the way it already carries `expectedTurn` from the transcript. It is equal on
+both sides of `sessionDetailRedraw`'s patch for the same session and differs for another, which is the rebuild
+that draw already does. This is the one addition beyond the ruling's list.
+
+**RED.** Tests first, in `PhoneSurfaceControlsTest`: `a Stop that settles after the conversation closed says
+nothing` (draw the working panel, `closeSessionDetail()` -- the production departure, which on the JVM reaches
+`drawContent(null, null)` -> `drawInbox` -> `detailDrawn = null` -- then `drawStopped(session)`, then draw the idle
+session: no notice), `a Stop that settles over another session does not say Stopped there` (draw working B,
+`drawStopped(A)`: no notice), `Stopped comes off when another session is drawn` (Stopped under A over `turn-a`,
+draw B whose open turn is also `turn-a`: gone). The two lifetime cases change only their call (below).
+`w3-rr-kotlin.sh` (the lane on `PhoneSurfaceControlsTest` + `ComposerTest`), tree at 951725dc plus the tests:
+
+```
+START=1787922165 (Fri Aug 28 15:02:45 CEST 2026)
+e: .../PhoneSurfaceControlsTest.kt:340:33 Too many arguments for 'fun drawStopped(): Unit'.
+e: .../PhoneSurfaceControlsTest.kt:359:33 Too many arguments for 'fun drawStopped(): Unit'.
+e: .../PhoneSurfaceControlsTest.kt:386:33 Too many arguments for 'fun drawStopped(): Unit'.
+e: .../PhoneSurfaceControlsTest.kt:402:33 Too many arguments for 'fun drawStopped(): Unit'.
+e: .../PhoneSurfaceControlsTest.kt:415:33 Too many arguments for 'fun drawStopped(): Unit'.
+> Task :app:compileDebugUnitTestKotlin FAILED
+BUILD FAILED in 2m
+GRADLE_EXIT=1
+SUMMARY: xml files=202 stale(older than START)=202 tests=0 failures=0 errors=0
+AAR unchanged (mtime 1787894314)
+```
+
+(:340 and :359 are the two lifetime cases' changed calls; :386, :402, :415 the three new cases.) The gate, re-cut
+first and run against the same pre-fix tree (`go test -count=1 ./android/gate -run TestW34`):
+
+```
+--- FAIL: TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted (0.02s)
+    w34_onebutton_test.go:88: rememberInterrupt never calls drawStopped(target) with the press's own session, so a sealed Stop either changes nothing on screen (W3.4, review round) or says Stopped under whatever conversation is drawn when it lands (residual). { ... drawStopped() }
+    w34_onebutton_test.go:114: drawStopped records no session in stoppedOverSession, so a word said over one conversation is kept under another whose open turn carries the same id (residual). Body: { stoppedOverTurn = detailDrawn?.transcript?.latestTurnId.orEmpty() ... }
+    w34_onebutton_test.go:133: drawComposerRegion clears stoppedNotice without comparing the drawn session to stoppedOverSession, so a word said over one conversation stays under another whose open turn carries the same id (residual). Body: (... panel.transcript.latestTurnId != stoppedOverTurn ...)
+FAIL	github.com/Nathandela/swarm/android/gate	0.832s
+```
+
+**GREEN.** Gate: `go test -count=1 ./android/gate -run 'TestW34|TestT4LTA'` -> `ok 0.910s` (4lta byte-identical).
+Kotlin: `START=1787922498 (Fri Aug 28 15:08:18 CEST 2026)`, `BUILD SUCCESSFUL in 3m 1s`, `SUMMARY: xml files=2
+stale(older than START)=0 tests=19 failures=0 errors=0` (`PhoneSurfaceControlsTest` 12 = the nine cases and the
+three new ones; `ComposerTest` 7), AAR unchanged.
+
+**Changed calls and anchors, before / after.**
+
+| Where | Before | After |
+|---|---|---|
+| `PhoneSurfaceControlsTest` `Stopped stays under the composer while the turn it was said over is open`, `Stopped comes off when the turn it was said over closes` | `surface.drawStopped()` | `surface.drawStopped(session)` (a changed call; every assertion byte-identical) |
+| `PhoneSurfaceControlsTest` helpers | `item(id, kind, turn, status)` over `session`; `openTurn` a `val`; `panelWith(items)` over `session` | `item(..., of = session)`, `openTurnOf(of)` with `openTurn = openTurnOf(session)`, `panelWith(items, of = session)`; new `otherSession = "mbp/api"` |
+| `w34`, settle anchor | `d0b8Lambda(t, code, "private fun rememberInterrupt(answer: Any?)", ...)`, must contain `drawStopped()` | anchor `"private fun rememberInterrupt(answer: Any?"` (a prefix, so the signature is not the fence), must contain `drawStopped(target)` |
+| `w34`, seam anchor | `d0b8Lambda(t, code, "internal fun drawStopped()", ...)` | `code` must contain `internal fun drawStopped(`; body read by `d0b8FunctionBody(t, code, "drawStopped", ...)`, past the parameter list |
+| `w34`, seam body | `INTERRUPT_SENT`, `composerRegion.addView(stoppedNotice`, `stoppedOverTurn = `, no `say(`/`Toast` | the same, plus `stoppedOverSession = ` |
+| `w34`, region | must contain `stoppedOverTurn` | must contain `!= stoppedOverTurn` (the reviewer's note: a reset line alone satisfied the old check) and `!= stoppedOverSession` |
+
+**Negative controls.** Kotlin, one lane run over the six W3 classes (`w3-nc.py rs`; `START=1787922861`, Fri Aug 28
+15:14:21 CEST 2026): both guards in `drawStopped` replaced by the pre-fix reading
+(`val drawn = detailDrawn; stoppedOverSession = target; stoppedOverTurn = drawn?.transcript?.latestTurnId.orEmpty()`)
+and the region's session compare dropped (`panel.transcript.latestTurnId != stoppedOverTurn` alone). Each case
+fails on its own guard by construction -- in case 1 `detailDrawn` is null so the session guard cannot run, in case
+2 it is B's panel so the null guard is moot, and case 3 asserts after a redraw that only the region decides -- and
+the 45 other tests, the two lifetime cases among them, stay green:
+
+| Control | Perturbation | Failure |
+|---|---|---|
+| the `?: return` guard | removed (above) | `a Stop that settles after the conversation closed says nothing FAILED` -- "the interrupt settled over the inbox and "Stopped" greets the reader under a composer that was never stopped: a notice recorded over no turn matches every idle session" |
+| the session guard | `if (drawn.sessionId != target) return` removed (above) | `a Stop that settles over another session does not say Stopped there FAILED` -- "a Stop pressed on one session settled while another was drawn, and the word went under the other one, over a turn nobody stopped" |
+| the region's session compare | `panel.sessionId != stoppedOverSession ||` removed | `Stopped comes off when another session is drawn FAILED` -- "another conversation was drawn and "Stopped" stayed under its composer because its open turn happens to carry the same id" |
+
+```
+48 tests completed, 3 failed
+SUMMARY: xml files=6 stale(older than START)=0 tests=48 failures=3 errors=0
+AAR unchanged (mtime 1787894314)
+restored; tracked changes now: 0
+```
+
+Go, w34 over that same perturbed tree: `w34_onebutton_test.go:133: drawComposerRegion clears stoppedNotice without
+comparing the drawn session to stoppedOverSession ...` -> `FAIL 1.016s`. Restored, then `stoppedOverSession = target`
+deleted from `drawStopped` (`w3-nc.py rs-go`, restored after):
+
+```
+--- FAIL: TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted (0.02s)
+    w34_onebutton_test.go:114: drawStopped records no session in stoppedOverSession, so a word said over one conversation is kept under another whose open turn carries the same id (residual). Body: { val drawn = detailDrawn ?: return; if (drawn.sessionId != target) return; stoppedOverTurn = drawn.transcript.latestTurnId ... }
+exit=1
+restored; tracked changes now: 0
+```
+
+**Final gates (committed tree a4ec0fda).** `w3-go-gates.sh`, 15:17:
+
+```
+date: Fri Aug 28 15:17:30 CEST 2026  HEAD: a4ec0fda  dirty: 0
+build exit=0
+vet exit=0
+0 issues.
+lint exit=0
+ok  	github.com/Nathandela/swarm/android/gate	102.065s
+gate test exit=0
+```
+
+(`android/gate` under `-race -count=1`, the `env -u SWARM_*` prefix.) The Kotlin lane on the two classes the fix
+touches (`w3-rr-kotlin.sh` -> `w3-lane.sh --tests PhoneSurfaceControlsTest --tests ComposerTest`, the lane guard
+from a script file on the wrapper-JVM pattern), 15:17:
+
+```
+HEAD: a4ec0fda  changed:
+START=1787923050 (Fri Aug 28 15:17:30 CEST 2026)
+BUILD SUCCESSFUL in 3m 11s
+GRADLE_EXIT=0
+SUMMARY: xml files=2 stale(older than START)=0 tests=19 failures=0 errors=0
+AAR unchanged (mtime 1787894314)
+```
+
+Branch `refit/w3` after the residual: 00bb0902, aa2b04af, d2477292, 7578281e, 53a83424, aaa929c7, 951725dc,
+a4ec0fda, plus this file's own commit. Not merged, not rebased, bead untouched.
