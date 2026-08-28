@@ -20,7 +20,8 @@ package gate
 // WHERE THE EXPECTED NUMBERS COME FROM. Not from here. The ten scale steps are the decision and
 // are named in the requirement, so they are named here; everything they are checked AGAINST is
 // computed at test time by s22b_designsource_test.go. The drift ledger reads the phone-kit block
-// of docs/research/obsidian-maquette.html, which ADR-009 D2 makes the normative design source;
+// of docs/research/slate-maquette.html, which ADR-021 D1 makes the normative design source (ADR-009
+// D2's arrangement, ADR-021's file);
 // the four radii read internal/design/tokens.json, which transcribes the same maquette; the three
 // frame constants and the dot's degeneracy still read the older directions artifact, for the two
 // reasons set out at s22bMaquetteRelPath -- neither is a skin value and the maquette states
@@ -68,6 +69,18 @@ import (
 // timestamp and its body, and the two other sub-label gaps in the maquette
 // (`.trow .lbl .l2` and `.mrow .m1 .s`) are both 2px. Absorbing down makes the three consistent;
 // absorbing up would leave one of them alone at 4dp for no reason a reader could name.
+//
+// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4). The Slate maquette's slab spends `margin:
+// 0 16px 14px; padding: 12px 16px` where the Obsidian one spent `0 14px 10px` / `13px 15px`, and
+// 15px was the slab's alone: no other rule in the kit block declares it, so the design no longer
+// declares it and the row that absorbed it can no longer claim to. What the row said before:
+//
+//	{"swarm_space_14", 14, []float64{14, 15}},
+//
+// 13px stays (`.cta`, `.trow`, `.field .fbox`, `.deny-chip` still declare it), so `swarm_space_12`
+// still absorbs it. No step is added and none is removed: ADR-021 D2 breathes by spending wider
+// steps of the same scale, which is why this ledger changed by one literal and dimens.xml's ten
+// steps did not change at all.
 var s22bScale = []struct {
 	Name    string
 	Dp      float64
@@ -79,7 +92,7 @@ var s22bScale = []struct {
 	{"swarm_space_8", 8, []float64{7, 8, 9}},
 	{"swarm_space_10", 10, []float64{10, 11}},
 	{"swarm_space_12", 12, []float64{12, 13}},
-	{"swarm_space_14", 14, []float64{14, 15}},
+	{"swarm_space_14", 14, []float64{14}},
 	{"swarm_space_16", 16, []float64{16}},
 	{"swarm_space_18", 18, []float64{18}},
 	{"swarm_space_24", 24, []float64{24}},
@@ -383,7 +396,7 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	for _, step := range s22bScale {
 		for _, v := range step.Absorbs {
 			if _, ok := spacings[v]; !ok {
-				t.Errorf("PB-DS-1: %q claims to absorb %gpx, which the Obsidian maquette does "+
+				t.Errorf("PB-DS-1: %q claims to absorb %gpx, which the Slate maquette does "+
 					"not declare as a spacing value", step.Name, v)
 			}
 		}
@@ -401,11 +414,20 @@ func TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale(t *testing.T) {
 	// longer somewhere else: it declares 3px, and the count and the requirement's ledger agree
 	// without a footnote for the first time. The 2dp mover is gone -- nothing in the maquette
 	// drifts further than 1dp -- so seven movers, all of them by one.
-	const wantMovers = 7
+	//
+	// AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4): SIX. What this said before:
+	//
+	//	const wantMovers = 7
+	//
+	// The seventh was 15->14, the Obsidian slab's horizontal padding, and the Slate slab spends
+	// 16px there instead -- a value already on the scale -- so the design declares one fewer
+	// literal that moves and the ledger is re-derived rather than kept: 3->2, 5->4, 7->8, 9->8,
+	// 11->10, 13->12, all by 1dp, worst drift still 1dp.
+	const wantMovers = 6
 	if len(movers) != wantMovers {
 		t.Errorf("PB-DS-1: %d of %d maquette spacing values move onto the scale, want %d.\n"+
 			"\tmoved: %s\n"+
-			"PB-DS-1's ledger is seven movers; a different count means the design moved and "+
+			"PB-DS-1's ledger is six movers (ADR-021 D2); a different count means the design moved and "+
 			"nobody re-took the decision.",
 			len(movers), len(values), wantMovers, strings.Join(movers, ", "))
 	}

@@ -70,7 +70,9 @@ Every wave runs the same way. None of this is optional.
    A load-timing failure in an unrelated package is rerun once in isolation before it is red. Android:
    `. android/toolchain.env && cd android && ./gradlew --no-daemon testDebugUnitTest --rerun-tasks --no-build-cache`.
 7. **The Gradle lane is serialised across all worktrees.** Before running Gradle, confirm
-   `pgrep -f gradle-wrapper.jar` is empty from a script file (not a typed command, which self-matches);
+   `pgrep -f '^/[^ ]*java .*gradle-wrapper[.]jar'` is empty (the running wrapper JVM only: a bare
+   `gradle-wrapper.jar` literal also matches every other fleet's typed wait, which then blocks the lane for
+   nothing), from a script file, never a typed command;
    afterwards confirm every `app/build/test-results/testDebugUnitTest/*.xml` is newer than the run's
    recorded start and `app/libs/swarm.aar` did not move during the run. Never delete test-results.
    If the wave changes an exported facade field, rebuild the AAR (`android/build-aar.sh`) and rerun.

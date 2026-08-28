@@ -103,15 +103,28 @@ func TestPBTOK7_TheThreeArtifactDerivationsAreComputedFromTheTokens(t *testing.T
 	// its resolved hex moves too: alpha 0.70*255=178.5 rounded to 0xB3=179 becomes 0.50*255=127.5
 	// rounded to 0x80=128, and `#B3C9A876` becomes `#80C9A876`. `--p-att`'s own RGB (`C9A876`)
 	// does not move -- R8 changed the SHARE, not the base colour.
+	//
+	// AUTHORIZED VALUE MIGRATION, ADR-021 D1 (2026-08-27, wave W4). What the three rows read
+	// under Obsidian, quoted so this move is visible too:
+	//
+	//	{"attention-row-border", "#66553D"},
+	//	{"deny-fill", "#21D96A62"},
+	//	{"needs-input-dot-glow", "#80C9A876"},
+	//
+	// ADR-009 O2's sentence holds a second time: the blends did not change and neither did
+	// Derivations(); the tokens underneath them did (`--p-att` and `--p-hair` and `--p-err` are
+	// Slate's), so all three resolutions moved without anybody editing a blend, and the longhand
+	// cross-check below still recomputes each from the tokens by arithmetic that shares no code
+	// with Mix. None of the three collides with a Slate token literal (W4.3's check).
 	cases := []struct {
 		name string
 		// artifact is the value the design's color-mix resolves to over the CURRENT tokens,
 		// recorded so a change in Mix that silently moves a shipped colour is caught.
 		artifact string
 	}{
-		{"attention-row-border", "#66553D"},
-		{"deny-fill", "#21D96A62"},
-		{"needs-input-dot-glow", "#80C9A876"},
+		{"attention-row-border", "#4B5E7B"},
+		{"deny-fill", "#21E5736B"},
+		{"needs-input-dot-glow", "#808EB4E6"},
 		// THE FOURTH ROW IS GONE, AND LIKE THE FIFTH BEFORE IT THIS IS NOT A VALUE MIGRATION.
 		// `docs/research/obsidian-maquette.html` draws no `box-shadow` at all on `.sdot.work`; the
 		// derivation was retired with its only consumer (`Kit.groupGlow`'s `"working"` branch), so

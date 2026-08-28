@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swarm — Slate maquette (design source)</title>
+<style>
+/* ============================================================
+   SLATE DESIGN SOURCE — ADR-021.
+   The :root block below is normative: internal/design/tokens.json
+   transcribes it, and the design-source gate reads it. It is a copy of
+   docs/research/obsidian-maquette.html (ADR-009 D2, superseded in its
+   values by ADR-021 D1) with the 35 tokens moved to Slate and the slab
+   given its breathing (ADR-021 D2). Everything after :root is the
+   maquette drawn AT these values; the geometry, the selectors and the
+   block markers the gates read are the Obsidian file's, unchanged.
+   ============================================================ */
+:root {
+  --p-bg: #0b0e14;
+  --p-card: #131824;
+  --p-elev: #1b2334;
+  --p-well: #080a10;
+  --p-hair: #262e3f;
+  --p-ink: #eef2f8;
+  --p-ink2: #9aa6ba;
+  --p-ink3: #66718a;
+  --p-hero: #8eb4e6;
+  --p-hero-ink: #0b1524;
+  --p-att: #8eb4e6;
+  --p-work: #6fc3bc;
+  --p-ok: #8cc49a;
+  --p-err: #e5736b;
+  --p-cta-bg: #8eb4e6;
+  --p-cta-ink: #0b1524;
+  --p-tabbg: rgba(11,14,20,1);
+  --p-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --p-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --p-display-wt: 500;
+  --p-display-tr: -0.015em;
+  --p-body-tr: 0.01em;
+  --p-card-r: 16px;
+  --p-sheet-r: 20px;
+  --p-btn-r: 12px;
+  --p-chip-r: 10px;
+  --p-dot-r: 4px;
+  --p-card-fx: inset 0 1px 0 rgba(238,242,248,0.08);
+  --p-lit-fx: inset 0 1px 0 rgba(238,242,248,0.18);
+  --p-cta-fx: 0 0 18px rgba(142,180,230,0.22);
+  --p-grain: 0.04;
+  --p-workbar: linear-gradient(90deg, #6fc3bc, transparent 85%);
+  --p-sweep-fx: sweep 500ms rgba(255,252,244,0.30);
+  --p-sheet-hi: #1b2334;
+  --p-sheet-lo: #10141d;
+}
+
+/* ---------- maquette page chrome (NOT part of the skin) ---------- */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #06080c; color: var(--p-ink); font-family: var(--p-font); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+.page-h { padding: 64px 0 40px; border-bottom: 1px solid var(--p-hair); }
+.page-h h1 { font-size: 34px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr); }
+.page-h p { color: var(--p-ink2); max-width: 700px; margin-top: 10px; }
+.eyebrow { font-family: var(--p-mono); font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--p-hero); }
+.note { font-family: var(--p-mono); font-size: 11px; color: var(--p-ink3); }
+section.blockx { padding: 48px 0; border-bottom: 1px solid var(--p-hair); }
+section.blockx > .wrap > h2 { font-size: 24px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr); margin: 8px 0 6px; }
+section.blockx > .wrap > p.intro { color: var(--p-ink2); max-width: 700px; margin-bottom: 26px; }
+.gallery { display: flex; flex-wrap: wrap; gap: 34px; align-items: flex-start; }
+.frame { flex: 0 0 auto; }
+.frame > .cap { font-family: var(--p-mono); font-size: 11px; color: var(--p-ink3); margin-top: 12px; text-align: center; }
+.frame > .cap b { color: var(--p-ink2); font-weight: 500; display: block; }
+
+/* ---------- the phone ---------- */
+.ph { width: 318px; border-radius: 30px; padding: 9px; background: #12161f; border: 1px solid #262e3f; }
+.scr { border-radius: 22px; overflow: hidden; height: 636px; display: flex; flex-direction: column; position: relative;
+  background: var(--p-bg); color: var(--p-ink); font-family: var(--p-font); letter-spacing: var(--p-body-tr); }
+
+/* ---------- kit primitives, drawn at token fidelity ---------- */
+.nav { display: flex; align-items: baseline; justify-content: space-between; padding: 24px 18px 14px; }
+.nav .t { font-size: 22px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr); }
+.nav .live { font-family: var(--p-mono); font-size: 10px; color: var(--p-hero); letter-spacing: 0.08em; }
+.nav-drill { display: flex; align-items: center; gap: 10px; padding: 24px 18px 12px; }
+.nav-drill .back { color: var(--p-ink3); font-size: 13px; }
+.nav-drill .t { font-size: 16px; font-weight: 500; }
+.nav-drill .sub { font-family: var(--p-mono); font-size: 10px; color: var(--p-ink3); margin-left: auto; }
+
+.chips { display: flex; gap: 8px; padding: 0 18px 12px; }
+.chip { border-radius: var(--p-chip-r); border: 1px solid var(--p-hair); padding: 5px 11px; font-size: 12px; color: var(--p-ink2); display: flex; align-items: center; gap: 6px; }
+.chip.on { background: var(--p-hero); color: var(--p-hero-ink); border-color: var(--p-hero); font-weight: 500; }
+.pdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.pdot.online { background: var(--p-ok); }
+.pdot.offline { background: var(--p-ink3); }
+.pdot.unknown { background: transparent; border: 1px solid var(--p-ink3); }
+
+.sect { font-family: var(--p-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--p-ink3); padding: 12px 18px 8px; }
+
+.slab { margin: 0 16px 14px; padding: 12px 16px; border-radius: var(--p-card-r); background: var(--p-card);
+  border: 1px solid var(--p-hair); box-shadow: var(--p-card-fx); position: relative; overflow: hidden; }
+.slab.lit { background: var(--p-elev); box-shadow: var(--p-lit-fx); }
+.slab .r1 { display: flex; align-items: center; gap: 8px; }
+.slab .proj { font-size: 14.5px; font-weight: 500; flex: 1; }
+.slab .agent { font-family: var(--p-mono); font-size: 10px; color: var(--p-ink3); }
+.slab .need { font-size: 12.5px; color: var(--p-ink2); margin-top: 5px; }
+.slab.lit .need { color: var(--p-hero); }
+.slab.rest { opacity: 0.62; }
+.sdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.sdot.att { background: var(--p-att); box-shadow: 0 0 9px rgba(142,180,230,0.5); }
+.sdot.work { background: var(--p-work); }
+.sdot.ok { background: var(--p-ok); }
+.sdot.done { background: var(--p-ink3); }
+.workbar { height: 3px; border-radius: 2px; background: var(--p-workbar); margin-top: 9px; }
+/* the specular sweep: fires ONCE on promotion to NeedsInput. Looped at 6s here for display only. */
+.slab.lit.sweep::after { content: ""; position: absolute; top: 0; left: -60%; width: 45%; height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(255,252,244,0.30), transparent);
+  transform: skewX(-25deg); animation: sweep 6s cubic-bezier(0.22,1,0.36,1) infinite; }
+@keyframes sweep { 0% { left: -60%; } 8.3% { left: 115%; } 100% { left: 115%; } } /* 500ms of a 6s loop */
+
+.tabbar { margin-top: auto; display: flex; justify-content: space-around; align-items: center; padding: 14px 8px 24px;
+  border-top: 1px solid var(--p-hair); background: var(--p-tabbg); }
+.tabbar span { font-size: 10px; letter-spacing: 0.04em; color: var(--p-ink3); }
+.tabbar .on { color: var(--p-hero); }
+
+.cta { display: block; text-align: center; padding: 13px; border-radius: var(--p-btn-r); background: var(--p-cta-bg);
+  color: var(--p-cta-ink); font-size: 14px; font-weight: 500; box-shadow: var(--p-cta-fx); }
+.cta.ghost { background: transparent; color: var(--p-ink2); border: 1px solid var(--p-hair); box-shadow: none; }
+.cta.danger { background: transparent; color: var(--p-err); border: 1px solid var(--p-hair); box-shadow: none; }
+.cta.disabled { background: var(--p-elev); color: var(--p-ink3); box-shadow: none; }
+.deny-chip { display: inline-block; padding: 7px 13px; border-radius: var(--p-chip-r); border: 1px solid var(--p-err); color: var(--p-err); font-size: 12px; }
+
+.well { font-family: var(--p-mono); font-size: 11.5px; color: var(--p-ink); background: var(--p-well);
+  border: 1px solid var(--p-hair); border-radius: var(--p-btn-r); padding: 11px 12px; line-height: 1.55; }
+
+.veil { position: absolute; inset: 0; background: rgba(8,10,16,0.62); }
+.sheet { position: absolute; left: 8px; right: 8px; bottom: 8px; border-radius: var(--p-sheet-r);
+  background: linear-gradient(180deg, var(--p-sheet-hi), var(--p-sheet-lo));
+  border: 1px solid var(--p-hair); box-shadow: var(--p-lit-fx); padding: 20px 18px 18px; }
+.sheet .ctx { font-family: var(--p-mono); font-size: 10px; color: var(--p-ink3); letter-spacing: 0.06em; text-transform: uppercase; }
+.sheet .q { font-size: 19px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr); line-height: 1.3; margin: 10px 0 14px; }
+.sheet .acts { display: flex; gap: 10px; margin-top: 16px; }
+.sheet .acts > * { flex: 1; }
+
+.toastx { position: absolute; left: 14px; right: 14px; bottom: 92px; background: var(--p-elev); border: 1px solid var(--p-hair);
+  border-radius: var(--p-btn-r); box-shadow: var(--p-card-fx); padding: 11px 14px; font-size: 12.5px; color: var(--p-ink); }
+.banner { position: absolute; left: 8px; right: 8px; top: 8px; background: linear-gradient(180deg, var(--p-sheet-hi), var(--p-sheet-lo));
+  border: 1px solid var(--p-hair); box-shadow: var(--p-lit-fx); border-radius: var(--p-card-r); padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+.banner .b1 { flex: 1; min-width: 0; }
+.banner .b1 .t { font-size: 13px; font-weight: 500; }
+.banner .b1 .s { font-size: 11.5px; color: var(--p-ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banner .open { font-size: 12px; color: var(--p-hero); font-weight: 500; }
+
+.trow { display: flex; align-items: center; gap: 11px; padding: 13px 18px; border-bottom: 1px solid var(--p-hair); }
+.trow .lbl { flex: 1; }
+.trow .lbl .l1 { font-size: 14px; }
+.trow .lbl .l2 { font-size: 11.5px; color: var(--p-ink3); margin-top: 2px; }
+.tog { width: 40px; height: 24px; border-radius: 12px; background: var(--p-elev); border: 1px solid var(--p-hair); position: relative; flex: 0 0 auto; }
+.tog i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--p-ink3); }
+.tog.on { background: var(--p-hero); border-color: var(--p-hero); }
+.tog.on i { left: auto; right: 3px; background: var(--p-hero-ink); }
+.tog.dis { opacity: 0.4; }
+
+.caret { display: inline-block; width: 6px; height: 12px; background: var(--p-hero); vertical-align: -2px; animation: caret 0.9s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0.35; } }
+
+.stale { margin: 6px 14px; border: 1px solid var(--p-hair); border-radius: var(--p-chip-r); padding: 8px 12px; font-size: 11px; color: var(--p-ink3); }
+.ronote { margin: 10px 14px; font-size: 11.5px; color: var(--p-ink3); border-left: 2px solid var(--p-hair); padding-left: 10px; }
+
+.field { margin: 0 18px 12px; }
+.field .flabel { font-family: var(--p-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--p-ink3); margin-bottom: 6px; }
+.field .fbox { border: 1px solid var(--p-hair); border-radius: var(--p-btn-r); background: var(--p-well); padding: 11px 13px; font-size: 13.5px; color: var(--p-ink); }
+.field.focus .fbox { border-color: var(--p-hero); box-shadow: 0 0 0 2px rgba(142,180,230,0.35); }
+.field .fhint { font-size: 11px; color: var(--p-ink3); margin-top: 5px; }
+
+.badge { display: inline-block; min-width: 18px; text-align: center; font-family: var(--p-mono); font-size: 10px;
+  background: var(--p-hero); color: var(--p-hero-ink); border-radius: 9px; padding: 2px 6px; font-weight: 500; }
+
+.reticle { margin: 12px 18px; height: 190px; border-radius: var(--p-card-r); background: var(--p-well); position: relative; border: 1px solid var(--p-hair); }
+.reticle i { position: absolute; width: 26px; height: 26px; border: 2px solid var(--p-hero); }
+.reticle i:nth-child(1) { top: 14px; left: 14px; border-right: 0; border-bottom: 0; }
+.reticle i:nth-child(2) { top: 14px; right: 14px; border-left: 0; border-bottom: 0; }
+.reticle i:nth-child(3) { bottom: 14px; left: 14px; border-right: 0; border-top: 0; }
+.reticle i:nth-child(4) { bottom: 14px; right: 14px; border-left: 0; border-top: 0; }
+.reticle .hint { position: absolute; bottom: -2px; left: 0; right: 0; transform: translateY(100%); text-align: center; font-size: 11px; color: var(--p-ink3); padding-top: 8px; }
+
+.sas { display: flex; gap: 10px; justify-content: center; padding: 14px 18px 4px; }
+.sas span { width: 52px; height: 52px; border-radius: var(--p-card-r); background: var(--p-card); border: 1px solid var(--p-hair);
+  box-shadow: var(--p-card-fx); display: flex; align-items: center; justify-content: center; font-size: 24px; color: var(--p-hero); }
+
+.steprow { display: flex; gap: 12px; padding: 10px 18px; }
+.steprow .n { font-family: var(--p-mono); font-size: 11px; color: var(--p-hero); }
+.steprow .b { font-size: 12.5px; color: var(--p-ink2); flex: 1; }
+
+.arow { padding: 11px 18px; border-bottom: 1px solid var(--p-hair); }
+.arow .at { font-family: var(--p-mono); font-size: 10px; color: var(--p-ink3); }
+.arow .ab { font-size: 13px; color: var(--p-ink2); margin-top: 3px; }
+.arow .ab b { color: var(--p-ink); font-weight: 500; }
+
+.mrow { display: flex; align-items: center; gap: 11px; padding: 14px 18px; border-bottom: 1px solid var(--p-hair); }
+.mrow .m1 { flex: 1; }
+.mrow .m1 .n { font-size: 14.5px; font-weight: 500; }
+.mrow .m1 .s { font-size: 11.5px; color: var(--p-ink3); margin-top: 2px; }
+.mrow .act { font-size: 12px; color: var(--p-err); }
+
+.empty { text-align: center; padding: 26px 30px; color: var(--p-ink3); font-size: 12.5px; }
+
+/* terminal peek: blue phosphor */
+.peek { margin: 12px 14px; flex: 1; border-radius: var(--p-card-r); background: var(--p-well); border: 1px solid var(--p-hair);
+  padding: 14px; font-family: var(--p-mono); font-size: 10.5px; line-height: 1.6; color: var(--p-hero); overflow: hidden; }
+.peek .dim2 { color: var(--p-ink3); }
+
+/* ---------- the mark ---------- */
+.markrow { display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-start; }
+.markcell { text-align: center; }
+.markcell .cap { font-family: var(--p-mono); font-size: 11px; color: var(--p-ink3); margin-top: 12px; }
+.icon-tile { width: 148px; height: 148px; border-radius: 34px; background: var(--p-bg); border: 1px solid var(--p-hair);
+  box-shadow: var(--p-card-fx); display: flex; align-items: center; justify-content: center; }
+.icon-tile.mono-v { background: var(--p-elev); }
+.feature { width: 420px; max-width: 100%; height: 205px; border-radius: 12px; background: var(--p-bg); border: 1px solid var(--p-hair);
+  display: flex; align-items: center; justify-content: center; gap: 26px; box-shadow: var(--p-card-fx); }
+.feature .fw { font-size: 30px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr); }
+.feature .fs { font-family: var(--p-mono); font-size: 11px; color: var(--p-ink2); margin-top: 4px; }
+
+/* ---------- component sheet ---------- */
+.sheetgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.cell { border: 1px solid var(--p-hair); border-radius: var(--p-card-r); background: var(--p-bg); padding: 18px; }
+.cell .cn { font-family: var(--p-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--p-ink3); margin-bottom: 14px; }
+.cell .demo { display: flex; flex-direction: column; gap: 10px; }
+.cell .demo-r { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.swx { width: 100%; height: 44px; border-radius: var(--p-chip-r); border: 1px solid var(--p-hair); }
+.grainx { background: var(--p-card); position: relative; overflow: hidden; }
+.grainx::after { content: ""; position: absolute; inset: 0; opacity: var(--p-grain); mix-blend-mode: soft-light;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"/></filter><rect width="140" height="140" filter="url(%23n)"/></svg>'); }
+
+@media (prefers-reduced-motion: reduce) { .slab.lit.sweep::after, .caret { animation: none; } }
+</style>
+</head>
+<body>
+
+<header class="page-h">
+  <div class="wrap">
+    <span class="eyebrow">Design source · ADR-021 · Slate · dark-only</span>
+    <h1>swarm — Slate maquette</h1>
+    <p>Normative. The <code class="note">:root</code> block in this file carries the 35 tokens
+    tokens.json transcribes (ADR-021 D1); every frame, control and mark below is drawn at those
+    values, on the PB-DS-1 spacing scale. Layout, flows and status taxonomy are unchanged from
+    the shipped app — the skin moves from Obsidian's warm ladder to Slate's cool one, and the
+    slab spends two wider steps (ADR-021 D2). The specular sweep loops here for display; in
+    production it fires once, on promotion to NeedsInput.</p>
+  </div>
+</header>
+
+<section class="blockx" id="mark">
+  <div class="wrap">
+    <span class="eyebrow">The mark</span>
+    <h2>Solid Wedge, re-rendered</h2>
+    <p class="intro">Geometry untouched — the wedge and its cursor block are the identity. Only the
+    material moves: slate blue on cool near-black, the same key-light as every card. The themed
+    (monochrome) variant satisfies Android 13+ themed icons.</p>
+    <div class="markrow">
+      <div class="markcell">
+        <div class="icon-tile">
+          <svg viewBox="0 0 100 100" width="96" height="96" aria-label="Solid Wedge mark">
+            <polyline points="70,18 20,40 62,56 26,78" fill="none" stroke="#8eb4e6" stroke-width="15" stroke-linejoin="miter" stroke-linecap="butt"/>
+            <rect x="62" y="70" width="26" height="13" fill="#8eb4e6"/>
+          </svg>
+        </div>
+        <div class="cap">launcher / store 512 — slate on --p-bg</div>
+      </div>
+      <div class="markcell">
+        <div class="icon-tile mono-v">
+          <svg viewBox="0 0 100 100" width="96" height="96" aria-label="Solid Wedge themed variant">
+            <polyline points="70,18 20,40 62,56 26,78" fill="none" stroke="#eef2f8" stroke-width="15" stroke-linejoin="miter" stroke-linecap="butt" opacity="0.9"/>
+            <rect x="62" y="70" width="26" height="13" fill="#eef2f8" opacity="0.9"/>
+          </svg>
+        </div>
+        <div class="cap">themed icon — ink monochrome</div>
+      </div>
+      <div class="markcell">
+        <div class="feature">
+          <svg viewBox="0 0 100 100" width="84" height="84" aria-label="Solid Wedge">
+            <polyline points="70,18 20,40 62,56 26,78" fill="none" stroke="#8eb4e6" stroke-width="15" stroke-linejoin="miter" stroke-linecap="butt"/>
+            <rect x="62" y="70" width="26" height="13" fill="#8eb4e6"/>
+          </svg>
+          <div><div class="fw">swarm</div><div class="fs">your agents, in your pocket</div></div>
+        </div>
+        <div class="cap">feature graphic 1024x500 composition</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="blockx" id="screens-core">
+  <div class="wrap">
+    <span class="eyebrow">Frames 1-4</span>
+    <h2>The emotional core</h2>
+    <p class="intro">Where attention lives: scanning the inbox, deciding on the sheet. The lit slab
+    carries the stronger key-light (--p-lit-fx) and the one sweep; the sheet is the only vertical
+    gradient in the app — the heaviest material, reserved for the moment of decision. The sheet's
+    headline is the blocking question itself; the literal command stays in the well.</p>
+    <div class="gallery">
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">Inbox</span><span class="live">2 NEED YOU</span></div>
+        <div class="chips">
+          <span class="chip on">All</span>
+          <span class="chip"><span class="pdot online"></span>mbp-m1</span>
+          <span class="chip"><span class="pdot offline"></span>studio</span>
+        </div>
+        <div class="sect">Needs you</div>
+        <div class="slab lit sweep">
+          <div class="r1"><span class="sdot att"></span><span class="proj">swarm</span><span class="agent">claude</span></div>
+          <div class="need">Allow: git push origin main</div>
+        </div>
+        <div class="slab lit">
+          <div class="r1"><span class="sdot att"></span><span class="proj">cahier</span><span class="agent">claude</span></div>
+          <div class="need">Question: keep the old migration?</div>
+        </div>
+        <div class="sect">Working</div>
+        <div class="slab">
+          <div class="r1"><span class="sdot work"></span><span class="proj">quiet-training</span><span class="agent">codex</span></div>
+          <div class="need">Refactoring the training loop · 41m</div>
+          <div class="workbar"></div>
+        </div>
+        <div class="slab">
+          <div class="r1"><span class="sdot work"></span><span class="proj">own_website</span><span class="agent">claude</span></div>
+          <div class="need">Running tests · 3 of 7</div>
+          <div class="workbar"></div>
+        </div>
+        <div class="sect">Ready for review</div>
+        <div class="slab">
+          <div class="r1"><span class="sdot ok"></span><span class="proj">portfolio</span><span class="agent">claude</span></div>
+          <div class="need">4 files changed · review ready</div>
+        </div>
+        <div class="tabbar"><span class="on">Inbox</span><span>Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>1 · Triage Inbox</b>lit slabs, sweep on the newest promotion</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">Inbox</span><span class="live">2 NEED YOU</span></div>
+        <div class="sect">Needs you</div>
+        <div class="slab lit">
+          <div class="r1"><span class="sdot att"></span><span class="proj">swarm</span><span class="agent">claude</span></div>
+          <div class="need">Allow: git push origin main</div>
+        </div>
+        <div class="veil"></div>
+        <div class="sheet">
+          <div class="ctx">swarm · claude · mbp-m1</div>
+          <div class="q">Claude wants to push the release commit to main.</div>
+          <div class="well">$ git push origin main</div>
+          <div class="acts"><span class="cta">Allow</span><span class="cta ghost">Deny</span></div>
+        </div>
+      </div></div><div class="cap"><b>2 · Approval sheet</b>question as headline, command in the well</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav-drill"><span class="back">&#8592;</span><span class="t">swarm · claude</span><span class="sub">12m WAITING</span></div>
+        <div class="arow"><div class="at">14:01</div><div class="ab">Ran <b>go test ./internal/remote/relay/</b> — PASS 34/34 in 2.41s</div></div>
+        <div class="arow"><div class="at">14:02</div><div class="ab">The race was in the drain goroutine — the timeout and the token call share a budget.</div></div>
+        <div class="arow"><div class="at">14:02</div><div class="ab"><b>Waiting on your answer.</b> Keep the ten-second retry budget, or track the relay's own deadline?</div></div>
+        <div style="margin: 12px 14px 0;">
+          <div class="well">&#9508; terminal snapshot &#9500;<br>PASS: TestRelayDrain (2.41s)<br>ok&nbsp;&nbsp;internal/remote/relay <span class="caret"></span></div>
+        </div>
+        <div style="display:flex; gap:10px; margin: 14px 14px 0;">
+          <span class="cta" style="flex:1">Answer</span>
+          <span class="deny-chip">Stop session</span>
+        </div>
+        <div class="ronote">Kill is two steps away on purpose: Stop asks first.</div>
+        <div class="tabbar"><span class="on">Inbox</span><span>Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>3 · Session Detail</b>transcript, snapshot, guarded stop</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav-drill"><span class="back">&#8592;</span><span class="t">Terminal · swarm</span><span class="sub">LIVE</span></div>
+        <div class="peek">
+          <span class="dim2">$ </span>go test ./internal/remote/relay/ -race<br>
+          === RUN&nbsp;&nbsp;&nbsp;TestRelayDrain<br>
+          --- PASS: TestRelayDrain (2.41s)<br>
+          === RUN&nbsp;&nbsp;&nbsp;TestTokenBudget<br>
+          --- PASS: TestTokenBudget (0.87s)<br>
+          PASS<br>
+          ok&nbsp;&nbsp;&nbsp;internal/remote/relay&nbsp;&nbsp;3.412s<br>
+          <span class="dim2">$ </span><span class="caret"></span>
+        </div>
+        <div class="ronote">Read-only. This phone does not hold the input lease.</div>
+        <div style="margin: 0 14px 14px;"><span class="cta ghost" style="display:block">Take control</span></div>
+        <div class="tabbar"><span class="on">Inbox</span><span>Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>4 · Terminal Peek</b>blue phosphor — the CRT grounding survives</div></div>
+
+    </div>
+  </div>
+</section>
+
+<section class="blockx" id="screens-utility">
+  <div class="wrap">
+    <span class="eyebrow">Frames 5-8</span>
+    <h2>Utility surfaces</h2>
+    <p class="intro">Visited rarely, so they stay quiet: hairlines and the ladder, no lit material.
+    Presence dots keep the PB-TOK-8 assignments — online sage, offline warm grey, unknown hollow.</p>
+    <div class="gallery">
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">Machines</span></div>
+        <div class="mrow"><span class="pdot online"></span><div class="m1"><div class="n">mbp-m1</div><div class="s">online · 6 sessions</div></div></div>
+        <div class="mrow"><span class="pdot offline"></span><div class="m1"><div class="n">studio</div><div class="s">offline · last seen 2d ago</div></div></div>
+        <div class="sect">Remote access</div>
+        <div style="margin: 0 18px;">
+          <div class="well">$ swarm remote on</div>
+          <div class="ronote" style="margin: 8px 0 0;">Run on the computer to enable this phone.</div>
+        </div>
+        <div class="sect">Paired devices</div>
+        <div class="mrow"><div class="m1"><div class="n">This phone</div><div class="s">paired 2026-08-02</div></div><span class="act">Revoke</span></div>
+        <div class="tabbar"><span>Inbox</span><span class="on">Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>5 · Machines</b></div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">Activity</span></div>
+        <div class="sect">Today</div>
+        <div class="arow"><div class="at">14:02</div><div class="ab"><b>swarm · claude</b> asked to run git push origin main</div></div>
+        <div class="arow"><div class="at">13:21</div><div class="ab">You approved <b>go test</b> for swarm · claude</div></div>
+        <div class="arow"><div class="at">11:48</div><div class="ab"><b>portfolio · claude</b> finished — 4 files changed</div></div>
+        <div class="sect">Yesterday</div>
+        <div class="arow"><div class="at">18:04</div><div class="ab">You stopped <b>docs_personal · codex</b></div></div>
+        <div class="arow"><div class="at">17:30</div><div class="ab">This phone paired with <b>mbp-m1</b></div></div>
+        <div class="stale">Showing cached activity · reconnecting</div>
+        <div class="tabbar"><span>Inbox</span><span>Machines</span><span class="on">Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>6 · Activity</b>with the stale-data notice</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">Settings</span></div>
+        <div class="sect">Notifications</div>
+        <div class="trow"><div class="lbl"><div class="l1">Needs-you alerts</div><div class="l2">When a session blocks on you</div></div><span class="tog on"><i></i></span></div>
+        <div class="trow"><div class="lbl"><div class="l1">Completion alerts</div><div class="l2">When a session finishes</div></div><span class="tog"><i></i></span></div>
+        <div class="trow"><div class="lbl"><div class="l1">System notifications</div><div class="l2">Blocked — allow in Android settings</div></div><span class="tog dis"><i></i></span></div>
+        <div class="sect">Paired machine</div>
+        <div class="trow"><div class="lbl"><div class="l1">mbp-m1</div><div class="l2">Noise XXpsk0 · relay: self-hosted</div></div></div>
+        <div class="sect">This phone</div>
+        <div class="trow"><div class="lbl"><div class="l1" style="color: var(--p-err)">Revoke this device</div><div class="l2">Destroys keys on this phone</div></div></div>
+        <div class="tabbar"><span>Inbox</span><span>Machines</span><span>Activity</span><span class="on">Settings</span></div>
+      </div></div><div class="cap"><b>7 · Settings</b>toggle states: on / off / disabled</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav"><span class="t">New session</span></div>
+        <div class="field"><div class="flabel">Agent</div><div class="fbox">claude</div><div class="fhint">Detected on mbp-m1</div></div>
+        <div class="field focus"><div class="flabel">Directory</div><div class="fbox">~/Code/swarm<span class="caret"></span></div><div class="fhint">Slate focus ring — 2dp, ADR-021</div></div>
+        <div class="field"><div class="flabel">Prompt</div><div class="fbox" style="color: var(--p-ink3)">What should it do first?</div></div>
+        <div style="margin: 6px 18px;"><span class="cta" style="display:block">Launch on mbp-m1</span></div>
+        <div class="empty">The session appears in the inbox as soon as the machine confirms.</div>
+        <div class="tabbar"><span class="on">Inbox</span><span>Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>8 · Launch form</b>the focus ring's first appearance</div></div>
+
+    </div>
+  </div>
+</section>
+
+<section class="blockx" id="screens-pairing">
+  <div class="wrap">
+    <span class="eyebrow">Frames 9-12</span>
+    <h2>Pairing and the moments</h2>
+    <p class="intro">The gate in front of everything, and the two ephemeral surfaces. SAS glyphs are
+    placeholders here — production keeps the emoji set and PB-SAS-3's compare-only rule.</p>
+    <div class="gallery">
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding: 0 30px;">
+          <svg viewBox="0 0 100 100" width="72" height="72" aria-label="Solid Wedge">
+            <polyline points="70,18 20,40 62,56 26,78" fill="none" stroke="#8eb4e6" stroke-width="15" stroke-linejoin="miter" stroke-linecap="butt"/>
+            <rect x="62" y="70" width="26" height="13" fill="#8eb4e6"/>
+          </svg>
+          <div style="font-size: 24px; font-weight: var(--p-display-wt); letter-spacing: var(--p-display-tr);">swarm</div>
+          <div style="font-size: 13px; color: var(--p-ink2); text-align: center;">Watch and control the coding agents on your computer, from here.</div>
+          <span class="cta" style="align-self: stretch;">Pair with your computer</span>
+        </div>
+      </div></div><div class="cap"><b>9 · Pair-only screen</b>the unpaired app, whole</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav-drill"><span class="back">&#8592;</span><span class="t">Pair</span></div>
+        <div class="reticle"><i></i><i></i><i></i><i></i><div class="hint">Point at the QR code your computer shows</div></div>
+        <div style="text-align:center; margin-top: 26px;"><span style="font-size: 12px; color: var(--p-hero);">Enter code instead</span></div>
+        <div class="sect" style="margin-top: 6px;">On your computer</div>
+        <div class="steprow"><span class="n">1</span><span class="b">Install and start swarm, then:</span></div>
+        <div style="margin: 0 18px;"><div class="well">$ swarm remote pair</div></div>
+        <div class="steprow"><span class="n">2</span><span class="b">A QR code appears. Scan it with this screen.</span></div>
+        <div class="tabbar" style="border-top-color: transparent; background: transparent;"><span></span></div>
+      </div></div><div class="cap"><b>10 · Pairing</b>reticle corners in slate</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="nav-drill"><span class="back">&#8592;</span><span class="t">Confirm it's your computer</span></div>
+        <div class="sas"><span>&#9670;</span><span>&#9679;</span><span>&#9650;</span><span>&#9632;</span></div>
+        <div style="text-align:center; padding: 10px 34px 0; font-size: 12.5px; color: var(--p-ink2);">
+          Your computer shows four symbols. Continue only if they match these, in this order.
+        </div>
+        <div style="margin: 22px 18px 0; display: flex; gap: 10px;">
+          <span class="cta" style="flex:1">They match</span>
+          <span class="cta ghost" style="flex:1">They don't</span>
+        </div>
+        <div class="ronote" style="margin-top: 18px;">There is no way to type these. Comparing is the point.</div>
+      </div></div><div class="cap"><b>11 · SAS compare</b>Display.SAS at display weight</div></div>
+
+      <div class="frame"><div class="ph"><div class="scr">
+        <div class="banner">
+          <span class="sdot att"></span>
+          <div class="b1"><div class="t">swarm · claude needs you</div><div class="s">Allow: git push origin main</div></div>
+          <span class="open">Open</span>
+        </div>
+        <div class="nav" style="margin-top: 62px;"><span class="t">Inbox</span><span class="live">1 NEED YOU</span></div>
+        <div class="sect">Working</div>
+        <div class="slab">
+          <div class="r1"><span class="sdot work"></span><span class="proj">quiet-training</span><span class="agent">codex</span></div>
+          <div class="need">Refactoring the training loop · 41m</div>
+          <div class="workbar"></div>
+        </div>
+        <div class="toastx">Stopped quiet-training · codex</div>
+        <div class="tabbar"><span class="on">Inbox</span><span>Machines</span><span>Activity</span><span>Settings</span></div>
+      </div></div><div class="cap"><b>12 · Push banner + toast</b>both ephemeral surfaces, sheet material for the banner</div></div>
+
+    </div>
+  </div>
+</section>
+
+<section class="blockx" id="kit">
+  <div class="wrap">
+    <span class="eyebrow">Component sheet</span>
+    <h2>Every kit primitive, every state</h2>
+    <p class="intro">One cell per kit file. A state not drawn here does not exist; a component not
+    named here keeps its geometry and only re-tokens.</p>
+    <div class="sheetgrid">
+
+      <div class="cell"><div class="cn">CtaButton — 4 variants</div><div class="demo">
+        <span class="cta">Allow</span>
+        <span class="cta ghost">Deny</span>
+        <span class="cta danger">Kill session</span>
+        <span class="cta disabled">Allow</span>
+      </div></div>
+
+      <div class="cell"><div class="cn">StatusDot — the 4 Groups</div><div class="demo">
+        <div class="demo-r"><span class="sdot att"></span><span class="note">NeedsInput · --p-att (glow 9dp)</span></div>
+        <div class="demo-r"><span class="sdot work"></span><span class="note">Working · --p-work</span></div>
+        <div class="demo-r"><span class="sdot ok"></span><span class="note">ReadyForReview · --p-ok</span></div>
+        <div class="demo-r"><span class="sdot done"></span><span class="note">Completed · --p-ink3</span></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">PresenceDot — 3 states</div><div class="demo">
+        <div class="demo-r"><span class="pdot online"></span><span class="note">online · --p-ok</span></div>
+        <div class="demo-r"><span class="pdot offline"></span><span class="note">offline · --p-ink3</span></div>
+        <div class="demo-r"><span class="pdot unknown"></span><span class="note">unknown · hollow</span></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">FilterChip</div><div class="demo">
+        <div class="demo-r"><span class="chip on">All</span><span class="chip"><span class="pdot online"></span>mbp-m1</span><span class="chip"><span class="pdot offline"></span>studio</span></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">Toggle — 3 states</div><div class="demo">
+        <div class="demo-r"><span class="tog on"><i></i></span><span class="tog"><i></i></span><span class="tog dis"><i></i></span></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">SessionRow — rest vs lit</div><div class="demo">
+        <div class="slab" style="margin:0"><div class="r1"><span class="sdot work"></span><span class="proj">quiet-training</span><span class="agent">codex</span></div><div class="need">Working · 41m</div><div class="workbar"></div></div>
+        <div class="slab lit" style="margin:0"><div class="r1"><span class="sdot att"></span><span class="proj">swarm</span><span class="agent">claude</span></div><div class="need">Allow: git push origin main</div></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">MonoWell</div><div class="demo">
+        <div class="well">$ swarm remote pair</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">TextField — idle / focused</div><div class="demo">
+        <div class="field" style="margin:0"><div class="fbox">~/Code/swarm</div></div>
+        <div class="field focus" style="margin:0"><div class="fbox">~/Code/swarm<span class="caret"></span></div></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">DenyChip · Badge</div><div class="demo">
+        <div class="demo-r"><span class="deny-chip">Deny with reason</span><span class="badge">2</span></div>
+      </div></div>
+
+      <div class="cell"><div class="cn">Toast</div><div class="demo">
+        <div class="toastx" style="position:static">Stopped quiet-training · codex</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">SectionLabel · ReadOnlyNote · Stale</div><div class="demo">
+        <div class="sect" style="padding:0">Needs you</div>
+        <div class="ronote" style="margin:0">Read-only. This phone does not hold the input lease.</div>
+        <div class="stale" style="margin:0">Showing cached activity · reconnecting</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">WorkingBar · caret</div><div class="demo">
+        <div class="workbar" style="margin:0"></div>
+        <div class="note">gradient keeps RGB in the transparent stop · caret: <span class="caret"></span> 900ms</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">EmptyState</div><div class="demo">
+        <div class="empty" style="padding: 10px 0;">Nothing needs you. The machine is working.</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">Surfaces — the ladder</div><div class="demo">
+        <div class="swx" style="background: var(--p-well)"></div>
+        <div class="swx" style="background: var(--p-bg)"></div>
+        <div class="swx" style="background: var(--p-card); box-shadow: var(--p-card-fx)"></div>
+        <div class="swx" style="background: var(--p-elev); box-shadow: var(--p-lit-fx)"></div>
+        <div class="note">well · bg · card+key-light 0.08 · elev+lit 0.18</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">Grain — 4% soft-light</div><div class="demo">
+        <div class="swx grainx" style="height: 74px;"></div>
+        <div class="note">display only — production uses the checked-in 140x140 raster</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">Sweep — one-shot on promotion</div><div class="demo">
+        <div class="slab lit sweep" style="margin:0"><div class="r1"><span class="sdot att"></span><span class="proj">promoted just now</span></div></div>
+        <div class="note">500ms · peak 0.30 · skew -25deg · never loops · one per viewport · reduced-motion: none</div>
+      </div></div>
+
+      <div class="cell"><div class="cn">ScanReticle · SAS tile</div><div class="demo">
+        <div class="demo-r">
+          <div class="reticle" style="margin:0; width: 110px; height: 82px;"><i></i><i></i><i></i><i></i></div>
+          <span class="sas" style="padding:0"><span style="width:44px;height:44px;font-size:20px;">&#9670;</span></span>
+        </div>
+      </div></div>
+
+      <div class="cell"><div class="cn">KillSwitchPanel</div><div class="demo">
+        <div style="border: 1px solid var(--p-err); border-radius: var(--p-card-r); padding: 13px;">
+          <div style="font-size: 13.5px; font-weight: 500;">Kill swarm · claude?</div>
+          <div style="font-size: 12px; color: var(--p-ink2); margin: 5px 0 11px;">The session ends immediately. Unsaved agent work is lost.</div>
+          <div class="demo-r"><span class="cta danger" style="flex:1; text-align:center;">Kill</span><span class="cta ghost" style="flex:1; text-align:center;">Keep it</span></div>
+        </div>
+      </div></div>
+
+    </div>
+  </div>
+</section>
+
+<footer style="padding: 40px 0 72px;">
+  <div class="wrap">
+    <p class="note">swarm · Slate maquette · ADR-021 · wave W4 of docs/specifications/phone-refit-playbook.md ·
+    owner ruling 2026-08-27 · spacing on the PB-DS-1 2dp scale · SAS glyphs are placeholders (production: emoji set, compare-only per PB-SAS-3)</p>
+  </div>
+</footer>
+
+</body>
+</html>

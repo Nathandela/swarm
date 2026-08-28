@@ -23,6 +23,12 @@
       :root block of docs/research/obsidian-maquette.html, and the gate requires this file to
       follow. The comments to the right are the token names, and they are annotations.
 
+      ADR-021 (W4, 2026-08-27): THE SKIN IS SLATE. All nineteen values below moved again (cool
+      near-black ground, cool inks, one slate-blue accent that is still both hero and attention),
+      no colour was added and no row of the join changed. Same arrangement as ADR-009: the origin
+      is internal/design/tokens.json, which now transcribes the :root block of
+      docs/research/slate-maquette.html, and the gate required this file to follow.
+
       Do not edit a value here. Edit internal/design/tokens.json, which is itself drift-guarded
       against the design source (PB-TOK-2), and the gate will require this file to follow.
 
@@ -36,29 +42,29 @@
       The tokens' real names carry a leading double hyphen (they are CSS custom properties);
       it is elided in the annotations because XML forbids that sequence inside a comment.
     -->
-    <color name="swarm_background">#FF0E0B08</color>        <!-- p-bg -->
-    <color name="swarm_surface_card">#FF171310</color>      <!-- p-card -->
-    <color name="swarm_surface_elevated">#FF1F1A13</color>  <!-- p-elev -->
-    <color name="swarm_surface_well">#FF090705</color>      <!-- p-well -->
-    <color name="swarm_hairline">#FF2E271D</color>          <!-- p-hair -->
-    <color name="swarm_text_primary">#FFF6F3EC</color>      <!-- p-ink -->
-    <color name="swarm_text_secondary">#FFA69D8E</color>    <!-- p-ink2 -->
-    <color name="swarm_text_tertiary">#FF746B5D</color>     <!-- p-ink3 -->
-    <color name="swarm_hero">#FFC9A876</color>              <!-- p-hero -->
-    <color name="swarm_hero_ink">#FF1A1206</color>          <!-- p-hero-ink -->
-    <color name="swarm_state_attention">#FFC9A876</color>   <!-- p-att -->
-    <color name="swarm_state_working">#FF6FA7A4</color>     <!-- p-work -->
-    <color name="swarm_state_ok">#FF8CAF8E</color>          <!-- p-ok -->
-    <color name="swarm_state_error">#FFD96A62</color>       <!-- p-err -->
+    <color name="swarm_background">#FF0B0E14</color>        <!-- p-bg -->
+    <color name="swarm_surface_card">#FF131824</color>      <!-- p-card -->
+    <color name="swarm_surface_elevated">#FF1B2334</color>  <!-- p-elev -->
+    <color name="swarm_surface_well">#FF080A10</color>      <!-- p-well -->
+    <color name="swarm_hairline">#FF262E3F</color>          <!-- p-hair -->
+    <color name="swarm_text_primary">#FFEEF2F8</color>      <!-- p-ink -->
+    <color name="swarm_text_secondary">#FF9AA6BA</color>    <!-- p-ink2 -->
+    <color name="swarm_text_tertiary">#FF66718A</color>     <!-- p-ink3 -->
+    <color name="swarm_hero">#FF8EB4E6</color>              <!-- p-hero -->
+    <color name="swarm_hero_ink">#FF0B1524</color>          <!-- p-hero-ink -->
+    <color name="swarm_state_attention">#FF8EB4E6</color>   <!-- p-att -->
+    <color name="swarm_state_working">#FF6FC3BC</color>     <!-- p-work -->
+    <color name="swarm_state_ok">#FF8CC49A</color>          <!-- p-ok -->
+    <color name="swarm_state_error">#FFE5736B</color>       <!-- p-err -->
     <!--
       swarm_cta_background / swarm_cta_ink hold the same bytes as swarm_hero / swarm_hero_ink
       TODAY. They are separate resources on purpose: p-cta-bg and p-cta-ink are distinct tokens
       that happen to be value-aliases, and collapsing them here would make breaking the alias a
       refactor of every CTA instead of a one-line edit to the origin.
     -->
-    <color name="swarm_cta_background">#FFC9A876</color>    <!-- p-cta-bg -->
-    <color name="swarm_cta_ink">#FF1A1206</color>           <!-- p-cta-ink -->
-    <color name="swarm_tabbar_background">#E00E0B08</color> <!-- p-tabbg -->
+    <color name="swarm_cta_background">#FF8EB4E6</color>    <!-- p-cta-bg -->
+    <color name="swarm_cta_ink">#FF0B1524</color>           <!-- p-cta-ink -->
+    <color name="swarm_tabbar_background">#FF0B0E14</color> <!-- p-tabbg -->
     <!--
       ADR-009 D4.4: the approval sheet is the ONE vertical gradient in the app and the only
       surface besides a promoted slab carrying the strong top edge: the heaviest material
@@ -69,6 +75,6 @@
       make the gradient's direction and depth a property of whatever drawable consumed it,
       which is precisely the "chosen at the point of use" this file exists to forbid.
     -->
-    <color name="swarm_sheet_gradient_top">#FF231C12</color>    <!-- p-sheet-hi -->
-    <color name="swarm_sheet_gradient_bottom">#FF16110B</color> <!-- p-sheet-lo -->
+    <color name="swarm_sheet_gradient_top">#FF1B2334</color>    <!-- p-sheet-hi -->
+    <color name="swarm_sheet_gradient_bottom">#FF10141D</color> <!-- p-sheet-lo -->
 </resources>

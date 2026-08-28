@@ -160,21 +160,26 @@ fun sessionRow(
 /**
  * origin: .prows
  *
- * The rows' container. It exists so a screen never types the 12 dp side padding or the gap between
+ * The rows' container. It exists so a screen never types the side padding or the gap between
  * rows -- PB-DS-6's whole claim is that a screen composes components and passes data, and a
  * container is where that claim is usually lost.
+ *
+ * THE STEPS ARE THE SLATE MAQUETTE'S (ADR-021 D2, 2026-08-27): `.slab { margin: 0 16px 14px }`,
+ * 16 dp at the sides and 14 dp between rows, where `.prows` spent 12 dp and an 8 dp gap. The
+ * container is still `.prows`'s idea and keeps that origin; what it spends is the slab's margin,
+ * which `android/gate/s23_kit_test.go` reads out of the maquette rather than the artifact.
  */
 fun sessionList(context: Context): LinearLayout = KitStack(
     context,
     LinearLayout.VERTICAL,
-    Kit.dimenPx(context, R.dimen.swarm_space_8),
+    Kit.dimenPx(context, R.dimen.swarm_space_14),
 ).apply {
     clipChildren = false
     clipToPadding = false
     setPaddingRelative(
-        Kit.dimenPx(context, R.dimen.swarm_space_12),
+        Kit.dimenPx(context, R.dimen.swarm_space_16),
         0,
-        Kit.dimenPx(context, R.dimen.swarm_space_12),
+        Kit.dimenPx(context, R.dimen.swarm_space_16),
         0,
     )
 }

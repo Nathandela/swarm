@@ -28,6 +28,7 @@ Architectural Decision Records for swarm. Each ADR captures the *why* behind a d
 | [018](ADR-018-multi-machine-pairings.md) | Multi-machine pairings — one phone, N independent single-device relationships | Accepted | 2026-08-14 |
 | [019](ADR-019-boundary-aware-detach-recognition.md) | Detach recognition becomes boundary-aware — the solo-read test (D4) is superseded | Accepted | 2026-08-26 |
 | [020](ADR-020-unattended-daemon-restart.md) | Unattended daemon restart spawns from the saved environment, or touches nothing | Proposed (owner sign-off pending) | 2026-08-27 |
+| [021](ADR-021-slate-palette-and-breathing-scale.md) | Slate palette and the breathing scale — a cool ladder, wider steps, one rung up (supersedes ADR-009-obsidian D1, D3 values, colour half of D4) | Accepted | 2026-08-27 |
 | [022](ADR-022-live-session-name-adoption.md) | A session's name follows the name its CLI shows, newest wins | Accepted | 2026-08-28 |
 
 Numbers 007, 008, 009 and 010 are each carried by TWO documents: parallel lines minted them
@@ -42,7 +43,7 @@ ADR-009-structured-chat-interaction.md and drawn in the language of ADR-009-obsi
 
 ## Adding a new ADR
 
-1. Next sequential number (the next FREE one is ADR-023: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, 021 is reserved by the phone refit playbook for the Slate palette decision (W4), and 022 was minted for live session name adoption).
+1. Next sequential number (the next FREE one is ADR-023: 013 was minted for the Mirror capture architecture, `docs/specifications/mirror-program.md` M3.1 has reserved 014 for paged interaction history and that reservation still stands, 015-018 were allocated together by Wave R1 for the four playbook §3 amendments, 019 was minted for boundary-aware detach recognition, 020 for the unattended-restart environment decision, and 021 for the Slate palette and breathing scale, and 022 for live session name adoption)
 2. File name: `docs/adr/ADR-NNN-kebab-case-title.md`.
 3. Template sections: `Status` (Proposed / Accepted / Deprecated / Superseded by ADR-XXX), `Date`, `Context`, `Decision`, `Consequences` (Positive/Negative), and `Alternatives Considered` where relevant.
 4. Add a row to the table above in the same commit.

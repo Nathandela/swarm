@@ -727,7 +727,18 @@ class InboxRowTest {
         )
     }
 
-    /** `.prows`: the rows' container, which owns the side padding and the 7px gap. */
+    /**
+     * `.prows`: the rows' container, which owns the side padding and the gap between rows.
+     *
+     * AUTHORIZED REWRITE, ADR-021 D2 (2026-08-27, wave W4). The steps are the Slate maquette's
+     * `.slab { margin: 0 16px 14px }` now -- 16 dp at the sides, 14 dp between rows -- where the
+     * claims read `space_12` and `space_8` for `.prows`'s own 12px and 7px gap. What the four
+     * claims said before:
+     *
+     *     Claim("`.prows` padding-x (start)", dimenPx("swarm_space_12"), list.paddingStart),
+     *     Claim("`.prows` padding-x (end)", dimenPx("swarm_space_12"), list.paddingEnd),
+     *     Claim("`.prows` gap above the second row", dimenPx("swarm_space_8"), ...topMargin),
+     */
     @Test
     fun `the session list carries the side padding and the gap between rows`() {
         val list = sessionList(context)
@@ -738,16 +749,16 @@ class InboxRowTest {
             emptyList<String>(),
             mismatches(
                 listOf(
-                    Claim("`.prows` padding-x (start)", dimenPx("swarm_space_12"), list.paddingStart),
-                    Claim("`.prows` padding-x (end)", dimenPx("swarm_space_12"), list.paddingEnd),
+                    Claim("`.slab` margin sides (start)", dimenPx("swarm_space_16"), list.paddingStart),
+                    Claim("`.slab` margin sides (end)", dimenPx("swarm_space_16"), list.paddingEnd),
                     Claim(
                         "no gap above the first row",
                         0,
                         (list.getChildAt(0).layoutParams as ViewGroup.MarginLayoutParams).topMargin,
                     ),
                     Claim(
-                        "`.prows` gap above the second row",
-                        dimenPx("swarm_space_8"),
+                        "`.slab` margin-bottom as the gap above the second row",
+                        dimenPx("swarm_space_14"),
                         (list.getChildAt(1).layoutParams as ViewGroup.MarginLayoutParams).topMargin,
                     ),
                 ),

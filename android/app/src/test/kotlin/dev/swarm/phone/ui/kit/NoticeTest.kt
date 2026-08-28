@@ -75,25 +75,26 @@ class NoticeTest {
         )
     }
 
-    /**
-     * The size is ON THE LADDER, which is the whole defect and not a restatement of the claim above.
+    /*
+     * DELETED, ADR-021 D3 (2026-08-28, wave W4, lead's ruling): `the notice is smaller than the
+     * platform default it used to render at`. What it asserted:
      *
-     * The sixteen sites this component replaces rendered at the platform default, and the platform
-     * default is LARGER than every style in §7's scale. So a notice whose appearance was dropped in
-     * a later edit would not go missing, it would get bigger -- which is the failure mode nobody
-     * spots by eye, because a bigger warning reads as a deliberate one.
+     *     val ladderPx = line().textSize
+     *     val platformDefaultPx = android.widget.TextView(context).textSize
+     *     assertTrue(..., ladderPx < platformDefaultPx)
+     *
+     * It existed because the sixteen sites this component replaced rendered at the platform
+     * default, which was LARGER than every style in the ladder, so a notice whose appearance was
+     * dropped in a later edit would not go missing, it would get bigger. Two facts retire it.
+     * First, ruling R9 put the body rung at 14 sp, the platform default's own size, and on that
+     * rung every rendered attribute of `Body.Secondary` -- family, weight, tracking, size -- equals
+     * the platform default, with the ink set outside the appearance by `notice()` itself. Second,
+     * `android:lineHeight` is a `TextView` attribute and not a `TextAppearance` one, so it does not
+     * travel through `setTextAppearance` on a framework `TextView` (measured in the W4 evidence:
+     * 16 px on the notice and on a bare view alike). No attribute is left that could tell a
+     * dropped appearance from an applied one, and a test asserting 14 <= 14 would be a claim
+     * nobody could fail. The notice's rung and ink stay pinned by the first test in this file.
      */
-    @Test
-    fun `the notice is smaller than the platform default it used to render at`() {
-        val ladderPx = line().textSize
-        val platformDefaultPx = android.widget.TextView(context).textSize
-        assertTrue(
-            "the notice renders at ${ladderPx / spScale} sp against the platform's " +
-                "${platformDefaultPx / spScale} sp. This component exists because a bare TextView " +
-                "is not unstyled -- it is styled bigger than anything in the ladder",
-            ladderPx < platformDefaultPx,
-        )
-    }
 
     /**
      * The error variant moves the ink and NOTHING else.

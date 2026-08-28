@@ -2,6 +2,12 @@ package gate
 
 // FAILING-FIRST (TDD RED, GG-5) for ADR-009 D8.1 -- THE CONTRAST GATE.
 //
+// RENAMED FROM obsidian_contrast_test.go BY ADR-021 (2026-08-27, wave W4), with its identifiers
+// and test names; the file's citations of ADR-009 D8.1 stay, because the floors are that
+// amendment's and ADR-021 keeps every one of them byte-identical. What moved is the palette the
+// floors are measured over: the origin is Slate's (ADR-021 D1), and every figure below that names
+// a skin now names three, so the comparison the amendment argued from is still checkable.
+//
 // "A contrast gate (android/gate/, new, RED-first): computes APCA lightness contrast for every
 //  ink-on-surface pair the join can derive (ink/ink2/ink3 x bg/card/elev/well, hero-ink on hero,
 //  err and hero as text on bg) and fails below Lc 75 for body-size roles, Lc 60 for large/display
@@ -80,22 +86,22 @@ import (
 // migration improves legibility rather than merely repainting it; the numbers have to stay
 // readable for that comparison to be checkable later.
 const (
-	// --p-ink, primary body prose.   Substrate -103.0..-102.3 | Obsidian -100.0..-98.7
+	// --p-ink, primary body prose.   Substrate -103.0..-102.3 | Obsidian -100.0..-98.7 | Slate -98.9..-96.5
 	apcaFloorPrimary = 90.0
 	// --p-ink2, spot-read supplementary status text.
-	//                                Substrate  -41.9..-41.1 | Obsidian  -49.7..-48.4
+	//                                Substrate  -41.9..-41.1 | Obsidian  -49.7..-48.4 | Slate -53.5..-51.0
 	apcaFloorSupplementary = 45.0
 	// --p-ink3, incidental / de-emphasized.
-	//                                Substrate  -22.9..-22.1 | Obsidian  -25.6..-24.2
+	//                                Substrate  -22.9..-22.1 | Obsidian  -25.6..-24.2 | Slate -27.6..-25.2
 	apcaFloorIncidental = 24.0
-	// --p-hero-ink on the champagne fills, the CTA label at 14sp/500.
-	//                                Substrate      +64.6    | Obsidian      +58.8
+	// --p-hero-ink on the accent fills, the CTA label at 14sp/500 (15sp/600 since ADR-021 D3).
+	//                                Substrate      +64.6    | Obsidian      +58.8 | Slate +60.9
 	apcaFloorCTALabel = 55.0
 	// --p-hero as text, the LIVE counter and links.
-	//                                Substrate      -63.8    | Obsidian      -57.7
+	//                                Substrate      -63.8    | Obsidian      -57.7 | Slate -60.0
 	apcaFloorAccentText = 50.0
 	// --p-err as text, the deny and revoke labels. Adjudicated 2026-08-09 (ruling R7).
-	//                                Substrate      -47.3    | Obsidian      -40.6
+	//                                Substrate      -47.3    | Obsidian      -40.6 | Slate -45.2
 	apcaFloorErrorText = 38.0
 
 	// wcagIndicatorFloor is the ratio a NON-TEXT state indicator must hold against the surface
@@ -105,7 +111,7 @@ const (
 )
 
 // The two floors the amendment retired, kept as named constants because the ceiling proof is
-// stated ABOUT them: TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette shows the champagne
+// stated ABOUT them: TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette shows the champagne
 // fill's ceiling sits below both, which is what made the old model impossible rather than merely
 // strict. Deleting them would delete the evidence for the amendment along with the numbers.
 const (
@@ -128,7 +134,7 @@ var apcaRungs = map[float64]string{
 // A role is DECLARED per pair rather than inferred, because "which ink is allowed to be faint" is
 // a design decision, and inference would let a failing pair be quietly reclassified into whatever
 // role it happens to satisfy. The closed-list assertion in
-// TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung is what makes the declaration binding:
+// TestADR021_EveryRoleFloorIsDeclaredAgainstItsRung is what makes the declaration binding:
 // inventing a seventh role with a convenient floor fails as loudly as lowering one of these six.
 type apcaRole struct {
 	Name string
@@ -170,11 +176,11 @@ var (
 	}
 	roleCTALabel = apcaRole{
 		Name: "cta-label", Floor: apcaFloorCTALabel, Rung: 45,
-		What: "the CTA label at 14sp/500 on its champagne fill, whose ceiling is 59.73",
+		What: "the CTA label on its accent fill, whose ceiling is 62.04 on Slate (59.73 on Obsidian's champagne)",
 	}
 	roleAccentText = apcaRole{
 		Name: "accent-text", Floor: apcaFloorAccentText, Rung: 45,
-		What: "champagne as text: the LIVE counter, the active tab, links",
+		What: "the accent as text: the LIVE counter, the active tab, links",
 	}
 	// THE WATCH ITEM, CLOSED. 38 is below the 45 rung; O7's device pass confirmed deny/revoke
 	// legibility and the owner accepted the token as designed 2026-08-09 (ruling R7, bead
@@ -183,13 +189,14 @@ var (
 	// future regression; this number does not move.
 	roleErrorText = apcaRole{
 		Name: "error-text", Floor: apcaFloorErrorText, Rung: 45, BelowRung: true,
-		What: "terracotta as text: the deny and revoke labels. Adjudicated 2026-08-09 (ruling R7): accepted as designed",
+		What: "the error red as text: the deny and revoke labels. Adjudicated 2026-08-09 (ruling R7): accepted as designed",
 	}
 )
 
-// obsidianRoles is the closed list. A pair carrying a role that is not in here is a floor
-// invented for a failure.
-var obsidianRoles = []apcaRole{
+// slateRoles is the closed list (slate by ADR-021; the roles and floors are ADR-009 D8.1's
+// amendment, unchanged). A pair carrying a role that is not in here is a floor invented for a
+// failure.
+var slateRoles = []apcaRole{
 	roleBodyPrimary, roleSupplementary, roleIncidental, roleCTALabel, roleAccentText, roleErrorText,
 }
 
@@ -201,7 +208,7 @@ var obsidianRoles = []apcaRole{
 //
 // AN INK'S ROLE IS ONE ROLE. The cheapest escape from any floor is to give the failing pair a
 // gentler role, so the ink carries the role and not the pair: --p-ink2 cannot be supplementary on
-// the well and primary on the card. TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung asserts
+// the well and primary on the card. TestADR021_EveryRoleFloorIsDeclaredAgainstItsRung asserts
 // the one-role-per-ink property directly rather than trusting this table's shape.
 //
 // --p-ink3 IS THE DEVIATION AND MUST SAY SO. It is the tertiary ink and it is also the Completed
@@ -209,7 +216,7 @@ var obsidianRoles = []apcaRole{
 // Holding it to a body floor would force it lighter until it stopped receding, which is a design
 // change wearing an accessibility argument. Its floor is below APCA's absolute minimum and the
 // role says so in its own name.
-var obsidianInks = []struct {
+var slateInks = []struct {
 	Token string
 	Role  apcaRole
 	Why   string
@@ -219,8 +226,8 @@ var obsidianInks = []struct {
 	{"--p-ink3", roleIncidental, "tertiary: section labels and the receded Completed group -- incidental only"},
 }
 
-// obsidianSurfaces are the four grounds an ink can land on: the whole ladder plus the well.
-var obsidianSurfaces = []string{"--p-bg", "--p-card", "--p-elev", "--p-well"}
+// slateSurfaces are the four grounds an ink can land on: the whole ladder plus the well.
+var slateSurfaces = []string{"--p-bg", "--p-card", "--p-elev", "--p-well"}
 
 // Polarity is which way round a pair is meant to be. It is DECLARED per pair, not inferred.
 //
@@ -234,19 +241,19 @@ const (
 	darkOnLight = "dark-on-light"
 )
 
-// obsidianExtraPairs are the ink-on-surface pairs the ladder cross product does not contain.
-var obsidianExtraPairs = []inkPair{
-	{Ink: "--p-hero-ink", Surface: "--p-hero", Role: roleCTALabel, Polarity: darkOnLight, Where: "ink on a champagne fill: selected chip, badge, toggle knob"},
+// slateExtraPairs are the ink-on-surface pairs the ladder cross product does not contain.
+var slateExtraPairs = []inkPair{
+	{Ink: "--p-hero-ink", Surface: "--p-hero", Role: roleCTALabel, Polarity: darkOnLight, Where: "ink on an accent fill: selected chip, badge, toggle knob"},
 	{Ink: "--p-hero-ink", Surface: "--p-cta-bg", Role: roleCTALabel, Polarity: darkOnLight, Where: "the CTA's label on its fill (--p-cta-bg value-aliases --p-hero and keeps its own row)"},
-	{Ink: "--p-err", Surface: "--p-bg", Role: roleErrorText, Polarity: lightOnDark, Where: "terracotta as TEXT: the deny label, the destructive row action"},
-	{Ink: "--p-hero", Surface: "--p-bg", Role: roleAccentText, Polarity: lightOnDark, Where: "champagne as TEXT: the LIVE counter, the active tab, the peek foreground"},
+	{Ink: "--p-err", Surface: "--p-bg", Role: roleErrorText, Polarity: lightOnDark, Where: "the error red as TEXT: the deny label, the destructive row action"},
+	{Ink: "--p-hero", Surface: "--p-bg", Role: roleAccentText, Polarity: lightOnDark, Where: "the accent as TEXT: the LIVE counter, the active tab, the peek foreground"},
 }
 
-// obsidianIndicators are the non-text colours: the four Group indicators (PB-TOK-8), the presence
+// slateIndicators are the non-text colours: the four Group indicators (PB-TOK-8), the presence
 // dots, and the sync status pill's mark. --p-ink3 carries both the Completed group and the offline
 // dot, which is why it appears once rather than twice; --p-err is here for the pill alone, since no
 // Group and no presence state is a failure.
-var obsidianIndicators = []struct {
+var slateIndicators = []struct {
 	Token string
 	Why   string
 }{
@@ -261,9 +268,9 @@ var obsidianIndicators = []struct {
 	{"--p-err", "the sync status pill's BROKEN mark"},
 }
 
-// obsidianIndicatorGrounds are the two surfaces a dot is ever drawn on: a row sits on a card, a
+// slateIndicatorGrounds are the two surfaces a dot is ever drawn on: a row sits on a card, a
 // chip's presence dot sits on the window ground.
-var obsidianIndicatorGrounds = []string{"--p-bg", "--p-card"}
+var slateIndicatorGrounds = []string{"--p-bg", "--p-card"}
 
 type inkPair struct {
 	Ink      string
@@ -273,18 +280,18 @@ type inkPair struct {
 	Where    string
 }
 
-// obsidianTextPairs is the full derivable set: the ladder cross product plus the named extras.
-func obsidianTextPairs() []inkPair {
+// slateTextPairs is the full derivable set: the ladder cross product plus the named extras.
+func slateTextPairs() []inkPair {
 	var out []inkPair
-	for _, ink := range obsidianInks {
-		for _, surface := range obsidianSurfaces {
+	for _, ink := range slateInks {
+		for _, surface := range slateSurfaces {
 			out = append(out, inkPair{
 				Ink: ink.Token, Surface: surface, Role: ink.Role,
 				Polarity: lightOnDark, Where: ink.Why,
 			})
 		}
 	}
-	return append(out, obsidianExtraPairs...)
+	return append(out, slateExtraPairs...)
 }
 
 // ---------------------------------------------------------------------------
@@ -416,14 +423,14 @@ func wcagRatio(a, b srgb) float64 {
 // The join. A colour this gate judges must actually reach the app.
 // ---------------------------------------------------------------------------
 
-// obsidianJoinedColours returns token -> value for every colour-typed token that has a row in
+// slateJoinedColours returns token -> value for every colour-typed token that has a row in
 // android/design-tokens.tsv naming a <color> colors.xml declares.
 //
 // GOING THROUGH THE JOIN IS THE POINT, not ceremony. A gate that read tokens.json alone would
 // certify that a JSON file is readable; what has to be readable is the app. So a token whose row
 // is missing, or whose resource is not in colors.xml, is excluded here and then reported as an
 // unjudgeable pair below -- which is a failure, not a skip.
-func obsidianJoinedColours(t *testing.T) map[string]string {
+func slateJoinedColours(t *testing.T) map[string]string {
 	t.Helper()
 	tokens := loadDesignTokens(t)
 	rows := loadTokenMap(t)
@@ -451,7 +458,7 @@ func obsidianJoinedColours(t *testing.T) map[string]string {
 	return out
 }
 
-func obsidianColour(t *testing.T, joined map[string]string, token string) (srgb, bool) {
+func slateColour(t *testing.T, joined map[string]string, token string) (srgb, bool) {
 	t.Helper()
 	value, ok := joined[token]
 	if !ok {
@@ -473,14 +480,14 @@ func obsidianColour(t *testing.T, joined map[string]string, token string) (srgb,
 // The requirement.
 // ---------------------------------------------------------------------------
 
-// TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor is the gate.
-func TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor(t *testing.T) {
-	joined := obsidianJoinedColours(t)
+// TestADR021_EveryInkOnSurfacePairClearsItsAPCAFloor is the gate.
+func TestADR021_EveryInkOnSurfacePairClearsItsAPCAFloor(t *testing.T) {
+	joined := slateJoinedColours(t)
 
 	var report []string
-	for _, p := range obsidianTextPairs() {
-		ink, okI := obsidianColour(t, joined, p.Ink)
-		surface, okS := obsidianColour(t, joined, p.Surface)
+	for _, p := range slateTextPairs() {
+		ink, okI := slateColour(t, joined, p.Ink)
+		surface, okS := slateColour(t, joined, p.Surface)
 		if !okI || !okS {
 			continue
 		}
@@ -525,13 +532,13 @@ func TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor(t *testing.T) {
 	t.Logf("ADR-009 D8.1 APCA ledger (%d text pairs):\n\t%s", len(report), strings.Join(report, "\n\t"))
 }
 
-// TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung is what keeps the per-role floors from
+// TestADR021_EveryRoleFloorIsDeclaredAgainstItsRung is what keeps the per-role floors from
 // becoming six ways to pass.
 //
 // WHAT IT REPLACED, quoted per the house test-rewrite rule. The old assertion guarded a two-rung
 // model that no longer exists:
 //
-//	func TestADR009D8_TheLargeOnlyExemptionIsDeclaredAndNarrow(t *testing.T) {
+//	func TestADR021_TheLargeOnlyExemptionIsDeclaredAndNarrow(t *testing.T) {
 //		if apcaLargeFloor >= apcaBodyFloor {
 //			t.Fatalf("ADR-009 D8.1: the large floor (%.0f) is not below the body floor (%.0f), so the "+
 //				"exemption is meaningless and this assertion guards nothing", apcaLargeFloor, apcaBodyFloor)
@@ -553,7 +560,7 @@ func TestADR009D8_EveryInkOnSurfacePairClearsItsAPCAFloor(t *testing.T) {
 //     calculator;
 //   - an ink carries ONE role across all four grounds, because an ink that is supplementary on
 //     the well and primary on the card is an ink whose role is chosen per failure.
-func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
+func TestADR021_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 	// THE PIN. These are ADR-009 D8.1's amendment table, transcribed. If a floor moves, this is
 	// the assertion that has to be rewritten quoting itself -- which is exactly the friction a
 	// threshold deserves.
@@ -565,13 +572,13 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 		"accent-text":   50,
 		"error-text":    38,
 	}
-	if len(obsidianRoles) != len(wantFloors) {
+	if len(slateRoles) != len(wantFloors) {
 		t.Fatalf("ADR-009 D8.1: the gate declares %d roles and the amendment states %d. A role "+
 			"this table does not know is a floor that was not adjudicated.",
-			len(obsidianRoles), len(wantFloors))
+			len(slateRoles), len(wantFloors))
 	}
 	byName := map[string]apcaRole{}
-	for _, r := range obsidianRoles {
+	for _, r := range slateRoles {
 		byName[r.Name] = r
 		want, known := wantFloors[r.Name]
 		if !known {
@@ -607,7 +614,7 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 	// THE TWO DEVIATIONS ARE EXACTLY TWO, and they are these two. A third role slipping below its
 	// rung is the failure mode this whole per-role model could decay into.
 	var deviations []string
-	for _, r := range obsidianRoles {
+	for _, r := range slateRoles {
 		if r.BelowRung {
 			deviations = append(deviations, r.Name)
 		}
@@ -637,7 +644,7 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 
 	// ONE INK, ONE ROLE, everywhere it lands.
 	roleOf := map[string]string{}
-	for _, p := range obsidianTextPairs() {
+	for _, p := range slateTextPairs() {
 		if _, ok := byName[p.Role.Name]; !ok {
 			t.Errorf("ADR-009 D8.1: the pair %s on %s carries role %q, which is not in the closed "+
 				"list", p.Ink, p.Surface, p.Role.Name)
@@ -659,7 +666,7 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 	// fills for being what they are; a table that declared everything dark-on-light would pass
 	// an entirely inverted skin.
 	polarities := map[string]int{}
-	for _, p := range obsidianTextPairs() {
+	for _, p := range slateTextPairs() {
 		if p.Polarity != lightOnDark && p.Polarity != darkOnLight {
 			t.Errorf("ADR-009 D8.1: %s on %s declares polarity %q, which is neither %q nor %q",
 				p.Ink, p.Surface, p.Polarity, lightOnDark, darkOnLight)
@@ -676,30 +683,30 @@ func TestADR009D8_EveryRoleFloorIsDeclaredAgainstItsRung(t *testing.T) {
 	// Every declared ink must actually appear in the derived set, or a role row is a decision
 	// recorded against nothing.
 	seen := map[string]bool{}
-	for _, p := range obsidianTextPairs() {
+	for _, p := range slateTextPairs() {
 		seen[p.Ink] = true
 	}
-	for _, ink := range obsidianInks {
+	for _, ink := range slateInks {
 		if !seen[ink.Token] {
 			t.Errorf("ADR-009 D8.1: %s carries a role and is in no pair", ink.Token)
 		}
 	}
 }
 
-// TestADR009D8_TheStateIndicatorsClearWCAGNonTextContrast is D8.1's certifying half.
+// TestADR021_TheStateIndicatorsClearWCAGNonTextContrast is D8.1's certifying half.
 //
 // A 7dp status dot is not text and APCA has no size-based answer for it, so the standard that
 // applies is WCAG 2.x's non-text minimum of 3:1 against the adjacent surface. Both surfaces are
 // checked because the same dot renders in both places: on a card in a session row, on the window
 // ground in a filter chip.
-func TestADR009D8_TheStateIndicatorsClearWCAGNonTextContrast(t *testing.T) {
-	joined := obsidianJoinedColours(t)
+func TestADR021_TheStateIndicatorsClearWCAGNonTextContrast(t *testing.T) {
+	joined := slateJoinedColours(t)
 
 	// The four Group indicators must be PAIRWISE DISTINCT (PB-TOK-8, kept by ADR-009 D6). A skin
 	// that fixed a contrast failure by collapsing two Groups onto one colour would clear every
 	// ratio below and destroy the taxonomy.
 	byValue := map[string][]string{}
-	for _, ind := range obsidianIndicators {
+	for _, ind := range slateIndicators {
 		if v, ok := joined[ind.Token]; ok {
 			byValue[strings.ToLower(v)] = append(byValue[strings.ToLower(v)], ind.Token)
 		}
@@ -714,13 +721,13 @@ func TestADR009D8_TheStateIndicatorsClearWCAGNonTextContrast(t *testing.T) {
 	}
 
 	var report []string
-	for _, ind := range obsidianIndicators {
-		dot, ok := obsidianColour(t, joined, ind.Token)
+	for _, ind := range slateIndicators {
+		dot, ok := slateColour(t, joined, ind.Token)
 		if !ok {
 			continue
 		}
-		for _, groundToken := range obsidianIndicatorGrounds {
-			ground, ok := obsidianColour(t, joined, groundToken)
+		for _, groundToken := range slateIndicatorGrounds {
+			ground, ok := slateColour(t, joined, groundToken)
 			if !ok {
 				continue
 			}
@@ -743,7 +750,7 @@ func TestADR009D8_TheStateIndicatorsClearWCAGNonTextContrast(t *testing.T) {
 		len(report), strings.Join(report, "\n\t"))
 }
 
-// TestADR009D8_TheContrastCheckerCanActuallyFail is the NEGATIVE CONTROL, and it is the assertion
+// TestADR021_TheContrastCheckerCanActuallyFail is the NEGATIVE CONTROL, and it is the assertion
 // this file is worth least without.
 //
 // Every assertion above is satisfiable by an apcaLc that returns -1000 for everything, or by a
@@ -751,7 +758,7 @@ func TestADR009D8_TheStateIndicatorsClearWCAGNonTextContrast(t *testing.T) {
 // functions are exercised against published reference values AND against deliberately failing
 // pairs -- IN MEMORY. Nothing here writes to disk: perturbing tokens.json to prove a gate can
 // fail is how a perturbation gets committed, which this repository has paid for before.
-func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
+func TestADR021_TheContrastCheckerCanActuallyFail(t *testing.T) {
 	black := srgb{0, 0, 0}
 	white := srgb{255, 255, 255}
 
@@ -783,18 +790,19 @@ func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
 		t.Error("polarityOf calls black-on-white light-on-dark; every polarity verdict is inverted")
 	}
 
-	// THE DELIBERATELY FAILING PAIR, fed to the checker rather than to the tree. #171310 is
-	// Obsidian's --p-card and #1f1a13 is --p-elev: two ADJACENT rungs of the ladder. They are
+	// THE DELIBERATELY FAILING PAIR, fed to the checker rather than to the tree. #131824 is
+	// Slate's --p-card and #1b2334 is --p-elev (ADR-021; under Obsidian this control fed #171310
+	// and #1f1a13, retargeted so the control still names the live ladder): two ADJACENT rungs. They are
 	// meant to be distinguishable as SURFACES and are nowhere near readable as ink on ground,
 	// so a checker that passed them would pass anything.
 	//
 	// IT IS JUDGED AGAINST THE LOWEST FLOOR IN THE SYSTEM, not the highest. The amendment's
 	// gentlest role is incidental at Lc 24, and a control that only proved the pair fails 75
 	// would prove nothing about the floors this gate actually spends most of its time applying.
-	adjacent := apcaLc(srgb{0x1f, 0x1a, 0x13}, srgb{0x17, 0x13, 0x10})
-	lowest := obsidianRoles[0].Floor
-	highest := obsidianRoles[0].Floor
-	for _, r := range obsidianRoles {
+	adjacent := apcaLc(srgb{0x1b, 0x23, 0x34}, srgb{0x13, 0x18, 0x24})
+	lowest := slateRoles[0].Floor
+	highest := slateRoles[0].Floor
+	for _, r := range slateRoles {
 		lowest = math.Min(lowest, r.Floor)
 		highest = math.Max(highest, r.Floor)
 	}
@@ -830,7 +838,7 @@ func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
 	// The deliberately failing indicator pair, in memory: --p-card on --p-bg. Two ladder rungs
 	// again -- they are DESIGNED to be a barely-visible step, so a 3:1 verdict on them would mean
 	// the ratio cannot discriminate.
-	if r := wcagRatio(srgb{0x17, 0x13, 0x10}, srgb{0x0e, 0x0b, 0x08}); r >= wcagIndicatorFloor {
+	if r := wcagRatio(srgb{0x13, 0x18, 0x24}, srgb{0x0b, 0x0e, 0x14}); r >= wcagIndicatorFloor {
 		t.Errorf("wcagRatio(--p-card, --p-bg) = %.2f:1, at or above the %.1f:1 indicator floor. "+
 			"Adjacent ladder rungs are a one-step lightness change by design; a ratio that scores "+
 			"them as a visible non-text signal cannot fail on a real indicator either.",
@@ -838,11 +846,11 @@ func TestADR009D8_TheContrastCheckerCanActuallyFail(t *testing.T) {
 	}
 
 	// The parser must refuse what it cannot judge, rather than inventing a composite.
-	if _, err := parseSRGB("--p-tabbg", "rgba(14,11,8,0.88)"); err == nil {
+	if _, err := parseSRGB("--p-tabbg", "rgba(11,14,20,0.88)"); err == nil {
 		t.Error("parseSRGB accepted a translucent colour; a contrast figure for it is a figure " +
 			"for a composite nobody specified")
 	}
-	for _, bad := range []string{"#fff", "650", "0.04", "linear-gradient(90deg, #6fa7a4, transparent 85%)"} {
+	for _, bad := range []string{"#fff", "650", "0.04", "linear-gradient(90deg, #6fc3bc, transparent 85%)"} {
 		if _, err := parseSRGB("--p-x", bad); err == nil {
 			t.Errorf("parseSRGB(%q) invented a colour", bad)
 		}
@@ -859,7 +867,7 @@ func apcaFails(lc, floor float64) bool { return math.Abs(lc) < floor }
 // powers, so it is monotone increasing in every channel: over the sRGB cube, Ytxt is smallest at
 // pure black and largest at pure white, and |Lc| grows with the distance between Ytxt and the
 // fixed Ybg in both polarity branches. The extreme is therefore at one of those two corners. The
-// argument is not taken on faith -- TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette sweeps
+// argument is not taken on faith -- TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette sweeps
 // the whole grey axis over a mid-luminance fill and requires the corner answer to win.
 func apcaCeiling(surface srgb) float64 {
 	return math.Max(
@@ -868,7 +876,7 @@ func apcaCeiling(surface srgb) float64 {
 	)
 }
 
-// TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette is the assertion that tells the two
+// TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette is the assertion that tells the two
 // failure modes apart, and without it this file misdirects every fix it demands.
 //
 // The gate's whole remedy sentence is "if a pair fails, the TOKEN moves" (ADR-009 D3: the ladder
@@ -882,7 +890,13 @@ func apcaCeiling(surface srgb) float64 {
 // So the ceiling is computed, and a floor above its own ceiling is reported as a defect in the
 // FLOOR rather than in the palette. This does not lower anything: the floors are untouched and
 // every pair is still judged against them.
-func TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette(t *testing.T) {
+//
+// RE-DERIVED ON THE LIVE FILL BY ADR-021 (2026-08-27). The champagne sweep below is the
+// amendment's EVIDENCE and stays as it was measured: 59.73 on #c9a876 is the number ADR-009 D8.1's
+// amendment rests on, and it is a fact about that fill whether or not the app still paints it. What
+// the live palette is held to is read through the join at the end of this test, so a future skin
+// re-derives the proof by failing rather than by inheriting a champagne number.
+func TestADR021_AFloorNoInkCanReachIsAFloorAndNotAPalette(t *testing.T) {
 	black := srgb{0, 0, 0}
 	white := srgb{255, 255, 255}
 
@@ -940,18 +954,48 @@ func TestADR009D8_AFloorNoInkCanReachIsAFloorAndNotAPalette(t *testing.T) {
 			"is still advice with no answer in it.", roleCTALabel.Floor, ceiling)
 	}
 
+	// THE LIVE FILL, read through the join rather than typed (ADR-021). Slate's --p-hero is
+	// #8eb4e6 and its ceiling is 62.04: still below the retired body floor of 75, so the finding
+	// the amendment rests on -- no ink on the CTA fill could ever have cleared a body-size floor --
+	// holds for the fill the label actually sits on; and ABOVE the retired large floor of 60 that
+	// the champagne fill missed by 0.3, so that half of the champagne proof is history, quoted
+	// above and no longer a fact about the palette. The CTA floor stays reachable, and it is the
+	// reachability that the amendment's honesty depends on.
+	joined := slateJoinedColours(t)
+	if hero, ok := slateColour(t, joined, "--p-hero"); ok {
+		live := apcaCeiling(hero)
+		if live >= apcaRetiredBodyFloor {
+			t.Errorf("apcaCeiling(--p-hero %s) = %.2f, at or above the RETIRED body floor of %.0f. "+
+				"If that is true the old two-rung model is satisfiable on this fill and the "+
+				"amendment's finding no longer describes the palette that ships; re-derive the proof.",
+				joined["--p-hero"], live, apcaRetiredBodyFloor)
+		}
+		if live < apcaRetiredLargeFloor {
+			t.Errorf("apcaCeiling(--p-hero %s) = %.2f, below the RETIRED large floor of %.0f. ADR-021 "+
+				"re-derived this proof on a fill that clears it (62.04 on #8eb4e6); a fill that does "+
+				"not is the champagne case again and the proof must be re-derived, not inherited.",
+				joined["--p-hero"], live, apcaRetiredLargeFloor)
+		}
+		if roleCTALabel.Floor > live {
+			t.Errorf("the cta-label floor (%.0f) is above the live accent fill's ceiling (%.2f): the "+
+				"floor has become unsatisfiable on the palette that ships, and 'move the token' is "+
+				"again advice with no answer in it.", roleCTALabel.Floor, live)
+		}
+	}
+
 	// A near-black ground must NOT be reported unreachable, or the diagnostic would excuse every
 	// ink in the skin instead of the two it applies to. They are checked against the HIGHEST floor
 	// in the system -- the primary ink's 90 -- because that is the strongest demand any of them
-	// has to be able to satisfy.
+	// has to be able to satisfy. Slate's four grounds (ADR-021); Obsidian's were #0e0b08, #171310,
+	// #1f1a13 and #090705.
 	for _, surface := range []struct {
 		Token string
 		Value srgb
 	}{
-		{"--p-bg", srgb{0x0e, 0x0b, 0x08}},
-		{"--p-card", srgb{0x17, 0x13, 0x10}},
-		{"--p-elev", srgb{0x1f, 0x1a, 0x13}},
-		{"--p-well", srgb{0x09, 0x07, 0x05}},
+		{"--p-bg", srgb{0x0b, 0x0e, 0x14}},
+		{"--p-card", srgb{0x13, 0x18, 0x24}},
+		{"--p-elev", srgb{0x1b, 0x23, 0x34}},
+		{"--p-well", srgb{0x08, 0x0a, 0x10}},
 	} {
 		if c := apcaCeiling(surface.Value); c < roleBodyPrimary.Floor {
 			t.Errorf("apcaCeiling(%s) = %.2f, below the highest floor in the system (%.0f, the "+

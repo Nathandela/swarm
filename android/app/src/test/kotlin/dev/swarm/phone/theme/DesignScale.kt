@@ -50,8 +50,13 @@ object DesignScale {
      * ladder (a redraw whose sizes ADR-009 D3 does not move), the four tab glyphs (it draws
      * labels, not `<svg>`) -- is still the directions artifact's, and re-pointing those at a
      * drawing that does not contain them would be inventing values rather than reading them.
+     *
+     * ADR-021 D1 (2026-08-27, wave W4): the resource is the SLATE maquette, a copy of the
+     * Obsidian one with the values moved and the same selectors and block markers, staged by
+     * app/build.gradle.kts in the Obsidian file's place. What this constant said before:
+     * "obsidian-maquette.html".
      */
-    private const val MAQUETTE_RESOURCE = "obsidian-maquette.html"
+    private const val MAQUETTE_RESOURCE = "slate-maquette.html"
 
     /**
      * The maquette's phone-kit block: every component the app draws, and nothing else.
