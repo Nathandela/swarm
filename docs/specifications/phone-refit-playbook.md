@@ -770,7 +770,7 @@ ActivityPanelView,SettingsPanelView,MachinesPanelView}.kt`, `ui/kit/NavHeader.kt
 ```kotlin
 need = listOfNotNull(
     needCopy(row.need, row.group),
-    ageOf(row.lastActivityUnixMs, nowUnixMs),                 // "" when 0
+    ageOf(row.stateSinceUnixMs, nowUnixMs),                 // "" when 0
     if (scope == null) machineNames[machineOf(row.id)] else null,
 ).filter { it.isNotEmpty() }.joinToString(" · ")
 ```
@@ -840,6 +840,19 @@ under the list, with W5's words and W7.2's shorter list above it.
   (model) untouched.
 - **Done when** a healthy two-computer panel draws two rows and nothing below them;
   `MachinesPanelScreenTest` passes untouched.
+
+### W7 amendments (ruled 2026-08-28, from the fleet's findings and the review)
+- **The stamps ride the wire.** The premise that the two stamps come from `mobile/` alone was false: the wire
+  carried none. Additive carriage, every new tag `omitzero`: `journal.Record.StateSince` set by
+  `internal/daemon/journal.go` at the roster and the four transitions from `next.EffectiveGroupEnteredAt()`;
+  `schema.JournalRecord` `ts` + `state_since`; `internal/skeleton/api.go` copies both; `phonecore.CachedSession.StateSince`;
+  `mobile` `Session.StateSinceUnixMs` / `JournalEntry.TSUnixMs`; `protocol.md` rows; `exported_surface.golden`.
+  Byte identity is pinned (an unstamped record, line and cached session serialise as before; an old cache loads).
+- **The age is time in the current state**, not time since launch: `persist.Meta.LastActivity` moves only at
+  launch and exit, so the source is `EffectiveGroupEnteredAt`, and the field is named for it.
+- `navHeaderDrill` also gains `trailing: View? = null` (the Computers screen uses the drill header).
+- The open Add form is surface state (`addFormOpen`, in `drawMachines`'s redraw guard), composed at draw.
+- The zero-stamp Activity section keeps its "Journal" heading until W5 removes the word.
 
 ## 9. Merge order and release
 
