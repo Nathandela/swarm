@@ -56,7 +56,7 @@ import dev.swarm.phone.R
  */
 fun toast(context: Context, message: CharSequence, suffix: CharSequence? = null): TextView =
     Kit.textView(context).apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+        Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
         setTextColor(Kit.colour(context, R.color.swarm_text_primary))
         background = toastSurface(context)
         setPaddingRelative(

@@ -61,7 +61,7 @@ fun gapDivider(context: Context, label: CharSequence): LinearLayout = KitStack(
     addView(gapRule(context))
     addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_state_error))
             text = label
             // WRAP between two weighted rules, so the words keep their own width and the rules

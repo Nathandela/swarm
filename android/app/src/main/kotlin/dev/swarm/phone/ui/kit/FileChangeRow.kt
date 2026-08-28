@@ -81,7 +81,7 @@ fun fileChangeRow(
 
     addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
             // `--p-ink`, row 14's body ink: the verb is the sentence of this row, not a
             // qualifier on one. It is also the WIRE's own word -- `modify`, `rename` -- and this
             // side never writes a summary of what a change did.
@@ -97,7 +97,7 @@ fun fileChangeRow(
         Kit.textView(context).apply {
             // MONO, because a path is a machine fact and this skin puts machine facts in the
             // machine's face -- row 27's subtitle makes the same call about a machine name.
-            setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
             setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
             text = path
             isSingleLine = true
@@ -112,7 +112,7 @@ fun fileChangeRow(
     )
     addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
             setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
             text = counts
             Kit.identityCell(this)

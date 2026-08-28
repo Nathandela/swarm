@@ -200,7 +200,7 @@ private fun tab(context: Context, item: TabItem): View {
         addView(iconFrame)
         addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Label_Tab)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Tab)
                 setTextColor(ink)
                 text = item.label
                 gravity = Gravity.CENTER

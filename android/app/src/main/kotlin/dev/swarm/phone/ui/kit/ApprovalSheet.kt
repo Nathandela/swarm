@@ -57,7 +57,7 @@ fun approvalSheet(
 
     addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
             setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
             isAllCaps = true
             text = contextLine
@@ -84,7 +84,7 @@ fun approvalSheet(
             // the display rung on purpose. The maquette's own 19 px is still not this app's, for
             // the reason the old text gave -- a 300 px gallery phone -- and the rung is 22 since
             // R3, not 27.
-            setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Display_NavTitle)
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             text = question
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {

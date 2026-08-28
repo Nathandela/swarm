@@ -112,7 +112,7 @@ fun navHeaderDrill(
                 // 15.5 sp against the root header's 27 -- a 43 percent drop for one navigation
                 // step, taken because nothing else existed rather than because anyone chose it.
                 // The ruling: a screen is a screen, and depth is the back chevron's job.
-                setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Display_NavTitle)
                 setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                 text = title
                 // The remaining width, for `navHeader`'s reason: a trailing gravity works until
@@ -146,7 +146,7 @@ fun navHeaderDrill(
  * spending anything else would be a step nobody wrote down.
  */
 private fun backControl(context: Context, label: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     text = label
     gravity = Gravity.CENTER_VERTICAL

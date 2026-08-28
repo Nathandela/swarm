@@ -58,7 +58,7 @@ fun syncPill(
     tone: SyncTone,
     description: CharSequence,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     text = label
     contentDescription = description
@@ -123,7 +123,7 @@ fun syncPill(
  * whole sentence is one tap away in the detail this strip opens.
  */
 fun syncStrip(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_primary))
     this.text = text
     background = BottomRule(

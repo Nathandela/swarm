@@ -47,7 +47,7 @@ import dev.swarm.phone.R
  */
 fun emptyState(context: Context, text: CharSequence, compact: Boolean = false): TextView =
     Kit.textView(context).apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+        Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
         setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
         gravity = Gravity.CENTER
         this.text = text

@@ -105,7 +105,7 @@ fun pairingStep(
  * being two type decisions.
  */
 private fun body(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     this.text = text
 }

@@ -87,7 +87,7 @@ fun sessionRow(
     )
     line.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
             // `.prow .pj` declares no colour: it inherits `.pscreen { color: var(--p-ink) }`.
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             text = project
@@ -113,7 +113,7 @@ fun sessionRow(
     if (agent.isNotBlank()) {
         line.addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = agent
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
@@ -139,7 +139,7 @@ fun sessionRow(
     row.addView(line)
     row.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = need
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {

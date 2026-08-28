@@ -29,7 +29,7 @@ import dev.swarm.phone.R
  * PB-DS-12 asks for it to be recorded with the sites it affects, and this is one of them.
  */
 fun sectionLabel(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Section)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Section)
     setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
     isAllCaps = true
     this.text = text

@@ -103,7 +103,7 @@ fun activityRow(
     if (glyph != null) {
         row.addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = glyph
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
@@ -114,7 +114,7 @@ fun activityRow(
     if (timestamp != null) {
         row.addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = timestamp
                 // WRAP, which is the derivation's one correction to the mock: a fixed column
@@ -126,7 +126,7 @@ fun activityRow(
     }
     row.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
             // `--p-ink`, which is row 14's cell and NOT the `--p-ink2` a body line takes on the
             // session row. `.prow .ln` is a session's need -- a subordinate second line under a
             // project name -- and this row has no first line for it to be subordinate to: the

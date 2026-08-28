@@ -54,7 +54,7 @@ fun denyChip(
     label: CharSequence,
     description: CharSequence? = null,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Chip)
     // `.a2-no { color: var(--p-err) }`. The ink is the token straight, over a 13% tint of itself:
     // 5.3:1 on that fill, which row 13 states and §9 records.
     setTextColor(Kit.colour(context, R.color.swarm_state_error))

@@ -38,7 +38,7 @@ import dev.swarm.phone.R
  * centring is the screen's half of the fence.
  */
 fun decisionPill(context: Context, label: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(Kit.colour(context, R.color.swarm_hero_ink))
     text = label
     background = pillSurface(context, fill = Kit.colour(context, R.color.swarm_hero))

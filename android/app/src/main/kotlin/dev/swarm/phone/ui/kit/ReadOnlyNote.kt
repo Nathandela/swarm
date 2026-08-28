@@ -40,7 +40,7 @@ fun readOnlyNote(
     context: Context,
     text: CharSequence,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     gravity = Gravity.CENTER
     this.text = text

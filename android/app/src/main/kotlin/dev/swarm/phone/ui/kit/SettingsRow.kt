@@ -54,7 +54,7 @@ fun settingsRow(
     }
     text.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             this.text = label
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -64,7 +64,7 @@ fun settingsRow(
     if (sublabel != null) {
         text.addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
                 setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
                 this.text = sublabel
                 layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)

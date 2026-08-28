@@ -57,7 +57,7 @@ fun navHeader(
 
         addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Display_NavTitle)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Display_NavTitle)
                 // `.pnav .big` declares no colour: it inherits `.pscreen { color: var(--p-ink) }`.
                 setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                 text = title
@@ -107,7 +107,7 @@ fun navHeader(
  * the badge is `--p-att`.
  */
 fun liveCounter(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Live)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Live)
     setTextColor(Kit.colour(context, R.color.swarm_hero))
     this.text = text
     layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)

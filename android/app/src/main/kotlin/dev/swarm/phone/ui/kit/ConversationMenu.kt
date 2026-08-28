@@ -65,7 +65,7 @@ fun overflowControl(context: Context): TextView = Kit.textView(context).apply {
     // Row 27's own cell: "the overflow glyph `--p-ink2`". The rung is the header's row rung, so
     // the mark and the session name beside it are the same size -- a heavier glyph would pull the
     // eye off the identity, which is what the header is for.
-    setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     text = OVERFLOW_GLYPH
     gravity = Gravity.CENTER
@@ -150,7 +150,7 @@ private fun menuRow(
     choice: MenuChoice,
     onChoose: (String) -> Unit,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Message)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
     // `--p-ink` for a route, `--p-err` for the one act that cannot be undone. It is the notice
     // line's pair of inks and it is the same claim: what changes is who is speaking, not how
     // loudly, so the size and the weight are the same in both rows.

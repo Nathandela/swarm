@@ -76,7 +76,7 @@ fun conversationHeader(
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             addView(
                 Kit.textView(context).apply {
-                    setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+                    Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
                     setTextColor(Kit.colour(context, R.color.swarm_text_primary))
                     text = title
                     isSingleLine = true
@@ -103,7 +103,7 @@ fun conversationHeader(
                     if (group.isNotEmpty()) addView(statusDot(context, group))
                     addView(
                         Kit.textView(context).apply {
-                            setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+                            Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
                             setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                             text = subtitle
                             isSingleLine = true

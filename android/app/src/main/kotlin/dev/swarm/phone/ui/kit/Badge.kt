@@ -33,7 +33,7 @@ import dev.swarm.phone.R
  */
 fun badge(context: Context, count: Int, description: CharSequence?): TextView =
     Kit.textView(context).apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
+        Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Agent)
         setTextColor(Kit.colour(context, R.color.swarm_hero_ink))
         // Three digits either overflow a 16 dp pill or shrink the type below the 10 sp floor
         // PB-DS-12 already flags, so the count saturates rather than the box growing.

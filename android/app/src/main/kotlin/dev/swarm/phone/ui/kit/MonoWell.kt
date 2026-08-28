@@ -63,7 +63,7 @@ fun monoWell(
     terminal: Boolean = false,
     lines: Int = 0,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Code)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Code)
     setTextColor(
         Kit.colour(
             context,

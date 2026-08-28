@@ -80,7 +80,7 @@ fun machineRow(
     )
     line.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
             // Row 11 states `--p-ink` explicitly, where `.prow .pj` inherits the same token from
             // `.pscreen`. The value is one; the authority is this row's.
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
@@ -95,7 +95,7 @@ fun machineRow(
     if (endpoint != null) {
         line.addView(
             Kit.textView(context).apply {
-                setTextAppearance(R.style.TextAppearance_Swarm_Mono_Agent)
+                Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Agent)
                 setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                 text = endpoint
                 layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
@@ -119,7 +119,7 @@ fun machineRow(
     row.addView(line)
     row.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = presence
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {

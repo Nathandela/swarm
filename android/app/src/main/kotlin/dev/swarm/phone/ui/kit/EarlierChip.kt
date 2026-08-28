@@ -37,7 +37,7 @@ import dev.swarm.phone.R
  * would be right on this screen and wrong on the next one that wants it.
  */
 fun earlierChip(context: Context, label: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
     text = label
     background = chipSurface(context, selected = false)

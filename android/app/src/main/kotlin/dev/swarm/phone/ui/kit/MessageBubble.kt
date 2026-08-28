@@ -61,7 +61,8 @@ fun messageBubble(
     state: BubbleState = BubbleState.SETTLED,
     mono: Boolean = false,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(
+    Kit.appearance(
+        this,
         if (mono) R.style.TextAppearance_Swarm_Mono_Code else R.style.TextAppearance_Swarm_Body_Message,
     )
     setTextColor(

@@ -55,7 +55,7 @@ fun notice(
     text: CharSequence,
     kind: NoticeKind = NoticeKind.INFO,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
     setTextColor(Kit.colour(context, noticeInk(kind)))
     this.text = text
     layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -97,7 +97,7 @@ fun notice(
  * it is drawing so a screen with two of these can tell them apart.
  */
 fun noticeDetail(context: Context, text: CharSequence): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
     setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
     this.text = text
     layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)

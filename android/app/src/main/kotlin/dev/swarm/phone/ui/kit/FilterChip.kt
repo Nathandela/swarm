@@ -41,7 +41,7 @@ fun filterChip(
      */
     contentDescription: CharSequence? = null,
 ): TextView = Kit.textView(context).apply {
-    setTextAppearance(R.style.TextAppearance_Swarm_Label_Chip)
+    Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Chip)
     setTextColor(
         Kit.colour(context, if (selected) R.color.swarm_hero_ink else R.color.swarm_text_secondary),
     )

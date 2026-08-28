@@ -76,7 +76,7 @@ fun killSwitchPanel(
     }
     panel.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Title_Row)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Title_Row)
             // `--p-err` on the TITLE and nowhere else in this panel. It is the one place the skin
             // spends the error token on something that is not a destructive control, and row 12
             // spends it deliberately: what the line reports is the machine refusing this phone.
@@ -88,7 +88,7 @@ fun killSwitchPanel(
     )
     panel.addView(
         Kit.textView(context).apply {
-            setTextAppearance(R.style.TextAppearance_Swarm_Body_Secondary)
+            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
             setTextColor(Kit.colour(context, R.color.swarm_text_secondary))
             text = Kit.emphasised(context, body, command)
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)

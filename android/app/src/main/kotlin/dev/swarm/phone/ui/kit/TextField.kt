@@ -58,7 +58,8 @@ fun textField(
     // line from the read-only well beside it would be the delta this kit just spent a commit
     // removing, in the one place a user is typing.
     includeFontPadding = false
-    setTextAppearance(
+    Kit.appearance(
+        this,
         if (mono) R.style.TextAppearance_Swarm_Mono_Code else R.style.TextAppearance_Swarm_Body_Message,
     )
     setTextColor(Kit.colour(context, R.color.swarm_text_primary))

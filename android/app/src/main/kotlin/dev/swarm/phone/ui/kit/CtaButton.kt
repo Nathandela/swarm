@@ -192,7 +192,7 @@ fun ctaButton(
     val spec = ctaSpec(context, kind, bloom)
     val padPx = Kit.dimenPx(context, R.dimen.swarm_space_12)
     return Kit.textView(context).apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Label_Button)
+        Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Button)
         setTextColor(ctaInk(context, kind))
         text = label
         gravity = Gravity.CENTER
