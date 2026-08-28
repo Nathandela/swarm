@@ -539,6 +539,7 @@ unchanged (mtime 1787902643), 203/203 result files newer than the start stamp.
 
 Lane note: before run 6 the lane script waited on a false positive -- another fleet's shell whose
 own typed text contained the literal `gradle-wrapper.jar` (the self-match §1.7 warns about). The
-script's check now matches an actual Gradle JVM only (`pgrep -f 'java.*-jar .*gradle-wrapper\.jar'`),
-which is the playbook's intent stated more precisely; nothing else about the lane discipline changed.
+script's check matched an actual Gradle JVM only for runs 6-8 (`pgrep -f 'java.*-jar .*gradle-wrapper\.jar'`)
+and has since been aligned to the orchestrator's corrected rule, `pgrep -f '^/[^ ]*java .*gradle-wrapper[.]jar'`
+in a script file and never in a typed command; nothing else about the lane discipline changed.
 
