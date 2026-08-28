@@ -426,6 +426,14 @@ else          /* the existing composer_send body from :489-520, unchanged */
   `stopVisible`, is gone by contract) and `the sealed interrupt says Stopped` replaces it. The e2e drivers press the
   control by its spoken description (`PhoneScreenDriver` `awaitDescribedPressable` / `pressDescribed`).
 - Filed, not here: `agents-tracker-svcg` (the menu Stop dropped with a success haptic while a send crosses).
+- **The notice carries its session** (review re-check, residual of the lifetime fix). A settle can land after the
+  drill-down closed (`detailDrawn == null`, inside the command lane's `awaitConn` wait) or while another session is
+  drawn; recording the turn at settle time then left "Stopped" under a composer nobody stopped. So
+  `rememberInterrupt(answer, target)` -> `drawStopped(target)`, which returns unless the drawn panel is the press's
+  session, and records `stoppedOverSession` beside `stoppedOverTurn`; `drawComposerRegion` removes the notice when the
+  drawn session OR turn differs, resetting both. `SessionDetailPanel` gained `sessionId` for it (the panel carried no
+  session identity, and the surface's own `session` is set only by a Ready render no JVM test reaches). The w34 gate
+  reads `internal fun drawStopped(`, `stoppedOverSession = `, `!= stoppedOverTurn` and `!= stoppedOverSession`.
 
 ## 5. W4 Slate and breathing
 
