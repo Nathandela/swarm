@@ -260,7 +260,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// The launch ENVIRONMENT is resolved ONCE here, so the persisted meta and the env
 	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
 	// half; see PolicyEnv). spec is a value copy, so this is local to this launch.
-	spec.ClientEnv = d.launchPolicyEnv(spec.ClientEnv)
+	spec.ClientEnv = d.LaunchPolicyEnv(spec.ClientEnv)
 
 	// Cap check + id reservation, atomically, BEFORE any spawn (S-7): the rejected
 	// launch must grow nothing and spawn nothing.

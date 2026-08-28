@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 // doctorEnv points the client config at a fresh, daemon-less state dir. The
@@ -63,6 +64,10 @@ func TestDoctorFailsOnAPersistedBackendPlanError(t *testing.T) {
 		ID:               "brokensession",
 		AgentType:        "codex",
 		BackendPlanError: `backend Program "codex" does not resolve on PATH`,
+		// RUNNING: only a live degraded session alarms. A killed one is history
+		// (R1 audit M3), or a cron'd doctor stays red forever after the very
+		// relaunch its fix line asks for.
+		Status: status.Status{Process: status.ProcessRunning},
 	}
 	writeMetaFile(t, sessDir, m)
 
@@ -102,5 +107,45 @@ func writeMetaFile(t *testing.T, sessDir string, m persist.Meta) {
 	}
 	if err := store.Save(m); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDoctorDoesNotAlarmOnAnExitedDegradedSession(t *testing.T) {
+	dir := doctorEnv(t)
+	sessDir := filepath.Join(dir, "pastsession")
+	if err := os.MkdirAll(sessDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeMetaFile(t, sessDir, persist.Meta{
+		ID:               "pastsession",
+		AgentType:        "codex",
+		BackendPlanError: "some old refusal",
+		Status:           status.Status{Process: status.ProcessExited},
+	})
+	var out, errb bytes.Buffer
+	if code := runDoctor(nil, &out, &errb); code != 0 {
+		t.Fatalf("doctor with only a PAST degraded session = exit %d, want 0:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "1 past degraded") {
+		t.Errorf("the past degradation is not counted:\n%s", out.String())
+	}
+}
+
+func TestDoctorLeavesANonexistentStateDirNonexistent(t *testing.T) {
+	// Sharper than the no-daemon control: on a machine where swarm has NEVER
+	// run, doctor must not conjure the state dir into being (R1 audit M1 --
+	// persist.NewStore MkdirAlls and chmods, which is why doctor reads plainly).
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "never-created")
+	t.Setenv("SWARM_DAEMON_STATE", dir)
+	t.Setenv("SWARM_DAEMON_SOCK", filepath.Join(dir, "d.sock"))
+	t.Setenv("SWARM_DAEMON_LOCK", filepath.Join(dir, "d.lock"))
+	t.Setenv("SWARM_DAEMON_LOG", filepath.Join(dir, "d.log"))
+	var out, errb bytes.Buffer
+	if code := runDoctor(nil, &out, &errb); code != 0 {
+		t.Fatalf("doctor on a virgin machine = exit %d:\n%s%s", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Error("doctor created the state dir on a machine swarm has never run on")
 	}
 }

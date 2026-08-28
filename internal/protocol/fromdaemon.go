@@ -78,6 +78,10 @@ type rosterSnap struct {
 	status status.Status
 	name   string
 	tag    string
+	// backendPlanError: persisted in launch's phase two, after a poll may have
+	// emitted the phase-one row -- without it in the key the change never fans
+	// out (R1 audit: codex finding 2; mirrors the skeleton watcher's key).
+	backendPlanError string
 }
 
 func (a *daemonAdapter) watch() {
@@ -92,7 +96,7 @@ func (a *daemonAdapter) watch() {
 			present := map[string]struct{}{}
 			for _, m := range a.d.List() {
 				present[m.ID] = struct{}{}
-				cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag}
+				cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, backendPlanError: m.BackendPlanError}
 				if prev, ok := seen[m.ID]; ok && prev == cur {
 					continue
 				}

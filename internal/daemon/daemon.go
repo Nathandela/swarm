@@ -307,9 +307,14 @@ func Open(cfg Config) (*Daemon, error) {
 	// older daemon.env survives, launches resolve against that survivor -- the same
 	// preference converge has -- and a failed read leaves nil, which PolicyEnv turns
 	// into the live environ (today's exact behavior).
-	if saved, err := LoadSavedEnv(cfg.StateDir); err == nil {
+	// len > 0, not err == nil: LoadSavedEnv deliberately returns non-nil EMPTY
+	// for an empty file (that loudness serves the restart path), and an empty
+	// environment adopted here would hand nil-ClientEnv launches no PATH and no
+	// HOME -- the round-4 BLOCKER-1 failure (R1 audit M2). Empty degrades to the
+	// live environ exactly like an unreadable file.
+	if saved, err := LoadSavedEnv(cfg.StateDir); err == nil && len(saved) > 0 {
 		d.savedEnv = saved
-	} else {
+	} else if err != nil {
 		d.logf("read saved daemon environment: %v", err)
 	}
 

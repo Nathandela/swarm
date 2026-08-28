@@ -16,11 +16,13 @@ package main
 // doctor_test.go holds the negative control.
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -30,6 +32,7 @@ import (
 	"github.com/Nathandela/swarm/internal/converge"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
+	"github.com/Nathandela/swarm/internal/status"
 	"github.com/Nathandela/swarm/internal/version"
 )
 
@@ -56,6 +59,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "print the findings as JSON")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		_, _ = fmt.Fprintf(stderr, "doctor: unexpected argument %q\n", fs.Arg(0))
 		return 2
 	}
 
@@ -106,10 +113,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // consulted only once a socket exists, where the state dir is in use anyway and
 // the question is "crashed or wedged".
 func doctorDaemonCheck(cc daemon.ClientConfig) []doctorFinding {
-	if _, err := os.Stat(cc.SocketPath); errors.Is(err, os.ErrNotExist) {
+	switch _, err := os.Stat(cc.SocketPath); {
+	case errors.Is(err, os.ErrNotExist):
 		return []doctorFinding{{
 			Check: "daemon", Status: "ok",
 			Detail: "no daemon running; the next swarm command starts one from its own shell",
+		}}
+	case err != nil:
+		return []doctorFinding{{
+			Check: "daemon", Status: "warn",
+			Detail: fmt.Sprintf("cannot read the socket path: %v", err),
 		}}
 	}
 	build, err := converge.HelloVia(cc.SocketPath)()
@@ -173,9 +186,12 @@ func doctorSavedEnvLoad(cc daemon.ClientConfig) ([]string, []doctorFinding) {
 // permanent test: for every production agent CLI, what YOUR shell resolves must
 // also resolve for the daemon's saved environment, or sessions launched outside
 // a terminal (remote, preset, converge-spawned) run a different binary or none.
-// The saved-env probe resolves names only (detect.EnvHost never executes).
+// BOTH probes resolve names only (detect.EnvHost never executes): doctor
+// consumes Found and Path alone, and a diagnostic that executes four Node CLIs
+// serially from a possibly-cron environment would be against its own spirit
+// (R1 audit L1).
 func doctorAgentChecks(saved []string) []doctorFinding {
-	host := detect.Host{}
+	host := detect.EnvHost{Env: os.Environ()}
 	envHost := detect.EnvHost{Env: saved}
 	var out []doctorFinding
 	for _, name := range registry.Names() {
@@ -247,40 +263,54 @@ func doctorCredentialChecks(saved []string) []doctorFinding {
 	return out
 }
 
-// doctorSessionChecks reads the session store from disk (never the daemon) and
-// surfaces every session that launched with no backend although its adapter
-// declared one -- the "working PTY, nothing to attach to" degradation.
+// doctorSessionChecks reads each session's meta.json directly -- NOT through
+// persist.NewStore, which MkdirAlls and force-chmods the state dir (R1 audit
+// M1): doctor's contract is to leave an untouched machine exactly as found, so
+// its scan is plain reads that create nothing. Only a RUNNING degraded session
+// fails the run (M3): a killed one is history, counted but not alarmed on, or a
+// cron'd doctor would stay red forever after the very relaunch its fix line
+// asks for.
 func doctorSessionChecks(stateDir string) []doctorFinding {
-	store, err := persist.NewStore(stateDir)
-	if err != nil {
-		return []doctorFinding{{
-			Check: "sessions", Status: "warn",
-			Detail: fmt.Sprintf("cannot open the session store: %v", err),
-		}}
+	entries, err := os.ReadDir(stateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []doctorFinding{{Check: "sessions", Status: "ok", Detail: "no state dir yet; nothing has ever run here"}}
 	}
-	metas, err := store.Scan()
 	if err != nil {
-		return []doctorFinding{{
-			Check: "sessions", Status: "warn",
-			Detail: fmt.Sprintf("cannot scan the session store: %v", err),
-		}}
+		return []doctorFinding{{Check: "sessions", Status: "warn",
+			Detail: fmt.Sprintf("cannot read the state dir: %v", err)}}
 	}
 	var out []doctorFinding
-	degraded := 0
-	for _, m := range metas {
+	total, degradedLive, degradedPast := 0, 0, 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(stateDir, e.Name(), "meta.json"))
+		if err != nil {
+			continue // not a session dir (journal/, devices/, ...), or unreadable: not doctor's to judge
+		}
+		var m persist.Meta
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		total++
 		if m.BackendPlanError == "" {
 			continue
 		}
-		degraded++
-		out = append(out, doctorFinding{
-			Check: "session:" + m.ID, Status: "fail",
-			Detail: fmt.Sprintf("launched with no backend: %s", m.BackendPlanError),
-			Fix:    "fix the cause above, then relaunch the session",
-		})
+		if m.Status.Process == status.ProcessRunning {
+			degradedLive++
+			out = append(out, doctorFinding{
+				Check: "session:" + m.ID, Status: "fail",
+				Detail: fmt.Sprintf("running with no backend: %s", m.BackendPlanError),
+				Fix:    "fix the cause above, then kill and relaunch the session",
+			})
+		} else {
+			degradedPast++
+		}
 	}
 	out = append(out, doctorFinding{
 		Check: "sessions", Status: "ok",
-		Detail: fmt.Sprintf("%d persisted, %d degraded", len(metas), degraded),
+		Detail: fmt.Sprintf("%d persisted, %d running degraded, %d past degraded", total, degradedLive, degradedPast),
 	})
 	return out
 }

@@ -751,9 +751,13 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 	// (lookPathIn). A remote/preset launch carries no client env by design (ADR-007 D8
 	// forbids a phone-supplied one), so without daemon policy filling it there is no
 	// PATH to search and no production provider can ever resolve -- round-4 review
-	// BLOCKER 1. daemon.PolicyEnv is that policy, and it is the SAME env the core then
-	// hands the shim, so the binary this resolves is the binary the agent runs.
-	spec.ClientEnv = daemon.PolicyEnv(spec.ClientEnv)
+	// BLOCKER 1. The core's LaunchPolicyEnv is that policy -- for a nil client env it
+	// reads the environment the daemon SAVED at Open (daemon.env, the file converge
+	// spawns replacements from) rather than the live environ, and it is the SAME env
+	// the core then hands the shim, so the binary this resolves is the binary the
+	// agent runs. THIS is the one point every launch entry passes through; resolving
+	// here is what makes the daemon-side seam real (R1 audit H1).
+	spec.ClientEnv = a.core.LaunchPolicyEnv(spec.ClientEnv)
 	// PRESENCE, not emptiness -- and this layer is the one that must get it right,
 	// because it is the ONLY point every launch entry passes through. handleLaunch has
 	// the same presence check, but `session_launch` (the signed remote-preset path) does
@@ -1465,6 +1469,11 @@ type rosterSnap struct {
 	tag                string
 	controlled         bool
 	supervisionPending bool
+	// backendPlanError joins the key because launch persists it in phase TWO,
+	// after the phase-one reservation a poll may already have emitted: without
+	// it, an open board would show the degraded session healthy until some
+	// unrelated change happened to follow (R1 audit: codex finding 2).
+	backendPlanError string
 }
 
 // watch samples the roster and emits a meta whenever a session's status, display
@@ -1482,7 +1491,7 @@ func (a *coreAPI) watch() {
 		present := map[string]struct{}{}
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
-			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID)}
+			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

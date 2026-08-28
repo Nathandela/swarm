@@ -81,7 +81,9 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 		// user looks first, not in daemon.log. Healthy rows leave it blank.
 		note := ""
 		if s.BackendPlanError != "" {
-			note = "no backend: " + s.BackendPlanError
+			// One line, no tabs: the reason is a Go error string, but the table's
+			// integrity must not depend on that.
+			note = "no backend: " + strings.NewReplacer("\t", " ", "\n", " ").Replace(s.BackendPlanError)
 		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.ID, s.Agent, s.Group, s.Name, note)
 	}
