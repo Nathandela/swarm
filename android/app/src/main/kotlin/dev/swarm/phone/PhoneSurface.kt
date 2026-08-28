@@ -389,7 +389,7 @@ class PhoneSurface(
                     // and `stale_turn` are facts only the machine has, and [renderInterruptVerdict]
                     // is where they reach the reader.
                     confirmation = "",
-                    settle = { answer -> rememberInterrupt(answer) },
+                    settle = { answer -> rememberInterrupt(answer, target) },
                 )
             }
             // NOT_SENT: input is live-only and this one is discarded rather than held (ADR-007
@@ -712,7 +712,13 @@ class PhoneSurface(
         screenAir()
     }
 
-    /** The turn [stoppedNotice] was said over, or "" while it is off screen. */
+    /**
+     * The session and the turn [stoppedNotice] was said over, or "" while it is off screen. Both,
+     * because a settle lands whenever the lane answers -- after the drill-down closed, or with
+     * another conversation drawn -- and two conversations can hold open turns of the same id
+     * ([stopNotSentFor]'s arrangement: a press fact names the session it was made on).
+     */
+    private var stoppedOverSession = ""
     private var stoppedOverTurn = ""
 
     /**
@@ -3460,11 +3466,15 @@ class PhoneSurface(
      * index 0 and one removal at the end.
      */
     private fun drawComposerRegion(panel: SessionDetailPanel) {
-        // "Stopped" was said over one turn; it comes off when that turn is no longer the open
-        // one -- closed, or another opened -- and not before, because this runs in the very
-        // dispatch that sealed it and again on every item a working agent writes.
-        if (stoppedNotice.parent != null && panel.transcript.latestTurnId != stoppedOverTurn) {
+        // "Stopped" was said over one turn of one session; it comes off when the drawn
+        // conversation is another one, or that turn is no longer the open one -- closed, or
+        // another opened -- and not before, because this runs in the very dispatch that sealed
+        // it and again on every item a working agent writes.
+        if (stoppedNotice.parent != null &&
+            (panel.sessionId != stoppedOverSession || panel.transcript.latestTurnId != stoppedOverTurn)
+        ) {
             composerRegion.removeView(stoppedNotice)
+            stoppedOverSession = ""
             stoppedOverTurn = ""
         }
         val shut = panel.composerShut.takeIf { panel.composerIsBar }
@@ -4716,12 +4726,16 @@ class PhoneSurface(
      * It is drawn in place by [drawStopped] -- [stoppedNotice] joins [composerRegion] and stays
      * while the turn it was said over is the open one -- and never as row 1's toast; the
      * machine's refusal, when there is one, arrives through [renderInterruptVerdict].
+     *
+     * @param target the session the press was made on, captured by [interruptPlan] at press time
+     *  and handed through the settle: this runs whenever the lane answers, which may be after
+     *  the reader left the conversation or opened another (review re-check, 2026-08-28).
      */
-    private fun rememberInterrupt(answer: Any?) {
+    private fun rememberInterrupt(answer: Any?, target: String) {
         val issued = answer as? Op ?: return
         interruptOp = issued.operationID
         interruptSaid = ""
-        drawStopped()
+        drawStopped(target)
     }
 
     /**
@@ -4735,13 +4749,25 @@ class PhoneSurface(
      * word was taken off before it reached a frame (and when the outcome line was non-empty at
      * press time, by the full draw path in the same dispatch).
      *
+     * AND IT SAYS THE WORD ONLY UNDER THE SESSION THE PRESS WAS MADE ON (review re-check,
+     * 2026-08-28). The settle lands whenever the command lane answers -- up to `awaitConn`'s wait
+     * on a flapping link, and `VerbDispatch.press` still settles after the drill-down closed,
+     * since `attached` clears only on pause. Read off whatever `detailDrawn` said at that moment,
+     * the word was recorded over turn "" on the inbox and then matched the next idle session
+     * opened, or went under another working session over its own open turn. So [target] is the
+     * press's session, and a settle whose session is not the drawn one says nothing: the reader
+     * who left does not get the word later, which is what the pre-review surface did too.
+     *
      * `internal` FOR ONE READER, [drawDetail]'s reason: `PhoneSurfaceControlsTest` cannot press
      * its way here -- `press` stops at the runtime gate on every JVM and `Op` is the AAR's -- so
      * it calls this half directly over a drawn panel and redraws. That [rememberInterrupt] is
-     * what calls it in production is `w34_onebutton_test.go`'s to read.
+     * what calls it in production, with the press's target, is `w34_onebutton_test.go`'s to read.
      */
-    internal fun drawStopped() {
-        stoppedOverTurn = detailDrawn?.transcript?.latestTurnId.orEmpty()
+    internal fun drawStopped(target: String) {
+        val drawn = detailDrawn ?: return
+        if (drawn.sessionId != target) return
+        stoppedOverSession = target
+        stoppedOverTurn = drawn.transcript.latestTurnId
         stoppedNotice.text = SessionDetail.INTERRUPT_SENT
         if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice)
     }

@@ -64,6 +64,13 @@ import dev.swarm.phone.ui.kit.SendState
  * pulse this bead deliberately leaves out.
  */
 data class SessionDetailPanel(
+    /**
+     * The session this conversation IS, by the id the wire gave it (W3 review re-check,
+     * 2026-08-28). The surface's presses name it at press time; a press's settle that lands
+     * after the drill-down closed, or while another conversation is drawn, reads this off the
+     * panel on screen to decide whether it has anything to say there (`PhoneSurface.drawStopped`).
+     */
+    val sessionId: String,
     /** The drill-down header's title: the session the user opened, by the id the wire gave it. */
     val title: String,
     /** §4's back control. The label a screen reader reads; the chevron is the kit's. */
@@ -986,6 +993,7 @@ object SessionDetailScreen {
         capabilities: SessionCapabilityFacts = SessionCapabilityFacts.ABSENT,
         undelivered: UndeliveredLedger = UndeliveredLedger.EMPTY,
     ): SessionDetailPanel = SessionDetailPanel(
+        sessionId = detail.sessionId,
         // THE SESSION'S OWN NAME, and the id only where there is none
         // (agents-tracker-ksvb.1). The id keeps every other job it had on this screen --
         // it is what Stop, kill and take_control act on -- and loses only the one it was

@@ -23,6 +23,14 @@ package gate
 // JVM half of that -- the notice surviving a same-turn redraw and dying on the turn closing -- is
 // PhoneSurfaceControlsTest's, through `drawStopped()` made internal; this fence holds the seam to
 // the settle, so the test's subject stays the production path.
+//
+// AND THE WORD CARRIES ITS SESSION (review re-check, residual, 2026-08-28). A settle can land
+// after the drill-down closed or while another conversation is drawn; recorded over whatever
+// `detailDrawn` said then, the word matched the next idle session (turn "" == "") or went under
+// the other one. The settle now passes the press's `target`, `drawStopped(target)` records
+// `stoppedOverSession` beside the turn and says nothing unless that session is the drawn one,
+// and the region draw compares both. The body is read past the parameter list
+// (d0b8FunctionBody), so the seam's signature is not this fence's anchor.
 
 import (
 	"strings"
@@ -74,18 +82,22 @@ func TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted(t *testing.T) {
 		t.Errorf("PhoneSurface.kt declares no `val stoppedNotice: TextView = noticeLine(`, so the " +
 			"sealing has no notice line of its own under the composer (W3.4)")
 	}
-	settle := d0b8Lambda(t, code, "private fun rememberInterrupt(answer: Any?)",
+	settle := d0b8Lambda(t, code, "private fun rememberInterrupt(answer: Any?",
 		"the Stop latches no operation (r6 M2.4)")
-	if !strings.Contains(settle, "drawStopped()") {
-		t.Errorf("rememberInterrupt never calls drawStopped(), so a sealed Stop changes nothing on "+
-			"screen until the machine answers (W3.4, review round). Body:\n%s", settle)
+	if !strings.Contains(settle, "drawStopped(target)") {
+		t.Errorf("rememberInterrupt never calls drawStopped(target) with the press's own session, so "+
+			"a sealed Stop either changes nothing on screen (W3.4, review round) or says Stopped "+
+			"under whatever conversation is drawn when it lands (residual). Body:\n%s", settle)
 	}
 	if strings.Contains(settle, "say(") || strings.Contains(settle, "Toast") {
 		t.Errorf("rememberInterrupt toasts; \"Stopped\" is a notice under the composer and not a "+
 			"toast (W3.4). Body:\n%s", settle)
 	}
-	said := d0b8Lambda(t, code, "internal fun drawStopped()",
-		"nothing draws the sealing under the composer (W3.4, review round)")
+	if !strings.Contains(code, "internal fun drawStopped(") {
+		t.Errorf("PhoneSurface.kt has no `internal fun drawStopped(`: nothing draws the sealing under " +
+			"the composer, or the seam PhoneSurfaceControlsTest reaches it through is gone (W3.4, review round)")
+	}
+	said := d0b8FunctionBody(t, code, "drawStopped", "PhoneSurface.kt")
 	if !strings.Contains(said, "INTERRUPT_SENT") {
 		t.Errorf("drawStopped never draws SessionDetail.INTERRUPT_SENT, so the sealing is a notice "+
 			"with no word on it (W3.4). Body:\n%s", said)
@@ -98,6 +110,11 @@ func TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted(t *testing.T) {
 		t.Errorf("drawStopped records no turn in stoppedOverTurn, so the region draw cannot tell the "+
 			"turn the word was said over from the next one (review round). Body:\n%s", said)
 	}
+	if !strings.Contains(said, "stoppedOverSession = ") {
+		t.Errorf("drawStopped records no session in stoppedOverSession, so a word said over one "+
+			"conversation is kept under another whose open turn carries the same id (residual). "+
+			"Body:\n%s", said)
+	}
 	if strings.Contains(said, "say(") || strings.Contains(said, "Toast") {
 		t.Errorf("drawStopped toasts; \"Stopped\" is a notice under the composer and not a toast "+
 			"(W3.4). Body:\n%s", said)
@@ -107,10 +124,15 @@ func TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted(t *testing.T) {
 		t.Errorf("drawComposerRegion never clears stoppedNotice, so \"Stopped\" outlives the turn it "+
 			"reports on -- said once means cleared once that turn is gone (W3.4). Body:\n%s", region)
 	}
-	if !strings.Contains(region, "stoppedOverTurn") {
-		t.Errorf("drawComposerRegion clears stoppedNotice without reading stoppedOverTurn, so the "+
-			"word comes off on the next draw -- over a working agent, before a frame (review round). "+
-			"Body:\n%s", region)
+	if !strings.Contains(region, "!= stoppedOverTurn") {
+		t.Errorf("drawComposerRegion clears stoppedNotice without comparing the drawn turn to "+
+			"stoppedOverTurn, so the word comes off on the next draw -- over a working agent, before "+
+			"a frame (review round). Body:\n%s", region)
+	}
+	if !strings.Contains(region, "!= stoppedOverSession") {
+		t.Errorf("drawComposerRegion clears stoppedNotice without comparing the drawn session to "+
+			"stoppedOverSession, so a word said over one conversation stays under another whose open "+
+			"turn carries the same id (residual). Body:\n%s", region)
 	}
 
 	// THE CONTROL: a refused Stop is not the sealing and keeps its say() (W2.3's own control,

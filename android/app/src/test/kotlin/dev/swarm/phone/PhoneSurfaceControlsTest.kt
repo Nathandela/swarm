@@ -337,7 +337,7 @@ class PhoneSurfaceControlsTest {
     fun `Stopped stays under the composer while the turn it was said over is open`() {
         withSurface { _, surface ->
             surface.drawDetail(panelWith(openTurn))
-            surface.drawStopped()
+            surface.drawStopped(session)
             assertTrue("the sealing said nothing under the composer", surface.composerRegion().saysStopped())
 
             surface.drawDetail(
@@ -356,13 +356,71 @@ class PhoneSurfaceControlsTest {
     fun `Stopped comes off when the turn it was said over closes`() {
         withSurface { _, surface ->
             surface.drawDetail(panelWith(openTurn))
-            surface.drawStopped()
+            surface.drawStopped(session)
             assertTrue(surface.composerRegion().saysStopped())
 
             surface.drawDetail(panelWith(closedTurn))
             assertFalse(
                 "the turn closed and \"Stopped\" is still under the composer: said once means " +
                     "cleared when the conversation it reported on has moved",
+                surface.composerRegion().saysStopped(),
+            )
+        }
+    }
+
+    /**
+     * Residual (review re-check, 2026-08-28): THE WORD CARRIES ITS SESSION. The settle can land
+     * after the drill-down closed -- the command lane waits on `awaitConn` for up to 5 s on a
+     * flapping link, and `VerbDispatch.press` still runs the settle, since `attached` clears only
+     * on pause -- or while ANOTHER conversation is drawn. Before this the settle read whatever
+     * `detailDrawn` said at that moment: over the inbox it recorded turn "" and the next idle
+     * drill-down kept the word ("" == ""); over another working session it put the word under
+     * that one. The press knows its session (`interruptPlan`'s `target`); the settle passes it,
+     * and the notice is said only under that session and kept only under it.
+     */
+    @Test
+    fun `a Stop that settles after the conversation closed says nothing`() {
+        withSurface { _, surface ->
+            surface.drawDetail(panelWith(openTurn))
+            surface.closeSessionDetail()
+            surface.drawStopped(session)
+
+            surface.drawDetail(panelWith(closedTurn))
+            assertFalse(
+                "the interrupt settled over the inbox and \"Stopped\" greets the reader under a " +
+                    "composer that was never stopped: a notice recorded over no turn matches " +
+                    "every idle session",
+                surface.composerRegion().saysStopped(),
+            )
+        }
+    }
+
+    @Test
+    fun `a Stop that settles over another session does not say Stopped there`() {
+        withSurface { _, surface ->
+            surface.drawDetail(panelWith(openTurnOf(otherSession), of = otherSession))
+            surface.drawStopped(session)
+            assertFalse(
+                "a Stop pressed on one session settled while another was drawn, and the word " +
+                    "went under the other one, over a turn nobody stopped",
+                surface.composerRegion().saysStopped(),
+            )
+        }
+    }
+
+    @Test
+    fun `Stopped comes off when another session is drawn`() {
+        withSurface { _, surface ->
+            surface.drawDetail(panelWith(openTurn))
+            surface.drawStopped(session)
+            assertTrue(surface.composerRegion().saysStopped())
+
+            // The other session's open turn carries the same id string: the turn alone cannot
+            // tell the two conversations apart.
+            surface.drawDetail(panelWith(openTurnOf(otherSession), of = otherSession))
+            assertFalse(
+                "another conversation was drawn and \"Stopped\" stayed under its composer " +
+                    "because its open turn happens to carry the same id",
                 surface.composerRegion().saysStopped(),
             )
         }
@@ -380,16 +438,23 @@ class PhoneSurfaceControlsTest {
 
     private val session = "mbp/swarm"
 
-    private fun item(id: String, kind: String, turn: String, status: String = "") = InteractionItem(
-        sessionId = session, itemId = id, cursor = 1, kind = kind,
+    /** A second conversation on the same phone, for the notice's session fence. */
+    private val otherSession = "mbp/api"
+
+    private fun item(
+        id: String, kind: String, turn: String, status: String = "", of: String = session,
+    ) = InteractionItem(
+        sessionId = of, itemId = id, cursor = 1, kind = kind,
         status = status, turnId = turn, text = "words",
     )
 
     /** A turn the agent is still inside: the header says working, and the square owes Stop. */
-    private val openTurn = listOf(
-        item("u1", "user_message", turn = "turn-a"),
-        item("t1", "tool_run", turn = "turn-a", status = "in_progress"),
+    private fun openTurnOf(of: String) = listOf(
+        item("u1", "user_message", turn = "turn-a", of = of),
+        item("t1", "tool_run", turn = "turn-a", status = "in_progress", of = of),
     )
+
+    private val openTurn = openTurnOf(session)
 
     /** The same turn, closed by its terminal agent_message: idle, and the square owes Send. */
     private val closedTurn = listOf(
@@ -397,13 +462,13 @@ class PhoneSurfaceControlsTest {
         item("a1", "agent_message", turn = "turn-a", status = "completed"),
     )
 
-    private fun panelWith(items: List<InteractionItem>): SessionDetailPanel = SessionDetailScreen.of(
+    private fun panelWith(items: List<InteractionItem>, of: String = session): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
-            sessionId = session, online = true, journalStale = false,
+            sessionId = of, online = true, journalStale = false,
             title = "claude-swarm", group = "working", machineLabel = "mbp",
         ),
         TranscriptScreen.of(items),
-        SessionLease(sessionId = session, online = true),
+        SessionLease(sessionId = of, online = true),
         capabilities = SessionCapabilityFacts(structuredChat = true),
     )
 
