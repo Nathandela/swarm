@@ -1,0 +1,17 @@
+# swarm nightly auto-upgrade timer, Linux (auto-upgrade-plan.md L1). 04:00 is a
+# preference, not a guarantee, on both platforms: launchd runs a missed
+# StartCalendarInterval at the next wake, and Persistent=true is systemd's spelling of
+# the same promise (a 04:00 the machine slept through runs at boot instead). The service
+# is written to be safe at any hour and to try again tomorrow.
+#
+# User timers on a headless machine need lingering (`loginctl enable-linger $USER`), or
+# the timer exists only while the owner is logged in.
+[Unit]
+Description=Nightly swarm auto-upgrade at 04:00
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

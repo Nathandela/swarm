@@ -136,3 +136,44 @@ running daemon and gateway processes actually have open (their `txt` mapping) �
 matters after an upgrade, since a process keeps running its old inode until it is restarted even
 after `brew` relinks the path. `launchctl print` shows the gateway unit's last exit status and
 whether it is currently loaded.
+
+## Linux: the same two layers, systemd and the release itself
+
+The plan's L2 (`swarm daemon restart --unattended`, ADR-020) is platform-symmetric already;
+what macOS gets from brew + launchd, Linux gets from the GitHub release + a systemd user
+timer. The templates live in `packaging/systemd/`: `swarm-upgrade.sh` downloads the latest
+release tarball when it is newer than the installed binary, verifies it against the release's
+`checksums.txt`, installs it stage-then-rename over `SWARM_BIN` (default
+`/usr/local/bin/swarm`, the documented tarball install path; `swarm-remote` is upgraded too
+where one is already installed), then ALWAYS runs `swarm daemon restart --unattended` — the
+same ";" rule as the plist, so a deferred night is retried and a hand-upgraded binary is
+converged. The exit codes and their meanings are the macOS ones above; the service names 2
+and 3 in `SuccessExitStatus` so a deferral is not a red unit.
+
+The same preconditions as macOS, plus two of Linux's own: `swarm version` must report 0.13.2
+or later before the timer is installed (the hop above); writing `/usr/local/bin` needs
+passwordless sudo for the timer's user (or set `SWARM_BIN` to a user-writable install); and a
+headless machine needs lingering, or the timer only exists while the owner is logged in.
+
+```bash
+mkdir -p ~/.local/bin ~/.config/systemd/user
+install -m 0755 packaging/systemd/swarm-upgrade.sh ~/.local/bin/swarm-upgrade
+cp packaging/systemd/swarm-upgrade.service packaging/systemd/swarm-upgrade.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now swarm-upgrade.timer
+loginctl enable-linger "$USER"
+```
+
+Dry proof, run once right after installing — the kickstart equivalent:
+
+```bash
+systemctl --user start swarm-upgrade.service
+journalctl --user -u swarm-upgrade.service -n 20 --no-pager
+```
+
+With nothing new published this shows `upgrade: <version> is current` and `--unattended`
+exiting 0 at rule 1 — the same idempotent no-op proof as macOS. The journal replaces
+`upgrade.log`; read it with `journalctl --user -u swarm-upgrade.service`. Pause or remove
+with `systemctl --user disable --now swarm-upgrade.timer` (delete the two unit files and the
+script for a clean removal). The shimwire drain rule above applies unchanged: bootout becomes
+`systemctl --user disable --now swarm-upgrade.timer`.

@@ -1,0 +1,17 @@
+# swarm nightly auto-upgrade, Linux (auto-upgrade-plan.md L1; the macOS twin is
+# packaging/launchd/com.swarm.upgrade.plist). A TEMPLATE tracked in packaging/, installed
+# by the one command in docs/ops/auto-upgrade.md; %h is systemd's own home expansion, so
+# unlike the plist there is nothing to sed. Install only once `swarm version` reports
+# 0.13.2 or later: an older `swarm daemon restart` ignores --unattended and would restart
+# the daemon from this unit's bare environment every night.
+[Unit]
+Description=swarm nightly auto-upgrade: fetch the latest release, then converge the daemon
+Documentation=https://github.com/Nathandela/swarm/blob/main/docs/ops/auto-upgrade.md
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/swarm-upgrade
+# ADR-020's converge exit codes: 2 deferred (a session is working or needs the user),
+# 3 refused (no saved daemon.env). Both are the engine declining to act by design --
+# tomorrow's run retries -- so only 1 (a failed restart) marks the unit failed.
+SuccessExitStatus=2 3
