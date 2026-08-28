@@ -57,11 +57,19 @@ const (
 	ModePromptCard = "prompt_card"
 )
 
-// user_message sources — interaction-schema.md §3.1.
+// user_message sources — interaction-schema.md §3.1, plus one the wire never carries.
+//
+// SourceSynthetic is the CLI's OWN envelope posted through its prompt hook (Claude Code's
+// system-reminder, teammate-message, task-notification, a slash command's stdout; phone refit
+// W2.4, round-1 review ruling). It is a user_message because a user_message is the only
+// turn-opening signal that CLI gives, and the daemon opens the turn on it -- then neither
+// persists nor publishes it, so §3.1's phone|owner|derived stays the whole of the wire's
+// vocabulary. Validate admits it so the daemon can see it at all.
 const (
-	SourcePhone   = "phone"
-	SourceOwner   = "owner"
-	SourceDerived = "derived"
+	SourcePhone     = "phone"
+	SourceOwner     = "owner"
+	SourceDerived   = "derived"
+	SourceSynthetic = "synthetic"
 )
 
 // Decision verdicts — the grant/refuse polarity of one offered decision, set by
@@ -408,7 +416,7 @@ func (in Interaction) Validate() error {
 	if err := oneOf("status", in.Status, true, StatusInProgress, StatusCompleted, StatusFailed, StatusDeclined); err != nil {
 		return err
 	}
-	if err := oneOf("source", in.Source, true, SourcePhone, SourceOwner, SourceDerived); err != nil {
+	if err := oneOf("source", in.Source, true, SourcePhone, SourceOwner, SourceDerived, SourceSynthetic); err != nil {
 		return err
 	}
 	if err := oneOf("stop_reason", in.StopReason, true, "end_turn", "interrupted", "error"); err != nil {

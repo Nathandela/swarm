@@ -358,3 +358,124 @@ func TestCarveOut_BashWithAFilePathIsPromptCardAndDecisionRefusesIt(t *testing.T
 		t.Errorf("keystrokes = %q, want allow=1 and deny=ESC (the recorded dialog's own affordances)", approval.Keystrokes)
 	}
 }
+
+// ---- W2.4: Claude's synthetic prompts are not messages -------------------------------------
+//
+// FAILING-FIRST (TDD RED) for W2.4 of the phone refit (docs/specifications/phone-refit-playbook.md
+// §3, bead agents-tracker-d45a.2). Claude Code fires UserPromptSubmit for its OWN envelopes -- a
+// system-reminder, a teammate message, a task notification, the caveat and stdout of a local
+// slash command -- and Interactions shaped every one of them as a user_message the phone then
+// drew as something the owner typed. A bare "starts with <" rule is wrong: `title` and `svg`
+// open real pasted prompts in the same recorded corpus. The rule is a recorded allowlist of
+// tags, and a prompt is synthetic only when it OPENS with one of them and CLOSES it.
+
+// recordedSyntheticTags is the golden list: the opening tags observed on user-role entries
+// across the 1532 local transcripts the contract records, plus the sibling envelopes of the
+// same families. `title` and `svg` are deliberately NOT here -- they are pasted content.
+var recordedSyntheticTags = []string{
+	"system-reminder", "task-notification", "teammate-message", "agent-message",
+	"tool_use_error", "persisted-output", "command-name", "command-message",
+	"local-command-caveat", "local-command-stdout", "local-command-stderr",
+	"bash-input", "bash-stdout", "bash-stderr",
+}
+
+// promptPayload is one UserPromptSubmit hook body carrying prompt, in the shape the CLI posts.
+func promptPayload(t *testing.T, prompt string) adapter.HookPayload {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "prompt": prompt})
+	if err != nil {
+		t.Fatalf("marshal prompt body: %v", err)
+	}
+	return adapter.HookPayload{Event: "UserPromptSubmit", Raw: raw}
+}
+
+// TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage. AMENDED by the round-1
+// review (orchestrator ruling): the contract said "shapes zero items", but a user_message is
+// Claude's ONLY turn-opening signal (internal/skeleton/interaction.go turnIDLocked; the adapter
+// sets TurnRef nowhere), so a session whose work starts from an envelope would open no turn,
+// its tool items would carry turn_id "", the phone would draw it idle and Stop would be
+// refused. Keep the turn, drop the bubble: the envelope is shaped as a user_message with
+// SourceSynthetic, and the daemon opens the turn on it and neither persists nor publishes it.
+func TestUserPromptSubmit_SyntheticEnvelopesShapeASyntheticUserMessage(t *testing.T) {
+	src, ok := adapter.AsInteractionSource(New())
+	if !ok {
+		t.Fatal("claude is not an InteractionSource")
+	}
+	check := func(t *testing.T, prompt string) {
+		t.Helper()
+		got := src.Interactions(promptPayload(t, prompt))
+		want := []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: prompt, Source: adapter.SourceSynthetic}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("an envelope shaped %+v, want exactly one synthetic user_message %+v: the turn "+
+				"must open on it and nothing may reach the wire as the owner's words", got, want)
+		}
+	}
+	for _, tag := range recordedSyntheticTags {
+		t.Run(tag, func(t *testing.T) {
+			check(t, "<"+tag+">\nwhat the CLI put in its own envelope\n</"+tag+">")
+		})
+	}
+	// An envelope that carries attributes on its opening tag is the same envelope.
+	check(t, `<teammate-message teammate_id="team-lead" summary="assign">start on task 1</teammate-message>`)
+}
+
+// TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept is the negative control, and the
+// reason the rule is an allowlist: pasted markup is what people ask about.
+func TestUserPromptSubmit_ARealPromptContainingAngleBracketsIsKept(t *testing.T) {
+	src, ok := adapter.AsInteractionSource(New())
+	if !ok {
+		t.Fatal("claude is not an InteractionSource")
+	}
+	for _, prompt := range []string{
+		"fix the <div> wrapper",
+		"<title>Foo</title> what does this render?",
+	} {
+		got := src.Interactions(promptPayload(t, prompt))
+		want := []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: prompt, Source: adapter.SourceOwner}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("prompt %q shaped %+v, want %+v: a real prompt with angle brackets in it is a message", prompt, got, want)
+		}
+	}
+}
+
+func TestIsSyntheticPrompt_GoldenTagListMatchesTheRecordedCorpus(t *testing.T) {
+	want := map[string]bool{}
+	for _, tag := range recordedSyntheticTags {
+		want[tag] = true
+	}
+	if !reflect.DeepEqual(syntheticPromptTags, want) {
+		t.Fatalf("syntheticPromptTags = %v, want exactly the recorded list %v", syntheticPromptTags, recordedSyntheticTags)
+	}
+	for _, pasted := range []string{"title", "svg"} {
+		if syntheticPromptTags[pasted] {
+			t.Errorf("<%s> is on the synthetic list; it opens pasted user content in the recorded corpus", pasted)
+		}
+	}
+}
+
+// TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept: opening with a listed tag is half the rule. A
+// person asking about the tag itself never closes it.
+func TestIsSyntheticPrompt_AnUnclosedEnvelopeIsKept(t *testing.T) {
+	for _, prompt := range []string{
+		"<system-reminder> keeps showing up in my transcripts, what is it?",
+		"<system-reminder>",
+		"<command-name>/clear",
+	} {
+		if isSyntheticPrompt(prompt) {
+			t.Errorf("isSyntheticPrompt(%q) = true, want false: the envelope is never closed", prompt)
+		}
+	}
+	if !isSyntheticPrompt("<system-reminder>\nbody\n</system-reminder>") {
+		t.Error("CONTROL BROKEN: a closed <system-reminder> envelope is not synthetic")
+	}
+	src, ok := adapter.AsInteractionSource(New())
+	if !ok {
+		t.Fatal("claude is not an InteractionSource")
+	}
+	const asked = "<system-reminder> keeps showing up in my transcripts, what is it?"
+	got := src.Interactions(promptPayload(t, asked))
+	want := []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: asked, Source: adapter.SourceOwner}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("an unclosed envelope shaped %+v, want the owner's own message %+v", got, want)
+	}
+}

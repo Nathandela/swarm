@@ -158,12 +158,13 @@ class PhoneActivity : AppCompatActivity() {
      * `android/gate/tabbar_test.go` asserts both halves, because either alone is correct.
      */
     private fun insetTheSystemBars() {
-        val screenTopPx = resources.getDimensionPixelSize(R.dimen.swarm_screen_top)
         surface.root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val ime = insets.getInsets(WindowInsets.Type.ime())
-            val top = screenTopOrRealInset(bars.top, screenTopPx)
-            view.setPadding(bars.left, top, bars.right, bottomInsetPx(bars.bottom, ime.bottom))
+            // THE TOP IS THE PLATFORM'S OWN INSET AND NOTHING ELSE (phone refit W1.1). It used to
+            // be floored at the design's 54dp `screen_top` -- derivation row 19's iPhone preview
+            // value -- which is taller than a real status bar, so the header sat in dead space.
+            view.setPadding(bars.left, bars.top, bars.right, bottomInsetPx(bars.bottom, ime.bottom))
             insets
         }
     }
@@ -208,28 +209,6 @@ class PhoneActivity : AppCompatActivity() {
 }
 
 /**
- * Derivation row 20's own "or": the screen scaffold's top padding is "`screen_top` (OR THE REAL
- * INSET)" -- a fallback, not a sum. `swarm_screen_top` (dimens.xml, 54dp; gate-pinned against the
- * design source by android/gate/s22b_spacing_test.go) had no Kotlin consumer anywhere in the app
- * before this: [insetTheSystemBars] applied only [measuredTopPx], with nothing under it for a
- * window that reports a thinner inset than the design's own minimum -- most concretely, before
- * this listener's first `WindowInsets` dispatch, when the padded root would otherwise start at 0
- * (agents-tracker-nx44.1).
- *
- * `screenTopPx` DOES NOT WIN ON A REAL HANDSET, and that is row 19's own ruling rather than a gap:
- * "`screen_top` 54 is an iPhone notch constant -- on Android it must come from
- * `WindowInsets.statusBars`, with 54 as the design-time preview value only". A modern handset's
- * measured inset is always taller, so this is a floor for the window before the platform has
- * measured anything, not a second inset stacked under the real one.
- *
- * A TOP-LEVEL FUNCTION AND NOT A LOCAL, so the arithmetic is testable without driving a real
- * `WindowInsets` dispatch through Robolectric -- which this app has never done, and which the
- * platform makes awkward to construct in a unit test.
- */
-internal fun screenTopOrRealInset(measuredTopPx: Int, screenTopPx: Int): Int =
-    maxOf(measuredTopPx, screenTopPx)
-
-/**
  * The window's bottom inset: the navigation bar, or the KEYBOARD when one is up.
  *
  * NOTHING IN THIS APP HAD EVER MET A KEYBOARD until the conversation gained a pinned composer.
@@ -243,13 +222,12 @@ internal fun screenTopOrRealInset(measuredTopPx: Int, screenTopPx: Int): Int =
  * withheld. Reading it is additive inside the one listener this app has, which is why no second
  * mechanism appears here.
  *
- * A MAX AND NOT A SUM, mirroring [screenTopOrRealInset] one function up. The keyboard is drawn
- * OVER the navigation bar rather than above it, so adding the two would inset the window by a
- * strip of screen the keyboard already occupies -- the doubling agents-tracker-2pnu F2 records
- * in the other axis.
+ * A MAX AND NOT A SUM. The keyboard is drawn OVER the navigation bar rather than above it, so
+ * adding the two would inset the window by a strip of screen the keyboard already occupies --
+ * the doubling agents-tracker-2pnu F2 records in the other axis.
  *
- * IT IS A TOP-LEVEL FUNCTION for [screenTopOrRealInset]'s reason: the arithmetic is testable
- * without driving a real `WindowInsets` dispatch through Robolectric.
+ * IT IS A TOP-LEVEL FUNCTION so `ConversationScaffoldViewTest` can assert the arithmetic without
+ * a `WindowInsets` dispatch.
  */
 internal fun bottomInsetPx(barsBottomPx: Int, imeBottomPx: Int): Int =
     maxOf(barsBottomPx, imeBottomPx)

@@ -143,4 +143,48 @@ class ConversationScaffoldViewTest {
             bottomInsetPx(barsBottomPx = 140, imeBottomPx = 140),
         )
     }
+
+    /**
+     * Phone refit W1.2 (docs/specifications/phone-refit-playbook.md, agents-tracker-d45a.1): the
+     * transcript's ScrollView was told not to clip, so rows scrolled past its bottom edge painted
+     * under -- and through -- the pinned composer. Nothing in the transcript needs the viewport
+     * open: what overhangs draws inside its own layer or lives in a sibling of the scroll.
+     */
+    @Test
+    fun `the transcript viewport clips, so nothing draws over the pinned composer`() {
+        val viewport = scaffold().find(ScaffoldTag.CONTENT) as ViewGroup
+
+        assertTrue(
+            "the transcript's ScrollView does not clip its children, so a row scrolled out of " +
+                "the viewport is still painted -- over the pinned composer below it",
+            viewport.clipChildren,
+        )
+        assertTrue(
+            "the transcript's ScrollView does not clip to its padding, for the same reason",
+            viewport.clipToPadding,
+        )
+    }
+
+    /**
+     * W1.2's other half as geometry: the composer is a SIBLING of the viewport under a vertical
+     * `LinearLayout`, laid out below its bottom edge and never over it. With the viewport
+     * clipping, nothing the transcript draws can reach the composer.
+     */
+    @Test
+    fun `the composer is laid out below the viewport's bottom edge, never over it`() {
+        val root = scaffold()
+        root.measure(exactly(400), exactly(800))
+        root.layout(0, 0, 400, 800)
+        val viewport = requireNotNull(root.find(ScaffoldTag.CONTENT))
+        val composer = requireNotNull(root.find(ScaffoldTag.COMPOSER))
+
+        assertTrue(
+            "the viewport's bottom edge (${viewport.bottom}) reaches past the composer's top " +
+                "(${composer.top}), so the two overlap and the transcript can draw over the bar",
+            viewport.bottom <= composer.top,
+        )
+        assertEquals("the composer is not pinned to the window's bottom edge", 800, composer.bottom)
+    }
+
+    private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)
 }

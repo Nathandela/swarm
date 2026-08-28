@@ -127,6 +127,34 @@ type patchHunk struct {
 	Lines    []string `json:"lines"`
 }
 
+// syntheticPromptTags is the recorded allowlist of envelopes Claude Code posts through its OWN
+// UserPromptSubmit hook (phone refit W2.4, agents-tracker-d45a.2): the opening tags observed on
+// user-role entries across 1532 local transcripts, plus the sibling envelopes of the same
+// families. It is an allowlist and not a "starts with <" rule because `title` and `svg` open
+// pasted user content in the same corpus, and a person asking about markup is a message.
+var syntheticPromptTags = map[string]bool{
+	"system-reminder": true, "task-notification": true, "teammate-message": true,
+	"agent-message": true, "tool_use_error": true, "persisted-output": true,
+	"command-name": true, "command-message": true, "local-command-caveat": true,
+	"local-command-stdout": true, "local-command-stderr": true, "bash-input": true,
+	"bash-stdout": true, "bash-stderr": true,
+}
+
+// isSyntheticPrompt reports whether prompt is one of the CLI's own envelopes: it OPENS with a
+// listed tag (attributes allowed) AND that tag is CLOSED in the same prompt. An unclosed tag is
+// somebody asking about the tag, and is the owner's message.
+func isSyntheticPrompt(prompt string) bool {
+	if !strings.HasPrefix(prompt, "<") {
+		return false
+	}
+	end := strings.IndexAny(prompt, "> \t\r\n")
+	if end < 0 {
+		return false
+	}
+	tag := prompt[1:end]
+	return syntheticPromptTags[tag] && strings.Contains(prompt, "</"+tag+">")
+}
+
 // Interactions shapes ONE captured hook body into zero or more items (ADR-010 §2). It is pure,
 // total and deterministic: an unparseable, truncated, garbage or unbounded body yields no item
 // rather than a panic, and no branch returns content it did not read out of p.Raw.
@@ -149,7 +177,15 @@ func (claudeAdapter) Interactions(p adapter.HookPayload) []adapter.Interaction {
 		}
 		// SourceOwner, not SourcePhone: the phone authors no prompt (D7/B43 freezes remote input
 		// to live keystrokes), so everything this hook reports was typed at the machine.
-		return []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: b.Prompt, Source: adapter.SourceOwner}}
+		source := adapter.SourceOwner
+		if isSyntheticPrompt(b.Prompt) {
+			// The CLI's own envelope (W2.4, round-1 review ruling): KEEP THE TURN, DROP THE
+			// BUBBLE. A user_message is the only turn-opening signal this CLI gives, so the
+			// envelope is shaped as one with SourceSynthetic; the daemon opens the turn on it
+			// and never persists or publishes it, so nothing reaches the phone as a message.
+			source = adapter.SourceSynthetic
+		}
+		return []adapter.Interaction{{Kind: adapter.KindUserMessage, Text: b.Prompt, Source: source}}
 
 	case "PreToolUse":
 		if b.ToolName == "" {

@@ -496,6 +496,7 @@ class PhoneSurface(
         composerSendFor = target
         composerSentText = line
         composerRefusal = ""
+        composerRefusalDetail = ""
         composerSendState = SendState.PENDING
         Press(
             // COMMAND, and the plane change IS the verb change: `composer_send` is a SIGNED
@@ -1319,6 +1320,9 @@ class PhoneSurface(
      * is what keeps that decision in one table (`ErrorRouter`) instead of in a string match here.
      */
     private var composerRefusal: String = ""
+
+    /** The machine's own words for that refusal, for the notice's detail cell (W2.3). */
+    private var composerRefusalDetail: String = ""
 
     /**
      * The four Wave R6 operations this surface has issued and not yet claimed an answer for
@@ -2868,6 +2872,7 @@ class PhoneSurface(
                 // back per session, so a send against one never reports on another.
                 composerState = composerSendState.takeIf { composerSendFor == open },
                 composerRefusal = if (composerSendFor == open) composerRefusal else "",
+                composerRefusalDetail = if (composerSendFor == open) composerRefusalDetail else "",
             ),
             TranscriptScreen.of(
                 chat.items,
@@ -4009,6 +4014,7 @@ class PhoneSurface(
         composerSentText = ""
         composerSendState = null
         composerRefusal = ""
+        composerRefusalDetail = ""
         // AND THE ANSWER IN FLIGHT IS FORGOTTEN WITH THE SCREEN, on the same argument: a lock is a
         // fact about a press made on THIS visit, and one carried across a departure would greet
         // the reader on their return with a decision frozen behind an answer they can no longer
@@ -4491,11 +4497,13 @@ class PhoneSurface(
         composerOp = ""
         composerSendState = verdict.state
         composerRefusal = verdict.refusal
+        // THE MACHINE'S WORDS RIDE WITH THE REFUSAL (W2.3). The composer notice is a refusal's
+        // single surface: the say() that stood here wrote the outcome line and a toast carrying
+        // the same sentence, so one refused send said it three times. A refused Stop is not a
+        // composer refusal and keeps its say() (renderInterruptVerdict).
+        composerRefusalDetail = verdict.detail
         // THE DRAFT IS SPENT ONLY HERE, and only on the answer that says it was delivered.
         if (verdict.clearsDraft) typed.text.clear()
-        if (verdict.notice.isNotEmpty()) {
-            say(PressFeedback.ofRefusal(verdict.notice, verdict.detail))
-        }
     }
 
     /** The Stop's own answer, claimed the way [renderKillVerdict] claims the kill's. */

@@ -294,6 +294,15 @@ class SessionDetailComposerTest {
         )
     }
 
+    /** W2.2's caller (phone-refit-playbook §3): `structured_unsupported` reads its sentence under the composer. */
+    @Test
+    fun `an unmapped code with a sentence shows that sentence under the composer`() {
+        val p = panel(sendState = SendState.REFUSED, refusal = "structured_unsupported")
+        assertEquals("Chat is off for this session.", p.composerNotice)
+        assertTrue(p.composerRetainsDraft)
+        assertNotNull(view(p).kitFind(DetailTag.COMPOSER_NOTICE))
+    }
+
     @Test
     fun `any other refusal keeps the draft too and says the message was not delivered`() {
         val p = panel(sendState = SendState.REFUSED, refusal = "OFFLINE")
@@ -323,6 +332,11 @@ class SessionDetailComposerTest {
             "the send's state label is drawn ABOVE the notice that explains the same refusal, so " +
                 "one failed send reports itself twice in two near-identical wordings",
             refused.kitFind(DetailTag.COMPOSER_STATE),
+        )
+        // W2.3 (phone-refit-playbook §3): the composer notice is the refusal's single surface.
+        assertNull(
+            "the surface's outcome line repeats the refusal the composer notice already carries",
+            refused.kitFind(DetailTag.OUTCOME),
         )
         assertNotNull(
             "a send still crossing draws nothing at all, though \"Sending\" names a state and " +

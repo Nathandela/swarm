@@ -184,6 +184,11 @@ var ErrSubmitUnsupported = errors.New("protocol: this shim advertises no submit 
 // the line. Nothing was written.
 var ErrInputBusy = errors.New("protocol: the session's input line was not empty")
 
+// ErrControlInputUnsupported is the honest degrade for daemon-authored control keys: this
+// shim predates the control_input frame, so the keys can only travel as ordinary input,
+// where the shim will count them against the next submit.
+var ErrControlInputUnsupported = errors.New("protocol: this shim advertises no control input")
+
 // Submit delivers one whole message through the shim's submit transaction: text and the
 // carriage return that runs it, under one hold of the PTY's only serialized writer.
 func (st *shimStream) Submit(text string) error {
@@ -394,6 +399,21 @@ func (st *shimStream) Input(p []byte) error {
 	st.writeMu.Lock()
 	defer st.writeMu.Unlock()
 	return wire.WriteFrame(st.conn, wire.TDataIn, p)
+}
+
+// ControlInput delivers daemon-authored keys on the frame that carries their provenance, so
+// the shim writes them without counting them as typing (phone refit W2.1).
+func (st *shimStream) ControlInput(keys []byte) error {
+	if !st.caps.ControlInput {
+		return ErrControlInputUnsupported
+	}
+	body, err := shimwire.Encode(shimwire.Control{Type: shimwire.TypeControlInput, Keys: string(keys)})
+	if err != nil {
+		return err
+	}
+	st.writeMu.Lock()
+	defer st.writeMu.Unlock()
+	return wire.WriteFrame(st.conn, wire.TControl, body)
 }
 
 func (st *shimStream) Resize(cols, rows int) error {

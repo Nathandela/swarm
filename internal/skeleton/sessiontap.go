@@ -28,8 +28,9 @@ package skeleton
 //   - Backpressure (S9): each subscriber has its OWN cap-tapSubQueueCap channel; on
 //     overflow that ONE subscriber is evicted (its channel closes) — the pump never
 //     blocks on it and the other subscribers are untouched.
-//   - mode: readWrite forwards Input/Resize to the upstream; readOnly makes them
-//     no-ops (the future remote peek observes without driving).
+//   - mode: readWrite forwards Input/Resize to the upstream, and Submit and ControlKeys
+//     (the two provenance-carrying writes: a whole message, a daemon-authored key);
+//     readOnly makes them no-ops (the future remote peek observes without driving).
 //
 // Locking: m.mu guards only the taps map; each tap's t.mu guards its subscriber set,
 // mirror, and closed flag. The two locks are NEVER held simultaneously (subscribe
@@ -38,6 +39,7 @@ package skeleton
 // the brief m.mu, preserving the no-head-of-line-blocking property (L1).
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -387,6 +389,22 @@ func (s *tapSub) Submit(text string) error {
 		return protocol.ErrSubmitUnsupported
 	}
 	return sm.Submit(text)
+}
+
+// ControlKeys forwards DAEMON-AUTHORED keys -- a turn interrupt, a dialog answer -- on the frame
+// that carries their provenance, so the shim writes them without counting them as somebody
+// typing (phone refit W2.1, agents-tracker-d45a.2). An upstream that proves no such frame gets
+// them as Input: today's behaviour, a disclosed degrade that a daemon restart resolves.
+func (s *tapSub) ControlKeys(p []byte) error {
+	if s.mode != readWrite {
+		return nil
+	}
+	if cw, ok := s.t.up.(protocol.ControlInputWriter); ok {
+		if err := cw.ControlInput(p); !errors.Is(err, protocol.ErrControlInputUnsupported) {
+			return err
+		}
+	}
+	return s.t.up.Input(p)
 }
 
 // Resize forwards to the shared upstream for a readWrite subscriber and updates

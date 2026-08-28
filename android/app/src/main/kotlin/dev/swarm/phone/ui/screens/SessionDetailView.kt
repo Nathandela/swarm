@@ -241,6 +241,12 @@ object DetailTag {
     const val COMPOSER_NOTICE = "detail.composer.notice"
 
     /**
+     * The machine's own words under [COMPOSER_NOTICE], in the kit's mono tertiary cell (W2.3):
+     * the one place a refused send's detail is drawn now that the toast is gone.
+     */
+    const val COMPOSER_NOTICE_DETAIL = "detail.composer.notice.detail"
+
+    /**
      * The state of the send itself -- Sending / Sent / Not sent -- which is a SEPARATE line from
      * [COMPOSER_NOTICE]'s remedy: one is what happened and the other is what to do about it,
      * and only the second is a refusal.
@@ -532,6 +538,15 @@ fun sessionDetailView(
                 .apply { tag = DetailTag.COMPOSER_NOTICE }
                 .screenAir(),
         )
+        // THE MACHINE'S WORDS, directly under the sentence they qualify and only where it sent
+        // some (W2.3): an empty mono line is a cell reserved for a reason that does not exist.
+        if (panel.composerNoticeDetail.isNotEmpty()) {
+            column.addView(
+                noticeDetail(context, panel.composerNoticeDetail)
+                    .apply { tag = DetailTag.COMPOSER_NOTICE_DETAIL }
+                    .screenAir(),
+            )
+        }
     }
     // A COMPOSER THAT CANNOT SEND SAYS WHY, IN THE WORDS OF ITS OWN REASON: one sentence per
     // state rather than one accusation over four (ComposerModel.shutCopyFor).

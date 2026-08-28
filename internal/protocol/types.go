@@ -283,6 +283,16 @@ type MessageSubmitter interface {
 	Submit(text string) error
 }
 
+// ControlInputWriter is the OPTIONAL half of a SessionStream that can deliver DAEMON-AUTHORED
+// keys -- a turn interrupt, a dialog answer -- on a frame that carries their provenance, so the
+// shim writes them without counting them against the next Submit (phone refit W2.1,
+// agents-tracker-d45a.2). Optional on the same reasoning as MessageSubmitter: a stream that
+// cannot do it is OLD, not broken, and answers ErrControlInputUnsupported so the caller
+// degrades to Input -- today's behaviour, disclosed.
+type ControlInputWriter interface {
+	ControlInput(keys []byte) error
+}
+
 // OperationClaimer is the optional interface a DaemonAPI ALSO implements to claim a
 // remote op's operation_id as single-use through the daemon's durable idempotency store
 // (slice A5-c). handleTakeControl claims the op AFTER authorization: a duplicate
