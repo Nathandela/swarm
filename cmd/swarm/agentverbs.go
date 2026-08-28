@@ -74,9 +74,16 @@ func runLS(args []string, c agentClient, stdout, stderr io.Writer) int {
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ID\tAGENT\tGROUP\tNAME")
+	_, _ = fmt.Fprintln(tw, "ID\tAGENT\tGROUP\tNAME\tNOTE")
 	for _, s := range sessions {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.ID, s.Agent, s.Group, s.Name)
+		// The one note the table carries is the degraded-backend reason (R1): a
+		// session whose PTY runs with nothing to attach to must say so where the
+		// user looks first, not in daemon.log. Healthy rows leave it blank.
+		note := ""
+		if s.BackendPlanError != "" {
+			note = "no backend: " + s.BackendPlanError
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", s.ID, s.Agent, s.Group, s.Name, note)
 	}
 	_ = tw.Flush()
 	return 0

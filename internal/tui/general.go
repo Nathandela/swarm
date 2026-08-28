@@ -1050,6 +1050,12 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	if s.SupervisionPending {
 		markers = append(markers, supervisionMarker(s, m.sessions))
 	}
+	if s.BackendPlanError != "" {
+		// The degraded-backend marker (lifecycle R1): the PTY runs but nothing
+		// serves the attach channel. A row has room only for the fact; the full
+		// reason is on `swarm ls` and `swarm doctor`.
+		markers = append(markers, styleError.Render("no backend"))
+	}
 	if len(markers) > 0 {
 		marker := " " + strings.Join(markers, " ")
 		markerWidth := lipgloss.Width(marker)

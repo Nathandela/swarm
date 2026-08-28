@@ -246,6 +246,13 @@ type SessionView struct {
 	// session's row serializes exactly as it did before the fields existed.
 	SpawnedFrom string `json:"spawned_from,omitempty"`
 	SpawnIntent string `json:"spawn_intent,omitempty"`
+	// BackendPlanError is the persisted reason this session launched with no backend
+	// although its adapter declared one (persist.Meta.BackendPlanError): the agent's
+	// PTY runs but nothing serves the attach channel. Surfaced on the roster so the
+	// degradation is visible where the user looks (`swarm ls`, the TUI) instead of
+	// one daemon.log line. omitempty: a healthy row serializes exactly as it did
+	// before the field existed, and an older daemon simply never populates it.
+	BackendPlanError string `json:"backend_plan_error,omitempty"`
 	// Supervision is the persisted supervision mode of a handoff child (ADR-010
 	// Amendment 3 C1/C5) and SupervisionPending reports that an attention event of
 	// that child awaits its source: LIVE daemon state, sampled at stamp time exactly

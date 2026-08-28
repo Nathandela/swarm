@@ -212,6 +212,15 @@ type Daemon struct {
 	sessions map[string]*session // the registry
 	closed   bool
 
+	// savedEnv is daemon.env as read back at Open: the environment nil-ClientEnv
+	// launches (the remote/preset path) resolve against, so every consumer of "the
+	// daemon's policy environment" reads the ONE file converge also spawns from
+	// (ADR-020) rather than this process's live environ. The two are identical at
+	// every start today; they diverge the day the write policy learns to keep a
+	// good file over a bare start, and this field is what makes that day a no-op
+	// here. nil (a failed read) falls back to the live environ via PolicyEnv.
+	savedEnv []string
+
 	writeMu sync.Mutex     // serializes meta writes (single-writer, G6)
 	stopCh  chan struct{}  // closed by Close/abandon: stop monitors + accept loop
 	wg      sync.WaitGroup // accept loop + poll/launched supervisors (not the reapers)
@@ -293,6 +302,15 @@ func Open(cfg Config) (*Daemon, error) {
 	// exactly what makes that converge refuse.
 	if err := writeSavedEnv(cfg.StateDir); err != nil {
 		d.logf("save daemon environment: %v", err)
+	}
+	// Read the file back rather than trusting the write: when the write failed but an
+	// older daemon.env survives, launches resolve against that survivor -- the same
+	// preference converge has -- and a failed read leaves nil, which PolicyEnv turns
+	// into the live environ (today's exact behavior).
+	if saved, err := LoadSavedEnv(cfg.StateDir); err == nil {
+		d.savedEnv = saved
+	} else {
+		d.logf("read saved daemon environment: %v", err)
 	}
 
 	// Rebuild + reconnect BEFORE serving so List/Get are correct. A scan failure is

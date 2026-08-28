@@ -47,3 +47,19 @@ func PolicyEnv(clientEnv []string) []string {
 	}
 	return persist.FilterEnv(daemonEnviron())
 }
+
+// launchPolicyEnv is PolicyEnv bound to THIS daemon's saved environment: a launch
+// with no client env (the remote/preset path) resolves against daemon.env as read
+// at Open, not against the process's live environ. The two are identical at every
+// start today, but daemon.env is the one file ADR-020's converge spawns
+// replacements from, so every nil-env consumer -- launches here, replacements
+// there -- reads a single source of truth. The 2026-08-28 incident's remote half
+// lives exactly in this seam: a bare-environ daemon resolving phone launches
+// against its own PATH. A nil savedEnv (unreadable file) falls back to PolicyEnv's
+// live-environ behavior unchanged.
+func (d *Daemon) launchPolicyEnv(clientEnv []string) []string {
+	if clientEnv == nil && d.savedEnv != nil {
+		return persist.FilterEnv(d.savedEnv)
+	}
+	return PolicyEnv(clientEnv)
+}
