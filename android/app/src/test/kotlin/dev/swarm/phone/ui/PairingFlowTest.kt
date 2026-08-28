@@ -340,11 +340,11 @@ class PairingStepTest {
      * symptom; a message that does not say "nothing changed" leaves them believing it happened.
      */
     @Test
-    fun `the different-machine state names the cause and says nothing was lost`() {
+    fun `the different-machine state names the cause`() {
         val message = PairingFlow.messageFor(PairingStep.DIFFERENT_MACHINE)
         assertTrue(
-            "the message must name the cause -- another machine's code -- not just report a failure",
-            message.contains("machine", ignoreCase = true),
+            "the message must name the cause -- another computer's code -- not just report a failure",
+            message.contains("computer", ignoreCase = true),
         )
         assertNotEquals(
             "it must not read as the generic failure it used to fall through to",
