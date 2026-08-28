@@ -4,14 +4,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
 <style>
-  /* Obsidian tokens, read from android/app/src/main/res/values/colors.xml,
+  /* Slate tokens (ADR-021, phone refit W4), read from android/app/src/main/res/values/colors.xml,
      which is gate-locked to internal/design/tokens.json. Nothing invented. */
   :root {
-    --bg:#0E0B08; --card:#171310; --elev:#1F1A13; --well:#090705; --hair:#2E271D;
-    --ink:#F6F3EC; --ink2:#A69D8E; --ink3:#746B5D;
-    --hero:#C9A876; --hero-ink:#1A1206;
-    --work:#6FA7A4; --ok:#8CAF8E; --err:#D96A62;
-    --lit: rgba(246,243,236,0.22);
+    --bg:#0B0E14; --card:#131824; --elev:#1B2334; --well:#080A10; --hair:#262E3F;
+    --ink:#EEF2F8; --ink2:#9AA6BA; --ink3:#66718A;
+    --hero:#8EB4E6; --hero-ink:#0B1524;
+    --work:#6FC3BC; --ok:#8CC49A; --err:#E5736B;
+    --lit: rgba(238,242,248,0.18);
     --page: clamp(320px, 94vw, 1240px);
     --col:  clamp(320px, 92vw, 700px);
     --f-display:"Fraunces","Iowan Old Style",Georgia,serif;
@@ -26,7 +26,7 @@
   }
   body::before{
     content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
-    background:radial-gradient(1200px 700px at 50% -10%, rgba(201,168,118,.06), transparent 62%);
+    background:radial-gradient(1200px 700px at 50% -10%, rgba(142,180,230,.06), transparent 62%);
   }
   main{position:relative;z-index:1}
   .wrap{width:var(--page);margin:0 auto;padding:0 4px}
@@ -85,12 +85,12 @@
   }
   .bubble.cmd{font-family:var(--f-mono);font-size:11px}
   .bubble.pending{opacity:.55;border:1px dashed var(--hair)}
-  .bubble.refused{border:1px solid rgba(217,106,98,.45)}
+  .bubble.refused{border:1px solid rgba(229,115,107,.45)}
   .undermsg{
     text-align:right;font-size:9.5px;color:var(--ink3);margin:-4px 0 8px;font-family:var(--f-mono);
   }
   .undermsg.err{color:var(--err);font-family:var(--f-body);font-size:10.5px}
-  .undermsg u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+  .undermsg u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(142,180,230,.4)}
 
   .prose{color:var(--ink);font-size:12.5px}
   .prose p{color:var(--ink);margin:0 0 6px;font-size:12.5px;line-height:1.5}
@@ -113,7 +113,7 @@
   .tool .mk{font-size:10px;flex:none}
   .tool .chev{color:var(--ink3);font-size:12px;flex:none}
   .tool.run .gl{color:var(--work)}
-  .tool.fail{border-color:rgba(217,106,98,.42)}
+  .tool.fail{border-color:rgba(229,115,107,.42)}
   .tool.fail .gl{color:var(--err)}
   .tool.fail .mk{color:var(--err)}
   .tool.open{display:block;padding:0;overflow:hidden}
@@ -123,8 +123,8 @@
   .tool.open .cl{padding:5px 9px 7px;font-size:10px;color:var(--ink3)}
 
   .decide{
-    border:1px solid rgba(201,168,118,.45);border-radius:12px;
-    background:linear-gradient(180deg, rgba(201,168,118,.13), rgba(201,168,118,.03));
+    border:1px solid rgba(142,180,230,.45);border-radius:12px;
+    background:linear-gradient(180deg, rgba(142,180,230,.13), rgba(142,180,230,.03));
     box-shadow: inset 0 1px 0 var(--lit);
     padding:10px 11px 11px;margin-bottom:8px;
   }
@@ -158,10 +158,10 @@
   @media (prefers-reduced-motion: reduce){.working .sp{animation:none}}
 
   .gap{display:flex;align-items:center;gap:9px;margin:10px 0;color:var(--err);font-size:10.5px}
-  .gap::before,.gap::after{content:"";height:1px;background:rgba(217,106,98,.32);flex:1}
-  .gap u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+  .gap::before,.gap::after{content:"";height:1px;background:rgba(229,115,107,.32);flex:1}
+  .gap u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(142,180,230,.4)}
   .sync{
-    border:1px solid rgba(217,106,98,.3);background:rgba(217,106,98,.06);border-radius:8px;
+    border:1px solid rgba(229,115,107,.3);background:rgba(229,115,107,.06);border-radius:8px;
     padding:6px 9px;font-size:10.5px;color:var(--ink2);margin-bottom:8px;
   }
 
@@ -196,7 +196,7 @@
   .cb.off{background:var(--elev);color:var(--ink3)}
   .cb.ghost{background:transparent;border:1px solid var(--hair);color:var(--ink2)}
   .why{color:var(--ink3);font-size:10.5px;padding:7px 4px 4px;text-align:center}
-  .why u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(201,168,118,.4)}
+  .why u{text-decoration:none;color:var(--hero);border-bottom:1px solid rgba(142,180,230,.4)}
 
   .menu{
     border:1px solid var(--hair);border-radius:10px;background:var(--elev);
@@ -228,8 +228,8 @@
   ul.plain li b{color:var(--ink)}
 
   .note{
-    border:1px solid rgba(201,168,118,.38);border-radius:12px;
-    background:linear-gradient(180deg,rgba(201,168,118,.08),rgba(201,168,118,.02));
+    border:1px solid rgba(142,180,230,.38);border-radius:12px;
+    background:linear-gradient(180deg,rgba(142,180,230,.08),rgba(142,180,230,.02));
     padding:1.2rem 1.3rem;
   }
   .note h3{color:var(--hero)}
@@ -393,7 +393,7 @@
           <div class="stage">
             <div style="border:1px solid var(--hair);border-radius:10px;background:var(--elev);padding:11px 12px">
               <div style="font-size:12px;color:var(--ink);margin-bottom:9px">End this session? This can't be undone.</div>
-              <div style="display:flex;gap:7px"><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid var(--hair);background:var(--card);color:var(--ink);font-family:var(--f-body)">Cancel</button><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid rgba(217,106,98,.4);background:rgba(217,106,98,.1);color:var(--err);font-family:var(--f-body);font-weight:600">Kill session</button></div>
+              <div style="display:flex;gap:7px"><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid var(--hair);background:var(--card);color:var(--ink);font-family:var(--f-body)">Cancel</button><button style="flex:1;font-size:11.5px;padding:7px;border-radius:7px;border:1px solid rgba(229,115,107,.4);background:rgba(229,115,107,.1);color:var(--err);font-family:var(--f-body);font-weight:600">Kill session</button></div>
             </div>
           </div>
           <p class="nt">The words are the ones that ship today. Kill moves; its question does not change.</p>
@@ -835,7 +835,7 @@
           <tr><td class="k">decisionCard</td><td>existing material, new place</td><td>the approval card's gradient and key-light edge, drawn inline at the item</td></tr>
           <tr><td class="k">gapDivider</td><td>redrawn</td><td>the error notice, reduced from a paragraph to a rule with a word on it</td></tr>
           <tr><td class="k">earlierChip</td><td><b>new</b></td><td>the pill shape the sync badge already uses</td></tr>
-          <tr><td class="k">decisionPill</td><td><b>new</b></td><td>the champagne call-to-action, at pill radius</td></tr>
+          <tr><td class="k">decisionPill</td><td><b>new</b></td><td>the slate-blue call-to-action, at pill radius</td></tr>
           <tr><td class="k">composer (pinned, with stop)</td><td>extended</td><td>the shipped bar, plus a stop affordance and the inset behaviour it has never needed</td></tr>
           <tr><td class="k">toolCard</td><td>default inverted</td><td>no visual change; the closed state gains a status and clipped mark</td></tr>
           <tr><td class="k">fileChangeRow</td><td><b>new</b></td><td>the tool row's shape, carrying the change verb, the path and the line counts</td></tr>
@@ -863,7 +863,7 @@
 <footer>
   <div class="col">
     <p style="margin:0 0 .4rem"><span class="mono">swarm · conversation surface drawing · agents-tracker-tbpm</span></p>
-    <p style="margin:0">Palette read from the product's own Obsidian tokens. Shipped copy kept verbatim wherever it exists. Every deferral on this sheet is named rather than omitted.</p>
+    <p style="margin:0">Palette read from the product's own Slate tokens (ADR-021). Shipped copy kept verbatim wherever it exists. Every deferral on this sheet is named rather than omitted.</p>
   </div>
 </footer>
 
