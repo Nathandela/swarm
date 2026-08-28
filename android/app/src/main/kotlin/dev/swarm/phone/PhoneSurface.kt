@@ -3591,8 +3591,10 @@ class PhoneSurface(
         // which has already written PB-APP-9's routed failure onto [status]; this is the same
         // sentence the Inbox tab already carries, not a second one invented here.
         hostContent(
-            panel?.let { activityPanelView(activity, it, status = statusSlot()) }
-                ?: emptyState(activity, status.text.toString()),
+            panel?.let {
+                // W7.4: a row is a way into its session, by the inbox row's own rule.
+                activityPanelView(activity, it, status = statusSlot(), onSelectSession = ::selectSession)
+            } ?: emptyState(activity, status.text.toString()),
         )
     }
 

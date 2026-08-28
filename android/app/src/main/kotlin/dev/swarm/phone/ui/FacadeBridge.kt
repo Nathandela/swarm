@@ -188,6 +188,8 @@ class FacadeBridge(private val app: App) {
                     sessionId = entry.getSessionID(),
                     type = entry.getType(),
                     group = entry.getGroup(),
+                    // The daemon's own record stamp, 0 where the wire carried none (W7.4).
+                    tsUnixMs = entry.getTSUnixMs(),
                 )
             },
             nextCursor = page.nextCursor(),

@@ -21,12 +21,15 @@ import dev.swarm.phone.ui.kit.sessionList
  * `R.color`, an `R.dimen`, an `R.style`, a `setTextAppearance`, a `setPadding` or a `background =`
  * here fails the build.
  *
- * **IT PASSES NO TIMESTAMP, AND THAT IS THE WHOLE OF WHAT THIS FILE HAS TO SAY ABOUT THE MOCK.**
- * `activityRow` takes one because derivation row 14 specifies the cell; [ActivityEntry] has none
- * to give because the wire carries none. The call below therefore spends the parameter's default,
- * and the row renders with no gutter rather than with an empty one -- which is only free because
- * row 14 makes that column wrap-content instead of the mock's fixed 52 dp. [ActivityPanel] argues
- * all of it; this file is where the argument becomes an argument that is not passed.
+ * **IT PASSES THE TIME THE MODEL HAS AND NO OTHER** (W7.4). `activityRow` takes one because
+ * derivation row 14 specifies the cell; [ActivityEntry.time] is the daemon's stamp formatted, or
+ * "" where the wire carried none -- and "" is passed as NULL, so an unstamped row renders with no
+ * gutter rather than with an empty one, which is only free because row 14 makes that column
+ * wrap-content instead of the mock's fixed 52 dp. [ActivityPanel] argues all of it.
+ *
+ * **A ROW IS A WAY INTO ITS SESSION** (W7.4): tapping one fires [activityPanelView]'s
+ * `onSelectSession` with the row's own session id, the inbox row's rule. A session-neutral record
+ * (`presence`) names none and takes no tap.
  *
  * THE STALE LINE IS THE KIT'S `notice` (agents-tracker-ksvb.4). It was a bare `TextView` carrying
  * the model's copy and no appearance at all, recorded here as "the absence of a decision rather
@@ -55,7 +58,7 @@ object ActivityTag {
     /** The activity tab's own `.pnav`. */
     const val NAV = "activity.nav"
 
-    /** `.plabel` -- one, and see [ActivityPanel] for why the mock's two are not reproduced. */
+    /** `.plabel` -- one per day, plus the unstamped trailer (W7.4); see [ActivityPanel]. */
     const val SECTION_LABEL = "activity.section.label"
 
     /**
@@ -83,12 +86,15 @@ object ActivityTag {
  *  (agents-tracker-nx44.2). It is a view the SURFACE owns, on the scaffold slot's own terms: what
  *  it says changes on the surface's clock and this screen is rebuilt on its model's, so a screen
  *  that built one would rebuild the mark under whoever is pressing it.
+ * @param onSelectSession the session a tapped row names (W7.4); the default takes the tap
+ *  nowhere, which is the JVM suite's own world and not a shipping one.
  */
 fun activityPanelView(
     context: Context,
     panel: ActivityPanel,
     below: View? = null,
     status: View? = null,
+    onSelectSession: (String) -> Unit = {},
 ): View {
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -130,7 +136,13 @@ fun activityPanelView(
                         context = context,
                         body = entry.body,
                         emphasis = entry.emphasis,
-                    ).apply { tag = ActivityTag.ROW },
+                        timestamp = entry.time.ifEmpty { null },
+                    ).apply {
+                        tag = ActivityTag.ROW
+                        if (entry.sessionId.isNotEmpty()) {
+                            setOnClickListener { onSelectSession(entry.sessionId) }
+                        }
+                    },
                 )
             }
             column.addView(list)
