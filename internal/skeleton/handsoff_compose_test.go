@@ -297,7 +297,7 @@ func TestHandsOff_ComposesFivePointersLocalLineageAndTheChosenModel(t *testing.T
 }
 
 // TestHandsOff_UsesTheProviderCwdOfAWorktreeSource: for a worktree session Meta.Cwd is
-// the repo root while the agent actually ran in <repo>/.swarm/worktrees/<id>, and the
+// the repo root while the agent actually ran in <repo>/.swarm/worktrees/<slug>, and the
 // provider filed its transcript under the latter. Reading Cwd here would search a
 // directory the provider never wrote to.
 func TestHandsOff_UsesTheProviderCwdOfAWorktreeSource(t *testing.T) {
@@ -333,7 +333,7 @@ func TestHandsOff_UsesTheProviderCwdOfAWorktreeSource(t *testing.T) {
 // The TUI has only a protocol.SessionView, which deliberately carries no AgentCwd -- four
 // reviewers rejected widening that frozen wire type -- so the client can only send
 // SessionView.Cwd, the LAUNCH cwd. For a worktree-isolated source that is the REPO ROOT,
-// while the agent ran in <repo>/.swarm/worktrees/<id>. The prompt already names the
+// while the agent ran in <repo>/.swarm/worktrees/<slug>. The prompt already names the
 // worktree, because the daemon composes it from ProviderCwd.
 //
 // Left alone, the successor's process would start in the repo root while its prompt told

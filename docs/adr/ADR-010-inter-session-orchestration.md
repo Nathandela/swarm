@@ -501,7 +501,7 @@ transcript is still a problem, it is now a problem owned by the party that can s
 it has to be solved against. Composition happens in the daemon, from an embedded template, never
 client-side — so no client can forge the instruction, and the transcript path that reaches the
 successor is the daemon's own resolution, which for a worktree source the client provably cannot
-compute (the agent's real cwd is `<repo>/.swarm/worktrees/<id>` while `Meta.Cwd` is the repo root).
+compute (the agent's real cwd is `<repo>/.swarm/worktrees/<slug>` while `Meta.Cwd` is the repo root).
 
 ### E6. Accepted risks, stated rather than solved
 

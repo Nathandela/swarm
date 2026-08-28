@@ -1138,7 +1138,7 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 	// guessed. The TUI holds only a protocol.SessionView, which carries no AgentCwd -- that
 	// frozen wire type was deliberately not widened -- so the client can send nothing but
 	// SessionView.Cwd, the LAUNCH cwd. For a worktree-isolated source that is the REPO
-	// ROOT while the agent ran under <repo>/.swarm/worktrees/<id>, and a git worktree is a
+	// ROOT while the agent ran under <repo>/.swarm/worktrees/<slug>, and a git worktree is a
 	// SEPARATE CHECKOUT: different files, possibly a different branch. Inheriting the
 	// client's value would start the successor in one tree while the prompt named another
 	// and the transcript described the second -- "continue this work" beginning in the

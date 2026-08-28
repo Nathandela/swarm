@@ -62,7 +62,7 @@ func TestPreLaunchPreDeleteRegisterWorktreeHooks(t *testing.T) {
 
 	cfg := Config{
 		PreLaunch: func(id string, spec LaunchSpec) (string, error) {
-			return worktree.Create(spec.Cwd, id)
+			return worktree.Create(spec.Cwd, id, spec.Name)
 		},
 		PreDelete: func(m persist.Meta) error {
 			return worktree.Remove(m.Cwd, m.ID)

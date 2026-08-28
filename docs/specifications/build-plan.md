@@ -141,7 +141,7 @@ Epics are ordered topologically; build top to bottom. Each epic is sized for one
 
 ## - [ ] Epic 12: Worktree isolation
 
-**Scope IN**: functional launch toggle: create `.swarm/worktrees/<id>` (validated id), branch `swarm/<id>`, error path for non-repo; teardown on delete (`git worktree remove` + prune); implemented as pre-launch/pre-delete hooks registered with daemon core (no inline branches in core control flow).
+**Scope IN**: functional launch toggle: create `.swarm/worktrees/<name-slug>` and branch `swarm/<name-slug>-<id>` for a named session, adding the full id to the path on a name collision and using the validated-id form for an unnamed session; error path for non-repo; teardown of the exact persisted worktree path on delete (`git worktree remove` + prune); implemented as pre-launch/pre-delete hooks registered with daemon core (no inline branches in core control flow).
 **EARS**: S-3, R-3 (teardown).
 **Contracts**: launch/delete hook points on daemon core (behavioral).
 **Assumptions**: plain `git` CLI available when the toggle is used (not a swarm runtime dependency).

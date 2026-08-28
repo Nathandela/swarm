@@ -4,7 +4,7 @@ package skeleton
 // cwd and the agent cwd apart, now that persist.Meta carries both.
 //
 //  1. Provider history lives under an encoding of the directory the agent RAN IN. For a
-//     worktree session that is <repo>/.swarm/worktrees/<id>, never the repo root, so the
+//     worktree session that is <repo>/.swarm/worktrees/<slug>, never the repo root, so the
 //     resolver must ask the meta for its ProviderCwd. Until it does, resume-id recovery
 //     cannot work for a worktree session at all -- it looks in a directory the provider
 //     never wrote to.
@@ -53,26 +53,26 @@ func newAgentCwdGitRepo(t *testing.T) string {
 }
 
 // TestAgentCwdWorktreeTeardownStillAnchorsOnTheRepo is the invariant guard for the whole
-// change: preDeleteWorktree keeps reading Meta.Cwd, and the worktree is really gone
-// afterwards. If teardown were switched to the agent cwd, `git -C <worktree> worktree
-// remove <worktree>/.swarm/worktrees/<id>` names a path that does not exist and the
-// session's worktree and branch leak forever.
+// change: preDeleteWorktree uses Meta.Cwd as the git repository and Meta.AgentCwd as
+// the exact named worktree path. Renaming the session after launch must not change
+// which checkout is removed.
 func TestAgentCwdWorktreeTeardownStillAnchorsOnTheRepo(t *testing.T) {
 	repo := newAgentCwdGitRepo(t)
 	const id = "sess1"
 
-	spec := daemon.LaunchSpec{Cwd: repo, Options: map[string]string{protocol.OptionWorktree: "true"}}
+	spec := daemon.LaunchSpec{Name: "Fix Login Flow", Cwd: repo, Options: map[string]string{protocol.OptionWorktree: "true"}}
 	agentCwd, err := preLaunchWorktree(id, spec)
 	if err != nil {
 		t.Fatalf("preLaunchWorktree: %v", err)
 	}
-	want := filepath.Join(repo, ".swarm", "worktrees", id)
+	want := filepath.Join(repo, ".swarm", "worktrees", "fix-login-flow")
 	if agentCwd != want {
 		t.Fatalf("preLaunchWorktree = %q, want %q", agentCwd, want)
 	}
 
 	m := persist.Meta{
 		ID:            id,
+		Name:          "Renamed After Launch",
 		Cwd:           repo,
 		AgentCwd:      agentCwd,
 		LaunchOptions: map[string]string{protocol.OptionWorktree: "true"},

@@ -28,9 +28,12 @@ func TestLaunchRollback_CompensatesPreLaunchWorktree(t *testing.T) {
 
 	cfg := daemonConfig(t)
 	cfg.PreLaunch = func(id string, spec LaunchSpec) (string, error) {
-		return worktree.Create(spec.Cwd, id)
+		return worktree.Create(spec.Cwd, id, spec.Name)
 	}
 	cfg.PreDelete = func(m persist.Meta) error {
+		if m.AgentCwd != "" {
+			return worktree.RemoveAt(m.Cwd, m.AgentCwd)
+		}
 		return worktree.Remove(m.Cwd, m.ID)
 	}
 	d := openDaemon(t, cfg)
@@ -46,6 +49,7 @@ func TestLaunchRollback_CompensatesPreLaunchWorktree(t *testing.T) {
 
 	spec := LaunchSpec{
 		AgentType: "fake",
+		Name:      "Rollback Named Worktree",
 		Argv:      []string{"/bin/sh", "-c", "while :; do sleep 1; done"},
 		Cwd:       repo,
 		ClientEnv: []string{"PATH=" + os.Getenv("PATH")},
