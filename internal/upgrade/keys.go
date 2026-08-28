@@ -13,12 +13,15 @@ import (
 )
 
 // releasePublicKeys are the ed25519 public keys a release's checksums.txt.sig
-// may verify against, hex-encoded. TWO SLOTS BY DESIGN (rotation): the verifying
-// key ships inside the artifact it verifies, so a compromised key can only be
-// replaced by an update signed with a key the fleet already trusts -- current
-// signs today, next is the standby that a rotation release starts signing with
-// while old binaries still carry it. The private halves live only in the release
-// pipeline's secret (SWARM_RELEASE_SIGNING_KEY; scripts/signchecksums).
+// may verify against, hex-encoded. The table holds MULTIPLE SLOTS by design
+// (rotation): the verifying key ships inside the artifact it verifies, so a
+// compromised key can only be replaced by an update signed with a key the
+// fleet already trusts -- a rotation release ADDS the successor here first,
+// ships signed by the incumbent, and a later release switches the signer.
+// Today the table holds the one key in service; the private half lives only in
+// the release pipeline's secret (SWARM_RELEASE_SIGNING_KEY;
+// scripts/signchecksums, whose --selfcheck refuses to publish with a secret
+// whose public half is not in this table).
 //
 // THREAT MODEL, stated honestly (committee B3/H2): this defends against a
 // swapped release asset, a stolen publish token, and a hostile mirror -- anyone
@@ -27,6 +30,19 @@ import (
 // would sign what it builds.
 var releasePublicKeys = []string{
 	"d7938ebe67f5cb7ff202724352a7890cd0af8ca422c22e3e7af32b6284e7885a", // current (2026-08-28)
+}
+
+// TrustedKey reports whether pubHex is one of the trust slots -- the release
+// pipeline's pre-publish selfcheck, so a valid-but-wrong secret fails the
+// RELEASE instead of shipping assets every fleet machine rejects (R2/R3
+// audit: codex finding 7, Fable M5).
+func TrustedKey(pubHex string) bool {
+	for _, kh := range releasePublicKeys {
+		if strings.EqualFold(strings.TrimSpace(pubHex), kh) {
+			return true
+		}
+	}
+	return false
 }
 
 // VerifyChecksums reports whether sig (the checksums.txt.sig release asset,

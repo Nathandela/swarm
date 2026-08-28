@@ -254,6 +254,11 @@ jobs:
         # --skip=sign: the checksums signature (lifecycle R2) needs the release
         # secret, which PR-triggered runs must never hold; the publish job signs.
         run: goreleaser release --snapshot --clean --skip=publish --skip=sign
+      - name: Assert the compatibility card ships inside the archive (lifecycle R3)
+        # A regressed archives.files glob would silently degrade every wire
+        # gate to "unknown" fleet-wide (R2/R3 audit, Fable M5).
+        run: |
+          tar -Oxzf dist/swarm_*_linux_amd64.tar.gz compat.json | grep -q '"shimwire"'
       - name: Assert 3 artifacts (darwin universal + 2 linux) + a checksums file exist (E13.1, h07)
         run: |
           count=$(find dist -maxdepth 1 -name 'swarm_*.tar.gz' | wc -l)

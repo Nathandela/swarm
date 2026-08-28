@@ -81,3 +81,5 @@ local.properties
 # Operator-created relay deployment files (docker-compose.yml header instructs creating them)
 deploy/relay/relay.config
 deploy/relay/Caddyfile.local
+# goreleaser before-hook output (the release's compatibility card)
+/compat.json
