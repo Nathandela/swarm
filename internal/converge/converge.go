@@ -59,6 +59,18 @@ type Deps struct {
 	// daemon of any protocol version, and is why no rule before rule 4 can spawn.
 	Sessions func() ([]Session, error)
 
+	// EnsureGateway, when non-nil, makes an INSTALLED gateway running -- an
+	// idempotent Ensure, never a restart -- and is consulted on rule 1's
+	// already-converged exit. It exists because the daemon/gateway pair was
+	// sequential, not transactional (lifecycle plan audit, codex finding 2): a
+	// night whose daemon restart succeeded and whose gateway restart failed left
+	// the gateway stale FOREVER, because every later night matched at rule 1 and
+	// exited before touching it. An error here downgrades the exit to failed --
+	// a converged daemon behind a dead gateway must not read as success -- and a
+	// machine with no gateway installed answers nil (the caller maps
+	// ErrNotInstalled to nil, the restartGatewayForDelivery precedent).
+	EnsureGateway func() error
+
 	// SavedEnv returns the environment the daemon saved when it last started
 	// interactively. Rule 3. An error satisfying errors.Is(err, os.ErrNotExist)
 	// means nothing was ever saved, which is the pre-0.13.2 machine.
@@ -137,6 +149,13 @@ func Run(d Deps) int {
 	build, err := d.Hello()
 	switch {
 	case err == nil && build == d.Version:
+		// The gateway retry (lifecycle R3): a matching daemon no longer skips a
+		// stopped-but-installed gateway -- see Deps.EnsureGateway.
+		if d.EnsureGateway != nil {
+			if gerr := d.EnsureGateway(); gerr != nil {
+				return say(d.Log, ExitFailed, "failed: the daemon already runs this build (%s) but the gateway could not be ensured: %v", build, gerr)
+			}
+		}
 		return say(d.Log, ExitConverged, "converged: the daemon already runs this build (%s), nothing to do", build)
 	case err == nil:
 		// A different build: continue.

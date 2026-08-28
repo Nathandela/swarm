@@ -5,6 +5,12 @@ project_name: swarm
 before:
   hooks:
     - go mod tidy
+    # The release's compatibility card (lifecycle R3): compat.json carries the
+    # wire/schema constants this build was compiled with, emitted from the same
+    # source constants the binary runs on (scripts/releasemanifest reads
+    # GORELEASER_CURRENT_TAG). It ships INSIDE the swarm archive, so the signed
+    # checksum covers it; activation gates on it with pure disk reads.
+    - go run ./scripts/releasemanifest --out compat.json
 
 # Three deployables ship from this pipeline:
 #
@@ -117,6 +123,11 @@ archives:
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # files REPLACES the default include globs, so README.md is restated
+    # alongside the compatibility card the before hook emitted.
+    files:
+      - README.md
+      - compat.json
 
   - id: swarm-relay
     ids:

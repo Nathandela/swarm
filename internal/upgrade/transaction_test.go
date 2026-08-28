@@ -103,6 +103,7 @@ func buildTarball(t *testing.T, stamp string) []byte {
 		}
 	}
 	add("README.md", "readme", 0o644)
+	add("compat.json", `{"version":"`+stamp+`","shimwire":1,"protocol":1,"schema":1}`, 0o644)
 	add("swarm", "#!/bin/sh\necho "+stamp+"\n", 0o755)
 	add("swarm-remote", "#!/bin/sh\necho remote\n", 0o755)
 	add("../escape", "hostile", 0o755)

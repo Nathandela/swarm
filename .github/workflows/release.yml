@@ -51,6 +51,13 @@ jobs:
         with:
           install-only: true
           version: '2.17.0' # matches release-dryrun (ci.yml) -- verified locally for this config
+      - name: Verify the signing secret matches a compiled trust slot
+        # A valid-but-wrong secret would let goreleaser publish assets every
+        # fleet machine rejects (R2/R3 audit); the selfcheck fails the release
+        # here instead.
+        env:
+          SWARM_RELEASE_SIGNING_KEY: ${{ secrets.SWARM_RELEASE_SIGNING_KEY }}
+        run: go run ./scripts/signchecksums --selfcheck
       - name: Publish release (goreleaser)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

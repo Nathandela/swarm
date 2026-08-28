@@ -55,6 +55,22 @@ func runDaemonRestartUnattended(stderr io.Writer) int {
 			c.Env = env
 			return daemon.Restart(c)
 		},
+		EnsureGateway: func() error {
+			// The rule-1 gateway retry: Ensure (idempotent, never a restart) on
+			// the supervisor; a machine that never ran `swarm remote init` has no
+			// unit, which is benign here exactly as it is for RestartGateway.
+			sup, err := newGatewaySupervisor(cc.StateDir)
+			if err != nil {
+				return err
+			}
+			if err := sup.Ensure(); err != nil {
+				if errors.Is(err, supervise.ErrNotInstalled) {
+					return nil
+				}
+				return err
+			}
+			return nil
+		},
 		RestartGateway: func() error {
 			// The package var, so a test substitutes a fake and never reaches launchd.
 			// supervise.ErrNotInstalled is mapped onto converge's own sentinel here, at

@@ -38,6 +38,10 @@ type Decision struct {
 	Reason string // human sentence; for refuse, names the owning delegate
 	Latest string // the resolved tag, when resolution succeeded
 	Owner  Owner
+	// RefuseOutcome is the machine-readable refusal class ("refused-dev",
+	// "refused-owner", "refused-downgrade"), set exactly where the refusal is
+	// decided -- outcomes must never be re-derived from prose (Fable L4).
+	RefuseOutcome string
 }
 
 // Check resolves the latest release and decides, WITHOUT downloading anything.
@@ -46,12 +50,12 @@ type Decision struct {
 func Check(ctx context.Context, opts Options) (Decision, error) {
 	installed, err := parseSemver(opts.Installed)
 	if err != nil {
-		return Decision{Action: "refuse", Reason: fmt.Sprintf(
+		return Decision{Action: "refuse", RefuseOutcome: "refused-dev", Reason: fmt.Sprintf(
 			"installed version %q is not a release build; nothing to compare, nothing touched", opts.Installed)}, nil
 	}
 	owner := ClassifyOwner(opts.BinPath)
 	if owner != OwnerSelf {
-		return Decision{Action: "refuse", Owner: owner, Reason: ownerDelegate(owner)}, nil
+		return Decision{Action: "refuse", RefuseOutcome: "refused-owner", Owner: owner, Reason: ownerDelegate(owner)}, nil
 	}
 	base := opts.BaseURL
 	if base == "" {
@@ -70,7 +74,7 @@ func Check(ctx context.Context, opts Options) (Decision, error) {
 		return Decision{Action: "current", Latest: latest, Owner: owner,
 			Reason: fmt.Sprintf("%s is current", opts.Installed)}, nil
 	case c < 0 && !opts.AllowDowngrade:
-		return Decision{Action: "refuse", Latest: latest, Owner: owner, Reason: fmt.Sprintf(
+		return Decision{Action: "refuse", RefuseOutcome: "refused-downgrade", Latest: latest, Owner: owner, Reason: fmt.Sprintf(
 			"latest %s is OLDER than installed %s; a re-pointed release must not silently downgrade (--allow-downgrade overrides)",
 			latest, opts.Installed)}, nil
 	default:
@@ -132,7 +136,24 @@ func Stage(ctx context.Context, opts Options) (State, error) {
 		_ = os.RemoveAll(StageDir(opts.StateDir))
 		return s, recordState(opts.StateDir, &s)
 	case dec.Action == "refuse":
-		s.Outcome, s.Detail = refusalOutcome(dec), dec.Reason
+		s.Outcome, s.Detail = dec.RefuseOutcome, dec.Reason
+		return s, recordState(opts.StateDir, &s)
+	}
+
+	// The rollback hold (rollback.go): the version a rollback backed out of must
+	// not come back on the next nightly. A NEWER release clears it by simply not
+	// being it.
+	if held := HeldVersion(opts.StateDir); held != "" && held == dec.Latest {
+		s.Outcome, s.Detail = "held", fmt.Sprintf("%s was rolled back on this machine; holding until a newer release ships", held)
+		return s, recordState(opts.StateDir, &s)
+	}
+
+	// An identical verified build already staged is not re-downloaded: a
+	// wire-deferred machine would otherwise pull the full tarball nightly
+	// (Fable L6). The staged VERSION was written last, so its presence means
+	// the stage completed.
+	if data, err := os.ReadFile(filepath.Join(StageDir(opts.StateDir), "VERSION")); err == nil && strings.TrimSpace(string(data)) == dec.Latest {
+		s.Outcome, s.Detail, s.StagedVersion = "staged", dec.Reason+" (already staged)", dec.Latest
 		return s, recordState(opts.StateDir, &s)
 	}
 
@@ -148,18 +169,7 @@ func Stage(ctx context.Context, opts Options) (State, error) {
 	return s, recordState(opts.StateDir, &s)
 }
 
-// refusalOutcome distinguishes the refusals in upgrade.json without parsing
-// prose: doctor keys off these.
-func refusalOutcome(dec Decision) string {
-	switch {
-	case dec.Owner != "" && dec.Owner != OwnerSelf:
-		return "refused-owner"
-	case strings.Contains(dec.Reason, "OLDER"):
-		return "refused-downgrade"
-	default:
-		return "refused-dev"
-	}
-}
+
 
 type stepError struct {
 	step string
@@ -291,9 +301,11 @@ func verifySHA256(checksums []byte, asset string, data []byte) error {
 	return nil
 }
 
-// extractBinaries unpacks EXACTLY the members named swarm and swarm-remote --
-// bare names only, so a hostile tarball's path traversal, symlink or device
-// entries are never even considered -- and requires swarm to be present.
+// extractBinaries unpacks EXACTLY the members named swarm, swarm-remote and
+// compat.json -- bare names only, so a hostile tarball's path traversal,
+// symlink or device entries are never even considered -- and requires swarm to
+// be present. compat.json is the release's compatibility card (manifest.go);
+// an archive without one predates it, which activation treats as unknown.
 func extractBinaries(tarball []byte, stage string) error {
 	gz, err := gzip.NewReader(strings.NewReader(string(tarball)))
 	if err != nil {
@@ -310,13 +322,17 @@ func extractBinaries(tarball []byte, stage string) error {
 			return err
 		}
 		name := filepath.Base(filepath.Clean(hdr.Name))
-		if (name != "swarm" && name != "swarm-remote") || hdr.Typeflag != tar.TypeReg {
+		if (name != "swarm" && name != "swarm-remote" && name != "compat.json") || hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 		if hdr.Size > maxAssetBytes {
 			return fmt.Errorf("upgrade: tar member %s exceeds the size cap", name)
 		}
-		dst, err := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+		mode := os.FileMode(0o755)
+		if name == "compat.json" {
+			mode = 0o600
+		}
+		dst, err := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return err
 		}

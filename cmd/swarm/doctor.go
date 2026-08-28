@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/detect"
@@ -320,6 +321,13 @@ func doctorSessionChecks(stateDir string) []doctorFinding {
 // A month of failed downloads must never be invisible behind a green unit
 // (committee C3): the state file is the durable record, and this is its reader.
 func doctorUpgradeCheck(stateDir string) doctorFinding {
+	if pending := upgrade.PendingConverge(stateDir); pending != "" {
+		return doctorFinding{
+			Check: "auto-update", Status: "warn",
+			Detail: fmt.Sprintf("%s is installed but its converge has not completed; the daemon may still run the previous build", pending),
+			Fix:    "swarm upgrade --unattended (retries the converge)",
+		}
+	}
 	st, err := upgrade.ReadState(stateDir)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -336,6 +344,13 @@ func doctorUpgradeCheck(stateDir string) doctorFinding {
 	detail := fmt.Sprintf("last run %s: %s", st.CheckedAt.Format("2006-01-02 15:04"), st.Outcome)
 	if st.StagedVersion != "" {
 		detail += fmt.Sprintf(" (%s staged, awaiting activation)", st.StagedVersion)
+	}
+	if age := time.Since(st.CheckedAt); age > 48*time.Hour {
+		return doctorFinding{
+			Check: "auto-update", Status: "warn",
+			Detail: detail + fmt.Sprintf(" -- %s ago; the scheduler has been quiet", age.Round(time.Hour)),
+			Fix:    "swarm upgrade --unattended",
+		}
 	}
 	switch {
 	case strings.HasPrefix(st.Outcome, "failed"):
