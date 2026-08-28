@@ -358,6 +358,15 @@ else          /* the existing composer_send body from :489-520, unchanged */
   the fact `headerStateFor` (`:645-657`) and `composerPlaceholder` (`:1093-1095`) already read; the
   header word, the placeholder, the menu row and the square cannot disagree. It joins
   `sessionDetailRedraw`'s patch whitelist deliberately (tbpm.4's hazard).
+  **Fence (W2 round-2 review, 2026-08-28).** `TranscriptScreen.openTurnOf`
+  (`TranscriptPanel.kt:812-819`) already reads a turn as open from any item's `turn_id`, which is
+  what makes a turn the daemon opened on Claude's own envelope (W2.4: no `user_message` is
+  published) reach the square. Its comments (`:88-89`, `:807-808`) and every case in
+  `TranscriptTurnAndAnchorTest.kt:65-115` say a `user_message` opens it, so a "tightening" to the
+  comment would silently reproduce the round-1 defect. W3 adds the test `a turn the daemon opened
+  on the CLI's own envelope reads open from its first tool item` (`[tool_run turn-c in_progress]`
+  → `latestTurnId == "turn-c"`) and rewords both comments: a turn is open when the newest item
+  carries a `turn_id` and is not a terminal `agent_message`, whether or not a `user_message` began it.
   Drawables, in `swarm_nav_back.xml`'s style (24dp, `@android:color/white`, kit-tinted):
   `swarm_send.xml` path `M12 19V5M5 12l7-7 7 7` (stroke 1.7); `swarm_stop.xml` path `M7 7h10v10H7z` (fill).
 - **Tests first.** `ComposerTest.kt`: `the composer action is a 40dp square`, `the square keeps the
@@ -840,7 +849,7 @@ Release:             versionCode 19 / versionName 0.9.0, AAR rebuilt, Kotlin sui
                      bundleRelease, swarm-publish --dry-run then internal track, owner handset pass
 ```
 
-W1, W2 and W4 are disjoint by file. W3 and W7 both edit `PhoneSurface.kt` in different regions;
+W1, W2 and W4 are disjoint by file and merge in order of readiness. W3 and W7 both edit `PhoneSurface.kt` in different regions;
 conflicts are resolved by the orchestrator at merge, never by a fleet editing outside its list.
 
 ## 10. Out of scope, with the reason
