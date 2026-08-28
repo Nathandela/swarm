@@ -800,6 +800,16 @@ func (m rootModel) composeBoard(body, status string) string {
 		status = clampCells(status, m.width-2)
 	}
 	bar := "  " + styleDim.Render(status)
+	// The build version rides the right end of the same row (agents-tracker-2c50), dim
+	// like the keys, flush with the terminal's edge, and dropped rather than squeezed
+	// when the row cannot hold both with a gap: the keys are what the row is for. Bare
+	// ("0.13.3"): the word swarm already heads the board, and the full keymap plus
+	// "swarm 0.13.3" is one cell over a 120-column terminal.
+	if ver := m.clientVersion; ver != "" && m.width > 0 {
+		if gap := m.width - 2 - lipgloss.Width(status) - lipgloss.Width(ver); gap >= 3 {
+			bar += strings.Repeat(" ", gap) + styleDim.Render(ver)
+		}
+	}
 
 	// The version-skew notice reserves its own row above the bar, clamped and styled the
 	// same way so it likewise cannot wrap.
