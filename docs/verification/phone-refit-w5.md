@@ -607,6 +607,7 @@ longer matches the code); GREEN is the same test passing after.
 | 7 | NOTE 7 pt.2 -- `MachinesPanelScreen.ADD_ID_HINT` still said "Machine id" | `31ae5a1b` | new `MachinesPanelScreenTest` assertion failed against "Machine id" | passes against "Computer id" | `MachinesPanelScreenTest.kt`: +1 assertion in `everyAffordanceCarriesRecordedCopy` (no prior coverage) |
 | 8 (mine) | `switchedTo`/`brokenNotice` interpolate a wire-omitempty name with `ifEmpty`, which a whitespace-only name slips past | `31ae5a1b` | 2 new `MachinesPanelRound3Test` tests (blank + whitespace-only name, one test per site) failed against the un-guarded interpolation | both pass against `ifBlank` guards (`switchedTo` falls back to "this computer"; `brokenNotice` falls back to `row.machineId` first, matching FORGET_CONFIRM/ADD_CONFIRM's existing pattern) | `MachinesPanelRound3Test.kt`: +2 tests |
 | 9 | reviewer's own audit -- `PairedMachineRowTest`'s confirmation clause weakened from `contains("pairing")` to `contains("pair")` when the "keys" test was removed, a strictly looser substring satisfied by "repair"/"paired"/"pairing" too | `bcf76498` | substring evidence, not a code RED (no production behavior changed): the old check passes against three decoy sentences that do not carry `CONFIRM_COST`'s text at all; the tightened check correctly rejects all three | tightened check passes against the real constant; same 11 `PairedMachineRowTest` tests green | `PairedMachineRowTest.kt`: replaced 2 assertions (`contains("pair")` + `contains("new code")`) with 1 (`contains("You'll need a new code to pair again.")`) |
+| 11 | found while verifying item 9's assertion -- two more stale `PairedMachineRow.kt` docs, same family SF6 fixed: the class-level KDoc (`:32-35`) still argued `replaceConfirmation` "names the machine and names the key purge" (the key-purge clause left with the "keys" test SF6's finding names); the `sublabel` field KDoc (`:40`) still read "What replacing costs, in the order the daemon performs it" though `sublabel` is hardcoded `""` (`:106`, W5.4 row 36) | `90ea7d45` | none -- doc-only, no observable behavior; the same substring-decoy evidence and reasoning as row 9 applies (the class KDoc's "names the key purge" claim is checked false against the real `CONFIRM_COST` text the same way row 9's old assertion was checked too loose) | docs corrected; same 11 `PairedMachineRowTest` tests rerun and green, no assertion changed | `PairedMachineRow.kt`: 2 KDoc rewrites, no test changes. (Landed as its own commit rather than folded into `bcf76498`, which was already pushed before this was found; same file, same family, immediately after in the log) |
 
 Items 9 and 10 arrived after the first six-commit push (`b74b9dd3`), which the lead then merged into
 `main` (`6d398297`) as-is; item 9 landed as its own follow-up commit in worktree `refit-w5b`, branch
@@ -694,8 +695,10 @@ aa0efb78 Ban the last two W5.1 words: relay and machine (SHOULD-FIX 3, NOTE 7 pt
 ```
 
 The six above merged into `main` at `6d398297` unchanged (`git diff` against the equivalent commit
-is empty for every file this round touches). Item 9 followed as its own commit, in `refit-w5b`:
+is empty for every file this round touches). Items 9 and 11 followed as their own commits, in
+`refit-w5b`:
 
 ```
 bcf76498 PairedMachineRowTest: pin the confirmation sentence, not a "pair" substring
+90ea7d45 PairedMachineRow: two more stale KDocs, same family as SF6 (item 11)
 ```
