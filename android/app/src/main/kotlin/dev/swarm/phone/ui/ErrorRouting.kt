@@ -278,7 +278,7 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.NOT_PAIRED to RoutedError(
             ErrorState.NOT_PAIRED, Remedy.PAIR,
-            "This phone is not paired with a machine yet. Nothing is broken -- pair it to begin.",
+            "This phone is not paired with a computer yet. Nothing is broken -- pair it to begin.",
         ),
         SwarmErrorTokens.STATE_CORRUPT to RoutedError(
             ErrorState.STATE_CORRUPT, Remedy.CLEAR_DATA_AND_RE_PAIR,
@@ -375,12 +375,12 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.RELAY_UNKNOWN to RoutedError(
             ErrorState.RELAY_UNKNOWN, Remedy.RETRY_PAIRING,
-            "This phone does not know your relay address yet. Scan the QR once, or paste the " +
-                "full code your computer printed.",
+            "This phone does not know your computer's address yet. Scan the QR once, or paste " +
+                "the full code your computer printed.",
         ),
         SwarmErrorTokens.RELAY_ADDRESS_INVALID to RoutedError(
             ErrorState.RELAY_ADDRESS_INVALID, Remedy.RETRY_PAIRING,
-            "That is not a relay address. It looks like wss://host:port -- your computer printed " +
+            "That is not an address. It looks like wss://host:port -- your computer printed " +
                 "the whole thing.",
         ),
     )

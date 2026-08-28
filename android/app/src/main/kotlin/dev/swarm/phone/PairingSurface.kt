@@ -264,7 +264,7 @@ class PairingSurface(
      * [destination] for the same confirm step a scanned QR goes through. A typed address gets no
      * shortcut through the step that exists to make a destination something the user has read.
      */
-    private val relayUrl = textField(activity, "Relay address, like wss://host:8443")
+    private val relayUrl = textField(activity, "Address, like wss://host:8443")
 
     /**
      * The fallback path's own action, and the one CTA on this screen whose champagne is CONTESTED.

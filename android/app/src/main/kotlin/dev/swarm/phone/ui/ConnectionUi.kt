@@ -89,15 +89,15 @@ data class ConnectionBanner(
             // that can come back, so neither may carry a spinner -- and they do not share a
             // remedy, which is why they are two rows and not one.
             ConnectionState.RELAY_UNTRUSTED -> state.banner(
-                "This phone will not connect to that relay: it is not presenting the identity " +
+                "This phone will not connect to that address: it is not presenting the identity " +
                     "your computer published when you paired. Pair this phone again.",
                 Remedy.RE_PAIR,
                 showsSpinner = false,
             )
 
             ConnectionState.RELAY_INSECURE -> state.banner(
-                "Your computer is configured to use an unencrypted relay, which this phone " +
-                    "refuses. Fix the relay address on your computer, then pair this phone again.",
+                "Your computer is configured to use an unencrypted address, which this phone " +
+                    "refuses. Fix your computer's address, then pair this phone again.",
                 Remedy.RE_PAIR,
                 showsSpinner = false,
             )

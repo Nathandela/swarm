@@ -49,8 +49,8 @@ class PairingEntryRoutingTest {
 
         assertEquals(ErrorState.RELAY_UNKNOWN, routed.state)
         assertEquals(
-            "This phone does not know your relay address yet. Scan the QR once, or paste the " +
-                "full code your computer printed.",
+            "This phone does not know your computer's address yet. Scan the QR once, or paste " +
+                "the full code your computer printed.",
             routed.message,
         )
         assertEquals(Remedy.RETRY_PAIRING, routed.remedy)
@@ -62,7 +62,7 @@ class PairingEntryRoutingTest {
 
         assertEquals(ErrorState.RELAY_ADDRESS_INVALID, routed.state)
         assertEquals(
-            "That is not a relay address. It looks like wss://host:port -- your computer printed " +
+            "That is not an address. It looks like wss://host:port -- your computer printed " +
                 "the whole thing.",
             routed.message,
         )

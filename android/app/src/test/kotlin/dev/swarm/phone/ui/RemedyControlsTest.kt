@@ -117,6 +117,19 @@ class RemedyControlsTest {
         }
     }
 
+    /**
+     * W5 review round (2026-08-29), NOTE 7: this row said "machine" on a screen whose every other
+     * sentence -- including [ErrorRouter]'s own STATE_CORRUPT and GRANT_LOST rows -- already says
+     * "computer" per W5.1's word list.
+     */
+    @Test
+    fun `the not-paired row says computer, like every other row on this table`() {
+        assertEquals(
+            "This phone is not paired with a computer yet. Nothing is broken -- pair it to begin.",
+            ErrorRouter.route(SwarmErrorTokens.NOT_PAIRED).message,
+        )
+    }
+
     private val everyToken = listOf(
         SwarmErrorTokens.UNKNOWN,
         SwarmErrorTokens.INTERNAL,
