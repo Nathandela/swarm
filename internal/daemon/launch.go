@@ -16,6 +16,7 @@ import (
 	"github.com/Nathandela/swarm/internal/idempotency"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
+	"github.com/Nathandela/swarm/internal/shimwire"
 	"github.com/Nathandela/swarm/internal/status"
 )
 
@@ -428,6 +429,9 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// The degraded-backend reason rides the identity save below -- no extra write.
 	// "" is the ordinary case: the backend planned, or this CLI declares none.
 	m.BackendPlanError = backendPlanErr
+	// The wire version this shim speaks: the shim was just spawned from this
+	// daemon's own executable, so at this instant they agree by construction.
+	m.ShimWireVersion = shimwire.Version
 
 	// Record the shim identity as EARLY as possible — before the shim spawns its
 	// agent — so a daemon crash any time after the agent exists still leaves a

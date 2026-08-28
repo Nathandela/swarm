@@ -68,6 +68,16 @@ type Meta struct {
 	ShimPID        int       `json:"shim_pid"`
 	ShimStartTime  int64     `json:"shim_start_time"`
 	ConversationID string    `json:"conversation_id"`
+	// ShimWireVersion is the shimwire.Version compiled into the shim this session
+	// runs under, stamped at spawn: the daemon spawns shims from its own
+	// executable, so at that instant the two agree, and afterwards the shim
+	// OUTLIVES upgrades of the binary on disk. Activation (lifecycle R3) gates a
+	// wire-bump install on this field with pure disk reads -- the compat matrix
+	// pins old-daemon x new-shim as ProcessLost, so a new binary must never land
+	// under a daemon whose live shims it cannot serve. Additive without a schema
+	// bump (the AgentCwd reason); 0 on a pre-R3 session means "unknown", which
+	// gates conservatively.
+	ShimWireVersion int `json:"shim_wire_version,omitempty"`
 	// BackendPlanError is the reason this session launched with NO backend when its
 	// adapter declared one (daemon.BackendPlanner returned an error): the agent's PTY
 	// runs, but there is no app-server for the daemon to attach to. Persisted so the

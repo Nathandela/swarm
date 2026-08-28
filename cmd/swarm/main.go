@@ -82,9 +82,10 @@ const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|ki
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
-  swarm upgrade    check for, or --stage, the latest release [--json]
-                   (verifies signature + checksum; never activates, never
-                    starts a daemon)
+  swarm upgrade    check, --stage, --activate, --rollback, or --unattended
+                   (signature + checksum verified; activation defers around
+                    live sessions and hands off to the new binary's converge;
+                    never starts a daemon) [--json]
   swarm version    print the build version
 `
 

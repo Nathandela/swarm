@@ -136,6 +136,14 @@ func Stage(ctx context.Context, opts Options) (State, error) {
 		return s, recordState(opts.StateDir, &s)
 	}
 
+	// The rollback hold (rollback.go): the version a rollback backed out of must
+	// not come back on the next nightly. A NEWER release clears it by simply not
+	// being it.
+	if held := HeldVersion(opts.StateDir); held != "" && held == dec.Latest {
+		s.Outcome, s.Detail = "held", fmt.Sprintf("%s was rolled back on this machine; holding until a newer release ships", held)
+		return s, recordState(opts.StateDir, &s)
+	}
+
 	base := opts.BaseURL
 	if base == "" {
 		base = DefaultBaseURL
@@ -291,9 +299,11 @@ func verifySHA256(checksums []byte, asset string, data []byte) error {
 	return nil
 }
 
-// extractBinaries unpacks EXACTLY the members named swarm and swarm-remote --
-// bare names only, so a hostile tarball's path traversal, symlink or device
-// entries are never even considered -- and requires swarm to be present.
+// extractBinaries unpacks EXACTLY the members named swarm, swarm-remote and
+// compat.json -- bare names only, so a hostile tarball's path traversal,
+// symlink or device entries are never even considered -- and requires swarm to
+// be present. compat.json is the release's compatibility card (manifest.go);
+// an archive without one predates it, which activation treats as unknown.
 func extractBinaries(tarball []byte, stage string) error {
 	gz, err := gzip.NewReader(strings.NewReader(string(tarball)))
 	if err != nil {
@@ -310,13 +320,17 @@ func extractBinaries(tarball []byte, stage string) error {
 			return err
 		}
 		name := filepath.Base(filepath.Clean(hdr.Name))
-		if (name != "swarm" && name != "swarm-remote") || hdr.Typeflag != tar.TypeReg {
+		if (name != "swarm" && name != "swarm-remote" && name != "compat.json") || hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 		if hdr.Size > maxAssetBytes {
 			return fmt.Errorf("upgrade: tar member %s exceeds the size cap", name)
 		}
-		dst, err := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+		mode := os.FileMode(0o755)
+		if name == "compat.json" {
+			mode = 0o600
+		}
+		dst, err := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			return err
 		}
