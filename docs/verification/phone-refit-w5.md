@@ -442,15 +442,17 @@ d69bbcfa Drawing sheet: Slate palette, per ADR-021 (W5.4)
 Three orchestrator rulings arrived after the evidence above was committed and pushed; each landed
 as its own commit, then the gates were re-run and this addendum written.
 
-### The s24 inventory edit, reverted (`9fcdc6c1`)
+### The s24 inventory row: reverted (`9fcdc6c1`), then dropped by ruling (`96895f21`)
 
-The 2-line edit dropped `TranscriptView.kt`'s required `sectionLabel` row from
+The 2-line edit in `6b4e12e3` dropped `TranscriptView.kt`'s required `sectionLabel` row from
 `android/gate/s24_screens_test.go`'s PB-DS-6 kit-reach inventory -- a composition requirement
-W5.3's label removal made false, not a literal the table moved. Per the rule ("anything but a
-literal the wave's table moved: revert it and stop on it") it is reverted and stopped on:
-`TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit` is red on the branch
-(`TranscriptView.kt: does not reach sectionLabel -- the heading over the conversation`) until the
-orchestrator rules on the row.
+W5.3's label removal made false, not a literal the table moved. Per the standing rule it was
+reverted and stopped on (`9fcdc6c1`; `TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit` red on
+`TranscriptView.kt: does not reach sectionLabel`). The orchestrator then ruled: drop the row --
+an empty label slot kept only to satisfy it would lie about the screen -- so `96895f21` re-applies
+the drop as a new commit under a dated note (no history rewrite: two commits already sat on the
+revert). PB-DS-9's argument (an empty section is still a section) is carried by the empty-state
+branch, which stays. `go test -race ./android/gate/` is green on the tip.
 
 ### The w6o3 gate, amended per ruling (a) (`b0d5e40d`)
 
@@ -540,20 +542,21 @@ FAILURE SessionDetailVerdictTest > the phone says why it stopped offering more h
 | W5.2 follow-up | `ui/screens/MachinesPanelRound3Test.kt` | `"Add this computer? The app reconnects for a moment.", MachinesPanelScreen.ADD_CONFIRM` | `"Add laptop? The app reconnects for a moment.", MachinesPanelScreen.ADD_CONFIRM("laptop")` |
 | W5.2 follow-up | `ui/screens/SessionDetailVerdictTest.kt` | (no clause) | `historyCapacityNotice("MacBookPro").contains("on MacBookPro")` |
 | W5.2 follow-up | `ui/screens/SessionDetailHeaderTest.kt` | (no test) | `the panel carries the machine label it was built from` |
-| s24 (reverted) | `android/gate/s24_screens_test.go` | at `a1507537` | at `a1507537` (the 2-line inventory edit of `6b4e12e3` reverted in `9fcdc6c1`, pending a ruling) |
+| s24 (ruled) | `android/gate/s24_screens_test.go` | `TranscriptView.kt` inventory: `"sectionLabel": "the heading over the conversation -- an empty section is still a section (PB-DS-9)"` | inventory row dropped by ruling, under a dated note; PB-DS-9's argument is carried by the empty-state branch, which stays (reverted in `9fcdc6c1`, re-applied in `96895f21`) |
 
-### Gates on the final tree (`86ff83eb`)
+### Gates on the final tree (`86ff83eb`, then `96895f21` for the Go gate)
 
 ```
-go build ./...        exit=0
-go vet ./...          exit=0
-golangci-lint run     0 issues.   exit=0
+go build ./...        exit=0   (re-run on 96895f21: exit=0)
+go vet ./...          exit=0   (re-run on 96895f21: exit=0)
+golangci-lint run     0 issues.   exit=0   (re-run on 96895f21: 0 issues)
+go test -race -count=1 ./android/gate/   on 96895f21: ok 150.5s (TestPBDS6, TestW6O3_*, TestR4D3* green)
 Kotlin full suite (lane `full3`): gradle exit=0, tests=1648 failures=0 errors=0 skipped=0, xml fresh 205/205, aar unmoved
 go test -race -count=1 -timeout 40m ./...  (run 2, concurrent with the Kotlin suite; 140 stale *.test
     processes from other sessions were resident on the machine)   exit=1
     59 packages ok; FAIL:
-    android/gate      TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit only (the s24 revert, pending ruling);
-                      TestW6O3_* and TestR4D3* green
+    android/gate      TestPBDS6_EveryRecomposedScreenIsBuiltOutOfTheKit only (the s24 revert at 9fcdc6c1;
+                      green again on 96895f21, above); TestW6O3_* and TestR4D3* green
     internal/upgrade  the same two as before (pre-existing on main, environmental)
     internal/attach, internal/converge, internal/daemon   the 40m wall clock (2640s each)
     internal/skeleton TestApprove_AStaleOrMismatchedApproveIsRefusedWithACodeAndAppliesNothing/a_rewritten_content_hash
@@ -578,4 +581,6 @@ d69bbcfa Drawing sheet: Slate palette, per ADR-021 (W5.4)
 9fcdc6c1 Revert the s24 inventory row edit, pending a ruling
 b0d5e40d Amend the w6o3 gate: the remedy is the well, before the control
 86ff83eb W5.2 names the machine where the row is known
+39132664 Record the W5 rulings: w6o3 amended, W5.2 follow-up, s24 reverted
+96895f21 Drop the sectionLabel inventory row (ruled)
 ```
