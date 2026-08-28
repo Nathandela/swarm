@@ -361,7 +361,8 @@ phone, decides what the tool *did*.
 - **IS-TOOL-1** (Ubiquitous) `action` SHALL be produced machine-side by the per-CLI adapter. A
   phone SHALL NOT parse `tool` or raw arguments to infer an action.
 - **IS-TOOL-2** (Unwanted) IF the adapter cannot classify the call, THEN `type` SHALL be `other`
-  and the card falls back to `tool`. An unclassified call is never guessed at.
+  and the phone says "Used a tool" and never the tool name (phone-refit-playbook W6.1). An
+  unclassified call is never guessed at.
 - **IS-TOOL-3** (Unwanted) IF a rendered line matches a per-CLI truncation marker (spike-SA's
   truncated-tool-output rule), THEN `truncation_marker` SHALL carry that text **verbatim**, the
   client SHALL show it as-is, and the item SHALL NOT claim to hold the underlying output. A

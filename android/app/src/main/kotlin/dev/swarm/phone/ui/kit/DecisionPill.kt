@@ -31,7 +31,7 @@ import dev.swarm.phone.R
  * exact argument R8 made when it took the glow off the Working dot.
  *
  * **THE ARROW IS NOT HERE.** The drawing puts one after the words and the copy table records
- * `Decision needed`; a string not on that sheet is not on the screen. Where the decision IS gets
+ * `Needs your answer`; a string not on that sheet is not on the screen. Where the decision IS gets
  * said by the scroll the tap performs, which is a better answer than a character.
  *
  * IT SETS NO GRAVITY AND NO MARGIN, for [earlierChip]'s reason: the drawing centres it and

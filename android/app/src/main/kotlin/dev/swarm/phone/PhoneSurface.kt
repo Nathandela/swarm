@@ -651,7 +651,7 @@ class PhoneSurface(
     }
 
     /**
-     * The drawing's one persistent affordance: *Decision needed*, above the composer, while the
+     * The drawing's one persistent affordance: *Needs your answer*, above the composer, while the
      * machine is blocked on this reader.
      *
      * IT IS ADDED AND REMOVED RATHER THAN HIDDEN, which is this surface's standing rule ("a view

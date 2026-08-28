@@ -134,7 +134,7 @@ data class TranscriptPanel(
      * The OLDEST decision nobody has answered yet, or "" when there is none.
      *
      * IT IS AN ID AND NOT A FLAG because the affordance it feeds is a JUMP. The drawing's
-     * `decision.pill` -- *Decision needed* -- "appears only while an unanswered decision is off
+     * `decision.pill` -- *Needs your answer* -- "appears only while an unanswered decision is off
      * screen, and it scrolls to it", and a boolean can raise a pill that has nowhere to go.
      *
      * OLDEST RATHER THAN NEWEST, on the same rule that orders the transcript: a conversation is
