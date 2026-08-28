@@ -337,7 +337,10 @@ fun composerBar(context: Context, field: View, send: View): LinearLayout = KitSt
  * glyph beside a voice glyph; this is one control whose MEANING changes under the finger, and a
  * red square standing where the arrow just stood would be `.a2-no`'s claim on the thing that
  * also sends. The glyph is `--p-ink`, the back chevron's own arrangement, and the drawables ship
- * the platform's white so there is something opaque for the tint to replace. Row 23's ring at
+ * the platform's white so there is something opaque for the tint to replace. Disabled -- offline,
+ * or while a send crosses, both of which the surface says through `isEnabled` -- is `--p-ink3`,
+ * the ink every dead control shares (row 24's pair, `CtaButton`'s arrangement); a single-colour
+ * tint drew a dead square at full strength (W3 review round, 2026-08-28). Row 23's ring at
  * radius 0, [overflowControl]'s reason: this paints no surface of its own.
  */
 fun composerAction(context: Context): ImageView = ImageView(context).apply {
@@ -350,7 +353,16 @@ fun composerAction(context: Context): ImageView = ImageView(context).apply {
             }
         },
     )
-    imageTintList = ColorStateList.valueOf(Kit.colour(context, R.color.swarm_text_primary))
+    // THE LIVE INK AND THE DEAD ONE (W3 review round): the surface holds this control disabled
+    // offline and while a send crosses, and says so through the drawable state alone --
+    // CtaButton's arrangement, row 24's pair. Row 9 records it as `disabled: ink3`.
+    imageTintList = ColorStateList(
+        arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+        intArrayOf(
+            Kit.colour(context, R.color.swarm_text_tertiary),
+            Kit.colour(context, R.color.swarm_text_primary),
+        ),
+    )
     scaleType = ImageView.ScaleType.CENTER
     minimumWidth = box
     minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)

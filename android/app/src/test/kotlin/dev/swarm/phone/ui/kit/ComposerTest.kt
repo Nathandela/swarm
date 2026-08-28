@@ -168,4 +168,27 @@ class ComposerTest {
             action.measuredHeight,
         )
     }
+
+    /**
+     * W3 review round (2026-08-28): THE SQUARE PAINTS ITS DISABLED STATE. `View.enable` (offline)
+     * and `VerbDispatch.press` (while a send crosses) set `isEnabled = false` and rely on the
+     * drawable state to show it, as `CtaButton` does (row 24's pair); a single-colour tint drew a
+     * dead control at full strength. Disabled is `--p-ink3`, the ink every dead control shares.
+     */
+    @Test
+    fun `a disabled square paints the tertiary ink`() {
+        val action = composerAction(context)
+        val tint = action.imageTintList!!
+
+        assertEquals(
+            "a disabled square keeps the live ink, so a control that cannot be pressed -- " +
+                "offline, or while a send crosses -- looks exactly like one that can",
+            Kit.colour(context, R.color.swarm_text_tertiary),
+            tint.getColorForState(intArrayOf(-android.R.attr.state_enabled), 0),
+        )
+        assertEquals(
+            Kit.colour(context, R.color.swarm_text_primary),
+            tint.getColorForState(intArrayOf(android.R.attr.state_enabled), 0),
+        )
+    }
 }

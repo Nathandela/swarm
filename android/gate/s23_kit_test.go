@@ -106,7 +106,8 @@ var s23Inbox = []s23Component{
 			"recorded in the row as `action-box 40`): the 40 dp square that sends, or stops while " +
 			"the agent works and the field is empty. It is inset inside the row's 48 dp target the " +
 			"way `textField`'s well is inset inside its own, carries both glyphs as one level list " +
-			"the screen selects from (`ComposerActionGlyph`), and is tinted --p-ink for both: row " +
+			"the screen selects from (`ComposerActionGlyph`), and is tinted --p-ink for both, --p-ink3 " +
+			"while disabled (the review round's `disabled: ink3` clause on the same note): row " +
 			"9's --p-err names the mock's separate stop glyph beside a voice glyph, and this is one " +
 			"control whose meaning changes under the finger. The press, the touch filter and the " +
 			"spoken words are PhoneSurface's.",
