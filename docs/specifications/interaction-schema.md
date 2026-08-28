@@ -353,7 +353,7 @@ phone, decides what the tool *did*.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `type` | string | `read` \| `edit` \| `write` \| `search` \| `execute` \| `fetch` \| `other` |
+| `type` | string | `read` \| `edit` \| `write` \| `search` \| `execute` \| `fetch` \| `agent` \| `other` (`agent`: a sub-agent the CLI started, phone-refit-playbook W6.1) |
 | `path` | string | file-scoped target, for `read`/`edit`/`write` |
 | `query` | string | the pattern, for `search`; the URL, for `fetch` (the Wave R6 target-field ruling, recorded when the first real WebFetch payload was captured — `claude-webfetch-pretooluse.json`: the URL is the fetch's target and rides the existing field rather than growing this sealed table a fifth member) |
 | `command` | string | the argv rendering, for `execute` |

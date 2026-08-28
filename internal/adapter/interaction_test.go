@@ -340,3 +340,17 @@ func TestValidate_AdmitsTheSyntheticSource(t *testing.T) {
 		t.Fatalf("Validate rejected a synthetic user_message: %v", err)
 	}
 }
+
+// TestInteractionValidate_AcceptsEverySection7ActionType — the positive half of the
+// `action.type` oneOf: every member of interaction-schema.md §7's vocabulary validates,
+// including `agent` (phone-refit-playbook W6.1: Claude's Task tool is a helper agent, not
+// an `other`). TestInteractionValidate above proves the fence rejects a stranger; this
+// proves it admits each citizen, so a member dropped from the oneOf is caught here.
+func TestInteractionValidate_AcceptsEverySection7ActionType(t *testing.T) {
+	for _, typ := range []string{"read", "edit", "write", "search", "execute", "fetch", "agent", "other"} {
+		in := Interaction{Kind: KindToolRun, Status: StatusCompleted, Tool: "x", Action: ToolAction{Type: typ}}
+		if err := in.Validate(); err != nil {
+			t.Errorf("action.type %q is in §7's vocabulary and was rejected: %v", typ, err)
+		}
+	}
+}

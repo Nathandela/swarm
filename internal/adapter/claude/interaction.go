@@ -297,6 +297,12 @@ func actionFor(tool string, in toolInput) adapter.ToolAction {
 		return adapter.ToolAction{Type: "search", Query: in.Pattern}
 	case "WebFetch":
 		return adapter.ToolAction{Type: "fetch", Query: in.URL}
+	case "Task":
+		// `agent` (phone-refit-playbook W6.1): a sub-agent is a kind of its own on the phone
+		// ("Started a helper agent"), not an unclassified call. The arm reads only the tool
+		// NAME, which every PreToolUse payload carries, and surfaces no argument -- so it
+		// needs no recorded corpus to stay honest, unlike the seven arms above.
+		return adapter.ToolAction{Type: "agent"}
 	}
 	return adapter.ToolAction{Type: "other"}
 }
