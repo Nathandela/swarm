@@ -431,6 +431,17 @@ internal object KitMetrics {
     /** origin: .ptabs svg { width } */
     const val TAB_ICON_DP = 22f
 
+    /**
+     * The composer's one control: the 40 dp square that sends, or stops while the agent works
+     * and the field is empty (phone refit W3.2, owner ruling). It is a BOX and not a target, for
+     * [WELL_HEIGHT_DP]'s reason: row 9's 48 dp floor is spent by `composerAction` as the
+     * control's minimum height, and the square is inset inside it the way the well is inset
+     * inside the field.
+     *
+     * derived: docs/design/substrate-components.md #9 Composer { action-box }
+     */
+    const val COMPOSER_ACTION_DP = 40f
+
     /** origin: --p-card-fx px */
     const val KEY_LIGHT_DP = 1f
 

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phone refit W3.2 (docs/specifications/phone-refit-playbook.md, section 4; owner ruling
+     recorded on docs/design/substrate-components.md row 9 as `action-box 40`): the arrow the
+     composer's one control shows while it SENDS. Its twin is swarm_stop.xml, and which of the two
+     is on screen is the screen's decision (PhoneSurface), never the kit's.
+
+     IT IS DRAWN IN swarm_nav_back.xml's STYLE AND FOR THAT ASSET'S REASON: no artifact draws it,
+     so the path is this asset's own. 24 dp box and viewport, stroke 1.7, and no colour beyond the
+     platform's white, which is there for the kit's tint to replace (composerAction tints it
+     [p-ink]).
+
+     TOKEN NAMES ARE SPELLED [p-name] IN THIS FILE, not with the CSS double dash, and the same goes
+     for the repo's em-dash convention: an XML comment may not contain a double hyphen (ADR-007
+     B138; android/gate/resxml_test.go). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="@android:color/white"
+        android:strokeWidth="1.7"
+        android:pathData="M12 19V5M5 12l7-7 7 7" />
+</vector>

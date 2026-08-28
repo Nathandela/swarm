@@ -99,6 +99,19 @@ var s23Inbox = []s23Component{
 			"blur is the tab bar's recorded omission at its second site.",
 	},
 	{
+		Factory: "composerAction",
+		File:    "Composer.kt",
+		Derived: "#9 Composer",
+		Why: "row 9's ONE control after the phone refit's one-button ruling (W3.2, 2026-08-28, " +
+			"recorded in the row as `action-box 40`): the 40 dp square that sends, or stops while " +
+			"the agent works and the field is empty. It is inset inside the row's 48 dp target the " +
+			"way `textField`'s well is inset inside its own, carries both glyphs as one level list " +
+			"the screen selects from (`ComposerActionGlyph`), and is tinted --p-ink for both: row " +
+			"9's --p-err names the mock's separate stop glyph beside a voice glyph, and this is one " +
+			"control whose meaning changes under the finger. The press, the touch filter and the " +
+			"spoken words are PhoneSurface's.",
+	},
+	{
 		Factory: "approvalSheet",
 		File:    "ApprovalSheet.kt",
 		Derived: "§4 Approval sheet pull-quote",
@@ -2699,6 +2712,16 @@ type s23TouchTarget struct {
 
 // s23TouchTargets is every stated floor in the derivation table, and where it reaches a pixel.
 var s23TouchTargets = []s23TouchTarget{
+	{
+		Row:     "#9 Composer",
+		Factory: "composerAction",
+		Why: "row 9 states `touch target 48` and, since the phone refit's one-button ruling " +
+			"(W3.2, `action-box 40`), the bar's one control is a 40 dp square that must not shrink " +
+			"the target with it. So the floor is the control's minimum height and the square is " +
+			"inset inside it -- `textField`'s arrangement for its 36 dp well one slot over, on the " +
+			"same row and the same number. A minimum and not a size: the drawn box is the design's " +
+			"and what grows is the air a finger may land in.",
+	},
 	{
 		Row:     "#27 Conversation header",
 		Factory: "conversationHeader",

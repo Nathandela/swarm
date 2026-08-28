@@ -1,10 +1,14 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.drawable.LevelListDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
+import androidx.annotation.DrawableRes
 import dev.swarm.phone.R
 
 /**
@@ -45,11 +49,11 @@ import dev.swarm.phone.R
  *
  * @param field row 9's well. It holds what the user typed, so a caller builds it once and hands the
  *  same view to every bar it composes -- see the detach below.
- * @param send what puts those bytes on the wire. Row 9 draws a voice glyph and a stop glyph beside
- *  it and NEITHER IS BUILT: no facade verb takes dictation, which is the call the quick-reply chips
- *  row already made ("a control whose behaviour the wire does not define"), and the stop is the
- *  session's own Stop -- `App.Interrupt`, drawn by the screen with a confirmation on it -- so a
- *  second one inside this bar would be two controls for one verb.
+ * @param send what puts those bytes on the wire -- and, since phone refit W3, what stops the
+ *  agent: [composerAction], one control whose meaning the screen switches on the live field.
+ *  Row 9's voice glyph is still NOT BUILT: no facade verb takes dictation, which is the call
+ *  the quick-reply chips row already made ("a control whose behaviour the wire does not
+ *  define").
  */
 /**
  * Mirror M2.4/M2.5 (Wave R6) -- the composer's MODEL, beside the bar factory below: the
@@ -311,4 +315,57 @@ fun composerBar(context: Context, field: View, send: View): LinearLayout = KitSt
     // four-word one leave the same field.
     addView(field, LinearLayout.LayoutParams(0, WRAP, 1f))
     addView(send, LinearLayout.LayoutParams(WRAP, WRAP))
+}
+
+/**
+ * The composer's ONE control, and the whole of phone refit W3 (docs/specifications/phone-refit-playbook.md
+ * §4, owner ruling; row 9 records it as `action-box 40`): the square that sends what is in the
+ * field, or stops the agent while it works and the field is empty.
+ *
+ * **IT DRAWS THE GLYPHS AND CHOOSES NEITHER.** Which of the two shows, and what a screen reader
+ * hears, is a fact about the session and the live field -- state and copy, both the screen's
+ * (PB-DS-9) -- so the view carries both drawables as one level list and the screen selects by
+ * [ComposerActionGlyph]. It sets no content description, [overflowControl]'s ruling: the words
+ * are copy, and the screen owes them on every draw and on every keystroke.
+ *
+ * **THE SQUARE IS INSET INSIDE THE TARGET**, which is [textField]'s own arrangement one slot over:
+ * row 9's 48 dp floor is the control's minimum height and the 40 dp box sits centred in it, so
+ * the drawing is the design's and the room for a finger is PB-DS-12's. The bar hands every slot
+ * `WRAP` x `WRAP` ([composerBar]), so both numbers are MINIMUMS here rather than layout params.
+ *
+ * **ONE INK FOR BOTH GLYPHS, DELIBERATELY.** Row 9's `--p-err` names the mock's separate stop
+ * glyph beside a voice glyph; this is one control whose MEANING changes under the finger, and a
+ * red square standing where the arrow just stood would be `.a2-no`'s claim on the thing that
+ * also sends. The glyph is `--p-ink`, the back chevron's own arrangement, and the drawables ship
+ * the platform's white so there is something opaque for the tint to replace. Row 23's ring at
+ * radius 0, [overflowControl]'s reason: this paints no surface of its own.
+ */
+fun composerAction(context: Context): ImageView = ImageView(context).apply {
+    val box = Kit.dpPx(context, KitMetrics.COMPOSER_ACTION_DP)
+    val room = (Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) - box) / 2
+    setImageDrawable(
+        LevelListDrawable().apply {
+            for (glyph in ComposerActionGlyph.entries) {
+                addLevel(glyph.ordinal, glyph.ordinal, context.getDrawable(glyph.drawable))
+            }
+        },
+    )
+    imageTintList = ColorStateList.valueOf(Kit.colour(context, R.color.swarm_text_primary))
+    scaleType = ImageView.ScaleType.CENTER
+    minimumWidth = box
+    minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+    // Only the vertical room moves: the box is the control's whole width.
+    setPadding(paddingLeft, room, paddingRight, room)
+    Kit.focusable(this, componentRadiusPx = 0f)
+    layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
+}
+
+/**
+ * The two things [composerAction] can show. The screen selects (`ImageView.setImageLevel` with
+ * the ordinal); the kit draws. An enum and not two resource ids at the call site, so that no
+ * screen ever names a drawable.
+ */
+enum class ComposerActionGlyph(@DrawableRes internal val drawable: Int) {
+    SEND(R.drawable.swarm_send),
+    STOP(R.drawable.swarm_stop),
 }

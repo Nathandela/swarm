@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.view.View.MeasureSpec
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -125,5 +126,46 @@ class ComposerTest {
 
         assertSame(second, field.parent)
         assertSame(second, send.parent)
+    }
+
+    /**
+     * Phone refit W3.2 (owner ruling; row 9's `action-box 40`): the bar's one control is a 40 dp
+     * square. The bar hands every slot WRAP x WRAP, so the square is the control's own MINIMUM
+     * width and the box between its paddings -- `textField`'s arrangement for its 36 dp well
+     * inside a 48 dp target, one slot over.
+     */
+    @Test
+    fun `the composer action is a 40dp square`() {
+        val action = composerAction(context)
+        val box = Kit.dpPx(context, KitMetrics.COMPOSER_ACTION_DP)
+        action.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
+
+        assertEquals("the control's box is not 40 dp wide", box, action.measuredWidth)
+        assertEquals(
+            "the box between the paddings is not square, so the glyph is not centred in the " +
+                "40 dp the row states",
+            box,
+            action.measuredHeight - action.paddingTop - action.paddingBottom,
+        )
+        assertEquals(
+            "the glyph is not the kit's ink; the drawables ship the platform's white precisely " +
+                "so the tint has something opaque to replace",
+            Kit.colour(context, R.color.swarm_text_primary),
+            action.imageTintList?.defaultColor,
+        )
+    }
+
+    /** PB-DS-12's floor, kept: 40 dp is drawn, and 48 dp is what the finger gets. */
+    @Test
+    fun `the square keeps the 48dp touch floor`() {
+        val action = composerAction(context)
+        action.measure(MeasureSpec.UNSPECIFIED, MeasureSpec.UNSPECIFIED)
+
+        assertEquals(
+            "the control measures under 48 dp tall, so the square shrank the target with it -- " +
+                "a target is not a size (row 4's own words)",
+            Kit.dpPx(context, KitMetrics.MIN_TARGET_DP),
+            action.measuredHeight,
+        )
     }
 }
