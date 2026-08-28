@@ -83,6 +83,8 @@ cea399bc Computers: Add behind the header action, Forget behind the row menu    
 8c82216c Inbox: every row's second line says state and age                      (W7.1 Kotlin)
 eaf1c9bd Activity: by day, with a time, tappable                                (W7.4 Kotlin)
 3ef888a1 Pin the bytes an unstamped record wrote before the stamps existed      (ruling, constraint 2)
+86fda2f3 The Inbox age is time in the current state, not time since launch     (review SHOULD-FIX 2)
+086242fa Computers: the open Add form survives a redraw                         (review SHOULD-FIX 1)
 ```
 
 W7.3 lands nothing, as the contract says: the launch panel keeps its place under the list.
@@ -417,3 +419,126 @@ Kotlin, final: run 4, `tests=1614 failures=0 errors=0 skipped=0`, `gradle exit=0
 
 Lane logs and gate outputs are in the session scratchpad (`w7-run{1..5}-*.log`, `w7-go-*.txt`,
 `w7-aar-rebuild.log`).
+
+## Review round (two SHOULD-FIX; the third, the byte pins, was closed by 3ef888a1)
+
+The sections above are the record as it stood at the first push and are left as written; the
+field they call `LastActivity` is `StateSince` since `86fda2f3`, for the reason below.
+
+### SHOULD-FIX 1 (W7.6 defect): the open Add form collapsed on the next redraw
+
+`MachinesPanelView.kt` composed the form block only inside the header action's click, and
+`drawMachines` (`PhoneSurface.kt`) rebuilds the view whenever the panel or the minute changes, so
+the first event after a minute boundary while the user was typing removed the block (the fields
+survived in `addComputerSlot()`, the block did not). Fixed as proposed and nothing more: `addFormOpen`
+is held on the surface beside `addComputerSlot()`, passed into `machinesPanelView` (composed at draw
+when true; the action flips it through `onToggleAddForm` and still composes or removes the block on
+the current draw, so the press is seen at once), and `machinesAddFormDrawn` joins the redraw guard.
+
+Test first: `MachinesPanelViewTest` `the open add form survives a redraw` -- opens the form, redraws
+with the surface's state, asserts the block is composed; closes it, redraws, asserts it is not.
+
+RED (run 6, lane script, `--tests MachinesPanelViewTest --tests TriageInboxScreenTest`;
+`compileDebugUnitTestKotlin` fails, main compiled):
+
+```
+e: ui/screens/MachinesPanelViewTest.kt:384:13 No parameter with name 'addFormOpen' found.
+e: ui/screens/MachinesPanelViewTest.kt:385:13 No parameter with name 'onToggleAddForm' found.
+```
+
+GREEN: run 7 (below). Negative control (run 8; the compose-at-draw line replaced by a no-op, the
+file restored by re-applying the edit -- not by `git checkout`, since the fix was not yet committed):
+
+```
+FAILURE MachinesPanelViewTest > the open add form survives a redraw
+    java.lang.AssertionError: the open add form collapsed on the next redraw; the block must be composed at draw from the surface's state, not only by the toggle's click
+SUMMARY tests=13 failures=1 errors=0 skipped=0
+```
+
+### SHOULD-FIX 2 (ruling): the age measures time in the current state
+
+`persist.Meta.LastActivity` is written only at launch (`launch.go:288`) and exit
+(`reconcile.go:229-231`), so an age counted from it read "launched 3h ago" and twins launched
+together aged identically. The stamp is now `next.EffectiveGroupEnteredAt()` (that method's own
+fallbacks for pre-`GroupEnteredAt` records included) at the roster snapshot and the four
+transitions, and named for what it is end to end, nothing having shipped under the old name:
+`journal.Record.StateSince` (`state_since,omitzero`), `schema.JournalRecord.StateSince`
+(`state_since`), phonecore `CachedSession.StateSince` (tag kept for the byte pins),
+`Session.StateSinceUnixMs`, Kotlin `stateSinceUnixMs`; the protocol.md row, the golden and the
+fixtures follow. `JournalEntry.TSUnixMs` is unaffected.
+
+Tests first (renamed, plus the source-distinguishing case: `GroupEnteredAt` set and `LastActivity`
+an hour earlier, so the two sources cannot be confused): `TestJournalRecordForCarriesStateSince`
+(x4), `TestJournalRecordForStateSinceFallsBackAsTheMetaDoes`, `TestRosterSnapshotCarriesStateSince`,
+`TestWireJournalRecordCarriesStateSince`, `TestCacheAppliesStateSinceVerbatim`,
+`TestSessionCarriesStateSinceUnixMs`, the schema round trip; Kotlin fixtures renamed.
+
+RED (Go, `w7-go-red-2.txt`; every package fails to compile on the missing field):
+
+```
+internal/protocol/schema/stamps_test.go:32:82: unknown field StateSince in struct literal of type JournalRecord
+internal/skeleton/stampwire_test.go:35:3: unknown field StateSince in struct literal of type journal.Record
+internal/daemon/stamprecord_test.go:50:12: rec.StateSince undefined (type journal.Record has no field or method StateSince)
+internal/phonecore/stampfold_test.go:22:33: cs.StateSince undefined (type CachedSession has no field or method StateSince)
+mobile/stampfacade_test.go:20:7: s.StateSinceUnixMs undefined (type Session has no field or method StateSinceUnixMs)
+```
+
+RED (Kotlin, run 6): `No parameter with name 'stateSinceUnixMs' found` at every `SessionRow`
+fixture (`TriageInboxTest`, `HumanNamesTest` x2, `NeedVocabularyTest`, `PhoneScaffoldViewTest`,
+`ScreenAirSweepTest`, `TriageInboxScreenTest`, `TriageInboxViewTest`).
+
+GREEN (Go, `w7-go-green-2.txt`): all of the above PASS; the four byte pins still PASS unchanged
+(their literals never carried the old key); golden: FAIL before, regenerated, ok after, diff
+`-field Session.LastActivityUnixMs int64` / `+field Session.StateSinceUnixMs int64`.
+
+Negative control Go-4 (the stamp sourced from `LastActivity` again at both daemon sites; the file
+then RE-EDITED back, see the note below):
+
+```
+    stamprecord_test.go:51: launched record carries StateSince 2026-08-28 08:34:00 +0000 UTC; want 2026-08-28 09:34:00 +0000 UTC, next.EffectiveGroupEnteredAt() -- the age is time in the current state, not time since launch (W7.1 ruling)
+    (the same for exited, lost, group_transition)
+--- FAIL: TestJournalRecordForCarriesStateSince (0.01s)
+    stamprecord_test.go:91: roster record for stamped carries StateSince 2026-08-28 08:34:00 +0000 UTC; want 2026-08-28 09:34:00 +0000 UTC
+--- FAIL: TestRosterSnapshotCarriesStateSince (0.04s)
+```
+
+### AAR rebuild 2 (the facade field is renamed)
+
+`android/build-aar.sh` once more, after the Go change was green and before the Kotlin run:
+
+```
+aar before: mtime=1787896202 Aug 28 07:50:02 2026 size=12657610 sha256=39b06bdc2bb820f6... at 2026-08-28T07:37:03Z
+build-aar exit=0
+aar after:  mtime=1787902643 Aug 28 09:37:23 2026 size=12657410 sha256=b1034cc0fb5b90c2... at 2026-08-28T07:37:24Z
+```
+
+Runs 6 (RED) ran against the previous artifact; runs 7 and 8 against the new one; every lane log
+records `aar unchanged` for its own span. The orchestrator rebuilds again at merge.
+
+### Gates on the final tree (086242fa)
+
+```
+go build ./...        build exit=0
+go vet ./...          vet exit=0
+golangci-lint run     0 issues.   lint exit=0
+```
+
+`go test -race -count=1 -timeout 40m ./...` (env -u SWARM_* prefix, concurrent with Kotlin run 7):
+62 packages ok, 7 with no test files, 2 FAIL, both load-timing and both PASS rerun once in
+isolation per the protocol: `internal/e2e` `TestE2E_ReplayProductionPath_AgyOpencode` (the same
+replay-idle window as before; `--- PASS (15.93s)` alone) and `internal/skeleton`
+`TestS18_ARevokeCarriesTheSIGNEDTargetAndNotTheSigner` (the package took 487s under the shared
+load; `--- PASS (4.42s)` alone). Recorded honestly: the FIRST isolated rerun of S18 failed to build,
+because negative control Go-4's `git checkout --` had restored `internal/daemon/journal.go` to
+HEAD -- the pre-rename version, the StateSince edit being uncommitted at that moment. The edit was
+re-applied (the file is byte-identical to the one the full run used, as the diff in `86fda2f3`
+shows) and the rerun passed. Every later restore in this round was done by re-editing.
+
+Kotlin, final: run 7, full suite, `tests=1615 failures=0 errors=0 skipped=0`, `gradle exit=0`, aar
+unchanged (mtime 1787902643), 203/203 result files newer than the start stamp.
+
+Lane note: before run 6 the lane script waited on a false positive -- another fleet's shell whose
+own typed text contained the literal `gradle-wrapper.jar` (the self-match §1.7 warns about). The
+script's check now matches an actual Gradle JVM only (`pgrep -f 'java.*-jar .*gradle-wrapper\.jar'`),
+which is the playbook's intent stated more precisely; nothing else about the lane discipline changed.
+
