@@ -854,6 +854,35 @@ under the list, with W5's words and W7.2's shorter list above it.
 - The open Add form is surface state (`addFormOpen`, in `drawMachines`'s redraw guard), composed at draw.
 - The zero-stamp Activity section keeps its "Journal" heading until W5 removes the word.
 
+## 8b. W8 Leadings render, the file-change row breathes
+
+Bead: `agents-tracker-a84l`. Worktree `refit-w8`. Added 2026-08-28 from a W4 fleet finding and a W4 review note.
+Files: `ui/kit/Kit.kt` (one helper), every `ui/kit/*.kt` that calls `setTextAppearance(` (46 sites in 29 files, mechanical),
+`ui/kit/FileChangeRow.kt`, `android/gate/s23_kit_test.go` (row #31 rows), `docs/design/substrate-components.md` (row #31 only),
+new gate `android/gate/w8_leading_test.go`, tests.
+
+### W8.1 A style's leading reaches the view
+- **Current.** `Kit.textView` (`Kit.kt:66`) is a framework `TextView`; components style it with `setTextAppearance(style)`.
+  `android:lineHeight` is a `TextView` attribute, not a `TextAppearance` one, so the five leadings in `type.xml`
+  (`:208` 20.3sp, `:217` 19.6sp, `:236` 18.75sp, `:256` 19.375sp, `:329` 17.6sp) never render: a styled notice measures
+  `lineHeight=16 == bare TextView 16`. `DesignScaleResolutionTest` reads the XML text, which is why the suite is green.
+- **Target.** One kit helper `Kit.appearance(view: TextView, style: Int)` = `setTextAppearance(style)` + read
+  `android.R.attr.lineHeight` from the style with `obtainStyledAttributes` and, when present, `TextViewCompat.setLineHeight`.
+  Every `setTextAppearance(` in `ui/kit` routes through it (mechanical; behaviour identical for the styles without a leading).
+  A new Go gate `w8_leading_test.go` forbids a bare `setTextAppearance(` in `ui/kit` outside the helper.
+- **Tests first.** Kotlin `LeadingTest.kt`: `a styled view reports the leading its style declares` (table over the five
+  styles: `view.lineHeight == round(sp x density)`), `a style without a leading leaves the platform line height`. Go: the
+  gate's own negative control (a scratch file with a bare call is rejected).
+- **Done when** the five styles measure their leading on a view; every other style measures as before; `NoticeTest`,
+  `KitDensityTest` and the goldens unchanged (negative controls: the leading changes line boxes, not text).
+
+### W8.2 The file-change row follows the activity row
+- `FileChangeRow.kt:60-73` keeps `space_10` x `space_12`; W4.5 moved `activityRow` to 12x16, and
+  `s23_kit_test.go:291-296`'s own rationale ("a tighter box would read as a different kind of object") is now what
+  happens in the stream. Padding becomes `space_12` (y) x `space_16` (x); the `space_10` gap stays. `s23_kit_test.go:1869-1870`
+  rows and `substrate-components.md` row #31 amended under a dated note; `KitDensityTest` claim updated.
+- **Done when** `-run PBDS1` and the s23 joins are green with no exemption added.
+
 ## 9. Merge order and release
 
 ```
