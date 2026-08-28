@@ -297,8 +297,8 @@ android {
         // on, so a build from a branch behind main emits a LOWER code than one already
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
-        versionCode = 18
-        versionName = "0.8.0"
+        versionCode = 19
+        versionName = "0.13.6"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and
         // `connectedAndroidTest` is a no-op that reports success -- so the exit demonstration's
