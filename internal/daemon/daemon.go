@@ -489,14 +489,14 @@ func (d *Daemon) SetConversationID(id, convID string) error {
 // to every client (all clients converge). It mirrors SetConversationID's RMW under
 // writeMu. An unknown session is an error; a no-op rename (same name) skips the
 // write; a tombstoned session is dropped by saveMetaLocked. NameSetAt is stamped now:
-// this is swarm's own rename, the moment the newest-wins clock (ADR-021) records.
+// this is swarm's own rename, the moment the newest-wins clock (ADR-022) records.
 func (d *Daemon) Rename(id, name string) error {
 	return d.RenameAt(id, name, time.Now())
 }
 
 // RenameAt is Rename with the caller vouching for WHEN the name was set. The assembly
 // uses it to adopt a name the CLI published, carrying the CLI's own timestamp so a
-// later swarm rename compares against the right moment (ADR-021).
+// later swarm rename compares against the right moment (ADR-022).
 func (d *Daemon) RenameAt(id, name string, at time.Time) error {
 	d.writeMu.Lock()
 	d.mu.Lock()

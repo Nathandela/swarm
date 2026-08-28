@@ -15,7 +15,7 @@ import (
 	"github.com/Nathandela/swarm/internal/persist"
 )
 
-// ADR-021: the name a running Claude Code session shows in its own prompt box is
+// ADR-022: the name a running Claude Code session shows in its own prompt box is
 // adopted as the swarm session's name, newest wins. Claude publishes it in
 // ~/.claude/sessions/<pid>.json; the assembly reads that registry on every
 // authenticated hook callback for the session and applies a newer name through the

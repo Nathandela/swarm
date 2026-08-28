@@ -193,7 +193,7 @@ func (d *Daemon) serveHookInteractions(cb engine.Callback) {
 		}
 	}
 	// With the identity known, the CLI's own name for this conversation can be looked up
-	// (ADR-021). Best-effort and synchronous: a handful of small files per callback.
+	// (ADR-022). Best-effort and synchronous: a handful of small files per callback.
 	d.adoptLiveSessionName(cb.SessionID, ad)
 	d.captureInteractions(cb.SessionID, ad, payload)
 }

@@ -1,6 +1,6 @@
 # Live session name adoption: evidence
 
-Decision: [ADR-021](../adr/ADR-021-live-session-name-adoption.md). Beads: agents-tracker-tila (investigation), agents-tracker-zlvc (change).
+Decision: [ADR-022](../adr/ADR-022-live-session-name-adoption.md). Beads: agents-tracker-tila (investigation), agents-tracker-zlvc (change).
 
 ## The data the decision rests on (owner's machine, 2026-08-28)
 

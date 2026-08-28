@@ -95,7 +95,7 @@ type Daemon struct {
 	eng        *engine.Engine
 	socketPath string
 	stateDir   string // for reading a session's transcript tail (conversation-id capture)
-	home       string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-021)
+	home       string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-022)
 
 	cancel context.CancelFunc // stops engine.Run
 

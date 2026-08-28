@@ -4,7 +4,7 @@ import "time"
 
 // LiveName is one fact a CLI publishes about a running session: the name it shows the
 // user right now, and when that name was set. Since is the newest-wins clock of
-// ADR-021: the assembly adopts the name only if Since is later than the last name
+// ADR-022: the assembly adopts the name only if Since is later than the last name
 // swarm itself stamped on the session.
 type LiveName struct {
 	Name  string

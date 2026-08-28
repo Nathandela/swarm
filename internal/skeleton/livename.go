@@ -10,7 +10,7 @@ import (
 	"github.com/Nathandela/swarm/internal/protocol"
 )
 
-// ADR-021: a session's name follows the name its CLI shows, newest wins. The CLI
+// ADR-022: a session's name follows the name its CLI shows, newest wins. The CLI
 // publishes it in a per-process registry under the daemon user's home (the adapter's
 // LiveNameSource says where and how to read one file); this file is the assembly's
 // half, the I/O and the clock comparison. It runs on every authenticated hook

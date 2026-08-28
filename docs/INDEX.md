@@ -39,7 +39,7 @@
 - [ADR-011](adr/ADR-011-multi-device-epochs.md) — multi-device epochs: per-device sender ids, inbound keys, seq spaces
 - [ADR-013](adr/ADR-013-mirror-capture-architecture.md) — Mirror capture architecture: structure beside the sacred PTY, the held hook rejected on co-presence grounds, the phone's answer typed into the CLI's own dialog
 - [ADR-020](adr/ADR-020-unattended-daemon-restart.md) — unattended daemon restart spawns from the saved environment, or touches nothing
-- [ADR-021](adr/ADR-021-live-session-name-adoption.md) — a session's name follows the name its CLI shows (Claude's `~/.claude/sessions` registry), newest wins
+- [ADR-022](adr/ADR-022-live-session-name-adoption.md) — a session's name follows the name its CLI shows (Claude's `~/.claude/sessions` registry), newest wins
 
 ## Governance
 - [docs/governance/](governance/) — the agentic-codebase-manifesto, vendored verbatim ([provenance](governance/PROVENANCE.md))

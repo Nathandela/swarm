@@ -1,4 +1,4 @@
-# ADR-021: A session's name follows the name its CLI shows, newest wins
+# ADR-022: A session's name follows the name its CLI shows, newest wins
 
 - Status: Accepted (owner decision 2026-08-28: "newest wins", both rename paths stay)
 - Date: 2026-08-28

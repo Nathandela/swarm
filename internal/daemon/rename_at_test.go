@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// NameSetAt is the newest-wins clock for a session's label (ADR-021): a CLI-published
+// NameSetAt is the newest-wins clock for a session's label (ADR-022): a CLI-published
 // name is adopted only when it is newer than the last name swarm itself stamped.
 // Rename stamps now; RenameAt stamps the moment the caller vouches for, which is how
 // an adopted CLI name carries the CLI's own timestamp rather than the adoption time.
