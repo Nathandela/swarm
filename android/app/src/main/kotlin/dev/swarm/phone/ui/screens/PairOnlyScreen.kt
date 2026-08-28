@@ -231,10 +231,15 @@ object PairOnlyScreen {
      * "say nothing" has to survive the join, and a caller that concatenated two composed strings
      * would put a lone separator on the screen of a phone where everything went right.
      *
-     * THE ORDER IS A COPY DECISION AND IS MADE HERE (agents-tracker-jx23). The machine's answer
-     * comes first because the user's next action turns on it -- whether `swarm remote pair` will
-     * be refused -- and the purge failure is a fact about this handset that no command of theirs
-     * undoes. Leading with the second buries the actionable one.
+     * THE ORDER IS A COPY DECISION AND IS MADE HERE (agents-tracker-jx23; reordered in the W5
+     * review round, 2026-08-29, SHOULD-FIX 4). It used to lead with the machine's answer, on the
+     * argument that the user's next action turns on it. That argument is still true and is no
+     * longer the deciding one: the machine's clause ENDS IN A COLON that names the well
+     * [dev.swarm.phone.ui.screens.pairOnlyView] draws directly beneath this notice, and with the
+     * purge sentence spliced in after that clause, the colon pointed at two unrelated sentences
+     * instead of the well. A colon whose object is not what follows it is a worse defect than
+     * which fact leads, so the purge sentence -- which names nothing to press -- now comes first,
+     * and the machine's clause, colon and well stay adjacent.
      *
      * @param purgeFailure PB-APP-9's routed reason the key material at rest survived, or empty
      *  where the purge finished. It is carried VERBATIM for [revokeUnsentNotice]'s reason: the
@@ -279,11 +284,17 @@ object PairOnlyScreen {
      * BOTH CAN BE TRUE AT ONCE and the worst case is exactly that: a machine that refused the
      * removal AND a handset that could not destroy what it held. Neither answers for the other, so
      * neither replaces the other.
+     *
+     * THE PURGE SENTENCE COMES FIRST WHEN BOTH ARE PRESENT (SHOULD-FIX 4, W5 review round,
+     * 2026-08-29). [machine], when non-empty, ends in a colon that names the well drawn directly
+     * beneath this notice; splicing the purge sentence in AFTER that clause put two unrelated
+     * sentences between the colon and the well it points at. [PURGE_INCOMPLETE] names nothing to
+     * press, so it carries no colon of its own and can lead without stranding one.
      */
     private fun joinedWithPurgeFailure(machine: String, purgeFailure: String): String = when {
         purgeFailure.isBlank() -> machine
         machine.isEmpty() -> purgeFailure + " " + PURGE_INCOMPLETE
-        else -> machine + " " + purgeFailure + " " + PURGE_INCOMPLETE
+        else -> purgeFailure + " " + PURGE_INCOMPLETE + " " + machine
     }
 
     /**
