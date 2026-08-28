@@ -201,21 +201,23 @@ Every §4 target, read from the tree rather than from the commit messages:
 
 - W3.1: `grep -rn 'stopQuestion|STOP_CONFIRMATION|stopConfirmation|stopVisible|stopLabel' android/app/src/main` finds nothing;
   the only `STOP` identifiers left are `PairingControl.STOP` (a different screen) and `ComposerActionGlyph.STOP`.
-  `composerRegion` (`PhoneSurface.kt:728-735`) adds `composer` and `composerShutDetail`; `decisionPillControl`
+  `composerRegion` (`PhoneSurface.kt:734-741`) adds `composer` and `composerShutDetail`; `decisionPillControl`
   is inserted at 0 and `stoppedNotice` at the end, both on the add-and-remove rule. The menu row is a MODEL
   decision (`SessionDetailScreen.menuChoicesFor`, `SessionDetailPanel.kt:514`), first, `destructive = false`;
   `ui/kit/ConversationMenu.kt` renders `MenuChoice` generically and needed no change. Its press
-  (`PhoneSurface.kt:3573`) is `press(send, ::interruptPlan)` -- the plan, never the square's click, so a
+  (`PhoneSurface.kt:3583`) is `press(send, ::interruptPlan)` -- the plan, never the square's click, so a
   draft in the field cannot turn a menu Stop into a send.
 - W3.2: `stopping()` (`:540`) = `detailDrawn?.composerWorking == true && typed.text.isBlank()`, read at
-  press (`:491`), on every region draw (`:3467`) and on every `afterTextChanged` (`:560-564`).
+  press (`:491`), on every region draw (`:3477`) and on every `afterTextChanged` (`:560-564`).
   `composerWorking` (`SessionDetailPanel.kt:271`) = `transcript.latestTurnId.isNotEmpty()`, derived from
   `transcript`, which `sessionDetailRedraw`'s patch admits (`SessionDetailView.kt:680-682`).
 - W3.3: the square passes no `ask` (`:490`); `interruptPlan`'s `Press` carries `confirmation = ""` (`:391`).
   `StopAction.CONFIRM` stays a model arm (`SessionScreens.kt`, `SessionStopOfflineTest.kt:67` untouched).
-- W3.4: `stoppedNotice` (`:707-710`, centred `noticeLine()`); `rememberInterrupt` (`:4689-4694`) writes
-  `SessionDetail.INTERRUPT_SENT` and adds it to `composerRegion`; `drawComposerRegion` (`:3448`) removes it
-  first; no `say(`/`Toast` on either path (w34, both halves).
+- W3.4: `stoppedNotice` (`:710-713`, centred `noticeLine()`); `rememberInterrupt` (`:4699-4703`) calls
+  `drawStopped()` (`:4722-4726`, review round), which writes `SessionDetail.INTERRUPT_SENT`, records the open turn
+  and adds the notice to `composerRegion`; `drawComposerRegion` (`:3455-3458`) removes it once the drawn panel's
+  turn differs; no `say(`/`Toast` on either path (w34, both halves). (Line numbers as of aaa929c7; the audit
+  above was first written against d2477292 and its refs were off by one in places, corrected here.)
 - Row 9 / s23: `docs/design/substrate-components.md:254` (row 9 only; the diff of that file is one line)
   carries `action-box 40 (AMENDED 2026-08-28, phone refit W3.2, owner ruling: ...)`; `KitMetrics.COMPOSER_ACTION_DP`
   is `derived: ... #9 Composer { action-box }`; `s23Inbox` and `s23TouchTargets` each gain a `composerAction` row.
@@ -425,3 +427,177 @@ three ledger cases), `ComposerTest` 6, `SessionDetailMenuTest` 5, `SessionDetail
 
 Branch `refit/w3`: 00bb0902, aa2b04af, d2477292, plus this file's own commit. Not merged, not rebased (the
 orchestrator rebases at merge; `main` has moved since 1a0e7b29), bead left open for the orchestrator.
+
+## Review round (2026-08-28, one adversarial round per §1.8)
+
+Verdict relayed by the orchestrator: no BLOCKING, two SHOULD-FIX, each its own commit, RED first. A third finding
+(the menu Stop dropping with a success haptic while a send crosses) was filed as its own bead and is not here.
+
+### Should-fix 1: "Stopped" must outlive the settle -- commit 53a83424
+
+**The defect.** `rememberInterrupt` added the notice and the same `dispatchPress` then called `render()`; with a
+non-empty outcome line at press time (an earlier refusal, or a second Stop after a refused one) `drawDetail` took the
+full path and `drawComposerRegion`'s first line removed the notice before any frame, and otherwise the next transcript
+item on the patch path did, which over a working agent is immediate. The KDoc's "the turn closing takes it off" was
+a claim the code did not make.
+
+**The fix.** `drawStopped()` records the open turn (`stoppedOverTurn = detailDrawn?.transcript?.latestTurnId`)
+beside the word; `drawComposerRegion` removes the notice only when `panel.transcript.latestTurnId !=
+stoppedOverTurn` (closed, or another opened) and otherwise leaves it. `rememberInterrupt` latches and calls
+`drawStopped()`.
+
+**The seam, stated.** The review proposed a RED that "presses the square with `VerbDispatch.direct()`". On every
+JVM `press` returns at `PhoneStartup.Unavailable` before the plan (`PhoneSurface.kt:5124-5131`), and `Op` is
+`swarmmobile.Op` (the AAR's), so no press and no hand-made answer can reach `rememberInterrupt` here -- the same
+fact ruling (1) recorded for `drawDetail`. The settle's drawing half is therefore `internal fun drawStopped()`,
+which the tests call directly over a drawn working panel; the w34 gate holds the seam to production (the settle
+must call `drawStopped()`, and `drawStopped` must record the turn and add the notice), so the tests' subject stays
+the production path.
+
+**RED.** Tests first (`PhoneSurfaceControlsTest`): `Stopped stays under the composer while the turn it was said over
+is open` (draw the open turn, `drawStopped()`, redraw with the same turn plus one `tool_run`, the notice is still a
+child of `composerRegion`) and `Stopped comes off when the turn it was said over closes` (redraw with the closed
+turn, gone). `w3-rr-kotlin.sh` (`w3-lane.sh --tests PhoneSurfaceControlsTest --tests ComposerTest`):
+
+```
+HEAD: 7578281e  changed:  M android/app/src/test/kotlin/dev/swarm/phone/PhoneSurfaceControlsTest.kt
+START=1787918225 (Fri Aug 28 13:57:05 CEST 2026)
+e: .../PhoneSurfaceControlsTest.kt:340:21 Unresolved reference 'drawStopped'.
+e: .../PhoneSurfaceControlsTest.kt:359:21 Unresolved reference 'drawStopped'.
+> Task :app:compileDebugUnitTestKotlin FAILED
+BUILD FAILED in 2m 12s
+GRADLE_EXIT=1
+SUMMARY: xml files=6 stale(older than START)=6 tests=0 failures=0 errors=0
+AAR unchanged (mtime 1787894314)
+```
+
+The w34 gate's second half re-cut first (`go test -count=1 ./android/gate -run TestW34`, tree at 7578281e):
+
+```
+--- FAIL: TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted (0.02s)
+    w34_onebutton_test.go:80: rememberInterrupt never calls drawStopped(), so a sealed Stop changes nothing on screen until the machine answers (W3.4, review round). Body: { ... stoppedNotice.text = SessionDetail.INTERRUPT_SENT; if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice) }
+    w34_onebutton_test.go:87: PhoneSurface.kt has no "internal fun drawStopped()": nothing draws the sealing under the composer (W3.4, review round)
+FAIL	github.com/Nathandela/swarm/android/gate	1.001s
+```
+
+**GREEN.** Gate: `go test -count=1 ./android/gate -run 'TestW34|TestT4LTA'` -> `ok 0.977s`. Kotlin, the same run that
+takes should-fix 2's RED (below): `START=1787918437 (Fri Aug 28 14:00:37 CEST 2026)`,
+`PhoneSurfaceControlsTest tests=9 failures=0` (the seven W3 cases and the two new ones).
+
+**Changed anchors (w34, second half), before / after.**
+
+| Before | After |
+|---|---|
+| `settle := r6SurfaceFunc(t, "rememberInterrupt", ...)` (reads to the next `private fun`) | `settle := d0b8Lambda(t, code, "private fun rememberInterrupt(answer: Any?)", ...)` (the balanced body; an `internal fun` follows it and must not be swallowed) |
+| settle must contain `INTERRUPT_SENT` and `composerRegion.addView(stoppedNotice` | settle must contain `drawStopped()`; `said := d0b8Lambda(t, code, "internal fun drawStopped()", ...)` must contain `INTERRUPT_SENT`, `composerRegion.addView(stoppedNotice` and `stoppedOverTurn = `; neither may `say(`/`Toast` |
+| region must contain `composerRegion.removeView(stoppedNotice)` | unchanged, plus region must contain `stoppedOverTurn` |
+
+### Should-fix 2: the square paints its disabled state -- commit aaa929c7
+
+**The defect.** `composerAction` set `ColorStateList.valueOf(ink)`; `View.enable` (offline, through
+`setKeyboardEnabled`) and `VerbDispatch.press` (while a send crosses) set `isEnabled = false` and rely on the
+drawable state to show it, as `CtaButton`'s `ctaInk` does, so a dead square drew at full strength.
+
+**The fix.** A two-entry `ColorStateList`: `-state_enabled` -> `swarm_text_tertiary` (`--p-ink3`), default ->
+`swarm_text_primary`. Row 9's dated note gains `disabled: ink3` (row 9 only; the file's diff is one line); the
+`s23Inbox` row's prose says so (no gate joins the tint, so it is prose). `defaultColor` is still the kit ink, which
+keeps `the composer action is a 40dp square`'s tint assertion green.
+
+**RED** (`ComposerTest > a disabled square paints the tertiary ink`, in run 2 above, tree with should-fix 1 green and
+`Composer.kt` unchanged):
+
+```
+START=1787918437 (Fri Aug 28 14:00:37 CEST 2026)
+ComposerTest > a disabled square paints the tertiary ink FAILED
+    java.lang.AssertionError: a disabled square keeps the live ink, so a control that cannot be pressed -- offline, or while a send crosses -- looks exactly like one that can expected:<-9147555> but was:<-592916>
+16 tests completed, 1 failed
+SUMMARY: xml files=2 stale(older than START)=0 tests=16 failures=1 errors=0
+AAR unchanged (mtime 1787894314)
+```
+
+(-9147555 is `#FF746B5D`, ink3; -592916 is `#FFF6F3EC`, ink.)
+
+**GREEN.** `START=1787918686 (Fri Aug 28 14:04:46 CEST 2026)`, `BUILD SUCCESSFUL in 5m 54s`,
+`SUMMARY: xml files=2 stale(older than START)=0 tests=16 failures=0 errors=0`, AAR unchanged. Go, over the edited
+kit, row 9 and s23 prose: `go test -race -count=1 ./android/gate` -> `ok 115.384s` (PB-DS-6/7/12 accept the clause).
+
+### Negative controls (review round)
+
+**Kotlin**, one lane run over the six W3 classes with both fixes perturbed back (`w3-nc.py rr`;
+`START=1787919090`, Fri Aug 28 14:11:30 CEST 2026); the other 43 tests stay green, including `Stopped comes off when
+the turn it was said over closes`, which the unconditional removal satisfies by construction:
+
+| Change | Perturbation | Failure |
+|---|---|---|
+| Should-fix 1 | `drawComposerRegion`: the conditional block back to `if (stoppedNotice.parent != null) composerRegion.removeView(stoppedNotice)` | `PhoneSurfaceControlsTest > Stopped stays under the composer while the turn it was said over is open FAILED` -- "the agent wrote one more item inside the same turn and "Stopped" was taken off, so over a working agent the word never survives to a frame" |
+| Should-fix 2 | `composerAction`: the two-entry list back to `ColorStateList.valueOf(Kit.colour(context, R.color.swarm_text_primary))` | `ComposerTest > a disabled square paints the tertiary ink FAILED` -- "... expected:<-9147555> but was:<-592916>" |
+
+```
+45 tests completed, 2 failed
+SUMMARY: xml files=6 stale(older than START)=0 tests=45 failures=2 errors=0
+AAR unchanged (mtime 1787894314)
+restored; tracked changes now: 0
+```
+
+**Go**, w34 over the same perturbed tree (the first perturbation also drops the turn read):
+
+```
+--- FAIL: TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted (0.02s)
+    w34_onebutton_test.go:111: drawComposerRegion clears stoppedNotice without reading stoppedOverTurn, so the word comes off on the next draw -- over a working agent, before a frame (review round). Body: (... if (stoppedNotice.parent != null) composerRegion.removeView(stoppedNotice) ...)
+FAIL	github.com/Nathandela/swarm/android/gate	1.005s
+```
+
+and, restored and then `drawStopped`'s `stoppedOverTurn = detailDrawn?.transcript?.latestTurnId.orEmpty()` deleted
+(`w3-nc.py rr-go-c`, restored after):
+
+```
+--- FAIL: TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted (0.01s)
+    w34_onebutton_test.go:98: drawStopped records no turn in stoppedOverTurn, so the region draw cannot tell the turn the word was said over from the next one (review round). Body: { stoppedNotice.text = SessionDetail.INTERRUPT_SENT; if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice) }
+FAIL	github.com/Nathandela/swarm/android/gate	0.768s
+restored; tracked changes now: 0
+```
+
+### Final gates (committed tree aaa929c7, after the two fixes)
+
+`w3-go-gates.sh`, 14:15:
+
+```
+date: Fri Aug 28 14:15:14 CEST 2026  HEAD: aaa929c7  dirty: 0
+build exit=0
+vet exit=0
+0 issues.
+lint exit=0
+ok  	github.com/Nathandela/swarm/android/gate	152.227s
+gate test exit=0
+```
+
+`w3-final-go.sh` (`go test -race -count=1 -timeout 40m ./...`, the `env -u SWARM_*` prefix), 14:15, load 7.83 with
+the Kotlin suite compiling alongside: 63 packages ok, 7 with no test files, one FAIL -- the same load-timing case as
+the first pass, in a package this wave does not touch:
+
+```
+--- FAIL: TestE2E_ReplayProductionPath_AgyOpencode (11.11s)
+    replay_e2e_test.go:403: agy: idle observed only 2.103565542s after the first active sample (want >= 3s ...)
+FAIL	github.com/Nathandela/swarm/internal/e2e	38.341s
+```
+
+Rerun once in isolation (§1.6), 14:24, load 13.65 (three other fleets on the machine):
+
+```
+ok  	github.com/Nathandela/swarm/internal/e2e	25.021s
+rerun exit=0
+```
+
+`w3-final-kotlin.sh` (the gate's exact `./gradlew --no-daemon testDebugUnitTest --rerun-tasks --no-build-cache`), 14:15:
+
+```
+HEAD: aaa929c7  tracked changes: 0
+START=1787919314 (Fri Aug 28 14:15:14 CEST 2026)
+BUILD SUCCESSFUL in 7m 11s
+GRADLE_EXIT=0
+SUMMARY: xml files=202 stale(older than START)=0 tests=1607 failures=0 errors=0
+AAR unchanged (mtime 1787894314)
+```
+
+(1604 + the review round's three cases.) Branch `refit/w3` after the round: 00bb0902, aa2b04af, d2477292, 7578281e,
+53a83424, aaa929c7, plus this file's own commit. Still not merged, not rebased, bead open for the orchestrator.
