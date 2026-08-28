@@ -46,3 +46,19 @@ func TestJournalRecordRoundTripsStamps(t *testing.T) {
 		t.Errorf("round trip = ts %v last_activity %v; want %v and %v", back.TS, back.LastActivity, ts, last)
 	}
 }
+
+// TestJournalRecordUnstampedBytesAreUnchanged is the byte-identity NEGATIVE CONTROL the
+// orchestrator asked for (W7 ruling, constraint 2): the literal is what main@1a0e7b29 produced for
+// this record, measured there (docs/verification/phone-refit-w7.md), not typed from memory. A
+// record with zero stamps must serialise to exactly those bytes; drop `omitzero` from either new
+// field and this fails.
+func TestJournalRecordUnstampedBytesAreUnchanged(t *testing.T) {
+	b, err := json.Marshal(JournalRecord{Cursor: 3, SessionID: "m/s1", Type: "launched", Group: status.Group("working"), Agent: "claude", Name: "api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const before = `{"cursor":3,"session_id":"m/s1","type":"launched","group":"working","agent":"claude","name":"api"}`
+	if string(b) != before {
+		t.Errorf("an unstamped record serialises as\n  %s\nwant the bytes main@1a0e7b29 wrote\n  %s", b, before)
+	}
+}
