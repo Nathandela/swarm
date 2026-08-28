@@ -29,7 +29,7 @@ amends three of its rulings on the owner's word:
 
 - **The drawing's string table is superseded** by the copy tables in W5. The owner's direction
   today is that the recorded copy is too long and too technical.
-- **ADR-009 (Obsidian) D1, D3 and the colour half of D4 are superseded** by ADR-020 (W4). The
+- **ADR-009 (Obsidian) D1, D3 and the colour half of D4 are superseded** by ADR-021 (W4). The
   material grammar, motion register, status semantics, type substitutions and contrast floors survive.
 - **R2 (send becomes stop)** is kept exactly as the committee amended it on tbpm.5: the button is
   Stop only while the session works **and** the field is empty; a non-empty field means Send; the
@@ -147,7 +147,7 @@ clipToPadding = false
   the visible bleed is closed by W1.1 + W1.2 alone. The opacity is a token value and lands in W4.2:
   the Slate maquette carries `--p-tabbg: rgba(11,14,20,1)`, `swarm_tabbar_background` becomes
   `#FF0B0E14`, both bars keep spending it, `s23_kit_test.go:4139`'s alpha pin moves 0.88 → 1.0 under
-  ADR-020, and `InboxChromeTest.kt:335-340`'s translucency assertion inverts. No o3 exemption, no
+  ADR-021, and `InboxChromeTest.kt:335-340`'s translucency assertion inverts. No o3 exemption, no
   dead row. W1's evidence file records the gate line and this ruling.
 
 **IME note.** `bottomInsetPx` (`PhoneActivity.kt:254-255`, `maxOf(bars.bottom, ime.bottom)`) is
@@ -404,7 +404,7 @@ else          /* the existing composer_send body from :489-520, unchanged */
 
 Bead: `agents-tracker-d45a.4`. Worktree `refit-w4`. Files: `internal/design/tokens.json`, `internal/design/tokens_test.go`,
 new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{colors,type}.xml`,
-`docs/design/icon-candidates/solid-wedge.svg`, `docs/adr/ADR-020-*.md`, `docs/adr/README.md`,
+`docs/design/icon-candidates/solid-wedge.svg`, `docs/adr/ADR-021-*.md`, `docs/adr/README.md`,
 `docs/adr/ADR-012-*.md` (amendment section), `android/gate/{s22b_*,obsidian_contrast_test.go,s22b_designsource_test.go}`,
 `ui/kit/{SessionRow,ActivityRow,MessageBubble,Kit}.kt`, `theme/SwarmTheme.kt`, two 512px PNGs, tests.
 `android/design-tokens.tsv`: comment lines only. `dimens.xml`: comment lines only.
@@ -428,7 +428,7 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
 --p-font, --p-mono, --p-display-wt, --p-display-tr, --p-body-tr: unchanged
 ```
 - **Tests first.** `tokens_test.go:279` `TestChosenSkinIsObsidianAndPinnedDark` → `...Slate...`, with
-  the file's AUTHORIZED REWRITE comment citing ADR-020; negative controls `:224`, `:239` retargeted to
+  the file's AUTHORIZED REWRITE comment citing ADR-021; negative controls `:224`, `:239` retargeted to
   Slate literals. `htmlTokenCount` and `colourTokenCount` do not move.
 - **Done when** `go test ./internal/design/` green including `TestTheDriftCheckCanActuallyFail`;
   `kinds` unchanged.
@@ -472,7 +472,7 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
   `android/gate/s23_kit_test.go` (`s23Spacing` rows for `.prows {padding: 0 12px; gap: 8px}` and the
   `s23DerivedSpacing` rows) and by `docs/design/substrate-components.md` rows #14 and #26 to the
   older Substrate values, not to the maquette's `.slab`. Both are in W4.5's list: the rows are
-  re-pointed to `slate-maquette.html`'s `.slab` under an AUTHORIZED REWRITE note citing ADR-020 D2,
+  re-pointed to `slate-maquette.html`'s `.slab` under an AUTHORIZED REWRITE note citing ADR-021 D2,
   and the claims in `InboxRowTest`, `ActivityRowTest`, `MessageBubbleTest`, `KitDensityTest:299`
   follow. No exemptions; a row that cannot be re-pointed to a declared design value stops the wave.
 - **Also ruled.** `--p-sweep-fx` keeps `rgba(255,252,244,0.30)` (ADR-009 D5 survives, sweep tint
@@ -484,12 +484,12 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
 ### W4.6 Type: five rungs, all shifted
 - Ladder: **display 24 / title 15 / body 14 / code 12.5 / micro 11** (gaps 9 / 1 / 1.5 / 1.5, all
   ≥ 1sp as `TestPBDS2_TheLadderIsTheFiveRuledRungs` requires). The authority is ADR-012's rung table,
-  amended by an ADR-020 section (R1's sixteen style cells struck through under a SUPERSEDED callout, every value untouched:
+  amended by an ADR-021 section (R1's sixteen style cells struck through under a SUPERSEDED callout, every value untouched:
   the rung readers at `s22b_type_test.go:307` and the Kotlin `TypeScale` reader refuse a style on two
   rungs, so the amendment cannot leave R1's rows live; ruled 2026-08-28); Move cells use a minted ruling `R9`
   (`s22bRungMoveRe` accepts `(R<digit>)`). `type.xml` sizes follow the table; every `lineHeight` is
   recomputed as multiplier × rung (`Body.Message` 1.45×14 = 20.3sp, `Mono.Code` 1.5×12.5 = 18.75sp,
-  `Mono.Meta` 1.6×11 = 17.6sp, and so on). `Display.SAS` 34sp is off the ladder and does not move.
+  `Mono.Fine` 1.6×11 = 17.6sp (`Mono.Meta` declares no leading), and so on). `Display.SAS` 34sp is off the ladder and does not move.
 - **Done when** `-run PBDS2` green including `TestPBDS2_TheRungReadersRefusePerturbedInput`.
 
 ### W4.7 The launcher mark is repainted, not redrawn
@@ -501,12 +501,12 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
   re-rendered by hand from the Slate SVG; `docs/verification/appicon-evidence.md` XOR re-run.
 - **Done when** `-run Icon` green with zero edits under `res/`; no `C9A876`/`0E0B08` outside quoted history.
 
-### W4.8 ADR-020 and the Kotlin literals
+### W4.8 ADR-021 and the Kotlin literals
 - `SwarmTheme.kt:40-44` `EXPECTED_DARK_COLORS` → `0xFF0B0E14, 0xFFEEF2F8, 0xFF9AA6BA`;
   `Kit.kt:400` `KEY_LIGHT_ALPHA 0.10f` → `0.08f`; `:420` `LIT_KEY_LIGHT_ALPHA 0.22f` → `0.18f`;
   prose quoting `rgba(246,243,236,…)` → `rgba(238,242,248,…)`; `Toggle.kt:29` / `ToggleTest.kt:214`
   ceiling on `#c9a876` re-measured on `#8eb4e6`. `ThemeTokenOriginTest` needs no value edit.
-- `docs/adr/ADR-020-slate-palette-and-breathing-scale.md`: Status Accepted, Date 2026-08-27; Context
+- `docs/adr/ADR-021-slate-palette-and-breathing-scale.md`: Status Accepted, Date 2026-08-27; Context
   (the pipeline is sound, the palette and density are what the owner ruled on); Decision D1 skin =
   slate, D2 breathing by spending steps not adding them, D3 the five rungs shift, D4 the mark is
   repainted; what ADR-009 this supersedes (D1, D3 values, colour half of D4) and what survives (D2,
