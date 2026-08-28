@@ -792,7 +792,7 @@ that a reviewer cannot distinguish from a verdict needs a written owner ruling f
   `tool_run` row (the untouched `an unreadable body renders as a neutral row and never crashes` caught the first
   cut saying "Used a tool").
 - **A command's grey line is the command's first line, always.** `secondaryFor`: `execute` -> `fields.target`;
-  every other kind -> the output's first line, or the target when there is none. The sketch's
+  every other kind -> the output's first non-blank line, trimmed, or the target when there is none. The sketch's
   `output.ifEmpty { target }` for every kind was wrong for commands.
 - **The grey line is the kit's.** `ActivityRow.kt` `activityRow(secondary = ...)` draws it
   (`KitTag.ACTIVITY_SECONDARY`, one line, `ellipsize = END`, `swarm_text_tertiary`); `TranscriptBlock.secondary`
@@ -805,6 +805,12 @@ that a reviewer cannot distinguish from a verdict needs a written owner ruling f
   `TranscriptChatRenderTest` line, the golden's two `BLOCK` rows; the `item()` fixture gains `toolKind`.
 - W6.2 carries its drawing row: `conversation-drawing.html`'s `decision.pill` says "Needs your answer" in the
   same commit as `SessionDetailPanel`, pinned by `the decision pill asks for the reader's answer`.
+- **Review round (2026-08-28).** The grey line's style goes through `Kit.appearance` (W8.1's gate caught the bare
+  `setTextAppearance` only on the three-way merge with main; the branch tree was green). The oneOf test reads §7's
+  `type` row off `interaction-schema.md` (a token added to the row and not to the `oneOf` now fails it). The grey
+  line is the first line that says something: `firstLine` skips blank leading lines. The drawn stages, IS-TOOL-2
+  and every KDoc that pinned "Decision needed" moved with the pill. Not ruled: a pre-R6 record with a body but no
+  `tool_kind` reads `tool_run` (`agents-tracker-c4gj`, owner's call).
 
 ## 8. W7 Inbox, Activity, Settings, Computers
 
