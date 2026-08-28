@@ -51,6 +51,13 @@ jobs:
         with:
           install-only: true
           version: '2.17.0' # matches release-dryrun (ci.yml) -- verified locally for this config
+      - name: Verify the signing secret matches a compiled trust slot
+        # A valid-but-wrong secret would let goreleaser publish assets every
+        # fleet machine rejects (R2/R3 audit); the selfcheck fails the release
+        # here instead.
+        env:
+          SWARM_RELEASE_SIGNING_KEY: ${{ secrets.SWARM_RELEASE_SIGNING_KEY }}
+        run: go run ./scripts/signchecksums --selfcheck
       - name: Publish release (goreleaser)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -58,4 +65,9 @@ jobs:
           # GITHUB_TOKEN cannot push the cask to a different repo. Referenced by
           # .goreleaser.yaml homebrew_casks.repository.token.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # The checksums-signing seed (lifecycle R2): base64 ed25519 seed, read
+          # by scripts/signchecksums via .goreleaser.yaml signs. Absent or empty,
+          # the signer refuses and the release fails -- an unsigned release is a
+          # release every fleet machine would refuse to stage anyway.
+          SWARM_RELEASE_SIGNING_KEY: ${{ secrets.SWARM_RELEASE_SIGNING_KEY }}
         run: goreleaser release --clean

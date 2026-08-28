@@ -59,7 +59,7 @@ const envFakeAgentBin = "SWARM_FAKE_AGENT_BIN"
 // fails loudly instead of re-exec'ing again.
 const shimSessionEnv = "SWARM_SHIM_SESSION"
 
-const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|version]
+const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|kill|send|peek|doctor|upgrade|version]
 
   swarm            open the TUI
   swarm daemon     run the session daemon
@@ -82,6 +82,10 @@ const usage = `usage: swarm [daemon|shim|hook|handoff|spawn|reattach|ls|watch|ki
   swarm peek       print a session's current screen <session> [--lines N]
   swarm doctor     diagnose this machine's swarm lifecycle [--json]
                    (never starts a daemon; safe from cron)
+  swarm upgrade    check, --stage, --activate, --rollback, or --unattended
+                   (signature + checksum verified; activation defers around
+                    live sessions and hands off to the new binary's converge;
+                    never starts a daemon) [--json]
   swarm version    print the build version
 `
 
@@ -126,6 +130,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		// NOT dispatchAgentVerb: that seam ensures a daemon (D-1), and doctor's
 		// whole contract is that it never starts one (see doctor.go's header).
 		return runDoctor(args[1:], stdout, stderr)
+	case "upgrade":
+		// Same posture as doctor: the transaction stages, never activates, and
+		// never starts a daemon.
+		return runUpgrade(args[1:], stdout, stderr)
 	case "watch":
 		return dispatchAgentVerb(runWatch, args[1:], []string{"subscribe"}, stdout, stderr)
 	case "kill":

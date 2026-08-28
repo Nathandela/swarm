@@ -5,6 +5,12 @@ project_name: swarm
 before:
   hooks:
     - go mod tidy
+    # The release's compatibility card (lifecycle R3): compat.json carries the
+    # wire/schema constants this build was compiled with, emitted from the same
+    # source constants the binary runs on (scripts/releasemanifest reads
+    # GORELEASER_CURRENT_TAG). It ships INSIDE the swarm archive, so the signed
+    # checksum covers it; activation gates on it with pure disk reads.
+    - go run ./scripts/releasemanifest --out compat.json
 
 # Three deployables ship from this pipeline:
 #
@@ -117,6 +123,11 @@ archives:
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # files REPLACES the default include globs, so README.md is restated
+    # alongside the compatibility card the before hook emitted.
+    files:
+      - README.md
+      - compat.json
 
   - id: swarm-relay
     ids:
@@ -128,6 +139,20 @@ archives:
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
+
+# The release signs its checksums (lifecycle R2): checksums.txt.sig is base64 of
+# a raw ed25519 signature over checksums.txt, produced by scripts/signchecksums
+# from the SWARM_RELEASE_SIGNING_KEY secret (release.yml exports it) and
+# verified on every machine by internal/upgrade.VerifyChecksums before anything
+# from a release archive is trusted. sha256 alone only proves the tarball
+# matches a checksums file fetched from the SAME origin; the signature is what
+# binds both to the release pipeline.
+signs:
+  - id: checksums-ed25519
+    artifacts: checksum
+    cmd: go
+    args: ["run", "./scripts/signchecksums", "--in", "${artifact}", "--out", "${signature}"]
+    signature: "${artifact}.sig"
 
 # Homebrew tap (E13.3), via the current (non-deprecated) `homebrew_casks`
 # config — goreleaser deprecated the older `brews:` Formula pipe in favor of
