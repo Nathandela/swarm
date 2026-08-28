@@ -26,16 +26,16 @@ func TestWireJournalRecordCarriesTS(t *testing.T) {
 	}
 }
 
-func TestWireJournalRecordCarriesLastActivity(t *testing.T) {
+func TestWireJournalRecordCarriesStateSince(t *testing.T) {
 	last := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
 	got := toWireJournalRecord(journal.Record{
 		SessionID:    "m/s1",
 		Type:         journal.TypeRoster,
 		Group:        status.Group("working"),
-		LastActivity: last,
+		StateSince: last,
 	})
-	if !got.LastActivity.Equal(last) {
-		t.Errorf("LastActivity = %v; want %v carried verbatim -- persist.Meta.LastActivity is the machine's stamp and the phone has no other source for it (W7.1)", got.LastActivity, last)
+	if !got.StateSince.Equal(last) {
+		t.Errorf("StateSince = %v; want %v carried verbatim -- persist.Meta.StateSince is the machine's stamp and the phone has no other source for it (W7.1)", got.StateSince, last)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestWireJournalRecordInventsNoStamps(t *testing.T) {
 	if !got.TS.IsZero() {
 		t.Errorf("TS = %v for a record carrying none; want the zero time", got.TS)
 	}
-	if !got.LastActivity.IsZero() {
-		t.Errorf("LastActivity = %v for a record carrying none; want the zero time", got.LastActivity)
+	if !got.StateSince.IsZero() {
+		t.Errorf("StateSince = %v for a record carrying none; want the zero time", got.StateSince)
 	}
 }

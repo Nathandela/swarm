@@ -54,7 +54,7 @@ class TriageInboxViewTest {
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
     private fun row(id: String, group: String, need: String = "doing something", present: Boolean = true) =
-        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude", lastActivityUnixMs = 0L)
+        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude", stateSinceUnixMs = 0L)
 
     private fun screen(
         rows: List<SessionRow>,

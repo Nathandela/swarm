@@ -1036,8 +1036,8 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 		Need:        need,
 		Present:     cs.Present,
 		Destination: phonecore.RouteSession(cs.Capabilities, profile).String(),
-		// The machine's stamp, and 0 where the wire carried none (W7.1).
-		LastActivityUnixMs: unixMs(cs.LastActivity),
+		// The machine's stamp of the current state, and 0 where the wire carried none (W7.1).
+		StateSinceUnixMs: unixMs(cs.StateSince),
 	}
 	// StructuredChat is the COMPOSER's predicate, not the record's raw field, and the
 	// difference is load-bearing (ADR-017 T2 rule 3 + T5-a): phonecore.ComposerAvailable is

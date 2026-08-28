@@ -38,7 +38,7 @@ class TriageInboxScreenTest {
         need: String = "doing something",
         present: Boolean = true,
         agent: String = "claude",
-        lastActivityUnixMs: Long = 0L,
+        stateSinceUnixMs: Long = 0L,
     ) = SessionRow(
         id = id,
         title = id.substringAfter('/'),
@@ -46,7 +46,7 @@ class TriageInboxScreenTest {
         need = need,
         present = present,
         agent = agent,
-        lastActivityUnixMs = lastActivityUnixMs,
+        stateSinceUnixMs = stateSinceUnixMs,
     )
 
     /** A fixed "now" so an age is a fact about the fixture and not about the wall clock. */
@@ -684,7 +684,7 @@ class TriageInboxScreenTest {
     @Test
     fun `the need line is the state word and the age`() {
         val screen = screenOf(
-            listOf(row("mbp/one", "working", need = "group_transition", lastActivityUnixMs = NOW - FOUR_MINUTES)),
+            listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES)),
             scope = "mbp",
         )
 
@@ -697,7 +697,7 @@ class TriageInboxScreenTest {
     @Test
     fun `an absent stamp draws no age rather than the epoch`() {
         val screen = screenOf(
-            listOf(row("mbp/one", "working", need = "group_transition", lastActivityUnixMs = 0L)),
+            listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = 0L)),
             scope = "mbp",
         )
         val need = screen.sections.single { it.group == "working" }.rows.single().need
@@ -712,7 +712,7 @@ class TriageInboxScreenTest {
 
     @Test
     fun `the All scope appends the machine`() {
-        val rows = listOf(row("mbp/one", "working", need = "group_transition", lastActivityUnixMs = NOW - FOUR_MINUTES))
+        val rows = listOf(row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES))
 
         assertEquals(
             "Working · 4m · Nathan's MBP",
@@ -741,8 +741,8 @@ class TriageInboxScreenTest {
     fun `twins show different ages`() {
         val screen = screenOf(
             listOf(
-                row("mbp/one", "working", need = "group_transition", lastActivityUnixMs = NOW - FOUR_MINUTES),
-                row("mbp/two", "working", need = "group_transition", lastActivityUnixMs = NOW - 3 * 60 * 60_000L),
+                row("mbp/one", "working", need = "group_transition", stateSinceUnixMs = NOW - FOUR_MINUTES),
+                row("mbp/two", "working", need = "group_transition", stateSinceUnixMs = NOW - 3 * 60 * 60_000L),
             ),
             scope = "mbp",
         )

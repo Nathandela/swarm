@@ -112,7 +112,7 @@ class HumanNamesTest {
 
     private fun roster(vararg ids: String) = TriageInbox.from(
         ids.map { id ->
-            SessionRow(id = id, title = "api refactor", group = "working", need = "launched", present = true, agent = "claude", lastActivityUnixMs = 0L)
+            SessionRow(id = id, title = "api refactor", group = "working", need = "launched", present = true, agent = "claude", stateSinceUnixMs = 0L)
         },
         journalStale = false,
     )
@@ -205,7 +205,7 @@ class HumanNamesTest {
                     need = "group_transition",
                     present = true,
                     agent = "claude",
-                    lastActivityUnixMs = 0L,
+                    stateSinceUnixMs = 0L,
                 ),
             ),
             journalStale = false,

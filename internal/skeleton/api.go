@@ -662,8 +662,8 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		Agent:     r.Agent,
 		Name:      r.Name,
 		// Both stamps verbatim, by Name's rule: the phone has no other clock for either.
-		TS:           r.TS,
-		LastActivity: r.LastActivity,
+		TS:         r.TS,
+		StateSince: r.StateSince,
 	}
 	if caps != nil {
 		if rec, ok := caps(r.SessionID); ok {

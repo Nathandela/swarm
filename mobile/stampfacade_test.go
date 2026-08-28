@@ -12,18 +12,18 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-func TestSessionCarriesLastActivityUnixMs(t *testing.T) {
+func TestSessionCarriesStateSinceUnixMs(t *testing.T) {
 	var a App
 	last := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
 
-	s := a.session(phonecore.CachedSession{SessionID: "m/s1", Group: status.Group("working"), Present: true, LastActivity: last})
-	if s.LastActivityUnixMs != last.UnixMilli() {
-		t.Errorf("Session.LastActivityUnixMs = %d; want %d, the machine's stamp in the unit Kotlin ages from", s.LastActivityUnixMs, last.UnixMilli())
+	s := a.session(phonecore.CachedSession{SessionID: "m/s1", Group: status.Group("working"), Present: true, StateSince: last})
+	if s.StateSinceUnixMs != last.UnixMilli() {
+		t.Errorf("Session.StateSinceUnixMs = %d; want %d, the machine's stamp in the unit Kotlin ages from", s.StateSinceUnixMs, last.UnixMilli())
 	}
 
 	zero := a.session(phonecore.CachedSession{SessionID: "m/s2", Group: status.Group("working"), Present: true})
-	if zero.LastActivityUnixMs != 0 {
-		t.Errorf("Session.LastActivityUnixMs = %d for a session with no stamp; want 0 -- 0 is absent, and time.Time{}.UnixMilli() is a date in 1754 that would draw as a 272-year age", zero.LastActivityUnixMs)
+	if zero.StateSinceUnixMs != 0 {
+		t.Errorf("Session.StateSinceUnixMs = %d for a session with no stamp; want 0 -- 0 is absent, and time.Time{}.UnixMilli() is a date in 1754 that would draw as a 272-year age", zero.StateSinceUnixMs)
 	}
 }
 

@@ -115,8 +115,8 @@ data class InboxRow(
      * the wire sent it, never a guessed English sentence that would fail silently the day the
      * server adds one.
      *
-     * The age is counted from the MACHINE's stamp
-     * ([dev.swarm.phone.ui.SessionRow.lastActivityUnixMs]) and is absent, not the epoch's, when
+     * The age is time IN THE CURRENT STATE, counted from the MACHINE's stamp of entering it
+     * ([dev.swarm.phone.ui.SessionRow.stateSinceUnixMs]), and is absent, not the epoch's, when
      * the stamp is 0.
      */
     val need: String,
@@ -262,11 +262,12 @@ object TriageInboxScreen {
     }
 
     /**
-     * The age since the machine's stamp, in `MachineFreshness`'s own units (`4m`, `3h`, `2d`),
-     * or "" for 0 -- a zero stamp is ABSENT and no age is drawn for it, never the epoch's.
+     * The time in the current state since the machine's stamp of entering it, in
+     * `MachineFreshness`'s own units (`4m`, `3h`, `2d`), or "" for 0 -- a zero stamp is ABSENT
+     * and no age is drawn for it, never the epoch's.
      */
-    private fun ageOf(lastActivityUnixMs: Long, nowUnixMs: Long): String =
-        MachineFreshness(silent = false, lastHeardUnixMs = lastActivityUnixMs).sinceLastHeard(nowUnixMs)
+    private fun ageOf(stateSinceUnixMs: Long, nowUnixMs: Long): String =
+        MachineFreshness(silent = false, lastHeardUnixMs = stateSinceUnixMs).sinceLastHeard(nowUnixMs)
 
     /** The separator between the need line's facts. `PeekPanelScreen` sets the idiom. */
     private const val FIELD_SEPARATOR = " · "
@@ -334,7 +335,7 @@ object TriageInboxScreen {
                             // keeps the id, the scope bar's own rule (agents-tracker-ksvb.1).
                             need = listOfNotNull(
                                 needCopy(row.need, row.group),
-                                ageOf(row.lastActivityUnixMs, nowUnixMs),
+                                ageOf(row.stateSinceUnixMs, nowUnixMs),
                                 if (scope == null) {
                                     machineOf(row.id)?.let { MachineLabel.of(machineNames[it].orEmpty(), it) }
                                 } else {

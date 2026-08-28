@@ -1,8 +1,11 @@
 package daemon
 
-// FAILING-FIRST (TDD RED, GG-5) for phone-refit-playbook W7.1: the roster snapshot and the four
-// journalworthy transitions carry persist.Meta.LastActivity -- the MACHINE's stamp -- at exactly
-// the sites Agent and Name are set (agentrecord_test.go), and a zero stamp stays zero.
+// FAILING-FIRST (TDD RED, GG-5) for phone-refit-playbook W7.1 (as ruled at review): the roster
+// snapshot and the four journalworthy transitions carry the MACHINE's stamp of when the session
+// entered its current state -- persist.Meta.EffectiveGroupEnteredAt(), never LastActivity, which
+// is written only at launch and exit and would age twins launched together identically -- at
+// exactly the sites Agent and Name are set (agentrecord_test.go). A meta with no stamp at all
+// stays zero.
 
 import (
 	"testing"
@@ -13,15 +16,18 @@ import (
 	"github.com/Nathandela/swarm/internal/status"
 )
 
-func metaActiveAt(id string, p status.Process, in status.Interaction, last time.Time) persist.Meta {
+// metaInStateSince: entered its current state at `since`, with a DIFFERENT LastActivity so the
+// two sources cannot be confused.
+func metaInStateSince(id string, p status.Process, in status.Interaction, since time.Time) persist.Meta {
 	m := metaWith(id, "claude", p, in)
-	m.LastActivity = last
+	m.GroupEnteredAt = since
+	m.LastActivity = since.Add(-time.Hour)
 	return m
 }
 
-func TestJournalRecordForCarriesLastActivity(t *testing.T) {
-	last := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
-	running := metaActiveAt("s1", status.ProcessRunning, status.InteractionNone, last.Add(-time.Minute))
+func TestJournalRecordForCarriesStateSince(t *testing.T) {
+	since := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
+	running := metaInStateSince("s1", status.ProcessRunning, status.InteractionNone, since.Add(-time.Minute))
 
 	cases := []struct {
 		name       string
@@ -30,10 +36,10 @@ func TestJournalRecordForCarriesLastActivity(t *testing.T) {
 		next       persist.Meta
 		wantType   journal.RecordType
 	}{
-		{"launched", persist.Meta{}, false, metaActiveAt("s1", status.ProcessRunning, status.InteractionNone, last), journal.TypeLaunched},
-		{"exited", running, true, metaActiveAt("s1", status.ProcessExited, status.InteractionNone, last), journal.TypeExited},
-		{"lost", running, true, metaActiveAt("s1", status.ProcessLost, status.InteractionNone, last), journal.TypeLost},
-		{"group_transition", running, true, metaActiveAt("s1", status.ProcessRunning, status.InteractionPermission, last), journal.TypeGroupTransition},
+		{"launched", persist.Meta{}, false, metaInStateSince("s1", status.ProcessRunning, status.InteractionNone, since), journal.TypeLaunched},
+		{"exited", running, true, metaInStateSince("s1", status.ProcessExited, status.InteractionNone, since), journal.TypeExited},
+		{"lost", running, true, metaInStateSince("s1", status.ProcessLost, status.InteractionNone, since), journal.TypeLost},
+		{"group_transition", running, true, metaInStateSince("s1", status.ProcessRunning, status.InteractionPermission, since), journal.TypeGroupTransition},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,19 +47,37 @@ func TestJournalRecordForCarriesLastActivity(t *testing.T) {
 			if !ok || rec.Type != tc.wantType {
 				t.Fatalf("journalRecordFor = %+v ok=%v; want a %s record", rec, ok, tc.wantType)
 			}
-			if !rec.LastActivity.Equal(last) {
-				t.Errorf("%s record carries LastActivity %v; want %v read straight off next.LastActivity (W7.1)", tc.wantType, rec.LastActivity, last)
+			if !rec.StateSince.Equal(since) {
+				t.Errorf("%s record carries StateSince %v; want %v, next.EffectiveGroupEnteredAt() -- the age is time in the current state, not time since launch (W7.1 ruling)", tc.wantType, rec.StateSince, since)
 			}
 		})
 	}
 }
 
-func TestRosterSnapshotCarriesLastActivity(t *testing.T) {
-	d := openDaemon(t, daemonConfig(t))
-	last := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
+func TestJournalRecordForStateSinceFallsBackAsTheMetaDoes(t *testing.T) {
+	// A record written before GroupEnteredAt existed: EffectiveGroupEnteredAt's own fallback
+	// (LastActivity, then CreatedAt) is what crosses, not a zero.
+	last := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+	next := metaWith("s2", "claude", status.ProcessRunning, status.InteractionNone)
+	next.GroupEnteredAt = time.Time{}
+	next.LastActivity = last
+	rec, ok := journalRecordFor(persist.Meta{}, false, next)
+	if !ok {
+		t.Fatalf("journalRecordFor(launched) reported not journalworthy")
+	}
+	if !rec.StateSince.Equal(last) {
+		t.Errorf("StateSince = %v; want %v, the meta's own fallback for a pre-GroupEnteredAt record", rec.StateSince, last)
+	}
+}
 
-	d.putMem(metaActiveAt("stamped", status.ProcessRunning, status.InteractionNone, last))
-	d.putMem(metaActiveAt("unstamped", status.ProcessRunning, status.InteractionNone, time.Time{}))
+func TestRosterSnapshotCarriesStateSince(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	since := time.Date(2026, 8, 28, 9, 34, 0, 0, time.UTC)
+
+	d.putMem(metaInStateSince("stamped", status.ProcessRunning, status.InteractionNone, since))
+	unstamped := metaWith("unstamped", "claude", status.ProcessRunning, status.InteractionNone)
+	unstamped.GroupEnteredAt, unstamped.LastActivity, unstamped.CreatedAt = time.Time{}, time.Time{}, time.Time{}
+	d.putMem(unstamped)
 
 	res, err := d.JournalReadFrom(0)
 	if err != nil {
@@ -61,12 +85,12 @@ func TestRosterSnapshotCarriesLastActivity(t *testing.T) {
 	}
 	got := map[string]time.Time{}
 	for _, r := range res.Roster {
-		got[r.SessionID] = r.LastActivity
+		got[r.SessionID] = r.StateSince
 	}
-	if !got["stamped"].Equal(last) {
-		t.Errorf("roster record for stamped carries LastActivity %v; want %v -- the roster is the only path by which a reconnected session reaches the phone, so it must carry the stamp (W7.1)", got["stamped"], last)
+	if !got["stamped"].Equal(since) {
+		t.Errorf("roster record for stamped carries StateSince %v; want %v -- the roster is the only path by which a reconnected session reaches the phone, so it must carry the stamp (W7.1)", got["stamped"], since)
 	}
 	if !got["unstamped"].IsZero() {
-		t.Errorf("roster record for unstamped carries LastActivity %v; want the zero time, never an invented one", got["unstamped"])
+		t.Errorf("roster record for unstamped carries StateSince %v; want the zero time, never an invented one", got["unstamped"])
 	}
 }

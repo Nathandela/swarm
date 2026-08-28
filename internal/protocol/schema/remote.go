@@ -106,11 +106,13 @@ type JournalRecord struct {
 	// omitzero: a zero stamp is absent on the wire, never the epoch, and every record written
 	// before this field existed serialises byte-identically.
 	TS time.Time `json:"ts,omitzero"`
-	// LastActivity is the session's persist.Meta.LastActivity -- when the MACHINE last saw the
-	// session do anything -- carried on roster records and the four journalworthy transitions
-	// so an Inbox row can say how old its state is (W7.1). It is the session's stamp, not
-	// this record's; a record whose meta carried none omits it, for TS's reason.
-	LastActivity time.Time `json:"last_activity,omitzero"`
+	// StateSince is the MACHINE's stamp of when the session entered its CURRENT state
+	// (persist.Meta.EffectiveGroupEnteredAt()), carried on roster records and the four
+	// journalworthy transitions so an Inbox row can say how long the session has been in the
+	// state it shows (W7.1). It is the session's stamp, not this record's, and it is not
+	// LastActivity, which moves only at launch and exit; a record whose meta carried no
+	// instant omits it, for TS's reason.
+	StateSince time.Time `json:"state_since,omitzero"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They

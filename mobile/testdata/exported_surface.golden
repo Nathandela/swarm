@@ -97,13 +97,13 @@ field Session.Agent string
 field Session.Destination string
 field Session.Group string
 field Session.ID string
-field Session.LastActivityUnixMs int64
 field Session.MissingCapability string
 field Session.Need string
 field Session.Present bool
 field Session.Provider string
 field Session.ProviderVersion string
 field Session.SessionInstance string
+field Session.StateSinceUnixMs int64
 field Session.StructuredChat bool
 field Session.TerminalControl bool
 field Session.Title string

@@ -114,12 +114,13 @@ type Session struct {
 	// watch and may not control (T6-b).
 	StructuredChat  bool
 	TerminalControl bool
-	// LastActivityUnixMs is the MACHINE's stamp of the session's last activity
-	// (persist.Meta.LastActivity, carried on the roster and the journalworthy transitions),
-	// in Unix milliseconds so Kotlin can age a row from it. 0 is ABSENT: no record has
-	// carried a stamp for this session, and Kotlin draws no age for 0 -- never the epoch
+	// StateSinceUnixMs is the MACHINE's stamp of when the session entered its current state
+	// (persist.Meta.EffectiveGroupEnteredAt(), carried on the roster and the journalworthy
+	// transitions), in Unix milliseconds so Kotlin can age a row from it: the age is time IN
+	// the state the row shows, not time since launch. 0 is ABSENT: no record has carried a
+	// stamp for this session, and Kotlin draws no age for 0 -- never the epoch
 	// (phone-refit-playbook W7.1).
-	LastActivityUnixMs int64
+	StateSinceUnixMs int64
 }
 
 // SessionList is a roster HANDLE. gomobile has no bound list type, so a collection

@@ -637,7 +637,7 @@ class ScreenAirSweepTest {
                         need = "waiting on you",
                         present = true,
                         agent = "claude",
-                        lastActivityUnixMs = 0L,
+                        stateSinceUnixMs = 0L,
                     ),
                 ),
                 journalStale = true,

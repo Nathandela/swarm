@@ -74,7 +74,7 @@ class NeedVocabularyTest {
             need = need,
             present = true,
             agent = "claude",
-            lastActivityUnixMs = 0L,
+            stateSinceUnixMs = 0L,
         )
         val screen = TriageInboxScreen.of(TriageInbox.from(listOf(session), journalStale = false))
         return screen.sections.first { it.group == group }.rows.single()
