@@ -689,11 +689,24 @@ class InboxChromeTest {
             KitOrigin.cssColour(".ptabs div", "color"),
             KitOrigin.cssColour(".ptabs div.on", "color"),
         )
+        // AUTHORIZED REWRITE, ADR-020 D1 (2026-08-27, wave W4). What the closing guard said:
+        //
+        //     assertNotEquals(
+        //         "--p-tabbg resolves to the same value as --p-bg, so the translucency assertion above " +
+        //             "cannot fail",
+        //         KitOrigin.rgbaToken("--p-tabbg"),
+        //         KitOrigin.token("--p-bg"),
+        //     )
+        //
+        // It guarded an assertion that said the bar is NOT the ground. The bar IS the ground now,
+        // by decision, and the assertion above says so with an equality; what makes that equality
+        // falsifiable is that the reader does not resolve every surface to the ground -- so the
+        // guard is that --p-bg and --p-card, one ladder rung apart, come back different.
         assertNotEquals(
-            "--p-tabbg resolves to the same value as --p-bg, so the translucency assertion above " +
-                "cannot fail",
-            KitOrigin.rgbaToken("--p-tabbg"),
+            "--p-bg resolves to the same value as --p-card, so the opaque-bar equality above " +
+                "would hold for a bar painted on any rung of the ladder and cannot fail",
             KitOrigin.token("--p-bg"),
+            KitOrigin.token("--p-card"),
         )
     }
 }
