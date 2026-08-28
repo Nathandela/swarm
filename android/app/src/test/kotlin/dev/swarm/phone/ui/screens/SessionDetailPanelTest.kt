@@ -346,4 +346,9 @@ class SessionDetailPanelTest {
     // that never needed one. The fence that keeps them gone is android/gate's
     // TestR1_TheLeaseIsNotAThingAScreenReads.
 
+    @Test
+    fun `the decision pill asks for the reader's answer`() {
+        // phone-refit-playbook W6.2: the drawing's decision.pill row, verbatim.
+        assertEquals("Needs your answer", panelOf().decisionPillLabel)
+    }
 }

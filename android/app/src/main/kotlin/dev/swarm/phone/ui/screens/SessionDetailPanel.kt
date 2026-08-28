@@ -461,7 +461,7 @@ object SessionDetailScreen {
      * with no owner and no production caller: the same "computed and read by nothing" shape this
      * wave is closing everywhere else.
      */
-    private const val DECISION_PILL = "Decision needed"
+    private const val DECISION_PILL = "Needs your answer"
 
     /**
      * What a conversation-menu row ANSWERS TO, which is never the words on it.
