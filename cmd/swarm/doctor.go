@@ -33,6 +33,7 @@ import (
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/upgrade"
 	"github.com/Nathandela/swarm/internal/version"
 )
 
@@ -315,24 +316,34 @@ func doctorSessionChecks(stateDir string) []doctorFinding {
 	return out
 }
 
-// doctorUpgradeCheck reads the upgrade state the update transaction writes
-// (lifecycle plan R2). Its absence is normal until R2 ships or runs.
+// doctorUpgradeCheck reads the last update-transaction run (upgrade.State).
+// A month of failed downloads must never be invisible behind a green unit
+// (committee C3): the state file is the durable record, and this is its reader.
 func doctorUpgradeCheck(stateDir string) doctorFinding {
-	if _, err := os.Stat(upgradeStatePath(stateDir)); errors.Is(err, os.ErrNotExist) {
+	st, err := upgrade.ReadState(stateDir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return doctorFinding{
 			Check: "auto-update", Status: "ok",
 			Detail: "has not run on this machine",
 		}
+	case err != nil:
+		return doctorFinding{
+			Check: "auto-update", Status: "warn",
+			Detail: fmt.Sprintf("cannot read the last run's record: %v", err),
+		}
 	}
-	return doctorFinding{
-		Check: "auto-update", Status: "ok",
-		Detail: "state present (see " + upgradeStatePath(stateDir) + ")",
+	detail := fmt.Sprintf("last run %s: %s", st.CheckedAt.Format("2006-01-02 15:04"), st.Outcome)
+	if st.StagedVersion != "" {
+		detail += fmt.Sprintf(" (%s staged, awaiting activation)", st.StagedVersion)
 	}
-}
-
-// upgradeStatePath is where the update transaction records each run's outcome.
-// Defined here until R2 introduces the writer, so the reader and writer cannot
-// drift apart on the location.
-func upgradeStatePath(stateDir string) string {
-	return stateDir + string(os.PathSeparator) + "upgrade.json"
+	switch {
+	case strings.HasPrefix(st.Outcome, "failed"):
+		return doctorFinding{Check: "auto-update", Status: "fail", Detail: detail + ": " + st.Detail,
+			Fix: "swarm upgrade --stage (and read the detail)"}
+	case st.Outcome == "refused-owner":
+		return doctorFinding{Check: "auto-update", Status: "ok", Detail: detail + ": " + st.Detail}
+	default:
+		return doctorFinding{Check: "auto-update", Status: "ok", Detail: detail}
+	}
 }
