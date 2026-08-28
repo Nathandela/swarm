@@ -1050,6 +1050,14 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	if s.SupervisionPending {
 		markers = append(markers, supervisionMarker(s, m.sessions))
 	}
+	if s.BackendPlanError != "" {
+		// The degraded-backend marker (lifecycle R1): the PTY runs but nothing
+		// serves the attach channel. A row has room only for the fact; the full
+		// reason is on `swarm ls` and `swarm doctor`. PLAIN text like its two
+		// siblings: the joined marker is clamped (clampCells requires unstyled
+		// input) and styled ONCE below (R1 audit: codex finding 4).
+		markers = append(markers, "no backend")
+	}
 	if len(markers) > 0 {
 		marker := " " + strings.Join(markers, " ")
 		markerWidth := lipgloss.Width(marker)

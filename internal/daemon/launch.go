@@ -260,7 +260,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 	// The launch ENVIRONMENT is resolved ONCE here, so the persisted meta and the env
 	// the shim actually execs the agent with cannot disagree (ADR-007 D8's daemon-policy
 	// half; see PolicyEnv). spec is a value copy, so this is local to this launch.
-	spec.ClientEnv = PolicyEnv(spec.ClientEnv)
+	spec.ClientEnv = d.LaunchPolicyEnv(spec.ClientEnv)
 
 	// Cap check + id reservation, atomically, BEFORE any spawn (S-7): the rejected
 	// launch must grow nothing and spawn nothing.
@@ -419,12 +419,15 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, terr
 	}
-	cmd, err := d.spawnShim(id, spec, sock, dir, token)
+	cmd, backendPlanErr, err := d.spawnShim(id, spec, sock, dir, token)
 	if err != nil {
 		d.rollbackReserved(id, m, preLaunchOK)
 		return persist.Meta{}, err
 	}
 	m.ShimPID = cmd.Process.Pid
+	// The degraded-backend reason rides the identity save below -- no extra write.
+	// "" is the ordinary case: the backend planned, or this CLI declares none.
+	m.BackendPlanError = backendPlanErr
 
 	// Record the shim identity as EARLY as possible — before the shim spawns its
 	// agent — so a daemon crash any time after the agent exists still leaves a
@@ -504,7 +507,13 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 // --config` process. It sets no process group, so the shim setsids in place (a
 // stable PID that reconcile can match) and detaches itself; the shim's stdio goes
 // to the daemon log while the AGENT's env is the filtered set in the config.
-func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (*exec.Cmd, error) {
+//
+// backendPlanErr is the planner's refusal when the session launched degraded --
+// no backend planned although the adapter declared one. It is a RESULT, not an
+// error: the launch proceeds (playbook §6.1), and the caller persists the reason
+// onto the meta so the degradation is visible in ls/TUI/doctor rather than only
+// in the daemon log.
+func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) (cmd *exec.Cmd, backendPlanErr string, err error) {
 	// The structured-capture channel (playbook §6.1): the shim binds its own hook
 	// socket beside its control socket, the agent's `swarm hook` is pointed at it, and
 	// the DRAIN verb is gated by a secret minted here and persisted only in this 0600
@@ -513,7 +522,7 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	hookSock := hookSocketPath(d.cfg.StateDir, id)
 	drainToken, err := newHookDrainToken()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	lc := shimSpawnConfig{
 		SessionID:      id,
@@ -538,7 +547,10 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 		if perr != nil {
 			// A backend failure is a failure for the BACKEND only (playbook §6.1's posture):
 			// the session still launches, degraded, exactly as a pre-R7 session of the same
-			// CLI does. The honest structured_gap that accompanies it is the assembly's.
+			// CLI does. The reason is returned so the caller persists it onto the meta --
+			// one daemon.log line was how the 2026-08-28 attach-failure incident stayed
+			// invisible -- and the log line stays for the operator tailing live.
+			backendPlanErr = perr.Error()
 			d.logf("launch %s: no session backend planned: %v", id, perr)
 		} else {
 			spec.Backend = plan
@@ -553,26 +565,26 @@ func (d *Daemon) spawnShim(id string, spec LaunchSpec, sock, dir, token string) 
 	}
 	data, err := json.Marshal(lc)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cfgPath := filepath.Join(dir, shimLaunchConfigFile)
 	if err := os.WriteFile(cfgPath, data, 0o600); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	cmd := exec.Command(d.cfg.ShimBinary, "shim", "--config", cfgPath)
+	cmd = exec.Command(d.cfg.ShimBinary, "shim", "--config", cfgPath)
 	cmd.Env = os.Environ() // the shim PROCESS env; the agent env is lc.Env (filtered)
 	logf, err := openDaemonLog(d.cfg.LogPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cmd.Stdout, cmd.Stderr = logf, logf
 	startErr := cmd.Start()
 	_ = logf.Close() // the shim holds its own dup of the fd
 	if startErr != nil {
-		return nil, startErr
+		return nil, "", startErr
 	}
-	return cmd, nil
+	return cmd, backendPlanErr, nil
 }
 
 // hookSeqFilePath is the per-session monotonic counter file injected as

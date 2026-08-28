@@ -189,6 +189,7 @@ alongside the group.
 | `summary`       | string          | V-4 one-line last-output summary                              |
 | `spawned_from`  | string          | local id of the session that spawned this one; absent when none (ADR-010 D4) |
 | `spawn_intent`  | string          | how the spawn was meant: `handoff` or `delegate`; absent when none |
+| `backend_plan_error` | string     | the persisted reason this session launched with no backend although its adapter declared one (the agent's PTY runs; nothing serves the attach channel); absent on a healthy session and on rows from an older daemon (lifecycle R1) |
 | `remote_controlled` | bool        | a paired device currently holds this session's controller lease (R1.3.7); absent when false |
 | `remote_activity_at` | `*time.Time` | when a paired device last delivered a message to this session, carried only while that instant is inside the daemon's activity horizon; absent when no message is in the window. The board row's words -- `phone sent 09:41` -- are drawn from this instant, so the row states an event and never a presence claim (conversation surface, Wave G item G.2) |
 | `supervision`   | string          | the persisted supervision mode of a handoff child: `passive`, `manual` or `none` (ADR-010 Amendment 3 C1); absent when none |

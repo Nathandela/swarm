@@ -68,6 +68,16 @@ type Meta struct {
 	ShimPID        int       `json:"shim_pid"`
 	ShimStartTime  int64     `json:"shim_start_time"`
 	ConversationID string    `json:"conversation_id"`
+	// BackendPlanError is the reason this session launched with NO backend when its
+	// adapter declared one (daemon.BackendPlanner returned an error): the agent's PTY
+	// runs, but there is no app-server for the daemon to attach to. Persisted so the
+	// failure has a surface (`swarm ls`, the TUI, `swarm doctor`) instead of one
+	// daemon.log line -- the 2026-08-28 "attach failure" incident took a debugging
+	// session to root-cause for want of exactly this field. Additive without a
+	// schema-version bump for the same rollback reason as AgentCwd above; "" means
+	// the backend planned fine, or the session's CLI needs none (the ordinary case,
+	// indistinguishable by design -- absence of a backend is not a defect).
+	BackendPlanError string `json:"backend_plan_error,omitempty"`
 	ExitCode       *int      `json:"exit_code"`
 	ResumedFrom    string    `json:"resumed_from"`
 	SpawnedFrom    string    `json:"spawned_from"` // local id of the session that spawned this one (ADR-010 D4)

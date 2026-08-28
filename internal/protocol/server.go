@@ -3008,6 +3008,8 @@ func stampView(endpointID string, m persist.Meta, group status.Group, remoteCont
 		// snapshot and the subscribe stream show where a session came from.
 		SpawnedFrom: m.SpawnedFrom,
 		SpawnIntent: m.SpawnIntent,
+		// The degraded-backend reason (persist.Meta.BackendPlanError): "" is healthy.
+		BackendPlanError: m.BackendPlanError,
 		// nx44.7: not persisted -- the controller lease is live daemon state, sampled
 		// by the caller at stamp time.
 		RemoteControlled: remoteControlled,

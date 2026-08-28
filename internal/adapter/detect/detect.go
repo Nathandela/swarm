@@ -8,7 +8,12 @@ package detect
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -30,6 +35,53 @@ type Host struct{}
 // LookPath resolves name to a program path via the process PATH.
 func (Host) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
+}
+
+// EnvHost is a HostProber bound to a SUPPLIED environment's PATH rather than the
+// process's: LookPath resolves against Env, and Run refuses -- resolution against
+// somebody else's environment must never execute anything on this process's
+// behalf. It exists for diagnosis (`swarm doctor` comparing what the daemon's
+// saved environment resolves against what the invoking shell resolves -- the
+// split-brain check) and mirrors the skeleton's own env-bound backend prober.
+type EnvHost struct{ Env []string }
+
+// LookPath resolves name against the PATH carried in h.Env, mirroring
+// exec.LookPath's contract: a name containing a separator is checked as a path,
+// a bare name is searched dir by dir.
+func (h EnvHost) LookPath(name string) (string, error) {
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if isExecutableFile(name) {
+			return name, nil
+		}
+		return "", fmt.Errorf("detect: %q is not an executable file", name)
+	}
+	var pathEnv string
+	for _, kv := range h.Env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathEnv = v
+		}
+	}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			continue
+		}
+		cand := filepath.Join(dir, name)
+		if isExecutableFile(cand) {
+			return cand, nil
+		}
+	}
+	return "", fmt.Errorf("detect: %q not found on the supplied PATH", name)
+}
+
+// Run refuses: see EnvHost.
+func (EnvHost) Run(string, []string) (string, error) {
+	return "", errors.New("detect: EnvHost resolves names; it never runs a program")
+}
+
+// isExecutableFile reports whether path is a regular, executable file.
+func isExecutableFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
 }
 
 // Run executes path with args and returns its combined stdout+stderr. Many CLIs
