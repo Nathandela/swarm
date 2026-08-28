@@ -1,7 +1,9 @@
 # Phone refit W6: Chat rows (verification evidence)
 
 Bead `agents-tracker-d45a.6`. Contract: `docs/specifications/phone-refit-playbook.md` §7
-(W6.1, W6.2). Worktree `refit-w6`, branch `refit/w6`, branched from `main` at `1a0e7b29`.
+(W6.1, W6.2). Worktree `refit-w6`, branch `refit/w6`, branched from `main` at `1a0e7b29` and rebased by the
+orchestrator onto `main` at `49759ed7` before the review round (the rebased SHAs are the ones in
+the commit list).
 Each item below records the RED run (tests written first, exact failure text), the GREEN run,
 and one negative control per behavioural change (the fix perturbed back, the test shown
 failing, the file restored).
@@ -311,14 +313,239 @@ ok  	github.com/Nathandela/swarm/internal/skeleton	435.048s
 
 All four Go gates green; the Kotlin suite green.
 
-## Commits on `refit/w6` (on `main` at `1a0e7b29`; not rebased, per the fleet protocol)
+## Commits on `refit/w6` (rebased onto `main` at `49759ed7`)
 
 | SHA | Subject |
 |---|---|
-| `ff3c65f8` | Add the agent tool kind: Claude's Task tool classifies as agent |
-| `b089efa5` | Rename the decision pill: Needs your answer |
-| `220fdcd9` | Read tool rows as a verb over one grey line |
+| `d82736b3` | Add the agent tool kind: Claude's Task tool classifies as agent |
+| `2118cab3` | Rename the decision pill: Needs your answer |
+| `81c7aa43` | Read tool rows as a verb over one grey line |
+| `bd5134db` | Record W6 evidence: RED, GREEN, controls, gates, changed assertions |
+| `795e5f80` | The oneOf test reads section 7's vocabulary from the schema (review fix 2) |
+| `695483fd` | Route the grey line's style through Kit.appearance (review fix 1) |
+| `2ab35944` | Say Needs your answer on the drawn stages and in the prose (review fix 3) |
+| `51b79a8a` | The grey line is the first line that says something (review fix 4) |
+
+(Before the rebase the first three were `ff3c65f8`, `b089efa5`, `220fdcd9` on `1a0e7b29`.)
 
 `git merge-tree --write-tree main refit/w6` is clean: `main`'s W4 changes to `ActivityRow.kt`
 (the padding, lines 21-29 and 91-100) do not overlap W6's hunks (the `secondary` parameter and
 the body cell, lines 71+ and 123+), so the rebase at merge is trivial.
+
+## Review round (2026-08-28)
+
+One adversarial round (fleet protocol §1 item 8): one BLOCKING finding, two SHOULD-FIX, one
+NOTE ruled in; one NOTE filed as a bead and not touched (a pre-R6 record with a readable body
+but no `tool_kind` now reads `tool_run`). Each fix below: the defect, the RED text, the GREEN,
+and the control that shows the fix is what the test bites on.
+
+### The rebase
+
+The orchestrator rebased `refit/w6` onto `main` at `49759ed7` (tree identical to the merge-tree
+recorded above, no conflicts) and pushed it as `bd5134db`; the wave's commits became
+`d82736b3`, `2118cab3`, `81c7aa43`, `bd5134db`. The worktree was reset to it and
+`android/app/libs/swarm.aar` copied from `refit-main` (main's mobile facade changed in W7).
+
+### Fix 1 (BLOCKING): the grey line's style bypassed Kit.appearance
+
+Defect: `ActivityRow.kt:165` applied `TextAppearance_Swarm_Mono_Meta` with a bare
+`setTextAppearance`, which main's W8.1 fence forbids in `ui/kit` (every kit style goes through
+`Kit.appearance`, which also applies the style's leading). Mono.Meta declares no lineHeight, so
+no golden moves.
+
+RED, on the rebased tree before the fix:
+
+```
+$ go test -count=1 ./android/gate -run TestW8
+--- FAIL: TestW8_EveryKitStyleIsAppliedThroughKitAppearance (0.03s)
+    w8_leading_test.go:70: W8.1: 1 bare setTextAppearance( call(s) in ui/kit outside Kit.appearance. Each applies the style's size, weight, family and tracking and drops its leading; route it through Kit.appearance(this, style):
+        	ActivityRow.kt:165: setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+FAIL	github.com/Nathandela/swarm/android/gate	0.917s
+```
+
+GREEN, `Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)`:
+
+```
+$ go test -count=1 ./android/gate -run TestW8
+ok  	github.com/Nathandela/swarm/android/gate	0.722s
+```
+
+Kotlin lane on `ActivityRowTest` + `TranscriptViewTest` (lane start 2026-08-28T13:20:59Z):
+
+```
+gradle exit=0
+aar unchanged (mtime 1787923203)
+xml total=2 stale=0
+SUMMARY tests=27 failures=0 errors=0 skipped=0
+```
+
+### Fix 2 (SHOULD-FIX): the oneOf test read a copied list, not the schema
+
+Defect: `TestInteractionValidate_AcceptsEverySection7ActionType` iterated a literal list, so a
+member added to interaction-schema.md §7 but not to the oneOf went uncaught. The test now reads
+the backticked tokens off the schema's `type` row (the line starting "| `type` |"; the field's
+own name dropped, a repeat kept once), the way `skeleton/r6_toolkind_test.go` reads the same
+file, and fails loudly when the row is missing or names nothing.
+
+RED, proof it bites: a `probe` token added to the tracked schema row (restored afterwards with
+`git checkout`), the new test:
+
+```
+$ go test -count=1 -run TestInteractionValidate_AcceptsEverySection7ActionType ./internal/adapter/
+--- FAIL: TestInteractionValidate_AcceptsEverySection7ActionType (0.01s)
+    interaction_test.go:358: action.type "probe" is in §7's vocabulary and was rejected: action.type "probe" is not one of [read edit write search execute fetch agent other] (interaction-schema.md §3/§4)
+FAIL	github.com/Nathandela/swarm/internal/adapter	1.930s
+```
+
+Control (the defect, shown): the OLD literal-list test (`bd5134db`'s) against the same probed
+schema row passes, which is exactly the hole:
+
+```
+--- PASS: TestInteractionValidate_AcceptsEverySection7ActionType (0.00s)
+ok  	github.com/Nathandela/swarm/internal/adapter	1.388s
+```
+
+GREEN, schema restored (`git status` clean on it), the new test:
+
+```
+--- PASS: TestInteractionValidate_AcceptsEverySection7ActionType (0.01s)
+ok  	github.com/Nathandela/swarm/internal/adapter	1.749s
+```
+
+### Fix 3 (SHOULD-FIX + prose): the drawn stages and the prose still said the old copy
+
+No test exists for figures and prose; the evidence is the grep, before and after, plus the
+copy checker and its Go harness.
+
+Before (`grep -rn "Decision needed" docs android/app/src/main`):
+
+```
+docs/design/conversation-drawing.html:313:              <div class="pill">Decision needed ↓</div>
+docs/design/conversation-drawing.html:610:          <div class="stage"><div class="pill">Decision needed ↓</div></div>
+docs/design/substrate-components.md:279:| 32 | Decision pill | ... the copy table records `Decision needed`, and a string not on that sheet is not on the screen ...
+docs/specifications/phone-refit-playbook.md:639:| Decision needed / Your machine could not apply this answer | Needs your answer / ... |
+docs/specifications/chat-surface-plan.md:198:| `decisionPill` | *Decision needed* — the only persistent affordance in the flow |
+docs/verification/remote-phaseA-a7-review.md:95:... **Decision needed (ADR):**
+docs/verification/phone-refit-w6.md:116, :207, :218 (this file's RED text and control A)
+android/app/src/main/kotlin/dev/swarm/phone/ui/kit/DecisionPill.kt:34: * `Decision needed`; a string not on that sheet is not on the screen. ...
+android/app/src/main/kotlin/dev/swarm/phone/PhoneSurface.kt:636:     * The drawing's one persistent affordance: *Decision needed*, above the composer, while the
+android/app/src/main/kotlin/dev/swarm/phone/ui/screens/TranscriptPanel.kt:134:     * `decision.pill` -- *Decision needed* -- "appears only while an unanswered decision is off
+```
+
+Changed: the two drawn stages (`:313`, `:610`, the arrow kept -- it is not copy),
+substrate-components.md (`:279`; the review cited `:277`, the row is at `:279` on this tree),
+chat-surface-plan.md `:198`, the three KDocs, and interaction-schema.md §7 IS-TOOL-2 ("the card
+falls back to `tool`" -> the phone says "Used a tool" and never the tool name).
+
+After:
+
+```
+$ grep -rn "Decision needed" android/app/src/main
+(empty; exit 1)
+$ grep -rn "Decision needed" docs
+docs/specifications/phone-refit-playbook.md:639   (W5's table: the "Now" column records the old literal by construction)
+docs/verification/remote-phaseA-a7-review.md:95   ("Decision needed (ADR)": an unrelated sense, not the pill)
+docs/verification/phone-refit-w6.md:116, :207, :218   (this file: the wave's RED text and control A, quoted)
+```
+
+Those three are left as they are: a "Now" column, a different phrase, and quoted failure text.
+
+```
+$ python3 scripts/check-conversation-copy.py .
+20 binding(s) checked across 15 of 28 tabled row(s), ONE DIRECTION.
+checker exit=0
+$ go test -count=1 ./internal/verify/ -run CopySheet
+ok  	github.com/Nathandela/swarm/internal/verify	3.416s
+```
+
+(The harness's tests are named `TestCopySheet_*`; `-run ConversationCopy` selects none of them.)
+
+Control: reverting the commit brings every line of the "before" grep back; there is no test to
+go red, which is the finding's own premise.
+
+### Fix 4 (NOTE ruled in): the grey line took a blank first line
+
+Defect: `firstLine` took the first line even when blank, so an `output_excerpt` opening with
+"\n" drew no grey line. The rule is now the first line that says something: blank lines
+skipped, the line's own edges trimmed.
+
+Test first, `TranscriptPanelTest` `the grey line skips a blank first line` (output
+`"\n\nok  swarm\n"` -> `ok  swarm`; command `"\n  go test ./...\n"` -> `go test ./...`).
+
+RED (lane start 2026-08-28T13:29:36Z, `--tests TranscriptPanelTest`):
+
+```
+gradle exit=1
+SUMMARY tests=24 failures=1 errors=0 skipped=0
+FAILURE dev.swarm.phone.ui.screens.TranscriptPanelTest > the grey line skips a blank first line
+    org.junit.ComparisonFailure: expected:<[ok  swarm]> but was:<[]>
+```
+
+The other 23 tests of the class pass in the same run, so the existing grey-line rules
+(`every tool kind gets a verb and other is never a question mark`) are untouched by the new
+claim.
+
+GREEN (lane start 2026-08-28T14:21:58Z, `--tests TranscriptPanelTest`), `firstLine` the first
+non-blank line, trimmed:
+
+```
+gradle exit=0
+aar unchanged (mtime 1787923203)
+xml total=1 stale=0
+SUMMARY tests=24 failures=0 errors=0 skipped=0
+```
+
+### Negative controls (each fix reverted in turn, its gate or test red, then restored)
+
+| Fix | Reverted to | What went red |
+|---|---|---|
+| 1 | `bd5134db`'s `ActivityRow.kt` (bare `setTextAppearance`), after the commit | `go test ./android/gate -run TestW8`: `--- FAIL: TestW8_EveryKitStyleIsAppliedThroughKitAppearance` / `ActivityRow.kt:165: setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)`; restored, `git status` clean |
+| 2 | `bd5134db`'s literal-list test, with `probe` in the schema row | nothing: the old test PASSES the probe (the defect); the new test fails on it (`action.type "probe" ... was rejected`) |
+| 3 | the commit itself | no test exists (the finding's premise): `grep -rn "Decision needed" android/app/src/main` finds the three KDocs again and the drawing's two stages return |
+| 4 | `firstLine` taking the first line even when blank (the pre-fix tree) | TranscriptPanelTest `the grey line skips a blank first line`: `expected:<[ok  swarm]> but was:<[]>` (the RED run above) |
+
+### Changed assertions (additions of this round)
+
+| Test | Before | After |
+|---|---|---|
+| TranscriptPanelTest `the grey line skips a blank first line` | (new) | output `"\n\nok  swarm\n"` -> secondary `ok  swarm`; command `"\n  go test ./...\n"` -> `go test ./...` |
+| `TestInteractionValidate_AcceptsEverySection7ActionType` | iterated `[read edit write search execute fetch agent other]` literally | iterates the backticked tokens of interaction-schema.md's `type` row; `t.Fatal` when the row is missing or names nothing |
+
+No existing assertion changed its expected value in this round.
+
+### Gates on the four-fix tree
+
+Go (start 2026-08-28T14:22:40Z, `firstLine` already applied on disk):
+
+```
+$ go build ./... && go vet ./... && golangci-lint run
+0 issues.
+static exit=0
+$ env -u ... go test -race -count=1 ./internal/adapter/... ./internal/verify/... ./android/gate/
+ok  	github.com/Nathandela/swarm/internal/adapter	3.584s
+ok  	github.com/Nathandela/swarm/internal/adapter/agy	3.801s
+ok  	github.com/Nathandela/swarm/internal/adapter/claude	4.551s
+ok  	github.com/Nathandela/swarm/internal/adapter/codex	4.828s
+ok  	github.com/Nathandela/swarm/internal/adapter/detect	12.285s
+ok  	github.com/Nathandela/swarm/internal/adapter/fixtureio	2.034s
+ok  	github.com/Nathandela/swarm/internal/adapter/opencode	3.187s
+ok  	github.com/Nathandela/swarm/internal/adapter/refadapter	5.025s
+ok  	github.com/Nathandela/swarm/internal/adapter/registry	3.074s
+ok  	github.com/Nathandela/swarm/internal/verify	48.007s
+ok  	github.com/Nathandela/swarm/android/gate	123.955s
+test exit=0
+```
+
+Kotlin, the seven classes (the six W6 classes and `ActivityRowTest`), lane start
+2026-08-28T15:22:51Z, on the tree with all four fixes committed:
+
+```
+$ ./gradlew --no-daemon testDebugUnitTest --rerun-tasks --no-build-cache --tests ...ToolCardTest --tests ...ActivityRowTest --tests ...SessionDetailPanelTest --tests ...TranscriptChatRenderTest --tests ...TranscriptPanelTest --tests ...TranscriptScreenGoldenTest --tests ...TranscriptViewTest
+gradle exit=0
+aar unchanged (mtime 1787923203)
+xml total=7 stale=0
+SUMMARY tests=96 failures=0 errors=0 skipped=0
+lane done 2026-08-28T15:25:37Z
+```
+
+The full race suite and the full Kotlin suite run at merge, by the orchestrator.
