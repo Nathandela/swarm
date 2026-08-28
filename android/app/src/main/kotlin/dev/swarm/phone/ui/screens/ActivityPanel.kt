@@ -181,7 +181,7 @@ object ActivityPanelScreen {
      * covers the case where the phone KNOWS it missed something; this copy covers the case where
      * it has no basis for saying either way, which is most of them.
      */
-    private const val EMPTY = "No activity has reached this phone yet."
+    private const val EMPTY = "No activity yet."
 
     /**
      * PB-APP-8's sentence, in the register [dev.swarm.phone.ui.TerminalPeek.staleNotice] set.
@@ -190,9 +190,7 @@ object ActivityPanelScreen {
      * own leaves a reader to guess whether the list is old or incomplete -- and for a chronology
      * it is incomplete, which is the worse of the two and the one they would not assume.
      */
-    private const val STALE_NOTICE =
-        "Some entries are missing: the event stream from your machine had a gap that has not " +
-            "been repaired, so this is not a complete history."
+    private const val STALE_NOTICE = "Some entries are missing."
 
     /** The separator between a record's session and its word. `PeekPanelScreen` sets the idiom. */
     private const val FIELD_SEPARATOR = " · "

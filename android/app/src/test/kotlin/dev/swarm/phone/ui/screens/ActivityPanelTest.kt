@@ -276,11 +276,10 @@ class ActivityPanelTest {
 
         val holed = panel(stale = true).staleNotice
         assertTrue("a stale journal page produced no notice at all", holed.isNotEmpty())
-        assertTrue(
-            "the notice does not say the history is INCOMPLETE. `stale` on its own leaves a " +
-                "reader to guess whether the list is old or has records missing from it, and for " +
-                "a chronology it is the second",
-            holed.contains("missing") || holed.contains("complete"),
+        assertEquals(
+            "the notice does not say entries are MISSING, in the reader's words (phone refit W5.4)",
+            "Some entries are missing.",
+            holed,
         )
     }
 

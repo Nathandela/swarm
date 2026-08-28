@@ -130,10 +130,11 @@ class PairOnlyPurgeNoticeTest {
                 "facts about two different computers and neither answers for the other",
             notice.contains(routed),
         )
-        assertTrue(
+        assertEquals(
             "the machine-side remedy went with them: this device is still registered AND still " +
                 "holding key material",
-            notice.contains("swarm remote revoke"),
+            PairOnlyScreen.REVOKE_COMMAND,
+            PairOnlyScreen.revokeCommandFor(answered),
         )
     }
 
@@ -156,7 +157,7 @@ class PairOnlyPurgeNoticeTest {
         assertTrue(
             "this device is still registered for certain -- the command never left the handset -- " +
                 "and the screen stopped saying so once a second failure arrived",
-            notice.contains("swarm remote revoke"),
+            notice.contains("If pairing is refused, on your computer:"),
         )
         assertTrue(
             "the key material this phone could not destroy is reported on the arm where the " +

@@ -94,8 +94,8 @@ class PressFeedbackAuditTest {
         "machineRow" to machineRow(context, "nathans-mbp", "online", mark = PresenceMark.ONLINE),
         "overflowControl" to overflowControl(context),
         "conversationMenu(row)" to firstMenuRow(),
-        "gapDivider" to gapDivider(context, "records missing - repair"),
-        "earlierChip" to earlierChip(context, "Load earlier messages"),
+        "gapDivider" to gapDivider(context, "Missing messages - Reload"),
+        "earlierChip" to earlierChip(context, "Show earlier"),
         "fileChangeRow" to fileChangeRow(context, "modify", "ui/kit/Composer.kt", "+12 -24"),
         "decisionPill" to decisionPill(context, "Decision needed"),
     ).mapValues { (_, view) -> view.apply { setOnClickListener { } } }

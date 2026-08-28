@@ -125,6 +125,8 @@ data class LaunchPresetPanel(
     val availability: LaunchAvailability,
     /** [LaunchPresetScreen.noticeFor] of [availability]: "" exactly when AVAILABLE. */
     val availabilityNotice: String,
+    /** [LaunchPresetScreen.commandFor] of [availability]: the well under the notice, or "". */
+    val availabilityCommand: String = "",
     val rows: List<PresetRowModel>,
     /** The confirm verb's resolved delivery/refusal sentence, "" while none is claimable. */
     val deliveryNotice: String,
@@ -229,15 +231,24 @@ object LaunchPresetScreen {
         presetRevision = preset.revision,
     )
 
-    /** Copy for an availability denial. NO_PRESETS names the terminal-side authoring verb,
-     * because its remedy is different from every other denial's. */
+    /** Copy for an availability denial. A denial whose remedy is a command names it in [commandFor]. */
     fun noticeFor(state: LaunchAvailability): String = when (state) {
         LaunchAvailability.AVAILABLE -> ""
-        LaunchAvailability.OFFLINE -> "This machine is unreachable right now, so nothing can be sent to it."
-        LaunchAvailability.KILL_SWITCH_OFF -> "Remote control is switched off on the machine. Turn it on at the terminal with `swarm remote on`."
-        LaunchAvailability.TIER_FORBIDS -> "This phone is paired without launch permission. Launching needs the full tier, granted at pairing."
-        LaunchAvailability.NO_PRESETS -> "The machine has not authored any launch presets yet. Create one at its terminal with `swarm remote presets add`."
-        LaunchAvailability.FETCHING -> "This phone has not asked the machine what it offers yet. Fetch the presets to begin."
+        LaunchAvailability.OFFLINE -> "Your computer is offline."
+        LaunchAvailability.KILL_SWITCH_OFF -> "Remote control is off on your computer."
+        LaunchAvailability.TIER_FORBIDS -> "This phone can't start sessions. Pair again with full access."
+        LaunchAvailability.NO_PRESETS -> "No presets yet. On your computer:"
+        LaunchAvailability.FETCHING -> "Tap Fetch to see presets."
+    }
+
+    /**
+     * The command a denial points at, or "" where there is none. It is the well's text and never
+     * part of the sentence (phone refit W5.1): a person retypes it into a shell off a phone screen.
+     */
+    fun commandFor(state: LaunchAvailability): String = when (state) {
+        LaunchAvailability.KILL_SWITCH_OFF -> "swarm remote on"
+        LaunchAvailability.NO_PRESETS -> "swarm remote presets add"
+        else -> ""
     }
 
     /**
@@ -249,22 +260,20 @@ object LaunchPresetScreen {
      */
     fun noticeFor(state: LaunchDeliveryNotice, detail: String = ""): String {
         val copy = when (state) {
-            LaunchDeliveryNotice.APPLIED -> "The session was created on the machine and is in your session list."
-            LaunchDeliveryNotice.PENDING -> "The launch is on its way to the machine and has not resolved yet."
-            LaunchDeliveryNotice.STALE_PRESET -> "This preset changed on the machine after you picked it. Pick it again from the refreshed list to confirm the new policy."
-            LaunchDeliveryNotice.UNKNOWN_PRESET -> "The machine does not have this preset any more. Refresh the list and choose one it currently offers."
-            LaunchDeliveryNotice.KILL_SWITCH -> "The machine refused: remote control is switched off there."
-            LaunchDeliveryNotice.NOT_AUTHORIZED -> "The machine refused: this phone is not authorized to launch sessions."
-            LaunchDeliveryNotice.OFFLINE -> "Nothing was sent: this machine is unreachable. The launch was not queued."
+            LaunchDeliveryNotice.APPLIED -> "Started."
+            LaunchDeliveryNotice.PENDING -> "Starting…"
+            LaunchDeliveryNotice.STALE_PRESET -> "That setup changed. Check it and confirm again."
+            LaunchDeliveryNotice.UNKNOWN_PRESET -> "That setup is gone. Pick another."
+            LaunchDeliveryNotice.KILL_SWITCH -> "Remote control is off on your computer."
+            LaunchDeliveryNotice.NOT_AUTHORIZED -> "This phone can't start sessions."
+            LaunchDeliveryNotice.OFFLINE -> "Your computer is offline."
             // ROUND 2 (review BLOCKER 2): this sentence promised "re-sends the same operation
             // and can never create a second session" -- a guarantee the code does not make.
             // App.SessionLaunch mints a FRESH operation id on every call, so a re-confirm is a
             // genuinely new operation and can duplicate; the honest copy warns instead of
             // promising, and sends the user to the session list FIRST.
-            LaunchDeliveryNotice.OUTCOME_UNKNOWN ->
-                "The machine could not prove what happened to this launch. Check the session list " +
-                    "first: confirming again sends a new launch and may create a second session."
-            LaunchDeliveryNotice.REFUSED -> "The machine refused this launch."
+            LaunchDeliveryNotice.OUTCOME_UNKNOWN -> "Not sure it started. Check the Inbox before trying again."
+            LaunchDeliveryNotice.REFUSED -> "Couldn't start."
         }
         return if (detail.isEmpty()) copy else "$copy ($detail)"
     }
@@ -276,16 +285,12 @@ object LaunchPresetScreen {
      * for a refused fetch prescribes the wrong fact and the wrong remedy). Same named states,
      * the fetch verb's own words; a non-empty [detail] (the machine's) is appended.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun fetchNoticeFor(state: LaunchDeliveryNotice, detail: String = ""): String {
-        val copy = when (state) {
-            LaunchDeliveryNotice.KILL_SWITCH ->
-                "The machine refused the preset fetch: remote control is switched off there."
-            LaunchDeliveryNotice.NOT_AUTHORIZED ->
-                "The machine refused the preset fetch: this phone is not authorized to read its presets."
-            // Every other state a wire refusal can resolve to (REFUSED and any future code)
-            // stays a VISIBLE refusal of THIS verb, with the machine's words in the detail.
-            else -> "The machine refused the preset fetch."
-        }
+        // ONE SENTENCE FOR EVERY STATE (phone refit W5.4): the fetch is a read, its refusal says
+        // the presets could not be loaded, and the machine's own words in the detail say which
+        // refusal this was.
+        val copy = "Couldn't load presets."
         return if (detail.isEmpty()) copy else "$copy ($detail)"
     }
 

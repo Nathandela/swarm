@@ -143,20 +143,20 @@ object ComposerModel {
     fun shutCopyFor(availability: ComposerAvailability): ComposerShut? = when (availability) {
         ComposerAvailability.AVAILABLE -> null
         ComposerAvailability.OFFLINE -> ComposerShut(
-            placeholder = "Not connected to your machine",
+            placeholder = "Not connected.",
             // Input is live-only and never queued (ADR-007 B43). A composer that went quiet
             // without saying so invites the reader to believe their words are waiting.
-            detail = "Messages are never held — nothing is sent when the link returns.",
+            detail = "Reconnect to send.",
         )
         ComposerAvailability.TORN -> ComposerShut(
-            placeholder = "This session's record has a gap",
-            detail = "Still typeable at your machine.",
+            placeholder = "Chat is paused here.",
+            detail = "You can still type on your computer.",
         )
         ComposerAvailability.NO_CHAT -> ComposerShut(
             // NOT "broke", NOT "gap", NOT "record": this machine never claimed a chat
             // surface for this session, which is not a failure of anything.
-            placeholder = "This agent reports no chat surface",
-            detail = "You can watch it here, and type at your machine.",
+            placeholder = "Chat is off for this session.",
+            detail = "Reply on your computer.",
         )
         ComposerAvailability.ENDED -> ComposerShut(
             placeholder = "This session has ended",
@@ -257,16 +257,16 @@ object ComposerModel {
         // kept" -- so what shipped had drifted from what the sheet records. The em dash is
         // U+2014 and the apostrophe is straight, as the copy table writes them.
         "STALE_TURN" -> ComposerNotice(
-            copy = "Not sent — the conversation moved on. Read the latest turn and send again.",
+            copy = "Not sent. There's a new reply. Read it, then send again.",
             retainsDraft = true,
         )
         // The drawing's `bubble.refused` row, verbatim.
         "INPUT_BUSY" -> ComposerNotice(
-            copy = "Not sent — the terminal's input line was not empty.",
+            copy = "Not sent. Finish typing on your computer first.",
             retainsDraft = true,
         )
         else -> ComposerNotice(
-            copy = "Your message was refused and not delivered.",
+            copy = "Not sent. Try again.",
             retainsDraft = true,
         )
     }
@@ -276,7 +276,7 @@ object ComposerModel {
      * agent still accepts input -- as feedback into the running turn, and the placeholder
      * says so rather than implying the composer is closed.
      */
-    fun placeholderFor(working: Boolean): String = if (working) "Add feedback..." else "Message"
+    fun placeholderFor(working: Boolean): String = if (working) "Add a note while it works" else "Message"
 
     /**
      * M2.4's paste discipline: a multi-line paste is ONE draft and never auto-submits -- a

@@ -80,8 +80,8 @@ class MachinePaneTest {
         // `assertTrue("the user is told WHEN", line.contains("since 14:26"))` -- a wall clock
         // with no date on it, which at 09:00 the next morning reads the same as three minutes.
         val line = silent.presenceExplanation(NOW)
-        assertTrue("the user is told HOW LONG", line.contains("for 19h"))
-        assertTrue("the relay's word is attributed to the relay", line.contains("relay"))
+        assertTrue("the user is told HOW LONG", line.contains("19h"))
+        assertTrue("the relay's word leads and the phone's own clock follows it", line.startsWith("Online · last seen "))
 
         val healthy = pane(presence = "online")
         assertFalse(
@@ -103,7 +103,7 @@ class MachinePaneTest {
         val healthy = pane(presence = "online")
 
         assertEquals("", healthy.presenceExplanation(NOW))
-        assertEquals("Your machine is online.", healthy.presenceAnnouncement)
+        assertEquals("Your computer is online.", healthy.presenceAnnouncement)
 
         // The silent case is unaffected: it already says presence in words, so there is nothing
         // for the announcement to carry that the line does not.
@@ -122,7 +122,7 @@ class MachinePaneTest {
     fun `a phone that has never heard from its machine names no time`() {
         val never = MachineFreshness(silent = true, lastHeardUnixMs = 0)
         val notice = never.notice(NOW)
-        assertEquals("Not heard from your machine yet.", notice)
+        assertEquals("Not seen yet", notice)
         assertNull("inside the budget there is nothing to say", MachineFreshness(false, 0).notice(NOW))
     }
 
@@ -150,12 +150,14 @@ class MachinePaneTest {
     @Test
     fun `the enabled state's sentence is one short line, and the disabled state keeps its teaching`() {
         val disengaged = pane(killSwitchEngaged = false)
-        assertEquals("Remote control is on. Only the machine can switch it off.", disengaged.killSwitchExplanation)
+        assertEquals("Remote control is on. Only your computer can switch it off.", disengaged.killSwitchExplanation)
 
         val engaged = pane(killSwitchEngaged = true)
-        assertTrue(
-            "the disabled state lost the teaching that only the owner can switch it back on",
-            engaged.killSwitchExplanation.contains("Only the machine's owner"),
+        assertEquals(
+            "the disabled state names the computer the switch is off on, and a pane that cannot " +
+                "read its name says your computer (phone refit W5.2)",
+            "Remote control is off on your computer.",
+            engaged.killSwitchExplanation,
         )
     }
 

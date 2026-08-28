@@ -174,22 +174,22 @@ class SyncStatusTest {
 
     @Test
     fun `the quiet pill carries an elapsed duration and never a clock time`() {
-        assertEquals("QUIET 18h", status(freshness = heardAgo(18 * HOUR)).pill)
-        assertEquals("QUIET 4m", status(freshness = heardAgo(4 * MINUTE)).pill)
-        assertEquals("QUIET 3d", status(freshness = heardAgo(3 * DAY)).pill)
+        assertEquals("Last seen 18h", status(freshness = heardAgo(18 * HOUR)).pill)
+        assertEquals("Last seen 4m", status(freshness = heardAgo(4 * MINUTE)).pill)
+        assertEquals("Last seen 3d", status(freshness = heardAgo(3 * DAY)).pill)
     }
 
     @Test
-    fun `a machine never heard from carries the word alone`() {
+    fun `a machine never heard from says not seen yet`() {
         // Zero is "this phone has never taken a frame" -- a first launch, or a restore. There is no
         // elapsed time to state, and `0h` would claim the machine spoke at the epoch.
-        assertEquals(SyncStatus.QUIET, status(freshness = neverHeard).pill)
+        assertEquals(SyncStatus.NOT_SEEN, status(freshness = neverHeard).pill)
     }
 
     @Test
     fun `the syncing and broken pills are one word each`() {
-        assertEquals("SYNCING", status(reconciled = false).pill)
-        assertEquals("BROKEN", status(state = ConnectionState.REVOKED).pill)
+        assertEquals("Syncing…", status(reconciled = false).pill)
+        assertEquals("Offline", status(state = ConnectionState.REVOKED).pill)
     }
 
     // ---- the strip escalates, and only for broken --------------------------

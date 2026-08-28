@@ -149,7 +149,7 @@ data class SasStep(val code: String) {
     val symbols: List<String> get() = code.trim().split(WHITESPACE)
 
     val instruction: String
-        get() = "Check these six against the ones on your machine's screen."
+        get() = "Same six on your computer?"
 
     /** Always false, and it is the point of the type. */
     val acceptsTypedInput: Boolean = false
@@ -189,10 +189,8 @@ data class PairingAttempt(
     val destinationNotice: String
         get() = when {
             step != PairingStep.CONFIRM_DESTINATION -> ""
-            originIsLocalNetwork -> "This is an address on your local network. Confirm it is " +
-                "your own machine before joining."
-            else -> "This phone will connect to this relay and to nothing else. Confirm it is " +
-                "the address your machine showed you."
+            originIsLocalNetwork -> "Local address. Make sure it's your computer."
+            else -> "Connects only to this address. Check it matches your computer."
         }
 
     /**
@@ -292,8 +290,7 @@ object PairingFlow {
      * has loaded, which this module's unit-test JVM cannot do, so a sentence written there has no
      * seam any test can reach.
      */
-    const val CAMERA_DID_NOT_START: String = "The camera did not start. Close any other app " +
-        "using it and try again, or enter the code instead."
+    const val CAMERA_DID_NOT_START: String = "Camera didn't start. Close other camera apps, or enter the code."
 
     /**
      * Only a permanent denial. An ordinary one is re-askable, and Settings is a detour.
@@ -448,59 +445,52 @@ object PairingFlow {
             "Check the destination below before this phone joins anything."
 
         PairingStep.HANDSHAKING ->
-            "Reaching your machine."
+            "Reaching your computer."
 
         PairingStep.COMPARING_CODES -> ""
 
         PairingStep.AWAITING_MACHINE_DECISION ->
-            "Waiting for your machine to confirm this device."
+            "Waiting for your computer to confirm this device."
 
         PairingStep.PAIRED ->
-            "This phone is paired with your machine."
+            "This phone is paired with your computer."
 
         PairingStep.REFUSED_ORIGIN_MISMATCH ->
-            "The destination changed after it was shown to you, so nothing was joined. Scan " +
-                "the code again."
+            "The address changed. Scan again."
 
         PairingStep.CANCELLED ->
             "You stopped this pairing. Nothing was joined."
 
         PairingStep.DECLINED ->
-            "Your machine declined this device. Approve it there, then pair again."
+            "Your computer said no. Approve it there, then try again."
 
         PairingStep.SAS_MISMATCH ->
-            "The symbols did not match, so someone may be sitting between this phone and your " +
-                "machine. Nothing was joined. Pair again on a network you trust."
+            "Symbols didn't match. Try again on a network you trust."
 
         PairingStep.RENDEZVOUS_TIMEOUT ->
-            "Your machine did not answer in time. Check it is awake and online, then pair again."
+            "No answer. Check your computer is awake, then try again."
 
         PairingStep.QR_EXPIRED ->
-            "That code has expired. Ask your machine for a new one."
+            "The code expired. Get a new one."
 
         // It names the CAUSE and then says nothing changed, in that order. Both halves are
         // load-bearing: retrying the same code fails the same way, and the defect this state
         // closes used to abandon the pairing the user already had -- so a message that does not
         // say the old one is intact leaves them believing it happened.
         PairingStep.DIFFERENT_MACHINE ->
-            "That code belongs to a different machine from the one this phone is paired with. " +
-                "Nothing changed, and your existing pairing is intact. Scan the code from your " +
-                "own machine."
+            "That code is for a different computer."
 
         PairingStep.RATE_LIMITED ->
-            "Too many pairing attempts from here. Wait a minute, then ask your machine for a " +
-                "new code and try again."
+            "Too many tries. Wait a minute, then get a new code."
 
         // The one failure where a new code is NOT the remedy, and the message must not offer
         // it: the field event behind this state was a phone on cellular dialling a home-LAN
         // relay, told to regenerate a code that failed identically (agents-tracker-n4vs).
         PairingStep.RELAY_UNREACHABLE ->
-            "This phone could not reach your relay. If the relay runs on your home network, " +
-                "connect this phone to that WiFi, then pair again."
+            "Couldn't reach your computer. On home WiFi? Join it, then try again."
 
         PairingStep.FAILED ->
-            "The pairing did not finish and nothing was joined. Ask your machine for a new " +
-                "code and try again."
+            "Pairing didn't finish. Get a new code and try again."
     }
 
     private fun stepOnly(step: PairingStep) = PairingAttempt(

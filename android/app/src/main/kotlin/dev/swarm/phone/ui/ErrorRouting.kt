@@ -252,8 +252,7 @@ object ErrorRouter {
     private val byToken: Map<String, RoutedError> = mapOf(
         SwarmErrorTokens.UNKNOWN to RoutedError(
             ErrorState.UNKNOWN, Remedy.NONE,
-            "Something failed in a way the app does not recognise. Try again, and report it if " +
-                "it keeps happening.",
+            "Something went wrong. Try again.",
         ),
         SwarmErrorTokens.INTERNAL to RoutedError(
             ErrorState.INTERNAL, Remedy.REPORT_BUG,
@@ -266,7 +265,7 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.NOT_FOUND to RoutedError(
             ErrorState.NOT_FOUND, Remedy.REFRESH,
-            "That is no longer there. Refresh to see what your machine has now.",
+            "That is no longer there. Refresh to see what your computer has now.",
         ),
         SwarmErrorTokens.APP_CLOSED to RoutedError(
             ErrorState.APP_CLOSED, Remedy.RESTART_APP,
@@ -274,7 +273,7 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.OFFLINE to RoutedError(
             ErrorState.OFFLINE, Remedy.WAIT_FOR_CONNECTION,
-            "No link to your machine right now. This resumes on its own once the connection is " +
+            "No link to your computer right now. This resumes on its own once the connection is " +
                 "back.",
         ),
         SwarmErrorTokens.NOT_PAIRED to RoutedError(
@@ -284,7 +283,7 @@ object ErrorRouter {
         SwarmErrorTokens.STATE_CORRUPT to RoutedError(
             ErrorState.STATE_CORRUPT, Remedy.CLEAR_DATA_AND_RE_PAIR,
             "This phone's saved state cannot be read, so it has stopped rather than guess. " +
-                "Clear this app's data, then on your machine run `swarm remote devices` to " +
+                "Clear this app's data, then on your computer run `swarm remote devices` to " +
                 "find this device and `swarm remote revoke <device-id>` to unregister it -- " +
                 "`swarm remote pair` is refused until you do -- and pair again.",
         ),
@@ -295,19 +294,19 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.SYNCING to RoutedError(
             ErrorState.SYNCING, Remedy.WAIT_FOR_MACHINE,
-            "Waiting for your machine to publish its current state. Reading works throughout; " +
+            "Waiting for your computer to publish its current state. Reading works throughout; " +
                 "changes are held until it does.",
         ),
         SwarmErrorTokens.AWAITING_KEY to RoutedError(
             ErrorState.AWAITING_KEY, Remedy.WAIT_FOR_MACHINE,
-            "Waiting for your machine to send this phone its content key. This is the ordinary " +
+            "Waiting for your computer to send this phone its content key. This is the ordinary " +
                 "first-launch wait.",
         ),
         SwarmErrorTokens.GRANT_LOST to RoutedError(
             ErrorState.GRANT_LOST, Remedy.MACHINE_REGRANT,
-            "This phone's key grant is gone, and only the machine can issue a new one. Go to " +
-                "your machine and grant this device access again; pairing again cannot work " +
-                "while the machine still has this device registered.",
+            "This phone's key grant is gone, and only your computer can issue a new one. Go to " +
+                "your computer and grant this device access again; pairing again cannot work " +
+                "while your computer still has this device registered.",
         ),
         SwarmErrorTokens.REPAIR_REQUIRED to RoutedError(
             ErrorState.REPAIR_REQUIRED, Remedy.RE_PAIR,
@@ -316,7 +315,7 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.REVOKED to RoutedError(
             ErrorState.REVOKED, Remedy.RE_PAIR,
-            "The owner removed this device. Clear its registration on the machine first, then " +
+            "The owner removed this device. Clear its registration on your computer first, then " +
                 "pair again.",
         ),
         SwarmErrorTokens.NEEDS_LEASE to RoutedError(
@@ -325,8 +324,8 @@ object ErrorRouter {
             // longer exists, and the ops this app sends need no lease, so reaching this row at
             // all now means an older machine or a plane this app does not use. It says what
             // happened and stops, rather than naming a button that is not there.
-            "Your machine did not accept that from this phone. Nothing was sent, and it is " +
-                "still yours to do at the machine.",
+            "Your computer did not accept that from this phone. Nothing was sent, and it is " +
+                "still yours to do at your computer.",
         ),
         SwarmErrorTokens.STALE_TURN to RoutedError(
             ErrorState.STALE_TURN, Remedy.REFRESH,
@@ -340,7 +339,7 @@ object ErrorRouter {
             // matched none of the three. The intent above is unchanged and the sentence is
             // shorter than what it replaces: it still never claims delivery, it still names the
             // one act, and it now reads the same here as on the bubble the user is looking at.
-            "Not sent — the conversation moved on. Read the latest turn and send again.",
+            "Not sent. There's a new reply. Read it, then send again.",
         ),
         SwarmErrorTokens.INPUT_BUSY to RoutedError(
             ErrorState.INPUT_BUSY, Remedy.WAIT_AND_RETRY,
@@ -354,7 +353,7 @@ object ErrorRouter {
             // THE SENTENCE NAMES THE LINE AND NEVER THE READER. The shim refused rather than
             // merge, so this is the app working; a wording that put the reader at fault would
             // report a prevented defect as one they caused.
-            "Not sent — the terminal's input line was not empty.",
+            "Not sent. Finish typing on your computer first.",
         ),
         SwarmErrorTokens.RATE_LIMITED to RoutedError(
             ErrorState.RATE_LIMITED, Remedy.WAIT_AND_RETRY,
@@ -362,7 +361,7 @@ object ErrorRouter {
         ),
         SwarmErrorTokens.PAIRING_FAILED to RoutedError(
             ErrorState.PAIRING_FAILED, Remedy.RETRY_PAIRING,
-            "The pairing call itself failed. Start the pairing again from your machine's code.",
+            "The pairing call itself failed. Start the pairing again from your computer's code.",
         ),
         // THE THREE ENTRY ROWS. They share PAIRING_FAILED's remedy and none of its words, and
         // that is the split rather than a redundancy: RETRY_PAIRING is the act of trying again
@@ -371,17 +370,17 @@ object ErrorRouter {
         // things went wrong, because the four are fixed in four different places.
         SwarmErrorTokens.PAIRING_CODE_INVALID to RoutedError(
             ErrorState.PAIRING_CODE_INVALID, Remedy.RETRY_PAIRING,
-            "That code does not look right. It is ten characters from your machine's screen -- " +
+            "That code does not look right. It is ten characters from your computer's screen -- " +
                 "check for a typo and try again.",
         ),
         SwarmErrorTokens.RELAY_UNKNOWN to RoutedError(
             ErrorState.RELAY_UNKNOWN, Remedy.RETRY_PAIRING,
             "This phone does not know your relay address yet. Scan the QR once, or paste the " +
-                "full code your machine printed.",
+                "full code your computer printed.",
         ),
         SwarmErrorTokens.RELAY_ADDRESS_INVALID to RoutedError(
             ErrorState.RELAY_ADDRESS_INVALID, Remedy.RETRY_PAIRING,
-            "That is not a relay address. It looks like wss://host:port -- your machine printed " +
+            "That is not a relay address. It looks like wss://host:port -- your computer printed " +
                 "the whole thing.",
         ),
     )

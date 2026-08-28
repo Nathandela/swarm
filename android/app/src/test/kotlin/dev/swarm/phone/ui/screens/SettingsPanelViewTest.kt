@@ -133,11 +133,11 @@ class SettingsPanelViewTest {
 
         assertEquals(page.sections.single().rows.size, rows.size)
         assertEquals(
-            listOf("Needs your decision", "Task done"),
+            listOf("Needs your answer", "Task done"),
             rows.map { textOf(it.kitRequire(KitTag.SETTINGS_LABEL)) },
         )
         assertEquals(
-            listOf("Approvals and blocked prompts", "Completions and failures"),
+            listOf("Approvals and questions", "Finished and failed sessions"),
             rows.map { textOf(it.kitRequire(KitTag.SETTINGS_SUBLABEL)) },
         )
     }

@@ -160,17 +160,12 @@ class MachinesPanelScreenTest {
                 "machines.recovery)",
             notice,
         )
-        assertTrue(
-            "the notice does not name the row's OWN fault; a generic failure sentence routes " +
-                "the user to the wholesale remedy ('clear this app's data'), which destroys " +
-                "every pairing",
-            notice!!.contains("the sealed blob refused to open"),
-        )
-        assertTrue(
-            "the notice does not say the other computers are unaffected -- the whole point of " +
-                "MM8's per-row recovery, and the sentence mobile/machines.go's own refusal " +
-                "carries",
-            notice.lowercase().contains("other computers are unaffected"),
+        assertEquals(
+            "the notice does not name the row that cannot open and the two per-row remedies, " +
+                "which is what keeps a user off the wholesale remedy that destroys every " +
+                "pairing (MM8, phone refit W5.4)",
+            "Can't open desk. Forget it or pair again.",
+            notice,
         )
     }
 

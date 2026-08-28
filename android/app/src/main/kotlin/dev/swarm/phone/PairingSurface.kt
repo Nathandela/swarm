@@ -246,7 +246,7 @@ class PairingSurface(
      * Separate fields would be a second wire encoding, and they would arrive as something the
      * user asserted rather than as a destination the phone must show them.
      */
-    private val typedPayload = textField(activity, "Paste the pairing code your machine printed")
+    private val typedPayload = textField(activity, "Paste the pairing code your computer printed")
 
     /**
      * The relay address, on the one pairing that has to be told it (agents-tracker-3fkm).
@@ -541,7 +541,7 @@ class PairingSurface(
         if (payload.isBlank()) {
             // PairingFlow.begin throws on an empty payload and that throw carries no error
             // class, so it would not route. An empty field is a user slip, not a classification.
-            outcome.text = "Paste the code your machine printed, then press Use this code."
+            outcome.text = "Paste the code your computer printed, then press Use this code."
             return
         }
         stopScanning()

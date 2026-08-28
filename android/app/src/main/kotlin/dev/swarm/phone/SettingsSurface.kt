@@ -372,6 +372,9 @@ class SettingsSurface(
      */
     internal var unpairNotice: String = ""
 
+    /** The command [unpairNotice] points at, for the well under it, or "" (phone refit W5.1). */
+    internal var unpairCommand: String = ""
+
     /**
      * The sync pill for this panel's nav row, or null while nothing owns one
      * (agents-tracker-nx44.2).
@@ -1076,10 +1079,9 @@ class SettingsSurface(
                     // asserted out of a race is the kind that gets fenced later and then holds
                     // somebody to a promise the drain never made.
                     onSuccess = { issued ->
-                        PairOnlyScreen.revokeNoticeFor(
-                            revokeVerdict(app, issued),
-                            purgeFailure = purgeFailure,
-                        )
+                        val verdict = revokeVerdict(app, issued)
+                        unpairCommand = PairOnlyScreen.revokeCommandFor(verdict)
+                        PairOnlyScreen.revokeNoticeFor(verdict, purgeFailure = purgeFailure)
                     },
                     // Every facade refusal arrives as an exception whose message carries the error
                     // class as a prefix, so it routes through the table rather than being shown raw.
@@ -1088,6 +1090,7 @@ class SettingsSurface(
                     // facade refusal) over a purge that could not finish at rest. An arm that
                     // dropped it would be jx23's own silence, one branch over.
                     onFailure = { refused ->
+                        unpairCommand = PairOnlyScreen.REVOKE_COMMAND
                         PairOnlyScreen.revokeUnsentNotice(
                             FacadeBridge(app).routeFacadeError(refused.message.orEmpty()).message,
                             purgeFailure = purgeFailure,

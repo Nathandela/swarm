@@ -28,8 +28,8 @@ class EarlierChipTest {
 
     @Test
     fun `it hugs its words and is not a full-width button`() {
-        val chip = earlierChip(context, "Load earlier messages")
-        assertEquals("Load earlier messages", chip.text.toString())
+        val chip = earlierChip(context, "Show earlier")
+        assertEquals("Show earlier", chip.text.toString())
         assertEquals(
             "a pill sits above the first message rather than in front of it, and scrolls away " +
                 "with the history it belongs to",
@@ -40,7 +40,7 @@ class EarlierChipTest {
 
     @Test
     fun `it is row 10's floating chip and not a second recipe`() {
-        val chip = earlierChip(context, "Load earlier messages")
+        val chip = earlierChip(context, "Show earlier")
         assertEquals(
             "the same surface `syncPill` already spends. A second recipe would differ from row " +
                 "10's in no cell",
@@ -51,7 +51,7 @@ class EarlierChipTest {
 
     @Test
     fun `it clears the touch floor with the chip's drawing unchanged`() {
-        val chip = earlierChip(context, "Load earlier messages")
+        val chip = earlierChip(context, "Show earlier")
         assertEquals(
             "a pill sized to one short line of copy is the control that measures short by " +
                 "construction",
@@ -73,7 +73,7 @@ class EarlierChipTest {
 
     @Test
     fun `it places itself nowhere`() {
-        val params = earlierChip(context, "Load earlier messages").layoutParams as LinearLayout.LayoutParams
+        val params = earlierChip(context, "Show earlier").layoutParams as LinearLayout.LayoutParams
         assertEquals(
             "the drawing centres it over the first message, and centring is layout -- a chip that " +
                 "centred itself would be right on this screen and wrong on the next one",
@@ -85,7 +85,7 @@ class EarlierChipTest {
 
     @Test
     fun `it is focusable, and its ring follows its own corners`() {
-        val chip = earlierChip(context, "Load earlier messages")
+        val chip = earlierChip(context, "Show earlier")
         assertTrue("row 23 applies to every focusable", chip.isFocusable)
         assertTrue(
             "unlike the header's controls this one paints a fill, so a ring at radius 0 would cut " +

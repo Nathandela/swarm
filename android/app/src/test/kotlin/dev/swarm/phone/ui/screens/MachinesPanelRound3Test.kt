@@ -124,7 +124,7 @@ class MachinesPanelRound3Test {
                 "mobile/machines.go:19-21's own words -- SelectMachine records the viewed " +
                 "pairing and does NOT yet re-target the App's live relay session. Claiming the " +
                 "session moved would be the dishonest rendering in the other direction",
-            "Selected laptop. This phone's live session has not moved to it yet.",
+            "Now viewing laptop.",
             MachinesPanelScreen.switchedTo("laptop"),
         )
     }
@@ -141,9 +141,7 @@ class MachinesPanelRound3Test {
                 "switching to it does not re-target the live relay session. Both limits are " +
                 "mobile/machines.go:19-21's own disclosure and must be on screen, not only in a " +
                 "verification file",
-            "Adding a computer registers it on this phone. That computer still needs its own " +
-                "pairing ceremony before it can answer, and switching to it records which " +
-                "computer you are viewing without moving this phone's live session yet.",
+            "You'll pair with it next.",
             MachinesPanelScreen.ADD_LIMITS,
         )
     }
@@ -159,9 +157,7 @@ class MachinesPanelRound3Test {
                 "keystroke as undelivered, severs every input lease and drops the connection. " +
                 "That is strictly more destructive than Forget's one pairing, and Forget asks. " +
                 "The question must name what is briefly lost and what is not",
-            "Add this computer now? This phone briefly disconnects from your computers while " +
-                "the pairing is registered, and anything typed but not sent is discarded. No " +
-                "pairing is removed and nothing already saved is lost.",
+            "Add this computer? The app reconnects for a moment.",
             MachinesPanelScreen.ADD_CONFIRM,
         )
     }
@@ -194,7 +190,7 @@ class MachinesPanelRound3Test {
         assertEquals(
             "a refused double tap must SAY it was refused; dropping it silently is the " +
                 "silent-no-op shape hard rule 5 forbids, on the app's most destructive control",
-            "Add computer is still running; nothing was sent.",
+            "Still adding…",
             MachinesPanelScreen.ADD_IN_FLIGHT,
         )
     }

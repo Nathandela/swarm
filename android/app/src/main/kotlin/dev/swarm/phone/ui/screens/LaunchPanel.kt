@@ -76,7 +76,7 @@ object LaunchPanelScreen {
     /** The hints `PhoneSurface` already used, verbatim. */
     private val HINTS: Map<LaunchFieldId, String> = mapOf(
         LaunchFieldId.AGENT to "Which agent to start",
-        LaunchFieldId.CWD to "Working directory on your machine",
+        LaunchFieldId.CWD to "Working directory on your computer",
         LaunchFieldId.PROMPT to "First message for the agent, if any",
     )
 
@@ -92,7 +92,7 @@ object LaunchPanelScreen {
         listOf(LaunchFieldId.AGENT, LaunchFieldId.CWD, LaunchFieldId.PROMPT)
 
     /** PB-SYNC-2: an unresolved launch is neither a success nor a failure. */
-    private const val PENDING = "Waiting for your machine to answer the launch."
+    private const val PENDING = "Waiting for your computer to answer the launch."
 
     private const val ACCEPTED = "Your machine started the session."
 

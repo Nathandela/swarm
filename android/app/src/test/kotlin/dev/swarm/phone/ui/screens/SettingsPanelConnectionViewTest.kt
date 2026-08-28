@@ -166,7 +166,7 @@ class SettingsPanelConnectionViewTest {
             1,
             lines.size,
         )
-        assertEquals("The journal and terminal views have gaps.", textOf(lines.single()))
+        assertEquals("Some updates are missing.", textOf(lines.single()))
     }
 
     @Test

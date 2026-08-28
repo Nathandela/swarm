@@ -114,7 +114,7 @@ data class MachinePane(
         get() = announcementOf(presence)
 
     val killSwitchExplanation: String
-        get() = killSwitchExplanationOf(killSwitchEngaged)
+        get() = killSwitchExplanationOf(killSwitchEngaged, machineName)
 
     /**
      * The two sentences this pane owns, reachable WITHOUT one (agents-tracker-nx44.3).
@@ -153,12 +153,12 @@ data class MachinePane(
             freshness: MachineFreshness,
             nowUnixMs: Long,
         ): String = freshness.notice(nowUnixMs)?.let { notice ->
-            "$notice The relay reports \"$presence\", which is the relay's word and not your " +
-                "machine's."
+            presence.replaceFirstChar { it.uppercase() } + " · " +
+                notice.replaceFirstChar { it.lowercase() }
         } ?: ""
 
         /** What the presence mark announces where [explanationOf] has printed nothing. */
-        fun announcementOf(presence: String): String = "Your machine is $presence."
+        fun announcementOf(presence: String): String = "Your computer is $presence."
 
         /**
          * What a phone may say about the daemon-side switch, reachable WITHOUT a whole pane
@@ -171,11 +171,10 @@ data class MachinePane(
          * the machine can move the switch -- rendered on every visit to a screen that is, in this
          * state, reporting nothing wrong.
          */
-        fun killSwitchExplanationOf(engaged: Boolean): String = if (engaged) {
-            "Remote control is switched off at your machine, so it will refuse anything this " +
-                "phone asks it to change. Only the machine's owner can switch it back on."
+        fun killSwitchExplanationOf(engaged: Boolean, machine: String = ""): String = if (engaged) {
+            "Remote control is off on ${machine.ifEmpty { "your computer" }}."
         } else {
-            "Remote control is on. Only the machine can switch it off."
+            "Remote control is on. Only your computer can switch it off."
         }
     }
 }
@@ -251,7 +250,7 @@ class LaunchScreen {
      */
     fun missingField(draft: LaunchDraft): String? = when {
         draft.agent.isBlank() -> "Say which agent to start."
-        draft.cwd.isBlank() -> "Say which folder on your machine it starts in."
+        draft.cwd.isBlank() -> "Say which folder on your computer it starts in."
         else -> null
     }
 

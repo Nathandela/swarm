@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -134,6 +135,16 @@ class PairOnlyScreenTest {
                 Presentation.PAIR_ONLY,
                 PairOnlyScreen.presentationOf(reader),
             )
+        }
+    }
+    /** Phone refit W5.1: commands go in a well, never in a sentence. */
+    @Test
+    fun `the repair-required screen's commands are a well and not a sentence`() {
+        val copy = PairOnlyScreen.copyFor(PairOnlyReason.REPAIR_REQUIRED)
+        assertEquals("swarm remote devices\nswarm remote revoke <device-id>", copy.command)
+        assertEquals("This phone needs to pair again. First, on your computer:", copy.body)
+        for (reason in listOf(PairOnlyReason.FIRST_RUN, PairOnlyReason.REVOKED)) {
+            assertEquals("$reason has no command to run", "", PairOnlyScreen.copyFor(reason).command)
         }
     }
 }

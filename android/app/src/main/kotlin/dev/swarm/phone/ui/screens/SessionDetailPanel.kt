@@ -325,26 +325,13 @@ object SessionDetailScreen {
      * a keystroke vanished. The step that would make Stop work is what the control offers instead.
      */
     /**
-     * What the screen says where the composer WOULD be, for a session whose structured record
-     * tore (ADR-017 T2 rule 2).
-     *
-     * IT SAYS WHAT IS STILL POSSIBLE. A control that simply vanishes reads as a bug, and the
-     * remedy here is real and nearby: the machine still has the session, and the owner can type
-     * at it. What the sentence must never do is imply the phone will get the composer back --
-     * the degrade is one-way for the life of the session instance.
-     */
-    private const val COMPOSER_ABSENT =
-        "This session's structured record broke, so it can no longer be typed into from the " +
-            "phone. It is still running on your machine, where you can still type at it."
-
-    /**
      * ADR-014's page, in the reader's terms rather than the wire's.
      *
      * "Earlier" AND NOT "older" OR "history": what the control fetches is the part of THIS
      * conversation that happened before what is on screen, and the reader's question is where the
      * conversation started rather than how old a record is.
      */
-    private const val LOAD_EARLIER = "Load earlier messages"
+    private const val LOAD_EARLIER = "Show earlier"
 
     private const val KILL = "Kill session"
 
@@ -373,7 +360,7 @@ object SessionDetailScreen {
      * the machine's own reason follows it because a kill switch, a revoked device and a policy
      * refusal end in three different places.
      */
-    private const val KILL_REFUSED = "Your machine did not end this session"
+    private const val KILL_REFUSED = "Couldn't end the session"
 
     /**
      * What the screen says when the machine REFUSED the Stop (Wave R6 review round 2).
@@ -390,7 +377,7 @@ object SessionDetailScreen {
      * the machine's own words follow it in the detail cell because those three refusals are
      * fixed in three different places.
      */
-    private const val INTERRUPT_REFUSED = "Your machine did not stop this turn"
+    private const val INTERRUPT_REFUSED = "Couldn't stop"
 
     /**
      * What the screen says when THIS PHONE can hold no more of the conversation (review round 2,
@@ -406,8 +393,7 @@ object SessionDetailScreen {
      * recovers it, and the machine still has it.
      */
     private const val HISTORY_AT_CAPACITY =
-        "This phone is holding as much of this conversation as it can. Anything earlier is still " +
-            "on your machine."
+        "That's all this phone can show. Older messages are on your computer."
 
     /**
      * What the screen says when the MACHINE refused a "load earlier" (round 3, finding F4).
@@ -417,17 +403,16 @@ object SessionDetailScreen {
      * declining, which are different facts with different remedies. The machine's own words follow
      * in the detail cell.
      */
-    private const val HISTORY_REFUSED = "Your machine did not send more of this conversation"
+    private const val HISTORY_REFUSED = "Couldn't load more"
 
     /** [HISTORY_REFUSED]'s argument on the clipped-card fetch: something refused it, not nothing. */
-    private const val DETAIL_REFUSED = "Your machine did not send the whole of this message"
+    private const val DETAIL_REFUSED = "Couldn't load the full message"
 
     /**
      * IS-CAP-3's `unavailable`, said as the fact it is: the whole body is GONE, and no number of
      * taps brings it back. What is on screen is what the machine kept.
      */
-    private const val DETAIL_UNAVAILABLE =
-        "Your machine no longer keeps the whole of this message, so what is shown is all of it"
+    private const val DETAIL_UNAVAILABLE = "This is all that's left of this message"
 
     /**
      * PB-APP-8's sentence for one session's chronology, in the register the other screens set.
@@ -435,9 +420,7 @@ object SessionDetailScreen {
      * A transcript reads as complete unless it says otherwise, and for a chronology the honest
      * failure is INCOMPLETE rather than merely old -- which is the reading a user would not assume.
      */
-    private const val STALE_NOTICE =
-        "Some records are missing: the event stream from your machine had a gap that has not been " +
-            "repaired, so this is not a complete log of the session."
+    private const val STALE_NOTICE = "Some messages are missing."
 
     /** §4's back control, by where it goes rather than by a glyph a screen reader cannot read. */
     private const val BACK = "Back to inbox"
@@ -534,11 +517,11 @@ object SessionDetailScreen {
      * draws it as a colour; this is the same fact said to a person, and the two are kept apart so
      * nobody is tempted to render a Group verbatim in a sentence.
      */
-    private const val STATE_IDLE = "idle"
-    private const val STATE_WORKING = "working"
-    private const val STATE_NEEDS_YOU = "needs you"
-    private const val STATE_OFFLINE = "not connected"
-    private const val STATE_ENDED = "ended"
+    private const val STATE_IDLE = "Idle"
+    private const val STATE_WORKING = "Working"
+    private const val STATE_NEEDS_YOU = "Needs you"
+    private const val STATE_OFFLINE = "Not connected"
+    private const val STATE_ENDED = "Ended"
 
     /**
      * What the header says about a session this phone holds no record of: NOTHING, and this is
@@ -715,7 +698,7 @@ object SessionDetailScreen {
      * (agents-tracker-upbo). "Resync" is the wire's word for a reseed; what the user is looking at
      * is a log with records missing from it, and [STALE_NOTICE] is the sentence directly above.
      */
-    private const val RESYNC = "Repair this record"
+    private const val RESYNC = "Reload"
 
     /**
      * PB-INPUT-1's acknowledgement, and it says what it clears rather than "dismiss".
@@ -723,7 +706,7 @@ object SessionDetailScreen {
      * The verb's own doc is why: a clear "does not disable the ledger", so a label reading as
      * "stop telling me" would describe something this control deliberately does not do.
      */
-    private const val ACKNOWLEDGE = "Clear this record"
+    private const val ACKNOWLEDGE = "Dismiss"
 
     /**
      * PB-INPUT-1's ledger, in the words that refuse the inference a queue would invite.
@@ -738,13 +721,9 @@ object SessionDetailScreen {
      * the reason its own type records, so there is nothing here that could quote what was typed
      * even if this file wanted to.
      */
-    private const val UNDELIVERED_LIVE_ONLY =
-        " Input is live-only: none of it was held, and nothing is sent when the connection comes " +
-            "back."
-
     private fun undeliveredHead(count: Int): String = when (count) {
-        1 -> "Something you typed did not reach your machine."
-        else -> "$count things you typed did not reach your machine."
+        1 -> "1 message didn't get through."
+        else -> "$count messages didn't get through."
     }
 
     /**
@@ -765,8 +744,7 @@ object SessionDetailScreen {
         if (ledger.entries.isEmpty()) {
             ""
         } else {
-            undeliveredHead(ledger.entries.size) + UNDELIVERED_LIVE_ONLY +
-                undeliveredOverflow(ledger.dropped)
+            undeliveredHead(ledger.entries.size) + undeliveredOverflow(ledger.dropped)
         }
 
     /**

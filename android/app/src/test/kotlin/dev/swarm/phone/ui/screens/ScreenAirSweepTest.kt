@@ -682,7 +682,7 @@ class ScreenAirSweepTest {
                     ),
                 ),
             ),
-            notices = listOf("Notifications are blocked for this app."),
+            notices = listOf("Notifications are blocked."),
             disclosure = "Battery saver can delay a push.",
             machineSection = MachineSection(
                 heading = "PAIRING",
@@ -710,7 +710,7 @@ class ScreenAirSweepTest {
                     command = "swarm remote on",
                 ),
             ),
-            permissionRedirectLabel = "Open notification settings",
+            permissionRedirectLabel = "Open settings",
             deliveryRedirectLabel = "Open the wake channel",
         ),
         rowFor = { row -> toggle(context, checked = row.checked, description = row.description) },
@@ -726,7 +726,7 @@ class ScreenAirSweepTest {
         // this host when a session is blocked on one. A session detail with nothing pending is
         // the common case, and an empty host sweeps to nothing rather than vacuously.
         approval = FrameLayout(context),
-        outcome = "The machine refused: remote control is disabled.",
+        outcome = "Remote control is off on your computer.",
     )
 
     /** Every conditional block on the detail screen drawn at once, so nothing is swept vacuously. */

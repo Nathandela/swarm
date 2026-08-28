@@ -2066,6 +2066,7 @@ class PhoneSurface(
         // [renderUnavailable] draws that too: a phone core that failed to build says nothing about
         // whether the revoke landed, and clearing there would drop the sentence on the way past.
         settings.unpairNotice = ""
+        settings.unpairCommand = ""
         // AND THE OPERATION THE SENTENCE WAS ABOUT GOES WITH IT (agents-tracker-4zue). The id
         // outlives the panel that issued it on purpose; what ends it is this, the one fact that
         // resolves the divergence. Left latched, the next pairing's screens would go on asking the
@@ -2292,6 +2293,7 @@ class PhoneSurface(
                 },
                 revokedNotice = revoked.notice,
                 revokedDetail = revoked.detail,
+                revokedCommand = revoked.command,
                 copy = PairOnlyScreen.copyFor(reason),
             ),
         )
@@ -2346,7 +2348,7 @@ class PhoneSurface(
      */
     private fun revokeNotice(app: App): RevokeNotice {
         val issued = runtime.revokeOperation()
-        if (issued.isEmpty()) return RevokeNotice(settings.unpairNotice, detail = "")
+        if (issued.isEmpty()) return RevokeNotice(settings.unpairNotice, detail = "", command = settings.unpairCommand)
         val verdict = try {
             CommandVerdict.of(
                 FacadeBridge(app).launchOutcome(issued),
@@ -2385,6 +2387,13 @@ class PhoneSurface(
         return RevokeNotice(
             notice = if (verdict.answered) composed else settings.unpairNotice.ifEmpty { composed },
             detail = PairOnlyScreen.revokeDetailFor(verdict),
+            // THE WELL FOLLOWS THE SENTENCE IT IS UNDER: the panel's command where the panel's
+            // sentence won, this verdict's otherwise (phone refit W5.1).
+            command = if (verdict.answered) {
+                PairOnlyScreen.revokeCommandFor(verdict)
+            } else {
+                settings.unpairCommand.ifEmpty { PairOnlyScreen.revokeCommandFor(verdict) }
+            },
         )
     }
 
@@ -4458,6 +4467,7 @@ class PhoneSurface(
         LaunchPresetPanel(
             availability = flow.availability,
             availabilityNotice = LaunchPresetScreen.noticeFor(flow.availability),
+            availabilityCommand = LaunchPresetScreen.commandFor(flow.availability),
             rows = flow.rows,
             deliveryNotice = presetDelivery,
             fetchNotice = presetFetchDelivery,
@@ -5397,7 +5407,7 @@ class PhoneSurface(
          * a row and the screen did nothing at all.
          */
         const val ANCHOR_NOT_RETAINED =
-            "That message is no longer in the history this phone is holding."
+            "That message is gone from this phone."
 
         /**
          * What a control built as a SLOT is labelled before the screen that places it has said.

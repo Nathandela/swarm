@@ -83,7 +83,7 @@ class ComposerShutReasonTest {
             ComposerModel.availabilityFor(online = true, structuredChat = false, recordTorn = false, ended = false),
         )!!
 
-        assertTrue("a torn record says so: it is what the machine proved", torn.placeholder.contains("gap"))
+        assertEquals("a torn record says the chat is paused here (phone refit W5.4)", "Chat is paused here.", torn.placeholder)
         for (word in listOf("broke", "gap", "record")) {
             assertTrue(
                 "a session that simply reports no chat surface must not be told its record " +

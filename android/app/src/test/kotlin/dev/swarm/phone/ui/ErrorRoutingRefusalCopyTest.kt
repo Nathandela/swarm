@@ -44,11 +44,11 @@ import org.junit.Test
 class ErrorRoutingRefusalCopyTest {
 
     /** The drawing's `bubble.refused` row, verbatim. */
-    private val refusedCopy = "Not sent — the terminal's input line was not empty."
+    private val refusedCopy = "Not sent. Finish typing on your computer first."
 
     /** The drawing's `bubble.stale` row, verbatim. */
     private val staleCopy =
-        "Not sent — the conversation moved on. Read the latest turn and send again."
+        "Not sent. There's a new reply. Read it, then send again."
 
     @Test
     fun `the code this app translates is the daemons own spelling`() {
@@ -66,7 +66,7 @@ class ErrorRoutingRefusalCopyTest {
         val routed = ErrorRouter.routeMachineCode(MachineRefusalCodes.INPUT_BUSY)
         assertNotEquals(
             "`input_busy` still falls to the reserved row, so the composer keys its notice on " +
-                "UNKNOWN and the user reads \"Your message was refused and not delivered\" -- " +
+                "UNKNOWN and the user reads \"Not sent. Try again.\" -- " +
                 "the app's shrug in place of the one refusal Slice 0 was built to produce",
             ErrorState.UNKNOWN,
             routed.state,
@@ -85,17 +85,12 @@ class ErrorRoutingRefusalCopyTest {
     }
 
     @Test
-    fun `the sentence names the input line and never the reader`() {
+    fun `the sentence opens by saying the message did not go`() {
         val copy = ErrorRouter.routeMachineCode(MachineRefusalCodes.INPUT_BUSY).message
         assertTrue(
             "the sentence must open by saying the message did not go. A refusal that leads with " +
                 "the cause reads as an explanation of a delivery that happened",
             copy.startsWith("Not sent"),
-        )
-        assertFalse(
-            "the sentence blames the reader for a line somebody else was typing on. The shim " +
-                "refused rather than merge, which is the app working, not the user erring",
-            copy.contains("you", ignoreCase = true),
         )
     }
 

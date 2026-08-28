@@ -194,8 +194,7 @@ object PairingPanelScreen {
      * that provably did not, and this protocol only ever reaches PAIRED through a human answering
      * the comparison.
      */
-    private const val INTERRUPTED =
-        "This pairing was interrupted before it finished. Nothing was joined."
+    private const val INTERRUPTED = "Pairing was interrupted."
 
     /**
      * The command a machine runs to produce a pairing code.
@@ -265,8 +264,7 @@ object PairingPanelScreen {
      * IT NAMES THE PASTE PATH TOO, because in this state that is the only thing on the screen that
      * works without leaving the app.
      */
-    const val CAMERA_BLOCKED = "This app cannot use the camera, so it cannot scan a code. Turn " +
-        "the camera on in Settings, or paste the code your machine printed."
+    const val CAMERA_BLOCKED = "Camera is off. Allow it in Settings, or enter the code."
 
     /**
      * Why the scanner is gone on a device with no camera at all, and why -- unlike
@@ -276,8 +274,7 @@ object PairingPanelScreen {
      * sentence [CAMERA_BLOCKED] uses would be the identical defect this screen already avoids for
      * a permission nobody withheld: a control that leads nowhere useful.
      */
-    const val NO_CAMERA_NOTICE = "This device has no camera, so it cannot scan a code. Paste " +
-        "the code your machine printed."
+    const val NO_CAMERA_NOTICE = "No camera. Enter the code instead."
 
     /**
      * Why a first pairing asks for a relay address, and why only the first one does.
@@ -296,8 +293,7 @@ object PairingPanelScreen {
      * is asked once: the address is remembered on the confirm step, so a pairing that fails
      * afterwards costs a re-run of the desktop verb and ten characters, not this field again.
      */
-    const val RELAY_ASK = "This phone does not know your relay yet. Enter its address once; it " +
-        "is remembered after this pairing."
+    const val RELAY_ASK = "Enter your computer's address once. It's remembered."
 
     /**
      * What the camera has looked at so far, or nothing at all before it has looked at anything.
@@ -327,7 +323,7 @@ object PairingPanelScreen {
     fun titleFor(step: PairingStep, machine: String = ""): String? = when (step) {
         PairingStep.SCAN -> SCAN_TITLE
         PairingStep.COMPARING_CODES -> COMPARE_TITLE
-        PairingStep.PAIRED -> if (machine.isEmpty()) PAIRED_TITLE else "$PAIRED_TITLE with $machine"
+        PairingStep.PAIRED -> machine.ifEmpty { PAIRED_TITLE }
         else -> null
     }
 

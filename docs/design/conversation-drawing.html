@@ -284,7 +284,7 @@
           <div class="stage" style="padding:0">
             <div class="head">
               <span class="chev">‹</span>
-              <div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> idle · nathan-mbp</div></div>
+              <div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> Idle · nathan-mbp</div></div>
               <span class="kb">⋮</span>
             </div>
             <div style="padding:10px 11px 4px">
@@ -312,7 +312,7 @@
               <div class="prose"><p>Found a reconnect storm at 03:14. I need to clear the stale database before the migration.</p></div>
               <div class="pill">Needs your answer ↓</div>
             </div>
-            <div class="comp"><div class="cbar"><span class="ph">Add feedback…</span><span class="cb stop"><i></i></span></div></div>
+            <div class="comp"><div class="cbar"><span class="ph">Add a note while it works</span><span class="cb stop"><i></i></span></div></div>
           </div>
         </div>
       </div>
@@ -350,12 +350,12 @@
       <div class="states">
         <div class="state">
           <span class="lb">idle</span>
-          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> idle · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">claude-NewLatexCV</div><div class="m"><span class="sdot idle"></span> Idle · nathan-mbp</div></div><span class="kb">⋮</span></div>
           <p class="nt">The machine name is always shown. With several machines paired, it is the only thing that tells two identically named sessions apart.</p>
         </div>
         <div class="state">
           <span class="lb">working</span>
-          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">codex-swarm-relay</div><div class="m"><span class="sdot work"></span> working · nathan-mbp</div></div><span class="kb">⋮</span></div>
+          <div class="head" style="border-radius:8px"><span class="chev">‹</span><div class="id"><div class="n">codex-swarm-relay</div><div class="m"><span class="sdot work"></span> Working · nathan-mbp</div></div><span class="kb">⋮</span></div>
           <p class="nt"><b>Read from the open turn</b>, never from “some tool is running” — an agent that is only thinking has no open tool, and a tool whose completion never arrived would read working forever.</p>
         </div>
         <div class="state">
@@ -383,7 +383,7 @@
           <span class="lb">live session</span>
           <div class="menu">
             <div>Session details</div>
-            <div>Load earlier messages</div>
+            <div>Show earlier</div>
             <div class="danger">Kill session</div>
           </div>
           <p class="nt"><b>Repair is not here.</b> It lives on the tear, where the tear is. One affordance per operation — two would create competing pending states for one live-only action.</p>
@@ -432,7 +432,7 @@
           <span class="lb">refused</span>
           <div class="stage">
             <div class="msg me"><div class="bubble refused">check the relay logs too</div></div>
-            <div class="undermsg err">Not sent — the terminal's input line was not empty. <u>Try again</u></div>
+            <div class="undermsg err">Not sent. Finish typing on your computer first. <u>Try again</u></div>
           </div>
           <p class="nt">A refusal keeps your words on screen and offers the retry. Nothing is ever silently swallowed, and nothing is queued while offline.</p>
         </div>
@@ -514,7 +514,7 @@
               <div class="bd">$ grep -nE '\[ERROR\]|\[WARN\]' daemon.log
 ---counts---
 0</div>
-              <div class="cl">Clipped at 4 KB. Tap to fetch the whole of it from your machine.</div>
+              <div class="cl">Tap to see the full message.</div>
             </div>
           </div>
           <p class="nt">A card you opened stays open. Nothing the agent does reopens one you closed, and nothing closes one you opened.</p>
@@ -590,7 +590,7 @@
             <div class="decide settled">
               <div class="q">Run this command?</div>
               <div class="lit">rm -rf ~/.swarm-relay/relay.db</div>
-              <div class="ft" style="color:var(--ok)">Yes · answered at your machine, 09:45</div>
+              <div class="ft" style="color:var(--ok)">Yes · answered at your computer, 09:45</div>
             </div>
           </div>
           <p class="nt">It stays in the conversation, because it is what was asked. It stops being a decision the instant it resolves anywhere — the phone and the terminal both answer, and whichever lands first wins.</p>
@@ -600,7 +600,7 @@
           <div class="stage">
             <div class="decide settled">
               <div class="q">This version of swarm cannot show this question.</div>
-              <div class="ft">Answer it at your machine, or update the app.</div>
+              <div class="ft">Update the app to answer here.</div>
             </div>
           </div>
           <p class="nt">Never a dead end. A question this build cannot render says so and offers a way out, so a session is never stuck behind a card that cannot be answered.</p>
@@ -648,7 +648,7 @@
       <div class="states">
         <div class="state">
           <span class="lb">a proven gap, in position</span>
-          <div class="stage"><div class="prose"><p>…finished the migration.</p></div><div class="gap">records missing · <u>repair</u></div><div class="prose"><p>Ready for the next step.</p></div></div>
+          <div class="stage"><div class="prose"><p>…finished the migration.</p></div><div class="gap">Missing messages · <u>Reload</u></div><div class="prose"><p>Ready for the next step.</p></div></div>
           <p class="nt">One line, at the place the record tore, carrying its own repair. Today this is a paragraph and two full-width buttons standing above the conversation.</p>
         </div>
         <div class="state">
@@ -658,7 +658,7 @@
         </div>
         <div class="state">
           <span class="lb">more to load</span>
-          <div class="stage"><div class="chip">Load earlier messages</div><div class="stamp">09:31</div></div>
+          <div class="stage"><div class="chip">Show earlier</div><div class="stamp">09:31</div></div>
           <p class="nt">A chip at the head of the list, offered only when there is genuinely something older to fetch. When the machine says nothing older is retained, the chip is not drawn at all rather than drawn dead.</p>
         </div>
       </div>
@@ -679,7 +679,7 @@
         </div>
         <div class="state">
           <span class="lb">working · empty</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph">Add feedback…</span><span class="cb stop"><i></i></span></div></div>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph">Add a note while it works</span><span class="cb stop"><i></i></span></div></div>
           <p class="nt">An empty composer while the agent works is the one case where the button is Stop.</p>
         </div>
         <div class="state">
@@ -689,17 +689,17 @@
         </div>
         <div class="state">
           <span class="lb">not connected</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Not connected to your machine</span><span class="cb off">↑</span></div><p class="why">Messages are never held — nothing is sent when the link returns.</p></div>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Not connected.</span><span class="cb off">↑</span></div><p class="why">Messages are never held — nothing is sent when the link returns.</p></div>
           <p class="nt">Today an offline session draws a composer identical to a live one. The state that would say otherwise is computed and read by nothing.</p>
         </div>
         <div class="state">
           <span class="lb">record torn</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">This session's record has a gap</span><span class="cb off">↑</span></div><p class="why">Still typeable at your machine. <u>Repair</u></p></div>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Chat is paused here.</span><span class="cb off">↑</span></div><p class="why">Still typeable at your machine. <u>Repair</u></p></div>
           <p class="nt">One of four distinct reasons, each with its own sentence. Today all four share a single sentence that accuses the record of breaking.</p>
         </div>
         <div class="state">
           <span class="lb">no chat surface · ended</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">This agent reports no chat surface</span><span class="cb off">↑</span></div><p class="why">You can watch it here, and type at your machine.</p></div>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Chat is off for this session.</span><span class="cb off">↑</span></div><p class="why">You can watch it here, and type at your machine.</p></div>
           <p class="nt">And an ended session says <em>“This session has ended”</em> with no composer at all. Four reasons, four sentences, none of them offering a step that cannot produce typing.</p>
         </div>
       </div>
@@ -727,32 +727,32 @@
       <table>
         <thead><tr><th>Where</th><th>Says</th><th>When</th></tr></thead>
         <tbody>
-          <tr><td class="k">header.state</td><td><b>idle · working · needs you · not connected · ended</b></td><td>read from the open turn and the link, never from “a tool is running”</td></tr>
+          <tr><td class="k">header.state</td><td><b>Idle · Working · Needs you · Not connected · Ended</b></td><td>read from the open turn and the link, never from “a tool is running”</td></tr>
           <tr><td class="k">bubble.pending</td><td><b>sending</b></td><td>signed and away; the agent has not echoed it</td></tr>
-          <tr><td class="k">bubble.refused</td><td><b>Not sent — the terminal's input line was not empty.</b></td><td>the machine refused rather than joining your words to someone's half-typed line</td></tr>
-          <tr><td class="k">bubble.stale</td><td><b>Not sent — the conversation moved on. Read the latest turn and send again.</b></td><td>shipped copy, kept</td></tr>
-          <tr><td class="k">tool.clipped</td><td><b>clipped</b> · opened: <b>Clipped at N KB. Tap to fetch the whole of it from your machine.</b></td><td>the body was cut to a cap and the machine still holds the rest</td></tr>
+          <tr><td class="k">bubble.refused</td><td><b>Not sent. Finish typing on your computer first.</b></td><td>the computer refused rather than joining your words to someone's half-typed line; where the phone knows the computer's name it says the name (phone refit W5.2)</td></tr>
+          <tr><td class="k">bubble.stale</td><td><b>Not sent. There's a new reply. Read it, then send again.</b></td><td>phone refit W5.4</td></tr>
+          <tr><td class="k">tool.clipped</td><td><b>clipped</b> · opened: <b>Tap to see the full message.</b></td><td>the body was cut to a cap and the machine still holds the rest</td></tr>
           <tr><td class="k">tool.failed</td><td><b>failed</b> · <b>declined</b></td><td>the wire's own status, never a word of ours. The vocabulary is four values and no more &mdash; <b>in_progress | completed | failed | declined</b>. An earlier draft of this row tabled <i>timed out</i>, which appears nowhere on the wire; it was struck rather than implemented, because a status this side invents is exactly what the caption forbids</td></tr>
           <tr><td class="k">tool.more</td><td><b>Open in full · N more lines</b>, and <b>Open in full · 1 more line</b></td><td>the output is longer than the in-place bound (20 lines). The singular is tabled because the template had no form for it and rendered "1 more lines"</td></tr>
           <tr><td class="k">filechange</td><td><b>&lt;change&gt; · &lt;path&gt; · +N -M</b>, and <b>&lt;old&gt; -&gt; &lt;new&gt;</b> for a rename</td><td>the change verb is the wire's own word; the counts are the wire's own numbers. <b>ASCII, not U+2212 and U+2192</b>: this sheet drew the typographic marks, the shipping code has always drawn the ASCII ones, and an absent glyph in the mono face renders as tofu on a handset. The sheet moved rather than the proven code</td></tr>
           <tr><td class="k">decision.footer</td><td><b>asked HH:mm</b></td><td>unresolved. <b>The clause &ldquo;answerable here or at the terminal&rdquo; is struck</b>: it is a capability claim, and this card draws identically on an offline session and on one whose composer is shut, where answering here is impossible. Unlike a settled row, this one is on screen precisely while the reader is deciding whether to act, so a false claim there is the most expensive kind. The time asked is a fact the model holds. <b>The settled sentences carry no time</b>, deliberately: the block already draws a timestamp at its turn boundary, and a second one inside the sentence is the same fact in two voices &mdash; the rule that produced five wordings of a moved turn</td></tr>
           <tr><td class="k">decision.settled</td><td><b>allowed · answered on this phone</b> &nbsp;/&nbsp; <b>denied · answered on this phone</b></td><td>keyed on <b>by</b>. The verdict token is the wire's own and is printed only where one exists &mdash; which is the <i>phone</i> path alone</td></tr>
-          <tr><td class="k">decision.settled.owner</td><td><b>answered at your machine</b></td><td>no verdict token, because there is none: <code>answered_locally</code> resolves precisely when the daemon did <i>not</i> type the answer and observes only that the session left the waiting state, never which button was pressed. Printing the token here would dress a non-verdict as a decision</td></tr>
+          <tr><td class="k">decision.settled.owner</td><td><b>answered at your computer</b></td><td>no verdict token, because there is none: <code>answered_locally</code> resolves precisely when the daemon did <i>not</i> type the answer and observes only that the session left the waiting state, never which button was pressed. Printing the token here would dress a non-verdict as a decision</td></tr>
           <tr><td class="k">decision.closed</td><td><b>cancelled · never answered</b> &nbsp;/&nbsp; <b>superseded · never answered</b> &nbsp;/&nbsp; <b>expired · never answered</b></td><td>the three resolutions that are <i>not</i> answers. Every request reaches one of six ends, and these three may never borrow an answer's words</td></tr>
           <tr><td class="k">decision.settled.unknown</td><td><b>&lt;decision&gt; · &lt;by&gt;</b></td><td>a vocabulary this build does not know keeps the wire's own two words rather than guessing a sentence. The table is not exhaustive-or-die</td></tr>
-          <tr><td class="k">decision.unknown</td><td><b>This version of swarm cannot show this question. Answer it at your machine, or update the app.</b></td><td>a request kind this build does not render</td></tr>
+          <tr><td class="k">decision.unknown</td><td><b>Update the app to answer here.</b></td><td>a request kind this build does not render</td></tr>
           <tr><td class="k">decision.pill</td><td><b>Needs your answer</b></td><td>an unanswered decision is off screen</td></tr>
           <tr><td class="k">working</td><td><b>Working</b> + elapsed · <b>Waiting for your answer</b></td><td>a turn is open · a decision is unanswered</td></tr>
-          <tr><td class="k">gap</td><td><b>records missing · repair</b></td><td>a proven, positioned tear in the record</td></tr>
-          <tr><td class="k">sync</td><td><b>This view may be missing events. It repairs itself when the link recovers.</b></td><td>the stream is stale but no tear is positioned</td></tr>
-          <tr><td class="k">earlier</td><td><b>Load earlier messages</b></td><td>there is something older and this phone can hold it</td></tr>
+          <tr><td class="k">gap</td><td><b>Missing messages · Reload</b></td><td>a proven, positioned tear in the record</td></tr>
+          <tr><td class="k">sync</td><td><b>Some updates may be missing.</b></td><td>the stream is stale but no tear is positioned</td></tr>
+          <tr><td class="k">earlier</td><td><b>Show earlier</b></td><td>there is something older and this phone can hold it</td></tr>
           <tr><td class="k">composer.idle</td><td><b>Message</b></td><td>shipped, kept</td></tr>
-          <tr><td class="k">composer.working</td><td><b>Add feedback…</b></td><td>shipped, kept</td></tr>
-          <tr><td class="k">composer.offline</td><td><b>Not connected to your machine</b> / <b>Messages are never held — nothing is sent when the link returns.</b></td><td>link down</td></tr>
-          <tr><td class="k">composer.torn</td><td><b>This session's record has a gap</b> / <b>Still typeable at your machine.</b></td><td>a proven structured gap</td></tr>
-          <tr><td class="k">composer.nochat</td><td><b>This agent reports no chat surface</b> / <b>You can watch it here, and type at your machine.</b></td><td>the capability record says no structured chat</td></tr>
+          <tr><td class="k">composer.working</td><td><b>Add a note while it works</b></td><td>phone refit W5.4</td></tr>
+          <tr><td class="k">composer.offline</td><td><b>Not connected.</b> / <b>Reconnect to send.</b></td><td>link down</td></tr>
+          <tr><td class="k">composer.torn</td><td><b>Chat is paused here.</b> / <b>You can still type on your computer.</b></td><td>a proven structured gap</td></tr>
+          <tr><td class="k">composer.nochat</td><td><b>Chat is off for this session.</b> / <b>Reply on your computer.</b></td><td>the capability record says no structured chat</td></tr>
           <tr><td class="k">composer.ended</td><td><b>This session has ended</b></td><td>no composer is drawn</td></tr>
-          <tr><td class="k">empty</td><td><b>No messages for this session have reached this phone yet.</b></td><td>shipped, kept — it says what this phone holds, never what the machine did</td></tr>
+          <tr><td class="k">empty</td><td><b>No messages yet.</b></td><td>it says what this phone holds, never what the computer did (phone refit W5.4)</td></tr>
           <tr><td class="k">menu.a11y</td><td><b>Session menu</b></td><td>the overflow control is a bare glyph (U+22EE) and announces nothing without it. Signed here rather than authored in code, because copy is the screen's and an invented string is an unrecorded one</td></tr>
           <tr><td class="k">kill.confirm</td><td><b>End this session? The agent stops and the session is gone; this cannot be undone.</b></td><td>shipped, kept</td></tr>
         </tbody>

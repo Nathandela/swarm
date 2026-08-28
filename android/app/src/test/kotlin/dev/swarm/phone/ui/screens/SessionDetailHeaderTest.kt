@@ -124,13 +124,13 @@ class SessionDetailHeaderTest {
         assertEquals(
             "an idle session's header says something other than \"idle\". No turn is open, which " +
                 "is exactly the state the daemon matches by the EMPTY expected_turn",
-            "idle · $MACHINE",
+            "Idle · $MACHINE",
             panel(items = closedTurn()).headerSubtitle,
         )
         assertEquals(
             "a session with an OPEN turn does not read as working, so the header cannot answer " +
                 "the one question a reader opens it to check",
-            "working · $MACHINE",
+            "Working · $MACHINE",
             panel(items = openTurn()).headerSubtitle,
         )
     }
@@ -160,7 +160,7 @@ class SessionDetailHeaderTest {
         assertEquals(
             "the header read \"a tool is running\" instead of the open turn, so a completion " +
                 "that never arrived leaves this session reading working for the rest of its life",
-            "idle · $MACHINE",
+            "Idle · $MACHINE",
             panel(items = strandedTool).headerSubtitle,
         )
     }
@@ -169,13 +169,13 @@ class SessionDetailHeaderTest {
     fun `the link outranks the turn and ended outranks everything`() {
         assertEquals(
             "a phone that cannot reach the machine still reported activity it is not receiving",
-            "not connected · $MACHINE",
+            "Not connected · $MACHINE",
             panel(online = false, items = openTurn()).headerSubtitle,
         )
         assertEquals(
             "an ended session read as something other than ended, though there is nothing to " +
                 "type into whatever the link or the record says",
-            "ended · $MACHINE",
+            "Ended · $MACHINE",
             panel(ended = true, online = false, items = openTurn()).headerSubtitle,
         )
     }
@@ -185,7 +185,7 @@ class SessionDetailHeaderTest {
         assertEquals(
             "a session the agent is blocked on read as working. It is not working -- it is " +
                 "stopped, waiting on this reader, and that is the fact worth the subtitle",
-            "needs you · $MACHINE",
+            "Needs you · $MACHINE",
             panel(group = "needs_input", items = openTurn()).headerSubtitle,
         )
     }
@@ -199,7 +199,7 @@ class SessionDetailHeaderTest {
         assertEquals(
             "the subtitle kept its separator over a machine half that does not exist, which is " +
                 "punctuation claiming a fact",
-            "idle",
+            "Idle",
             panel(machineLabel = "", items = closedTurn()).headerSubtitle,
         )
     }
@@ -239,19 +239,19 @@ class SessionDetailHeaderTest {
             "an ENDED session lost its word to a missing record. There is nothing to type into " +
                 "whatever the record says, and `ended` is read from the session and not from the " +
                 "transcript",
-            "ended · $MACHINE",
+            "Ended · $MACHINE",
             panel(ended = true, items = emptyList()).headerSubtitle,
         )
         assertEquals(
             "an unreachable session lost its word to a missing record, though a phone that " +
                 "cannot reach the machine knows exactly that much and owes the reader it",
-            "not connected · $MACHINE",
+            "Not connected · $MACHINE",
             panel(online = false, items = emptyList()).headerSubtitle,
         )
         assertEquals(
             "a session the ROSTER says is blocked on this reader lost its word to a missing " +
                 "transcript. That fact comes off the roster row, not out of the items",
-            "needs you · $MACHINE",
+            "Needs you · $MACHINE",
             panel(group = "needs_input", items = emptyList()).headerSubtitle,
         )
     }
@@ -346,7 +346,7 @@ class SessionDetailHeaderTest {
         assertEquals(
             "the state word stopped being read from the open turn, so this no longer tests the " +
                 "contradiction it was written for",
-            "working · $MACHINE",
+            "Working · $MACHINE",
             working.headerSubtitle,
         )
         assertFalse(
@@ -380,8 +380,8 @@ class SessionDetailHeaderTest {
         val working = panel(items = openTurn())
         val host = column(idle)
 
-        assertEquals("the fixture does not change the state word at all", "idle · $MACHINE", idle.headerSubtitle)
-        assertEquals("working · $MACHINE", working.headerSubtitle)
+        assertEquals("the fixture does not change the state word at all", "Idle · $MACHINE", idle.headerSubtitle)
+        assertEquals("Working · $MACHINE", working.headerSubtitle)
         assertTrue(
             "the redraw refused a panel that differs only in the transcript and the header's own " +
                 "two fields, so the conversation is rebuilt every time a turn opens or closes -- " +

@@ -35,8 +35,7 @@ class PairingCameraCopyTest {
         val copy = PairingFlow.CAMERA_DID_NOT_START
 
         assertEquals(
-            "The camera did not start. Close any other app using it and try again, or enter " +
-                "the code instead.",
+            "Camera didn't start. Close other camera apps, or enter the code.",
             copy,
         )
     }

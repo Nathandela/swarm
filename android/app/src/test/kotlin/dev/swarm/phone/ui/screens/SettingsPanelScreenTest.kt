@@ -64,7 +64,7 @@ class SettingsPanelScreenTest {
     @Test
     fun `the rows carry C6's recorded labels in C6's order`() {
         assertEquals(
-            listOf("Needs your decision", "Task done"),
+            listOf("Needs your answer", "Task done"),
             rows(SettingsPanelScreen.of(screen())).map { it.label },
         )
     }
@@ -72,7 +72,7 @@ class SettingsPanelScreenTest {
     @Test
     fun `each row carries the sublabel C6 records under its label`() {
         assertEquals(
-            listOf("Approvals and blocked prompts", "Completions and failures"),
+            listOf("Approvals and questions", "Finished and failed sessions"),
             rows(SettingsPanelScreen.of(screen())).map { it.sublabel },
         )
     }

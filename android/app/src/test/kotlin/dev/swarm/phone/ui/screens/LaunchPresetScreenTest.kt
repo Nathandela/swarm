@@ -92,10 +92,10 @@ class LaunchPresetScreenTest {
                 online = true, tier = "full", killSwitchOn = true, presetCount = 0,
             ),
         )
-        val copy = LaunchPresetScreen.noticeFor(LaunchAvailability.NO_PRESETS)
+        val command = LaunchPresetScreen.commandFor(LaunchAvailability.NO_PRESETS)
         assertTrue(
-            "the empty-preset state must point at the terminal-side authoring verb; got \"$copy\"",
-            copy.contains("swarm remote presets"),
+            "the empty-preset state must point at the terminal-side authoring verb, in its well; got \"$command\"",
+            command.contains("swarm remote presets"),
         )
     }
 
@@ -145,7 +145,8 @@ class LaunchPresetScreenTest {
     fun outcomeUnknownNeverClaimsSuccessOrFailure() {
         val notice = LaunchPresetScreen.noticeFor(LaunchDeliveryNotice.OUTCOME_UNKNOWN).lowercase()
         assertTrue("outcome_unknown copy is empty; honest uncertainty still needs a sentence", notice.isNotEmpty())
-        for (overclaim in listOf("launched", "started", "running", "failed", "refused")) {
+        assertTrue("outcome_unknown copy \"$notice\" does not open on the uncertainty", notice.startsWith("not sure"))
+        for (overclaim in listOf("launched", "running", "failed", "refused")) {
             assertFalse(
                 "outcome_unknown copy \"$notice\" claims \"$overclaim\"; the machine could not prove " +
                     "the outcome and the screen must not invent one",
@@ -169,5 +170,20 @@ class LaunchPresetScreenTest {
             sentences.size,
             sentences.toSet().size,
         )
+    }
+    /** Phone refit W5.1: commands go in a well, never in a sentence. */
+    @Test
+    fun `a denial's command is the well's text and never part of the sentence`() {
+        assertEquals("swarm remote on", LaunchPresetScreen.commandFor(LaunchAvailability.KILL_SWITCH_OFF))
+        assertEquals("swarm remote presets add", LaunchPresetScreen.commandFor(LaunchAvailability.NO_PRESETS))
+        for (state in LaunchAvailability.entries) {
+            assertFalse(
+                "$state's sentence carries a command; a command is a well's text (W5.1)",
+                LaunchPresetScreen.noticeFor(state).contains("swarm "),
+            )
+            if (state != LaunchAvailability.KILL_SWITCH_OFF && state != LaunchAvailability.NO_PRESETS) {
+                assertEquals("$state has no command to run", "", LaunchPresetScreen.commandFor(state))
+            }
+        }
     }
 }

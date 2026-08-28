@@ -296,8 +296,7 @@ class TranscriptDecisionTest {
             block.unrenderable,
         )
         assertEquals(
-            "This version of swarm cannot show this question. Answer it at your machine, or " +
-                "update the app.",
+            "Update the app to answer here.",
             block.line,
         )
         assertFalse(
@@ -393,7 +392,7 @@ class TranscriptDecisionTest {
                 "daemon observed the dialog leaving the waiting state and never learned which " +
                 "button was pressed (internal/skeleton/backend.go:671), so this row has a " +
                 "WHERE and no verdict at all",
-            "answered at your machine",
+            "answered at your computer",
             block.line,
         )
         assertTrue(block.resolution?.answered == true)

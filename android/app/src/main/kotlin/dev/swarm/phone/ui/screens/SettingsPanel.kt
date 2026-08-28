@@ -350,14 +350,14 @@ object SettingsPanelScreen {
      * a sublabel that carries the detail, which is the structure row 15 specifies.
      */
     private val ROW_LABELS: Map<PushToggle, String> = mapOf(
-        PushToggle.FIRST to "Needs your decision",
+        PushToggle.FIRST to "Needs your answer",
         PushToggle.SECOND to "Task done",
     )
 
     /** The second line of each row, verbatim from C6.2. */
     private val ROW_SUBLABELS: Map<PushToggle, String> = mapOf(
-        PushToggle.FIRST to "Approvals and blocked prompts",
-        PushToggle.SECOND to "Completions and failures",
+        PushToggle.FIRST to "Approvals and questions",
+        PushToggle.SECOND to "Finished and failed sessions",
     )
 
     /**
@@ -409,13 +409,13 @@ object SettingsPanelScreen {
     private const val REMOTE_ACCESS = "Remote access"
 
     /**
-     * Where the switch lives, and the verb that moves it.
+     * The verb that moves the switch, and it is the well's text and never the sentence's (phone
+     * refit W5.1).
      *
      * THE VERB IS THE ONE THAT APPLIES TO THE STATE THE SWITCH IS IN. `swarm remote on` and not
      * the mock's unconditional `swarm remote off`, which is the wrong instruction to give
      * somebody whose remote control is already off. Both are real verbs of `cmd/swarm/remote.go`.
      */
-    private const val SWITCH_LIVES = "The switch lives on the machine: "
     private const val COMMAND_ENABLE = "swarm remote on"
 
     fun labelFor(toggle: PushToggle): String = checkNotNull(ROW_LABELS[toggle]) {
@@ -521,10 +521,11 @@ object SettingsPanelScreen {
         // could answer differently -- and a row whose line and description disagreed about
         // whether the machine is healthy is exactly the drift PB-APP-11 refuses.
         val line = MachinePane.explanationOf(presence, freshness, nowUnixMs)
+        val label = MachineLabel.of(machineName, machineId)
         return ConnectionSection(
             heading = CONNECTION,
             machine = MachineRow(
-                name = MachineLabel.of(machineName, machineId),
+                name = label,
                 // THE ID KEEPS ITS OWN CELL, and only while the name cell is saying something
                 // else. See [MachineRow.endpoint]: this is a second FACT beside the name, never a
                 // second copy of it.
@@ -555,8 +556,10 @@ object SettingsPanelScreen {
             remoteAccess = if (killSwitchEngaged) {
                 RemoteAccessRow(
                     title = REMOTE_ACCESS,
-                    body = "${MachinePane.killSwitchExplanationOf(true)} " +
-                        "$SWITCH_LIVES$COMMAND_ENABLE.",
+                    // ROW 12 DRAWS THE COMMAND AS ITS INLINE MONO CELL (the kit's `Kit.emphasised`
+                    // span, pinned by KillSwitchPanelTest), so the sentence ends and the verb
+                    // follows it in that cell -- the nearest this panel comes to W5.1's well.
+                    body = "${MachinePane.killSwitchExplanationOf(true, label)} To turn it on: $COMMAND_ENABLE",
                     command = COMMAND_ENABLE,
                 )
             } else {
@@ -579,11 +582,8 @@ object SettingsPanelScreen {
      * so a channel being repaired is a channel with a hole in it that is being worked on --
      * reporting it as current is PB-SYNC-3's optimistic clear.
      */
-    private fun healthOf(names: List<String>): String = when (names.size) {
-        0 -> ""
-        1 -> "The ${names.single()} view has a gap."
-        else -> "The ${names.dropLast(1).joinToString(", ")} and ${names.last()} views have gaps."
-    }
+    private fun healthOf(names: List<String>): String =
+        if (names.isEmpty()) "" else "Some updates are missing."
 
     private fun rowFor(settings: SettingsScreen, toggle: PushToggle): SettingsRow {
         val label = labelFor(toggle)

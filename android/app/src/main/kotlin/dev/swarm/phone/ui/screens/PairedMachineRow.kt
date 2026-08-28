@@ -101,8 +101,7 @@ object PairedMachineRowScreen {
      * handset. Pairing again needs the code the computer shows, so a phone whose owner is nowhere
      * near their machine has just made itself useless until they are.
      */
-    private const val CONFIRM_COST = "This ends the pairing and destroys this phone's keys; " +
-        "pairing again needs a new code from the computer."
+    private const val CONFIRM_COST = "You'll need a new code to pair again."
 
     /** [CONFIRM_COST], asked about the machine that is actually about to be replaced. */
     private fun confirmationFor(machine: String): String =
@@ -119,7 +118,9 @@ object PairedMachineRowScreen {
             "PairingPanelScreen.titleFor answered null for PAIRED, so the one place this app " +
                 "words a completed pairing no longer words it. This row must not invent a second."
         },
-        sublabel = COST,
+        // NO SUBLABEL (phone refit W5.4): the row is the computer's name; the cost of replacing
+        // is the confirmation's to state, once, when the control is pressed.
+        sublabel = "",
         replaceLabel = REPLACE,
         replaceConfirmation = confirmationFor(machine),
     )

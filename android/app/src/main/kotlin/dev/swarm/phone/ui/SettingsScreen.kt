@@ -175,7 +175,7 @@ data class SettingsScreen(
 
     val pendingNotice: String
         get() = if (pendingSync) {
-            "Saved on this phone. It takes effect once your machine confirms it."
+            "Saved. Waiting for your computer to confirm."
         } else {
             ""
         }
@@ -199,13 +199,9 @@ data class SettingsScreen(
             // and the state below read "Turn them on in system settings" with no way to get there.
             // Copy naming an action the screen does not offer is worse than silence: it reads as a
             // step the user has failed to find.
-            NotificationRemedy.ASK ->
-                "Notifications are turned off for this app, so these switches change nothing " +
-                    "yet. Turn one on and Android will ask for permission."
+            NotificationRemedy.ASK -> "Allow notifications to use these."
 
-            NotificationRemedy.SYSTEM_SETTINGS ->
-                "Notifications are blocked for this app, so these switches change nothing yet. " +
-                    "$OPEN_NOTIFICATION_SETTINGS to allow them."
+            NotificationRemedy.SYSTEM_SETTINGS -> "Notifications are blocked."
 
             null -> ""
         }
@@ -268,14 +264,9 @@ data class SettingsScreen(
      */
     val deliveryBlockedNotice: String
         get() = when (blockedDelivery) {
-            NotificationDelivery.APP_BLOCKED ->
-                "Android is not showing notifications from this app, so these switches change " +
-                    "nothing. $OPEN_NOTIFICATION_SETTINGS to turn them back on."
+            NotificationDelivery.APP_BLOCKED -> "Notifications are off in Android."
 
-            NotificationDelivery.CHANNEL_BLOCKED ->
-                "Android has this app's alert category switched off, so wakes are dropped before " +
-                    "they reach you and these switches change nothing. $OPEN_CHANNEL_SETTINGS to " +
-                    "turn it back on."
+            NotificationDelivery.CHANNEL_BLOCKED -> "Alerts are off in Android."
 
             NotificationDelivery.DELIVERABLE, null -> ""
         }
@@ -370,7 +361,7 @@ data class SettingsScreen(
          * The redirect's words, once, so the sentence that names the control and the control itself
          * cannot drift apart -- [notificationsBlockedNotice] interpolates this constant.
          */
-        const val OPEN_NOTIFICATION_SETTINGS = "Open notification settings"
+        const val OPEN_NOTIFICATION_SETTINGS = "Open settings"
 
         /**
          * The channel redirect's words, once, for [OPEN_NOTIFICATION_SETTINGS]'s reason --
@@ -388,7 +379,7 @@ data class SettingsScreen(
          * a second copy typed here would be a second copy that drifts -- the same argument
          * [SettingsSurface]'s controls make about carrying no words at construction.
          */
-        const val OPEN_CHANNEL_SETTINGS = "Open the alert category"
+        const val OPEN_CHANNEL_SETTINGS = "Open settings"
 
         /**
          * ADR-007 B143's disclosure, once -- [pushDelayDisclosure] interpolates this constant.
@@ -401,7 +392,7 @@ data class SettingsScreen(
          * ONE LINE (agents-tracker-ksvb.6). It is still always-on -- the fact is always true,
          * unlike every notice above it -- but always true does not require two sentences to say.
          */
-        const val PUSH_DELAY_DISCLOSURE = "Battery saver can delay these notifications."
+        const val PUSH_DELAY_DISCLOSURE = "Battery saver can delay these."
 
         /**
          * What a refusal says when the machine sent no words with it (agents-tracker-os37).
@@ -412,7 +403,7 @@ data class SettingsScreen(
          * empty one would put the switch back with no explanation, which is this defect in a
          * different coat.
          */
-        const val SYNC_REFUSED = "Your machine did not save this change."
+        const val SYNC_REFUSED = "Couldn't save. Try again."
 
         /**
          * What the screen says when the system screen a redirect leads to is not on this phone
@@ -425,8 +416,7 @@ data class SettingsScreen(
          * build that ships no notification settings activity offers this app nothing else to
          * point at.
          */
-        const val SETTINGS_SCREEN_MISSING =
-            "This phone has no system screen for that, so it cannot be changed from here."
+        const val SETTINGS_SCREEN_MISSING = "Can't be changed on this phone."
 
         /**
          * What the screen says when a push-token reconciliation failed (agents-tracker-xla6).
@@ -438,9 +428,7 @@ data class SettingsScreen(
          * authenticated reconnect. What is left is a fault with no remedy the user can act on, so
          * the honest thing to say is what is now true of their phone rather than a routed cause.
          */
-        const val PUSH_TOKEN_UNRECONCILED =
-            "This phone could not update its push registration, so what it receives may not " +
-                "match these switches until it reconnects."
+        const val PUSH_TOKEN_UNRECONCILED = "Notifications may lag until the phone reconnects."
 
         /**
          * What the screen says when a category comes back on and nothing can re-register the

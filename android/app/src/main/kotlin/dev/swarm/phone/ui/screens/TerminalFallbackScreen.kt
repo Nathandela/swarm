@@ -119,16 +119,12 @@ data class TerminalFallbackModel(
      * different states, and the machine is the only thing that knows which one this is.
      */
     val explanation: String
-        get() = if (missingCapability.isEmpty()) {
-            NO_STRUCTURED_PLANE
-        } else {
-            "No chat here: this build of $provider does not support $missingCapability."
-        }
+        get() = NO_STRUCTURED_PLANE
 
     companion object {
 
         /** The header line when the machine named no missing capability. */
-        const val NO_STRUCTURED_PLANE = "No chat here: this session has no structured plane."
+        const val NO_STRUCTURED_PLANE = "Chat is off for this session."
 
         /**
          * ADR-017 T8 / playbook:286-287 -- the INTERLEAVING warning, and it is a warning rather
@@ -139,8 +135,7 @@ data class TerminalFallbackModel(
          * simultaneous typing can interleave; it must NOT "fix" this by evicting the terminal user,
          * which would make the phone's convenience cost someone else their session.
          */
-        const val INTERLEAVING_WARNING =
-            "Someone may be typing at this terminal too. Simultaneous typing can interleave."
+        const val INTERLEAVING_WARNING = "Someone else may be typing here."
 
         /** The banner's own sentence while a control generation is live. */
         const val CONTROL_LIVE = "You are typing into this terminal."
@@ -149,7 +144,7 @@ data class TerminalFallbackModel(
         const val RELEASE_LABEL = "Release control"
 
         /** What the read-only state says, so "read only" is stated rather than inferred from a missing keyboard. */
-        const val READ_ONLY = "Read only. This session's machine did not grant terminal control."
+        const val READ_ONLY = "Read only."
 
         /**
          * The model for one routed session, or null when the machine did not route it here.
@@ -221,7 +216,7 @@ data class TerminalFallbackModel(
             if (snapshotAge < STALE_AFTER_MS) {
                 ""
             } else {
-                "Last update ${snapshotAge / 1000}s ago -- this screen may be out of date."
+                "Updated ${snapshotAge / 1000} s ago"
             }
 
         /**
@@ -234,8 +229,7 @@ data class TerminalFallbackModel(
          * "the machine went quiet" told to the user as "the terminal is idle", which is the state
          * a user is most likely to act on and the exact lie T4-b names.
          */
-        const val STREAM_STALE =
-            "Not hearing from this machine. This screen is whatever it last sent, not what is there now."
+        const val STREAM_STALE = "Your computer is offline. This may be out of date."
 
         /**
          * The one staleness sentence to draw, or the empty string when there is nothing to say.
@@ -262,7 +256,7 @@ data class TerminalFallbackModel(
          */
         fun controlBanner(remainingHorizon: Long): String =
             if (remainingHorizon <= 0L) {
-                "Control ended. Nothing you type reaches this terminal."
+                "Your turn ended."
             } else {
                 "$CONTROL_LIVE ${remainingHorizon / 60_000}m left."
             }

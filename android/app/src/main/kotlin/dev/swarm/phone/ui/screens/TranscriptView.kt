@@ -636,7 +636,7 @@ private fun rowFor(
  * It closes by carrying `full_bytes` those four hops, which is a plumbing request with a known
  * source and not a protocol change.
  */
-private const val DETAIL_OFFER = "This was clipped. Tap to fetch the whole of it from your machine."
+private const val DETAIL_OFFER = "Tap to see the full message."
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

@@ -355,7 +355,7 @@ fun settingsPanelView(
             settingsRow(
                 context = context,
                 label = section.row.label,
-                sublabel = section.row.sublabel,
+                sublabel = section.row.sublabel.takeIf { it.isNotEmpty() },
                 // Row 13's arrangement, reused: the `.a2-no` treatment at chip metrics, for the
                 // same class of action as Revoke -- because it IS the revoke. The control is the
                 // caller's; this places it and tags it.

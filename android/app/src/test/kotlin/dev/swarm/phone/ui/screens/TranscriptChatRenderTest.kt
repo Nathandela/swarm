@@ -357,7 +357,7 @@ class TranscriptChatRenderTest {
             "the tear does not say the record is missing records, or does not carry its own " +
                 "repair -- and a tear a reader cannot act on where they found it is the notice " +
                 "standing above the conversation that this slice was filed to remove",
-            "records missing · repair",
+            "Missing messages · Reload",
             block.line,
         )
         assertEquals(

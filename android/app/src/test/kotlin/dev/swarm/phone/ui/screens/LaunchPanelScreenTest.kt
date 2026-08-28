@@ -56,7 +56,7 @@ class LaunchPanelScreenTest {
         assertEquals(
             listOf(
                 "Which agent to start",
-                "Working directory on your machine",
+                "Working directory on your computer",
                 "First message for the agent, if any",
             ),
             LaunchPanelScreen.of().fields.map { it.hint },
@@ -116,7 +116,7 @@ class LaunchPanelScreenTest {
     @Test
     fun `an unresolved launch is reported as unresolved, never as either outcome`() {
         assertEquals(
-            "Waiting for your machine to answer the launch.",
+            "Waiting for your computer to answer the launch.",
             LaunchPanelScreen.of(rendering(LaunchResult.PENDING)).notice,
         )
     }

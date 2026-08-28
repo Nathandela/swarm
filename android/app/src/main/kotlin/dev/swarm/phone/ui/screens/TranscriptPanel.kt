@@ -568,7 +568,7 @@ object TranscriptScreen {
      * screen claiming the agent has said nothing would be a claim about the MACHINE that a phone
      * holding no items is in no position to make.
      */
-    private const val EMPTY = "No messages for this session have reached this phone yet."
+    private const val EMPTY = "No messages yet."
 
     /**
      * The one character that makes a typed line a MACHINE WORD rather than a sentence.
@@ -685,7 +685,7 @@ object TranscriptScreen {
      * item says "nobody answered this".
      */
     private const val ANSWERED_HERE = "answered on this phone"
-    private const val ANSWERED_AT_MACHINE = "answered at your machine"
+    private const val ANSWERED_AT_MACHINE = "answered at your computer"
     private const val NEVER_ANSWERED = "never answered"
 
     /**
@@ -1376,8 +1376,8 @@ object TranscriptScreen {
      * label and the whole rule is tappable. Two spans here would be a second affordance to aim
      * at, on the thinnest row on the screen.
      */
-    private const val GAP_MISSING = "records missing"
-    private const val GAP_REPAIR = "repair"
+    private const val GAP_MISSING = "Missing messages"
+    private const val GAP_REPAIR = "Reload"
     private val GAP_LINE = joined(GAP_MISSING, GAP_REPAIR)
 
     /**
@@ -1401,5 +1401,5 @@ object TranscriptScreen {
     // The line is over this file's usual width, deliberately: the alternative is a tabled
     // sentence that can drift from the sheet without anything noticing.
     private const val DECISION_UNRENDERABLE =
-        "This version of swarm cannot show this question. Answer it at your machine, or update the app."
+        "Update the app to answer here."
 }
