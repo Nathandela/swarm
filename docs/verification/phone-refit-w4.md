@@ -355,3 +355,85 @@ ok  	github.com/Nathandela/swarm/android/gate	3.990s
 ```
 
 `go vet ./android/gate/` and `golangci-lint run ./android/gate/` clean after the rename.
+
+## W4.5 Spacing: the maquette moves, the components follow (widened by the lead's ruling)
+
+The Slate maquette's slab goes from `margin: 0 14px 10px; padding: 13px 15px` to
+`margin: 0 16px 14px; padding: 12px 16px`. The ten steps and the frame constants are untouched;
+`dimens.xml`'s spacing lines are byte-identical.
+
+**RED, step 1** -- the slab moved, the ledger unchanged (`go test ./android/gate/ -run PBDS1`):
+
+```
+--- FAIL: TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale (0.00s)
+    s22b_spacing_test.go:386: PB-DS-1: "swarm_space_14" claims to absorb 15px, which the Obsidian maquette does not declare as a spacing value
+    s22b_spacing_test.go:406: PB-DS-1: 6 of 19 maquette spacing values move onto the scale, want 7.
+```
+
+**GREEN** -- `s22b_spacing_test.go`: `swarm_space_14` absorbs `{14}` (15px was the slab's alone;
+13px stays, four other rules declare it), `wantMovers` 7 to 6, both under AUTHORIZED REWRITE notes
+quoting the old lines; the reverse assertion ("claims to absorb a value the maquette does not
+declare") is what produced the RED and stays. `TestPBDS1_TheAbsorptionLedgerCanActuallyFail` and
+`TestPBDS1_TheRatifiedExceptionsAreExactlyTheseThree` untouched and green.
+
+**RED, step 2** -- the joins re-pointed before any call site moved
+(`go test ./android/gate/ -run 'PBDS6|PBDS7'`). `s23Spacing` gained a `Maquette` source flag (a
+separate form, not a fallback, for `s23MetricMaquetteOrigin`'s reason) and its two `.prows` rows
+became `.slab { margin }` fields 1 and 2 read from the Slate maquette (16 sides, 14 bottom); the
+`s23DerivedSpacing` rows for `#14 Activity row` and `#26 Message bubble` became `space_12` x
+`space_16`, and `docs/design/substrate-components.md` rows 14 and 26 state that pair with an
+AMENDED note naming `.slab { padding: 12px 16px }` as the value's source (row 26's bubble gap
+became `space_14`, the slab's `margin-bottom`). No design value was invented: every step is one
+the maquette declares. Row 31's "all row 14's" cross-reference and the `fileChangeRow` factory
+prose were annotated as stale rather than moved (the file-change row keeps `space_10` x `space_12`
+pending its own ruling).
+
+```
+--- FAIL: TestPBDS6_EveryKitSpacingIsTheLedgersStep (0.01s)
+    s23_kit_test.go:1668: PB-DS-6: SessionRow.kt never references R.dimen.swarm_space_16, which is the step PB-DS-1's ledger assigns to `.slab { margin }` = 16px. A dimension that is not read from the scale is one typed at the call site, and the constant this requirement replaced was PhoneSurface's `PADDING = 24` in raw pixels.
+    s23_kit_test.go:1668: PB-DS-6: SessionRow.kt never references R.dimen.swarm_space_14, which is the step PB-DS-1's ledger assigns to `.slab { margin }` = 14px. A dimension that is not read from the scale is one typed at the call site, and the constant this requirement replaced was PhoneSurface's `PADDING = 24` in raw pixels.
+--- FAIL: TestPBDS7_EveryDerivedSpacingIsTheRowsStep (0.00s)
+    s23_kit_test.go:1944: PB-DS-7: ActivityRow.kt never references R.dimen.swarm_space_16, which is the step `#14 Activity row` states for its padding-x. A component whose only specification is prose in a table is the one whose spacing has to be read out of that table rather than out of itself.
+    s23_kit_test.go:1944: PB-DS-7: MessageBubble.kt never references R.dimen.swarm_space_16, which is the step `#26 Message bubble` states for its padding-x. A component whose only specification is prose in a table is the one whose spacing has to be read out of that table rather than out of itself.
+```
+
+**GREEN, step 3** -- `sessionList` gap `space_8` to `space_14` and sides `space_12` to `space_16`
+(KDoc keeps `origin: .prows` for the factory join and names the slab's margin as the steps'
+source); `activityRow` 12/10 to 16/12; `messageBubble` 12/8 to 16/12 with `topMargin` `space_14`.
+`sessionRow`'s own `.prow` padding is not in the ruling and did not move.
+
+```
+    s22b_spacing_test.go:440: PB-DS-1 drift ledger over 19 distinct maquette spacing values (16 of them absorbed, 3 ratified exceptions), worst 1dp:
+        	3->2 (-1)
+        	5->4 (-1)
+        	7->8 (+1)
+        	9->8 (-1)
+        	11->10 (-1)
+        	13->12 (-1)
+--- PASS: TestPBDS1_EveryDesignSpacingIsAbsorbedByTheScale (0.01s)
+--- PASS: TestPBDS6_EveryKitFactoryIsAnInboxComponent (0.00s)
+--- PASS: TestPBDS6_EveryKitFileIsClaimedByAFence (0.00s)
+--- PASS: TestPBDS6_EveryKitSpacingIsTheLedgersStep (0.00s)
+--- PASS: TestPBDS7_EveryDerivedSpacingIsTheRowsStep (0.00s)
+--- PASS: TestPBDS6_EveryKitMetricIsRenderedOneWay (0.01s)
+ok  	github.com/Nathandela/swarm/android/gate	1.695s
+```
+
+**RED, step 4 (Kotlin)** -- the call sites moved, the Robolectric claims not yet (targeted run,
+`--tests` InboxChromeTest, InboxRowTest, ActivityRowTest, KitDensityTest; InboxChromeTest is
+commit C's guard fix and passed):
+
+```
+ActivityRowTest > the row is the session row's card and the session row's padding FAILED
+InboxRowTest > the session list carries the side padding and the gap between rows FAILED
+KitDensityTest > the conversation surface spends the whole pixels the platform would FAILED
+> Task :app:testDebugUnitTest FAILED
+BUILD FAILED in 4m 33s
+COUNTS: tests=48 failures=3 errors=0 skipped=0
+```
+
+**GREEN** -- `InboxRowTest`'s `.prows` claims become the slab's margin (16 sides, 14 gap),
+`ActivityRowTest`'s row-14 claims become 16/12 and the test is renamed for what it now asserts,
+`KitDensityTest:299`'s row-26 padding-x becomes `space_16`; each under an AUTHORIZED REWRITE note
+quoting the old claim. `MessageBubbleTest` carries no padding claim. The full Kotlin run on the
+committed tree is run 3 in the gate table.

@@ -291,7 +291,9 @@ var s23Inbox = []s23Component{
 			"draws a unified diff inline, unconditionally, so a wide refactor costs a screen per " +
 			"file on the one surface whose purpose is continuous reading; this costs one line " +
 			"per file. It takes `activityRow`'s card, padding and gap verbatim -- `cardSurface`, " +
-			"`space_10` x `space_12`, `space_10` -- because it sits AMONG tool rows in the same " +
+			"`space_10` x `space_12`, `space_10` (row 14's pair until ADR-020 D2 widened the " +
+			"activity row to `space_12` x `space_16`; this row keeps the tighter box pending its " +
+			"own ruling) -- because it sits AMONG tool rows in the same " +
 			"stream and a tighter box would read as a different kind of object rather than as " +
 			"the same kind carrying different cells. The path ellipsizes at the MIDDLE and every " +
 			"other identity in this kit ellipsizes at the end: `Kit.identityCell`'s rule is that " +
@@ -589,8 +591,9 @@ var s23Inbox = []s23Component{
 		Factory: "sessionList",
 		File:    "SessionRow.kt",
 		Origin:  ".prows",
-		Why: "the rows' container carries the 12dp side padding and the 7dp gap. Without it a " +
-			"screen types both, which is the PB-DS-6 violation the kit exists to prevent",
+		Why: "the rows' container carries the side padding and the gap between rows (16dp and " +
+			"14dp since ADR-020 D2, the Slate slab's margin; 12dp and the 7px gap under Substrate). " +
+			"Without it a screen types both, which is the PB-DS-6 violation the kit exists to prevent",
 	},
 	{
 		Factory: "workingBar",
@@ -1523,45 +1526,63 @@ func TestPBDS6_NoRawDimensionIsTypedInTheKit(t *testing.T) {
 // actually declares. What the table contributes is the CLAIM -- that this component's padding is
 // that declaration -- which is a decision a reviewer can disagree with, and which no amount of
 // scanning could infer.
+//
+// A ROW MAY NAME THE SLATE MAQUETTE INSTEAD OF THE SHARED BLOCK (ADR-020 D2, 2026-08-27), and it
+// says so with `Maquette: true` rather than by falling back: the two sources name the same
+// component differently (`.prows`/`.prow` in the artifact, `.slab` in the maquette), so a lookup
+// that tried both would answer from whichever file happened to declare the selector and stop
+// being about the design that is normative. `s23MetricMaquetteOrigin` makes the same split for
+// the kit's dp constants and for the same reason.
 var s23Spacing = []struct {
 	File     string
 	Selector string
 	Property string
 	Index    int
 	Dimen    string
+	Maquette bool
 }{
 	// `.sheet2 .cmd { padding: 10px 11px }`. The horizontal edge is the interesting one: the
 	// design declares 11px and PB-DS-1's ledger absorbs it into `space_10`, while derivation row
 	// 18 transcribes the same cell as `space_12` -- which no rounding rule produces from 11.
 	// Substrate DREW this component, so the source plus the ledger are the authority and the row
 	// is a transcription of them. Reported as a documentation defect rather than followed.
-	{"MonoWell.kt", ".sheet2 .cmd", "padding", 0, "swarm_space_10"},
-	{"MonoWell.kt", ".sheet2 .cmd", "padding", 1, "swarm_space_10"},
-	{"SessionRow.kt", ".prow", "padding", 0, "swarm_space_10"},
-	{"SessionRow.kt", ".prow", "padding", 1, "swarm_space_12"},
-	{"SessionRow.kt", ".prow .t", "gap", 0, "swarm_space_8"},
-	{"SessionRow.kt", ".prow .ln", "margin-top", 0, "swarm_space_4"},
-	{"SessionRow.kt", ".prows", "padding", 1, "swarm_space_12"},
-	{"SessionRow.kt", ".prows", "gap", 0, "swarm_space_8"},
-	{"WorkingBar.kt", ".workbar", "margin", 0, "swarm_space_2"},
-	{"FilterChip.kt", ".chip", "padding", 0, "swarm_space_8"},
-	{"FilterChip.kt", ".chip", "padding", 1, "swarm_space_10"},
-	{"FilterChip.kt", ".chip .pd", "margin-right", 0, "swarm_space_4"},
-	{"FilterChip.kt", ".chips", "gap", 0, "swarm_space_8"},
-	{"FilterChip.kt", ".chips", "padding", 1, "swarm_space_18"},
-	{"FilterChip.kt", ".chips", "padding", 2, "swarm_space_12"},
+	{"MonoWell.kt", ".sheet2 .cmd", "padding", 0, "swarm_space_10", false},
+	{"MonoWell.kt", ".sheet2 .cmd", "padding", 1, "swarm_space_10", false},
+	{"SessionRow.kt", ".prow", "padding", 0, "swarm_space_10", false},
+	{"SessionRow.kt", ".prow", "padding", 1, "swarm_space_12", false},
+	{"SessionRow.kt", ".prow .t", "gap", 0, "swarm_space_8", false},
+	{"SessionRow.kt", ".prow .ln", "margin-top", 0, "swarm_space_4", false},
+	// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4). The list's side inset and the gap
+	// between rows are the Slate maquette's `.slab { margin: 0 16px 14px }` -- field 1 is the
+	// sides, field 2 is the bottom, which between stacked slabs is the gap. What the two rows
+	// said before, joined to Substrate's `.prows { padding: 0 12px; gap: 8px }`:
+	//
+	//	{"SessionRow.kt", ".prows", "padding", 1, "swarm_space_12", false},
+	//	{"SessionRow.kt", ".prows", "gap", 0, "swarm_space_8", false},
+	//
+	// The container is still `.prows`'s idea (the factory table keeps that origin); the STEPS it
+	// spends are the maquette's, which is the file ADR-020 D1 makes normative.
+	{"SessionRow.kt", ".slab", "margin", 1, "swarm_space_16", true},
+	{"SessionRow.kt", ".slab", "margin", 2, "swarm_space_14", true},
+	{"WorkingBar.kt", ".workbar", "margin", 0, "swarm_space_2", false},
+	{"FilterChip.kt", ".chip", "padding", 0, "swarm_space_8", false},
+	{"FilterChip.kt", ".chip", "padding", 1, "swarm_space_10", false},
+	{"FilterChip.kt", ".chip .pd", "margin-right", 0, "swarm_space_4", false},
+	{"FilterChip.kt", ".chips", "gap", 0, "swarm_space_8", false},
+	{"FilterChip.kt", ".chips", "padding", 1, "swarm_space_18", false},
+	{"FilterChip.kt", ".chips", "padding", 2, "swarm_space_12", false},
 	// `.acts2 button { padding: 12px }` is a single-field shorthand: one step on all four edges.
 	// The `.acts2` container's own `gap: 7px` is NOT here, because this slice ships the BUTTON and
 	// not the column it sits in -- a container factory with no caller is the second spelling
 	// EmptyStateTest's KDoc argues against, and the gap belongs to whoever builds the sheet.
-	{"CtaButton.kt", ".acts2 button", "padding", 0, "swarm_space_12"},
-	{"SectionLabel.kt", ".plabel", "padding", 0, "swarm_space_12"},
-	{"SectionLabel.kt", ".plabel", "padding", 1, "swarm_space_18"},
-	{"SectionLabel.kt", ".plabel", "padding", 2, "swarm_space_8"},
-	{"NavHeader.kt", ".pnav", "padding", 0, "swarm_space_4"},
-	{"NavHeader.kt", ".pnav", "padding", 1, "swarm_space_18"},
-	{"NavHeader.kt", ".pnav", "padding", 2, "swarm_space_10"},
-	{"NavHeader.kt", ".pnav", "gap", 0, "swarm_space_10"},
+	{"CtaButton.kt", ".acts2 button", "padding", 0, "swarm_space_12", false},
+	{"SectionLabel.kt", ".plabel", "padding", 0, "swarm_space_12", false},
+	{"SectionLabel.kt", ".plabel", "padding", 1, "swarm_space_18", false},
+	{"SectionLabel.kt", ".plabel", "padding", 2, "swarm_space_8", false},
+	{"NavHeader.kt", ".pnav", "padding", 0, "swarm_space_4", false},
+	{"NavHeader.kt", ".pnav", "padding", 1, "swarm_space_18", false},
+	{"NavHeader.kt", ".pnav", "padding", 2, "swarm_space_10", false},
+	{"NavHeader.kt", ".pnav", "gap", 0, "swarm_space_10", false},
 	// `.ptabs { padding-bottom: 14px }` is DELIBERATELY NOT LEDGERED, and the absence is the
 	// decision. That 14 px reserves the iPhone home indicator INSIDE the bar's own box, and the
 	// design has already ruled on this class of constant twice: derivation row 19 calls
@@ -1574,17 +1595,18 @@ var s23Spacing = []struct {
 	// So the bar spends `tabbar_height` and nothing else, and `PhoneActivity.insetTheSystemBars`
 	// puts the measured inset below it. Ledgering the 14 here would have required the bar to keep
 	// spending it, and the two together double the bar's bottom air on every handset.
-	{"TabBar.kt", ".ptabs div", "gap", 0, "swarm_space_4"},
+	{"TabBar.kt", ".ptabs div", "gap", 0, "swarm_space_4", false},
 	// `.acts2 { gap: 7px }`, one of the two movers the scale absorbs UP rather than to the nearer
 	// step (dimens.xml: "7 sits between 6 and 8 and goes up"). ctaButton's own row spends `.acts2
 	// button`'s padding and deliberately not this -- "the gap belongs to whoever builds the
 	// sheet" -- so ctaStack is that container, over the same selector.
-	{"CtaButton.kt", ".acts2", "gap", 0, "swarm_space_8"},
+	{"CtaButton.kt", ".acts2", "gap", 0, "swarm_space_8", false},
 }
 
 func TestPBDS6_EveryKitSpacingIsTheLedgersStep(t *testing.T) {
 	sources := s23KitSources(t)
-	css := s22bSharedCSS(t)
+	shared := s22bSharedCSS(t)
+	maquette := s22bMaquetteKitCSS(t)
 
 	absorbs := map[float64]string{}
 	for _, step := range s22bScale {
@@ -1597,6 +1619,10 @@ func TestPBDS6_EveryKitSpacingIsTheLedgersStep(t *testing.T) {
 	}
 
 	for _, s := range s23Spacing {
+		css := shared
+		if s.Maquette {
+			css = maquette
+		}
 		rule, ok := css[s.Selector]
 		if !ok {
 			t.Errorf("PB-DS-6: the design declares no `%s`, so the %s row claiming its %s is "+
@@ -1794,14 +1820,20 @@ var s23DerivedSpacing = []struct {
 	// silently check the bar's padding against the field's component.
 	{"TextField.kt", "#9 Composer", "padding-y", "swarm_space_8"},
 	{"TextField.kt", "#9 Composer", "padding-x", "swarm_space_14"},
-	// Row 14 states the same two steps the session row spends, which is the point rather than a
-	// coincidence: the activity row's card IS `.prow`'s, so `cardSurface` paints it and this join
-	// is what stops the padding beside it being retyped. These rows cited `§4 Activity row` for
-	// part of a day, while the derivation table carried the activity row twice; the §4 duplicate
-	// is deleted and row 14 is the authority, which is also the reference s23FindRow can resolve
-	// unambiguously -- see the scoping note on that function.
-	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_10"},
-	{"ActivityRow.kt", "#14 Activity row", "padding-x", "swarm_space_12"},
+	// Row 14 stated the same two steps the session row spends until ADR-020 D2 (2026-08-27): the
+	// activity row's card IS `.prow`'s, so `cardSurface` paints it and this join is what stops the
+	// padding beside it being retyped. These rows cited `§4 Activity row` for part of a day, while
+	// the derivation table carried the activity row twice; the §4 duplicate is deleted and row 14
+	// is the authority, which is also the reference s23FindRow can resolve unambiguously -- see
+	// the scoping note on that function.
+	//
+	// AUTHORIZED REWRITE, ADR-020 D2. Row 14 now states the Slate slab's `space_12` x `space_16`
+	// (the maquette's `.slab { padding: 12px 16px }`); what these two rows said before:
+	//
+	//	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_10"},
+	//	{"ActivityRow.kt", "#14 Activity row", "padding-x", "swarm_space_12"},
+	{"ActivityRow.kt", "#14 Activity row", "padding-y", "swarm_space_12"},
+	{"ActivityRow.kt", "#14 Activity row", "padding-x", "swarm_space_16"},
 	// Rows 11 and 12 state the SAME two steps, and the machines screen is where that stops being
 	// a coincidence: the machine row and the panel under it are inset alike, which is what makes
 	// them read as one screen rather than as two blocks that happen to be stacked. Both are joined
@@ -1841,8 +1873,13 @@ var s23DerivedSpacing = []struct {
 	// AND THE TWO THAT LANDED EARLIER IN THE SAME WAVE. Neither was joined when it shipped, which
 	// is the same omission this block exists to end -- a bubble and a header whose only
 	// specification is prose in a table, with nothing reading the table.
-	{"MessageBubble.kt", "#26 Message bubble", "padding-y", "swarm_space_8"},
-	{"MessageBubble.kt", "#26 Message bubble", "padding-x", "swarm_space_12"},
+	// AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27): row 26 now states the Slate slab's
+	// `space_12` x `space_16`; what these two rows said before:
+	//
+	//	{"MessageBubble.kt", "#26 Message bubble", "padding-y", "swarm_space_8"},
+	//	{"MessageBubble.kt", "#26 Message bubble", "padding-x", "swarm_space_12"},
+	{"MessageBubble.kt", "#26 Message bubble", "padding-y", "swarm_space_12"},
+	{"MessageBubble.kt", "#26 Message bubble", "padding-x", "swarm_space_16"},
 	{"ConversationHeader.kt", "#27 Conversation header", "padding-y", "swarm_space_10"},
 	{"ConversationHeader.kt", "#27 Conversation header", "padding-x", "swarm_space_18"},
 	// GapDivider.kt IS DELIBERATELY NOT IN THIS TABLE and is in s23DerivedEdge instead: row 29

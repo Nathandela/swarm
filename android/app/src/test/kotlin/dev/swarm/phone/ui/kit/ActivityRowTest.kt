@@ -95,18 +95,29 @@ class ActivityRowTest {
 
     // ---- the card is `.prow`'s, which is row 14's first four cells --------------
 
+    /**
+     * AUTHORIZED REWRITE, ADR-020 D2 (2026-08-27, wave W4). Row 14's padding is the Slate slab's
+     * `space_12` x `space_16` now, and no longer the session row's. What the test was called and
+     * what its four padding claims said before:
+     *
+     *     fun `the row is the session row's card and the session row's padding`() {
+     *     Claim("row 14 padding-x start", dimenPx("swarm_space_12"), subject.paddingStart),
+     *     Claim("row 14 padding-x end", dimenPx("swarm_space_12"), subject.paddingEnd),
+     *     Claim("row 14 padding-y top", dimenPx("swarm_space_10"), subject.paddingTop),
+     *     Claim("row 14 padding-y bottom", dimenPx("swarm_space_10"), subject.paddingBottom),
+     */
     @Test
-    fun `the row is the session row's card and the session row's padding`() {
+    fun `the row is the session row's card and the Slate slab's padding`() {
         val subject = row()
         val surface = subject.background as SubstrateSurface
 
         val claims = listOf(
             Claim("`.prow` fill", KitOrigin.cssColour(".prow", "background"), surface.spec.fill),
             Claim("`.prow` hairline", KitOrigin.cssColour(".prow", "border"), surface.spec.stroke),
-            Claim("row 14 padding-x start", dimenPx("swarm_space_12"), subject.paddingStart),
-            Claim("row 14 padding-x end", dimenPx("swarm_space_12"), subject.paddingEnd),
-            Claim("row 14 padding-y top", dimenPx("swarm_space_10"), subject.paddingTop),
-            Claim("row 14 padding-y bottom", dimenPx("swarm_space_10"), subject.paddingBottom),
+            Claim("row 14 padding-x start", dimenPx("swarm_space_16"), subject.paddingStart),
+            Claim("row 14 padding-x end", dimenPx("swarm_space_16"), subject.paddingEnd),
+            Claim("row 14 padding-y top", dimenPx("swarm_space_12"), subject.paddingTop),
+            Claim("row 14 padding-y bottom", dimenPx("swarm_space_12"), subject.paddingBottom),
         )
         assertEquals(mismatches(claims).joinToString("\n"), emptyList<String>(), mismatches(claims))
     }
