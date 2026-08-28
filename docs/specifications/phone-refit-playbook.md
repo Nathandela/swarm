@@ -951,9 +951,17 @@ Fleet 1 (parallel):  W1 frame   |  W2 sending   |  W4 Slate
 Fleet 2 (parallel):  W3 button (after W2)  |  W6 chat rows  |  W7 screens
                      merge W3 -> merge W6 -> merge W7
 Sequential:          W5 words (touches every screen file; last, to avoid conflicts)
-Release:             versionCode 19 / versionName 0.9.0, AAR rebuilt, Kotlin suite rerun against it,
-                     bundleRelease, swarm-publish --dry-run then internal track, owner handset pass
+Release:             versionCode 19 / versionName = the CLI's current tag plus one patch (see below),
+                     AAR rebuilt, Kotlin suite rerun against it, bundleRelease, swarm-publish --dry-run
+                     then internal track, owner handset pass
 ```
+
+**Release numbering (owner ruling, 2026-08-28).** The app's published version stays aligned with the swarm CLI's
+tag: at release time take the latest `v*` tag on main and add one patch (`v0.13.5` today, so the refit ships as
+`0.13.6`), set `versionName` to it and `versionCode` to 19, commit, and tag that commit `v0.13.6` so
+`release.yml` builds the CLI from the same commit the bundle is built from: one number for both. The app never
+numbers itself on its own line; the `0.9.0` this plan first named is void. If main gains another tag before the
+release commit, the release takes the newest tag plus one.
 
 W1, W2 and W4 are disjoint by file and merge in order of readiness. W3 and W7 both edit `PhoneSurface.kt` in different regions;
 conflicts are resolved by the orchestrator at merge, never by a fleet editing outside its list.
