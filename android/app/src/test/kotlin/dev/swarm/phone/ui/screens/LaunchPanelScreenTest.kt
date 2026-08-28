@@ -124,7 +124,7 @@ class LaunchPanelScreenTest {
     @Test
     fun `an accepted launch says the machine started it`() {
         assertEquals(
-            "Your machine started the session.",
+            "Your computer started the session.",
             LaunchPanelScreen.of(rendering(LaunchResult.LAUNCHED, reason = "ok")).notice,
         )
     }
@@ -154,7 +154,7 @@ class LaunchPanelScreenTest {
         assertEquals(
             "the machine's own string is the whole notice, so a daemon error reads as the form's " +
                 "own copy about a launch",
-            "Your machine did not start the session.",
+            "Your computer did not start the session.",
             panel.notice,
         )
         assertEquals(
@@ -183,13 +183,13 @@ class LaunchPanelScreenTest {
         ).notice
 
         assertEquals(
-            "Your machine did not start the session. This one is worth trying again shortly.",
+            "Your computer did not start the session. This one is worth trying again shortly.",
             transient,
         )
         assertEquals(
             "a considered refusal is advertised as retryable, which sends the user to press the " +
                 "same button against the same answer",
-            "Your machine did not start the session.",
+            "Your computer did not start the session.",
             settled,
         )
     }
@@ -203,7 +203,7 @@ class LaunchPanelScreenTest {
         )
 
         assertEquals(
-            "Your machine did not start the session. This one is worth trying again shortly.",
+            "Your computer did not start the session. This one is worth trying again shortly.",
             odd.notice,
         )
         // THE RETRY HINT IS THE HEAD'S AND NOT THE DETAIL'S. It is copy this product wrote about
