@@ -145,14 +145,14 @@ class PairedMachineRowTest {
         // destroys the key tiers in a `finally` beside the verb.
         val question = PairedMachineRowScreen.of("nathans-mbp").replaceConfirmation
 
+        // PINS THE SENTENCE IN FULL, not a bare "pair" substring (W5 review round, 2026-08-29):
+        // "pair" alone is satisfied by "repair", "paired" and "pairing" too -- four different
+        // words that would all pass a check meant to pin one specific sentence. The way back
+        // (a new code) and the fact that pairing is what ends are both stated by this one clause.
         assertTrue(
-            "the confirmation does not say pairing is what ends: '$question'",
-            question.contains("pair", ignoreCase = true),
-        )
-        assertTrue(
-            "the confirmation does not say a new code is needed to come back: '$question'. That " +
-                "is the way back, and it is not on this handset (phone refit W5.4)",
-            question.contains("new code", ignoreCase = true),
+            "the confirmation does not carry the cost sentence in full: '$question'. That is " +
+                "the way back, and it is not on this handset (phone refit W5.4)",
+            question.contains("You'll need a new code to pair again."),
         )
     }
 
