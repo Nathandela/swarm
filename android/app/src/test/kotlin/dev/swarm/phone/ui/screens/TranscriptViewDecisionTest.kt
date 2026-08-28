@@ -78,7 +78,7 @@ class TranscriptViewDecisionTest {
     )
 
     private fun panel(blocks: List<TranscriptBlock>) =
-        TranscriptPanel(heading = "Conversation", blocks = blocks, emptyCopy = "Nothing yet.")
+        TranscriptPanel(blocks = blocks, emptyCopy = "Nothing yet.")
 
     private fun view(
         blocks: List<TranscriptBlock> = listOf(decision()),

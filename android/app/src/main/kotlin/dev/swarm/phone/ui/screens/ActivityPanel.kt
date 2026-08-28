@@ -133,18 +133,6 @@ object ActivityPanelScreen {
     /** The mock's `.navhead`, verbatim -- the one piece of its activity screen that survives. */
     private const val TITLE = "Activity"
 
-    /**
-     * The unstamped section's heading (W7.4: the trailing section, for rows the wire did not
-     * stamp; before W7.4 the one section).
-     *
-     * AUTHORED, AND NAMING THE SOURCE RATHER THAN THE READER'S SITUATION. The mock's two headings
-     * are dropped for the reason the class comment gives, and a replacement had to say something
-     * true about what is under it. "Journal" is the product's own name for this record stream --
-     * `internal/journal`, `App.ReadJournal`, `JournalPage` -- so it is a word the log can be
-     * checked against, and it makes no claim about when the user last looked, nor about a day.
-     */
-    private const val SECTION = "Journal"
-
     /** The day headings a stamp supports (W7.4). Any other day is its date. */
     private const val TODAY = "Today"
     private const val YESTERDAY = "Yesterday"
@@ -217,11 +205,11 @@ object ActivityPanelScreen {
                     emptyCopy = EMPTY,
                 )
             }
-        // THE UNSTAMPED ROWS TRAIL, under the stream's own name: a daemon predating the stamp
-        // sends none, and its whole page lands here -- which is exactly what this screen drew
-        // before W7.4. An empty page is this section too, so row 8's empty state has a heading.
+        // THE UNSTAMPED ROWS TRAIL, with no heading (phone refit W5.3): a daemon predating the
+        // stamp sends none, and its whole page lands here. The day headings are W7.4's, from the
+        // stamp; the phone has no word of its own to put over rows it cannot date.
         val trailing = if (unstamped.isNotEmpty() || days.isEmpty()) {
-            listOf(ActivitySection(heading = SECTION, rows = unstamped.map(::entryFor), emptyCopy = EMPTY))
+            listOf(ActivitySection(heading = "", rows = unstamped.map(::entryFor), emptyCopy = EMPTY))
         } else {
             emptyList()
         }

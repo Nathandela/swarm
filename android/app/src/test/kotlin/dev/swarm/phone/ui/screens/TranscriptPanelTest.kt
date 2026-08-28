@@ -554,6 +554,5 @@ class TranscriptPanelTest {
                 "MACHINE that a phone holding no items is in no position to make",
             !panel.emptyCopy.lowercase().contains("nothing has happened"),
         )
-        assertTrue(panel.heading.isNotEmpty())
     }
 }

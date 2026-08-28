@@ -741,7 +741,6 @@ class ScreenAirSweepTest {
         dev.swarm.phone.ui.SessionLease(sessionId = "mbp/api", online = true),
     ).copy(
         transcript = TranscriptPanel(
-            heading = "CONVERSATION",
             blocks = listOf(
                 TranscriptBlock(itemId = "i1", kind = "message", line = "Running the suite"),
                 TranscriptBlock(

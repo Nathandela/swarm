@@ -302,4 +302,9 @@ class ActivityPanelTest {
             empty.only.emptyCopy.contains("Nothing has happened"),
         )
     }
+    /** Phone refit W5.3: the unstamped section has no heading; the day headings are W7.4's. */
+    @Test
+    fun `the unstamped section has no heading`() {
+        assertEquals("", panel(rows = page().rows).only.heading)
+    }
 }

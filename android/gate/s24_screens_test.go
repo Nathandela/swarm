@@ -1173,8 +1173,9 @@ var s24ScreenComponents = map[string]map[string]string{
 	// declared in ui/kit/Kit.kt and `markdownBody` in ui/kit/Markdown.kt, so a match here is a
 	// spend and nothing else. That is a property of the mechanism, so it holds for every row of
 	// this table rather than for these two.
+	// `sectionLabel` left this inventory with phone refit W5.3 (2026-08-28): the conversation is
+	// the screen, and a heading saying so was chrome over the first message.
 	"dev/swarm/phone/ui/screens/TranscriptView.kt": {
-		"sectionLabel": "the heading over the conversation -- an empty section is still a section (PB-DS-9)",
 		"sessionList":  "`.prows` -- the blocks' container, carrying the gap and the side padding",
 		"activityRow":  "one interaction item, derivation row 14 reused a fourth time",
 		"monoWell":     "a tool's output and a file's diff -- §2's one factory for every mono block",

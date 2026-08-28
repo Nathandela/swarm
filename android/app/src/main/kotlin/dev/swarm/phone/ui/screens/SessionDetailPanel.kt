@@ -342,8 +342,7 @@ object SessionDetailScreen {
      * confirmation that read the same for both would train the user to dismiss the one that
      * matters.
      */
-    private const val KILL_CONFIRMATION =
-        "End this session? The agent stops and the session is gone; this cannot be undone."
+    private const val KILL_CONFIRMATION = "End this session? This can't be undone."
 
     /**
      * What the screen says when the machine REFUSED the kill (agents-tracker-qlf9).

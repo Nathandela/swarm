@@ -78,7 +78,7 @@ class TranscriptViewTest {
     )
 
     private fun panel(blocks: List<TranscriptBlock> = listOf(block())) =
-        TranscriptPanel(heading = "Conversation", blocks = blocks, emptyCopy = "Nothing yet.")
+        TranscriptPanel(blocks = blocks, emptyCopy = "Nothing yet.")
 
     private fun view(
         panel: TranscriptPanel = panel(),
@@ -125,13 +125,12 @@ class TranscriptViewTest {
     fun `the transcript is composed of the parts its recorded composition names`() {
         val root = view()
 
-        listOf(
-            TranscriptTag.SECTION_LABEL to "the heading over the conversation",
-            TranscriptTag.BLOCK to "one interaction item",
-        ).forEach { (tag, what) ->
-            assertNotNull("the transcript renders nothing for $what", root.kitFind(tag))
-        }
-        assertEquals("Conversation", textOf(root.kitFind(TranscriptTag.SECTION_LABEL)))
+        assertNotNull("the transcript renders nothing for one interaction item", root.kitFind(TranscriptTag.BLOCK))
+        assertNull(
+            "the conversation draws a heading over itself. It IS the screen, and a label saying " +
+                "so is chrome standing between the reader and the first message (phone refit W5.3)",
+            root.kitFind(TranscriptTag.SECTION_LABEL),
+        )
     }
 
     @Test
@@ -158,9 +157,9 @@ class TranscriptViewTest {
 
         assertEquals("Nothing yet.", textOf(root.kitFind(TranscriptTag.EMPTY)))
         assertNull("an empty transcript still drew a block", root.kitFind(TranscriptTag.BLOCK))
-        assertNotNull(
-            "the heading went with the rows, so an empty conversation is a gap where a section " +
-                "used to be rather than a section saying it is empty",
+        assertNull(
+            "an empty conversation drew a heading over its empty state; the copy stands where " +
+                "the first message would, with no chrome over it (phone refit W5.3)",
             root.kitFind(TranscriptTag.SECTION_LABEL),
         )
     }

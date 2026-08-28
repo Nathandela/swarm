@@ -64,8 +64,6 @@ import java.net.URI
  * `status == in_progress` alone would elide the front of every message still being streamed.
  */
 data class TranscriptPanel(
-    /** The heading over the conversation. */
-    val heading: String,
     /** One block per item, oldest first. */
     val blocks: List<TranscriptBlock>,
     /** PB-DS-9: what an empty section says, because an empty section is still a section. */
@@ -556,9 +554,6 @@ data class FileChangeChip(
 /** The transcript, as a pure function over the items the phone holds. */
 object TranscriptScreen {
 
-    /** The heading over a session's conversation. It is a conversation, so it says so. */
-    private const val HEADING = "Conversation"
-
     /**
      * What the transcript says when this phone holds no items for the session.
      *
@@ -792,7 +787,6 @@ object TranscriptScreen {
             )
         }
         return TranscriptPanel(
-            heading = HEADING,
             blocks = withPending,
             emptyCopy = EMPTY,
             // The turn the screen is DRAWING, which is what a send or a Stop tapped now is

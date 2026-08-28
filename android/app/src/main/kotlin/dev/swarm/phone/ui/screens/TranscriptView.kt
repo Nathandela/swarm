@@ -19,7 +19,6 @@ import dev.swarm.phone.ui.kit.messageBubble
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.scrolledHorizontally
-import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
 
 /**
@@ -28,7 +27,7 @@ import dev.swarm.phone.ui.kit.sessionList
  * IT IS THE SESSION'S CONTENT SURFACE, and after ADR-009 (3) deletes the terminal well it is the
  * only one. That raises the stakes on the rule this file follows rather than changing it: **not one
  * visual decision is made here.** Nine factories that already exist do all of the drawing --
- * `sectionLabel` over `sessionList` over one `activityRow` per block, `messageBubble` for the
+ * `sessionList` over one `activityRow` per block, `messageBubble` for the
  * reader's own words, `gapDivider` for a proven tear, `fileChangeRow` for a change, `approvalSheet`
  * for the decision, `monoWell` for the blocks that carry a machine-authored literal, `notice` for
  * the two offers that reach past this screen, `emptyState` for a conversation with nothing in it --
@@ -261,11 +260,9 @@ fun transcriptView(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
-    column.addView(sectionLabel(context, panel.heading).apply { tag = TranscriptTag.SECTION_LABEL })
-
-    // THE HEADING STAYS WHEN THE ROWS GO. PB-DS-9's rule is that an empty section is still a
-    // section: dropping the heading with its rows leaves a gap where a section used to be, and
-    // "this conversation has not reached this phone" stops being something the screen can say.
+    // NO HEADING OVER THE CONVERSATION (phone refit W5.3): it is the screen, and a label saying
+    // so was chrome between the reader and the first message. An empty conversation still says
+    // so (PB-DS-9), where the first message would be.
     if (panel.blocks.isEmpty()) {
         column.addView(emptyState(context, panel.emptyCopy).apply { tag = TranscriptTag.EMPTY })
         return column
