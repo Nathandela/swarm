@@ -712,6 +712,8 @@ class FacadeBridge(private val app: App) {
         // fact, not a gap to fill: substituting the title or the id here would put a fabricated
         // identity in the one cell a reader trusts to name the agent.
         agent = session.getAgent(),
+        // The machine's stamp, 0 where the wire carried none (W7.1).
+        lastActivityUnixMs = session.getLastActivityUnixMs(),
     )
 
     /**

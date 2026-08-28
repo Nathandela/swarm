@@ -69,6 +69,17 @@ data class SessionRow(
      * to let the next mapping be written wrong.
      */
     val agent: String,
+    /**
+     * `swarmmobile.Session.LastActivityUnixMs`, verbatim: the MACHINE's stamp of the session's
+     * last activity in Unix milliseconds, and 0 MEANS NO RECORD HAS CARRIED ONE -- a daemon
+     * predating the stamp, or a session the roster has not stamped yet. The inbox row draws no
+     * age for 0, never the epoch's (phone-refit-playbook W7.1).
+     *
+     * IT HAS NO DEFAULT, for [agent]'s reason: a mapping that forgot the stamp would render
+     * exactly what an unstamped session renders, and the compiler is the only thing that refuses
+     * to let the next mapping be written wrong.
+     */
+    val lastActivityUnixMs: Long,
 )
 
 /**

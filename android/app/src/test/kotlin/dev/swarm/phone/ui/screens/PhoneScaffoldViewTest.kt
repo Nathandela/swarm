@@ -55,7 +55,7 @@ class PhoneScaffoldViewTest {
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
     private fun row(id: String, group: String) =
-        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = "doing something", present = true, agent = "claude")
+        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = "doing something", present = true, agent = "claude", lastActivityUnixMs = 0L)
 
     private fun inbox(rows: List<SessionRow>): InboxScreen =
         TriageInboxScreen.of(inbox = TriageInbox.from(rows, journalStale = false))

@@ -54,7 +54,7 @@ class TriageInboxViewTest {
         get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
 
     private fun row(id: String, group: String, need: String = "doing something", present: Boolean = true) =
-        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude")
+        SessionRow(id = id, title = id.substringAfter('/'), group = group, need = need, present = present, agent = "claude", lastActivityUnixMs = 0L)
 
     private fun screen(
         rows: List<SessionRow>,
@@ -192,6 +192,8 @@ class TriageInboxViewTest {
                 row("mbp/one", "working", need = "writing pairing tests"),
                 row("mbp/two", "working", need = "refactoring auth middleware"),
             ),
+            // Scoped: in the All scope W7.1 appends the machine to the need line.
+            scope = "mbp",
         )
         val rows = root.allTagged(InboxTag.ROW)
 
