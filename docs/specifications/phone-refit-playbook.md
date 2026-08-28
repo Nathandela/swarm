@@ -484,7 +484,9 @@ new `docs/research/slate-maquette.html`, `android/app/src/main/res/values/{color
 ### W4.6 Type: five rungs, all shifted
 - Ladder: **display 24 / title 15 / body 14 / code 12.5 / micro 11** (gaps 9 / 1 / 1.5 / 1.5, all
   ≥ 1sp as `TestPBDS2_TheLadderIsTheFiveRuledRungs` requires). The authority is ADR-012's rung table,
-  amended by an ADR-020 section (not by editing R1's text); Move cells use a minted ruling `R9`
+  amended by an ADR-020 section (R1's sixteen style cells struck through under a SUPERSEDED callout, every value untouched:
+  the rung readers at `s22b_type_test.go:307` and the Kotlin `TypeScale` reader refuse a style on two
+  rungs, so the amendment cannot leave R1's rows live; ruled 2026-08-28); Move cells use a minted ruling `R9`
   (`s22bRungMoveRe` accepts `(R<digit>)`). `type.xml` sizes follow the table; every `lineHeight` is
   recomputed as multiplier × rung (`Body.Message` 1.45×14 = 20.3sp, `Mono.Code` 1.5×12.5 = 18.75sp,
   `Mono.Meta` 1.6×11 = 17.6sp, and so on). `Display.SAS` 34sp is off the ladder and does not move.
