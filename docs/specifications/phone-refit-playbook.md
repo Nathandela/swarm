@@ -402,6 +402,31 @@ else          /* the existing composer_send body from :489-520, unchanged */
 - **Gates.** Check `PressFeedbackAuditTest.kt:85` / `o6_haptics_test.go` do not require a non-empty
   `confirmation` on every `Press`.
 
+### W3 amendments (ruled 2026-08-28, from the fleet's findings and the review)
+- **The JVM cannot press.** On every JVM `press` returns at `PhoneStartup.Unavailable` before the plan, and `Op`
+  is the AAR's, so no test reaches `rememberInterrupt` through a press. The settle's drawing half is
+  `internal fun drawStopped()`, which the tests call over a drawn working panel; the Go gate
+  `android/gate/w34_onebutton_test.go` holds the seam to production, both halves: nothing on the stop path
+  `say(`s or toasts, `rememberInterrupt` calls `drawStopped()`, `drawStopped` writes `INTERRUPT_SENT`, records
+  `stoppedOverTurn` and adds the notice to `composerRegion`, and `drawComposerRegion` reads `stoppedOverTurn`.
+  The gate replaces W3.4's `ShadowToast` test.
+- **"Stopped" outlives the settle.** Not "cleared on the next `drawComposerRegion`": the notice is removed only
+  when the drawn panel's `latestTurnId` differs from `stoppedOverTurn` (the turn closed, or another opened).
+  The first cut cleared it before any frame reached the screen.
+- **The disabled square paints ink3.** `composerAction`'s tint is a two-entry `ColorStateList`
+  (`-state_enabled` -> `swarm_text_tertiary`, default -> `swarm_text_primary`); row 9's note says `disabled: ink3`.
+- **4lta re-anchored, not reworded.** `4lta_offlinestop_test.go` reads `private fun interruptPlan(`, the one plan
+  the square and the menu's Stop row both press; its four assertions are byte-identical.
+- **The menu's Stop row is a model choice** (`SessionDetailScreen.menuChoicesFor`, first, offered while
+  `composerWorking`); `ConversationMenu.kt` renders `MenuChoice` generically and needed no change. Its press is
+  `press(send, ::interruptPlan)`, never the square's click, so a draft in the field cannot turn a menu Stop into a send.
+- `docs/design/substrate-components.md` row 9 gains the dated `action-box 40` cell, which
+  `KitMetrics.COMPOSER_ACTION_DP` is derived from; `s23Inbox` and `s23TouchTargets` each gain a `composerAction` row.
+- `SessionScreensTest` `stop is persistent regardless of what the session has done` is deleted (its subject,
+  `stopVisible`, is gone by contract) and `the sealed interrupt says Stopped` replaces it. The e2e drivers press the
+  control by its spoken description (`PhoneScreenDriver` `awaitDescribedPressable` / `pressDescribed`).
+- Filed, not here: `agents-tracker-svcg` (the menu Stop dropped with a success haptic while a send crosses).
+
 ## 5. W4 Slate and breathing
 
 Bead: `agents-tracker-d45a.4`. Worktree `refit-w4`. Files: `internal/design/tokens.json`, `internal/design/tokens_test.go`,
@@ -751,6 +776,27 @@ The pill becomes "Needs your answer" (W5's table; a bound drawing row). The card
 already `block.line`. **A machine-nominated "preferred" choice is not in this session**: IS-APR-4
 keeps polarity off the item and `interaction_chain_e2e_test.go:430-457` guards it; a render hint
 that a reviewer cannot distinguish from a verdict needs a written owner ruling first (§10).
+
+### W6 amendments (ruled 2026-08-28, from the fleet's findings)
+- **`other` draws its own glyph, `T`.** The Done-when is literal (`?` never renders), so the map is eight kinds,
+  eight glyphs (`agent` `A`); `ToolCardTest` pins both facts.
+- **No kind is no fact.** `verbFor("")` is `""`: an item with no readable body and no `tool_kind` stays the neutral
+  `tool_run` row (the untouched `an unreadable body renders as a neutral row and never crashes` caught the first
+  cut saying "Used a tool").
+- **A command's grey line is the command's first line, always.** `secondaryFor`: `execute` -> `fields.target`;
+  every other kind -> the output's first line, or the target when there is none. The sketch's
+  `output.ifEmpty { target }` for every kind was wrong for commands.
+- **The grey line is the kit's.** `ActivityRow.kt` `activityRow(secondary = ...)` draws it
+  (`KitTag.ACTIVITY_SECONDARY`, one line, `ellipsize = END`, `swarm_text_tertiary`); `TranscriptBlock.secondary`
+  carries it; `TranscriptView` does not build its own `TextView`.
+- **The wire vocabulary lives in the schema.** `docs/specifications/interaction-schema.md` §7's `type` row gains
+  `agent` in the same commit as the `oneOf`, and `TestInteractionValidate_AcceptsEverySection7ActionType` reads
+  that vocabulary. The R6 fixtures record no `Task` corpus, so `Task -> agent` is a direct `actionFor` table
+  (`internal/adapter/claude/w6_agent_test.go`), not a fabricated fixture.
+- **Changed assertions are the must-change set only**: three `TranscriptPanelTest` lines, one
+  `TranscriptChatRenderTest` line, the golden's two `BLOCK` rows; the `item()` fixture gains `toolKind`.
+- W6.2 carries its drawing row: `conversation-drawing.html`'s `decision.pill` says "Needs your answer" in the
+  same commit as `SessionDetailPanel`, pinned by `the decision pill asks for the reader's answer`.
 
 ## 8. W7 Inbox, Activity, Settings, Computers
 
