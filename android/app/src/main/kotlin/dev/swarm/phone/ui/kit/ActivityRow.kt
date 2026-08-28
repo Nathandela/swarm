@@ -162,7 +162,7 @@ fun activityRow(
             addView(sentence.apply { layoutParams = LinearLayout.LayoutParams(MATCH, WRAP) })
             addView(
                 Kit.textView(context).apply {
-                    setTextAppearance(R.style.TextAppearance_Swarm_Mono_Meta)
+                    Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
                     setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
                     text = secondary
                     Kit.identityCell(this)
