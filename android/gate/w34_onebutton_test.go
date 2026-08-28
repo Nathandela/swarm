@@ -13,7 +13,16 @@ package gate
 // so no press on a JVM ever runs `Press.settle` -- and what the press DECLARES and what the settle
 // DRAWS can only be pinned by reading them. Both halves are read (orchestrator ruling,
 // 2026-08-28): that nothing on the stop path toasts, AND that the word is drawn as a notice line
-// the composer region holds and the next region draw clears.
+// the composer region holds until the turn it was said over is gone.
+//
+// THE SECOND HALF WAS RE-CUT BY THE REVIEW ROUND (2026-08-28). "Cleared by the next region draw"
+// was the defect: the settle that adds the notice runs inside the dispatch that then renders, and
+// a working agent redraws at output rate, so the word never reached a frame. The settle now calls
+// `drawStopped()`, which records the open turn (`stoppedOverTurn`) beside the word, and
+// `drawComposerRegion` removes the notice only when the drawn panel's turn differs from it. The
+// JVM half of that -- the notice surviving a same-turn redraw and dying on the turn closing -- is
+// PhoneSurfaceControlsTest's, through `drawStopped()` made internal; this fence holds the seam to
+// the settle, so the test's subject stays the production path.
 
 import (
 	"strings"
@@ -59,29 +68,49 @@ func TestW34_AStopIsSaidOnceUnderTheComposerAndNeverToasted(t *testing.T) {
 			"draw (W3.4). Press:\n%s", press)
 	}
 
-	// HALF TWO: THE WORD IS A NOTICE LINE THE REGION HOLDS, ADDED BY THE SETTLE AND CLEARED BY
-	// THE NEXT REGION DRAW.
+	// HALF TWO: THE WORD IS A NOTICE LINE THE REGION HOLDS, ADDED BY THE SETTLE THROUGH
+	// drawStopped() AND KEPT UNTIL THE TURN IT WAS SAID OVER IS GONE.
 	if !strings.Contains(code, "val stoppedNotice: TextView = noticeLine(") {
 		t.Errorf("PhoneSurface.kt declares no `val stoppedNotice: TextView = noticeLine(`, so the " +
 			"sealing has no notice line of its own under the composer (W3.4)")
 	}
-	settle := r6SurfaceFunc(t, "rememberInterrupt", "the Stop latches no operation (r6 M2.4)")
-	if !strings.Contains(settle, "INTERRUPT_SENT") {
-		t.Errorf("rememberInterrupt never draws SessionDetail.INTERRUPT_SENT, so a sealed Stop "+
-			"changes nothing on screen until the machine answers (W3.4). Body:\n%s", settle)
-	}
-	if !strings.Contains(settle, "composerRegion.addView(stoppedNotice") {
-		t.Errorf("rememberInterrupt never adds stoppedNotice to composerRegion, so the word is "+
-			"written on a view nothing holds (W3.4). Body:\n%s", settle)
+	settle := d0b8Lambda(t, code, "private fun rememberInterrupt(answer: Any?)",
+		"the Stop latches no operation (r6 M2.4)")
+	if !strings.Contains(settle, "drawStopped()") {
+		t.Errorf("rememberInterrupt never calls drawStopped(), so a sealed Stop changes nothing on "+
+			"screen until the machine answers (W3.4, review round). Body:\n%s", settle)
 	}
 	if strings.Contains(settle, "say(") || strings.Contains(settle, "Toast") {
 		t.Errorf("rememberInterrupt toasts; \"Stopped\" is a notice under the composer and not a "+
 			"toast (W3.4). Body:\n%s", settle)
 	}
+	said := d0b8Lambda(t, code, "internal fun drawStopped()",
+		"nothing draws the sealing under the composer (W3.4, review round)")
+	if !strings.Contains(said, "INTERRUPT_SENT") {
+		t.Errorf("drawStopped never draws SessionDetail.INTERRUPT_SENT, so the sealing is a notice "+
+			"with no word on it (W3.4). Body:\n%s", said)
+	}
+	if !strings.Contains(said, "composerRegion.addView(stoppedNotice") {
+		t.Errorf("drawStopped never adds stoppedNotice to composerRegion, so the word is written on "+
+			"a view nothing holds (W3.4). Body:\n%s", said)
+	}
+	if !strings.Contains(said, "stoppedOverTurn = ") {
+		t.Errorf("drawStopped records no turn in stoppedOverTurn, so the region draw cannot tell the "+
+			"turn the word was said over from the next one (review round). Body:\n%s", said)
+	}
+	if strings.Contains(said, "say(") || strings.Contains(said, "Toast") {
+		t.Errorf("drawStopped toasts; \"Stopped\" is a notice under the composer and not a toast "+
+			"(W3.4). Body:\n%s", said)
+	}
 	region := r6SurfaceFunc(t, "drawComposerRegion", "the composer region is never drawn")
 	if !strings.Contains(region, "composerRegion.removeView(stoppedNotice)") {
 		t.Errorf("drawComposerRegion never clears stoppedNotice, so \"Stopped\" outlives the turn it "+
-			"reports on -- said once means cleared on the next region draw (W3.4). Body:\n%s", region)
+			"reports on -- said once means cleared once that turn is gone (W3.4). Body:\n%s", region)
+	}
+	if !strings.Contains(region, "stoppedOverTurn") {
+		t.Errorf("drawComposerRegion clears stoppedNotice without reading stoppedOverTurn, so the "+
+			"word comes off on the next draw -- over a working agent, before a frame (review round). "+
+			"Body:\n%s", region)
 	}
 
 	// THE CONTROL: a refused Stop is not the sealing and keeps its say() (W2.3's own control,

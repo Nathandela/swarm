@@ -698,16 +698,22 @@ class PhoneSurface(
      * where the finger was and never as a toast.
      *
      * IT IS ADDED AND REMOVED RATHER THAN HIDDEN, [decisionPillControl]'s arrangement for its
-     * reason: a view that is not on screen is a view this surface did not add. [rememberInterrupt]
-     * adds it when the envelope is sealed and writes the word; the next [drawComposerRegion] --
-     * the next draw on which the conversation has moved, which for a Stop that landed is the turn
-     * closing -- takes it off. It is the sealing and not the agent's answer: `interrupt_unsupported`
-     * and `stale_turn` arrive later through [renderInterruptVerdict] and say so on the outcome line.
+     * reason: a view that is not on screen is a view this surface did not add. [drawStopped]
+     * adds it when the envelope is sealed and writes the word over the open turn
+     * ([stoppedOverTurn]); [drawComposerRegion] takes it off on the first draw whose open turn is
+     * a different one -- for a Stop that landed, the turn closing -- and keeps it through every
+     * draw of the same turn (W3 review round: the settle renders in its own dispatch, and a
+     * working agent draws at output rate). It is the sealing and not the agent's answer:
+     * `interrupt_unsupported` and `stale_turn` arrive later through [renderInterruptVerdict] and
+     * say so on the outcome line.
      */
     private val stoppedNotice: TextView = noticeLine().apply {
         gravity = Gravity.CENTER_HORIZONTAL
         screenAir()
     }
+
+    /** The turn [stoppedNotice] was said over, or "" while it is off screen. */
+    private var stoppedOverTurn = ""
 
     /**
      * What the conversation pins under the thumb: the bar that sends a line, and the notice under
@@ -3436,7 +3442,7 @@ class PhoneSurface(
     /**
      * The pinned region under the conversation: the pill, the bar, what a bar that cannot send
      * says under itself, and the square's own glyph and word -- and the sealing's one word,
-     * taken off (phone refit W3.4).
+     * taken off once the turn it was said over is gone (phone refit W3.4, review round).
      *
      * **THE FIELD'S HINT IS THE SHUT SENTENCE WHERE THERE IS ONE.** `composerPlaceholder` answers
      * "Message" or "Add feedback..." -- the two states of a composer that CAN send -- and for a
@@ -3454,8 +3460,13 @@ class PhoneSurface(
      * index 0 and one removal at the end.
      */
     private fun drawComposerRegion(panel: SessionDetailPanel) {
-        // "Stopped" was said once, for the conversation as it stood; it has moved on.
-        if (stoppedNotice.parent != null) composerRegion.removeView(stoppedNotice)
+        // "Stopped" was said over one turn; it comes off when that turn is no longer the open
+        // one -- closed, or another opened -- and not before, because this runs in the very
+        // dispatch that sealed it and again on every item a working agent writes.
+        if (stoppedNotice.parent != null && panel.transcript.latestTurnId != stoppedOverTurn) {
+            composerRegion.removeView(stoppedNotice)
+            stoppedOverTurn = ""
+        }
         val shut = panel.composerShut.takeIf { panel.composerIsBar }
         typed.hint = shut?.placeholder ?: panel.composerPlaceholder
         composerShutDetail.text = shut?.detail.orEmpty()
@@ -4702,14 +4713,35 @@ class PhoneSurface(
      *
      * THE WORD IS THE SEALING'S AND NOT THE AGENT'S: `App.Interrupt` returns the moment the
      * envelope is appended, and [SessionDetail.INTERRUPT_SENT]'s own KDoc keeps that argument.
-     * It is drawn in place -- [stoppedNotice] joins [composerRegion] and the next region draw
-     * takes it off -- and never as row 1's toast; the machine's refusal, when there is one,
-     * arrives through [renderInterruptVerdict].
+     * It is drawn in place by [drawStopped] -- [stoppedNotice] joins [composerRegion] and stays
+     * while the turn it was said over is the open one -- and never as row 1's toast; the
+     * machine's refusal, when there is one, arrives through [renderInterruptVerdict].
      */
     private fun rememberInterrupt(answer: Any?) {
         val issued = answer as? Op ?: return
         interruptOp = issued.operationID
         interruptSaid = ""
+        drawStopped()
+    }
+
+    /**
+     * "Stopped", under the composer, over the turn the panel shows open (W3 review round,
+     * 2026-08-28).
+     *
+     * IT RECORDS THE TURN BESIDE THE WORD, and [drawComposerRegion] takes the word off only when
+     * the drawn panel's open turn is a different one -- closed, or another opened. It used to come
+     * off on the NEXT region draw, which was the defect the review found: this settle runs inside
+     * the dispatch that then calls `render()`, and a working agent redraws at output rate, so the
+     * word was taken off before it reached a frame (and when the outcome line was non-empty at
+     * press time, by the full draw path in the same dispatch).
+     *
+     * `internal` FOR ONE READER, [drawDetail]'s reason: `PhoneSurfaceControlsTest` cannot press
+     * its way here -- `press` stops at the runtime gate on every JVM and `Op` is the AAR's -- so
+     * it calls this half directly over a drawn panel and redraws. That [rememberInterrupt] is
+     * what calls it in production is `w34_onebutton_test.go`'s to read.
+     */
+    internal fun drawStopped() {
+        stoppedOverTurn = detailDrawn?.transcript?.latestTurnId.orEmpty()
         stoppedNotice.text = SessionDetail.INTERRUPT_SENT
         if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice)
     }

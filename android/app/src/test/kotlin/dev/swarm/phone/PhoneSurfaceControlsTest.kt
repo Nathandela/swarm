@@ -21,6 +21,7 @@ import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TranscriptScreen
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -317,6 +318,59 @@ class PhoneSurfaceControlsTest {
                 ShadowDialog.getLatestDialog(),
             )
         }
+    }
+
+    /**
+     * Review round (W3, 2026-08-28): "STOPPED" OUTLIVES THE SETTLE. The settle that adds the
+     * notice runs inside the dispatch that then calls `render()`, and a working agent appends an
+     * item at output rate, so a notice the NEXT region draw took off was never on screen for a
+     * frame (and when the outcome line was non-empty at press time, the full draw path took it
+     * off in the same dispatch). The word is said over a TURN -- the one the panel showed open
+     * when the interrupt was sealed -- and it stays while that turn is the open one.
+     *
+     * THE SETTLE'S HALF IS CALLED DIRECTLY ([PhoneSurface.drawStopped]): `press` stops at the
+     * runtime gate on every JVM (`PhoneRuntime.phone()` answers Unavailable) and `Op` is the
+     * AAR's, so no press here can reach `rememberInterrupt`. That the settle calls it, and calls
+     * nothing that toasts, is `android/gate/w34_onebutton_test.go`'s to read.
+     */
+    @Test
+    fun `Stopped stays under the composer while the turn it was said over is open`() {
+        withSurface { _, surface ->
+            surface.drawDetail(panelWith(openTurn))
+            surface.drawStopped()
+            assertTrue("the sealing said nothing under the composer", surface.composerRegion().saysStopped())
+
+            surface.drawDetail(
+                panelWith(openTurn + item("t2", "tool_run", turn = "turn-a", status = "in_progress")),
+            )
+            assertTrue(
+                "the agent wrote one more item inside the same turn and \"Stopped\" was taken " +
+                    "off, so over a working agent the word never survives to a frame",
+                surface.composerRegion().saysStopped(),
+            )
+        }
+    }
+
+    /** The other half of "said once": the turn it was said over closing is what takes it off. */
+    @Test
+    fun `Stopped comes off when the turn it was said over closes`() {
+        withSurface { _, surface ->
+            surface.drawDetail(panelWith(openTurn))
+            surface.drawStopped()
+            assertTrue(surface.composerRegion().saysStopped())
+
+            surface.drawDetail(panelWith(closedTurn))
+            assertFalse(
+                "the turn closed and \"Stopped\" is still under the composer: said once means " +
+                    "cleared when the conversation it reported on has moved",
+                surface.composerRegion().saysStopped(),
+            )
+        }
+    }
+
+    /** Whether the pinned region carries the sealing's word, read the way a reader would. */
+    private fun ViewGroup.saysStopped(): Boolean = (0 until childCount).any {
+        (getChildAt(it) as? TextView)?.text?.toString() == SessionDetail.INTERRUPT_SENT
     }
 
     // -----------------------------------------------------------------------
