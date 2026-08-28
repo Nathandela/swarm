@@ -584,3 +584,93 @@ b0d5e40d Amend the w6o3 gate: the remedy is the well, before the control
 39132664 Record the W5 rulings: w6o3 amended, W5.2 follow-up, s24 reverted
 96895f21 Drop the sectionLabel inventory row (ruled)
 ```
+
+## Review round (2026-08-29)
+
+An adversarial review (`scratchpad/review-w5-report.md`, verdict MERGEABLE WITH SHOULD-FIX, no
+BLOCKING finding) found six SHOULD-FIX items and one NOTE the wave's own W5.1 word-list rule
+should have caught but did not, because the Done-when grep is case-sensitive and neither "relay"
+nor "Your machine" (capital Y) was in its pattern. The lead ruled all eight fixed except one
+(SHOULD-FIX 2), which hit a documented BOUND and was stopped rather than sprawled. TDD throughout:
+each fix's RED is the touched test failing against the pre-fix code (or, for the two constant/KDoc
+items with no observable behavior, grep evidence the constant is dead / the KDoc's argument no
+longer matches the code); GREEN is the same test passing after.
+
+| # | finding | commit | RED | GREEN | changed assertions |
+|---|---|---|---|---|---|
+| 1 | SF1 -- `LaunchPanel.kt` ACCEPTED/REFUSED still said "Your machine" | `b471ec25` | `LaunchPanelScreenTest` (5 assertions) failed against "Your machine started/did not start the session." | same 5 assertions pass against "Your computer ..." | `LaunchPanelScreenTest.kt`: 5 literals `Your machine` -> `Your computer` |
+| 2 | SF3 -- "relay" survives in 5 sentences, 2 in anchor ranges | `aa0efb78` | `PairingEntryRoutingTest` (2 assertions) failed against the old RELAY_UNKNOWN/RELAY_ADDRESS_INVALID sentences | same 2 assertions pass against "your computer's address" / "an address" | `PairingEntryRoutingTest.kt`: 2 literals rewritten. `ConnectionUi.kt` and `PairingSurface.kt` sentences are unbound (no test carried them; confirmed by a whole-tree grep before and after) |
+| 3 | NOTE 7 pt.1 -- `ErrorRouting.NOT_PAIRED` still said "machine" | `aa0efb78` | new `RemedyControlsTest` assertion failed against "not paired with a machine yet" | passes against "not paired with a computer yet" | `RemedyControlsTest.kt`: +1 test (no prior coverage of this sentence) |
+| 4 | SF4 -- the purge-failure colon no longer points at the well | `88ac502a` | `PairOnlyPurgeNoticeTest`'s renamed ordering test and a new colon-adjacency test both failed against the old `machine + purgeFailure` order | both pass against the reordered `purgeFailure + machine` | `PairOnlyPurgeNoticeTest.kt`: renamed+rewrote 1 test (its old assertion checked a substring never actually present in the notice -- see commit message), fixed 1 pre-existing order-coupled assertion (`startsWith` -> `contains`) on a second, untouched test that the reorder also broke, +1 new test |
+| 5 | SF5 -- dead `COST` constant left behind | `352ab2a7` | grep evidence: `COST` referenced only in its own declaration and KDoc, spent nowhere | grep after: zero references; `PairedMachineRowTest` (11 tests) unaffected | none -- `PairedMachineRowTest` never pinned `COST` or its text |
+| 6 | SF6 -- `CONFIRM_COST`'s KDoc argues for the deleted "keys" clause | `352ab2a7` | evidence: `PairedMachineRowTest` pins `contains("pair")`/`contains("new code")`, not "keys," so nothing pinned the KDoc's argument | KDoc now states the table's ruling (row 37) instead of re-litigating it; same 11 tests green | none |
+| 7 | NOTE 7 pt.2 -- `MachinesPanelScreen.ADD_ID_HINT` still said "Machine id" | `31ae5a1b` | new `MachinesPanelScreenTest` assertion failed against "Machine id" | passes against "Computer id" | `MachinesPanelScreenTest.kt`: +1 assertion in `everyAffordanceCarriesRecordedCopy` (no prior coverage) |
+| 8 (mine) | `switchedTo`/`brokenNotice` interpolate a wire-omitempty name with `ifEmpty`, which a whitespace-only name slips past | `31ae5a1b` | 2 new `MachinesPanelRound3Test` tests (blank + whitespace-only name, one test per site) failed against the un-guarded interpolation | both pass against `ifBlank` guards (`switchedTo` falls back to "this computer"; `brokenNotice` falls back to `row.machineId` first, matching FORGET_CONFIRM/ADD_CONFIRM's existing pattern) | `MachinesPanelRound3Test.kt`: +2 tests |
+
+### SHOULD-FIX 2: stopped at the BOUND
+
+The instruction was to give `RoutedError` an optional `command` field, shorten the STATE_CORRUPT
+sentence, and draw `PairOnlyScreen.UNREGISTER_COMMANDS` in a well "by whatever view renders routed
+errors" -- with an explicit BOUND: if hosting the slot needs more than the data-class field, one
+view change and at most one new tag, stop rather than sprawl.
+
+Traced every draw site `RoutedError.message` reaches (which is what any `RoutedError`, STATE_CORRUPT
+included, is rendered through -- there is no STATE_CORRUPT-specific view):
+
+- `PhoneSurface.renderUnavailable` (`:1975`): `status.text = startup.error.message` -- the one
+  dedicated startup-failure screen, and the only site where a well would sit under a specific,
+  narrow-purpose TextView.
+- `PhoneSurface.press` (`:5195`): `outcome.text = startup.error.message` -- a generic notice line
+  also written from at least four OTHER call sites (`:1907`, `:1963`, `:2227`, `:3689`) for
+  arbitrary command refusals, none of which are STATE_CORRUPT.
+- `SettingsSurface.renderUnavailable` (`:417`): the same generic-outcome-line shape, in a second
+  file.
+- `SettingsSurface` (`:790`): `say(PressFeedback.ofRefusal(startup.error.message))` -- an Android
+  Toast, which cannot host a well at all.
+
+So the same `RoutedError.message` a STATE_CORRUPT failure carries is drawn through at least four
+call sites across three files, one of them a Toast. Wiring a well consistently -- so the command
+is visible everywhere the sentence is, not only on the one screen a test happens to exercise --
+needs more than one view change and one tag: it needs a decision about which of the non-dedicated
+sites suppress the well entirely (the Toast; the shared `outcome` line, whose other four writers
+are not STATE_CORRUPT) and which draw it. That is a real design question, not a mechanical wire-up,
+so this crosses the stated BOUND. **No change was made to `ErrorRouting.kt`'s STATE_CORRUPT row or
+to `RoutedError`.** Recommend a follow-up bead scoped to: (a) whether the well belongs only on
+`PhoneSurface.renderUnavailable`'s dedicated `status` line, with the other three sites keeping the
+shortened sentence and no well, or (b) a structural change to how routed errors reach the screen at
+all. Either is a real design decision the lead should make, not one to default into at this hour.
+
+### Gates on the tip after this round
+
+```
+go build ./...                              exit=0
+go vet ./...                                 exit=0
+golangci-lint run                            0 issues.   exit=0
+go test -race -count=1 ./android/gate/       ok 92.869s
+python3 scripts/check-conversation-copy.py . exit=0 -- 20 binding(s) across 15 of 28 tabled rows, unchanged (none of the 7 fixes touch a bound row)
+go test -count=1 ./internal/verify/          exit=0
+```
+
+Kotlin: 18 touched-and-dependent classes run (`--tests`, `--rerun-tasks --no-build-cache`, lane
+waited on from a script file, start stamp recorded), rather than the full suite -- justified
+because every fix's blast radius is confined to these classes and their existing test coverage,
+traced above. `BUILD SUCCESSFUL`, all 18 result XMLs newer than the start stamp (18/18 fresh, 0
+stale), `tests=156 failures=0 errors=0 skipped=0`, `app/libs/swarm.aar` mtime unchanged
+(`1787932204`, matching every prior run recorded in this file). Classes run: `LaunchPanelScreenTest`,
+`PairingEntryRoutingTest`, `PairOnlyPurgeNoticeTest`, `MachinesPanelScreenTest`,
+`MachinesPanelRound3Test`, `RemedyControlsTest` (the six touched or added), plus
+`PairedMachineRowTest`, `PairOnlyScreenTest`, `PairOnlyRevokeNoticeTest`, `PairOnlyViewTest`,
+`MachinesPanelRound2Test`, `MachinesPanelViewTest`, `MachinesPanelViewRound2Test`,
+`MachinesPanelViewRound3Test`, `SettingsPanelMachinesEntryTest`, `SyncStatusTest`,
+`SyncStatusViewTest`, `ErrorRoutingRefusalCopyTest` (existing coverage of the same production
+files, run for regression, all pre-existing green and still green).
+
+## Commits (review round)
+
+```
+b471ec25 LaunchPanel: finish W5.1's half-applied sentence (SHOULD-FIX 1)
+aa0efb78 Ban the last two W5.1 words: relay and machine (SHOULD-FIX 3, NOTE 7 pt.1)
+88ac502a PairOnlyScreen: the colon points at the well again (SHOULD-FIX 4)
+352ab2a7 PairedMachineRow: delete a dead constant, rewrite a stale KDoc (SF5, SF6)
+31ae5a1b MachinesPanelScreen: computer id, and a blank name never renders bare (NOTE 7 pt.2, +2 sites)
+```
