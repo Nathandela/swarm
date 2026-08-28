@@ -41,7 +41,7 @@ object InboxTag {
     /** C1.2 `.chips`. */
     const val SCOPES = "inbox.scopes"
 
-    /** C1.3 `.plabel` -- one per Group in TRIAGE_ORDER, empty or not. */
+    /** C1.3 `.plabel` -- one per Group in TRIAGE_ORDER that has rows, plus an empty Needs you (W7.2). */
     const val SECTION_LABEL = "inbox.section.label"
 
     /** C1.3 `.prows`. */
@@ -143,17 +143,21 @@ fun triageInboxView(
     )
 
     screen.sections.forEach { section ->
-        // EVERY Group gets its heading, whether or not anything is under it. Dropping the empty
-        // ones is the obvious implementation and it is wrong for a triage surface: the sections
-        // then move under the user as sessions change group, and "nothing is waiting on me" --
-        // the most useful fact this screen can report -- becomes indistinguishable from "that
-        // section scrolled away".
+        // AN EMPTY SECTION COLLAPSES, EXCEPT NEEDS YOU (phone-refit-playbook W7.2). This used to
+        // draw every Group's heading whether or not anything was under it, on the argument that
+        // "nothing is waiting on me" must stay distinguishable from "that section scrolled
+        // away". The argument is right about exactly ONE section: the one blocked on the human,
+        // whose emptiness is the most useful fact this screen reports. For the other three, a
+        // heading over a caption is three headings over nothing on a one-session inbox, and the
+        // list under them reads as empty when it is not. The model still emits all four
+        // sections; which one survives empty is its own named decision, not a second one here.
+        if (section.rows.isEmpty() && section.group != TriageInboxScreen.BLOCKED) return@forEach
         content.addView(
             sectionLabel(context, section.heading).apply { tag = InboxTag.SECTION_LABEL },
         )
-        // AND ITS COPY GOES UNDER IT. A heading over nothing is the same defect wearing a
-        // heading, which is why row 8's own note says "the `.plabel` stays and this block sits
-        // under it".
+        // AND NEEDS YOU'S COPY GOES UNDER IT. A heading over nothing is the same defect wearing
+        // a heading, which is why row 8's own note says "the `.plabel` stays and this block sits
+        // under it". Only the blocked section reaches here empty, so this is its caption.
         //
         // THE CONDITION IS THE POINT AND NOT BOILERPLATE. Drawing the block unconditionally is
         // the obvious over-correction, and it tells a user holding two live sessions that the

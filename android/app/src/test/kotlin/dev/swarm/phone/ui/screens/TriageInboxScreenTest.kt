@@ -132,29 +132,22 @@ class TriageInboxScreenTest {
     }
 
     @Test
-    fun `an empty section is still a section and says so`() {
-        // One session, in one group. The other three sections have nothing in them and must
-        // survive anyway -- with a heading a user can read and copy that says what the emptiness
-        // means, which is the whole reason PB-DS-9 names this case.
+    fun `an empty needs-you section is still a section and says Nothing waiting`() {
+        // One session, in Working. The Needs you section has nothing in it and must survive
+        // anyway -- with a heading a user can read and copy that says what the emptiness
+        // means. W7.2 collapses the OTHER empty sections in the view; the model still emits
+        // all four (the test below), and this one is about the section the view keeps.
         val screen = screenOf(listOf(row("mbp/one", "working")))
 
-        val empty = screen.sections.filter { it.rows.isEmpty() }
+        val needsYou = screen.sections.single { it.group == "needs_input" }
+        assertTrue("the needs-you section is not empty for a working-only roster", needsYou.rows.isEmpty())
+        assertEquals("Needs you", needsYou.heading)
         assertEquals(
-            "sections vanished when they emptied: ${screen.sections.map { it.group }}",
-            3,
-            empty.size,
+            "'nothing is waiting on me' is the most useful fact this screen can report, and it " +
+                "is reported by this copy",
+            "Nothing waiting",
+            needsYou.emptyCopy,
         )
-        empty.forEach { section ->
-            assertTrue(
-                "the ${section.group} section is empty and carries no heading",
-                section.heading.isNotBlank(),
-            )
-            assertTrue(
-                "the ${section.group} section is empty and says nothing about it, so it renders " +
-                    "as a bare heading over nothing",
-                section.emptyCopy.isNotBlank(),
-            )
-        }
     }
 
     @Test

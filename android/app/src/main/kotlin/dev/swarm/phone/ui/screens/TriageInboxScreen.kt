@@ -520,6 +520,9 @@ object TriageInboxScreen {
      * and the lit slab are two instruments reporting the same fact at two scales -- one across the
      * whole app, one on the row itself -- and giving them a constant each is giving them a chance
      * to disagree.
+     *
+     * PUBLIC SINCE W7.2, for the same reason: the view keeps exactly one section on screen when
+     * it is empty, and which one is this decision a third time, not a fresh `== "needs_input"`.
      */
-    private const val BLOCKED = "needs_input"
+    const val BLOCKED = "needs_input"
 }
