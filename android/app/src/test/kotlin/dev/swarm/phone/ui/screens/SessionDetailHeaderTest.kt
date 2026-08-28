@@ -418,4 +418,10 @@ class SessionDetailHeaderTest {
         const val TURN = "t-1"
         const val NEXT_TURN = "t-2"
     }
+    /** Phone refit W5.2: the panel carries the label it was built from, for the notices said over it. */
+    @Test
+    fun `the panel carries the machine label it was built from`() {
+        assertEquals(MACHINE, panel(items = closedTurn()).machineLabel)
+        assertEquals("", panel(machineLabel = "", items = closedTurn()).machineLabel)
+    }
 }

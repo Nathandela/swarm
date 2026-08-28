@@ -51,8 +51,8 @@ class MachinesPanelRound2Test {
             "the forget confirmation must say what this phone deletes, that the computer " +
                 "itself is untouched, and that other computers are unaffected (MM8's " +
                 "sentence) -- anything less reads as app-wide data loss or as nothing at all",
-            "Forget this computer? You can pair it again later.",
-            MachinesPanelScreen.FORGET_CONFIRM,
+            "Forget desk? You can pair it again later.",
+            MachinesPanelScreen.FORGET_CONFIRM("desk"),
         )
     }
 

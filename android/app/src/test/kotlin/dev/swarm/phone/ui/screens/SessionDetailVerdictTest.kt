@@ -159,6 +159,10 @@ class SessionDetailVerdictTest {
         val notice = SessionDetailScreen.historyCapacityNotice()
         assertTrue("the control vanished with nothing said", notice.isNotEmpty())
         assertTrue(
+            "the sentence does not name the computer the rest is on when the screen knows it (W5.2)",
+            SessionDetailScreen.historyCapacityNotice("MacBookPro").contains("on MacBookPro"),
+        )
+        assertTrue(
             "the reader must not be left believing they reached the beginning of a " +
                 "conversation that goes further back: the sentence has to name where the rest is",
             notice.contains("computer"),

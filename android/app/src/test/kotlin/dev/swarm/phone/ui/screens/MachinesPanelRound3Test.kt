@@ -157,8 +157,8 @@ class MachinesPanelRound3Test {
                 "keystroke as undelivered, severs every input lease and drops the connection. " +
                 "That is strictly more destructive than Forget's one pairing, and Forget asks. " +
                 "The question must name what is briefly lost and what is not",
-            "Add this computer? The app reconnects for a moment.",
-            MachinesPanelScreen.ADD_CONFIRM,
+            "Add laptop? The app reconnects for a moment.",
+            MachinesPanelScreen.ADD_CONFIRM("laptop"),
         )
     }
 

@@ -3917,7 +3917,7 @@ class PhoneSurface(
             return
         }
         AlertDialog.Builder(activity)
-            .setMessage(MachinesPanelScreen.ADD_CONFIRM)
+            .setMessage(MachinesPanelScreen.ADD_CONFIRM(name.ifEmpty { id }))
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val sent = machineVerb(
                     key = ADD_MACHINE_KEY,
@@ -3987,8 +3987,10 @@ class PhoneSurface(
      * per-control dispatch. The QUESTION is the model's recorded copy (PB-DS-9).
      */
     private fun forgetComputer(machineId: String) {
+        // THE ROW'S OWN NAME (phone refit W5.2): the press was on a row the drawn panel holds.
+        val name = machinesDrawn?.rows?.firstOrNull { it.machineId == machineId }?.displayName ?: machineId
         AlertDialog.Builder(activity)
-            .setMessage(MachinesPanelScreen.FORGET_CONFIRM)
+            .setMessage(MachinesPanelScreen.FORGET_CONFIRM(name))
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 machineVerb { app -> app.forgetMachine(machineId) }
             }
@@ -4682,7 +4684,14 @@ class PhoneSurface(
                     // that from reading as "you have reached the beginning" -- said ONCE, at the
                     // moment it becomes true, where the finger that asked was.
                     speaks && bridge.historyAtCapacity(target) ->
-                        say(PressFeedback.ofRefusal(SessionDetailScreen.historyCapacityNotice(), ""))
+                        say(
+                            PressFeedback.ofRefusal(
+                                SessionDetailScreen.historyCapacityNotice(
+                                    detailDrawn?.takeIf { it.sessionId == target }?.machineLabel.orEmpty(),
+                                ),
+                                "",
+                            ),
+                        )
                 }
             }
         }

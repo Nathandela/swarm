@@ -65,7 +65,9 @@ object MachinesPanelScreen {
      * names what is destroyed, what is NOT (the computer itself), and carries MM8's reassurance
      * so the dialog does not read as app-wide data loss.
      */
-    const val FORGET_CONFIRM = "Forget this computer? You can pair it again later."
+    val FORGET_CONFIRM: (String) -> String = { machine ->
+        "Forget ${machine.ifEmpty { "this computer" }}? You can pair it again later."
+    }
 
     /**
      * The resolver's PAIR_ONLY answer AS A SENTENCE (round 2). With zero machines the entry
@@ -98,7 +100,9 @@ object MachinesPanelScreen {
      * than forgetting one pairing, and forgetting one pairing asks. The question names what is
      * briefly lost, and what is not, so it does not read as data loss.
      */
-    const val ADD_CONFIRM = "Add this computer? The app reconnects for a moment."
+    val ADD_CONFIRM: (String) -> String = { machine ->
+        "Add ${machine.ifEmpty { "this computer" }}? The app reconnects for a moment."
+    }
 
     /**
      * The refusal a SECOND add earns while the first is still crossing (round 3). The controls

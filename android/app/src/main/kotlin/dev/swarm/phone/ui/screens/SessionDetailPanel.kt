@@ -110,6 +110,8 @@ data class SessionDetailPanel(
      * punctuation standing in for a fact.
      */
     val headerSubtitle: String,
+    /** The computer's name the subtitle was built from, or "" (phone refit W5.2). */
+    val machineLabel: String = "",
     /**
      * The Group the header's dot draws: ALWAYS one `Kit.groupColour` can place, OR EMPTY.
      *
@@ -391,9 +393,6 @@ object SessionDetailScreen {
      * IT NAMES WHERE THE REST IS, because that is the only act available: nothing on the handset
      * recovers it, and the machine still has it.
      */
-    private const val HISTORY_AT_CAPACITY =
-        "That's all this phone can show. Older messages are on your computer."
-
     /**
      * What the screen says when the MACHINE refused a "load earlier" (round 3, finding F4).
      *
@@ -806,7 +805,8 @@ object SessionDetailScreen {
         if (verdict.refused) verdict.reason else ""
 
     /** See [HISTORY_AT_CAPACITY]: said once, where the reader's finger was, when the page cannot be held. */
-    fun historyCapacityNotice(): String = HISTORY_AT_CAPACITY
+    fun historyCapacityNotice(machine: String = ""): String =
+        "That's all this phone can show. Older messages are on ${machine.ifEmpty { "your computer" }}."
 
     /**
      * What the screen says when the machine REFUSED a "load earlier" (Wave R6 review round 3,
@@ -1010,6 +1010,7 @@ object SessionDetailScreen {
         // written for at all. [GROUP_UNKNOWN] is the empty string now and the kit draws no mark
         // for it, so the header claims exactly what this phone knows and no more.
         headerGroup = detail.group.takeIf { it in TriageInbox.TRIAGE_ORDER } ?: GROUP_UNKNOWN,
+        machineLabel = detail.machineLabel,
         transcript = transcript,
         // THE LEASE MODEL DECIDES BOTH, and they are read from the two properties rather than from
         stopAction = detail.stop(),
