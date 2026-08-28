@@ -182,7 +182,7 @@ class TranscriptChatRenderTest {
         assertEquals(
             "the glyph was spliced into the sentence, which rewrites the line the recorded " +
                 "crossing pins byte for byte",
-            "Read /tmp/x",
+            "Read x",
             panel.blocks.single().line,
         )
     }

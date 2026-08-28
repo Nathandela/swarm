@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.Markdown
 import dev.swarm.phone.ui.kit.MarkdownBlock
 import dev.swarm.phone.ui.kit.ToolCard
+import java.net.URI
 
 /**
  * ADR-009-structured-chat-interaction (1) -- the chat transcript's SCREEN MODEL: what a session
@@ -191,6 +192,13 @@ data class TranscriptBlock(
     val line: String,
     /** The span of [line] that carries row 14's inline mono, or null where nothing is marked. */
     val emphasis: String? = null,
+    /**
+     * The one grey line under a tool row (phone-refit-playbook W6.1): the first line of what
+     * the tool printed, or of its target when it printed nothing, or the command itself for a
+     * command. Empty draws nothing. It is its own field for [emphasis]'s reason: the verb is
+     * copy, and the machine's literal never rides inside copy.
+     */
+    val secondary: String = "",
     /**
      * The machine's own literal, drawn UNDER the row: a tool's output, a fenced block out of the
      * agent's markdown. Empty draws no well.
@@ -923,10 +931,12 @@ object TranscriptScreen {
                 TranscriptBlock(
                     itemId = item.itemId,
                     kind = item.kind,
-                    // "Read src/main.rs" -- the adapter's tool and the action's own literal. An
-                    // unclassified call (IS-TOOL-2) fills no literal and this is the tool alone.
-                    line = phrase(fields.tool, fields.target),
-                    emphasis = fields.target,
+                    // "Read main.rs" (phone-refit-playbook W6.1): a verb for the flat tool_kind
+                    // -- the field the glyph reads, never the tool's name -- over the least of
+                    // the target a phone can show. No emphasis: nothing on a verb line is an
+                    // identifier to set in mono.
+                    line = verbFor(item.toolKind, fields.target),
+                    secondary = secondaryFor(item.toolKind, fields),
                     // IS-TOOL-3: the CLI's marker rides with the excerpt, verbatim, so the card
                     // never claims to hold output it only saw a marker for. RUNNING leads when
                     // the item is still open, so a tool with no output yet still draws a well
@@ -1285,6 +1295,38 @@ object TranscriptScreen {
     /** The same, for values that read as one phrase rather than as a list of facts. */
     private fun phrase(vararg parts: String): String =
         parts.filter { it.isNotEmpty() }.joinToString(" ")
+
+    /**
+     * W6.1's verb for one `tool_kind`: what the tool DID, in the reader's words, over the least
+     * of its target a phone can show. An unknown kind says the honest minimum -- never the raw
+     * tool name, never a question mark. NO kind at all is no fact (interaction-schema.md §2's
+     * `tool_kind` row: an unclassified call carries none, and an absent fact stays absent), so
+     * it says nothing and the row falls to [marked]'s neutral line, which is also where an
+     * unreadable body lands.
+     */
+    private fun verbFor(kind: String, target: String): String = when (kind) {
+        "" -> ""
+        "execute" -> "Ran a command"
+        "read" -> phrase("Read", basename(target))
+        "edit" -> phrase("Edited", basename(target))
+        "write" -> phrase("Wrote", basename(target))
+        "search" -> "Searched"
+        "fetch" -> phrase("Fetched", hostOf(target))
+        "agent" -> "Started a helper agent"
+        else -> "Used a tool"
+    }
+
+    /** W6.1's grey line: a command's is the command; any other kind's is its output, or its target. */
+    private fun secondaryFor(kind: String, fields: ItemFields): String =
+        firstLine(if (kind == "execute") fields.target else fields.output.ifEmpty { fields.target })
+
+    private fun basename(path: String): String = path.trimEnd('/').substringAfterLast('/')
+
+    /** The URL's host, or the URL itself when no host can be read off it. */
+    private fun hostOf(url: String): String =
+        runCatching { URI(url).host }.getOrNull().orEmpty().ifEmpty { url }
+
+    private fun firstLine(text: String): String = text.lineSequence().first()
 
     /** The same, for a mono block, where the machine's own line breaks are the structure. */
     private fun lines(vararg parts: String): String =

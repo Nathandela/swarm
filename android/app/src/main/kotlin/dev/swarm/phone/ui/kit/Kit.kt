@@ -802,6 +802,13 @@ internal object KitTag {
     const val ACTIVITY_GLYPH = "activity glyph"
 
     /**
+     * The row's one grey line under the sentence (phone-refit-playbook W6.1): the machine's
+     * literal -- a command, a file's first line, a host -- one line, ellipsised. A view and not
+     * a span, for the opposite of the emphasis's reason: it is not part of the sentence.
+     */
+    const val ACTIVITY_SECONDARY = "activity secondary"
+
+    /**
      * The toast. Named for the PART, like [SETTINGS_LABEL] and [TOGGLE_TRACK]: `.toast` is the
      * retired mock's class and the shared Substrate block declares no rule for it at all, so a tag
      * naming that selector would point a reader at something that does not exist.

@@ -2,6 +2,7 @@ package dev.swarm.phone.ui.kit
 
 import dev.swarm.phone.ui.InteractionItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,13 +40,23 @@ class ToolCardTest {
 
     @Test
     fun everyKindInTheVocabularyHasItsOwnGlyph() {
-        val kinds = listOf("read", "edit", "write", "search", "execute", "fetch", "other")
+        val kinds = listOf("read", "edit", "write", "search", "execute", "fetch", "agent", "other")
         val glyphs = kinds.map { ToolCard.glyphFor(it) }
         for (g in glyphs) assertTrue("a glyph is never empty", g.isNotEmpty())
         assertEquals(
             "distinct kinds draw distinct glyphs; a shared glyph makes two different acts look alike",
             glyphs.size, glyphs.toSet().size,
         )
+    }
+
+    @Test
+    fun noKindDrawsAQuestionMark() {
+        // phone-refit-playbook W6.1's Done-when, literally: "?" never renders. A question mark
+        // beside a row reads as the app not knowing what it is showing; an unclassified call
+        // is still a tool, and its glyph says so.
+        for (k in listOf("read", "edit", "write", "search", "execute", "fetch", "agent", "other", "some_future_kind")) {
+            assertNotEquals("kind $k draws a question mark", "?", ToolCard.glyphFor(k))
+        }
     }
 
     @Test

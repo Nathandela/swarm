@@ -601,6 +601,8 @@ private fun rowFor(
     timestamp = block.timestamp.ifEmpty { null },
     // M2.2's glyph, read from ONE flat field by the kit's card model.
     glyph = block.glyph.ifEmpty { null },
+    // W6.1's grey line, drawn by the kit under the verb; empty draws nothing.
+    secondary = block.secondary.ifEmpty { null },
 ).apply {
     // agents-tracker-dwwv.1.2: a still-running tool_run is its own tag, same reasoning as
     // APPROVAL -- see [TranscriptTag.RUNNING].

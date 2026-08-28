@@ -243,8 +243,8 @@ class TranscriptScreenGoldenTest {
                 TranscriptTag.BUBBLE to
                     "Using the Edit tool, change the text 'line two' to 'line TWO EDITED' in edit-target3.txt",
                 TranscriptTag.APPROVAL to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",
-                TranscriptTag.BLOCK to "Read /Users/Nathan/spike-sb-work/edit-target3.txt",
-                TranscriptTag.BLOCK to "Edit /Users/Nathan/spike-sb-work/edit-target3.txt",
+                TranscriptTag.BLOCK to "Read edit-target3.txt",
+                TranscriptTag.BLOCK to "Edited edit-target3.txt",
                 TranscriptTag.FILE_CHANGE to "modify · /Users/Nathan/spike-sb-work/edit-target3.txt · +1 -1",
                 TranscriptTag.BLOCK to "Done. Changed 'line two' to 'line TWO EDITED' in edit-target3.txt.",
             ),
