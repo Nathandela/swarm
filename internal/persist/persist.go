@@ -39,7 +39,12 @@ type Meta struct {
 	ID            string `json:"id"`
 	AgentType     string `json:"agent_type"`
 	Name          string `json:"name"` // user-provided session label; "" falls back to AgentType at display time
-	Tag           string `json:"tag"`  // user-assigned grouping label; empty means untagged
+	// NameSetAt is when Name was last stamped, by a swarm rename or by adopting the name
+	// the CLI itself shows for the session (ADR-021, newest wins). Additive without a
+	// schema-version bump for the same rollback reason as AgentCwd below; a zero value
+	// on an older record means "never stamped", which any CLI-published name beats.
+	NameSetAt time.Time `json:"name_set_at"`
+	Tag       string    `json:"tag"` // user-assigned grouping label; empty means untagged
 	Cwd           string `json:"cwd"`
 	// AgentCwd is additive and DELIBERATELY DID NOT BUMP SchemaVersion. An adversarial
 	// review proposed bumping it, reasoning that a rolled-back old daemon would rewrite

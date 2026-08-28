@@ -95,6 +95,7 @@ type Daemon struct {
 	eng        *engine.Engine
 	socketPath string
 	stateDir   string // for reading a session's transcript tail (conversation-id capture)
+	home       string // the trusted daemon-user home: resume history and the CLIs' live-name registries (ADR-021)
 
 	cancel context.CancelFunc // stops engine.Run
 
@@ -307,6 +308,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	if historyHome == "" {
 		historyHome, _ = os.UserHomeDir()
 	}
+	d.home = historyHome
 	d.api.historyResolver = newFilesystemResumeHistoryResolver(historyHome, defaultResumeHistoryLimits)
 	// ADR-017 T2-a's three assembly hooks: author at launch (api.go), author on the
 	// re-attach of a session dir that has no record (sessiontap.go), and the PURE READ
