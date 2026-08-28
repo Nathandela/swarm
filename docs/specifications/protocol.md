@@ -140,6 +140,8 @@ needs; the daemon-internal payload is not carried, with the single exception of
 | `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
 | `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
 | `item`       | `json.RawMessage` | the interaction item object, carried ONLY when `type` is `interaction` — one unit of the phone's chat transcript (ADR-009, `interaction-schema.md` §1/§2, IS-LAYER-1). Opaque on the wire: the gateway forwards it and parses no item (§10), and the item's own `kind` discriminator stays inside it (IS-LAYER-2) |
+| `ts`         | `time.Time`       | the daemon's own stamp of when the record was appended (`journal.Record.TS`); omitted when zero (`omitzero`). A roster record is never appended and carries none. The phone shows it as a time and never manufactures one from `cursor` (phone-refit-playbook W7.4) |
+| `last_activity` | `time.Time`    | the session's `persist.Meta.LastActivity` — the machine's stamp of when the session last did anything — carried on roster records and the four journalworthy transitions; omitted when zero. It is the SESSION's stamp, not this record's (W7.1) |
 
 Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
 that predates one of them serializes byte-identically to what earlier builds wrote.

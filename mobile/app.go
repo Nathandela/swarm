@@ -981,6 +981,15 @@ func (a *App) Session(id string) (s *Session, err error) {
 	return &out, nil
 }
 
+// unixMs is a stamp for the bound boundary: 0 for the zero time, because time.Time{}.UnixMilli()
+// is a date in 1754 that Kotlin would age as centuries rather than read as absent.
+func unixMs(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
 func (a *App) session(cs phonecore.CachedSession) Session {
 	a.mu.Lock()
 	need := a.needs[cs.SessionID]
@@ -1027,6 +1036,8 @@ func (a *App) session(cs phonecore.CachedSession) Session {
 		Need:        need,
 		Present:     cs.Present,
 		Destination: phonecore.RouteSession(cs.Capabilities, profile).String(),
+		// The machine's stamp, and 0 where the wire carried none (W7.1).
+		LastActivityUnixMs: unixMs(cs.LastActivity),
 	}
 	// StructuredChat is the COMPOSER's predicate, not the record's raw field, and the
 	// difference is load-bearing (ADR-017 T2 rule 3 + T5-a): phonecore.ComposerAvailable is

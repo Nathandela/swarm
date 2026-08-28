@@ -69,11 +69,12 @@ func (d *Daemon) rosterSnapshotLocked() []journal.Record {
 		// state and then applies Events (cursor > from) on top. A consumer must not
 		// sort roster records by their own Cursor.
 		roster = append(roster, journal.Record{
-			SessionID: m.ID,
-			Type:      journal.TypeRoster,
-			Group:     status.Derive(m.Status),
-			Agent:     m.AgentType,
-			Name:      m.Name,
+			SessionID:    m.ID,
+			Type:         journal.TypeRoster,
+			Group:        status.Derive(m.Status),
+			Agent:        m.AgentType,
+			Name:         m.Name,
+			LastActivity: m.LastActivity,
 		})
 	}
 	return roster
@@ -103,19 +104,19 @@ func (d *Daemon) RecordGatewayPresence(online bool) error {
 // journalRecordFor derives the journal record a meta write warrants from the
 // session's previous state (R-JRN.2). The display Group is computed server-side
 // here via status.Derive and never on the phone; the Agent is copied verbatim off
-// next.AgentType and the Name off next.Name, which is why every branch sets both rather
-// than only the one that happens to be exercised. It returns ok=false for a same-group
+// next.AgentType, the Name off next.Name and the LastActivity off next.LastActivity, which is
+// why every branch sets all three rather than only the one that happens to be exercised. It returns ok=false for a same-group
 // status tick, which is not journalworthy.
 func journalRecordFor(prev persist.Meta, prevExists bool, next persist.Meta) (journal.Record, bool) {
 	switch {
 	case next.Status.Process == status.ProcessExited && (!prevExists || prev.Status.Process != status.ProcessExited):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeExited, Agent: next.AgentType, Name: next.Name}, true
+		return journal.Record{SessionID: next.ID, Type: journal.TypeExited, Agent: next.AgentType, Name: next.Name, LastActivity: next.LastActivity}, true
 	case next.Status.Process == status.ProcessLost && (!prevExists || prev.Status.Process != status.ProcessLost):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLost, Agent: next.AgentType, Name: next.Name}, true
+		return journal.Record{SessionID: next.ID, Type: journal.TypeLost, Agent: next.AgentType, Name: next.Name, LastActivity: next.LastActivity}, true
 	case !prevExists && next.Status.Process == status.ProcessRunning:
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLaunched, Agent: next.AgentType, Name: next.Name}, true
+		return journal.Record{SessionID: next.ID, Type: journal.TypeLaunched, Agent: next.AgentType, Name: next.Name, LastActivity: next.LastActivity}, true
 	case prevExists && status.Derive(prev.Status) != status.Derive(next.Status):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeGroupTransition, Group: status.Derive(next.Status), Agent: next.AgentType, Name: next.Name}, true
+		return journal.Record{SessionID: next.ID, Type: journal.TypeGroupTransition, Group: status.Derive(next.Status), Agent: next.AgentType, Name: next.Name, LastActivity: next.LastActivity}, true
 	default:
 		return journal.Record{}, false
 	}

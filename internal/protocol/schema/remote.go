@@ -100,6 +100,17 @@ type JournalRecord struct {
 	// status card, which is the honest answer for a session whose machine cannot say what
 	// it supports.
 	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
+	// TS is the daemon's own stamp of when this record was appended (journal.Record.TS),
+	// carried so the Activity screen can show a time that a MACHINE clock produced
+	// (phone-refit-playbook W7.4). A roster record is never appended and carries none.
+	// omitzero: a zero stamp is absent on the wire, never the epoch, and every record written
+	// before this field existed serialises byte-identically.
+	TS time.Time `json:"ts,omitzero"`
+	// LastActivity is the session's persist.Meta.LastActivity -- when the MACHINE last saw the
+	// session do anything -- carried on roster records and the four journalworthy transitions
+	// so an Inbox row can say how old its state is (W7.1). It is the session's stamp, not
+	// this record's; a record whose meta carried none omits it, for TS's reason.
+	LastActivity time.Time `json:"last_activity,omitzero"`
 }
 
 // Canonical action strings signed over the remote command tuple (D4/R-POL.9). They

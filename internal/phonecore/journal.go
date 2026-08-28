@@ -11,6 +11,7 @@ package phonecore
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -106,6 +107,11 @@ type CachedSession struct {
 	// none of it. A nil record is T2-a's honest status card and is deliberately
 	// distinguishable from a record that says terminal_fallback=false.
 	Capabilities *schema.SessionCapabilities
+	// LastActivity is the machine's own stamp of the session's last activity, applied
+	// VERBATIM from the wire like Group, Agent and Name (phone-refit-playbook W7.1): a record
+	// carrying one sets it, a record carrying none leaves it alone, and the phone never
+	// substitutes its own clock. Zero means no record has carried one yet.
+	LastActivity time.Time `json:"last_activity,omitzero"`
 }
 
 // SessionCache is the phone's merged session model (R-PHC.3), keyed by namespaced
@@ -165,6 +171,9 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	}
 	if rec.Name != "" {
 		cs.Name = rec.Name // verbatim from the wire, same rule as Group and Agent
+	}
+	if !rec.LastActivity.IsZero() {
+		cs.LastActivity = rec.LastActivity // verbatim from the wire, same rule again
 	}
 	if rec.Capabilities != nil {
 		// Verbatim, same rule as Group/Agent/Name, and VALIDATED at this decode seam --
