@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>swarm — Mobile interface direction · Field Guide v1</title>
+  <style>
+    @font-face {
+      font-family: "Swarm Mono";
+      src: url("../../../android/app/src/main/res/font/jetbrains_mono_regular.ttf") format("truetype");
+      font-weight: 400;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Swarm Mono";
+      src: url("../../../android/app/src/main/res/font/jetbrains_mono_medium.ttf") format("truetype");
+      font-weight: 500 700;
+      font-display: swap;
+    }
+
+    :root {
+      /* Canonical Slate tokens — internal/design/tokens.json */
+      --bg: #0b0e14;
+      --card: #131824;
+      --elev: #1b2334;
+      --well: #080a10;
+      --hair: #262e3f;
+      --ink: #eef2f8;
+      --ink2: #9aa6ba;
+      --ink3: #66718a;
+      --hero: #8eb4e6;
+      --hero-ink: #0b1524;
+      --work: #6fc3bc;
+      --ok: #8cc49a;
+      --err: #e5736b;
+
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Swarm Mono", "JetBrains Mono", ui-monospace, monospace;
+      --page: min(1500px, calc(100vw - 40px));
+      --phone-w: 302px;
+      --phone-h: 612px;
+      --r-card: 16px;
+      --r-sheet: 20px;
+      --r-btn: 12px;
+      --r-chip: 10px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(900px 480px at 75% -120px, rgba(142,180,230,.12), transparent 68%),
+        radial-gradient(600px 380px at -10% 18%, rgba(111,195,188,.055), transparent 68%),
+        var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+      opacity: .032;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.65'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+    button { font: inherit; }
+    a { color: inherit; }
+    code { font-family: var(--mono); }
+    .shell { width: var(--page); margin: 0 auto; }
+    .mono { font-family: var(--mono); }
+    .eyebrow {
+      color: var(--hero);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .muted { color: var(--ink3); }
+    .secondary { color: var(--ink2); }
+
+    /* page chrome */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 18;
+      border-bottom: 1px solid rgba(38,46,63,.8);
+      background: rgba(11,14,20,.86);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-inner {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .brand-mini { display: flex; align-items: center; gap: 9px; margin-right: auto; }
+    .brand-mini img { width: 34px; height: 34px; object-fit: contain; }
+    .brand-mini b { font-size: 15px; font-weight: 500; letter-spacing: -.02em; }
+    .topnav { display: flex; gap: 6px; }
+    .topnav a {
+      padding: 8px 10px;
+      border-radius: 9px;
+      color: var(--ink3);
+      font-size: 12px;
+      text-decoration: none;
+    }
+    .topnav a:hover { color: var(--ink); background: var(--card); }
+    .edition { color: var(--ink3); font: 10px/1 var(--mono); letter-spacing: .06em; white-space: nowrap; }
+
+    .hero {
+      position: relative;
+      min-height: 720px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(460px, .95fr);
+      align-items: center;
+      gap: clamp(30px, 6vw, 110px);
+      padding: 90px 0 84px;
+      overflow: hidden;
+    }
+    .hero-copy { position: relative; z-index: 2; max-width: 760px; }
+    .hero h1 {
+      margin: 24px 0 24px;
+      max-width: 800px;
+      font-size: clamp(54px, 7vw, 110px);
+      font-weight: 450;
+      letter-spacing: -.065em;
+      line-height: .92;
+      text-wrap: balance;
+    }
+    .hero h1 span { color: var(--hero); }
+    .hero-copy > p {
+      max-width: 650px;
+      margin: 0;
+      color: var(--ink2);
+      font-size: clamp(17px, 1.8vw, 22px);
+      line-height: 1.55;
+    }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-top: 34px;
+    }
+    .meta-chip {
+      border: 1px solid var(--hair);
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--ink3);
+      font: 10px/1 var(--mono);
+      letter-spacing: .04em;
+    }
+    .hero-world {
+      min-height: 590px;
+      position: relative;
+      isolation: isolate;
+    }
+    .planet {
+      position: absolute;
+      width: 360px;
+      height: 360px;
+      right: 7%;
+      top: 2%;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 37% 36%, rgba(238,242,248,.34), transparent 3%),
+        radial-gradient(circle at 55% 58%, rgba(11,14,20,.32), transparent 50%),
+        linear-gradient(140deg, rgba(142,180,230,.45), rgba(27,35,52,.2));
+      box-shadow: inset -45px -40px 90px rgba(8,10,16,.46), 0 0 80px rgba(142,180,230,.08);
+      opacity: .75;
+      z-index: -2;
+    }
+    .hero-mark {
+      position: absolute;
+      width: min(520px, 95%);
+      right: 0;
+      top: 48%;
+      transform: translateY(-46%);
+      filter: saturate(.82) drop-shadow(0 0 32px rgba(142,180,230,.12));
+      opacity: .94;
+    }
+    .ridge { position: absolute; left: -8%; right: -10%; bottom: 0; height: 37%; z-index: -1; }
+    .ridge::before, .ridge::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      clip-path: polygon(0 76%, 10% 55%, 22% 67%, 35% 34%, 48% 62%, 60% 42%, 73% 69%, 88% 30%, 100% 57%, 100% 100%, 0 100%);
+    }
+    .ridge::before { background: #131824; transform: translateY(-22px); opacity: .8; }
+    .ridge::after { background: #080a10; }
+    .hero-callout {
+      position: absolute;
+      right: 1%;
+      bottom: 9%;
+      width: 238px;
+      padding: 12px 14px;
+      border: 1px solid var(--hair);
+      border-radius: 12px;
+      background: rgba(19,24,36,.84);
+      box-shadow: inset 0 1px rgba(238,242,248,.07);
+      color: var(--ink2);
+      font-size: 12px;
+    }
+    .hero-callout b { display: block; color: var(--ink); font-weight: 500; margin-bottom: 3px; }
+
+    .section { padding: 92px 0; border-top: 1px solid var(--hair); }
+    .section-head {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 760px);
+      gap: 34px;
+      margin-bottom: 42px;
+    }
+    .section-head h2 {
+      margin: 0 0 12px;
+      font-size: clamp(34px, 4vw, 58px);
+      font-weight: 450;
+      letter-spacing: -.045em;
+      line-height: 1.02;
+    }
+    .section-head p { margin: 0; color: var(--ink2); font-size: 17px; line-height: 1.65; }
+
+    .audit-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--hair); border: 1px solid var(--hair); border-radius: 18px; overflow: hidden; }
+    .audit-card { min-height: 245px; padding: 26px; background: var(--card); }
+    .audit-card .num { color: var(--hero); font: 10px/1 var(--mono); letter-spacing: .12em; }
+    .audit-card h3 { margin: 52px 0 9px; font-size: 19px; font-weight: 550; letter-spacing: -.02em; }
+    .audit-card p { margin: 0; color: var(--ink3); font-size: 13px; line-height: 1.6; }
+    .audit-card.good h3 { color: var(--ok); }
+    .audit-card.gap h3 { color: var(--hero); }
+
+    /* three directions */
+    .directions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .direction {
+      position: relative;
+      min-height: 460px;
+      overflow: hidden;
+      border: 1px solid var(--hair);
+      border-radius: 20px;
+      background: var(--card);
+      padding: 22px;
+      box-shadow: inset 0 1px rgba(238,242,248,.06);
+    }
+    .direction.recommended { border-color: rgba(142,180,230,.56); }
+    .direction .recommend {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: var(--hero);
+      color: var(--hero-ink);
+      font: 9px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .direction .letter { color: var(--ink3); font: 11px/1 var(--mono); }
+    .direction h3 { margin: 13px 0 6px; font-size: 26px; font-weight: 500; letter-spacing: -.035em; }
+    .direction > p { margin: 0; min-height: 70px; color: var(--ink2); font-size: 13px; }
+    .direction-viz { height: 185px; margin: 25px -22px 20px; position: relative; overflow: hidden; background: var(--well); border-block: 1px solid var(--hair); }
+    .direction-viz.signal { background: radial-gradient(circle at 68% 42%, rgba(142,180,230,.13), transparent 40%), var(--well); }
+    .direction-viz.signal::before {
+      content: ""; position: absolute; inset: 32px 4%;
+      background: url("../swarm-illustration-direction/swarm-atmospheric-mark.png") center/contain no-repeat;
+      opacity: .76;
+    }
+    .direction-viz.atlas::before, .direction-viz.atlas::after {
+      content: ""; position: absolute; left: -5%; right: -5%; bottom: -1px; height: 75%;
+      clip-path: polygon(0 75%, 14% 42%, 25% 60%, 38% 25%, 51% 65%, 66% 38%, 79% 55%, 90% 23%, 100% 50%, 100% 100%, 0 100%);
+    }
+    .direction-viz.atlas::before { background: var(--elev); transform: translateY(-22px); opacity: .8; }
+    .direction-viz.atlas::after { background: var(--card); }
+    .direction-viz.atlas .orbit { position: absolute; width: 154px; height: 154px; border: 1px solid rgba(142,180,230,.18); border-radius: 50%; right: 25px; top: -74px; }
+    .direction-viz.constellation { display: grid; place-items: center; }
+    .constellation-field { position: relative; width: 78%; height: 72%; }
+    .constellation-field::before { content: ""; position: absolute; inset: 15% 12%; border: 1px solid var(--hair); border-radius: 52% 48% 60% 40%; transform: rotate(-8deg); }
+    .node { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: var(--hero); box-shadow: 0 0 11px currentColor; color: var(--hero); }
+    .node.n1 { left: 10%; top: 32%; } .node.n2 { left: 38%; top: 10%; color: var(--work); background: var(--work); }
+    .node.n3 { left: 62%; top: 56%; color: var(--ok); background: var(--ok); } .node.n4 { right: 8%; top: 24%; }
+    .direction dl { display: grid; grid-template-columns: 68px 1fr; gap: 8px 12px; margin: 0; font-size: 11px; }
+    .direction dt { color: var(--ink3); font-family: var(--mono); text-transform: uppercase; }
+    .direction dd { margin: 0; color: var(--ink2); }
+
+    /* workshop controls */
+    .workshop-shell { width: min(1640px, calc(100vw - 28px)); margin: 0 auto; }
+    .workshop-layout { display: grid; grid-template-columns: 226px minmax(0, 1fr); gap: 26px; align-items: start; }
+    .screen-rail { position: sticky; top: 82px; display: flex; flex-direction: column; gap: 5px; }
+    .screen-button {
+      display: grid;
+      grid-template-columns: 25px 1fr auto;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      padding: 9px 10px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--ink3);
+      cursor: pointer;
+      text-align: left;
+      font-size: 12px;
+    }
+    .screen-button .idx { font: 9px/1 var(--mono); }
+    .screen-button .count { color: var(--ink3); font: 8px/1 var(--mono); }
+    .screen-button:hover { color: var(--ink); background: var(--card); }
+    .screen-button[aria-selected="true"] { color: var(--ink); background: var(--elev); box-shadow: inset 0 1px rgba(238,242,248,.07); }
+    .screen-button[aria-selected="true"] .idx { color: var(--hero); }
+
+    .workbench { min-width: 0; }
+    .workbench-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .workbench-head h3 { margin: 5px 0 0; font-size: 30px; font-weight: 500; letter-spacing: -.035em; }
+    .variant-tabs { display: flex; gap: 5px; padding: 4px; border: 1px solid var(--hair); border-radius: 12px; background: var(--well); }
+    .variant-tab {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 11px;
+      color: var(--ink3);
+      background: transparent;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .variant-tab:hover { color: var(--ink); }
+    .variant-tab[aria-pressed="true"] { color: var(--hero-ink); background: var(--hero); font-weight: 600; }
+
+    .comparison-stage {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(342px, 1fr) minmax(342px, 1fr);
+      gap: 16px;
+    }
+    .comparison-card {
+      min-width: 0;
+      border: 1px solid var(--hair);
+      border-radius: 20px;
+      background: rgba(19,24,36,.74);
+      box-shadow: inset 0 1px rgba(238,242,248,.055);
+      overflow: hidden;
+    }
+    .comparison-card.after { border-color: rgba(142,180,230,.35); }
+    .compare-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+    .compare-head b { font-size: 12px; font-weight: 550; }
+    .compare-head span { color: var(--ink3); font: 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .phone-stage { min-height: 676px; display: grid; place-items: center; padding: 26px 12px 30px; background: radial-gradient(400px 330px at 50% 42%, rgba(142,180,230,.05), transparent 70%); }
+
+    /* the phone */
+    .phone {
+      width: var(--phone-w);
+      height: calc(var(--phone-h) + 18px);
+      padding: 8px;
+      border: 1px solid #30384a;
+      border-radius: 34px;
+      background: #10141d;
+      box-shadow: 0 30px 70px rgba(0,0,0,.36), inset 0 1px rgba(238,242,248,.08);
+    }
+    .phone-ui {
+      height: var(--phone-h);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-radius: 27px;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 11.5px;
+      letter-spacing: .01em;
+    }
+    .phone-ui::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 12;
+      pointer-events: none;
+      opacity: .027;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.94' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+    }
+    .statusbar { height: 30px; padding: 10px 15px 0; display: flex; justify-content: space-between; align-items: flex-start; color: var(--ink2); font: 9px/1 var(--mono); flex: 0 0 auto; }
+    .dynamic-island { width: 64px; height: 18px; position: absolute; left: 50%; top: 7px; transform: translateX(-50%); border-radius: 10px; background: #030406; }
+    .app-nav { display: flex; align-items: center; gap: 9px; padding: 10px 16px 9px; min-height: 50px; position: relative; z-index: 2; }
+    .app-nav .back { color: var(--ink3); font-size: 16px; }
+    .app-nav .title { font-size: 19px; font-weight: 530; letter-spacing: -.025em; }
+    .app-nav .identity { flex: 1; min-width: 0; }
+    .app-nav .identity .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .app-nav .sub { margin-top: 1px; color: var(--ink3); font: 8.5px/1.3 var(--mono); }
+    .app-nav .side { margin-left: auto; color: var(--hero); font: 8.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+    .app-content { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+    .scroll { height: 100%; overflow: hidden; padding-bottom: 8px; }
+    .section-label { padding: 9px 16px 7px; color: var(--ink3); font: 8.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .scope-row { display: flex; gap: 6px; padding: 0 15px 10px; overflow: hidden; }
+    .scope { flex: 0 0 auto; border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 6px 9px; color: var(--ink2); font-size: 9.5px; }
+    .scope.active { border-color: var(--hero); background: var(--hero); color: var(--hero-ink); font-weight: 600; }
+    .dot { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; vertical-align: 1px; background: var(--ink3); }
+    .dot.att { background: var(--hero); box-shadow: 0 0 8px rgba(142,180,230,.65); }
+    .dot.work { background: var(--work); }
+    .dot.ok { background: var(--ok); }
+    .dot.err { background: var(--err); }
+    .session-card { position: relative; margin: 0 14px 9px; padding: 11px 13px; border: 1px solid var(--hair); border-radius: var(--r-card); background: var(--card); box-shadow: inset 0 1px rgba(238,242,248,.075); overflow: hidden; }
+    .session-card.lit { background: var(--elev); box-shadow: inset 0 1px rgba(238,242,248,.16); }
+    .session-card .line1 { display: flex; align-items: center; gap: 7px; }
+    .session-card .project { min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .session-card .agent { color: var(--ink3); font: 8px/1 var(--mono); }
+    .session-card .need { margin: 5px 0 0 13px; color: var(--ink2); font-size: 10px; }
+    .session-card.lit .need { color: var(--hero); }
+    .workbar { height: 2px; margin: 8px 0 0 13px; border-radius: 2px; background: linear-gradient(90deg, var(--work), transparent 88%); }
+    .card-trail { display: none; position: absolute; left: 10px; top: 22px; bottom: -18px; width: 1px; background: linear-gradient(var(--hero), rgba(142,180,230,0)); }
+    .tabbar { flex: 0 0 auto; height: 58px; display: flex; align-items: center; justify-content: space-around; border-top: 1px solid var(--hair); background: var(--bg); }
+    .tab { position: relative; display: grid; place-items: center; gap: 3px; min-width: 62px; color: var(--ink3); font-size: 8px; }
+    .tab .glyph { width: 17px; height: 13px; display: grid; place-items: center; color: currentColor; font: 12px/1 var(--mono); }
+    .tab.on { color: var(--hero); }
+    .tab .badge { position: absolute; top: -3px; right: 10px; min-width: 14px; padding: 1px 4px; border-radius: 8px; background: var(--hero); color: var(--hero-ink); font: 7px/1.4 var(--mono); }
+    .pill { display: inline-flex; align-items: center; gap: 5px; width: fit-content; padding: 5px 9px; border: 1px solid var(--hair); border-radius: 999px; background: var(--card); color: var(--ink2); font-size: 9px; }
+    .pill.hero { border-color: var(--hero); background: var(--hero); color: var(--hero-ink); font-weight: 600; }
+    .button { display: block; padding: 10px 12px; border-radius: var(--r-btn); background: var(--hero); color: var(--hero-ink); text-align: center; font-weight: 650; }
+    .button.ghost { border: 1px solid var(--hair); background: transparent; color: var(--ink2); }
+    .button.danger { border: 1px solid rgba(229,115,107,.45); background: transparent; color: var(--err); }
+    .well { border: 1px solid var(--hair); border-radius: var(--r-btn); background: var(--well); padding: 9px 10px; color: var(--ink2); font: 9px/1.55 var(--mono); }
+    .notice { margin: 6px 14px 8px; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 10px; color: var(--ink2); font-size: 9px; }
+    .notice.error { border-color: rgba(229,115,107,.35); color: var(--err); }
+    .row { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--hair); }
+    .row-copy { min-width: 0; flex: 1; }
+    .row-copy b { display: block; font-size: 11.5px; font-weight: 550; }
+    .row-copy small { display: block; margin-top: 2px; color: var(--ink3); font-size: 9px; }
+    .toggle { width: 35px; height: 21px; border-radius: 12px; border: 1px solid var(--hair); background: var(--elev); position: relative; }
+    .toggle::after { content: ""; position: absolute; width: 13px; height: 13px; left: 3px; top: 3px; border-radius: 50%; background: var(--ink3); }
+    .toggle.on { border-color: var(--hero); background: var(--hero); }
+    .toggle.on::after { left: 17px; background: var(--hero-ink); }
+
+    /* variant material grammar */
+    .phone-ui.signal .app-nav::after {
+      content: ""; position: absolute; height: 1px; left: 16px; right: 16px; bottom: 0;
+      background: linear-gradient(90deg, var(--hero), rgba(142,180,230,.12) 48%, transparent);
+    }
+    .phone-ui.signal .card-trail { display: block; }
+    .phone-ui.signal .session-card { margin-left: 18px; }
+    .phone-ui.signal .section-label::before { content: "· "; color: var(--hero); }
+    .phone-ui.atlas { background: linear-gradient(180deg, #101827 0, var(--bg) 36%); }
+    .phone-ui.atlas .app-nav { min-height: 62px; align-items: flex-end; }
+    .phone-ui.atlas .app-nav::before {
+      content: ""; position: absolute; inset: -1px 0 0; z-index: -1; opacity: .55;
+      background: linear-gradient(155deg, transparent 55%, rgba(142,180,230,.10) 56%, transparent 80%);
+      clip-path: polygon(0 44%, 15% 32%, 30% 59%, 49% 20%, 67% 53%, 82% 28%, 100% 49%, 100% 100%, 0 100%);
+    }
+    .phone-ui.atlas .section-label { letter-spacing: .16em; }
+    .phone-ui.atlas .session-card { border-left-color: var(--ink3); }
+    .phone-ui.atlas .session-card.lit { border-left-color: var(--hero); }
+    .phone-ui.constellation .session-card { border-radius: 12px; background: rgba(19,24,36,.66); }
+    .phone-ui.constellation .app-nav .title { letter-spacing: -.035em; }
+    .phone-ui.constellation .dot { box-shadow: 0 0 0 3px rgba(102,113,138,.08); }
+    .phone-ui.constellation .dot.att { box-shadow: 0 0 12px rgba(142,180,230,.72); }
+    .phone-ui.constellation .tabbar { margin: 0 8px 8px; height: 48px; border: 1px solid var(--hair); border-radius: 15px; background: var(--card); }
+
+    /* screen-specific primitives */
+    .welcome { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 24px 22px 30px; }
+    .welcome-mark { width: 96px; height: 96px; object-fit: contain; margin: 0 auto 18px; }
+    .welcome h4 { margin: 0; text-align: center; font-size: 25px; line-height: 1.08; font-weight: 500; letter-spacing: -.04em; }
+    .welcome p { margin: 11px 0 22px; color: var(--ink2); text-align: center; font-size: 11px; line-height: 1.55; }
+    .welcome .aside { margin-top: 12px; color: var(--ink3); text-align: center; font: 8px/1.5 var(--mono); }
+    .welcome-field { height: 150px; margin: 0 -22px 20px; position: relative; overflow: hidden; }
+    .welcome-field::before { content: ""; position: absolute; inset: 0; background: url("../swarm-illustration-direction/swarm-atmospheric-mark.png") center/contain no-repeat; opacity: .72; }
+    .atlas .welcome-field::after { content: ""; position: absolute; left: -4%; right: -4%; bottom: 0; height: 50%; background: var(--card); clip-path: polygon(0 80%, 17% 44%, 30% 73%, 47% 20%, 62% 66%, 78% 36%, 100% 71%, 100% 100%, 0 100%); }
+    .constellation .welcome-field::after { content: ""; position: absolute; width: 112px; height: 112px; border: 1px solid rgba(142,180,230,.16); border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+    .pair-steps { padding: 4px 16px; }
+    .step { display: grid; grid-template-columns: 20px 1fr; gap: 7px; margin: 8px 0; color: var(--ink2); }
+    .step i { color: var(--hero); font: normal 9px/1.6 var(--mono); }
+    .reticle { height: 196px; margin: 5px 16px 12px; position: relative; overflow: hidden; border: 1px solid var(--hair); border-radius: 16px; background: radial-gradient(circle at 52% 40%, #2a3343, #10151f 52%, var(--well)); }
+    .reticle::before, .reticle::after { content: ""; position: absolute; width: 54px; height: 54px; border-color: var(--hero); border-style: solid; }
+    .reticle::before { left: 18px; top: 18px; border-width: 2px 0 0 2px; border-radius: 13px 0 0; }
+    .reticle::after { right: 18px; bottom: 18px; border-width: 0 2px 2px 0; border-radius: 0 0 13px; }
+    .scan-beam { position: absolute; left: 24px; right: 24px; top: 50%; height: 1px; background: linear-gradient(90deg, transparent, var(--work), transparent); box-shadow: 0 0 12px var(--work); }
+    .sas-row { display: flex; justify-content: center; gap: 7px; margin: 18px 16px 8px; }
+    .sas { width: 48px; height: 48px; display: grid; place-items: center; border: 1px solid var(--hair); border-radius: 15px; background: var(--card); font-size: 20px; }
+    .message-list { height: 100%; padding: 8px 12px; }
+    .message { margin: 0 0 9px; color: var(--ink); line-height: 1.5; }
+    .message.me { max-width: 80%; margin-left: auto; padding: 8px 10px; border-radius: 14px 14px 4px 14px; background: var(--elev); }
+    .tool-line { display: flex; align-items: center; gap: 7px; margin: 7px 0; padding: 7px 8px; border: 1px solid var(--hair); border-radius: 10px; background: var(--card); color: var(--ink2); font-size: 9.5px; }
+    .tool-line .glyph { color: var(--work); font: 9px/1 var(--mono); }
+    .tool-line b { color: var(--ink); font-weight: 500; }
+    .working-line { display: flex; align-items: center; gap: 6px; color: var(--work); font-size: 9.5px; }
+    .working-line .spin { width: 7px; height: 7px; border: 1px solid var(--work); border-top-color: transparent; border-radius: 50%; }
+    .composer { flex: 0 0 auto; padding: 8px 9px 9px; border-top: 1px solid var(--hair); background: var(--bg); }
+    .composer-bar { min-height: 38px; display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 11px; border: 1px solid var(--hair); border-radius: 18px; background: var(--card); }
+    .composer-bar span:first-child { flex: 1; color: var(--ink3); }
+    .send { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--hero); color: var(--hero-ink); font-weight: 700; }
+    .send.stop { border-radius: 9px; background: var(--ink); color: var(--bg); }
+    .decision-card { margin: 8px 12px; padding: 12px; border: 1px solid rgba(142,180,230,.42); border-radius: 15px; background: linear-gradient(180deg, rgba(142,180,230,.13), rgba(142,180,230,.03)); box-shadow: inset 0 1px rgba(238,242,248,.16); }
+    .decision-card .context { color: var(--ink3); font: 8px/1.4 var(--mono); text-transform: uppercase; }
+    .decision-card h5 { margin: 7px 0 9px; font-size: 16px; line-height: 1.25; font-weight: 520; }
+    .decision-card .choice { display: block; margin-top: 6px; padding: 9px; border: 1px solid var(--hair); border-radius: 9px; background: var(--elev); color: var(--ink); font-size: 9.5px; font-weight: 600; }
+    .decision-card .choice.primary { border-color: var(--hero); background: var(--hero); color: var(--hero-ink); }
+    .decision-card .foot { margin-top: 8px; color: var(--ink3); font: 8px/1.5 var(--mono); }
+    .form { padding: 6px 16px; }
+    .field { margin-bottom: 10px; }
+    .field label { display: block; margin-bottom: 5px; color: var(--ink3); font: 8px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .field-box { padding: 9px 10px; border: 1px solid var(--hair); border-radius: 11px; background: var(--well); color: var(--ink); }
+    .field.focus .field-box { border-color: var(--hero); box-shadow: 0 0 0 2px rgba(142,180,230,.22); }
+    .presets { display: flex; gap: 6px; margin-bottom: 12px; }
+    .preset { flex: 1; padding: 8px 7px; border: 1px solid var(--hair); border-radius: 10px; background: var(--card); color: var(--ink2); font-size: 8px; }
+    .preset.active { border-color: var(--hero); color: var(--hero); }
+    .activity-row { display: grid; grid-template-columns: 34px 1fr; gap: 9px; padding: 10px 16px; border-bottom: 1px solid var(--hair); }
+    .activity-row time { color: var(--ink3); font: 8px/1.4 var(--mono); }
+    .activity-row p { margin: 0; color: var(--ink2); font-size: 9.5px; line-height: 1.45; }
+    .activity-row b { color: var(--ink); font-weight: 500; }
+    .machine-hero { margin: 4px 14px 12px; padding: 14px; border: 1px solid var(--hair); border-radius: 16px; background: var(--card); }
+    .machine-hero .orbit { width: 68px; height: 68px; margin: 0 auto 10px; position: relative; border: 1px solid rgba(142,180,230,.18); border-radius: 50%; }
+    .machine-hero .orbit::before { content: ""; position: absolute; width: 8px; height: 8px; left: 50%; top: 50%; border-radius: 50%; background: var(--ok); box-shadow: 0 0 10px var(--ok); transform: translate(-50%,-50%); }
+    .machine-hero .orbit::after { content: ""; position: absolute; width: 5px; height: 5px; left: 6px; top: 21px; border-radius: 50%; background: var(--hero); box-shadow: 0 0 8px var(--hero); }
+    .machine-hero h5 { margin: 0; text-align: center; font-size: 14px; font-weight: 550; }
+    .machine-hero p { margin: 3px 0 0; color: var(--ink3); text-align: center; font: 8px/1.4 var(--mono); }
+    .diff { margin: 6px 12px; overflow: hidden; border: 1px solid var(--hair); border-radius: 12px; background: var(--well); font: 8px/1.6 var(--mono); }
+    .diff-head { padding: 8px 10px; border-bottom: 1px solid var(--hair); background: var(--card); color: var(--ink2); }
+    .diff-body { padding: 8px 10px; white-space: pre; color: var(--ink3); }
+    .diff-body .add { color: var(--ok); } .diff-body .del { color: var(--err); }
+    .sync-strip { padding: 8px 14px; border-bottom: 1px solid var(--hair); background: var(--elev); color: var(--ink); font-size: 9px; }
+    .system-state { height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 26px 22px; text-align: center; }
+    .system-orbit { width: 124px; height: 124px; margin: 0 auto 18px; position: relative; border: 1px solid var(--hair); border-radius: 50%; }
+    .system-orbit::before { content: ""; position: absolute; width: 9px; height: 9px; left: 15px; top: 52px; border-radius: 50%; background: var(--err); box-shadow: 0 0 12px rgba(229,115,107,.55); }
+    .system-orbit::after { content: ""; position: absolute; width: 54px; height: 1px; left: 24px; top: 56px; background: linear-gradient(90deg, var(--err), transparent); }
+    .system-state h5 { margin: 0 0 7px; font-size: 18px; font-weight: 520; }
+    .system-state p { margin: 0 0 16px; color: var(--ink2); font-size: 10.5px; }
+
+    .annotation-panel { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; margin-top: 16px; }
+    .rationale, .implementation { padding: 18px 20px; border: 1px solid var(--hair); border-radius: 16px; background: var(--card); }
+    .rationale h4, .implementation h4 { margin: 6px 0 6px; font-size: 16px; font-weight: 550; }
+    .rationale p, .implementation p { margin: 0; color: var(--ink2); font-size: 12px; line-height: 1.6; }
+    .implementation code { color: var(--hero); font-size: 10px; }
+    .change-list { display: grid; gap: 8px; margin-top: 12px; }
+    .change { display: grid; grid-template-columns: 20px 1fr; gap: 8px; color: var(--ink2); font-size: 11px; }
+    .change i { display: grid; place-items: center; width: 18px; height: 18px; border: 1px solid var(--hair); border-radius: 50%; color: var(--hero); font: normal 8px/1 var(--mono); }
+
+    /* system section */
+    .grammar-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .grammar-card { min-height: 230px; padding: 22px; border: 1px solid var(--hair); border-radius: 18px; background: var(--card); }
+    .grammar-viz { height: 80px; position: relative; margin-bottom: 24px; }
+    .grammar-viz.trail::before { content: ""; position: absolute; left: 8%; right: 8%; top: 42%; height: 1px; background: linear-gradient(90deg, transparent, var(--hero), transparent); transform: rotate(-7deg); }
+    .grammar-viz.trail::after { content: ""; position: absolute; right: 12%; top: 27%; width: 7px; height: 7px; border-radius: 50%; background: var(--hero); box-shadow: 0 0 12px var(--hero); }
+    .grammar-viz.beacon { display: grid; place-items: center; }
+    .grammar-viz.beacon::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--work); box-shadow: 0 0 18px var(--work); }
+    .grammar-viz.ridges::before, .grammar-viz.ridges::after { content: ""; position: absolute; inset: 20px 0 0; clip-path: polygon(0 80%, 22% 33%, 39% 62%, 58% 25%, 78% 58%, 100% 34%, 100% 100%, 0 100%); }
+    .grammar-viz.ridges::before { background: var(--elev); transform: translateY(-10px); opacity: .75; }
+    .grammar-viz.ridges::after { background: var(--well); }
+    .grammar-viz.field { border: 1px solid var(--hair); border-radius: 50%; transform: scale(.72); }
+    .grammar-viz.field::before, .grammar-viz.field::after { content: ""; position: absolute; border-radius: 50%; background: var(--hero); box-shadow: 0 0 10px var(--hero); }
+    .grammar-viz.field::before { width: 8px; height: 8px; left: 12%; top: 45%; }
+    .grammar-viz.field::after { width: 6px; height: 6px; right: 17%; top: 22%; background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+    .grammar-card h3 { margin: 0 0 6px; font-size: 17px; font-weight: 550; }
+    .grammar-card p { margin: 0; color: var(--ink3); font-size: 12px; }
+    .grammar-card .rule { display: block; margin-top: 13px; color: var(--hero); font: 9px/1.4 var(--mono); }
+
+    .token-strip { display: grid; grid-template-columns: repeat(7, 1fr); margin-top: 18px; border: 1px solid var(--hair); border-radius: 16px; overflow: hidden; }
+    .swatch { min-height: 118px; padding: 14px; display: flex; flex-direction: column; justify-content: flex-end; color: var(--ink); border-right: 1px solid rgba(11,14,20,.24); }
+    .swatch:last-child { border-right: 0; }
+    .swatch b { font-size: 10px; font-weight: 600; }
+    .swatch code { margin-top: 3px; font-size: 8px; opacity: .72; }
+    .swatch.light { color: var(--hero-ink); }
+
+    .motion-table { margin-top: 18px; border: 1px solid var(--hair); border-radius: 16px; overflow: hidden; }
+    .motion-row { display: grid; grid-template-columns: 160px 140px 1fr; gap: 18px; padding: 13px 16px; border-bottom: 1px solid var(--hair); background: var(--card); font-size: 11px; }
+    .motion-row:last-child { border-bottom: 0; }
+    .motion-row b { font-weight: 550; }
+    .motion-row code { color: var(--hero); font-size: 9px; }
+    .motion-row span { color: var(--ink2); }
+
+    .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .phase { min-height: 340px; padding: 24px; border: 1px solid var(--hair); border-radius: 18px; background: var(--card); }
+    .phase.recommended { border-color: rgba(142,180,230,.5); background: linear-gradient(180deg, rgba(142,180,230,.08), var(--card) 44%); }
+    .phase .phase-no { color: var(--hero); font: 10px/1 var(--mono); }
+    .phase h3 { margin: 17px 0 7px; font-size: 23px; font-weight: 520; letter-spacing: -.03em; }
+    .phase > p { min-height: 52px; margin: 0 0 20px; color: var(--ink3); font-size: 12px; }
+    .phase ul { margin: 0; padding: 0; list-style: none; }
+    .phase li { padding: 9px 0 9px 18px; border-top: 1px solid var(--hair); color: var(--ink2); font-size: 11px; position: relative; }
+    .phase li::before { content: "·"; position: absolute; left: 2px; color: var(--hero); }
+
+    .guardrails { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+    .guard { padding: 22px; border: 1px solid var(--hair); border-radius: 16px; background: var(--card); }
+    .guard h3 { margin: 0 0 10px; font-size: 16px; font-weight: 550; }
+    .guard.keep h3 { color: var(--ok); } .guard.avoid h3 { color: var(--err); }
+    .guard ul { margin: 0; padding-left: 18px; color: var(--ink2); font-size: 12px; }
+    .guard li { margin: 7px 0; }
+    footer { padding: 35px 0 64px; border-top: 1px solid var(--hair); color: var(--ink3); font: 9px/1.6 var(--mono); }
+
+    @media (max-width: 1120px) {
+      .hero { grid-template-columns: 1fr; padding-top: 70px; }
+      .hero-world { min-height: 440px; }
+      .hero-mark { left: 50%; right: auto; transform: translate(-50%,-48%); }
+      .audit-grid { grid-template-columns: 1fr 1fr; }
+      .directions { grid-template-columns: 1fr; }
+      .direction { min-height: 390px; }
+      .workshop-layout { grid-template-columns: 1fr; }
+      .screen-rail { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 8px; }
+      .screen-button { min-width: 155px; }
+      .grammar-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 790px) {
+      :root { --page: calc(100vw - 28px); --phone-w: 290px; --phone-h: 586px; }
+      .topnav, .edition { display: none; }
+      .hero { min-height: auto; padding: 70px 0 56px; }
+      .hero h1 { font-size: 54px; }
+      .hero-world { min-height: 370px; }
+      .planet { width: 240px; height: 240px; }
+      .section { padding: 64px 0; }
+      .section-head { grid-template-columns: 1fr; gap: 12px; }
+      .audit-grid, .comparison-stage, .annotation-panel, .grammar-grid, .roadmap, .guardrails { grid-template-columns: 1fr; }
+      .comparison-card.before { order: 1; }
+      .comparison-card.after { order: 0; }
+      .workbench-head { align-items: flex-start; flex-direction: column; }
+      .variant-tabs { width: 100%; overflow-x: auto; }
+      .variant-tab { flex: 1 0 auto; }
+      .phone-stage { min-height: 640px; }
+      .token-strip { grid-template-columns: repeat(2, 1fr); }
+      .swatch { border-bottom: 1px solid rgba(11,14,20,.24); }
+      .motion-row { grid-template-columns: 1fr; gap: 4px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <nav class="topbar" aria-label="Page">
+    <div class="shell topbar-inner">
+      <div class="brand-mini">
+        <img src="../swarm-illustration-direction/swarm-atmospheric-mark.png" alt="">
+        <b>swarm / mobile field guide</b>
+      </div>
+      <div class="topnav">
+        <a href="#diagnosis">diagnosis</a>
+        <a href="#directions">directions</a>
+        <a href="#workshop">screens</a>
+        <a href="#system">system</a>
+        <a href="#roadmap">roadmap</a>
+      </div>
+      <span class="edition">proposal · v1 · 2026-08-29</span>
+    </div>
+  </nav>
+
+  <header class="hero shell">
+    <div class="hero-copy">
+      <span class="eyebrow">Mobile identity study · before / after</span>
+      <h1>Turn the app into a <span>living field.</span></h1>
+      <p>The interface already speaks Slate. The next step is to let swarm’s core idea—many autonomous actors, one calm vantage point—shape navigation, hierarchy, motion, and every state of the product.</p>
+      <div class="hero-meta">
+        <span class="meta-chip">12 mobile frames</span>
+        <span class="meta-chip">3 directions per frame</span>
+        <span class="meta-chip">canonical tokens only</span>
+        <span class="meta-chip">Signal Field recommended</span>
+      </div>
+    </div>
+    <div class="hero-world" aria-label="Atmospheric swarm interface metaphor">
+      <div class="planet"></div>
+      <img class="hero-mark" src="../swarm-illustration-direction/swarm-atmospheric-mark.png" alt="Five delicate autonomous trajectories forming the swarm mark">
+      <div class="ridge"></div>
+      <div class="hero-callout"><b>One identity, two scales.</b>The GitHub landscape becomes a precise interface grammar: trails, beacons, fields, and layered depth.</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="section" id="diagnosis">
+      <div class="shell">
+        <div class="section-head">
+          <span class="eyebrow">01 · Diagnosis</span>
+          <div>
+            <h2>Aligned in color. Under-expressed in behavior.</h2>
+            <p>The shipped design has strong fundamentals: a dark-only Slate ladder, careful status semantics, honest safety copy, pinned chat structure, and disciplined component states. What it lacks is a signature composition. Most screens could still belong to any thoughtful developer tool.</p>
+          </div>
+        </div>
+        <div class="audit-grid">
+          <article class="audit-card good"><span class="num">KEEP / 01</span><h3>Safety is legible</h3><p>Needs-you, working, review, completed, and error already have distinct semantic colors and words. Preserve that exact mapping.</p></article>
+          <article class="audit-card good"><span class="num">KEEP / 02</span><h3>Chat has the right frame</h3><p>Fixed header, one scrolling transcript, pinned composer. This is the right information architecture; the redesign should strengthen it.</p></article>
+          <article class="audit-card gap"><span class="num">OPEN / 03</span><h3>Identity stops at the palette</h3><p>The atmospheric swarm exists in repository art and the launcher, but not in the app’s spatial grammar, transitions, or empty states.</p></article>
+          <article class="audit-card gap"><span class="num">OPEN / 04</span><h3>Everything has equal gravity</h3><p>Rows, sections, system warnings, and key actions often use similar boxes. The user’s eye receives structure, but not a compelling field of priority.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="directions">
+      <div class="shell">
+        <div class="section-head">
+          <span class="eyebrow">02 · Three directions</span>
+          <div>
+            <h2>Three ways to bring the Night Orchestra inside.</h2>
+            <p>All three keep the app implementable with native Android views and the existing tokens. They differ in how much atmosphere they spend and where they place it. Every frame in the workshop can be switched among all three.</p>
+          </div>
+        </div>
+        <div class="directions">
+          <article class="direction recommended">
+            <span class="letter">A / SIGNAL FIELD</span><span class="recommend">recommended</span>
+            <h3>Quiet motion as structure</h3>
+            <p>Hairline trajectories connect related moments. Status beacons sit at the leading edge. Cards remain familiar and fast.</p>
+            <div class="direction-viz signal"></div>
+            <dl><dt>Identity</dt><dd>strong, without illustration everywhere</dd><dt>Density</dt><dd>balanced for everyday use</dd><dt>Risk</dt><dd>low–medium; extends the current kit</dd></dl>
+          </article>
+          <article class="direction">
+            <span class="letter">B / NIGHT ATLAS</span>
+            <h3>Landscape as hierarchy</h3>
+            <p>Layered header bands, ridge-like section changes, and editorial whitespace make each destination feel like a place.</p>
+            <div class="direction-viz atlas"><span class="orbit"></span></div>
+            <dl><dt>Identity</dt><dd>most atmospheric and editorial</dd><dt>Density</dt><dd>spacious, best for focus</dd><dt>Risk</dt><dd>medium; more custom layout work</dd></dl>
+          </article>
+          <article class="direction">
+            <span class="letter">C / CONSTELLATION</span>
+            <h3>Agents as a live system</h3>
+            <p>Compact modules and orbital groupings make multi-agent state tangible without adding decorative scenery.</p>
+            <div class="direction-viz constellation"><div class="constellation-field"><i class="node n1"></i><i class="node n2"></i><i class="node n3"></i><i class="node n4"></i></div></div>
+            <dl><dt>Identity</dt><dd>technical and spatial</dd><dt>Density</dt><dd>highest information per screen</dd><dt>Risk</dt><dd>medium; new grouping primitives</dd></dl>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="workshop">
+      <div class="workshop-shell">
+        <div class="section-head">
+          <span class="eyebrow">03 · Frame workshop</span>
+          <div>
+            <h2>Every major surface, before and after.</h2>
+            <p>Choose a frame on the left, then switch the proposed direction. The left phone reconstructs today’s Slate composition; the right phone explores the same product state with a stronger swarm identity.</p>
+          </div>
+        </div>
+        <div class="workshop-layout">
+          <div class="screen-rail" id="screenRail" role="tablist" aria-label="Mobile frames"></div>
+          <div class="workbench">
+            <div class="workbench-head">
+              <div><span class="eyebrow" id="frameEyebrow">Frame 01 / 12</span><h3 id="frameTitle">Welcome</h3></div>
+              <div class="variant-tabs" aria-label="After direction">
+                <button class="variant-tab" data-variant="signal" aria-pressed="true">A · Signal Field</button>
+                <button class="variant-tab" data-variant="atlas" aria-pressed="false">B · Night Atlas</button>
+                <button class="variant-tab" data-variant="constellation" aria-pressed="false">C · Constellation</button>
+              </div>
+            </div>
+            <div class="comparison-stage">
+              <article class="comparison-card before">
+                <div class="compare-head"><b>Before</b><span>Current Slate grammar</span></div>
+                <div class="phone-stage" id="beforePhone"></div>
+              </article>
+              <article class="comparison-card after">
+                <div class="compare-head"><b id="afterLabel">After · Signal Field</b><span>Identity-forward proposal</span></div>
+                <div class="phone-stage" id="afterPhone"></div>
+              </article>
+            </div>
+            <div class="annotation-panel">
+              <article class="rationale">
+                <span class="eyebrow">Design move</span>
+                <h4 id="rationaleTitle"></h4>
+                <p id="rationaleCopy"></p>
+                <div class="change-list" id="changeList"></div>
+              </article>
+              <article class="implementation">
+                <span class="eyebrow">Build seam</span>
+                <h4>Native, token-led, incremental.</h4>
+                <p id="implementationCopy"></p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="system">
+      <div class="shell">
+        <div class="section-head">
+          <span class="eyebrow">04 · Identity grammar</span>
+          <div>
+            <h2>The swarm motif must do a job.</h2>
+            <p>The interface should never paste a decorative S behind content. Each visual device earns its place by carrying product meaning. This is how the atmospheric identity becomes a system rather than wallpaper.</p>
+          </div>
+        </div>
+        <div class="grammar-grid">
+          <article class="grammar-card"><div class="grammar-viz trail"></div><h3>Trajectory</h3><p>Connects a session’s past, present, and next action. Used in state transitions and grouped timeline edges.</p><span class="rule">means continuity · never network topology</span></article>
+          <article class="grammar-card"><div class="grammar-viz beacon"></div><h3>Beacon</h3><p>The single authoritative status mark for an agent, machine, or operation. Word and color always travel together.</p><span class="rule">means current state · never decoration</span></article>
+          <article class="grammar-card"><div class="grammar-viz ridges"></div><h3>Atmospheric layer</h3><p>Separates hierarchy at destination headers, onboarding, and empty states without adding another bordered card.</p><span class="rule">means depth · never a content background</span></article>
+          <article class="grammar-card"><div class="grammar-viz field"></div><h3>Field</h3><p>Shows several actors belonging to one machine or one workflow. Best for scope selection and connection health.</p><span class="rule">means coordinated plurality · never a hive</span></article>
+        </div>
+
+        <div class="token-strip" aria-label="Canonical Slate colors">
+          <div class="swatch" style="background:#0b0e14"><b>Ground</b><code>#0b0e14</code></div>
+          <div class="swatch" style="background:#131824"><b>Card</b><code>#131824</code></div>
+          <div class="swatch" style="background:#1b2334"><b>Elevation</b><code>#1b2334</code></div>
+          <div class="swatch light" style="background:#8eb4e6"><b>Needs you</b><code>#8eb4e6</code></div>
+          <div class="swatch light" style="background:#6fc3bc"><b>Working</b><code>#6fc3bc</code></div>
+          <div class="swatch light" style="background:#8cc49a"><b>Review</b><code>#8cc49a</code></div>
+          <div class="swatch light" style="background:#e5736b"><b>Error</b><code>#e5736b</code></div>
+        </div>
+
+        <div class="motion-table" aria-label="Recommended motion register">
+          <div class="motion-row"><b>Needs-you arrival</b><code>500 ms · once</code><span>Existing specular sweep becomes a tiny trail arrival ending at the status beacon. No loop.</span></div>
+          <div class="motion-row"><b>Working continuity</b><code>1200 ms · subtle</code><span>A 1 px gradient breathes along the active tail only; elapsed time remains the honest progress report.</span></div>
+          <div class="motion-row"><b>Destination change</b><code>240 ms · shared axis</code><span>Content shifts 6 dp while the active tab beacon travels, creating one continuous spatial field.</span></div>
+          <div class="motion-row"><b>Decision resolution</b><code>280 ms · collapse</code><span>Controls settle into a record without moving the surrounding conversation under the user’s thumb.</span></div>
+          <div class="motion-row"><b>Reduced motion</b><code>0 ms</code><span>Every trajectory is a static line and every state remains fully legible through words and color.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap">
+      <div class="shell">
+        <div class="section-head">
+          <span class="eyebrow">05 · Implementation path</span>
+          <div>
+            <h2>Make Signal Field the base; borrow Atlas sparingly.</h2>
+            <p>The strongest route is a hybrid with a clear hierarchy: Signal Field for everyday interaction, Night Atlas for first-run and empty/system moments, and Constellation only where the product truly shows several actors at once.</p>
+          </div>
+        </div>
+        <div class="roadmap">
+          <article class="phase recommended"><span class="phase-no">PHASE 01 · FOUNDATION</span><h3>Give the kit a signature</h3><p>High impact, low product risk. No navigation or protocol changes.</p><ul><li>Add trail, beacon, atmospheric header, and field primitives</li><li>Refine nav/title rhythm and bottom tab treatment</li><li>Move welcome, empty, and offline states onto the new grammar</li><li>Keep the canonical token and contrast pipeline untouched</li></ul></article>
+          <article class="phase"><span class="phase-no">PHASE 02 · CORE FLOW</span><h3>Redesign daily use</h3><p>Inbox, conversation, decision, and launch—where identity earns repeat value.</p><ul><li>Session timeline rails and stronger state grouping</li><li>Conversation continuity trail and quieter tool rows</li><li>Inline decision card resolution motion</li><li>Preset-led launch with machine context visible first</li></ul></article>
+          <article class="phase"><span class="phase-no">PHASE 03 · SYSTEM</span><h3>Complete the world</h3><p>Utility surfaces and edge cases inherit the same visual language.</p><ul><li>Connection field and machine health detail</li><li>Activity trajectory and file/output presentation</li><li>Push, toast, stale, loading, and repair choreography</li><li>Tablet, font-scale, TalkBack, and reduced-motion passes</li></ul></article>
+        </div>
+        <div class="guardrails">
+          <article class="guard keep"><h3>Keep</h3><ul><li>Short, user-side copy and honest state words</li><li>One luminous accent per statement</li><li>Large quiet fields around important decisions</li><li>Native Android semantics and 48 dp targets</li></ul></article>
+          <article class="guard avoid"><h3>Avoid</h3><ul><li>Full scenic illustrations behind active content</li><li>Lines that suggest false data relationships</li><li>Continuous neon, particles, or decorative looping</li><li>Changing semantic colors to “make a screen prettier”</li></ul></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">swarm · Mobile Interface Field Guide v1 · based on Brandbook v1 / Night Orchestra, ADR-021 Slate, the shipped Android screen inventory, the conversation drawing, and the phone refit rulings · recommended direction: Signal Field</div>
+  </footer>
+
+  <script>
+    const mark = "../swarm-illustration-direction/swarm-atmospheric-mark.png";
+    const tabs = (active = "Inbox", badge = true) => `
+      <div class="tabbar">
+        ${["Inbox","Activity","Settings"].map((name, i) => `<span class="tab ${name === active ? "on" : ""}"><span class="glyph">${["⌁","⌇","⋯"][i]}</span>${name}${name === "Inbox" && badge ? '<i class="badge">2</i>' : ''}</span>`).join("")}
+      </div>`;
+    const statusbar = `<div class="statusbar"><span>9:41</span><span>▴ 5G 82%</span></div><span class="dynamic-island"></span>`;
+    const nav = (title, side = "", drill = false, sub = "") => `<div class="app-nav">${drill ? '<span class="back">‹</span>' : ''}<div class="identity"><div class="title">${title}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>${side ? `<span class="side">${side}</span>` : ""}</div>`;
+    const phone = (body, variant = "current") => `<div class="phone"><div class="phone-ui ${variant}">${statusbar}${body}</div></div>`;
+    const session = (state, project, agent, need, lit = false, trail = false) => `<div class="session-card ${lit ? "lit" : ""}">${trail ? '<span class="card-trail"></span>' : ''}<div class="line1"><span class="dot ${state}"></span><span class="project">${project}</span><span class="agent">${agent}</span></div><div class="need">${need}</div>${state === "work" ? '<div class="workbar"></div>' : ''}</div>`;
+    const row = (title, copy, end = "") => `<div class="row"><div class="row-copy"><b>${title}</b><small>${copy}</small></div>${end}</div>`;
+
+    const screens = [
+      {
+        id: "welcome", title: "Welcome", label: "Onboarding / pair-only",
+        rationale: "The first screen should explain the emotional promise before the setup verb.",
+        changes: ["Lead with the atmospheric swarm mark, not a generic empty page", "Turn setup into a two-beat story: watch the field, then connect it", "Reserve the primary CTA for the one necessary action"],
+        impl: "Compose from <code>PairOnlyView</code>, <code>EmptyState</code>, and the checked-in atmospheric mark. The Atlas layer belongs only here and in true empty states.",
+        render(variant) {
+          if (variant === "current") return phone(`<div class="welcome"><h4>Pair this phone</h4><p>Sessions, machines and activity all come from the machine this phone is paired with.</p><span class="button">Pair a computer</span></div>`);
+          const titles = {signal:"Your agents. One steady view.", atlas:"A quiet view over every agent.", constellation:"Bring your agent field with you."};
+          const copies = {signal:"Watch every session, answer when one needs you, and keep the work moving from anywhere.", atlas:"Your computer keeps the agents alive. This phone gives you one calm place to see the whole field.", constellation:"Connect one machine now. Every active session will appear as a live signal in your field."};
+          return phone(`<div class="welcome"><div class="welcome-field"></div><h4>${titles[variant]}</h4><p>${copies[variant]}</p><span class="button">Connect your computer</span><span class="aside">private · self-hosted · end-to-end encrypted</span></div>`, variant);
+        }
+      },
+      {
+        id: "scan", title: "Pair", label: "QR scanner",
+        rationale: "Pairing is the first live system moment. It should feel like acquiring a signal, not filling a setup form.",
+        changes: ["Make the camera field the hero and keep instructions around—not over—it", "Use a single live scan beam with a reduced-motion fallback", "Keep the manual code route visible without matching the primary action"],
+        impl: "Extend <code>ScanReticle</code> with the existing hero/work colors. Preserve the current scanner safety boundary: the overlay remains non-interactive.",
+        render(variant) {
+          const body = `${nav("Pair a computer","",true)}<div class="app-content"><div class="reticle"><span class="scan-beam"></span></div><div style="text-align:center;color:var(--ink2);font-size:10px;padding:0 26px 8px">Point at the code shown by <b style="color:var(--ink)">swarm remote pair</b></div><div style="text-align:center"><span class="pill">Enter code instead</span></div><div class="pair-steps"><div class="step"><i>01</i><span>Run the pairing command on your computer.</span></div><div class="step"><i>02</i><span>Hold this field over its QR code.</span></div></div></div>`;
+          if (variant === "current") return phone(`${nav("Pair a computer","",true)}<div class="app-content"><div class="section-label">On your computer</div><div class="pair-steps"><div class="step"><i>1</i><span>Run</span></div><div class="well">swarm remote pair</div><div class="step"><i>2</i><span>Scan the QR code below.</span></div></div><div class="reticle"></div><div style="margin:0 16px"><span class="button">Scan QR code</span><span class="button ghost" style="margin-top:6px">Enter code instead</span></div></div>`);
+          return phone(body, variant);
+        }
+      },
+      {
+        id: "trust", title: "Trust check", label: "SAS verification",
+        rationale: "Security comparison deserves stillness. Four symbols become four autonomous beacons in one ordered formation.",
+        changes: ["Give the symbols more air and a visible left-to-right path", "Separate ‘match’ from destructive mismatch without weakening either", "Explain the consequence in one short sentence"],
+        impl: "Restyle <code>PairingStepRow</code> and the current SAS tiles; do not change compare-only semantics or author a typeable fallback.",
+        render(variant) {
+          const line = variant === "signal" ? 'style="height:1px;background:linear-gradient(90deg,transparent,var(--hero),transparent);margin:-33px 44px 32px"' : 'style="height:1px;background:var(--hair);margin:-33px 44px 32px"';
+          const body = `${nav("Confirm your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span></div><div ${line}></div><p style="margin:0 28px 18px;text-align:center;color:var(--ink2);line-height:1.5">Continue only if these appear in the same order on your computer.</p><div style="margin:0 16px"><span class="button">They match</span><span class="button danger" style="margin-top:7px">They don’t match</span></div><div class="notice" style="margin-top:16px">A mismatch means the connection is not yours.</div></div>`;
+          if (variant === "current") return phone(`${nav("Confirm it's your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span></div><p style="margin:10px 26px;text-align:center;color:var(--ink2)">Your computer shows four symbols. Continue only if they match these, in this order.</p><div style="display:flex;gap:7px;margin:18px 16px"><span class="button" style="flex:1">They match</span><span class="button ghost" style="flex:1">They don't</span></div></div>`);
+          return phone(body, variant);
+        }
+      },
+      {
+        id: "inbox", title: "Inbox", label: "Triage inbox",
+        rationale: "This is swarm’s defining screen: many independent sessions resolving into one calm priority field.",
+        changes: ["Turn each section into a continuous state trajectory", "Make ‘Needs you’ the one luminous ridge; keep working and review quieter", "Let machine scope feel like choosing a field, not toggling filters"],
+        impl: "Evolve <code>SessionRow</code>, <code>SectionLabel</code>, and <code>FilterChip</code>. Keep the exact Group order and semantic token mapping already gated.",
+        render(variant) {
+          const content = `${nav("Inbox","2 need you")}<div class="scope-row"><span class="scope active">All machines</span><span class="scope"><i class="dot ok"></i>nathan-mbp</span></div><div class="app-content"><div class="scroll"><div class="section-label">Needs you</div>${session("att","swarm","codex","Allow: git push origin main · 2m",true,true)}${session("att","dark-research","claude","Question about the data source · 8m",true,true)}<div class="section-label">Working</div>${session("work","learning-agent","codex","Training loop · 41m",false,true)}<div class="section-label">Ready for review</div>${session("ok","portfolio","claude","4 files changed · 12m",false,true)}</div></div>${tabs("Inbox")}`;
+          if (variant === "current") return phone(`${nav("Inbox","2 need you")}<div class="scope-row"><span class="scope active">All machines</span><span class="scope"><i class="dot ok"></i>nathan-mbp</span></div><div class="app-content"><div class="scroll"><div class="section-label">Needs you</div>${session("att","swarm","codex","Allow: git push origin main · 2m",true)}${session("att","dark-research","claude","Question about the data source · 8m",true)}<div class="section-label">Working</div>${session("work","learning-agent","codex","Training loop · 41m")}</div></div>${tabs("Inbox")}`);
+          return phone(content, variant);
+        }
+      },
+      {
+        id: "chat", title: "Conversation", label: "Structured chat",
+        rationale: "A conversation should feel like one unbroken session trajectory, with tools and decisions as events along it.",
+        changes: ["Use a faint continuity rail through agent-side events", "Quiet tool cards so the agent’s actual words regain primacy", "Make working status part of the tail, never a floating dashboard widget"],
+        impl: "Build on <code>ConversationHeader</code>, <code>TranscriptView</code>, <code>ToolCard</code>, and <code>Composer</code>. The rail is presentation-only; transcript order remains authoritative.",
+        render(variant) {
+          const body = `${nav("codex-swarm-relay","⋮",true,'<i class="dot work"></i>Working · nathan-mbp')}<div class="app-content"><div class="message-list" style="${variant === "signal" ? 'border-left:1px solid rgba(142,180,230,.16);margin-left:18px;padding-left:12px' : ''}"><div class="message me">check the relay logs too</div><div class="tool-line"><span class="glyph">$</span><span><b>Running</b> · tail -n 200 relay.log</span><span style="margin-left:auto">›</span></div><div class="message">Found a reconnect storm at 03:14. I’m tracing which side closes the stream first.</div><div class="tool-line"><span class="glyph">E</span><span><b>Modified</b> · relay/client.go</span><span style="margin-left:auto;color:var(--ok)">+12</span></div><div class="working-line"><span class="spin"></span>Working <span style="margin-left:auto;color:var(--ink3);font-family:var(--mono)">1m 12s</span></div></div></div><div class="composer"><div class="composer-bar"><span>Add a note while it works</span><i class="send stop">■</i></div></div>`;
+          if (variant === "current") return phone(`${nav("codex-swarm-relay","⋮",true,'<i class="dot work"></i>Working · nathan-mbp')}<div class="app-content"><div class="message-list"><div class="message me">check the relay logs too</div><div class="tool-line"><span class="glyph">$</span><span><b>Running</b> · tail -n 200 relay.log</span><span style="margin-left:auto">›</span></div><div class="message">Found a reconnect storm at 03:14. I’m tracing which side closes the stream first.</div><div class="working-line"><span class="spin"></span>Working <span style="margin-left:auto;color:var(--ink3);font-family:var(--mono)">1m 12s</span></div></div></div><div class="composer"><div class="composer-bar"><span>Add a note while it works</span><i class="send stop">■</i></div></div>`);
+          return phone(body, variant);
+        }
+      },
+      {
+        id: "decision", title: "Decision", label: "Approval / question",
+        rationale: "The moment an agent needs the user should feel like one beacon arriving—not a generic modal interrupting the app.",
+        changes: ["Keep the question in transcript context whenever possible", "Use one arrival trail and one lit material, then settle it into history", "Keep CLI-authored options and their order untouched"],
+        impl: "Refine <code>ApprovalSheet</code> and <code>DecisionPill</code>; prefer the existing inline <code>ApprovalItem</code> path. Never infer or rename a verdict.",
+        render(variant) {
+          const card = `<div class="decision-card"><div class="context">codex-swarm-relay · nathan-mbp</div><h5>Run this command?</h5><div class="well">rm -rf ~/.swarm-relay/relay.db</div><span class="choice primary">Yes</span><span class="choice">Yes, and don’t ask again this session</span><span class="choice">No, and tell Codex what to do differently</span><div class="foot">asked 09:44</div></div>`;
+          if (variant === "current") return phone(`${nav("Inbox","2 need you")}<div class="app-content">${session("att","swarm","codex","Allow: remove stale relay database",true)}<div style="position:absolute;inset:0;background:rgba(8,10,16,.58)"></div><div style="position:absolute;left:8px;right:8px;bottom:8px">${card}</div></div>`);
+          return phone(`${nav("codex-swarm-relay","⋮",true,'<i class="dot att"></i>Needs you · nathan-mbp')}<div class="app-content"><div class="message-list" style="${variant === "signal" ? 'border-left:1px solid rgba(142,180,230,.18);margin-left:18px;padding-left:12px' : ''}"><div class="message">The stale relay database blocks the migration.</div>${card}</div></div><div class="composer"><div class="composer-bar" style="opacity:.58"><span>Waiting for your answer</span><i class="send">↑</i></div></div>`, variant);
+        }
+      },
+      {
+        id: "launch", title: "New session", label: "Launch flow",
+        rationale: "Launching is not a blank form; it is placing a new autonomous light into an existing field.",
+        changes: ["Start with a named preset for common work, then allow deliberate editing", "Show the target machine as context above the fields", "Preview where the new session will appear"],
+        impl: "Compose <code>LaunchPresetView</code> and <code>LaunchPanelView</code> into one progressive flow. No new launch verb or widened permission surface.",
+        render(variant) {
+          const target = variant === "constellation" ? `<div class="machine-hero"><div class="orbit"></div><h5>nathan-mbp</h5><p>online · 6 sessions</p></div>` : `<div class="notice"><i class="dot ok"></i>Launching on nathan-mbp · online</div>`;
+          const form = `<div class="form"><div class="presets"><span class="preset active">Continue work</span><span class="preset">New task</span><span class="preset">Review</span></div><div class="field"><label>Agent</label><div class="field-box">codex</div></div><div class="field focus"><label>Directory</label><div class="field-box">~/Code/swarm</div></div><div class="field"><label>Prompt</label><div class="field-box" style="color:var(--ink3)">What should it do first?</div></div><span class="button">Launch session</span></div>`;
+          if (variant === "current") return phone(`${nav("New session","",true)}<div class="app-content">${form}</div>`);
+          return phone(`${nav("New session","",true)}<div class="app-content">${target}${form}<p style="margin:8px 28px;text-align:center;color:var(--ink3);font-size:8px">A new signal will appear in Working when the machine confirms.</p></div>`, variant);
+        }
+      },
+      {
+        id: "activity", title: "Activity", label: "Audit trail",
+        rationale: "Activity is already a timeline. The redesign makes that continuity visible without turning it into a decorative network diagram.",
+        changes: ["Use one quiet vertical trajectory per day", "Let action words and actors carry hierarchy instead of more cards", "Make stale state a break in the trail, not a competing block"],
+        impl: "Extend <code>ActivityRow</code> and <code>ActivityPanelView</code>. Events keep their current order and copy; the visual rail has no semantic authority.",
+        render(variant) {
+          const rail = variant === "signal" ? 'style="border-left:1px solid rgba(142,180,230,.18);margin-left:24px"' : '';
+          const content = `${nav("Activity")}<div class="app-content"><div class="section-label">Today</div><div ${rail}><div class="activity-row"><time>14:02</time><p><b>swarm · codex</b> asked to push main</p></div><div class="activity-row"><time>13:21</time><p>You approved <b>go test</b> for swarm</p></div><div class="activity-row"><time>11:48</time><p><b>portfolio · claude</b> finished · 4 files changed</p></div></div><div class="section-label">Yesterday</div><div ${rail}><div class="activity-row"><time>18:04</time><p>You stopped <b>docs-personal · codex</b></p></div><div class="activity-row"><time>17:30</time><p>This phone paired with <b>nathan-mbp</b></p></div></div></div>${tabs("Activity",false)}`;
+          return phone(content, variant === "current" ? "current" : variant);
+        }
+      },
+      {
+        id: "settings", title: "Settings", label: "Options / preferences",
+        rationale: "Options should feel like tuning the field, not entering a control panel. Group by consequence and show system health before toggles.",
+        changes: ["Promote connection health into a concise header object", "Use fewer separators and stronger section spacing", "Keep destructive actions isolated at the visual horizon"],
+        impl: "Refactor composition around <code>SettingsPanelView</code>, <code>SettingsRow</code>, and <code>Toggle</code>. Reuse existing settings models and refusal behavior unchanged.",
+        render(variant) {
+          const body = `${nav("Settings")}<div class="app-content"><div class="scroll">${variant === "current" ? '' : '<div class="notice"><i class="dot ok"></i>nathan-mbp · connected · all updates current</div>'}<div class="section-label">Notifications</div>${row("Needs-you alerts","When a session waits on you",'<i class="toggle on"></i>')}${row("Finished sessions","When work is ready or ends",'<i class="toggle"></i>')}<div class="section-label">Connection</div>${row("nathan-mbp","online · self-hosted relay",'<span style="color:var(--ink3)">›</span>')}<div class="section-label">This phone</div>${row("Pair another computer","Add another field",'<span style="color:var(--hero)">+</span>')}${row('<span style="color:var(--err)">Revoke this device</span>',"Destroys keys on this phone",'<span style="color:var(--ink3)">›</span>')}</div></div>${tabs("Settings",false)}`;
+          return phone(body, variant === "current" ? "current" : variant);
+        }
+      },
+      {
+        id: "machines", title: "Connections", label: "Machines / global scope",
+        rationale: "Multiple machines are the clearest place for the constellation metaphor: several independent fields, each with honest reachability.",
+        changes: ["Represent each machine as a field with session count and freshness", "Keep online, offline, and unknown distinct in both words and marks", "Offer global sessions as an outcome, not a fourth primary tab"],
+        impl: "Use <code>MachinesPanelView</code>, <code>PairedMachineRow</code>, and <code>GlobalInboxView</code>. The constellation is derived only from existing roster counts.",
+        render(variant) {
+          const body = `${nav("Connections","",true)}<div class="app-content">${variant === "constellation" ? '<div class="machine-hero"><div class="orbit"></div><h5>2 connected fields</h5><p>9 sessions · 3 need you</p></div>' : ''}<div class="section-label">Machines</div>${row('<i class="dot ok"></i>nathan-mbp','online · 6 sessions · current','<span style="color:var(--ink3)">›</span>')}${row('<i class="dot"></i>studio','offline · last seen 2d ago','<span style="color:var(--ink3)">›</span>')}<div style="margin:14px 16px"><span class="button ghost">View all sessions</span><span class="button" style="margin-top:7px">Pair another computer</span></div></div>`;
+          if (variant === "current") return phone(`${nav("Connections","",true)}<div class="app-content"><div class="section-label">Machines</div>${row('<i class="dot ok"></i>nathan-mbp','online · 6 sessions','<span>›</span>')}${row('<i class="dot"></i>studio','offline · last seen 2d ago','<span>›</span>')}<div style="margin:14px 16px"><span class="button ghost">All sessions</span><span class="button" style="margin-top:7px">Add computer</span></div></div>`);
+          return phone(body, variant);
+        }
+      },
+      {
+        id: "files", title: "Output & diff", label: "Files / command output",
+        rationale: "Machine output should feel like entering a precise instrument panel inside the same world—not like falling back into a miniature terminal.",
+        changes: ["Use the trail only in the header, then maximize readable mono space", "Separate file identity, counts, and content in a stable order", "Keep semantic red/green inside the diff where those directions are literal"],
+        impl: "Restyle <code>OutputScreen</code> and <code>DiffScreen</code>; preserve horizontal scrolling, exact bytes, and the current middle-ellipsis path behavior.",
+        render(variant) {
+          const body = `${nav("Composer.kt","+12 −4",true)}<div class="app-content"><div class="diff"><div class="diff-head">ui/kit/Composer.kt</div><div class="diff-body"><span class="del">-  action = STOP</span>\n<span class="add">+  action = field.resolve()</span>\n   onPress {\n<span class="add">+    signal.arrive()</span>\n   }</div></div><div class="notice">Modified by codex-swarm-relay · 09:44</div><div style="margin:10px 14px"><span class="button ghost">Open full output</span></div></div>`;
+          return phone(body, variant === "current" ? "current" : variant);
+        }
+      },
+      {
+        id: "reliability", title: "System state", label: "Offline / repair / empty",
+        rationale: "When the system tears, the swarm metaphor should clarify exactly which signal was lost and what remains safe.",
+        changes: ["Show a broken trajectory instead of a generic warning stack", "State what remains visible before asking for recovery", "Use red only for failure; quiet blue remains attention, not alarm"],
+        impl: "Compose existing <code>SyncStatusView</code>, <code>Notice</code>, and <code>EmptyState</code>. The illustration is a deterministic native shape, not a generated image dependency.",
+        render(variant) {
+          if (variant === "current") return phone(`${nav("Inbox","Offline")}<div class="sync-strip">Not connected. Some updates may be missing.</div><div class="app-content"><div class="notice error">Showing cached sessions · reconnecting</div>${session("att","swarm","codex","Waiting on you · cached",true)}<div class="notice">Messages are never held. Reconnect to send.</div></div>${tabs("Inbox")}`);
+          return phone(`${nav("Connection lost","",true)}<div class="app-content"><div class="system-state"><div class="system-orbit"></div><h5>Your view is paused.</h5><p>Cached sessions are still here. Nothing you type will be held or sent later.</p><span class="button ghost">Connection details</span><span class="pill" style="margin:10px auto 0"><i class="dot work"></i>Reconnecting</span></div></div>`, variant);
+        }
+      }
+    ];
+
+    const variants = {
+      signal: { label: "Signal Field", suffix: "Trajectories turn hierarchy and continuity into the brand’s signature." },
+      atlas: { label: "Night Atlas", suffix: "Layered atmospheric depth makes the destination feel like a place." },
+      constellation: { label: "Constellation", suffix: "Spatial fields make coordinated actors and scope tangible." }
+    };
+    let activeScreen = 0;
+    let activeVariant = "signal";
+
+    const rail = document.getElementById("screenRail");
+    screens.forEach((screen, index) => {
+      const button = document.createElement("button");
+      button.className = "screen-button";
+      button.type = "button";
+      button.role = "tab";
+      button.innerHTML = `<span class="idx">${String(index + 1).padStart(2,"0")}</span><span>${screen.label}</span><span class="count">A/B/C</span>`;
+      button.addEventListener("click", () => { activeScreen = index; draw(); });
+      rail.appendChild(button);
+    });
+    document.querySelectorAll(".variant-tab").forEach(button => button.addEventListener("click", () => {
+      activeVariant = button.dataset.variant;
+      draw();
+    }));
+
+    function draw() {
+      const screen = screens[activeScreen];
+      document.querySelectorAll(".screen-button").forEach((button, index) => button.setAttribute("aria-selected", String(index === activeScreen)));
+      document.querySelectorAll(".variant-tab").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.variant === activeVariant)));
+      document.getElementById("frameEyebrow").textContent = `Frame ${String(activeScreen + 1).padStart(2,"0")} / ${screens.length}`;
+      document.getElementById("frameTitle").textContent = screen.title;
+      document.getElementById("afterLabel").textContent = `After · ${variants[activeVariant].label}`;
+      document.getElementById("beforePhone").innerHTML = screen.render("current");
+      document.getElementById("afterPhone").innerHTML = screen.render(activeVariant);
+      document.getElementById("rationaleTitle").textContent = screen.rationale;
+      document.getElementById("rationaleCopy").textContent = variants[activeVariant].suffix;
+      document.getElementById("changeList").innerHTML = screen.changes.map((change, i) => `<div class="change"><i>${i + 1}</i><span>${change}</span></div>`).join("");
+      document.getElementById("implementationCopy").innerHTML = screen.impl;
+    }
+    draw();
+  </script>
+</body>
+</html>
