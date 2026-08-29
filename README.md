@@ -14,6 +14,7 @@
   <a href="https://github.com/Nathandela/swarm/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Nathandela/swarm?color=8eb4e6"></a>
   <a href="https://go.dev/"><img alt="Go 1.25 or newer" src="https://img.shields.io/badge/Go-1.25+-6fc3bc?logo=go&amp;logoColor=white"></a>
   <img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-66718a">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8eb4e6"></a>
 </p>
 
 swarm brings Claude Code, Codex, and other coding-agent CLIs into one Agent View-style terminal dashboard. Sessions sort themselves by what they need from you and run under durable per-session supervisors, so closing the wrong tab no longer kills the work.
@@ -200,3 +201,7 @@ golangci-lint run
 ```
 
 All gates must pass before a feature closes. Contributions follow the TDD, evidence, and ADR conventions in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md).
+
+## License
+
+swarm is licensed under the [MIT License](LICENSE). Bundled third-party components and assets remain subject to their respective license notices.
