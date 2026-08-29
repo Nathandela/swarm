@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.kit
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.TypedValue
@@ -112,12 +113,50 @@ class ScanReticleTest {
                     "rectangle -- a border rather than an aiming mark"
             }
         }
-        if (hasInk(painted, RectF(frame.centerX() - arm, frame.centerY() - arm, frame.centerX() + arm, frame.centerY() + arm))) {
-            faults += "the middle of the frame is painted, so the reticle covers the code it frames"
+        if (hasInk(painted, RectF(frame.centerX() - arm, frame.centerY() - arm, frame.centerX() + arm, frame.centerY() - specStroke()))) {
+            faults += "the open centre contains bracket ink away from the Signal Field path"
         }
 
         assertEquals(faults.joinToString("\n"), emptyList<String>(), faults)
     }
+
+    @Test
+    fun `the static scan path uses work ink and fades before the brackets`() {
+        val drawable = scanReticle(context)
+        assertEquals(KitOrigin.token("--p-work"), drawable.spec.beamInk)
+        assertEquals(Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(), drawable.spec.beamStrokePx)
+        assertEquals(dimen("swarm_space_24"), drawable.spec.beamInsetPx)
+        assertEquals(0, Color.alpha(drawable.beamClearInk))
+        assertEquals(Color.red(drawable.spec.beamInk), Color.red(drawable.beamClearInk))
+        assertEquals(Color.green(drawable.spec.beamInk), Color.green(drawable.beamClearInk))
+        assertEquals(Color.blue(drawable.spec.beamInk), Color.blue(drawable.beamClearInk))
+
+        val box = (dp(KitMetrics.RETICLE_FRAME_DP) * 2f).toInt()
+        val painted = paint(box)
+        val y = box / 2
+        val centre = painted.getPixel(box / 2, y)
+        val start = frameIn(box).left + drawable.spec.beamInsetPx
+        val end = frameIn(box).right - drawable.spec.beamInsetPx
+        val nearEdge = painted.getPixel((start + (end - start) * 0.1f).toInt(), y)
+        val outside = painted.getPixel((start - dp(2f)).toInt(), y)
+
+        val channelFaults = listOf(
+            Color.red(drawable.spec.beamInk) to Color.red(centre),
+            Color.green(drawable.spec.beamInk) to Color.green(centre),
+            Color.blue(drawable.spec.beamInk) to Color.blue(centre),
+        ).count { (expected, actual) ->
+            kotlin.math.abs(expected - actual) > 1
+        }
+        assertEquals("the scanner's field line is not work teal at its centre", 0, channelFaults)
+        assertTrue("the scanner's field line is not visible over the camera", centre ushr 24 > 0)
+        assertTrue(
+            "the field line is solid rather than fading before the brackets",
+            nearEdge ushr 24 in 1 until (centre ushr 24),
+        )
+        assertEquals("the field line reaches outside its stated inset", 0, outside ushr 24)
+    }
+
+    private fun specStroke(): Float = scanReticle(context).spec.beamStrokePx * 2f
 
     /**
      * The row's "clamped to the preview when the preview is the smaller of the two".

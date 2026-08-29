@@ -822,7 +822,6 @@ class ScreenAirSweepTest {
                 body = notice(context, "Point the camera at the code on your machine."),
                 notice = notice(context, ""),
                 destination = notice(context, ""),
-                sas = notice(context, ""),
                 sasInstruction = notice(context, ""),
                 scanner = View(context),
                 scanProgress = notice(context, ""),

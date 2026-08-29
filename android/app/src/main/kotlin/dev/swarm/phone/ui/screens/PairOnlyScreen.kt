@@ -71,6 +71,8 @@ data class PairOnlyCopy(
     val cta: String,
     /** The command the body points at, drawn in a well under it, or "" (phone refit W5.1). */
     val command: String = "",
+    /** True only for the emotional first-run promise; recovery keeps its factual composition. */
+    val signalField: Boolean = false,
 )
 
 /**
@@ -94,32 +96,33 @@ data class RevokeNotice(
  *
  * ## What the words are for
  *
- * Three sentences, because there are three things this screen has to do: name what is missing,
- * say why the app is otherwise empty, and offer the one action that fixes it. They are HERE and
- * not in the composition for PB-DS-9's reason -- copy belongs to the screen model, so a suite that
- * asserts what is drawn cannot agree with a re-worded copy of itself.
+ * Three sentences, because there are three things this screen has to do: state the first-run
+ * promise, connect that promise to what the app can do, and offer the one action that begins it.
+ * They are HERE and not in the composition for PB-DS-9's reason -- copy belongs to the screen
+ * model, so a suite that asserts what is drawn cannot agree with a re-worded copy of itself.
  *
- * [CTA] IS INVENTORY C7'S OWN NAME FOR THE FLOW IT OPENS ("Pair a computer",
- * [PairingPanelScreen]'s SCAN heading), and that is deliberate rather than a duplication: the
- * button and the screen it leads to say the same thing, which is how a person knows the press
- * worked. [TITLE] says what is being paired instead, so the two are not one sentence twice.
+ * [CTA] is the approved frame 01 onboarding verb. [RECOVERY_CTA] keeps inventory C7's established
+ * name in terminal recovery, where factual continuity matters more than the welcome story.
  */
 object PairOnlyScreen {
 
-    /** What this phone is, stated as the thing it is not yet. */
-    const val TITLE = "Pair this phone"
+    /** The emotional promise frame 01 leads with. */
+    const val TITLE = "Your agents. One steady view."
 
     /**
-     * Why there is nothing else on screen.
-     *
-     * THE SECOND HALF IS THE PART THAT MATTERS. Without it this screen reads as an app that has
-     * lost its contents; with it, an empty window is the honest report that everything the app
-     * shows belongs to a machine this handset has not got.
+     * What that promise means in concrete mobile work: visibility, intervention and continuity.
      */
-    const val BODY = "Your sessions come from the computer you pair with."
+    const val BODY = "Watch every session, answer when one needs you, and keep the work moving from anywhere."
 
     /** The one thing a person can do here. */
-    const val CTA = "Pair a computer"
+    const val CTA = "Connect your computer"
+
+    /** Recovery retains the established verb because it is resuming a known pairing, not onboarding. */
+    const val RECOVERY_CTA = "Pair a computer"
+
+    /** The pre-Signal-Field pair-only composition, retained when local revoke evidence is present. */
+    const val RECOVERY_TITLE = "Pair this phone"
+    const val RECOVERY_BODY = "Your sessions come from the computer you pair with."
 
     /**
      * The command a user runs on their computer to see whether this device is still registered,
@@ -404,25 +407,37 @@ object PairOnlyScreen {
      * cause explained twice at different heights of detail. FIRST_RUN has no cause of its own, so
      * [BODY] is the only sentence that state gets.
      *
-     * [CTA] IS THE SAME CONTROL IN EVERY ROW. It is inventory C7's own name for the flow it opens,
-     * and the flow is the same flow: the recovery ends with `swarm remote pair` showing a code and
-     * this phone scanning it. See [REPAIR_REQUIRED_CAUSE] for why it is not withheld in the state
-     * that cannot clear itself.
+     * EVERY ROW STILL OFFERS THE SAME CONTROL. First run names it [CTA] in the approved onboarding
+     * voice; the two recovery rows name it [RECOVERY_CTA] so the established pairing verb remains
+     * visible beside recovery commands. The flow is the same flow in all three states. See
+     * [REPAIR_REQUIRED_CAUSE] for why it is not withheld in the state that cannot clear itself.
      */
     fun copyFor(reason: PairOnlyReason): PairOnlyCopy = when (reason) {
-        PairOnlyReason.FIRST_RUN -> PairOnlyCopy(TITLE, BODY, CTA)
+        PairOnlyReason.FIRST_RUN -> PairOnlyCopy(TITLE, BODY, CTA, signalField = true)
 
         PairOnlyReason.REVOKED -> PairOnlyCopy(
             TITLE_REVOKED,
             ConnectionBanner.of(ConnectionState.REVOKED).text,
-            CTA,
+            RECOVERY_CTA,
         )
 
         PairOnlyReason.REPAIR_REQUIRED -> PairOnlyCopy(
             TITLE_REPAIR_REQUIRED,
             REPAIR_REQUIRED_CAUSE,
-            CTA,
+            RECOVERY_CTA,
             command = UNREGISTER_COMMANDS,
         )
     }
+
+    /**
+     * A local revoke can close the core before [reasonFor] reads a terminal transport reason. Its
+     * independently persisted notice is still proof this is not a fresh install, so that path
+     * keeps the factual pair-only composition Signal Field replaced rather than borrowing its
+     * welcome promise.
+     */
+    fun copyForRevokeEvidence(): PairOnlyCopy = PairOnlyCopy(
+        RECOVERY_TITLE,
+        RECOVERY_BODY,
+        RECOVERY_CTA,
+    )
 }

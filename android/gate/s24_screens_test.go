@@ -1114,7 +1114,8 @@ var s24ScreenComponents = map[string]map[string]string{
 	"dev/swarm/phone/ui/screens/PairingPanelView.kt": {
 		// Derivation row 18: the pairing step has no nav header, so its title IS the screen
 		// title, in `Display.NavTitle` -- which is the style `navHeader` renders.
-		"navHeader": "C7 -- the step title, per derivation row 18",
+		"navHeader":   "C7 -- the step title, per derivation row 18",
+		"sasSequence": "mobile direction frame 03 -- six ordered beacons on one static Signal Field path",
 	},
 	// C2 -- the session detail, and IT WAS UNFENCED UNTIL THIS ROW EXISTED. The file had no entry,
 	// so `s24ScreenComponents[name]` returned an empty requirement and the loop above found nothing
@@ -1340,10 +1341,11 @@ var s24ScreenComponents = map[string]map[string]string{
 		"monoWell": "R9's routed `diff_excerpt`, drawn byte for byte in the app's one mono block",
 	},
 	"dev/swarm/phone/ui/screens/PairOnlyView.kt": {
-		"navHeader":  "the screen's own title -- there is nothing to drill back to",
-		"ctaButton":  "the one offer: pair this phone with a computer",
-		"emptyState": "derivation row 8 -- the reason this screen is all there is",
-		"notice":     "§4 Notice line -- why a pairing is missing, when the reason is known",
+		"navHeader":       "the screen's own title -- there is nothing to drill back to",
+		"ctaButton":       "the one offer: pair this phone with a computer",
+		"emptyState":      "derivation row 8 -- the reason this screen is all there is",
+		"notice":          "§4 Notice line -- why a pairing is missing, when the reason is known",
+		"signalFieldMark": "mobile direction frame 01 -- first run's atmospheric swarm identity",
 	},
 }
 

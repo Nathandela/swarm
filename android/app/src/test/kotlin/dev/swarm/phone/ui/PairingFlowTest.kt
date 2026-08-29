@@ -275,7 +275,11 @@ class PairingStepTest {
     fun `the SAS screen compares two screens and collects no input`() {
         val sas = SasStep(code = "otter anchor lemon prism cactus violin")
         assertEquals(6, sas.symbols.size)
-        assertTrue(sas.instruction.isNotBlank())
+        assertEquals(
+            "Continue only if these six symbols appear in the same order on your computer. " +
+                "A mismatch means the connection is not yours.",
+            sas.instruction,
+        )
         assertFalse("a typed code moves the comparison off the two screens", sas.acceptsTypedInput)
         assertEquals(setOf(SasAnswer.MATCHES, SasAnswer.DOES_NOT_MATCH), sas.answers)
     }

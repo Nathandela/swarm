@@ -658,6 +658,34 @@ internal object KitMetrics {
      * derived: docs/design/substrate-components.md §4 Scanner reticle { stroke }
      */
     const val RETICLE_STROKE_DP = 2f
+
+    /**
+     * Frame 01's vertical field for the checked-in atmospheric mark.
+     *
+     * derived: docs/design/substrate-components.md §4 Signal field welcome { mark }
+     */
+    const val SIGNAL_FIELD_MARK_DP = 150f
+
+    /**
+     * Frame 01's quiet raster opacity: identity on the ground, not a second content surface.
+     *
+     * derived: docs/design/substrate-components.md §4 Signal field welcome { alpha }
+     */
+    const val SIGNAL_FIELD_MARK_ALPHA = 0.72f
+
+    /**
+     * Frame 03's beacon height. Width shares the available row so all six protocol symbols fit.
+     *
+     * derived: docs/design/substrate-components.md #7 SAS display { beacon }
+     */
+    const val SAS_BEACON_DP = 48f
+
+    /**
+     * Six peers carry equal visual weight because the security comparison is ordered, not ranked.
+     *
+     * derived: docs/design/substrate-components.md #7 SAS display { weight }
+     */
+    const val SIGNAL_FIELD_EQUAL_WEIGHT = 1f
 }
 
 /**

@@ -2,9 +2,11 @@ package dev.swarm.phone
 
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import dev.swarm.phone.PhoneScreenDriver.awaitDescribedPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitScreen
 import dev.swarm.phone.PhoneScreenDriver.press
+import dev.swarm.phone.PhoneScreenDriver.pressDescribed
 import dev.swarm.phone.PhoneScreenDriver.selectSession
 import dev.swarm.phone.PhoneScreenDriver.textOnScreen
 import dev.swarm.phone.PhoneScreenDriver.type

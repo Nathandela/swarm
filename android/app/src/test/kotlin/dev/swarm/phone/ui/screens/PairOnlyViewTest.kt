@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
@@ -17,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import kotlin.math.abs
 
 /**
  * FAILING-FIRST (TDD RED, GG-5) for the screen an unpaired phone opens on, AS DRAWN.
@@ -148,6 +150,83 @@ class PairOnlyViewTest {
                 "unpaired phone has does nothing when pressed",
             started,
         )
+    }
+
+    @Test
+    fun `Signal Field belongs to first run and leads the offer`() {
+        val root = pairOnlyView(context, pairing = flow(), started = false, onStartPairing = {})
+        val order = root.flatten().mapNotNull { it.tag as? String }
+
+        assertNotNull("the approved atmospheric swarm mark is absent", root.kitFind(PairOnlyTag.SIGNAL_FIELD))
+        assertTrue(
+            "the atmospheric field does not introduce the welcome story",
+            order.indexOf(PairOnlyTag.SIGNAL_FIELD) < order.indexOf(PairOnlyTag.TITLE),
+        )
+        assertEquals("the mark accidentally became a second control", 1, root.controls().size)
+
+        for (reason in listOf(PairOnlyReason.REVOKED, PairOnlyReason.REPAIR_REQUIRED)) {
+            val recovery = pairOnlyView(
+                context,
+                pairing = flow(),
+                started = false,
+                onStartPairing = {},
+                copy = PairOnlyScreen.copyFor(reason),
+            )
+            assertNull("$reason inherited first-run artwork", recovery.kitFind(PairOnlyTag.SIGNAL_FIELD))
+        }
+
+        val started = pairOnlyView(context, pairing = flow(), started = true, onStartPairing = {})
+        assertNull("the welcome artwork survives over the security flow", started.kitFind(PairOnlyTag.SIGNAL_FIELD))
+    }
+
+    @Test
+    fun `Signal Field centres the welcome while a short handset still scrolls to its action`() {
+        fun laidOut(widthDp: Int, heightDp: Int): ScrollView {
+            val density = context.resources.displayMetrics.density
+            return (pairOnlyView(context, pairing = flow(), started = false, onStartPairing = {}) as ScrollView)
+                .apply {
+                    val width = (widthDp * density).toInt()
+                    val height = (heightDp * density).toInt()
+                    measure(
+                        View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
+                    )
+                    layout(0, 0, width, height)
+                }
+        }
+
+        fun View.topInside(ancestor: View): Int {
+            var result = top
+            var current = parent
+            while (current is View && current !== ancestor) {
+                result += current.top
+                current = current.parent
+            }
+            return result
+        }
+
+        for (width in listOf(360, 400)) {
+            val root = laidOut(width, 800)
+            val mark = root.kitRequire(PairOnlyTag.SIGNAL_FIELD)
+            val cta = root.kitRequire(PairOnlyTag.CTA)
+            val groupMiddle = (mark.topInside(root) + cta.topInside(root) + cta.height) / 2
+            val tolerance = (24 * context.resources.displayMetrics.density).toInt()
+
+            assertTrue(
+                "the $width dp Signal Field welcome is top-heavy instead of centred: " +
+                    "group midpoint=$groupMiddle viewport midpoint=${root.height / 2}",
+                abs(groupMiddle - root.height / 2) <= tolerance,
+            )
+        }
+
+        val short = laidOut(360, 360)
+        assertTrue("the compact welcome no longer fills the viewport", short.isFillViewport)
+        assertTrue(
+            "the short welcome clips instead of becoming scrollable",
+            short.getChildAt(0).measuredHeight > short.measuredHeight,
+        )
+        short.fullScroll(View.FOCUS_DOWN)
+        assertTrue("the pairing action cannot be reached by scrolling", short.scrollY > 0)
     }
 
     // ---- the flow ----------------------------------------------------------

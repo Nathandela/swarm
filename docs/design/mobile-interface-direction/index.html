@@ -849,7 +849,7 @@
       {
         id: "scan", title: "Pair", label: "QR scanner",
         rationale: "Pairing is the first live system moment. It should feel like acquiring a signal, not filling a setup form.",
-        changes: ["Make the camera field the hero and keep instructions around—not over—it", "Use a single live scan beam with a reduced-motion fallback", "Keep the manual code route visible without matching the primary action"],
+        changes: ["Make the camera field the hero and keep instructions around—not over—it", "Use one static work-teal trajectory inside the live field", "Keep the manual code route visible without matching the primary action"],
         impl: "Extend <code>ScanReticle</code> with the existing hero/work colors. Preserve the current scanner safety boundary: the overlay remains non-interactive.",
         render(variant) {
           const body = `${nav("Pair a computer","",true)}<div class="app-content"><div class="reticle"><span class="scan-beam"></span></div><div style="text-align:center;color:var(--ink2);font-size:10px;padding:0 26px 8px">Point at the code shown by <b style="color:var(--ink)">swarm remote pair</b></div><div style="text-align:center"><span class="pill">Enter code instead</span></div><div class="pair-steps"><div class="step"><i>01</i><span>Run the pairing command on your computer.</span></div><div class="step"><i>02</i><span>Hold this field over its QR code.</span></div></div></div>`;
@@ -859,13 +859,13 @@
       },
       {
         id: "trust", title: "Trust check", label: "SAS verification",
-        rationale: "Security comparison deserves stillness. Four symbols become four autonomous beacons in one ordered formation.",
+        rationale: "Security comparison deserves stillness. Six protocol symbols become six autonomous beacons in one ordered formation.",
         changes: ["Give the symbols more air and a visible left-to-right path", "Separate ‘match’ from destructive mismatch without weakening either", "Explain the consequence in one short sentence"],
-        impl: "Restyle <code>PairingStepRow</code> and the current SAS tiles; do not change compare-only semantics or author a typeable fallback.",
+        impl: "Render the protocol’s six symbols through a native <code>sasSequence</code>; do not change compare-only semantics or author a typeable fallback.",
         render(variant) {
           const line = variant === "signal" ? 'style="height:1px;background:linear-gradient(90deg,transparent,var(--hero),transparent);margin:-33px 44px 32px"' : 'style="height:1px;background:var(--hair);margin:-33px 44px 32px"';
-          const body = `${nav("Confirm your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span></div><div ${line}></div><p style="margin:0 28px 18px;text-align:center;color:var(--ink2);line-height:1.5">Continue only if these appear in the same order on your computer.</p><div style="margin:0 16px"><span class="button">They match</span><span class="button danger" style="margin-top:7px">They don’t match</span></div><div class="notice" style="margin-top:16px">A mismatch means the connection is not yours.</div></div>`;
-          if (variant === "current") return phone(`${nav("Confirm it's your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span></div><p style="margin:10px 26px;text-align:center;color:var(--ink2)">Your computer shows four symbols. Continue only if they match these, in this order.</p><div style="display:flex;gap:7px;margin:18px 16px"><span class="button" style="flex:1">They match</span><span class="button ghost" style="flex:1">They don't</span></div></div>`);
+          const body = `${nav("Confirm your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span><span class="sas">✦</span><span class="sas">⬟</span></div><div ${line}></div><p style="margin:0 28px 18px;text-align:center;color:var(--ink2);line-height:1.5">Continue only if these six symbols appear in the same order on your computer.</p><div style="margin:0 16px"><span class="button">They match</span><span class="button danger" style="margin-top:7px">They don’t match</span></div><div class="notice" style="margin-top:16px">A mismatch means the connection is not yours.</div></div>`;
+          if (variant === "current") return phone(`${nav("Confirm it's your computer","",true)}<div class="app-content"><div class="sas-row"><span class="sas">◆</span><span class="sas">●</span><span class="sas">▲</span><span class="sas">■</span><span class="sas">✦</span><span class="sas">⬟</span></div><p style="margin:10px 26px;text-align:center;color:var(--ink2)">Your computer shows six symbols. Continue only if they match these, in this order.</p><div style="display:flex;gap:7px;margin:18px 16px"><span class="button" style="flex:1">They match</span><span class="button ghost" style="flex:1">They don't</span></div></div>`);
           return phone(body, variant);
         }
       },

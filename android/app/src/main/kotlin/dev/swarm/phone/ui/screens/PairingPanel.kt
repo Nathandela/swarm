@@ -25,7 +25,7 @@ import dev.swarm.phone.ui.ScannerState
  *
  * ## The heading, and the twelve steps the artifact never drew
  *
- * Inventory C7 draws three steps and gives each a heading: `Pair a computer`, `Check both
+ * Inventory C7 draws three steps and gives each a heading: `Pair a computer`, `Confirm your
  * screens`, `Paired with nathans-mbp`. [PairingStep] has fifteen values. The twelve without a
  * recorded heading get NULL rather than an invented one, and that is a deliberate boundary: the
  * missing twelve are the handshake, the wait, and ten refusals, and every one of them already has
@@ -181,7 +181,7 @@ object PairingPanelScreen {
     private const val SCAN_TITLE = "Pair a computer"
 
     /** Inventory C7 step 1. */
-    private const val COMPARE_TITLE = "Check both screens"
+    private const val COMPARE_TITLE = "Confirm your computer"
 
     /** Inventory C7 step 2, whose recorded form names the machine. */
     private const val PAIRED_TITLE = "Paired"
@@ -390,7 +390,10 @@ object PairingPanelScreen {
             // only `requestPermissions(CAMERA)` is that control's listener, so nothing could ever
             // ask for it. A fresh install resolves to PERMISSION_DENIED and got a paste field and
             // no camera, for the life of the install (agents-tracker-qx9m).
-            if (PairingFlow.offersScanner(scanner)) controls += PairingControl.SCAN
+            // Once the pipeline is live, the viewfinder itself is the primary action's result.
+            // Keeping "Scan QR code" below it would offer the action that has already happened;
+            // if the camera stops, cameraLive becomes false and the retry returns on the next draw.
+            if (PairingFlow.offersScanner(scanner) && !cameraLive) controls += PairingControl.SCAN
             if (PairingFlow.offersManualEntry(scanner)) {
                 // OPEN WHERE IT IS THE WHOLE SCREEN, BEHIND A CONTROL WHERE IT IS THE FALLBACK,
                 // AND THE ASYMMETRY IS THE DECISION. A permanent denial withdraws the scanner for

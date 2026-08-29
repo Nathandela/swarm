@@ -149,7 +149,8 @@ data class SasStep(val code: String) {
     val symbols: List<String> get() = code.trim().split(WHITESPACE)
 
     val instruction: String
-        get() = "Same six on your computer?"
+        get() = "Continue only if these six symbols appear in the same order on your computer. " +
+            "A mismatch means the connection is not yours."
 
     /** Always false, and it is the point of the type. */
     val acceptsTypedInput: Boolean = false

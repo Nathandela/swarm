@@ -4,9 +4,12 @@ import android.util.Log
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.swarm.phone.PhoneScreenDriver.awaitDescribedPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitPressable
 import dev.swarm.phone.PhoneScreenDriver.awaitScreen
+import dev.swarm.phone.PhoneScreenDriver.descriptionOnScreen
 import dev.swarm.phone.PhoneScreenDriver.press
+import dev.swarm.phone.PhoneScreenDriver.pressDescribed
 import dev.swarm.phone.PhoneScreenDriver.selectSession
 import dev.swarm.phone.PhoneScreenDriver.textOnScreen
 import dev.swarm.phone.PhoneScreenDriver.type
@@ -99,10 +102,10 @@ class PbE2E2PairAndTypeTest {
             // `SasStep.instruction`, rendered beside the symbols. That instruction is now the
             // waypoint.
             app.awaitScreen(
-                "Check these six against the ones on your machine's screen.",
+                "Continue only if these six symbols appear in the same order on your computer.",
                 "the handshake never reached the SAS gate, so \"SAS matches\" has no subject",
             )
-            val symbols = sasOnScreen(app.textOnScreen())
+            val symbols = sasOnScreen(app.descriptionOnScreen(SAS_DESCRIPTION_PREFIX))
             assertEquals(
                 "PB-SAS-1: the phone displayed ${symbols.size} symbol(s), not six. The " +
                     "comparison is with the machine's own display and both ends derive it from " +
@@ -175,24 +178,25 @@ class PbE2E2PairAndTypeTest {
     }
 
     /**
-     * The six symbols as the screen laid them out. [dev.swarm.phone.ui.SasStep] splits the
-     * core's display string on whitespace and the surface joins it with spaces, so this reverses
-     * exactly that and nothing else -- it does not re-implement the alphabet, which lives in the
-     * shared Go core (internal/remote/crypto/sas.go) and exists in one place on purpose.
+     * The six symbols in the one ordered accessibility sentence [sasSequence] exposes. Reading
+     * that node rather than flattening visible text keeps this physical-device exit test aligned
+     * with the six separate visual beacons while also exercising the TalkBack contract.
+     * This does not re-implement the alphabet, which lives in the shared Go core
+     * (internal/remote/crypto/sas.go) and exists in one place on purpose.
      */
-    private fun sasOnScreen(screen: String): List<String> {
-        val instruction = "Check these six against the ones on your machine's screen."
-        val line = screen.lines()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it != instruction }
-            .lastOrNull { it.split(Regex("\\s+")).size == 6 }
-            ?: return emptyList()
-        return line.split(Regex("\\s+"))
-    }
+    private fun sasOnScreen(description: String): List<String> = description
+        .takeIf { it.startsWith(SAS_DESCRIPTION_PREFIX) }
+        ?.removePrefix(SAS_DESCRIPTION_PREFIX)
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        .orEmpty()
 
     private companion object {
         /** The keyboard's hint, and the marker that a session is on screen at all. */
         const val SESSION_PROMPT = "Type into the session you hold"
+
+        const val SAS_DESCRIPTION_PREFIX = "Verification symbols, in order: "
 
         /**
          * The routed messages that mean the machine refused this phone's input. Matched as text

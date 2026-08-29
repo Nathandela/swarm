@@ -2,10 +2,14 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.LinearGradient
+import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import dev.swarm.phone.R
 
@@ -24,6 +28,10 @@ internal data class ScanReticleSpec(
     /** How far one bracket runs from its corner along each of the two edges that meet there. */
     val armPx: Float,
     val radiusPx: Float,
+    /** Frame 02's static acquisition path; status work teal is used because the camera is live. */
+    val beamInk: Int,
+    val beamStrokePx: Float,
+    val beamInsetPx: Float,
 )
 
 /**
@@ -65,6 +73,9 @@ fun scanReticle(context: Context): ScanReticleDrawable = ScanReticleDrawable(
         // Row 6's radius, because this frames row 6's tile. It is a TOKEN with a resource, so it
         // is read rather than carried as a constant -- which is the split KitMetrics exists for.
         radiusPx = Kit.dimen(context, R.dimen.swarm_radius_card),
+        beamInk = Kit.colour(context, R.color.swarm_state_working),
+        beamStrokePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(),
+        beamInsetPx = Kit.dimen(context, R.dimen.swarm_space_24),
     ),
 )
 
@@ -84,16 +95,30 @@ fun scanReticle(context: Context): ScanReticleDrawable = ScanReticleDrawable(
  */
 class ScanReticleDrawable internal constructor(internal val spec: ScanReticleSpec) : Drawable() {
 
+    /** The same work RGB at alpha zero, so the fade does not pass through black. */
+    internal val beamClearInk = Color.argb(
+        0,
+        Color.red(spec.beamInk),
+        Color.green(spec.beamInk),
+        Color.blue(spec.beamInk),
+    )
+
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = spec.ink
         strokeWidth = spec.strokePx
     }
 
+    private val beam = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = spec.beamStrokePx }
+
     /** Reused across draws: this is painted on every frame the camera produces. */
     private val frame = RectF()
+    private var beamStart = 0f
+    private var beamEnd = 0f
+    private var beamY = 0f
 
-    override fun draw(canvas: Canvas) {
+    override fun onBoundsChange(bounds: Rect) {
+        super.onBoundsChange(bounds)
         if (bounds.isEmpty) return
         val half = spec.strokePx / 2f
         // CLAMPED RATHER THAN SCALED. The frame is an absolute size and the preview is the screen's
@@ -107,6 +132,29 @@ class ScanReticleDrawable internal constructor(internal val spec: ScanReticleSpe
             bounds.exactCenterY() + reach,
         )
         frame.inset(half, half)
+
+        beamStart = frame.left + spec.beamInsetPx
+        beamEnd = frame.right - spec.beamInsetPx
+        beamY = bounds.exactCenterY()
+        if (beamStart < beamEnd) {
+            beam.shader = LinearGradient(
+                beamStart,
+                beamY,
+                beamEnd,
+                beamY,
+                intArrayOf(beamClearInk, spec.beamInk, beamClearInk),
+                null,
+                Shader.TileMode.CLAMP,
+            )
+        } else {
+            beam.shader = null
+        }
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (bounds.isEmpty) return
+        val half = spec.strokePx / 2f
+        if (beamStart < beamEnd) canvas.drawLine(beamStart, beamY, beamEnd, beamY, beam)
 
         // AND THE ARM IS CLAMPED WITH IT, so the brackets never meet. Two arms longer than half the
         // side would close the edge between them, which is the one drawing this component must not
@@ -126,7 +174,13 @@ class ScanReticleDrawable internal constructor(internal val spec: ScanReticleSpe
         canvas.restore()
     }
 
-    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
-    override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+        beam.alpha = alpha
+    }
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        paint.colorFilter = colorFilter
+        beam.colorFilter = colorFilter
+    }
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }

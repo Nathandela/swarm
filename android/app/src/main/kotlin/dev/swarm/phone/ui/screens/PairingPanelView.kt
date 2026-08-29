@@ -12,6 +12,7 @@ import dev.swarm.phone.ui.kit.navHeader
 import dev.swarm.phone.ui.kit.pairingStep
 import dev.swarm.phone.ui.kit.readOnlyNote
 import dev.swarm.phone.ui.kit.scrolledHorizontally
+import dev.swarm.phone.ui.kit.sasSequence
 
 /**
  * Phase B slice S24 -- PB-DS-6 and PB-DS-9: the pairing screen, composed in inventory C7's order.
@@ -23,10 +24,9 @@ import dev.swarm.phone.ui.kit.scrolledHorizontally
  * and derivation row 18 says the pairing step's title *is* the screen title in exactly that
  * style, so spending it here is the row's own instruction rather than a reuse of convenience.
  *
- * The other five have no factory. Row 18's mono well, row 7's SAS display, row 10's three CTA
- * variants, row 9's text field and the body/waiting copy are all fills, radii, inks or text
- * appearances, and PB-DS-6 puts every one of those in `ui/kit`. So this file does NOT build them:
- * it takes them, already built, from [PairingSlots].
+ * The remaining pieces are either kit factories or long-lived surface-owned slots. Row 7's SAS
+ * display is now [sasSequence], while row 18's mono well, row 10's three CTA variants, row 9's text
+ * field and the body/waiting copy arrive already built from [PairingSlots].
  *
  * **That is a smaller claim than "the pairing screen is recomposed on the kit", and it is stated
  * here rather than left for a reader to discover.** What has actually moved is the part a screen
@@ -38,14 +38,11 @@ import dev.swarm.phone.ui.kit.scrolledHorizontally
  *
  * ## Why the slots are the surface's and not this file's
  *
- * `PairingSurface` builds them because it must: `SecureWindow.gate` applies PB-SEC-12 clause 1's
- * touch filter at construction, the listeners belong to the surface's own verbs, and the same
- * control has to survive a redraw or `touchFilteredActions` stops naming the views that are
- * actually on screen. The surface may also spend an `R.style` -- PB-DS-11 permits a text
- * appearance outside the screen package, which is how the destination keeps `Mono.Code` and the
- * symbols keep their size while row 18 and row 7 are unbuilt. Moving those views in here would
- * hand them to a fence that forbids `setTextAppearance`, and the screen would render *worse* than
- * the one it replaced. A gap is not an improvement wearing a fence.
+ * `PairingSurface` builds the interactive slots because it must: `SecureWindow.gate` applies
+ * PB-SEC-12 clause 1's touch filter at construction, the listeners belong to the surface's own
+ * verbs, and the same control has to survive a redraw or `touchFilteredActions` stops naming the
+ * views that are actually on screen. The non-interactive SAS sequence is built here from panel
+ * data so its geometry and accessibility stay in the kit and no security verb moves with it.
  */
 object PairingTag {
     /** C7's step title, in `Display.NavTitle` per derivation row 18. */
@@ -98,7 +95,6 @@ class PairingSlots(
     val body: View,
     val notice: View,
     val destination: View,
-    val sas: View,
     val sasInstruction: View,
     val scanner: View,
     /**
@@ -140,8 +136,37 @@ fun pairingPanelView(
         column.addView(navHeader(context, title, null).apply { tag = PairingTag.NAV })
     }
 
-    column.addView(PairingScaffoldLayout.body(slots.body).tagged(PairingTag.BODY))
+    if (panel.body.isNotEmpty() || !panel.showsScanProgress) {
+        column.addView(PairingScaffoldLayout.body(slots.body).tagged(PairingTag.BODY))
+    }
     if (panel.notice.isNotEmpty()) column.addView(slots.notice.tagged(PairingTag.NOTICE))
+    // The long-lived camera becomes frame 02's hero only while it is genuinely live. Before the
+    // user presses Scan it remains GONE and the existing instruction-first composition is kept.
+    if (panel.showsScanProgress) {
+        column.addView(slots.scanner.tagged(PairingTag.SCANNER))
+        column.addView(slots.scanProgress.tagged(PairingTag.SCAN_PROGRESS))
+    }
+    // In frame 02's live state the viewfinder has already replaced the scan action. Keep the one
+    // alternate route directly under that field, before the setup guidance, as Signal Field draws
+    // it. Once revealed, the actual form remains in the normal ordered control stack below.
+    val earlyControls = if (
+        panel.showsScanProgress && PairingControl.REVEAL_TYPED_PAYLOAD in panel.controls
+    ) {
+        setOf(PairingControl.REVEAL_TYPED_PAYLOAD)
+    } else {
+        emptySet()
+    }
+    if (earlyControls.isNotEmpty()) {
+        column.addView(
+            ctaStack(context).apply {
+                addView(
+                    requireNotNull(slots.controls[PairingControl.REVEAL_TYPED_PAYLOAD]) {
+                        "Signal Field's live scanner has no manual-entry control to compose."
+                    }.tagged(PairingTag.control(PairingControl.REVEAL_TYPED_PAYLOAD)),
+                )
+            },
+        )
+    }
     if (panel.steps.isNotEmpty()) column.addView(guidance(context, panel.steps))
     // `emptyState` IS THE SENTENCE COMPONENT HERE, which is the reuse `PairOnlyView` already makes
     // and for its stated reason: row 8's block is body copy centred with generous air, and what it
@@ -156,18 +181,15 @@ fun pairingPanelView(
     // CameraX allocates a provider the moment it exists and this screen is built on every launch
     // -- so whether it is showing is a fact about the camera rather than about the step, and the
     // surface is what holds it.
-    column.addView(slots.scanner.tagged(PairingTag.SCANNER))
+    if (!panel.showsScanProgress) column.addView(slots.scanner.tagged(PairingTag.SCANNER))
     // DIRECTLY UNDER THE PREVIEW, because that is what makes it a caption rather than a number.
     // "N frames analysed, no code found yet" beside the thing the user is aiming reads as "this
     // is looking and not finding"; anywhere else on the screen it reads as an error.
-    if (panel.showsScanProgress) {
-        column.addView(slots.scanProgress.tagged(PairingTag.SCAN_PROGRESS))
-    }
     if (panel.destination.isNotEmpty()) {
         column.addView(slots.destination.tagged(PairingTag.DESTINATION))
     }
     if (panel.sas.isNotEmpty()) {
-        column.addView(slots.sas.tagged(PairingTag.SAS))
+        column.addView(sasSequence(context, panel.sas).tagged(PairingTag.SAS))
         column.addView(slots.sasInstruction.tagged(PairingTag.SAS_INSTRUCTION))
     }
 
@@ -192,7 +214,7 @@ fun pairingPanelView(
         column.addView(it)
     }
 
-    PairingControl.entries.filter { it in panel.controls }.forEach { control ->
+    PairingControl.entries.filter { it in panel.controls && it !in earlyControls }.forEach { control ->
         // THE RELAY SENTENCE IS COMPOSED WITH ITS FIELD AND NOT ABOVE THE STACK. Every other
         // block on this screen belongs to the STEP; this one belongs to one box, and a sentence
         // about a relay address drawn above `Scan QR code` is a sentence about nothing the reader

@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -18,6 +19,7 @@ import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.noticeDetail
 import dev.swarm.phone.ui.kit.screenColumn
+import dev.swarm.phone.ui.kit.signalFieldMark
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on, as drawn.
@@ -47,6 +49,9 @@ import dev.swarm.phone.ui.kit.screenColumn
  * being offered anyway.
  */
 object PairOnlyTag {
+    /** Frame 01's decorative atmospheric swarm, present on true first run only. */
+    const val SIGNAL_FIELD = "pairOnly.signalField"
+
     /** The offer's heading, on the `.pnav .big` cell itself -- see [pairOnlyView]. */
     const val TITLE = "pairOnly.title"
 
@@ -119,6 +124,15 @@ fun pairOnlyView(
     // agents-tracker-nx44.1: row 18's own padding, `space_10` vertical x `space_24` horizontal --
     // `screenColumn` is the kit factory that spends it, on `pairingPanelView`'s column exactly.
     val column = screenColumn(context)
+    val hasRevokeEvidence = revokedNotice.isNotEmpty() ||
+        revokedDetail.isNotEmpty() || revokedCommand.isNotEmpty()
+    val presentedCopy = if (!started && copy.signalField && hasRevokeEvidence) {
+        PairOnlyScreen.copyForRevokeEvidence()
+    } else {
+        copy
+    }
+    val showsSignalField = !started && presentedCopy.signalField && !hasRevokeEvidence
+    if (showsSignalField) column.gravity = Gravity.CENTER_VERTICAL
 
     // DRAWN ONLY WHEN IT HAS SOMETHING TO SAY, which is `sessionDetailView`'s rule for its own
     // three notices: a blank warning line over a phone that has revoked nothing is a warning
@@ -160,8 +174,11 @@ fun pairOnlyView(
             },
         )
     } else {
+        if (showsSignalField) {
+            column.addView(signalFieldMark(context).apply { tag = PairOnlyTag.SIGNAL_FIELD })
+        }
         column.addView(
-            navHeader(context, copy.title, null).apply {
+            navHeader(context, presentedCopy.title, null, centeredTitle = showsSignalField).apply {
                 // THE TAG GOES ON THE TITLE CELL AND NOT ON THE HEADER ROW, which is the one place
                 // this screen differs from every other one's `navHeader`. The others name the row
                 // because they assert its position; here the tag names the SENTENCE, and a tag on
@@ -177,12 +194,18 @@ fun pairOnlyView(
         // at all, which is what the settings CONNECTION section's clock line settles for because
         // it sits inside a
         // populated screen; this sentence is half of the only screen this phone has.
-        column.addView(emptyState(context, copy.body).apply { tag = PairOnlyTag.BODY })
+        column.addView(
+            emptyState(context, presentedCopy.body, compact = showsSignalField).apply { tag = PairOnlyTag.BODY },
+        )
         if (copy.command.isNotEmpty()) {
-            column.addView(monoWell(context, copy.command).apply { tag = PairOnlyTag.COMMAND }.scrolledHorizontally())
+            column.addView(
+                monoWell(context, copy.command)
+                    .apply { tag = PairOnlyTag.COMMAND }
+                    .scrolledHorizontally(),
+            )
         }
         column.addView(
-            ctaButton(context, copy.cta, CtaKind.APPROVE).apply {
+            ctaButton(context, presentedCopy.cta, CtaKind.APPROVE).apply {
                 tag = PairOnlyTag.CTA
                 setOnClickListener { onStartPairing() }
                 // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close
@@ -211,6 +234,7 @@ fun pairOnlyView(
     return ScrollView(context).apply {
         // `scrollbar-width: none`, derivation row 20, spelled as the scaffold spells it.
         isVerticalScrollBarEnabled = false
+        isFillViewport = showsSignalField
         layoutParams = ViewGroup.LayoutParams(MATCH, MATCH)
         addView(column)
     }

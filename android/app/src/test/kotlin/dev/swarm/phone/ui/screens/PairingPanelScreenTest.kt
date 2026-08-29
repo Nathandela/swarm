@@ -73,7 +73,7 @@ class PairingPanelScreenTest {
     @Test
     fun `the three steps the artifact draws carry the artifact's own headings`() {
         assertEquals("Pair a computer", PairingPanelScreen.titleFor(PairingStep.SCAN))
-        assertEquals("Check both screens", PairingPanelScreen.titleFor(PairingStep.COMPARING_CODES))
+        assertEquals("Confirm your computer", PairingPanelScreen.titleFor(PairingStep.COMPARING_CODES))
         assertEquals(
             "nathans-mbp",
             PairingPanelScreen.titleFor(PairingStep.PAIRED, machine = "nathans-mbp"),

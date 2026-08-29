@@ -518,6 +518,24 @@ var s23Inbox = []s23Component{
 			"than restating either.",
 	},
 	{
+		Factory: "signalFieldMark",
+		File:    "SignalField.kt",
+		Derived: "§4 Signal field welcome",
+		Why: "mobile direction frame 01's atmospheric swarm on true first run. It is the same " +
+			"checked-in raster the launcher spends, with no landscape or moon, and is a kit " +
+			"component because its measured field, opacity and accessibility silence are visual " +
+			"decisions a screen may not restate. Recovery states do not call it.",
+	},
+	{
+		Factory: "sasSequence",
+		File:    "SignalField.kt",
+		Derived: "#7 SAS display",
+		Why: "mobile direction frame 03's six ordered beacons and their static path. The protocol " +
+			"still owns the symbols and the surface still owns the answer verbs; this factory owns " +
+			"only card material, equal geometry, the hero trajectory and one ordered accessibility " +
+			"node. Six rather than the concept mock's four preserves PB-SAS-3.",
+	},
+	{
 		Factory: "scanReticle",
 		File:    "ScanReticle.kt",
 		Derived: "§4 Scanner reticle",

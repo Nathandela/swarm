@@ -41,7 +41,6 @@ class PairOnlyPairingInsetTest {
         body = View(context),
         notice = View(context),
         destination = View(context),
-        sas = View(context),
         sasInstruction = View(context),
         scanner = View(context),
         scanProgress = View(context),
