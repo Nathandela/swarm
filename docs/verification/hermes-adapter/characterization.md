@@ -264,8 +264,12 @@ claimed complete by this characterization.
 
 ## What this record does not prove
 
-- No Hermes session was live-characterized on Linux. Linux amd64/arm64 are the
-  release targets and still require CI plus real-binary smoke validation.
+- This pre-implementation record contains no Linux session. Subsequent
+  real-binary acceptance smokes established both targets in the
+  [main evidence](../hermes-adapter-evidence.md): arm64 native to a LinuxKit VM
+  and x86_64 under Docker emulation on Apple Silicon. Those later runs do not
+  turn the three retained PTY fixtures here into Linux captures or prove every
+  Linux distro and packaging environment.
 - No named-profile resume capture was retained.
 - Swarm's one-key TUI resume does not currently recover the source's named
   profile option; this needs a generic persisted resume-option contract rather

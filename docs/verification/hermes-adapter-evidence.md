@@ -347,8 +347,8 @@ specific diagnostic or timing than was retained.
 | T-7 shipped lineup | system spec explicitly names Hermes | established by T-2/T-7 and architecture-diagram update |
 | L-2 detection | production registry and picker accept characterized banner | established by registry/picker RED-green tests |
 | R-2 resume | saved `resume_from` ID composes a new linked session; 0.20.6 returns to recorded Hermes cwd | saved-source composition/linkage and live default-profile restore established |
-| Platform policy | native macOS arm64 smoke; Linux amd64/arm64 build/test and smoke | native arm64 artifact/smoke and all target cross-builds pass; Linux live smoke pending |
-| GG-4 close gates | build, vet, lint, tests, and proportionate race evidence | incomplete: build/vet/lint and Hermes-scoped races pass; repository test baseline is red |
+| Platform policy | native macOS arm64 smoke; Linux amd64/arm64 build/test and smoke | established: LinuxKit-native arm64 and Docker-emulated x86_64 real-Hermes smokes plus all target cross-builds |
+| GG-4 close gates | build, vet, lint, tests, and proportionate race evidence | established by canonical CI `33250012015` and relay `33250012007` for race-fix commit `b1951444ca80f8269af37c068b68fcfaad31dc0b` |
 
 ### T-5 coupling sweep
 
@@ -400,8 +400,9 @@ following rather than infer them from happy-path fixtures:
 - `--worktree` is never emitted;
 - `yolo` is false by default and visibly warns that approvals are bypassed;
 - a native Apple Silicon binary launches Hermes without Rosetta; and
-- Linux support is not marked live-verified until both target arches have
-  real-Hermes smoke evidence; cross-builds alone do not satisfy that gate.
+- both Linux target architectures have recorded real-Hermes smoke evidence,
+  with arm64 native to the LinuxKit VM and x86_64 executed under Docker
+  emulation on Apple Silicon; cross-builds alone would not satisfy this gate.
 
 Review must also preserve the documented identity-rotation limitation: startup
 capture provides a resumable ID, but no v1 test currently proves that Swarm's
@@ -432,32 +433,103 @@ These repository and target-build gates passed:
 | `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...` | pass |
 | `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...` | pass |
 | native `swarm-char` artifact inspection | Mach-O 64-bit arm64 |
-| adapter packages plus `internal/engine` under `go test -race` | pass |
+| `internal/adapter/hermes` under `go test -race` | pass, 2.456 s |
+| `internal/adapter` under `go test -race` | pass, 2.338 s |
+| `internal/engine` under `go test -race` | pass, 35.516 s |
 | Hermes compose/validator/capture skeleton cases, `-race -count=3` | pass |
 | production picker case, `-race -count=3` | pass |
+| race-exposing skeleton E2E group, `-race -count=3` | pass after fix, 43.641 s |
+| full `internal/skeleton` under `go test -race` | pass after fix, 454.737 s |
 
-The concurrency review found that final conversation capture read
-`d.adapterFor` without `itemMu` and locally fell back to `d.registryAdapter`
-instead of using the daemon's synchronized adapter resolver. Root replaced that
-block with `d.resolveAdapter`, which reads the overridable seam through its
-`itemMu` synchronization and keeps production capture and validator tests on
-the same resolution path. The capture race repetition above passed after the
-fix.
+CI run `33248579855` at historical commit `8b151` then exposed a real data race
+that the earlier focused and full-suite race runs at `b233cc7b` had missed.
+Capability authoring in `sessionCapabilityInputs` read `d.adapterFor` while an
+E2E test replaced that resolver concurrently. The production read now goes
+through `d.resolveAdapter`,
+and tests replace the resolver through `setAdapterForTest`, which writes under
+the same `itemMu`; test setups that publish the daemon first were also moved to
+set the resolver before launch where required. The race-exposing E2E repetition
+and full skeleton race run above are green on fix commit
+`b1951444ca80f8269af37c068b68fcfaad31dc0b`.
 
-`go test ./...` is **not green**, so GG-4 is not complete. Its measured failures
-were outside the Hermes change:
+The local macOS full-repository race run was **not green**. Its remaining
+host-baseline failures were:
 
-- Android gate tests read the existing `android/app/libs/swarm.aar`, which is
-  missing four timestamp accessors expected by the current Go/Kotlin surface;
-- one S18 skeleton gateway-stop timing case failed once, then passed in an
-  isolated `-count=3` rerun; and
-- `internal/upgrade` retained two stable pre-existing failures.
+- Android gate tests read a stale `android/app/libs/swarm.aar` whose exported
+  surface lacks the current timestamp accessors;
+- the AGY production replay timing case missed its bound under the local race
+  load; and
+- two `internal/upgrade` tests retained their host-state-dependent failures.
 
-All packages and focused cases touched by the Hermes integration passed,
-including their race runs. That does not convert unrelated baseline failures
-into waivers, does not establish a repository-wide `go test ./...` green, and
-does not claim a full-repository race result. Socket-dependent capture tests ran
-in an environment that permitted their temporary Unix sockets.
+All Hermes adapter, engine, picker, validator/capture, race-exposing E2E, and
+full skeleton race runs passed after the fix. The local repository-wide baseline
+does not close GG-4; canonical CI remains the authority. Socket-dependent
+capture tests ran in an environment that permitted their temporary Unix sockets.
+
+Historical GitHub Actions CI run `33248192599` and relay-container run
+`33248192619` completed successfully for integration commit `b233cc7b`. That CI
+included:
+
+- Linux `go test -race ./...`;
+- active fuzzing, lint, and documentation checks;
+- Android fresh-AAR, Gradle, and artifact gates;
+- Darwin engine and integration tests;
+- static `linux/amd64` and `linux/arm64` builds, plus Darwin builds; and
+- the release dry-run.
+
+Those runs remain valid historical evidence for `b233cc7b`, but they are
+insufficient as final attestation because run `33248579855` later exposed the
+adapter-resolver seam race. Fix commit
+`b1951444ca80f8269af37c068b68fcfaad31dc0b` has green local build, vet, lint
+(zero issues), all three target cross-builds, and the focused/full race results
+above. Its relay-container run `33250012007` is green. Canonical CI run
+`33250012015` also completed successfully. Those two runs are the sole formal
+GG-4 close gate and release attestation for the race-fix commit; neither the
+older green `b233cc7b` runs nor the failed `8b151` run is treated as current
+attestation. CI does not install or launch Hermes; the separate real-binary
+smokes below provide platform evidence and are not attributed to CI.
+
+## Linux real-binary acceptance smokes
+
+Both target architectures ran the real classic CLI from the pinned upstream
+checkout `aff5125f8edf5095aef5d3d79bbbb101c95b9413`, reporting Hermes `0.20.6`.
+The environment was the pinned minimal
+`ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie` image on Docker LinuxKit kernel
+`6.10.14`. The Swarm integration exercised by these platform smokes is commit
+`b233cc7b`. The later `b1951444ca80f8269af37c068b68fcfaad31dc0b` fix changes
+the synchronized daemon adapter-resolution seam and tests, not Hermes argv or
+platform behavior; the smoke provenance remains `b233cc7b` rather than being
+silently relabeled as a run of the later commit.
+
+| Target | Execution qualification | Fresh session | Resume result |
+|---|---|---|---|
+| `linux/arm64` | container `uname -m`: `aarch64`; native LinuxKit VM architecture | returned `pong`; clean exit matched `20260829_105452_32ede9` and reported 2 messages | restored the prior 2-message conversation, returned `pong` to a second prompt, and clean-exited with the same ID and 4 messages |
+| `linux/amd64` | container `uname -m`: `x86_64`; Docker emulation on Apple Silicon, not native x86_64 hardware | returned `pong`; clean exit matched `20260829_105814_e05e3f` and reported 2 messages | restored the prior 2-message conversation, returned `pong` to a second prompt, and clean-exited with the same ID and 4 messages |
+
+Each fresh session used the adapter's exact argv:
+
+```text
+hermes chat --cli --provider swarm-mock --model swarm-test \
+  -q "Reply exactly pong"
+```
+
+Each resume used the corresponding captured ID in the adapter's exact form:
+
+```text
+hermes chat --cli --resume ID --no-restore-cwd
+```
+
+Resume was invoked from `/resume-origin` while the session's recorded cwd was
+`/workspace`. On both architectures Hermes first displayed `/resume-origin`,
+then changed to `/workspace` despite `--no-restore-cwd`. This independently
+confirms the documented Hermes `0.20.6` cwd bug on both Linux targets.
+
+These smokes establish detection, fresh classic-CLI execution, initial prompt,
+clean-exit identity consistency, Hermes conversation restoration, continued
+interaction, and the cwd limitation on both target architectures. They did not
+exercise approval or clarification on Linux; those states remain supported by
+the retained macOS PTY captures, adversarial classifier tests, and production
+byte-stream replay rather than Linux-live modal evidence.
 
 ## Explicit limitations
 
@@ -471,7 +543,10 @@ in an environment that permitted their temporary Unix sockets.
 - Swarm owns worktrees; Hermes's nested worktree mode is unsupported.
 - macOS amd64/Rosetta is unsupported for Hermes. This does not remove Swarm's
   macOS amd64 release for other adapters.
-- Linux targets are not yet live-proven by the macOS characterization record.
+- Linux live evidence covers Hermes `0.20.6` in one pinned Debian Trixie-based
+  container environment: arm64 was native to the LinuxKit VM, while x86_64 ran
+  under Docker emulation on Apple Silicon. It does not prove every Linux distro,
+  packaging method, kernel, or native physical x86_64 host.
 - Mid-process Hermes ID rotation is not represented by Swarm's write-once native
   conversation identity in v1.
 - Conversation-ID evidence is structurally corroborated terminal output, not an
@@ -496,8 +571,12 @@ in an environment that permitted their temporary Unix sockets.
 
 ## Closure rule
 
-Replace each pending acceptance row with concrete test/artifact references only
-after it is green. Then run a clean coupling sweep and a reviewer pass focused on
-false-ready risk, identity correctness, unsafe argv, user-config mutation, and
-platform overclaiming. Until that happens, this file is implementation evidence
-in progress, not a release attestation.
+Every acceptance-matrix row now has concrete test or artifact evidence. The
+clean coupling sweep and reviewer passes covered false-ready risk, identity
+correctness, unsafe argv, user-config mutation, concurrency, and platform
+overclaiming. Canonical CI run `33250012015` and relay run `33250012007` are
+green for commit `b1951444ca80f8269af37c068b68fcfaad31dc0b`; together they
+are its sole GG-4 close gate and release attestation. The Linux real-binary
+smokes retain their truthful `b233cc7b` provenance because the later fix did not
+change Hermes argv or platform behavior. All explicit limitations above remain
+part of the attestation.

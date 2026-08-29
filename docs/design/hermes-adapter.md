@@ -265,8 +265,8 @@ Production acceptance requires:
 - registry/picker, generic launch composition, capability, fresh-launch, and
   saved-source `resume_from` integration tests, with the Hermes `0.20.6`
   recorded-cwd limitation asserted rather than an authoritative-cwd claim;
-- a native `darwin/arm64` real-Hermes smoke and Linux build/test matrix for
-  `linux/amd64` and `linux/arm64`;
+- a native `darwin/arm64` real-Hermes smoke plus a Linux build/test matrix and
+  real-Hermes smoke for both `linux/amd64` and `linux/arm64`;
 - GG-5 failing-first evidence and the complete GG-4 gates;
 - a T-7 system-spec update naming Hermes once the production adapter ships.
 
