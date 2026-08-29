@@ -696,11 +696,12 @@ Other screens:
 | The machine refused: remote control is switched off there. / … not authorized … / Nothing was sent: this machine is unreachable. … | Remote control is off on {m}. / This phone can't start sessions. / {m} is offline. | LaunchPresetScreen.kt:256-258 |
 | The machine could not prove what happened to this launch. Check the session list first: confirming again sends a new launch and may create a second session. | Not sure it started. Check the Inbox before trying again. | LaunchPresetScreen.kt:265 |
 | The machine refused this launch. / … refused the preset fetch … | Couldn't start. / Couldn't load presets. | LaunchPresetScreen.kt:267, 279-289 |
-| Sessions, machines and activity all come from the machine this phone is paired with. There is nothing else here until then. | Your sessions come from the computer you pair with. | PairOnlyScreen.kt:108 |
+| Sessions, machines and activity all come from the machine this phone is paired with. There is nothing else here until then. | Your agents. One steady view. / Watch every session, answer when one needs you, and keep the work moving from anywhere. / **Connect your computer** | PairOnlyScreen.kt:108-120 |
+| Pair this phone / Your sessions come from the computer you pair with. / **Pair a computer** | Unchanged when independently persisted revoke evidence proves this is recovery rather than first run. | PairOnlyScreen.kt:122-126, 430-444 |
 | This phone's key was destroyed and cannot be recovered. Your machine still has this device registered and … | This phone needs to pair again. First, on your computer: (well:) swarm remote revoke {device} | PairOnlyScreen.kt:149 |
 | This phone has unpaired itself, and your machine has not confirmed … | Unpaired. If pairing is refused, on your computer: (well:) swarm remote devices | PairOnlyScreen.kt:179-196 |
 | This phone could not destroy the key material it had stored, so it is still on this device. | Couldn't clear this phone's keys. | PairOnlyScreen.kt:217 |
-| Check these six against the ones on your machine's screen. | Same six on your computer? | PairingUi.kt:152 |
+| Check these six against the ones on your machine's screen. | Continue only if these six symbols appear in the same order on your computer. A mismatch means the connection is not yours. | PairingUi.kt:152 |
 | This is an address on your local network. Confirm it is your own machine before joining. / This phone will connect to this relay and to nothing else. … | Local address. Make sure it's your computer. / Connects only to this address. Check it matches your computer. | PairingUi.kt:192-195 |
 | The destination changed after it was shown to you, so nothing was joined. Scan the code again. | The address changed. Scan again. | PairingUi.kt:462 |
 | Your machine declined this device. Approve it there, then pair again. | Your computer said no. Approve it there, then try again. | PairingUi.kt:469 |

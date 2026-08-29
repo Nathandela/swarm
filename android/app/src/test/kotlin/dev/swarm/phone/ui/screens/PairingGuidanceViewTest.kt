@@ -68,7 +68,6 @@ class PairingGuidanceViewTest {
             body = View(context),
             notice = View(context),
             destination = View(context),
-            sas = View(context),
             sasInstruction = View(context),
             scanner = View(context),
             scanProgress = View(context),
@@ -148,6 +147,22 @@ class PairingGuidanceViewTest {
         assertTrue("the steps are not on screen", steps >= 0)
         assertTrue("the scan control is not on screen", scan >= 0)
         assertTrue("the scan CTA is drawn above the steps that explain it", steps < scan)
+    }
+
+    @Test
+    fun `a live Signal Field makes the scanner the hero before its guidance`() {
+        val order = draw(scanner = ScannerState.SCANNING, cameraLive = true).tags()
+        val scanner = order.indexOf(PairingTag.SCANNER)
+        val progress = order.indexOf(PairingTag.SCAN_PROGRESS)
+        val manual = order.indexOf(PairingTag.control(PairingControl.REVEAL_TYPED_PAYLOAD))
+        val steps = order.indexOf(PairingTag.STEPS)
+        val scan = order.indexOf(PairingTag.control(PairingControl.SCAN))
+
+        assertTrue("the live scanner is not on screen", scanner >= 0)
+        assertTrue("the live field caption is not immediately below the scanner", progress == scanner + 1)
+        assertTrue("the manual fallback is not kept directly under the live field", progress < manual)
+        assertTrue("guidance still sits above the live camera hero", manual < steps)
+        assertEquals("the live camera still offers a redundant second scan action", -1, scan)
     }
 
     @Test

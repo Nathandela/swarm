@@ -11,7 +11,6 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -159,35 +158,7 @@ class PairingSurface(
      */
     private val scanProgressRate = ScanProgressThrottle()
 
-    /**
-     * The six symbols. Named for what it is -- a DISPLAY -- because the one thing this screen
-     * must never grow is a field beside it; android/gate/s16_ui_test.go fences the shape and
-     * mobile/conformance/s16_pairing_test.go fences that no verb would ingest one.
-     *
-     * PB-DS-11: it was `textSize = SAS_TEXT_SP` with `SAS_TEXT_SP = 28f`, a size chosen at a call
-     * site, and then `Display.NavTitle`, then 27 sp, with a paragraph here explaining that the style
-     * derivation row 7 asks for "does not exist". IT DOES (agents-tracker-ksvb.4). `Display.SAS`
-     * has been in `res/values/type.xml` since the type ladder landed -- 34 sp / 400 / sans, the
-     * one style §7 adds to PB-DS-2's 18, carrying a `derived:` citation rather than an `origin:`
-     * because `.sas` is absent from the shared CSS block. The join the old paragraph said would
-     * have to be rebuilt was rebuilt: `android/gate/s22b_type_test.go` counts the two citation
-     * classes separately. So this is the design's own size, and the seven-sp approximation is gone.
-     *
-     * IT IS CENTRED, which is row 7's "row, gap `space_14`" read for what it is: six symbols a
-     * person is holding up against another screen are a display and not a paragraph, and
-     * left-aligned they read as a value in a form. The gaps are the SCREEN's -- the separator
-     * below joins them -- because there is no SAS row component and one built here would be this
-     * file choosing spacing.
-     *
-     * IT CARRIES NO INK, and `Display.SAS` declares none either: row 7 records the exception --
-     * emoji glyphs are drawn by the platform's colour emoji font, which ignores textColor.
-     */
-    private val sasDisplay = TextView(activity).apply {
-        setTextAppearance(R.style.TextAppearance_Swarm_Display_SAS)
-        gravity = Gravity.CENTER_HORIZONTAL
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-    }
-
+    /** The comparison sentence under `sasSequence`; the screen model owns its security copy. */
     private val sasInstruction = noticeLine()
 
     /**
@@ -445,9 +416,9 @@ class PairingSurface(
      * They are built here rather than in the screen package because they must be: `SecureWindow`
      * applies PB-SEC-12 clause 1's touch filter at construction, the listeners are this file's own
      * verbs, and [touchFilteredActions] has to name the views that are actually on screen. The two
-     * that carry a text appearance are here for a second reason -- the screen package is fenced
-     * against `setTextAppearance`, so moving them would cost the destination its `Mono.Code` and
-     * the symbols their size while derivation rows 18 and 7 are unbuilt.
+     * The destination carries its text appearance here for a second reason -- the screen package
+     * is fenced against `setTextAppearance`, so moving it would cost the well its `Mono.Code`.
+     * The SAS sequence is now a native kit component and owns its derived `Display.SAS` role.
      */
     private val slots = PairingSlots(
         body = message,
@@ -458,7 +429,6 @@ class PairingSurface(
         // `destination.text =` below still targets the `TextView` itself, called once here so it
         // is parented exactly once.
         destination = destination.scrolledHorizontally(),
-        sas = sasDisplay,
         sasInstruction = sasInstruction,
         scanner = scannerHost,
         scanProgress = scanProgress,
@@ -867,9 +837,6 @@ class PairingSurface(
         message.text = panel.body
         stepNotice.text = panel.notice
         destination.text = panel.destination
-        // Three spaces, so the six symbols read as six things rather than one word. The
-        // separator is the screen's, and the alphabet is the shared Go core's -- never Kotlin's.
-        sasDisplay.text = panel.sas.joinToString("   ")
         sasInstruction.text = panel.sasInstruction
         // The preview closes with the step that offers it. It never OPENS here: a camera is
         // started by someone pressing Scan, not by a redraw.

@@ -188,6 +188,47 @@ class PairOnlyRevokeNoticeTest {
         )
     }
 
+    @Test
+    fun `revoke evidence always suppresses the first-run atmospheric welcome`() {
+        val recoveryFields = listOf(
+            Triple("Unpaired. If pairing is refused, on your computer:", "", ""),
+            Triple("", "The computer refused to remove this phone.", ""),
+            Triple("", "", PairOnlyScreen.REVOKE_COMMAND),
+        )
+
+        recoveryFields.forEach { (notice, detail, command) ->
+            val root = pairOnlyView(
+                context,
+                pairing = View(context),
+                started = false,
+                onStartPairing = {},
+                revokedNotice = notice,
+                revokedDetail = detail,
+                revokedCommand = command,
+            )
+
+            assertNull(
+                "revoke evidence was presented as a fresh-install welcome: " +
+                    "notice='$notice', detail='$detail', command='$command'",
+                root.kitFind(PairOnlyTag.SIGNAL_FIELD),
+            )
+            assertEquals(
+                "revoke evidence inherited the new first-run promise instead of the previous " +
+                    "factual pair-only composition",
+                PairOnlyScreen.copyForRevokeEvidence().title,
+                textOf(root.kitRequire(PairOnlyTag.TITLE)),
+            )
+            assertEquals(
+                PairOnlyScreen.copyForRevokeEvidence().body,
+                textOf(root.kitRequire(PairOnlyTag.BODY)),
+            )
+            assertEquals(
+                PairOnlyScreen.copyForRevokeEvidence().cta,
+                textOf(root.kitRequire(PairOnlyTag.CTA)),
+            )
+        }
+    }
+
     /**
      * IT SURVIVES THE OFFER BEING TAKEN UP, which is when it matters most: the user is inside the
      * flow that is about to be refused.

@@ -225,6 +225,14 @@ class PairingGuidanceTest {
         }
     }
 
+    @Test
+    fun `a camera that is already live replaces the scan action with its fallback`() {
+        assertEquals(
+            setOf(PairingControl.REVEAL_TYPED_PAYLOAD),
+            panel(scanner = ScannerState.SCANNING, cameraLive = true).controls,
+        )
+    }
+
     // ---- the typed code: reachable, and not expanded -------------------------
 
     @Test

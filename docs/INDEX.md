@@ -25,6 +25,7 @@
 
 ## Design reference
 - [Brandbook v1](design/swarm-illustration-direction/index.html) — **canonical visual identity**: Night Orchestra artwork, logo, app icon, Slate palette, and README asset system
+- [Mobile Interface Field Guide v1](design/mobile-interface-direction/index.html) — interactive before/after proposal across 12 Android frame families, with Signal Field, Night Atlas, and Constellation options for each
 - [UI preview](design/ui-preview.html) — **canonical visual reference** (TUI): interactive screen mockups (keyboard-drivable), flow, architecture, lifecycle, test strategy. Live copy: https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
 - [Slate maquette](research/slate-maquette.html) — **the phone app's design-token source** (ADR-021): every screen, every kit component, the re-rendered mark, and the normative `:root` token block
 - [Hermes adapter contract](design/hermes-adapter.md) — classic-CLI argv, status, identity/resume, platform boundary, and deferred structured transports

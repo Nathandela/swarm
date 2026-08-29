@@ -2,11 +2,13 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.view.View
+import android.view.Gravity
 import android.widget.LinearLayout
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -58,5 +60,14 @@ class NavHeaderTest {
             children(header).size,
             children(navHeader(context, "Inbox", null)).size,
         )
+    }
+
+    @Test
+    fun `the Signal Field welcome can centre its title without moving the default`() {
+        val current = navHeader(context, "Inbox", null)
+        val welcome = navHeader(context, "Your agents. One steady view.", null, centeredTitle = true)
+
+        assertTrue((current.getChildAt(0) as android.widget.TextView).gravity != Gravity.CENTER)
+        assertEquals(Gravity.CENTER, (welcome.getChildAt(0) as android.widget.TextView).gravity)
     }
 }

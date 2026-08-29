@@ -3,6 +3,7 @@ package dev.swarm.phone.ui.screens
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.R
 import dev.swarm.phone.runtime.AppPermission
@@ -35,10 +36,9 @@ import org.robolectric.RobolectricTestRunner
  * is the only human-in-the-loop security check left in the product, so a mis-tap there is not a
  * usability defect.
  *
- * WHAT IS NOT ASSERTED: appearance, for the reason `SettingsPanelViewTest` gives -- and here for a
- * second reason worth stating. The pairing screen's five specified components (derivation rows 7,
- * 9, 10, 18 and the mono well) have no kit factory, so the views this composition arranges are
- * the surface's own. Their look is not this file's subject and is not yet anybody's.
+ * Most appearance remains in kit suites for the reason `SettingsPanelViewTest` gives. The Signal
+ * Field SAS material is asserted by `SignalFieldTest`; this suite asserts that the real six-symbol
+ * model reaches that component in order.
  */
 @RunWith(RobolectricTestRunner::class)
 class PairingPanelViewTest {
@@ -78,7 +78,6 @@ class PairingPanelViewTest {
         val body = View(context)
         val notice = View(context)
         val destination = View(context)
-        val sas = View(context)
         val sasInstruction = View(context)
         val scanner = View(context)
         val scanProgress = View(context)
@@ -89,7 +88,6 @@ class PairingPanelViewTest {
             body = body,
             notice = notice,
             destination = destination,
-            sas = sas,
             sasInstruction = sasInstruction,
             scanner = scanner,
             scanProgress = scanProgress,
@@ -105,6 +103,11 @@ class PairingPanelViewTest {
         }
         walk(this)
         return found
+    }
+
+    private fun View.descendants(): List<View> = when (this) {
+        is ViewGroup -> listOf(this) + (0 until childCount).flatMap { getChildAt(it).descendants() }
+        else -> listOf(this)
     }
 
     // ---- the composition ---------------------------------------------------
@@ -190,6 +193,12 @@ class PairingPanelViewTest {
         )
 
         assertNotNull(comparing.kitFind(PairingTag.SAS))
+        assertEquals(
+            listOf("owl", "microscope", "galaxy", "anchor", "lock", "key"),
+            comparing.kitRequire(PairingTag.SAS).descendants()
+                .filterIsInstance<TextView>()
+                .map { it.text.toString() },
+        )
         assertNotNull(
             "the symbols are on screen with no sentence telling the user what to do with them",
             comparing.kitFind(PairingTag.SAS_INSTRUCTION),
@@ -325,7 +334,6 @@ class PairingPanelViewTest {
             body = stubs.body,
             notice = stubs.notice,
             destination = stubs.destination,
-            sas = stubs.sas,
             sasInstruction = stubs.sasInstruction,
             scanner = stubs.scanner,
             scanProgress = stubs.scanProgress,

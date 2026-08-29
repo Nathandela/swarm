@@ -160,7 +160,7 @@ class PairOnlyTerminalReasonTest {
                     "with a pairing on this handset -- `swarm remote pair` shows a code and this " +
                     "phone scans it -- and a screen that renamed or withheld that control in a " +
                     "state nothing on the device can clear would withhold it forever",
-                PairOnlyScreen.CTA,
+                if (reason == PairOnlyReason.FIRST_RUN) PairOnlyScreen.CTA else PairOnlyScreen.RECOVERY_CTA,
                 copy.cta,
             )
             assertTrue(
@@ -172,12 +172,16 @@ class PairOnlyTerminalReasonTest {
     }
 
     @Test
-    fun `the screen a fresh install opens on is unchanged`() {
-        // The constants are what `PairOnlyViewTest` asserts are drawn, and what the first-run
-        // screen says is not this issue's subject: a phone with no machine is told the same thing
-        // it was told before.
+    fun `a fresh install opts into the approved Signal Field welcome`() {
+        // Recovery copy remains factual; this explicit bit is what prevents its commands and
+        // notices from inheriting the atmospheric first-run composition.
         assertEquals(
-            PairOnlyCopy(PairOnlyScreen.TITLE, PairOnlyScreen.BODY, PairOnlyScreen.CTA),
+            PairOnlyCopy(
+                PairOnlyScreen.TITLE,
+                PairOnlyScreen.BODY,
+                PairOnlyScreen.CTA,
+                signalField = true,
+            ),
             PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
         )
     }

@@ -246,6 +246,22 @@ object PhoneScreenDriver {
         return text
     }
 
+    /** The first visible accessibility sentence beginning with [prefix]. */
+    fun ActivityScenario<PhoneActivity>.descriptionOnScreen(prefix: String): String {
+        var description = ""
+        onActivity { activity ->
+            description = activity.controls()
+                .firstOrNull {
+                    it.visibility == View.VISIBLE &&
+                        it.contentDescription?.toString()?.startsWith(prefix) == true
+                }
+                ?.contentDescription
+                ?.toString()
+                .orEmpty()
+        }
+        return description
+    }
+
     internal fun Activity.controls(): List<View> =
         findViewById<ViewGroup>(android.R.id.content).flatten()
 

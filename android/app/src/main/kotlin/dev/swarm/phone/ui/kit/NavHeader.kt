@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -36,6 +37,8 @@ import dev.swarm.phone.R
  *  same terms as [status]: the control is the caller's, with its click and its destination, and
  *  this row only places it -- LAST, after the readouts, because an action is what a thumb reaches
  *  for at the end of the row. The default draws nothing, so every existing header is unchanged.
+ * @param centeredTitle frame 01's welcome exception. It centres the title inside the same title
+ *  cell without changing the header's type, padding, counter, status, or trailing-action rules.
  */
 fun navHeader(
     context: Context,
@@ -43,6 +46,7 @@ fun navHeader(
     live: CharSequence?,
     status: View? = null,
     trailing: View? = null,
+    centeredTitle: Boolean = false,
 ): LinearLayout =
     LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -63,6 +67,7 @@ fun navHeader(
                 text = title
                 layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
                 tag = KitTag.TITLE
+                if (centeredTitle) gravity = Gravity.CENTER
                 Kit.identityCell(this)
             },
         )
