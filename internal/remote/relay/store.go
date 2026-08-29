@@ -2,9 +2,12 @@ package relay
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 
 	bolt "go.etcd.io/bbolt"
@@ -18,6 +21,10 @@ import (
 var (
 	bucketItems = []byte("items") // nested: rid -> (cursor8 -> record)
 	bucketSeq   = []byte("seq")   // rid -> next storage cursor (8 bytes)
+	// Not part of requiredBuckets: Restore must accept legacy backups and openStore
+	// migrates them by minting an incarnation after restore.
+	bucketMeta            = []byte("meta")
+	keyMailboxIncarnation = []byte("mailbox_incarnation")
 	// bucketPairs is "authorizer\x00authorized" -> {1}, DIRECTED (ADR-007 B27): one
 	// key per authorize_device, naming who granted whom. The direction is the
 	// authority check itself (see authorizePair and mayActOn), not a storage detail.
@@ -78,12 +85,54 @@ func openStore(path string) (*store, error) {
 				return err
 			}
 		}
+		meta, err := tx.CreateBucketIfNotExists(bucketMeta)
+		if err != nil {
+			return err
+		}
+		if meta.Get(keyMailboxIncarnation) == nil {
+			incarnation, err := mintMailboxIncarnation()
+			if err != nil {
+				return err
+			}
+			if err := meta.Put(keyMailboxIncarnation, []byte(incarnation)); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return &store{db: db}, nil
+}
+
+func mintMailboxIncarnation() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("mint mailbox incarnation: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func rotateMailboxIncarnation(db *bolt.DB) error {
+	incarnation, err := mintMailboxIncarnation()
+	if err != nil {
+		return err
+	}
+	return db.Update(func(tx *bolt.Tx) error {
+		meta, err := tx.CreateBucketIfNotExists(bucketMeta)
+		if err != nil {
+			return err
+		}
+		return meta.Put(keyMailboxIncarnation, []byte(incarnation))
+	})
+}
+
+func mailboxIncarnation(tx *bolt.Tx) string {
+	if meta := tx.Bucket(bucketMeta); meta != nil {
+		return string(meta.Get(keyMailboxIncarnation))
+	}
+	return ""
 }
 
 func (s *store) close() error { return s.db.Close() }
@@ -167,17 +216,54 @@ const mailboxItemJSONOverhead = 64
 // readItemsPage returns at most maxItems items whose storage cursor is strictly
 // greater than afterCursor, in ascending cursor order, bounded so that the
 // items' estimated serialized size stays within byteBudget. It reports hasMore
-// true iff at least one further item remains past the returned page.
+// true iff at least one further item remains past the returned page. It reports
+// resetRequired when afterCursor cannot safely resume this mailbox.
 //
 // At least one item is always returned when the mailbox holds any item past the
 // cursor (progress guarantee): a page is never empty-with-more, so a paginated
 // drain cannot spin. The byte accounting uses the base64-encoded envelope length
 // plus a conservative per-item JSON overhead, so a caller can size byteBudget to
 // keep the whole JSON reply under MaxFrame without ever leaking plaintext (CR-4).
-func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudget int) ([]Item, bool, error) {
+func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudget int) ([]Item, bool, bool, error) {
+	items, more, reset, _, err := s.readItemsPageForIncarnation(rid, "", afterCursor, maxItems, byteBudget)
+	return items, more, reset, err
+}
+
+func (s *store) readItemsPageForIncarnation(rid, expectedIncarnation string, afterCursor uint64, maxItems, byteBudget int) ([]Item, bool, bool, string, error) {
 	var out []Item
 	hasMore := false
+	resetRequired := false
+	incarnation := ""
 	err := s.db.View(func(tx *bolt.Tx) error {
+		incarnation = mailboxIncarnation(tx)
+		if expectedIncarnation != "" && expectedIncarnation != incarnation {
+			resetRequired = true
+			return nil
+		}
+		// bucketSeq holds the NEXT cursor even after ack or retention compacts every
+		// item, so next-1 is the mailbox's durable high-water. Read it in this SAME
+		// snapshot as the items below: a continuity verdict assembled from separate
+		// transactions could race an append and describe no state the store ever held.
+		highWater := uint64(0)
+		if v := tx.Bucket(bucketSeq).Get([]byte(rid)); v != nil {
+			next := binary.BigEndian.Uint64(v)
+			if next == 0 {
+				// appendItem's cursor space is exhausted/wrapped. Treat its high-water as
+				// MaxUint64 here so an untrusted MaxUint64 resume cursor still cannot
+				// cause afterCursor+1 to wrap the scan to zero below.
+				highWater = math.MaxUint64
+			} else {
+				highWater = next - 1
+			}
+		}
+		// C > H is the unambiguous reset/reinitialisation case. Retained records at
+		// or below C are NOT evidence of discontinuity: both shipped drains advance
+		// their durable cursor and re-park before their asynchronous ack batch has
+		// compacted those records, so that shape is expected on every healthy link.
+		if afterCursor > highWater {
+			resetRequired = true
+			return nil
+		}
 		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
 		if mb == nil {
 			return nil
@@ -212,13 +298,37 @@ func (s *store) readItemsPage(rid string, afterCursor uint64, maxItems, byteBudg
 		}
 		return nil
 	})
-	return out, hasMore, err
+	return out, hasMore, resetRequired, incarnation, err
 }
 
 // ackItems compacts away every item whose storage cursor is at or below
 // throughCursor (the durable consumed watermark).
 func (s *store) ackItems(rid string, throughCursor uint64) error {
+	return s.ackItemsForIncarnation(rid, "", throughCursor)
+}
+
+func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughCursor uint64) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
+		if expectedIncarnation != "" && expectedIncarnation != mailboxIncarnation(tx) {
+			return ErrMailboxCursorResetRequired
+		}
+		// A client can survive a store reset with a cursor from the old mailbox.
+		// Letting that stale cursor ack the replacement store would compact new,
+		// never-consumed items before the read path gets a chance to request a
+		// rewind. The seq high-water is durable across ordinary ack/purge, so being
+		// past it is the unambiguous unsafe case.
+		highWater := uint64(0)
+		if v := tx.Bucket(bucketSeq).Get([]byte(rid)); v != nil {
+			next := binary.BigEndian.Uint64(v)
+			if next == 0 {
+				highWater = math.MaxUint64
+			} else {
+				highWater = next - 1
+			}
+		}
+		if throughCursor > highWater {
+			return ErrMailboxCursorResetRequired
+		}
 		mb := tx.Bucket(bucketItems).Bucket([]byte(rid))
 		if mb == nil {
 			return nil

@@ -67,16 +67,17 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	s15Machine     = "s15-machine-8f3a1c"
-	s15MachineName = "s15-hostname-1e6c93"
-	s15RoutingID   = "s15-routing-4d7e2b"
-	s15PushToken   = "s15-push-token-c19a6f"
-	s15SessionID   = "s15-session-2b8d4e"
-	s15SnapLine    = "s15-terminal-line-7a3f9c"
-	s15OpID        = "s15-op-id-5e1b8d"
-	s15OpOutcome   = "s15-outcome-9c4a2f"
-	s15QueuedOp    = "s15-queued-op-3d9f7b"
-	s15StaleStream = "s15-stream-6f2e1a"
+	s15Machine          = "s15-machine-8f3a1c"
+	s15MachineName      = "s15-hostname-1e6c93"
+	s15RoutingID        = "s15-routing-4d7e2b"
+	s15PushToken        = "s15-push-token-c19a6f"
+	s15SessionID        = "s15-session-2b8d4e"
+	s15SnapLine         = "s15-terminal-line-7a3f9c"
+	s15OpID             = "s15-op-id-5e1b8d"
+	s15OpOutcome        = "s15-outcome-9c4a2f"
+	s15QueuedOp         = "s15-queued-op-3d9f7b"
+	s15StaleStream      = "s15-stream-6f2e1a"
+	s15RelayIncarnation = "abcdef0123456789abcdef0123456789"
 	// s15ItemText is the TRANSCRIPT's sentinel: the reconstructed body of one interaction item
 	// (ADR-009). It is what the user and the agent actually said to each other, which makes it
 	// the most revealing thing this file measures.
@@ -154,6 +155,7 @@ func s15State() State {
 		GrantSeq:            s15GrantSeq,
 		WakeReplay:          s15WakeReplay,
 		RelayCursor:         s15RelayCursor,
+		RelayIncarnation:    s15RelayIncarnation,
 		RosterRevision:      s15RosterRevision,
 		Sessions:            []CachedSession{{SessionID: s15SessionID, Present: true}},
 		Snapshots:           []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
@@ -338,6 +340,9 @@ func s15Inventory() []s15Tier {
 		{field: "RelayCursor", needles: s15Num(s15RelayCursor, 8),
 			why: "the relay mailbox read cursor. A replay-guard coordinate PB-STATE-9 does not name; " +
 				"it discloses how far the phone has read, not what it read"},
+		{field: "RelayIncarnation", needles: s15Str(s15RelayIncarnation),
+			why: "an opaque mailbox identity; it reveals no content and must be available before " +
+				"the content tier opens so a reset mailbox cannot inherit an old cursor"},
 		{field: "RosterRevision", needles: s15Num(s15RosterRevision, 8),
 			why: "the generation proving an authoritative roster committed; it reveals neither " +
 				"the rows nor their content and must be readable before the content tier opens"},

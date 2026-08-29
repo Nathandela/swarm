@@ -429,14 +429,51 @@ structural damage to the store itself. Only once all four pass does `restore` wr
 content into place, through a temp file in the destination's own directory renamed over the
 original — so a failure at any point (including a disk-full write, or any of checks 1-4 failing)
 leaves the previous file, if any, untouched rather than half-overwritten, whether that previous
-file held real data or was itself empty.
+file held real data or was itself empty. Before that staged copy is renamed into place, (5)
+`restore` replaces its durable mailbox incarnation with a newly generated one. A restore is a
+different mailbox log even when its numeric cursors overlap the live log, so retaining the
+backup's old incarnation would let a post-backup consumer cursor silently skip restored items.
 
-**Restore compatibility.** A backup taken at the relay's current on-disk schema restores and
-serves: every mailbox item, the storage cursor it was assigned, and the pairing graph
-(`authorize_device` grants) are all present and usable immediately after `restore`, proven by
-`TestRestore_RoundTripSeedBackupWipeRestoreServe` (`internal/remote/relay/backup_test.go`) — seed a
-store through a real relay, back it up, wipe the live file, restore, and read the seeded item back
-out through a freshly started relay.
+**Restore compatibility and upgrade order: consumers first, then relay, then restore.**
+Install the incarnation-aware build on both consumers of the relay mailbox — the machine gateway
+and every phone — before upgrading the relay server. The new consumers interoperate with an older
+server: their added request field is ignored and a response without an incarnation is treated as
+legacy. The upgraded server also continues ordinary service for an older consumer, but that
+consumer does not have the durable incarnation binding or the rewind path, so it is **not safe to
+rely on it for rollback recovery**. Do not perform a planned restore until the relay server and the
+affected gateway/phone consumers are all upgraded. Rolling the gateway or phone back after it has
+written the new durable state also fails closed on the newer state schema rather than silently
+discarding the binding.
+
+**What an upgraded consumer does after `restore`.** The first read, wait, or pending ack carrying
+the pre-restore incarnation is refused with `mailbox_cursor_reset`. The consumer retires any queued
+ack from that mailbox generation, durably rewinds **only the relay storage cursor** to zero, keeps
+its authenticated per-sender/per-epoch replay high-waters, adopts the restored store's new
+incarnation, and drains again from the beginning. A re-served frame already covered by a durable
+high-water is authenticated and compacted without repeating its command or UI side effect; a
+still-current, unapplied frame is handled normally. A backup taken at the relay's current on-disk
+schema still restores every mailbox item, its storage cursor, and the pairing graph
+(`authorize_device` grants),
+as proven by `TestRestore_RoundTripSeedBackupWipeRestoreServe`
+(`internal/remote/relay/backup_test.go`); “usable” now includes this explicit consumer rewind rather
+than claiming that every pre-restore numeric cursor remains a valid resume point.
+
+**Retired content keys are an explicit recovery limit.** Rewind/re-drain cannot authenticate a
+queued ciphertext sealed under an epoch content key that the gateway or phone has already retired.
+Such a frame is never treated as a proved duplicate and is never acked merely because it came from
+a restore. The same fail-closed rule applies to a restored frame outside the consumer's freshness
+bound unless its authenticated sequence is already covered by durable custody: restore does not
+turn old, previously unapplied content into fresh content. If a later decryptable, current frame is
+present, the drains can advance past the refused one; a full page or mailbox tail made only of
+retired-key or expired-unapplied frames can instead stall until the relay's retention cap removes it
+(seven days by default) or the affected relay state is explicitly purged.
+
+For a handset mailbox, the normal destructive `swarm remote revoke <device-id>` and subsequent
+re-pair purges that route's queued machine-to-phone state. There is no narrow, authorization-
+preserving CLI purge for retired phone-to-machine frames in the machine mailbox; clearing those
+sooner requires an operator-directed relay-state reinitialisation and re-pairing of every affected
+relationship. Do not edit the bbolt file by hand. Plan the restore window so current epoch keys are
+still retained whenever possible.
 
 **Restore is a revocation rollback — re-revoke anything revoked after the backup.** `restore`
 replaces the *entire* store, and the revocation state (`swarm remote revoke`'s deleted pairing edge

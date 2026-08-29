@@ -1,6 +1,6 @@
 package conformance_test
 
-// A POISONED RELAY READ CURSOR MUST BE RECOVERABLE BY THE USER.
+// A DISCONTINUOUS RELAY READ CURSOR MUST RECOVER WITHOUT RE-PAIRING.
 //
 // The relay MINTS relay.Item.Cursor -- its own doc says "the relay's own monotonic storage
 // cursor (UNTRUSTED ordering)" -- and the phone persists it as the point its next read
@@ -10,9 +10,9 @@ package conformance_test
 // repair channel cannot repair it because a reseed is delivered THROUGH the poisoned cursor.
 // Before this test the only recovery was deleting the state directory and re-pairing.
 //
-// The VALUE is still not validated -- bounding how far a relay-minted cursor may move per
-// page needs a number no requirement states (ADR-007 B126). What is fenced here is that the
-// damage is no longer permanent.
+// The relay's durable sequence and retained first item now expose when that coordinate no
+// longer describes the current mailbox. The phone must rewind only the relay coordinate,
+// preserve its authenticated replay guards, compact redeliveries, and resume by itself.
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 
@@ -211,10 +210,11 @@ func phoneSawSession(t *testing.T, h *harness, session string) bool {
 	return false
 }
 
-// TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned is the recovery, end to end: a real
-// relay, a real relay.Client, the real facade, and the poison delivered over the wire rather
-// than written into durable state by the test.
-func TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned(t *testing.T) {
+// TestDrain_AutomaticallyRecoversAPhoneWhoseRelayCursorWasPoisoned is the recovery, end to
+// end: a real relay, a real relay.Client, the real facade, and the poison delivered over the
+// wire rather than written into durable state by the test. No repair button or re-pair is
+// allowed between the discontinuity and the recovered event.
+func TestDrain_AutomaticallyRecoversAPhoneWhoseRelayCursorWasPoisoned(t *testing.T) {
 	h, proxy := poisonedPhone(t)
 
 	// 1<<63 rather than MaxUint64 deliberately: MaxUint64 exercises the store's own scan-start
@@ -226,29 +226,9 @@ func TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned(t *testing.T) {
 	})
 	proxy.Heal()
 
-	sum, err := h.App.StateSummary()
-	if err != nil {
-		t.Fatalf("StateSummary: %v", err)
-	}
-	if sum.RelayCursor >= 0 && uint64(sum.RelayCursor) < 1<<62 {
-		t.Fatalf("premise: RelayCursor = %d, so the poison never landed and this test proves "+
-			"nothing about recovering from it", sum.RelayCursor)
-	}
-
-	// THE DAMAGE, with the relay honest from here on.
-	h.PushEvent(schema.JournalRecord{Cursor: 3, SessionID: testMachineID + "/lost", Type: "launched", Group: "working"})
-	time.Sleep(2 * time.Second)
-	if phoneSawSession(t, h, "/lost") {
-		t.Fatalf("premise: delivery never stopped, so there is nothing to recover")
-	}
-
-	// THE RECOVERY, and it is the one the user has: the repair verb the app already exposes.
-	if err := h.App.Resync("journal"); err != nil {
-		t.Fatalf("Resync(journal): %v", err)
-	}
-	h.PushEvent(schema.JournalRecord{Cursor: 4, SessionID: testMachineID + "/recovered", Type: "launched", Group: "working"})
-	eventually(t, "after Resync the phone STILL receives nothing from an honest relay: a "+
-		"poisoned relay read cursor is unrecoverable without deleting the state directory",
+	// THE RECOVERY, automatically on the next honest mailbox answer.
+	h.PushEvent(schema.JournalRecord{Cursor: 3, SessionID: testMachineID + "/recovered", Type: "launched", Group: "working"})
+	eventually(t, "the phone did not recover automatically from a discontinuous relay cursor",
 		func() bool { return phoneSawSession(t, h, "/recovered") })
 
 	// AND THE RECOVERY IS DURABLE. A rewind that lived only in memory would be undone by the
@@ -259,7 +239,7 @@ func TestResync_RecoversAPhoneWhoseRelayCursorWasPoisoned(t *testing.T) {
 		s, err := h.App.ConnectionState()
 		return err == nil && s == "online"
 	})
-	h.PushEvent(schema.JournalRecord{Cursor: 5, SessionID: testMachineID + "/after-restart", Type: "launched", Group: "working"})
+	h.PushEvent(schema.JournalRecord{Cursor: 4, SessionID: testMachineID + "/after-restart", Type: "launched", Group: "working"})
 	eventually(t, "the poisoned cursor came back after a restart: the rewind never reached disk",
 		func() bool { return phoneSawSession(t, h, "/after-restart") })
 }

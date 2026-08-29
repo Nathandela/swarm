@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/Nathandela/swarm/internal/remote/relay"
 )
 
 // InboundStream identifies one phone -> machine mailbox stream by exactly the coordinate
@@ -28,8 +30,9 @@ type InboundStream struct {
 // a retained frame however the relay chooses to re-serve it (a hostile or buggy relay may
 // re-append the identical envelope at a fresh storage cursor).
 type InboundCheckpoint struct {
-	Cursor  uint64
-	Highest map[InboundStream]uint64
+	Cursor      uint64
+	Incarnation string
+	Highest     map[InboundStream]uint64
 }
 
 // InboundState is the durable custody of an InboundCheckpoint. Load cannot fail: custody
@@ -39,11 +42,17 @@ type InboundCheckpoint struct {
 type InboundState interface {
 	Load() InboundCheckpoint
 	Save(InboundCheckpoint) error
+	// RewindCursor is the one explicit exception to Save's monotonic cursor rule. It
+	// resets only the relay-owned storage coordinate after a continuity break; authenticated
+	// per-stream replay high-waters remain monotonic and intact.
+	RewindCursor() error
 }
 
-// inboundSchemaVersion stamps the on-disk file so the format can migrate forward. A file
-// stamped with anything else is refused rather than reinterpreted.
-const inboundSchemaVersion = 1
+// inboundSchemaVersion stamps the on-disk file so the format can migrate forward. v2 binds
+// the numeric cursor to mailbox_incarnation. v1 is the sole migration input and loads with
+// an empty incarnation, which makes the first upgraded relay contact perform the safe
+// one-time rewind. A v1 binary refuses v2 rather than silently dropping that binding.
+const inboundSchemaVersion = 2
 
 // inboundFile is the on-disk shape. It is JSON rather than the packed big-endian uint64 of
 // the outbound seq file (seqstore.go) because a checkpoint is a variable-length map under a
@@ -55,6 +64,7 @@ type inboundFile struct {
 	SchemaVersion int                   `json:"schema_version"`
 	Machine       string                `json:"machine"`
 	Cursor        uint64                `json:"cursor"`
+	Incarnation   string                `json:"mailbox_incarnation,omitempty"`
 	Streams       []inboundStreamRecord `json:"streams"`
 }
 
@@ -127,6 +137,12 @@ func (s *fileInboundState) Save(ck InboundCheckpoint) error {
 	defer s.mu.Unlock()
 
 	merged := cloneCheckpoint(s.ck)
+	if ck.Incarnation != "" {
+		if merged.Incarnation != "" && merged.Incarnation != ck.Incarnation {
+			return fmt.Errorf("remotegw: mailbox incarnation changed without an explicit cursor rewind")
+		}
+		merged.Incarnation = ck.Incarnation
+	}
 	if ck.Cursor > merged.Cursor {
 		merged.Cursor = ck.Cursor
 	}
@@ -144,8 +160,27 @@ func (s *fileInboundState) Save(ck InboundCheckpoint) error {
 	return nil
 }
 
+// RewindCursor durably resets only the relay mailbox coordinate. It does not route through
+// Save because Save deliberately refuses every lowering; keeping this explicit exception on
+// the custody object makes an accidental ordinary write unable to reopen consumed frames.
+func (s *fileInboundState) RewindCursor() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rewound := cloneCheckpoint(s.ck)
+	rewound.Cursor = 0
+	rewound.Incarnation = ""
+	if s.path != "" {
+		if err := persistInboundCheckpoint(s.path, s.machine, rewound); err != nil {
+			return err
+		}
+	}
+	s.ck = rewound
+	return nil
+}
+
 func cloneCheckpoint(ck InboundCheckpoint) InboundCheckpoint {
-	out := InboundCheckpoint{Cursor: ck.Cursor, Highest: make(map[InboundStream]uint64, len(ck.Highest))}
+	out := InboundCheckpoint{Cursor: ck.Cursor, Incarnation: ck.Incarnation, Highest: make(map[InboundStream]uint64, len(ck.Highest))}
 	for st, seq := range ck.Highest {
 		out.Highest[st] = seq
 	}
@@ -170,14 +205,20 @@ func loadInboundCheckpoint(path, machineID string) (InboundCheckpoint, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return empty, fmt.Errorf("%w: %s: %v", errCorruptInboundState, path, err)
 	}
-	if f.SchemaVersion != inboundSchemaVersion {
-		return empty, fmt.Errorf("%w: %s: schema version %d unsupported (want %d)",
+	if f.SchemaVersion != 1 && f.SchemaVersion != inboundSchemaVersion {
+		return empty, fmt.Errorf("%w: %s: schema version %d unsupported (accept 1 or %d)",
 			errCorruptInboundState, path, f.SchemaVersion, inboundSchemaVersion)
 	}
 	if f.Machine != machineID {
 		return empty, nil
 	}
-	ck := InboundCheckpoint{Cursor: f.Cursor, Highest: make(map[InboundStream]uint64, len(f.Streams))}
+	incarnation := f.Incarnation
+	if f.SchemaVersion == 1 {
+		incarnation = ""
+	} else if incarnation != "" && !relay.ValidMailboxIncarnation(incarnation) {
+		return empty, fmt.Errorf("%w: %s: malformed mailbox incarnation", errCorruptInboundState, path)
+	}
+	ck := InboundCheckpoint{Cursor: f.Cursor, Incarnation: incarnation, Highest: make(map[InboundStream]uint64, len(f.Streams))}
 	for _, rec := range f.Streams {
 		raw, err := hex.DecodeString(rec.Sender)
 		if err != nil || len(raw) != 8 {
@@ -197,7 +238,7 @@ func loadInboundCheckpoint(path, machineID string) (InboundCheckpoint, error) {
 // power loss could resurrect an OLDER checkpoint, and a lower high-water re-opens frames the
 // relay retained -- precisely the replay this state exists to refuse.
 func persistInboundCheckpoint(path, machineID string, ck InboundCheckpoint) error {
-	f := inboundFile{SchemaVersion: inboundSchemaVersion, Machine: machineID, Cursor: ck.Cursor}
+	f := inboundFile{SchemaVersion: inboundSchemaVersion, Machine: machineID, Cursor: ck.Cursor, Incarnation: ck.Incarnation}
 	for st, seq := range ck.Highest {
 		f.Streams = append(f.Streams, inboundStreamRecord{
 			Sender: hex.EncodeToString(st.Sender[:]), Epoch: st.Epoch, Seq: seq,

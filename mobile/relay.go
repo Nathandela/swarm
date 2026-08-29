@@ -135,7 +135,7 @@ func (r *relayAcker) Ack(cursor uint64) error {
 // high-water refuses any redelivery), so nothing is lost when one fails. The poll drain
 // ignores it, because its next MailboxRead re-probes the link within one
 // DefaultCallTimeout anyway.
-func (a *App) flushAcks(ctx context.Context, cl *relay.Client) error {
+func (a *App) flushAcks(ctx context.Context, cl *relay.Client, generation uint64) error {
 	a.mu.Lock()
 	cursor := a.ackPending
 	sent := a.ackSent
@@ -143,7 +143,7 @@ func (a *App) flushAcks(ctx context.Context, cl *relay.Client) error {
 	if cursor <= sent {
 		return nil
 	}
-	if err := cl.MailboxAck(ctx, cursor); err != nil {
+	if err := cl.MailboxAckGeneration(ctx, cursor, generation); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -514,6 +514,7 @@ func (a *App) run(ctx context.Context) {
 		// the presence cadence starts, so the hello is the connection's only in-flight
 		// exchange and the drain mode is decided from the relay's own advertisement
 		// rather than from a blind probe's timeout (committee findings M1/M3).
+		cl.SetMailboxIncarnation(a.core.State().RelayIncarnation)
 		a.waitSupport.Store(a.negotiateWaitSupport(ctx, cl))
 		a.setClient(cl)
 		a.setConn(connOnline)
@@ -1065,6 +1066,8 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 		a.mu.Unlock()
 		return nil
 	})
+	a.setAckReset(acks.Reset)
+	defer a.setAckReset(nil)
 	actx, stopAcks := context.WithCancel(ctx)
 	ackDone := make(chan struct{})
 	go func() { defer close(ackDone); acks.Run(actx) }()
@@ -1082,6 +1085,7 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 		// this line is picked up here, and one that lands after it cancels the wait
 		// (nudgeDrain), so neither ordering leaves the drain parked at the old cursor.
 		cursor := a.core.State().RelayCursor
+		ackGeneration := acks.Generation()
 		items, _, err := cl.MailboxWait(waitCtx, cursor)
 		a.setWaitCancel(nil)
 		cancelWait()
@@ -1089,6 +1093,12 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 		if err != nil {
 			if ctx.Err() != nil {
 				return
+			}
+			if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+				if resetErr := a.rewindRelayCursor(); resetErr != nil {
+					return
+				}
+				continue
 			}
 			if errors.Is(err, context.Canceled) {
 				// The NUDGE, and it can be nothing else: the drain's own shutdown was
@@ -1107,6 +1117,9 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 			}
 			return
 		}
+		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
+			return
+		}
 		a.waitSupport.Store(waitSupported)
 		for _, it := range items {
 			a.accept(ctx, it.Envelope, it.Cursor)
@@ -1120,7 +1133,14 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 		pending, sent := a.ackPending, a.ackSent
 		a.mu.Unlock()
 		if pending > sent {
-			acks.Record(pending)
+			if !acks.RecordGeneration(pending, ackGeneration) {
+				// A manual Resync crossed this delivery. Its cursor belongs to the
+				// retired mailbox generation, including the facade's coalescing copy.
+				a.mu.Lock()
+				a.ackPending = 0
+				a.ackSent = 0
+				a.mu.Unlock()
+			}
 		}
 	}
 }
@@ -1146,6 +1166,12 @@ func (a *App) setWaitCancel(fn context.CancelFunc) {
 	a.mu.Unlock()
 }
 
+func (a *App) setAckReset(fn func()) {
+	a.mu.Lock()
+	a.ackReset = fn
+	a.mu.Unlock()
+}
+
 // nudgeDrain wakes a parked mailbox wait so the drain re-reads the durable relay cursor.
 //
 // IT EXISTS FOR EXACTLY ONE CALLER: Resync, right after RewindRelayCursor. The poll
@@ -1167,17 +1193,72 @@ func (a *App) nudgeDrain() {
 	}
 }
 
+// rewindRelayCursor moves only the relay-owned storage coordinate back to zero and retires
+// every queued ack from its prior generation. The phonecore rewind preserves authenticated
+// receive and grant replay high-waters, so re-served envelopes are refused/acked without
+// being applied twice. Both ack counters must move with it: their numeric ordering has no
+// meaning in the replacement mailbox and a larger stale ack could otherwise delete new items.
+func (a *App) rewindRelayCursor() error {
+	a.mu.Lock()
+	resetAcks := a.ackReset
+	cl := a.client
+	a.mu.Unlock()
+	// Reset is a barrier: any already-started old-coordinate ack completes while
+	// the client still carries the retired incarnation. Clear it only afterwards.
+	if resetAcks != nil {
+		resetAcks()
+	}
+	if cl != nil {
+		cl.ResetMailboxIncarnation()
+	}
+	// Write the durable rewind last. If an already-returned page was adopting the
+	// retired incarnation concurrently, this write follows it and clears it; if its
+	// request was still in flight, the client generation barrier refuses its response.
+	if err := a.core.RewindRelayCursor(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.ackPending = 0
+	a.ackSent = 0
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *App) adoptRelayIncarnation(incarnation string) error {
+	if incarnation == "" || a.core.State().RelayIncarnation == incarnation {
+		return nil
+	}
+	return a.core.SetRelayIncarnation(incarnation)
+}
+
 func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 	for ctx.Err() == nil {
 		cursor := a.core.State().RelayCursor
+		ackGeneration := cl.MailboxGeneration()
 		items, err := cl.MailboxRead(ctx, cursor)
 		if err != nil {
+			if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+				if resetErr := a.rewindRelayCursor(); resetErr == nil {
+					continue
+				}
+			}
+			return
+		}
+		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
 			return
 		}
 		for _, it := range items {
 			a.accept(ctx, it.Envelope, it.Cursor)
 		}
-		_ = a.flushAcks(ctx, cl) // this loop's own MailboxRead re-probes the link next cycle
+		if err := a.flushAcks(ctx, cl, ackGeneration); errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+			// A manual recovery crossed this already-returned poll page. Its coalesced
+			// cursor belongs to the retired mailbox generation and must not leak into
+			// the next page's ack.
+			a.mu.Lock()
+			a.ackPending = 0
+			a.ackSent = 0
+			a.mu.Unlock()
+		}
 		if a.core.State().RelayCursor > cursor {
 			continue
 		}

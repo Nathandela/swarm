@@ -12,6 +12,7 @@ package phonecore
 // rewind reaches disk, and the merge rule it defeats is still there for everyone else.
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -69,5 +70,48 @@ func TestRewindRelayCursor_DoesNotWeakenTheMergeRuleForOrdinaryWrites(t *testing
 	if got := core.State().RelayCursor; got != 500 {
 		t.Fatalf("an ordinary Save rewound the read cursor to %d: custody must still refuse "+
 			"every lowering that is not an explicit RewindRelayCursor", got)
+	}
+}
+
+func TestRewindRelayCursor_StaleConcurrentWriterCannotRestoreRetiredGeneration(t *testing.T) {
+	dir, wake, content, _ := s14aR2Sealed(t)
+	core := s14aR2Resume(t, dir, wake, content)
+
+	seed := core.State()
+	seed.RelayCursor = 53
+	seed.RelayIncarnation = "11111111111111111111111111111111"
+	if err := core.Save(seed); err != nil {
+		t.Fatalf("seed continuity: %v", err)
+	}
+	stale := core.State() // captured by a writer before recovery begins
+
+	writerReady := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	var once sync.Once
+	go func() {
+		once.Do(func() { close(writerReady) })
+		<-releaseWriter
+		writerDone <- core.Save(stale)
+	}()
+	<-writerReady
+	if err := core.RewindRelayCursor(); err != nil {
+		t.Fatalf("RewindRelayCursor: %v", err)
+	}
+	if err := core.SetRelayIncarnation("22222222222222222222222222222222"); err != nil {
+		t.Fatalf("SetRelayIncarnation: %v", err)
+	}
+	close(releaseWriter) // the pre-recovery writer finishes last
+	if err := <-writerDone; err != nil {
+		t.Fatalf("stale concurrent Save: %v", err)
+	}
+
+	got := core.State()
+	if got.RelayCursor != 0 || got.RelayIncarnation != "22222222222222222222222222222222" {
+		t.Fatalf("stale writer restored retired continuity: cursor=%d incarnation=%q", got.RelayCursor, got.RelayIncarnation)
+	}
+	reopened := s14aR2Resume(t, dir, wake, content).State()
+	if reopened.RelayCursor != 0 || reopened.RelayIncarnation != "22222222222222222222222222222222" {
+		t.Fatalf("stale writer reached disk: cursor=%d incarnation=%q", reopened.RelayCursor, reopened.RelayIncarnation)
 	}
 }

@@ -133,6 +133,9 @@ type App struct {
 	// would otherwise not look at the rewound cursor until the relay's wait ceiling
 	// answered it empty (mobile/relay.go).
 	waitCancel context.CancelFunc
+	// AckBatcher.Reset for the live wait drain. It is a generation barrier used by
+	// both automatic recovery and the manual Resync cursor rewind.
+	ackReset func()
 
 	// bucketMu orders the phone -> machine MAILBOX BUCKET -- every envelope on it, command
 	// and input alike. It is held across allocate-seal-append at each of the three append
@@ -1432,7 +1435,7 @@ func (a *App) Resync(stream string) (err error) {
 	// not have to guess which button repairs the connection. It is inside the budget for the
 	// same reason the rest of the verb is: the work is one re-drain of a depth-capped mailbox,
 	// and the seq high-water refuses every frame in it that was already applied.
-	if err = core.RewindRelayCursor(); err != nil {
+	if err = a.rewindRelayCursor(); err != nil {
 		return err
 	}
 	// The wait drain PARKS at the cursor it read, and a wait parked at the poisoned value

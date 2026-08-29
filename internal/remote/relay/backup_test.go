@@ -62,7 +62,7 @@ func TestBackup_ProducesRestorableSnapshot(t *testing.T) {
 		t.Fatalf("openStore(backup): %v", err)
 	}
 	defer func() { _ = st.close() }()
-	items, _, err := st.readItemsPage(devRID, 0, 10, 1<<20)
+	items, _, _, err := st.readItemsPage(devRID, 0, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("readItemsPage on backup: %v", err)
 	}
@@ -785,6 +785,77 @@ func TestRestore_FsyncsDestinationDirectoryAfterRename(t *testing.T) {
 	}
 	if want := filepath.Dir(dbPath); syncedDir != want {
 		t.Fatalf("Restore did not fsync the destination directory: got %q, want %q", syncedDir, want)
+	}
+}
+
+func TestRestoreRotatesMailboxIncarnation(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	backup := filepath.Join(dir, "backup.db")
+	target := filepath.Join(dir, "target.db")
+	st, err := openStore(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	if err := st.db.View(func(tx *bolt.Tx) error { before = mailboxIncarnation(tx); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Backup(source, backup); err != nil {
+		t.Fatalf("Backup: %v", err)
+	}
+	if err := Restore(target, backup); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	restored, err := openStore(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restored.close() }()
+	var after string
+	if err := restored.db.View(func(tx *bolt.Tx) error { after = mailboxIncarnation(tx); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if before == "" || after == "" || before == after {
+		t.Fatalf("restore mailbox incarnations before=%q after=%q, want two non-empty distinct values", before, after)
+	}
+}
+
+func TestRestoreAcceptsLegacyBackupAndMintsNewMailboxIncarnation(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "legacy-backup.db")
+	target := filepath.Join(dir, "target.db")
+	seedValidBackup(t, legacy)
+
+	db, err := bolt.Open(legacy, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error { return tx.DeleteBucket(bucketMeta) }); err != nil {
+		_ = db.Close()
+		t.Fatalf("remove post-legacy meta bucket: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Restore(target, legacy); err != nil {
+		t.Fatalf("Restore legacy backup: %v", err)
+	}
+	restored, err := openStore(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restored.close() }()
+	var incarnation string
+	if err := restored.db.View(func(tx *bolt.Tx) error { incarnation = mailboxIncarnation(tx); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if incarnation == "" {
+		t.Fatal("restored legacy backup has no mailbox incarnation")
 	}
 }
 

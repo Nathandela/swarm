@@ -161,7 +161,11 @@ import (
 // its first snapshot. A build one version back drops this proof and returns after restart
 // to calling that state synchronized-empty, so the schema and its pinned literal advance
 // together.
-const StateSchemaVersion = 14
+//
+// v15 adds relay_incarnation, the durable identity of the mailbox log that minted
+// RelayCursor. Dropping it turns the cursor back into an unqualified number and can skip
+// restored items when a replacement log's numeric high-water catches up.
+const StateSchemaVersion = 15
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -279,16 +283,17 @@ type State struct {
 	// current again -- a flag that could only be set would replace an unpairable phone with a
 	// permanently unpairable one. What protects it from a writer that has not noticed the
 	// revoke is the purge stamp rather than a merge rule; see Save and disown.
-	Disowned    bool
-	RoutingID   string            // this phone's relay routing id
-	EpochID     uint32            // current epoch the content key belongs to
-	Keys        crypto.EpochKeys  // wake + content keys for EpochID
-	SendSeq     map[uint32]uint64 // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive     map[Bucket]uint64 // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch  uint32            // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq    uint64            // highest accepted grant seq for GrantEpoch
-	WakeReplay  uint64            // highest accepted push-wake counter
-	RelayCursor uint64            // relay mailbox read cursor the next poll resumes from
+	Disowned         bool
+	RoutingID        string            // this phone's relay routing id
+	EpochID          uint32            // current epoch the content key belongs to
+	Keys             crypto.EpochKeys  // wake + content keys for EpochID
+	SendSeq          map[uint32]uint64 // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive          map[Bucket]uint64 // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch       uint32            // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq         uint64            // highest accepted grant seq for GrantEpoch
+	WakeReplay       uint64            // highest accepted push-wake counter
+	RelayCursor      uint64            // relay mailbox read cursor the next poll resumes from
+	RelayIncarnation string            // durable identity of the relay mailbox RelayCursor belongs to
 	// RosterRevision advances whenever a contiguous authoritative journal reseed commits.
 	// Unlike a row count or cursor it proves that even an empty roster at cursor zero arrived.
 	RosterRevision uint64
@@ -361,6 +366,12 @@ type State struct {
 	// clamped to the acceptance instant so a machine whose clock runs fast cannot buy itself
 	// an unbounded freshness window with one stamp.
 	LastHeardAt int64
+
+	// relayGen is custody's in-process generation for the explicit relay continuity
+	// rewind. A State snapshot from before RewindRelayCursor carries an older value and
+	// cannot restore the retired cursor/incarnation if its Save finishes afterwards.
+	// It is intentionally not persisted: no writer survives the process that owns it.
+	relayGen uint64
 
 	// purgeGen is the purge counter this snapshot was taken at. It is custody's own
 	// bookkeeping, never persisted and never set by a caller: Store stamps every State it
@@ -497,6 +508,7 @@ type Store interface {
 	// indicator still reading live; before this seam the only way back was deleting the state
 	// directory and re-pairing (ADR-007 B126).
 	RewindRelayCursor() error
+	SetRelayIncarnation(string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -569,11 +581,12 @@ type stateFile struct {
 	ContentKept      []byte `json:"content_kept,omitempty"`
 	ContentPurgeable []byte `json:"content_purgeable,omitempty"`
 
-	GrantEpoch     uint32         `json:"grant_epoch"`
-	GrantSeq       uint64         `json:"grant_seq"`
-	RelayCursor    uint64         `json:"relay_cursor"`
-	RosterRevision uint64         `json:"roster_revision,omitempty"`
-	Stale          []bucketRecord `json:"stale,omitempty"`
+	GrantEpoch       uint32         `json:"grant_epoch"`
+	GrantSeq         uint64         `json:"grant_seq"`
+	RelayCursor      uint64         `json:"relay_cursor"`
+	RelayIncarnation string         `json:"relay_incarnation,omitempty"`
+	RosterRevision   uint64         `json:"roster_revision,omitempty"`
+	Stale            []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
 	// LastHeardAt is PB-APP-11's freshness coordinate (see State.LastHeardAt). It is
@@ -793,7 +806,13 @@ func (s *fileStore) hasSealedContentKey() bool {
 func (s *fileStore) Save(st State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked(st)
+}
 
+// saveLocked is Save with custody's mutex already held. Explicit continuity mutations use
+// it so changing s.st and persisting the change are one critical section rather than an
+// unlock/relock window in which an old snapshot can restore the retired generation.
+func (s *fileStore) saveLocked(st State) error {
 	// A snapshot taken BEFORE a purge belongs to a writer that has not noticed it, and round
 	// 2's "a real key always wins" makes its stale keys win over the purge. Re-apply what the
 	// purge destroyed instead: the rest of the snapshot still lands, because refusing the
@@ -808,6 +827,11 @@ func (s *fileStore) Save(st State) error {
 	// revoke, which is what makes a pairing able to clear the flag through an ordinary Save.
 	if st.purgeGen < s.purgeGen {
 		st = disown(st)
+	}
+	if st.relayGen < s.st.relayGen {
+		st.RelayCursor = s.st.RelayCursor
+		st.RelayIncarnation = s.st.RelayIncarnation
+		st.relayGen = s.st.relayGen
 	}
 	// A CALLER ARRIVING WITH A REAL CONTENT KEY HAS PROVED THE TIER IS OPEN, and the containers
 	// have to be told. resealTier's "a real key always wins" branch is about to seal that key
@@ -824,6 +848,7 @@ func (s *fileStore) Save(st State) error {
 	}
 	merged := mergeGuards(s.st, st.clone())
 	merged.purgeGen = s.purgeGen
+	merged.relayGen = s.st.relayGen
 	if s.path != "" {
 		if err := s.refuseUnreadableContentWrite(merged); err != nil {
 			return err
@@ -1071,10 +1096,28 @@ func (s *fileStore) PurgeKeys() error {
 // not a second way to reach the disk.
 func (s *fileStore) RewindRelayCursor() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.st.clone()
 	s.st.RelayCursor = 0
-	st := s.st.clone()
-	s.mu.Unlock()
-	return s.Save(st)
+	s.st.RelayIncarnation = ""
+	s.st.relayGen++
+	if err := s.saveLocked(s.st.clone()); err != nil {
+		s.st = previous
+		return err
+	}
+	return nil
+}
+
+func (s *fileStore) SetRelayIncarnation(incarnation string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.st.clone()
+	s.st.RelayIncarnation = incarnation
+	if err := s.saveLocked(s.st.clone()); err != nil {
+		s.st = previous
+		return err
+	}
+	return nil
 }
 
 // UnsealContent re-opens the content tier IN PLACE: PB-KEY-7's "require a fresh unwrap before
@@ -1262,6 +1305,9 @@ func mergeGuards(cur, next State) State {
 	if cur.RelayCursor > next.RelayCursor {
 		next.RelayCursor = cur.RelayCursor
 	}
+	if cur.RelayIncarnation != "" {
+		next.RelayIncarnation = cur.RelayIncarnation
+	}
 	return next
 }
 
@@ -1295,6 +1341,9 @@ func (s *fileStore) load() error {
 		// not write a blob stamped with an empty machine, or it discards itself next launch.
 		return nil
 	}
+	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) {
+		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
+	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
 	// sealed blobs would be exactly the silent reinterpretation the version guard exists
 	// to refuse, so a pre-seal blob that carries either one is refused outright. Checked
@@ -1325,6 +1374,7 @@ func (s *fileStore) load() error {
 		GrantEpoch:          f.GrantEpoch,
 		GrantSeq:            f.GrantSeq,
 		RelayCursor:         f.RelayCursor,
+		RelayIncarnation:    f.RelayIncarnation,
 		RosterRevision:      f.RosterRevision,
 		LastHeardAt:         f.LastHeardAt,
 		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
@@ -1397,6 +1447,21 @@ func (s *fileStore) load() error {
 	}
 	s.st = st
 	return nil
+}
+
+// Kept local rather than importing remote/relay: phonecore's durable core must not depend on
+// the websocket client package (PB-BIND-0). This mirrors the protocol's canonical 128-bit,
+// lowercase-hex representation at the persistence trust boundary.
+func validPersistedRelayIncarnation(incarnation string) bool {
+	if len(incarnation) != 32 {
+		return false
+	}
+	for i := range incarnation {
+		if c := incarnation[i]; c < '0' || (c > '9' && c < 'a') || c > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeBucket(sender string, epoch uint32) (Bucket, error) {
@@ -1566,6 +1631,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		GrantEpoch:          st.GrantEpoch,
 		GrantSeq:            st.GrantSeq,
 		RelayCursor:         st.RelayCursor,
+		RelayIncarnation:    st.RelayIncarnation,
 		RosterRevision:      st.RosterRevision,
 		LastHeardAt:         st.LastHeardAt,
 	}

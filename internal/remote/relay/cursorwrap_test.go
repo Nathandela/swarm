@@ -10,6 +10,7 @@ package relay
 // readItemsPage, so the boundary is fenced once, there.
 
 import (
+	"errors"
 	"math"
 	"testing"
 )
@@ -37,13 +38,8 @@ func TestMailboxRead_MaxUint64CursorDoesNotWrapAndReserveTheWholeMailbox(t *test
 		t.Fatalf("premise: mailbox holds %d items, want 3", len(all))
 	}
 
-	items, err := device.MailboxRead(testCtx(t), math.MaxUint64)
-	if err != nil {
-		t.Fatalf("MailboxRead(MaxUint64): %v", err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("MailboxRead(MaxUint64) returned %d items, want 0: the scan start "+
-			"`afterCursor+1` wrapped to zero, so the relay re-serves the ENTIRE mailbox "+
-			"on every read from that cursor", len(items))
+	if _, err := device.MailboxRead(testCtx(t), math.MaxUint64); !errors.Is(err, ErrMailboxCursorResetRequired) {
+		t.Fatalf("MailboxRead(MaxUint64) = %v, want ErrMailboxCursorResetRequired: the cursor is "+
+			"past this mailbox's durable high-water and must never wrap to the beginning", err)
 	}
 }

@@ -46,8 +46,9 @@ const (
 // pendingWait is one parked server-side wait. §6.0 caps them at one per client,
 // so Server.waits is keyed by routing id and the map itself enforces the cap.
 type pendingWait struct {
-	id     uint64
-	cursor uint64
+	id          uint64
+	cursor      uint64
+	incarnation string
 	// rid is the routing id this wait was REGISTERED under, captured once under
 	// s.mu. It is deliberately a copy rather than a read of sc.rid: re-running the
 	// handshake on an established connection is a legal frame sequence, so sc.rid
@@ -64,8 +65,8 @@ type pendingWait struct {
 	wake chan struct{}
 }
 
-func newPendingWait(sc *serverConn, rid string, id, cursor uint64) *pendingWait {
-	return &pendingWait{id: id, cursor: cursor, rid: rid, sc: sc, wake: make(chan struct{}, 1)}
+func newPendingWait(sc *serverConn, rid string, id, cursor uint64, incarnation string) *pendingWait {
+	return &pendingWait{id: id, cursor: cursor, incarnation: incarnation, rid: rid, sc: sc, wake: make(chan struct{}, 1)}
 }
 
 // signal releases the wait. Terminal reasons win over waitItems and over each
@@ -84,16 +85,17 @@ func (w *pendingWait) signal(r waitReason) {
 // Code is the same wire code an r_error would have carried, so the client maps it
 // back to the identical sentinel.
 type waitReplyBody struct {
-	WaitID  uint64 `json:"wait_id"`
-	Items   []Item `json:"items"`
-	HasMore bool   `json:"has_more"`
-	Code    string `json:"code,omitempty"`
+	WaitID      uint64 `json:"wait_id"`
+	Items       []Item `json:"items"`
+	HasMore     bool   `json:"has_more"`
+	Incarnation string `json:"mailbox_incarnation,omitempty"`
+	Code        string `json:"code,omitempty"`
 }
 
 // registerWait claims this client's single pending-wait slot. sc.rid is read HERE,
 // under s.mu, on the connection's own request loop -- the one place it is safe to
 // read it -- and every later use goes through the captured copy.
-func (s *Server) registerWait(sc *serverConn, id, cursor uint64) (*pendingWait, bool) {
+func (s *Server) registerWait(sc *serverConn, id, cursor uint64, incarnation string) (*pendingWait, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Refused both per CONNECTION and per routing id: the §6.0 cap is per client,
@@ -104,7 +106,7 @@ func (s *Server) registerWait(sc *serverConn, id, cursor uint64) (*pendingWait, 
 	if _, busy := s.waits[sc.rid]; busy {
 		return nil, false
 	}
-	w := newPendingWait(sc, sc.rid, id, cursor)
+	w := newPendingWait(sc, sc.rid, id, cursor, incarnation)
 	s.waits[w.rid] = w
 	sc.wait = w
 	return w, true
@@ -182,8 +184,9 @@ func (sc *serverConn) concludeWait(w *pendingWait, b waitReplyBody) {
 // a refusal is immediate and no refused wait ever parks anything.
 func (sc *serverConn) handleMailboxWait(payload []byte) error {
 	var req struct {
-		Cursor uint64 `json:"cursor"`
-		WaitID uint64 `json:"wait_id"`
+		Cursor      uint64  `json:"cursor"`
+		WaitID      uint64  `json:"wait_id"`
+		Incarnation *string `json:"mailbox_incarnation"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
@@ -204,7 +207,14 @@ func (sc *serverConn) handleMailboxWait(payload []byte) error {
 	if sc.superseded.Load() {
 		return sc.replyWait(waitReplyBody{WaitID: req.WaitID, Code: codeDuplicateConn})
 	}
-	w, ok := sc.s.registerWait(sc, req.WaitID, req.Cursor)
+	if req.Incarnation != nil && *req.Incarnation == "" && req.Cursor > 0 {
+		return sc.replyWait(waitReplyBody{WaitID: req.WaitID, Code: codeMailboxCursorReset})
+	}
+	expected := ""
+	if req.Incarnation != nil {
+		expected = *req.Incarnation
+	}
+	w, ok := sc.s.registerWait(sc, req.WaitID, req.Cursor, expected)
 	if !ok {
 		return sc.replyWait(waitReplyBody{WaitID: req.WaitID, Code: codeWaitInProgress})
 	}
@@ -265,13 +275,17 @@ func (sc *serverConn) serveWait(w *pendingWait) {
 	for {
 		// The wait returns the ITEMS, not a bare signal: a signal-then-read costs two
 		// metered ops per batch, which §6.0's 240/min drain budget cannot absorb.
-		items, hasMore, err := sc.s.st.readItemsPage(w.rid, w.cursor, defaultMailboxPageItems, mailboxPageByteBudget)
+		items, hasMore, resetRequired, incarnation, err := sc.s.st.readItemsPageForIncarnation(w.rid, w.incarnation, w.cursor, defaultMailboxPageItems, mailboxPageByteBudget)
 		if err != nil {
 			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Code: codeBadRequest})
 			return
 		}
+		if resetRequired {
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Code: codeMailboxCursorReset})
+			return
+		}
 		if len(items) > 0 {
-			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Items: items, HasMore: hasMore})
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Items: items, HasMore: hasMore, Incarnation: incarnation})
 			return
 		}
 		select {
@@ -289,7 +303,7 @@ func (sc *serverConn) serveWait(w *pendingWait) {
 		case <-timer.C:
 			// Bounded: a clean empty page at the ceiling, never a socket held open
 			// until an intermediary kills it.
-			sc.concludeWait(w, waitReplyBody{WaitID: w.id})
+			sc.concludeWait(w, waitReplyBody{WaitID: w.id, Incarnation: incarnation})
 			return
 		case <-sc.ctx.Done():
 			// The connection is gone (close, revoke severance, server shutdown).

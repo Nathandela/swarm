@@ -44,6 +44,12 @@ type Mailbox interface {
 	MailboxAck(ctx context.Context, cursor uint64) error
 }
 
+type mailboxIncarnationState interface {
+	SetMailboxIncarnation(string)
+	ResetMailboxIncarnation()
+	MailboxIncarnation() string
+}
+
 // CommandForwarder forwards a device-signed command to the daemon and returns the
 // reply. (*Gateway).ForwardCommand satisfies it.
 //
@@ -167,11 +173,17 @@ type CommandBridge struct {
 	// takes mu. See sealReply for why the three steps cannot be split.
 	replyMu sync.Mutex
 
-	mu      sync.Mutex
-	cursor  uint64
-	highest map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
-	pollErr error                    // first error the Run loop's polls hit (see Err)
-	replies uint64                   // waits the RELAY answered (see RelayReplies)
+	mu          sync.Mutex
+	cursor      uint64
+	incarnation string
+	highest     map[InboundStream]uint64 // in-memory mirror of the persisted per-stream high-water
+	// cursorRecovery is true only after this connection received the relay's explicit
+	// continuity-reset verdict. It authorises authenticated stale-envelope compaction while
+	// redraining from zero; ordinary restart replays keep their longstanding surfaced-error
+	// behavior and are never silently adopted as relay-cursor progress.
+	cursorRecovery bool
+	pollErr        error  // first error the Run loop's polls hit (see Err)
+	replies        uint64 // waits the RELAY answered (see RelayReplies)
 }
 
 // NewCommandBridge returns a bridge over cfg, SEEDED from its durable inbound checkpoint
@@ -210,6 +222,10 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 		b.highest[st] = seq
 	}
 	b.cursor = ck.Cursor
+	b.incarnation = ck.Incarnation
+	if mailbox, ok := cfg.Mailbox.(mailboxIncarnationState); ok {
+		mailbox.SetMailboxIncarnation(ck.Incarnation)
+	}
 	// PB-INPUT-2: a lease that dies under a live gateway must be sealed back to the phone
 	// (lease_sever.go). cfg.Leases is nilable -- "nil => input plane disabled" -- and a
 	// registration that dereferenced it would turn a supported configuration into a crash
@@ -267,11 +283,14 @@ func (b *CommandBridge) Cursor() uint64 {
 // into the returned error but do not stop the batch. The cursor advances past the items that
 // were HANDLED, never past one that failed to open (processBatch).
 func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
-	items, err := b.cfg.Mailbox.MailboxRead(ctx, b.Cursor())
+	items, err := b.readMailboxPage(ctx)
 	if err != nil {
 		return 0, err
 	}
 	processed, maxCursor, errs := b.processBatch(ctx, items)
+	if len(items) == 0 {
+		b.completeCursorRecovery()
+	}
 	if maxCursor > 0 {
 		// Ack durably purges consumed items from the relay's mailbox store, so a
 		// restarted bridge never re-reads them. A failed ack surfaces as an error but
@@ -284,6 +303,75 @@ func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 		}
 	}
 	return processed, errors.Join(errs...)
+}
+
+// readMailboxPage performs one bounded continuity repair. A reset relay store can restart
+// its per-mailbox cursors at one while this bridge durably resumes at a larger coordinate;
+// the relay's explicit sentinel is the only honest evidence that lowering that coordinate
+// is required. Retry exactly once from zero so a broken or hostile relay cannot turn the
+// repair signal into an unbounded local loop.
+func (b *CommandBridge) readMailboxPage(ctx context.Context) ([]relay.Item, error) {
+	items, err := b.cfg.Mailbox.MailboxRead(ctx, b.Cursor())
+	if !errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+		if err == nil {
+			err = b.adoptMailboxIncarnation()
+		}
+		return items, err
+	}
+	if err := b.rewindMailboxCursor(); err != nil {
+		return nil, err
+	}
+	items, err = b.cfg.Mailbox.MailboxRead(ctx, 0)
+	if err == nil {
+		err = b.adoptMailboxIncarnation()
+	}
+	return items, err
+}
+
+// rewindMailboxCursor persists the reset before publishing it in memory, preserving every
+// authenticated (sender, epoch) high-water. Holding b.mu across custody prevents an ordinary
+// checkpoint Save captured before the reset from landing afterwards and raising the cursor
+// back to the retired relay generation.
+func (b *CommandBridge) rewindMailboxCursor() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.inbound.RewindCursor(); err != nil {
+		return fmt.Errorf("rewind relay mailbox cursor: %w", err)
+	}
+	b.cursor = 0
+	b.incarnation = ""
+	b.cursorRecovery = true
+	if mailbox, ok := b.cfg.Mailbox.(mailboxIncarnationState); ok {
+		mailbox.ResetMailboxIncarnation()
+	}
+	return nil
+}
+
+func (b *CommandBridge) adoptMailboxIncarnation() error {
+	mailbox, ok := b.cfg.Mailbox.(mailboxIncarnationState)
+	if !ok {
+		return nil
+	}
+	incarnation := mailbox.MailboxIncarnation()
+	if incarnation == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.incarnation == incarnation {
+		return nil
+	}
+	previous := b.incarnation
+	b.incarnation = incarnation
+	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest))}
+	for st, seq := range b.highest {
+		ck.Highest[st] = seq
+	}
+	if err := b.inbound.Save(ck); err != nil {
+		b.incarnation = previous
+		return fmt.Errorf("persist relay mailbox incarnation: %w", err)
+	}
+	return nil
 }
 
 // processBatch handles one batch of mailbox items and returns how many forwarded
@@ -317,6 +405,20 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 	before := b.Cursor()
 	for _, it := range items {
 		if err := b.handle(ctx, it); err != nil {
+			if b.cursorRecoveryActive() {
+				// An explicit relay-cursor rewind deliberately re-serves envelopes whose
+				// authenticated seq is already durable. Authenticate one with a fresh
+				// receiver before advancing only the relay coordinate: MailboxReceiver's
+				// fast stale path checks the visible header before AEAD, so ErrStaleSeq
+				// alone is never sufficient authority to compact an item.
+				if replayErr := b.consumeDurableReplay(it); replayErr == nil {
+					errs = append(errs, fmt.Errorf("cursor %d: %w", it.Cursor, err))
+					continue
+				} else {
+					errs = append(errs, fmt.Errorf("cursor %d: %w", it.Cursor, errors.Join(err, replayErr)))
+					continue
+				}
+			}
 			errs = append(errs, fmt.Errorf("cursor %d: %w", it.Cursor, err))
 			continue
 		}
@@ -331,6 +433,53 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 		return processed, 0, errs
 	}
 	return processed, consumed, errs
+}
+
+func (b *CommandBridge) cursorRecoveryActive() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cursorRecovery
+}
+
+func (b *CommandBridge) completeCursorRecovery() {
+	b.mu.Lock()
+	b.cursorRecovery = false
+	b.mu.Unlock()
+}
+
+// consumeDurableReplay authenticates a stale envelope without dispatching it, then advances
+// only the relay-owned storage cursor when the signed stream/seq is at or below the durable
+// replay high-water. This is what lets a post-reset rewind compact a page made entirely of
+// already-applied commands without repeating any daemon or PTY side effect.
+func (b *CommandBridge) consumeDurableReplay(it relay.Item) error {
+	env, err := crypto.ParseEnvelope(it.Envelope)
+	if err != nil {
+		return fmt.Errorf("parse replay: %w", err)
+	}
+	fresh := crypto.NewMailboxReceiver()
+	frame, err := OpenMailboxFrameAt(fresh, b.cfg.Key, it.Envelope, time.UnixMilli(env.Header.IssuedAt))
+	if err != nil {
+		return fmt.Errorf("authenticate replay: %w", err)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	durable := b.inbound.Load()
+	if high, ok := durable.Highest[frame.Stream]; !ok || frame.Seq > high {
+		return fmt.Errorf("replay seq %d is not covered by a durable high-water", frame.Seq)
+	}
+	if it.Cursor <= b.cursor {
+		return nil
+	}
+	previous := b.cursor
+	b.cursor = it.Cursor
+	ck := cloneCheckpoint(durable)
+	ck.Cursor = b.cursor
+	if err := b.inbound.Save(ck); err != nil {
+		b.cursor = previous
+		return fmt.Errorf("persist replay cursor %d: %w", it.Cursor, err)
+	}
+	return nil
 }
 
 // gatewayHelloCaps is every capability the gateway sidecar's r_hello asks the relay
@@ -488,12 +637,23 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 		// ONE deadline per wait, and it is cancelled rather than deferred: a defer in this
 		// loop would accumulate one live timer per cycle for the life of the bridge.
 		waitCtx, cancelWait := context.WithTimeout(ctx, b.waitTimeout())
+		ackGeneration := acks.Generation()
 		items, _, err := b.cfg.Mailbox.MailboxWait(waitCtx, b.Cursor())
 		cancelWait()
 		pacer.Observe(len(items))
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+				// Cross the ack-generation barrier before the relay client forgets the
+				// retired incarnation in rewindMailboxCursor.
+				acks.Reset()
+				if resetErr := b.rewindMailboxCursor(); resetErr != nil {
+					b.setErr(resetErr)
+				} else {
+					continue
+				}
 			}
 			if waitCtx.Err() != nil {
 				// Name the condition. relay.mailboxWait reports every context ending as
@@ -519,14 +679,21 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		if err := b.adoptMailboxIncarnation(); err != nil {
+			b.setErr(err)
+			continue
+		}
 		// The relay ANSWERED. Recorded before the batch is handled, because what this
 		// counts is the link carrying traffic, not the gateway liking what arrived.
 		b.mu.Lock()
 		b.replies++
 		b.mu.Unlock()
 		_, maxCursor, errs := b.processBatch(ctx, items)
+		if len(items) == 0 {
+			b.completeCursorRecovery()
+		}
 		if maxCursor > 0 {
-			acks.Record(maxCursor)
+			acks.RecordGeneration(maxCursor, ackGeneration)
 		}
 		if err := errors.Join(errs...); err != nil {
 			b.setErr(err)
@@ -678,11 +845,11 @@ func (b *CommandBridge) consume(frame MailboxFrame, cursor uint64) error {
 // merges monotonically, so a concurrent poll can never lower what another already wrote.
 func (b *CommandBridge) saveCheckpoint() error {
 	b.mu.Lock()
-	ck := InboundCheckpoint{Cursor: b.cursor, Highest: make(map[InboundStream]uint64, len(b.highest))}
+	defer b.mu.Unlock()
+	ck := InboundCheckpoint{Cursor: b.cursor, Incarnation: b.incarnation, Highest: make(map[InboundStream]uint64, len(b.highest))}
 	for st, seq := range b.highest {
 		ck.Highest[st] = seq
 	}
-	b.mu.Unlock()
 	return b.inbound.Save(ck)
 }
 

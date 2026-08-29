@@ -362,6 +362,21 @@ func (c *Core) RewindRelayCursor() error {
 	return nil
 }
 
+// SetRelayIncarnation durably binds the current relay cursor to the mailbox identity a
+// successful read reported. It is persisted before any item from that read is committed.
+func (c *Core) SetRelayIncarnation(incarnation string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.RelayIncarnation == incarnation {
+		return nil
+	}
+	if err := c.store.SetRelayIncarnation(incarnation); err != nil {
+		return err
+	}
+	c.st = c.store.Load().clone()
+	return nil
+}
+
 // persist writes st through custody and adopts whatever custody made of it (the file store
 // merges the replay guards monotonically). A failed write leaves the in-memory copy
 // untouched, so nothing is claimed that is not durable.

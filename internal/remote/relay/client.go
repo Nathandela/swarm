@@ -919,8 +919,89 @@ func (c *Conn) RendezvousComplete(ctx context.Context, id string) error {
 
 // Client is an authenticated relay connection bound to RoutingID(relay-auth pub).
 type Client struct {
-	conn *Conn
-	rid  string
+	conn               *Conn
+	rid                string
+	mailboxMu          sync.Mutex
+	mailboxIncarnation string
+	mailboxAware       bool
+	mailboxGeneration  uint64
+}
+
+// SetMailboxIncarnation seeds the durable mailbox identity a consumer resumed with.
+// Older relays ignore the optional request field; newer relays refuse a different store
+// before interpreting the numeric cursor.
+func (c *Client) SetMailboxIncarnation(incarnation string) {
+	c.mailboxMu.Lock()
+	if !c.mailboxAware || c.mailboxIncarnation != incarnation {
+		c.mailboxGeneration++
+	}
+	c.mailboxIncarnation = incarnation
+	c.mailboxAware = true
+	c.mailboxMu.Unlock()
+}
+
+func (c *Client) ResetMailboxIncarnation() {
+	c.mailboxMu.Lock()
+	c.mailboxIncarnation = ""
+	c.mailboxAware = true
+	// Always advance, even if already empty: Reset is also a response-generation
+	// barrier for any read/wait sent before its caller began a durable rewind.
+	c.mailboxGeneration++
+	c.mailboxMu.Unlock()
+}
+
+func (c *Client) MailboxIncarnation() string {
+	c.mailboxMu.Lock()
+	defer c.mailboxMu.Unlock()
+	return c.mailboxIncarnation
+}
+
+// MailboxGeneration snapshots the live continuity generation for a delivery whose ack may
+// race an explicit reset. Pass it to MailboxAckGeneration after processing that delivery.
+func (c *Client) MailboxGeneration() uint64 {
+	c.mailboxMu.Lock()
+	defer c.mailboxMu.Unlock()
+	return c.mailboxGeneration
+}
+
+func (c *Client) mailboxContinuity() (string, bool, uint64) {
+	c.mailboxMu.Lock()
+	defer c.mailboxMu.Unlock()
+	return c.mailboxIncarnation, c.mailboxAware, c.mailboxGeneration
+}
+
+func (c *Client) adoptMailboxIncarnation(got string, requestGeneration uint64) error {
+	c.mailboxMu.Lock()
+	defer c.mailboxMu.Unlock()
+	if c.mailboxGeneration != requestGeneration {
+		return ErrMailboxCursorResetRequired
+	}
+	if got == "" { // an older relay
+		return nil
+	}
+	if !ValidMailboxIncarnation(got) {
+		return fmt.Errorf("relay: invalid mailbox incarnation (want 32 lowercase hexadecimal characters)")
+	}
+	if c.mailboxIncarnation != "" && c.mailboxIncarnation != got {
+		return ErrMailboxCursorResetRequired
+	}
+	c.mailboxIncarnation = got
+	c.mailboxAware = true
+	return nil
+}
+
+// ValidMailboxIncarnation reports whether incarnation is the canonical wire/storage form:
+// a 128-bit value encoded as exactly 32 lowercase hexadecimal characters.
+func ValidMailboxIncarnation(incarnation string) bool {
+	if len(incarnation) != 32 {
+		return false
+	}
+	for i := range incarnation {
+		if c := incarnation[i]; c < '0' || (c > '9' && c < 'a') || c > 'f' {
+			return false
+		}
+	}
+	return true
 }
 
 // Dial opens a connection and completes the Ed25519 signed-challenge handshake,
@@ -1080,18 +1161,27 @@ func (c *Client) MailboxRead(ctx context.Context, cursor uint64) ([]Item, error)
 // draining an arbitrarily large backlog is a loop of MailboxReadPage + MailboxAck
 // that never overflows a frame.
 func (c *Client) MailboxReadPage(ctx context.Context, cursor uint64, limit int) ([]Item, bool, error) {
-	resp, err := c.conn.control(ctx, "mailbox_read", map[string]any{"cursor": cursor, "limit": limit})
+	incarnation, aware, generation := c.mailboxContinuity()
+	req := map[string]any{"cursor": cursor, "limit": limit}
+	if aware {
+		req["mailbox_incarnation"] = incarnation
+	}
+	resp, err := c.conn.control(ctx, "mailbox_read", req)
 	if err != nil {
 		return nil, false, err
 	}
 	var r struct {
-		Items   []Item `json:"items"`
-		HasMore bool   `json:"has_more"`
+		Items       []Item `json:"items"`
+		HasMore     bool   `json:"has_more"`
+		Incarnation string `json:"mailbox_incarnation,omitempty"`
 	}
 	if err := json.Unmarshal(resp, &r); err != nil {
 		return nil, false, err
 	}
 	if err := checkPageOrder(cursor, r.Items); err != nil {
+		return nil, false, err
+	}
+	if err := c.adoptMailboxIncarnation(r.Incarnation, generation); err != nil {
 		return nil, false, err
 	}
 	return r.Items, r.HasMore, nil
@@ -1147,14 +1237,22 @@ func checkPageOrder(after uint64, items []Item) error {
 // with ErrWaitInProgress, never queued — a queue would make cancellation
 // ambiguous and let one connection pin unbounded server-side wait state.
 func (c *Client) MailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, error) {
-	return c.conn.mailboxWait(ctx, cursor)
+	incarnation, aware, generation := c.mailboxContinuity()
+	items, more, incarnation, err := c.conn.mailboxWait(ctx, cursor, incarnation, aware)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.adoptMailboxIncarnation(incarnation, generation); err != nil {
+		return nil, false, err
+	}
+	return items, more, nil
 }
 
-func (c *Conn) mailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, error) {
+func (c *Conn) mailboxWait(ctx context.Context, cursor uint64, incarnation string, aware bool) ([]Item, bool, string, error) {
 	c.waitMu.Lock()
 	if c.waitCh != nil {
 		c.waitMu.Unlock()
-		return nil, false, ErrWaitInProgress
+		return nil, false, "", ErrWaitInProgress
 	}
 	c.waitSeq++
 	id := c.waitSeq
@@ -1170,32 +1268,36 @@ func (c *Conn) mailboxWait(ctx context.Context, cursor uint64) ([]Item, bool, er
 		c.waitMu.Unlock()
 	}()
 
-	body, err := json.Marshal(map[string]any{"op": "mailbox_wait", "cursor": cursor, "wait_id": id})
+	req := map[string]any{"op": "mailbox_wait", "cursor": cursor, "wait_id": id}
+	if aware {
+		req["mailbox_incarnation"] = incarnation
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if err := c.writeFrame(ctx, MsgRelay, body); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	select {
 	case r := <-ch:
 		if r.Code != "" {
-			return nil, false, errForCode(r.Code)
+			return nil, false, "", errForCode(r.Code)
 		}
 		// The wait carries the same page shape as a read, so it carries the same contract.
 		if err := checkPageOrder(cursor, r.Items); err != nil {
-			return nil, false, err
+			return nil, false, "", err
 		}
-		return r.Items, r.HasMore, nil
+		return r.Items, r.HasMore, r.Incarnation, nil
 	case <-ctx.Done():
 		// Release the SERVER's slot too. An orphaned wait would hold the single
 		// pending-wait slot until its ceiling elapsed, so the next wait — the one a
 		// reconnecting live tail parks — would be refused and typing would be dead
 		// for the remainder of the ceiling.
 		c.cancelWait(id)
-		return nil, false, fmt.Errorf("relay: mailbox wait cancelled: %w", ctx.Err())
+		return nil, false, "", fmt.Errorf("relay: mailbox wait cancelled: %w", ctx.Err())
 	case <-c.done:
-		return nil, false, ErrConnClosed
+		return nil, false, "", ErrConnClosed
 	}
 }
 
@@ -1233,7 +1335,30 @@ func (c *Conn) deliverWait(payload []byte) {
 
 // MailboxAck compacts away every item at or below cursor.
 func (c *Client) MailboxAck(ctx context.Context, cursor uint64) error {
-	_, err := c.conn.control(ctx, "mailbox_ack", map[string]any{"cursor": cursor})
+	return c.mailboxAck(ctx, cursor, nil)
+}
+
+// MailboxAckGeneration acks a cursor only if the delivery generation it belongs to is still
+// current. The generation check and incarnation capture are atomic: a reset before them
+// refuses the stale cursor, while a reset afterwards leaves the request bound to the old
+// incarnation and therefore unable to purge the replacement mailbox.
+func (c *Client) MailboxAckGeneration(ctx context.Context, cursor, generation uint64) error {
+	return c.mailboxAck(ctx, cursor, &generation)
+}
+
+func (c *Client) mailboxAck(ctx context.Context, cursor uint64, generation *uint64) error {
+	c.mailboxMu.Lock()
+	if generation != nil && c.mailboxGeneration != *generation {
+		c.mailboxMu.Unlock()
+		return ErrMailboxCursorResetRequired
+	}
+	incarnation, aware := c.mailboxIncarnation, c.mailboxAware
+	c.mailboxMu.Unlock()
+	req := map[string]any{"cursor": cursor}
+	if aware {
+		req["mailbox_incarnation"] = incarnation
+	}
+	_, err := c.conn.control(ctx, "mailbox_ack", req)
 	return err
 }
 

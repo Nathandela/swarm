@@ -113,7 +113,7 @@ type memInboundState struct {
 func (s *memInboundState) Load() InboundCheckpoint {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := InboundCheckpoint{Cursor: s.ck.Cursor, Highest: make(map[InboundStream]uint64, len(s.ck.Highest))}
+	out := InboundCheckpoint{Cursor: s.ck.Cursor, Incarnation: s.ck.Incarnation, Highest: make(map[InboundStream]uint64, len(s.ck.Highest))}
 	for k, v := range s.ck.Highest {
 		out.Highest[k] = v
 	}
@@ -128,6 +128,9 @@ func (s *memInboundState) Save(ck InboundCheckpoint) error {
 		return s.failSave
 	}
 	s.ck.Cursor = ck.Cursor
+	if ck.Incarnation != "" {
+		s.ck.Incarnation = ck.Incarnation
+	}
 	if s.ck.Highest == nil {
 		s.ck.Highest = make(map[InboundStream]uint64)
 	}
@@ -136,6 +139,17 @@ func (s *memInboundState) Save(ck InboundCheckpoint) error {
 			s.ck.Highest[k] = v
 		}
 	}
+	return nil
+}
+
+func (s *memInboundState) RewindCursor() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failSave != nil {
+		return s.failSave
+	}
+	s.ck.Cursor = 0
+	s.ck.Incarnation = ""
 	return nil
 }
 

@@ -123,6 +123,32 @@ func TestB42StaleAge_AlreadyAppliedFramesKeepTheirAck(t *testing.T) {
 	}
 }
 
+func TestB42StaleAge_AlreadyAppliedOldFrameCompactsAfterCursorRecovery(t *testing.T) {
+	st := &memStore{}
+	seedPaired(t, st)
+	ack := &recordingAcker{}
+	r := resumeRouter(t, st, ack)
+	issued := time.UnixMilli(1_784_000_000_000)
+	env, err := crypto.SealMailbox(testContentKey(), crypto.EnvelopeHeader{
+		Version: crypto.VersionV1, EpochID: 7, Seq: 1, IssuedAt: issued.UnixMilli(),
+	}, marshalReply(t, takeControlReply()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := env.Marshal()
+	if _, err := r.AcceptCommitAt(raw, 1, issued); err != nil {
+		t.Fatalf("initial delivery: %v", err)
+	}
+
+	rcpt, err := r.AcceptCommitAt(raw, 2, issued.Add(InboundMaxAge+time.Minute))
+	if !errors.Is(err, crypto.ErrStaleAge) {
+		t.Fatalf("old replay = %v, want ErrStaleAge surfaced", err)
+	}
+	if !rcpt.Acked || len(ack.acked) != 2 || ack.acked[1] != 2 {
+		t.Fatalf("durably applied old replay was not compacted: receipt=%+v acks=%v", rcpt, ack.acked)
+	}
+}
+
 // TestB42StaleAge_CorrectingTheClockRecoversTheFrame is the property the ack destroyed, and
 // the one the residual's "loss of function" wording missed entirely.
 //

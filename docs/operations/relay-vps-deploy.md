@@ -524,6 +524,25 @@ sudo -u swarm-relay /opt/swarm-relay/bin/swarm-relay restore \
 sudo systemctl start swarm-relay
 ```
 
+**Upgrade order before a planned restore:** deploy the incarnation-aware phone and machine gateway
+consumers first, upgrade the relay server second, and restore only after all affected components are
+on that build. The added wire fields are backward-compatible during this rollout, but an older
+consumer has no durable mailbox-incarnation binding and cannot perform the safe automatic rewind.
+After the restored relay starts, an upgraded consumer sees the new incarnation, discards queued
+acks from the retired mailbox generation, rewinds only its relay cursor (not its authenticated
+replay high-waters), and drains again from zero. Already-applied frames are authenticated and
+compacted without repeating their effects.
+
+One limit is deliberate: a queued frame encrypted under a content-key epoch the consumer has
+already retired cannot be authenticated as either new content or a safe duplicate. A full page or
+mailbox tail of those frames may block the re-drain until the default seven-day retention cap
+removes it or an operator explicitly purges/reinitialises the affected relay state and re-pairs.
+`swarm remote revoke <device-id>` is the supported destructive purge for that handset's
+machine-to-phone route; there is no narrow CLI purge for retired phone-to-machine frames in the
+machine mailbox. Do not edit the bbolt database directly. See the relay runbook §11, “Restore
+compatibility and upgrade order,” for the exact flow and scope before choosing the destructive
+recovery.
+
 Run as `swarm-relay` (the `sudo -u`), not root: the store file and its directory are owned by that
 user (`WorkingDirectory=/var/lib/swarm-relay` in the unit, §5), and a root-owned backup or a
 root-written restore leaves permissions the service can no longer open on its next start. The

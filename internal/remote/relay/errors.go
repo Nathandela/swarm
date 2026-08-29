@@ -43,6 +43,16 @@ var (
 	// one rather than queueing it: a queue would let a client pin unbounded
 	// server-side wait state on one connection and make cancellation ambiguous.
 	ErrWaitInProgress = errors.New("relay: a mailbox wait is already outstanding on this client")
+	// ErrMailboxCursorResetRequired means the caller's durable mailbox cursor cannot
+	// be a resume point in the mailbox the relay currently holds. This is recoverable:
+	// the caller rewinds ONLY the relay storage cursor, preserving its authenticated
+	// per-stream replay high-waters, and drains again from zero.
+	//
+	// It is distinct from a malformed cursor. A store reinitialisation or rollback can
+	// leave an otherwise valid persisted cursor past the new mailbox's high-water. The
+	// authenticated replay high-waters, not this relay cursor, prevent duplicate effects
+	// when the caller drains again from zero.
+	ErrMailboxCursorResetRequired = errors.New("relay: mailbox cursor no longer names a safe resume point; reset required")
 	// ErrRendezvousFull is returned when a third party claims a rendezvous that
 	// already has two participants.
 	ErrRendezvousFull = errors.New("relay: rendezvous already has two participants")
@@ -89,34 +99,36 @@ var (
 
 // wire error codes. The client maps a received code back to the sentinel above.
 const (
-	codeBadRequest       = "bad_request"
-	codeQuotaExceeded    = "quota_exceeded"
-	codeNotAuthorized    = "not_authorized"
-	codeRevoked          = "revoked"
-	codeDuplicateConn    = "duplicate_connection"
-	codeWaitInProgress   = "wait_in_progress"
-	codeRendezvousFull   = "rendezvous_full"
-	codeRendezvousTTL    = "rendezvous_expired"
-	codeRendezvousUsed   = "rendezvous_burned"
-	codeRendezvousExists = "rendezvous_exists"
-	codeAuthFailed       = "auth_failed"
-	codeUnsupported      = "unsupported"
-	codeConsentRetired   = "consent_retired"
+	codeBadRequest         = "bad_request"
+	codeQuotaExceeded      = "quota_exceeded"
+	codeNotAuthorized      = "not_authorized"
+	codeRevoked            = "revoked"
+	codeDuplicateConn      = "duplicate_connection"
+	codeWaitInProgress     = "wait_in_progress"
+	codeMailboxCursorReset = "mailbox_cursor_reset"
+	codeRendezvousFull     = "rendezvous_full"
+	codeRendezvousTTL      = "rendezvous_expired"
+	codeRendezvousUsed     = "rendezvous_burned"
+	codeRendezvousExists   = "rendezvous_exists"
+	codeAuthFailed         = "auth_failed"
+	codeUnsupported        = "unsupported"
+	codeConsentRetired     = "consent_retired"
 )
 
 // codeToErr maps a wire error code to its sentinel. An unrecognised code becomes
 // a generic error carrying the server message.
 var codeToErr = map[string]error{
-	codeQuotaExceeded:    ErrQuotaExceeded,
-	codeNotAuthorized:    ErrNotAuthorized,
-	codeRevoked:          ErrRevoked,
-	codeDuplicateConn:    ErrDuplicateConnection,
-	codeWaitInProgress:   ErrWaitInProgress,
-	codeRendezvousFull:   ErrRendezvousFull,
-	codeRendezvousTTL:    ErrRendezvousExpired,
-	codeRendezvousUsed:   ErrRendezvousBurned,
-	codeRendezvousExists: ErrRendezvousExists,
-	codeConsentRetired:   ErrConsentRetired,
+	codeQuotaExceeded:      ErrQuotaExceeded,
+	codeNotAuthorized:      ErrNotAuthorized,
+	codeRevoked:            ErrRevoked,
+	codeDuplicateConn:      ErrDuplicateConnection,
+	codeWaitInProgress:     ErrWaitInProgress,
+	codeMailboxCursorReset: ErrMailboxCursorResetRequired,
+	codeRendezvousFull:     ErrRendezvousFull,
+	codeRendezvousTTL:      ErrRendezvousExpired,
+	codeRendezvousUsed:     ErrRendezvousBurned,
+	codeRendezvousExists:   ErrRendezvousExists,
+	codeConsentRetired:     ErrConsentRetired,
 }
 
 // errorBody is the JSON shape of an r_error reply.

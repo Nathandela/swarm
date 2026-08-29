@@ -1183,8 +1183,9 @@ func (sc *serverConn) handleMailboxRead(payload []byte) error {
 		return sc.replyErr(code)
 	}
 	var req struct {
-		Cursor uint64 `json:"cursor"`
-		Limit  int    `json:"limit"`
+		Cursor      uint64  `json:"cursor"`
+		Limit       int     `json:"limit"`
+		Incarnation *string `json:"mailbox_incarnation"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
@@ -1197,14 +1198,26 @@ func (sc *serverConn) handleMailboxRead(payload []byte) error {
 	if maxItems <= 0 {
 		maxItems = defaultMailboxPageItems
 	}
-	items, hasMore, err := sc.s.st.readItemsPage(sc.rid, req.Cursor, maxItems, mailboxPageByteBudget)
+	if req.Incarnation != nil && *req.Incarnation == "" && req.Cursor > 0 {
+		// One-time migration for a generation-aware consumer whose durable legacy
+		// checkpoint predates the field. It must rewind before it can safely adopt.
+		return sc.replyErr(codeMailboxCursorReset)
+	}
+	expected := ""
+	if req.Incarnation != nil {
+		expected = *req.Incarnation
+	}
+	items, hasMore, resetRequired, incarnation, err := sc.s.st.readItemsPageForIncarnation(sc.rid, expected, req.Cursor, maxItems, mailboxPageByteBudget)
 	if err != nil {
 		return sc.replyErr(codeBadRequest)
+	}
+	if resetRequired {
+		return sc.replyErr(codeMailboxCursorReset)
 	}
 	if items == nil {
 		items = []Item{}
 	}
-	return sc.replyOK(map[string]any{"items": items, "has_more": hasMore})
+	return sc.replyOK(map[string]any{"items": items, "has_more": hasMore, "mailbox_incarnation": incarnation})
 }
 
 func (sc *serverConn) handleMailboxAck(payload []byte) error {
@@ -1215,12 +1228,22 @@ func (sc *serverConn) handleMailboxAck(payload []byte) error {
 		return sc.replyErr(code)
 	}
 	var req struct {
-		Cursor uint64 `json:"cursor"`
+		Cursor      uint64  `json:"cursor"`
+		Incarnation *string `json:"mailbox_incarnation"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
-	if err := sc.s.st.ackItems(sc.rid, req.Cursor); err != nil {
+	if req.Incarnation != nil && *req.Incarnation == "" && req.Cursor > 0 {
+		return sc.replyErr(codeMailboxCursorReset)
+	}
+	expected := ""
+	if req.Incarnation != nil {
+		expected = *req.Incarnation
+	}
+	if err := sc.s.st.ackItemsForIncarnation(sc.rid, expected, req.Cursor); errors.Is(err, ErrMailboxCursorResetRequired) {
+		return sc.replyErr(codeMailboxCursorReset)
+	} else if err != nil {
 		return sc.replyErr(codeBadRequest)
 	}
 	return sc.replyOK(map[string]any{})

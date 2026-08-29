@@ -50,9 +50,10 @@ func (c *countingStore) Save(s State) error {
 	c.saves++
 	return c.inner.Save(s)
 }
-func (c *countingStore) PurgeKeys() error         { return c.inner.PurgeKeys() }
-func (c *countingStore) UnsealContent() error     { return c.inner.UnsealContent() }
-func (c *countingStore) RewindRelayCursor() error { return c.inner.RewindRelayCursor() }
+func (c *countingStore) PurgeKeys() error                   { return c.inner.PurgeKeys() }
+func (c *countingStore) UnsealContent() error               { return c.inner.UnsealContent() }
+func (c *countingStore) RewindRelayCursor() error           { return c.inner.RewindRelayCursor() }
+func (c *countingStore) SetRelayIncarnation(v string) error { return c.inner.SetRelayIncarnation(v) }
 
 // failAfterNStore commits the first n Saves and fails every one after that -- "the
 // process died before anything else hit disk", the injection idiom
@@ -73,9 +74,10 @@ func (f *failAfterNStore) Save(s State) error {
 	}
 	return f.inner.Save(s)
 }
-func (f *failAfterNStore) PurgeKeys() error         { return f.inner.PurgeKeys() }
-func (f *failAfterNStore) UnsealContent() error     { return f.inner.UnsealContent() }
-func (f *failAfterNStore) RewindRelayCursor() error { return f.inner.RewindRelayCursor() }
+func (f *failAfterNStore) PurgeKeys() error                   { return f.inner.PurgeKeys() }
+func (f *failAfterNStore) UnsealContent() error               { return f.inner.UnsealContent() }
+func (f *failAfterNStore) RewindRelayCursor() error           { return f.inner.RewindRelayCursor() }
+func (f *failAfterNStore) SetRelayIncarnation(v string) error { return f.inner.SetRelayIncarnation(v) }
 
 // memStore is a non-durable Store standing in for the phone's state file across a
 // simulated crash: the process dies, the file does not. Reusing ONE memStore across two
@@ -96,7 +98,8 @@ func (m *memStore) PurgeKeys() error {
 func (m *memStore) UnsealContent() error { return nil }
 
 // memStore has no merge rule to defeat, so the rewind is the assignment itself.
-func (m *memStore) RewindRelayCursor() error { m.st.RelayCursor = 0; return nil }
+func (m *memStore) RewindRelayCursor() error           { m.st.RelayCursor = 0; return nil }
+func (m *memStore) SetRelayIncarnation(v string) error { m.st.RelayIncarnation = v; return nil }
 
 // resumeSeq builds a Core over st and returns its sequencer, for the epoch already
 // recorded in the state.

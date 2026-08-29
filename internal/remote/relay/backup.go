@@ -212,6 +212,21 @@ func Restore(dbPath, backupPath string) error {
 	case closeErr != nil:
 		return fmt.Errorf("relay: close restored store: %w", closeErr)
 	}
+	// A restore is a rollback to another mailbox log even when the backup itself
+	// already carries an incarnation. Reusing it would let a consumer cursor from
+	// after the snapshot silently skip/purge restored items once H catches up.
+	staged, err := bolt.Open(tmpPath, 0o600, &bolt.Options{Timeout: lockProbeTimeout})
+	if err != nil {
+		return fmt.Errorf("relay: open staged restore for incarnation rotation: %w", err)
+	}
+	rotateErr := rotateMailboxIncarnation(staged)
+	closeErr = staged.Close()
+	if rotateErr != nil {
+		return fmt.Errorf("relay: rotate restored mailbox incarnation: %w", rotateErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("relay: close incarnation-rotated restore: %w", closeErr)
+	}
 	if err := os.Rename(tmpPath, dbPath); err != nil {
 		return fmt.Errorf("relay: finalize restore: %w", err)
 	}

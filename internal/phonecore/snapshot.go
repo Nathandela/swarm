@@ -891,6 +891,16 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 			return Receipt{Acked: r.ack(cursor) == nil}, err
 		}
 		if errors.Is(err, crypto.ErrStaleAge) {
+			// open authenticated the envelope before returning ErrStaleAge. If durable
+			// custody already covers its authenticated seq, this is a restored replay,
+			// not content the phone refused only because its clock may be wrong. Compacting
+			// that redundant copy is safe and lets an explicit relay-cursor rewind cross
+			// an old full page instead of stalling behind the age backstop.
+			if r.core != nil {
+				if env, parseErr := crypto.ParseEnvelope(raw); parseErr == nil && r.core.State().Receive[b] >= env.Header.Seq {
+					return Receipt{Acked: r.ack(cursor) == nil}, err
+				}
+			}
 			// PAST PB-TIME-2's BOUND, AND THEREFORE NEVER ACKED. This branch used to share
 			// the ack above on the reasoning that the frame is "never usable" -- and that
 			// reasoning is false in the one case that matters. The bound compares the

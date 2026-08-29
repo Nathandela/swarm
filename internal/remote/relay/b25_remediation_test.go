@@ -216,7 +216,7 @@ func TestB25Fix_APreVersionItemRecordIsSkippedRatherThanMisread(t *testing.T) {
 		t.Fatalf("write a pre-version record: %v", err)
 	}
 
-	items, _, err := st.readItemsPage(rid, 0, 16, 1<<20)
+	items, _, _, err := st.readItemsPage(rid, 0, 16, 1<<20)
 	if err != nil {
 		t.Fatalf("readItemsPage: %v", err)
 	}
