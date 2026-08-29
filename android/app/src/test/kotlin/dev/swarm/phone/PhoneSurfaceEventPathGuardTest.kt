@@ -140,7 +140,9 @@ class PhoneSurfaceEventPathGuardTest {
 
     @Test
     fun `inboxScreen wraps bridge triageInbox in a try so a refusal cannot reach PhoneEvents' uncaught main post`() {
-        val member = memberText(source(), "private fun inboxScreen(bridge: FacadeBridge): InboxScreen")
+        // Match the member name rather than its parameter list: roster readiness and refresh
+        // state are now explicit inputs, but the guard still owns the same facade read.
+        val member = memberText(source(), "private fun inboxScreen(")
         assertTrue(
             "inboxScreen calls bridge.triageInbox() with no try/catch around it. It is called " +
                 "unconditionally from renderReady, so a facade refusal there propagates out of " +
