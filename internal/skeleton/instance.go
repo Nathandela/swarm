@@ -262,7 +262,7 @@ func (d *Daemon) sessionCapabilityInputs(sessionID, agentType string, incarnatio
 	// which answer "absent" for nil, and absence is the signal (ADR-010 §5). The reserved
 	// dev "fake" agent therefore authors {structured:false, fallback:true} -- which is
 	// true of it: it has a real PTY and no structured plane.
-	ad, _ = d.adapterFor(agentType)
+	ad, _ = d.resolveAdapter(agentType)
 	inst, err := d.adoptOrMintSessionInstance(sessionID, incarnation)
 	if err != nil {
 		log.Printf("skeleton: session %s has no instance, so it keeps the status card: %v", sessionID, err)

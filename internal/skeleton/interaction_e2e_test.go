@@ -86,9 +86,9 @@ func TestInteractionE2E_ApprovalAndMessageReachThePhoneAndSurviveAReseed(t *test
 			Text: "I will write the file.", StopReason: "end_turn",
 		}},
 	}}
-	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	rig.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &captureAdapter{Adapter: newPlainAdapter(), items: nil, script: items}, true
-	}
+	})
 
 	// The event plane is armed BEFORE the first post: an item that lands is supposed to WAKE a
 	// screen, and a listener attached afterwards would be satisfied by a system that raises no

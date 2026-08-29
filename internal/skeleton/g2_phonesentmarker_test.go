@@ -56,9 +56,9 @@ func newG2Rig(t *testing.T) *g2Rig {
 	sk := assemble(t, func(c *Config) {
 		c.RemoteSocketPath = filepath.Join(c.StateDir, "remote.sock")
 	})
-	sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &r7KeystrokeAdapter{Adapter: newPlainAdapter().Adapter}, true
-	}
+	})
 	m := launchFake(t, sk, r7StdinScript)
 	return &g2Rig{
 		sk:      sk,

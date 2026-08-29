@@ -1,56 +1,70 @@
 # swarm
 
-> Every coding-agent CLI on your machine, in one keyboard-driven terminal dashboard — running in the background, surviving the terminal and the daemon.
-
-[![Release](https://img.shields.io/github/v/release/Nathandela/swarm?color=E2AC4F)](https://github.com/Nathandela/swarm/releases)
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-![Platforms](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-8A877D)
-
 <p align="center">
-  <img src="docs/assets/swarm-board.svg" alt="The swarm general view: a terminal window listing sessions grouped by status. Needs input holds one selected Claude session asking to run a db migration; Working holds a Codex and an agy session mid-task; Ready for review holds a Claude session that changed 14 files; Completed holds an exited Gemini session. A key legend runs along the bottom." width="840">
+  <img src="docs/assets/swarm-hero.png" alt="swarm — many coding agents moving through one blue-hour landscape toward a persistent relay" width="960">
 </p>
 
-swarm centralizes every coding-agent session on a machine — Claude Code, Codex, and more — into one Agent View-style dashboard. Sessions run in the background under a supervisor daemon, sort themselves by what they need from you, and are launched, attached, and killed entirely by keyboard. Close the terminal or upgrade the daemon, and the agents keep running.
+<p align="center"><strong>Every coding agent on your machine. One calm, keyboard-driven view.</strong></p>
 
-Inspired by Claude Code's Agent View, but agent-agnostic.
+<p align="center">
+  Run agents in the background, see what needs you, and keep every session alive when the terminal closes or the daemon upgrades.
+</p>
 
-## Why
+<p align="center">
+  <a href="https://github.com/Nathandela/swarm/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Nathandela/swarm?color=8eb4e6"></a>
+  <a href="https://go.dev/"><img alt="Go 1.25 or newer" src="https://img.shields.io/badge/Go-1.25+-6fc3bc?logo=go&amp;logoColor=white"></a>
+  <img alt="Platforms: macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-66718a">
+</p>
 
-Run more than one coding agent at once and they scatter across terminal tabs and windows. You can't see at a glance which one is blocked on a question, which is mid-task, and which just finished — and closing the wrong terminal kills a session outright.
+swarm brings Claude Code, Codex, and other coding-agent CLIs into one Agent View-style terminal dashboard. Sessions sort themselves by what they need from you and run under durable per-session supervisors, so closing the wrong tab no longer kills the work.
 
-swarm gives you:
+Inspired by Claude Code's Agent View, but agent-agnostic and open source.
 
-- **One view for every agent.** Claude Code and Codex today, each behind a tested adapter; Gemini CLI, OpenCode, and more are on the roadmap.
-- **Grouping by what needs you.** Sessions sort into _Needs input_, _Working_, _Ready for review_, and _Completed_, so the ones waiting on you stay on top.
-- **Background by default.** Each session runs under its own process that owns the terminal (PTY). Close the tab and it keeps going.
-- **Survival across daemon crash and upgrade.** `brew upgrade swarm` mid-run — the next daemon reconnects to your live sessions with nothing lost.
-- **Keyboard-only flow.** Three screens, five keys.
+## Why swarm
+
+- **One view for every agent.** Watch supported CLIs from a single board instead of a wall of terminal tabs.
+- **Attention comes first.** _Needs input_, _Working_, _Ready for review_, and _Completed_ keep the next human action obvious.
+- **Background by default.** Each session owns a real PTY through its own shim process and continues after the TUI exits.
+- **Safe daemon upgrades.** Restart or upgrade swarm while agents are running; the replacement daemon finds and reconnects to them.
+- **Keyboard-native control.** Launch, attach, rename, hand off work, and stop sessions without leaving the terminal.
+- **Remote companion.** The Android app in this repository can securely watch and control agents running on your computer.
 
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/swarm-architecture.svg" alt="swarm architecture. A disposable terminal runs the thin swarm TUI, which talks over a Unix socket to a replaceable swarm daemon (protocol server, registry, status engine, and the claude and codex adapters). The daemon supervises one shim process per session; each shim owns a PTY, a VT grid, and a transcript, and runs the agent CLI. Shims write meta.json to a state directory. A callout explains that closing the terminal or upgrading the daemon leaves the agents running, because the next daemon rebuilds its registry from meta.json and reconnects." width="840">
+  <img src="docs/assets/swarm-system-vista.png" alt="A disposable swarm TUI reaches a central replaceable daemon, which reconnects to three independent persistent session shims" width="960">
 </p>
 
-One binary, a few roles. `swarm` is the TUI client; on first run it auto-starts `swarm daemon` in the background. The daemon supervises a tiny **shim** process per session — the shim owns the PTY, emulates the screen as a VT grid, and appends the transcript. Because the shims are separate processes, they outlive both your terminal and the daemon itself: a restarted daemon rebuilds its registry from each session's on-disk `meta.json` and reconnects, verifying process identity by PID plus start time (ADR-001).
+One binary plays a few clear roles:
 
-Clients never talk to shims directly — everything goes through the daemon's protocol over a Unix socket. That protocol is the product's spine, kept evolvable for a future mobile client.
+1. `swarm` is the thin terminal client. On first run it starts `swarm daemon` automatically.
+2. The daemon owns the protocol, registry, status engine, and CLI adapters.
+3. Every agent session gets a tiny **shim** process that owns its PTY, VT screen grid, and transcript.
+4. Session metadata is written to disk, allowing a replacement daemon to rebuild the registry and reconnect safely.
+
+Clients never talk to shims directly. Everything crosses the daemon's versioned Unix-socket protocol—the same product spine used by the remote companion.
+
+### Why sessions survive
+
+<p align="center">
+  <img src="docs/assets/swarm-session-survival.png" alt="One uninterrupted session trail continues after the terminal closes and while a replacement daemon reconnects" width="960">
+</p>
+
+The terminal is only a view, and the daemon is replaceable. The per-session shim is the durable process: it keeps the agent, PTY, screen state, and transcript alive. After a restart, the daemon reads each session's `meta.json`, verifies process identity by PID and start time, and reconnects without taking ownership away from the shim.
 
 ## Install
 
 swarm ships as a single static binary with no runtime dependencies.
 
 ```sh
-# Homebrew (macOS)
+# Homebrew · macOS
 brew install --cask Nathandela/swarm/swarm
 
-# go install (macOS or Linux)
+# Go · macOS or Linux
 go install github.com/Nathandela/swarm/cmd/swarm@latest
 ```
 
-Or download a static binary for your platform from the [releases page](https://github.com/Nathandela/swarm/releases). Checksums and upgrade notes: [docs/install.md](docs/install.md).
-
-Verify the install:
+Or download a signed archive and checksum from the [releases page](https://github.com/Nathandela/swarm/releases). See [docs/install.md](docs/install.md) for platform details and upgrade notes.
 
 ```sh
 swarm version
@@ -62,135 +76,127 @@ swarm version
 swarm
 ```
 
-The daemon starts automatically the first time, and you land on the general view. From there, everything is five keys:
+The daemon starts automatically and opens the session board.
 
 | Key | Action |
-|-----|--------|
-| <kbd>↑</kbd> <kbd>↓</kbd> | Move through the session list |
-| <kbd>⏎</kbd> | Attach to the selected session — raw and full-screen (<kbd>ctrl</kbd>+<kbd>q</kbd> returns) |
-| <kbd>n</kbd> | New session — pick an agent and a working directory |
+|---|---|
+| <kbd>↑</kbd> <kbd>↓</kbd> | Move through sessions |
+| <kbd>⏎</kbd> | Attach to the selected agent; <kbd>ctrl</kbd>+<kbd>q</kbd> returns to swarm |
+| <kbd>n</kbd> | Start a session and choose its CLI and working directory |
 | <kbd>e</kbd> | Rename the selected session |
-| <kbd>h</kbd> | Hand work to another supported CLI and supervise it from the source session |
-| <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill it (or delete a finished one) — confirm with <kbd>y</kbd> |
-| <kbd>esc</kbd> | Quit the TUI — your agents keep running |
+| <kbd>h</kbd> | Hand work to another supported CLI |
+| <kbd>ctrl</kbd>+<kbd>x</kbd> | Kill a live session or delete a finished one; confirm with <kbd>y</kbd> |
+| <kbd>esc</kbd> | Close the TUI while agents keep running |
 
-While renaming, <kbd>←</kbd>/<kbd>→</kbd> moves one character. <kbd>⌘</kbd>+<kbd>←</kbd>/<kbd>→</kbd> jumps to the start/end and <kbd>⌘</kbd>+<kbd>⌫</kbd> clears everything left of the cursor; <kbd>home</kbd>/<kbd>end</kbd>, <kbd>ctrl</kbd>+<kbd>a</kbd>/<kbd>e</kbd>, and <kbd>ctrl</kbd>+<kbd>u</kbd> provide terminal-compatible fallbacks.
+Attach mode is raw passthrough: the agent's native full-screen interface remains untouched. swarm adds only a thin session header, which can be hidden. Ended sessions offer <kbd>r</kbd> to resume as a fresh linked session where the adapter supports it.
 
-Attach is raw passthrough: the agent CLI's own interface, full-screen and untouched. swarm adds a single thin line (session name and the detach key), and even that is toggleable. Ended sessions offer <kbd>r</kbd> to resume them as a fresh, linked session where the agent supports it.
+## Status is the interface
 
-### Bring existing Claude sessions into swarm
+<p align="center">
+  <img src="docs/assets/swarm-status-ridge.png" alt="Four ordered lights represent Needs input, Working, Ready for review, and Completed" width="960">
+</p>
 
-With swarm already running, inspect the Claude Agent View background sessions that
-can be adopted:
+swarm combines process, turn, and interaction signals into one actionable group:
+
+| Group | What it means |
+|---|---|
+| **Needs input** | The agent asked a question or requested permission. Always sorted first. |
+| **Working** | A turn is active. The last meaningful output appears underneath. |
+| **Ready for review** | The turn finished. Attach, review the diff, or send the next prompt. |
+| **Completed** | The process exited or was lost. It remains until you delete it. |
+
+Structured events are preferred when a CLI exposes them—Claude Code uses configured hooks. Otherwise swarm reads the emulated screen grid and applies adapter-specific detection; it never guesses from arbitrary raw byte fragments.
+
+## The terminal board
+
+<p align="center">
+  <img src="docs/assets/swarm-board.svg" alt="The swarm terminal board listing coding-agent sessions grouped by status, with Needs input first" width="840">
+</p>
+
+## Bring existing Claude sessions into swarm
+
+Inspect Claude Agent View background sessions that can be adopted:
 
 ```sh
 swarm reattach --cli claude --all --dry-run
 ```
 
-Adopt active background sessions by explicitly transferring supervision from
-Claude's background daemon to swarm:
+Transfer active sessions from Claude's background supervisor to swarm:
 
 ```sh
 swarm reattach --cli claude --take-over
 ```
 
-Add `--all` to include completed and stopped sessions as well:
+Add `--all` to include completed and stopped sessions. Interactive sessions are never imported. The operation is idempotent: swarm reuses a row with the same native Claude session ID instead of creating a duplicate.
 
-```sh
-swarm reattach --cli claude --all --take-over
-```
+## Supervised handoff
 
-Only Claude background sessions are considered; interactive sessions are never
-imported. `--take-over` stops Claude's background supervisor before any live
-session is launched under swarm, preventing two supervisors from owning the same
-session. Re-running the command is safe: swarm reuses an existing row with the
-same native Claude session ID instead of creating a duplicate. If the CLI reports
-that the daemon lacks external-resume support, run `swarm daemon restart` after
-upgrading swarm.
-
-### Status groups
-
-swarm tracks three orthogonal signals per session — process, turn, and interaction — and derives the group you see, so the list always tells you what to do next:
-
-| Group | Meaning |
-|-------|---------|
-| **Needs input** | The agent asked a question or requested permission. Always first. |
-| **Working** | Mid-task. The one-line summary is its last meaningful output. |
-| **Ready for review** | The turn finished. Attach, review the diff, send the next prompt. |
-| **Completed** | Exited (code shown) or lost. Stays listed until you delete it. |
-
-Detection is typed-event-first where a CLI exposes structured events — Claude Code drives it through settings-configured hooks — with screen-grid heuristics (reading the emulated screen, never raw bytes) as the fallback.
-
-### Supervised handoff
-
-Select a source session that is waiting at an ordinary prompt or ready for review and
-press <kbd>h</kbd>. Choose the target CLI and model; swarm submits one structured
-instruction to the source agent. That agent writes a context document, launches the
-linked child with the first-class `swarm handoff` command, and remains responsible for
-monitoring it through `swarm watch`, `swarm peek`, and `swarm send` until completion.
-
-The form's third field picks how the source follows the child:
-
-- `passive` (default) — the daemon supervises: when the child needs input, is ready for
-  review, or completes, swarm types one short notification into the source session and
-  the source agent takes it from there with `swarm peek` and `swarm send`. Nothing is
-  typed while the source is busy, waiting on a question or permission, or attached by a
-  human; the
-  board shows `supervisor pending` on the child until it is delivered.
-- `manual` — the source agent runs the `swarm watch` / `peek` / `send` loop itself.
-- `none` — the source reports the child session ID and stops; you supervise.
-
-The same command is available directly inside any live swarm-managed session:
+Select a source session at an ordinary prompt or ready for review and press <kbd>h</kbd>. Choose the target CLI, model, and supervision mode. The source writes a context document, launches the linked child, and can monitor it with `swarm watch`, `swarm peek`, and `swarm send`.
 
 ```sh
 swarm handoff --cli claude --model opus --supervision passive --context-file /tmp/handoff.md
 ```
 
-It prints only the child session ID on stdout so the source can supervise it reliably.
-Permission requests are never treated as ordinary prompts: resolve them with the human
-before opening or submitting a handoff, and a supervision notification never approves one.
+Supervision modes:
+
+- `passive` — the daemon notifies the source when the child needs input, becomes ready for review, or completes.
+- `manual` — the source agent runs the watch/peek/send loop itself.
+- `none` — the source reports the child session ID and leaves supervision to you.
+
+Permission requests are never approved by handoff automation; they remain explicit human decisions.
 
 ## Supported agents
 
 | Agent | Status |
-|-------|--------|
+|---|---|
 | Claude Code | Supported |
 | Codex | Supported |
-| Gemini CLI · OpenCode · agy | Roadmap |
+| agy / Antigravity CLI | Supported |
+| OpenCode | Supported |
+| [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation) | Supported on Apple Silicon macOS and Linux |
 
-Each agent is a self-contained adapter — detection, spawn arguments, status signals, and resume — preceded by a characterization harness that records the real CLI, so every adapter is tested against genuine output rather than a guess.
+Every integration is a self-contained adapter covering detection, spawn arguments, status signals, and resume behavior. Characterization harnesses record real CLI output so adapters are tested against observed behavior rather than assumptions. See the [Hermes adapter evidence](docs/verification/hermes-adapter-evidence.md) for its current upstream limitations.
+
+## Android companion
+
+The Android app pairs with a computer running swarm, displays the same session priorities, and supports encrypted remote observation and control. There is no swarm account: the phone and computer pair directly, and the relay transports encrypted envelopes it cannot read.
+
+The application source lives under [`android/`](android/). Product, privacy, pairing, and self-hosted relay documentation is indexed from [docs/INDEX.md](docs/INDEX.md).
 
 ## Upgrading
 
-The daemon keeps running across upgrades of the binary on disk. After upgrading, bring it up to the new build:
+The daemon keeps running when the binary on disk changes. After an upgrade, move it to the new build with:
 
 ```sh
 swarm daemon restart
 ```
 
-This is safe by design: every running session survives the restart and is reconnected. Details: [docs/install.md](docs/install.md).
+Running sessions survive and reconnect by design. See [docs/install.md](docs/install.md) for the complete upgrade path.
 
 ## Project status
 
-Public and released — latest [`v0.12.4`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
+Public and released—latest [`v0.13.8`](https://github.com/Nathandela/swarm/releases/tag/v0.13.8). Building requires Go 1.25 or newer.
 
-One known limitation: sessions run only while the host machine is awake. Sleep pauses every agent process — they resume automatically on wake with nothing lost, but make no progress while asleep. A keep-awake option is a possible later addition (system-spec, requirement N-7).
+The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, production CLI adapters, inter-session handoff, and Android remote-control foundation are implemented and covered by verification evidence under [`docs/verification/`](docs/verification/).
 
-Design and specifications:
+Known limitation: sessions make progress only while the host computer is awake. Sleep pauses agent processes; they resume automatically on wake with their state intact.
 
-- [Documentation index](docs/INDEX.md) — everything, one hop away
-- [System specification](docs/specifications/system-spec.md) — EARS requirements, architecture, scenarios
-- [Build plan](docs/specifications/build-plan.md) — 15 ordered epics
-- [Architecture decisions](docs/adr/) — the foundational ADRs
-- [UI preview](docs/design/ui-preview.html) — navigable design mockup
+## Documentation
 
-## Build & test
+- [Documentation index](docs/INDEX.md) — every major document, one hop away
+- [System specification](docs/specifications/system-spec.md) — requirements, architecture, and scenarios
+- [Build plan](docs/specifications/build-plan.md) — ordered delivery plan and contracts
+- [Architecture decisions](docs/adr/) — the decisions behind the process and protocol model
+- [UI preview](docs/design/ui-preview.html) — navigable terminal design mockup
+- [Visual identity direction](docs/design/swarm-illustration-direction/index.html) — artwork, logo, icon, and README asset system
+
+## Build and test
 
 ```sh
 go build ./...
-go test ./...        # -race on packages that spawn goroutines
+go test ./...
 go vet ./...
 golangci-lint run
 ```
 
-All four must be green before any epic closes. Contributions follow the TDD and ADR conventions described in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md).
+All gates must pass before a feature closes. Contributions follow the TDD, evidence, and ADR conventions in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md).

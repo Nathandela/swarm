@@ -29,7 +29,7 @@ func liveNameRig(t *testing.T) (*Daemon, persist.Meta, string) {
 	t.Helper()
 	home := t.TempDir()
 	sk := assemble(t, func(c *Config) { c.historyHome = home })
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	m := launchFake(t, sk, r7StdinScript)
 	if err := sk.core.SetConversationID(m.ID, liveNameConv); err != nil {
 		t.Fatalf("SetConversationID: %v", err)
@@ -150,7 +150,7 @@ func TestUnreadableRegistryFilesAreSkipped(t *testing.T) {
 func TestNoConversationIDMeansNoLookup(t *testing.T) {
 	home := t.TempDir()
 	sk := assemble(t, func(c *Config) { c.historyHome = home })
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	m := launchFake(t, sk, r7StdinScript)
 	writeLiveName(t, home, 4242, liveNameConv, "unowned", time.Now().Add(time.Hour))
 	// A callback whose body carries no session_id leaves the conversation id unset.

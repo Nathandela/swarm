@@ -6,8 +6,8 @@ package skeleton
 // (adapter.AsInteractionSource), discovered exactly as ADR-010 §5 already discovers it
 // for interaction capture -- "ABSENCE IS A SIGNAL", never a defect, and never a
 // hardcoded per-provider list. Claude is the only adapter in this repo that implements
-// it today (internal/adapter/claude/interaction.go); codex, opencode and agy do not, so
-// they get structured_chat=false, terminal_fallback=true.
+// it today (internal/adapter/claude/interaction.go); codex, hermes, opencode, and agy do
+// not, so they get structured_chat=false, terminal_fallback=true.
 //
 // WHY THIS LIVES IN internal/skeleton: it is the only package that imports the adapter
 // contract, the adapter registry AND the wire schema (protocol) -- exactly the reason
@@ -25,14 +25,15 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter/agy"
 	"github.com/Nathandela/swarm/internal/adapter/claude"
 	"github.com/Nathandela/swarm/internal/adapter/codex"
+	"github.com/Nathandela/swarm/internal/adapter/hermes"
 	"github.com/Nathandela/swarm/internal/adapter/opencode"
 )
 
-// TestDeriveSessionCapabilities_PerAdapter is the table-driven pin over the four
+// TestDeriveSessionCapabilities_PerAdapter is the table-driven pin over the five
 // production adapters (internal/adapter/registry.production): the ONE adapter that
 // implements InteractionSource gets structured_chat=true and -- per ADR-017 T2 rule 4,
 // "no route to the fallback from a healthy structured session" -- terminal_fallback=
-// false; the other three get the generic-fallback pair.
+// false; the other four get the generic-fallback pair.
 func TestDeriveSessionCapabilities_PerAdapter(t *testing.T) {
 	cases := []struct {
 		provider             string
@@ -42,6 +43,7 @@ func TestDeriveSessionCapabilities_PerAdapter(t *testing.T) {
 	}{
 		{"claude", claude.New(), true, false},
 		{"codex", codex.New(), false, true},
+		{"hermes", hermes.New(), false, true},
 		{"opencode", opencode.New(), false, true},
 		{"agy", agy.New(), false, true},
 	}
@@ -88,7 +90,7 @@ func TestDeriveSessionCapabilities_PerAdapter(t *testing.T) {
 // the per-session-instance behavior is fenced by
 // TestR7Capabilities_StructuredChatIsSeamANDLiveBackendPerSessionInstance.
 func TestDeriveSessionCapabilities_TracksAsInteractionSourceExactly(t *testing.T) {
-	for _, ad := range []adapter.Adapter{claude.New(), codex.New(), opencode.New(), agy.New()} {
+	for _, ad := range []adapter.Adapter{claude.New(), codex.New(), hermes.New(), opencode.New(), agy.New()} {
 		_, wantSource := adapter.AsInteractionSource(ad)
 		got := deriveSessionCapabilities("x", ad, "v", "r", true)
 		if got.StructuredChat != wantSource {

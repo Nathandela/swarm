@@ -215,9 +215,9 @@ func scriptedCapture(sk *Daemon, refs ...string) {
 		}}
 	}
 	script := &interactionScript{items: batches}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &captureAdapter{Adapter: newPlainAdapter(), script: script}, true
-	}
+	})
 }
 
 // postTurnEvent posts one authenticated, sequence-distinct hook event straight to the shim's

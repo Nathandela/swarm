@@ -143,9 +143,9 @@ func (echoCaptureAdapter) Decision(string, string) (adapter.DecisionAction, bool
 
 // echoCapture wires sk's adapter resolution to echoCaptureAdapter for every session.
 func echoCapture(sk *Daemon) {
-	sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return echoCaptureAdapter{Adapter: newPlainAdapter()}, true
-	}
+	})
 }
 
 // peekSpoolRecords issues a read-only DRAIN (FoldSeq=0: fold nothing) against the shim's

@@ -34,9 +34,9 @@ package skeleton
 //
 // Entering there also means the adapter is HANDED IN rather than looked up, so the one further
 // thing this does not exercise is `adapterFor`/`resolveAdapter` choosing `claude` for a claude
-// session. That is registry behaviour with its own tests, and the alternative -- overwriting
-// `rig.sk.adapterFor` from the test goroutine while the daemon reads it under `itemMu` -- would
-// buy a lookup at the price of an unsynchronized write on a rig that runs under -race.
+// session. That is registry behaviour with its own tests. The synchronized resolver configured
+// below serves the decision/application path; it does not pretend this explicit capture call
+// exercised a lookup.
 
 import (
 	"encoding/json"
@@ -98,9 +98,9 @@ func TestClaudeChainE2E_TheRecordedCorpusRendersAndBothVerdictsResolveOnThePhone
 	// Since M1.8 the gate refuses to type a request's verdict into a dialog raised by a
 	// DIFFERENT tool, so the screen has to move between the legs exactly as the real CLI's does
 	// -- which is what this session now models rather than assumes.
+	rig.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	dialog, cols, rows := gridScript(t, editDialogGrid, bashDialogGrid)
 	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
-	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
 		return rig.RosterHas(sessionID)
 	})

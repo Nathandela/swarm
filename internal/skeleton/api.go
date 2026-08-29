@@ -940,6 +940,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
 		}
+		if !adapter.AcceptsConversationID(ad, conversationID) {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: external conversation identity is invalid")
+		}
 		argv, err := ad.Resume(adapter.ResumeSpec{
 			Cwd:            spec.Cwd,
 			ConversationID: conversationID,
@@ -965,6 +968,9 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		ad, ok := registry.New(spec.AgentType)
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
+		}
+		if srcMeta.ConversationID != "" && !adapter.AcceptsConversationID(ad, srcMeta.ConversationID) {
+			return daemon.LaunchSpec{}, fmt.Errorf("resume: saved conversation identity is invalid")
 		}
 		argv, rerr := ad.Resume(adapter.ResumeSpec{
 			Cwd:            spec.Cwd,

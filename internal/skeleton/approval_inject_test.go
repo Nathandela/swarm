@@ -248,7 +248,7 @@ func gridText(snap *vt.Snap) string {
 func newInjectRig(t *testing.T, g recordedGrid, in adapter.Interaction) *injectRig {
 	t.Helper()
 	sk := assemble(t)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 
 	script, cols, rows := gridScript(t, g)
 	m := launchFakeSized(t, sk, script, cols, rows)

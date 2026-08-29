@@ -21,11 +21,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/daemon"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/shim"
 	"github.com/Nathandela/swarm/internal/status"
+	"github.com/Nathandela/swarm/internal/vt"
 )
+
+type rejectingCaptureAdapter struct{ adapter.Adapter }
+
+func (rejectingCaptureAdapter) ExtractConversationID(*vt.Snap, []byte) (string, bool) {
+	return "corrupt-native-id", true
+}
+
+func (rejectingCaptureAdapter) IsValidConversationID(id string) bool {
+	return id == "valid-native-id"
+}
 
 // convScanHarness assembles a real core with one long-idling "reference" session
 // and a read-counting readTail seam, so a test can drive captureConversationID
@@ -151,6 +164,60 @@ func TestCaptureConversationID_GrowthTriggersRereadAndCapturesLateID(t *testing.
 	}
 	if m, _ := d.core.Get(id); m.ConversationID != "late-arriving-id" {
 		t.Fatalf("ConversationID changed after write-once capture: %q", m.ConversationID)
+	}
+}
+
+func TestCaptureConversationID_RejectsExtractorOutputBeforeWriteOncePersistence(t *testing.T) {
+	dir := t.TempDir()
+	const id = "invalidcapture1"
+	store, err := persist.NewStore(dir)
+	if err != nil {
+		t.Fatalf("persist.NewStore: %v", err)
+	}
+	if err := store.Save(persist.Meta{
+		ID:           id,
+		AgentType:    "reference",
+		CreatedAt:    time.Now(),
+		LastActivity: time.Now(),
+		Status:       status.Status{Process: status.ProcessExited},
+	}); err != nil {
+		t.Fatalf("Save terminal meta: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id, shim.TranscriptFile), []byte("conv-id=corrupt-native-id\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	core, err := daemon.Open(daemon.Config{
+		StateDir:    dir,
+		SocketPath:  filepath.Join(dir, "d.sock"),
+		LockPath:    filepath.Join(dir, "d.lock"),
+		LogPath:     filepath.Join(dir, "d.log"),
+		MaxSessions: 8,
+	})
+	if err != nil {
+		t.Fatalf("daemon.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = core.Close() })
+
+	base, ok := registry.New("reference")
+	if !ok {
+		t.Fatal("reference adapter missing from registry")
+	}
+	d := &Daemon{
+		core:     core,
+		stateDir: dir,
+		adapterFor: func(string) (adapter.Adapter, bool) {
+			return rejectingCaptureAdapter{Adapter: base}, true
+		},
+	}
+	d.captureConversationIDFinal(id)
+
+	m, ok := core.Get(id)
+	if !ok {
+		t.Fatalf("session %s missing after capture", id)
+	}
+	if m.ConversationID != "" {
+		t.Fatalf("invalid extractor output reached write-once persistence: %q", m.ConversationID)
 	}
 }
 

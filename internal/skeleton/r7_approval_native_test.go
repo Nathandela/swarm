@@ -213,7 +213,7 @@ func newR7BackendRig(t *testing.T) *r7BackendRig {
 	t.Helper()
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter, items: []adapter.Interaction{r7CodexApproval()}}
 	sk := assemble(t)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 
 	m := launchFake(t, sk, r7StdinScript)
 	local := m.ID

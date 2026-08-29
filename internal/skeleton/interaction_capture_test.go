@@ -327,12 +327,12 @@ func TestInteractionCapture_AnAuthenticatedHookReachesTheProducer(t *testing.T) 
 	m := launchFake(t, sk, "print HOOKED\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
 
-	sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return newCaptureAdapter(adapter.Interaction{
 			Kind: adapter.KindAgentMessage, Status: adapter.StatusCompleted,
 			Ref: "hook-msg", Text: "from the hook", StopReason: "end_turn",
 		}), true
-	}
+	})
 
 	// A FOREIGN token first: it must change nothing. Asserted before the good post so a later
 	// item cannot be mistaken for this one.

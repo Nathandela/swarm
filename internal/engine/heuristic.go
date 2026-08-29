@@ -131,6 +131,7 @@ func cursorParked(snap *vt.Snap, idx int) bool {
 const (
 	sigCodex  = "codex"
 	sigClaude = "claude"
+	sigHermes = "hermes"
 )
 
 // gridRegionRows bounds the per-adapter multi-line scan to the last N non-blank
@@ -187,10 +188,346 @@ func evaluateGridSig(snap *vt.Snap, sig string) (status.Turn, status.Interaction
 		return evaluateCodexGrid(snap)
 	case sigClaude:
 		return evaluateClaudeGrid(snap)
+	case sigHermes:
+		return evaluateHermesGrid(snap)
 	default:
 		turn, inter := evaluateGrid(snap)
 		return turn, inter, turn != status.TurnUnknown
 	}
+}
+
+// Hermes classic-CLI chrome markers, characterized against Hermes Agent 0.20.6.
+// They are never sufficient as bare substrings: agent output is untrusted and
+// may quote any of them. The helpers below require the surrounding navigation,
+// status-row, or composer-border shape that Hermes itself renders.
+const (
+	hermesApprovalNavigation = "↑/↓ to select, Enter to confirm"
+	hermesSlashNavigation    = "type 1/2/3, or ↑/↓ to select, Enter to confirm"
+	hermesClarifyNavigation  = "↑/↓ to select, Enter to lock, Tab next question"
+	hermesFreeTextNavigation = "type your answer and press Enter"
+	hermesBusyPlaceholder    = "msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel"
+	hermesCommandHint        = "command in progress · "
+	hermesPromptSymbols      = "❯>$#›»→"
+	hermesCommandSpinners    = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	hermesCompactWidth       = 64
+)
+
+// evaluateHermesGrid reads Hermes Agent's classic prompt_toolkit interface.
+// Modal navigation rows outrank all other chrome because a dialog can coexist
+// with a stale busy row and its composer uses the same arrow marker as ordinary
+// idle input. A structurally anchored status row is active; a composer in the
+// source-defined top/lower rule geometry is idle. Anything clipped or mid-redraw
+// is inconclusive, allowing ADR-007 to preserve the committed state instead of
+// guessing idle.
+func evaluateHermesGrid(snap *vt.Snap) (status.Turn, status.Interaction, bool) {
+	if snap == nil {
+		return status.TurnUnknown, status.InteractionUnknown, false
+	}
+	if hermesModalInRegion(snap, hermesApprovalNavigation, "⚠") ||
+		hermesModalInRegion(snap, hermesSlashNavigation, "⚠") {
+		return status.TurnIdle, status.InteractionPermission, true
+	}
+	if hermesModalInRegion(snap, hermesClarifyNavigation, "?") ||
+		hermesModalInRegion(snap, hermesApprovalNavigation, "?") ||
+		hermesModalInRegion(snap, hermesFreeTextNavigation, "✎") {
+		return status.TurnIdle, status.InteractionPrompt, true
+	}
+	if hermesCommandInRegion(snap) {
+		return status.TurnActive, status.InteractionNone, true
+	}
+	if hermesBusyInRegion(snap) {
+		return status.TurnActive, status.InteractionNone, true
+	}
+	if hermesBorderedComposerInRegion(snap) {
+		return status.TurnIdle, status.InteractionNone, true
+	}
+	return status.TurnUnknown, status.InteractionUnknown, false
+}
+
+// hermesModalInRegion recognizes a modal only when its exact navigation row is
+// followed by the matching state composer in terminal input-rule geometry. The
+// title may scroll off a short screen, so it is not required. Conversely,
+// requiring the composer prevents model output that reproduces the complete
+// navigation line from manufacturing a human-input state above an ordinary
+// idle prompt.
+func hermesModalInRegion(snap *vt.Snap, navigation, stateIcon string) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	first := last - gridRegionRows + 1
+	if first < 0 {
+		first = 0
+	}
+	for y := first; y <= last; y++ {
+		row := strings.TrimSpace(lineText(snap.Lines[y]))
+		if hermesNavigationRow(row, navigation) {
+			return hermesComposerBetween(snap, y+1, last, func(candidate string, cols int) bool {
+				return hermesStateComposerRow(candidate, cols, stateIcon)
+			})
+		}
+	}
+	return false
+}
+
+// hermesBusyInRegion recognizes Hermes's live bottom status row. Both the
+// caduceus/composer prefix and source placeholder are required so a transcript
+// sentence containing the shortcut does not manufacture activity. Compact
+// chrome can expose only the caduceus, or a viewport-clipped placeholder. Wide
+// chrome has top and lower rules; compact chrome retains only the top rule.
+func hermesBusyInRegion(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	first := last - gridRegionRows + 1
+	if first < 0 {
+		first = 0
+	}
+	for y := first; y <= last; y++ {
+		if hermesAgentBusyRow(lineText(snap.Lines[y]), snap.Cols) &&
+			hermesTerminalComposerChrome(snap, y, last) {
+			return true
+		}
+	}
+	return false
+}
+
+// hermesCommandInRegion recognizes the separate synchronous-command state.
+// Both its exact hint row and the spinner-prefixed composer are needed: a
+// braille rune alone is common in transcript output and generic animations.
+func hermesCommandInRegion(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	first := last - gridRegionRows + 1
+	if first < 0 {
+		first = 0
+	}
+	for y := first; y <= last; y++ {
+		if !hermesCommandNavigationRow(lineText(snap.Lines[y]), snap.Cols < hermesCompactWidth) {
+			continue
+		}
+		if hermesComposerBetween(snap, y+1, last, hermesCommandComposerRow) {
+			return true
+		}
+	}
+	return false
+}
+
+// hermesBorderedComposerInRegion recognizes the settled prompt_toolkit composer:
+// a prompt row carrying any upstream-supported arrow suffix. The ordinary
+// prompt may be bare or carry a valid profile prefix ("coder ❯"). State
+// composers are handled separately with their navigation/status rows.
+func hermesBorderedComposerInRegion(snap *vt.Snap) bool {
+	last, _, ok := lastContentLine(snap)
+	if !ok {
+		return false
+	}
+	first := last - gridRegionRows + 1
+	if first < 0 {
+		first = 0
+	}
+	return hermesComposerBetween(snap, first, last, func(row string, _ int) bool {
+		return hermesComposerRow(row)
+	})
+}
+
+func hermesComposerBetween(snap *vt.Snap, first, last int, matches func(string, int) bool) bool {
+	for y := first; y <= last; y++ {
+		if matches(lineText(snap.Lines[y]), snap.Cols) && hermesTerminalComposerChrome(snap, y, last) {
+			return true
+		}
+	}
+	return false
+}
+
+// hermesTerminalComposerChrome validates the prompt_toolkit layout, including
+// its responsive breakpoint. The top separator is always present. At widths
+// below 64 columns Hermes hides the lower separator, so the composer itself is
+// the final nonblank row. On a wide screen one or more lower-rule fragments may
+// exist during a redraw, but every remaining nonblank row must be a rule. This
+// terminal constraint prevents a complete-looking quoted state plus Markdown
+// rule higher in agent output from overriding the real composer below it.
+func hermesTerminalComposerChrome(snap *vt.Snap, row, last int) bool {
+	if !hermesPreviousContentIsBorder(snap, row) {
+		return false
+	}
+	if snap.Cols < hermesCompactWidth {
+		return row == last
+	}
+	if row >= last {
+		return false
+	}
+	found := false
+	for below := row + 1; below <= last; below++ {
+		candidate := strings.TrimSpace(lineText(snap.Lines[below]))
+		if candidate == "" {
+			continue
+		}
+		if !hermesHorizontalBorder(candidate) {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+func hermesPreviousContentIsBorder(snap *vt.Snap, row int) bool {
+	for above := row - 1; above >= 0; above-- {
+		candidate := strings.TrimSpace(lineText(snap.Lines[above]))
+		if candidate == "" {
+			continue
+		}
+		return hermesHorizontalBorder(candidate)
+	}
+	return false
+}
+
+func hermesComposerRow(row string) bool {
+	fields := strings.Fields(row)
+	if len(fields) == 0 {
+		return false
+	}
+	if hermesPromptSymbol(fields[0]) {
+		return true
+	}
+	return len(fields) >= 2 && validHermesProfilePrefix(fields[0]) && hermesPromptSymbol(fields[1])
+}
+
+func hermesStateComposerRow(row string, cols int, stateIcon string) bool {
+	fields := strings.Fields(row)
+	if len(fields) == 0 || fields[0] != stateIcon {
+		return false
+	}
+	if cols < hermesCompactWidth {
+		switch stateIcon {
+		case "⚠":
+			return hermesCompactSourceRow(row, "⚠", cols) ||
+				hermesCompactSourceRow(row, "⚠ type 1/2/3, or use ↑/↓ then Enter", cols)
+		case "?":
+			return hermesCompactSourceRow(row, "?", cols)
+		case "✎":
+			return hermesCompactSourceRow(row, "✎ type your answer here and press Enter", cols)
+		}
+		return false
+	}
+	return len(fields) >= 2 && hermesPromptSymbol(fields[1])
+}
+
+func hermesAgentBusyRow(row string, cols int) bool {
+	fields := strings.Fields(row)
+	if cols < hermesCompactWidth {
+		return hermesCompactSourceRow(row, "⚕", cols) ||
+			hermesCompactSourceRow(row, "⚕ "+hermesBusyPlaceholder, cols)
+	}
+	if len(fields) < 3 || fields[0] != "⚕" || !hermesPromptSymbol(fields[1]) {
+		return false
+	}
+	prefix := fields[0] + " " + fields[1] + " "
+	return strings.TrimSpace(row) == prefix+hermesBusyPlaceholder
+}
+
+func hermesCommandComposerRow(row string, cols int) bool {
+	fields := strings.Fields(row)
+	if cols < hermesCompactWidth {
+		return len(fields) == 1 && hermesCommandSpinner(fields[0]) ||
+			len(fields) >= 2 && hermesCommandSpinner(fields[0]) && hermesCommandSpinner(fields[1])
+	}
+	return len(fields) >= 2 && hermesCommandSpinner(fields[0]) && hermesPromptSymbol(fields[1])
+}
+
+// hermesCompactSourceRow accepts an exact compact row or a viewport-clipped
+// prefix of it. A clipped row must consume the viewport (allowing one cell for
+// terminal width accounting), so arbitrary prose that merely begins with the
+// same state icon is not treated as live chrome.
+func hermesCompactSourceRow(row, full string, cols int) bool {
+	row = strings.TrimSpace(row)
+	if row == full {
+		return true
+	}
+	return strings.HasPrefix(full, row) && len([]rune(row)) >= cols-1
+}
+
+func hermesCommandNavigationRow(row string, compact bool) bool {
+	fields := strings.Fields(row)
+	if len(fields) < 5 || !hermesCommandSpinner(fields[0]) {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(row), fields[0]))
+	for _, expected := range []string{
+		hermesCommandHint + "input temporarily disabled",
+		hermesCommandHint + "input stays active; Enter queues",
+	} {
+		if rest == expected || compact && strings.HasPrefix(rest, hermesCommandHint) && strings.HasPrefix(expected, rest) {
+			return true
+		}
+	}
+	return false
+}
+
+func hermesNavigationRow(row, navigation string) bool {
+	row = strings.TrimSpace(row)
+	if row == navigation {
+		return true
+	}
+	tail, ok := strings.CutPrefix(row, navigation)
+	if !ok {
+		return false
+	}
+	tail = strings.TrimSpace(tail)
+	if len(tail) < 4 || tail[0] != '(' || !strings.HasSuffix(tail, "s)") {
+		return false
+	}
+	for _, r := range tail[1 : len(tail)-2] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func hermesPromptSymbol(token string) bool {
+	runes := []rune(token)
+	return len(runes) == 1 && strings.ContainsRune(hermesPromptSymbols, runes[0])
+}
+
+func hermesCommandSpinner(token string) bool {
+	runes := []rune(token)
+	return len(runes) == 1 && strings.ContainsRune(hermesCommandSpinners, runes[0])
+}
+
+// validHermesProfilePrefix mirrors the upstream profile identifier grammar
+// used by Hermes 0.20.6: [a-z0-9][a-z0-9_-]{0,63}. Besides accepting real
+// named-profile composers, this rejects partial redraw debris such as "──❯",
+// which otherwise looks like a one-token prompt immediately above the border
+// and would be a dangerous false-idle classification during work.
+func validHermesProfilePrefix(prefix string) bool {
+	if len(prefix) < 1 || len(prefix) > 64 {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || i > 0 && (c == '_' || c == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func hermesHorizontalBorder(row string) bool {
+	runes := []rune(strings.TrimSpace(row))
+	if len(runes) < 6 {
+		return false
+	}
+	for _, r := range runes {
+		if !strings.ContainsRune("─━═╌╍", r) {
+			return false
+		}
+	}
+	return true
 }
 
 // evaluateCodexGrid reads Codex's real screen (q65). Codex has no typed signal in

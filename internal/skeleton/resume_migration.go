@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Nathandela/swarm/internal/adapter"
+	"github.com/Nathandela/swarm/internal/adapter/registry"
 	"github.com/Nathandela/swarm/internal/persist"
 	"github.com/Nathandela/swarm/internal/status"
 )
@@ -45,7 +46,13 @@ func (a *coreAPI) ensureResumeConversationID(local string, source persist.Meta) 
 }
 
 func validateStoredResumeConversationID(source persist.Meta) error {
-	if source.ConversationID == "" || source.AgentType != "codex" && source.AgentType != "claude" {
+	if source.ConversationID == "" {
+		return nil
+	}
+	if ad, ok := registry.New(source.AgentType); ok && !adapter.AcceptsConversationID(ad, source.ConversationID) {
+		return fmt.Errorf("resume: saved conversation identity is invalid")
+	}
+	if source.AgentType != "codex" && source.AgentType != "claude" {
 		return nil
 	}
 	if !adapter.IsCanonicalConversationID(source.ConversationID) {

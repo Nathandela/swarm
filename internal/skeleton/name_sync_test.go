@@ -31,7 +31,7 @@ func awaitNameSetCall(t *testing.T, backend *r7FakeBackend, wantName string) map
 func nameSyncRig(t *testing.T) (*Daemon, string, *r7FakeBackend) {
 	t.Helper()
 	sk := assemble(t)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return codex.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return codex.New(), true })
 	sk.api.syncName = func(id, name string) { go sk.syncSessionNameToProvider(id, name) }
 	m := launchFake(t, sk, r7StdinScript)
 	backend := newR7FakeBackend()
@@ -41,7 +41,7 @@ func nameSyncRig(t *testing.T) (*Daemon, string, *r7FakeBackend) {
 
 func TestCodexBackendJoinReceivesExistingSwarmSessionName(t *testing.T) {
 	sk := assemble(t)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return codex.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return codex.New(), true })
 	m := launchFake(t, sk, r7StdinScript)
 	if err := sk.core.Rename(m.ID, "launch name"); err != nil {
 		t.Fatalf("seed session name: %v", err)

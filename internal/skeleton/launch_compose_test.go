@@ -7,6 +7,7 @@ package skeleton
 // daemon: getSource and lookPath are stubs.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -111,6 +112,30 @@ func TestComposeLaunchSpec_ExternalResumeRejectsUnsafeIdentityAndMixedSource(t *
 	}
 }
 
+func TestComposeLaunchSpec_ExternalHermesResumeRejectsUUIDThatNativeValidatorCannotAccept(t *testing.T) {
+	const canonicalUUID = "4a7a2465-d8f0-4c05-a7a9-c44d8077b22b"
+	spec := daemon.LaunchSpec{
+		AgentType: "hermes",
+		Cwd:       "/work",
+		Options: map[string]string{
+			protocol.OptionResumeConversationID: canonicalUUID,
+		},
+	}
+	lookPathCalled := false
+	lookPath := func(name string, _ []string) (string, error) {
+		lookPathCalled = true
+		return "/abs/" + name, nil
+	}
+
+	got, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter("", persist.Meta{}), lookPath)
+	if err == nil || !strings.Contains(err.Error(), "external conversation identity is invalid") {
+		t.Fatalf("composeLaunchSpec(external Hermes UUID) = (%+v, %v); want native-identity rejection", got, err)
+	}
+	if lookPathCalled {
+		t.Fatal("native-invalid external identity reached argv binary resolution")
+	}
+}
+
 func TestComposeLaunchSpec_InvalidResumeRejected(t *testing.T) {
 	const local = "srclocal"
 	claudeSrc := endedClaudeSource(local)
@@ -163,6 +188,125 @@ func TestComposeLaunchSpec_FreshClaudeLaunchComposesArgv(t *testing.T) {
 	}
 	if !argvContains(got.Argv, "--settings") {
 		t.Errorf("fresh claude argv %v omits the --settings hook injection", got.Argv)
+	}
+}
+
+// TestComposeLaunchSpec_HermesFreshAndResume proves the generic assembly carries
+// Hermes's profile/runtime options into both paths while keeping Swarm's cwd in
+// the generic launch specification. Hermes 0.20.6 is known to override that cwd
+// later despite --no-restore-cwd; the adapter contract documents this upstream
+// runtime limitation separately.
+func TestComposeLaunchSpec_HermesFreshAndResume(t *testing.T) {
+	const (
+		local          = "hermes-source"
+		conversationID = "20260829_103232_1a7c23"
+	)
+	options := map[string]string{
+		"profile":   "coder",
+		"provider":  "swarm-mock",
+		"model":     "swarm-test",
+		"reasoning": "high",
+		"toolsets":  "terminal,skills",
+		"skills":    "reviewer,testing",
+		"yolo":      "true",
+	}
+
+	fresh := daemon.LaunchSpec{
+		AgentType:     "hermes",
+		Cwd:           "/swarm/selected",
+		Options:       options,
+		InitialPrompt: "line one\nline two --not-a-flag",
+	}
+	gotFresh, err := composeLaunchSpec(fresh, testEndpoint, "", srcGetter("", persist.Meta{}), stubLookPath)
+	if err != nil {
+		t.Fatalf("fresh Hermes launch rejected: %v", err)
+	}
+	wantFresh := []string{
+		"/abs/hermes", "--profile", "coder", "chat", "--cli",
+		"--provider", "swarm-mock", "--model", "swarm-test", "--reasoning", "high",
+		"--toolsets", "terminal,skills", "--skills", "reviewer,testing", "--yolo",
+		"-q", "line one\nline two --not-a-flag",
+	}
+	if !reflect.DeepEqual(gotFresh.Argv, wantFresh) {
+		t.Fatalf("fresh Hermes argv = %#v; want %#v", gotFresh.Argv, wantFresh)
+	}
+
+	source := persist.Meta{
+		ID:             local,
+		AgentType:      "hermes",
+		Cwd:            "/old/provider/cwd",
+		ConversationID: conversationID,
+		Status:         status.Status{Process: status.ProcessExited},
+	}
+	resumeOptions := make(map[string]string, len(options)+1)
+	for key, value := range options {
+		resumeOptions[key] = value
+	}
+	resumeOptions[protocol.OptionResumeFrom] = protocol.NamespacedID(testEndpoint, local)
+	resume := daemon.LaunchSpec{AgentType: "hermes", Cwd: "/swarm/selected", Options: resumeOptions}
+	gotResume, err := composeLaunchSpec(resume, testEndpoint, "", srcGetter(local, source), stubLookPath)
+	if err != nil {
+		t.Fatalf("Hermes resume rejected: %v", err)
+	}
+	wantResume := []string{
+		"/abs/hermes", "--profile", "coder", "chat", "--cli",
+		"--resume", conversationID, "--no-restore-cwd",
+		"--provider", "swarm-mock", "--model", "swarm-test", "--reasoning", "high",
+		"--toolsets", "terminal,skills", "--skills", "reviewer,testing", "--yolo",
+	}
+	if !reflect.DeepEqual(gotResume.Argv, wantResume) {
+		t.Fatalf("Hermes resume argv = %#v; want %#v", gotResume.Argv, wantResume)
+	}
+	if gotResume.Cwd != "/swarm/selected" {
+		t.Fatalf("Hermes resume launch-spec cwd = %q; want core-selected cwd %q", gotResume.Cwd, "/swarm/selected")
+	}
+	if gotResume.ResumedFrom != local {
+		t.Fatalf("Hermes ResumedFrom = %q; want %q", gotResume.ResumedFrom, local)
+	}
+}
+
+func TestComposeLaunchSpec_HermesSavedResumeRejectsCorruptConversationIDBeforeArgv(t *testing.T) {
+	const local = "hermes-corrupt-source"
+	source := persist.Meta{
+		ID:             local,
+		AgentType:      "hermes",
+		ConversationID: "20261340_296199_1a7c23",
+		Status:         status.Status{Process: status.ProcessExited},
+	}
+	spec := daemon.LaunchSpec{
+		AgentType: "hermes",
+		Cwd:       "/swarm/selected",
+		Options: map[string]string{
+			protocol.OptionResumeFrom: protocol.NamespacedID(testEndpoint, local),
+		},
+	}
+	lookPathCalled := false
+	lookPath := func(name string, _ []string) (string, error) {
+		lookPathCalled = true
+		return "/abs/" + name, nil
+	}
+
+	got, err := composeLaunchSpec(spec, testEndpoint, "", srcGetter(local, source), lookPath)
+	if err == nil || !strings.Contains(err.Error(), "saved conversation identity is invalid") {
+		t.Fatalf("composeLaunchSpec(corrupt Hermes metadata) = (%+v, %v); want saved-identity rejection", got, err)
+	}
+	if lookPathCalled {
+		t.Fatal("corrupt saved identity reached argv binary resolution")
+	}
+	if got.ResumedFrom != "" || len(got.Argv) != 0 {
+		t.Fatalf("rejected resume composed launch state: ResumedFrom=%q argv=%v", got.ResumedFrom, got.Argv)
+	}
+}
+
+func TestValidateStoredResumeConversationIDUsesHermesAdapterValidator(t *testing.T) {
+	valid := persist.Meta{AgentType: "hermes", ConversationID: "20260829_103232_1a7c23"}
+	if err := validateStoredResumeConversationID(valid); err != nil {
+		t.Fatalf("valid saved Hermes identity rejected: %v", err)
+	}
+	invalid := valid
+	invalid.ConversationID = "20261340_296199_1a7c23"
+	if err := validateStoredResumeConversationID(invalid); err == nil {
+		t.Fatal("corrupt saved Hermes identity accepted")
 	}
 }
 
