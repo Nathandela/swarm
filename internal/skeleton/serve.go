@@ -918,7 +918,7 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 	if !ok || m.ConversationID != "" {
 		return
 	}
-	ad, ok := registry.New(m.AgentType)
+	ad, ok := d.resolveAdapter(m.AgentType)
 	if !ok {
 		return
 	}
@@ -960,7 +960,7 @@ func (d *Daemon) captureConversationIDGated(id string, gateRunning bool) {
 		return
 	}
 	convID, ok := ad.ExtractConversationID(nil, tail)
-	if !ok || convID == "" {
+	if !ok || convID == "" || !adapter.AcceptsConversationID(ad, convID) {
 		return
 	}
 	_ = d.core.SetConversationID(id, convID)

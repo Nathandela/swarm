@@ -29,7 +29,7 @@ swarm gives you:
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/swarm-architecture.svg" alt="swarm architecture. A disposable terminal runs the thin swarm TUI, which talks over a Unix socket to a replaceable swarm daemon (protocol server, registry, status engine, and the claude and codex adapters). The daemon supervises one shim process per session; each shim owns a PTY, a VT grid, and a transcript, and runs the agent CLI. Shims write meta.json to a state directory. A callout explains that closing the terminal or upgrading the daemon leaves the agents running, because the next daemon rebuilds its registry from meta.json and reconnects." width="840">
+  <img src="docs/assets/swarm-architecture.svg" alt="swarm architecture. A disposable terminal runs the thin swarm TUI, which talks over a Unix socket to a replaceable swarm daemon containing the protocol server, registry, status engine, and CLI adapters. The daemon supervises one shim process per session; each shim owns a PTY, a VT grid, and a transcript, and runs the agent CLI. Shims write meta.json to a state directory. A callout explains that closing the terminal or upgrading the daemon leaves the agents running, because the next daemon rebuilds its registry from meta.json and reconnects." width="840">
 </p>
 
 One binary, a few roles. `swarm` is the TUI client; on first run it auto-starts `swarm daemon` in the background. The daemon supervises a tiny **shim** process per session — the shim owns the PTY, emulates the screen as a VT grid, and appends the transcript. Because the shims are separate processes, they outlive both your terminal and the daemon itself: a restarted daemon rebuilds its registry from each session's on-disk `meta.json` and reconnects, verifying process identity by PID plus start time (ADR-001).
@@ -156,9 +156,13 @@ before opening or submitting a handoff, and a supervision notification never app
 |-------|--------|
 | Claude Code | Supported |
 | Codex | Supported |
-| Gemini CLI · OpenCode · agy | Roadmap |
+| agy (Antigravity CLI) | Supported |
+| OpenCode | Supported |
+| [Hermes Agent](https://hermes-agent.nousresearch.com/docs/getting-started/installation) | Supported on Apple Silicon macOS and Linux |
 
-Each agent is a self-contained adapter — detection, spawn arguments, status signals, and resume — preceded by a characterization harness that records the real CLI, so every adapter is tested against genuine output rather than a guess.
+Each agent is a self-contained adapter — detection, spawn arguments, status signals, and resume — preceded by a characterization harness that records the real CLI, so every adapter is tested against genuine output rather than a guess. Hermes's exact support boundary and upstream limitations are recorded in its [adapter evidence](docs/verification/hermes-adapter-evidence.md).
+
+Hermes `0.20.6` has an upstream resume bug that restores the session's recorded working directory even when Swarm requests the newly selected one; resume history still works. Swarm also records the startup identity, so a Hermes session that rotates its ID mid-process may resume an earlier continuation.
 
 ## Upgrading
 
@@ -172,7 +176,7 @@ This is safe by design: every running session survives the restart and is reconn
 
 ## Project status
 
-Public and released — latest [`v0.12.4`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and the Claude Code and Codex adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
+Public and released — latest [`v0.12.4`](https://github.com/Nathandela/swarm/releases). Requires the Go 1.25 toolchain to build. The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, and production CLI adapters are implemented and tested; per-epic verification evidence lives under [docs/verification/](docs/verification/).
 
 One known limitation: sessions run only while the host machine is awake. Sleep pauses every agent process — they resume automatically on wake with nothing lost, but make no progress while asleep. A keep-awake option is a possible later addition (system-spec, requirement N-7).
 

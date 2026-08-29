@@ -26,6 +26,7 @@
 ## Design reference
 - [UI preview](design/ui-preview.html) — **canonical visual reference** (TUI): interactive screen mockups (keyboard-drivable), flow, architecture, lifecycle, test strategy. Live copy: https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
 - [Obsidian maquette](research/obsidian-maquette.html) — **the phone app's design source** (ADR-009): every screen, every kit component, the re-rendered mark, normative `:root` token block. Supersedes the Substrate directions HTML as the skin source once phase O2 re-points tokens.json.
+- [Hermes adapter contract](design/hermes-adapter.md) — classic-CLI argv, status, identity/resume, platform boundary, and deferred structured transports
 
 ## Decisions
 - [ADR index](adr/README.md) — all decisions, status, and the convention for adding new ones
@@ -48,4 +49,5 @@
 - [Audit committee report 001](verification/audit-001-system-spec.md) — the adversarial review that shaped spec Draft 2
 - [Audit committee report 002](verification/audit-002-implementation-goals.md) — the review that shaped implementation-goals.md Draft 2
 - [Landscape research](research/agent_view_landscape.md) — Agent View internals, cross-CLI managers, mobile remotes
+- [Hermes adapter evidence](verification/hermes-adapter-evidence.md) — characterization provenance, retained PTY fixtures, TDD records, acceptance gates, and known upstream limitations
 - [DESIGN.md](../DESIGN.md) — original design brief (historical)

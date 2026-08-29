@@ -20,11 +20,35 @@ type ConversationIdentitySource interface {
 	ConversationIDFromEvent(HookPayload) (string, bool)
 }
 
+// ConversationIDValidator is an optional adapter extension for providers whose
+// native conversation IDs have a defensible syntax. It lets generic resume
+// paths reject corrupt persisted metadata without adding provider switches or
+// widening the frozen Adapter interface. Implementations are pure, total and
+// deterministic.
+type ConversationIDValidator interface {
+	IsValidConversationID(string) bool
+}
+
 // AsConversationIdentitySource reports whether a implements the optional
 // authenticated-event identity extension.
 func AsConversationIdentitySource(a Adapter) (ConversationIdentitySource, bool) {
 	src, ok := a.(ConversationIdentitySource)
 	return src, ok
+}
+
+// AsConversationIDValidator reports whether a implements the optional native-ID
+// validation extension.
+func AsConversationIDValidator(a Adapter) (ConversationIDValidator, bool) {
+	validator, ok := a.(ConversationIDValidator)
+	return validator, ok
+}
+
+// AcceptsConversationID applies an adapter's native-ID validator when it has
+// one. Adapters without this optional extension retain their historical opaque-
+// ID behavior.
+func AcceptsConversationID(a Adapter, id string) bool {
+	validator, ok := AsConversationIDValidator(a)
+	return !ok || validator.IsValidConversationID(id)
 }
 
 // IsCanonicalConversationID accepts the canonical lowercase UUID spelling used

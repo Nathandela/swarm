@@ -1,15 +1,13 @@
 // Package registry is the Epic 11 adapter REGISTRY: the single table mapping a
-// stable agent name ("agy" / "claude" / "codex" / "opencode" / "reference") to
+// stable agent name ("agy" / "claude" / "codex" / "hermes" / "opencode" /
+// "reference") to
 // the constructor that builds that Adapter. It is the ONE place the daemon's
 // DetectFunc (which greys the launch-form picker per L-2) and `swarm-char
 // --adapter` resolve an adapter by name (T-5, T-7).
 //
-// R-F1 (.claude/tmp/cli-duo-implementation-plan.md Phase F) extends this
-// originally v1.0 (claude/codex) suite to the v1.1 CLI duo: agy + opencode
-// join as both constructors and production entries, FAILING-FIRST — this file
-// pins the expanded surface before registry.go registers them, so the RED
-// reason is "New(\"agy\"/\"opencode\") = (nil, false)" and a truncated
-// Names() until they land.
+// The literal tables below pin the shipped lineup independently of registry.go,
+// so an adapter cannot disappear from both construction and launch eligibility
+// without a test failure.
 package registry
 
 import (
@@ -19,20 +17,21 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 )
 
-// wantNames are the v1.1 registered adapters (T-7): the four real CLIs plus the
+// wantNames are the registered adapters (T-7): the five real CLIs plus the
 // fixture-only reference adapter that proves the boundary (E9.5).
-var wantNames = []string{"agy", "claude", "codex", "opencode", "reference"}
+var wantNames = []string{"agy", "claude", "codex", "hermes", "opencode", "reference"}
 
 // wantBinary is the real PATH binary each named adapter detects.
 var wantBinary = map[string]string{
 	"agy":       "agy",
 	"claude":    "claude",
 	"codex":     "codex",
+	"hermes":    "hermes",
 	"opencode":  "opencode",
 	"reference": "reference-cli",
 }
 
-// TestNew_KnownAdapters — each v1.1 name constructs a non-nil adapter whose
+// TestNew_KnownAdapters — each shipped name constructs a non-nil adapter whose
 // Name and Binary match the registration; an unknown name returns (nil, false).
 func TestNew_KnownAdapters(t *testing.T) {
 	for _, name := range wantNames {
@@ -53,7 +52,7 @@ func TestNew_KnownAdapters(t *testing.T) {
 
 // wantProduction is the T-7/GG-6 production set: every real CLI adapter, minus
 // the fixture-only "reference" adapter.
-var wantProduction = []string{"agy", "claude", "codex", "opencode"}
+var wantProduction = []string{"agy", "claude", "codex", "hermes", "opencode"}
 
 // TestIsProduction — R-F1: every real CLI adapter is a launchable production
 // provider; "reference" and an unregistered name are not (the fail-closed
@@ -61,7 +60,7 @@ var wantProduction = []string{"agy", "claude", "codex", "opencode"}
 func TestIsProduction(t *testing.T) {
 	for _, name := range wantProduction {
 		if !IsProduction(name) {
-			t.Errorf("IsProduction(%q) = false; want true (v1.1 real CLI)", name)
+			t.Errorf("IsProduction(%q) = false; want true (real CLI)", name)
 		}
 	}
 	if IsProduction("reference") {
@@ -128,5 +127,22 @@ func TestRegistryDrivesDetection(t *testing.T) {
 	det := adapter.Detect(a, stubProber{path: "/usr/local/bin/claude", out: "2.1.212 (Claude Code)"})
 	if !det.Found || !det.InRange {
 		t.Errorf("Detect(registry claude, real version) = %+v; want Found + InRange (picker offers it)", det)
+	}
+}
+
+// TestRegistryDrivesHermesDetection pins the exact characterized Hermes banner
+// through the production registry, not merely through the package parser. This
+// is the launch picker's proof that Hermes 0.20.6 is usable (L-2/T-6).
+func TestRegistryDrivesHermesDetection(t *testing.T) {
+	a, ok := New("hermes")
+	if !ok {
+		t.Fatal("New(\"hermes\") failed")
+	}
+	det := adapter.Detect(a, stubProber{
+		path: "/usr/local/bin/hermes",
+		out:  "Hermes Agent v0.20.6 (2026.8.27) · upstream aff5125f",
+	})
+	if !det.Found || !det.InRange || det.Version != "0.20.6" {
+		t.Errorf("Detect(registry hermes, characterized banner) = %+v; want Found + version 0.20.6 + InRange", det)
 	}
 }
