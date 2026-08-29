@@ -111,12 +111,13 @@ func (m Meta) EffectiveGroupEnteredAt() time.Time {
 // ProviderCwd is the working directory the AGENT actually ran in: AgentCwd when a
 // pre-launch hook resolved one, and Cwd otherwise. The two differ for a worktree-isolated
 // session (Epic 12), where Cwd is the repo the launch was requested in and the agent runs
-// under <repo>/.swarm/worktrees/<id>.
+// under <repo>/.swarm/worktrees/<name-slug> (or <id> when unnamed; an id suffix
+// is added when the friendly path is already occupied).
 //
 // An agent CLI files its own history under an encoding of the directory it ran in, so
 // every provider-facing path derivation must ask for this rather than read Cwd. Cwd keeps
-// its own meaning untouched and is what worktree teardown stays anchored to
-// (internal/skeleton's preDeleteWorktree); conflating the two would tear down nothing.
+// its own meaning untouched and is what worktree teardown stays anchored to;
+// AgentCwd supplies the exact checkout path to remove.
 func (m Meta) ProviderCwd() string {
 	if m.AgentCwd != "" {
 		return m.AgentCwd

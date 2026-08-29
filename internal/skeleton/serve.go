@@ -1157,14 +1157,19 @@ func preLaunchWorktree(id string, spec daemon.LaunchSpec) (string, error) {
 	if spec.Options[protocol.OptionWorktree] != "true" {
 		return "", nil
 	}
-	return worktree.Create(spec.Cwd, id)
+	return worktree.Create(spec.Cwd, id, spec.Name)
 }
 
 // preDeleteWorktree tears down a worktree-isolated session's worktree on delete.
-// m.Cwd is the original launch cwd (the repo), not the overridden agent cwd.
+// m.Cwd is the original launch cwd (the repo); AgentCwd is the exact, durable
+// worktree path chosen at launch. Older metadata without AgentCwd used the id as
+// its path component and takes the compatibility fallback.
 func preDeleteWorktree(m persist.Meta) error {
 	if m.LaunchOptions[protocol.OptionWorktree] != "true" {
 		return nil
+	}
+	if m.AgentCwd != "" {
+		return worktree.RemoveAt(m.Cwd, m.AgentCwd)
 	}
 	return worktree.Remove(m.Cwd, m.ID)
 }

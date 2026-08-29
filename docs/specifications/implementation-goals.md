@@ -148,7 +148,7 @@ Goal: two real CLIs, each characterized first, proving the adapter boundary unde
 
 ### Epic 12 — Worktree isolation
 Goal: opt-in isolated worktrees without touching core control flow.
-- E12.1 Launch toggle creates `.swarm/worktrees/<validated-id>` + branch `swarm/<id>`; non-repo → clear error (S-3).
+- E12.1 Launch toggle creates `.swarm/worktrees/<name-slug>` + branch `swarm/<name-slug>-<validated-id>` for named sessions, adding the id to a colliding path and falling back to the id-only form when unnamed; non-repo → clear error (S-3).
 - E12.2 Delete tears down (`git worktree remove` + prune) (R-3).
 - E12.3 Implemented as pre-launch/pre-delete hooks on daemon core; review asserts no inline worktree branches in core.
 

@@ -13,10 +13,11 @@ package persist
 //	func (m Meta) ProviderCwd() string // AgentCwd, falling back to Cwd when it is empty
 //
 // WHY IT IS ADDITIVE AND Cwd DOES NOT MOVE. For a worktree-isolated session (Epic 12)
-// the daemon's PreLaunch hook returns <repo>/.swarm/worktrees/<id> and the agent runs
+// the daemon's PreLaunch hook returns <repo>/.swarm/worktrees/<slug> and the agent runs
 // THERE, while Meta.Cwd keeps the launch cwd -- the repo root. Teardown depends on that
-// exact meaning: internal/skeleton's preDeleteWorktree calls worktree.Remove(m.Cwd, m.ID),
-// and a Remove anchored at the worktree instead of the repo tears down nothing. So the
+// exact meaning: internal/skeleton's preDeleteWorktree runs git from m.Cwd and removes
+// the exact path in m.AgentCwd. A Remove anchored at the worktree instead of the repo
+// tears down nothing. So the
 // resolved directory arrives as a NEW field and Cwd keeps its meaning untouched.
 //
 // A provider files its own history under an encoding of the directory the agent ran in,

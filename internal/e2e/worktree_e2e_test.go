@@ -9,7 +9,7 @@
 // This test composes that end-to-end: inside a throwaway git repo, launch a fake
 // session with LaunchReq.Worktree — proving the reserved OptionWorktree reaches the
 // skeleton's PreLaunch hook — then assert (a) the worktree directory
-// <repo>/.swarm/worktrees/<id> and branch swarm/<id> exist per git, and (b) the
+// <repo>/.swarm/worktrees/<name-slug> and matching id-qualified branch exist per git, and (b) the
 // agent process's ACTUAL working directory is that worktree dir (the kernel's view,
 // not a printed claim). Then delete the session and assert the worktree is torn down
 // (git worktree removed + the directory gone). git is required; the test skips with a
@@ -46,7 +46,7 @@ func TestE2E_Worktree_LaunchRunTeardown(t *testing.T) {
 	// Launch WITH the worktree toggle. Cwd is the repo; the daemon's PreLaunch hook
 	// must create an isolated worktree and run the agent there instead. The agent
 	// prints once then idles, so it stays alive for the cwd + teardown assertions.
-	id := launchWorktreeSession(t, c, repo, "print IN-WORKTREE\nidle 300s\n")
+	id := launchWorktreeSession(t, c, repo, "Fix Login Flow", "print IN-WORKTREE\nidle 300s\n")
 	view := waitOneView(t, c)
 	if view.ID != id {
 		t.Fatalf("listed id %q != launched id %q", view.ID, id)
@@ -55,8 +55,8 @@ func TestE2E_Worktree_LaunchRunTeardown(t *testing.T) {
 
 	// (a) git-visible isolation: the worktree dir and branch exist, and git registers
 	// the worktree — the launch really created the Epic 12 isolation, not just a cwd.
-	wantDir := filepath.Join(repo, ".swarm", "worktrees", local)
-	branch := "swarm/" + local
+	wantDir := filepath.Join(repo, ".swarm", "worktrees", "fix-login-flow")
+	branch := "swarm/fix-login-flow-" + local
 	if fi, err := os.Stat(wantDir); err != nil || !fi.IsDir() {
 		t.Fatalf("worktree dir %q not created (err=%v)", wantDir, err)
 	}
@@ -99,7 +99,7 @@ func TestE2E_Worktree_LaunchRunTeardown(t *testing.T) {
 // and Cwd pinned to repo, returning the namespaced session id. It mirrors
 // launchFakeSession but opts into isolation (LaunchReq.Worktree) and does not use a
 // throwaway Cwd (the repo is load-bearing for worktree creation).
-func launchWorktreeSession(t *testing.T, c *protocol.Client, repo, script string) string {
+func launchWorktreeSession(t *testing.T, c *protocol.Client, repo, name, script string) string {
 	t.Helper()
 	spath := filepath.Join(t.TempDir(), "script.txt")
 	if err := os.WriteFile(spath, []byte(script), 0o600); err != nil {
@@ -109,6 +109,7 @@ func launchWorktreeSession(t *testing.T, c *protocol.Client, repo, script string
 
 	id, _, err := c.Launch(protocol.LaunchReq{
 		Agent:    "fake",
+		Name:     name,
 		Cwd:      repo,
 		Worktree: true,
 		Options:  map[string]string{"script": spath},

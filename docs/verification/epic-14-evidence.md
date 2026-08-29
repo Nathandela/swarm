@@ -25,7 +25,7 @@ The whole system is proven against everything above it: all 18 spec scenarios au
 ## Carry-forwards closed
 
 - **a7d** (shim arms signal handler before spawn): `shim/shim_signal_order_test.go` — a nil-in-prod seam delivers a SIGTERM in the arm→spawn window and proves it is buffered and still contains the agent group (S5 ordering).
-- **Worktree e2e**: `e2e/worktree_e2e_test.go` — launch with the toggle → the agent's ACTUAL kernel cwd (via /proc or lsof) is `.swarm/worktrees/<id>` on branch `swarm/<id>` → delete tears it down (S-3/R-3).
+- **Worktree e2e**: `e2e/worktree_e2e_test.go` — launch a named session with the toggle → the agent's ACTUAL kernel cwd (via /proc or lsof) is `.swarm/worktrees/<name-slug>` on its id-qualified branch → delete tears it down (S-3/R-3).
 - **D1/D2 real-CLI VERIFY** (Epic 11 deferrals): `internal/smoke/realcli_test.go` — a `//go:build realcli` + `SWARM_REALCLI=1` doubly-gated, never-CI, billable harness that confirms the real Claude hook value-names and the real Codex app-server event stream against live CLIs and re-records fixtures on drift. Compiles clean; **remains VERIFY-pending until a human runs it once** (documented, [epic-14-realcli-smoke.md]). This is a deliberately-gated manual confirmation, not a missing test.
 
 ## Committee & TDD

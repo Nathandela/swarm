@@ -109,7 +109,7 @@ func (r *filesystemResumeHistoryResolver) Resolve(m persist.Meta) resumeHistoryR
 		return resumeHistoryResult{Outcome: resumeHistoryUnsupported}
 	}
 	// ProviderCwd, not Cwd: a provider files its history under the directory the AGENT
-	// ran in, which for a worktree-isolated session is <repo>/.swarm/worktrees/<id> and
+	// ran in, which for a worktree-isolated session is <repo>/.swarm/worktrees/<slug> and
 	// not the repo the launch was requested in. Reading Cwd here searched a directory
 	// the provider never wrote to, so recovery could not work for those sessions at all.
 	// The absoluteness gate applies to the value actually used, for the same reason.
