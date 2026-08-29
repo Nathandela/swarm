@@ -188,7 +188,7 @@ Known limitation: sessions make progress only while the host computer is awake. 
 - [Build plan](docs/specifications/build-plan.md) — ordered delivery plan and contracts
 - [Architecture decisions](docs/adr/) — the decisions behind the process and protocol model
 - [UI preview](docs/design/ui-preview.html) — navigable terminal design mockup
-- [Visual identity direction](docs/design/swarm-illustration-direction/index.html) — artwork, logo, icon, and README asset system
+- [Brandbook v1](docs/design/swarm-illustration-direction/index.html) — Night Orchestra artwork, logo, icon, palette, and README asset system
 
 ## Build and test
 

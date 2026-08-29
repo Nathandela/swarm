@@ -1,7 +1,7 @@
 package tui
 
 // ADR-010 Amendment 3 C3/C4 -- the board's half of passive supervision. A handoff
-// child with an undelivered attention event carries the amber "supervisor pending"
+// child with an undelivered attention event carries the accent "supervisor pending"
 // marker in its summary tail (same width discipline as the phone-control marker);
 // when its source has left the roster or is no longer running, the row says
 // "supervisor gone" instead, so the human sees that nobody will be woken.

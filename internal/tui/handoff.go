@@ -273,7 +273,7 @@ func (m handoffModel) view() string {
 	// E4: the disclosure question, naming both CLIs. It is a separate thing from the
 	// warning above -- that one is informational, this one blocks the submit.
 	if m.confirmPending() {
-		b.WriteString("\n" + m.clampLine("  "+styleAmber.Render(m.crossCLIQuestion())) + "\n")
+		b.WriteString("\n" + m.clampLine("  "+styleAccent.Render(m.crossCLIQuestion())) + "\n")
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.clampLine("  "+styleError.Render(m.errMsg)) + "\n")
@@ -295,7 +295,7 @@ func (m handoffModel) crossCLIQuestion() string {
 func (m handoffModel) fieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
-		prefix = styleAmber.Render("▌") + " "
+		prefix = styleAccent.Render("▌") + " "
 	}
 	return m.clampLine(prefix+styleDim.Render(padLabel(label))+value) + "\n"
 }
@@ -314,7 +314,7 @@ func (m handoffModel) targetValue() string {
 	if m.targetIdx < 0 {
 		return styleError.Render("no installed, supported agent")
 	}
-	return styleDim.Render("◂ ") + styleAmber.Render(m.targetName()) + styleDim.Render(" ▸")
+	return styleDim.Render("◂ ") + styleAccent.Render(m.targetName()) + styleDim.Render(" ▸")
 }
 
 func (m handoffModel) modelValue() string {
@@ -362,11 +362,11 @@ func (m handoffModel) supervisionValue() string {
 	if m.method == handoffMethodHandsOff {
 		return styleDim.Render("not applicable - no supervisor exists")
 	}
-	return styleDim.Render("◂ ") + styleAmber.Render(m.supervision) + styleDim.Render(" ▸")
+	return styleDim.Render("◂ ") + styleAccent.Render(m.supervision) + styleDim.Render(" ▸")
 }
 
 func (m handoffModel) methodValue() string {
-	return styleDim.Render("◂ ") + styleAmber.Render(m.method) + styleDim.Render(" ▸")
+	return styleDim.Render("◂ ") + styleAccent.Render(m.method) + styleDim.Render(" ▸")
 }
 
 func (m handoffModel) hint() string {

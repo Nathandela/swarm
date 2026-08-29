@@ -24,8 +24,9 @@
 - [Phone refit playbook](specifications/phone-refit-playbook.md) — owner-directed 2026-08-27, the contract for seven waves: pinned frame, sending works, one button, Slate palette (ADR-021), rewritten words, one-line tool rows, the other screens. Per wave: files allowed, tests first, gates, done-when. Interactive mock: https://claude.ai/code/artifact/90c122aa-eff2-4e47-a4f1-6d9e8757ba99
 
 ## Design reference
+- [Brandbook v1](design/swarm-illustration-direction/index.html) — **canonical visual identity**: Night Orchestra artwork, logo, app icon, Slate palette, and README asset system
 - [UI preview](design/ui-preview.html) — **canonical visual reference** (TUI): interactive screen mockups (keyboard-drivable), flow, architecture, lifecycle, test strategy. Live copy: https://claude.ai/code/artifact/2959c9c2-1ab9-4ab1-ba35-e32d845ba0b7
-- [Obsidian maquette](research/obsidian-maquette.html) — **the phone app's design source** (ADR-009): every screen, every kit component, the re-rendered mark, normative `:root` token block. Supersedes the Substrate directions HTML as the skin source once phase O2 re-points tokens.json.
+- [Slate maquette](research/slate-maquette.html) — **the phone app's design-token source** (ADR-021): every screen, every kit component, the re-rendered mark, and the normative `:root` token block
 - [Hermes adapter contract](design/hermes-adapter.md) — classic-CLI argv, status, identity/resume, platform boundary, and deferred structured transports
 
 ## Decisions

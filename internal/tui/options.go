@@ -68,21 +68,21 @@ func (o optionsModel) view(width int) string {
 }
 
 // picker renders a choice row the way the agent picker does: the selection as an
-// amber filled dot, the rest as hollow dots, flanked by the cycle-arrow affordances.
+// accent-filled dot, the rest as hollow dots, flanked by the cycle-arrow affordances.
 // When the full row exceeds budget (> 0), it degrades to the handoff form's compact
 // "◂ selected ▸" so the selection always stays visible; a plain clamp would clip it.
 func picker(labels []string, sel, budget int) string {
 	parts := make([]string, len(labels))
 	for i, l := range labels {
 		if i == sel {
-			parts[i] = styleAmber.Render("● " + l)
+			parts[i] = styleAccent.Render("● " + l)
 		} else {
 			parts[i] = "○ " + l
 		}
 	}
 	row := styleDim.Render("◂ ") + strings.Join(parts, "   ") + styleDim.Render(" ▸")
 	if budget > 0 && lipgloss.Width(row) > budget {
-		row = styleDim.Render("◂ ") + styleAmber.Render(labels[sel]) + styleDim.Render(" ▸")
+		row = styleDim.Render("◂ ") + styleAccent.Render(labels[sel]) + styleDim.Render(" ▸")
 	}
 	return row
 }

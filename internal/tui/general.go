@@ -933,7 +933,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 		prefix = styleError.Render(prompt) + " "
 		prefixWidth = lipgloss.Width(prompt) + 1
 	case selected:
-		prefix = styleAmber.Render("▌") + " "
+		prefix = styleAccent.Render("▌") + " "
 		prefixWidth = 2
 	default:
 		prefix = "  "
@@ -950,7 +950,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 	}
 	tailText = clampCells(tailText, cols.summary)
 	tail := styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed) + tailText)
-	// Amber markers share one cell budget with the summary and take precedence over
+	// Accent markers share one cell budget with the summary and take precedence over
 	// it: the summary yields, then the markers themselves clamp, so the row never
 	// exceeds the terminal.
 	var markers []string
@@ -984,7 +984,7 @@ func (m generalModel) renderRow(s protocol.SessionView, g status.Group, selected
 			tailText = clampCells(tailText, cols.summary-markerWidth)
 		}
 		tail = styleDim.Render(padRight(compactElapsed(elapsedOf(s)), colElapsed)+tailText) +
-			styleAmber.Render(marker)
+			styleAccent.Render(marker)
 	}
 	fields := icon + " " +
 		styleAgent.Render(padRight(m.nameCell(s, cols.name), cols.name)) +

@@ -898,8 +898,10 @@ func (m *rootModel) armWorkingAnimation() tea.Cmd {
 // Shared styling + formatting helpers.
 // ---------------------------------------------------------------------------
 
-// Group palette (matches docs/design/ui-preview.html). Colors degrade to plain
-// text without a TTY, so unit tests — which strip ANSI — never see them.
+// Terminal palette. These are the semantic Slate tokens shared with the mobile
+// app and Brandbook v1; palette_test.go joins every value back to both sources.
+// Colors degrade to plain text without a TTY, so layout tests — which strip
+// ANSI — never see them.
 //
 // Every Style below is a package-level var (R4.1.1): general.go/launch.go's
 // render paths reuse these instead of constructing a fresh lipgloss.NewStyle()
@@ -907,19 +909,20 @@ func (m *rootModel) armWorkingAnimation() tea.Cmd {
 // groupHeaderStyle's switch so a per-group color+bold combination is built once
 // at init, not once per row per frame.
 var (
-	colNeedsInput = lipgloss.Color("#ff5f5f")
-	colWorking    = lipgloss.Color("#5fafff")
-	colReview     = lipgloss.Color("#5fd75f")
-	colCompleted  = lipgloss.Color("#8a8a8a")
-	colAmber      = lipgloss.Color("#ffcf5f")
+	colAccent     = lipgloss.Color("#8eb4e6") // --p-hero
+	colNeedsInput = lipgloss.Color("#8eb4e6") // --p-att: needs you / live
+	colWorking    = lipgloss.Color("#6fc3bc") // --p-work
+	colReview     = lipgloss.Color("#8cc49a") // --p-ok
+	colCompleted  = lipgloss.Color("#66718a") // --p-ink3
+	colError      = lipgloss.Color("#e5736b") // --p-err: failure / deny
 
-	styleTitle = lipgloss.NewStyle().Foreground(colAmber).Bold(true)
-	styleDim   = lipgloss.NewStyle().Foreground(colCompleted)
-	styleAgent = lipgloss.NewStyle().Bold(true)
-	styleAmber = lipgloss.NewStyle().Foreground(colAmber)
-	styleError = lipgloss.NewStyle().Foreground(colNeedsInput)
+	styleTitle  = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	styleDim    = lipgloss.NewStyle().Foreground(colCompleted)
+	styleAgent  = lipgloss.NewStyle().Bold(true)
+	styleAccent = lipgloss.NewStyle().Foreground(colAccent)
+	styleError  = lipgloss.NewStyle().Foreground(colError)
 
-	styleGroupNeedsInput = styleError
+	styleGroupNeedsInput = lipgloss.NewStyle().Foreground(colNeedsInput)
 	styleGroupWorking    = lipgloss.NewStyle().Foreground(colWorking)
 	styleGroupReview     = lipgloss.NewStyle().Foreground(colReview)
 	styleGroupCompleted  = styleDim

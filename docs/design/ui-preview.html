@@ -3,9 +3,10 @@
   :root {
     --bg: #FAFAF8; --fg: #1A1D21; --muted: #6F6B60; --line: #E5E2D9;
     --accent: #B8821F; --accent-soft: #B8821F1F;
-    --card: #FFFFFF; --term-bg: #101418; --term-fg: #D8D6D0; --term-line: #23262B;
+    --card: #FFFFFF; --term-bg: #0B0E14; --term-fg: #EEF2F8; --term-line: #262E3F;
     --red: #C74A3C; --blue: #3D7FB8; --green: #2F9964; --grey: #7A7F87;
-    --tred: #E0604F; --tblue: #5B9DD9; --tgreen: #4DBD86; --tgrey: #6E747E;
+    --taccent: #8EB4E6; --tatt: #8EB4E6; --twork: #6FC3BC;
+    --tok: #8CC49A; --terr: #E5736B; --tgrey: #66718A;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -67,15 +68,16 @@
     padding: 14px 16px; overflow-x: auto; white-space: pre;
   }
   .term:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .term .dim { color: #5C636E; }
-  .term .amber { color: #E2AC4F; }
-  .term .red { color: var(--tred); }
-  .term .blue { color: var(--tblue); }
-  .term .green { color: var(--tgreen); }
+  .term .dim { color: var(--tgrey); }
+  .term .accent { color: var(--taccent); }
+  .term .attention { color: var(--tatt); }
+  .term .work { color: var(--twork); }
+  .term .ok { color: var(--tok); }
+  .term .error { color: var(--terr); }
   .term .grey { color: var(--tgrey); }
-  .term .sel { background: #E2AC4F26; display: inline-block; width: 100%; }
-  .term .selbar { color: #E2AC4F; }
-  .term .cursor { animation: blink 1.1s steps(1) infinite; background: #D8D6D0; color: #101418; }
+  .term .sel { background: #8EB4E61A; display: inline-block; width: 100%; }
+  .term .selbar { color: var(--taccent); }
+  .term .cursor { animation: blink 1.1s steps(1) infinite; background: var(--term-fg); color: var(--term-bg); }
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
 
@@ -151,10 +153,10 @@
 
   <h3>Design intent</h3>
   <div class="cols">
-    <div class="card"><h4 style="color:var(--red)">NEEDS INPUT</h4><p>The group that matters. Always first, always highlighted. A session lands here when its agent asks a question or requests permission.</p></div>
-    <div class="card"><h4 style="color:var(--blue)">WORKING</h4><p>Agents mid-task. The one-line summary shows the last meaningful output so you know what each is doing without attaching.</p></div>
-    <div class="card"><h4 style="color:var(--green)">READY FOR REVIEW</h4><p>The agent finished its turn. Attach, review the diff, send the next prompt — the session drops back to Working.</p></div>
-    <div class="card"><h4 style="color:var(--grey)">COMPLETED</h4><p>Exited sessions, exit code shown. They stay listed (transcript on disk) until you delete them with <span class="mono">x</span>.</p></div>
+    <div class="card"><h4 style="color:var(--tatt)">NEEDS INPUT</h4><p>The group that matters. Always first, always highlighted. A session lands here when its agent asks a question or requests permission.</p></div>
+    <div class="card"><h4 style="color:var(--twork)">WORKING</h4><p>Agents mid-task. The one-line summary shows the last meaningful output so you know what each is doing without attaching.</p></div>
+    <div class="card"><h4 style="color:var(--tok)">READY FOR REVIEW</h4><p>The agent finished its turn. Attach, review the diff, send the next prompt — the session drops back to Working.</p></div>
+    <div class="card"><h4 style="color:var(--tgrey)">COMPLETED</h4><p>Exited sessions, exit code shown. They stay listed (transcript on disk) until you delete them with <span class="mono">x</span>.</p></div>
   </div>
   <div class="note">Attach is raw passthrough: the agent CLI's own interface, untouched, full-screen. swarm adds exactly one thin line — session name and the detach key — and even that is toggleable. No fluff.</div>
 </section>
@@ -402,9 +404,9 @@ flowchart LR
   // ---- interactive mockup ----
   var el = document.getElementById('mockup');
   var GROUPS = [
-    { key: 'needs_input', label: 'NEEDS INPUT', cls: 'red', icon: '●' },
-    { key: 'working', label: 'WORKING', cls: 'blue', icon: '◐' },
-    { key: 'review', label: 'READY FOR REVIEW', cls: 'green', icon: '✓' },
+    { key: 'needs_input', label: 'NEEDS INPUT', cls: 'attention', icon: '●' },
+    { key: 'working', label: 'WORKING', cls: 'work', icon: '◐' },
+    { key: 'review', label: 'READY FOR REVIEW', cls: 'ok', icon: '✓' },
     { key: 'done', label: 'COMPLETED', cls: 'grey', icon: '─' }
   ];
   var sessions = [
@@ -422,7 +424,7 @@ flowchart LR
   function renderGeneral() {
     var running = sessions.filter(function (s) { return s.st !== 'done'; }).length;
     var needs = sessions.filter(function (s) { return s.st === 'needs_input'; }).length;
-    var out = '<span class="amber">swarm</span><span class="dim">' +
+    var out = '<span class="accent">swarm</span><span class="dim">' +
       pad('', 46) + running + ' running · ' + needs + ' needs you</span>\n\n';
     var flat = [];
     GROUPS.forEach(function (g) {
@@ -437,7 +439,7 @@ flowchart LR
           '<span class="dim">' + pad(s.t, 6) + esc(s.sum) + '</span>';
         if (i === sel) {
           var mark = confirming
-            ? '<span class="red">kill? y/n</span> '
+            ? '<span class="error">kill? y/n</span> '
             : '<span class="selbar">▌</span>';
           out += '<span class="sel">' + mark + line + '</span>\n';
         } else {
@@ -453,9 +455,9 @@ flowchart LR
 
   function renderLaunch() {
     el.innerHTML =
-      '<span class="amber">swarm</span><span class="dim"> · new session</span>\n\n' +
+      '<span class="accent">swarm</span><span class="dim"> · new session</span>\n\n' +
       '  <span class="dim">directory</span>   ~/Code/quanthome-api<span class="cursor"> </span>\n' +
-      '  <span class="dim">agent</span>       <span class="amber">● claude</span>   <span class="dim">○ codex   ○ gemini   ○ opencode   ✕ agy (not installed)</span>\n' +
+      '  <span class="dim">agent</span>       <span class="accent">● claude</span>   <span class="dim">○ codex   ○ gemini   ○ opencode   ✕ agy (not installed)</span>\n' +
       '  <span class="dim">model</span>       opus <span class="dim">▾</span>\n' +
       '  <span class="dim">options</span>     --permission-mode acceptEdits\n' +
       '  <span class="dim">prompt</span>      <span class="dim">(optional) </span>Fix the failing CI on branch feat/rates\n' +
@@ -466,11 +468,11 @@ flowchart LR
   function renderAttach() {
     var s = sessions[Math.min(sel, sessions.length - 1)] || sessions[0];
     el.innerHTML =
-      '<span class="dim">[</span><span class="amber">' + esc(s.agent) + '</span><span class="dim"> · ' + esc(s.dir) +
+      '<span class="dim">[</span><span class="accent">' + esc(s.agent) + '</span><span class="dim"> · ' + esc(s.dir) +
       ' ──────────────────────────── ctrl+q detach]</span>\n\n' +
       '<span class="dim">&gt;</span> Fix the failing CI on branch feat/rates\n\n' +
-      '<span class="amber">●</span> I found the failing job — the rates fixture is stale.\n\n' +
-      '  Update <span class="green">tests/fixtures/rates_2026.json</span> with the new schema?\n\n' +
+      '<span class="accent">●</span> I found the failing job — the rates fixture is stale.\n\n' +
+      '  Update <span class="ok">tests/fixtures/rates_2026.json</span> with the new schema?\n\n' +
       '  <span class="dim">❯</span> 1. Yes\n' +
       '  <span class="dim">  2. Yes, and don\'t ask again</span>\n' +
       '  <span class="dim">  3. No, tell Claude what to do differently</span>\n\n' +

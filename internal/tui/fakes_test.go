@@ -20,8 +20,9 @@
 // teatest.RequireEqualOutput) and land at testdata/<TestName>.golden. Goldens are
 // ANSI-stripped and time-normalized so the acceptance record is readable and
 // wall-clock-independent; a human reviews them against docs/design/ui-preview.html
-// (the approved look). Color/highlight are NOT asserted in unit tests (termenv
-// strips color without a TTY) — tests assert text, layout, and marker glyphs.
+// (the approved look). Most layout tests strip ANSI and assert text, layout, and
+// marker glyphs; style_hoist_test.go pins rendered SGR and palette_test.go joins
+// its semantic colors to the shared Slate tokens and Brandbook v1.
 package tui
 
 import (

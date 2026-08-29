@@ -802,14 +802,14 @@ func (m launchModel) agentNote() string {
 	default:
 		return ""
 	}
-	return "  " + styleAmber.Render(note)
+	return "  " + styleAccent.Render(note)
 }
 
 // fieldLine renders one labelled field, marking the focused one with a bar.
 func fieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
-		prefix = styleAmber.Render("▌") + " "
+		prefix = styleAccent.Render("▌") + " "
 	}
 	return prefix + styleDim.Render(padLabel(label)) + value + "\n"
 }
@@ -856,7 +856,7 @@ func (m launchModel) fieldLayout(label string) launchFieldLayout {
 func (m launchModel) launchFieldLine(label, value string, focused bool) string {
 	prefix := "  "
 	if focused {
-		prefix = styleAmber.Render("▌") + " "
+		prefix = styleAccent.Render("▌") + " "
 	}
 	layout := m.fieldLayout(label)
 	if m.width > 0 {
@@ -968,7 +968,7 @@ func (m launchModel) buildAgentRow(showOtherReasons bool, selReasonBudget int) s
 			}
 		}
 		if a.usable() && i == m.agentIdx {
-			text = styleAmber.Render(text)
+			text = styleAccent.Render(text)
 		} else if !a.usable() {
 			text = styleDim.Render(text)
 		}

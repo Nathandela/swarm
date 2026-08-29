@@ -7,17 +7,16 @@
   <style>
     :root {
       color-scheme: dark;
-      --page: #0d1013;
-      --panel: #14181d;
-      --panel-2: #101418;
-      --line: #262b31;
+      --page: #0b0e14;
+      --panel: #131824;
+      --panel-2: #080a10;
+      --line: #262e3f;
       --line-strong: #3c4651;
-      --text: #e7e4de;
-      --muted: #8a8f98;
-      --dim: #676d76;
-      --amber: #ffcf5f;
-      --blue: #5fafff;
-      --green: #5fd75f;
+      --text: #eef2f8;
+      --muted: #9aa6ba;
+      --dim: #66718a;
+      --accent: #8eb4e6;
+      --work: #6fc3bc;
       --radius: 10px;
     }
 
@@ -39,7 +38,7 @@
       font: 700 30px/1.15 ui-monospace, "SFMono-Regular", Menlo, monospace;
       letter-spacing: -.04em;
     }
-    h1 span, .accent { color: var(--amber); }
+    h1 span, .accent { color: var(--accent); }
     h2 {
       margin: 48px 0 8px;
       font: 650 18px/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -79,7 +78,7 @@
       padding: 0 12px;
     }
     .control:hover { border-color: var(--line-strong); }
-    .control.primary { color: #101418; border-color: var(--amber); background: var(--amber); }
+    .control.primary { color: #101418; border-color: var(--accent); background: var(--accent); }
 
     .timing-grid {
       display: grid;
@@ -99,8 +98,8 @@
       transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
     }
     .timing-card:hover { transform: translateY(-2px); border-color: var(--line-strong); }
-    .timing-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
-    .timing-card.selected { border-color: var(--blue); background: #151d25; }
+    .timing-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .timing-card.selected { border-color: var(--accent); background: #151d25; }
     .timing-card.recommended::after,
     .timing-card.baseline::after {
       position: absolute;
@@ -109,8 +108,8 @@
       font: 700 10px/1 ui-monospace, "SFMono-Regular", Menlo, monospace;
       letter-spacing: .08em;
     }
-    .timing-card.recommended::after { content: "FINAL CHOICE"; color: var(--blue); }
-    .timing-card.baseline::after { content: "CURRENT"; color: var(--amber); }
+    .timing-card.recommended::after { content: "FINAL CHOICE"; color: var(--accent); }
+    .timing-card.baseline::after { content: "CURRENT"; color: var(--accent); }
     .timing-card p { margin: 12px 0 0; color: var(--muted); font: 13px/1.5 Inter, system-ui, sans-serif; }
 
     .terminal-row {
@@ -121,18 +120,18 @@
       margin: 18px 0 14px;
       padding: 12px 10px;
       overflow: hidden;
-      border: 1px solid #242a30;
+      border: 1px solid var(--line);
       border-radius: 7px;
-      background: #090b0d;
-      color: #d8d6d0;
+      background: var(--panel-2);
+      color: var(--text);
       font: 12px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace;
       white-space: nowrap;
     }
-    .terminal-row .selection { color: var(--amber); }
-    .terminal-row .glyph { width: 1ch; color: var(--blue); font-size: 18px; line-height: 1; }
-    .terminal-row .name { overflow: hidden; color: #eeeae2; font-weight: 700; text-overflow: ellipsis; }
+    .terminal-row .selection { color: var(--accent); }
+    .terminal-row .glyph { width: 1ch; color: var(--work); font-size: 18px; line-height: 1; }
+    .terminal-row .name { overflow: hidden; color: var(--text); font-weight: 700; text-overflow: ellipsis; }
     .terminal-row .agent, .terminal-row .status { color: var(--dim); }
-    .terminal-row .status { color: var(--blue); }
+    .terminal-row .status { color: var(--work); }
 
     .metrics {
       display: grid;
@@ -161,14 +160,14 @@
     .custom-lab .terminal-row { margin-bottom: 0; }
     .slider-wrap { display: grid; align-content: center; gap: 10px; }
     .slider-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-    .slider-value { color: var(--amber); font: 700 20px/1 ui-monospace, Menlo, monospace; }
-    input[type="range"] { width: 100%; accent-color: var(--amber); }
+    .slider-value { color: var(--accent); font: 700 20px/1 ui-monospace, Menlo, monospace; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
     .range-labels { display: flex; justify-content: space-between; color: var(--dim); font: 10px ui-monospace, Menlo, monospace; }
     .note {
       margin-top: 18px;
       padding: 14px 16px;
-      border-left: 3px solid var(--amber);
-      background: #ffcf5f0d;
+      border-left: 3px solid var(--accent);
+      background: #8eb4e60d;
       color: var(--muted);
     }
 
