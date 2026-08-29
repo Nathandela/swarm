@@ -114,10 +114,13 @@ func decodeLauncherPNG(t *testing.T, path string) image.Image {
 	if err != nil {
 		t.Fatalf("open launcher artwork %s: %v", mustRel(t, path), err)
 	}
-	defer f.Close()
-	img, err := png.Decode(f)
-	if err != nil {
-		t.Fatalf("decode launcher artwork %s: %v", mustRel(t, path), err)
+	img, decodeErr := png.Decode(f)
+	closeErr := f.Close()
+	if decodeErr != nil {
+		t.Fatalf("decode launcher artwork %s: %v", mustRel(t, path), decodeErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close launcher artwork %s: %v", mustRel(t, path), closeErr)
 	}
 	return img
 }
