@@ -817,6 +817,8 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		scratch := NewSessionCache()
 		scratch.reseed(f.reseed)
 		st.Sessions = sortedSessions(scratch)
+		// A committed generation proves even an authoritative empty roster at cursor zero.
+		st.RosterRevision++
 		// The transcript MERGES the events half rather than replacing (see MailboxRouter.apply
 		// for why the two halves of one frame commit under opposite rules), and it is the
 		// channel IS-LIFE-3 re-delivers an unresolved approval_request on.

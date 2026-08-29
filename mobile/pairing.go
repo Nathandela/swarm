@@ -1090,6 +1090,7 @@ func (a *App) pin(out *pairing.DeviceOutcome) error {
 		// the case no filter can see and the one this screen is reached from most often: the
 		// owner is here because the machine went quiet.
 		st.LastHeardAt = 0
+		st.RosterRevision = 0
 		newEpoch = st.EpochID != out.Machine.EpochID
 		if newEpoch {
 			st.Keys = crypto.EpochKeys{}

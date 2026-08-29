@@ -26,6 +26,9 @@ import dev.swarm.phone.R
  */
 enum class CtaKind { APPROVE, DENY, MORE }
 
+/** Where the shared CTA is composed; the pairing row overrides geometry, never its surface. */
+enum class CtaPlacement { FULL_WIDTH, PAIRING }
+
 /**
  * The single input a CTA's background is built from.
  *
@@ -146,6 +149,7 @@ internal class CtaBloom(
  * origin: .a2-more
  * derived: docs/design/substrate-components.md §4 In-card CTA pair
  * derived: docs/design/substrate-components.md #24 Disabled / stale CTA
+ * derived: docs/design/substrate-components.md #18 Pairing scaffold
  *
  * The approval sheet's three actions: approve, deny, and the one that opens the session instead.
  *
@@ -154,6 +158,8 @@ internal class CtaBloom(
  * three fills and the three inks. Section 3 of the derivation table has no numbered row for this
  * component precisely because the artifact draws it. The `§4` citation above is for the one thing
  * the artifact does not say, which is the [bloom] parameter.
+ * Row 18 supplies only contextual PAIRING geometry: asymmetric padding and hugging width;
+ * FULL_WIDTH remains the default.
  *
  * **ROW 24 IS A STATE OF THIS BUTTON AND NOT A COMPONENT BESIDE IT**, which is why the second
  * `derived:` line is here rather than in a factory of its own. The row is reached by
@@ -188,9 +194,18 @@ fun ctaButton(
     label: CharSequence,
     kind: CtaKind,
     bloom: Boolean = true,
+    placement: CtaPlacement = CtaPlacement.FULL_WIDTH,
 ): TextView {
     val spec = ctaSpec(context, kind, bloom)
-    val padPx = Kit.dimenPx(context, R.dimen.swarm_space_12)
+    val verticalPadPx = Kit.dimenPx(context, R.dimen.swarm_space_12)
+    val horizontalPadPx = Kit.dimenPx(
+        context,
+        if (placement == CtaPlacement.PAIRING) {
+            R.dimen.swarm_space_24
+        } else {
+            R.dimen.swarm_space_12
+        },
+    )
     return Kit.textView(context).apply {
         Kit.appearance(this, R.style.TextAppearance_Swarm_Label_Button)
         setTextColor(ctaInk(context, kind))
@@ -201,10 +216,10 @@ fun ctaButton(
         // design's sense -- it is the inflation the layers are inset by, and the negative margins
         // below hand every pixel of it back, so what the design fixes is unchanged.
         setPaddingRelative(
-            padPx + spec.insetPx,
-            padPx + spec.insetPx,
-            padPx + spec.insetPx,
-            padPx + spec.insetPx,
+            horizontalPadPx + spec.insetPx,
+            verticalPadPx + spec.insetPx,
+            horizontalPadPx + spec.insetPx,
+            verticalPadPx + spec.insetPx,
         )
         // Row 22's `min 48`, PLUS the room the halo takes and the margins below hand back. The
         // floor is about the button a user can SEE: measured against the view's own box, a
@@ -213,7 +228,10 @@ fun ctaButton(
         // left after the negative margins, which is the thing anyone aims at.
         minimumWidth = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) + 2 * spec.insetPx
         minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP) + 2 * spec.insetPx
-        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP).apply {
+        layoutParams = LinearLayout.LayoutParams(
+            if (placement == CtaPlacement.PAIRING) WRAP else MATCH,
+            WRAP,
+        ).apply {
             marginStart = -spec.insetPx
             marginEnd = -spec.insetPx
             topMargin = -spec.insetPx

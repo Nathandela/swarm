@@ -2327,14 +2327,109 @@ func (cc *clientConn) handleJournalRead(c Control) {
 		cc.replyError("journal_read: " + err.Error())
 		return
 	}
-	_ = cc.writeControl(Control{
+	reply := Control{
 		Op:         OpJournalRead,
 		EndpointID: cc.endpointID,
 		Cursor:     res.Cursor,
 		Journal:    res.Events,
 		Roster:     res.Roster,
 		FullResync: res.FullResync,
-	})
+	}
+	if c.JournalMaxBytes <= 0 {
+		if err := cc.writeControl(reply); err != nil {
+			// WriteFrame rejects an oversized body before writing any bytes. Give an old
+			// caller a small, actionable refusal instead of leaving it connected forever
+			// awaiting a reply that can never arrive.
+			if writeErr := cc.writeControl(Control{
+				Op: OpError, EndpointID: cc.endpointID,
+				Error: "journal_read response: " + err.Error(),
+			}); writeErr != nil {
+				cc.close()
+			}
+		}
+		return
+	}
+	pages, err := journalReadPages(reply, c.JournalMaxBytes)
+	if err != nil {
+		cc.replyError("journal_read: " + err.Error())
+		return
+	}
+	for _, page := range pages {
+		if err := cc.writeControl(page); err != nil {
+			// A prefix is never a snapshot. Closing makes the gateway discard its local
+			// aggregation and retry one new atomic read.
+			cc.close()
+			return
+		}
+	}
+}
+
+func journalReadPages(reply Control, requested int) ([]Control, error) {
+	max := requested
+	if max > wire.MaxFrame-1 {
+		max = wire.MaxFrame - 1
+	}
+	events, roster := reply.Journal, reply.Roster
+	reply.Journal, reply.Roster = nil, nil
+	var pages []Control
+	for ei, ri := 0, 0; ei < len(events) || ri < len(roster) || len(pages) == 0; {
+		page := reply
+		// Size conservatively with the continuation field present. The final page only
+		// gets smaller when this is cleared below.
+		page.JournalMore = true
+		n := maxJournalPageRecords(page, events[ei:], max)
+		page.Journal = events[ei : ei+n]
+		ei += n
+		if ei == len(events) {
+			n = maxRosterPageRecords(page, roster[ri:], max)
+			page.Roster = roster[ri : ri+n]
+			ri += n
+		}
+		more := ei < len(events) || ri < len(roster)
+		page.JournalMore = more
+		body, err := EncodeControl(page)
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > max {
+			return nil, fmt.Errorf("journal page encoded to %d bytes (limit %d)", len(body), max)
+		}
+		if more && len(page.Journal) == 0 && len(page.Roster) == 0 {
+			return nil, fmt.Errorf("one journal record exceeds page limit %d", max)
+		}
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+func maxJournalPageRecords(page Control, records []JournalRecord, max int) int {
+	lo, hi := 0, len(records)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		page.Journal = records[:mid]
+		body, err := EncodeControl(page)
+		if err == nil && len(body) <= max {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
+func maxRosterPageRecords(page Control, records []JournalRecord, max int) int {
+	lo, hi := 0, len(records)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		page.Roster = records[:mid]
+		body, err := EncodeControl(page)
+		if err == nil && len(body) <= max {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
 }
 
 // handleJournalSubscribe registers a journal subscriber (journal-capable backend +

@@ -477,14 +477,15 @@ type PushPreference struct {
 // pairing pinned; Paired says whether that pairing is still one. See App.StateSummary for what it
 // is derived from and why the machine NAME was the wrong thing to infer it from.
 type StateSummary struct {
-	Machine     string
-	EpochID     int64
-	SendSeq     int64
-	RelayCursor int64
-	PendingOps  int
-	Restored    bool
-	Reconciled  bool
-	Paired      bool
+	Machine        string
+	EpochID        int64
+	SendSeq        int64
+	RelayCursor    int64
+	RosterRevision int64
+	PendingOps     int
+	Restored       bool
+	Reconciled     bool
+	Paired         bool
 }
 
 // Freshness is PB-APP-11's verdict: how recently the MACHINE last spoke, and whether what

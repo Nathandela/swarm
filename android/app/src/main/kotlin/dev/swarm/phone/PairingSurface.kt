@@ -32,6 +32,7 @@ import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.CtaPlacement
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
@@ -1063,7 +1064,7 @@ class PairingSurface(
      */
     private fun ctaAction(text: String, kind: CtaKind, onPress: () -> Unit): TextView =
         SecureWindow.gate(
-            ctaButton(activity, text, kind).apply {
+            ctaButton(activity, text, kind, placement = CtaPlacement.PAIRING).apply {
                 setOnClickListener { onPress() }
                 // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close
                 // it -- it has no click to hang the role on -- so the role is set where the click

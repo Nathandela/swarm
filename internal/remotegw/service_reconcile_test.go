@@ -71,8 +71,8 @@ func TestService_PublishesTheReconcileRecordFromItsOwnDurableState(t *testing.T)
 	if err := svc.sink.Snapshot(nil, 0); err != nil {
 		t.Fatalf("Snapshot: %v (a Service with no authority source fails closed here -- and a Service that simply never publishes leaves the phone bricked)", err)
 	}
-	if len(mb.appends) != 1 {
-		t.Fatalf("the assembled runtime appended %d envelopes on its first journal run; want exactly the reconcile record", len(mb.appends))
+	if len(mb.appends) != 2 {
+		t.Fatalf("the assembled runtime appended %d envelopes; want reconcile then empty roster reseed", len(mb.appends))
 	}
 
 	env, err := crypto.ParseEnvelope(mb.appends[0])

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.PairingScaffoldLayout
 import dev.swarm.phone.ui.kit.ctaStack
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.monoWell
@@ -139,7 +140,7 @@ fun pairingPanelView(
         column.addView(navHeader(context, title, null).apply { tag = PairingTag.NAV })
     }
 
-    column.addView(slots.body.tagged(PairingTag.BODY))
+    column.addView(PairingScaffoldLayout.body(slots.body).tagged(PairingTag.BODY))
     if (panel.notice.isNotEmpty()) column.addView(slots.notice.tagged(PairingTag.NOTICE))
     if (panel.steps.isNotEmpty()) column.addView(guidance(context, panel.steps))
     // `emptyState` IS THE SENTENCE COMPONENT HERE, which is the reuse `PairOnlyView` already makes

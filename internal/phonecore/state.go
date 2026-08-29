@@ -154,7 +154,14 @@ import (
 // was last paired or migrated with, and simply stops reading it. So this bump adds a field;
 // it does not remove or reinterpret one, and the v12 fixture's pin survives unchanged into
 // v13's.
-const StateSchemaVersion = 13
+//
+// v14 adds roster_revision, the durable proof that an authoritative roster reseed
+// committed. Row count and relay cursor cannot prove that event: a valid authoritative
+// roster may be empty at cursor zero, indistinguishable from a paired phone still awaiting
+// its first snapshot. A build one version back drops this proof and returns after restart
+// to calling that state synchronized-empty, so the schema and its pinned literal advance
+// together.
+const StateSchemaVersion = 14
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -273,20 +280,23 @@ type State struct {
 	// permanently unpairable one. What protects it from a writer that has not noticed the
 	// revoke is the purge stamp rather than a merge rule; see Save and disown.
 	Disowned    bool
-	RoutingID   string                    // this phone's relay routing id
-	EpochID     uint32                    // current epoch the content key belongs to
-	Keys        crypto.EpochKeys          // wake + content keys for EpochID
-	SendSeq     map[uint32]uint64         // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
-	Receive     map[Bucket]uint64         // per-(sender,epoch) receive high-water (replay guard)
-	GrantEpoch  uint32                    // highest accepted grant epoch (PB-STATE-4(c))
-	GrantSeq    uint64                    // highest accepted grant seq for GrantEpoch
-	WakeReplay  uint64                    // highest accepted push-wake counter
-	RelayCursor uint64                    // relay mailbox read cursor the next poll resumes from
-	Sessions    []CachedSession           // journal-derived session model
-	Snapshots   []Snapshot                // server-rendered terminal grids, latest per session
-	PendingOps  []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
-	OpOutcomes  map[string]schema.Control // durable operation outcomes, keyed by operation id
-	Stale       map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	RoutingID   string            // this phone's relay routing id
+	EpochID     uint32            // current epoch the content key belongs to
+	Keys        crypto.EpochKeys  // wake + content keys for EpochID
+	SendSeq     map[uint32]uint64 // per-epoch DURABLE send-seq reservation ceiling (PB-STATE-3)
+	Receive     map[Bucket]uint64 // per-(sender,epoch) receive high-water (replay guard)
+	GrantEpoch  uint32            // highest accepted grant epoch (PB-STATE-4(c))
+	GrantSeq    uint64            // highest accepted grant seq for GrantEpoch
+	WakeReplay  uint64            // highest accepted push-wake counter
+	RelayCursor uint64            // relay mailbox read cursor the next poll resumes from
+	// RosterRevision advances whenever a contiguous authoritative journal reseed commits.
+	// Unlike a row count or cursor it proves that even an empty roster at cursor zero arrived.
+	RosterRevision uint64
+	Sessions       []CachedSession           // journal-derived session model
+	Snapshots      []Snapshot                // server-rendered terminal grids, latest per session
+	PendingOps     []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	OpOutcomes     map[string]schema.Control // durable operation outcomes, keyed by operation id
+	Stale          map[Bucket]bool           // buckets whose content may not be trusted until reconciled
 	// StaleStreams are the REPAIR CHANNELS whose content may not be trusted (PB-SYNC-1).
 	// It is a second set rather than a view over Stale because marking and clearing happen
 	// at different granularities and one bit cannot carry both: a gap in the SHARED bucket
@@ -559,10 +569,11 @@ type stateFile struct {
 	ContentKept      []byte `json:"content_kept,omitempty"`
 	ContentPurgeable []byte `json:"content_purgeable,omitempty"`
 
-	GrantEpoch  uint32         `json:"grant_epoch"`
-	GrantSeq    uint64         `json:"grant_seq"`
-	RelayCursor uint64         `json:"relay_cursor"`
-	Stale       []bucketRecord `json:"stale,omitempty"`
+	GrantEpoch     uint32         `json:"grant_epoch"`
+	GrantSeq       uint64         `json:"grant_seq"`
+	RelayCursor    uint64         `json:"relay_cursor"`
+	RosterRevision uint64         `json:"roster_revision,omitempty"`
+	Stale          []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
 	// LastHeardAt is PB-APP-11's freshness coordinate (see State.LastHeardAt). It is
@@ -1314,6 +1325,7 @@ func (s *fileStore) load() error {
 		GrantEpoch:          f.GrantEpoch,
 		GrantSeq:            f.GrantSeq,
 		RelayCursor:         f.RelayCursor,
+		RosterRevision:      f.RosterRevision,
 		LastHeardAt:         f.LastHeardAt,
 		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
 		// arrive from the sealed containers below), so this is the forward migration and not a
@@ -1554,6 +1566,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		GrantEpoch:          st.GrantEpoch,
 		GrantSeq:            st.GrantSeq,
 		RelayCursor:         st.RelayCursor,
+		RosterRevision:      st.RosterRevision,
 		LastHeardAt:         st.LastHeardAt,
 	}
 	for b, stale := range st.Stale {

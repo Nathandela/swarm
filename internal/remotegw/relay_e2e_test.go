@@ -104,11 +104,24 @@ func TestRelayE2E_MachineForwardsJournalPhoneReads(t *testing.T) {
 		if err != nil {
 			t.Fatalf("item %d open under content key: %v", i, err)
 		}
-		var rec protocol.JournalRecord
-		if err := json.Unmarshal(plain, &rec); err != nil {
-			t.Fatalf("item %d decode: %v", i, err)
+		if i == 0 {
+			var frame reseedFrame
+			if err := json.Unmarshal(plain, &frame); err != nil {
+				t.Fatalf("item %d decode roster reseed: %v", i, err)
+			}
+			if frame.Kind != kindJournalReseed {
+				t.Fatalf("item %d kind = %q, want journal_reseed", i, frame.Kind)
+			}
+			for _, rec := range frame.Roster {
+				groups[rec.SessionID] = rec.Group
+			}
+		} else {
+			var rec protocol.JournalRecord
+			if err := json.Unmarshal(plain, &rec); err != nil {
+				t.Fatalf("item %d decode: %v", i, err)
+			}
+			groups[rec.SessionID] = rec.Group
 		}
-		groups[rec.SessionID] = rec.Group
 	}
 	if groups["m/s1"] != status.Group("working") {
 		t.Fatalf("s1 group = %q; want working (from the roster snapshot)", groups["m/s1"])

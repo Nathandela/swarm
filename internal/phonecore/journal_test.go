@@ -57,17 +57,13 @@ func TestPhoneCore_ReceivesGatewayJournalEndToEnd(t *testing.T) {
 	}
 
 	// The phone opens each envelope under its content key and applies it.
-	cache := NewSessionCache()
+	router := NewMailboxRouter(key)
 	for i, raw := range box.envs {
-		rec, seq, err := OpenJournalEnvelope(key, raw)
-		if err != nil {
+		if _, err := router.Accept(raw); err != nil {
 			t.Fatalf("env %d open: %v", i, err)
 		}
-		if seq == 0 {
-			t.Fatalf("env %d has zero Seq", i)
-		}
-		cache.Apply(rec)
 	}
+	cache := router.Sessions()
 
 	// s1 came from the roster with Group working (verbatim).
 	if cs, ok := cache.Get("m/s1"); !ok || cs.Group != status.Group("working") {

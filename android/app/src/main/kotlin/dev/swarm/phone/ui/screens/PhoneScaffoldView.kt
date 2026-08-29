@@ -1,8 +1,11 @@
 package dev.swarm.phone.ui.screens
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import dev.swarm.phone.ui.kit.TabItem
@@ -352,6 +355,7 @@ private fun ScrollView.anchorConversation(content: View, scrollY: Int?) {
  *  is the whole of the placement: a strip inside it scrolls away under a long journal, which is
  *  the same disappearance this slot exists to end, in a slower form.
  */
+@SuppressLint("ClickableViewAccessibility")
 fun phoneScaffoldView(
     context: Context,
     content: View,
@@ -359,6 +363,7 @@ fun phoneScaffoldView(
     destination: Destination,
     onSelectDestination: (Destination) -> Unit,
     status: View? = null,
+    onInboxRefresh: (() -> Unit)? = null,
 ): View {
     val scroll = ScrollView(context).apply {
         tag = ScaffoldTag.CONTENT
@@ -378,6 +383,30 @@ fun phoneScaffoldView(
         // Weight 1: the destination takes whatever is left after the fixed bar below it.
         layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         addView(content)
+    }
+    if (destination == Destination.INBOX && onInboxRefresh != null) {
+        var pullStartY: Float? = null
+        val threshold = ViewConfiguration.get(context).scaledPagingTouchSlop
+        scroll.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> pullStartY = event.y.takeIf { scroll.scrollY == 0 }
+                MotionEvent.ACTION_MOVE -> {
+                    val start = pullStartY
+                    if (scroll.scrollY != 0 || (start != null && event.y < start)) {
+                        pullStartY = null
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    val start = pullStartY
+                    pullStartY = null
+                    if (start != null && scroll.scrollY == 0 && event.y - start >= threshold) {
+                        onInboxRefresh()
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> pullStartY = null
+            }
+            false
+        }
     }
     // ADR-009 D4.3 as amended 2026-08-08: the grain goes on the SCROLLED CHILD and not on the
     // ScrollView, which is the whole of what "content-anchored" means. A ScrollView does not

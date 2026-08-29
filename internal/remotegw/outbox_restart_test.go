@@ -198,12 +198,40 @@ func journalSocket(t *testing.T) (string, net.Listener) {
 // for a restarted RelaySink whose outbox has already been reopened. It isolates the SEEDING
 // defect (New never asks anyone where to resume) from the outbox's own durability, so both
 // fail independently rather than one hiding behind the other.
+type seededCursorCall struct {
+	kind   string
+	cursor uint64
+}
+
 type seededCursorSink struct {
 	cursor uint64
-	snapshotRecorder
+	mu     sync.Mutex
+	calls  []seededCursorCall
 }
 
 func (s *seededCursorSink) DeliveredCursor() uint64 { return s.cursor }
+
+func (s *seededCursorSink) Snapshot(_ []protocol.JournalRecord, cursor uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, seededCursorCall{kind: "snapshot", cursor: cursor})
+	return nil
+}
+
+func (s *seededCursorSink) Event(rec protocol.JournalRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, seededCursorCall{kind: "event", cursor: rec.Cursor})
+	return nil
+}
+
+func (s *seededCursorSink) callSnapshot() []seededCursorCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]seededCursorCall(nil), s.calls...)
+}
+
+func (*seededCursorSink) Terminal(protocol.TerminalViewV1) error { return nil }
 
 // TestGateway_SeedsResumePointFromDurableCursor: a restarted gateway's resume point is the
 // cursor its sink durably delivered, known BEFORE it has contacted anyone -- and the
@@ -227,7 +255,14 @@ func TestGateway_SeedsResumePointFromDurableCursor(t *testing.T) {
 	}
 
 	gotRead := make(chan protocol.Control, 1)
-	go serveFakeJournalDaemon(t, ln, "m", protocol.Control{Cursor: 9}, gotRead)
+	go serveFakeJournalDaemon(t, ln, "m", protocol.Control{
+		Cursor: 9,
+		Journal: []protocol.JournalRecord{
+			{Cursor: 7},
+			{Cursor: 8},
+			{Cursor: 9},
+		},
+	}, gotRead)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	errc := make(chan error, 1)
@@ -243,6 +278,28 @@ func TestGateway_SeedsResumePointFromDurableCursor(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the restarted gateway never issued a journal_read")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls := sink.callSnapshot()
+		if len(calls) == 4 {
+			want := []seededCursorCall{
+				{kind: "snapshot", cursor: 6},
+				{kind: "event", cursor: 7},
+				{kind: "event", cursor: 8},
+				{kind: "event", cursor: 9},
+			}
+			for i := range want {
+				if calls[i] != want[i] {
+					t.Fatalf("delivery call %d = %+v, want %+v; snapshot must keep the prior cursor so backlog events are not stale-dropped", i, calls[i], want[i])
+				}
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delivery calls = %+v, want snapshot:6 then events 7,8,9", calls)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	cancel()
 	<-errc
@@ -335,19 +392,18 @@ func TestGateway_RestartDoesNotReAppendDeliveredJournalRecords(t *testing.T) {
 	if err := sink2.Snapshot(roster, 6); err != nil {
 		t.Fatalf("roster snapshot after restart: %v", err)
 	}
-	if got := app2.count(); got != len(roster) {
-		t.Fatalf("the reconnect roster appended %d of %d records: roster records are CURRENT STATE "+
-			"re-sent as of the read cursor, not journal events to dedup -- suppressing them leaves a "+
-			"restarted phone with no roster at all", got, len(roster))
+	if got := app2.count(); got != 1 {
+		t.Fatalf("the reconnect roster appended %d envelopes, want one authoritative reseed: "+
+			"current roster state is not an outbox-deduped journal event", got)
 	}
 
 	// And a genuinely new record still flows.
 	if err := sink2.Event(protocol.JournalRecord{Cursor: 7, SessionID: "m/s2", Type: "exited"}); err != nil {
 		t.Fatalf("new record cursor 7: %v", err)
 	}
-	if got := app2.count(); got != len(roster)+1 {
-		t.Fatalf("appends after the new record = %d, want %d: idempotent resume must not swallow "+
-			"records past the committed cursor", got, len(roster)+1)
+	if got := app2.count(); got != 2 {
+		t.Fatalf("appends after the new record = %d, want 2: one roster reseed plus the event "+
+			"past the committed cursor", got)
 	}
 }
 

@@ -30,6 +30,8 @@ import dev.swarm.phone.ui.ErrorRouter
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
+import dev.swarm.phone.ui.InboxRefreshState
+import dev.swarm.phone.ui.InboxScreenCache
 import dev.swarm.phone.ui.LaunchDraft
 import dev.swarm.phone.ui.LaunchRendering
 import dev.swarm.phone.ui.LaunchScreen
@@ -1032,6 +1034,10 @@ class PhoneSurface(
      * right one, and [drawContent] is where the difference is maintained.
      */
     private var inboxDrawn: InboxScreen? = null
+    private val inboxRefresh = InboxRefreshState()
+    private val inboxCache = InboxScreenCache()
+    /** Last readable durable roster generation; zero means first sync has not completed. */
+    private var rosterRevision = 0L
 
     /**
      * What the drill-down last drew, and null while the Inbox tab is showing its list.
@@ -2075,6 +2081,15 @@ class PhoneSurface(
 
         converge(startup.app)
         val bridge = FacadeBridge(startup.app)
+        val nextRosterRevision = try {
+            bridge.rosterRevision()
+        } catch (unreadable: Exception) {
+            outcome.text = bridge.routeFacadeError(unreadable.message.orEmpty()).message
+            rosterRevision
+        }
+        // Admission of a repair request is not completion; a committed replacement is.
+        inboxRefresh.observe(nextRosterRevision)
+        rosterRevision = nextRosterRevision
         // BEFORE ANYTHING IS DRAWN, because the session detail composes whatever is on the outcome
         // line and a verdict claimed after it would reach the screen one journal event late
         // (agents-tracker-qlf9).
@@ -2084,7 +2099,11 @@ class PhoneSurface(
         // an empty page while withholding the machine's frames leaves it reading "Connected to
         // your machine." with nothing behind it. The machine's own clock is the only evidence on
         // this screen a relay cannot forge newer.
-        val inbox = inboxScreen(bridge)
+        val inbox = inboxScreen(
+            bridge = bridge,
+            rosterReady = rosterRevision != 0L,
+            refreshing = inboxRefresh.refreshing,
+        )
         drawContent(bridge, inbox)
         drawScaffold(inbox.tabs)
 
@@ -2210,8 +2229,12 @@ class PhoneSurface(
      * own empty roster, and never a fabricated one: there is no honest inbox to show when the
      * roster could not be read.
      */
-    private fun inboxScreen(bridge: FacadeBridge): InboxScreen = try {
-        TriageInboxScreen.of(
+    private fun inboxScreen(
+        bridge: FacadeBridge,
+        rosterReady: Boolean,
+        refreshing: Boolean,
+    ): InboxScreen = try {
+        inboxCache.remember(TriageInboxScreen.of(
             inbox = bridge.triageInbox(),
             scope = scope,
             selectedSession = chosen.takeIf { it.isNotEmpty() },
@@ -2222,10 +2245,18 @@ class PhoneSurface(
             // the id; an entry only changes the word on the chip, and a machine the phone holds no
             // name for keeps rendering its id.
             machineNames = bridge.machineNames(),
-        )
+            rosterReady = rosterReady,
+            refreshing = refreshing,
+        ))
     } catch (refused: Exception) {
         outcome.text = bridge.routeFacadeError(refused.message.orEmpty()).message
-        TriageInboxScreen.of(TriageInbox.from(emptyList(), journalStale = false))
+        inboxCache.fallback(
+            TriageInboxScreen.of(
+                TriageInbox.from(emptyList(), journalStale = false),
+                rosterReady = rosterReady,
+                refreshing = refreshing,
+            ),
+        )
     }
 
     /**
@@ -2266,6 +2297,10 @@ class PhoneSurface(
      * @param app the facade this draw asks for the revoke's answer -- see [revokeNotice].
      */
     private fun drawPairOnly(reason: PairOnlyReason, app: App) {
+        inboxRefresh.refused()
+        inboxCache.clear()
+        rosterRevision = 0L
+
         // WHAT THE REVOKE LEFT BEHIND, RE-ASKED ON THE DRAW THAT SHOWS IT (agents-tracker-4zue).
         // The settings panel is gone by the time this draws -- a revoked phone is an unpaired one
         // and this screen replaces the whole scaffold -- so the one sentence explaining why the
@@ -2542,6 +2577,7 @@ class PhoneSurface(
                     destination = destination,
                     onSelectDestination = ::selectDestination,
                     status = syncHost,
+                    onInboxRefresh = if (destination == Destination.INBOX && detail == null) ::refreshInbox else null,
                 )
             },
         )
@@ -2858,6 +2894,8 @@ class PhoneSurface(
                     promoted = promoted,
                     below = unrecomposedControls,
                     status = statusSlot(),
+                    refreshing = screen.refreshing,
+                    onRefresh = ::refreshInbox,
                 )
             },
         )
@@ -5263,6 +5301,38 @@ class PhoneSurface(
         )
     }
 
+    /** Ask for one authoritative all-agent roster replacement. */
+    private fun refreshInbox() {
+        val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
+        if (!inboxRefresh.begin(rosterRevision)) return
+
+        // Keep the existing roster visible and expose the single-flight state immediately.
+        render()
+        val accepted = dispatch.enqueue(
+            plane = SendPlane.COMMAND,
+            key = INBOX_REFRESH_KEY,
+            work = { FacadeBridge(app).refreshRoster() },
+            settle = { answer ->
+                answer.fold(
+                    onSuccess = { render() },
+                    onFailure = {
+                        inboxRefresh.refused()
+                        say(
+                            PressFeedback.ofRefusal(
+                                FacadeBridge(app).routeFacadeError(it.message.orEmpty()),
+                            ),
+                        )
+                        render()
+                    },
+                )
+            },
+        )
+        if (!accepted) {
+            inboxRefresh.refused()
+            render()
+        }
+    }
+
     /**
      * Put one press's answer on screen: the persistent line, and row 1's toast.
      *
@@ -5363,6 +5433,7 @@ class PhoneSurface(
          */
         const val JOURNAL_FROM_THE_START = 0L
         const val WHOLE_JOURNAL = 0L
+        const val INBOX_REFRESH_KEY = "inbox.refresh"
 
         /**
          * ADR-014's page size for one "load earlier" (Mirror M3.1).

@@ -18,6 +18,7 @@ import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
 import dev.swarm.phone.ui.kit.mismatches
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -61,10 +62,12 @@ class TriageInboxViewTest {
         stale: Boolean = false,
         scope: String? = null,
         selected: String? = null,
+        rosterReady: Boolean = true,
     ) = TriageInboxScreen.of(
         inbox = TriageInbox.from(rows, journalStale = stale),
         scope = scope,
         selectedSession = selected,
+        rosterReady = rosterReady,
     )
 
     private fun view(
@@ -75,12 +78,17 @@ class TriageInboxViewTest {
         onSelectSession: (String) -> Unit = {},
         onSelectScope: (String?) -> Unit = {},
         promoted: Set<String> = emptySet(),
+        rosterReady: Boolean = true,
+        refreshing: Boolean = false,
+        onRefresh: (() -> Unit)? = null,
     ): View = triageInboxView(
         context = context,
-        screen = screen(rows, stale, scope, selected),
+        screen = screen(rows, stale, scope, selected, rosterReady),
         onSelectSession = onSelectSession,
         onSelectScope = onSelectScope,
         promoted = promoted,
+        refreshing = refreshing,
+        onRefresh = onRefresh,
     )
 
     /** Every descendant carrying [tag], in depth-first (that is, on-screen) order. */
@@ -460,5 +468,33 @@ class TriageInboxViewTest {
             promoted = setOf("other-machine/nine"),
         )
         assertNull(Motion.inFlightSweep)
+    }
+
+    @Test
+    fun `paired before first authoritative roster says Syncing instead of Nothing waiting`() {
+        val root = view(emptyList(), rosterReady = false)
+        assertEquals("Syncing conversations\u2026", textOf(root.kitRequire(InboxTag.SYNCING)))
+        assertTrue("pre-roster screen claims synchronized-empty", root.allTagged(InboxTag.SECTION_EMPTY).isEmpty())
+    }
+
+    @Test
+    fun `refresh fallback stays accessible and current rows remain visible in flight`() {
+        var refreshes = 0
+        val root = view(
+            listOf(row("mbp/one", "working")),
+            refreshing = true,
+            onRefresh = { refreshes++ },
+        )
+        assertEquals(1, root.allTagged(InboxTag.ROW).size)
+        val inFlight = root.kitRequire(InboxTag.REFRESH)
+        assertEquals("Refreshing conversations", inFlight.contentDescription)
+        assertFalse("in-flight fallback remains pressable", inFlight.isEnabled)
+
+        val idle = view(
+            listOf(row("mbp/one", "working")),
+            onRefresh = { refreshes++ },
+        ).kitRequire(InboxTag.REFRESH)
+        assertTrue(idle.performClick())
+        assertEquals(1, refreshes)
     }
 }

@@ -171,13 +171,15 @@ type LinkWatcher interface {
 // process; a crash leaves the daemon and its sessions untouched (S1) and the runtime
 // resumes journal delivery from its last durable cursor.
 type Service struct {
-	cfg      ServiceConfig
-	gw       *Gateway
-	sink     *RelaySink
-	notifier *PushNotifier
-	bridge   *CommandBridge
-	leases   *LeaseManager
-	watchers *TerminalWatcher
+	cfg          ServiceConfig
+	gw           *Gateway
+	sink         *RelaySink
+	notifier     *PushNotifier
+	bridge       *CommandBridge
+	leases       *LeaseManager
+	watchers     *TerminalWatcher
+	journalErrMu sync.Mutex
+	journalErr   error
 	// wakeMachine/wakeObligations are set only when cfg.PushGateway is configured, and
 	// exist so RedrivePendingWakeObligations (PG-OBL-8) has something to re-drive at
 	// startup without reaching back into cfg. wakeRetry (PG-OBL-9, set under the same
@@ -423,28 +425,46 @@ func (s *Service) CommandBridge() *CommandBridge { return s.bridge }
 // simply has nothing to say.
 func (s *Service) PushNotifier() *PushNotifier { return s.notifier }
 
-// Err is the runtime's DEGRADED STATE: the first error each of the three components that
-// store one has seen, joined, or nil when none has.
+// Err is the runtime's DEGRADED STATE: the first error each component that stores one has
+// seen, joined, or nil when none has.
 //
-// IT EXISTS BECAUSE NOTHING READ ANY OF THEM. CommandBridge.Err, RelaySink.Err and
-// PushNotifier.Err each stash a first error precisely so a condition that must not fail a
-// record is still observable -- a state dir that fails every checkpoint persist and so
-// drops every keystroke, a relay that answers no mailbox wait, a wake path that has stopped
-// ringing the phone. The tree contained no non-test caller of any of the three
-// (ADR-007 B114), so all three were writes to a channel with no reader and an operator
-// learned nothing. This is the reader; cmd/swarm-remote prints it to the unit's log.
+// IT EXISTS BECAUSE NOTHING READ ANY OF THEM. CommandBridge.Err, RelaySink.Err,
+// PushNotifier.Err and the journal bridge each retain a first error precisely so a condition
+// that must not fail a record is still observable -- a state dir that fails every checkpoint
+// persist and so drops every keystroke, a relay that answers no mailbox wait, a wake path
+// that has stopped ringing the phone, or a journal connection that cannot be read. The tree
+// contained no non-test caller of those component errors (ADR-007 B114), so they were writes
+// to a channel with no reader and an operator learned nothing. This is the reader;
+// cmd/swarm-remote prints it to the unit's log.
 //
 // It is deliberately a SNAPSHOT of first errors rather than a stream: each component's
 // stored error is the root cause it saw, not the latest symptom, and a gateway that has
 // recovered still owes the operator the reason it was degraded.
 //
-// The fourth member is PG-OBL-10 (bd agents-tracker-hggx.4.5): the wake-obligation
+// The wake-obligation member is PG-OBL-10 (bd agents-tracker-hggx.4.5): the
 // store's CURRENT record for the configured push address, read live rather than stashed,
 // because the pairing's push health IS its last obligation's outcome -- a later
 // obligation that delivers replaces the record and clears the state, exactly as
 // PG-OBL-10's "last obligation" wording intends.
 func (s *Service) Err() error {
-	return errors.Join(s.bridge.Err(), s.sink.Err(), s.notifier.Err(), s.wakeObligationErr())
+	return errors.Join(s.bridge.Err(), s.sink.Err(), s.notifier.Err(), s.wakeObligationErr(), s.journalBridgeErr())
+}
+
+func (s *Service) setJournalErr(err error) {
+	if err == nil {
+		return
+	}
+	s.journalErrMu.Lock()
+	if s.journalErr == nil {
+		s.journalErr = err
+	}
+	s.journalErrMu.Unlock()
+}
+
+func (s *Service) journalBridgeErr() error {
+	s.journalErrMu.Lock()
+	defer s.journalErrMu.Unlock()
+	return s.journalErr
 }
 
 // wakeObligationErr surfaces PG-OBL-10's degraded push state: a migrated pairing whose
@@ -621,7 +641,10 @@ func (s *Service) runJournal(ctx context.Context) (revoked bool) {
 		if ctx.Err() != nil {
 			return false
 		}
-		_ = s.gw.RunJournal(ctx)
+		err := s.gw.RunJournal(ctx)
+		if err != nil && ctx.Err() == nil {
+			s.setJournalErr(fmt.Errorf("journal bridge: %w", err))
+		}
 		if ctx.Err() != nil {
 			return false
 		}

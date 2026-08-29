@@ -121,6 +121,7 @@ field StateSummary.PendingOps int
 field StateSummary.Reconciled bool
 field StateSummary.RelayCursor int64
 field StateSummary.Restored bool
+field StateSummary.RosterRevision int64
 field StateSummary.SendSeq int64
 field TranscriptItem.Body string
 field TranscriptItem.Cursor int64
@@ -196,6 +197,7 @@ method App.PushPreference() (*PushPreference, error)
 method App.ReadJournal(int64, int) (*JournalPage, error)
 method App.ReadTranscript(string, int64, int) (*TranscriptPage, error)
 method App.RefreshLaunchPresets() (*Op, error)
+method App.RefreshRoster() error
 method App.RegisterPushToken(string) error
 method App.ReleaseControl(string) (*Op, error)
 method App.Resize(string, int, int) error

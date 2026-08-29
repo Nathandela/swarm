@@ -38,6 +38,8 @@ data class InboxScreen(
     val scopes: List<ScopeChip>,
     val sections: List<InboxSection>,
     val tabs: List<InboxTab>,
+    val rosterReady: Boolean,
+    val refreshing: Boolean,
     /**
      * PB-APP-8's verdict for this screen, in [TriageInbox]'s own words.
      *
@@ -287,6 +289,11 @@ object TriageInboxScreen {
 
     /** Inventory C1.1: `.pnav .big`. */
     private const val TITLE = "Inbox"
+    const val SYNCING_COPY = "Syncing conversations…"
+    const val REFRESH_LABEL = "Refresh"
+    const val REFRESHING_LABEL = "Refreshing…"
+    const val REFRESH_DESCRIPTION = "Refresh all conversations"
+    const val REFRESHING_DESCRIPTION = "Refreshing conversations"
 
     /** Inventory C1.2: the scope that names no machine. */
     private const val ALL_MACHINES = "All machines"
@@ -316,6 +323,8 @@ object TriageInboxScreen {
         selectedSession: String? = null,
         machineNames: Map<String, String> = emptyMap(),
         nowUnixMs: Long = System.currentTimeMillis(),
+        rosterReady: Boolean = true,
+        refreshing: Boolean = false,
     ): InboxScreen {
         val sections = inbox.sections.map { section ->
             InboxSection(
@@ -361,6 +370,8 @@ object TriageInboxScreen {
             scopes = scopesOf(inbox, scope, machineNames),
             sections = sections,
             tabs = tabsOf(blocked),
+            rosterReady = rosterReady,
+            refreshing = refreshing,
             staleNotice = inbox.staleNotice,
         )
     }

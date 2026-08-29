@@ -100,12 +100,11 @@ type TerminalWatchRouter interface {
 // *TerminalWatcher is the production TerminalWatchRouter. Pinned at compile time.
 var _ TerminalWatchRouter = (*TerminalWatcher)(nil)
 
-// JournalResyncer serves PB-SYNC-2's journal repair: read the daemon's atomic roster +
-// the events after the phone's cursor and publish them as one reseed frame. *Gateway is the
-// production implementation (Resync); the seam keeps the loop's dispatch unit-testable
-// without a live daemon.
+// JournalResyncer serves PB-SYNC-2's journal repair and the inbox's roster-only refresh.
+// Both read one atomic daemon snapshot; rosterOnly controls whether the backlog is included
+// in the one reseed frame. *Gateway is the production implementation (Resync).
 type JournalResyncer interface {
-	Resync(ctx context.Context, from uint64) error
+	Resync(ctx context.Context, from uint64, rosterOnly bool) error
 }
 
 // *Gateway is the production JournalResyncer. Pinned at compile time.
@@ -780,7 +779,7 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		if b.cfg.Resync == nil {
 			return nil
 		}
-		return b.cfg.Resync.Resync(ctx, rc.ResyncCursor)
+		return b.cfg.Resync.Resync(ctx, rc.ResyncCursor, rc.RosterOnly)
 	case protocol.ActionPushPrefs:
 		// Authorized by the DAEMON, persisted HERE (PB-PUSH-8 / PB-PUSH-10): see
 		// applyPushPrefs.

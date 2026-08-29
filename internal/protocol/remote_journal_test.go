@@ -27,6 +27,7 @@ package protocol
 //	//   FullResync bool            `json:"full_resync,omitempty"`
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ import (
 type journalStub struct {
 	*stubDaemon
 	mu     sync.Mutex
+	reads  int
 	resume JournalResume
 	source chan JournalRecord
 }
@@ -50,13 +52,20 @@ func newJournalStub() *journalStub {
 func (j *journalStub) JournalReadFrom(from uint64) (JournalResume, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	j.reads++
 	var out []JournalRecord
 	for _, e := range j.resume.Events {
 		if e.Cursor > from {
 			out = append(out, e)
 		}
 	}
-	return JournalResume{Cursor: j.resume.Cursor, Events: out, FullResync: j.resume.FullResync}, nil
+	return JournalResume{Cursor: j.resume.Cursor, Roster: j.resume.Roster, Events: out, FullResync: j.resume.FullResync}, nil
+}
+
+func (j *journalStub) readCount() int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.reads
 }
 
 func (j *journalStub) JournalSubscribe() (<-chan JournalRecord, func()) {
@@ -124,6 +133,116 @@ func TestProtocol_JournalReadFromCursor(t *testing.T) {
 		if rec.Cursor != wantCursors[i] {
 			t.Fatalf("journal_read record %d cursor = %d; want %d (ordered, cursor>from)", i, rec.Cursor, wantCursors[i])
 		}
+	}
+}
+
+// TestProtocol_JournalReadPagesAnOversizedBacklog is the regression for a gateway
+// that stayed connected forever while its durable cursor never advanced: the server
+// encoded the complete retained journal into one control body, WriteFrame rejected the
+// >1 MiB body, and handleJournalRead discarded that error. A paging-aware caller asks
+// for a bounded response and must receive every record exactly once over legal frames.
+func TestProtocol_JournalReadPagesAnOversizedBacklog(t *testing.T) {
+	js := newJournalStub()
+	const records = 8
+	for i := 1; i <= records; i++ {
+		js.resume.Events = append(js.resume.Events, JournalRecord{
+			Cursor:    uint64(i),
+			SessionID: strings.Repeat(string(rune('a'+i-1)), 180_000),
+			Type:      "interaction",
+		})
+	}
+	js.resume.Cursor = records
+	const rosterRecords = 4
+	for i := 0; i < rosterRecords; i++ {
+		js.resume.Roster = append(js.resume.Roster, JournalRecord{
+			SessionID: strings.Repeat(string(rune('k'+i)), 180_000),
+			Type:      "roster",
+		})
+	}
+
+	sock, _ := serveJournal(t, js)
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapJournal})
+
+	rc.writeControl(Control{
+		Op:              OpJournalRead,
+		EndpointID:      rep.EndpointID,
+		JournalMaxBytes: wire.MaxFrame / 2,
+	})
+	var got []uint64
+	var gotRoster int
+	for {
+		typ, body, err := rc.readFrame()
+		if err != nil {
+			t.Fatalf("read paged journal response: %v", err)
+		}
+		if typ != wire.TControl {
+			t.Fatalf("paged response frame type = %d, want TControl", typ)
+		}
+		if len(body) > wire.MaxFrame/2 {
+			t.Fatalf("paged response body = %d bytes, want <= %d", len(body), wire.MaxFrame/2)
+		}
+		page, err := DecodeControl(body)
+		if err != nil {
+			t.Fatalf("decode paged response: %v", err)
+		}
+		if page.Op != OpJournalRead {
+			t.Fatalf("paged response op = %q, want %q", page.Op, OpJournalRead)
+		}
+		for _, rec := range page.Journal {
+			got = append(got, rec.Cursor)
+		}
+		gotRoster += len(page.Roster)
+		if !page.JournalMore {
+			if page.Cursor != records {
+				t.Fatalf("final boundary cursor = %d, want %d", page.Cursor, records)
+			}
+			break
+		}
+	}
+
+	if got := js.readCount(); got != 1 {
+		t.Fatalf("JournalReadFrom calls = %d, want 1 atomic read", got)
+	}
+	if len(got) != records {
+		t.Fatalf("received cursors %v, want 1..%d exactly once", got, records)
+	}
+	for i, cursor := range got {
+		if want := uint64(i + 1); cursor != want {
+			t.Fatalf("received cursors %v: index %d = %d, want %d (no loss/duplication)", got, i, cursor, want)
+		}
+	}
+	if gotRoster != rosterRecords {
+		t.Fatalf("received %d roster records, want %d", gotRoster, rosterRecords)
+	}
+}
+
+func TestProtocol_OversizedLegacyJournalReadReturnsError(t *testing.T) {
+	js := newJournalStub()
+	for i := 1; i <= 8; i++ {
+		js.resume.Events = append(js.resume.Events, JournalRecord{
+			Cursor: uint64(i), SessionID: strings.Repeat("x", 180_000), Type: "interaction",
+		})
+	}
+	js.resume.Cursor = 8
+	sock, _ := serveJournal(t, js)
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapJournal})
+	rc.writeControl(Control{Op: OpJournalRead, EndpointID: rep.EndpointID})
+
+	typ, body, err := rc.readFrame()
+	if err != nil {
+		t.Fatalf("read legacy oversize error: %v", err)
+	}
+	if typ != wire.TControl {
+		t.Fatalf("legacy oversize response type = %d, want TControl", typ)
+	}
+	got, err := DecodeControl(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Op != OpError || !strings.Contains(got.Error, wire.ErrFrameTooLarge.Error()) {
+		t.Fatalf("legacy oversize response = %#v, want descriptive OpError", got)
 	}
 }
 

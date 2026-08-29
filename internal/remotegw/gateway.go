@@ -24,10 +24,12 @@ import (
 	"github.com/Nathandela/swarm/internal/wire"
 )
 
-// JournalSink receives the journal the gateway bridges toward the phone. Snapshot is
-// called once per (re)connection with the roster as-of the read cursor; Event is then
-// called for each live record in cursor order. Implementations must not block the
-// gateway's read loop (R-GW.4/.5: bounded/coalescing on the relay side).
+// JournalSink receives the journal the gateway bridges toward the phone. Snapshot is called
+// once per (re)connection with an atomic roster and the PRIOR delivered cursor. Event then
+// carries every backlog record after that cursor, followed by live records, in cursor order.
+// Keeping the snapshot boundary behind the backlog prevents the phone from stale-dropping
+// those records. Implementations must not block the gateway's read loop (R-GW.4/.5:
+// bounded/coalescing on the relay side).
 type JournalSink interface {
 	Snapshot(roster []protocol.JournalRecord, cursor uint64) error
 	Event(rec protocol.JournalRecord) error
@@ -82,8 +84,12 @@ type ReseedSink interface {
 // frame's arrival, so a silent nil here would leave it stale with nothing to say why.
 var errNoReseedSink = errors.New("remotegw: this sink cannot publish a journal reseed")
 
-// Resync answers the phone's journal_resync (PB-SYNC-2): read the daemon's atomic roster +
-// the events after the phone's own cursor, and publish them as ONE reseed frame.
+// Resync serves the phone's sealed journal read. With rosterOnly false it is PB-SYNC-2's
+// journal repair: one atomic roster+events reseed at the daemon's final boundary. With
+// rosterOnly true it is the inbox refresh: one authoritative roster-only reseed at the
+// phone's PRIOR cursor. Keeping that prior boundary is load-bearing; advancing to the daemon
+// boundary would make the separately forwarded backlog stale and silently lose transcript
+// events.
 //
 // It opens its OWN daemon connection rather than borrowing RunJournal's. RunJournal's conn
 // is inside a blocking read loop that owns its control stream, so interleaving a second
@@ -91,11 +97,10 @@ var errNoReseedSink = errors.New("remotegw: this sink cannot publish a journal r
 // work while the journal loop is between reconnects, which is exactly when the phone is
 // most likely to have a hole.
 //
-// from is the phone's cursor, so res.Roster/res.Events/res.Cursor map onto the reseed's
-// three fields directly. The roster is namespaced with the daemon's endpoint id like every
-// other record the phone sees, or the repaired session ids do not match the ids it signs
-// commands against.
-func (g *Gateway) Resync(ctx context.Context, from uint64) error {
+// from is the phone's durable cursor. It maps directly onto a full repair's read boundary;
+// for roster-only refresh it also remains the reseed cursor, while the current roster comes
+// from the atomic daemon result.
+func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly bool) error {
 	sink, ok := g.sink.(ReseedSink)
 	if !ok {
 		return errNoReseedSink
@@ -105,15 +110,25 @@ func (g *Gateway) Resync(ctx context.Context, from uint64) error {
 		return err
 	}
 	defer func() { _ = dc.Close() }()
-	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalRead, EndpointID: dc.endpointID, Cursor: from}); err != nil {
-		return err
-	}
-	res, err := dc.awaitOp(protocol.OpJournalRead, 10*time.Second)
+	// Fence the atomic read through its replacement frame against RunJournal delivery.
+	// Without this span a live record newer than the read boundary can reach the phone
+	// first, then be overwritten by this older roster and never be delivered again.
+	g.deliveryMu.Lock()
+	defer g.deliveryMu.Unlock()
+	res, err := dc.readJournal(from)
 	if err != nil {
 		return err
 	}
+	roster := append([]protocol.JournalRecord{}, namespaceRoster(dc.endpointID, res.Roster)...)
+	if rosterOnly {
+		return sink.Reseed(protocol.JournalReseed{
+			Roster: roster,
+			Events: []protocol.JournalRecord{},
+			Cursor: from,
+		})
+	}
 	return sink.Reseed(protocol.JournalReseed{
-		Roster: namespaceRoster(dc.endpointID, res.Roster),
+		Roster: roster,
 		Events: namespaceRoster(dc.endpointID, res.Journal),
 		Cursor: res.Cursor,
 	})
@@ -125,6 +140,10 @@ func (g *Gateway) Resync(ctx context.Context, from uint64) error {
 type Gateway struct {
 	socketPath string
 	sink       JournalSink
+
+	// deliveryMu orders every daemon snapshot read with the sink writes derived from it.
+	// The order is always deliveryMu -> mu; no path acquires them in reverse.
+	deliveryMu sync.Mutex
 
 	// watchLive is the WATCH-LIVENESS clause of ADR-017 T4-b, consulted before EVERY
 	// snapshot is handed to the sink. Without it the horizon was a field nothing read: an
@@ -238,36 +257,47 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		ms.SetMachine(dc.endpointID)
 	}
 
-	// Snapshot: the atomic roster + events after our cursor (R-JRN.4).
-	from := g.Cursor()
-	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalRead, EndpointID: dc.endpointID, Cursor: from}); err != nil {
-		return err
-	}
-	res, err := dc.awaitOp(protocol.OpJournalRead, 10*time.Second)
-	if err != nil {
-		return err
-	}
-	// Subscribe BEFORE the snapshot is forwarded, not after: everything between the
-	// journal_read reply and this write is a window in which a live event reaches neither
-	// the read nor the stream, and forwarding the snapshot means relay round-trips (the
-	// roster records, and the reconcile record the sink leads each run with) that widen that
-	// window from microseconds to tens of milliseconds -- long enough to lose the event of a
-	// session launched moments after the gateway started. Events that arrive during the
-	// forwarding below are buffered on the daemon conn and read by the loop; deliver dedups
-	// them against the roster read by cursor, exactly as it already did for the overlap.
-	if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
-		return err
-	}
-	if err := g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), res.Cursor); err != nil {
-		return err
-	}
-	for _, rec := range res.Journal {
-		if err := g.deliver(namespaceRecord(dc.endpointID, rec)); err != nil {
+	if err := func() error {
+		// Hold one delivery fence from the cursor boundary through the atomic read,
+		// subscription, roster replacement, backlog, and cursor advance. A concurrent
+		// Resync must not publish a newer roster and then have this older bootstrap
+		// overwrite it; a concurrent live delivery must not cross the same boundary.
+		g.deliveryMu.Lock()
+		defer g.deliveryMu.Unlock()
+
+		// Snapshot: the atomic roster + events after our cursor (R-JRN.4).
+		from := g.Cursor()
+		res, err := dc.readJournal(from)
+		if err != nil {
 			return err
 		}
-	}
-	if res.Cursor > from {
-		g.setCursor(res.Cursor)
+		// Subscribe BEFORE the snapshot is forwarded, not after: everything between the
+		// journal_read reply and this write is a window in which a live event reaches neither
+		// the read nor the stream, and forwarding the snapshot means relay round-trips (the
+		// roster records, and the reconcile record the sink leads each run with) that widen that
+		// window from microseconds to tens of milliseconds -- long enough to lose the event of a
+		// session launched moments after the gateway started. Events that arrive during the
+		// forwarding below are buffered on the daemon conn and read by the loop; deliver dedups
+		// them against the roster read by cursor, exactly as it already did for the overlap.
+		if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
+			return err
+		}
+		// Snapshot carries the boundary before this read's incremental events. Advancing it
+		// to res.Cursor here would make deliver stale-drop the backlog forwarded below.
+		if err := g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), from); err != nil {
+			return err
+		}
+		for _, rec := range res.Journal {
+			if err := g.deliverLocked(namespaceRecord(dc.endpointID, rec)); err != nil {
+				return err
+			}
+		}
+		if res.Cursor > from {
+			g.setCursor(res.Cursor)
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
 
 	for {
@@ -572,6 +602,14 @@ func namespaceRoster(endpointID string, roster []protocol.JournalRecord) []proto
 // deliver forwards a record to the sink only if it advances the delivered cursor,
 // deduplicating the small read/subscribe overlap so no event is delivered twice.
 func (g *Gateway) deliver(rec protocol.JournalRecord) error {
+	g.deliveryMu.Lock()
+	defer g.deliveryMu.Unlock()
+	return g.deliverLocked(rec)
+}
+
+// deliverLocked is deliver inside the snapshot/delivery ordering fence. The caller must
+// hold deliveryMu. Cursor state remains separately guarded by mu.
+func (g *Gateway) deliverLocked(rec protocol.JournalRecord) error {
 	g.mu.Lock()
 	if rec.Cursor != 0 && rec.Cursor <= g.cursor {
 		g.mu.Unlock()
@@ -664,6 +702,57 @@ func (d *daemonConn) awaitOp(op string, within time.Duration) (protocol.Control,
 			return protocol.Control{}, fmt.Errorf("gateway: daemon refused %q: %s (%s)", op, ctrl.Error, ctrl.ErrorCode)
 		default:
 			// skip unrelated frames
+		}
+	}
+}
+
+// readJournal consumes every bounded page produced from one atomic daemon read before
+// exposing any part to the sink. A failed or malformed page sequence is discarded whole.
+func (d *daemonConn) readJournal(from uint64) (protocol.Control, error) {
+	if err := d.writeControl(protocol.Control{
+		Op: protocol.OpJournalRead, EndpointID: d.endpointID, Cursor: from,
+		JournalMaxBytes: wire.MaxFrame - 1,
+	}); err != nil {
+		return protocol.Control{}, err
+	}
+	var out protocol.Control
+	last := from
+	for first := true; ; first = false {
+		page, err := d.awaitOp(protocol.OpJournalRead, 10*time.Second)
+		if err != nil {
+			return protocol.Control{}, err
+		}
+		if first {
+			out = page
+			out.Journal = nil
+			out.Roster = nil
+		} else if page.Cursor != out.Cursor {
+			return protocol.Control{}, fmt.Errorf(
+				"gateway: journal boundary changed across pages: %d then %d", out.Cursor, page.Cursor,
+			)
+		}
+		if page.JournalMore && len(page.Journal) == 0 && len(page.Roster) == 0 {
+			return protocol.Control{}, fmt.Errorf("gateway: empty non-final journal page at cursor %d", page.Cursor)
+		}
+		for _, rec := range page.Journal {
+			if rec.Cursor <= last {
+				return protocol.Control{}, fmt.Errorf(
+					"gateway: journal page did not advance after cursor %d (got %d)", last, rec.Cursor,
+				)
+			}
+			last = rec.Cursor
+			out.Journal = append(out.Journal, rec)
+		}
+		out.Roster = append(out.Roster, page.Roster...)
+		out.FullResync = out.FullResync || page.FullResync
+		if !page.JournalMore {
+			if out.Cursor < last {
+				return protocol.Control{}, fmt.Errorf(
+					"gateway: journal boundary %d precedes event cursor %d", out.Cursor, last,
+				)
+			}
+			out.JournalMore = false
+			return out, nil
 		}
 	}
 }

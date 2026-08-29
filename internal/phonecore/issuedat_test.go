@@ -80,6 +80,10 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealResyncEnvelope: %v", err)
 	}
+	rosterRefresh, err := SealRosterRefreshEnvelope(key, epoch, seq.Next(), auth, 12)
+	if err != nil {
+		t.Fatalf("SealRosterRefreshEnvelope: %v", err)
+	}
 	prefs, err := SealPushPrefsEnvelope(key, epoch, seq.Next(), auth, schema.PushPrefs{Version: 1})
 	if err != nil {
 		t.Fatalf("SealPushPrefsEnvelope: %v", err)
@@ -159,6 +163,7 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 		"SealTakeControlEnvelope":   take,
 		"SealLaunchEnvelope":        lau,
 		"SealResyncEnvelope":        resync,
+		"SealRosterRefreshEnvelope": rosterRefresh,
 		"SealPushPrefsEnvelope":     prefs,
 		"SealApproveEnvelope":       approve,
 		"SealSessionLaunchEnvelope": sessionLaunch,

@@ -398,6 +398,23 @@ class CtaButtonTest {
         )
     }
 
+    /** Row 18 is a contextual override; generic `.acts2` remains full width above. */
+    @Test
+    fun `a pairing CTA hugs its label and spends row 18's asymmetric padding`() {
+        for (kind in CtaKind.entries) {
+            val button = ctaButton(
+                context, "Continue", kind, placement = CtaPlacement.PAIRING,
+            )
+            val room = (button.background as CtaSurface).spec.insetPx
+
+            assertEquals(LinearLayout.LayoutParams.WRAP_CONTENT, button.layoutParams.width)
+            assertEquals(dimenPx("swarm_space_24") + room, button.paddingStart)
+            assertEquals(dimenPx("swarm_space_24") + room, button.paddingEnd)
+            assertEquals(dimenPx("swarm_space_12") + room, button.paddingTop)
+            assertEquals(dimenPx("swarm_space_12") + room, button.paddingBottom)
+        }
+    }
+
     /** The copy is the screen's (PB-DS-9); the component decides what it looks like. */
     @Test
     fun `the button says what it was given`() {

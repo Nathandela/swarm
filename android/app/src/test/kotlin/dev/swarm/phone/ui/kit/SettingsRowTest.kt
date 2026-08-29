@@ -20,15 +20,12 @@ import org.robolectric.annotation.GraphicsMode
 import kotlin.math.roundToInt
 
 /**
- * FAILING-FIRST (TDD RED, GG-5) for PB-DS-10 over derivation row 15 -- the settings row and the
- * status label that is its other trailing form.
+ * FAILING-FIRST (TDD RED, GG-5) for PB-DS-10 over derivation row 15 -- the flat grouped
+ * settings row and its caller-owned trailing control.
  *
- * WHAT THIS SUITE IS AND IS NOT ASSERTING. The row's SURFACE is `cardSurface`, which
- * `InboxRowTest` already checks against `.prow`: fill, hairline, radius and key light. Repeating
- * those here would be a second opinion that can disagree with the first, so what is asserted is
- * the property only THIS component can get wrong -- that it reuses that surface rather than
- * building a fourth recipe for the same four values. §2's reuse rule is the reason the remaining
- * components are tractable, and it is the thing a careless edit would quietly undo.
+ * WHAT THIS SUITE IS AND IS NOT ASSERTING. The row's surface is the signed Slate `.trow`:
+ * screen ground with one bottom hairline, no rounded card or key light. This suite holds that
+ * structural decision plus the row's content gutter; typography and controls remain kit-owned.
  *
  * EVERY OTHER EXPECTATION COMES FROM THE DESIGN. The type and the inks resolve through
  * [KitOrigin]; the padding is joined to row 15 by `s23DerivedSpacing` in the Go lane, which reads
@@ -134,33 +131,26 @@ class SettingsRowTest {
     // protected is not lost: `--p-hero`'s meaning is stated in android/design-tokens.tsv and the
     // one production spend of it is asserted where that spend is.
 
-    // ---- the surface is reused, not re-derived ----------------------------
-
     @Test
-    fun `the row reuses the card surface rather than deriving a fourth recipe`() {
+    fun `the row is flat ground with one bottom hairline rather than a rounded card`() {
         val subject = row()
-        val surface = subject.background as? SubstrateSurface
-        assertNotNull(
-            "the settings row's background is ${subject.background}, not a SubstrateSurface -- so " +
-                "it is painting something the design system does not describe",
-            surface,
-        )
+        val surface = subject.background as? BottomRule
 
-        // The same spec `cardSurface` hands the session row. Compared field by field against a
-        // freshly built one rather than against numbers recorded here: what is being asserted is
-        // REUSE, and a transcription of the four values would pass even if the two diverged.
-        assertEquals(cardSurface(context, attention = false).spec, surface!!.spec)
+        assertNotNull("the settings row is still an individual card: ${subject.background}", surface)
+        assertEquals(Kit.colour(context, dev.swarm.phone.R.color.swarm_background), surface!!.fill)
+        assertEquals(Kit.colour(context, dev.swarm.phone.R.color.swarm_hairline), surface.rule)
+        assertEquals(Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(), surface.rulePx)
+        assertTrue("a flat settings row cannot carry a card surface", subject.background !is SubstrateSurface)
     }
 
     @Test
-    fun `the row is never the attention variant`() {
-        // `.prow.attention`'s rail is Substrate's marker for "this row needs you". Row 12 records
-        // the same call for the kill-switch panel and rejects it there for the same reason: a
-        // settings container does not need anybody.
-        assertNull(
-            "a settings row carries the attention rail, which claims the user is blocked on it",
-            (row().background as SubstrateSurface).spec.rail,
-        )
+    fun `the ruled row aligns its content to the signed Slate group`() {
+        val subject = row()
+
+        assertEquals(dimenPx("swarm_space_18"), subject.paddingStart)
+        assertEquals(dimenPx("swarm_space_18"), subject.paddingEnd)
+        assertEquals(dimenPx("swarm_space_14"), subject.paddingTop)
+        assertEquals(dimenPx("swarm_space_14"), subject.paddingBottom)
     }
 
     // ---- composition ------------------------------------------------------
@@ -253,21 +243,6 @@ class SettingsRowTest {
         assertTrue(
             "a gap one pixel from the row's passes the comparison",
             mismatches(listOf(Claim("gap", gap, gap + 1))).isNotEmpty(),
-        )
-        // The surface claim is an object comparison rather than a Claim list, so its control has
-        // to be the same comparison: a spec that differs in ONE field must not read as equal.
-        val real = cardSurface(context, attention = false).spec
-        assertNotEquals(
-            "a surface whose stroke width differs by one pixel compares equal to the card's, so " +
-                "the reuse assertion would accept a component that re-derived it wrongly",
-            real,
-            real.copy(strokeWidthPx = real.strokeWidthPx + 1),
-        )
-        assertNotEquals(
-            "the attention variant compares equal to the plain one, so the rail assertion is " +
-                "about nothing",
-            real,
-            cardSurface(context, attention = true).spec,
         )
     }
 }

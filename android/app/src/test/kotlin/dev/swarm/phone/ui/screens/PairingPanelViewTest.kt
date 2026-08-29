@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.R
 import dev.swarm.phone.runtime.AppPermission
 import dev.swarm.phone.runtime.PermissionStateResolver
 import dev.swarm.phone.theme.SwarmTheme
@@ -135,6 +136,23 @@ class PairingPanelViewTest {
             root.kitFind(PairingTag.NAV),
         )
         assertNotNull("the step's own sentence is not on screen", root.kitFind(PairingTag.BODY))
+    }
+
+    @Test
+    fun `the body keeps row 18's separation before the pairing action`() {
+        val stubs = Stubs(context).apply { scanner.visibility = View.GONE }
+        val root = pairingPanelView(
+            context,
+            panel(PairingStep.HANDSHAKING, holding = true),
+            stubs.slots,
+        )
+        val body = root.kitRequire(PairingTag.BODY)
+
+        assertEquals(
+            "the body and Stop pairing action touch because row 18's body margin is unspent",
+            context.resources.getDimensionPixelSize(R.dimen.swarm_space_18),
+            (body.layoutParams as ViewGroup.MarginLayoutParams).bottomMargin,
+        )
     }
 
     @Test

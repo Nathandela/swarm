@@ -68,7 +68,7 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 	}
 
 	if len(app.envs) != 2 {
-		t.Fatalf("appended %d envelopes; want 2 (one roster + one event)", len(app.envs))
+		t.Fatalf("appended %d envelopes; want 2 (one roster reseed + one event)", len(app.envs))
 	}
 	for _, target := range app.targets {
 		if target != "phone-routing-id" {
@@ -78,10 +78,6 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 
 	// Each opaque envelope must parse, carry the right header, and decrypt (under the
 	// content key) back to the original record. A wrong key must NOT open it.
-	want := []protocol.JournalRecord{
-		{Cursor: 5, SessionID: "s1", Type: "roster", Group: "working"},
-		{Cursor: 6, SessionID: "s2", Type: "launched"},
-	}
 	var lastSeq uint64
 	for i, raw := range app.envs {
 		env, err := crypto.ParseEnvelope(raw)
@@ -100,16 +96,24 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 		if err != nil {
 			t.Fatalf("env %d does not open under the content key: %v", i, err)
 		}
-		var got protocol.JournalRecord
-		if err := json.Unmarshal(plain, &got); err != nil {
-			t.Fatalf("env %d plaintext not a JournalRecord: %v", i, err)
-		}
-		// DeepEqual, not ==: JournalRecord gained the additive Item field
-		// (json.RawMessage, the interaction item of interaction-schema.md §1), and a
-		// struct holding a slice is not comparable. The assertion is unchanged --
-		// the whole record, field for field, against the one that was sealed.
-		if !reflect.DeepEqual(got, want[i]) {
-			t.Errorf("env %d record = %+v, want %+v", i, got, want[i])
+		if i == 0 {
+			var got reseedFrame
+			if err := json.Unmarshal(plain, &got); err != nil {
+				t.Fatalf("env %d plaintext not a roster reseed: %v", i, err)
+			}
+			if got.Kind != kindJournalReseed || got.Cursor != 5 ||
+				!reflect.DeepEqual(got.Roster, roster) {
+				t.Errorf("env %d reseed = %+v, want roster %+v at cursor 5", i, got, roster)
+			}
+		} else {
+			var got protocol.JournalRecord
+			if err := json.Unmarshal(plain, &got); err != nil {
+				t.Fatalf("env %d plaintext not a JournalRecord: %v", i, err)
+			}
+			want := protocol.JournalRecord{Cursor: 6, SessionID: "s2", Type: "launched"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("env %d record = %+v, want %+v", i, got, want)
+			}
 		}
 
 		// A different content key must fail to open (confidentiality).
@@ -118,6 +122,58 @@ func TestRelaySink_SealsAndAppendsDecryptableRecords(t *testing.T) {
 			t.Errorf("env %d opened under the WRONG key; confidentiality broken", i)
 		}
 	}
+}
+
+func TestRelaySinkSnapshotPublishesOneAuthoritativeRosterReseed(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	app := &fakeAppender{}
+	sink := newTestRelaySink(t, app, key)
+	roster := []protocol.JournalRecord{
+		{SessionID: "m/s1", Type: "roster", Group: "working"},
+		{SessionID: "m/s2", Type: "roster"},
+	}
+	if err := sink.Snapshot(roster, 5); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	assertReseed := func(index int, wantRoster []protocol.JournalRecord, wantCursor uint64) {
+		t.Helper()
+		env, err := crypto.ParseEnvelope(app.envs[index])
+		if err != nil {
+			t.Fatalf("parse envelope %d: %v", index, err)
+		}
+		plain, err := crypto.OpenMailbox(key, env)
+		if err != nil {
+			t.Fatalf("open envelope %d: %v", index, err)
+		}
+		var got reseedFrame
+		if err := json.Unmarshal(plain, &got); err != nil {
+			t.Fatalf("decode envelope %d: %v", index, err)
+		}
+		if got.Kind != kindJournalReseed || got.Cursor != wantCursor {
+			t.Fatalf("snapshot frame = %#v, want journal_reseed at cursor %d", got, wantCursor)
+		}
+		if !reflect.DeepEqual(got.Roster, wantRoster) {
+			t.Fatalf("snapshot roster = %#v, want %#v", got.Roster, wantRoster)
+		}
+		if got.Events == nil || len(got.Events) != 0 {
+			t.Fatalf("snapshot events = %#v, want an explicit empty event list", got.Events)
+		}
+	}
+	if len(app.envs) != 1 {
+		t.Fatalf("non-empty Snapshot appended %d envelopes, want one atomic reseed", len(app.envs))
+	}
+	assertReseed(0, roster, 5)
+
+	if err := sink.Snapshot(nil, 0); err != nil {
+		t.Fatalf("empty Snapshot: %v", err)
+	}
+	if len(app.envs) != 2 {
+		t.Fatalf("empty Snapshot appended %d total envelopes, want an authoritative reseed too", len(app.envs))
+	}
+	assertReseed(1, []protocol.JournalRecord{}, 0)
 }
 
 // hangingAppender blocks in MailboxAppend until its ctx is cancelled, simulating a hung
