@@ -1,60 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The launcher icon's foreground layer: "Solid Wedge", the candidate the owner chose out of six.
+  Atmospheric Swarm launcher foreground.
 
-  THIS FILE IS A TRANSCRIPTION, NOT A DRAWING. Every number below is read off
-  docs/design/icon-candidates/solid-wedge.svg, which is the source of truth, and
-  android/gate/appicon_test.go parses both files and compares the geometry it evaluates from
-  each. Do not adjust a coordinate here. Adjust the candidate, and let the gate require this
-  file to follow; a number changed only here is a second design nobody approved, and it is
-  invisible in review because both files look right on their own.
+  The artwork is the approved transparent mark from
+  docs/design/swarm-illustration-direction/swarm-atmospheric-mark.png, copied byte-for-byte to
+  drawable-nodpi/swarm_atmospheric_mark.png. Keeping the generated trails as a bitmap preserves
+  their fine glow, grain, and soft edges; restating them as vector paths would create a second,
+  harsher drawing.
 
-  WHY THIS MARK. The product is a terminal multi-agent tracker. The zigzag is the prompt's
-  reversal carried at the heaviest weight the set allows, so what survives downscaling is mass
-  rather than detail, and the cursor is the one filled shape, which is what keeps it reading as a
-  cursor beside a stroked letter without needing a gap to separate them. Butt caps cut both
-  terminals flat at the diagonal's own angle and mitred joins give the reversals real points:
-  both are stated explicitly below rather than left to the platform default, because a default
-  that agrees with the specification today is still not the specification.
-
-  WHY IT IS A VECTOR AND WHY THERE ARE NO PNG BUCKETS. minSdk is 33 and adaptive icons landed
-  at 26, so mipmap-anydpi-v26 resolves on every device this app supports; a density ladder of
-  rasterised copies would be twelve files that can disagree with each other and with this one.
-
-  GEOMETRY. The canvas is the adaptive 108x108dp and the mark sits at the candidate's own
-  coordinates, neither scaled nor translated. Measured from rendered pixels at 10x, the drawn
-  extent spans x 24.95..79.95 and y 32.35..76.15, and the furthest point from the centre is the
-  cursor bar's bottom-right corner at (80, 76.25), r = 34.2. THAT IS 1.2 PAST the 33dp circle
-  Android guarantees against every launcher mask. It clears the masks in practice (a 72dp circle
-  reaches 36, and the corner sits well inside a 72dp squircle's rounding), and this file
-  reproduces the approved drawing rather than quietly re-centring it, but the overrun is real and
-  is filed as agents-tracker-aww2 for the owner to accept or close. Re-measure from pixels if the
-  artwork ever moves: the arithmetic that ignores what a mitred join does past the end of its own
-  path understates every corner, which is how the candidate's comment came to carry 32.5.
-
-  COLOUR IS A TOKEN, NOT A VALUE. [p-hero] is the mark's colour in the candidate and
-  swarm_hero is what it is called here, joined through android/design-tokens.tsv (PB-TOK-1). An
-  icon-only literal would be a colour that entered the product without passing through that
-  origin, which is precisely what the token gate exists to refuse. The token names carry a
-  leading double hyphen; it is spelled [p-hero] here because XML forbids that sequence inside a
-  comment.
+  The adaptive canvas is 108dp. A 24dp inset leaves a 60dp square. Measured from every non-zero
+  alpha pixel in the approved source, the furthest visible point then lands within Android's
+  guaranteed 33dp mask-safe radius. android/gate/appicon_test.go verifies the source identity,
+  alpha geometry, inset, and adaptive-layer wiring.
 -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
-    <!-- The zigzag: three legs, one open channel between them at 48dp. -->
-    <path
-        android:pathData="M57,36 L34,48 L57,60 L34,72"
-        android:strokeColor="@color/swarm_hero"
-        android:strokeWidth="8.5"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter" />
-
-    <!-- The cursor: one straight bar on the zigzag's own baseline, and the only filled shape. -->
-    <path
-        android:pathData="M61,67.75 L77,67.75 L77,76.25 L61,76.25 Z"
-        android:fillColor="@color/swarm_hero" />
-</vector>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="24dp">
+    <bitmap
+        android:src="@drawable/swarm_atmospheric_mark"
+        android:gravity="fill" />
+</inset>

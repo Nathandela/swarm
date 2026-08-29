@@ -50,7 +50,7 @@ Ordered by how long they take.
 
 | # | Blocker | Where | Effort |
 |---|---|---|---|
-| 1 | ~~No launcher icon.~~ **DONE** — adaptive vector icon, verified in the built APK at every density. The 512x512 store icon and 1024x500 feature graphic are in `docs/ops/play-assets/`. | — | done |
+| 1 | ~~No launcher icon.~~ **DONE** — the adaptive launcher now uses the same generated Atmospheric Swarm trajectories as the Play listing, over the app's Slate background token. The transparent source, mask-safe inset, and adaptive/monochrome wiring are gated; the separate 512x512 store icon and 1024x500 feature graphic are in `docs/ops/play-assets/`. | — | done |
 | 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below, published page at `docs/ops/privacy-policy/index.html`. **Gated on a merge to `main`:** GitHub Pages is configured to deploy from `main`/`docs`, and the whole ops track exists only on `design-system-substrate` — `git log main -- docs/ops/privacy-policy` returns nothing — so the URL 404s until that branch merges. | external hosting + a merge | 30 min |
@@ -326,7 +326,7 @@ client and it is not a remote desktop -- it is a window onto processes you alrea
 > (§10 item 2). Background wake is "the feature the phone exists for" per §0, so this is a listing
 > that should get its bullet back rather than one that never had a right to it.
 
-**Graphic assets — all mandatory, none currently exist in the repo**
+**Graphic assets — all mandatory assets are present in the repo**
 
 | Asset | Spec |
 |---|---|
@@ -335,10 +335,11 @@ client and it is not a remote desktop -- it is a window onto processes you alrea
 | Phone screenshots | **2–8 required. THESE NEED A PHYSICAL HANDSET — see below.** 16:9 or 9:16, each side 320–3840 px |
 | 7" / 10" tablet screenshots | optional unless you declare tablet support |
 
-The launcher icon (blocker #1) is **done** — an adaptive vector icon using the app's own design
-tokens, verified in the built APK at every density bucket. It does **not** cover the two store
-assets above: the Console's 512×512 field is a separate PNG upload and cannot be satisfied by a
-vector.
+The launcher icon (blocker #1) is **done** — an adaptive icon using the approved transparent
+Atmospheric Swarm mark over the app's own Slate background token. Its 24dp foreground inset keeps
+the complete generated trail inside Android's guaranteed mask-safe circle, and the same layer is
+declared for themed icons. The Console's 512×512 field remains a separate PNG upload; its matching
+asset is `docs/ops/play-assets/play-store-icon-512.png`.
 
 ### Screenshots need a physical Android 13+ handset — you cannot use an emulator
 
