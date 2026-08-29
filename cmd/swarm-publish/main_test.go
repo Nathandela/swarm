@@ -79,7 +79,11 @@ func TestVerifiedBundleDescriptorSurvivesAPathReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openVerifiedProductionFirebaseBundle: %v", err)
 	}
-	defer bundle.Close()
+	defer func() {
+		if err := bundle.Close(); err != nil {
+			t.Errorf("close verified bundle: %v", err)
+		}
+	}()
 
 	if err := os.Rename(aab, aab+".verified"); err != nil {
 		t.Fatalf("rename verified AAB: %v", err)

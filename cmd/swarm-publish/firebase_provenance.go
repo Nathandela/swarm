@@ -41,13 +41,13 @@ type firebaseProvenance struct {
 // later rename or replacement of aabPath unable to change the uploaded artifact.
 func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.File, resultErr error) {
 	if packageName != productionFirebasePackage {
-		return nil, fmt.Errorf("Firebase provenance: --package=%q, want production package %q",
+		return nil, fmt.Errorf("firebase provenance: --package=%q, want production package %q",
 			packageName, productionFirebasePackage)
 	}
 
 	bundle, err := os.Open(aabPath)
 	if err != nil {
-		return nil, fmt.Errorf("Firebase provenance: open AAB: %w", err)
+		return nil, fmt.Errorf("firebase provenance: open AAB: %w", err)
 	}
 	defer func() {
 		if resultErr != nil {
@@ -56,39 +56,39 @@ func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.Fi
 	}()
 	info, err := bundle.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("Firebase provenance: inspect AAB: %w", err)
+		return nil, fmt.Errorf("firebase provenance: inspect AAB: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("Firebase provenance: AAB %q is not a regular file", aabPath)
+		return nil, fmt.Errorf("firebase provenance: AAB %q is not a regular file", aabPath)
 	}
 
 	provenancePath := aabPath + firebaseProvenanceSuffix
 	f, err := os.Open(provenancePath)
 	if err != nil {
-		return nil, fmt.Errorf("Firebase provenance sidecar %q is missing or unreadable: %w; "+
+		return nil, fmt.Errorf("firebase provenance sidecar %q is missing or unreadable: %w; "+
 			"rebuild with :app:bundleRelease and do not publish a stale AAB", provenancePath, err)
 	}
 	defer func() { _ = f.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(f, firebaseProvenanceMax+1))
 	if err != nil {
-		return nil, fmt.Errorf("Firebase provenance: read sidecar: %w", err)
+		return nil, fmt.Errorf("firebase provenance: read sidecar: %w", err)
 	}
 	if len(raw) > firebaseProvenanceMax {
-		return nil, fmt.Errorf("Firebase provenance: sidecar exceeds %d bytes", firebaseProvenanceMax)
+		return nil, fmt.Errorf("firebase provenance: sidecar exceeds %d bytes", firebaseProvenanceMax)
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var provenance firebaseProvenance
 	if err := dec.Decode(&provenance); err != nil {
-		return nil, fmt.Errorf("Firebase provenance: decode sidecar: %w", err)
+		return nil, fmt.Errorf("firebase provenance: decode sidecar: %w", err)
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, errors.New("Firebase provenance: sidecar contains multiple JSON documents")
+			return nil, errors.New("firebase provenance: sidecar contains multiple JSON documents")
 		}
-		return nil, fmt.Errorf("Firebase provenance: trailing sidecar data: %w", err)
+		return nil, fmt.Errorf("firebase provenance: trailing sidecar data: %w", err)
 	}
 
 	for _, fact := range []struct {
@@ -99,21 +99,21 @@ func openVerifiedProductionFirebaseBundle(aabPath, packageName string) (_ *os.Fi
 		{"mobilesdk_app_id", provenance.MobileSDKAppID, productionFirebaseAppID},
 	} {
 		if fact.got != fact.want {
-			return nil, fmt.Errorf("Firebase provenance: %s=%q, want production value %q",
+			return nil, fmt.Errorf("firebase provenance: %s=%q, want production value %q",
 				fact.name, fact.got, fact.want)
 		}
 	}
 	if provenance.Schema != 1 {
-		return nil, fmt.Errorf("Firebase provenance: schema=%d, want 1", provenance.Schema)
+		return nil, fmt.Errorf("firebase provenance: schema=%d, want 1", provenance.Schema)
 	}
 
 	digest, err := sha256AndRewind(bundle)
 	if err != nil {
-		return nil, fmt.Errorf("Firebase provenance: hash AAB: %w", err)
+		return nil, fmt.Errorf("firebase provenance: hash AAB: %w", err)
 	}
 	wantDigest := hex.EncodeToString(digest[:])
 	if provenance.AABSHA256 != wantDigest {
-		return nil, fmt.Errorf("Firebase provenance: AAB SHA-256 does not match sidecar; " +
+		return nil, fmt.Errorf("firebase provenance: AAB SHA-256 does not match sidecar; " +
 			"the bundle is stale, replaced, or not the build the sidecar describes")
 	}
 	return bundle, nil
