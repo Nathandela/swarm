@@ -95,6 +95,13 @@ func hookSink(t *testing.T) (sock string, next func() engine.Callback) {
 // capture rows.
 func hookEnv(t *testing.T, sock string, capture []string) {
 	t.Helper()
+	// These tests exercise the daemon-only compatibility path. A developer running
+	// them from inside a live Swarm session inherits the session's shim socket;
+	// leaving it set would make PostSmart correctly send the callback to that live
+	// shim instead of the test sink. Record the parent value for cleanup, then make
+	// the variable genuinely absent for the test.
+	t.Setenv(hookclient.EnvHookSocket, "")
+	_ = os.Unsetenv(hookclient.EnvHookSocket)
 	t.Setenv(hookclient.EnvSessionID, "sid-1")
 	t.Setenv(hookclient.EnvToken, "tok-abc")
 	t.Setenv(hookclient.EnvSocket, sock)
