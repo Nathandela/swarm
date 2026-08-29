@@ -431,18 +431,8 @@ func (s *RelaySink) Reseed(rs protocol.JournalReseed) error {
 	return s.seal(plaintext)
 }
 
-// forward marshals rec as a bare journal record (no kind tag, backward-compatible with the
-// phone's journal path) and seals it into the phone's mailbox. The seal/append error is
-// returned (authoritative for the gateway's cursor gating) and also stashed for Err().
-func (s *RelaySink) forward(rec protocol.JournalRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Cursor 0: the roster path is not outbox-keyed (see Snapshot).
-	return s.forwardLocked(0, rec)
-}
-
-// forwardLocked is forward inside the critical section. A non-zero cursor makes the frame
-// outbox-backed (Event); 0 leaves it unrecorded (roster records, which are re-sent state).
+// forwardLocked marshals a bare journal record inside the critical section. A non-zero cursor
+// makes the frame outbox-backed (Event); zero leaves it unrecorded.
 func (s *RelaySink) forwardLocked(cursor uint64, rec protocol.JournalRecord) error {
 	plaintext, err := json.Marshal(rec)
 	if err != nil {

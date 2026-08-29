@@ -11,8 +11,8 @@ import (
 
 func TestDaemonConnReadJournalAggregatesOneAtomicPagedRead(t *testing.T) {
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 	dc := &daemonConn{conn: client, endpointID: "machine"}
 
 	serverDone := make(chan error, 1)
