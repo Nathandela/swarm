@@ -99,7 +99,9 @@ func validDiscardRecoveryToken(token string) bool {
 		return false
 	}
 	for _, c := range token {
-		if !('0' <= c && c <= '9') && !('a' <= c && c <= 'f') {
+		isDigit := '0' <= c && c <= '9'
+		isLowerHex := 'a' <= c && c <= 'f'
+		if !isDigit && !isLowerHex {
 			return false
 		}
 	}
