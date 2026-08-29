@@ -32,6 +32,11 @@ var (
 	// ErrNotAuthorized is returned when a caller acts on a route it is not
 	// paired to (R-REL.12).
 	ErrNotAuthorized = errors.New("relay: not authorized for route")
+	// ErrPeerCapabilityUnavailable is returned when an operation is safe only
+	// while the caller's paired peer is connected through a protocol generation
+	// that explicitly advertises support for it. Callers may retry after the peer
+	// reconnects or is upgraded; the refused operation has made no state change.
+	ErrPeerCapabilityUnavailable = errors.New("relay: active peer does not advertise required capability")
 	// ErrRevoked is returned when a de-authorized relay-auth key tries to
 	// authenticate (R-REL.13).
 	ErrRevoked = errors.New("relay: relay-auth registration revoked")
@@ -99,36 +104,38 @@ var (
 
 // wire error codes. The client maps a received code back to the sentinel above.
 const (
-	codeBadRequest         = "bad_request"
-	codeQuotaExceeded      = "quota_exceeded"
-	codeNotAuthorized      = "not_authorized"
-	codeRevoked            = "revoked"
-	codeDuplicateConn      = "duplicate_connection"
-	codeWaitInProgress     = "wait_in_progress"
-	codeMailboxCursorReset = "mailbox_cursor_reset"
-	codeRendezvousFull     = "rendezvous_full"
-	codeRendezvousTTL      = "rendezvous_expired"
-	codeRendezvousUsed     = "rendezvous_burned"
-	codeRendezvousExists   = "rendezvous_exists"
-	codeAuthFailed         = "auth_failed"
-	codeUnsupported        = "unsupported"
-	codeConsentRetired     = "consent_retired"
+	codeBadRequest                = "bad_request"
+	codeQuotaExceeded             = "quota_exceeded"
+	codeNotAuthorized             = "not_authorized"
+	codePeerCapabilityUnavailable = "peer_capability_unavailable"
+	codeRevoked                   = "revoked"
+	codeDuplicateConn             = "duplicate_connection"
+	codeWaitInProgress            = "wait_in_progress"
+	codeMailboxCursorReset        = "mailbox_cursor_reset"
+	codeRendezvousFull            = "rendezvous_full"
+	codeRendezvousTTL             = "rendezvous_expired"
+	codeRendezvousUsed            = "rendezvous_burned"
+	codeRendezvousExists          = "rendezvous_exists"
+	codeAuthFailed                = "auth_failed"
+	codeUnsupported               = "unsupported"
+	codeConsentRetired            = "consent_retired"
 )
 
 // codeToErr maps a wire error code to its sentinel. An unrecognised code becomes
 // a generic error carrying the server message.
 var codeToErr = map[string]error{
-	codeQuotaExceeded:      ErrQuotaExceeded,
-	codeNotAuthorized:      ErrNotAuthorized,
-	codeRevoked:            ErrRevoked,
-	codeDuplicateConn:      ErrDuplicateConnection,
-	codeWaitInProgress:     ErrWaitInProgress,
-	codeMailboxCursorReset: ErrMailboxCursorResetRequired,
-	codeRendezvousFull:     ErrRendezvousFull,
-	codeRendezvousTTL:      ErrRendezvousExpired,
-	codeRendezvousUsed:     ErrRendezvousBurned,
-	codeRendezvousExists:   ErrRendezvousExists,
-	codeConsentRetired:     ErrConsentRetired,
+	codeQuotaExceeded:             ErrQuotaExceeded,
+	codeNotAuthorized:             ErrNotAuthorized,
+	codePeerCapabilityUnavailable: ErrPeerCapabilityUnavailable,
+	codeRevoked:                   ErrRevoked,
+	codeDuplicateConn:             ErrDuplicateConnection,
+	codeWaitInProgress:            ErrWaitInProgress,
+	codeMailboxCursorReset:        ErrMailboxCursorResetRequired,
+	codeRendezvousFull:            ErrRendezvousFull,
+	codeRendezvousTTL:             ErrRendezvousExpired,
+	codeRendezvousUsed:            ErrRendezvousBurned,
+	codeRendezvousExists:          ErrRendezvousExists,
+	codeConsentRetired:            ErrConsentRetired,
 }
 
 // errorBody is the JSON shape of an r_error reply.

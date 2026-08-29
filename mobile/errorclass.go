@@ -385,7 +385,8 @@ func stampErrorClass(err error) error {
 		return classed(ErrClassRateLimited, err)
 	case errors.Is(err, crypto.ErrStaleSeq), errors.Is(err, relay.ErrNotAuthorized),
 		errors.Is(err, relay.ErrDuplicateConnection),
-		errors.Is(err, relay.ErrTimeout), errors.Is(err, relay.ErrConnClosed):
+		errors.Is(err, relay.ErrTimeout), errors.Is(err, relay.ErrConnClosed),
+		errors.Is(err, relay.ErrPeerCapabilityUnavailable):
 		// THE TWO ENDINGS OF ONE OUTAGE, and they must not reach different screens. A relay
 		// that answers nothing fails the call with relay.ErrTimeout (relay.DefaultCallTimeout);
 		// the same outage noticed a moment later, once the socket is torn down, fails it with

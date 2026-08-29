@@ -19,10 +19,11 @@ package schema
 // here is the snapshot BOUNDARY (JournalResume.Cursor), and it REPLACES the cache cursor
 // rather than being merged into it.
 //
-// NO FIELD MAY CARRY omitempty, for the reason ReconcileRecord states: a legitimately-empty
-// roster (a machine with no live sessions) must stay distinguishable on the wire from a
-// producer that never published the field, or a phone reading "absent" as "empty" cannot
-// tell a real repair from a malformed one.
+// The three snapshot fields never carry omitempty, for the reason ReconcileRecord states: a
+// legitimately-empty roster (a machine with no live sessions) must stay distinguishable on
+// the wire from a producer that never published the field. DiscardRecoveryToken is an
+// additive mode echo and deliberately DOES use omitempty, keeping every ordinary repair
+// byte-compatible while letting a recovering phone distinguish a current gateway's answer.
 type JournalReseed struct {
 	// Roster is the machine's COMPLETE live session set as of Cursor. It replaces the
 	// phone's cached set; a session absent here has gone away while the phone was not
@@ -34,4 +35,8 @@ type JournalReseed struct {
 	// Cursor is the snapshot boundary the roster is current as of. It REPLACES the phone's
 	// cache cursor (PB-SYNC-8); it is never merged, never max'd.
 	Cursor uint64 `json:"cursor"`
+	// DiscardRecoveryToken echoes the exact token from the sealed roster-refresh command
+	// whose explicit mailbox discard requested this fast-forward snapshot. An absent or
+	// different token is an ordinary reseed and cannot complete durable discard recovery.
+	DiscardRecoveryToken string `json:"discard_recovery_token,omitempty"`
 }

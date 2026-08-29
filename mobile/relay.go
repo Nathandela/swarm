@@ -116,6 +116,19 @@ var reconnectDelayObserver atomic.Pointer[func(attempt int, d time.Duration)]
 // machine could publish.
 type relayAcker struct{ app *App }
 
+type mailboxDiscardRequest struct {
+	ctx     context.Context
+	done    chan mailboxDiscardResult
+	claimed bool // guarded by App.mu; exactly one drain generation may execute it
+}
+
+type mailboxDiscardResult struct {
+	recoveryToken string
+	err           error
+}
+
+const mailboxDiscardRequestTimeout = 15 * time.Second
+
 func (r *relayAcker) Ack(cursor uint64) error {
 	a := r.app
 	a.mu.Lock()
@@ -152,6 +165,128 @@ func (a *App) flushAcks(ctx context.Context, cl *relay.Client, generation uint64
 	}
 	a.mu.Unlock()
 	return nil
+}
+
+// requestMailboxDiscard hands an explicitly user-authorized destructive recovery to the
+// single mailbox reader and waits for its bounded result. Executing on the drain is the
+// concurrency boundary: a direct facade-side control call could race the wait page currently
+// being accepted, then let that old page restore cursor/ack state across the discard.
+func (a *App) requestMailboxDiscard() (string, error) {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return "", errClosed
+	}
+	sess := a.sess
+	if sess == nil || a.client == nil {
+		a.mu.Unlock()
+		return "", classed(ErrClassOffline, errors.New("swarmmobile: relay connection not established for mailbox recovery"))
+	}
+	if a.mailboxDiscard != nil {
+		a.mu.Unlock()
+		return "", classed(ErrClassRateLimited, errors.New("swarmmobile: a mailbox recovery is already in progress"))
+	}
+	ctx, cancel := context.WithTimeout(sess.ctx, mailboxDiscardRequestTimeout)
+	defer cancel()
+	req := &mailboxDiscardRequest{ctx: ctx, done: make(chan mailboxDiscardResult, 1)}
+	a.mailboxDiscard = req
+	wake := a.waitCancel
+	a.mu.Unlock()
+	if wake != nil {
+		wake()
+	}
+
+	select {
+	case result := <-req.done:
+		return result.recoveryToken, result.err
+	case <-ctx.Done():
+		a.mu.Lock()
+		if a.mailboxDiscard == req && !req.claimed {
+			a.mailboxDiscard = nil
+		}
+		a.mu.Unlock()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", classed(ErrClassOffline, fmt.Errorf("swarmmobile: mailbox recovery timed out: %w", relay.ErrTimeout))
+		}
+		return "", classed(ErrClassOffline, fmt.Errorf("swarmmobile: mailbox recovery canceled with its app session: %w", ctx.Err()))
+	}
+}
+
+// performMailboxDiscard executes at the top of a drain iteration, when that goroutine owns no
+// in-flight read. resetAcks is AckBatcher.Reset on the wait path and nil on the synchronous
+// poll path. Reset is a barrier for an already-started old ack and retires every pending cursor
+// before the destructive transaction is issued.
+func (a *App) performMailboxDiscard(cl *relay.Client, resetAcks func()) bool {
+	a.mu.Lock()
+	req := a.mailboxDiscard
+	if req == nil || req.claimed {
+		a.mu.Unlock()
+		return false
+	}
+	req.claimed = true
+	a.mu.Unlock()
+
+	finish := func(recoveryToken string, err error) {
+		a.mu.Lock()
+		if a.mailboxDiscard == req {
+			a.mailboxDiscard = nil
+		}
+		a.mu.Unlock()
+		req.done <- mailboxDiscardResult{recoveryToken: recoveryToken, err: err}
+	}
+	if err := req.ctx.Err(); err != nil {
+		finish("", classed(ErrClassOffline, err))
+		return true
+	}
+	// The stale verdict may have cleared while RefreshRoster was waking this single reader.
+	// In that case the healthy frames already repaired the transport; compacting them would
+	// no longer be the narrowly authorized recovery. Complete the request without deletion
+	// so the caller can still send its ordinary roster refresh.
+	pendingToken := a.core.DiscardRecoveryToken()
+	if !a.core.Router().InboundAgeRefused() && pendingToken == "" {
+		finish("", nil)
+		return true
+	}
+	if !a.mailboxRecoverySupported.Load() {
+		finish("", relay.ErrPeerCapabilityUnavailable)
+		return true
+	}
+	// The intent must reach durable state BEFORE the destructive RPC. If the process dies
+	// after this Save, the next explicit RefreshRoster sees the same token and reissues the
+	// incarnation-fenced idempotent discard even though the in-memory age refusal is gone.
+	recoveryToken, err := a.core.BeginRelayDiscardRecovery()
+	if err != nil {
+		finish("", err)
+		return true
+	}
+	if resetAcks != nil {
+		resetAcks()
+	}
+	target, _ := a.destination()
+	if target == "" {
+		routeErr := classed(ErrClassOffline, errors.New("swarmmobile: paired machine route unavailable for mailbox recovery"))
+		finish("", routeErr)
+		return true
+	}
+	result, err := cl.MailboxDiscard(req.ctx, target)
+	if err != nil {
+		finish("", err)
+		return true
+	}
+	if err := a.core.AdoptRelayDiscard(result.ThroughCursor, result.MailboxIncarnation); err != nil {
+		// The relay operation is idempotent and returns the same durable high-water even when
+		// its mailbox is now empty. Report the failed local adoption honestly; the next pull
+		// retries it instead of pretending replacement state can resume from an unpersisted
+		// coordinate.
+		finish("", err)
+		return true
+	}
+	a.mu.Lock()
+	a.ackPending = result.ThroughCursor
+	a.ackSent = result.ThroughCursor // the destructive op already compacted through it
+	a.mu.Unlock()
+	finish(recoveryToken, nil)
+	return true
 }
 
 // conn returns the live relay client, or why there is none.
@@ -960,16 +1095,22 @@ const (
 // connection), so TestCommitteeR3_PhoneHelloCapsAreServedByTheRelay fences them against
 // drift: every capability named here must be granted by the shipped relay, or the phone
 // would silently run degraded against its OWN relay (committee round 3, Opus nit 6).
-var helloRequestCaps = []string{"mailbox", "push", "presence", "wait"}
+var helloRequestCaps = []string{"mailbox", "push", "presence", "wait", relay.CapabilityMailboxRecovery}
 
 // negotiateWaitSupport derives one connection's wait verdict from its r_hello exchange.
 // A refused or failed hello reads as unsupported rather than an error: the poll fallback
 // works against every relay, and if the hello failed because the link is dying the drain
 // discovers that within one bounded call anyway.
 func (a *App) negotiateWaitSupport(ctx context.Context, cl *relay.Client) int32 {
+	a.mailboxRecoverySupported.Store(false)
 	_, caps, err := cl.Hello(ctx, relay.ProtocolVersion, helloRequestCaps)
 	if err != nil {
 		return waitUnsupported
+	}
+	for _, c := range caps {
+		if c == relay.CapabilityMailboxRecovery {
+			a.mailboxRecoverySupported.Store(true)
+		}
 	}
 	for _, c := range caps {
 		if c == "wait" {
@@ -1073,6 +1214,9 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 	go func() { defer close(ackDone); acks.Run(actx) }()
 	defer func() { stopAcks(); <-ackDone }() // joined, so no ack outlives the drain that owns it
 	for ctx.Err() == nil {
+		if a.performMailboxDiscard(cl, acks.Reset) {
+			continue
+		}
 		if pacer.Pace(ctx) != nil {
 			return
 		}
@@ -1233,6 +1377,9 @@ func (a *App) adoptRelayIncarnation(incarnation string) error {
 
 func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 	for ctx.Err() == nil {
+		if a.performMailboxDiscard(cl, nil) {
+			continue
+		}
 		cursor := a.core.State().RelayCursor
 		ackGeneration := cl.MailboxGeneration()
 		items, err := cl.MailboxRead(ctx, cursor)

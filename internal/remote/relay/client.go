@@ -1362,6 +1362,61 @@ func (c *Client) mailboxAck(ctx context.Context, cursor uint64, generation *uint
 	return err
 }
 
+// MailboxDiscardResult is the exact current mailbox generation and cursor compacted by an
+// explicit self-mailbox discard. A consumer must persist both before requesting replacement
+// state; through_cursor is a relay-owned transport coordinate, never an authenticated content
+// sequence.
+type MailboxDiscardResult struct {
+	ThroughCursor      uint64 `json:"through_cursor"`
+	MailboxIncarnation string `json:"mailbox_incarnation"`
+}
+
+// MailboxDiscard explicitly compacts the authenticated caller's own current mailbox. It is
+// intentionally unavailable until a successful read has adopted a non-empty incarnation: a
+// destructive request must never fall back to an unqualified numeric coordinate or an unfenced
+// legacy relay.
+func (c *Client) MailboxDiscard(ctx context.Context, peer string) (MailboxDiscardResult, error) {
+	incarnation, aware, generation := c.mailboxContinuity()
+	if !aware || incarnation == "" {
+		return MailboxDiscardResult{}, ErrMailboxCursorResetRequired
+	}
+	resp, err := c.conn.control(ctx, "mailbox_discard", map[string]any{
+		"mailbox_incarnation": incarnation,
+		"peer":                peer,
+	})
+	if err != nil {
+		return MailboxDiscardResult{}, err
+	}
+	var result MailboxDiscardResult
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return MailboxDiscardResult{}, err
+	}
+	if err := c.adoptMailboxDiscard(result, generation); err != nil {
+		return MailboxDiscardResult{}, err
+	}
+	return result, nil
+}
+
+func (c *Client) adoptMailboxDiscard(result MailboxDiscardResult, requestGeneration uint64) error {
+	c.mailboxMu.Lock()
+	defer c.mailboxMu.Unlock()
+	if c.mailboxGeneration != requestGeneration {
+		return ErrMailboxCursorResetRequired
+	}
+	if !ValidMailboxIncarnation(result.MailboxIncarnation) {
+		return fmt.Errorf("relay: invalid mailbox incarnation (want 32 lowercase hexadecimal characters)")
+	}
+	if c.mailboxIncarnation != result.MailboxIncarnation {
+		return ErrMailboxCursorResetRequired
+	}
+	c.mailboxAware = true
+	// A successful discard is itself a local continuity boundary even though the server's
+	// mailbox incarnation does not change. Any delivery/ack token captured beforehand names
+	// the compacted log and must not be allowed to act on a later frame appended after it.
+	c.mailboxGeneration++
+	return nil
+}
+
 // TokenRegister registers (or refreshes) this device's APNs push token.
 func (c *Client) TokenRegister(ctx context.Context, token string) error {
 	_, err := c.conn.control(ctx, "token_register", map[string]any{"token": token})

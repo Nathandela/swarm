@@ -90,6 +90,10 @@ type harness struct {
 // exactly PB-BIND-3's "state lifecycle (restore)" path, and it is what a real second app
 // launch does.
 func newHarness(t *testing.T) *harness {
+	return newHarnessWithRelayConfig(t, nil)
+}
+
+func newHarnessWithRelayConfig(t *testing.T, mutate func(*relay.Config)) *harness {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -97,6 +101,9 @@ func newHarness(t *testing.T) *harness {
 
 	rcfg := relay.DefaultConfig()
 	rcfg.DBPath = filepath.Join(t.TempDir(), "relay.db")
+	if mutate != nil {
+		mutate(&rcfg)
+	}
 	srv, err := relay.New(rcfg)
 	if err != nil {
 		t.Fatalf("relay.New: %v", err)
@@ -154,6 +161,9 @@ func newHarness(t *testing.T) *harness {
 		Sign:         func(c []byte) ([]byte, error) { return ed25519.Sign(mPriv, c), nil },
 	}); err != nil {
 		t.Fatalf("machine dial: %v", err)
+	}
+	if _, _, err := h.machineRelay.Hello(ctx, relay.ProtocolVersion, []string{relay.CapabilityMailboxRecovery}); err != nil {
+		t.Fatalf("machine recovery capability hello: %v", err)
 	}
 	t.Cleanup(func() { _ = h.machineRelay.Close() })
 	phoneConsent := consentFrom(t, ks, relay.RoutingID(mPub))

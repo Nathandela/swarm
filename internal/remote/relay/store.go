@@ -340,6 +340,33 @@ func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughC
 	})
 }
 
+// discardItemsForIncarnation atomically compacts the authenticated caller's whole current
+// mailbox and returns the durable cursor through which it compacted. The exact incarnation is
+// mandatory at the server boundary; checking it again in the transaction closes the store-reset
+// race between request parsing and deletion.
+func (s *store) discardItemsForIncarnation(rid, expectedIncarnation string) (through uint64, incarnation string, err error) {
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		incarnation = mailboxIncarnation(tx)
+		if expectedIncarnation == "" || expectedIncarnation != incarnation {
+			return ErrMailboxCursorResetRequired
+		}
+		if v := tx.Bucket(bucketSeq).Get([]byte(rid)); v != nil {
+			next := binary.BigEndian.Uint64(v)
+			if next == 0 {
+				through = math.MaxUint64
+			} else {
+				through = next - 1
+			}
+		}
+		items := tx.Bucket(bucketItems)
+		if items.Bucket([]byte(rid)) == nil {
+			return nil
+		}
+		return items.DeleteBucket([]byte(rid))
+	})
+	return through, incarnation, err
+}
+
 // purgeOlderThan deletes every item (across all mailboxes) whose append time is
 // at or before cutoffMillis — the retention cap, even for never-acked items.
 func (s *store) purgeOlderThan(cutoffMillis int64) error {

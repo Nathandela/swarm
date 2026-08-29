@@ -138,33 +138,87 @@ func runGeneration(ctx context.Context, p gatewayParams) (progressed bool, err e
 		return false, fmt.Errorf("dial relay: %w", err)
 	}
 	defer func() { _ = client.Close() }()
+	return runConnectedGeneration(ctx, p, client)
+}
 
+// runConnectedGeneration is split from the secure dial so the startup ordering can be
+// exercised at the complete relay/Service seam without replacing production dial policy.
+func runConnectedGeneration(ctx context.Context, p gatewayParams, client relayConn) (progressed bool, err error) {
 	// C5: authorize the paired device and deliver its sealed epoch grant over the mailbox
-	// before the bridge starts (idempotent; the phone dedups by grant seq).
+	// before the bridge starts (idempotent; the phone dedups by grant seq). A clean grant-
+	// append quota refusal (including the mailbox depth cap) is the one exception: keeping
+	// command-IN offline cannot create capacity, and prevents the phone's explicit recovery
+	// command from reaching the daemon. Preserve the exact frame for a generation-scoped
+	// retry while Service begins draining commands.
+	var retryFrame []byte
 	if err := deliverEpochGrant(ctx, client, p); err != nil {
-		return false, fmt.Errorf("deliver epoch grant: %w", err)
+		var appendErr *grantAppendError
+		if !errors.As(err, &appendErr) || !errors.Is(err, relay.ErrQuotaExceeded) {
+			return false, fmt.Errorf("deliver epoch grant: %w", err)
+		}
+		retryFrame = append([]byte(nil), appendErr.frame...)
+		report("epoch grant append quota refused; starting command recovery while delivery retries", err)
 	}
 
 	svc := remotegw.NewService(serviceConfigFromParams(p, client))
+	generationCtx, cancelGeneration := context.WithCancel(ctx)
+	defer cancelGeneration()
 	// ADR-015 P9/P12, PG-OBL-8: re-drive whatever non-terminal wake obligation this
 	// process finds durable, once per generation (a no-op when the pairing has not
 	// migrated off legacy_relay). Riding every redial rather than only the true process
 	// start also gives PG-OBL-9's ongoing retry a free ride until a proper backoff driver
 	// lands (bd issue agents-tracker-hggx.4.3) -- Drive is idempotent-safe to call again
 	// on an obligation that already resolved, so this costs nothing on the common path.
-	if err := svc.RedrivePendingWakeObligations(ctx); err != nil {
+	if err := svc.RedrivePendingWakeObligations(generationCtx); err != nil {
 		report("push gateway: redrive pending wake obligation", err)
 	}
 	// ADR-007 B114's other half: give the stored degraded state a reader. The watcher is
 	// JOINED rather than left to a deferred cancel, so this function cannot outlive it.
-	wctx, stopWatch := context.WithCancel(ctx)
+	wctx, stopWatch := context.WithCancel(generationCtx)
 	watched := make(chan struct{})
 	go func() { defer close(watched); watchDegraded(wctx, svc) }()
 
-	err = svc.Run(ctx)
+	serviceDone := make(chan error, 1)
+	go func() { serviceDone <- svc.Run(generationCtx) }()
+	var retryDone chan error
+	if retryFrame != nil {
+		retryDone = make(chan error, 1)
+		go func() {
+			retryDone <- retryEpochGrantAppend(generationCtx, client, p.PhoneTarget, retryFrame)
+		}()
+	}
+
+	var serviceErr, retryErr error
+	serviceFinishedFirst := false
+	if retryDone == nil {
+		serviceErr = <-serviceDone
+	} else {
+		select {
+		case serviceErr = <-serviceDone:
+			serviceFinishedFirst = true
+			cancelGeneration()
+			retryErr = <-retryDone
+		case retryErr = <-retryDone:
+			if retryErr != nil {
+				cancelGeneration()
+			}
+			serviceErr = <-serviceDone
+		}
+	}
 	stopWatch()
 	<-watched
-	return svc.Progressed(), err
+	progressed = svc.Progressed()
+	if err := ctx.Err(); err != nil {
+		return progressed, err
+	}
+	// Cancellation caused solely by the already-finished Service is teardown, not a grant
+	// failure. Every other retry error ended the generation and must reach run's terminal/
+	// redial classification. retryDone is always joined before returning, so it can never
+	// append through a client owned by a later generation.
+	if retryErr != nil && (!serviceFinishedFirst || !errors.Is(retryErr, context.Canceled)) {
+		return progressed, fmt.Errorf("deliver epoch grant retry: %w", retryErr)
+	}
+	return progressed, serviceErr
 }
 
 // degradedPollInterval is how often the gateway's stored degraded state is consulted. It is

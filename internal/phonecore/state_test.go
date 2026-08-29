@@ -80,35 +80,38 @@ func fullState() State {
 		wake[i] = byte(i + 100)
 	}
 	return State{
-		Machine:             "m1",
-		MachineName:         "nathans-mbp",
-		MachineStatic:       bytes.Repeat([]byte{0xA1}, 32),
-		MachineSignPub:      bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
-		MachineRelayAuthPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
-		RelaySPKIPin:        bytes.Repeat([]byte{0xD4}, sha256.Size),
-		RelayTLSPolicy:      "pinned_spki",
-		RoutingID:           "rid-m1",
-		EpochID:             7,
-		PushToken:           "fcm-token-m1",
-		PushPreference:      PushPreference{Alerts: true, Mentions: true},
-		ReconciledEpoch:     7,
-		Keys:                crypto.EpochKeys{WakeKey: wake, ContentKey: testContentKey()},
-		SendSeq:             map[uint32]uint64{7: 512, 6: 1024},
-		Receive:             map[Bucket]uint64{journalBucket(7): 42, replyBucket(7): 5},
-		GrantEpoch:          7,
-		GrantSeq:            2,
-		WakeReplay:          91,
-		RelayCursor:         17,
-		RelayIncarnation:    "0123456789abcdef0123456789abcdef",
-		RosterRevision:      23,
-		Sessions:            []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
-		Snapshots:           []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
-		PendingOps:          []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
-		OpOutcomes:          map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
-		Stale:               map[Bucket]bool{replyBucket(7): true},
-		StaleStreams:        map[string]bool{StreamJournal: true},
-		LastHeardAt:         1753900000000,
-		Disowned:            true,
+		Machine:                   "m1",
+		MachineName:               "nathans-mbp",
+		MachineStatic:             bytes.Repeat([]byte{0xA1}, 32),
+		MachineSignPub:            bytes.Repeat([]byte{0xB2}, ed25519.PublicKeySize),
+		MachineRelayAuthPub:       bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize),
+		RelaySPKIPin:              bytes.Repeat([]byte{0xD4}, sha256.Size),
+		RelayTLSPolicy:            "pinned_spki",
+		RoutingID:                 "rid-m1",
+		EpochID:                   7,
+		PushToken:                 "fcm-token-m1",
+		PushPreference:            PushPreference{Alerts: true, Mentions: true},
+		ReconciledEpoch:           7,
+		Keys:                      crypto.EpochKeys{WakeKey: wake, ContentKey: testContentKey()},
+		SendSeq:                   map[uint32]uint64{7: 512, 6: 1024},
+		Receive:                   map[Bucket]uint64{journalBucket(7): 42, replyBucket(7): 5},
+		GrantEpoch:                7,
+		GrantSeq:                  2,
+		WakeReplay:                91,
+		RelayCursor:               17,
+		RelayIncarnation:          "0123456789abcdef0123456789abcdef",
+		DiscardRecoveryGeneration: 3,
+		DiscardRecoveryCompleted:  2,
+		DiscardRecoveryToken:      "fedcba9876543210fedcba9876543210",
+		RosterRevision:            23,
+		Sessions:                  []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
+		Snapshots:                 []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
+		PendingOps:                []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
+		OpOutcomes:                map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
+		Stale:                     map[Bucket]bool{replyBucket(7): true},
+		StaleStreams:              map[string]bool{StreamJournal: true},
+		LastHeardAt:               1753900000000,
+		Disowned:                  true,
 		Items: []Item{{
 			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, LastCursor: 11, Kind: KindAgentMessage,
 			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
@@ -515,6 +518,15 @@ var stateV15Fixture = func() string {
 	return strings.Replace(fixture, `"relay_cursor":17`, `"relay_cursor":17,"relay_incarnation":"0123456789abcdef0123456789abcdef"`, 1)
 }()
 
+// stateV16Fixture adds the pending discard-recovery checkpoint. The token is opaque
+// synchronization metadata, not mailbox content, and is available before content unlock so
+// a restarted transport can finish the already-authorized recovery.
+var stateV16Fixture = func() string {
+	fixture := strings.Replace(stateV15Fixture, `"schema_version":15`, `"schema_version":16`, 1)
+	return strings.Replace(fixture, `"relay_incarnation":"0123456789abcdef0123456789abcdef"`,
+		`"relay_incarnation":"0123456789abcdef0123456789abcdef","discard_recovery_generation":3,"discard_recovery_completed":2,"discard_recovery_token":"fedcba9876543210fedcba9876543210"`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -528,6 +540,7 @@ var stateFixtures = map[int]string{
 	13: stateV13Fixture,
 	14: stateV14Fixture,
 	15: stateV15Fixture,
+	16: stateV16Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

@@ -299,22 +299,30 @@ func SealTakeControlEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, 
 // content key the relay cannot forge, and a wrong cursor only changes how many events the
 // reseed carries. seq must be unique per epoch.
 func SealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64) ([]byte, error) {
-	return sealResyncEnvelope(key, epochID, seq, cmd, from, false)
+	return sealResyncEnvelope(key, epochID, seq, cmd, from, false, false, "")
 }
 
 // SealRosterRefreshEnvelope seals the inbox's authoritative roster refresh. It reuses the
 // unsigned journal_resync read and adds an opt-in mode bit, so an older gateway can still
 // decode the command while a current gateway avoids aggregating the transcript backlog into
-// the relay's one-frame reseed. from remains the phone's PRIOR cursor: advancing it here would
-// make the individually forwarded backlog stale and silently drop conversation history.
-func SealRosterRefreshEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64) ([]byte, error) {
-	return sealResyncEnvelope(key, epochID, seq, cmd, from, true)
+// the relay's one-frame reseed. discardedBacklog is true only after the phone completed and
+// durably adopted its explicit self-mailbox discard. A healthy refresh leaves it false and
+// keeps from as the reseed cursor; a recovery refresh lets the gateway advance the bounded
+// roster reseed to the daemon's authoritative final cursor.
+func SealRosterRefreshEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64, discardedBacklog bool, recoveryToken string) ([]byte, error) {
+	return sealResyncEnvelope(key, epochID, seq, cmd, from, true, discardedBacklog, recoveryToken)
 }
 
-func sealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64, rosterOnly bool) ([]byte, error) {
+func sealResyncEnvelope(key crypto.ContentKey, epochID uint32, seq uint64, cmd schema.DeviceCommandAuth, from uint64, rosterOnly, discardedBacklog bool, recoveryToken string) ([]byte, error) {
 	return sealPhoneFrame(key, epochID, seq, commandFrame{
-		Kind:          kindPhoneToMachine,
-		RemoteCommand: schema.RemoteCommand{DeviceCommandAuth: cmd, ResyncCursor: from, RosterOnly: rosterOnly},
+		Kind: kindPhoneToMachine,
+		RemoteCommand: schema.RemoteCommand{
+			DeviceCommandAuth:    cmd,
+			ResyncCursor:         from,
+			RosterOnly:           rosterOnly,
+			DiscardedBacklog:     discardedBacklog,
+			DiscardRecoveryToken: recoveryToken,
+		},
 	})
 }
 

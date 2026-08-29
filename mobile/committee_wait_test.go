@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -58,6 +59,7 @@ type committeeProxy struct {
 	waitForwarded int // mailbox_wait ops that crossed to the real relay
 	readForwarded int // mailbox_read ops
 	ackForwarded  int // mailbox_ack ops
+	discardProbed int // mailbox_discard ops put on the wire (must stay zero for an old relay)
 	kill          []func()
 }
 
@@ -164,10 +166,10 @@ func (p *committeeProxy) classify(data []byte, oldRelay bool) (reply []byte, for
 			return nil, true
 		}
 		// The old serverCaps intersection: everything the client asked for except
-		// "wait", which a pre-wait relay never registered.
+		// capabilities introduced after this simulated relay generation.
 		agreed := make([]string, 0, len(env.Caps))
 		for _, c := range env.Caps {
-			if c != "wait" {
+			if c != "wait" && c != relay.CapabilityMailboxRecovery {
 				agreed = append(agreed, c)
 			}
 		}
@@ -194,6 +196,16 @@ func (p *committeeProxy) classify(data []byte, oldRelay bool) (reply []byte, for
 		p.readForwarded++
 	case "mailbox_ack":
 		p.ackForwarded++
+	case "mailbox_discard":
+		p.discardProbed++
+		if oldRelay {
+			body, _ := json.Marshal(map[string]string{"code": "bad_request"})
+			var buf bytes.Buffer
+			if relay.WriteFrame(&buf, relay.MsgError, body) != nil {
+				return nil, true
+			}
+			return buf.Bytes(), false
+		}
 	}
 	return nil, true
 }
@@ -213,6 +225,12 @@ func (p *committeeProxy) counts() (helloStripped, waitRefused, waitForwarded, re
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.helloStripped, p.waitRefused, p.waitForwarded, p.readForwarded, p.ackForwarded
+}
+
+func (p *committeeProxy) mailboxDiscardProbes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.discardProbed
 }
 
 // committeeRig is the r9_waitfallback seeding, factored for this file: a real relay, a
@@ -398,6 +416,55 @@ func TestCommittee_WaitSupportIsRenegotiatedPerConnection(t *testing.T) {
 	if waitRefusedAfter != waitRefused {
 		t.Errorf("wait ops were refused after the upgrade (%d -> %d); the verbatim connection "+
 			"forwards them, so these reached the OLD-relay connection", waitRefused, waitRefusedAfter)
+	}
+}
+
+// TestCommittee_AnOldRelayIsNeverProbedWithMailboxDiscard pins the destructive
+// operation to the CURRENT connection's hello verdict. A pre-recovery relay answers an
+// unknown op with an ordinary in-order error; sending the op anyway would both violate
+// negotiation and risk shifting the connection's request/reply pairing. The nil-like
+// alternative is also the safe compatibility behavior: keep the durable pending marker
+// and retry only after a connection advertises recovery support.
+func TestCommittee_AnOldRelayIsNeverProbedWithMailboxDiscard(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	proxyHolder := &struct{ p *committeeProxy }{}
+	app, _ := committeeRig(t, ctx, func(realURL string) string {
+		proxyHolder.p = newCommitteeProxy(t, realURL, true)
+		return proxyHolder.p.URL()
+	})
+	proxy := proxyHolder.p
+	r9Eventually(t, "the phone never completed capability negotiation with the old relay", func() bool {
+		state, err := app.ConnectionState()
+		return err == nil && state == connOnline
+	})
+	if app.mailboxRecoverySupported.Load() {
+		t.Fatal("old relay connection retained mailbox recovery support absent from hello")
+	}
+
+	token, err := app.core.BeginRelayDiscardRecovery()
+	if err != nil || token == "" {
+		t.Fatalf("seed durable pending recovery = %q, %v", token, err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := app.requestMailboxDiscard()
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, relay.ErrPeerCapabilityUnavailable) {
+			t.Fatalf("old-relay recovery = %v, want ErrPeerCapabilityUnavailable", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("old-relay recovery did not refuse promptly from the negotiated verdict")
+	}
+	if got := proxy.mailboxDiscardProbes(); got != 0 {
+		t.Fatalf("phone sent %d mailbox_discard ops despite the old relay omitting recovery support", got)
+	}
+	if got := app.core.DiscardRecoveryToken(); got != token {
+		t.Fatalf("old-relay refusal changed durable pending token %q to %q", token, got)
 	}
 }
 

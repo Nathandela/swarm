@@ -236,6 +236,26 @@ func (n *PushNotifier) Snapshot(roster []protocol.JournalRecord, cursor uint64) 
 	return nil
 }
 
+// RecoverySnapshot is Snapshot's tokened mailbox-recovery variant. It remains silent for
+// push purposes and seeds current groups only after the full reconcile+reseed pair succeeds.
+func (n *PushNotifier) RecoverySnapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error {
+	rr, ok := n.inner.(RecoverySnapshotSink)
+	if !ok {
+		return errors.New("remotegw: inner sink cannot publish a tokened recovery snapshot")
+	}
+	if err := rr.RecoverySnapshot(roster, cursor, recoveryToken); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	for _, rec := range roster {
+		if rec.Group != "" {
+			n.lastGroup[rec.SessionID] = rec.Group
+		}
+	}
+	n.mu.Unlock()
+	return nil
+}
+
 // Event forwards one live journal record and then, if it is a hand-off the owner is
 // waiting on, wakes the phone.
 //

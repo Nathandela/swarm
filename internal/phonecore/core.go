@@ -10,6 +10,8 @@ package phonecore
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -375,6 +377,61 @@ func (c *Core) SetRelayIncarnation(incarnation string) error {
 	}
 	c.st = c.store.Load().clone()
 	return nil
+}
+
+// ErrRelayIncarnationChanged refuses a destructive mailbox result after the durable transport
+// checkpoint has moved to another relay store generation.
+var ErrRelayIncarnationChanged = errors.New("phonecore: relay mailbox incarnation changed")
+
+// BeginRelayDiscardRecovery durably records the recovery generation BEFORE the caller asks
+// the relay to delete anything. Repeated calls while one is pending return the same token, so
+// a restarted phone can safely reissue the relay's idempotent discard and the same sealed
+// roster-refresh intent. No destructive RPC may precede this commit.
+func (c *Core) BeginRelayDiscardRecovery() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.DiscardRecoveryGeneration > c.st.DiscardRecoveryCompleted && c.st.DiscardRecoveryToken != "" {
+		return c.st.DiscardRecoveryToken, nil
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("phonecore: create discard recovery token: %w", err)
+	}
+	st := c.st.clone()
+	st.DiscardRecoveryGeneration++
+	st.DiscardRecoveryToken = hex.EncodeToString(raw[:])
+	if err := c.persistLocked(st); err != nil {
+		return "", err
+	}
+	return c.st.DiscardRecoveryToken, nil
+}
+
+// DiscardRecoveryToken returns the currently pending durable recovery token, or empty when
+// no explicit mailbox discard still awaits its authoritative echoed roster.
+func (c *Core) DiscardRecoveryToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.st.DiscardRecoveryGeneration <= c.st.DiscardRecoveryCompleted {
+		return ""
+	}
+	return c.st.DiscardRecoveryToken
+}
+
+// AdoptRelayDiscard durably advances only the relay-owned read coordinate after the user has
+// explicitly compacted this exact mailbox generation. It does not advance an authenticated
+// receive high-water and does not claim any discarded content was applied; the fresh reconcile
+// and roster reseed requested immediately afterwards repair those application authorities.
+func (c *Core) AdoptRelayDiscard(through uint64, incarnation string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !validPersistedRelayIncarnation(incarnation) || c.st.RelayIncarnation != incarnation {
+		return ErrRelayIncarnationChanged
+	}
+	st := c.st.clone()
+	if through > st.RelayCursor {
+		st.RelayCursor = through
+	}
+	return c.persistLocked(st)
 }
 
 // persist writes st through custody and adopts whatever custody made of it (the file store
@@ -826,6 +883,12 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		}
 		st.OpOutcomes[f.reply.OperationID] = f.reply
 	case kindJournalReseed:
+		if token := f.reseed.DiscardRecoveryToken; token != "" &&
+			st.DiscardRecoveryGeneration > st.DiscardRecoveryCompleted &&
+			token == st.DiscardRecoveryToken {
+			st.DiscardRecoveryCompleted = st.DiscardRecoveryGeneration
+			st.DiscardRecoveryToken = ""
+		}
 		// PB-SYNC-8: REPLACE, never merge. The durable list is computed the same way the
 		// live cache will be (a scratch cache the reseed is applied to), so the two cannot
 		// disagree once MailboxRouter.apply mirrors it.

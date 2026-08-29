@@ -3,6 +3,7 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -15,13 +16,29 @@ import (
 )
 
 type reseedCapture struct {
-	mu      sync.Mutex
-	reseeds []protocol.JournalReseed
+	mu        sync.Mutex
+	reseeds   []protocol.JournalReseed
+	snapshots []protocol.JournalReseed
+	machine   string
 }
 
-func (*reseedCapture) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
-func (*reseedCapture) Event(protocol.JournalRecord) error              { return nil }
-func (*reseedCapture) Terminal(protocol.TerminalViewV1) error          { return nil }
+func (s *reseedCapture) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshots = append(s.snapshots, protocol.JournalReseed{Roster: roster, Events: []protocol.JournalRecord{}, Cursor: cursor})
+	return nil
+}
+func (s *reseedCapture) RecoverySnapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshots = append(s.snapshots, protocol.JournalReseed{
+		Roster: roster, Events: []protocol.JournalRecord{}, Cursor: cursor, DiscardRecoveryToken: recoveryToken,
+	})
+	return nil
+}
+func (*reseedCapture) Event(protocol.JournalRecord) error     { return nil }
+func (*reseedCapture) Terminal(protocol.TerminalViewV1) error { return nil }
+func (s *reseedCapture) SetMachine(machine string)            { s.machine = machine }
 func (s *reseedCapture) Reseed(rs protocol.JournalReseed) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,8 +53,15 @@ type orderingReseedSink struct {
 	release chan struct{}
 }
 
-func (*orderingReseedSink) Snapshot([]protocol.JournalRecord, uint64) error { return nil }
-func (*orderingReseedSink) Terminal(protocol.TerminalViewV1) error          { return nil }
+func (s *orderingReseedSink) Snapshot([]protocol.JournalRecord, uint64) error {
+	close(s.started)
+	<-s.release
+	s.mu.Lock()
+	s.calls = append(s.calls, "snapshot")
+	s.mu.Unlock()
+	return nil
+}
+func (*orderingReseedSink) Terminal(protocol.TerminalViewV1) error { return nil }
 func (s *orderingReseedSink) Reseed(protocol.JournalReseed) error {
 	close(s.started)
 	<-s.release
@@ -132,7 +156,7 @@ func TestGatewayRosterRefreshBoundsSevenMegabyteBacklogAndKeepsPriorCursor(t *te
 	g := New(sock, sink)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := g.Resync(ctx, 42, true); err != nil {
+	if err := g.Resync(ctx, 42, true, false, ""); err != nil {
 		t.Fatalf("roster refresh over 7 MiB backlog: %v", err)
 	}
 	if err := <-done; err != nil {
@@ -140,15 +164,62 @@ func TestGatewayRosterRefreshBoundsSevenMegabyteBacklogAndKeepsPriorCursor(t *te
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.reseeds) != 1 {
-		t.Fatalf("reseed count = %d, want one atomic roster refresh", len(sink.reseeds))
+	if len(sink.snapshots) != 1 || len(sink.reseeds) != 0 {
+		t.Fatalf("snapshot/reseed counts = %d/%d, want one snapshot recovery anchor", len(sink.snapshots), len(sink.reseeds))
 	}
-	got := sink.reseeds[0]
+	got := sink.snapshots[0]
 	if got.Cursor != 42 || got.Events == nil || len(got.Events) != 0 {
 		t.Fatalf("roster refresh = cursor %d, %d events; want prior cursor 42 and no backlog events", got.Cursor, len(got.Events))
 	}
 	if len(got.Roster) != 1 || got.Roster[0].SessionID != "machine/s1" {
 		t.Fatalf("roster refresh roster = %#v, want namespaced authoritative roster", got.Roster)
+	}
+	if sink.machine != "machine" {
+		t.Fatalf("roster refresh stamped machine %q, want daemon endpoint machine", sink.machine)
+	}
+}
+
+func TestGatewayDiscardedBacklogRosterRefreshFastForwardsWithoutReplayingEvents(t *testing.T) {
+	sock, ln := journalSocket(t)
+	done := make(chan error, 1)
+	go servePagedResync(t, ln, 42, 2, done)
+	sink := &reseedCapture{}
+	g := New(sock, sink)
+	const recoveryToken = "0123456789abcdef0123456789abcdef"
+	if err := g.Resync(context.Background(), 42, true, true, recoveryToken); err != nil {
+		t.Fatalf("discard recovery roster refresh: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("fake daemon: %v", err)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.snapshots) != 1 || len(sink.reseeds) != 0 {
+		t.Fatalf("snapshot/reseed counts = %d/%d, want one bounded snapshot", len(sink.snapshots), len(sink.reseeds))
+	}
+	got := sink.snapshots[0]
+	if got.Cursor != 44 || got.Events == nil || len(got.Events) != 0 || got.DiscardRecoveryToken != recoveryToken {
+		t.Fatalf("discard recovery = cursor %d, %d events, token %q; want daemon final cursor 44, no discarded events, exact token", got.Cursor, len(got.Events), got.DiscardRecoveryToken)
+	}
+}
+
+func TestGatewayDiscardRecoveryFlagAndTokenMustAgree(t *testing.T) {
+	g := New("unused", &reseedCapture{})
+	for _, tc := range []struct {
+		rosterOnly bool
+		discarded  bool
+		token      string
+	}{
+		{rosterOnly: true, discarded: true},
+		{rosterOnly: true, token: "0123456789abcdef0123456789abcdef"},
+		{discarded: true, token: "0123456789abcdef0123456789abcdef"},
+		{rosterOnly: true, discarded: true, token: "short"},
+		{rosterOnly: true, discarded: true, token: "0123456789ABCDEF0123456789ABCDEF"},
+		{rosterOnly: true, discarded: true, token: "0123456789abcdef0123456789abcdeg"},
+	} {
+		if err := g.Resync(context.Background(), 42, tc.rosterOnly, tc.discarded, tc.token); !errors.Is(err, errInvalidDiscardRecovery) {
+			t.Fatalf("Resync(roster_only=%t, discarded=%t, token=%q) = %v, want errInvalidDiscardRecovery", tc.rosterOnly, tc.discarded, tc.token, err)
+		}
 	}
 }
 
@@ -158,7 +229,7 @@ func TestGatewayOrdinaryJournalRepairStillCarriesEventsAndFinalCursor(t *testing
 	go servePagedResync(t, ln, 42, 2, done)
 	sink := &reseedCapture{}
 	g := New(sock, sink)
-	if err := g.Resync(context.Background(), 42, false); err != nil {
+	if err := g.Resync(context.Background(), 42, false, false, ""); err != nil {
 		t.Fatalf("ordinary journal repair: %v", err)
 	}
 	if err := <-done; err != nil {
@@ -179,7 +250,7 @@ func TestGatewayRosterRefreshOrdersNewerLiveEventAfterReseed(t *testing.T) {
 	sink := &orderingReseedSink{started: make(chan struct{}), release: make(chan struct{})}
 	g := New(sock, sink)
 	resyncDone := make(chan error, 1)
-	go func() { resyncDone <- g.Resync(context.Background(), 42, true) }()
+	go func() { resyncDone <- g.Resync(context.Background(), 42, true, false, "") }()
 	<-sink.started
 
 	eventDone := make(chan error, 1)
@@ -210,7 +281,69 @@ func TestGatewayRosterRefreshOrdersNewerLiveEventAfterReseed(t *testing.T) {
 	}
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if len(sink.calls) != 2 || sink.calls[0] != "reseed" || sink.calls[1] != "event" {
-		t.Fatalf("delivery order = %v, want [reseed event]", sink.calls)
+	if len(sink.calls) != 2 || sink.calls[0] != "snapshot" || sink.calls[1] != "event" {
+		t.Fatalf("delivery order = %v, want [snapshot event]", sink.calls)
+	}
+}
+
+func TestGatewayRosterRefreshRetriesAReconcileWhoseReseedAppendWasRefused(t *testing.T) {
+	sock, ln := journalSocket(t)
+	serverDone := make(chan error, 1)
+	go servePagedResync(t, ln, 42, 0, serverDone)
+
+	key := reconcileTestKey()
+	app := &refuseNthAppender{refuse: 2}
+	sink := newReconcileSink(app, key, testAuthorities, nil)
+	g := New(sock, sink)
+	if err := g.Resync(context.Background(), 42, true, false, ""); err != nil {
+		t.Fatalf("roster refresh after transient second append refusal: %v", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("fake daemon: %v", err)
+	}
+
+	app.mu.Lock()
+	stored := append([][]byte(nil), app.stored...)
+	calls := app.calls
+	app.mu.Unlock()
+	if calls != 4 || len(stored) != 3 {
+		t.Fatalf("append calls/stored = %d/%d, want 4/3 (reconcile, refused reseed, reconcile, reseed)", calls, len(stored))
+	}
+
+	kinds := make([]string, 0, len(stored))
+	seqs := make([]uint64, 0, len(stored))
+	for _, raw := range stored {
+		hdr, plain := openPlaintext(t, key, raw)
+		var tagged struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(plain, &tagged); err != nil {
+			t.Fatalf("decode stored plaintext: %v", err)
+		}
+		kinds = append(kinds, tagged.Kind)
+		seqs = append(seqs, hdr.Seq)
+	}
+	if got := strings.Join(kinds, ","); got != "reconcile,reconcile,journal_reseed" {
+		t.Fatalf("stored kinds = %s, want reconcile,reconcile,journal_reseed", got)
+	}
+	if seqs[2] != seqs[1]+1 {
+		t.Fatalf("replacement reconcile/reseed seqs = %v, want final pair contiguous", seqs)
+	}
+
+	_, reconcilePlain := openPlaintext(t, key, stored[1])
+	var rec reconcileFrame
+	if err := json.Unmarshal(reconcilePlain, &rec); err != nil {
+		t.Fatalf("decode replacement reconcile: %v", err)
+	}
+	if rec.JournalCeiling != seqs[1] {
+		t.Fatalf("replacement reconcile ceiling = %d, want own seq %d", rec.JournalCeiling, seqs[1])
+	}
+	_, reseedPlain := openPlaintext(t, key, stored[2])
+	var reseed reseedFrame
+	if err := json.Unmarshal(reseedPlain, &reseed); err != nil {
+		t.Fatalf("decode replacement reseed: %v", err)
+	}
+	if reseed.Cursor != 42 || reseed.Events == nil || len(reseed.Events) != 0 {
+		t.Fatalf("replacement reseed = cursor %d, events %#v; want prior cursor 42 and explicit empty events", reseed.Cursor, reseed.Events)
 	}
 }

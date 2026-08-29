@@ -108,9 +108,11 @@ var _ TerminalWatchRouter = (*TerminalWatcher)(nil)
 
 // JournalResyncer serves PB-SYNC-2's journal repair and the inbox's roster-only refresh.
 // Both read one atomic daemon snapshot; rosterOnly controls whether the backlog is included
-// in the one reseed frame. *Gateway is the production implementation (Resync).
+// in the one reseed frame. discardedBacklog is the phone's sealed proof that its explicit
+// self-mailbox recovery completed, allowing a bounded roster reseed at the daemon's final
+// cursor. *Gateway is the production implementation (Resync).
 type JournalResyncer interface {
-	Resync(ctx context.Context, from uint64, rosterOnly bool) error
+	Resync(ctx context.Context, from uint64, rosterOnly, discardedBacklog bool, recoveryToken string) error
 }
 
 // *Gateway is the production JournalResyncer. Pinned at compile time.
@@ -489,7 +491,7 @@ func (b *CommandBridge) consumeDurableReplay(it relay.Item) error {
 // grants every one of them, so the two sets cannot drift apart silently. The gateway
 // deliberately omits "presence" (it never asks) and "rendezvous" (pairing's, spoken on a
 // raw connection by the machine CLI, not by this sidecar).
-var gatewayHelloCaps = []string{"mailbox", "push", "wait"}
+var gatewayHelloCaps = []string{"mailbox", "push", "wait", relay.CapabilityMailboxRecovery}
 
 // CapabilityHello is the optional per-connection negotiation seam (codex round-3
 // blocker 1, bead agents-tracker-10ar): the r_hello exchange through which a relay
@@ -946,7 +948,7 @@ func (b *CommandBridge) routeCommand(ctx context.Context, rc protocol.RemoteComm
 		if b.cfg.Resync == nil {
 			return nil
 		}
-		return b.cfg.Resync.Resync(ctx, rc.ResyncCursor, rc.RosterOnly)
+		return b.cfg.Resync.Resync(ctx, rc.ResyncCursor, rc.RosterOnly, rc.DiscardedBacklog, rc.DiscardRecoveryToken)
 	case protocol.ActionPushPrefs:
 		// Authorized by the DAEMON, persisted HERE (PB-PUSH-8 / PB-PUSH-10): see
 		// applyPushPrefs.

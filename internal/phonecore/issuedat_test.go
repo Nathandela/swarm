@@ -80,7 +80,7 @@ func phoneSeals(t *testing.T, key crypto.ContentKey, epoch uint32, seq *Sequence
 	if err != nil {
 		t.Fatalf("SealResyncEnvelope: %v", err)
 	}
-	rosterRefresh, err := SealRosterRefreshEnvelope(key, epoch, seq.Next(), auth, 12)
+	rosterRefresh, err := SealRosterRefreshEnvelope(key, epoch, seq.Next(), auth, 12, false, "")
 	if err != nil {
 		t.Fatalf("SealRosterRefreshEnvelope: %v", err)
 	}

@@ -30,16 +30,20 @@ import (
 
 // fakeResyncer records the resync requests the bridge dispatched.
 type fakeResyncer struct {
-	mu         sync.Mutex
-	froms      []uint64
-	rosterOnly []bool
+	mu                sync.Mutex
+	froms             []uint64
+	rosterOnly        []bool
+	discardedBacklogs []bool
+	recoveryTokens    []string
 }
 
-func (f *fakeResyncer) Resync(_ context.Context, from uint64, rosterOnly bool) error {
+func (f *fakeResyncer) Resync(_ context.Context, from uint64, rosterOnly, discardedBacklog bool, recoveryToken string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.froms = append(f.froms, from)
 	f.rosterOnly = append(f.rosterOnly, rosterOnly)
+	f.discardedBacklogs = append(f.discardedBacklogs, discardedBacklog)
+	f.recoveryTokens = append(f.recoveryTokens, recoveryToken)
 	return nil
 }
 
@@ -88,6 +92,9 @@ func TestS10_TheBridgeRoutesJournalResyncToTheResyncer(t *testing.T) {
 	if rs.rosterOnly[0] {
 		t.Errorf("ordinary journal repair was dispatched as roster-only; PB-SYNC-3 still requires its atomic roster+events reseed")
 	}
+	if rs.discardedBacklogs[0] {
+		t.Errorf("ordinary journal repair was dispatched as a completed mailbox discard")
+	}
 	// PB-SYNC-5's decision, as a fence: the resync is UNSIGNED and is NOT forwarded to the
 	// daemon's device authenticator. The gateway performs the journal_read and holds no
 	// device signing key, so a forwarded resync could never be authorized at all.
@@ -95,6 +102,33 @@ func TestS10_TheBridgeRoutesJournalResyncToTheResyncer(t *testing.T) {
 		t.Errorf("forwarded ops = %v, want [kill] only. journal_resync must not reach the daemon's "+
 			"device authenticator: it is an unsigned read the gateway serves itself, exactly like "+
 			"terminal_watch", fwd.ops)
+	}
+}
+
+func TestBridgeRoutesSealedDiscardedBacklogProofToRosterRefresh(t *testing.T) {
+	var key crypto.ContentKey
+	for i := range key {
+		key[i] = byte(i + 17)
+	}
+	mb := &fakeMailbox{inbox: []relay.Item{{Cursor: 1, Envelope: sealRemoteCmd(t, key, 1,
+		protocol.RemoteCommand{
+			DeviceCommandAuth:    protocol.DeviceCommandAuth{Action: protocol.ActionJournalResync, Machine: "m1"},
+			ResyncCursor:         42,
+			RosterOnly:           true,
+			DiscardedBacklog:     true,
+			DiscardRecoveryToken: "0123456789abcdef0123456789abcdef",
+		})}}}
+	rs := &fakeResyncer{}
+	b := NewCommandBridge(CommandBridgeConfig{
+		Mailbox: mb, Forwarder: &fakeForwarder{}, Resync: rs, Key: key, EpochID: 1, ReplyTarget: "phone",
+	})
+	if _, err := b.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if len(rs.froms) != 1 || rs.froms[0] != 42 || !rs.rosterOnly[0] || !rs.discardedBacklogs[0] || rs.recoveryTokens[0] == "" {
+		t.Fatalf("dispatched resync = from %v roster_only %v discarded_backlog %v recovery_token %v", rs.froms, rs.rosterOnly, rs.discardedBacklogs, rs.recoveryTokens)
 	}
 }
 

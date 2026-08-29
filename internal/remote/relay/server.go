@@ -86,8 +86,16 @@ func defaultSourceKey(remoteAddr string) string {
 // cannot correlate -- a stray reply that shifts the connection's request/reply pairing.
 // With the capability advertised, a client never sends the op to a relay that did not
 // claim it, and a reconnect to an upgraded relay re-evaluates for free.
+// CapabilityMailboxRecovery is advertised by a gateway connection only when that
+// gateway understands the destructive-mailbox-recovery command and will replace the
+// compacted backlog with a roster reseed. The relay uses the negotiated capability on
+// the CURRENT paired gateway session as a deletion fence; an old or disconnected
+// gateway therefore cannot authorize a new phone to discard data it would not replace.
+const CapabilityMailboxRecovery = "mailbox_recovery"
+
 var serverCaps = map[string]bool{
 	"mailbox": true, "push": true, "presence": true, "rendezvous": true, "wait": true,
+	CapabilityMailboxRecovery: true,
 }
 
 const (
@@ -487,7 +495,11 @@ type serverConn struct {
 	// auth_init and answered in auth_resp (ADR-007 B49). Empty means "no verdict wanted",
 	// which is what every machine-side dial sends.
 	pendingPeer string
-	superseded  atomic.Bool
+	// negotiatedCaps is the most recent successful r_hello intersection for this
+	// exact connection. It is guarded by Server.mu because a paired phone consults
+	// the active gateway's set from another connection's dispatch goroutine.
+	negotiatedCaps map[string]bool
+	superseded     atomic.Bool
 
 	rdvID    string
 	rdvInbox chan []byte
@@ -818,6 +830,8 @@ func (sc *serverConn) dispatch(tag MsgType, payload []byte) error {
 			return sc.handleMailboxWaitCancel(payload)
 		case "mailbox_ack":
 			return sc.handleMailboxAck(payload)
+		case "mailbox_discard":
+			return sc.handleMailboxDiscard(payload)
 		case "token_register":
 			return sc.handleTokenRegister(payload)
 		case "token_delete":
@@ -870,11 +884,16 @@ func (sc *serverConn) handleHello(payload []byte) error {
 		return sc.replyErr(codeUnsupported)
 	}
 	agreed := make([]string, 0, len(req.Caps))
+	negotiated := make(map[string]bool, len(req.Caps))
 	for _, c := range req.Caps {
 		if serverCaps[c] {
 			agreed = append(agreed, c)
+			negotiated[c] = true
 		}
 	}
+	sc.s.mu.Lock()
+	sc.negotiatedCaps = negotiated
+	sc.s.mu.Unlock()
 	return sc.replyOK(map[string]any{"version": ProtocolVersion, "caps": agreed})
 }
 
@@ -1247,6 +1266,57 @@ func (sc *serverConn) handleMailboxAck(payload []byte) error {
 		return sc.replyErr(codeBadRequest)
 	}
 	return sc.replyOK(map[string]any{})
+}
+
+// handleMailboxDiscard is the explicitly destructive recovery for an authenticated caller's
+// OWN mailbox. Unlike mailbox_ack it accepts no target and no numeric cursor supplied by the
+// caller: the transaction compacts exactly the current log, and returns the log coordinate the
+// caller must durably adopt before it asks the machine for replacement state.
+//
+// The incarnation is mandatory. A destructive request from a client resumed against another
+// relay store must never erase the replacement store merely because its numeric high-water has
+// caught up. Appends serialize with the store transaction, so an append either precedes the
+// discard and is included in through_cursor, or follows it with a strictly later cursor.
+func (sc *serverConn) handleMailboxDiscard(payload []byte) error {
+	if !sc.meterOp() {
+		return sc.replyErr(codeQuotaExceeded)
+	}
+	if code, ok := sc.requireAuth(); !ok {
+		return sc.replyErr(code)
+	}
+	var req struct {
+		Incarnation string `json:"mailbox_incarnation"`
+		Peer        string `json:"peer"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil || !ValidMailboxIncarnation(req.Incarnation) || req.Peer == "" {
+		return sc.replyErr(codeBadRequest)
+	}
+	// Authentication proves only the caller's identity. The caller may name only its
+	// paired machine, and may not use its own session as the compatibility witness.
+	if req.Peer == sc.rid || !sc.s.st.mayActOn(sc.rid, req.Peer) {
+		return sc.replyErr(codeNotAuthorized)
+	}
+	// Hold Server.mu across the rare store transaction so removeConn/newest-wins cannot
+	// make the checked gateway stale between the capability verdict and deletion. The
+	// mailbox store does not acquire Server.mu, so this lock order cannot recurse.
+	sc.s.mu.Lock()
+	peer := sc.s.sessions[req.Peer]
+	if peer == nil || peer.superseded.Load() || !peer.negotiatedCaps[CapabilityMailboxRecovery] {
+		sc.s.mu.Unlock()
+		return sc.replyErr(codePeerCapabilityUnavailable)
+	}
+	through, incarnation, err := sc.s.st.discardItemsForIncarnation(sc.rid, req.Incarnation)
+	sc.s.mu.Unlock()
+	if errors.Is(err, ErrMailboxCursorResetRequired) {
+		return sc.replyErr(codeMailboxCursorReset)
+	}
+	if err != nil {
+		return sc.replyErr(codeBadRequest)
+	}
+	return sc.replyOK(map[string]any{
+		"through_cursor":      through,
+		"mailbox_incarnation": incarnation,
+	})
 }
 
 func (sc *serverConn) handleTokenRegister(payload []byte) error {

@@ -330,6 +330,21 @@ type RemoteCommand struct {
 	// only its roster at ResyncCursor, leaving every later backlog event admissible on the
 	// phone. Additive + omitempty keeps ordinary resync frames byte-compatible.
 	RosterOnly bool `json:"roster_only,omitempty"`
+	// DiscardedBacklog is the explicit recovery proof attached to a roster-only refresh
+	// after the phone has successfully discarded its own stale relay mailbox generation
+	// and durably adopted the relay's replacement cursor. It tells the gateway to publish
+	// the bounded roster reseed at the daemon snapshot's FINAL cursor, so the next live
+	// journal record is contiguous with the phone's new authoritative boundary. A healthy
+	// roster refresh omits it and keeps ResyncCursor, preserving unread backlog.
+	//
+	// The bit is meaningful only with RosterOnly. It is sealed under the epoch content key
+	// with the rest of RemoteCommand, so the relay cannot invent destructive recovery.
+	DiscardedBacklog bool `json:"discarded_backlog,omitempty"`
+	// DiscardRecoveryToken is the opaque durable recovery generation the phone created
+	// BEFORE asking the relay to delete anything. A supporting gateway echoes it only on
+	// the authoritative fast-forward JournalReseed that answers this command. The phone
+	// clears its pending recovery only when that exact echo commits contiguously.
+	DiscardRecoveryToken string `json:"discard_recovery_token,omitempty"`
 	// SessionLaunch is the session_launch body (Wave R5): the phone's confirmed preset
 	// selection. It rides beside the signed tuple under launch's own rule -- the body is
 	// bound into the signature via ContentHash = SessionLaunchContentHash(SessionLaunch),

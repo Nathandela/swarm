@@ -67,17 +67,18 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	s15Machine          = "s15-machine-8f3a1c"
-	s15MachineName      = "s15-hostname-1e6c93"
-	s15RoutingID        = "s15-routing-4d7e2b"
-	s15PushToken        = "s15-push-token-c19a6f"
-	s15SessionID        = "s15-session-2b8d4e"
-	s15SnapLine         = "s15-terminal-line-7a3f9c"
-	s15OpID             = "s15-op-id-5e1b8d"
-	s15OpOutcome        = "s15-outcome-9c4a2f"
-	s15QueuedOp         = "s15-queued-op-3d9f7b"
-	s15StaleStream      = "s15-stream-6f2e1a"
-	s15RelayIncarnation = "abcdef0123456789abcdef0123456789"
+	s15Machine              = "s15-machine-8f3a1c"
+	s15MachineName          = "s15-hostname-1e6c93"
+	s15RoutingID            = "s15-routing-4d7e2b"
+	s15PushToken            = "s15-push-token-c19a6f"
+	s15SessionID            = "s15-session-2b8d4e"
+	s15SnapLine             = "s15-terminal-line-7a3f9c"
+	s15OpID                 = "s15-op-id-5e1b8d"
+	s15OpOutcome            = "s15-outcome-9c4a2f"
+	s15QueuedOp             = "s15-queued-op-3d9f7b"
+	s15StaleStream          = "s15-stream-6f2e1a"
+	s15RelayIncarnation     = "abcdef0123456789abcdef0123456789"
+	s15DiscardRecoveryToken = "1234567890abcdef1234567890abcdef"
 	// s15ItemText is the TRANSCRIPT's sentinel: the reconstructed body of one interaction item
 	// (ADR-009). It is what the user and the agent actually said to each other, which makes it
 	// the most revealing thing this file measures.
@@ -87,13 +88,15 @@ const (
 	s15GrantEpoch      uint32 = 1000000009
 	s15ReconciledEpoch uint32 = 1000000021
 
-	s15SendCeiling    uint64 = 8100000000000000017
-	s15ReceiveSeq     uint64 = 8200000000000000029
-	s15GrantSeq       uint64 = 8300000000000000037
-	s15WakeReplay     uint64 = 8400000000000000041
-	s15RelayCursor    uint64 = 8500000000000000053
-	s15RosterRevision uint64 = 8500000000000000059
-	s15LastHeardAt    int64  = 8600000000000000061
+	s15SendCeiling               uint64 = 8100000000000000017
+	s15ReceiveSeq                uint64 = 8200000000000000029
+	s15GrantSeq                  uint64 = 8300000000000000037
+	s15WakeReplay                uint64 = 8400000000000000041
+	s15RelayCursor               uint64 = 8500000000000000053
+	s15RosterRevision            uint64 = 8500000000000000059
+	s15DiscardRecoveryGeneration uint64 = 8700000000000000067
+	s15DiscardRecoveryCompleted  uint64 = 8700000000000000063
+	s15LastHeardAt               int64  = 8600000000000000061
 )
 
 // s15Bucket is the receive bucket the high-water sentinel is keyed by. Its sender id is what
@@ -139,35 +142,38 @@ func s15EpochKeys() crypto.EpochKeys {
 // inventory at once.
 func s15State() State {
 	st := State{
-		Keys:                s15EpochKeys(),
-		Machine:             s15Machine,
-		MachineName:         s15MachineName,
-		MachineStatic:       s15MachineStatic(),
-		MachineSignPub:      s15MachineSignPub(),
-		MachineRelayAuthPub: s15MachineRelayPub(),
-		RelaySPKIPin:        s15RelaySPKIPin(),
-		RelayTLSPolicy:      s15RelayTLSPolicy,
-		RoutingID:           s15RoutingID,
-		EpochID:             s15EpochID,
-		SendSeq:             map[uint32]uint64{s15EpochID: s15SendCeiling},
-		Receive:             map[Bucket]uint64{s15Bucket: s15ReceiveSeq},
-		GrantEpoch:          s15GrantEpoch,
-		GrantSeq:            s15GrantSeq,
-		WakeReplay:          s15WakeReplay,
-		RelayCursor:         s15RelayCursor,
-		RelayIncarnation:    s15RelayIncarnation,
-		RosterRevision:      s15RosterRevision,
-		Sessions:            []CachedSession{{SessionID: s15SessionID, Present: true}},
-		Snapshots:           []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
-		PendingOps:          []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
-		OpOutcomes:          map[string]schema.Control{s15OpID: {Op: "kill", Error: s15OpOutcome}},
-		Stale:               map[Bucket]bool{s15StaleBucket: true},
-		StaleStreams:        map[string]bool{s15StaleStream: true},
-		PushToken:           s15PushToken,
-		PushPreference:      PushPreference{Alerts: true},
-		ReconciledEpoch:     s15ReconciledEpoch,
-		LastHeardAt:         s15LastHeardAt,
-		Disowned:            true,
+		Keys:                      s15EpochKeys(),
+		Machine:                   s15Machine,
+		MachineName:               s15MachineName,
+		MachineStatic:             s15MachineStatic(),
+		MachineSignPub:            s15MachineSignPub(),
+		MachineRelayAuthPub:       s15MachineRelayPub(),
+		RelaySPKIPin:              s15RelaySPKIPin(),
+		RelayTLSPolicy:            s15RelayTLSPolicy,
+		RoutingID:                 s15RoutingID,
+		EpochID:                   s15EpochID,
+		SendSeq:                   map[uint32]uint64{s15EpochID: s15SendCeiling},
+		Receive:                   map[Bucket]uint64{s15Bucket: s15ReceiveSeq},
+		GrantEpoch:                s15GrantEpoch,
+		GrantSeq:                  s15GrantSeq,
+		WakeReplay:                s15WakeReplay,
+		RelayCursor:               s15RelayCursor,
+		RelayIncarnation:          s15RelayIncarnation,
+		DiscardRecoveryGeneration: s15DiscardRecoveryGeneration,
+		DiscardRecoveryCompleted:  s15DiscardRecoveryCompleted,
+		DiscardRecoveryToken:      s15DiscardRecoveryToken,
+		RosterRevision:            s15RosterRevision,
+		Sessions:                  []CachedSession{{SessionID: s15SessionID, Present: true}},
+		Snapshots:                 []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
+		PendingOps:                []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
+		OpOutcomes:                map[string]schema.Control{s15OpID: {Op: "kill", Error: s15OpOutcome}},
+		Stale:                     map[Bucket]bool{s15StaleBucket: true},
+		StaleStreams:              map[string]bool{s15StaleStream: true},
+		PushToken:                 s15PushToken,
+		PushPreference:            PushPreference{Alerts: true},
+		ReconciledEpoch:           s15ReconciledEpoch,
+		LastHeardAt:               s15LastHeardAt,
+		Disowned:                  true,
 		Items: []Item{{
 			SessionID: s15SessionID, ItemID: "s15-item-id", Kind: KindAgentMessage,
 			Status: StatusCompleted, Text: s15ItemText,
@@ -343,6 +349,13 @@ func s15Inventory() []s15Tier {
 		{field: "RelayIncarnation", needles: s15Str(s15RelayIncarnation),
 			why: "an opaque mailbox identity; it reveals no content and must be available before " +
 				"the content tier opens so a reset mailbox cannot inherit an old cursor"},
+		{field: "DiscardRecoveryGeneration", needles: s15Num(s15DiscardRecoveryGeneration, 8),
+			why: "a monotonic synchronization generation proving an explicit mailbox recovery began"},
+		{field: "DiscardRecoveryCompleted", needles: s15Num(s15DiscardRecoveryCompleted, 8),
+			why: "the monotonic completion coordinate paired with the recovery generation"},
+		{field: "DiscardRecoveryToken", needles: s15Str(s15DiscardRecoveryToken),
+			why: "an opaque random correlation token carrying no mailbox or session content; the restart path " +
+				"must read it before issuing the idempotent transport recovery"},
 		{field: "RosterRevision", needles: s15Num(s15RosterRevision, 8),
 			why: "the generation proving an authoritative roster committed; it reveals neither " +
 				"the rows nor their content and must be readable before the content tier opens"},

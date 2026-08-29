@@ -165,7 +165,11 @@ import (
 // v15 adds relay_incarnation, the durable identity of the mailbox log that minted
 // RelayCursor. Dropping it turns the cursor back into an unqualified number and can skip
 // restored items when a replacement log's numeric high-water catches up.
-const StateSchemaVersion = 15
+//
+// v16 adds the crash-safe discard-recovery generation, completion and opaque token. A build
+// one version back drops the only proof that a destructive mailbox transaction still owes an
+// authoritative fast-forward roster after process death.
+const StateSchemaVersion = 16
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -294,6 +298,16 @@ type State struct {
 	WakeReplay       uint64            // highest accepted push-wake counter
 	RelayCursor      uint64            // relay mailbox read cursor the next poll resumes from
 	RelayIncarnation string            // durable identity of the relay mailbox RelayCursor belongs to
+	// DiscardRecoveryGeneration, DiscardRecoveryCompleted and DiscardRecoveryToken are the
+	// crash-safe transaction spanning an explicit self-mailbox discard and its replacement
+	// roster. BeginRelayDiscardRecovery advances Generation and persists a fresh Token BEFORE
+	// the destructive relay call. The exact echoed token advances Completed and clears Token
+	// in the same Save that accepts the authoritative fast-forward reseed. A pending recovery
+	// is Generation > Completed; all generations are monotonic so stale writers cannot erase
+	// or resurrect the intent around an Android process death.
+	DiscardRecoveryGeneration uint64
+	DiscardRecoveryCompleted  uint64
+	DiscardRecoveryToken      string
 	// RosterRevision advances whenever a contiguous authoritative journal reseed commits.
 	// Unlike a row count or cursor it proves that even an empty roster at cursor zero arrived.
 	RosterRevision uint64
@@ -581,12 +595,15 @@ type stateFile struct {
 	ContentKept      []byte `json:"content_kept,omitempty"`
 	ContentPurgeable []byte `json:"content_purgeable,omitempty"`
 
-	GrantEpoch       uint32         `json:"grant_epoch"`
-	GrantSeq         uint64         `json:"grant_seq"`
-	RelayCursor      uint64         `json:"relay_cursor"`
-	RelayIncarnation string         `json:"relay_incarnation,omitempty"`
-	RosterRevision   uint64         `json:"roster_revision,omitempty"`
-	Stale            []bucketRecord `json:"stale,omitempty"`
+	GrantEpoch                uint32         `json:"grant_epoch"`
+	GrantSeq                  uint64         `json:"grant_seq"`
+	RelayCursor               uint64         `json:"relay_cursor"`
+	RelayIncarnation          string         `json:"relay_incarnation,omitempty"`
+	DiscardRecoveryGeneration uint64         `json:"discard_recovery_generation,omitempty"`
+	DiscardRecoveryCompleted  uint64         `json:"discard_recovery_completed,omitempty"`
+	DiscardRecoveryToken      string         `json:"discard_recovery_token,omitempty"`
+	RosterRevision            uint64         `json:"roster_revision,omitempty"`
+	Stale                     []bucketRecord `json:"stale,omitempty"`
 	// StaleStreams travels as a sorted array of channel names (see State.StaleStreams).
 	StaleStreams []string `json:"stale_streams,omitempty"`
 	// LastHeardAt is PB-APP-11's freshness coordinate (see State.LastHeardAt). It is
@@ -1308,6 +1325,22 @@ func mergeGuards(cur, next State) State {
 	if cur.RelayIncarnation != "" {
 		next.RelayIncarnation = cur.RelayIncarnation
 	}
+	// Recovery uses a monotonic generation/completion pair plus the token belonging to the
+	// newest generation. This admits the one legitimate clear (Completed catches Generation)
+	// while preventing a stale pre-begin writer from erasing pending intent and a stale
+	// pre-completion writer from resurrecting it.
+	if cur.DiscardRecoveryGeneration > next.DiscardRecoveryGeneration {
+		next.DiscardRecoveryGeneration = cur.DiscardRecoveryGeneration
+		next.DiscardRecoveryToken = cur.DiscardRecoveryToken
+	}
+	if cur.DiscardRecoveryCompleted > next.DiscardRecoveryCompleted {
+		next.DiscardRecoveryCompleted = cur.DiscardRecoveryCompleted
+	}
+	if next.DiscardRecoveryCompleted >= next.DiscardRecoveryGeneration {
+		next.DiscardRecoveryToken = ""
+	} else if next.DiscardRecoveryToken == "" && cur.DiscardRecoveryGeneration == next.DiscardRecoveryGeneration {
+		next.DiscardRecoveryToken = cur.DiscardRecoveryToken
+	}
 	return next
 }
 
@@ -1344,6 +1377,14 @@ func (s *fileStore) load() error {
 	if f.RelayIncarnation != "" && !validPersistedRelayIncarnation(f.RelayIncarnation) {
 		return fmt.Errorf("%w: %s: malformed relay mailbox incarnation", ErrCorruptState, path)
 	}
+	if f.DiscardRecoveryCompleted > f.DiscardRecoveryGeneration {
+		return fmt.Errorf("%w: %s: discard recovery completion exceeds generation", ErrCorruptState, path)
+	}
+	pendingRecovery := f.DiscardRecoveryGeneration > f.DiscardRecoveryCompleted
+	if pendingRecovery != (f.DiscardRecoveryToken != "") ||
+		(f.DiscardRecoveryToken != "" && !validPersistedRelayIncarnation(f.DiscardRecoveryToken)) {
+		return fmt.Errorf("%w: %s: malformed discard recovery checkpoint", ErrCorruptState, path)
+	}
 	// Before v3 the two epoch keys were CLEARTEXT in these same fields. Reading them as
 	// sealed blobs would be exactly the silent reinterpretation the version guard exists
 	// to refuse, so a pre-seal blob that carries either one is refused outright. Checked
@@ -1359,24 +1400,27 @@ func (s *fileStore) load() error {
 	}
 
 	st := State{
-		Machine:             f.Machine,
-		MachineName:         f.MachineName,
-		MachineStatic:       f.MachineStatic,
-		MachineSignPub:      f.MachineSignPub,
-		MachineRelayAuthPub: f.MachineRelayAuthPub,
-		RelaySPKIPin:        f.RelaySPKIPin,
-		RelayTLSPolicy:      f.RelayTLSPolicy,
-		Disowned:            f.Disowned,
-		RoutingID:           f.RoutingID,
-		EpochID:             f.EpochID,
-		PushPreference:      f.PushPreference,
-		ReconciledEpoch:     f.ReconciledEpoch,
-		GrantEpoch:          f.GrantEpoch,
-		GrantSeq:            f.GrantSeq,
-		RelayCursor:         f.RelayCursor,
-		RelayIncarnation:    f.RelayIncarnation,
-		RosterRevision:      f.RosterRevision,
-		LastHeardAt:         f.LastHeardAt,
+		Machine:                   f.Machine,
+		MachineName:               f.MachineName,
+		MachineStatic:             f.MachineStatic,
+		MachineSignPub:            f.MachineSignPub,
+		MachineRelayAuthPub:       f.MachineRelayAuthPub,
+		RelaySPKIPin:              f.RelaySPKIPin,
+		RelayTLSPolicy:            f.RelayTLSPolicy,
+		Disowned:                  f.Disowned,
+		RoutingID:                 f.RoutingID,
+		EpochID:                   f.EpochID,
+		PushPreference:            f.PushPreference,
+		ReconciledEpoch:           f.ReconciledEpoch,
+		GrantEpoch:                f.GrantEpoch,
+		GrantSeq:                  f.GrantSeq,
+		RelayCursor:               f.RelayCursor,
+		RelayIncarnation:          f.RelayIncarnation,
+		DiscardRecoveryGeneration: f.DiscardRecoveryGeneration,
+		DiscardRecoveryCompleted:  f.DiscardRecoveryCompleted,
+		DiscardRecoveryToken:      f.DiscardRecoveryToken,
+		RosterRevision:            f.RosterRevision,
+		LastHeardAt:               f.LastHeardAt,
 		// The pre-v5 cleartext copies. A v5 blob carries none of them (the same coordinates
 		// arrive from the sealed containers below), so this is the forward migration and not a
 		// second source: an installed v4 blob loads with its replay guard intact and the first
@@ -1610,30 +1654,33 @@ type stateSeals struct {
 // seal is what makes the containers safe to rewrite at all.
 func persistState(path string, st State, seals stateSeals) error {
 	f := stateFile{
-		SchemaVersion:       StateSchemaVersion,
-		Machine:             st.Machine,
-		MachineName:         st.MachineName,
-		MachineStatic:       st.MachineStatic,
-		MachineSignPub:      st.MachineSignPub,
-		MachineRelayAuthPub: st.MachineRelayAuthPub,
-		RelaySPKIPin:        st.RelaySPKIPin,
-		RelayTLSPolicy:      st.RelayTLSPolicy,
-		Disowned:            st.Disowned,
-		RoutingID:           st.RoutingID,
-		EpochID:             st.EpochID,
-		PushPreference:      st.PushPreference,
-		ReconciledEpoch:     st.ReconciledEpoch,
-		WakeKey:             seals.wakeKey,
-		ContentKey:          seals.contentKey,
-		WakeState:           seals.wakeState,
-		ContentKept:         seals.kept,
-		ContentPurgeable:    seals.purgeable,
-		GrantEpoch:          st.GrantEpoch,
-		GrantSeq:            st.GrantSeq,
-		RelayCursor:         st.RelayCursor,
-		RelayIncarnation:    st.RelayIncarnation,
-		RosterRevision:      st.RosterRevision,
-		LastHeardAt:         st.LastHeardAt,
+		SchemaVersion:             StateSchemaVersion,
+		Machine:                   st.Machine,
+		MachineName:               st.MachineName,
+		MachineStatic:             st.MachineStatic,
+		MachineSignPub:            st.MachineSignPub,
+		MachineRelayAuthPub:       st.MachineRelayAuthPub,
+		RelaySPKIPin:              st.RelaySPKIPin,
+		RelayTLSPolicy:            st.RelayTLSPolicy,
+		Disowned:                  st.Disowned,
+		RoutingID:                 st.RoutingID,
+		EpochID:                   st.EpochID,
+		PushPreference:            st.PushPreference,
+		ReconciledEpoch:           st.ReconciledEpoch,
+		WakeKey:                   seals.wakeKey,
+		ContentKey:                seals.contentKey,
+		WakeState:                 seals.wakeState,
+		ContentKept:               seals.kept,
+		ContentPurgeable:          seals.purgeable,
+		GrantEpoch:                st.GrantEpoch,
+		GrantSeq:                  st.GrantSeq,
+		RelayCursor:               st.RelayCursor,
+		RelayIncarnation:          st.RelayIncarnation,
+		DiscardRecoveryGeneration: st.DiscardRecoveryGeneration,
+		DiscardRecoveryCompleted:  st.DiscardRecoveryCompleted,
+		DiscardRecoveryToken:      st.DiscardRecoveryToken,
+		RosterRevision:            st.RosterRevision,
+		LastHeardAt:               st.LastHeardAt,
 	}
 	for b, stale := range st.Stale {
 		if stale {

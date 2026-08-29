@@ -127,6 +127,9 @@ type App struct {
 	// process-sticky. Atomic rather than under mu: it is written by the transport
 	// goroutine and read by tests across generations.
 	waitSupport atomic.Int32
+	// mailboxRecoverySupported is the CURRENT connection's r_hello verdict. A destructive
+	// request is refused locally unless this connection advertised the capability.
+	mailboxRecoverySupported atomic.Bool
 	// waitCancel, guarded by mu, is the cancel function of the mailbox wait the drain
 	// currently has parked (nil between waits). Resync cancels it through nudgeDrain
 	// after rewinding the relay cursor, because a parked wait is the one reader that
@@ -181,9 +184,14 @@ type App struct {
 	subscribed    bool
 	ackPending    uint64
 	ackSent       uint64
-	journal       []JournalEntry
-	needs         map[string]string
-	inflight      map[string]bool
+	// mailboxDiscard is the one explicit stale-mailbox recovery the drain goroutine owns.
+	// RefreshRoster publishes it and wakes a parked wait; the single mailbox reader claims
+	// it only after that wait has returned, so no read page or old-generation ack can cross
+	// the destructive operation.
+	mailboxDiscard *mailboxDiscardRequest
+	journal        []JournalEntry
+	needs          map[string]string
+	inflight       map[string]bool
 	// presets is the machine-published launch-preset cache (Wave R5): the last
 	// launch_presets reply adopted via adoptPresets. Empty until the machine answers a
 	// RefreshLaunchPresets -- never seeded with an invented default (ADR-007 B135).
@@ -237,6 +245,7 @@ type App struct {
 
 // session is one Start..Stop generation.
 type session struct {
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -366,7 +375,7 @@ func (a *App) Start() (err error) {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{cancel: cancel, done: make(chan struct{})}
+	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	a.sess = s
 	go func() {
 		defer close(s.done)
@@ -422,7 +431,7 @@ func (a *App) rearmAfterPairing() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{cancel: cancel, done: make(chan struct{})}
+	s := &session{ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	a.sess = s
 	a.pairingGraceUntil = time.Now().Add(pairingRevokeGrace)
 	a.mu.Unlock()
@@ -1478,12 +1487,32 @@ func (a *App) RefreshRoster() (err error) {
 	if err != nil {
 		return err
 	}
-	// Share the journal repair budget: both verbs make the daemon take an atomic journal
-	// snapshot, and separate budgets would let the same UI double the amplification bound.
-	if err = a.resyncBudget(phonecore.StreamJournal, time.Now()); err != nil {
+	// Reserve the replacement command BEFORE any destructive recovery. Otherwise a full
+	// stale mailbox could be compacted and only then discover the request was rate-limited,
+	// leaving no fresh reconcile/reseed in flight. The exact reservation is refunded if the
+	// discard itself fails, since in that case no daemon request was authored.
+	reservedAt := time.Now()
+	if err = a.resyncBudget(phonecore.StreamJournal, reservedAt); err != nil {
 		return err
 	}
-	_, err = a.unsignedRosterRefresh(core.Router().Sessions().Cursor())
+	// ONLY the explicit user refresh may take the destructive recovery. An ordinary healthy
+	// refresh remains the roster-only read it has always been. InboundAgeRefused means the
+	// authenticated head is outside the bounded-age window and therefore cannot be acked;
+	// when that backlog fills the mailbox, no replacement roster can be appended until the
+	// owner explicitly releases it.
+	recoveryToken := core.DiscardRecoveryToken()
+	if core.Router().InboundAgeRefused() || recoveryToken != "" {
+		if recoveryToken, err = a.requestMailboxDiscard(); err != nil {
+			a.refundResyncBudget(phonecore.StreamJournal, reservedAt)
+			return stampErrorClass(err)
+		}
+	}
+	_, err = a.unsignedRosterRefresh(core.Router().Sessions().Cursor(), recoveryToken != "", recoveryToken)
+	if err != nil {
+		// No replacement command was authored. The durable token keeps the recovery pending,
+		// and refunding this exact slot lets an explicit retry proceed immediately.
+		a.refundResyncBudget(phonecore.StreamJournal, reservedAt)
+	}
 	return err
 }
 
@@ -1573,6 +1602,21 @@ func (a *App) resyncBudget(stream string, now time.Time) error {
 	}
 	a.resyncAt[stream] = append(kept, now)
 	return nil
+}
+
+// refundResyncBudget releases only the reservation owned by one failed pre-command recovery.
+// Matching the exact timestamp prevents a late failure from deleting another caller's slot.
+func (a *App) refundResyncBudget(stream string, reservedAt time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	at := a.resyncAt[stream]
+	for i := len(at) - 1; i >= 0; i-- {
+		if !at[i].Equal(reservedAt) {
+			continue
+		}
+		a.resyncAt[stream] = append(at[:i], at[i+1:]...)
+		return
+	}
 }
 
 // streamStale is the app-facing staleness of one repair channel. The per-channel flags are

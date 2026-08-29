@@ -185,15 +185,27 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 // their own cursors. Suppressing it would leave a restarted phone with no authoritative
 // roster at all.
 func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
+	return s.snapshot(roster, cursor, "")
+}
+
+// RecoverySnapshot is Snapshot with the exact durable discard-recovery token echoed on the
+// roster reseed. The reconcile still lands first; the phone completes pending recovery only
+// when the following contiguous reseed commits with this matching token.
+func (s *RelaySink) RecoverySnapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error {
+	return s.snapshot(roster, cursor, recoveryToken)
+}
+
+func (s *RelaySink) snapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error {
 	if s.cfg.Authorities != nil {
 		if err := s.Reconcile(); err != nil {
 			return err
 		}
 	}
 	return s.Reseed(protocol.JournalReseed{
-		Roster: append([]protocol.JournalRecord{}, roster...),
-		Events: []protocol.JournalRecord{},
-		Cursor: cursor,
+		Roster:               append([]protocol.JournalRecord{}, roster...),
+		Events:               []protocol.JournalRecord{},
+		Cursor:               cursor,
+		DiscardRecoveryToken: recoveryToken,
 	})
 }
 

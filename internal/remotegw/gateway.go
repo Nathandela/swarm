@@ -79,17 +79,40 @@ type ReseedSink interface {
 	Reseed(rs protocol.JournalReseed) error
 }
 
+// RecoverySnapshotSink is the explicit mailbox-discard recovery publisher. It preserves
+// Snapshot's reconcile-then-reseed ordering while echoing the phone's durable recovery token
+// on the bounded roster frame. Keeping it separate leaves ordinary reconnect snapshots and
+// their long-standing JournalSink interface byte- and source-compatible.
+type RecoverySnapshotSink interface {
+	RecoverySnapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error
+}
+
 // errNoReseedSink refuses a resync whose sink cannot publish the repair, rather than
 // reporting a repair that never left the machine. The phone's stale flag clears only on the
 // frame's arrival, so a silent nil here would leave it stale with nothing to say why.
 var errNoReseedSink = errors.New("remotegw: this sink cannot publish a journal reseed")
 
+var errInvalidDiscardRecovery = errors.New("remotegw: invalid discard recovery command")
+
+func validDiscardRecoveryToken(token string) bool {
+	if len(token) != 32 {
+		return false
+	}
+	for _, c := range token {
+		if !('0' <= c && c <= '9') && !('a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // Resync serves the phone's sealed journal read. With rosterOnly false it is PB-SYNC-2's
 // journal repair: one atomic roster+events reseed at the daemon's final boundary. With
-// rosterOnly true it is the inbox refresh: one authoritative roster-only reseed at the
-// phone's PRIOR cursor. Keeping that prior boundary is load-bearing; advancing to the daemon
-// boundary would make the separately forwarded backlog stale and silently lose transcript
-// events.
+// rosterOnly true it is the inbox refresh: one authoritative roster-only reseed. A healthy
+// refresh stays at the phone's PRIOR cursor so separately forwarded backlog remains
+// admissible. Only a sealed command reporting a completed explicit mailbox discard advances
+// the bounded reseed to the daemon snapshot's final cursor; the discarded events themselves
+// are never copied into the replacement payload.
 //
 // It opens its OWN daemon connection rather than borrowing RunJournal's. RunJournal's conn
 // is inside a blocking read loop that owns its control stream, so interleaving a second
@@ -97,10 +120,16 @@ var errNoReseedSink = errors.New("remotegw: this sink cannot publish a journal r
 // work while the journal loop is between reconnects, which is exactly when the phone is
 // most likely to have a hole.
 //
-// from is the phone's durable cursor. It maps directly onto a full repair's read boundary;
-// for roster-only refresh it also remains the reseed cursor, while the current roster comes
-// from the atomic daemon result.
-func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly bool) error {
+// from is the phone's durable cursor. It maps directly onto a full repair's read boundary.
+// A healthy roster-only refresh also keeps it as the reseed cursor; completed-discard
+// recovery instead uses the final boundary returned by that same atomic daemon read.
+func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly, discardedBacklog bool, recoveryToken string) error {
+	if discardedBacklog != (recoveryToken != "") {
+		return fmt.Errorf("%w: discarded_backlog and discard_recovery_token must be present together", errInvalidDiscardRecovery)
+	}
+	if discardedBacklog && (!rosterOnly || !validDiscardRecoveryToken(recoveryToken)) {
+		return fmt.Errorf("%w: recovery requires roster_only and a 32-character lowercase hexadecimal token", errInvalidDiscardRecovery)
+	}
 	sink, ok := g.sink.(ReseedSink)
 	if !ok {
 		return errNoReseedSink
@@ -121,11 +150,47 @@ func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly bool) erro
 	}
 	roster := append([]protocol.JournalRecord{}, namespaceRoster(dc.endpointID, res.Roster)...)
 	if rosterOnly {
-		return sink.Reseed(protocol.JournalReseed{
-			Roster: roster,
-			Events: []protocol.JournalRecord{},
-			Cursor: from,
-		})
+		snapshotCursor := from
+		if discardedBacklog && recoveryToken != "" {
+			snapshotCursor = res.Cursor
+		}
+		// A destructive phone-side mailbox recovery can leave its authenticated receive
+		// high-water behind every frame it explicitly discarded. Snapshot is the existing
+		// two-frame recovery anchor: a fresh reconcile whose JournalCeiling is its own seq,
+		// immediately followed by the roster-only reseed. The phone adopts the reconcile
+		// synchronously, making the reseed contiguous and therefore durable rather than a
+		// gapped live-cache update lost on process death.
+		//
+		// Stamp the identity learned on THIS daemon connection before publishing. Command-IN
+		// can serve this request before RunJournal has reached its own SetMachine call, and an
+		// empty/old machine on the reconcile is refused by the phone.
+		if named, ok := g.sink.(machineNamer); ok {
+			named.SetMachine(dc.endpointID)
+		}
+		// Snapshot is a reconcile followed by the roster reseed. A definitive/transient
+		// refusal of the second append burns that frame's shared seq, and the command bridge
+		// cannot safely count on redispatching the same command within this process. Retry the
+		// complete pair once: the replacement reconcile raises the phone to its own new ceiling
+		// and the following reseed is contiguous. Repeating authoritative current state is
+		// idempotent; returning after two failures keeps the error honest.
+		publish := func() error { return g.sink.Snapshot(roster, snapshotCursor) }
+		if discardedBacklog && recoveryToken != "" {
+			recoverySink, ok := g.sink.(RecoverySnapshotSink)
+			if !ok {
+				return errors.New("remotegw: this sink cannot publish a tokened recovery snapshot")
+			}
+			publish = func() error { return recoverySink.RecoverySnapshot(roster, snapshotCursor, recoveryToken) }
+		}
+		var snapshotErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if snapshotErr = publish(); snapshotErr == nil {
+				return nil
+			}
+		}
+		return snapshotErr
 	}
 	return sink.Reseed(protocol.JournalReseed{
 		Roster: roster,

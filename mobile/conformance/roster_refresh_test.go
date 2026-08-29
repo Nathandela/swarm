@@ -19,6 +19,9 @@ func TestS10_RefreshRosterAsksForRosterOnly(t *testing.T) {
 	if !cmd.RosterOnly {
 		t.Fatalf("RefreshRoster command = %#v, want roster_only=true", cmd)
 	}
+	if cmd.DiscardedBacklog {
+		t.Fatalf("healthy RefreshRoster command = %#v, want discarded_backlog omitted", cmd)
+	}
 	if cmd.ResyncCursor != 0 {
 		t.Fatalf("RefreshRoster cursor = %d, want the phone's prior zero cursor", cmd.ResyncCursor)
 	}

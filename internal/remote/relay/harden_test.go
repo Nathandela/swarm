@@ -288,6 +288,9 @@ func TestRelay_EveryOpRateLimited(t *testing.T) {
 		{"mailbox_ack", false, func(t *testing.T, m *Client, _ string, _ sealParty, _ *fakeClock, _ uint64) error {
 			return discard(m.conn.control(testCtx(t), "mailbox_ack", map[string]any{"cursor": 0}))
 		}},
+		{"mailbox_discard", false, func(t *testing.T, m *Client, _ string, _ sealParty, _ *fakeClock, _ uint64) error {
+			return discard(m.conn.control(testCtx(t), "mailbox_discard", map[string]any{"mailbox_incarnation": "0123456789abcdef0123456789abcdef"}))
+		}},
 		{"token_register", false, func(t *testing.T, m *Client, _ string, _ sealParty, _ *fakeClock, _ uint64) error {
 			return discard(m.conn.control(testCtx(t), "token_register", map[string]any{"token": "tok"}))
 		}},

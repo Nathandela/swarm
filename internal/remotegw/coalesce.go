@@ -1,6 +1,7 @@
 package remotegw
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -148,6 +149,19 @@ func (c *CoalescingSink) Snapshot(roster []protocol.JournalRecord, cursor uint64
 	defer c.mu.Unlock()
 	c.debitLocked(c.now())
 	return c.inner.Snapshot(roster, cursor)
+}
+
+// RecoverySnapshot forwards the tokened reconcile+reseed pair immediately under the same
+// shared append-budget charge as an ordinary Snapshot.
+func (c *CoalescingSink) RecoverySnapshot(roster []protocol.JournalRecord, cursor uint64, recoveryToken string) error {
+	rr, ok := c.inner.(RecoverySnapshotSink)
+	if !ok {
+		return errors.New("remotegw: inner sink cannot publish a tokened recovery snapshot")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.debitLocked(c.now())
+	return rr.RecoverySnapshot(roster, cursor, recoveryToken)
 }
 
 // Event forwards one live journal record immediately, consuming the shared slot. A journal
