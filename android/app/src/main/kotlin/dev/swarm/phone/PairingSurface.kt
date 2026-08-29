@@ -32,6 +32,7 @@ import dev.swarm.phone.ui.SasStep
 import dev.swarm.phone.ui.ScannerState
 import dev.swarm.phone.ui.SwarmErrorTokens
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.CtaPlacement
 import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.monoWell
@@ -246,7 +247,7 @@ class PairingSurface(
      * Separate fields would be a second wire encoding, and they would arrive as something the
      * user asserted rather than as a destination the phone must show them.
      */
-    private val typedPayload = textField(activity, "Paste the pairing code your machine printed")
+    private val typedPayload = textField(activity, "Paste the pairing code your computer printed")
 
     /**
      * The relay address, on the one pairing that has to be told it (agents-tracker-3fkm).
@@ -264,7 +265,7 @@ class PairingSurface(
      * [destination] for the same confirm step a scanned QR goes through. A typed address gets no
      * shortcut through the step that exists to make a destination something the user has read.
      */
-    private val relayUrl = textField(activity, "Relay address, like wss://host:8443")
+    private val relayUrl = textField(activity, "Address, like wss://host:8443")
 
     /**
      * The fallback path's own action, and the one CTA on this screen whose champagne is CONTESTED.
@@ -541,7 +542,7 @@ class PairingSurface(
         if (payload.isBlank()) {
             // PairingFlow.begin throws on an empty payload and that throw carries no error
             // class, so it would not route. An empty field is a user slip, not a classification.
-            outcome.text = "Paste the code your machine printed, then press Use this code."
+            outcome.text = "Paste the code your computer printed, then press Use this code."
             return
         }
         stopScanning()
@@ -1063,7 +1064,7 @@ class PairingSurface(
      */
     private fun ctaAction(text: String, kind: CtaKind, onPress: () -> Unit): TextView =
         SecureWindow.gate(
-            ctaButton(activity, text, kind).apply {
+            ctaButton(activity, text, kind, placement = CtaPlacement.PAIRING).apply {
                 setOnClickListener { onPress() }
                 // A `TextView` ANNOUNCES ITSELF AS TEXT. The kit records the gap and cannot close
                 // it -- it has no click to hang the role on -- so the role is set where the click

@@ -134,7 +134,7 @@ class ComposerSendStateTest {
         assertEquals(
             "the shim refused rather than joining the reader's words to somebody's half-typed " +
                 "line, having written nothing. The copy names the one fact it actually knows",
-            "Not sent — the terminal's input line was not empty.",
+            "Not sent. Finish typing on your computer first.",
             busy.copy,
         )
         assertNotEquals(
@@ -167,7 +167,7 @@ class ComposerSendStateTest {
         assertEquals(
             "a working agent still accepts input -- as feedback into the running turn, and the " +
                 "placeholder says so",
-            "Add feedback...",
+            "Add a note while it works",
             ComposerModel.placeholderFor(working = true),
         )
     }

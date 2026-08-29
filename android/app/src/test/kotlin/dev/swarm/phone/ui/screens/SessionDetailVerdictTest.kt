@@ -159,9 +159,13 @@ class SessionDetailVerdictTest {
         val notice = SessionDetailScreen.historyCapacityNotice()
         assertTrue("the control vanished with nothing said", notice.isNotEmpty())
         assertTrue(
+            "the sentence does not name the computer the rest is on when the screen knows it (W5.2)",
+            SessionDetailScreen.historyCapacityNotice("MacBookPro").contains("on MacBookPro"),
+        )
+        assertTrue(
             "the reader must not be left believing they reached the beginning of a " +
                 "conversation that goes further back: the sentence has to name where the rest is",
-            notice.contains("machine"),
+            notice.contains("computer"),
         )
     }
 
@@ -182,8 +186,8 @@ class SessionDetailVerdictTest {
             notice.isNotEmpty(),
         )
         assertTrue(
-            "the sentence must be about this conversation, not about a verb or a category",
-            notice.contains("conversation"),
+            "the sentence must say more could not be loaded, not name a verb or a category",
+            notice.startsWith("Couldn't load more"),
         )
         assertEquals(
             "the machine's words were dropped by the detail-less ofRefusal overload",
@@ -204,7 +208,7 @@ class SessionDetailVerdictTest {
         assertTrue(
             "the tap on a clipped card whose body the machine has evicted answered \"Try again, " +
                 "and report it if it keeps happening\" -- advice for a retry that can never work",
-            notice.contains("no longer"),
+            notice.contains("all that's left"),
         )
         assertEquals(
             "interaction detail: no full body for item is retained (IS-CAP-3)",

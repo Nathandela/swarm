@@ -76,7 +76,7 @@ object LaunchPanelScreen {
     /** The hints `PhoneSurface` already used, verbatim. */
     private val HINTS: Map<LaunchFieldId, String> = mapOf(
         LaunchFieldId.AGENT to "Which agent to start",
-        LaunchFieldId.CWD to "Working directory on your machine",
+        LaunchFieldId.CWD to "Working directory on your computer",
         LaunchFieldId.PROMPT to "First message for the agent, if any",
     )
 
@@ -92,9 +92,9 @@ object LaunchPanelScreen {
         listOf(LaunchFieldId.AGENT, LaunchFieldId.CWD, LaunchFieldId.PROMPT)
 
     /** PB-SYNC-2: an unresolved launch is neither a success nor a failure. */
-    private const val PENDING = "Waiting for your machine to answer the launch."
+    private const val PENDING = "Waiting for your computer to answer the launch."
 
-    private const val ACCEPTED = "Your machine started the session."
+    private const val ACCEPTED = "Your computer started the session."
 
     /**
      * What a refusal says, in the FORM'S own words (agents-tracker-ksvb.10).
@@ -110,7 +110,7 @@ object LaunchPanelScreen {
      * user through the retry clause and through the machine's own words beneath, both of which say
      * more than a third wording of the same fact would.
      */
-    private const val REFUSED = "Your machine did not start the session."
+    private const val REFUSED = "Your computer did not start the session."
 
     /**
      * What a refusal waiting would fix says about itself.

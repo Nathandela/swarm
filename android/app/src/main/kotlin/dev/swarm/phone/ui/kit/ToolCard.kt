@@ -34,7 +34,9 @@ object ToolCard {
         "search" to "/",
         "execute" to "$",
         "fetch" to "@",
-        "other" to "?",
+        "agent" to "A",
+        // A tool, not a question: the phone never draws "?" (phone-refit-playbook W6.1).
+        "other" to "T",
     )
 
     /** The glyph for one `tool_kind`. Unknown falls back to `other`'s -- never invented. */

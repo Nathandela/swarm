@@ -65,7 +65,13 @@ enum class PairOnlyReason {
 }
 
 /** The three sentences one draw of [pairOnlyView] puts on screen. */
-data class PairOnlyCopy(val title: String, val body: String, val cta: String)
+data class PairOnlyCopy(
+    val title: String,
+    val body: String,
+    val cta: String,
+    /** The command the body points at, drawn in a well under it, or "" (phone refit W5.1). */
+    val command: String = "",
+)
 
 /**
  * The two cells a revoke leaves on this screen: the sentence, and the machine's own words
@@ -76,7 +82,12 @@ data class PairOnlyCopy(val title: String, val body: String, val cta: String)
  * carried beside it rather than inside it has to be in the key too, or a machine reply arriving on
  * a later draw would be the one the early return skips.
  */
-data class RevokeNotice(val notice: String, val detail: String)
+data class RevokeNotice(
+    val notice: String,
+    val detail: String,
+    /** The command the notice points at, drawn in a well under it, or "" (phone refit W5.1). */
+    val command: String = "",
+)
 
 /**
  * Phase B -- agents-tracker-64rf: the screen an unpaired phone opens on.
@@ -105,23 +116,24 @@ object PairOnlyScreen {
      * lost its contents; with it, an empty window is the honest report that everything the app
      * shows belongs to a machine this handset has not got.
      */
-    const val BODY = "Sessions, machines and activity all come from the machine this phone is " +
-        "paired with. There is nothing else here until then."
+    const val BODY = "Your sessions come from the computer you pair with."
 
     /** The one thing a person can do here. */
     const val CTA = "Pair a computer"
 
     /**
-     * The two commands that clear a machine-side registration, spelled ONCE.
-     *
-     * Every sentence on this screen that sends a user to their machine sends them to the same two
-     * verbs -- find the device, unregister it -- and [dev.swarm.phone.ui.ErrorRouter] spells them
-     * this way for `swarm/state-corrupt`, which is the same recovery. Three copies of a command
-     * line is three things to keep in agreement, and a user who reads two of them wonders which is
-     * the real one.
+     * The command a user runs on their computer to see whether this device is still registered,
+     * spelled ONCE. It is a well's text and never a sentence's (phone refit W5.1): a person
+     * retypes it into a shell off a phone screen, and a second spelling is a second typo.
      */
-    private const val UNREGISTER_FIRST = "run `swarm remote devices` on your machine to find " +
-        "this device and `swarm remote revoke <device-id>` to unregister it"
+    const val REVOKE_COMMAND = "swarm remote devices"
+
+    /**
+     * The two commands that clear a machine-side registration, one per line of the well: find the
+     * device, then unregister it. The id is not in this phone's reach, so the second line names
+     * its placeholder.
+     */
+    private const val UNREGISTER_COMMANDS = "$REVOKE_COMMAND\nswarm remote revoke <device-id>"
 
     /** What a phone the owner removed is, stated as the fact and not as the remedy. */
     const val TITLE_REVOKED = "This phone was removed"
@@ -146,10 +158,7 @@ object PairOnlyScreen {
      * PB-STATE-10 documents ENDS with a pairing on this handset. What the requirement forbids is a
      * BARE control -- one offered with no statement of the step that has to come first.
      */
-    private const val REPAIR_REQUIRED_CAUSE = "This phone's key was destroyed and cannot be " +
-        "recovered. Your machine still has this device registered and `swarm remote pair` is " +
-        "refused until that is cleared, so " + UNREGISTER_FIRST + " before pairing this phone " +
-        "again."
+    private const val REPAIR_REQUIRED_CAUSE = "This phone needs to pair again. First, on your computer:"
 
     /**
      * What a revoke leaves this phone unable to say, said (agents-tracker-qlf9).
@@ -176,15 +185,13 @@ object PairOnlyScreen {
      * again. Two wordings for one pair of commands is two things for a reader to reconcile at the
      * moment they are least able to.
      */
-    const val REVOKE_UNCONFIRMED = "This phone has unpaired itself, and your machine has not " +
-        "confirmed that it removed the device. If pairing is refused, " + UNREGISTER_FIRST +
-        " first."
+    const val REVOKE_UNCONFIRMED = "Unpaired. If pairing is refused, on your computer:"
 
     /**
      * The whole of the refused sentence. The machine's own reason no longer follows it inside
      * the string -- it is [revokeDetailFor], drawn beneath (agents-tracker-ksvb.10).
      */
-    private const val REVOKE_REFUSED = "Your machine refused to remove this device"
+    private const val REVOKE_REFUSED = "Your computer refused to remove this device"
 
     /**
      * What is true of the handset once the revoke did not land, in either way it can fail to.
@@ -192,8 +199,7 @@ object PairOnlyScreen {
      * IT IS ONE TAIL FOR BOTH because the fact is one fact: the purge ran, so the phone is
      * unpaired and the machine is not.
      */
-    private const val STILL_REGISTERED = " This phone has unpaired itself anyway, so " +
-        UNREGISTER_FIRST + " before pairing again."
+    private const val STILL_REGISTERED = " This phone is unpaired anyway. If pairing is refused, on your computer:"
 
     /**
      * What a purge that could not finish leaves behind, stated as the fact it is
@@ -214,8 +220,7 @@ object PairOnlyScreen {
      * pairing they may be about to re-make, on a guess about a platform condition this screen
      * cannot read.
      */
-    private const val PURGE_INCOMPLETE = "This phone could not destroy the key material it had " +
-        "stored, so it is still on this device."
+    private const val PURGE_INCOMPLETE = "Couldn't clear this phone's keys."
 
     /**
      * The machine's answer to the revoke this phone issued, as the screen states it.
@@ -226,10 +231,15 @@ object PairOnlyScreen {
      * "say nothing" has to survive the join, and a caller that concatenated two composed strings
      * would put a lone separator on the screen of a phone where everything went right.
      *
-     * THE ORDER IS A COPY DECISION AND IS MADE HERE (agents-tracker-jx23). The machine's answer
-     * comes first because the user's next action turns on it -- whether `swarm remote pair` will
-     * be refused -- and the purge failure is a fact about this handset that no command of theirs
-     * undoes. Leading with the second buries the actionable one.
+     * THE ORDER IS A COPY DECISION AND IS MADE HERE (agents-tracker-jx23; reordered in the W5
+     * review round, 2026-08-29, SHOULD-FIX 4). It used to lead with the machine's answer, on the
+     * argument that the user's next action turns on it. That argument is still true and is no
+     * longer the deciding one: the machine's clause ENDS IN A COLON that names the well
+     * [dev.swarm.phone.ui.screens.pairOnlyView] draws directly beneath this notice, and with the
+     * purge sentence spliced in after that clause, the colon pointed at two unrelated sentences
+     * instead of the well. A colon whose object is not what follows it is a worse defect than
+     * which fact leads, so the purge sentence -- which names nothing to press -- now comes first,
+     * and the machine's clause, colon and well stay adjacent.
      *
      * @param purgeFailure PB-APP-9's routed reason the key material at rest survived, or empty
      *  where the purge finished. It is carried VERBATIM for [revokeUnsentNotice]'s reason: the
@@ -262,16 +272,29 @@ object PairOnlyScreen {
         if (verdict.answered && !verdict.accepted) verdict.reason else ""
 
     /**
+     * The command [revokeNoticeFor]'s sentence points at, or "" where the machine confirmed the
+     * removal and there is nothing to look up. The well's text, never the sentence's (W5.1).
+     */
+    fun revokeCommandFor(verdict: CommandVerdict): String =
+        if (verdict.accepted) "" else REVOKE_COMMAND
+
+    /**
      * The two facts as one notice, in the one place that knows how they read together.
      *
      * BOTH CAN BE TRUE AT ONCE and the worst case is exactly that: a machine that refused the
      * removal AND a handset that could not destroy what it held. Neither answers for the other, so
      * neither replaces the other.
+     *
+     * THE PURGE SENTENCE COMES FIRST WHEN BOTH ARE PRESENT (SHOULD-FIX 4, W5 review round,
+     * 2026-08-29). [machine], when non-empty, ends in a colon that names the well drawn directly
+     * beneath this notice; splicing the purge sentence in AFTER that clause put two unrelated
+     * sentences between the colon and the well it points at. [PURGE_INCOMPLETE] names nothing to
+     * press, so it carries no colon of its own and can lead without stranding one.
      */
     private fun joinedWithPurgeFailure(machine: String, purgeFailure: String): String = when {
         purgeFailure.isBlank() -> machine
         machine.isEmpty() -> purgeFailure + " " + PURGE_INCOMPLETE
-        else -> machine + " " + purgeFailure + " " + PURGE_INCOMPLETE
+        else -> purgeFailure + " " + PURGE_INCOMPLETE + " " + machine
     }
 
     /**
@@ -399,6 +422,7 @@ object PairOnlyScreen {
             TITLE_REPAIR_REQUIRED,
             REPAIR_REQUIRED_CAUSE,
             CTA,
+            command = UNREGISTER_COMMANDS,
         )
     }
 }

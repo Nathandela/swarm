@@ -113,7 +113,7 @@ data class TriageInbox(
 
     val staleNotice: String
         get() = if (stale) {
-            "This list may be incomplete: some of your machine's activity has not arrived yet."
+            "Some updates haven't arrived yet."
         } else {
             ""
         }

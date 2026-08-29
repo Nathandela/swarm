@@ -47,7 +47,7 @@ class PairedMachineRowTest {
     @Test
     fun `the row's label names the paired machine`() {
         assertEquals(
-            "Paired with nathans-mbp",
+            "nathans-mbp",
             PairedMachineRowScreen.of("nathans-mbp").label,
         )
     }
@@ -102,27 +102,13 @@ class PairedMachineRowTest {
         assertEquals(withMachine.sublabel, withUnreadableMachine.sublabel)
     }
 
-    @Test
-    fun `the copy is honest that replacing ends the current pairing`() {
-        val row = PairedMachineRowScreen.of("nathans-mbp")
-
-        assertTrue(
-            "the row's copy does not say the pairing ends: '${row.sublabel}'",
-            row.sublabel.contains("ends", ignoreCase = true) &&
-                row.sublabel.contains("pairing", ignoreCase = true),
-        )
-    }
-
     /**
-     * agents-tracker-ksvb.6: shortened once more, and the fact that must survive the shortening
-     * is the ORDER -- the current pairing ends before the new one starts.
+     * Phone refit W5.4: the row is the computer's name and nothing under it. The cost of
+     * replacing is the confirmation's to state, once, when the control is pressed.
      */
     @Test
-    fun `the sublabel is the shortened form, with the ordering fact intact`() {
-        assertEquals(
-            "Ends this pairing first, then re-pairs.",
-            PairedMachineRowScreen.of("nathans-mbp").sublabel,
-        )
+    fun `the row has no sublabel`() {
+        assertEquals("", PairedMachineRowScreen.of("nathans-mbp").sublabel)
     }
 
     // ---- the confirmation ----------------------------------------------------
@@ -159,15 +145,14 @@ class PairedMachineRowTest {
         // destroys the key tiers in a `finally` beside the verb.
         val question = PairedMachineRowScreen.of("nathans-mbp").replaceConfirmation
 
+        // PINS THE SENTENCE IN FULL, not a bare "pair" substring (W5 review round, 2026-08-29):
+        // "pair" alone is satisfied by "repair", "paired" and "pairing" too -- four different
+        // words that would all pass a check meant to pin one specific sentence. The way back
+        // (a new code) and the fact that pairing is what ends are both stated by this one clause.
         assertTrue(
-            "the confirmation does not say the pairing ends: '$question'",
-            question.contains("pairing", ignoreCase = true),
-        )
-        assertTrue(
-            "the confirmation does not say this phone's keys are destroyed: '$question'. That is " +
-                "the half a user cannot see and cannot undo -- both tiers go, whether or not the " +
-                "command ever reached the machine",
-            question.contains("keys", ignoreCase = true),
+            "the confirmation does not carry the cost sentence in full: '$question'. That is " +
+                "the way back, and it is not on this handset (phone refit W5.4)",
+            question.contains("You'll need a new code to pair again."),
         )
     }
 

@@ -33,7 +33,7 @@ class ConnectionUiStaleNoticeTest {
 
     /** The drawing's `sync` row, verbatim. */
     private val tabled =
-        "This view may be missing events. It repairs itself when the link recovers."
+        "Some updates may be missing."
 
     @Test
     fun `a stale stream says what the drawing tables and nothing stronger`() {
@@ -60,15 +60,6 @@ class ConnectionUiStaleNoticeTest {
         )
     }
 
-    @Test
-    fun `it says the thing the reader can act on -- that waiting is enough`() {
-        val stale = StreamView(stream = "journal", stale = true, resyncPending = false)
-        assertTrue(
-            "the stale notice never tells the reader it repairs itself, so a state that ends " +
-                "on its own reads like one that needs them",
-            stale.notice.contains("repairs itself"),
-        )
-    }
 
     /**
      * The rest of PB-APP-8's per-stream model is unchanged by the copy, and this says so rather

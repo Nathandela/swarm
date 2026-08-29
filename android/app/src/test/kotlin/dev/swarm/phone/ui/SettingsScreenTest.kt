@@ -200,10 +200,11 @@ class SettingsScreenTest {
 
         assertEquals(NotificationRemedy.SYSTEM_SETTINGS, blocked.notificationRemedy)
         assertEquals(SettingsScreen.OPEN_NOTIFICATION_SETTINGS, blocked.notificationRedirectLabel)
-        assertTrue(
-            "the PERMANENTLY_DENIED sentence does not name the control beside it, so the words " +
-                "and the button are two separate things a reader has to join up",
-            blocked.notificationsBlockedNotice.contains(SettingsScreen.OPEN_NOTIFICATION_SETTINGS),
+        assertEquals(
+            "the PERMANENTLY_DENIED sentence says the one fact, and the control beside it is the " +
+                "remedy (phone refit W5.4)",
+            "Notifications are blocked.",
+            blocked.notificationsBlockedNotice,
         )
 
         for (live in listOf(
@@ -544,10 +545,10 @@ class SettingsScreenTest {
             SettingsScreen.OPEN_CHANNEL_SETTINGS,
             blocked.deliveryRedirectLabel,
         )
-        assertTrue(
-            "the notice does not name the control beside it, so the two can drift into a " +
-                "sentence describing an action the screen does not offer",
-            SettingsScreen.OPEN_CHANNEL_SETTINGS in blocked.deliveryBlockedNotice,
+        assertEquals(
+            "the notice says the one fact, and the control beside it is the remedy (phone refit W5.4)",
+            "Alerts are off in Android.",
+            blocked.deliveryBlockedNotice,
         )
     }
 
@@ -677,7 +678,7 @@ class SettingsScreenTest {
     @Test
     fun `the disclosure is one line`() {
         assertEquals(
-            "Battery saver can delay these notifications.",
+            "Battery saver can delay these.",
             SettingsScreen.PUSH_DELAY_DISCLOSURE,
         )
     }

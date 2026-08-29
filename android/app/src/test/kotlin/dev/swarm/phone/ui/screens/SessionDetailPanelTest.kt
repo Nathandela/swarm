@@ -129,7 +129,7 @@ class SessionDetailPanelTest {
         assertTrue("an open turn does not read as working", working.composerWorking)
         assertTrue(
             "the header does not say working over the very turn the composer reads as open",
-            working.headerSubtitle.contains("working"),
+            working.headerSubtitle.contains("Working"),
         )
         assertEquals(ComposerModel.placeholderFor(working = true), working.composerPlaceholder)
 
@@ -273,10 +273,10 @@ class SessionDetailPanelTest {
 
         assertTrue("the loss is not reported at all", notice.isNotEmpty())
         assertTrue(
-            "the notice does not say the input is gone for good, so a user reads it as a queue " +
-                "that will flush when the link returns -- and PB-INPUT-1 is explicit that input " +
-                "is live-only and nothing is ever retried",
-            notice.contains("live-only"),
+            "the notice does not say the messages did not get through, in the past tense: a " +
+                "user must read a loss, never a queue that will flush when the link returns " +
+                "(PB-INPUT-1; phone refit W5.4)",
+            notice.contains("didn't get through"),
         )
         assertFalse(
             "the notice promises a retry this transport never makes",
@@ -346,4 +346,9 @@ class SessionDetailPanelTest {
     // that never needed one. The fence that keeps them gone is android/gate's
     // TestR1_TheLeaseIsNotAThingAScreenReads.
 
+    @Test
+    fun `the decision pill asks for the reader's answer`() {
+        // phone-refit-playbook W6.2: the drawing's decision.pill row, verbatim.
+        assertEquals("Needs your answer", panelOf().decisionPillLabel)
+    }
 }

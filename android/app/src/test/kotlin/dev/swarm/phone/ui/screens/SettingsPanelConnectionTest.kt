@@ -132,7 +132,7 @@ class SettingsPanelConnectionTest {
         assertEquals(
             "the sentence is gone and the dot is the only thing left carrying the state, so it " +
                 "must carry it in words for a screen reader",
-            "Your machine is online.",
+            "Your computer is online.",
             row.presenceDescription,
         )
         assertEquals(PresenceMark.ONLINE, row.mark)
@@ -149,8 +149,7 @@ class SettingsPanelConnectionTest {
             "PB-APP-11: the relay is the party withholding the machine's frames, so a phone that " +
                 "has not heard from its machine must not print the relay's \"online\" as though " +
                 "the machine had said it. Line was: ${row.presenceLine}",
-            row.presenceLine.contains("Not heard from your machine for") &&
-                row.presenceLine.contains("the relay's word and not your machine's"),
+            row.presenceLine.startsWith("Online · last seen ") && row.presenceLine.endsWith(" ago"),
         )
         assertNull(
             "the line already says the machine's state in words, so a described dot would have a " +
@@ -179,7 +178,7 @@ class SettingsPanelConnectionTest {
         assertTrue(
             "the presence line does not say HOW LONG the machine has been silent. Line was: " +
                 "${row.presenceLine}",
-            row.presenceLine.contains("for 18h"),
+            row.presenceLine.contains("18h"),
         )
         assertFalse(
             "the line still renders a wall-clock time. A clock with no date on it reads the same " +
@@ -225,13 +224,11 @@ class SettingsPanelConnectionTest {
                 "screen. The fold deleted killSwitchPanel's only caller and did not re-home it",
             off,
         )
-        assertTrue(
-            "the panel lost the sentence saying the switch is off at the machine",
-            off!!.body.contains("Remote control is switched off at your machine"),
-        )
-        assertTrue(
-            "the OFF state lost the teaching that only the owner can switch it back on",
-            off.body.contains("Only the machine's owner"),
+        assertEquals(
+            "the sentence names the computer the switch is off on and ends before the verb, " +
+                "which row 12 draws as its inline mono cell (phone refit W5.4)",
+            "Remote control is off on nathans-mbp. To turn it on: swarm remote on",
+            off!!.body,
         )
         assertEquals(
             "the recovery verb is the one that applies to the state the switch is IN. The mock " +
@@ -269,9 +266,9 @@ class SettingsPanelConnectionTest {
     }
 
     @Test
-    fun `one channel with a hole is named, in the wire's own word`() {
+    fun `one channel with a hole says updates are missing`() {
         assertEquals(
-            "The journal view has a gap.",
+            "Some updates are missing.",
             connection(streams = streams("journal")).health,
         )
     }
@@ -281,7 +278,7 @@ class SettingsPanelConnectionTest {
         assertEquals(
             "the four gap cards are what the fold deletes; naming the channels in one line is " +
                 "what replaces them, and the per-channel detail is the sync sheet's",
-            "The journal and terminal views have gaps.",
+            "Some updates are missing.",
             connection(streams = streams("journal", "terminal")).health,
         )
     }
@@ -289,7 +286,7 @@ class SettingsPanelConnectionTest {
     @Test
     fun `three channels keep the list readable`() {
         assertEquals(
-            "The journal, terminal and reply views have gaps.",
+            "Some updates are missing.",
             connection(streams = streams("journal", "terminal", "reply")).health,
         )
     }
@@ -300,7 +297,7 @@ class SettingsPanelConnectionTest {
             "PB-SYNC-3: a requested repair does not clear the hole -- the mark clears when the " +
                 "repair LANDS -- so a repairing channel reported as current is the optimistic " +
                 "clear that requirement forbids",
-            "The journal view has a gap.",
+            "Some updates are missing.",
             connection(streams = repairing("journal")).health,
         )
     }

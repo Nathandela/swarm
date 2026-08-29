@@ -116,7 +116,7 @@ class SyncStatusViewTest {
     fun `the pill carries the model's words and its announcement`() {
         val pill = syncPillView(context, quiet) {}!!
 
-        assertEquals("QUIET 18h", (pill as TextView).text.toString())
+        assertEquals("Last seen 18h", (pill as TextView).text.toString())
         assertEquals(
             "the pill announces its own three upper-case characters, which read aloud are not a " +
                 "sentence and do not say that pressing opens anything",

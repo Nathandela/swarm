@@ -103,15 +103,15 @@ class PairOnlyTerminalReasonTest {
                     "The machine still holds this device's registration and `swarm remote pair` " +
                     "is refused while it does (PB-STATE-10), so a user who presses the only " +
                     "control on this screen walks into a pairing that cannot complete -- the " +
-                    "failure loop PB-APP-10 forbids, reached through the remedy",
-                copy.body.contains(step),
+                    "failure loop PB-APP-10 forbids, reached through the remedy. The command is " +
+                    "the well's text under the body (phone refit W5.1)",
+                copy.command.contains(step),
             )
         }
         assertTrue(
-            "the repair_required screen never says that pairing is refused until the machine " +
-                "side is cleared, so the order of the two steps is left for the user to discover " +
-                "by failing at it",
-            copy.body.contains("refused"),
+            "the repair_required screen never says the machine side comes FIRST, so the order " +
+                "of the two steps is left for the user to discover by failing at it",
+            copy.body.contains("First"),
         )
     }
 

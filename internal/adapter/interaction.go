@@ -428,7 +428,7 @@ func (in Interaction) Validate() error {
 	if in.OldPath != "" && in.Change != "rename" {
 		return fmt.Errorf("old_path is set with change %q; interaction-schema.md §3.4 carries it on a rename only", in.Change)
 	}
-	if err := oneOf("action.type", in.Action.Type, true, "read", "edit", "write", "search", "execute", "fetch", "other"); err != nil {
+	if err := oneOf("action.type", in.Action.Type, true, "read", "edit", "write", "search", "execute", "fetch", "agent", "other"); err != nil {
 		return err
 	}
 	if err := oneOf("mode", in.Mode, true, ModeCard, ModePromptCard); err != nil {

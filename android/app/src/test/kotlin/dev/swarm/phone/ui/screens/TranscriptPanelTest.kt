@@ -44,6 +44,7 @@ class TranscriptPanelTest {
         truncated: Boolean = false,
         degraded: Boolean = false,
         resolved: Boolean = false,
+        toolKind: String = "",
     ) = InteractionItem(
         itemId = itemId,
         cursor = cursor,
@@ -54,6 +55,7 @@ class TranscriptPanelTest {
         truncated = truncated,
         degraded = degraded,
         resolved = resolved,
+        toolKind = toolKind,
     )
 
     /**
@@ -122,14 +124,14 @@ class TranscriptPanelTest {
             item(
                 "tool_run",
                 body = """{"tool":"Read","action":{"type":"read","path":"src/main.rs"}}""",
+                toolKind = "read",
             ),
         )
 
-        assertEquals("Read src/main.rs", block.line)
-        assertEquals(
-            "the card names the file and does not MARK it, so the target reads as prose rather " +
-                "than as the identifier row 14's inline mono is for",
-            "src/main.rs",
+        assertEquals("Read main.rs", block.line)
+        assertNull(
+            "the verb line marks no span (phone-refit-playbook W6.1): the target is prose, " +
+                "reduced to its basename, and nothing on the row is an identifier to set in mono",
             block.emphasis,
         )
     }
@@ -140,26 +142,85 @@ class TranscriptPanelTest {
         // carries the target is the action's own `type`, and a client that keyed off the tool name
         // would break on the first CLI that spelled its tools differently.
         val search = blockOf(
-            item("tool_run", body = """{"tool":"Grep","action":{"type":"search","query":"TODO"}}"""),
+            item("tool_run", body = """{"tool":"Grep","action":{"type":"search","query":"TODO"}}""", toolKind = "search"),
         )
         val execute = blockOf(
             item(
                 "tool_run",
                 body = """{"tool":"Bash","action":{"type":"execute","command":"go test ./..."}}""",
+                toolKind = "execute",
             ),
         )
 
-        assertEquals("Grep TODO", search.line)
-        assertEquals("Bash go test ./...", execute.line)
+        assertEquals("Searched", search.line)
+        assertEquals("Ran a command", execute.line)
     }
 
     @Test
     fun `an unclassified call falls back to the tool and guesses nothing`() {
         // IS-TOOL-2 in as many words: "an unclassified call is never guessed at".
-        val block = blockOf(item("tool_run", body = """{"tool":"WebFetch","action":{"type":"other"}}"""))
+        val block = blockOf(item("tool_run", body = """{"tool":"WebFetch","action":{"type":"other"}}""", toolKind = "other"))
 
-        assertEquals("WebFetch", block.line)
+        assertEquals("Used a tool", block.line)
         assertNull(block.emphasis)
+    }
+
+    @Test
+    fun `every tool kind gets a verb and other is never a question mark`() {
+        // phone-refit-playbook W6.1: a tool row is a verb and one grey line. The verb comes off
+        // the flat tool_kind (the field the glyph already reads), the target is reduced to what
+        // a phone can show, and the grey line is the first line of the output, or of the target
+        // when there is none -- except a command, whose grey line IS the command.
+        fun block(kind: String, body: String) = blockOf(item("tool_run", body = body, toolKind = kind))
+
+        val read = block(
+            "read",
+            """{"tool":"Read","action":{"type":"read","path":"src/main.rs"},"output_excerpt":"fn main() {}\nfn other() {}"}""",
+        )
+        assertEquals("Read main.rs", read.line)
+        assertEquals("fn main() {}", read.secondary)
+        val edit = block("edit", """{"tool":"Edit","action":{"type":"edit","path":"src/main.rs"}}""")
+        assertEquals("Edited main.rs", edit.line)
+        assertEquals("with no output, the grey line is the target", "src/main.rs", edit.secondary)
+        assertEquals("Wrote main.rs", block("write", """{"tool":"Write","action":{"type":"write","path":"src/main.rs"}}""").line)
+        assertEquals("Searched", block("search", """{"tool":"Grep","action":{"type":"search","query":"TODO"}}""").line)
+        val ran = block(
+            "execute",
+            """{"tool":"Bash","action":{"type":"execute","command":"go test ./...\necho done"},"output_excerpt":"ok  swarm"}""",
+        )
+        assertEquals("Ran a command", ran.line)
+        assertEquals("the grey line under a command is the command's first line, never its output", "go test ./...", ran.secondary)
+        assertEquals(
+            "Fetched example.com",
+            block("fetch", """{"tool":"WebFetch","action":{"type":"fetch","query":"https://example.com/docs/x"}}""").line,
+        )
+        assertEquals("Started a helper agent", block("agent", """{"tool":"Task","action":{"type":"agent"}}""").line)
+        val other = block("other", """{"tool":"Telepathy","action":{"type":"other"}}""")
+        assertEquals("Used a tool", other.line)
+        assertFalse("an unclassified call must never read as a question mark", other.line.contains("?"))
+        assertEquals("nothing known about the call draws no grey line", "", other.secondary)
+        assertEquals(
+            "no tool_kind at all is no fact, and the row stays the neutral line rather than a guess",
+            "tool_run",
+            block("", """{"tool":"Telepathy"}""").line,
+        )
+    }
+
+    @Test
+    fun `the grey line skips a blank first line`() {
+        // W6 review round, fix 4: the grey line is the first line that SAYS something. A tool
+        // whose output opens with a newline, or a command pasted with leading whitespace, still
+        // gets a line, and the line carries no whitespace of its own.
+        fun block(kind: String, body: String) = blockOf(item("tool_run", body = body, toolKind = kind))
+
+        assertEquals(
+            "ok  swarm",
+            block("read", """{"tool":"Read","action":{"type":"read","path":"x"},"output_excerpt":"\n\nok  swarm\n"}""").secondary,
+        )
+        assertEquals(
+            "go test ./...",
+            block("execute", """{"tool":"Bash","action":{"type":"execute","command":"\n  go test ./...\n"}}""").secondary,
+        )
     }
 
     @Test
@@ -493,6 +554,5 @@ class TranscriptPanelTest {
                 "MACHINE that a phone holding no items is in no position to make",
             !panel.emptyCopy.lowercase().contains("nothing has happened"),
         )
-        assertTrue(panel.heading.isNotEmpty())
     }
 }

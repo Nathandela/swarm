@@ -90,15 +90,17 @@ class PairOnlyRevokeNoticeTest {
                 "has destroyed both key tiers and cannot ask again",
             notice.isNotEmpty(),
         )
-        assertTrue(
-            "the notice does not say the machine has not confirmed the removal, which is the " +
-                "whole of what this phone knows",
-            notice.contains("not confirmed"),
+        assertEquals(
+            "the notice does not say the phone is unpaired and where to look if pairing is " +
+                "refused, which is the whole of what this phone knows (phone refit W5.4)",
+            "Unpaired. If pairing is refused, on your computer:",
+            notice,
         )
-        assertTrue(
-            "the notice names no way out. `swarm remote pair` is refused while the machine still " +
-                "has this device registered, so a user who cannot pair has no way to discover why",
-            notice.contains("swarm remote revoke"),
+        assertEquals(
+            "the way out is a command, and a command is a well's text, never a sentence's " +
+                "(phone refit W5.1)",
+            PairOnlyScreen.REVOKE_COMMAND,
+            PairOnlyScreen.revokeCommandFor(CommandVerdict.UNANSWERED),
         )
     }
 
@@ -138,7 +140,9 @@ class PairOnlyRevokeNoticeTest {
                 "that the machine has definitely kept this device",
             notice != PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED),
         )
-        assertTrue(notice.contains("swarm remote revoke"))
+        assertFalse("a command inside a sentence", notice.contains("swarm remote"))
+        assertEquals(PairOnlyScreen.REVOKE_COMMAND, PairOnlyScreen.revokeCommandFor(refused))
+        assertEquals("a confirmed removal offers a command to run", "", PairOnlyScreen.revokeCommandFor(verdict("ok", "ok")))
     }
 
     /**
@@ -159,7 +163,7 @@ class PairOnlyRevokeNoticeTest {
         assertTrue(
             "a revoke that never reached the machine leaves the device registered for certain, " +
                 "and the screen does not say so",
-            notice.contains("swarm remote revoke"),
+            notice.endsWith("If pairing is refused, on your computer:"),
         )
     }
 

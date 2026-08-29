@@ -155,7 +155,7 @@ object ApprovalSheetScreen {
      * `noticeDetail`'s register, saying WHICH of the codes this one was -- the same split
      * [SessionDetailScreen.killNoticeFor] and `killDetailFor` already draw.
      */
-    private const val NOT_APPLIED = "Your machine could not apply this answer"
+    private const val NOT_APPLIED = "Couldn't send your answer. Try again"
 
     /**
      * The verdict's own sentence, or nothing while the daemon has APPLIED the tap or has not

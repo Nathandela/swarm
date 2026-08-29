@@ -154,8 +154,10 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 	return &RelaySink{cfg: cfg, now: now, seq: seq, outbox: outbox, resumed: outbox.Cursor()}
 }
 
-// Snapshot seals and forwards each roster record as-of the read cursor, returning on
-// the first record that fails so the gateway can gate its cursor on delivery (R-GW.5).
+// Snapshot seals and forwards one authoritative roster-only reseed at the PRIOR delivered
+// cursor. Its explicit empty Events proves that even an empty roster has arrived; the gateway
+// follows it with every backlog record after cursor so the phone can advance without
+// stale-dropping any of them. An append failure gates cursor progress (R-GW.5).
 //
 // It is also PB-SYNC-7's BOOTSTRAP point: Snapshot runs exactly once per (re)connection
 // (the JournalSink contract, gateway.go), so publishing the reconcile record here gets the
@@ -165,21 +167,21 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 // to reconcile against. A nil Authorities disables the bootstrap (unit-test wiring only;
 // production must always provision one).
 //
-// Roster records are deliberately EXEMPT from the outbox dedup Event applies (PB-GW-8): they
-// are CURRENT STATE re-sent as of the read cursor, sharing cursors with journal records they
-// do not duplicate, so suppressing them would leave a restarted phone with no roster at all.
-func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, _ uint64) error {
+// The roster reseed is deliberately EXEMPT from the outbox dedup Event applies (PB-GW-8):
+// it is CURRENT STATE re-sent at the prior cursor, while the following events are keyed by
+// their own cursors. Suppressing it would leave a restarted phone with no authoritative
+// roster at all.
+func (s *RelaySink) Snapshot(roster []protocol.JournalRecord, cursor uint64) error {
 	if s.cfg.Authorities != nil {
 		if err := s.Reconcile(); err != nil {
 			return err
 		}
 	}
-	for _, rec := range roster {
-		if err := s.forward(rec); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.Reseed(protocol.JournalReseed{
+		Roster: append([]protocol.JournalRecord{}, roster...),
+		Events: []protocol.JournalRecord{},
+		Cursor: cursor,
+	})
 }
 
 // Event seals and forwards one live journal record, returning any seal/append error so
@@ -429,18 +431,8 @@ func (s *RelaySink) Reseed(rs protocol.JournalReseed) error {
 	return s.seal(plaintext)
 }
 
-// forward marshals rec as a bare journal record (no kind tag, backward-compatible with the
-// phone's journal path) and seals it into the phone's mailbox. The seal/append error is
-// returned (authoritative for the gateway's cursor gating) and also stashed for Err().
-func (s *RelaySink) forward(rec protocol.JournalRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Cursor 0: the roster path is not outbox-keyed (see Snapshot).
-	return s.forwardLocked(0, rec)
-}
-
-// forwardLocked is forward inside the critical section. A non-zero cursor makes the frame
-// outbox-backed (Event); 0 leaves it unrecorded (roster records, which are re-sent state).
+// forwardLocked marshals a bare journal record inside the critical section. A non-zero cursor
+// makes the frame outbox-backed (Event); zero leaves it unrecorded.
 func (s *RelaySink) forwardLocked(cursor uint64, rec protocol.JournalRecord) error {
 	plaintext, err := json.Marshal(rec)
 	if err != nil {

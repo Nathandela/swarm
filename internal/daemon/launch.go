@@ -386,7 +386,7 @@ func (d *Daemon) launch(spec LaunchSpec, probe launchProbe) (persist.Meta, error
 			// session's agent actually ran in -- the one a provider files its history
 			// under -- becomes uncomputable by anyone, this daemon included. Meta.Cwd is
 			// deliberately left alone: rollbackReserved and Delete both anchor worktree
-			// teardown on it (PreDelete's worktree.Remove(m.Cwd, m.ID) is run -C the REPO).
+			// teardown on the repo while AgentCwd identifies the exact checkout path.
 			m.AgentCwd = cwd
 		}
 	}

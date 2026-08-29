@@ -182,7 +182,7 @@ class TranscriptChatRenderTest {
         assertEquals(
             "the glyph was spliced into the sentence, which rewrites the line the recorded " +
                 "crossing pins byte for byte",
-            "Read /tmp/x",
+            "Read x",
             panel.blocks.single().line,
         )
     }
@@ -357,7 +357,7 @@ class TranscriptChatRenderTest {
             "the tear does not say the record is missing records, or does not carry its own " +
                 "repair -- and a tear a reader cannot act on where they found it is the notice " +
                 "standing above the conversation that this slice was filed to remove",
-            "records missing · repair",
+            "Missing messages · Reload",
             block.line,
         )
         assertEquals(

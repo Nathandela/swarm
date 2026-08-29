@@ -75,7 +75,7 @@ class PairingPanelScreenTest {
         assertEquals("Pair a computer", PairingPanelScreen.titleFor(PairingStep.SCAN))
         assertEquals("Check both screens", PairingPanelScreen.titleFor(PairingStep.COMPARING_CODES))
         assertEquals(
-            "Paired with nathans-mbp",
+            "nathans-mbp",
             PairingPanelScreen.titleFor(PairingStep.PAIRED, machine = "nathans-mbp"),
         )
     }
@@ -406,7 +406,7 @@ class PairingPanelScreenTest {
     @Test
     fun `an interrupted attempt says so, and only while there is no live handshake`() {
         assertEquals(
-            "This pairing was interrupted before it finished. Nothing was joined.",
+            "Pairing was interrupted.",
             panel(PairingStep.SCAN, holding = false, interrupted = true).notice,
         )
         assertEquals(

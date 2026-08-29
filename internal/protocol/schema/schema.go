@@ -62,25 +62,27 @@ type Control struct {
 	// Every field is omitempty so an existing-shape Control serializes
 	// byte-identically (GG-7); the daemon-authoritative times are pointers so a zero
 	// Control emits no new key (a zero time.Time is NOT omitted by encoding/json).
-	OperationID    string          `json:"operation_id,omitempty"`     // idempotency key of a remote mutating op
-	InteractionID  string          `json:"interaction_id,omitempty"`   // the agent interaction being approved (A6)
-	DeviceID       string          `json:"device_id,omitempty"`        // pairing device id (never trusted alone, A1)
-	DeviceSig      string          `json:"device_sig,omitempty"`       // detached Ed25519 over the canonical op tuple (D4)
-	Cursor         uint64          `json:"cursor,omitempty"`           // journal cursor (journal_read/journal_event)
-	IssuedAt       *time.Time      `json:"issued_at,omitempty"`        // daemon-authoritative issue time
-	ExpiresAt      *time.Time      `json:"expires_at,omitempty"`       // daemon-authoritative expiry
-	Approve        *ApproveReq     `json:"approve,omitempty"`          // remote approval request (A6)
-	ErrorCode      ErrorCode       `json:"error_code,omitempty"`       // machine-readable refusal reason (R-PROT.7)
-	Journal        []JournalRecord `json:"journal,omitempty"`          // journal records (journal_read/journal_event)
-	Roster         []JournalRecord `json:"roster,omitempty"`           // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
-	FullResync     bool            `json:"full_resync,omitempty"`      // the caller's cursor fell below the retained floor
-	Devices        []DeviceView    `json:"devices,omitempty"`          // paired-device roster, carried on the device_list reply
-	Policy         *PolicyView     `json:"policy,omitempty"`           // remote launch policy, carried on the policy_query reply
-	TargetDeviceID string          `json:"target_device_id,omitempty"` // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
-	Pairing        *PairingControl `json:"pairing,omitempty"`          // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
-	TTLSeconds     int             `json:"ttl_seconds,omitempty"`      // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
-	GateToken      string          `json:"gate_token,omitempty"`       // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
-	RemoteControl  *bool           `json:"remote_control,omitempty"`   // remote_set_control: the DESIRED remote-control master state (true=on, false=manual off). Pointer so false is transmittable and a zero Control emits no key (A4)
+	OperationID     string          `json:"operation_id,omitempty"`      // idempotency key of a remote mutating op
+	InteractionID   string          `json:"interaction_id,omitempty"`    // the agent interaction being approved (A6)
+	DeviceID        string          `json:"device_id,omitempty"`         // pairing device id (never trusted alone, A1)
+	DeviceSig       string          `json:"device_sig,omitempty"`        // detached Ed25519 over the canonical op tuple (D4)
+	Cursor          uint64          `json:"cursor,omitempty"`            // journal cursor (journal_read/journal_event)
+	JournalMaxBytes int             `json:"journal_max_bytes,omitempty"` // journal_read request: opt into bounded response pages
+	JournalMore     bool            `json:"journal_more,omitempty"`      // journal_read response: more pages from this atomic read follow
+	IssuedAt        *time.Time      `json:"issued_at,omitempty"`         // daemon-authoritative issue time
+	ExpiresAt       *time.Time      `json:"expires_at,omitempty"`        // daemon-authoritative expiry
+	Approve         *ApproveReq     `json:"approve,omitempty"`           // remote approval request (A6)
+	ErrorCode       ErrorCode       `json:"error_code,omitempty"`        // machine-readable refusal reason (R-PROT.7)
+	Journal         []JournalRecord `json:"journal,omitempty"`           // journal records (journal_read/journal_event)
+	Roster          []JournalRecord `json:"roster,omitempty"`            // live sessions as-of Cursor on a journal_read snapshot (R-JRN.4)
+	FullResync      bool            `json:"full_resync,omitempty"`       // the caller's cursor fell below the retained floor
+	Devices         []DeviceView    `json:"devices,omitempty"`           // paired-device roster, carried on the device_list reply
+	Policy          *PolicyView     `json:"policy,omitempty"`            // remote launch policy, carried on the policy_query reply
+	TargetDeviceID  string          `json:"target_device_id,omitempty"`  // device_revoke: the device to REVOKE, distinct from the caller DeviceID (A3.2)
+	Pairing         *PairingControl `json:"pairing,omitempty"`           // owner-tier pairing payload (pair_start/pair_pending/pair_confirm/pair_result, A3.3-a)
+	TTLSeconds      int             `json:"ttl_seconds,omitempty"`       // take_control: caller-requested control-session lifetime (seconds), clamped server-side (A5-b)
+	GateToken       string          `json:"gate_token,omitempty"`        // take_control: one-shot gate token bound into the device signature via content_hash and made single-use (A5-c)
+	RemoteControl   *bool           `json:"remote_control,omitempty"`    // remote_set_control: the DESIRED remote-control master state (true=on, false=manual off). Pointer so false is transmittable and a zero Control emits no key (A4)
 
 	Terminal *TerminalSnapshot `json:"terminal,omitempty"` // server-rendered terminal snapshot, carried on terminal_snapshot (A7 slice B)
 

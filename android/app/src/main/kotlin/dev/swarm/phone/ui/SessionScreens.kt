@@ -270,9 +270,7 @@ data class SessionDetail(
          * reconnection would arrive after the user gave up and did something else, and would stop
          * whatever is running then.
          */
-        const val NOT_SENT_NOTICE =
-            "Stop did not reach your machine and was not held for later. Try again once the " +
-                "connection is back."
+        const val NOT_SENT_NOTICE = "Couldn't stop. You're offline."
 
         /**
          * What the screen says, once, under the composer, when the interrupt is away (phone refit

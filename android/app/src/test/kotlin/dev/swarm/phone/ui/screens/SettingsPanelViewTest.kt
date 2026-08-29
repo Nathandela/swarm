@@ -133,13 +133,27 @@ class SettingsPanelViewTest {
 
         assertEquals(page.sections.single().rows.size, rows.size)
         assertEquals(
-            listOf("Needs your decision", "Task done"),
+            listOf("Needs your answer", "Task done"),
             rows.map { textOf(it.kitRequire(KitTag.SETTINGS_LABEL)) },
         )
         assertEquals(
-            listOf("Approvals and blocked prompts", "Completions and failures"),
+            listOf("Approvals and questions", "Finished and failed sessions"),
             rows.map { textOf(it.kitRequire(KitTag.SETTINGS_SUBLABEL)) },
         )
+    }
+
+    @Test
+    fun `rows form one full-width group without per-tile outer gaps`() {
+        val rows = view(panel()).allTagged(SettingsTag.ROW)
+
+        assertEquals(2, rows.size)
+        rows.forEach { row ->
+            val margins = row.layoutParams as ViewGroup.MarginLayoutParams
+            assertEquals("a grouped row still has a tile inset at start", 0, margins.marginStart)
+            assertEquals("a grouped row still has a tile inset at end", 0, margins.marginEnd)
+            assertEquals("a grouped row still has a tile gap above it", 0, margins.topMargin)
+            assertEquals("a grouped row still has a tile gap below it", 0, margins.bottomMargin)
+        }
     }
 
     // ---- the control goes to the row it belongs to -------------------------
@@ -475,5 +489,21 @@ class SettingsPanelViewTest {
             ),
             tagOrder(root),
         )
+    }
+
+    @Test
+    fun `the replacement row belongs to the full-width settings group too`() {
+        val root = settingsPanelView(
+            context = context,
+            panel = paired(killSwitchEngaged = false),
+            rowFor = { stubControl(context) },
+        )
+        val margins = root.kitRequire(SettingsTag.MACHINE_ROW).layoutParams as
+            ViewGroup.MarginLayoutParams
+
+        assertEquals(0, margins.marginStart)
+        assertEquals(0, margins.marginEnd)
+        assertEquals(0, margins.topMargin)
+        assertEquals(0, margins.bottomMargin)
     }
 }

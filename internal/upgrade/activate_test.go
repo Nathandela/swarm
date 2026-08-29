@@ -106,8 +106,12 @@ func TestActivateInstallsAndHandsOffToTheNewBinarysConverge(t *testing.T) {
 	if len(*calls) != 1 {
 		t.Fatalf("exec calls = %d, want exactly one handoff", len(*calls))
 	}
+	installed, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		t.Fatalf("resolve installed binary: %v", err)
+	}
 	call := (*calls)[0]
-	if call[0] != bin || call[1] != handoffGuardEnv+"=1" {
+	if call[0] != installed || call[1] != handoffGuardEnv+"=1" {
 		t.Errorf("handoff = %v, want the INSTALLED binary with the loop guard", call)
 	}
 	if got := strings.Join(call[2:], " "); got != "swarm daemon restart --unattended" {

@@ -274,9 +274,9 @@ class KitDensityTest {
         )
         val menu = conversationMenu(context, listOf(MenuChoice("a", "A"), MenuChoice("b", "B"))) {}
         val menuRule = (0 until menu.childCount).map { menu.getChildAt(it) }.first { it !is TextView }
-        val tear = gapDivider(context, "records missing")
+        val tear = gapDivider(context, "Missing messages")
         val tearRule = (0 until tear.childCount).map { tear.getChildAt(it) }.first { it !is TextView }
-        val chip = earlierChip(context, "Load earlier messages")
+        val chip = earlierChip(context, "Show earlier")
         val pill = decisionPill(context, "Decision needed")
         val change = fileChangeRow(context, "modify", "ui/kit/Composer.kt", "+12 -24")
         val bubble = messageBubble(context, "check the relay logs too")

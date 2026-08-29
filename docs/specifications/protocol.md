@@ -78,6 +78,8 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `device_id`        | string            | pairing device id; never trusted alone, always paired with `device_sig` (A1) |
 | `device_sig`       | string            | detached Ed25519 signature over the canonical op tuple (D4)                  |
 | `cursor`           | uint64            | journal cursor, carried on `journal_read` / `journal_event` (R-PROT.3)       |
+| `journal_max_bytes`| int               | opt-in maximum encoded response-page size for `journal_read`; omitted keeps the legacy single reply |
+| `journal_more`     | bool              | a bounded `journal_read` response has another page in the same atomic result |
 | `issued_at`        | time              | daemon-authoritative issue time (pointer; the key is omitted when zero)      |
 | `expires_at`       | time              | daemon-authoritative expiry (pointer; the key is omitted when zero)          |
 | `approve`          | `*ApproveReq`     | remote approval of an agent interaction (A6)                                 |

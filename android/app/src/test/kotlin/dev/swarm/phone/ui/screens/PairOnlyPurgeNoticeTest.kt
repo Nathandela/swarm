@@ -130,10 +130,11 @@ class PairOnlyPurgeNoticeTest {
                 "facts about two different computers and neither answers for the other",
             notice.contains(routed),
         )
-        assertTrue(
+        assertEquals(
             "the machine-side remedy went with them: this device is still registered AND still " +
                 "holding key material",
-            notice.contains("swarm remote revoke"),
+            PairOnlyScreen.REVOKE_COMMAND,
+            PairOnlyScreen.revokeCommandFor(answered),
         )
     }
 
@@ -151,12 +152,12 @@ class PairOnlyPurgeNoticeTest {
 
         assertTrue(
             "the routed transport failure was dropped or re-worded once a purge also failed",
-            notice.startsWith(transport),
+            notice.contains(transport),
         )
         assertTrue(
             "this device is still registered for certain -- the command never left the handset -- " +
                 "and the screen stopped saying so once a second failure arrived",
-            notice.contains("swarm remote revoke"),
+            notice.contains("If pairing is refused, on your computer:"),
         )
         assertTrue(
             "the key material this phone could not destroy is reported on the arm where the " +
@@ -177,19 +178,44 @@ class PairOnlyPurgeNoticeTest {
         )
     }
 
+    /**
+     * SHOULD-FIX 4 (W5 review round, 2026-08-29), and it REVERSES the order this test used to
+     * pin under agents-tracker-jx23's ruling ("the machine's answer comes first"). The machine's
+     * clause ends in a colon that points at the well `PairOnlyView` draws directly beneath this
+     * notice; with the purge sentence spliced in after that clause, the colon pointed at two
+     * unrelated sentences instead, which is a worse defect than which fact leads.
+     */
     @Test
-    fun `the machine's answer is stated before the handset's own`() {
-        val refusal = "remote control is disabled (kill switch off)"
-        val notice = PairOnlyScreen.revokeNoticeFor(verdict("kill_switch", refusal), purgeFailure = routed)
+    fun `the purge sentence is stated before the machine's own, so its colon lands beside the well`() {
+        val notice = PairOnlyScreen.revokeNoticeFor(
+            verdict("kill_switch", "remote control is disabled (kill switch off)"),
+            purgeFailure = routed,
+        )
 
-        // THE ORDER IS A COPY DECISION AND IS MADE HERE. The machine's answer is what the user's
-        // next action depends on -- whether `swarm remote pair` will be refused -- and the purge
-        // failure is a fact about this handset that no command of theirs undoes. Leading with the
-        // second buries the actionable one.
+        // "refused to remove this device" is REVOKE_REFUSED's own literal text -- unlike the
+        // machine's raw reason, which lands only in revokeDetailFor's separate cell (ksvb.10),
+        // this is the substring that is actually IN the notice, so the index comparison means
+        // what it says.
         assertTrue(
-            "the handset's own failure is stated before the machine's answer, so the sentence the " +
-                "user can act on is the second one they reach",
-            notice.indexOf(refusal) < notice.indexOf(routed),
+            "the machine's clause -- whose colon points at the well -- is stated before the " +
+                "purge failure, so the colon no longer lands beside the well it names",
+            notice.indexOf(routed) < notice.indexOf("refused to remove this device"),
+        )
+    }
+
+    /**
+     * THE PROPERTY SHOULD-FIX 4 ACTUALLY ASKS FOR, stated directly rather than only inferred from
+     * the previous test's ordering: a colon whose object is drawn immediately under it, and
+     * nothing else, is the whole of what "points at the well" means.
+     */
+    @Test
+    fun `the colon that points at the well is the last character before it, even with a purge failure`() {
+        val notice = PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED, purgeFailure = routed)
+
+        assertTrue(
+            "the colon that names the well's command is not the last character of the notice, " +
+                "so the well it points at reads as attached to a different sentence: '$notice'",
+            notice.endsWith(":"),
         )
     }
 }

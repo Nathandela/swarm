@@ -46,12 +46,19 @@ package gate
 // NOTHING HERE WALKS THE REPOSITORY ROOT. The scan is two named files.
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 )
 
 const w6o3ScreenFile = "dev/swarm/phone/ui/screens/PairOnlyScreen.kt"
+
+// w6o3ViewFile is the composition that draws that copy. The remedy is a command, and a command is a
+// well's text and never a sentence's (phone refit W5.1, ruled 2026-08-28): the well is drawn AFTER
+// the body that points at it and BEFORE the control that needs it, which is the order this fence
+// has always been about.
+const w6o3ViewFile = "dev/swarm/phone/ui/screens/PairOnlyView.kt"
 
 // w6o3TransportRead is the transport's own state, which is the ONLY place the cause survives: the
 // summary carries `paired` and nothing about why it turned false.
@@ -181,6 +188,10 @@ var w6o3StringLiteral = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 
 var w6o3ConstReference = regexp.MustCompile(`\b[A-Z][A-Z0-9_]{2,}\b`)
 
+// w6o3TemplateReference is a `const val` spliced into a literal by Kotlin's own template syntax
+// (`"$REVOKE_COMMAND\n..."`), which is how PairOnlyScreen spells the well's two lines once.
+var w6o3TemplateReference = regexp.MustCompile(`\$\{?([A-Z][A-Z0-9_]{2,})\}?`)
+
 // w6o3Constants maps each `const val` in the file to the expression it is assigned.
 //
 // The expression ends at the next declaration or the next blank line, whichever comes first.
@@ -212,7 +223,12 @@ func w6o3Text(expr string, consts map[string]string, depth int) string {
 	}
 	var out strings.Builder
 	for _, lit := range w6o3StringLiteral.FindAllStringSubmatch(expr, -1) {
-		out.WriteString(lit[1])
+		out.WriteString(w6o3TemplateReference.ReplaceAllStringFunc(lit[1], func(ref string) string {
+			if body, ok := consts[w6o3TemplateReference.FindStringSubmatch(ref)[1]]; ok {
+				return w6o3Text(body, consts, depth+1)
+			}
+			return ref
+		}))
 		out.WriteByte(' ')
 	}
 	for _, ref := range w6o3ConstReference.FindAllString(w6o3StringLiteral.ReplaceAllString(expr, " "), -1) {
@@ -228,7 +244,8 @@ func w6o3Text(expr string, consts map[string]string, depth int) string {
 // needed.
 //
 // @param code PairOnlyScreen.kt with its comments stripped and its STRING LITERALS KEPT: the
-//  subject here is the words.
+//
+//	subject here is the words.
 func w6o3CopyFaults(where, code string) []string {
 	body, ok := kotlinFunBody(code, "copyFor")
 	if !ok {
@@ -240,22 +257,31 @@ func w6o3CopyFaults(where, code string) []string {
 			"cannot clear itself, so a screen with nothing to say in it says nothing forever"}
 	}
 	args, ok := w6o3ArgumentsOfFirstCall(body[arm:], "PairOnlyCopy")
-	if !ok || len(args) != 3 {
-		return []string{where + ": the REPAIR_REQUIRED arm does not compose a three-part " +
-			"PairOnlyCopy, so this fence cannot tell the body from the control"}
+	if !ok || len(args) != 4 {
+		return []string{where + ": the REPAIR_REQUIRED arm does not compose a four-part " +
+			"PairOnlyCopy (title, body, control, command), so this fence cannot tell the body " +
+			"from the control from the well"}
 	}
 	consts := w6o3Constants(code)
-	// The slots are positional and the order is the reading order: title, body, control.
+	// The slots are positional and the order is the reading order: title, body, control; the
+	// command is the well drawn between the body and the control (phone refit W5.1).
 	bodyText, ctaText := w6o3Text(args[1], consts, 0), w6o3Text(args[2], consts, 0)
+	commandText := w6o3Text(args[3], consts, 0)
 
 	var faults []string
 	for _, step := range w6o3Unregister {
-		if !strings.Contains(bodyText, step) {
-			faults = append(faults, where+": repair_required's body never names `"+step+"`. The "+
+		if !strings.Contains(commandText, step) {
+			faults = append(faults, where+": repair_required's well never names `"+step+"`. The "+
 				"machine still holds this device's registration and `swarm remote pair` is refused "+
 				"while it does (PB-STATE-10), so a user who presses the only control on this screen "+
 				"walks into a pairing that cannot complete -- the failure loop PB-APP-10 forbids, "+
 				"reached through the remedy")
+		}
+		if strings.Contains(bodyText, step) {
+			faults = append(faults, where+": repair_required puts `"+step+"` in the BODY sentence. A "+
+				"command is a well's text and never a sentence's (phone refit W5.1): a person "+
+				"retypes it into a shell off a phone screen, and the prose around it is what they "+
+				"mistype")
 		}
 		if strings.Contains(ctaText, step) {
 			faults = append(faults, where+": repair_required puts `"+step+"` on the CONTROL. A "+
@@ -281,9 +307,37 @@ func TestW6O3_TheTerminalTransportStatesReachTheScreenTheySendThePhoneTo(t *test
 	}
 }
 
+// w6o3OrderFaults reports the well drawn anywhere but between the body that points at it and the
+// control that needs it.
+//
+// @param code PairOnlyView.kt with its comments stripped. The three marks are read as source
+//
+//	positions because the composition adds its views in source order.
+func w6o3OrderFaults(where, code string) []string {
+	body := strings.Index(code, "PairOnlyTag.BODY")
+	well := strings.Index(code, "monoWell(context, copy.command)")
+	cta := strings.Index(code, "PairOnlyTag.CTA")
+	switch {
+	case body < 0 || cta < 0:
+		return []string{where + ": the composition tags neither its body nor its control, so this " +
+			"fence cannot read the order"}
+	case well < 0:
+		return []string{where + ": nothing draws `copy.command`, so the remedy the body points at " +
+			"reaches no view -- the reader is told to run something they are never shown"}
+	case well < body || well > cta:
+		return []string{fmt.Sprintf("%s: the command's well is drawn outside the body-then-control "+
+			"order (body at %d, well at %d, control at %d). A remedy shown after the control is a "+
+			"decoration, and one shown above the sentence that points at it is a command with no "+
+			"sentence", where, body, well, cta)}
+	}
+	return nil
+}
+
 // TestW6O3_TheRemedyIsStatedBeforeTheControlThatNeedsIt.
 func TestW6O3_TheRemedyIsStatedBeforeTheControlThatNeedsIt(t *testing.T) {
-	if faults := w6o3CopyFaults(w6o3ScreenFile, d0b8Code(t, w6o3ScreenFile)); len(faults) > 0 {
+	faults := w6o3CopyFaults(w6o3ScreenFile, d0b8Code(t, w6o3ScreenFile))
+	faults = append(faults, w6o3OrderFaults(w6o3ViewFile, d0b8Code(t, w6o3ViewFile))...)
+	if len(faults) > 0 {
 		t.Errorf("agents-tracker-w6o3: the repair_required screen offers a bare pairing "+
 			"control:\n  %s", strings.Join(faults, "\n  "))
 	}
@@ -359,48 +413,98 @@ func TestW6O3_TheWiringScanDiscriminates(t *testing.T) {
 // TestW6O3_TheCopyScanDiscriminates is the control on the words.
 func TestW6O3_TheCopyScanDiscriminates(t *testing.T) {
 	const shape = `object PairOnlyScreen {
-    const val BODY = "Sessions, machines and activity all come from the machine this phone is paired with."
+    const val BODY = "Your sessions come from the computer you pair with."
 
     const val CTA = "Pair a computer"
 
-    private const val UNREGISTER_FIRST = "run ` + "`swarm remote devices`" + ` on your machine to find " +
-        "this device and ` + "`swarm remote revoke <device-id>`" + ` to unregister it"
+    const val REVOKE_COMMAND = "swarm remote devices"
 
-    private const val REPAIR_REQUIRED_CAUSE = "This phone's key was destroyed and cannot be " +
-        "recovered. Your machine still has this device registered, so " + UNREGISTER_FIRST +
-        " before pairing this phone again."
+    private const val UNREGISTER_COMMANDS = "$REVOKE_COMMAND\nswarm remote revoke <device-id>"
+
+    private const val REPAIR_REQUIRED_CAUSE = "This phone needs to pair again. First, on your computer:"
 
     fun copyFor(reason: PairOnlyReason): PairOnlyCopy = when (reason) {
         PairOnlyReason.FIRST_RUN -> PairOnlyCopy(TITLE, BODY, CTA)
 
         PairOnlyReason.REPAIR_REQUIRED -> PairOnlyCopy(
             TITLE_REPAIR_REQUIRED,
-            REPAIR_REQUIRED_CAUSE + " " + BODY,
+            REPAIR_REQUIRED_CAUSE,
             CTA,
+            command = UNREGISTER_COMMANDS,
         )
     }
 }`
 	if faults := w6o3CopyFaults("shape.kt", shape); len(faults) > 0 {
-		t.Fatalf("the scan rejects a screen that states the machine-side step in its body and then "+
-			"offers the control:\n%s", strings.Join(faults, "\n"))
+		t.Fatalf("the scan rejects a screen that states the machine-side step in its well, under "+
+			"the body and before the control:\n%s", strings.Join(faults, "\n"))
 	}
 
-	// THE BARE CONTROL PB-APP-10 FORBIDS: a terminal state with the first-run sentence under it.
-	bare := strings.Replace(shape, "REPAIR_REQUIRED_CAUSE + \" \" + BODY,", "BODY,", 1)
+	// THE BARE CONTROL PB-APP-10 FORBIDS: the well is empty, and the body points at nothing.
+	bare := strings.Replace(shape, "command = UNREGISTER_COMMANDS,", "command = \"\",", 1)
 	if faults := w6o3CopyFaults("bare.kt", bare); len(faults) != 2 {
 		t.Errorf("the scan finds %d faults where repair_required offers a pairing control with no "+
 			"statement of the step the machine has to take first:\n%s",
 			len(faults), strings.Join(faults, "\n"))
 	}
 
+	// THE STEP IN THE SENTENCE, which is the shape W5.1 replaced: prose a person retypes.
+	inBody := strings.Replace(shape,
+		"REPAIR_REQUIRED_CAUSE,\n            CTA,",
+		"REPAIR_REQUIRED_CAUSE + \" \" + UNREGISTER_COMMANDS,\n            CTA,", 1)
+	if faults := w6o3CopyFaults("inbody.kt", inBody); len(faults) != 2 {
+		t.Errorf("the scan finds %d faults where the remedy is spliced into the body sentence "+
+			"(two steps, each in the sentence):\n%s", len(faults), strings.Join(faults, "\n"))
+	}
+
 	// THE STEP ANNOUNCED ON THE CONTROL, which is the same words in the one slot that is read
 	// after the press rather than before it.
 	onControl := strings.Replace(shape,
-		"REPAIR_REQUIRED_CAUSE + \" \" + BODY,\n            CTA,",
-		"BODY,\n            CTA + \" -- \" + UNREGISTER_FIRST,", 1)
-	if faults := w6o3CopyFaults("oncontrol.kt", onControl); len(faults) != 4 {
-		t.Errorf("the scan finds %d faults where the remedy is a label on the button rather than "+
-			"the sentence above it (two steps, missing from the body and present on the "+
-			"control):\n%s", len(faults), strings.Join(faults, "\n"))
+		"REPAIR_REQUIRED_CAUSE,\n            CTA,",
+		"REPAIR_REQUIRED_CAUSE,\n            CTA + \" -- \" + UNREGISTER_COMMANDS,", 1)
+	if faults := w6o3CopyFaults("oncontrol.kt", onControl); len(faults) != 2 {
+		t.Errorf("the scan finds %d faults where the remedy is also a label on the button "+
+			"(two steps, each on the control):\n%s", len(faults), strings.Join(faults, "\n"))
+	}
+
+	// THE OLD THREE-PART COPY, which has no slot for a well at all.
+	threePart := strings.Replace(shape, "\n            command = UNREGISTER_COMMANDS,", "", 1)
+	if faults := w6o3CopyFaults("threepart.kt", threePart); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults in a copy with no command slot:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+}
+
+// TestW6O3_TheOrderScanDiscriminates is the control on where the well is drawn.
+func TestW6O3_TheOrderScanDiscriminates(t *testing.T) {
+	const ordered = `fun pairOnlyView(context: Context, copy: PairOnlyCopy): View {
+    column.addView(emptyState(context, copy.body).apply { tag = PairOnlyTag.BODY })
+    if (copy.command.isNotEmpty()) {
+        column.addView(monoWell(context, copy.command).apply { tag = PairOnlyTag.COMMAND }.scrolledHorizontally())
+    }
+    column.addView(ctaButton(context, copy.cta, CtaKind.APPROVE).apply { tag = PairOnlyTag.CTA })
+    return column
+}`
+	if faults := w6o3OrderFaults("ordered.kt", ordered); len(faults) > 0 {
+		t.Fatalf("the scan rejects a well drawn between the body and the control:\n%s",
+			strings.Join(faults, "\n"))
+	}
+
+	const wellBlock = `    if (copy.command.isNotEmpty()) {
+        column.addView(monoWell(context, copy.command).apply { tag = PairOnlyTag.COMMAND }.scrolledHorizontally())
+    }
+`
+	// THE WELL UNDER THE CONTROL: the remedy is read after the press.
+	below := strings.Replace(ordered, wellBlock, "", 1)
+	below = strings.Replace(below, "    return column\n", wellBlock+"    return column\n", 1)
+	if faults := w6o3OrderFaults("below.kt", below); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults where the well is drawn after the control:\n%s",
+			len(faults), strings.Join(faults, "\n"))
+	}
+
+	// NO WELL AT ALL: the body points at a command nobody is shown.
+	absent := strings.Replace(ordered, wellBlock, "", 1)
+	if faults := w6o3OrderFaults("absent.kt", absent); len(faults) != 1 {
+		t.Errorf("the scan finds %d faults where nothing draws the command:\n%s",
+			len(faults), strings.Join(faults, "\n"))
 	}
 }

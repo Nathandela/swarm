@@ -191,4 +191,25 @@ class ComposerTest {
             tint.getColorForState(intArrayOf(android.R.attr.state_enabled), 0),
         )
     }
+    /** Phone refit W5.2: the refusal names the computer where the screen knows its name. */
+    @Test
+    fun `noticeFor names the machine when one is known`() {
+        assertEquals(
+            "Not sent. Finish typing on MacBookPro first.",
+            ComposerModel.noticeFor("INPUT_BUSY", machine = "MacBookPro").copy,
+        )
+    }
+
+    @Test
+    fun `noticeFor falls back to your computer`() {
+        assertEquals(
+            "Not sent. Finish typing on your computer first.",
+            ComposerModel.noticeFor("INPUT_BUSY").copy,
+        )
+        assertEquals(
+            "an empty name is no name, not a blank in the sentence",
+            ComposerModel.noticeFor("INPUT_BUSY"),
+            ComposerModel.noticeFor("INPUT_BUSY", machine = ""),
+        )
+    }
 }

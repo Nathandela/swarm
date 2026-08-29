@@ -18,7 +18,10 @@ package adapter
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -339,4 +342,52 @@ func TestValidate_AdmitsTheSyntheticSource(t *testing.T) {
 	if err := in.Validate(); err != nil {
 		t.Fatalf("Validate rejected a synthetic user_message: %v", err)
 	}
+}
+
+// TestInteractionValidate_AcceptsEverySection7ActionType — the positive half of the
+// `action.type` oneOf: every member of interaction-schema.md §7's vocabulary validates,
+// including `agent` (phone-refit-playbook W6.1: Claude's Task tool is a helper agent, not
+// an `other`). The vocabulary is READ OFF THE SCHEMA rather than copied here, so a member
+// §7 names that the oneOf does not admit is caught, and the test is never a third copy of
+// the list that drifts on its own. TestInteractionValidate above proves the fence rejects
+// a stranger; this proves it admits each citizen.
+func TestInteractionValidate_AcceptsEverySection7ActionType(t *testing.T) {
+	for _, typ := range section7ActionTypes(t) {
+		in := Interaction{Kind: KindToolRun, Status: StatusCompleted, Tool: "x", Action: ToolAction{Type: typ}}
+		if err := in.Validate(); err != nil {
+			t.Errorf("action.type %q is in §7's vocabulary and was rejected: %v", typ, err)
+		}
+	}
+}
+
+// section7ActionTypes reads §7's vocabulary off interaction-schema.md: the backticked tokens
+// of the `type` row (the line starting "| `type` |"), the field's own name dropped and a
+// repeat kept once (the row's parenthetical names `agent` again). It fails loudly when the
+// row is missing or names nothing, so a reshuffled table never passes as an empty vocabulary.
+// The same file is read the same way by skeleton/r6_toolkind_test.go.
+func section7ActionTypes(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "specifications", "interaction-schema.md"))
+	if err != nil {
+		t.Fatalf("read interaction-schema.md: %v", err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "| `type` |") {
+			continue
+		}
+		var types []string
+		seen := map[string]bool{}
+		for _, m := range regexp.MustCompile("`([^`]+)`").FindAllStringSubmatch(line, -1)[1:] {
+			if tok := m[1]; !seen[tok] {
+				seen[tok] = true
+				types = append(types, tok)
+			}
+		}
+		if len(types) == 0 {
+			t.Fatal("interaction-schema.md §7's `type` row names no action type")
+		}
+		return types
+	}
+	t.Fatal("interaction-schema.md has no `type` row (a line starting \"| `type` |\"); §7's vocabulary is read off it")
+	return nil
 }

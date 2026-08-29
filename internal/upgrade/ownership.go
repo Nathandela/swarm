@@ -51,8 +51,16 @@ func ClassifyOwner(binPath string) Owner {
 		}
 	}
 
-	if gobin := goInstallDir(); gobin != "" && filepath.Dir(resolved) == gobin {
-		return OwnerGo
+	if gobin := goInstallDir(); gobin != "" {
+		// Compare resolved paths on both sides. On macOS /tmp is a symlink to
+		// /private/tmp; resolving only the binary made a GOBIN beneath /tmp look
+		// self-owned and allowed the updater to overwrite Go's install.
+		if resolvedGoBin, resolveErr := filepath.EvalSymlinks(gobin); resolveErr == nil {
+			gobin = resolvedGoBin
+		}
+		if filepath.Dir(resolved) == filepath.Clean(gobin) {
+			return OwnerGo
+		}
 	}
 
 	if runtime.GOOS == "linux" {

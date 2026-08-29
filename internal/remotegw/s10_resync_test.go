@@ -30,14 +30,16 @@ import (
 
 // fakeResyncer records the resync requests the bridge dispatched.
 type fakeResyncer struct {
-	mu    sync.Mutex
-	froms []uint64
+	mu         sync.Mutex
+	froms      []uint64
+	rosterOnly []bool
 }
 
-func (f *fakeResyncer) Resync(_ context.Context, from uint64) error {
+func (f *fakeResyncer) Resync(_ context.Context, from uint64, rosterOnly bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.froms = append(f.froms, from)
+	f.rosterOnly = append(f.rosterOnly, rosterOnly)
 	return nil
 }
 
@@ -82,6 +84,9 @@ func TestS10_TheBridgeRoutesJournalResyncToTheResyncer(t *testing.T) {
 			"the machine must read from 0 and re-send every event it has ever journalled to "+
 			"repair one hole -- into the same 600-per-tumbling-minute mailbox the repair itself "+
 			"has to arrive on", rs.froms[0])
+	}
+	if rs.rosterOnly[0] {
+		t.Errorf("ordinary journal repair was dispatched as roster-only; PB-SYNC-3 still requires its atomic roster+events reseed")
 	}
 	// PB-SYNC-5's decision, as a fence: the resync is UNSIGNED and is NOT forwarded to the
 	// daemon's device authenticator. The gateway performs the journal_read and holds no

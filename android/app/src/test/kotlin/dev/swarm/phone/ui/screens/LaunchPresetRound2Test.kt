@@ -46,12 +46,8 @@ class LaunchPresetRound2Test {
             notice.contains("same operation"),
         )
         assertTrue(
-            "outcome_unknown copy \"$notice\" must say a re-confirm is a NEW launch",
-            notice.contains("new launch"),
-        )
-        assertTrue(
-            "outcome_unknown copy \"$notice\" must name the second-session risk the user is accepting",
-            notice.contains("second session"),
+            "outcome_unknown copy \"$notice\" must send the reader to check before trying again",
+            notice.contains("before trying again"),
         )
     }
 

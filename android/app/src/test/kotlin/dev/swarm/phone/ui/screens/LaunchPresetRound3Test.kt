@@ -51,12 +51,12 @@ class LaunchPresetRound3Test {
     }
 
     @Test
-    fun fetchKillSwitchRefusalStillNamesTheSwitch() {
+    fun fetchKillSwitchRefusalSaysThePresetsCouldNotLoad() {
         val fetch = LaunchPresetScreen.fetchNoticeFor(LaunchDeliveryNotice.KILL_SWITCH).lowercase()
         assertTrue(
-            "kill-switch fetch refusal \"$fetch\" does not name remote control being off; the " +
-                "remedy (turn it on at the terminal) hangs off that fact",
-            fetch.contains("remote control"),
+            "kill-switch fetch refusal \"$fetch\" does not say the presets could not be loaded; " +
+                "the switch itself is the machine's own words, in the detail (phone refit W5.4)",
+            fetch.startsWith("couldn't load presets"),
         )
     }
 

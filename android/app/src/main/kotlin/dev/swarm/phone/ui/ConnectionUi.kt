@@ -46,25 +46,25 @@ data class ConnectionBanner(
 
         fun of(state: ConnectionState): ConnectionBanner = when (state) {
             ConnectionState.OFFLINE -> state.banner(
-                "Not connected to your machine.",
+                "Offline",
                 Remedy.WAIT_FOR_CONNECTION,
                 showsSpinner = false,
             )
 
             ConnectionState.CONNECTING -> state.banner(
-                "Connecting to your machine.",
+                "Connecting…",
                 Remedy.WAIT_FOR_CONNECTION,
                 showsSpinner = true,
             )
 
             ConnectionState.ONLINE -> state.banner(
-                "Connected to your machine.",
+                "Connected",
                 Remedy.NONE,
                 showsSpinner = false,
             )
 
             ConnectionState.RECONNECTING -> state.banner(
-                "Lost the link to your machine; reconnecting.",
+                "Reconnecting…",
                 Remedy.WAIT_FOR_CONNECTION,
                 showsSpinner = true,
             )
@@ -79,7 +79,7 @@ data class ConnectionBanner(
             // same: the machine still holds a registration the owner has to clear before a
             // re-pair can succeed, and a user told only to "pair again" will try and fail.
             ConnectionState.REVOKED -> state.banner(
-                "The owner removed this device. Clear its registration on the machine, then " +
+                "The owner removed this device. Clear its registration on your computer, then " +
                     "pair this phone again.",
                 Remedy.RE_PAIR,
                 showsSpinner = false,
@@ -89,15 +89,15 @@ data class ConnectionBanner(
             // that can come back, so neither may carry a spinner -- and they do not share a
             // remedy, which is why they are two rows and not one.
             ConnectionState.RELAY_UNTRUSTED -> state.banner(
-                "This phone will not connect to that relay: it is not presenting the identity " +
-                    "your machine published when you paired. Pair this phone again.",
+                "This phone will not connect to that address: it is not presenting the identity " +
+                    "your computer published when you paired. Pair this phone again.",
                 Remedy.RE_PAIR,
                 showsSpinner = false,
             )
 
             ConnectionState.RELAY_INSECURE -> state.banner(
-                "Your machine is configured to use an unencrypted relay, which this phone " +
-                    "refuses. Fix the relay address on the machine, then pair this phone again.",
+                "Your computer is configured to use an unencrypted address, which this phone " +
+                    "refuses. Fix your computer's address, then pair this phone again.",
                 Remedy.RE_PAIR,
                 showsSpinner = false,
             )
@@ -174,10 +174,8 @@ data class StreamView(
     val notice: String
         get() = when (badge) {
             StreamBadge.LIVE -> ""
-            StreamBadge.STALE ->
-                "This view may be missing events. It repairs itself when the link recovers."
-            StreamBadge.RESYNCING -> "Repairing the $stream view; the gap clears when the " +
-                "repair arrives."
+            StreamBadge.STALE -> "Some updates may be missing."
+            StreamBadge.RESYNCING -> "Catching up…"
         }
 }
 
@@ -251,8 +249,8 @@ data class MachineFreshness(
      */
     fun notice(nowUnixMs: Long): String? = when {
         !silent -> null
-        lastHeardUnixMs == 0L -> "Not heard from your machine yet."
-        else -> "Not heard from your machine for ${sinceLastHeard(nowUnixMs)}."
+        lastHeardUnixMs == 0L -> "Not seen yet"
+        else -> "Last seen ${sinceLastHeard(nowUnixMs)} ago"
     }
 
     /**

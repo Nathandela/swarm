@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import dev.swarm.phone.ui.kit.chipRow
+import dev.swarm.phone.ui.kit.earlierChip
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.filterChip
 import dev.swarm.phone.ui.kit.navHeader
@@ -40,6 +41,8 @@ object InboxTag {
 
     /** C1.2 `.chips`. */
     const val SCOPES = "inbox.scopes"
+    const val SYNCING = "inbox.syncing"
+    const val REFRESH = "inbox.refresh"
 
     /** C1.3 `.plabel` -- one per Group in TRIAGE_ORDER that has rows, plus an empty Needs you (W7.2). */
     const val SECTION_LABEL = "inbox.section.label"
@@ -111,6 +114,8 @@ fun triageInboxView(
     promoted: Set<String> = emptySet(),
     below: View? = null,
     status: View? = null,
+    refreshing: Boolean = screen.refreshing,
+    onRefresh: (() -> Unit)? = null,
 ): View {
     val content = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -122,8 +127,23 @@ fun triageInboxView(
         layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
     }
 
+    val refresh = onRefresh?.let { callback ->
+        earlierChip(
+            context,
+            if (refreshing) TriageInboxScreen.REFRESHING_LABEL else TriageInboxScreen.REFRESH_LABEL,
+        ).apply {
+            tag = InboxTag.REFRESH
+            contentDescription = if (refreshing) {
+                TriageInboxScreen.REFRESHING_DESCRIPTION
+            } else {
+                TriageInboxScreen.REFRESH_DESCRIPTION
+            }
+            isEnabled = !refreshing
+            setOnClickListener { callback() }
+        }
+    }
     content.addView(
-        navHeader(context, screen.title, screen.live, status).apply { tag = InboxTag.NAV },
+        navHeader(context, screen.title, screen.live, status, refresh).apply { tag = InboxTag.NAV },
     )
     content.addView(
         chipRow(context).apply {
@@ -141,6 +161,15 @@ fun triageInboxView(
             }
         },
     )
+
+    if (!screen.rosterReady) {
+        content.addView(
+            emptyState(context, TriageInboxScreen.SYNCING_COPY, compact = true)
+                .apply { tag = InboxTag.SYNCING },
+        )
+        below?.let { content.addView(it) }
+        return content
+    }
 
     screen.sections.forEach { section ->
         // AN EMPTY SECTION COLLAPSES, EXCEPT NEEDS YOU (phone-refit-playbook W7.2). This used to

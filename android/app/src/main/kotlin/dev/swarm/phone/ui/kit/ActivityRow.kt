@@ -72,6 +72,11 @@ import dev.swarm.phone.R
  *  A CELL AND NOT A PREFIX ON [body]. The alternative -- splicing the character into the sentence
  *  -- would put a symbol inside copy the SCREEN wrote (PB-DS-9) and would rewrite the transcript
  *  lines the recorded Claude Code crossing pins byte for byte.
+ * @param secondary the one grey line under [body] (phone-refit-playbook W6.1): the machine's own
+ *  literal -- a command, a file's first line, a host -- which is why it is a VIEW and not a span
+ *  in the sentence, and why it takes the timestamp cell's face and ink rather than the body's.
+ *  One line, ended with the platform's mark ([Kit.identityCell]): a command is an identity, not
+ *  prose, and the whole of it is one tap away. null draws no line and costs nothing.
  */
 fun activityRow(
     context: Context,
@@ -79,6 +84,7 @@ fun activityRow(
     emphasis: CharSequence? = null,
     timestamp: CharSequence? = null,
     glyph: CharSequence? = null,
+    secondary: CharSequence? = null,
 ): LinearLayout {
     val row = KitStack(
         context,
@@ -124,7 +130,7 @@ fun activityRow(
             },
         )
     }
-    row.addView(
+    val sentence =
         Kit.textView(context).apply {
             Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Message)
             // `--p-ink`, which is row 14's cell and NOT the `--p-ink2` a body line takes on the
@@ -137,10 +143,35 @@ fun activityRow(
             // drawing actually spends.
             setTextColor(Kit.colour(context, R.color.swarm_text_primary))
             text = emphasised(context, body, emphasis)
-            // The body takes the slack, so the timestamp keeps its own width and the sentence
-            // wraps inside what is left rather than pushing the row wider than the screen.
-            layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             tag = KitTag.ACTIVITY_BODY
+        }
+    // The body takes the slack, so the timestamp keeps its own width and the sentence wraps
+    // inside what is left rather than pushing the row wider than the screen.
+    val slack = LinearLayout.LayoutParams(0, WRAP, 1f)
+    if (secondary == null) {
+        row.addView(sentence.apply { layoutParams = slack })
+        return row
+    }
+    // The grey line sits UNDER the sentence and inside its cell: a vertical stack takes the
+    // slack, the sentence its full width, and the stack's baseline is the sentence's first line
+    // so the timestamp still sits on it. The gap is the ledger's smallest step -- the two are
+    // one row, not a label over a value.
+    row.addView(
+        KitStack(context, LinearLayout.VERTICAL, Kit.dimenPx(context, R.dimen.swarm_space_2)).apply {
+            layoutParams = slack
+            addView(sentence.apply { layoutParams = LinearLayout.LayoutParams(MATCH, WRAP) })
+            addView(
+                Kit.textView(context).apply {
+                    Kit.appearance(this, R.style.TextAppearance_Swarm_Mono_Meta)
+                    setTextColor(Kit.colour(context, R.color.swarm_text_tertiary))
+                    text = secondary
+                    Kit.identityCell(this)
+                    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+                    tag = KitTag.ACTIVITY_SECONDARY
+                },
+            )
+            // After the children: the platform checks the index against the count it has.
+            baselineAlignedChildIndex = 0
         },
     )
     return row

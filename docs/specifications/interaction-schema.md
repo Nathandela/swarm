@@ -353,7 +353,7 @@ phone, decides what the tool *did*.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `type` | string | `read` \| `edit` \| `write` \| `search` \| `execute` \| `fetch` \| `other` |
+| `type` | string | `read` \| `edit` \| `write` \| `search` \| `execute` \| `fetch` \| `agent` \| `other` (`agent`: a sub-agent the CLI started, phone-refit-playbook W6.1) |
 | `path` | string | file-scoped target, for `read`/`edit`/`write` |
 | `query` | string | the pattern, for `search`; the URL, for `fetch` (the Wave R6 target-field ruling, recorded when the first real WebFetch payload was captured — `claude-webfetch-pretooluse.json`: the URL is the fetch's target and rides the existing field rather than growing this sealed table a fifth member) |
 | `command` | string | the argv rendering, for `execute` |
@@ -361,7 +361,8 @@ phone, decides what the tool *did*.
 - **IS-TOOL-1** (Ubiquitous) `action` SHALL be produced machine-side by the per-CLI adapter. A
   phone SHALL NOT parse `tool` or raw arguments to infer an action.
 - **IS-TOOL-2** (Unwanted) IF the adapter cannot classify the call, THEN `type` SHALL be `other`
-  and the card falls back to `tool`. An unclassified call is never guessed at.
+  and the phone says "Used a tool" and never the tool name (phone-refit-playbook W6.1). An
+  unclassified call is never guessed at.
 - **IS-TOOL-3** (Unwanted) IF a rendered line matches a per-CLI truncation marker (spike-SA's
   truncated-tool-output rule), THEN `truncation_marker` SHALL carry that text **verbatim**, the
   client SHALL show it as-is, and the item SHALL NOT claim to hold the underlying output. A

@@ -1197,19 +1197,23 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 // events after it rather than every event ever journalled: JournalResume's
 // {Roster, Events, Cursor} is exactly the reseed's three fields.
 func (a *App) unsignedResync(from uint64) (*Op, error) {
-	return a.unsignedCommandAt(schema.ActionJournalResync, "", from)
+	return a.unsignedCommandAt(schema.ActionJournalResync, "", from, false)
+}
+
+func (a *App) unsignedRosterRefresh(from uint64) (*Op, error) {
+	return a.unsignedCommandAt(schema.ActionJournalResync, "", from, true)
 }
 
 // unsignedCommand seals a READ command (terminal_watch / terminal_unwatch): the action and
 // its target only, with no device signature, because the gateway serves it itself.
 func (a *App) unsignedCommand(action, session string) (*Op, error) {
-	return a.unsignedCommandAt(action, session, 0)
+	return a.unsignedCommandAt(action, session, 0, false)
 }
 
 // unsignedCommandAt is unsignedCommand with journal_resync's from-cursor. It is one function
 // because every unsigned read draws from the SAME Sequencer and must take the same bucket
 // lock; a second copy of this body is a second place for that rule to be forgotten.
-func (a *App) unsignedCommandAt(action, session string, resyncCursor uint64) (*Op, error) {
+func (a *App) unsignedCommandAt(action, session string, resyncCursor uint64, rosterOnly bool) (*Op, error) {
 	core, err := a.ready()
 	if err != nil {
 		return nil, err
@@ -1230,7 +1234,11 @@ func (a *App) unsignedCommandAt(action, session string, resyncCursor uint64) (*O
 	auth := schema.DeviceCommandAuth{Action: action, Machine: core.State().Machine, Session: session}
 	var env []byte
 	if action == schema.ActionJournalResync {
-		env, err = phonecore.SealResyncEnvelope(sc.key, sc.epoch, seq, auth, resyncCursor)
+		if rosterOnly {
+			env, err = phonecore.SealRosterRefreshEnvelope(sc.key, sc.epoch, seq, auth, resyncCursor)
+		} else {
+			env, err = phonecore.SealResyncEnvelope(sc.key, sc.epoch, seq, auth, resyncCursor)
+		}
 	} else {
 		env, err = phonecore.SealCommandEnvelope(sc.key, sc.epoch, seq, auth)
 	}

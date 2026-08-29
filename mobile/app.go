@@ -821,14 +821,15 @@ func (a *App) StateSummary() (sum *StateSummary, err error) {
 	ended := transportEndsPairing(a.connState, a.pairingGraceUntil, time.Now())
 	a.mu.Unlock()
 	return &StateSummary{
-		Machine:     st.Machine,
-		EpochID:     int64(st.EpochID),
-		SendSeq:     int64(st.SendSeq[st.EpochID]),
-		RelayCursor: int64(st.RelayCursor),
-		PendingOps:  pending,
-		Restored:    len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
-		Reconciled:  reconciled,
-		Paired:      st.Machine != "" && !st.Disowned && !ended,
+		Machine:        st.Machine,
+		EpochID:        int64(st.EpochID),
+		SendSeq:        int64(st.SendSeq[st.EpochID]),
+		RelayCursor:    int64(st.RelayCursor),
+		RosterRevision: int64(st.RosterRevision),
+		PendingOps:     pending,
+		Restored:       len(st.MachineRelayAuthPub) == ed25519.PublicKeySize,
+		Reconciled:     reconciled,
+		Paired:         st.Machine != "" && !st.Disowned && !ended,
 	}, nil
 }
 
@@ -1461,6 +1462,25 @@ func (a *App) Resync(stream string) (err error) {
 		return nil
 	}
 	_, err = a.unsignedResync(core.Router().Sessions().Cursor())
+	return err
+}
+
+// RefreshRoster asks for one authoritative all-session roster without turning the phone's
+// whole transcript backlog into one relay frame. Unlike Resync it neither rewinds the shared
+// transport cursor nor marks a stale channel as repairing: the returned roster-only reseed
+// carries this phone's prior journal cursor, so later backlog events remain admissible.
+func (a *App) RefreshRoster() (err error) {
+	defer barrier(&err)
+	core, err := a.ready()
+	if err != nil {
+		return err
+	}
+	// Share the journal repair budget: both verbs make the daemon take an atomic journal
+	// snapshot, and separate budgets would let the same UI double the amplification bound.
+	if err = a.resyncBudget(phonecore.StreamJournal, time.Now()); err != nil {
+		return err
+	}
+	_, err = a.unsignedRosterRefresh(core.Router().Sessions().Cursor())
 	return err
 }
 

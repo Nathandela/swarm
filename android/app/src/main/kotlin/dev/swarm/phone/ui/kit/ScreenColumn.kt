@@ -39,6 +39,16 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
     setPaddingRelative(horizontal, vertical, horizontal, vertical)
 }
 
+/** Pairing rhythm applied to the long-lived body slot without screen-local dimensions. */
+object PairingScaffoldLayout {
+    fun body(view: View): View = view.apply {
+        val params = (layoutParams as? ViewGroup.MarginLayoutParams)
+            ?: LinearLayout.LayoutParams(MATCH, WRAP)
+        params.bottomMargin = Kit.dimenPx(context, R.dimen.swarm_space_18)
+        layoutParams = params
+    }
+}
+
 /**
  * derived: docs/design/substrate-components.md #20 Screen scaffold
  * derived: docs/design/substrate-components.md §4 Notice line
@@ -57,15 +67,11 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
  * session detail and the launch form it was a bare `MATCH_PARENT` column paying nothing, and the
  * owner photographed the result: text and buttons on the glass.
  *
- * **A PADDING IS NOT A MARGIN, AND THIS PARAGRAPH SAID IT WAS.** It read "`sessionList` 12,
- * `settingsRow` and `machineRow` 14, `emptyState` 24", counting NINE components as holding their
- * own edge. Rows 11 and 15 spend their `space_14` INSIDE the card: the label clears the floor and
- * the `--p-card` fill and its `--p-hair` border underneath it do not, so on the one screen that
- * places those rows on the ground rather than in `sessionList` they ran edge to edge while the leaf
- * sweep stayed green. They are in the second group -- `settingsPanelView` gives each row the step
- * here, and the card keeps its rows' 14 inside -- the same ARRANGEMENT `sessionList` ships on the
- * Inbox, where the session card keeps its own 12. The `approvalSheet` is the same correction: it is a rounded card in a column
- * and not the docked sheet whose row rounds the top corners only.
+ * **ROW 11 IS A CARD; ROW 15 IS A GROUPED RULED ROW.** `machineRow` keeps caller-supplied
+ * `screenAir`, while the signed Slate `.trow` puts its 18 dp content gutter inside an edge-to-edge
+ * ground with a bottom hairline. Treating both as cards was the Settings spacing defect: it added
+ * outer tile gaps to a list designed to read as one continuous group. The `approvalSheet` remains
+ * a rounded card in a column, not the docked sheet whose row rounds the top corners only.
  *
  * **IT IS A PER-CHILD SEAM AND NOT A PADDING ON THE COLUMN, WHICH IS THE WHOLE OF THE DESIGN.**
  * A column that padded its own sides would add 12 to every child that already holds itself off the

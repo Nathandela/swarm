@@ -735,6 +735,55 @@ asserts UI copy (verified).
 - **Done when** `python3 scripts/check-conversation-copy.py .` exits 0, `go test ./internal/verify/
   -run ConversationCopy` passes, the Kotlin suite is green, and `grep -rn "your machine\|the machine\|structured\|event stream\|input line" android/app/src/main` returns only KDoc.
 
+### W5 amendments (ruled 2026-08-28, from the fleet's findings)
+- **A gate did assert copy, and it keeps its guarantee.** §6's "no `android/gate` test asserts UI copy" was false:
+  `w6o3_terminalpaironly_test.go` read the pairing remedy's commands out of `PairOnlyScreen`'s REPAIR_REQUIRED
+  *sentence*. Ruled: the gate's guarantee is the ORDER -- the remedy is stated before the control that needs it --
+  not the sentence. It now reads the four-part `PairOnlyCopy(title, body, command, cta)`, requires both steps in the
+  `command` slot, forbids them in `body` and on the control, and requires `PairOnlyView` to draw the well between the
+  body and the CTA. Three negative controls (commands back in the body, empty command slot, well under the CTA).
+- **The `sectionLabel` inventory row goes with the heading.** `s24_screens_test.go`'s PB-DS-6 kit-reach inventory
+  required `TranscriptView` to spend `sectionLabel`; W5.3 removes that heading by contract, so the row was a
+  composition requirement the contract made false. Ruled: drop the row under a dated note. PB-DS-9's argument
+  ("an empty section is still a section") is carried by the empty-state branch, which stays. Keeping an empty label
+  slot so the row still held was refused: it would make the gate lie about the screen.
+- **The machine is named wherever a name is in reach**, which was more places than W5.2 listed:
+  `SettingsScreen.pendingNotice` becomes `pendingNoticeFor(machine)`; `MachinesPanelScreen`'s `FORGET_CONFIRM` and
+  `ADD_CONFIRM` become function-typed `val`s of the name (the `r4_d3` fences read that token and a `val`
+  declaration, so the shape is kept), fed by the pressed row's `displayName` and by the typed name or id;
+  `SessionDetailPanel` gains `machineLabel` so the capacity notice names the drawn session's computer.
+  `LaunchPresetScreen` is not in reach and says "your computer".
+- **`{device}` is in no model's reach**, so the repair-required well carries two lines, `swarm remote devices` then
+  `swarm remote revoke <device-id>`, rather than the table's interpolated single line.
+- **Row 12 keeps the kit's inline mono cell** for `swarm remote on` (`killSwitchPanel` and its test pin that shape):
+  the sentence ends at a colon and the command sits in the cell, which is the rule's intent already satisfied.
+- **"Last seen 3 h ago" reads "3h ago"**: the age formatter is W7's, shared with the inbox row, and one wave does
+  not fork it for one sentence.
+- **Test churn ran past the named lists.** §6's W5.5 lists were where the sentence is the subject; roughly twenty-five
+  further tests pinned an old word inside a `contains()` clause and moved their expected value only. Four assertions
+  were DELETED because the clause has no successor in the tables (`ConnectionUiStaleNoticeTest`'s "repairs itself",
+  two `PairedMachineRowTest` sublabel tests collapsed to one, `LaunchPresetRound2Test`'s second-session clause,
+  `TranscriptPanelTest`'s heading assertion); each is listed in the evidence with the subject that still pins it.
+- **The Done-when grep was weaker than the rule it checks**, which is how sentences survived a green wave: it is
+  case-sensitive (a sentence-initial "Your machine" does not match "your machine") and covers four phrases while
+  W5.1 forbids seven (it omits "relay", "ceremony", "plane"). The Done-when is therefore case-insensitive, covers all
+  seven, and reads only *sentences* -- a quoted literal of two or more words, which skips wire tokens
+  (`relay_unreachable`), identifiers (`RELAY_FILE`, `RelayTrust`) and developer-facing exception text:
+  `grep -rniE '"[^"]*[a-z]+ +(your machine|the machine|structured|event stream|input line|relay|ceremony|plane)[^"]*"' android/app/src/main`,
+  every survivor judged by hand. A rule whose check is narrower than itself is not checked.
+- **"No structural change" yields to the tables where they disagree.** §6's preamble says every rewrite replaces a
+  literal in place, but four W5.4 rows specify "(well:)", which no literal-in-place can satisfy. The tables are the
+  more specific instrument: `PairOnlyCopy.command`, `RevokeNotice.command`, `LaunchPresetScreen.commandFor`,
+  `RemoteAccessRow.command` and their tags, `TranscriptPanel.heading`'s removal (W5.3) and
+  `ComposerModel.noticeFor(machine)` (W5.2) are contracted, not violations. Everything else in the wave is a
+  literal replacement.
+- **The review round found the rule half-applied, not the tables misread.** Every should-fix was a W5.1 survivor the
+  Done-when grep could not see: two "Your machine" sentences in a file the wave itself half-converted, five "relay"
+  sentences (four inside anchors), a colon whose object had two sentences spliced in front of it, a dead constant and
+  a KDoc still arguing for a deleted sentence. Seven were fixed in the round; the eighth --
+  `ErrorRouting`'s state-corrupt recovery, still two commands inside a sentence -- needs a `command` slot on
+  `RoutedError` and a view to host it, which is `agents-tracker-qk6z`.
+
 ## 7. W6 Chat rows
 
 Bead: `agents-tracker-d45a.6`. Worktree `refit-w6`. Files: `ui/kit/ToolCard.kt`, `ui/screens/TranscriptPanel.kt`,
@@ -792,7 +841,7 @@ that a reviewer cannot distinguish from a verdict needs a written owner ruling f
   `tool_run` row (the untouched `an unreadable body renders as a neutral row and never crashes` caught the first
   cut saying "Used a tool").
 - **A command's grey line is the command's first line, always.** `secondaryFor`: `execute` -> `fields.target`;
-  every other kind -> the output's first line, or the target when there is none. The sketch's
+  every other kind -> the output's first non-blank line, trimmed, or the target when there is none. The sketch's
   `output.ifEmpty { target }` for every kind was wrong for commands.
 - **The grey line is the kit's.** `ActivityRow.kt` `activityRow(secondary = ...)` draws it
   (`KitTag.ACTIVITY_SECONDARY`, one line, `ellipsize = END`, `swarm_text_tertiary`); `TranscriptBlock.secondary`
@@ -805,6 +854,12 @@ that a reviewer cannot distinguish from a verdict needs a written owner ruling f
   `TranscriptChatRenderTest` line, the golden's two `BLOCK` rows; the `item()` fixture gains `toolKind`.
 - W6.2 carries its drawing row: `conversation-drawing.html`'s `decision.pill` says "Needs your answer" in the
   same commit as `SessionDetailPanel`, pinned by `the decision pill asks for the reader's answer`.
+- **Review round (2026-08-28).** The grey line's style goes through `Kit.appearance` (W8.1's gate caught the bare
+  `setTextAppearance` only on the three-way merge with main; the branch tree was green). The oneOf test reads §7's
+  `type` row off `interaction-schema.md` (a token added to the row and not to the `oneOf` now fails it). The grey
+  line is the first line that says something: `firstLine` skips blank leading lines. The drawn stages, IS-TOOL-2
+  and every KDoc that pinned "Decision needed" moved with the pill. Not ruled: a pre-R6 record with a body but no
+  `tool_kind` reads `tool_run` (`agents-tracker-c4gj`, owner's call).
 
 ## 8. W7 Inbox, Activity, Settings, Computers
 
@@ -945,9 +1000,17 @@ Fleet 1 (parallel):  W1 frame   |  W2 sending   |  W4 Slate
 Fleet 2 (parallel):  W3 button (after W2)  |  W6 chat rows  |  W7 screens
                      merge W3 -> merge W6 -> merge W7
 Sequential:          W5 words (touches every screen file; last, to avoid conflicts)
-Release:             versionCode 19 / versionName 0.9.0, AAR rebuilt, Kotlin suite rerun against it,
-                     bundleRelease, swarm-publish --dry-run then internal track, owner handset pass
+Release:             versionCode 19 / versionName = the CLI's current tag plus one patch (see below),
+                     AAR rebuilt, Kotlin suite rerun against it, bundleRelease, swarm-publish --dry-run
+                     then internal track, owner handset pass
 ```
+
+**Release numbering (owner ruling, 2026-08-28).** The app's published version stays aligned with the swarm CLI's
+tag: at release time take the latest `v*` tag on main and add one patch (`v0.13.5` today, so the refit ships as
+`0.13.6`), set `versionName` to it and `versionCode` to 19, commit, and tag that commit `v0.13.6` so
+`release.yml` builds the CLI from the same commit the bundle is built from: one number for both. The app never
+numbers itself on its own line; the `0.9.0` this plan first named is void. If main gains another tag before the
+release commit, the release takes the newest tag plus one.
 
 W1, W2 and W4 are disjoint by file and merge in order of readiness. W3 and W7 both edit `PhoneSurface.kt` in different regions;
 conflicts are resolved by the orchestrator at merge, never by a fleet editing outside its list.

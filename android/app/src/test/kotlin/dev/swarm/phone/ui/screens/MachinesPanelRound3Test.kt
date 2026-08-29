@@ -124,7 +124,7 @@ class MachinesPanelRound3Test {
                 "mobile/machines.go:19-21's own words -- SelectMachine records the viewed " +
                 "pairing and does NOT yet re-target the App's live relay session. Claiming the " +
                 "session moved would be the dishonest rendering in the other direction",
-            "Selected laptop. This phone's live session has not moved to it yet.",
+            "Now viewing laptop.",
             MachinesPanelScreen.switchedTo("laptop"),
         )
     }
@@ -141,9 +141,7 @@ class MachinesPanelRound3Test {
                 "switching to it does not re-target the live relay session. Both limits are " +
                 "mobile/machines.go:19-21's own disclosure and must be on screen, not only in a " +
                 "verification file",
-            "Adding a computer registers it on this phone. That computer still needs its own " +
-                "pairing ceremony before it can answer, and switching to it records which " +
-                "computer you are viewing without moving this phone's live session yet.",
+            "You'll pair with it next.",
             MachinesPanelScreen.ADD_LIMITS,
         )
     }
@@ -159,10 +157,8 @@ class MachinesPanelRound3Test {
                 "keystroke as undelivered, severs every input lease and drops the connection. " +
                 "That is strictly more destructive than Forget's one pairing, and Forget asks. " +
                 "The question must name what is briefly lost and what is not",
-            "Add this computer now? This phone briefly disconnects from your computers while " +
-                "the pairing is registered, and anything typed but not sent is discarded. No " +
-                "pairing is removed and nothing already saved is lost.",
-            MachinesPanelScreen.ADD_CONFIRM,
+            "Add laptop? The app reconnects for a moment.",
+            MachinesPanelScreen.ADD_CONFIRM("laptop"),
         )
     }
 
@@ -194,8 +190,41 @@ class MachinesPanelRound3Test {
         assertEquals(
             "a refused double tap must SAY it was refused; dropping it silently is the " +
                 "silent-no-op shape hard rule 5 forbids, on the app's most destructive control",
-            "Add computer is still running; nothing was sent.",
+            "Still adding…",
             MachinesPanelScreen.ADD_IN_FLIGHT,
         )
+    }
+
+    // -------------------------------------------------------------------
+    // W5 review round (2026-08-29), item 7: switchedTo and brokenNotice interpolate a name
+    // the wire allows to be empty (display_name is omitempty). FORGET_CONFIRM and ADD_CONFIRM
+    // already guard with ifEmpty, and a whitespace-only name ("Forget  ?") slips past ifEmpty --
+    // both sites need ifBlank instead.
+    // -------------------------------------------------------------------
+
+    @Test
+    fun aBlankOrWhitespaceOnlyNameFallsBackToThisComputerOnSwitch() {
+        for (name in listOf("", " ")) {
+            assertEquals(
+                "switchedTo must not interpolate a blank or whitespace-only name ('$name') into " +
+                    "the sentence; machine id is not in reach at this call, so the fallback is " +
+                    "'this computer'",
+                "Now viewing this computer.",
+                MachinesPanelScreen.switchedTo(name),
+            )
+        }
+    }
+
+    @Test
+    fun aBlankOrWhitespaceOnlyDisplayNameFallsBackToTheMachineIdOnBrokenNotice() {
+        for (name in listOf("", " ")) {
+            val broken = row("m-broken", connected = false).copy(displayName = name, broken = true)
+            assertEquals(
+                "brokenNotice must fall back to the machine id when the display name is blank " +
+                    "or whitespace-only ('$name'), the way it is in reach here",
+                "Can't open m-broken. Forget it or pair again.",
+                MachinesPanelScreen.brokenNotice(broken),
+            )
+        }
     }
 }

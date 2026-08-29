@@ -64,7 +64,7 @@ class SettingsPanelScreenTest {
     @Test
     fun `the rows carry C6's recorded labels in C6's order`() {
         assertEquals(
-            listOf("Needs your decision", "Task done"),
+            listOf("Needs your answer", "Task done"),
             rows(SettingsPanelScreen.of(screen())).map { it.label },
         )
     }
@@ -72,7 +72,7 @@ class SettingsPanelScreenTest {
     @Test
     fun `each row carries the sublabel C6 records under its label`() {
         assertEquals(
-            listOf("Approvals and blocked prompts", "Completions and failures"),
+            listOf("Approvals and questions", "Finished and failed sessions"),
             rows(SettingsPanelScreen.of(screen())).map { it.sublabel },
         )
     }
@@ -378,5 +378,20 @@ class SettingsPanelScreenTest {
                 SettingsPanelScreen.of(settings).disclosure,
             )
         }
+    }
+    /** Phone refit W5.2: the panel knows the machine, so the pending notice names it. */
+    @Test
+    fun `the pending notice names the computer the panel is given`() {
+        val pending = screen().setAlerts(false)
+        assertTrue(
+            "the pending notice does not name the computer whose confirmation it waits for",
+            SettingsPanelScreen.of(pending, machine = "nathans-mbp").notices
+                .contains("Saved. Waiting for nathans-mbp to confirm."),
+        )
+        assertEquals(
+            "a panel with no machine to name says your computer",
+            "Saved. Waiting for your computer to confirm.",
+            pending.pendingNotice,
+        )
     }
 }

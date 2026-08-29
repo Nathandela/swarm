@@ -88,7 +88,7 @@ class SessionDetailKillVerdictTest {
         assertTrue(
             "the sentence does not say the session is still running, which is the fact the user " +
                 "acted on",
-            notice.contains("did not end"),
+            notice.contains("Couldn't end"),
         )
     }
 
@@ -107,7 +107,7 @@ class SessionDetailKillVerdictTest {
     fun `a refusal the machine sent no words with still says the session survived`() {
         val notice = SessionDetailScreen.killNoticeFor(verdict("kill_switch"))
 
-        assertTrue(notice.contains("did not end"))
+        assertTrue(notice.contains("Couldn't end"))
         assertTrue("a wordless refusal produced a dangling sentence", notice.endsWith("."))
     }
 

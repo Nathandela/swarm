@@ -29,15 +29,19 @@ import dev.swarm.phone.ui.PairingStep
  * promise something the daemon refuses on the first press. There is replace, and it says what it
  * costs before anyone presses it.
  *
- * AND IT ASKS (agents-tracker-mrq5). Saying what it costs is what the row does at rest; the
- * confirmation is what it does at the moment of the press, and the two are not the same sentence --
- * [PairedMachineRow.replaceConfirmation] names the machine and names the key purge, which the
- * sublabel does not, because a user reading a dialog has stopped reading the row underneath it.
+ * AND IT ASKS (agents-tracker-mrq5). Saying what it costs is what the row does at rest -- and
+ * since W5.4 (row 36) the row states no cost at all, so the confirmation is the only place either
+ * fact reaches the user: [PairedMachineRow.replaceConfirmation] names the machine, and names the
+ * way back (a new code), because a user reading a dialog has stopped reading the row underneath it.
  */
 data class PairedMachineRow(
     /** [PairingPanelScreen.titleFor] for a completed pairing: the machine, named. */
     val label: String,
-    /** What replacing costs, in the order the daemon performs it. */
+    /**
+     * Empty (phone refit W5.4, row 36): the row is the computer's name and nothing under it.
+     * The cost of replacing is [PairedMachineRow.replaceConfirmation]'s to state, once, at the
+     * press.
+     */
     val sublabel: String,
     /** The one control the row offers. */
     val replaceLabel: String,
@@ -60,23 +64,6 @@ object PairedMachineRowScreen {
     private const val REPLACE = "Replace this computer"
 
     /**
-     * The cost, stated in the daemon's own order: the current pairing ends FIRST, and the new one
-     * is what the revoke makes room for. A row that only said "replace" would let a user find out
-     * afterwards that the machine they had is gone.
-     *
-     * THE SECOND HALF WAS A PROMISE THE APP COULD NOT KEEP until agents-tracker-d0b8. Ending the
-     * pairing worked; "then pairs a new computer" did not, because the presentation gate read the
-     * pinned machine -- which the revoke does not clear -- and went on showing the four-tab shell,
-     * with the pairing entry point on the settings screen inside it. The press now leaves the phone
-     * reading unpaired and redraws the whole window, so the sentence describes what happens.
-     *
-     * SHORTENED AGAIN (agents-tracker-ksvb.6), and the ordering fact is the one thing that must
-     * survive a shortening: "first" carries what "the current pairing" and "then" carried before,
-     * in fewer words.
-     */
-    private const val COST = "Ends this pairing first, then re-pairs."
-
-    /**
      * The confirmation's subject when this phone cannot read the machine's name.
      *
      * `Replace ?` is worse than no confirmation at all: it is the one sentence standing between a
@@ -90,19 +77,17 @@ object PairedMachineRowScreen {
      * What replacing costs, in the register [SessionDetailScreen]'s kill confirmation set: the
      * CONSEQUENCE and not the action.
      *
-     * BOTH HALVES ARE IRREVERSIBLE ON THIS PHONE AND ONLY ONE OF THEM IS ON THE ROW. [COST] says
-     * the pairing ends, which is the part a user can predict; the key purge is the part they cannot
-     * see, and it is not conditional on the revoke succeeding -- `SettingsSurface` runs
-     * `PhoneRuntime.purgeKeys` in a `finally`, deliberately, because the situation this control
-     * exists for is one where the phone may not reach its machine at all (ADR-007 B133 decision 3).
-     * A confirmation that named only the pairing would be describing the recoverable half.
+     * THE TABLE'S RULING (row 37, phone refit W5.4; restated in the W5 review round, 2026-08-29,
+     * SHOULD-FIX 6): the confirmation names the PAIRING ending, and says nothing about the key
+     * purge that runs beside it in `PhoneRuntime.purgeKeys`'s `finally`. An earlier draft argued
+     * both halves belonged here, on the reasoning that both are irreversible; the table's row is
+     * the more specific instrument and this sentence follows it rather than re-litigating it.
      *
      * THE LAST CLAUSE IS THE WAY BACK, and it is stated because there is one and it is not on this
      * handset. Pairing again needs the code the computer shows, so a phone whose owner is nowhere
      * near their machine has just made itself useless until they are.
      */
-    private const val CONFIRM_COST = "This ends the pairing and destroys this phone's keys; " +
-        "pairing again needs a new code from the computer."
+    private const val CONFIRM_COST = "You'll need a new code to pair again."
 
     /** [CONFIRM_COST], asked about the machine that is actually about to be replaced. */
     private fun confirmationFor(machine: String): String =
@@ -119,7 +104,10 @@ object PairedMachineRowScreen {
             "PairingPanelScreen.titleFor answered null for PAIRED, so the one place this app " +
                 "words a completed pairing no longer words it. This row must not invent a second."
         },
-        sublabel = COST,
+        // NO SUBLABEL (phone refit W5.4): the row is the computer's name; the cost of replacing
+        // -- ending this pairing first, in the daemon's own order, before a new one can be paired
+        // -- is the confirmation's to state, once, when the control is pressed.
+        sublabel = "",
         replaceLabel = REPLACE,
         replaceConfirmation = confirmationFor(machine),
     )

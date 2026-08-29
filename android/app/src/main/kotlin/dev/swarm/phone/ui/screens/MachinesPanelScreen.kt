@@ -43,20 +43,17 @@ object MachinesPanelScreen {
      */
     const val ENTRY_LABEL = "Computers"
 
-    /** The entry row's second line: what is on the other side of it. */
-    const val ENTRY_SUBLABEL = "Add, switch, or forget a computer"
-
     /** Playbook 4.1 step 4's own words: the developer "chooses Add computer". */
     const val ADD_LABEL = "Add computer"
 
     /** What belongs in the add form's first field. The id is the pairing's identity (MM4). */
-    const val ADD_ID_HINT = "Machine id"
+    const val ADD_ID_HINT = "Computer id"
 
     /** The add form's optional display name; a machine may publish none. */
     const val ADD_NAME_HINT = "Computer name (optional)"
 
     /** The panel's own refusal of an add with no machine id: nothing reached the facade. */
-    const val ADD_ID_MISSING = "Add computer needs the machine id; nothing was sent."
+    const val ADD_ID_MISSING = "Enter the computer's id first."
 
     /** Playbook 4.9's own words: phone-side, distinct from machine-side revoke. */
     const val FORGET_LABEL = "Forget this computer"
@@ -68,17 +65,16 @@ object MachinesPanelScreen {
      * names what is destroyed, what is NOT (the computer itself), and carries MM8's reassurance
      * so the dialog does not read as app-wide data loss.
      */
-    const val FORGET_CONFIRM = "Forget this computer? This phone deletes its pairing keys and " +
-        "cached sessions for it. The computer itself is untouched, and other computers are " +
-        "unaffected."
+    val FORGET_CONFIRM: (String) -> String = { machine ->
+        "Forget ${machine.ifEmpty { "this computer" }}? You can pair it again later."
+    }
 
     /**
      * The resolver's PAIR_ONLY answer AS A SENTENCE (round 2). With zero machines the entry
      * used to bounce back to Settings composing nothing and saying nothing -- the silent no-op
      * shape. An answer the user cannot read is not an answer.
      */
-    const val PAIR_FIRST = "No computers are paired yet. Pair this phone with a computer " +
-        "first; Computers fills in from the first pairing."
+    const val PAIR_FIRST = "No computers yet. Pair one first."
 
     /**
      * WHAT ADD COMPUTER CANNOT FINISH, on screen and not only in a verification file (round 3).
@@ -92,9 +88,7 @@ object MachinesPanelScreen {
      * form that cannot be completed and says nothing leaves a permanently stale row and a user
      * with no way to know why -- which is the overclaim in the shape of a screen.
      */
-    const val ADD_LIMITS = "Adding a computer registers it on this phone. That computer still " +
-        "needs its own pairing ceremony before it can answer, and switching to it records which " +
-        "computer you are viewing without moving this phone's live session yet."
+    const val ADD_LIMITS = "You'll pair with it next."
 
     /**
      * What ADD ASKS before it acts (round 3), on [FORGET_CONFIRM]'s argument applied to the
@@ -106,9 +100,9 @@ object MachinesPanelScreen {
      * than forgetting one pairing, and forgetting one pairing asks. The question names what is
      * briefly lost, and what is not, so it does not read as data loss.
      */
-    const val ADD_CONFIRM = "Add this computer now? This phone briefly disconnects from your " +
-        "computers while the pairing is registered, and anything typed but not sent is " +
-        "discarded. No pairing is removed and nothing already saved is lost."
+    val ADD_CONFIRM: (String) -> String = { machine ->
+        "Add ${machine.ifEmpty { "this computer" }}? The app reconnects for a moment."
+    }
 
     /**
      * The refusal a SECOND add earns while the first is still crossing (round 3). The controls
@@ -116,7 +110,7 @@ object MachinesPanelScreen {
      * the lane's keyed fence does, and what it refuses must be SAID -- a tap dropped in silence
      * is the silent no-op shape on the app's most destructive control.
      */
-    const val ADD_IN_FLIGHT = "Add computer is still running; nothing was sent."
+    const val ADD_IN_FLIGHT = "Still adding…"
 
     /**
      * The row mark for the machine this phone last switched to (round 3): the first word of that
@@ -133,9 +127,14 @@ object MachinesPanelScreen {
      * overstates what happened: `mobile/machines.go:19-21` -- SelectMachine records the viewed
      * pairing and feeds the least-recently-viewed connection policy; it does NOT re-target the
      * App's live relay session yet.
+     *
+     * GUARDED THE WAY [FORGET_CONFIRM] AND [ADD_CONFIRM] ALREADY ARE (W5 review round,
+     * 2026-08-29): `display_name` is wire `omitempty`, and machine id is not in reach at this
+     * call, so a blank or whitespace-only name falls back to "this computer" -- `ifBlank`, not
+     * `ifEmpty`, because a whitespace-only name would otherwise render "Now viewing  .".
      */
     fun switchedTo(displayName: String): String =
-        "Selected $displayName. This phone's live session has not moved to it yet."
+        "Now viewing ${displayName.ifBlank { "this computer" }}."
 
     /** The aggregate inbox destination across every pairing (inbox.global). */
     const val GLOBAL_INBOX_LABEL = "All sessions"
@@ -214,17 +213,22 @@ object MachinesPanelScreen {
      * reaching for the wholesale remedy that destroys every pairing (MM8, machines.recovery --
      * the same sentence App.SelectMachine's refusal carries). Null on a healthy row: a fault
      * sentence over a working pairing is the dishonest rendering in the other direction.
+     *
+     * GUARDED LIKE [switchedTo] (W5 review round, 2026-08-29), one layer deeper: `display_name`
+     * is wire `omitempty`, but `row.machineId` -- the pairing's own identity (MM4) -- IS in
+     * reach here, so a blank or whitespace-only display name falls back to it before falling
+     * back to "this computer".
      */
     fun brokenNotice(row: MachineRowModel): String? {
         if (!row.broken) return null
-        val fault = row.brokenReason.ifEmpty { "this pairing's saved state failed to open" }
-        return "$fault. Forget this computer or pair it again; other computers are unaffected."
+        val name = row.displayName.ifBlank { row.machineId.ifBlank { "this computer" } }
+        return "Can't open $name. Forget it or pair again."
     }
 
     /** ADR-018's cap sentence, stating the number the rows were arbitrated under. */
     private fun capNoticeFor(count: Int, cap: Int): String? =
         if (count > cap) {
-            "Only $cap computers stay connected at once; the rest are parked and shown stale."
+            "Up to $cap computers stay connected. Others pause."
         } else {
             null
         }

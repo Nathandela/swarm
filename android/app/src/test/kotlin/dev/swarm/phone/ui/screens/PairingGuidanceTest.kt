@@ -337,7 +337,7 @@ class PairingGuidanceTest {
         assertTrue("the explanation is empty", page.cameraNotice.isNotEmpty())
         assertTrue(
             "the sentence does not mention the camera, which is the thing that is wrong",
-            page.cameraNotice.contains("camera"),
+            page.cameraNotice.contains("camera", ignoreCase = true),
         )
     }
 

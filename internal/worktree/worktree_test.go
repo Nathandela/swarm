@@ -94,20 +94,20 @@ func worktreeListed(t *testing.T, repoDir, dir string) bool {
 func TestCreateMakesWorktreeAndBranch(t *testing.T) {
 	repo := newGitRepo(t)
 
-	dir, err := Create(repo, "sess1")
+	dir, err := Create(repo, "sess1", "Fix Login Flow")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	wantDir := filepath.Join(repo, ".swarm", "worktrees", "sess1")
+	wantDir := filepath.Join(repo, ".swarm", "worktrees", "fix-login-flow")
 	if dir != wantDir {
 		t.Fatalf("worktreeDir = %q, want %q", dir, wantDir)
 	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		t.Fatalf("Create did not produce a directory at %q: %v", dir, err)
 	}
-	if !branchExists(t, repo, "swarm/sess1") {
-		t.Fatalf("branch swarm/sess1 was not created")
+	if !branchExists(t, repo, "swarm/fix-login-flow-sess1") {
+		t.Fatalf("branch swarm/fix-login-flow-sess1 was not created")
 	}
 	if !worktreeListed(t, repo, dir) {
 		t.Fatalf("git worktree list does not show %q", dir)
@@ -118,7 +118,7 @@ func TestCreateRejectsPathTraversalID(t *testing.T) {
 	repo := newGitRepo(t)
 
 	for _, id := range []string{"..", "../evil", "a/../../b", "/etc/passwd", ""} {
-		dir, err := Create(repo, id)
+		dir, err := Create(repo, id, "ignored")
 		if err == nil {
 			t.Errorf("Create(%q): want error, got dir %q", id, dir)
 		}
@@ -140,7 +140,7 @@ func TestCreateInNonRepoDirErrors(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	got, err := Create(dir, "sess1")
+	got, err := Create(dir, "sess1", "named")
 	if err == nil {
 		t.Fatalf("Create in a non-repo dir: want error, got dir %q", got)
 	}
@@ -155,21 +155,48 @@ func TestCreateInNonRepoDirErrors(t *testing.T) {
 func TestCreateCollisionOnSecondCall(t *testing.T) {
 	repo := newGitRepo(t)
 
-	if _, err := Create(repo, "sess1"); err != nil {
+	if _, err := Create(repo, "sess1", "Same Name"); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
 	// A second Create for the SAME id, without an intervening Remove, collides on
 	// both the existing worktree directory and the existing branch. It must fail
 	// clearly rather than silently reusing or corrupting the first worktree.
-	dir, err := Create(repo, "sess1")
+	dir, err := Create(repo, "sess1", "Same Name")
 	if err == nil {
 		t.Fatalf("second Create(sess1): want error, got dir %q", dir)
 	}
-	if !branchExists(t, repo, "swarm/sess1") {
-		t.Fatalf("original branch swarm/sess1 was lost after a colliding Create")
+	if !branchExists(t, repo, "swarm/same-name-sess1") {
+		t.Fatalf("original branch swarm/same-name-sess1 was lost after a colliding Create")
 	}
-	if !worktreeListed(t, repo, filepath.Join(repo, ".swarm", "worktrees", "sess1")) {
+	if !worktreeListed(t, repo, filepath.Join(repo, ".swarm", "worktrees", "same-name")) {
 		t.Fatalf("original worktree was lost after a colliding Create")
+	}
+}
+
+func TestCreateSameNameUsesSessionIDToAvoidCollision(t *testing.T) {
+	repo := newGitRepo(t)
+
+	first, err := Create(repo, "sess1", "Same Name")
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	second, err := Create(repo, "sess2", "Same Name")
+	if err != nil {
+		t.Fatalf("second Create with same name: %v", err)
+	}
+	if first == second {
+		t.Fatalf("same-named sessions resolved to one worktree: %q", first)
+	}
+	if filepath.Base(first) != "same-name" {
+		t.Errorf("first same-named session path = %q, want friendly unsuffixed slug", first)
+	}
+	if filepath.Base(second) != "same-name-sess2" {
+		t.Errorf("second same-named session path = %q, want id collision suffix", second)
+	}
+	for _, want := range []string{"swarm/same-name-sess1", "swarm/same-name-sess2"} {
+		if !branchExists(t, repo, want) {
+			t.Errorf("branch %q was not created", want)
+		}
 	}
 }
 
@@ -177,13 +204,13 @@ func TestCreateCollisionOnSecondCall(t *testing.T) {
 
 func TestRemoveTearsDownWorktree(t *testing.T) {
 	repo := newGitRepo(t)
-	dir, err := Create(repo, "sess1")
+	dir, err := Create(repo, "sess1", "Fix Login Flow")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := Remove(repo, "sess1"); err != nil {
-		t.Fatalf("Remove: %v", err)
+	if err := RemoveAt(repo, dir); err != nil {
+		t.Fatalf("RemoveAt: %v", err)
 	}
 
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -191,6 +218,34 @@ func TestRemoveTearsDownWorktree(t *testing.T) {
 	}
 	if worktreeListed(t, repo, dir) {
 		t.Fatalf("git worktree list still shows %q after Remove", dir)
+	}
+}
+
+func TestRemoveKeepsCompatibilityWithIDOnlyWorktrees(t *testing.T) {
+	repo := newGitRepo(t)
+	dir, err := Create(repo, "sess1", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := Remove(repo, "sess1"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("legacy id-only worktree dir %q still exists after Remove", dir)
+	}
+}
+
+func TestRemoveAtRejectsPathsOutsideWorktreeRoot(t *testing.T) {
+	repo := newGitRepo(t)
+	for _, dir := range []string{
+		repo,
+		filepath.Join(repo, ".git"),
+		filepath.Join(repo, ".swarm", "worktrees", "nested", "sess1"),
+		filepath.Join(repo, ".swarm", "worktrees", "..", "escape"),
+	} {
+		if err := RemoveAt(repo, dir); err == nil {
+			t.Errorf("RemoveAt(%q): want path-boundary error", dir)
+		}
 	}
 }
 
@@ -216,5 +271,42 @@ func TestValidID(t *testing.T) {
 		if validID(id) {
 			t.Errorf("validID(%q) = true, want false", id)
 		}
+	}
+}
+
+func TestSlugsUseReadableNameAndFullID(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		wantDir    string
+		wantBranch string
+	}{
+		{"Fix Login / Flow", "sess1", "fix-login-flow", "fix-login-flow-sess1"},
+		{"  Déploiement API 2  ", "sess2", "déploiement-api-2", "déploiement-api-2-sess2"},
+		{"", "sess3", "sess3", "sess3"},
+		{"?!", "sess4", "sess4", "sess4"},
+		{"Already---separated", "sess5", "already-separated", "already-separated-sess5"},
+	}
+	for _, tc := range tests {
+		gotDir, gotBranch := slugs(tc.id, tc.name)
+		if gotDir != tc.wantDir || gotBranch != tc.wantBranch {
+			t.Errorf("slugs(%q, %q) = (%q, %q), want (%q, %q)",
+				tc.id, tc.name, gotDir, gotBranch, tc.wantDir, tc.wantBranch)
+		}
+	}
+}
+
+func TestSlugsCapBytesWithoutSplittingUnicode(t *testing.T) {
+	dirSlug, branchSlug := slugs("sess1", strings.Repeat("é", 100))
+	for kind, got := range map[string]string{"directory": dirSlug, "branch": branchSlug} {
+		if len(got) > maxSlugBytes {
+			t.Fatalf("%s slug is %d bytes, want <= %d: %q", kind, len(got), maxSlugBytes, got)
+		}
+		if strings.ToValidUTF8(got, "�") != got {
+			t.Fatalf("%s slug is not valid UTF-8: %q", kind, got)
+		}
+	}
+	if !strings.HasSuffix(branchSlug, "-sess1") {
+		t.Fatalf("branch slug %q lost its full session-id suffix", branchSlug)
 	}
 }

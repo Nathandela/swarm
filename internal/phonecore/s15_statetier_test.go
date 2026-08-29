@@ -86,12 +86,13 @@ const (
 	s15GrantEpoch      uint32 = 1000000009
 	s15ReconciledEpoch uint32 = 1000000021
 
-	s15SendCeiling uint64 = 8100000000000000017
-	s15ReceiveSeq  uint64 = 8200000000000000029
-	s15GrantSeq    uint64 = 8300000000000000037
-	s15WakeReplay  uint64 = 8400000000000000041
-	s15RelayCursor uint64 = 8500000000000000053
-	s15LastHeardAt int64  = 8600000000000000061
+	s15SendCeiling    uint64 = 8100000000000000017
+	s15ReceiveSeq     uint64 = 8200000000000000029
+	s15GrantSeq       uint64 = 8300000000000000037
+	s15WakeReplay     uint64 = 8400000000000000041
+	s15RelayCursor    uint64 = 8500000000000000053
+	s15RosterRevision uint64 = 8500000000000000059
+	s15LastHeardAt    int64  = 8600000000000000061
 )
 
 // s15Bucket is the receive bucket the high-water sentinel is keyed by. Its sender id is what
@@ -153,6 +154,7 @@ func s15State() State {
 		GrantSeq:            s15GrantSeq,
 		WakeReplay:          s15WakeReplay,
 		RelayCursor:         s15RelayCursor,
+		RosterRevision:      s15RosterRevision,
 		Sessions:            []CachedSession{{SessionID: s15SessionID, Present: true}},
 		Snapshots:           []Snapshot{{Session: s15SessionID, Lines: []string{s15SnapLine}, Cols: 80, Rows: 24}},
 		PendingOps:          []QueuedOp{{Op: s15QueuedOp, SessionID: s15SessionID}},
@@ -336,6 +338,9 @@ func s15Inventory() []s15Tier {
 		{field: "RelayCursor", needles: s15Num(s15RelayCursor, 8),
 			why: "the relay mailbox read cursor. A replay-guard coordinate PB-STATE-9 does not name; " +
 				"it discloses how far the phone has read, not what it read"},
+		{field: "RosterRevision", needles: s15Num(s15RosterRevision, 8),
+			why: "the generation proving an authoritative roster committed; it reveals neither " +
+				"the rows nor their content and must be readable before the content tier opens"},
 
 		{field: "Sessions", tier: "content", needles: s15Str(s15SessionID)},
 		{field: "Snapshots", tier: "content", needles: s15Str(s15SnapLine)},

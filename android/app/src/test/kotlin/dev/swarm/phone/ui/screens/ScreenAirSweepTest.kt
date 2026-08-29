@@ -22,11 +22,11 @@ import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.PresenceMark
+import dev.swarm.phone.ui.kit.cardSurface
 import dev.swarm.phone.ui.kit.composerBar
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.sessionList
-import dev.swarm.phone.ui.kit.settingsRow
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.kit.toggle
 import org.junit.Assert.assertEquals
@@ -62,16 +62,12 @@ import org.robolectric.RobolectricTestRunner
  *
  * ## And what counts as a SURFACE
  *
- * **THE RULING IS ABOUT ELEMENTS AND NOT ONLY ABOUT WORDS.** A leaf sweep alone certifies a card
- * that runs edge to edge as long as its own padding holds the label 14 dp in, which is exactly
- * what shipped: `settingsRow` and `machineRow` pay `space_14` INSIDE their box and carry no margin
- * at all, so on Settings the `--p-card` fill and its `--p-hair` border touched both edges of the
- * screen while every assertion in this file stayed green. What a person sees is the painted box,
- * so every view that paints one is measured against the same floor -- and the fix is the seam the
- * Inbox already proves: `sessionList` insets its cards by `space_12` and the card keeps its own
- * padding inside -- `space_12` on a session row, rows 11 and 15's `space_14` on a settings or
- * machine row. The ARRANGEMENT is what a settings row lacked, not the number: an outer step from
- * the container, the card's own padding kept within it.
+ * **THE RULING IS ABOUT ELEMENTS AND NOT ONLY ABOUT WORDS.** A leaf sweep alone certifies a
+ * rounded card that runs edge to edge as long as its padding holds the label in, so painted
+ * surfaces are measured too. The signed Slate Settings rows are the deliberate exception:
+ * `.trow` is the screen ground plus one bottom hairline, full width as a continuous group, with
+ * its 18 dp content gutter inside. Those two screen-owned rows are exempt by exact tag below;
+ * cards, wells and panels still have to clear the outer floor.
  *
  * The exemptions are the app's FURNITURE, and they are named one by one in [fullBleedChrome]
  * rather than inferred from a shape -- an exemption a reader cannot see is how the next full-bleed
@@ -252,7 +248,7 @@ class ScreenAirSweepTest {
     }
 
     /**
-     * The full-bleed chrome, BY NAME. Nothing else is exempt.
+     * The allowed full-bleed surfaces, BY NAME. Nothing else is exempt.
      *
      * THE TAB BAR AND THE COMPOSER BAR, which are one construction and the only two views in this
      * app that paint [TopRule]: a fill plus a 1 dp `--p-hair` line across the WHOLE width, with the
@@ -270,10 +266,17 @@ class ScreenAirSweepTest {
      * [HorizontalScrollView] measures its child with no width ceiling, so a diff wider than the
      * phone has a right edge off-screen. The walk clamps everything inside one to the viewport; the
      * scroller itself is the viewport and has nothing to be measured against.
+     *
+     * THE TWO SETTINGS RULE ROWS, which are the signed Slate `.trow`: screen ground and a bottom
+     * hairline forming one continuous full-width group. They are named by the screen tags rather
+     * than by [dev.swarm.phone.ui.kit.BottomRule], so another ruled surface cannot accidentally
+     * acquire the same exemption.
      */
     private fun fullBleedChrome(view: View): Boolean = when {
         view.background is dev.swarm.phone.ui.kit.TopRule -> true
         view.tag == KitTag.SYNC_STRIP -> true
+        view.tag == SettingsTag.ROW -> true
+        view.tag == SettingsTag.MACHINE_ROW -> true
         view is HorizontalScrollView -> true
         else -> false
     }
@@ -377,10 +380,9 @@ class ScreenAirSweepTest {
     /**
      * The same floor, against the box a person actually sees drawn.
      *
-     * THE OWNER'S RULING IS ABOUT ELEMENTS. A card whose own padding holds its label 14 dp in still
-     * paints its fill and its border on the glass, and the leaf claim above cannot see it -- which
-     * is how Settings shipped a column of `--p-card` rows running edge to edge with every leaf
-     * assertion green.
+     * THE OWNER'S RULING IS ABOUT ELEMENTS. A rounded card whose own padding holds its label in
+     * still paints its fill and border on the glass, and the leaf claim above cannot see it.
+     * Full-width Settings rule rows are ground, not cards, and are named explicitly above.
      */
     @Test
     fun `every visible surface on every destination clears the ruled side inset`() {
@@ -491,20 +493,24 @@ class ScreenAirSweepTest {
     /**
      * The surface reader's own negative controls, in memory.
      *
-     * A reader that always answered "far enough" would certify the very column this claim was
-     * added for, and one that exempted anything with a background would exempt every card in the
-     * app -- so both directions are held: a bare `settingsRow` in a bare column is seen, and the
-     * same row inside `sessionList`'s ruled `space_12` is not.
+     * A reader that always answered "far enough" would certify a rounded card painted on the
+     * glass, and one that exempted anything with a background would exempt every card in the app.
+     * Both directions are held with the same synthetic card: flush is rejected, while the card
+     * inside `sessionList`'s ruled `space_12` is accepted.
      */
     @Test
     fun `the surface sweep can see a card on the glass and passes the one that is held off it`() {
+        fun card(label: String) = LinearLayout(context).apply {
+            layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+            background = cardSurface(context, attention = false)
+            addView(TextView(context).apply { text = label })
+        }
         val flush = LinearLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
-            addView(settingsRow(context, label = "Alerts", sublabel = "When a session needs you"))
+            addView(card("Alerts"))
         }
         assertTrue(
-            "the surface sweep certified a card painted edge to edge, which is the defect it " +
-                "exists for: its label sits `space_14` in and the box it is drawn on does not",
+            "the surface sweep certified a rounded card painted edge to edge",
             surfaces(flush).any { minOf(it.start, it.end) < air() },
         )
 
@@ -512,7 +518,7 @@ class ScreenAirSweepTest {
             layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
             addView(
                 sessionList(context).apply {
-                    addView(settingsRow(context, label = "Alerts", sublabel = "the same row"))
+                    addView(card("Alerts"))
                 },
             )
         }
@@ -682,7 +688,7 @@ class ScreenAirSweepTest {
                     ),
                 ),
             ),
-            notices = listOf("Notifications are blocked for this app."),
+            notices = listOf("Notifications are blocked."),
             disclosure = "Battery saver can delay a push.",
             machineSection = MachineSection(
                 heading = "PAIRING",
@@ -710,7 +716,7 @@ class ScreenAirSweepTest {
                     command = "swarm remote on",
                 ),
             ),
-            permissionRedirectLabel = "Open notification settings",
+            permissionRedirectLabel = "Open settings",
             deliveryRedirectLabel = "Open the wake channel",
         ),
         rowFor = { row -> toggle(context, checked = row.checked, description = row.description) },
@@ -726,7 +732,7 @@ class ScreenAirSweepTest {
         // this host when a session is blocked on one. A session detail with nothing pending is
         // the common case, and an empty host sweeps to nothing rather than vacuously.
         approval = FrameLayout(context),
-        outcome = "The machine refused: remote control is disabled.",
+        outcome = "Remote control is off on your computer.",
     )
 
     /** Every conditional block on the detail screen drawn at once, so nothing is swept vacuously. */
@@ -741,7 +747,6 @@ class ScreenAirSweepTest {
         dev.swarm.phone.ui.SessionLease(sessionId = "mbp/api", online = true),
     ).copy(
         transcript = TranscriptPanel(
-            heading = "CONVERSATION",
             blocks = listOf(
                 TranscriptBlock(itemId = "i1", kind = "message", line = "Running the suite"),
                 TranscriptBlock(

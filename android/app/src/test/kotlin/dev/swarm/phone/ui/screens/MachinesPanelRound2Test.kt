@@ -51,9 +51,8 @@ class MachinesPanelRound2Test {
             "the forget confirmation must say what this phone deletes, that the computer " +
                 "itself is untouched, and that other computers are unaffected (MM8's " +
                 "sentence) -- anything less reads as app-wide data loss or as nothing at all",
-            "Forget this computer? This phone deletes its pairing keys and cached sessions " +
-                "for it. The computer itself is untouched, and other computers are unaffected.",
-            MachinesPanelScreen.FORGET_CONFIRM,
+            "Forget desk? You can pair it again later.",
+            MachinesPanelScreen.FORGET_CONFIRM("desk"),
         )
     }
 
@@ -67,8 +66,7 @@ class MachinesPanelRound2Test {
             "with zero machines the Computers entry must SAY why there is nothing to show; " +
                 "bouncing back to Settings wordlessly is the silent no-op shape on the path " +
                 "hard rule 5 does not name",
-            "No computers are paired yet. Pair this phone with a computer first; Computers " +
-                "fills in from the first pairing.",
+            "No computers yet. Pair one first.",
             MachinesPanelScreen.PAIR_FIRST,
         )
     }

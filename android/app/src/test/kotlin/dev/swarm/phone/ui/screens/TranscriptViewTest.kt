@@ -1,11 +1,14 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.R
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.kit.Kit
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
@@ -59,6 +62,7 @@ class TranscriptViewTest {
         gap: Boolean = false,
         fileChange: FileChangeChip? = null,
         route: TranscriptRoute = TranscriptRoute.None,
+        secondary: String = "",
     ) = TranscriptBlock(
         itemId = itemId,
         kind = kind,
@@ -70,10 +74,11 @@ class TranscriptViewTest {
         gap = gap,
         fileChange = fileChange,
         route = route,
+        secondary = secondary,
     )
 
     private fun panel(blocks: List<TranscriptBlock> = listOf(block())) =
-        TranscriptPanel(heading = "Conversation", blocks = blocks, emptyCopy = "Nothing yet.")
+        TranscriptPanel(blocks = blocks, emptyCopy = "Nothing yet.")
 
     private fun view(
         panel: TranscriptPanel = panel(),
@@ -120,13 +125,12 @@ class TranscriptViewTest {
     fun `the transcript is composed of the parts its recorded composition names`() {
         val root = view()
 
-        listOf(
-            TranscriptTag.SECTION_LABEL to "the heading over the conversation",
-            TranscriptTag.BLOCK to "one interaction item",
-        ).forEach { (tag, what) ->
-            assertNotNull("the transcript renders nothing for $what", root.kitFind(tag))
-        }
-        assertEquals("Conversation", textOf(root.kitFind(TranscriptTag.SECTION_LABEL)))
+        assertNotNull("the transcript renders nothing for one interaction item", root.kitFind(TranscriptTag.BLOCK))
+        assertNull(
+            "the conversation draws a heading over itself. It IS the screen, and a label saying " +
+                "so is chrome standing between the reader and the first message (phone refit W5.3)",
+            root.kitFind(TranscriptTag.SECTION_LABEL),
+        )
     }
 
     @Test
@@ -153,9 +157,9 @@ class TranscriptViewTest {
 
         assertEquals("Nothing yet.", textOf(root.kitFind(TranscriptTag.EMPTY)))
         assertNull("an empty transcript still drew a block", root.kitFind(TranscriptTag.BLOCK))
-        assertNotNull(
-            "the heading went with the rows, so an empty conversation is a gap where a section " +
-                "used to be rather than a section saying it is empty",
+        assertNull(
+            "an empty conversation drew a heading over its empty state; the copy stands where " +
+                "the first message would, with no chrome over it (phone refit W5.3)",
             root.kitFind(TranscriptTag.SECTION_LABEL),
         )
     }
@@ -280,6 +284,24 @@ class TranscriptViewTest {
         assertNull(
             "a finished tool is tagged as though it were still running",
             root.kitFind(TranscriptTag.RUNNING),
+        )
+    }
+
+    @Test
+    fun `the secondary line is one line and ellipsised`() {
+        // phone-refit-playbook W6.1: one grey line under the verb -- the timestamp cell's ink,
+        // never wrapping, ending in the platform's own mark -- and no line at all when the
+        // model has nothing to put there.
+        val root = view(panel(listOf(block(kind = "tool_run", line = "Ran a command", secondary = "go test ./..."))))
+        val grey = root.kitRequire(KitTag.ACTIVITY_SECONDARY) as TextView
+        assertEquals("go test ./...", grey.text.toString())
+        assertEquals(1, grey.maxLines)
+        assertEquals(TextUtils.TruncateAt.END, grey.ellipsize)
+        assertEquals(Kit.colour(context, R.color.swarm_text_tertiary), grey.currentTextColor)
+        assertEquals("the verb is still the row's body", "Ran a command", textOf(root.kitRequire(KitTag.ACTIVITY_BODY)))
+        assertNull(
+            "a row with nothing under its verb draws no grey line",
+            view(panel(listOf(block(kind = "tool_run", line = "Used a tool")))).kitFind(KitTag.ACTIVITY_SECONDARY),
         )
     }
 

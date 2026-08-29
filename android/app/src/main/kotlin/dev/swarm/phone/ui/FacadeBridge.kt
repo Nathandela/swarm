@@ -37,6 +37,9 @@ import swarmmobile.Session
  */
 class FacadeBridge(private val app: App) {
 
+    /** Durable generation of committed authoritative roster replacements. */
+    fun rosterRevision(): Long = app.stateSummary().rosterRevision
+
     /**
      * The roster as rows. gomobile has no list type, so a collection crosses as an opaque
      * handle with Count/At and is walked here once rather than at every screen.
@@ -402,6 +405,12 @@ class FacadeBridge(private val app: App) {
      * would be a button that reports success for a repair the budget refused.
      */
     fun repairTranscript() = app.resync(REPAIR_CHANNELS.first())
+
+    /**
+     * Reload the authoritative all-agent roster without bundling retained conversation events.
+     * The event backlog remains on the ordinary paged journal drain.
+     */
+    fun refreshRoster() = app.refreshRoster()
 
     /**
      * The unresolved `approval_request` this session is blocked on, or null when there is none.

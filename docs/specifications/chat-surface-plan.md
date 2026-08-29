@@ -195,7 +195,7 @@ own surface may not be authored there.
 | `conversationMenu` | Session details · Load earlier · Kill session. **No terminal-view route** (ADR-017:60-65 forbids it on a structured session) |
 | `fileChangeRow` | the tool row's shape carrying change verb, path and `+N −M` |
 | `earlierChip` | pill at the head of the list |
-| `decisionPill` | *Decision needed* — the only persistent affordance in the flow |
+| `decisionPill` | *Needs your answer* — the only persistent affordance in the flow |
 | `gapDivider` | the error notice reduced to a rule with a word on it |
 | `toolCard` | **no visual change**; the closed state gains a status mark and a clipped mark |
 | `workingBar` | reused as-is, at the tail of the list |

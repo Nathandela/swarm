@@ -193,17 +193,17 @@ func bindingsChecked(t *testing.T, out string) int {
 // TestCopySheet_TheCheckerCatchesARetypedSentence is the mutation that matters most, because
 // it is the one a human reviewer cannot catch: one character, rendering identically.
 func TestCopySheet_TheCheckerCatchesARetypedSentence(t *testing.T) {
-	const em = "Not sent — the terminal's input line was not empty."
-	const en = "Not sent – the terminal's input line was not empty." // U+2013, an en dash
+	const straight = "Not sent. There's a new reply. Read it, then send again."
+	const curled = "Not sent. There’s a new reply. Read it, then send again." // U+2019, a curled apostrophe
 
 	out, ok := runMutation(t, func(rel, body string) string {
 		if strings.HasSuffix(rel, "Composer.kt") {
-			return strings.Replace(body, em, en, 1)
+			return strings.Replace(body, straight, curled, 1)
 		}
 		return body
 	})
 	if ok {
-		t.Fatalf("an en dash substituted for an em dash passed the checker. That is the exact "+
+		t.Fatalf("a curled apostrophe substituted for the straight one passed the checker. That is the exact "+
 			"near-miss this gate exists for: it renders identically, reads identically, and is "+
 			"a different string:\n%s", out)
 	}
@@ -216,7 +216,7 @@ func TestCopySheet_TheCheckerCatchesARetypedSentence(t *testing.T) {
 // TestCopySheet_TheCheckerCatchesASentenceThatLeftTheCode: a bound row whose sentence is no
 // longer shipped anywhere. This is the direction that catches copy deleted in a refactor.
 func TestCopySheet_TheCheckerCatchesASentenceThatLeftTheCode(t *testing.T) {
-	const sync = "This view may be missing events. It repairs itself when the link recovers."
+	const sync = "Some updates may be missing."
 
 	out, ok := runMutation(t, func(rel, body string) string {
 		if strings.HasSuffix(rel, "ConnectionUi.kt") {
@@ -286,7 +286,7 @@ func TestCopySheet_TheCheckerCatchesAShortLabelThatLeftTheCode(t *testing.T) {
 // in one line and moves on. That is a binding which cannot fail -- the shape of every defect
 // this gate was built for -- so it is a fault, not a note.
 func TestCopySheet_ABoundRowWithNothingToCompareIsAFailure(t *testing.T) {
-	const cell = "<b>This view may be missing events. It repairs itself when the link recovers.</b>"
+	const cell = "<b>Some updates may be missing.</b>"
 
 	out, ok := runMutation(t, func(rel, body string) string {
 		if strings.HasSuffix(rel, "conversation-drawing.html") {

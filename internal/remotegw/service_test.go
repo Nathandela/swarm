@@ -19,6 +19,8 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -266,5 +268,32 @@ func TestService_RedrivePendingWakeObligationsSubmitsAPendingObligationAtStartup
 	if got := len(sub.all()); got != 1 {
 		t.Fatalf("wake submissions after redrive = %d, want 1: PG-OBL-8's restart re-drive must not "+
 			"wait for an unrelated trigger", got)
+	}
+}
+
+func TestServiceErrReportsJournalReconnectFailure(t *testing.T) {
+	svc := NewService(ServiceConfig{
+		DaemonSocket:   filepath.Join(t.TempDir(), "missing.sock"),
+		Relay:          &scriptedMailbox{},
+		ReconnectDelay: time.Hour,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.runJournal(ctx)
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for svc.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := svc.Err(); err == nil || !strings.Contains(err.Error(), "journal bridge") {
+		t.Fatalf("Service.Err() = %v, want the journal bridge failure", err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runJournal did not stop")
 	}
 }

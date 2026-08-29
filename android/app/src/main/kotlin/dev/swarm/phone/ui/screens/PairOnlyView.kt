@@ -13,7 +13,9 @@ import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.ctaButton
 import dev.swarm.phone.ui.kit.emptyState
 import dev.swarm.phone.ui.kit.navHeader
+import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.noticeDetail
 import dev.swarm.phone.ui.kit.screenColumn
 
@@ -74,6 +76,9 @@ object PairOnlyTag {
      * confirmed leaves behind is this screen's own, and there is no reply to quote under it.
      */
     const val NOTICE_DETAIL = "pairOnly.notice.detail"
+
+    /** The well carrying the command a sentence on this screen points at (phone refit W5.1). */
+    const val COMMAND = "pairOnly.command"
 }
 
 /**
@@ -108,6 +113,7 @@ fun pairOnlyView(
     onStartPairing: () -> Unit,
     revokedNotice: String = "",
     revokedDetail: String = "",
+    revokedCommand: String = "",
     copy: PairOnlyCopy = PairOnlyScreen.copyFor(PairOnlyReason.FIRST_RUN),
 ): View {
     // agents-tracker-nx44.1: row 18's own padding, `space_10` vertical x `space_24` horizontal --
@@ -123,6 +129,12 @@ fun pairOnlyView(
     // and the component that draws it cannot both be called the same thing in one scope.
     if (revokedNotice.isNotEmpty()) {
         column.addView(notice(context, revokedNotice).apply { tag = PairOnlyTag.NOTICE })
+    }
+
+    // A command is a well's text and never a sentence's (phone refit W5.1): the kit's mono well,
+    // directly under the sentence that points at it.
+    if (revokedCommand.isNotEmpty()) {
+        column.addView(monoWell(context, revokedCommand).apply { tag = PairOnlyTag.COMMAND }.scrolledHorizontally())
     }
 
     // AND THE MACHINE'S OWN WORDS UNDER IT (agents-tracker-ksvb.10). The sentence above says the
@@ -166,6 +178,9 @@ fun pairOnlyView(
         // it sits inside a
         // populated screen; this sentence is half of the only screen this phone has.
         column.addView(emptyState(context, copy.body).apply { tag = PairOnlyTag.BODY })
+        if (copy.command.isNotEmpty()) {
+            column.addView(monoWell(context, copy.command).apply { tag = PairOnlyTag.COMMAND }.scrolledHorizontally())
+        }
         column.addView(
             ctaButton(context, copy.cta, CtaKind.APPROVE).apply {
                 tag = PairOnlyTag.CTA

@@ -1,6 +1,7 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
@@ -67,6 +68,7 @@ class PhoneScaffoldViewTest {
         content: View? = null,
         banner: View? = null,
         onSelectDestination: (Destination) -> Unit = {},
+        onInboxRefresh: (() -> Unit)? = null,
     ): View {
         val screen = inbox(rows)
         return phoneScaffoldView(
@@ -81,6 +83,7 @@ class PhoneScaffoldViewTest {
             destination = destination,
             onSelectDestination = onSelectDestination,
             status = banner,
+            onInboxRefresh = onInboxRefresh,
         )
     }
 
@@ -300,6 +303,17 @@ class PhoneScaffoldViewTest {
             "the destination's ScrollView does not clip to its padding, for the same reason",
             viewport.clipToPadding,
         )
+    }
+
+    @Test
+    fun `pulling down from the top of Inbox requests refresh`() {
+        var refreshes = 0
+        val viewport = scaffold(onInboxRefresh = { refreshes++ })
+            .kitRequire(ScaffoldTag.CONTENT)
+        viewport.dispatchTouchEvent(MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100f, 100f, 0))
+        viewport.dispatchTouchEvent(MotionEvent.obtain(0, 10, MotionEvent.ACTION_MOVE, 100f, 400f, 0))
+        viewport.dispatchTouchEvent(MotionEvent.obtain(0, 20, MotionEvent.ACTION_UP, 100f, 400f, 0))
+        assertEquals("a top pull did not request authoritative refresh", 1, refreshes)
     }
 
     /** The badge overhangs the BAR's box, and the bar is the root's child, not the scroll's. */

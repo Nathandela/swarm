@@ -8,6 +8,7 @@ import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.Markdown
 import dev.swarm.phone.ui.kit.MarkdownBlock
 import dev.swarm.phone.ui.kit.ToolCard
+import java.net.URI
 
 /**
  * ADR-009-structured-chat-interaction (1) -- the chat transcript's SCREEN MODEL: what a session
@@ -63,8 +64,6 @@ import dev.swarm.phone.ui.kit.ToolCard
  * `status == in_progress` alone would elide the front of every message still being streamed.
  */
 data class TranscriptPanel(
-    /** The heading over the conversation. */
-    val heading: String,
     /** One block per item, oldest first. */
     val blocks: List<TranscriptBlock>,
     /** PB-DS-9: what an empty section says, because an empty section is still a section. */
@@ -133,7 +132,7 @@ data class TranscriptPanel(
      * The OLDEST decision nobody has answered yet, or "" when there is none.
      *
      * IT IS AN ID AND NOT A FLAG because the affordance it feeds is a JUMP. The drawing's
-     * `decision.pill` -- *Decision needed* -- "appears only while an unanswered decision is off
+     * `decision.pill` -- *Needs your answer* -- "appears only while an unanswered decision is off
      * screen, and it scrolls to it", and a boolean can raise a pill that has nowhere to go.
      *
      * OLDEST RATHER THAN NEWEST, on the same rule that orders the transcript: a conversation is
@@ -191,6 +190,13 @@ data class TranscriptBlock(
     val line: String,
     /** The span of [line] that carries row 14's inline mono, or null where nothing is marked. */
     val emphasis: String? = null,
+    /**
+     * The one grey line under a tool row (phone-refit-playbook W6.1): the first line of what
+     * the tool printed, or of its target when it printed nothing, or the command itself for a
+     * command. Empty draws nothing. It is its own field for [emphasis]'s reason: the verb is
+     * copy, and the machine's literal never rides inside copy.
+     */
+    val secondary: String = "",
     /**
      * The machine's own literal, drawn UNDER the row: a tool's output, a fenced block out of the
      * agent's markdown. Empty draws no well.
@@ -548,9 +554,6 @@ data class FileChangeChip(
 /** The transcript, as a pure function over the items the phone holds. */
 object TranscriptScreen {
 
-    /** The heading over a session's conversation. It is a conversation, so it says so. */
-    private const val HEADING = "Conversation"
-
     /**
      * What the transcript says when this phone holds no items for the session.
      *
@@ -560,7 +563,7 @@ object TranscriptScreen {
      * screen claiming the agent has said nothing would be a claim about the MACHINE that a phone
      * holding no items is in no position to make.
      */
-    private const val EMPTY = "No messages for this session have reached this phone yet."
+    private const val EMPTY = "No messages yet."
 
     /**
      * The one character that makes a typed line a MACHINE WORD rather than a sentence.
@@ -677,7 +680,7 @@ object TranscriptScreen {
      * item says "nobody answered this".
      */
     private const val ANSWERED_HERE = "answered on this phone"
-    private const val ANSWERED_AT_MACHINE = "answered at your machine"
+    private const val ANSWERED_AT_MACHINE = "answered at your computer"
     private const val NEVER_ANSWERED = "never answered"
 
     /**
@@ -784,7 +787,6 @@ object TranscriptScreen {
             )
         }
         return TranscriptPanel(
-            heading = HEADING,
             blocks = withPending,
             emptyCopy = EMPTY,
             // The turn the screen is DRAWING, which is what a send or a Stop tapped now is
@@ -923,10 +925,12 @@ object TranscriptScreen {
                 TranscriptBlock(
                     itemId = item.itemId,
                     kind = item.kind,
-                    // "Read src/main.rs" -- the adapter's tool and the action's own literal. An
-                    // unclassified call (IS-TOOL-2) fills no literal and this is the tool alone.
-                    line = phrase(fields.tool, fields.target),
-                    emphasis = fields.target,
+                    // "Read main.rs" (phone-refit-playbook W6.1): a verb for the flat tool_kind
+                    // -- the field the glyph reads, never the tool's name -- over the least of
+                    // the target a phone can show. No emphasis: nothing on a verb line is an
+                    // identifier to set in mono.
+                    line = verbFor(item.toolKind, fields.target),
+                    secondary = secondaryFor(item.toolKind, fields),
                     // IS-TOOL-3: the CLI's marker rides with the excerpt, verbatim, so the card
                     // never claims to hold output it only saw a marker for. RUNNING leads when
                     // the item is still open, so a tool with no output yet still draws a well
@@ -1286,6 +1290,40 @@ object TranscriptScreen {
     private fun phrase(vararg parts: String): String =
         parts.filter { it.isNotEmpty() }.joinToString(" ")
 
+    /**
+     * W6.1's verb for one `tool_kind`: what the tool DID, in the reader's words, over the least
+     * of its target a phone can show. An unknown kind says the honest minimum -- never the raw
+     * tool name, never a question mark. NO kind at all is no fact (interaction-schema.md §2's
+     * `tool_kind` row: an unclassified call carries none, and an absent fact stays absent), so
+     * it says nothing and the row falls to [marked]'s neutral line, which is also where an
+     * unreadable body lands.
+     */
+    private fun verbFor(kind: String, target: String): String = when (kind) {
+        "" -> ""
+        "execute" -> "Ran a command"
+        "read" -> phrase("Read", basename(target))
+        "edit" -> phrase("Edited", basename(target))
+        "write" -> phrase("Wrote", basename(target))
+        "search" -> "Searched"
+        "fetch" -> phrase("Fetched", hostOf(target))
+        "agent" -> "Started a helper agent"
+        else -> "Used a tool"
+    }
+
+    /** W6.1's grey line: a command's is the command; any other kind's is its output, or its target. */
+    private fun secondaryFor(kind: String, fields: ItemFields): String =
+        firstLine(if (kind == "execute") fields.target else fields.output.ifEmpty { fields.target })
+
+    private fun basename(path: String): String = path.trimEnd('/').substringAfterLast('/')
+
+    /** The URL's host, or the URL itself when no host can be read off it. */
+    private fun hostOf(url: String): String =
+        runCatching { URI(url).host }.getOrNull().orEmpty().ifEmpty { url }
+
+    /** The first line that says something: blank lines skipped, the line's own edges trimmed. */
+    private fun firstLine(text: String): String =
+        text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+
     /** The same, for a mono block, where the machine's own line breaks are the structure. */
     private fun lines(vararg parts: String): String =
         parts.filter { it.isNotEmpty() }.joinToString("\n")
@@ -1332,8 +1370,8 @@ object TranscriptScreen {
      * label and the whole rule is tappable. Two spans here would be a second affordance to aim
      * at, on the thinnest row on the screen.
      */
-    private const val GAP_MISSING = "records missing"
-    private const val GAP_REPAIR = "repair"
+    private const val GAP_MISSING = "Missing messages"
+    private const val GAP_REPAIR = "Reload"
     private val GAP_LINE = joined(GAP_MISSING, GAP_REPAIR)
 
     /**
@@ -1357,5 +1395,5 @@ object TranscriptScreen {
     // The line is over this file's usual width, deliberately: the alternative is a tabled
     // sentence that can drift from the sheet without anything noticing.
     private const val DECISION_UNRENDERABLE =
-        "This version of swarm cannot show this question. Answer it at your machine, or update the app."
+        "Update the app to answer here."
 }

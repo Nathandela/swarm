@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
+import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.kit.KitTag
 import dev.swarm.phone.ui.kit.kitFind
 import dev.swarm.phone.ui.kit.kitRequire
@@ -242,5 +243,25 @@ class PairOnlyViewTest {
             )
             assertEquals(copy.cta, textOf(root.kitFind(PairOnlyTag.CTA)))
         }
+    }
+    /** Phone refit W5.1: a command the screen points at is a mono well under the sentence. */
+    @Test
+    fun `a command the screen points at is drawn in a well under the sentence`() {
+        val copy = PairOnlyScreen.copyFor(PairOnlyReason.REPAIR_REQUIRED)
+        val repair = pairOnlyView(context, pairing = flow(), started = false, onStartPairing = {}, copy = copy)
+        assertEquals(copy.command, textOf(repair.kitFind(PairOnlyTag.COMMAND)))
+
+        val revoked = pairOnlyView(
+            context,
+            pairing = flow(),
+            started = false,
+            onStartPairing = {},
+            revokedNotice = PairOnlyScreen.revokeNoticeFor(CommandVerdict.UNANSWERED),
+            revokedCommand = PairOnlyScreen.REVOKE_COMMAND,
+        )
+        assertEquals(PairOnlyScreen.REVOKE_COMMAND, textOf(revoked.kitFind(PairOnlyTag.COMMAND)))
+
+        val plain = pairOnlyView(context, pairing = flow(), started = false, onStartPairing = {})
+        assertNull("a screen with no command to run drew a well", plain.kitFind(PairOnlyTag.COMMAND))
     }
 }

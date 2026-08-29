@@ -240,16 +240,10 @@ class MachinesPanelViewTest {
         )
         val words = screen.texts()
         assertTrue(
-            "the broken pairing's own fault is nowhere on screen; App.SelectMachine's refusal " +
+            "the broken pairing's notice is nowhere on screen; App.SelectMachine's refusal " +
                 "must be a user-visible state on the row that owns it, never a crash and never " +
                 "a silent no-op (MM8, machines.recovery)",
-            words.any { it.contains("the sealed blob refused to open") },
-        )
-        assertTrue(
-            "the screen does not say the other computers are unaffected, which is the half of " +
-                "the sentence that stops a user reaching for the wholesale remedy that " +
-                "destroys every pairing",
-            words.any { it.lowercase().contains("other computers are unaffected") },
+            words.any { it == "Can't open desk. Forget it or pair again." },
         )
 
         screen.tapRowNamed("desk")

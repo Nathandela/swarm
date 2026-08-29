@@ -15,15 +15,14 @@ import dev.swarm.phone.R
  * Substrate block declares no such rule -- the same reason [emptyState] cites a row rather than a
  * selector. Substrate's directions page has no settings screen to draw one on.
  *
- * ITS SURFACE IS `cardSurface` AND NOT A SECOND DERIVATION OF THE SAME FOUR VALUES. Row 15 asks
- * for `--p-card`, a 1 dp `--p-hair` border, `--p-card-r` and the `--p-card-fx` key light, which is
- * the session row's surface exactly. §2's reuse rule is the whole reason the remaining 24
- * components are tractable: a second recipe here would be a third place the card fill has to be
- * changed, and the two would drift on the first edit. What differs between a session row and a
- * settings row is what is IN it, which is this file.
+ * ITS SURFACE IS THE SIGNED SLATE `.trow`: the screen ground with one bottom hairline. Row 15
+ * deliberately has no card fill, radius, key light or outer tile inset; consecutive rows make one
+ * flat group. The row owns its 18 dp content gutter and 14 dp vertical rhythm, while its caller
+ * leaves the group edge to edge. Row 13 reuses this composition for the paired-device action.
  *
  * THE TRAILING CONTROL IS A VIEW THE CALLER PASSES, not a variant this component switches on. Row
- * 15 says it is "row 4, or status text", and a factory that took a `Boolean` and built one itself
+ * 15 keeps row 4 as a caller-owned trailing slot, and a factory that took a `Boolean` and built
+ * one itself
  * would own two components' worth of decisions and force a third parameter the first time a row
  * needed something else. The screen composes; this places.
  *
@@ -76,12 +75,16 @@ fun settingsRow(
     return LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        background = cardSurface(context, attention = false)
+        background = BottomRule(
+            fill = Kit.colour(context, R.color.swarm_background),
+            rule = Kit.colour(context, R.color.swarm_hairline),
+            rulePx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP).toFloat(),
+        )
         setPaddingRelative(
+            Kit.dimenPx(context, R.dimen.swarm_space_18),
             Kit.dimenPx(context, R.dimen.swarm_space_14),
-            Kit.dimenPx(context, R.dimen.swarm_space_12),
+            Kit.dimenPx(context, R.dimen.swarm_space_18),
             Kit.dimenPx(context, R.dimen.swarm_space_14),
-            Kit.dimenPx(context, R.dimen.swarm_space_12),
         )
         // Rows 4 and 15 are one instruction: "the whole row is one >=48 dp target when it carries
         // a toggle", which is also where row 4 puts the TOGGLE's ">=48 with the visual unchanged".

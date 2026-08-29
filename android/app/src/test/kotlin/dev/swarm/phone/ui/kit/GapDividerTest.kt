@@ -35,21 +35,21 @@ class GapDividerTest {
 
     @Test
     fun `it is a rule with a word on it and nothing else`() {
-        val divider = gapDivider(context, "records missing")
+        val divider = gapDivider(context, "Missing messages")
         assertEquals(
             "one line, at the place the record tore. Today this is a paragraph and two full-width " +
                 "buttons standing above the conversation",
             3,
             divider.childCount,
         )
-        assertEquals("records missing", word(divider).text.toString())
+        assertEquals("Missing messages", word(divider).text.toString())
         assertEquals("a rule on each side, so the word sits in the record", 2, rules(divider).size)
     }
 
     @Test
     fun `it says the machine's words in the notice line's error voice`() {
-        val divider = gapDivider(context, "records missing")
-        val notice = notice(context, "records missing", NoticeKind.ERROR)
+        val divider = gapDivider(context, "Missing messages")
+        val notice = notice(context, "Missing messages", NoticeKind.ERROR)
         assertEquals(
             "what changed is how much of the screen the statement may take, not who is making it",
             notice.currentTextColor,
@@ -66,7 +66,7 @@ class GapDividerTest {
 
     @Test
     fun `the rules are warmed toward the error ink and are not the plain hairline`() {
-        val divider = gapDivider(context, "records missing")
+        val divider = gapDivider(context, "Missing messages")
         for (rule in rules(divider)) {
             assertEquals(
                 "row 12's own `color-mix(--p-err 36%, --p-hair)`, spent a third time rather than " +
@@ -86,7 +86,7 @@ class GapDividerTest {
 
     @Test
     fun `both rules are one hairline tall and share whatever width is left`() {
-        val divider = gapDivider(context, "records missing")
+        val divider = gapDivider(context, "Missing messages")
         for (rule in rules(divider)) {
             val params = rule.layoutParams as LinearLayout.LayoutParams
             assertEquals(
@@ -112,13 +112,13 @@ class GapDividerTest {
             "row 22's general case: an inline span cannot carry a 48 dp target, so the line is the " +
                 "control and the line is where the floor is spent",
             Kit.dpPx(context, KitMetrics.MIN_TARGET_DP),
-            gapDivider(context, "records missing").minimumHeight,
+            gapDivider(context, "Missing messages").minimumHeight,
         )
     }
 
     @Test
     fun `it carries no air of its own beyond that floor`() {
-        val params = gapDivider(context, "records missing").layoutParams as LinearLayout.LayoutParams
+        val params = gapDivider(context, "Missing messages").layoutParams as LinearLayout.LayoutParams
         assertEquals("the air belongs to the column that composes it", 0, params.topMargin)
         assertEquals("and at the other edge", 0, params.bottomMargin)
         assertTrue(

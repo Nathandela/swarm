@@ -101,25 +101,25 @@ data class SyncStatus(
     companion object {
 
         /** The pill's word for [SyncState.SYNCING]. */
-        const val SYNCING = "SYNCING"
+        const val SYNCING = "Syncing…"
 
-        /**
-         * The pill's word for [SyncState.QUIET], and the whole pill where the machine has never
-         * been heard from at all.
-         */
-        const val QUIET = "QUIET"
+        /** The pill's words for [SyncState.QUIET], followed by the elapsed duration. */
+        const val QUIET = "Last seen"
+
+        /** The whole pill where the machine has never been heard from at all (phone refit W5.4). */
+        const val NOT_SEEN = "Not seen yet"
 
         /** The pill's word for [SyncState.BROKEN]. */
-        const val BROKEN = "BROKEN"
+        const val BROKEN = "Offline"
 
         /** The machine's own clock. */
-        const val HEARD = "HEARD"
+        const val HEARD = "Last heard"
 
         /** The transport's opinion -- whether frames can arrive at all. */
-        const val READING = "READING"
+        const val READING = "Link"
 
         /** The repair channels' completeness -- whether the ones that arrived are all of them. */
-        const val VIEWS = "VIEWS"
+        const val VIEWS = "Up to date"
 
         /**
          * The HEARD row where `lastHeardUnixMs` is zero.
@@ -137,7 +137,7 @@ data class SyncStatus(
          * mends every gap this sheet lists. `SessionDetailPanel.RESYNC` reads "Repair this record"
          * because there it sits beside one conversation; here the subject is the phone.
          */
-        const val REPAIR = "Repair now"
+        const val REPAIR = "Reload"
 
         /**
          * What the pairing control reads. It is `StatusBanner.PAIR_AGAIN`'s word, unchanged, and
@@ -149,7 +149,7 @@ data class SyncStatus(
          * machine declines. The Settings destination leads with the `Pairing` section, whose one
          * control clears the registration the re-pair is blocked on.
          */
-        const val PAIR_AGAIN = "Go to Pairing"
+        const val PAIR_AGAIN = "Pair again"
 
         /** Nothing to say -- the state a phone with no core to ask is honestly in. */
         val NONE = SyncStatus(
@@ -199,7 +199,7 @@ data class SyncStatus(
                 pill = when (state) {
                     SyncState.LIVE -> ""
                     SyncState.SYNCING -> SYNCING
-                    SyncState.QUIET -> if (since.isEmpty()) QUIET else "$QUIET $since"
+                    SyncState.QUIET -> if (since.isEmpty()) NOT_SEEN else "$QUIET $since"
                     SyncState.BROKEN -> BROKEN
                 },
                 // ONLY BROKEN ESCALATES. The strip is opaque chrome that displaces the destination,
@@ -241,9 +241,9 @@ data class SyncStatus(
             SyncState.LIVE -> ""
             SyncState.SYNCING -> "Sync status: syncing. Open details."
             SyncState.QUIET -> if (since.isEmpty()) {
-                "Sync status: your machine has not been heard from. Open details."
+                "Sync status: your computer has not been heard from. Open details."
             } else {
-                "Sync status: your machine has been quiet for $since. Open details."
+                "Sync status: your computer has been quiet for $since. Open details."
             }
             SyncState.BROKEN -> "Sync status: broken. Open details."
         }

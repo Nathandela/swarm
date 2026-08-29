@@ -528,3 +528,31 @@ func TestS10_AReseedReplacesTheSessionSetNotJustTheCursor(t *testing.T) {
 			"on the phone's screen -- working -- for the life of the install", cs)
 	}
 }
+
+// An empty roster is still authoritative. Rows and Cursor are both legitimately zero for an
+// empty machine, so neither can distinguish it from the cache between pairing and first sync.
+func TestS10_EmptyReseedAdvancesTheDurableRosterRevision(t *testing.T) {
+	core, router := s10Router(t)
+	key := testContentKey()
+	plain, err := json.Marshal(reseedFrame{
+		Kind:          kindJournalReseed,
+		JournalReseed: schema.JournalReseed{Roster: []schema.JournalRecord{}, Cursor: 0},
+	})
+	if err != nil {
+		t.Fatalf("marshal empty reseed: %v", err)
+	}
+
+	if _, err := router.AcceptCommit(sealFrameFrom(t, key, machineSender, 7, 1, plain), 101); err != nil {
+		t.Fatalf("accept empty reseed: %v", err)
+	}
+	if got := core.State().RosterRevision; got != 1 {
+		t.Fatalf("RosterRevision after authoritative empty reseed = %d, want 1; zero rows and cursor zero must still end first-sync", got)
+	}
+
+	if _, err := router.AcceptCommit(sealFrameFrom(t, key, machineSender, 7, 2, plain), 102); err != nil {
+		t.Fatalf("accept second empty reseed: %v", err)
+	}
+	if got := core.State().RosterRevision; got != 2 {
+		t.Fatalf("RosterRevision after second reseed = %d, want 2; pull refresh needs a generation it can reconcile against", got)
+	}
+}

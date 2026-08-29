@@ -325,6 +325,11 @@ type RemoteCommand struct {
 	// make the reseed carry more or fewer events than needed -- the roster it replaces the
 	// cache with is complete either way.
 	ResyncCursor uint64 `json:"resync_cursor,omitempty"`
+	// RosterOnly distinguishes an authoritative roster refresh from PB-SYNC-2's full
+	// journal repair. The gateway still reads one atomic daemon snapshot, but publishes
+	// only its roster at ResyncCursor, leaving every later backlog event admissible on the
+	// phone. Additive + omitempty keeps ordinary resync frames byte-compatible.
+	RosterOnly bool `json:"roster_only,omitempty"`
 	// SessionLaunch is the session_launch body (Wave R5): the phone's confirmed preset
 	// selection. It rides beside the signed tuple under launch's own rule -- the body is
 	// bound into the signature via ContentHash = SessionLaunchContentHash(SessionLaunch),

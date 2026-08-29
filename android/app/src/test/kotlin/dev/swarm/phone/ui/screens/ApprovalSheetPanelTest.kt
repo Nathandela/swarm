@@ -277,7 +277,7 @@ class ApprovalSheetPanelTest {
             "the sheet's own sentence names no error and no verb, and asserts no CAUSE -- one " +
                 "head string covers five refusal reasons, so it may only claim what is true of " +
                 "every one of them: the answer was not applied",
-            "Your machine could not apply this answer.",
+            "Couldn't send your answer. Try again.",
             ApprovalSheetScreen.refusalNoticeFor(refused),
         )
         assertEquals(
@@ -306,7 +306,7 @@ class ApprovalSheetPanelTest {
         assertEquals(
             "the machine looked at the screen and did not know it; saying the approval was " +
                 "already answered sends the owner away from a CLI that is still waiting",
-            "Your machine could not apply this answer.",
+            "Couldn't send your answer. Try again.",
             ApprovalSheetScreen.refusalNoticeFor(refused),
         )
         assertFalse(
@@ -325,7 +325,7 @@ class ApprovalSheetPanelTest {
     fun `an invalid decision reads the same calm way, in the machine's own words`() {
         val refused = verdictFor(code = "invalid_field", message = "decision \"cancel\" was not offered")
 
-        assertEquals("Your machine could not apply this answer.", ApprovalSheetScreen.refusalNoticeFor(refused))
+        assertEquals("Couldn't send your answer. Try again.", ApprovalSheetScreen.refusalNoticeFor(refused))
         assertEquals("decision \"cancel\" was not offered", ApprovalSheetScreen.refusalDetailFor(refused))
     }
 

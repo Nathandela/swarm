@@ -101,14 +101,12 @@ class TerminalFallbackViewTest {
     // ---- playbook:280: the honest header ----------------------------------------
 
     @Test
-    fun `the header names the provider, its detected version, and what is missing`() {
+    fun `the header names the provider, its detected version, and says chat is off`() {
         val root = view()
         assertTrue(
-            "the header must name the missing capability, or the screen says \"this is a " +
-                "terminal\" rather than \"this is a terminal BECAUSE this build of this provider " +
-                "does not do X\" -- and the second sentence is the whole of what makes three " +
-                "destinations honest rather than arbitrary",
-            textOf(root, TerminalFallbackTag.HEADER).contains("structured_chat"),
+            "the header must say chat is off for this session, in the reader's words (phone " +
+                "refit W5.4); the provider and its version are the checkable half beside it",
+            textOf(root, TerminalFallbackTag.HEADER).contains("Chat is off for this session."),
         )
         assertEquals("opencode 0.9.3", model().headline)
     }
@@ -142,7 +140,7 @@ class TerminalFallbackViewTest {
                 "the state a user is most likely to type into.",
             root.kitFind(TerminalFallbackTag.STALENESS),
         )
-        assertTrue(textOf(root, TerminalFallbackTag.STALENESS).contains("out of date"))
+        assertTrue(textOf(root, TerminalFallbackTag.STALENESS).contains("ago"))
     }
 
     @Test
@@ -183,7 +181,7 @@ class TerminalFallbackViewTest {
             "Decision G keeps the owner typing throughout and ADR-013's co-presence finding " +
                 "proves both streams stay live, so the UX must warn that simultaneous typing can " +
                 "interleave -- and must NOT \"fix\" it by evicting the terminal user",
-            textOf(view(), TerminalFallbackTag.INTERLEAVING).contains("interleave"),
+            textOf(view(), TerminalFallbackTag.INTERLEAVING).contains("typing"),
         )
     }
 
@@ -210,7 +208,7 @@ class TerminalFallbackViewTest {
     fun `an expired horizon says control ended rather than quietly vanishing`() {
         assertTrue(
             "a banner that disappears is indistinguishable from a screen that never had control",
-            TerminalFallbackModel.controlBanner(0L).contains("Control ended"),
+            TerminalFallbackModel.controlBanner(0L).contains("ended"),
         )
     }
 

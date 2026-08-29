@@ -182,9 +182,8 @@ var s23Inbox = []s23Component{
 		Derived: "#15 Settings row",
 		Why: "the Settings screen's only structural element. Substrate's directions page has no " +
 			"settings screen, so `.setrow` is the retired mock's class and row 15 is the whole " +
-			"specification. Its surface is cardSurface rather than a second derivation of the " +
-			"same four values -- §2's reuse rule, which is why the remaining components are " +
-			"tractable at all.",
+			"specification. The signed Slate `.trow` is a flat grouped row: screen ground, one " +
+			"bottom hairline, and no per-row card radius, key light or outer tile gap.",
 	},
 	{
 		Factory: "toggle",
@@ -1826,8 +1825,8 @@ var s23DerivedSpacing = []struct {
 	// than a step, which s23DocPadding does not match. That join lives in s24_screens_test.go
 	// with a reader of its own -- recorded here so the absence reads as a known limit rather than
 	// as a component nobody joined.
-	{"SettingsRow.kt", "#15 Settings row", "padding-y", "swarm_space_12"},
-	{"SettingsRow.kt", "#15 Settings row", "padding-x", "swarm_space_14"},
+	{"SettingsRow.kt", "#15 Settings row", "padding-y", "swarm_space_14"},
+	{"SettingsRow.kt", "#15 Settings row", "padding-x", "swarm_space_18"},
 	// Row 9 states its padding TWICE -- once for the composer bar and once for the field -- and
 	// both are `space_8` x `space_14`. This reader takes the first match, which is the bar's, so
 	// the join holds only while the two agree. Recorded because if they ever diverge this would

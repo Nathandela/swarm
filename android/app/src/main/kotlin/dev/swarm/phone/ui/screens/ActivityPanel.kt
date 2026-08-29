@@ -133,18 +133,6 @@ object ActivityPanelScreen {
     /** The mock's `.navhead`, verbatim -- the one piece of its activity screen that survives. */
     private const val TITLE = "Activity"
 
-    /**
-     * The unstamped section's heading (W7.4: the trailing section, for rows the wire did not
-     * stamp; before W7.4 the one section).
-     *
-     * AUTHORED, AND NAMING THE SOURCE RATHER THAN THE READER'S SITUATION. The mock's two headings
-     * are dropped for the reason the class comment gives, and a replacement had to say something
-     * true about what is under it. "Journal" is the product's own name for this record stream --
-     * `internal/journal`, `App.ReadJournal`, `JournalPage` -- so it is a word the log can be
-     * checked against, and it makes no claim about when the user last looked, nor about a day.
-     */
-    private const val SECTION = "Journal"
-
     /** The day headings a stamp supports (W7.4). Any other day is its date. */
     private const val TODAY = "Today"
     private const val YESTERDAY = "Yesterday"
@@ -181,7 +169,7 @@ object ActivityPanelScreen {
      * covers the case where the phone KNOWS it missed something; this copy covers the case where
      * it has no basis for saying either way, which is most of them.
      */
-    private const val EMPTY = "No activity has reached this phone yet."
+    private const val EMPTY = "No activity yet."
 
     /**
      * PB-APP-8's sentence, in the register [dev.swarm.phone.ui.TerminalPeek.staleNotice] set.
@@ -190,9 +178,7 @@ object ActivityPanelScreen {
      * own leaves a reader to guess whether the list is old or incomplete -- and for a chronology
      * it is incomplete, which is the worse of the two and the one they would not assume.
      */
-    private const val STALE_NOTICE =
-        "Some entries are missing: the event stream from your machine had a gap that has not " +
-            "been repaired, so this is not a complete history."
+    private const val STALE_NOTICE = "Some entries are missing."
 
     /** The separator between a record's session and its word. `PeekPanelScreen` sets the idiom. */
     private const val FIELD_SEPARATOR = " · "
@@ -219,11 +205,11 @@ object ActivityPanelScreen {
                     emptyCopy = EMPTY,
                 )
             }
-        // THE UNSTAMPED ROWS TRAIL, under the stream's own name: a daemon predating the stamp
-        // sends none, and its whole page lands here -- which is exactly what this screen drew
-        // before W7.4. An empty page is this section too, so row 8's empty state has a heading.
+        // THE UNSTAMPED ROWS TRAIL, with no heading (phone refit W5.3): a daemon predating the
+        // stamp sends none, and its whole page lands here. The day headings are W7.4's, from the
+        // stamp; the phone has no word of its own to put over rows it cannot date.
         val trailing = if (unstamped.isNotEmpty() || days.isEmpty()) {
-            listOf(ActivitySection(heading = SECTION, rows = unstamped.map(::entryFor), emptyCopy = EMPTY))
+            listOf(ActivitySection(heading = "", rows = unstamped.map(::entryFor), emptyCopy = EMPTY))
         } else {
             emptyList()
         }

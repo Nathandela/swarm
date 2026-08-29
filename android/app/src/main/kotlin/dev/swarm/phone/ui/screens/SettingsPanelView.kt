@@ -59,15 +59,12 @@ import dev.swarm.phone.ui.kit.settingsRow
  * add 12 to the first group and re-run agents-tracker-2pnu F2's doubling; the argument is
  * `ui/kit/ScreenColumn.kt`'s and `ScreenAirSweepTest` is what holds every screen to it.
  *
- * **AND THE CARDS ARE IN THAT SECOND GROUP, WHICH THIS SCREEN READ WRONG ONCE.** Rows 11 and 15
- * spend `space_14` INSIDE their box; a padding is not a margin, so the label cleared the ruled
- * floor while the `--p-card` fill and its `--p-hair` border underneath ran edge to edge -- on the
- * one screen in the app that places those two rows on the ground instead of in `sessionList`,
- * which is the Inbox's own way of paying exactly this. So each row gets the same step here, once,
- * and keeps its 14 inside: a settings card now sits where a session card does. `killSwitchPanel`
- * is untouched, because row 12 gives that one a `space_14` margin of its own -- "the panel is the
- * one block ... that sits on the ground rather than inside a list, so nothing above it can carry
- * its inset" -- and 14 already clears 12.
+ * **THE TWO ROW FORMS HAVE DIFFERENT EDGE OWNERS.** Row 11's machine identity remains the one
+ * inset rounded card and therefore keeps `screenAir`. Rows 13 and 15 follow the signed Slate
+ * `.trow`: one full-width ruled group whose 18 dp content gutter lives inside each row, with no
+ * outer tile gap. Adding `screenAir` to those rows recreates the handset defect by breaking the
+ * continuous group into separate tiles. `killSwitchPanel` is unchanged because row 12 owns its
+ * own `space_14` margin.
  *
  * THE NOTICE LINES ARE THE KIT'S NOW (agents-tracker-ksvb.4). This paragraph read "THE NOTICE LINES
  * ARE STILL BARE `TextView`s ... that is the absence of a decision rather than one made here", and
@@ -308,7 +305,7 @@ fun settingsPanelView(
                     label = row.label,
                     sublabel = row.sublabel,
                     trailing = rowFor(row),
-                ).apply { announceAsOneRow(row) }.screenAir(),
+                ).apply { announceAsOneRow(row) },
             )
         }
     }
@@ -355,12 +352,12 @@ fun settingsPanelView(
             settingsRow(
                 context = context,
                 label = section.row.label,
-                sublabel = section.row.sublabel,
+                sublabel = section.row.sublabel.takeIf { it.isNotEmpty() },
                 // Row 13's arrangement, reused: the `.a2-no` treatment at chip metrics, for the
                 // same class of action as Revoke -- because it IS the revoke. The control is the
                 // caller's; this places it and tags it.
                 trailing = replaceFor(section.row).apply { tag = SettingsTag.REPLACE },
-            ).apply { tag = SettingsTag.MACHINE_ROW }.screenAir(),
+            ).apply { tag = SettingsTag.MACHINE_ROW },
         )
     }
 

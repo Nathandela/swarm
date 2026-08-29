@@ -4,7 +4,9 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.sectionLabel
 import dev.swarm.phone.ui.kit.sessionList
@@ -38,6 +40,9 @@ object LaunchPresetTag {
 
     /** The availability resolver's named denial, drawn only when NEW_SESSION is not offered. */
     const val AVAILABILITY = "launch.preset.availability"
+
+    /** The well under the availability notice, carrying the command a denial points at (W5.1). */
+    const val COMMAND = "launch.preset.command"
 
     /** One selectable machine-authored preset row (SELECT_PRESET). */
     const val ROW = "launch.preset.row"
@@ -85,6 +90,15 @@ fun launchPresetView(
             notice(context, panel.availabilityNotice)
                 .apply { tag = LaunchPresetTag.AVAILABILITY }
                 .screenAir(),
+        )
+    }
+    // A command is a well's text and never a sentence's (phone refit W5.1): the kit's mono well,
+    // under the sentence that points at it, scrollable so a long verb is reachable.
+    if (panel.availabilityCommand.isNotEmpty()) {
+        column.addView(
+            monoWell(context, panel.availabilityCommand)
+                .apply { tag = LaunchPresetTag.COMMAND }
+                .scrolledHorizontally(),
         )
     }
 

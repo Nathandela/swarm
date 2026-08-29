@@ -319,7 +319,7 @@ class TranscriptOverflowTest {
                 "a discontinuity needs to know the record is not continuous and how to repair " +
                 "it; three sentences of explanation is a notice they must finish before the " +
                 "conversation resumes",
-            "records missing · repair",
+            "Missing messages · Reload",
             block.line,
         )
         assertFalse(
