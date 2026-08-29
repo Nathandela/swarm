@@ -412,12 +412,14 @@ as sandbox or permission bypasses." The first half is narrowed to the supervised
 hands-off method has no cooperating source to delegate the launch to, so the TUI submits the
 launch itself, through the same `OpLaunch` every other owner-tier client already uses; there is no
 second launch path and no new op. The second half STANDS, unchanged and for both methods: the
-handoff form carries target CLI, model and method, and nothing else. Sandbox and permission-bypass
-flags are not on it, and hands-off is not the door through which they arrive — that half of B2 was
-never about who calls `OpLaunch`, it was about what a launch form is allowed to widen, and nothing
-here widens it. What the client sends is a source session id plus the form's three choices; the
-daemon composes everything else (E5), so the client's whole new authority is naming which session
-to hand off from, which is authority ADR-004 already grants any same-user process.
+handoff form displays target CLI, model, supervision and method, and nothing else. Sandbox and
+permission-bypass flags are not on it, and hands-off is not the door through which they arrive —
+that half of B2 was never about who calls `OpLaunch`, it was about what a launch form is allowed to
+widen, and nothing here widens it. For hands-off, supervision is displayed as not applicable and is
+not sent; method selects the branch, while the launch request carries the source session id plus the
+chosen target CLI and model. The daemon composes everything else (E5), so the client's whole new
+authority is naming which session to hand off from, which is authority ADR-004 already grants any
+same-user process.
 
 ### E2. B3's eligibility gate becomes the DEFAULT SUGGESTION for a `method` field, never the action selector
 
@@ -464,24 +466,27 @@ orphaned-supervisor marker on a child that never had a supervisor to orphan. Emp
 supervision relationship was ever formed; `none` keeps meaning a formed relationship the source
 declined to act on.
 
-### E4. Cross-provider transcript disclosure is an owner decision taken at the form, not a silent default
+### E4. Cross-CLI transcript disclosure is an owner decision taken at the form, not a silent default
 
 The composed prompt instructs the successor to READ a local transcript file. That file is the raw
 record of another session: whatever a human pasted into it, whatever a tool printed, whatever file
 content was read into the conversation — credentials pasted in a hurry, environment dumps,
-proprietary source. When the chosen target CLI belongs to a different vendor than the source's,
-launching the successor is what sends that content to a second model provider, under an agreement
-the source's provider never covered. D2 already established that transcripts travel as raw
-per-vendor pointers with no cross-vendor normalization; what is new here is that swarm now points
-one vendor's agent at another vendor's file, on the owner's behalf, with no agent in between
-deciding what to quote.
+proprietary source. When the chosen target CLI differs from the source CLI, launching the successor
+may send that content to a second model provider, under an agreement the source's provider never
+covered. D2 already established that transcripts travel as raw per-vendor pointers with no
+cross-vendor normalization; what is new here is that swarm now points one CLI's agent at another
+CLI's file, on the owner's behalf, with no agent in between deciding what to quote.
 
 That is a disclosure decision, so it is taken by the owner, knowingly, at the form: where the
-target provider differs from the source's, submit takes an explicit confirmation naming both
-providers. A same-vendor handoff takes no confirmation — the content reaches nobody new. The
-disclosure is also recorded operator-side in `docs/operations/metadata-disclosure.md`, because
-ADR-007 D11 forbids this project from claiming less exposure than exists, and an undocumented
-cross-vendor content path is exactly that.
+target CLI differs from the source CLI, submit takes an explicit confirmation naming both CLIs. A
+same-CLI handoff takes no confirmation. This is deliberately a conservative CLI boundary, not a
+claim that the two CLIs necessarily use different providers: agy and OpenCode can route to
+different providers according to model/configuration, so swarm has no reliable static
+CLI-to-provider map. The rule may therefore confirm a same-provider cross-CLI handoff, but it never
+silently infers that two different CLIs share a provider. The disclosure is also recorded
+operator-side in `docs/operations/metadata-disclosure.md`, because ADR-007 D11 forbids this project
+from claiming less exposure than exists, and an undocumented cross-provider content path is
+exactly that.
 
 ### E5. What is handed over is POINTERS ONLY
 
@@ -525,19 +530,73 @@ footing as D7: for the personal single-owner deployment, any same-user process a
 daemon power, and the successor runs with the authority the owner gave it either way. It is
 recorded here rather than argued away.
 
-### E7. Scope: `claude` sources only in this sweep
+### E7. Scope: sources with a characterized, anchored history locator
 
-Hands-off resolves a source only when the source agent is `claude`. `codex`, `agy` and `opencode`
-are refused BY NAME. Every refusal in this flow is named and launches nothing: no refusal may
-degrade to a bare, context-free launch, because an agent loose in the owner's checkout with no idea
-what it is continuing is the worst outcome available here — worse than no handoff at all, since the
-owner would believe the work was carried over. The gate is the adapter's knowledge of its own
-transcript layout, expressed as an optional interface discovered by type assertion, which is the
-house pattern from `ADR-010-adapter-structured-capture.md` for extending the frozen adapter
-contract; an adapter that does not implement it is not asserted into the interface, and its
-sessions are refused. Codex is the next candidate and needs the dated-directory scan the existing
-resume resolver already performs, so it is a later slice, not this one. agy and opencode have no
-characterized on-disk history format at all, which is the same line R-2 already draws for resume.
+> **AMENDED 2026-08-29:** The first sweep supported `claude` only. The Codex expansion
+> characterizes Codex 0.150.1's dated live-rollout layout and adds unarchived `codex` histories as
+> the second supported source shape. The refusal invariant and the `agy`/`opencode` boundary are
+> unchanged.
+
+Hands-off resolves a source only when swarm has characterized both how that provider names its
+history and how the history proves its own identity. `claude` and unarchived `codex` histories meet
+that bar. `agy`, `opencode`, `hermes`, and any unknown future adapter are refused BY NAME. Every refusal in this flow
+is named and launches nothing: no refusal may degrade to a bare, context-free launch, because an
+agent loose in the owner's checkout with no idea what it is continuing is the worst outcome
+available here — worse than no handoff at all, since the owner would believe the work was carried
+over.
+
+Claude's locator remains the adapter-declared, deterministic
+`~/.claude/projects/<encoded-cwd>/<conversation-id>.jsonl` path. Codex is not forced into that
+shape: its provider-history resolver performs a bounded, anchored traversal below
+`~/.codex/sessions/YYYY/MM/DD`. It accepts only Codex's characterized rollout names,
+`rollout-<timestamp>-<thread-id>.jsonl` and the revert form whose stem ends
+`<thread-id>_<rollout-id>.jsonl`. The stable thread id is the conversation identity; the optional
+rollout id distinguishes multiple rollouts of that thread. Among logical files for the requested
+thread, selection mirrors Codex 0.150.1: choose the maximum `(parsed filename local-wall timestamp,
+rollout id)`. The offset is not present in the basename, so this is an ordering key rather than an
+absolute instant; canonical UUID lexical order is byte order. Two distinct paths with the same
+selection key are ambiguous and refused; swarm does not guess.
+
+A plain `.jsonl` hides only its identical `.jsonl.zst` sibling. If the selected logical rollout is
+available only as `.jsonl.zst`, hands-off refuses it by name and does not fall back to an older
+plaintext rollout. Passing a compressed path would not be an honest handoff because arbitrary
+successor CLIs cannot be assumed to read zstd; materializing a plaintext copy would break E5's
+pointers-only/no-copy model and create sensitive lifecycle state. Fresh and live Codex sessions,
+before Codex's cold-history compression, remain ordinary `.jsonl` files and are supported. A later
+slice may add compressed history only with a reviewed export/decompression lifecycle design.
+This named compressed outcome starts only after swarm has a canonical thread id and can select by
+that stable identity. If the source has no captured id and its candidate history is compressed,
+swarm cannot inspect `session_meta` to correlate cwd and launch time; it therefore reports that no
+usable identity/history could be recovered rather than trusting the filename alone.
+
+After selection, the daemon opens the physical file through the anchored, regular-file-only walk
+and reads only the bounded first complete record needed for identity. It must be a Codex
+`session_meta` record whose `payload.id` is the requested stable thread id. A misleading filename,
+malformed or oversized first record, directly observed symlink, FIFO, traversal, replacement race,
+exhausted scan budget, missing file, and mismatched identity are refusals, not alternative search
+strategies.
+The daemon's trusted HOME is the anchor, as it already is for resume recovery; client-supplied HOME
+does not move it.
+
+For missing-id recovery, filename and payload time are validated in their own domains. Codex
+0.150.1 creates the path from local wall time, omits the UTC offset from the basename, and stores
+the same start instant as UTC in `session_meta.payload.timestamp`. The basename therefore proves
+canonical shape, dated-directory consistency, and ordering; the RFC3339 payload timestamp proves
+correlation to the swarm launch window. Comparing them as two UTC instants would reject every
+non-UTC host and is deliberately forbidden.
+
+This slice searches the live/unarchived `~/.codex/sessions` tree only. Codex's explicit archive
+operation moves rollouts into a separate flat `~/.codex/archived_sessions` layout; those histories
+currently receive the same named not-found refusal as any unavailable transcript. Adding archive
+support requires its own cross-root selection and identity contract and is not inferred from the
+live-tree rules.
+
+Codex app-server's `Thread.path` is deliberately neither trusted nor persisted in this slice. Its
+published schema marks the field unstable; swarm metadata has no durable field for it, and making
+handoff composition synchronously depend on app-server would contaminate the pure
+composer/provider-history-resolver boundary. The anchored filesystem scan is authoritative. A
+future stable hint may narrow that scan only after the hinted path passes the same anchor, filename,
+selection, physical-file, budget, and first-record identity checks; it may never bypass them.
 
 The launch option (`handoff_from`) is owner-tier only and capability-negotiated for the same
 fail-closed reason: a client talking to an older daemon that does not know the option must be

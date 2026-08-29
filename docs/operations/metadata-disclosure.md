@@ -380,7 +380,7 @@ Three limits that remain, stated because D11 forbids reading the table above as 
 > is the project's register of who observes what, and D11's rule — never claim less exposure than
 > exists — does not stop being the rule when the observer is a model API rather than a relay
 > operator. The document's title is accordingly narrower than its contents; it is left as published
-> because a rename this section is not scoped to make. `docs/INDEX.md`'s entry, which described
+> because renaming it is outside this section's scope. `docs/INDEX.md`'s entry, which described
 > this file as covering "the relay operator and the push provider", was broadened instead: an
 > index that under-describes the register is D11's own failure mode moved to the discovery layer,
 > where a reader scanning for "who observes what" never reaches the correction.
@@ -401,15 +401,19 @@ record of a session, and it holds whatever was pasted into it and whatever a too
 in swarm redacts it, and nothing here can: swarm ships no filter recipe by decision (ADR-010 E5),
 so there is no filter to teach and no redaction seam to add one at.
 
-**A same-vendor handoff discloses nothing new.** Claude to Claude sends the transcript back to the
-provider that already holds the conversation it records. The exposure is created by a CROSS-vendor
-handoff, which is why the owner confirms that case explicitly at the form, with both providers
-named (ADR-010 E4), rather than swarm reading a target-CLI choice as consent to a disclosure the
-owner was not shown.
+The material exposure is to the target CLI's configured provider. swarm cannot reliably determine
+that provider from the CLI name: agy and OpenCode, for example, can route according to the selected
+model and local configuration. The form therefore uses a deliberately conservative rule: a
+**cross-CLI** handoff requires explicit confirmation naming the source and target CLIs; a same-CLI
+handoff does not. This may ask for confirmation even when two different CLIs ultimately use the
+same provider, but it never silently treats that unverified routing fact as safe (ADR-010 E4).
 
-**Scope today.** Only `claude` sources are supported in the first sweep (ADR-010 E7), so today's
-cross-vendor case is a Claude transcript read by codex, agy or opencode. Widening the source set
-widens this section's subject, not its rule.
+**Scope today.** `claude` and unarchived `codex` histories are supported (ADR-010 E7). A cross-CLI
+handoff can therefore disclose a Claude or unarchived Codex transcript to the target CLI's
+configured provider. The form
+applies the same explicit confirmation in every cross-CLI direction. agy, OpenCode, Hermes, and
+unknown sources remain unsupported; widening the source set later widens this section's subject,
+not its rule.
 
 **What this section is not.** It is not a claim that swarm ships content anywhere on its own: the
 successor is a local process the owner launched, reading a local file the owner pointed it at, and

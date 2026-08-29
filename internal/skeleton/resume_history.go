@@ -24,6 +24,11 @@ const (
 	resumeHistoryAmbiguous
 	resumeHistoryUnsafe
 	resumeHistoryUnreadable
+	// resumeHistoryCompressed is a usable provider history whose storage format
+	// cannot safely be handed to an arbitrary successor CLI as a readable path.
+	// It is distinct from Unreadable: retrying permissions will not make a zstd
+	// rollout into the plaintext JSONL the hands-off prompt promises.
+	resumeHistoryCompressed
 )
 
 type resumeHistoryResult struct {
@@ -140,47 +145,38 @@ func (r *filesystemResumeHistoryResolver) Resolve(m persist.Meta) resumeHistoryR
 // Resolve uses, opens it, and returns its absolute path.
 //
 // WHAT THE ANCHORED WALK BUYS, AND WHAT IT DOES NOT. The traversal's guarantees --
-// os.SameFile inode identity, no symlink component, IsRegular, O_RDONLY|O_NONBLOCK
-// against a planted FIFO -- are properties of a FILE DESCRIPTOR, and this function
-// returns a STRING. None of them survive serialization into a name that another
+// confinement below the opened root, equality between each inspected inode and the
+// inode subsequently opened, IsRegular, and O_RDONLY|O_NONBLOCK against a planted
+// FIFO -- are properties of a FILE DESCRIPTOR, and this function returns a STRING.
+// None of them survive serialization into a name that another
 // process opens minutes later. Concretely, the returned path does NOT promise that the
 // file still exists at open time, that it is the same inode, that no component became a
 // symlink in between, that it is still a regular file, or that the successor's process
 // resolves the same string to the same file. What it does promise is confinement BY
-// CONSTRUCTION: swarm did not invent this path and did not follow a symlink to produce
-// it. Every segment is provably a single separator-free component -- homeAbs is Clean'd
-// and IsAbs-checked; ".claude" and "projects" are compile-time literals, and where
-// ".claude" is instead a stable alias, providerAliasTarget has already proved its
-// target a clean, ".."-free, strict descendant of that same home; ProjectDirName emits
-// only [A-Za-z0-9-] (one dash per non-alphanumeric rune, so no separator can survive
-// it); and a convID that passed IsCanonicalConversationID is 36 characters of lowercase
-// hex with dashes at fixed offsets. There is no input under which the assembled string
-// leaves the projects root. (The argument is the COMPONENTS', not filepath.Join's: Join
+// CONSTRUCTION: swarm did not invent this path, every direct symlink observed by its
+// pre-open checks is refused, and os.Root cannot resolve outside the trusted root. A
+// symlink introduced by a concurrent rename may still be resolved when it stays inside
+// that root and reaches the same inspected inode, so the contract does not claim a
+// portable categorical no-follow guarantee. Every segment is provably a single
+// separator-free component -- homeAbs is Clean'd and IsAbs-checked; provider and fixed
+// subdirectory names are literals; providerAliasTarget proves the one supported root
+// alias a clean, ".."-free strict descendant of HOME; Claude's ProjectDirName emits only
+// [A-Za-z0-9-]; Codex date components are fixed-width decimal values; and conversation
+// IDs and rollout names pass strict parsers. There is no input under which the assembled
+// string leaves the selected provider root. (The argument is the COMPONENTS', not filepath.Join's: Join
 // cleans, and cleaning is what would turn "../.." into an escape rather than stop it.)
 // The machinery's real job here is stopping a malformed or hostile input from steering
 // the DAEMON's own reads, and that job is done in full.
 //
-// The provider root is claude's, so this locator is claude's, exactly as resolveClaude
-// is. Codex files its history in dated directories under a different root and needs its
-// own locator when it is characterized.
+// Claude's pure naming layout and Codex's dated-tree search deliberately meet only
+// at this anchored resolver. An adapter seam cannot describe Codex's one-to-many
+// thread/revert layout without performing the filesystem search that belongs here.
 func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convID string) (string, resumeHistoryOutcome) {
 	if !adapter.IsCanonicalConversationID(convID) {
 		return "", resumeHistoryUnsafe
 	}
-	if m.AgentType != "claude" {
+	if m.AgentType != "claude" && m.AgentType != "codex" {
 		return "", resumeHistoryUnsupported
-	}
-	// Absence is the signal (ADR-010 section 5): an adapter without a characterized
-	// layout is not asserted into the interface, and a stub returning "" would look like
-	// an answer and send an anchored open at a directory named "".
-	ad, _ := registry.New(m.AgentType)
-	layout, ok := adapter.AsTranscriptLayout(ad)
-	if !ok {
-		return "", resumeHistoryUnsupported
-	}
-	cwd := m.ProviderCwd() // the directory the AGENT ran in; see Resolve
-	if !filepath.IsAbs(cwd) {
-		return "", resumeHistoryNoMatch
 	}
 	if !filepath.IsAbs(r.home) {
 		return "", resumeHistoryUnreadable
@@ -194,6 +190,21 @@ func (r *filesystemResumeHistoryResolver) LocateTranscript(m persist.Meta, convI
 		return "", outcome
 	}
 	defer func() { _ = home.Close() }()
+	if m.AgentType == "codex" {
+		return r.locateCodexTranscript(home, budget, convID)
+	}
+	// Absence is the signal (ADR-010 section 5): an adapter without a characterized
+	// layout is not asserted into the interface, and a stub returning "" would look like
+	// an answer and send an anchored open at a directory named "".
+	ad, _ := registry.New(m.AgentType)
+	layout, ok := adapter.AsTranscriptLayout(ad)
+	if !ok {
+		return "", resumeHistoryUnsupported
+	}
+	cwd := m.ProviderCwd() // the directory the AGENT ran in; see Resolve
+	if !filepath.IsAbs(cwd) {
+		return "", resumeHistoryNoMatch
+	}
 	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".claude")
 	if !ok {
 		return "", outcome
@@ -540,8 +551,322 @@ func (r *filesystemResumeHistoryResolver) openCandidate(root *os.Root, absDir, n
 }
 
 type codexHistoryCandidate struct {
-	id     string
-	parent string
+	id        string
+	parent    string
+	when      time.Time
+	rolloutID string
+	reverted  bool
+}
+
+type codexRolloutName struct {
+	when       time.Time
+	threadID   string
+	rolloutID  string
+	compressed bool
+	reverted   bool
+}
+
+// codexTranscriptCandidate is one path-shaped match for a KNOWN Codex thread.
+// threadID stays in the parsed name only long enough to match the caller; rolloutID
+// is the distinct UUID Codex adds after '_' when thread/revert creates a new
+// immutable rollout while keeping the thread identity stable.
+type codexTranscriptCandidate struct {
+	year       string
+	month      string
+	day        string
+	name       string
+	when       time.Time
+	rolloutID  string
+	compressed bool
+}
+
+// locateCodexTranscript performs Codex's filesystem fallback for a KNOWN thread
+// identity. That is intentionally a different search from resolveCodex: recovery
+// correlates an unknown thread to one swarm launch in a narrow time/cwd window,
+// whereas a known thread can acquire newer rollout files days later through
+// thread/revert.
+//
+// The traversal has exactly three variable directory levels (YYYY/MM/DD), counts
+// every directory entry against the shared budget, and opens no rollout until the
+// newest matching name has been selected. Codex filenames have only second
+// precision, so the rollout UUID is the deterministic same-second tie breaker --
+// the same ordering used by Codex's own filesystem fallback.
+func (r *filesystemResumeHistoryResolver) locateCodexTranscript(home *os.Root, budget *historyBudget, threadID string) (string, resumeHistoryOutcome) {
+	provider, providerAbs, closeProvider, outcome, ok := r.openProviderRoot(home, ".codex")
+	if !ok {
+		return "", outcome
+	}
+	defer closeProvider()
+	sessions, sessionsAbs, closeSessions, outcome, ok := r.openProviderChild(provider, providerAbs, "sessions")
+	if !ok {
+		return "", outcome
+	}
+	defer closeSessions()
+
+	var best codexTranscriptCandidate
+	found := false
+	ambiguous := false
+	years, outcome := readDirBounded(sessions, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	for _, yearEntry := range years {
+		year := yearEntry.Name()
+		if !decimalComponent(year, 4, 0, 9999) {
+			continue
+		}
+		yearRoot, closeYear, outcome, opened := r.openDirPath(sessions, sessionsAbs, year)
+		if !opened {
+			return "", outcome
+		}
+		months, outcome := readDirBounded(yearRoot, budget)
+		if outcome != resumeHistoryFound {
+			closeYear()
+			return "", outcome
+		}
+		for _, monthEntry := range months {
+			month := monthEntry.Name()
+			if !decimalComponent(month, 2, 1, 12) {
+				continue
+			}
+			monthRoot, closeMonth, outcome, opened := r.openDirPath(yearRoot, filepath.Join(sessionsAbs, year), month)
+			if !opened {
+				closeYear()
+				return "", outcome
+			}
+			days, outcome := readDirBounded(monthRoot, budget)
+			if outcome != resumeHistoryFound {
+				closeMonth()
+				closeYear()
+				return "", outcome
+			}
+			for _, dayEntry := range days {
+				day := dayEntry.Name()
+				dateText := year + "-" + month + "-" + day
+				if !decimalComponent(day, 2, 1, 31) {
+					continue
+				}
+				if _, err := time.Parse("2006-01-02", dateText); err != nil {
+					continue
+				}
+				monthAbs := filepath.Join(sessionsAbs, year, month)
+				dayRoot, closeDay, outcome, opened := r.openDirPath(monthRoot, monthAbs, day)
+				if !opened {
+					closeMonth()
+					closeYear()
+					return "", outcome
+				}
+				entries, outcome := readDirBounded(dayRoot, budget)
+				if outcome != resumeHistoryFound {
+					closeDay()
+					closeMonth()
+					closeYear()
+					return "", outcome
+				}
+				for _, entry := range entries {
+					parsed, valid := parseCodexTranscriptName(entry.Name())
+					if !valid {
+						// A malformed name for ANOTHER thread is irrelevant noise,
+						// but a malformed current/revert name for the requested
+						// thread could otherwise hide a newer rollout and make us
+						// silently hand off stale history.
+						if codexRolloutNameTargetsThread(entry.Name(), threadID) {
+							closeDay()
+							closeMonth()
+							closeYear()
+							return "", resumeHistoryUnsafe
+						}
+						continue
+					}
+					if parsed.threadID != threadID {
+						continue
+					}
+					// A matching name in the wrong dated directory is not a layout
+					// swarm has characterized. Refuse instead of returning a path whose
+					// components contradict the identity encoded by its basename.
+					if parsed.when.UTC().Format("2006-01-02") != dateText {
+						closeDay()
+						closeMonth()
+						closeYear()
+						return "", resumeHistoryUnsafe
+					}
+					candidate := codexTranscriptCandidate{
+						year: year, month: month, day: day, name: entry.Name(),
+						when: parsed.when, rolloutID: parsed.rolloutID, compressed: parsed.compressed,
+					}
+					if !found {
+						best, found = candidate, true
+						continue
+					}
+					switch compareCodexTranscriptCandidate(candidate, best) {
+					case 1:
+						best, found, ambiguous = candidate, true, false
+					case 0:
+						if found && candidate.name != best.name {
+							// Codex compression keeps the logical rollout basename
+							// and adds only .zst. During an interrupted cleanup both
+							// siblings can exist; Codex itself prefers the plaintext
+							// file, and so do we. Any other equal-key pair has no
+							// characterized winner.
+							if strings.TrimSuffix(candidate.name, ".zst") == strings.TrimSuffix(best.name, ".zst") {
+								if best.compressed && !candidate.compressed {
+									best = candidate
+								}
+							} else {
+								ambiguous = true
+							}
+						}
+					}
+				}
+				closeDay()
+			}
+			closeMonth()
+		}
+		closeYear()
+	}
+	if !found {
+		return "", resumeHistoryNoMatch
+	}
+	if ambiguous {
+		return "", resumeHistoryAmbiguous
+	}
+
+	// Re-open only the selected path through the anchor. Holding every day root
+	// across a full-tree scan would turn the entry budget into an fd-exhaustion bug.
+	dayRoot, closeDay, outcome, ok := r.openDirPath(sessions, sessionsAbs, best.year, best.month, best.day)
+	if !ok {
+		return "", outcome
+	}
+	defer closeDay()
+	absDir := filepath.Join(sessionsAbs, best.year, best.month, best.day)
+	f, outcome := r.openCandidate(dayRoot, absDir, best.name, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	defer func() { _ = f.Close() }()
+	if best.compressed {
+		// Do not point an arbitrary successor CLI at a zstd stream and call it a
+		// readable transcript, and do not silently choose an older plaintext
+		// rollout: that would hand off stale state.
+		return "", resumeHistoryCompressed
+	}
+	line, outcome := readCompleteLine(f, budget)
+	if outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	if outcome := codexTranscriptNamesItsConversation(line, threadID); outcome != resumeHistoryFound {
+		return "", outcome
+	}
+	return filepath.Join(absDir, best.name), resumeHistoryFound
+}
+
+func decimalComponent(value string, width, min, max int) bool {
+	if len(value) != width {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+		n = n*10 + int(value[i]-'0')
+	}
+	return n >= min && n <= max
+}
+
+// parseCodexTranscriptName accepts both ordinary and reverted rollout names, and
+// recognizes Codex's cold-history suffix without attempting to decode it.
+func parseCodexTranscriptName(name string) (codexRolloutName, bool) {
+	compressed := strings.HasSuffix(name, ".jsonl.zst")
+	plainName := strings.TrimSuffix(name, ".zst")
+	if !strings.HasPrefix(plainName, "rollout-") || !strings.HasSuffix(plainName, ".jsonl") {
+		return codexRolloutName{}, false
+	}
+	core := strings.TrimSuffix(strings.TrimPrefix(plainName, "rollout-"), ".jsonl")
+	const stampLen = len("2006-01-02T15-04-05")
+	if len(core) < stampLen+1 || core[stampLen] != '-' {
+		return codexRolloutName{}, false
+	}
+	when, err := time.ParseInLocation("2006-01-02T15-04-05", core[:stampLen], time.UTC)
+	if err != nil {
+		return codexRolloutName{}, false
+	}
+	ids := core[stampLen+1:]
+	threadID, rolloutID := ids, ids
+	reverted := false
+	if strings.Count(ids, "_") == 1 {
+		threadID, rolloutID, _ = strings.Cut(ids, "_")
+		reverted = true
+	} else if strings.Contains(ids, "_") {
+		return codexRolloutName{}, false
+	}
+	if !adapter.IsCanonicalConversationID(threadID) || !adapter.IsCanonicalConversationID(rolloutID) {
+		return codexRolloutName{}, false
+	}
+	return codexRolloutName{
+		when: when, threadID: threadID, rolloutID: rolloutID,
+		compressed: compressed, reverted: reverted,
+	}, true
+}
+
+// codexRolloutNameTargetsThread recognizes the fixed-position, exact thread token
+// in a rollout-shaped basename without accepting the remainder as valid. It exists
+// for the failure side of parsing: once the canonical token is followed by its only
+// legal boundaries ('_' for a revert, '.' for an extension, or end-of-name), a bad
+// rollout UUID/remainder/extension belongs to the requested thread and must block a
+// stale fallback. A different UUID, a longer token, or prose merely containing the
+// target does not gain that power.
+func codexRolloutNameTargetsThread(name, threadID string) bool {
+	const stampLen = len("2006-01-02T15-04-05")
+	const prefix = "rollout-"
+	threadStart := len(prefix) + stampLen + 1
+	threadEnd := threadStart + len(threadID)
+	if !strings.HasPrefix(name, prefix) || len(name) < threadEnd || name[len(prefix)+stampLen] != '-' {
+		return false
+	}
+	if name[threadStart:threadEnd] != threadID {
+		return false
+	}
+	if len(name) == threadEnd {
+		return true
+	}
+	return name[threadEnd] == '_' || name[threadEnd] == '.'
+}
+
+// compareCodexTranscriptCandidate returns the ordering of a against b. Canonical
+// UUID spellings preserve byte order under lexical comparison, so no UUID package
+// or second parser is needed for Codex's same-second tie breaker.
+func compareCodexTranscriptCandidate(a, b codexTranscriptCandidate) int {
+	if a.when.After(b.when) {
+		return 1
+	}
+	if a.when.Before(b.when) {
+		return -1
+	}
+	return strings.Compare(a.rolloutID, b.rolloutID)
+}
+
+func codexTranscriptNamesItsConversation(line []byte, want string) resumeHistoryOutcome {
+	top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line))))
+	if !ok {
+		return resumeHistoryUnsafe
+	}
+	typ, ok := strictJSONString(top["type"])
+	if !ok || typ != "session_meta" {
+		return resumeHistoryNoMatch
+	}
+	payload, ok := decodeStrictObject(top["payload"])
+	if !ok {
+		return resumeHistoryUnsafe
+	}
+	id, ok := strictJSONString(payload["id"])
+	if !ok || !adapter.IsCanonicalConversationID(id) {
+		return resumeHistoryUnsafe
+	}
+	if id != want {
+		return resumeHistoryNoMatch
+	}
+	return resumeHistoryFound
 }
 
 func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *historyBudget, m persist.Meta) resumeHistoryResult {
@@ -574,13 +899,25 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 		}
 		absDir := filepath.Join(sessionsAbs, filepath.Join(parts...))
 		for _, entry := range entries {
-			fileTime, fileID, candidate, valid := parseCodexHistoryName(entry.Name())
+			parsed, valid := parseCodexTranscriptName(entry.Name())
+			candidate := codexRolloutCandidateName(entry.Name())
 			if !candidate {
 				continue
 			}
 			if !valid {
 				closeDay()
 				return resumeHistoryResult{Outcome: resumeHistoryUnsafe}
+			}
+			if parsed.when.UTC().Format("2006-01-02") != day.Format("2006-01-02") {
+				closeDay()
+				return resumeHistoryResult{Outcome: resumeHistoryUnsafe}
+			}
+			if parsed.compressed {
+				// Recovery has no captured thread identity, so a compressed
+				// basename cannot be correlated to this source safely: cwd and the
+				// metadata identity are inside the zstd stream. Ignore it exactly as
+				// an unavailable candidate; the known-ID locator reports Compressed.
+				continue
 			}
 			f, openOutcome := r.openCandidate(dayRoot, absDir, entry.Name(), budget)
 			if openOutcome != resumeHistoryFound {
@@ -593,12 +930,15 @@ func (r *filesystemResumeHistoryResolver) resolveCodex(home *os.Root, budget *hi
 				closeDay()
 				return resumeHistoryResult{Outcome: readOutcome}
 			}
-			candidateValue, matched, parseOutcome := parseCodexSessionMeta(line, fileID, fileTime, cleanCWD, m.CreatedAt)
+			candidateValue, matched, parseOutcome := parseCodexSessionMeta(line, parsed.threadID, cleanCWD, m.CreatedAt)
 			if parseOutcome != resumeHistoryFound {
 				closeDay()
 				return resumeHistoryResult{Outcome: parseOutcome}
 			}
 			if matched {
+				candidateValue.when = parsed.when
+				candidateValue.rolloutID = parsed.rolloutID
+				candidateValue.reverted = parsed.reverted
 				candidates = append(candidates, candidateValue)
 			}
 		}
@@ -612,18 +952,9 @@ func (r *filesystemResumeHistoryResolver) openProviderChild(provider *os.Root, p
 	return root, filepath.Join(append([]string{providerAbs}, components...)...), cleanup, outcome, ok
 }
 
-func parseCodexHistoryName(name string) (time.Time, string, bool, bool) {
-	if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
-		return time.Time{}, "", false, false
-	}
-	const stampLen = len("2006-01-02T15-04-05")
-	body := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
-	if len(body) != stampLen+1+36 || body[stampLen] != '-' {
-		return time.Time{}, "", true, false
-	}
-	stamp, id := body[:stampLen], body[stampLen+1:]
-	when, err := time.ParseInLocation("2006-01-02T15-04-05", stamp, time.UTC)
-	return when, id, true, err == nil && adapter.IsCanonicalConversationID(id)
+func codexRolloutCandidateName(name string) bool {
+	plain := strings.TrimSuffix(name, ".zst")
+	return strings.HasPrefix(plain, "rollout-") && strings.HasSuffix(plain, ".jsonl")
 }
 
 func readCompleteLine(f *os.File, budget *historyBudget) ([]byte, resumeHistoryOutcome) {
@@ -641,7 +972,7 @@ func readCompleteLine(f *os.File, budget *historyBudget) ([]byte, resumeHistoryO
 	return append([]byte(nil), line[:len(line)-1]...), resumeHistoryFound
 }
 
-func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, cleanCWD string, created time.Time) (codexHistoryCandidate, bool, resumeHistoryOutcome) {
+func parseCodexSessionMeta(line []byte, fileID, cleanCWD string, created time.Time) (codexHistoryCandidate, bool, resumeHistoryOutcome) {
 	top, ok := decodeStrictObject([]byte(strings.TrimSpace(string(line))))
 	if !ok {
 		return codexHistoryCandidate{}, false, resumeHistoryUnsafe
@@ -660,8 +991,15 @@ func parseCodexSessionMeta(line []byte, fileID string, fileTime time.Time, clean
 	if !idOK || !stampOK || !cwdOK || !adapter.IsCanonicalConversationID(id) || id != fileID {
 		return codexHistoryCandidate{}, false, resumeHistoryUnsafe
 	}
+	// Codex 0.150.1 renders the basename from OffsetDateTime::now_local but
+	// serializes this payload timestamp after converting that instant to UTC. The
+	// basename drops its offset, and Codex's own parser assumes UTC only to recover
+	// a sortable wall-clock key. It therefore cannot be compared to this absolute
+	// timestamp as an instant. The filename and dated directory were validated
+	// independently above; provenance here comes from the canonical ID, cwd and the
+	// payload's RFC3339 timestamp relative to the swarm launch window.
 	when, err := time.Parse(time.RFC3339Nano, stamp)
-	if err != nil || when.UTC().Format("2006-01-02T15-04-05") != fileTime.UTC().Format("2006-01-02T15-04-05") {
+	if err != nil {
 		return codexHistoryCandidate{}, false, resumeHistoryUnsafe
 	}
 	parent := ""
@@ -689,9 +1027,29 @@ func resolveCodexCandidateGraph(candidates []codexHistoryCandidate) resumeHistor
 		return resumeHistoryResult{Outcome: resumeHistoryNoMatch}
 	}
 	byID := make(map[string]codexHistoryCandidate, len(candidates))
+	ordinarySeen := make(map[string]bool, len(candidates))
 	for _, candidate := range candidates {
-		if _, duplicate := byID[candidate.id]; duplicate {
-			return resumeHistoryResult{Outcome: resumeHistoryAmbiguous}
+		if !candidate.reverted {
+			if ordinarySeen[candidate.id] {
+				// The revert winner must not erase this evidence: two ordinary
+				// basenames claiming one stable ID are copied/moved histories in
+				// every input order, even when a legitimate revert is also present.
+				return resumeHistoryResult{Outcome: resumeHistoryAmbiguous}
+			}
+			ordinarySeen[candidate.id] = true
+		}
+		if prior, duplicate := byID[candidate.id]; duplicate {
+			// A real thread/revert is distinguishable by `_ROLLOUT`; its
+			// strictly newer (timestamp, rollout UUID) key is Codex's
+			// characterized winner. Ordinary duplication was fenced above.
+			order := compareCodexHistoryCandidate(candidate, prior)
+			if order == 0 {
+				return resumeHistoryResult{Outcome: resumeHistoryAmbiguous}
+			}
+			if order > 0 {
+				byID[candidate.id] = candidate
+			}
+			continue
 		}
 		byID[candidate.id] = candidate
 	}
@@ -722,6 +1080,16 @@ func resolveCodexCandidateGraph(candidates []codexHistoryCandidate) resumeHistor
 		root = candidateRoot
 	}
 	return resumeHistoryResult{Outcome: resumeHistoryFound, ConversationID: root}
+}
+
+func compareCodexHistoryCandidate(a, b codexHistoryCandidate) int {
+	if a.when.After(b.when) {
+		return 1
+	}
+	if a.when.Before(b.when) {
+		return -1
+	}
+	return strings.Compare(a.rolloutID, b.rolloutID)
 }
 
 func (r *filesystemResumeHistoryResolver) resolveClaude(home *os.Root, budget *historyBudget, m persist.Meta) resumeHistoryResult {

@@ -146,6 +146,19 @@ Supervision modes:
 
 Permission requests are never approved by handoff automation; they remain explicit human decisions.
 
+## Hands-off handoff
+
+When the source is rate-limited, wedged, ended, or otherwise unable to cooperate, press <kbd>h</kbd>
+and choose `hands-off`. swarm launches one linked successor without sending input to, stopping, or
+killing the source. The successor receives pointers to the source conversation, transcript, and
+working directory; swarm does not copy transcript content into the launch request.
+
+Claude Code and unarchived Codex sources are supported. A cross-CLI handoff asks for explicit
+confirmation before the successor is launched. Codex cold-history rollouts available only as
+`.jsonl.zst`, and rollouts moved into Codex's separate archive store, are refused rather than
+silently falling back to stale plaintext; agy, OpenCode, Hermes, and unknown source formats remain
+unsupported for hands-off handoff.
+
 ## Supported agents
 
 | Agent | Status |

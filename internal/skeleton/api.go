@@ -1111,14 +1111,11 @@ func composeHandsOffLaunch(spec daemon.LaunchSpec, endpointID string, getSource 
 		return daemon.LaunchSpec{}, err
 	}
 
-	// STEP 2. E7's scope gate, and it is the ADAPTER's knowledge that draws the line:
-	// an adapter without a characterized transcript layout is not asserted into the
-	// interface, so codex, agy and opencode are refused BY NAME rather than handed a
-	// path this daemon cannot compute.
-	ad, _ := registry.New(source.AgentType)
-	if _, ok := adapter.AsTranscriptLayout(ad); !ok {
-		return daemon.LaunchSpec{}, fmt.Errorf("handoff: source agent %q has no characterized transcript layout; hands-off supports claude sources only in this sweep", source.AgentType)
-	}
+	// STEP 2. E7's scope gate is the resolver's own Unsupported outcome. Claude can
+	// name its transcript directly through adapter.TranscriptLayout; Codex needs a
+	// bounded search of its dated rollout tree, so pretending both providers fit the
+	// adapter's naming-only interface would weaken that boundary. Providers with
+	// neither characterized strategy are still refused by name at STEP 4/5 below.
 	if resolver == nil {
 		return daemon.LaunchSpec{}, fmt.Errorf("handoff: no provider history resolver is configured")
 	}
@@ -1263,6 +1260,8 @@ func handsOffConversationID(local string, source persist.Meta, resolver resumeHi
 		return "", fmt.Errorf("handoff: %s conversation history is unsafe to inspect", provider)
 	case resumeHistoryUnreadable:
 		return "", fmt.Errorf("handoff: could not read %s conversation history safely", provider)
+	case resumeHistoryCompressed:
+		return "", fmt.Errorf("handoff: the matching %s conversation history is compressed and cannot be handed to this successor as plaintext", provider)
 	default:
 		return "", fmt.Errorf("handoff: %s conversation history returned an unsafe result", provider)
 	}
@@ -1278,9 +1277,13 @@ func handsOffTranscriptError(provider, convID string, outcome resumeHistoryOutco
 	case resumeHistoryNoMatch:
 		return fmt.Errorf("handoff: the %s transcript for conversation %s was not found", provider, convID)
 	case resumeHistoryUnsupported:
-		return fmt.Errorf("handoff: %s has no characterized transcript layout", provider)
+		return fmt.Errorf("handoff: %s has no characterized transcript locator", provider)
+	case resumeHistoryAmbiguous:
+		return fmt.Errorf("handoff: multiple current %s transcripts were found for conversation %s; refusing to guess", provider, convID)
 	case resumeHistoryUnsafe:
 		return fmt.Errorf("handoff: the %s transcript for conversation %s is unsafe to open", provider, convID)
+	case resumeHistoryCompressed:
+		return fmt.Errorf("handoff: the newest %s transcript for conversation %s is compressed and cannot be handed to this successor as plaintext", provider, convID)
 	default:
 		return fmt.Errorf("handoff: the %s transcript for conversation %s could not be opened", provider, convID)
 	}

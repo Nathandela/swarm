@@ -190,6 +190,41 @@ func TestHandsOff_SubmitIssuesOneLaunchAndNoSendInput(t *testing.T) {
 	}
 }
 
+// Codex is a characterized hands-off SOURCE as well as a target. This pins the TUI
+// half of the 2026-08-29 E7 expansion: a same-CLI Codex handoff needs no disclosure
+// confirmation and uses the exact one-Launch/zero-SendInput contract. Transcript
+// discovery and identity validation remain daemon-owned and are tested in skeleton.
+func TestHandsOff_CodexSameCLIUsesTheOrdinaryLaunchContract(t *testing.T) {
+	f := newHandsOffClient(sCompleted("endpoint/source", "codex", "/repo", "done", time.Minute))
+	m := openForm(newModel(t, f, handoffAgents()))
+	if got := m.(rootModel).handoff.method; got != handoffMethodHandsOff {
+		t.Fatalf("default method = %q, want hands-off for an ended Codex source", got)
+	}
+
+	// Claude is the fixture's first target. Cycle once to Codex while focus is on
+	// target, preserving the form's already-visible hands-off method.
+	m = send(m, keyRight)
+	if got := m.(rootModel).handoff.targetName(); got != "codex" {
+		t.Fatalf("target after cycling = %q, want codex", got)
+	}
+
+	m2, cmd := m.Update(keyEnter)
+	if m2.(rootModel).handoff.confirmPending() {
+		t.Fatal("a same-CLI codex-to-codex handoff requested cross-CLI confirmation")
+	}
+	execCmd(cmd)
+	if calls := f.sendInputCalls(); len(calls) != 0 {
+		t.Fatalf("Codex hands-off submit signalled the source: %+v", calls)
+	}
+	reqs := f.launchReqs()
+	if len(reqs) != 1 {
+		t.Fatalf("Launch calls = %d, want exactly 1: %+v", len(reqs), reqs)
+	}
+	if reqs[0].Agent != "codex" || reqs[0].Options[protocol.OptionHandoffFrom] != "endpoint/source" {
+		t.Fatalf("Codex hands-off launch lost target or source pointer: %+v", reqs[0])
+	}
+}
+
 // An empty model means "the agent's own default" and must NOT be sent as an empty
 // --model value. An earlier draft dropped the model entirely and silently
 // discarded the user's selection; this pins both halves.

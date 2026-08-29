@@ -9,8 +9,9 @@ one sweep in dependency order with the decision record first.
 [protocol.md](../specifications/protocol.md) (`handoff_from`, `hands-off-handoff`),
 [metadata-disclosure.md](../operations/metadata-disclosure.md) §5.
 
-**Ground truth**: one real `claude` CLI run on 2026-08-26 (§2), and the measured state of
-the owner's own machine — seven live claude sessions and thirteen real transcripts (§2, §6).
+**Ground truth**: one real `claude` CLI run on 2026-08-26 (§2), the measured state of
+the owner's own machine — seven live claude sessions and thirteen real transcripts (§2, §6) — and
+the Codex 0.150.1 source-expansion investigation on 2026-08-29 (§10).
 
 This file records what was proven, what was taken on report, and what was deliberately
 NOT built. The gaps are in §6 and §7, not buried.
@@ -200,20 +201,23 @@ cross-session content disclosure. Not guessing is strictly better.
 
 `LocateTranscript` returns a string, and its contract says plainly what that is and is not.
 
-The anchored walk's guarantees — `os.SameFile` inode identity, no symlink component,
-`IsRegular`, `O_RDONLY|O_NONBLOCK` against a planted FIFO — are properties of a **file
-descriptor**. None survives serialization into a name that another process opens minutes
-later. The returned path does **not** promise that the file still exists at open time, that
+The anchored walk's guarantees — confinement below the opened root, equality between each
+inspected inode and the inode subsequently opened, `IsRegular`, and `O_RDONLY|O_NONBLOCK` against
+a planted FIFO — are properties of a **file descriptor**. Direct symlinks seen by the pre-open
+checks are refused. `os.Root` may still resolve an in-root symlink introduced by a concurrent
+rename when it reaches that same inspected inode; confinement remains, but this is not presented
+as a portable categorical no-follow guarantee. None of these properties survives serialization
+into a name that another process opens minutes later. The returned path does **not** promise that
+the file still exists at open time, that
 it is the same inode, that no component became a symlink in between, that it is still a
 regular file, or that the successor's process resolves the same string to the same file.
 
 What it does promise is **confinement by construction**: every segment is provably a single
-separator-free component — `homeAbs` is cleaned and absolute-checked; `.claude` and `projects`
-are compile-time literals (and where `.claude` is a stable alias, its target was already
-proved a clean, `..`-free strict descendant of the same home); `ProjectDirName` emits only
-`[A-Za-z0-9-]`; and a `convID` that passed `IsCanonicalConversationID` is 36 characters of
-lowercase hex with dashes at fixed offsets. There is no input under which the assembled
-string leaves the projects root.
+separator-free component — provider and fixed subdirectory names are literals; a supported
+provider-root alias must resolve to a clean, `..`-free strict descendant of HOME; Claude's
+`ProjectDirName` emits only `[A-Za-z0-9-]`; Codex date components are fixed-width decimal values;
+and conversation IDs and rollout names pass strict parsers. There is no input under which the
+assembled string leaves the selected provider root.
 
 The argument is the **components'**, not `filepath.Join`'s. Join *cleans*, and cleaning is
 what would turn `../..` into an escape rather than stop it. The machinery's real job is
@@ -365,8 +369,12 @@ empty supervision.
 - **Two live writers in one checkout.** The source is left alive by owner decision (E3), so
   the mitigation is honesty in the prompt and a warning in the form, not enforcement.
   `OptionWorktree` stays available as a manual choice.
-- **Non-claude sources are refused by name.** Codex needs a dated-directory scan; agy and
-  opencode have no characterized on-disk history format at all (E7).
+- **Source coverage.** The first sweep's Claude-only boundary was superseded on 2026-08-29:
+  unarchived Codex histories are now characterized and supported. agy, OpenCode, Hermes, and
+  unknown providers still have no approved hands-off history locator and are refused by name
+  (E7). Codex rollouts whose
+  selected logical file is available only as `.jsonl.zst` are also refused by name; the resolver
+  never substitutes an older plaintext rollout.
 - **Prompt injection is accepted, not solved.** Reading a prior transcript means ingesting
   whatever that session saw. The prompt's "evidence, not orders" clause is the strongest
   honest mitigation short of not reading the file.
@@ -387,3 +395,150 @@ empty supervision.
   rather than hiding it. Retitling both files is a decision left open.
 - **Divergent HOME** (§7) is a pre-existing limitation that affects resume recovery today in
   the same way, and is deliberately not fixed here.
+- **Archived Codex histories are not searched.** This slice is rooted at
+  `~/.codex/sessions`; Codex's explicit archive operation moves rollouts into the separate flat
+  `~/.codex/archived_sessions` store. Supporting selection across both roots needs a later
+  characterized contract. An archived source is refused by name rather than launched bare.
+
+---
+
+## 10. Codex source expansion (2026-08-29)
+
+### 10.1 The failure was a deliberate scope gate, not a broken TUI launch
+
+The reported screen read:
+
+```
+launch failed: launch: handoff: source agent "codex" has no characterized transcript layout;
+hands-off supports claude sources only in this sweep
+```
+
+The form had already done the correct client-side work: it selected hands-off for a source that
+could not cooperate, required a Codex-to-Claude disclosure confirmation, issued one `Launch`, and
+issued no `SendInput`. `composeHandsOffLaunch` then intentionally rejected every adapter lacking
+Claude's flat transcript-layout interface. Codex did not fit that interface: its rollouts live in a
+dated tree, and one stable thread may have multiple rollout files. The implementation therefore
+extends the provider-history resolver rather than pretending Codex has Claude's layout.
+
+The live machine supplied a direct fixture for the shape. Codex 0.150.1 reported thread
+`01a04c96-1587-71c0-9468-605772ae88e5`; its rollout was
+`~/.codex/sessions/2026/08/29/rollout-2026-08-29T10-14-59-01a04c96-1587-71c0-9468-605772ae88e5.jsonl`.
+The first complete record was `type=session_meta`, its `payload.id` matched the thread, and its cwd
+matched the swarm session directory. A bounded temporary scanner found and verified that rollout
+among 813 entries in about 0.59 seconds. The temporary probe code was removed.
+
+Upstream source established four details that local current-file evidence could not:
+
+- Codex's own locator is database-first with filename scan fallback and validates session metadata;
+- a reverted thread filename carries both the stable thread id and a distinct rollout id;
+- rollout paths are rendered from local wall time while `session_meta` stores the start instant in
+  UTC, so the offset-less basename is an ordering key rather than an absolute instant; and
+- cold history may be compressed to `.jsonl.zst`, while app-server marks `Thread.path` unstable.
+
+The relevant upstream implementations are
+[`list.rs`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/list.rs),
+[`rollout_file_name.rs`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/rollout_file_name.rs),
+[`recorder.rs`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/recorder.rs),
+[`compression.rs`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/rollout/src/compression.rs), and
+the versioned [`Thread` schema](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/app-server-protocol/schema/typescript/v2/Thread.ts).
+
+### 10.2 The locator contract
+
+| Question | Decision |
+|---|---|
+| Trust anchor | The daemon user's HOME, then `.codex/sessions`; never source/client `HOME` |
+| Traversal | Anchored, component-by-component and root-confined; the one reviewed provider-root alias may be a stable symlink, while direct symlinks below it are refused |
+| Names | Strict ordinary `rollout-<timestamp>-<thread>.jsonl` and revert `<thread>_<rollout>.jsonl` forms |
+| Selection | Maximum `(parsed filename local-wall timestamp, rollout UUID)` for the requested stable thread; identical-key distinct paths are ambiguous |
+| Plain + compressed twin | The plain `.jsonl` is the physical representation; its identical `.jsonl.zst` sibling is hidden |
+| New compressed vs old plain | The newer logical rollout wins selection and then refuses as compressed; no stale fallback |
+| Identity | The bounded first complete record must be `session_meta` with `payload.id == stable thread id` |
+| Time domains | The offset-less filename supplies shape/date/order only; the RFC3339 payload timestamp independently correlates missing-id recovery to the swarm launch window |
+| App-server `Thread.path` | Unstable, unpersisted and untrusted; no synchronous RPC dependency in the composer/resolver |
+| Failure | Named refusal and zero launch; no context-free fallback |
+
+The compressed-history ruling preserves two existing decisions. Passing a `.jsonl.zst` pointer is
+not portable across arbitrary target CLIs, while materializing a plaintext copy would violate E5's
+pointers-only/no-copy model and create sensitive state whose permissions, cleanup, crash recovery,
+and retention would all need a new lifecycle contract. Fresh and live sessions remain plaintext;
+cold compressed sessions need a later reviewed export/decompression design. The named compressed
+refusal applies after a canonical stable thread id is known. With no captured id, swarm cannot read
+compressed `session_meta` to correlate cwd and launch time, so recovery reports no usable
+identity/history instead of trusting the filename as provenance.
+
+### 10.3 Failing-first and final verification evidence
+
+The Codex expansion was developed failing-first. The test lane recorded these RED stages before the
+implementation existed:
+
+| Stage | Command / failure |
+|---|---|
+| Contract introduced | `go test ./internal/skeleton -run 'TestCodex(TranscriptLocator\|HandsOff)' -count=1` did not compile because the named compressed-history result did not exist yet (`undefined: resumeHistoryCompressed`). |
+| Base behaviour | The same focused contract then failed because Codex composition and missing-id recovery were still unsupported. |
+| Adversarial selection | `go test ./internal/skeleton -run '^TestCodex' -count=1` returned an older plaintext rollout when a newer target-prefixed malformed revert existed, violating the no-stale-fallback rule. |
+| Adversarial recovery | The same run returned `Found` rather than `Ambiguous` for two ordinary copies separated by a revert, in both `[O1,R,O2]` and `[R,O1,O2]` enumeration orders. |
+| Real clock domains | A fixed reproduction of the observed Zurich rollout (`10:14:59` filename, `08:14:59Z` payload) returned `Unsafe`, proving recovery incorrectly compared local wall time to an absolute UTC instant. |
+
+The permanent skeleton contract is
+`internal/skeleton/codex_transcript_locator_test.go`. It covers current and reverted rollouts,
+first-record identity, malformed target names, unsafe filesystem objects, invalid ids, scan/read
+budgets, compressed and duplicate candidates, pointer-only composition, reverted-rollout recovery,
+the local-wall/UTC clock split, the no-id compressed boundary, and ordinary-copy ambiguity across
+a revert. The TUI contract in
+`internal/tui/handoff_handsoff_test.go` additionally proves a same-CLI Codex handoff takes the
+ordinary one-launch/no-input path; the existing cross-CLI cases prove confirmation, cancellation,
+and frozen-target authorization.
+
+Final GREEN was reproduced from the dedicated pre-release feature worktree:
+
+```text
+go test ./internal/skeleton -run '^TestCodex' -count=1
+ok github.com/Nathandela/swarm/internal/skeleton 40.325s
+
+go test ./internal/skeleton -run 'Test(ResumeHistory|HandsOff)' -count=1
+ok github.com/Nathandela/swarm/internal/skeleton 11.194s
+
+go test -race ./internal/skeleton -run '^TestCodex' -count=1
+ok github.com/Nathandela/swarm/internal/skeleton 9.851s
+
+go test ./internal/tui -run 'TestHandsOff' -count=1
+ok github.com/Nathandela/swarm/internal/tui 0.991s
+```
+
+The full ordinary packages that reported timing/process failures during an intentionally parallel
+all-repository sweep were then rerun serially and passed: `internal/daemon` (64.730s),
+`internal/e2e` (28.738s), `internal/remotegw` (32.236s), `internal/shim` (65.043s), and
+`internal/skeleton` (413.602s). The two originally failing race packages also passed serially:
+`internal/daemon` (122.184s) and `internal/e2e` (24.243s). The full race sweep emitted no data-race
+diagnostic; its Codex-relevant `internal/skeleton`, `internal/tui`, and `internal/adapter/codex`
+packages passed.
+
+A later clean-environment `go test ./...` run passed every package except the same real-time
+Agy/OpenCode replay threshold: under cross-package load it observed idle after 2.655s rather than
+the required 3s. The exact `TestE2E_ReplayProductionPath_AgyOpencode` test then passed alone in
+14.272s. No Codex or hands-off assertion failed in either run.
+
+Running the command-package tests from inside a live swarm session exposed a pre-existing test
+isolation defect: daemon-compatibility hook tests inherited `SWARM_SHIM_HOOK_SOCK`, so the
+production shim-first transport correctly delivered their callbacks to the live shim instead of
+the test socket. The test helper now makes that variable genuinely absent and restores it at
+cleanup. All nine hook transport/capture cases pass with the live parent environment still present
+under `-race` (3.102s). A package-wide command race run remains unsuitable as a release gate on
+this host: an unrelated test's nested `go build` exceeded Go's ten-minute package timeout. It
+reported neither a data race nor a changed-path failure.
+
+Static and release checks also passed: `go build ./...`, `go vet ./...`, golangci-lint 2.12.2,
+`goreleaser check` 2.17.0, Darwin/arm64 cross-build, and static Linux amd64/arm64 cross-builds.
+`git diff --check` and documentation-link checks were clean.
+
+A temporary test then invoked the production
+`filesystemResumeHistoryResolver` against the owner's installed Codex 0.150.1 history and captured
+thread `01a04c96-1587-71c0-9468-605772ae88e5`. It returned the exact anchored plaintext rollout
+named in §10.1 and verified its first-record identity in 0.17 seconds. The temporary test file was
+removed after the pass. After the clock-domain correction, a second temporary production-resolver
+test started with no captured id and recovered that same real thread from its local-wall filename
+and UTC metadata in 0.06 seconds; that temporary file was also removed.
+
+A final read-only adversarial review found no merge blocker. The remaining post-enumeration
+addition race is inherent to returning a pathname to a separately launched process (§8); it does
+not justify selecting an older or otherwise unverified rollout.
