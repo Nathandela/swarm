@@ -48,9 +48,9 @@ import (
 func newKeystrokeRig(t *testing.T) *r7ComposerRig {
 	t.Helper()
 	r := newR7ComposerRig(t, false)
-	r.sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	r.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &r7KeystrokeAdapter{Adapter: newPlainAdapter().Adapter}, true
-	}
+	})
 	// Pin the capability record a Claude-shaped session carries. Without it the daemon
 	// derives one lazily and requireStructuredComposer can answer differently for two sends
 	// a fraction of a second apart -- which would make this file's subject unreachable

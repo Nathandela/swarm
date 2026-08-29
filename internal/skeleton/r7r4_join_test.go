@@ -257,7 +257,7 @@ func newR7R4Rig(t *testing.T, announce string) *r7r4Rig {
 	// subscription any more -- that is Ruling 3.
 	sk.backendReady = 3 * time.Second
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	m := launchFake(t, sk, r7StdinScript)
 	srv := newR7R4Server(t)
 	srv.mu.Lock()

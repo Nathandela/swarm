@@ -88,7 +88,7 @@ func r7AwaitGap(t *testing.T, sk *Daemon, session string) []map[string]any {
 func TestR7Lifecycle_ABackendThatNEVERConnectedEmitsAGapAtLaunchAndDegradesDurably(t *testing.T) {
 	sk := assemble(t)
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	m := launchFake(t, sk, "idle 60s\n")
 
 	// The launch declared a backend and the daemon could never dial it.
@@ -117,7 +117,7 @@ func TestR7Lifecycle_ABackendThatNEVERConnectedEmitsAGapAtLaunchAndDegradesDurab
 func TestR7Lifecycle_ADaemonRestartWithASuccessfulRejoinNeitherGapsNorDegrades(t *testing.T) {
 	sk := assemble(t)
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	m := launchFake(t, sk, "idle 60s\n")
 
 	backend := newR7FakeBackend()
@@ -145,7 +145,7 @@ func TestR7Lifecycle_ADaemonRestartWithASuccessfulRejoinNeitherGapsNorDegrades(t
 func TestR7Lifecycle_ABackendThatDiedMidSessionGapsTheTail(t *testing.T) {
 	sk := assemble(t)
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	m := launchFake(t, sk, "idle 60s\n")
 
 	backend := newR7FakeBackend()

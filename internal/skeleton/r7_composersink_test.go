@@ -51,7 +51,7 @@ func newR7ComposerRig(t *testing.T, withBackend bool) *r7ComposerRig {
 	t.Helper()
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
 	sk := assemble(t)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 
 	m := launchFake(t, sk, r7StdinScript)
 	session := protocol.NamespacedID(sk.api.endpointID, m.ID)
@@ -260,9 +260,9 @@ func TestR7ComposerSink_NoBackendAndNoKeystrokeSeamREFUSESHavingTypedNothing(t *
 // broken the provider it was not touching.
 func TestR7ComposerSink_AKeystrokeAdapterStillUsesThePTY(t *testing.T) {
 	r := newR7ComposerRig(t, false)
-	r.sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	r.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &r7KeystrokeAdapter{Adapter: newPlainAdapter().Adapter}, true
-	}
+	})
 
 	code, err := r.send(t, "", "ship it", "devA:01JKEYS0000000000000000")
 	if err != nil || code != "" {

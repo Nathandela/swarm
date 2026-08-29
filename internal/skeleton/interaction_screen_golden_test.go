@@ -112,9 +112,9 @@ func TestI1_TheScreensBytesAreTheFacadesBytes(t *testing.T) {
 	// It is the EDIT dialog because the corpus replayed below is the recorded EDIT permission,
 	// and since M1.8 the gate refuses to type a request's verdict into a dialog raised by a
 	// different tool. One screen, one request: until M1.8 nothing checked that they matched.
+	rig.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	dialog, cols, rows := gridScript(t, editDialogGrid)
 	sessionID := rig.LaunchOnMachineSized(dialog, cols, rows)
-	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
 	rig.Eventually("the phone's roster shows the session the machine launched", func() bool {
 		return rig.RosterHas(sessionID)
 	})

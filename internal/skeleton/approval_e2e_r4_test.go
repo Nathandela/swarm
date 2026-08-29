@@ -52,9 +52,9 @@ func TestInteractionE2E_AResolvedApprovalDismissesThePhoneCard(t *testing.T) {
 		{pendingApprovalInteraction("e2e-withdrawn", "write src/main.rs")},
 		{withdrawn},
 	}}
-	rig.sk.adapterFor = func(string) (adapter.Adapter, bool) {
+	rig.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) {
 		return &captureAdapter{Adapter: newPlainAdapter(), script: script}, true
-	}
+	})
 	token := hookTokenFor(t, rig.stateDir, localID)
 
 	post := func(seq uint64, event string) {

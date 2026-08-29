@@ -362,15 +362,11 @@ func withEnv(env []string, key, value string) []string {
 	return append(out, key+"="+value)
 }
 
-// dressAsClaudeSession points the daemon's adapter seam at the shipped claude producer, UNDER
-// itemMu -- the lock resolveAdapter reads the field beneath. The rig runs under -race, and the
-// bare assignment the other interaction tests make is an unsynchronized write to a field a
-// daemon goroutine reads; taking the lock costs one line and removes the question.
+// dressAsClaudeSession points the daemon's adapter seam at the shipped claude producer through
+// the synchronized test seam. The rig runs under -race, and a bare assignment can race the
+// daemon's background capture and capability-authoring goroutines.
 func dressAsClaudeSession(sk *Daemon) {
-	sk.itemMu.Lock()
-	defer sk.itemMu.Unlock()
-	sk.initInteractionsLocked()
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 }
 
 // recordedProse is the `last_assistant_message` of a fixture's Stop body: the agent's own reply,

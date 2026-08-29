@@ -99,7 +99,7 @@ func TestR6Interrupt_ANoSeamSessionRefusesInterruptUnsupportedAndTypesNothing(t 
 	r := newInjectRig(t, composerGrid, claudeApproval("req-interrupt-unsup"))
 	// The same live session, resolved through an adapter that proves no seam: the rig's
 	// resolver is overridable exactly for this kind of counterfactual.
-	r.sk.adapterFor = func(string) (adapter.Adapter, bool) { return opencode.New(), true }
+	r.sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return opencode.New(), true })
 
 	turn := r6FixOpenTurn(t, r.sk, r.local, "start the work")
 	code, err := r.sk.api.InterruptTurn(r.sk.api.endpointID, "devA:01JUNSUP",

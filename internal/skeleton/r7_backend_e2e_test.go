@@ -167,7 +167,7 @@ func newR7E2ERig(t *testing.T) *r7E2ERig {
 	ks := registerPhone(t, sk, device.CapFull)
 
 	ad := &r7CodexAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	meta := launchFake(t, sk, r7StdinScript)
 	namespaced := protocol.NamespacedID(sk.api.endpointID, meta.ID)
 

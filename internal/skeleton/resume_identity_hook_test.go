@@ -27,7 +27,7 @@ func TestResumeIdentity_IngestAuthenticatesBeforePersistingAndThenShapes(t *test
 	sk := assemble(t)
 	m := launchFake(t, sk, "print HOOK-IDENTITY\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	body := json.RawMessage(`{"session_id":"` + hookConversationID +
 		`","last_assistant_message":"authenticated identity still shapes"}`)
 
@@ -66,7 +66,7 @@ func TestResumeIdentity_HookPersistenceErrorDoesNotSuppressShapingAndSameIDRetri
 	sk := assemble(t)
 	m := launchFake(t, sk, "print HOOK-IDENTITY-RETRY\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 
 	sessionDir := filepath.Join(sk.stateDir, m.ID)
 	hold := sessionDir + ".hold"
@@ -143,7 +143,7 @@ func TestResumeIdentity_ConcurrentHookAndBackendCaptureConverge(t *testing.T) {
 	sk := assemble(t)
 	m := launchFake(t, sk, "print HOOK-BACKEND-RACE\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 	body := json.RawMessage(`{"session_id":"` + hookConversationID + `"}`)
 	raw := marshalHookCallback(t, engine.Callback{
 		SessionID: m.ID, Token: token, Sequence: 1, Event: "Notification", Raw: body,

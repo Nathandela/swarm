@@ -98,7 +98,7 @@ func TestCarriage_AnAuthenticatedHookPostShapesTheCLIsOwnBody(t *testing.T) {
 	sk := assemble(t)
 	m := launchFake(t, sk, "print CARRIAGE\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 
 	const fixture = "claude-edit-permissionrequest-run1.json"
 	for i, ev := range []string{"UserPromptSubmit", "PreToolUse"} {
@@ -146,7 +146,7 @@ func TestCarriage_AHookPostWithNoCapturedBodyShapesNothing(t *testing.T) {
 	sk := assemble(t)
 	m := launchFake(t, sk, "print CARRIAGE-NONE\nidle 60s\n")
 	token := hookTokenFor(t, sk.stateDir, m.ID)
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return claude.New(), true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return claude.New(), true })
 
 	if err := hookclient.Post(sk.SocketPath(), engine.Callback{
 		SessionID: m.ID, Token: token, Sequence: 1, Event: "Notification",

@@ -134,7 +134,7 @@ func r7PumpRig(t *testing.T) (*Daemon, *r7RecordingAdapter, string) {
 	t.Helper()
 	sk := assemble(t)
 	ad := &r7RecordingAdapter{Adapter: newPlainAdapter().Adapter}
-	sk.adapterFor = func(string) (adapter.Adapter, bool) { return ad, true }
+	sk.setAdapterForTest(func(string) (adapter.Adapter, bool) { return ad, true })
 	m := launchFake(t, sk, "idle 600s\n")
 	return sk, ad, m.ID
 }
