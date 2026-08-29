@@ -1036,6 +1036,8 @@ class PhoneSurface(
     private var inboxDrawn: InboxScreen? = null
     private val inboxRefresh = InboxRefreshState()
     private val inboxCache = InboxScreenCache()
+    private val inboxRefreshHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val inboxRefreshTimeout = Runnable(::expireInboxRefresh)
     /** Last readable durable roster generation; zero means first sync has not completed. */
     private var rosterRevision = 0L
 
@@ -1827,6 +1829,8 @@ class PhoneSurface(
      * started, so a pause before anything was built does not reach Keystore on the way out.
      */
     fun release() {
+        cancelInboxRefreshTimeout()
+        inboxRefresh.refused()
         pairing.release()
 
         // ADR-017 T4-b: the watch goes with the screen. Leaving the app is leaving the screen,
@@ -2088,7 +2092,13 @@ class PhoneSurface(
             rosterRevision
         }
         // Admission of a repair request is not completion; a committed replacement is.
-        inboxRefresh.observe(nextRosterRevision)
+        if (inboxRefresh.observe(nextRosterRevision)) {
+            cancelInboxRefreshTimeout()
+            // A roster that arrived just after the deadline is still the requested answer. Do
+            // not leave its timeout sentence standing over the now-current conversations, but
+            // preserve any later, unrelated command outcome written in the meantime.
+            if (outcome.text == TriageInboxScreen.REFRESH_TIMEOUT) outcome.text = ""
+        }
         rosterRevision = nextRosterRevision
         // BEFORE ANYTHING IS DRAWN, because the session detail composes whatever is on the outcome
         // line and a verdict claimed after it would reach the screen one journal event late
@@ -2297,7 +2307,7 @@ class PhoneSurface(
      * @param app the facade this draw asks for the revoke's answer -- see [revokeNotice].
      */
     private fun drawPairOnly(reason: PairOnlyReason, app: App) {
-        inboxRefresh.refused()
+        refuseInboxRefresh()
         inboxCache.clear()
         rosterRevision = 0L
 
@@ -5307,6 +5317,8 @@ class PhoneSurface(
         if (!inboxRefresh.begin(rosterRevision)) return
 
         // Keep the existing roster visible and expose the single-flight state immediately.
+        outcome.text = ""
+        scheduleInboxRefreshTimeout()
         render()
         val accepted = dispatch.enqueue(
             plane = SendPlane.COMMAND,
@@ -5316,7 +5328,7 @@ class PhoneSurface(
                 answer.fold(
                     onSuccess = { render() },
                     onFailure = {
-                        inboxRefresh.refused()
+                        refuseInboxRefresh()
                         say(
                             PressFeedback.ofRefusal(
                                 FacadeBridge(app).routeFacadeError(it.message.orEmpty()),
@@ -5328,9 +5340,48 @@ class PhoneSurface(
             },
         )
         if (!accepted) {
-            inboxRefresh.refused()
+            if (deferInboxRefreshRetry()) {
+                say(PressFeedback.ofRefusal(TriageInboxScreen.REFRESH_TIMEOUT))
+            }
             render()
         }
+    }
+
+    /** Bound one roster request to this foreground screen; completion remains revision-driven. */
+    private fun scheduleInboxRefreshTimeout() {
+        inboxRefreshHandler.removeCallbacks(inboxRefreshTimeout)
+        inboxRefreshHandler.postDelayed(inboxRefreshTimeout, INBOX_REFRESH_TIMEOUT_MILLIS)
+    }
+
+    private fun cancelInboxRefreshTimeout() {
+        inboxRefreshHandler.removeCallbacks(inboxRefreshTimeout)
+    }
+
+    /** A refused request has no late authoritative answer to recognise. */
+    private fun refuseInboxRefresh() {
+        cancelInboxRefreshTimeout()
+        inboxRefresh.refused()
+    }
+
+    /**
+     * A keyed enqueue refusal means an earlier refresh is still crossing, not that no answer can
+     * arrive. Return the retry to idle but retain its roster baseline so that earlier request's
+     * authoritative answer still clears the timeout when it lands.
+     */
+    private fun deferInboxRefreshRetry(): Boolean {
+        cancelInboxRefreshTimeout()
+        return inboxRefresh.expire()
+    }
+
+    /** Return the affordance to retry without replacing or clearing the cached conversations. */
+    private fun expireInboxRefresh() {
+        // The roster event and this deadline are both main-looper callbacks. Observe durable state
+        // one final time before declaring failure, so a reply already committed but whose event
+        // callback sits behind this one cannot produce a false timeout toast.
+        render()
+        if (!inboxRefresh.expire()) return
+        say(PressFeedback.ofRefusal(TriageInboxScreen.REFRESH_TIMEOUT))
+        render()
     }
 
     /**
@@ -5434,6 +5485,7 @@ class PhoneSurface(
         const val JOURNAL_FROM_THE_START = 0L
         const val WHOLE_JOURNAL = 0L
         const val INBOX_REFRESH_KEY = "inbox.refresh"
+        const val INBOX_REFRESH_TIMEOUT_MILLIS = 20_000L
 
         /**
          * ADR-014's page size for one "load earlier" (Mirror M3.1).

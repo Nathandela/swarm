@@ -294,6 +294,7 @@ object TriageInboxScreen {
     const val REFRESHING_LABEL = "Refreshing…"
     const val REFRESH_DESCRIPTION = "Refresh all conversations"
     const val REFRESHING_DESCRIPTION = "Refreshing conversations"
+    const val REFRESH_TIMEOUT = "Couldn’t refresh. Try again."
 
     /** Inventory C1.2: the scope that names no machine. */
     private const val ALL_MACHINES = "All machines"
