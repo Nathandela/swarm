@@ -73,7 +73,7 @@ Play requires all of these before a listing can be saved.
 
 | Asset | Spec | Status |
 |---|---|---|
-| App icon | 512 x 512 PNG, 32-bit | Done — Atmospheric Swarm, clean generated trajectories on the mobile Slate field, `docs/ops/play-assets/play-store-icon-512.png` |
+| App icon | 512 x 512 PNG, 32-bit | Submitted for Play review on 29 August 2026 — Atmospheric Swarm, clean generated trajectories on the mobile Slate field, `docs/ops/play-assets/play-store-icon-512.png`; the installed Android launcher uses the matching transparent mark |
 | Feature graphic | 1024 x 500 PNG or JPEG | Done — Solid Wedge on the product ground, `docs/ops/play-assets/play-feature-graphic-1024x500.png` |
 | Phone screenshots | 2 to 8, min 320 px, 16:9 or 9:16 | Emulator set exists (`docs/design/store-assets/screenshots/`: pairing, scanner, first run, plus 7in/10in tablet). Paired-app screenshots (session list, machines, activity) tracked as agents-tracker-h4yg |
 

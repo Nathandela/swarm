@@ -4,9 +4,8 @@
 
   It is the SAME three layers, and that is correct rather than lazy: an adaptive icon is already
   masked to whatever shape the launcher wants, so the round form differs only in which mask is
-  applied and not in what is drawn. ic_launcher_foreground documents where the mark reaches, and
-  the one corner that goes past the 33dp guarantee clears a round mask by a comfortable margin:
-  the circular mask is 72dp across, so it reaches 36 and the corner is at 34.2.
+  applied and not in what is drawn. ic_launcher_foreground documents and measures the inset that
+  keeps the complete Atmospheric Swarm mark inside Android's guaranteed mask-safe circle.
 
   It exists as its own file because android:roundIcon must resolve to something; pointing it at
   ic_launcher would work and would read as an oversight the next time someone changes one of
