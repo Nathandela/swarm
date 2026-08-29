@@ -9,6 +9,7 @@ package remotegw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -223,6 +224,47 @@ func TestRelaySink_AppendBounded(t *testing.T) {
 	}
 	if sink.Err() == nil {
 		t.Fatal("hung relay: Err() is nil; the bounded-append timeout must surface via Err()")
+	}
+}
+
+// A Service shutdown is a stronger bound than the per-append timeout: once its generation
+// is cancelled, an append already blocked in the relay client must release the sink lock and
+// let Service.Run join its journal goroutine promptly. Standalone sinks still rely on the
+// configured timeout, but a service-owned sink is explicitly parented by Service.Run.
+func TestRelaySink_AppendStopsWhenServiceParentIsCancelled(t *testing.T) {
+	var key crypto.ContentKey
+	app := &hangingAppender{entered: make(chan struct{}, 1)}
+	sink := NewRelaySink(RelayConfig{
+		Appender:      app,
+		Target:        "phone-routing-id",
+		EpochID:       7,
+		Key:           key,
+		Now:           func() time.Time { return time.Unix(1_700_000_000, 0) },
+		AppendTimeout: time.Hour,
+	})
+	parent, cancel := context.WithCancel(context.Background())
+	sink.bindParent(parent)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sink.Event(protocol.JournalRecord{Cursor: 1, SessionID: "s1", Type: "launched"})
+	}()
+	select {
+	case <-app.entered:
+	case <-time.After(time.Second):
+		t.Fatal("append did not enter the relay client")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("append error = %v, want service parent cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("append ignored service parent cancellation")
+	}
+	if err := sink.Err(); err != nil {
+		t.Fatalf("normal service cancellation latched a degraded sink error: %v", err)
 	}
 }
 

@@ -38,6 +38,20 @@ type scriptedMailbox struct {
 	appends [][]byte
 }
 
+// serviceHangingMailbox supplies the command-side Mailbox methods while its embedded
+// hangingAppender blocks the journal/replay side until that append context is cancelled.
+type serviceHangingMailbox struct{ *hangingAppender }
+
+func (m *serviceHangingMailbox) MailboxRead(context.Context, uint64) ([]relay.Item, error) {
+	return nil, nil
+}
+
+func (m *serviceHangingMailbox) MailboxWait(context.Context, uint64) ([]relay.Item, bool, error) {
+	return nil, false, nil
+}
+
+func (m *serviceHangingMailbox) MailboxAck(context.Context, uint64) error { return nil }
+
 func (m *scriptedMailbox) MailboxRead(_ context.Context, cursor uint64) ([]relay.Item, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -108,6 +122,47 @@ func TestService_RunStopsOnCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not stop within 2s of cancel (a loop is not honouring ctx)")
+	}
+}
+
+// Replay runs synchronously before the Service starts either producer loop. Its relay append
+// must nevertheless inherit the Service generation context: otherwise cancellation during a
+// lost relay reply leaves Run stuck until RelaySink's independent five-second deadline.
+func TestService_RunCancelStopsAnInFlightReplayAppend(t *testing.T) {
+	app := &hangingAppender{entered: make(chan struct{}, 1)}
+	mb := &serviceHangingMailbox{hangingAppender: app}
+	outbox, err := OpenOutbox("")
+	if err != nil {
+		t.Fatalf("OpenOutbox: %v", err)
+	}
+	if err := outbox.Reserve(1, []byte("previously sealed envelope")); err != nil {
+		t.Fatalf("reserve replay entry: %v", err)
+	}
+	svc := NewService(ServiceConfig{
+		DaemonSocket: "/nonexistent/remote.sock",
+		Relay:        mb,
+		PhoneTarget:  "phone",
+		Outbox:       outbox,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- svc.Run(ctx) }()
+	select {
+	case <-app.entered:
+	case <-time.After(time.Second):
+		t.Fatal("replay did not enter the relay client")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not cancel its in-flight replay append")
+	}
+	if err := svc.Err(); err != nil {
+		t.Fatalf("normal service cancellation reported degraded state: %v", err)
 	}
 }
 

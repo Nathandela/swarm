@@ -89,6 +89,13 @@ func runBatcher(t *testing.T, rec *recordingAck) *transport.AckBatcher {
 	return b
 }
 
+func recordAck(t *testing.T, b *transport.AckBatcher, cursor uint64) {
+	t.Helper()
+	if !b.RecordGeneration(cursor, b.Generation()) {
+		t.Fatal("serialized test delivery unexpectedly crossed an ack generation reset")
+	}
+}
+
 // awaitAcks waits until at least n acks have happened, or fails.
 func awaitAcks(t *testing.T, rec *recordingAck, n int, why string) {
 	t.Helper()
@@ -120,15 +127,15 @@ func TestAckBatcher_CoalescesToTheHighestCursorAndNeverAcksOnTheDeliveryPath(t *
 
 	const highest = 50
 	for c := uint64(1); c <= highest; c++ {
-		b.Record(c)
+		recordAck(t, b, c)
 	}
 	// Out of order, and LOWER: monotonic means the batch keeps 50.
-	b.Record(7)
+	recordAck(t, b, 7)
 
 	// THE DELIVERY PATH DID NO I/O. This is checked immediately, inside the first tick, so it
-	// is a statement about Record and not a race with the flush loop.
+	// is a statement about RecordGeneration and not a race with the flush loop.
 	if n := rec.count(); n != 0 {
-		t.Fatalf("Record performed %d ack(s) synchronously; acks must ride the batcher OFF the "+
+		t.Fatalf("RecordGeneration performed %d ack(s) synchronously; acks must ride the batcher OFF the "+
 			"delivery path, or each one puts a relay fsync between an item's arrival and the "+
 			"next wait", n)
 	}
@@ -152,7 +159,7 @@ func TestAckBatcher_AnIdleDrainAcksNothing(t *testing.T) {
 	rec := &recordingAck{}
 	b := runBatcher(t, rec)
 
-	b.Record(9)
+	recordAck(t, b, 9)
 	awaitAcks(t, rec, 1, "the recorded cursor must be acked")
 	if got := rec.all()[0]; got != 9 {
 		t.Fatalf("first ack carried %d, want 9", got)
@@ -180,7 +187,7 @@ func TestAckBatcher_ARefusedAckIsRetriedRatherThanLost(t *testing.T) {
 	rec := &recordingAck{failFirst: true}
 	b := runBatcher(t, rec)
 
-	b.Record(42)
+	recordAck(t, b, 42)
 	awaitAcks(t, rec, 2, "a refused ack must be re-offered on a later tick, not dropped")
 
 	got := rec.all()

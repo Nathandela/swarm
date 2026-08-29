@@ -158,7 +158,7 @@ type AckBatcher struct {
 	ack func(ctx context.Context, cursor uint64) error
 
 	// flushMu makes Reset a generation barrier without putting network I/O under
-	// mu: Record remains non-blocking, while Reset waits for an already-started
+	// mu: RecordGeneration remains non-blocking, while Reset waits for an already-started
 	// old-generation ack to finish before its caller switches protocol incarnation.
 	flushMu    sync.Mutex
 	mu         sync.Mutex
@@ -169,16 +169,6 @@ type AckBatcher struct {
 // NewAckBatcher returns a batcher over one hop's ack call.
 func NewAckBatcher(ack func(ctx context.Context, cursor uint64) error) *AckBatcher {
 	return &AckBatcher{ack: ack}
-}
-
-// Record notes the highest cursor consumed so far. It never blocks and never
-// performs I/O, so it is safe to call from the delivery path.
-func (a *AckBatcher) Record(cursor uint64) {
-	a.mu.Lock()
-	if cursor > a.pending {
-		a.pending = cursor
-	}
-	a.mu.Unlock()
 }
 
 // Generation snapshots the mailbox generation a delivery started under. A caller that can
@@ -192,7 +182,7 @@ func (a *AckBatcher) Generation() uint64 {
 
 // RecordGeneration records cursor only if the delivery began in the still-current mailbox
 // generation. The boolean lets a caller discard any separate coalescing state that belonged
-// to a late page. Record remains the compatibility API for single-generation/serialized use.
+// to a late page.
 func (a *AckBatcher) RecordGeneration(cursor, generation uint64) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

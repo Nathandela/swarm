@@ -301,12 +301,8 @@ func (s *store) readItemsPageForIncarnation(rid, expectedIncarnation string, aft
 	return out, hasMore, resetRequired, incarnation, err
 }
 
-// ackItems compacts away every item whose storage cursor is at or below
-// throughCursor (the durable consumed watermark).
-func (s *store) ackItems(rid string, throughCursor uint64) error {
-	return s.ackItemsForIncarnation(rid, "", throughCursor)
-}
-
+// ackItemsForIncarnation compacts away every item whose storage cursor is at or below
+// throughCursor (the durable consumed watermark), provided it still names this mailbox log.
 func (s *store) ackItemsForIncarnation(rid, expectedIncarnation string, throughCursor uint64) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		if expectedIncarnation != "" && expectedIncarnation != mailboxIncarnation(tx) {

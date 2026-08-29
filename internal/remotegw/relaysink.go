@@ -68,8 +68,8 @@ const defaultAppendTimeout = 5 * time.Second
 // mailbox. Envelope Seq is a strictly increasing per-sink counter (cfg.Seq) so the phone
 // can order and dedup; a durable Seq resumes above the phone's high-water after a gateway
 // restart (C2b) instead of resetting to 1 and being stale-dropped. Append failures are
-// surfaced via Err(); the durable-cursor / relay-ack backpressure (R-GW.5) is a later
-// refinement.
+// surfaced via Err() unless they are the owning Service's expected lifecycle cancellation;
+// the durable-cursor / relay-ack backpressure (R-GW.5) is a later refinement.
 type RelaySink struct {
 	cfg    RelayConfig
 	now    func() time.Time
@@ -78,6 +78,11 @@ type RelaySink struct {
 
 	mu      sync.Mutex
 	lastErr error
+	// parent is the owning Service generation's lifetime. A standalone RelaySink leaves it
+	// nil and appendLocked uses Background plus AppendTimeout; Service.Run binds it before
+	// replay or live delivery so shutdown also cancels an append already blocked in the
+	// relay client. It is protected by mu, which appendLocked's caller already holds.
+	parent context.Context
 	// reuse holds a seq whose frame PROVABLY never crossed the process boundary -- the
 	// marshal, the seal or the outbox reservation failed, all of them BEFORE the append --
 	// so the next frame carries it instead of leaving a gap (see sealAtSeqLocked). A seq the
@@ -95,6 +100,14 @@ type RelaySink struct {
 	// overrides cfg.Machine. It is a separate field rather than a write into cfg so nothing
 	// that reads cfg lock-free on the seal path can race with the stamp.
 	daemonMachine string
+}
+
+// bindParent ties future (and replayed) appends to the lifetime of the Service generation
+// that owns this sink. Service.Run calls it before Replay and before starting producers.
+func (s *RelaySink) bindParent(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parent = ctx
 }
 
 // SetMachine adopts the endpoint id the DAEMON assigned, which is the only correct value for
@@ -247,7 +260,7 @@ func (s *RelaySink) DeliveredCursor() uint64 { return s.outbox.Cursor() }
 // s.mu (the append is serialized with every other producer, exactly like a fresh seal).
 func (s *RelaySink) replayLocked(e OutboxEntry) error {
 	if err := s.appendLocked(e.Envelope); err != nil {
-		s.setErrLocked(err)
+		s.setAppendErrLocked(err)
 		return err
 	}
 	if err := s.outbox.Commit(e.Cursor); err != nil {
@@ -524,7 +537,7 @@ func (s *RelaySink) sealAtSeqLocked(cursor uint64, build func(seq uint64, issued
 		// An outbox-backed frame is unaffected either way: its reservation already owns the
 		// seq and Event's retry re-appends the IDENTICAL envelope, which the phone's
 		// receiver stale-drops for free.
-		s.setErrLocked(err)
+		s.setAppendErrLocked(err)
 		return err
 	}
 	if cursor != 0 {
@@ -557,7 +570,11 @@ func (s *RelaySink) appendLocked(env []byte) error {
 	if timeout <= 0 {
 		timeout = defaultAppendTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parent := s.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	_, err := s.cfg.Appender.MailboxAppend(ctx, s.cfg.Target, env)
 	return err
@@ -582,4 +599,17 @@ func (s *RelaySink) setErrLocked(err error) {
 	if s.lastErr == nil {
 		s.lastErr = err
 	}
+}
+
+// setAppendErrLocked records a relay failure as degraded state unless it is merely the
+// owning Service generation ending. The append still fails (so an outbox reservation stays
+// pending and an offered seq is never reused), but an ordinary operator stop must not be
+// reported as "gateway degraded: context canceled" by watchDegraded. The caller holds mu.
+func (s *RelaySink) setAppendErrLocked(err error) {
+	if s.parent != nil {
+		if parentErr := s.parent.Err(); parentErr != nil && errors.Is(err, parentErr) {
+			return
+		}
+	}
+	s.setErrLocked(err)
 }

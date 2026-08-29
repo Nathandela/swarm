@@ -17,9 +17,9 @@ func TestAckBatcher_ResetDropsThePriorMailboxCoordinate(t *testing.T) {
 		mu.Unlock()
 		return nil
 	})
-	a.Record(53)
+	a.RecordGeneration(53, a.Generation())
 	a.Reset()
-	a.Record(1)
+	a.RecordGeneration(1, a.Generation())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); a.Run(ctx) }()
@@ -50,7 +50,7 @@ func TestAckBatcher_ResetDoesNotResurrectAnOldFailedAck(t *testing.T) {
 		}
 		return nil
 	})
-	a.Record(53)
+	a.RecordGeneration(53, a.Generation())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); a.Run(ctx) }()
@@ -67,7 +67,7 @@ func TestAckBatcher_ResetDoesNotResurrectAnOldFailedAck(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Reset did not finish after the old ack returned")
 	}
-	a.Record(1)
+	a.RecordGeneration(1, a.Generation())
 	time.Sleep(2 * time.Second / MaxDrainAcksPerSec)
 	cancel()
 	<-done
@@ -91,7 +91,7 @@ func TestAckBatcher_ResetWaitsForOldGenerationAckBeforeCallerSwitchesIncarnation
 		<-release
 		return nil
 	})
-	a.Record(53)
+	a.RecordGeneration(53, a.Generation())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)

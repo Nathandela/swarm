@@ -547,20 +547,21 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.wakeRetry != nil {
 		defer s.wakeRetry.Stop()
 	}
-	// PB-GW-8: re-append whatever the outbox reserved but never saw acked BEFORE any new
-	// frame goes out, so a delivery-unknown record is recovered by its IDENTICAL sealed
-	// envelope (which the phone stale-drops for free) rather than re-sealed at a fresh seq.
-	// A replay that fails is stashed on the sink (Err) and its entries stay pending for the
-	// next start; it must not stop the bridge from running.
-	_ = s.sink.Replay()
-	// Derive a cancelable context so the journal loop can tear the WHOLE Service down (both
-	// loops) the moment it detects the paired device was revoked (codex#1) -- and so the
-	// link watcher below can do the same the moment the relay connection dies. parent is
-	// kept because the two are opposite instructions to the caller: a cancelled parent must
-	// NOT be redialled, a dead link must.
+	// Derive the generation context before replay: a replay append is just as capable of
+	// blocking in the relay client as a live append, and operator cancellation must release
+	// it promptly rather than waiting out the independent per-append deadline. parent is kept
+	// because cancellation and relay loss give opposite instructions to the caller.
 	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.sink.bindParent(ctx)
+	// PB-GW-8: re-append whatever the outbox reserved but never saw acked BEFORE any new
+	// frame goes out, so a delivery-unknown record is recovered by its IDENTICAL sealed
+	// envelope (which the phone stale-drops for free) rather than re-sealed at a fresh seq.
+	// A replay that fails while the generation is live is stashed on the sink (Err), and its
+	// entries stay pending for the next start. Lifecycle cancellation is returned but is not
+	// degraded state. Either way, replay failure must not stop the bridge from running.
+	_ = s.sink.Replay()
 	// Parent the peek watchers to the Service ctx so a revoke (cancel below) stops every peek
 	// reconnecting IMMEDIATELY and structurally -- not incidentally via the kill switch, and not
 	// only when the deferred watchers.Close runs after wg.Wait returns (opus#2).

@@ -483,10 +483,12 @@ func TestRestore_RejectsTruncatedRawCopyWhenPageOneMetaIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	const pageSize = 4096
 	need := bboltMetaOffset + bboltMetaChecksummedLen + 8
-	_, pgid0, _, ok0 := parseBoltMeta(raw[0:need])
-	_, pgid1, _, ok1 := parseBoltMeta(raw[pageSize : pageSize+need])
+	pageSize, pgid0, _, ok0 := parseBoltMeta(raw[0:need])
+	if !ok0 || pageSize == 0 || uint64(len(raw)) < uint64(pageSize)+uint64(need) {
+		t.Fatalf("page 0 meta must locate a complete page 1: pageSize=%d len=%d ok0=%v", pageSize, len(raw), ok0)
+	}
+	_, pgid1, _, ok1 := parseBoltMeta(raw[int(pageSize) : int(pageSize)+need])
 	if !ok0 || !ok1 {
 		t.Fatalf("both meta pages must parse as valid bbolt meta: ok0=%v ok1=%v", ok0, ok1)
 	}
@@ -496,7 +498,7 @@ func TestRestore_RejectsTruncatedRawCopyWhenPageOneMetaIsActive(t *testing.T) {
 			"pgid0=%d pgid1=%d -- the seeding shape above needs adjusting", pgid0, pgid1)
 	}
 
-	truncated := raw[:pgid0*pageSize]
+	truncated := raw[:pgid0*uint64(pageSize)]
 	truncatedPath := filepath.Join(t.TempDir(), "truncated-raw-copy.db")
 	if err := os.WriteFile(truncatedPath, truncated, 0o600); err != nil {
 		t.Fatalf("write truncated raw copy: %v", err)
@@ -530,15 +532,24 @@ func TestRestore_RejectsBackupWithCorruptedKeyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
-	// Written in ONE transaction (not 64 separate st.putToken calls): bbolt's
+	// Written in ONE transaction (not separate st.putToken calls): bbolt's
 	// copy-on-write leaves each committed transaction's superseded pages in
 	// the file as unreferenced garbage, and a search for a literal key byte
 	// string can find stale leftover copies of it in exactly that garbage --
 	// a single transaction has nothing earlier of its own to leave behind.
 	if err := st.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketTokens)
-		for i := 0; i < 64; i++ {
-			rid := fmt.Sprintf("probe-token-rid-%03d", i)
+		// Scale with the host page size. Apple Silicon uses 16 KiB pages, so the
+		// old fixed 64 records still fit bbolt's pageSize/4 inline-bucket threshold;
+		// tx.Check walks spilled B+tree pages, not an inline bucket embedded as a
+		// parent value. This count exceeds the threshold on both 4 KiB and 16 KiB
+		// hosts while remaining tiny.
+		entries := os.Getpagesize() / 32
+		if entries < 64 {
+			entries = 64
+		}
+		for i := 0; i < entries; i++ {
+			rid := fmt.Sprintf("probe-token-rid-%08d", i)
 			if err := b.Put([]byte(rid), []byte("tok")); err != nil {
 				return err
 			}
@@ -560,15 +571,21 @@ func TestRestore_RejectsBackupWithCorruptedKeyOrder(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	// Flip the last digit of one key so it now reads as a later key's value
-	// -- a duplicate/out-of-order key in the leaf's physical ordering.
-	target := []byte("probe-token-rid-032")
+	// Replace one key with a later key's value -- a duplicate/out-of-order key
+	// in the leaf's physical ordering.
+	entries := os.Getpagesize() / 32
+	if entries < 64 {
+		entries = 64
+	}
+	targetIndex := entries / 2
+	target := []byte(fmt.Sprintf("probe-token-rid-%08d", targetIndex))
+	replacement := []byte(fmt.Sprintf("probe-token-rid-%08d", targetIndex+7))
 	if n := bytes.Count(raw, target); n != 1 {
 		t.Fatalf("probe key appears %d time(s) in the backup, want exactly 1", n)
 	}
 	idx := bytes.Index(raw, target)
 	corrupted := append([]byte(nil), raw...)
-	corrupted[idx+len(target)-1] = '9' // "...rid-032" -> "...rid-039"
+	copy(corrupted[idx:idx+len(target)], replacement)
 	corruptedPath := filepath.Join(t.TempDir(), "corrupted.db")
 	if err := os.WriteFile(corruptedPath, corrupted, 0o600); err != nil {
 		t.Fatalf("write corrupted backup: %v", err)

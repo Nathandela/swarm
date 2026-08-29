@@ -28,12 +28,12 @@ func TestRewindRelayCursorResetsTheLiveWaitAckGeneration(t *testing.T) {
 		mu.Unlock()
 		return nil
 	})
-	batcher.Record(53)
+	batcher.RecordGeneration(53, batcher.Generation())
 	app.setAckReset(batcher.Reset)
 	if err := app.rewindRelayCursor(); err != nil {
 		t.Fatalf("rewindRelayCursor: %v", err)
 	}
-	batcher.Record(1)
+	batcher.RecordGeneration(1, batcher.Generation())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); batcher.Run(ctx) }()
