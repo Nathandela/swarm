@@ -175,7 +175,7 @@ Running sessions survive and reconnect by design. See [docs/install.md](docs/ins
 
 ## Project status
 
-Public and released—latest [`v0.13.5`](https://github.com/Nathandela/swarm/releases/tag/v0.13.5). Building requires Go 1.25 or newer.
+Public and released—latest [`v0.13.8`](https://github.com/Nathandela/swarm/releases/tag/v0.13.8). Building requires Go 1.25 or newer.
 
 The daemon, per-session shim supervision, TUI, VT emulator, status engine, worktree isolation, production CLI adapters, inter-session handoff, and Android remote-control foundation are implemented and covered by verification evidence under [`docs/verification/`](docs/verification/).
 
