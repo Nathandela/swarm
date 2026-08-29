@@ -139,7 +139,7 @@ func TestHandoff_FormHasOnlyTargetAndModelControls(t *testing.T) {
 	}
 	m = send(m, keyTab)
 	m = send(m, keyRight)
-	if got := m.(rootModel).handoff.model; got != "gpt-5.5" {
+	if got := m.(rootModel).handoff.model.text; got != "gpt-5.5" {
 		t.Fatalf("right on model selected %q, want gpt-5.5", got)
 	}
 }
@@ -154,15 +154,15 @@ func TestHandoff_ModelEditPasteAndDetectionRefreshPreserveSelection(t *testing.T
 	m = send(m, tea.PasteMsg{Content: "-custom\r\n"})
 
 	rm := m.(rootModel)
-	if rm.handoff.targetName() != "codex" || rm.handoff.model != "gpt-5.6-custom" {
-		t.Fatalf("edited form = target %q model %q", rm.handoff.targetName(), rm.handoff.model)
+	if rm.handoff.targetName() != "codex" || rm.handoff.model.text != "gpt-5.6-custom" {
+		t.Fatalf("edited form = target %q model %q", rm.handoff.targetName(), rm.handoff.model.text)
 	}
 	refreshed := handoffAgents()()
 	refreshed = append(refreshed, AgentInfo{Name: "gemini", Installed: false, InRange: false})
 	m = send(m, detectMsg{gen: rm.detectGen, agents: refreshed})
 	rm = m.(rootModel)
-	if rm.handoff.targetName() != "codex" || rm.handoff.model != "gpt-5.6-custom" {
-		t.Fatalf("refresh clobbered selection = target %q model %q", rm.handoff.targetName(), rm.handoff.model)
+	if rm.handoff.targetName() != "codex" || rm.handoff.model.text != "gpt-5.6-custom" {
+		t.Fatalf("refresh clobbered selection = target %q model %q", rm.handoff.targetName(), rm.handoff.model.text)
 	}
 }
 
@@ -401,8 +401,8 @@ func TestHandoff_FormHasSupervisionAsThirdField(t *testing.T) {
 	if line := lineContaining(view(m), "supervision"); !strings.Contains(line, "none") {
 		t.Fatalf("form does not show the selected supervision mode (line %q):\n%s", line, view(m))
 	}
-	if rm.handoff.targetName() != "claude" || rm.handoff.model != "opus" {
-		t.Fatalf("cycling supervision disturbed target %q / model %q", rm.handoff.targetName(), rm.handoff.model)
+	if rm.handoff.targetName() != "claude" || rm.handoff.model.text != "opus" {
+		t.Fatalf("cycling supervision disturbed target %q / model %q", rm.handoff.targetName(), rm.handoff.model.text)
 	}
 
 	// AMENDED for ADR-010 Amendment 4 E2, which adds `method` as a FOURTH field: the

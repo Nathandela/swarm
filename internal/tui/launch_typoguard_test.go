@@ -11,7 +11,7 @@ import (
 
 func replaceLaunchDirectory(t *testing.T, m tea.Model, path string) tea.Model {
 	t.Helper()
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	return sendType(m, path)
@@ -55,7 +55,7 @@ func TestLaunch_FuzzyArrowChoosesExistingDirectory(t *testing.T) {
 	m = send(m, keyEnter)
 
 	m = send(m, keyRight)
-	if got := launchOf(m).cwd; got != want {
+	if got := launchOf(m).cwd.text; got != want {
 		t.Fatalf("Right selected %q, want suggested path %q", got, want)
 	}
 	_, cmd := m.Update(keyEnter)

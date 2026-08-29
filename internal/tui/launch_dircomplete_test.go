@@ -52,7 +52,7 @@ func dirFixture(t *testing.T) string {
 func openDirField(t *testing.T) tea.Model {
 	t.Helper()
 	m := openLaunch(t, newFakeClient())
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	return m
@@ -198,8 +198,8 @@ func TestDirCompleteRightAcceptsGhostAndDrillsDown(t *testing.T) {
 
 	m = send(m, keyRight)
 	lm := launchOf(m)
-	if lm.cwd != dir+"/beta/" {
-		t.Fatalf("Right must append the ghost; cwd = %q, want %q", lm.cwd, dir+"/beta/")
+	if lm.cwd.text != dir+"/beta/" {
+		t.Fatalf("Right must append the ghost; cwd = %q, want %q", lm.cwd.text, dir+"/beta/")
 	}
 	if lm.dirGhost != "inner/" {
 		t.Fatalf("accepting a ghost must recompute one level down; ghost = %q, want %q", lm.dirGhost, "inner/")
@@ -218,8 +218,8 @@ func TestDirCompleteTabAcceptsGhostWithoutChangingFocus(t *testing.T) {
 
 	m = send(m, keyTab)
 	lm := launchOf(m)
-	if lm.cwd != dir+"/beta/" {
-		t.Fatalf("Tab must append the path ghost; cwd = %q, want %q", lm.cwd, dir+"/beta/")
+	if lm.cwd.text != dir+"/beta/" {
+		t.Fatalf("Tab must append the path ghost; cwd = %q, want %q", lm.cwd.text, dir+"/beta/")
 	}
 	if !lm.isDir() {
 		t.Fatalf("Tab path completion changed focus to %d; want directory field", lm.focus)
@@ -255,20 +255,20 @@ func TestDirCompleteArrowsCycleAnchoredCandidates(t *testing.T) {
 
 	m = send(m, keyRight) // current text IS a candidate: step to the next one
 	lm := launchOf(m)
-	if lm.cwd != dir+"/alphabet" {
-		t.Fatalf("Right must cycle to the next candidate; cwd = %q, want %q", lm.cwd, dir+"/alphabet")
+	if lm.cwd.text != dir+"/alphabet" {
+		t.Fatalf("Right must cycle to the next candidate; cwd = %q, want %q", lm.cwd.text, dir+"/alphabet")
 	}
 	if got := strings.Join(lm.dirCands, ","); got != "alpha,alphabet" {
 		t.Fatalf("cycling must not recompute the candidate set; cands = [%s], want [alpha,alphabet]", got)
 	}
 
 	m = send(m, keyRight) // wraps back to the first candidate
-	if got := launchOf(m).cwd; got != dir+"/alpha" {
+	if got := launchOf(m).cwd.text; got != dir+"/alpha" {
 		t.Fatalf("Right past the last candidate must wrap; cwd = %q, want %q", got, dir+"/alpha")
 	}
 
 	m = send(m, keyLeft) // backward through the same anchored menu
-	if got := launchOf(m).cwd; got != dir+"/alphabet" {
+	if got := launchOf(m).cwd.text; got != dir+"/alphabet" {
 		t.Fatalf("Left must cycle backward; cwd = %q, want %q", got, dir+"/alphabet")
 	}
 }
@@ -337,19 +337,19 @@ func TestDirCompleteHintAdvertisesCompletionKeys(t *testing.T) {
 	const tail = " · ↑↓ next · enter launch · esc cancel"
 
 	m := openLaunch(t, newFakeClient()) // prefilled cwd, no completion computed yet
-	if got := launchOf(m).hint(); got != "type or paste"+tail {
-		t.Fatalf("hint without completion = %q, want %q", got, "type or paste"+tail)
+	if got := launchOf(m).hint(); got != "type or paste · "+lineEditFastHint+tail {
+		t.Fatalf("hint without completion = %q, want %q", got, "type or paste · "+lineEditFastHint+tail)
 	}
 
 	dir := dirFixture(t)
 	m = openDirField(t)
 	m = sendType(m, dir+"/alph") // ghost "a" AND two candidates
-	if got := launchOf(m).hint(); got != "tab/←→ complete"+tail {
-		t.Fatalf("hint with a completion = %q, want %q", got, "tab/←→ complete"+tail)
+	if got := launchOf(m).hint(); got != "tab/←→ complete · "+lineEditFastHint+tail {
+		t.Fatalf("hint with a completion = %q, want %q", got, "tab/←→ complete · "+lineEditFastHint+tail)
 	}
 
 	m = send(m, keyDown) // off the directory field: completion keys mean nothing again
-	if got := launchOf(m).hint(); got == "tab/←→ complete"+tail {
+	if got := launchOf(m).hint(); got == "tab/←→ complete · "+lineEditFastHint+tail {
 		t.Fatalf("the completion hint must not survive a blur, got %q", got)
 	}
 }
@@ -373,7 +373,7 @@ func TestDirCompleteTildePathKeepsTypedForm(t *testing.T) {
 	}
 
 	m = send(m, keyRight)
-	if got := launchOf(m).cwd; got != "~/beta/" {
+	if got := launchOf(m).cwd.text; got != "~/beta/" {
 		t.Fatalf("accepting a ghost must keep the tilde; cwd = %q, want %q", got, "~/beta/")
 	}
 }

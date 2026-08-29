@@ -92,7 +92,7 @@ func TestLaunch_DirectoryPrefilledWithCwd(t *testing.T) {
 		t.Fatalf("cannot resolve cwd: %v", err)
 	}
 	m := openLaunch(t, newFakeClient())
-	if got := launchOf(m).cwd; got != wd {
+	if got := launchOf(m).cwd.text; got != wd {
 		t.Fatalf("directory prefill = %q, want the client cwd %q", got, wd)
 	}
 	if !strings.Contains(view(m), wd) {
@@ -111,15 +111,15 @@ func TestLaunch_ModelStringOptionEditable(t *testing.T) {
 	m = send(m, keyDown) // agent -> model (string)
 
 	m = sendType(m, "opus")
-	if got := launchOf(m).options["model"]; got != "opus" {
+	if got := launchOf(m).options["model"].text; got != "opus" {
 		t.Fatalf("typed model = %q, want opus", got)
 	}
 	m = send(m, keyBackspace)
-	if got := launchOf(m).options["model"]; got != "opu" {
+	if got := launchOf(m).options["model"].text; got != "opu" {
 		t.Fatalf("after backspace model = %q, want opu", got)
 	}
 	m = send(m, tea.PasteMsg{Content: "s-4\n"})
-	if got := launchOf(m).options["model"]; got != "opus-4" {
+	if got := launchOf(m).options["model"].text; got != "opus-4" {
 		t.Fatalf("after paste model = %q, want opus-4 (newline stripped)", got)
 	}
 }
@@ -136,17 +136,17 @@ func TestLaunch_ModelSuggestionsCycle(t *testing.T) {
 
 	// Suggest = [sonnet, opus, haiku]; from empty, right -> sonnet, right -> opus.
 	m = send(m, keyRight)
-	if got := launchOf(m).options["model"]; got != "sonnet" {
+	if got := launchOf(m).options["model"].text; got != "sonnet" {
 		t.Fatalf("first suggestion = %q, want sonnet", got)
 	}
 	m = send(m, keyRight)
-	if got := launchOf(m).options["model"]; got != "opus" {
+	if got := launchOf(m).options["model"].text; got != "opus" {
 		t.Fatalf("second suggestion = %q, want opus", got)
 	}
 	// Left from sonnet wraps to the last suggestion.
 	m = send(m, keyLeft) // opus -> sonnet
 	m = send(m, keyLeft) // sonnet -> haiku (wrap)
-	if got := launchOf(m).options["model"]; got != "haiku" {
+	if got := launchOf(m).options["model"].text; got != "haiku" {
 		t.Fatalf("left-wrap suggestion = %q, want haiku", got)
 	}
 }
@@ -162,18 +162,18 @@ func TestLaunch_SpaceTogglesBoolOption(t *testing.T) {
 	m = send(m, keyDown) // agent -> model
 	m = send(m, keyDown) // model -> skip (bool)
 
-	if got := launchOf(m).options["dangerously-skip-permissions"]; got != "false" {
+	if got := launchOf(m).options["dangerously-skip-permissions"].text; got != "false" {
 		t.Fatalf("default skip = %q, want false", got)
 	}
 	m = send(m, keyRune(' '))
-	if got := launchOf(m).options["dangerously-skip-permissions"]; got != "true" {
+	if got := launchOf(m).options["dangerously-skip-permissions"].text; got != "true" {
 		t.Fatalf("after space skip = %q, want true", got)
 	}
 	if v := view(m); !strings.Contains(v, "[x]") {
 		t.Fatalf("a toggled bool option must render [x]:\n%s", v)
 	}
 	m = send(m, keyRune(' '))
-	if got := launchOf(m).options["dangerously-skip-permissions"]; got != "false" {
+	if got := launchOf(m).options["dangerously-skip-permissions"].text; got != "false" {
 		t.Fatalf("second space skip = %q, want false", got)
 	}
 }
@@ -182,9 +182,9 @@ func TestLaunch_SpaceTogglesBoolOption(t *testing.T) {
 // (single-line field).
 func TestLaunch_PasteIntoDirectoryStripsNewlines(t *testing.T) {
 	m := openLaunch(t, newFakeClient()) // focus starts on directory (prefilled)
-	before := launchOf(m).cwd
+	before := launchOf(m).cwd.text
 	m = send(m, tea.PasteMsg{Content: "/tmp/x\r\ny"})
-	got := launchOf(m).cwd
+	got := launchOf(m).cwd.text
 	if strings.ContainsAny(got, "\r\n") {
 		t.Fatalf("pasted newlines must be stripped, got %q", got)
 	}

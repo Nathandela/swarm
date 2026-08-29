@@ -446,9 +446,16 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		// Bracketed paste routes into the launch form's focused text field, or into the
 		// general board's inline rename buffer when a rename is open (newlines stripped
-		// for these single-line fields); elsewhere it is ignored.
+		// for these single-line fields); elsewhere it is ignored. Modal overlays own all
+		// input, including paste, so none may leak into the form underneath them.
+		if m.pairing != nil || m.screen == screenHandoff && m.handoff.confirmPending() {
+			return m, nil
+		}
 		switch {
 		case m.screen == screenLaunch:
+			// Creation requires consecutive Enter presses. Pasting into any launch
+			// field is an edit action and therefore invalidates an armed path.
+			m.launch.createCwd = ""
 			m.launch.paste(msg.Content)
 		case m.screen == screenHandoff:
 			m.handoff.paste(msg.Content)
@@ -641,9 +648,9 @@ func (m rootModel) generalStatus() string {
 	}
 	if m.general.editing {
 		if m.general.editTag {
-			return "edit tag · type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
+			return "edit tag · type  ←→ move  " + lineEditFastHint + "  ⏎ save  esc cancel"
 		}
-		return "type  ←→ move  ⌘←/→ home/end  ⌘⌫/ctrl+u clear-left  ⏎ save  esc cancel"
+		return "type  ←→ move  " + lineEditFastHint + "  ⏎ save  esc cancel"
 	}
 	if m.general.confirm {
 		return "y confirm   n cancel"

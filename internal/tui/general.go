@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -99,14 +98,11 @@ type generalModel struct {
 
 	// Inline rename edit (v0.5): 'e' opens a single-line edit of the selected row's
 	// name. editID captures the target by identity so a concurrent regroup cannot move
-	// the edit onto a neighbor; editBuf is the working buffer; editing gates the mode.
+	// the edit onto a neighbor; edit is the working buffer; editing gates the mode.
 	editing bool
 	editID  string
-	editBuf string
-	// editCursor is a rune index into editBuf. A rune index keeps arrow movement,
-	// insertion, and deletion safe for non-ASCII discussion names.
-	editCursor int
-	editTag    bool // the shared inline editor targets Tag instead of Name
+	edit    lineEditor
+	editTag bool // the shared inline editor targets Tag instead of Name
 
 	// spinnerFrame advances on the dedicated 90 ms Working animation tick. The
 	// router runs that tick only while this board is visible and has a Working row.
@@ -497,16 +493,14 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if s, ok := m.general.selected(); ok {
 			m.general.editing = true
 			m.general.editID = s.ID
-			m.general.editBuf = s.Name
-			m.general.editCursor = utf8.RuneCountInString(s.Name)
+			m.general.edit = newLineEditor(s.Name)
 		}
 	case k.Text == "t":
 		if s, ok := m.general.selected(); ok {
 			m.general.editing = true
 			m.general.editTag = true
 			m.general.editID = s.ID
-			m.general.editBuf = s.Tag
-			m.general.editCursor = utf8.RuneCountInString(s.Tag)
+			m.general.edit = newLineEditor(s.Tag)
 		}
 	case k.Text == "o":
 		// Open the options window seeded with the live layout (owner decision
@@ -575,9 +569,9 @@ func (m rootModel) updateConfirm(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // modified key cannot silently degrade to a one-rune edit. The target is the session
 // captured when the edit opened (editID), not the live selection.
 func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case k.Code == tea.KeyEnter:
-		id, value, editingTag := m.general.editID, m.general.editBuf, m.general.editTag
+	switch k.Code {
+	case tea.KeyEnter:
+		id, value, editingTag := m.general.editID, m.general.edit.text, m.general.editTag
 		m.general.closeEdit()
 		if editingTag {
 			// Trim here too (the daemon trims as well) so the optimistic apply and
@@ -585,45 +579,19 @@ func (m rootModel) updateRename(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, setTagCmd(m.client, id, strings.TrimSpace(value))
 		}
 		return m, renameCmd(m.client, id, value)
-	case k.Code == tea.KeyEsc:
+	case tea.KeyEsc:
 		m.general.closeEdit()
-	case k.Code == tea.KeyLeft && isCommandArrowModifier(k.Mod),
-		k.Code == tea.KeyHome && k.Mod == 0,
-		k.Code == 'a' && k.Mod == tea.ModCtrl:
-		m.general.editCursor = 0
-	case k.Code == tea.KeyRight && isCommandArrowModifier(k.Mod),
-		k.Code == tea.KeyEnd && k.Mod == 0,
-		k.Code == 'e' && k.Mod == tea.ModCtrl:
-		m.general.editCursor = utf8.RuneCountInString(m.general.editBuf)
-	case k.Code == tea.KeyBackspace && k.Mod == tea.ModSuper,
-		k.Code == 'u' && k.Mod == tea.ModCtrl:
-		m.general.deleteToStart()
-	case k.Code == tea.KeyLeft && k.Mod == 0:
-		if m.general.editCursor > 0 {
-			m.general.editCursor--
-		}
-	case k.Code == tea.KeyRight && k.Mod == 0:
-		if m.general.editCursor < utf8.RuneCountInString(m.general.editBuf) {
-			m.general.editCursor++
-		}
-	case k.Code == tea.KeyBackspace && k.Mod == 0:
-		m.general.deleteBeforeCursor()
-	case k.Text != "":
-		m.general.insertAtCursor(k.Text)
+	default:
+		m.general.edit.update(k)
 	}
 	return m, nil
-}
-
-func isCommandArrowModifier(mod tea.KeyMod) bool {
-	return mod == tea.ModSuper || mod == tea.ModMeta
 }
 
 // closeEdit exits the inline rename mode and clears its buffer/target.
 func (m *generalModel) closeEdit() {
 	m.editing = false
 	m.editID = ""
-	m.editBuf = ""
-	m.editCursor = 0
+	m.edit = lineEditor{}
 	m.editTag = false
 }
 
@@ -633,59 +601,7 @@ func (m *generalModel) pasteEdit(s string) {
 	if !m.editing {
 		return
 	}
-	m.insertAtCursor(strings.NewReplacer("\r", "", "\n", "").Replace(s))
-}
-
-// insertAtCursor inserts text at editCursor and leaves the cursor after the new
-// runes. Converting to []rune is appropriate for a short, human-edited label and
-// makes it impossible to split UTF-8 while navigating.
-func (m *generalModel) insertAtCursor(text string) {
-	if text == "" {
-		return
-	}
-	runes := []rune(m.editBuf)
-	if m.editCursor < 0 {
-		m.editCursor = 0
-	}
-	if m.editCursor > len(runes) {
-		m.editCursor = len(runes)
-	}
-	inserted := []rune(text)
-	out := make([]rune, 0, len(runes)+len(inserted))
-	out = append(out, runes[:m.editCursor]...)
-	out = append(out, inserted...)
-	out = append(out, runes[m.editCursor:]...)
-	m.editBuf = string(out)
-	m.editCursor += len(inserted)
-}
-
-// deleteBeforeCursor removes the rune immediately left of the insertion cursor.
-func (m *generalModel) deleteBeforeCursor() {
-	runes := []rune(m.editBuf)
-	if m.editCursor <= 0 || len(runes) == 0 {
-		return
-	}
-	if m.editCursor > len(runes) {
-		m.editCursor = len(runes)
-	}
-	i := m.editCursor - 1
-	m.editBuf = string(append(runes[:i], runes[m.editCursor:]...))
-	m.editCursor = i
-}
-
-// deleteToStart removes every rune left of the insertion cursor while retaining
-// the complete suffix. Clamping keeps the helper total if a stale internal cursor
-// ever reaches it; normal editor updates maintain the cursor invariant already.
-func (m *generalModel) deleteToStart() {
-	runes := []rune(m.editBuf)
-	if m.editCursor < 0 {
-		m.editCursor = 0
-	}
-	if m.editCursor > len(runes) {
-		m.editCursor = len(runes)
-	}
-	m.editBuf = string(runes[m.editCursor:])
-	m.editCursor = 0
+	m.edit.paste(s)
 }
 
 func isCtrlX(k tea.KeyPressMsg) bool {
@@ -1088,7 +1004,7 @@ func (m generalModel) nameCell(s protocol.SessionView, width int) string {
 		return ""
 	}
 	if m.editing && s.ID == m.editID {
-		return editViewport(m.editBuf, m.editCursor, contentWidth)
+		return editViewport(m.edit.text, m.edit.cursor, contentWidth)
 	}
 	return clampCells(s.Name, contentWidth)
 }

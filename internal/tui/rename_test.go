@@ -92,8 +92,8 @@ func TestRename_ArrowKeysEditInTheMiddle(t *testing.T) {
 	m = send(m, keyRune('b'))
 
 	rm := m.(rootModel)
-	if rm.general.editBuf != "abc" || rm.general.editCursor != 2 {
-		t.Fatalf("middle insertion = %q at %d; want abc at 2", rm.general.editBuf, rm.general.editCursor)
+	if rm.general.edit.text != "abc" || rm.general.edit.cursor != 2 {
+		t.Fatalf("middle insertion = %q at %d; want abc at 2", rm.general.edit.text, rm.general.edit.cursor)
 	}
 	if status := rm.generalStatus(); !strings.Contains(status, "←→") {
 		t.Fatalf("rename status must advertise plain cursor navigation, got %q", status)
@@ -111,8 +111,8 @@ func TestRename_CursorEditingIsRuneAware(t *testing.T) {
 	m = send(m, keyLeft)      // a é | c
 	m = send(m, keyBackspace) // a | c
 	rm := m.(rootModel)
-	if rm.general.editBuf != "ac" || rm.general.editCursor != 1 {
-		t.Fatalf("Unicode backspace = %q at %d; want ac at 1", rm.general.editBuf, rm.general.editCursor)
+	if rm.general.edit.text != "ac" || rm.general.edit.cursor != 1 {
+		t.Fatalf("Unicode backspace = %q at %d; want ac at 1", rm.general.edit.text, rm.general.edit.cursor)
 	}
 }
 
@@ -125,8 +125,8 @@ func TestRename_PasteInsertsAtCursor(t *testing.T) {
 	m = send(m, keyLeft)
 	m = send(m, tea.PasteMsg{Content: "b\n"})
 	rm := m.(rootModel)
-	if rm.general.editBuf != "abc" || rm.general.editCursor != 2 {
-		t.Fatalf("paste-at-cursor = %q at %d; want abc at 2", rm.general.editBuf, rm.general.editCursor)
+	if rm.general.edit.text != "abc" || rm.general.edit.cursor != 2 {
+		t.Fatalf("paste-at-cursor = %q at %d; want abc at 2", rm.general.edit.text, rm.general.edit.cursor)
 	}
 }
 

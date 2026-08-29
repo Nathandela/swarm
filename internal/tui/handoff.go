@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -35,7 +36,7 @@ type handoffModel struct {
 	agents      []AgentInfo
 	targetIdx   int
 	detected    bool
-	model       string
+	model       lineEditor
 	supervision string
 	method      string
 	focus       int // 0 target, 1 model, 2 supervision, 3 method
@@ -121,16 +122,17 @@ func (m handoffModel) modelSpec() (adapter.OptionSpec, bool) {
 }
 
 func (m *handoffModel) loadModelDefault() {
-	m.model = ""
+	value := ""
 	if spec, ok := m.modelSpec(); ok {
-		m.model = spec.Default
-		if m.model == "" {
+		value = spec.Default
+		if value == "" {
 			values := handoffModelValues(spec)
 			if len(values) > 0 {
-				m.model = values[0]
+				value = values[0]
 			}
 		}
 	}
+	m.model.set(value)
 }
 
 func handoffModelValues(spec adapter.OptionSpec) []string {
@@ -160,7 +162,7 @@ func (m *handoffModel) refreshAgents(agents []AgentInfo) {
 	// moves underneath it, cancel it outright and say so, rather than leaving a question
 	// on screen that names one target while the form has selected another.
 	defer func() {
-		if m.confirmPending() && (m.targetName() != m.confirmTarget || m.model != m.confirmModel) {
+		if m.confirmPending() && (m.targetName() != m.confirmTarget || m.model.text != m.confirmModel) {
 			m.confirmTarget, m.confirmModel = "", ""
 			m.errMsg = "target changed while the cross-CLI confirmation was open - nothing launched, review and submit again"
 		}
@@ -225,7 +227,7 @@ func (m *handoffModel) cycleModel(forward bool) {
 	if len(values) == 0 {
 		return
 	}
-	m.model = cycleValue(values, m.model, forward)
+	m.model.set(cycleValue(values, m.model.text, forward))
 	m.errMsg = ""
 }
 
@@ -250,9 +252,9 @@ func (m *handoffModel) paste(s string) {
 	if !ok || spec.Type != "string" {
 		return
 	}
-	s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
-	m.model += s
-	m.errMsg = ""
+	if m.model.paste(s) {
+		m.errMsg = ""
+	}
 }
 
 func (m handoffModel) view() string {
@@ -320,12 +322,31 @@ func (m handoffModel) modelValue() string {
 	if !ok {
 		return styleDim.Render("(agent default)")
 	}
-	value := m.model
+	value := m.model.text
+	if m.focus == 1 && spec.Type == "string" {
+		var rendered string
+		if m.width <= 0 {
+			rendered = m.model.cursorView()
+		} else {
+			budget := m.width - 2 - lipgloss.Width(padLabel("model"))
+			rendered = editViewport(m.model.text, m.model.cursor, budget)
+		}
+		if m.model.text == "" {
+			// The cursor represents the real empty value, so it comes first. The
+			// placeholder is passive context and is appended only where it fits.
+			placeholder := " (agent default)"
+			if m.width > 0 {
+				budget := m.width - 2 - lipgloss.Width(padLabel("model"))
+				placeholder = clampCells(placeholder, budget-lipgloss.Width(rendered))
+			}
+			if placeholder != "" {
+				rendered += styleDim.Render(placeholder)
+			}
+		}
+		return rendered
+	}
 	if value == "" {
 		value = "(agent default)"
-	}
-	if m.focus == 1 && spec.Type == "string" {
-		return value + "█"
 	}
 	if len(handoffModelValues(spec)) > 1 {
 		return value + " " + styleDim.Render("◂ ▸")
@@ -361,7 +382,11 @@ func (m handoffModel) hint() string {
 		return "arrows change method · tab/↑↓ next · enter continue · esc cancel"
 	}
 	if spec, ok := m.modelSpec(); ok && spec.Type == "string" {
-		return "type, paste, or use arrows · tab/↑↓ next · enter continue · esc cancel"
+		prefix := "type or paste · ←→ move"
+		if len(handoffModelValues(spec)) > 0 {
+			prefix = "type or paste · ←→ suggestions"
+		}
+		return prefix + " · " + lineEditFastHint + " · tab/↑↓ next · enter continue · esc cancel"
 	}
 	return "arrows change model · tab/↑↓ next · enter continue · esc cancel"
 }
@@ -393,32 +418,52 @@ func (m rootModel) updateHandoff(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.focus = (h.focus + 1) % 4
 	case k.Code == tea.KeyUp:
 		h.focus = (h.focus + 3) % 4
-	case k.Code == tea.KeyLeft, k.Code == tea.KeyRight:
+	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0:
 		forward := k.Code == tea.KeyRight
 		switch h.focus {
 		case 0:
 			h.cycleTarget(forward)
 		case 1:
-			h.cycleModel(forward)
+			if h.plainArrowsCycleModel() {
+				h.cycleModel(forward)
+			} else {
+				h.updateModelEditor(k)
+			}
 		case 2:
 			h.cycleSupervision(forward)
 		default:
 			h.cycleMethod(forward)
 		}
-	case k.Code == tea.KeyBackspace:
-		if h.focus == 1 {
-			if spec, ok := h.modelSpec(); ok && spec.Type == "string" {
-				h.model = dropLast(h.model)
-				h.errMsg = ""
-			}
-		}
-	case k.Text != "" && h.focus == 1:
-		if spec, ok := h.modelSpec(); ok && spec.Type == "string" {
-			h.model += k.Text
-			h.errMsg = ""
-		}
+	default:
+		h.updateModelEditor(k)
 	}
 	return m, nil
+}
+
+func (m handoffModel) plainArrowsCycleModel() bool {
+	if m.focus != 1 {
+		return false
+	}
+	spec, ok := m.modelSpec()
+	if !ok {
+		return false
+	}
+	return spec.Type != "string" || len(handoffModelValues(spec)) > 0
+}
+
+func (m *handoffModel) updateModelEditor(k tea.KeyPressMsg) lineEditResult {
+	if m.focus != 1 {
+		return lineEditResult{}
+	}
+	spec, ok := m.modelSpec()
+	if !ok || spec.Type != "string" {
+		return lineEditResult{}
+	}
+	result := m.model.update(k)
+	if result.changed {
+		m.errMsg = ""
+	}
+	return result
 }
 
 func (m rootModel) submitHandoff() (tea.Model, tea.Cmd) {
@@ -445,7 +490,7 @@ func (m rootModel) submitHandoff() (tea.Model, tea.Cmd) {
 		h.errMsg = "no installed, supported target agent"
 		return m, nil
 	}
-	prompt, err := renderHandoffPrompt(h.targetName(), h.model, h.supervision)
+	prompt, err := renderHandoffPrompt(h.targetName(), h.model.text, h.supervision)
 	if err != nil {
 		h.errMsg = err.Error()
 		return m, nil
@@ -487,10 +532,10 @@ func (m rootModel) submitHandsOff() (tea.Model, tea.Cmd) {
 	// vendor boundary and the conservative rule is the honest one. A same-CLI handoff
 	// takes no confirmation -- the content reaches nobody new.
 	if h.targetName() != h.sourceAgent {
-		h.confirmTarget, h.confirmModel = h.targetName(), h.model
+		h.confirmTarget, h.confirmModel = h.targetName(), h.model.text
 		return m, nil
 	}
-	return m.launchHandsOffWith(h.targetName(), h.model)
+	return m.launchHandsOffWith(h.targetName(), h.model.text)
 }
 
 // launchHandsOffWith issues the one launch against an EXPLICIT target and model rather

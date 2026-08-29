@@ -213,7 +213,7 @@ func TestLaunchForm_SubmitAutoAttachesIntoNewSession(t *testing.T) {
 	m = send(m, keyRune('n'))                       // open the launch form
 
 	// Clear the prefilled cwd and type a real, existing directory so submit is valid.
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, t.TempDir())

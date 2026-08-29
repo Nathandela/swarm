@@ -203,7 +203,7 @@ func TestHandsOff_EmptyModelIsOmittedFromOptions(t *testing.T) {
 	m := newModel(t, f, noDefault)
 	m = send(m, detectMsg{agents: noDefault()})
 	m = selectMethod(t, send(m, keyH), handoffMethodHandsOff)
-	if got := m.(rootModel).handoff.model; got != "" {
+	if got := m.(rootModel).handoff.model.text; got != "" {
 		t.Fatalf("fixture model = %q, want empty", got)
 	}
 	_, cmd := m.Update(keyEnter)
