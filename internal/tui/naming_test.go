@@ -43,15 +43,15 @@ func TestLaunch_NameFieldEditable(t *testing.T) {
 		t.Fatalf("Tab from directory must focus the name field; focus=%d", launchOf(m).focus)
 	}
 	m = sendType(m, "backend")
-	if got := launchOf(m).name; got != "backend" {
+	if got := launchOf(m).name.text; got != "backend" {
 		t.Fatalf("typed name = %q, want backend", got)
 	}
 	m = send(m, keyBackspace)
-	if got := launchOf(m).name; got != "backen" {
+	if got := launchOf(m).name.text; got != "backen" {
 		t.Fatalf("after backspace name = %q, want backen", got)
 	}
 	m = send(m, tea.PasteMsg{Content: "d-refactor\n"})
-	if got := launchOf(m).name; got != "backend-refactor" {
+	if got := launchOf(m).name.text; got != "backend-refactor" {
 		t.Fatalf("after paste name = %q, want backend-refactor (newline stripped)", got)
 	}
 }
@@ -63,7 +63,7 @@ func TestLaunch_DefaultNameComposedAtSubmit(t *testing.T) {
 	m := openLaunch(t, f)
 
 	dir := t.TempDir()
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)
@@ -87,7 +87,7 @@ func TestLaunch_TypedNameSubmitted(t *testing.T) {
 	m := openLaunch(t, f)
 
 	dir := t.TempDir()
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)

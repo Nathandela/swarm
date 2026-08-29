@@ -34,7 +34,7 @@ func TestLaunch_SubmitRefusedWhenNoUsableAgent(t *testing.T) {
 	}
 
 	// Clear the cwd prefill (ADR-006) so this test's path is the one submitted.
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, t.TempDir()) // a real, existing directory — cwd check passes

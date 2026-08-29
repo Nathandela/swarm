@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	edlib "github.com/hbollon/go-edlib"
 
 	"github.com/Nathandela/swarm/internal/adapter"
@@ -23,11 +24,11 @@ type launchModel struct {
 	agentIdx int  // index into agents of the chosen agent
 	detected bool // whether detection has landed (else the picker shows "checking...")
 
-	cwd      string
-	name     string               // optional session label; empty defaults to "<agent>-<base cwd>" at submit (P2)
-	optSpecs []adapter.OptionSpec // the chosen agent's declarative schema
-	options  map[string]string    // option key -> current value
-	prompt   string
+	cwd      lineEditor
+	name     lineEditor            // optional session label; empty defaults to "<agent>-<base cwd>" at submit (P2)
+	optSpecs []adapter.OptionSpec  // the chosen agent's declarative schema
+	options  map[string]lineEditor // option key -> current value/editor; non-string cursors are unused
+	prompt   lineEditor
 	worktree bool
 
 	dirCands  []string // candidate basenames for the typed cwd prefix, ReadDir (sorted) order
@@ -52,7 +53,7 @@ type launchModel struct {
 func newLaunchModel(agents []AgentInfo, detected bool, width int) launchModel {
 	m := launchModel{agents: agents, detected: detected, width: width}
 	if wd, err := os.Getwd(); err == nil {
-		m.cwd = wd
+		m.cwd.set(wd)
 	}
 	m.apiKeyInEnv = os.Getenv("ANTHROPIC_API_KEY") != ""
 	m.agentIdx = firstUsable(agents)
@@ -141,13 +142,13 @@ func agentReason(a AgentInfo) string {
 // agent's defaults.
 func (m *launchModel) loadAgentOptions() {
 	m.optSpecs = nil
-	m.options = map[string]string{}
+	m.options = map[string]lineEditor{}
 	if m.agentIdx < 0 || m.agentIdx >= len(m.agents) {
 		return
 	}
 	m.optSpecs = m.agents[m.agentIdx].Options
 	for _, o := range m.optSpecs {
-		m.options[o.Key] = o.Default
+		m.options[o.Key] = newLineEditor(o.Default)
 	}
 }
 
@@ -216,55 +217,66 @@ func (m rootModel) updateLaunch(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		lm.moveFocus(1)
 	case k.Code == tea.KeyUp:
 		lm.moveFocus(-1)
-	case k.Code == tea.KeyBackspace:
-		switch {
-		case lm.isDir():
-			lm.cwd = dropLast(lm.cwd)
-			lm.errMsg = ""
-			lm.refreshDirCompletion()
-		case lm.isName():
-			lm.name = dropLast(lm.name)
-		case lm.isPrompt():
-			lm.prompt = dropLast(lm.prompt)
-		default:
-			if si, ok := lm.focusedOptionOfType("string"); ok {
-				key := lm.optSpecs[si].Key
-				lm.options[key] = dropLast(lm.options[key])
-			}
-		}
-	case k.Code == tea.KeyLeft:
-		if lm.isDir() {
-			lm.cycleDirCompletion(false)
-		} else {
-			lm.cycleField(false)
-		}
-	case k.Code == tea.KeyRight:
-		if lm.isDir() {
-			lm.cycleDirCompletion(true)
-		} else {
-			lm.cycleField(true)
-		}
+	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0 && lm.isDir():
+		// Directory keeps its established shell-like plain-arrow completion. Only
+		// exact unmodified arrows are reserved; Command/Meta arrows reach the editor.
+		lm.cycleDirCompletion(k.Code == tea.KeyRight)
+	case (k.Code == tea.KeyLeft || k.Code == tea.KeyRight) && k.Mod == 0 && lm.plainArrowsCycleField():
+		// Pickers and curated string suggestions retain their established arrows.
+		lm.cycleField(k.Code == tea.KeyRight)
 	case k.Text != "":
 		switch {
 		case lm.isWorktree() && k.Text == " ":
 			lm.worktree = !lm.worktree
 		case k.Text == " " && lm.toggleBoolOption():
 			// handled: Space toggled the focused bool option
-		case lm.isDir():
-			lm.cwd += k.Text
-			lm.errMsg = ""
-			lm.refreshDirCompletion()
-		case lm.isName():
-			lm.name += k.Text
-		case lm.isPrompt():
-			lm.prompt += k.Text
 		default:
-			if si, ok := lm.focusedOptionOfType("string"); ok {
-				lm.options[lm.optSpecs[si].Key] += k.Text
-			}
+			lm.updateFocusedText(k)
 		}
+	default:
+		// Backspace, plain cursor arrows on ordinary text, fast editing keys, and
+		// unsupported modified editing gestures all share one implementation.
+		lm.updateFocusedText(k)
 	}
 	return m, nil
+}
+
+// plainArrowsCycleField reports whether exact unmodified arrows belong to a
+// picker/suggestion list rather than the focused line editor.
+func (m launchModel) plainArrowsCycleField() bool {
+	if m.isAgent() || m.isChoiceFocused() {
+		return true
+	}
+	if si, ok := m.focusedOptionOfType("string"); ok {
+		return len(m.optSpecs[si].Suggest) > 0
+	}
+	return false
+}
+
+// updateFocusedText delegates a key to the focused writable line. Its only
+// screen-specific mutation hook is directory completion/validation refresh.
+func (m *launchModel) updateFocusedText(k tea.KeyPressMsg) lineEditResult {
+	var result lineEditResult
+	switch {
+	case m.isDir():
+		result = m.cwd.update(k)
+	case m.isName():
+		result = m.name.update(k)
+	case m.isPrompt():
+		result = m.prompt.update(k)
+	default:
+		if si, ok := m.focusedOptionOfType("string"); ok {
+			key := m.optSpecs[si].Key
+			editor := m.options[key]
+			result = editor.update(k)
+			m.options[key] = editor // map values are not addressable: copy/update/write back
+		}
+	}
+	if result.changed && m.isDir() {
+		m.errMsg = ""
+		m.refreshDirCompletion()
+	}
+	return result
 }
 
 // toggleBoolOption flips the focused bool option ("true"/"false") and reports
@@ -275,11 +287,13 @@ func (m *launchModel) toggleBoolOption() bool {
 		return false
 	}
 	key := m.optSpecs[si].Key
-	if m.options[key] == "true" {
-		m.options[key] = "false"
+	editor := m.options[key]
+	if editor.text == "true" {
+		editor.set("false")
 	} else {
-		m.options[key] = "true"
+		editor.set("true")
 	}
+	m.options[key] = editor
 	return true
 }
 
@@ -287,23 +301,25 @@ func (m *launchModel) toggleBoolOption() bool {
 // prompt, or an editable string option), stripping the CR/LF that single-line
 // fields must never carry.
 func (m *launchModel) paste(s string) {
-	s = strings.NewReplacer("\r", "", "\n", "").Replace(s)
-	if s == "" {
-		return
-	}
+	var changed bool
 	switch {
 	case m.isDir():
-		m.cwd += s
-		m.errMsg = ""
-		m.refreshDirCompletion()
+		changed = m.cwd.paste(s)
 	case m.isName():
-		m.name += s
+		changed = m.name.paste(s)
 	case m.isPrompt():
-		m.prompt += s
+		changed = m.prompt.paste(s)
 	default:
 		if si, ok := m.focusedOptionOfType("string"); ok {
-			m.options[m.optSpecs[si].Key] += s
+			key := m.optSpecs[si].Key
+			editor := m.options[key]
+			changed = editor.paste(s)
+			m.options[key] = editor
 		}
+	}
+	if changed && m.isDir() {
+		m.errMsg = ""
+		m.refreshDirCompletion()
 	}
 }
 
@@ -318,13 +334,13 @@ func (m *launchModel) cycleDirCompletion(forward bool) {
 		for i, c := range m.dirCands {
 			fullPaths[i] = m.dirParent + c
 		}
-		m.cwd = cycleValue(fullPaths, m.cwd, forward)
+		m.cwd.set(cycleValue(fullPaths, m.cwd.text, forward))
 		m.createCwd = ""
 		m.errMsg = ""
 		return
 	}
 	if forward && m.dirGhost != "" {
-		m.cwd += m.dirGhost
+		m.cwd.set(m.cwd.text + m.dirGhost)
 		m.errMsg = ""
 		m.refreshDirCompletion()
 		return
@@ -334,7 +350,7 @@ func (m *launchModel) cycleDirCompletion(forward bool) {
 		for i, c := range m.dirCands {
 			fullPaths[i] = m.dirParent + c
 		}
-		m.cwd = cycleValue(fullPaths, m.cwd, forward)
+		m.cwd.set(cycleValue(fullPaths, m.cwd.text, forward))
 		m.errMsg = ""
 	}
 }
@@ -374,12 +390,14 @@ func (m *launchModel) cycleAgent(forward bool) {
 // forward step lands on the first suggestion (last on a backward step).
 func (m *launchModel) cycleOption(specIdx int, forward bool) {
 	spec := m.optSpecs[specIdx]
+	editor := m.options[spec.Key]
 	switch {
 	case spec.Type == "choice" && len(spec.Choices) > 0:
-		m.options[spec.Key] = cycleValue(spec.Choices, m.options[spec.Key], forward)
+		editor.set(cycleValue(spec.Choices, editor.text, forward))
 	case spec.Type == "string" && len(spec.Suggest) > 0:
-		m.options[spec.Key] = cycleValue(spec.Suggest, m.options[spec.Key], forward)
+		editor.set(cycleValue(spec.Suggest, editor.text, forward))
 	}
+	m.options[spec.Key] = editor
 }
 
 // cycleValue returns the value one step from cur within values (wrapping). When
@@ -418,7 +436,7 @@ func cycleValue(values []string, cur string, forward bool) string {
 // missing or out-of-range agent.
 func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 	lm := &m.launch
-	expanded := expandTilde(strings.TrimSpace(lm.cwd))
+	expanded := expandTilde(strings.TrimSpace(lm.cwd.text))
 	if expanded == "" {
 		lm.errMsg = "directory is required"
 		return m, nil
@@ -459,16 +477,16 @@ func (m rootModel) submitLaunch() (tea.Model, tea.Cmd) {
 
 	opts := make(map[string]string, len(lm.options))
 	for k, v := range lm.options {
-		opts[k] = v
+		opts[k] = v.text
 	}
 	agent := lm.agents[lm.agentIdx].Name
 	cols, rows := launchDims(m.width, m.height)
 	req := protocol.LaunchReq{
 		Agent:         agent,
-		Name:          launchName(lm.name, agent, expanded),
+		Name:          launchName(lm.name.text, agent, expanded),
 		Cwd:           expanded,
 		Options:       opts,
-		InitialPrompt: lm.prompt,
+		InitialPrompt: lm.prompt.text,
 		Env:           os.Environ(), // so the daemon can resolve the agent binary on PATH
 		Cols:          cols,
 		Rows:          rows,
@@ -526,14 +544,6 @@ func expandTilde(p string) string {
 	return p
 }
 
-func dropLast(s string) string {
-	if s == "" {
-		return s
-	}
-	r := []rune(s)
-	return string(r[:len(r)-1])
-}
-
 // refreshDirCompletion recomputes dirCands/dirGhost/dirParent from the current cwd
 // text. It reads the typed parent directory (tilde-expanded for the ReadDir call
 // only — dirParent itself keeps the typed form) and lists its subdirectories that
@@ -542,13 +552,13 @@ func dropLast(s string) string {
 func (m *launchModel) refreshDirCompletion() {
 	m.dirFuzzy = false
 	m.createCwd = ""
-	i := strings.LastIndex(m.cwd, "/")
+	i := strings.LastIndex(m.cwd.text, "/")
 	if i < 0 {
 		m.dirCands, m.dirGhost, m.dirParent = nil, "", ""
 		return
 	}
-	m.dirParent = m.cwd[:i+1]
-	base := m.cwd[i+1:]
+	m.dirParent = m.cwd.text[:i+1]
+	base := m.cwd.text[i+1:]
 
 	// ponytail: symlinked directories are skipped by e.IsDir() (it reflects the
 	// symlink itself, not its target); resolving via os.Stat is left for if
@@ -593,7 +603,7 @@ func (m *launchModel) armDirectoryCreation(expanded string) {
 		m.errMsg = "directory " + expanded + " does not exist; arrows complete or enter again to create"
 		return
 	}
-	typed := strings.TrimSpace(m.cwd)
+	typed := strings.TrimSpace(m.cwd.text)
 	i := strings.LastIndex(typed, "/")
 	if i >= 0 {
 		m.dirParent = typed[:i+1]
@@ -701,7 +711,7 @@ func (m launchModel) view() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("swarm") + styleDim.Render(" · new session") + "\n\n")
 
-	b.WriteString(fieldLine("directory", m.dirValue(), m.isDir()))
+	b.WriteString(m.launchFieldLine("directory", m.dirValue(), m.isDir()))
 	if m.isDir() && (len(m.dirCands) > 1 || m.dirFuzzy && len(m.dirCands) > 0) {
 		row := strings.Join(m.dirCands, "  ")
 		if m.width > 2+launchLabelW {
@@ -709,14 +719,14 @@ func (m launchModel) view() string {
 		}
 		b.WriteString(strings.Repeat(" ", 2+launchLabelW) + styleDim.Render(row) + "\n")
 	}
-	b.WriteString(fieldLine("name", m.nameValue(), m.isName()))
-	b.WriteString(fieldLine("agent", m.agentValue(), m.isAgent()))
+	b.WriteString(m.launchFieldLine("name", m.nameValue(), m.isName()))
+	b.WriteString(m.launchFieldLine("agent", m.agentValue(), m.isAgent()))
 	for i, spec := range m.optSpecs {
 		focused := m.focus == 3+i
-		b.WriteString(fieldLine(spec.Label, m.optionValue(spec, focused), focused))
+		b.WriteString(m.launchFieldLine(spec.Label, m.optionValue(spec, focused), focused))
 	}
-	b.WriteString(fieldLine("prompt", m.promptValue(), m.isPrompt()))
-	b.WriteString(fieldLine("worktree", m.worktreeValue(), m.isWorktree()))
+	b.WriteString(m.launchFieldLine("prompt", m.promptValue(), m.isPrompt()))
+	b.WriteString(m.launchFieldLine("worktree", m.worktreeValue(), m.isWorktree()))
 
 	if note := m.agentNote(); note != "" {
 		b.WriteString("\n" + note + "\n")
@@ -738,15 +748,15 @@ func (m launchModel) hint() string {
 	const tail = " · ↑↓ next · enter launch · esc cancel"
 	if m.isDir() && m.createCwd != "" {
 		if m.dirFuzzy {
-			return "tab/←→ choose · enter create directory · esc cancel"
+			return "tab/←→ choose · " + lineEditFastHint + " · enter create directory · esc cancel"
 		}
 		if m.dirGhost != "" || len(m.dirCands) > 0 {
-			return "tab/←→ complete · enter create directory · esc cancel"
+			return "tab/←→ complete · " + lineEditFastHint + " · enter create directory · esc cancel"
 		}
-		return "enter create directory · esc cancel"
+		return lineEditFastHint + " · enter create directory · esc cancel"
 	}
 	if m.isDir() && (m.dirGhost != "" || len(m.dirCands) > 1) {
-		return "tab/←→ complete" + tail
+		return "tab/←→ complete · " + lineEditFastHint + tail
 	}
 	if m.isAgent() || m.isChoiceFocused() {
 		return "arrows change" + tail
@@ -757,7 +767,13 @@ func (m launchModel) hint() string {
 	if _, ok := m.focusedOptionOfType("bool"); ok {
 		return "space toggle" + tail
 	}
-	return "type or paste" + tail
+	if m.isDir() {
+		return "type or paste · " + lineEditFastHint + tail
+	}
+	if si, ok := m.focusedOptionOfType("string"); ok && len(m.optSpecs[si].Suggest) > 0 {
+		return "type or paste · ←→ suggest · " + lineEditFastHint + tail
+	}
+	return "type or paste · ←→ move · " + lineEditFastHint + tail
 }
 
 // isChoiceFocused reports whether the focused field is a choice option.
@@ -798,6 +814,57 @@ func fieldLine(label, value string, focused bool) string {
 	return prefix + styleDim.Render(padLabel(label)) + value + "\n"
 }
 
+type launchFieldLayout struct {
+	label      string
+	valueWidth int
+}
+
+// fieldLayout computes one label and value budget together. At ordinary widths
+// padLabel remains byte-identical to the established layout. At narrow widths a
+// dynamic adapter label is clamped with its separator while reserving at least
+// one cell for a focused editor's cursor.
+func (m launchModel) fieldLayout(label string) launchFieldLayout {
+	padded := padLabel(label)
+	if m.width <= 0 {
+		return launchFieldLayout{label: padded}
+	}
+	available := m.width - 2 // two-cell focus prefix
+	if available <= 0 {
+		return launchFieldLayout{}
+	}
+	maxLabelWidth := available - 1 // preserve one value/cursor cell
+	if maxLabelWidth < 0 {
+		maxLabelWidth = 0
+	}
+	if lipgloss.Width(padded) > maxLabelWidth {
+		labelWidth := maxLabelWidth - 1 // separating space
+		if labelWidth < 0 {
+			labelWidth = 0
+		}
+		padded = clampCells(label, labelWidth)
+		if maxLabelWidth > 0 {
+			padded += " "
+		}
+	}
+	valueWidth := available - lipgloss.Width(padded)
+	if valueWidth < 0 {
+		valueWidth = 0
+	}
+	return launchFieldLayout{label: padded, valueWidth: valueWidth}
+}
+
+func (m launchModel) launchFieldLine(label, value string, focused bool) string {
+	prefix := "  "
+	if focused {
+		prefix = styleAmber.Render("▌") + " "
+	}
+	layout := m.fieldLayout(label)
+	if m.width > 0 {
+		value = ansi.Truncate(value, layout.valueWidth, "")
+	}
+	return prefix + styleDim.Render(layout.label) + value + "\n"
+}
+
 // padLabel pads a field label to the label column, always keeping at least one
 // separating space before the value. padRight leaves a label as wide as (or wider
 // than) the column flush against its value, which jammed codex's 12-char "Sandbox
@@ -811,16 +878,33 @@ func padLabel(label string) string {
 	return padded
 }
 
+// focusedEditorValue keeps the insertion cursor inside the field's visible
+// value budget. editViewport is rune-safe and pins a cursor that moved into a
+// long prefix/suffix to the corresponding edge.
+func (m launchModel) focusedEditorValue(label string, editor lineEditor) string {
+	if m.width <= 0 {
+		return editor.cursorView()
+	}
+	return editViewport(editor.text, editor.cursor, m.fieldLayout(label).valueWidth)
+}
+
 func (m launchModel) dirValue() string {
 	if !m.isDir() {
-		return m.cwd
+		return m.cwd.text
 	}
-	v := m.cwd + "█" // cursor on the focused text field
+	v := m.focusedEditorValue("directory", m.cwd)
 	if m.dirGhost != "" {
 		// An empty ghost must render as nothing, not as an empty-content styled span
 		// (lipgloss.Render("") still emits open/close SGR codes), so the style_hoist
 		// golden for the no-completion case stays byte-identical.
-		v += styleDim.Render(m.dirGhost)
+		ghost := m.dirGhost
+		if m.width > 0 {
+			budget := m.fieldLayout("directory").valueWidth
+			ghost = clampCells(ghost, budget-lipgloss.Width(v))
+		}
+		if ghost != "" {
+			v += styleDim.Render(ghost)
+		}
 	}
 	return v
 }
@@ -895,7 +979,8 @@ func (m launchModel) buildAgentRow(showOtherReasons bool, selReasonBudget int) s
 }
 
 func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
-	v := m.options[spec.Key]
+	editor := m.options[spec.Key]
+	v := editor.text
 	switch spec.Type {
 	case "bool":
 		box := "[ ]"
@@ -909,7 +994,7 @@ func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
 		return v + " " + styleDim.Render("▾")
 	default: // editable string (possibly with curated suggestions)
 		if focused {
-			return v + "█" // cursor on the focused text field
+			return m.focusedEditorValue(spec.Label, editor)
 		}
 		if v == "" {
 			return styleDim.Render("(default)")
@@ -919,9 +1004,9 @@ func (m launchModel) optionValue(spec adapter.OptionSpec, focused bool) string {
 }
 
 func (m launchModel) nameValue() string {
-	v := m.name
+	v := m.name.text
 	if m.isName() {
-		return v + "█" // cursor on the focused text field
+		return m.focusedEditorValue("name", m.name)
 	}
 	if v == "" {
 		return styleDim.Render("(optional · defaults to agent-dir)")
@@ -930,9 +1015,9 @@ func (m launchModel) nameValue() string {
 }
 
 func (m launchModel) promptValue() string {
-	v := m.prompt
+	v := m.prompt.text
 	if m.isPrompt() {
-		return v + "█"
+		return m.focusedEditorValue("prompt", m.prompt)
 	}
 	if v == "" {
 		return styleDim.Render("(optional)")

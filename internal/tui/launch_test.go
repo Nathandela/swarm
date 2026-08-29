@@ -90,7 +90,7 @@ func TestLaunch_TildeExpansionAndSubmit(t *testing.T) {
 
 	// The directory field is prefilled with the client cwd (ADR-006 field-test
 	// revision); clear it so this test's own path is what submits.
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, "~") // expands to $HOME, which exists
@@ -118,7 +118,7 @@ func TestLaunch_SubmitComposesLaunchReq(t *testing.T) {
 
 	dir := t.TempDir() // a real, existing directory
 	// Clear the cwd prefill (ADR-006) so dir is the exact submitted path.
-	for launchOf(m).cwd != "" {
+	for launchOf(m).cwd.text != "" {
 		m = send(m, keyBackspace)
 	}
 	m = sendType(m, dir)

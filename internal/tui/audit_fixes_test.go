@@ -60,7 +60,7 @@ func TestRefreshAgents_PreservesPromptFocusAcrossReindex(t *testing.T) {
 		t.Fatalf("focus must remain semantically on prompt after the re-index; focus=%d", launchOf(m).focus)
 	}
 	m = send(m, keyRune('Z'))
-	if got := launchOf(m).prompt; got != "Z" {
+	if got := launchOf(m).prompt.text; got != "Z" {
 		t.Fatalf("a typed rune must land in the prompt after the re-index; prompt=%q", got)
 	}
 }

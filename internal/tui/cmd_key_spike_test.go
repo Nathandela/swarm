@@ -36,6 +36,11 @@ func TestSpike_CommandKeyWireEncodings(t *testing.T) {
 		{name: "csi u super left", wire: "\x1b[57350;9u", code: uv.KeyLeft, mod: uv.ModSuper},
 		{name: "csi u super right", wire: "\x1b[57351;9u", code: uv.KeyRight, mod: uv.ModSuper},
 		{name: "kitty super backspace", wire: "\x1b[127;9u", code: uv.KeyBackspace, mod: uv.ModSuper},
+		{name: "xterm modifyOtherKeys super delete", wire: "\x1b[27;9;127~", code: uv.KeyBackspace, mod: uv.ModMeta},
+		{name: "xterm modifyOtherKeys super backspace", wire: "\x1b[27;9;8~", code: uv.KeyBackspace, mod: uv.ModMeta},
+		// A bare ESC prefix is Option/Alt, not Command. It must remain distinct
+		// from the modifyOtherKeys form above so Option+Backspace stays a no-op.
+		{name: "legacy option backspace", wire: "\x1b\x7f", code: uv.KeyBackspace, mod: uv.ModAlt},
 		{name: "legacy home", wire: "\x1b[H", code: uv.KeyHome},
 		{name: "legacy end", wire: "\x1b[F", code: uv.KeyEnd},
 		{name: "legacy ctrl a", wire: "\x01", code: 'a', mod: uv.ModCtrl},
@@ -86,6 +91,7 @@ func TestRename_FastEditingKeys(t *testing.T) {
 		{name: "legacy end", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: tea.KeyEnd}, wantBuf: unicodeName, wantCursor: end},
 		{name: "legacy ctrl e", buffer: unicodeName, cursor: 2, key: tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}, wantBuf: unicodeName, wantCursor: end},
 		{name: "native command backspace preserves unicode suffix", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "bc", wantCursor: 0},
+		{name: "xterm compatible command backspace preserves unicode suffix", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModMeta}, wantBuf: "bc", wantCursor: 0},
 		{name: "legacy ctrl u preserves unicode suffix", buffer: unicodeName, cursor: 3, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "bc", wantCursor: 0},
 		{name: "native command backspace at end clears buffer", buffer: unicodeName, cursor: end, key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}, wantBuf: "", wantCursor: 0},
 		{name: "legacy ctrl u at end clears buffer", buffer: unicodeName, cursor: end, key: tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}, wantBuf: "", wantCursor: 0},
@@ -105,11 +111,11 @@ func TestRename_FastEditingKeys(t *testing.T) {
 			for range repeat {
 				rm = send(rm, tt.key).(rootModel)
 			}
-			if rm.general.editBuf != tt.wantBuf || rm.general.editCursor != tt.wantCursor {
-				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.wantBuf, tt.wantCursor)
+			if rm.general.edit.text != tt.wantBuf || rm.general.edit.cursor != tt.wantCursor {
+				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.edit.text, rm.general.edit.cursor, tt.wantBuf, tt.wantCursor)
 			}
-			if !utf8.ValidString(rm.general.editBuf) {
-				t.Fatalf("rename edit split UTF-8: %q", rm.general.editBuf)
+			if !utf8.ValidString(rm.general.edit.text) {
+				t.Fatalf("rename edit split UTF-8: %q", rm.general.edit.text)
 			}
 		})
 	}
@@ -138,8 +144,8 @@ func TestRename_PlainEditingKeysRemainSingleRuneOperations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := renameEditorAt(t, unicodeName, tt.cursor)
 			rm = send(rm, tt.key).(rootModel)
-			if rm.general.editBuf != tt.wantBuf || rm.general.editCursor != tt.wantCursor {
-				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.wantBuf, tt.wantCursor)
+			if rm.general.edit.text != tt.wantBuf || rm.general.edit.cursor != tt.wantCursor {
+				t.Fatalf("buffer/cursor = %q/%d, want %q/%d", rm.general.edit.text, rm.general.edit.cursor, tt.wantBuf, tt.wantCursor)
 			}
 		})
 	}
@@ -164,8 +170,8 @@ func TestRename_PrintableTextStillInsertsWithModifiers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := renameEditorAt(t, "ab", 1)
 			rm = send(rm, tt.key).(rootModel)
-			if rm.general.editBuf != tt.want || rm.general.editCursor != utf8.RuneCountInString(tt.want)-1 {
-				t.Fatalf("printable input buffer/cursor = %q/%d, want %q/%d", rm.general.editBuf, rm.general.editCursor, tt.want, utf8.RuneCountInString(tt.want)-1)
+			if rm.general.edit.text != tt.want || rm.general.edit.cursor != utf8.RuneCountInString(tt.want)-1 {
+				t.Fatalf("printable input buffer/cursor = %q/%d, want %q/%d", rm.general.edit.text, rm.general.edit.cursor, tt.want, utf8.RuneCountInString(tt.want)-1)
 			}
 		})
 	}
@@ -188,7 +194,6 @@ func TestRename_UnsupportedModifiedEditingKeysAreNoOps(t *testing.T) {
 		{name: "meta shift right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModMeta | tea.ModShift}},
 		{name: "option right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModAlt}},
 		{name: "ctrl right", key: tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl}},
-		{name: "meta backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModMeta}},
 		{name: "super shift backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper | tea.ModShift}},
 		{name: "option backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt}},
 		{name: "ctrl backspace", key: tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModCtrl}},
@@ -203,8 +208,8 @@ func TestRename_UnsupportedModifiedEditingKeysAreNoOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rm := renameEditorAt(t, unicodeName, 3)
 			rm = send(rm, tt.key).(rootModel)
-			if rm.general.editBuf != unicodeName || rm.general.editCursor != 3 {
-				t.Fatalf("unsupported %s changed buffer/cursor to %q/%d", tt.key.Keystroke(), rm.general.editBuf, rm.general.editCursor)
+			if rm.general.edit.text != unicodeName || rm.general.edit.cursor != 3 {
+				t.Fatalf("unsupported %s changed buffer/cursor to %q/%d", tt.key.Keystroke(), rm.general.edit.text, rm.general.edit.cursor)
 			}
 		})
 	}
@@ -250,8 +255,8 @@ func TestRename_FastNavigationKeepsLongNameViewportVisible(t *testing.T) {
 	// suffix, so its viewport must immediately follow that new cursor.
 	rm = renameEditorAt(t, name, 7) // after "abcdef-"
 	rm = send(rm, tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModSuper}).(rootModel)
-	if rm.general.editBuf != "é🐝-uvwxyz" || rm.general.editCursor != 0 {
-		t.Fatalf("prefix deletion buffer/cursor = %q/%d, want é🐝-uvwxyz/0", rm.general.editBuf, rm.general.editCursor)
+	if rm.general.edit.text != "é🐝-uvwxyz" || rm.general.edit.cursor != 0 {
+		t.Fatalf("prefix deletion buffer/cursor = %q/%d, want é🐝-uvwxyz/0", rm.general.edit.text, rm.general.edit.cursor)
 	}
 	assertViewport("command backspace", rm, true)
 	s, _ := rm.general.sessionByID(rm.general.editID)
@@ -305,6 +310,6 @@ func renameEditorAt(t *testing.T, name string, cursor int) rootModel {
 	if !rm.general.editing {
 		t.Fatal("failed to enter rename editor")
 	}
-	rm.general.editCursor = cursor
+	rm.general.edit.cursor = cursor
 	return rm
 }
