@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1774" height="887" viewBox="0 0 1774 887" role="img" aria-labelledby="title desc">
+  <title id="title">swarm Night Orchestra repository hero</title>
+  <desc id="desc">The swarm wordmark and Solid Wedge sit over a blue-hour mountain landscape where five agent signals converge on a persistent relay beneath a vast moon.</desc>
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#080a10" stop-opacity=".78"/>
+      <stop offset=".38" stop-color="#080a10" stop-opacity=".2"/>
+      <stop offset=".66" stop-color="#080a10" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <image href="swarm-night-orchestra.png" x="0" y="0" width="1774" height="887" preserveAspectRatio="xMidYMid slice"/>
+  <rect width="1774" height="887" fill="url(#shade)"/>
+
+  <image href="swarm-atmospheric-logo.png" x="64" y="270" width="720" height="216" preserveAspectRatio="xMidYMid meet"/>
+</svg>

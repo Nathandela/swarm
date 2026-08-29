@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108" role="img" aria-labelledby="title desc">
+  <title id="title">swarm Night Signal app icon</title>
+  <desc id="desc">Several luminous agent flight paths form an S above a dark layered landscape beneath a large slate moon.</desc>
+  <defs>
+    <radialGradient id="moon" cx="38%" cy="36%" r="66%">
+      <stop offset="0" stop-color="#8eb4e6" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#1b2334" stop-opacity=".88"/>
+    </radialGradient>
+    <filter id="signal" x="-300%" y="-300%" width="700%" height="700%">
+      <feGaussianBlur stdDeviation="1.8"/>
+    </filter>
+  </defs>
+
+  <rect width="108" height="108" fill="#0b0e14"/>
+  <circle cx="88" cy="12" r="38" fill="url(#moon)"/>
+  <path d="M0 76 C20 66 39 72 55 67 C73 61 87 57 108 63 V108 H0Z" fill="#131824"/>
+  <path d="M0 88 C18 78 34 84 50 79 C69 73 88 76 108 68 V108 H0Z" fill="#080a10"/>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M79 28 C60 21 38 25 30 37 C23 48 36 52 52 56 C70 61 78 67 72 77 C66 86 47 89 29 82" stroke="#8eb4e6" stroke-width="5.7"/>
+    <path d="M82 36 C65 31 47 33 41 41 C36 48 47 51 60 54 C76 58 84 66 79 75 C74 83 60 87 45 87" stroke="#6fc3bc" stroke-width="2.1" opacity=".82"/>
+    <path d="M74 24 C55 18 33 23 24 34" stroke="#9aa6ba" stroke-width="1.35" opacity=".52"/>
+    <path d="M48 87 C64 90 82 84 92 73" stroke="#6fc3bc" stroke-width="1.35" opacity=".68"/>
+  </g>
+  <circle cx="79" cy="28" r="5" fill="#8eb4e6" opacity=".16" filter="url(#signal)"/>
+  <circle cx="79" cy="28" r="2.3" fill="#eef2f8"/>
+  <circle cx="82" cy="36" r="1.8" fill="#6fc3bc"/>
+  <circle cx="92" cy="73" r="4.6" fill="#6fc3bc" opacity=".16" filter="url(#signal)"/>
+  <circle cx="92" cy="73" r="2" fill="#eef2f8"/>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="200" viewBox="0 0 760 200" role="img" aria-labelledby="title desc">
+  <title id="title">swarm Night Signal horizontal logo</title>
+  <desc id="desc">Moon-backed agent flight paths form the initial S in the lowercase swarm wordmark, then continue beneath the letters as a quiet swarm trajectory.</desc>
+  <defs>
+    <radialGradient id="logo-moon" cx="36%" cy="32%" r="68%">
+      <stop offset="0" stop-color="#8eb4e6" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#1b2334" stop-opacity=".7"/>
+    </radialGradient>
+  </defs>
+
+  <g transform="translate(18 17) scale(1.25)">
+    <circle cx="68" cy="32" r="46" fill="url(#logo-moon)"/>
+    <g fill="none" stroke-linecap="round">
+      <path d="M79 28 C60 21 38 25 30 37 C23 48 36 52 52 56 C70 61 78 67 72 77 C66 86 47 89 29 82" stroke="#8eb4e6" stroke-width="5.7"/>
+      <path d="M82 36 C65 31 47 33 41 41 C36 48 47 51 60 54 C76 58 84 66 79 75 C74 83 60 87 45 87" stroke="#6fc3bc" stroke-width="2.1" opacity=".82"/>
+      <path d="M74 24 C55 18 33 23 24 34" stroke="#9aa6ba" stroke-width="1.35" opacity=".52"/>
+    </g>
+    <circle cx="79" cy="28" r="2.3" fill="#eef2f8"/>
+    <circle cx="82" cy="36" r="1.8" fill="#6fc3bc"/>
+  </g>
+
+  <text x="139" y="119" fill="#eef2f8" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, sans-serif" font-size="90" font-weight="500" letter-spacing="-5">warm</text>
+  <path d="M79 128 C229 165 452 163 690 128" fill="none" stroke="#262e3f" stroke-width="1.5"/>
+  <path d="M92 135 C267 177 476 166 658 139" fill="none" stroke="#6fc3bc" stroke-width="1.4" opacity=".68"/>
+  <circle cx="690" cy="128" r="3.5" fill="#8eb4e6"/>
+  <circle cx="658" cy="139" r="3" fill="#6fc3bc"/>
+  <text x="141" y="184" fill="#66718a" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="12" letter-spacing="2.3">MANY MINDS · ONE STEADY VIEW</text>
+</svg>

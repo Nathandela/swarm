@@ -1,0 +1,1148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>swarm — Night Orchestra visual identity direction</title>
+  <style>
+    :root {
+      /* The shipped mobile Slate tokens. */
+      --p-bg: #0b0e14;
+      --p-card: #131824;
+      --p-elev: #1b2334;
+      --p-well: #080a10;
+      --p-hair: #262e3f;
+      --p-ink: #eef2f8;
+      --p-ink2: #9aa6ba;
+      --p-ink3: #66718a;
+      --p-hero: #8eb4e6;
+      --p-hero-ink: #0b1524;
+      --p-att: #8eb4e6;
+      --p-work: #6fc3bc;
+      --p-ok: #8cc49a;
+      --p-err: #e5736b;
+      --page: #07090e;
+      --content: 1180px;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--p-ink);
+      background:
+        radial-gradient(circle at 73% 8%, rgba(142, 180, 230, 0.08), transparent 30rem),
+        var(--page);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      opacity: 0.025;
+      pointer-events: none;
+      mix-blend-mode: soft-light;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.9'/%3E%3C/svg%3E");
+    }
+
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .shell {
+      width: min(var(--content), calc(100% - 40px));
+      margin-inline: auto;
+    }
+
+    .masthead {
+      min-height: 84px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      border-bottom: 1px solid rgba(154, 166, 186, 0.16);
+    }
+
+    .mini-brand,
+    .edition,
+    .eyebrow,
+    .ratio-label,
+    .swatch code,
+    .research-link,
+    summary,
+    .footer-note {
+      font-family: var(--mono);
+    }
+
+    .mini-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+
+    .mini-mark { width: 27px; height: 27px; display: block; border-radius: 7px; }
+
+    .edition {
+      color: var(--p-ink3);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .intro {
+      padding: 74px 0 42px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.52fr);
+      align-items: end;
+      gap: 64px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--p-hero);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 28px;
+      height: 1px;
+      background: currentColor;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 780px;
+      margin: 18px 0 0;
+      font-size: clamp(44px, 7.2vw, 92px);
+      font-weight: 500;
+      letter-spacing: -0.055em;
+      line-height: 0.96;
+    }
+
+    .intro-copy {
+      margin: 0 0 3px;
+      color: var(--p-ink2);
+      font-size: clamp(16px, 1.65vw, 20px);
+      line-height: 1.5;
+    }
+
+    .intro-copy strong { color: var(--p-ink); font-weight: 500; }
+
+    .hero-section { padding-bottom: 92px; }
+
+    .viewer-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 14px;
+    }
+
+    .viewer-bar p {
+      margin: 0;
+      color: var(--p-ink3);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .view-switch {
+      display: flex;
+      padding: 3px;
+      gap: 2px;
+      border: 1px solid var(--p-hair);
+      border-radius: 12px;
+      background: var(--p-well);
+    }
+
+    .view-switch button {
+      appearance: none;
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 11px;
+      color: var(--p-ink3);
+      background: transparent;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+
+    .view-switch button:hover { color: var(--p-ink2); }
+
+    .view-switch button[aria-pressed="true"] {
+      color: var(--p-hero-ink);
+      background: var(--p-hero);
+    }
+
+    .hero-frame {
+      position: relative;
+      aspect-ratio: 2 / 1;
+      overflow: hidden;
+      border: 1px solid var(--p-hair);
+      border-radius: 18px;
+      background: var(--p-card);
+      box-shadow: inset 0 1px 0 rgba(238, 242, 248, 0.12), 0 40px 100px rgba(0, 0, 0, 0.38);
+      isolation: isolate;
+    }
+
+    .hero-frame > img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .hero-frame::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background: linear-gradient(90deg, rgba(8, 10, 16, 0.66) 0%, rgba(8, 10, 16, 0.14) 32%, transparent 55%);
+      transition: opacity 220ms ease;
+    }
+
+    .hero-frame[data-view="art"]::after,
+    .hero-frame[data-view="meaning"]::after { opacity: 0; }
+
+    .hero-identity {
+      position: absolute;
+      left: clamp(24px, 5vw, 66px);
+      top: 50%;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: clamp(2px, 0.45vw, 8px);
+      transform: translateY(-50%);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .hero-frame:not([data-view="brand"]) .hero-identity {
+      opacity: 0;
+      transform: translateY(-44%);
+      pointer-events: none;
+    }
+
+    .hero-atmospheric-logo {
+      width: clamp(330px, 48vw, 650px);
+      height: auto;
+      display: block;
+      filter: drop-shadow(0 12px 34px rgba(8, 10, 16, 0.32));
+    }
+
+    .hero-mark {
+      width: clamp(64px, 10vw, 122px);
+      height: auto;
+      color: var(--p-hero);
+      filter: drop-shadow(0 0 22px rgba(142, 180, 230, 0.19));
+    }
+
+    .hero-name {
+      font-size: clamp(32px, 6vw, 72px);
+      font-weight: 500;
+      letter-spacing: -0.055em;
+      line-height: 0.85;
+    }
+
+    .hero-wordblock { min-width: 0; }
+
+    .hero-trajectory {
+      width: clamp(190px, 29vw, 420px);
+      height: 18px;
+      display: block;
+      margin-top: 4px;
+      margin-left: clamp(-100px, -7vw, -55px);
+      overflow: visible;
+    }
+
+    .hero-tagline {
+      margin-top: 1px;
+      color: var(--p-ink2);
+      font-family: var(--mono);
+      font-size: clamp(8px, 1.1vw, 13px);
+      letter-spacing: 0.075em;
+    }
+
+    .meaning-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+    }
+
+    .hero-frame[data-view="meaning"] .meaning-layer { opacity: 1; }
+
+    .pin {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--p-ink);
+      border-radius: 50%;
+      box-shadow: 0 0 0 5px rgba(11, 14, 20, 0.48);
+    }
+
+    .pin span {
+      position: absolute;
+      left: 13px;
+      top: -7px;
+      width: max-content;
+      padding: 4px 7px;
+      border: 1px solid rgba(154, 166, 186, 0.28);
+      border-radius: 7px;
+      color: var(--p-ink);
+      background: rgba(8, 10, 16, 0.78);
+      font-family: var(--mono);
+      font-size: clamp(7px, 0.8vw, 10px);
+      letter-spacing: 0.03em;
+    }
+
+    .pin.operator { left: 18.5%; top: 78%; border-color: var(--p-ink2); }
+    .pin.relay { left: 69%; top: 56%; border-color: var(--p-hero); }
+    .pin.agent { left: 25.4%; top: 57%; border-color: var(--p-err); }
+
+    .hero-meta {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      margin-top: 16px;
+      color: var(--p-ink3);
+      font-size: 13px;
+    }
+
+    .hero-meta p { margin: 0; }
+
+    .download {
+      color: var(--p-hero);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .download:hover { text-decoration: underline; }
+
+    .block {
+      padding: 90px 0;
+      border-top: 1px solid rgba(154, 166, 186, 0.16);
+    }
+
+    .block-head {
+      display: grid;
+      grid-template-columns: 0.43fr 1fr;
+      gap: 54px;
+      margin-bottom: 44px;
+    }
+
+    .block h2 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 50px);
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      line-height: 1.05;
+    }
+
+    .block-lede {
+      max-width: 720px;
+      margin: 0;
+      color: var(--p-ink2);
+      font-size: 18px;
+    }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-hair);
+    }
+
+    .principle {
+      min-height: 238px;
+      padding: 24px;
+      background: var(--p-card);
+    }
+
+    .principle .number {
+      color: var(--p-hero);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .principle h3 {
+      margin: 54px 0 10px;
+      font-size: 18px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+
+    .principle p {
+      margin: 0;
+      color: var(--p-ink3);
+      font-size: 14px;
+    }
+
+    .palette {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+    }
+
+    .swatch {
+      min-height: 158px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      border: 1px solid var(--p-hair);
+      border-radius: 14px;
+      background: var(--swatch);
+      box-shadow: inset 0 1px 0 rgba(238, 242, 248, 0.08);
+    }
+
+    .swatch.light { color: var(--p-hero-ink); border-color: transparent; }
+    .swatch b { font-size: 13px; font-weight: 600; }
+    .swatch code { margin-top: 2px; font-size: 10px; opacity: 0.72; }
+
+    .identity-grid {
+      display: grid;
+      grid-template-columns: minmax(270px, 0.72fr) minmax(0, 1.45fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .identity-panel {
+      min-width: 0;
+      padding: 22px;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-card);
+      box-shadow: inset 0 1px 0 rgba(238, 242, 248, 0.08);
+    }
+
+    .identity-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .identity-label h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .identity-label span,
+    .identity-note,
+    .size-tag,
+    .asset-kicker,
+    .asset-use,
+    .readme-sequence {
+      font-family: var(--mono);
+    }
+
+    .identity-label span {
+      color: var(--p-ink3);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .icon-stage {
+      min-height: 270px;
+      display: grid;
+      place-items: center;
+      border-radius: 13px;
+      background:
+        radial-gradient(circle at 50% 38%, rgba(142, 180, 230, 0.08), transparent 52%),
+        var(--p-well);
+    }
+
+    .icon-stage > img {
+      width: min(210px, 72%);
+      aspect-ratio: 1;
+      border-radius: 46px;
+      box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(238, 242, 248, 0.11);
+    }
+
+    .size-tests {
+      margin-top: 18px;
+      display: flex;
+      align-items: end;
+      justify-content: center;
+      gap: 26px;
+    }
+
+    .size-sample { text-align: center; }
+    .size-sample img { display: block; margin: 0 auto 8px; border-radius: 22%; }
+    .size-sample:nth-child(1) img { width: 64px; }
+    .size-sample:nth-child(2) img { width: 48px; }
+    .size-sample:nth-child(3) img { width: 32px; }
+
+    .size-tag {
+      color: var(--p-ink3);
+      font-size: 9px;
+    }
+
+    .logo-stage {
+      min-height: 270px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 13px;
+      background:
+        linear-gradient(180deg, rgba(27, 35, 52, 0.42), transparent 54%),
+        var(--p-well);
+    }
+
+    .logo-stage img { width: min(94%, 720px); display: block; }
+
+    .identity-note {
+      margin: 18px 0 0;
+      color: var(--p-ink3);
+      font-size: 10px;
+      line-height: 1.65;
+    }
+
+    .identity-rules {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .identity-rule {
+      padding: 16px;
+      border-left: 1px solid var(--p-hair);
+    }
+
+    .identity-rule b {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--p-ink);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .identity-rule span {
+      color: var(--p-ink3);
+      font-size: 12px;
+    }
+
+    .crop-grid {
+      display: grid;
+      grid-template-columns: 1.9fr 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .crop-card {
+      overflow: hidden;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-card);
+    }
+
+    .crop-card img { width: 100%; height: 100%; display: block; object-fit: cover; }
+    .crop-wide { aspect-ratio: 2 / 1; }
+    .crop-square { aspect-ratio: 1 / 1; }
+    .crop-square img { object-position: 74% center; }
+
+    .crop-caption {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      color: var(--p-ink2);
+      font-size: 13px;
+    }
+
+    .ratio-label {
+      color: var(--p-hero);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .readme-sequence {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: -16px 0 38px;
+      color: var(--p-ink3);
+      font-size: 10px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+
+    .readme-sequence span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .readme-sequence span:not(:last-child)::after {
+      content: "→";
+      color: var(--p-hair);
+    }
+
+    .asset-list {
+      display: grid;
+      gap: 18px;
+    }
+
+    .asset-card {
+      overflow: hidden;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-card);
+    }
+
+    .asset-card > img {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: var(--p-bg);
+    }
+
+    .asset-caption {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 20px;
+      padding: 18px 20px;
+      border-top: 1px solid var(--p-hair);
+    }
+
+    .asset-kicker {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--p-hero);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .asset-caption h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .asset-caption p {
+      max-width: 750px;
+      margin: 5px 0 0;
+      color: var(--p-ink3);
+      font-size: 13px;
+    }
+
+    .asset-use {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      white-space: nowrap;
+      color: var(--p-ink3);
+      font-size: 10px;
+    }
+
+    .asset-use a {
+      color: var(--p-hero);
+      text-decoration: none;
+    }
+
+    .asset-use a:hover { text-decoration: underline; }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .decision {
+      padding: 26px;
+      border: 1px solid var(--p-hair);
+      border-radius: 16px;
+      background: var(--p-card);
+    }
+
+    .decision h3 {
+      margin: 0 0 18px;
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .decision ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--p-ink2);
+    }
+
+    .decision li + li { margin-top: 8px; }
+    .decision.no h3 { color: var(--p-err); }
+    .decision.yes h3 { color: var(--p-ok); }
+
+    .research-links {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+    }
+
+    .research-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      min-height: 84px;
+      padding: 18px 20px;
+      border: 1px solid var(--p-hair);
+      border-radius: 14px;
+      color: var(--p-ink2);
+      background: var(--p-card);
+      text-decoration: none;
+      font-size: 12px;
+    }
+
+    .research-link:hover { color: var(--p-ink); border-color: var(--p-hero); }
+    .research-link span:last-child { color: var(--p-hero); }
+
+    details {
+      margin-top: 16px;
+      border: 1px solid var(--p-hair);
+      border-radius: 14px;
+      background: var(--p-well);
+    }
+
+    summary {
+      padding: 18px 20px;
+      color: var(--p-ink2);
+      cursor: pointer;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .prompt {
+      margin: 0;
+      padding: 0 20px 20px;
+      color: var(--p-ink3);
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: pre-wrap;
+    }
+
+    footer {
+      padding: 32px 0 48px;
+      border-top: 1px solid rgba(154, 166, 186, 0.16);
+    }
+
+    .footer-note {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      color: var(--p-ink3);
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 850px) {
+      .intro, .block-head { grid-template-columns: 1fr; gap: 28px; }
+      .principles { grid-template-columns: 1fr 1fr; }
+      .palette { grid-template-columns: repeat(3, 1fr); }
+      .identity-grid { grid-template-columns: 1fr; }
+      .crop-grid, .decision-grid { grid-template-columns: 1fr; }
+      .research-links { grid-template-columns: 1fr; }
+      .hero-tagline { max-width: 180px; }
+    }
+
+    @media (max-width: 560px) {
+      .shell { width: min(100% - 24px, var(--content)); }
+      .masthead { min-height: 66px; }
+      .edition { display: none; }
+      .intro { padding-top: 52px; }
+      .hero-section { padding-bottom: 64px; }
+      .viewer-bar { align-items: flex-start; flex-direction: column; }
+      .hero-frame { border-radius: 12px; }
+      .hero-name { display: none; }
+      .hero-tagline { display: none; }
+      .hero-mark { width: 58px; }
+      .hero-atmospheric-logo { width: 245px; }
+      .hero-meta { grid-template-columns: 1fr; }
+      .principles { grid-template-columns: 1fr; }
+      .principle { min-height: 190px; }
+      .principle h3 { margin-top: 34px; }
+      .palette { grid-template-columns: repeat(2, 1fr); }
+      .swatch { min-height: 126px; }
+      .identity-panel { padding: 14px; }
+      .identity-rules { grid-template-columns: 1fr; }
+      .identity-rule { border-left: 0; border-top: 1px solid var(--p-hair); }
+      .asset-caption { grid-template-columns: 1fr; }
+      .asset-use { justify-content: space-between; }
+      .block { padding: 68px 0; }
+      .footer-note { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead shell">
+    <div class="mini-brand">
+      <img class="mini-mark" src="swarm-atmospheric-app-icon.png" alt="">
+      <span>warm</span>
+    </div>
+    <div class="edition">Visual identity direction · concept 01 · 2026</div>
+  </header>
+
+  <main>
+    <section class="intro shell">
+      <div>
+        <span class="eyebrow">Night Orchestra</span>
+        <h1>Many minds.<br>One steady view.</h1>
+      </div>
+      <p class="intro-copy">An illustration system for <strong>swarm</strong>: the scale and wonder of a science-fiction cover, the legibility of a layered landscape poster, and the exact cool Slate colors already living in the mobile app.</p>
+    </section>
+
+    <section class="hero-section shell" aria-labelledby="hero-label">
+      <div class="viewer-bar">
+        <p id="hero-label">Primary GitHub banner · 1774 × 887</p>
+        <div class="view-switch" aria-label="Artwork view">
+          <button type="button" data-view="brand" aria-pressed="true">brand</button>
+          <button type="button" data-view="art" aria-pressed="false">art only</button>
+          <button type="button" data-view="meaning" aria-pressed="false">meaning</button>
+        </div>
+      </div>
+
+      <div class="hero-frame" data-view="brand">
+        <img src="swarm-night-orchestra.png" alt="A lone operator overlooks a vast blue-hour mountain valley. Five luminous agent beacons trace separate paths toward a persistent relay observatory beneath a huge pale planet.">
+        <div class="hero-identity" aria-hidden="true">
+          <img class="hero-atmospheric-logo" src="swarm-atmospheric-logo.png" alt="">
+        </div>
+        <div class="meaning-layer" aria-hidden="true">
+          <div class="pin operator"><span>you · one calm vantage point</span></div>
+          <div class="pin relay"><span>supervisor · persistent relay</span></div>
+          <div class="pin agent"><span>error · the one warm signal</span></div>
+        </div>
+      </div>
+
+      <div class="hero-meta">
+        <p>Five independent paths. One durable relay. The human stays in command without becoming the center of every action.</p>
+        <a class="download" href="swarm-night-orchestra.png" download>download artwork ↓</a>
+      </div>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Visual thesis</span>
+        <div>
+          <h2>Orchestration, not a hive.</h2>
+          <p class="block-lede">“Swarm” can become noisy, insect-like, or diagrammatic very quickly. This direction makes it spacious instead: autonomous lights cross a living landscape while a quiet piece of infrastructure keeps the system coherent.</p>
+        </div>
+      </div>
+
+      <div class="principles">
+        <article class="principle">
+          <span class="number">01 / DEPTH</span>
+          <h3>Layered silhouettes</h3>
+          <p>Mountain bands turn a complex system into simple, readable levels—even at README scale.</p>
+        </article>
+        <article class="principle">
+          <span class="number">02 / SCALE</span>
+          <h3>One impossible sky</h3>
+          <p>The planet gives the project ambition and wonder without adding interface chrome.</p>
+        </article>
+        <article class="principle">
+          <span class="number">03 / MOTION</span>
+          <h3>Five quiet trajectories</h3>
+          <p>Agents remain separate actors. Their lines converge, but they do not collapse into a network diagram.</p>
+        </article>
+        <article class="principle">
+          <span class="number">04 / HUMAN</span>
+          <h3>A small operator</h3>
+          <p>The person has oversight, not busywork: watching the whole field from one stable place.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Color transfer</span>
+        <div>
+          <h2>Slate, opened into a landscape.</h2>
+          <p class="block-lede">The mobile palette is not pasted on top. Its surface ladder becomes atmospheric depth; its status colors become the agents’ tiny lights.</p>
+        </div>
+      </div>
+
+      <div class="palette" aria-label="Mobile Slate color palette">
+        <div class="swatch" style="--swatch:#0b0e14"><b>Ground</b><code>#0b0e14</code></div>
+        <div class="swatch" style="--swatch:#131824"><b>Card / ridge</b><code>#131824</code></div>
+        <div class="swatch" style="--swatch:#1b2334"><b>Elevation</b><code>#1b2334</code></div>
+        <div class="swatch light" style="--swatch:#8eb4e6"><b>Hero / live</b><code>#8eb4e6</code></div>
+        <div class="swatch light" style="--swatch:#6fc3bc"><b>Working</b><code>#6fc3bc</code></div>
+        <div class="swatch light" style="--swatch:#e5736b"><b>Error / deny</b><code>#e5736b</code></div>
+      </div>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Identity system</span>
+        <div>
+          <h2>Let the artwork draw the logo.</h2>
+          <p class="block-lede">The same atmospheric swarm now anchors every scale. In the logo and app icon alike, the identity is only the motion itself: painted trajectories, negative space, and tiny autonomous lights. Nothing competes with that gesture.</p>
+        </div>
+      </div>
+
+      <div class="identity-grid">
+        <article class="identity-panel">
+          <div class="identity-label">
+            <h3>Atmospheric Swarm · app icon</h3>
+            <span>1024 px master</span>
+          </div>
+          <div class="icon-stage">
+            <img src="swarm-atmospheric-app-icon.png" alt="Proposed atmospheric swarm app icon: delicate painted bot trajectories form an S on a clean near-black Slate field.">
+          </div>
+          <div class="size-tests" aria-label="App icon size tests">
+            <div class="size-sample"><img src="swarm-atmospheric-app-icon.png" alt=""><span class="size-tag">64 px</span></div>
+            <div class="size-sample"><img src="swarm-atmospheric-app-icon.png" alt=""><span class="size-tag">48 px</span></div>
+            <div class="size-sample"><img src="swarm-atmospheric-app-icon.png" alt=""><span class="size-tag">32 px</span></div>
+          </div>
+          <p class="identity-note">Implementation: use a quiet near-black Slate field as the adaptive-icon background and the original generated emblem as the only foreground. Preserve the full painterly master for stores and desktop. Derive launcher sizes from this composition so the bright bot heads—not a thickened outline—carry recognition.</p>
+          <div class="asset-use" style="margin-top:12px"><a href="swarm-atmospheric-app-icon.png" download>1024 px icon PNG ↓</a></div>
+        </article>
+
+        <article class="identity-panel">
+          <div class="identity-label">
+            <h3>Atmospheric Swarm · repository lockup</h3>
+            <span>generated large-format signature</span>
+          </div>
+          <div class="logo-stage">
+            <img src="swarm-atmospheric-logo.png" alt="Proposed atmospheric swarm logo: soft painted agent trails imply the initial S and continue beneath a lightweight lowercase warm wordmark.">
+          </div>
+          <div class="identity-rules">
+            <div class="identity-rule"><b>Core logo</b><span>The generated atmosphere is the initial S; typeset only “warm” after it in a light weight.</span></div>
+            <div class="identity-rule"><b>Campaign lockup</b><span>Use the full mist, trajectories, and tagline only above 480 px wide.</span></div>
+            <div class="identity-rule"><b>Small-size behavior</b><span>Let the bot heads and the S-shaped motion carry recognition; keep the painted trail thin instead of redrawing it as a bold glyph.</span></div>
+          </div>
+          <p class="identity-note">The emblem is generated from the hero artwork’s material language; the word “warm” and micro-copy remain deterministic. This keeps the poetry in the motion while preserving correct typography.</p>
+          <div class="asset-use" style="margin-top:12px">
+            <a href="swarm-atmospheric-mark.png" download>transparent emblem ↓</a>
+            <a href="swarm-atmospheric-logo.png" download>complete lockup ↓</a>
+          </div>
+        </article>
+      </div>
+
+      <details>
+        <summary>Atmospheric emblem generation brief</summary>
+        <pre class="prompt">Image 1 is a mood, material, and palette reference only. Create a refined, delicate abstract swarm emblem: five extremely slender autonomous light trails sweep through negative space and collectively imply a graceful lowercase S without drawing a literal typographic glyph. Each trail tapers naturally like a distant moving beacon in atmosphere; tiny luminous bot points sit at different leading edges, and one finest trail continues right, translating the old cursor into motion. Smooth digital gouache and atmospheric airbrush, softly painted edges, subtle mist, restrained matte grain, quiet rather than techy. Only #8eb4e6, #eef2f8, #9aa6ba, and #6fc3bc. No text, solid glyph, thick stroke, outline, hard vector geometry, neon, insects, honeycomb, or watermark.</pre>
+      </details>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Crop behavior</span>
+        <div>
+          <h2>One scene, two useful signatures.</h2>
+          <p class="block-lede">The native 2:1 frame fits a GitHub README hero. The relay-and-planet side survives a square crop for social or release artwork while the full scene keeps the human story.</p>
+        </div>
+      </div>
+
+      <div class="crop-grid">
+        <figure class="crop-card" style="margin:0">
+          <div class="crop-wide"><img src="swarm-night-orchestra.png" alt="Wide crop of the Night Orchestra swarm illustration."></div>
+          <figcaption class="crop-caption"><span>Primary · GitHub README / feature</span><span class="ratio-label">2:1</span></figcaption>
+        </figure>
+        <figure class="crop-card" style="margin:0">
+          <div class="crop-square"><img src="swarm-night-orchestra.png" alt="Square crop focused on the relay and planet."></div>
+          <figcaption class="crop-caption"><span>Secondary · social / release</span><span class="ratio-label">1:1</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">README visual kit</span>
+        <div>
+          <h2>Explain the system as one continuous world.</h2>
+          <p class="block-lede">The README now moves through one continuous atmosphere. Each technical asset starts as a purpose-generated editorial painting—moonlight, ridge depth, mist, hairline trajectories, and tiny bot beacons—then receives deterministic typography so the system language stays perfectly crisp.</p>
+        </div>
+      </div>
+
+      <div class="readme-sequence" aria-label="Recommended README visual order">
+        <span>01 hero</span><span>02 system vista</span><span>03 survival story</span><span>04 status ridge</span><span>05 install</span>
+      </div>
+
+      <div class="asset-list">
+        <figure class="asset-card" style="margin:0">
+          <img src="readme-night-orchestra-lockup.png" alt="Branded Night Orchestra repository hero with the swarm mark and wordmark over the blue-hour agent landscape.">
+          <figcaption class="asset-caption">
+            <div>
+              <span class="asset-kicker">Asset 00 · top of README</span>
+              <h3>Repository Hero Lockup</h3>
+              <p>The emotional promise comes first. It establishes the world and the brand before the README becomes technical; the title remains readable at GitHub’s content width.</p>
+            </div>
+            <div class="asset-use"><span>1774 × 887</span><a href="readme-night-orchestra-lockup.png" download>PNG ↓</a></div>
+          </figcaption>
+        </figure>
+
+        <figure class="asset-card" style="margin:0">
+          <img src="readme-architecture-vista.png" alt="Generated architecture vista showing a disposable terminal, central replaceable daemon, and three persistent session lights connected by fine trajectories.">
+          <figcaption class="asset-caption">
+            <div>
+              <span class="asset-kicker">Asset 01 · replace current architecture diagram</span>
+              <h3>System Vista</h3>
+              <p>A purpose-generated flight field answers “what owns what?”: the disposable TUI reaches a relay observatory, then each persistent shim continues as its own light. Exact labels are composited after generation for immaculate typography.</p>
+            </div>
+            <div class="asset-use"><span>1180 × 560</span><a href="readme-architecture-vista.png" download>PNG ↓</a></div>
+          </figcaption>
+        </figure>
+
+        <figure class="asset-card" style="margin:0">
+          <img src="readme-persistence-strip.png" alt="Generated blue-hour panorama showing one luminous session trail continuing from an open terminal through detachment to a replacement daemon.">
+          <figcaption class="asset-caption">
+            <div>
+              <span class="asset-kicker">Asset 02 · place after “How it works”</span>
+              <h3>One Unbroken Session</h3>
+              <p>One luminous trail crosses all three moments: terminal open, terminal gone, daemon replaced. The persistent shim stays lit, making continuity both the technical point and the visual motif.</p>
+            </div>
+            <div class="asset-use"><span>1180 × 390</span><a href="readme-persistence-strip.png" download>PNG ↓</a></div>
+          </figcaption>
+        </figure>
+
+        <figure class="asset-card" style="margin:0">
+          <img src="readme-state-ridge.png" alt="Generated status ridge with four ordered agent beacons: Needs input, Working, Ready for review, and Completed.">
+          <figcaption class="asset-caption">
+            <div>
+              <span class="asset-kicker">Asset 03 · place before Quickstart</span>
+              <h3>Status Ridge</h3>
+              <p>Four directly labeled beacons cross one ridge in priority order. The mobile Slate status colors become light in the landscape while the words still carry the exact state.</p>
+            </div>
+            <div class="asset-use"><span>1180 × 360</span><a href="readme-state-ridge.png" download>PNG ↓</a></div>
+          </figcaption>
+        </figure>
+      </div>
+
+      <details>
+        <summary>Suggested README insertion skeleton</summary>
+        <pre class="prompt">&lt;p align="center"&gt;
+  &lt;img src="docs/design/swarm-illustration-direction/readme-night-orchestra-lockup.png" alt="swarm — every agent, in one steady view" width="960"&gt;
+&lt;/p&gt;
+
+## How it works
+&lt;p align="center"&gt;&lt;img src="docs/design/swarm-illustration-direction/readme-architecture-vista.png" alt="How swarm works" width="960"&gt;&lt;/p&gt;
+
+&lt;p align="center"&gt;&lt;img src="docs/design/swarm-illustration-direction/readme-persistence-strip.png" alt="Why swarm sessions survive" width="960"&gt;&lt;/p&gt;
+
+## Status groups
+&lt;p align="center"&gt;&lt;img src="docs/design/swarm-illustration-direction/readme-state-ridge.png" alt="How swarm sorts sessions" width="960"&gt;&lt;/p&gt;</pre>
+      </details>
+
+      <details>
+        <summary>Generated README illustration briefs</summary>
+        <pre class="prompt">SYSTEM VISTA — Image 1 is a style and palette reference only. Create an ultra-clean wide editorial blue-hour landscape: one disposable terminal at left, one refined relay observatory at center, three persistent session beacons at separate depths on the right, and hairline trajectories fanning through the relay. Premium smooth digital gouache / atmospheric screenprint, precise silhouettes, controlled grain, generous negative space. No text, UI boxes, arrows, people, logos, or watermark.
+
+SESSION SURVIVAL — Image 1 is a style and palette reference only. Create an ultra-wide three-beat blue-hour panorama crossed by one unbroken luminous session trajectory: terminal and teal shim together at left; terminal vanished but the same shim continuing at center; new relay reconnecting to that same shim at right. No literal panels, labels, boxes, people, logos, or watermark.
+
+STATUS RIDGE — Image 1 is a style and palette reference only. Create an ultra-wide blue-hour ridge with exactly four autonomous bot beacons in priority order: attention blue, working teal, ready green, muted slate. Give each one hairline trajectory and descending urgency, with dark negative space above for deterministic labels. No extra lights, text, boxes, buildings, people, logos, or watermark.</pre>
+      </details>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Guardrails</span>
+        <div>
+          <h2>Keep the world calm.</h2>
+          <p class="block-lede">The identity works when the system feels capable, legible, and quietly alive. More objects and more glow would reduce that confidence.</p>
+        </div>
+      </div>
+
+      <div class="decision-grid">
+        <article class="decision yes">
+          <h3>Keep</h3>
+          <ul>
+            <li>One enormous celestial or environmental anchor.</li>
+            <li>Five to seven broad atmospheric layers.</li>
+            <li>Small signals using the shipped semantic colors.</li>
+            <li>Matte grain, smooth edges, and generous negative space.</li>
+          </ul>
+        </article>
+        <article class="decision no">
+          <h3>Avoid</h3>
+          <ul>
+            <li>Literal bees, honeycomb motifs, and insect imagery.</li>
+            <li>Neon cyberpunk density or generic “AI network” nodes.</li>
+            <li>A different bright color for every agent.</li>
+            <li>Putting UI screenshots inside the painted world.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="block shell">
+      <div class="block-head">
+        <span class="eyebrow">Research translation</span>
+        <div>
+          <h2>References became principles, not a copy.</h2>
+          <p class="block-lede">The official references point to two useful ideas: a science-fiction book cover brought to life, and key art built to scale cleanly across wallpaper formats. This proposal translates those ideas into swarm’s own metaphor and palette.</p>
+        </div>
+      </div>
+
+      <div class="research-links">
+        <a class="research-link" href="https://www.nomanssky.com/2016/04/art-of-no-mans-sky/" target="_blank" rel="noreferrer"><span>No Man’s Sky · official art note</span><span>↗</span></a>
+        <a class="research-link" href="https://blog.camposanto.com/post/79908513045/official-wallpapers-of-the-firewatch-key-art-by" target="_blank" rel="noreferrer"><span>Campo Santo · official Firewatch key art</span><span>↗</span></a>
+      </div>
+
+      <details>
+        <summary>Generation brief · reproducibility</summary>
+        <pre class="prompt">Original retro-futurist editorial landscape illustration for a wide GitHub hero. A quiet alien alpine valley at blue hour under an enormous pale slate planet. Layered ridgelines descend into a cool near-black valley. A small elegant relay observatory sits center-right; five tiny luminous agent-beacons move independently across separate ridges and sky paths, their fine arcs subtly converging toward the relay. A tiny human operator watches from a low-left overlook. Premium smooth digital gouache / screenprint hybrid, strong silhouettes, soft atmospheric gradients, subtle matte grain, no photorealism or hard outlines. Use only tints of #0b0e14, #131824, #1b2334, #262e3f, #8eb4e6, #6fc3bc, #8cc49a, #e5736b, and #eef2f8. Leave dark negative space at left for a separate wordmark. No text, logos, UI, bees, honeycomb, weapons, cyberpunk density, or watermark.</pre>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-note">
+      <span>swarm · illustration direction · Night Orchestra</span>
+      <span>mobile source palette · Slate / ADR-021</span>
+    </div>
+  </footer>
+
+  <script>
+    const frame = document.querySelector('.hero-frame');
+    const switches = document.querySelectorAll('.view-switch button');
+
+    switches.forEach((button) => {
+      button.addEventListener('click', () => {
+        frame.dataset.view = button.dataset.view;
+        switches.forEach((candidate) => {
+          candidate.setAttribute('aria-pressed', String(candidate === button));
+        });
+      });
+    });
+  </script>
+</body>
+</html>

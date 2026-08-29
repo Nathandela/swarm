@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">swarm atmospheric logo typography layer</title>
+  <desc id="desc">A light lowercase warm wordmark, delicate swarm trajectories, and the tagline many minds, one steady view.</desc>
+
+  <text x="242" y="182" fill="#eef2f8" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, sans-serif" font-size="122" font-weight="300" letter-spacing="-6">warm</text>
+  <path d="M246 265 C460 294 741 289 1114 237" fill="none" stroke="#8eb4e6" stroke-width="1.6" opacity=".4"/>
+  <path d="M274 278 C538 309 798 290 1060 255" fill="none" stroke="#6fc3bc" stroke-width="1.35" opacity=".54"/>
+  <circle cx="1114" cy="237" r="3.8" fill="#eef2f8" opacity=".9"/>
+  <circle cx="1060" cy="255" r="3.2" fill="#6fc3bc"/>
+  <text x="257" y="333" fill="#9aa6ba" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="16" font-weight="400" letter-spacing="3.4">MANY MINDS · ONE STEADY VIEW</text>
+</svg>
