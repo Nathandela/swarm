@@ -1,9 +1,9 @@
 # Release signing — the upload keystore and the signed AAB
 
-**Tracks `agents-tracker-cwz`.** This document covers everything before the Play Console upload
-itself (`agents-tracker-2qm`, which is blocked on this one): generating the keystore, wiring its
-credentials into the build the way `android/app/build.gradle.kts` actually reads them, and
-producing a signed `app-release.aab`.
+**Tracks `agents-tracker-cwz`.** This document covers generating the keystore, wiring its
+credentials into the build the way `android/app/build.gradle.kts` actually reads them, producing
+a signed and provenanced `app-release.aab`, and handing that artifact to the guarded publisher.
+Play Console application and track setup remains `agents-tracker-2qm`.
 
 **This runbook does not generate the keystore for you and does not run the build.** Both need a
 password only the operator has, and a keystore an agent generated with a password it chose is
@@ -38,12 +38,16 @@ relying on an update landing on schedule.
 
 ## 1. Prerequisites
 
-- A JDK providing `keytool` and `jarsigner` — this project already pins JDK 17
+- A JDK providing `keytool` and `jarsigner` — this project already pins JDK 21
   (`android/toolchain.env`'s `SWARM_JDK_MAJOR`), and both tools ship with any JDK, so sourcing that
   file is enough; no separate install.
 - **One** password of your own choosing. `build.gradle.kts` reads the keystore password and the key
   password as two independent settings (§4), but you must set **both to the same value** — see the
   warning under §2, which is a property of the keystore format and not a convention.
+- The operator-provisioned production Firebase client config at
+  `android/app/google-services.json`. It is deliberately gitignored. For the Play artifact it must
+  name project `swarm-8404f`, package `dev.swarm.phone`, and Firebase app
+  `1:733314021126:android:ff6e016cffe98782535087`; a development or fork config is not equivalent.
 
 ## 2. Generate the upload keystore
 
@@ -111,7 +115,7 @@ has no build dependency and no reason to wait.
 
 ## 4. Supply the credentials to Gradle
 
-`android/app/build.gradle.kts:38-43` reads exactly four settings, each resolved by
+`android/app/build.gradle.kts` reads exactly four settings through `operatorSetting`, each resolved by
 `findProperty(name) ?: System.getenv(name)` — a Gradle project property (`-P<name>=...` on the
 command line, or a `gradle.properties` entry) wins if both are set, otherwise the environment
 variable is used:
@@ -123,8 +127,8 @@ variable is used:
 | `SWARM_RELEASE_KEY_ALIAS` | The `-alias` value from §2 (`swarm-upload` above) |
 | `SWARM_RELEASE_KEY_PASSWORD` | The key's password inside the keystore — **the same value as `SWARM_RELEASE_KEYSTORE_PASSWORD`**, for the PKCS12 reason in §2 |
 
-Any release build missing `SWARM_RELEASE_KEYSTORE` fails outright — `requireReleaseSigning`
-(`build.gradle.kts:48-59`) is wired as a dependency of `assembleRelease`/`bundleRelease`
+Any release build missing `SWARM_RELEASE_KEYSTORE` fails outright — `requireReleaseSigning` in
+`build.gradle.kts` is wired as a dependency of `assembleRelease`/`bundleRelease`
 specifically so a forgotten credential produces a loud build failure instead of a silently
 unsigned artifact.
 
@@ -164,16 +168,39 @@ unsigned artifact.
 ```bash
 cd android
 . ./toolchain.env    # nothing Android is on PATH without this
+test -s app/google-services.json
 ./build-aar.sh       # rebuilds the gomobile AAR the app module links; the release build's
                       # preBuild task (requireSwarmAar) refuses to proceed without it
 ./gradlew :app:bundleRelease
 ```
+
+`bundleRelease` depends on `requireProductionFirebaseConfig`. It fails before producing the Play
+artifact if the file is absent or if its project, package or Firebase app id is not the production
+one above. This is deliberately narrower than the general Android build: CI lint/tests, debug APKs
+and the bootstrap `assembleRelease` path remain usable without a production Firebase file.
+
+Do not upload an `app-release.aab` left over from before the config was provisioned. The artifact
+below must be the output of the successful `bundleRelease` invocation in this run; an older bundle
+can be correctly signed and still contain no Firebase resources.
 
 The signed bundle lands at:
 
 ```
 android/app/build/outputs/bundle/release/app-release.aab
 ```
+
+The same successful task writes a hash-bound publisher provenance sidecar:
+
+```
+android/app/build/outputs/bundle/release/app-release.aab.swarm-firebase-provenance.json
+```
+
+It contains only public Firebase identifiers plus the AAB's SHA-256; it does not contain the API
+key or signing material. `swarm-publish` requires this exact adjacent file and recomputes the AAB
+hash before it reads the Play credential. A missing sidecar, a development-project sidecar, or a
+sidecar copied from a different/stale AAB is a local hard failure and makes no Google request.
+The publisher keeps that verified AAB descriptor open through credential validation and upload, so
+replacing the pathname after the check cannot change which bytes reach Play.
 
 If this fails on the signing step with a message about recovering the key, or the keystore password
 being incorrect, the cause is almost always the PKCS12 password rule in §2: set
@@ -195,14 +222,28 @@ matching §2. If this instead reports the jar is unsigned, `requireReleaseSignin
 have failed the build before you got here — recheck that all four settings in §4 were visible to
 the exact shell/invocation that ran `bundleRelease`.
 
-## 7. What happens next (out of scope here)
+## 7. Publish only through the guarded CLI
 
 > AMENDED BY ADR-015 (2026-08-15): the Play closed-testing track named below is now the release
 > path (Play-Store Android is the first client, not a deferred distribution option); the task
 > split itself is unchanged.
 
-Creating the app in Play Console (which enrolls it in the mandatory Play App Signing automatically)
-and uploading this AAB to a closed-testing track is `agents-tracker-2qm`, not this task. Before that upload, re-check
-Play's current target API level requirement — `docs/ops/play-closed-testing-application.md`
-already flags that the floor moves every August and this project sits on the pinned value in
-`android/toolchain.env`.
+Creating the app and closed-testing track in Play Console (which also enrolls it in mandatory Play
+App Signing) is covered by `docs/ops/play-console-walkthrough.md`. The Console's manual AAB upload
+control is not an allowed release path: it does not consume the provenance sidecar. After the app
+and `alpha` track exist, rehearse with:
+
+```bash
+cd .. # run the publisher from the repository root
+go run ./cmd/swarm-publish \
+  --aab android/app/build/outputs/bundle/release/app-release.aab \
+  --key /absolute/path/to/play-service-account.json \
+  --package dev.swarm.phone \
+  --track alpha \
+  --dry-run
+```
+
+With explicit approval to publish, repeat the identical command without `--dry-run`. Before either
+command, re-check Play's current target API level requirement —
+`docs/ops/play-closed-testing-application.md` flags that the floor moves every August and this
+project sits on the pinned value in `android/toolchain.env`.

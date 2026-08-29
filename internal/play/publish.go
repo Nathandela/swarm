@@ -71,8 +71,11 @@ type Config struct {
 	Package string
 	// Track is the Play track: internal, alpha, beta or production.
 	Track string
-	// AAB is the path to the App Bundle to upload.
-	AAB string
+	// Bundle is the already-open App Bundle to upload. The caller retains
+	// ownership and must close it after Publish returns. Accepting the descriptor
+	// ensures the uploaded bytes cannot change through a pathname replacement
+	// after a release preflight has verified them.
+	Bundle *os.File
 	// DryRun performs every step EXCEPT the commit. The resulting edit is never applied
 	// and expires on Google's side, changing nothing.
 	DryRun bool
@@ -103,16 +106,20 @@ func Publish(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Account == nil {
 		return Result{}, errors.New("play: no service account")
 	}
-	// Fail on a bad bundle path BEFORE minting a credential or opening an edit: the
+	// Fail on a bad bundle BEFORE minting a credential or opening an edit: the
 	// alternative leaves a dangling edit behind and reads as an API failure.
-	bundle, err := os.Open(cfg.AAB)
-	if err != nil {
-		return Result{}, fmt.Errorf("play: open bundle: %w", err)
+	if cfg.Bundle == nil {
+		return Result{}, errors.New("play: no bundle")
 	}
-	defer func() { _ = bundle.Close() }()
-	info, err := bundle.Stat()
+	info, err := cfg.Bundle.Stat()
 	if err != nil {
 		return Result{}, fmt.Errorf("play: stat bundle: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return Result{}, errors.New("play: bundle is not a regular file")
+	}
+	if _, err := cfg.Bundle.Seek(0, io.SeekStart); err != nil {
+		return Result{}, fmt.Errorf("play: rewind bundle: %w", err)
 	}
 
 	p := &publisher{
@@ -134,7 +141,7 @@ func Publish(ctx context.Context, cfg Config) (Result, error) {
 	if res.EditID, err = p.createEdit(ctx); err != nil {
 		return Result{}, err
 	}
-	if res.VersionCode, err = p.uploadBundle(ctx, res.EditID, bundle, info.Size()); err != nil {
+	if res.VersionCode, err = p.uploadBundle(ctx, res.EditID, cfg.Bundle, info.Size()); err != nil {
 		return Result{}, err
 	}
 	if err := p.setTrack(ctx, res.EditID, cfg.Track, res.VersionCode); err != nil {

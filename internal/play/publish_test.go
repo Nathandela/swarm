@@ -205,11 +205,16 @@ func writeAAB(t *testing.T, content string) string {
 func testConfig(t *testing.T, f *fakePlay, aab string) Config {
 	t.Helper()
 	acct, _ := testAccount(t, f.srv.URL+"/token")
+	bundle, err := os.Open(aab)
+	if err != nil {
+		t.Fatalf("open test AAB: %v", err)
+	}
+	t.Cleanup(func() { _ = bundle.Close() })
 	return Config{
 		Account: acct,
 		Package: "dev.swarm.phone",
 		Track:   "internal",
-		AAB:     aab,
+		Bundle:  bundle,
 		BaseURL: f.srv.URL,
 	}
 }
@@ -261,8 +266,15 @@ func TestPublishUploadsTheBundleBytesAsAnOctetStream(t *testing.T) {
 	f := newFakePlay(t)
 	const content = "PK\x03\x04 the bytes that must arrive unaltered"
 	aab := writeAAB(t, content)
+	cfg := testConfig(t, f, aab)
+	if err := os.Rename(aab, aab+".verified"); err != nil {
+		t.Fatalf("rename verified AAB: %v", err)
+	}
+	if err := os.WriteFile(aab, []byte("replacement at the old path"), 0o600); err != nil {
+		t.Fatalf("replace AAB path: %v", err)
+	}
 
-	if _, err := Publish(context.Background(), testConfig(t, f, aab)); err != nil {
+	if _, err := Publish(context.Background(), cfg); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
@@ -310,13 +322,8 @@ func TestPublishSignsAnAssertionThatVerifiesAgainstTheAccountKey(t *testing.T) {
 	f := newFakePlay(t)
 	aab := writeAAB(t, "bundle")
 	acct, pub := testAccount(t, f.srv.URL+"/token")
-	cfg := Config{
-		Account: acct,
-		Package: "dev.swarm.phone",
-		Track:   "internal",
-		AAB:     aab,
-		BaseURL: f.srv.URL,
-	}
+	cfg := testConfig(t, f, aab)
+	cfg.Account = acct
 
 	before := time.Now()
 	if _, err := Publish(context.Background(), cfg); err != nil {
@@ -541,12 +548,14 @@ func TestErrorsNeverCarryTheAccessToken(t *testing.T) {
 	}
 }
 
-// TestMissingBundleFailsBeforeAnyNetworkCall pins that a typo in --aab costs nothing. The
-// alternative -- discovering it after minting a credential and opening an edit -- leaves a
-// dangling edit and reads as an API failure.
+// TestMissingBundleFailsBeforeAnyNetworkCall pins that a caller which did not supply its
+// already-verified descriptor costs nothing. The alternative -- discovering it after minting
+// a credential and opening an edit -- leaves a dangling edit and reads as an API failure.
 func TestMissingBundleFailsBeforeAnyNetworkCall(t *testing.T) {
 	f := newFakePlay(t)
-	cfg := testConfig(t, f, filepath.Join(t.TempDir(), "does-not-exist.aab"))
+	aab := writeAAB(t, "bundle")
+	cfg := testConfig(t, f, aab)
+	cfg.Bundle = nil
 
 	if _, err := Publish(context.Background(), cfg); err == nil {
 		t.Fatal("Publish returned nil for a missing bundle")

@@ -1,3 +1,6 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -20,7 +23,92 @@ plugins {
 // `gradlew --no-daemon lint test` and `:app:assembleDebug`), which android/gate's R3A fences
 // pin. The plugin VERSION is pinned in the root build script.
 // ---------------------------------------------------------------------------
-if (file("google-services.json").exists()) {
+val googleServicesConfig = layout.projectDirectory.file("google-services.json")
+val googleServicesConfigured = googleServicesConfig.asFile.isFile
+
+data class ProductionFirebaseConfig(
+    val projectID: String,
+    val packageName: String,
+    val mobileSDKAppID: String,
+)
+
+fun jsonObject(value: Any?, path: String): Map<*, *> {
+    check(value is Map<*, *>) {
+        "android/app/google-services.json must contain a JSON object at $path."
+    }
+    return value
+}
+
+fun jsonString(value: Any?, path: String): String {
+    check(value is String && value.isNotBlank()) {
+        "android/app/google-services.json must contain a non-empty string at $path."
+    }
+    return value
+}
+
+// Parse the same structure the Google Services plugin consumes. In particular, package_name
+// and mobilesdk_app_id must belong to ONE client: independent raw-text matches can be satisfied
+// by unrelated clients while the plugin selects a development Firebase application.
+fun validatedProductionFirebaseConfig(): ProductionFirebaseConfig {
+    check(googleServicesConfigured && googleServicesConfig.asFile.isFile) {
+        "A Play release requires android/app/google-services.json for the production " +
+            "Firebase project. Provision that gitignored operator file before running " +
+            "bundleRelease. Refusing to build an installable app with no background wake."
+    }
+
+    val root = try {
+        jsonObject(JsonSlurper().parse(googleServicesConfig.asFile), "root")
+    } catch (error: Exception) {
+        throw GradleException("android/app/google-services.json is not valid JSON.", error)
+    }
+    val projectInfo = jsonObject(root["project_info"], "project_info")
+    val projectID = jsonString(projectInfo["project_id"], "project_info.project_id")
+    check(projectID == "swarm-8404f") {
+        "android/app/google-services.json does not name the production Firebase " +
+            "project_id=swarm-8404f. Refusing to build the Play bundle."
+    }
+
+    val clients = root["client"] as? List<*>
+        ?: throw GradleException(
+            "android/app/google-services.json must contain a client array.",
+        )
+    val matchingClients = clients.mapIndexedNotNull { index, value ->
+        val client = jsonObject(value, "client[$index]")
+        val clientInfo = jsonObject(client["client_info"], "client[$index].client_info")
+        val androidInfo = jsonObject(
+            clientInfo["android_client_info"],
+            "client[$index].client_info.android_client_info",
+        )
+        val packageName = jsonString(
+            androidInfo["package_name"],
+            "client[$index].client_info.android_client_info.package_name",
+        )
+        if (packageName == "dev.swarm.phone") packageName to clientInfo else null
+    }
+    check(matchingClients.size == 1) {
+        "android/app/google-services.json must contain exactly one client for production " +
+            "package_name=dev.swarm.phone; found ${matchingClients.size}."
+    }
+
+    val (packageName, matchingClientInfo) = matchingClients.single()
+    val mobileSDKAppID = jsonString(
+        matchingClientInfo["mobilesdk_app_id"],
+        "the dev.swarm.phone client's client_info.mobilesdk_app_id",
+    )
+    check(mobileSDKAppID == "1:733314021126:android:ff6e016cffe98782535087") {
+        "android/app/google-services.json's dev.swarm.phone client does not name the " +
+            "production mobilesdk_app_id=1:733314021126:android:ff6e016cffe98782535087. " +
+            "Refusing to build the Play bundle."
+    }
+
+    return ProductionFirebaseConfig(
+        projectID = projectID,
+        packageName = packageName,
+        mobileSDKAppID = mobileSDKAppID,
+    )
+}
+
+if (googleServicesConfigured) {
     apply(plugin = "com.google.gms.google-services")
 }
 
@@ -79,8 +167,86 @@ val requireReleaseSigning = tasks.register("requireReleaseSigning") {
     }
 }
 
-tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }
+// A config-free debug build is an intentional foreground-only development shape, and
+// assembleRelease remains the bootstrap/sideload shape documented in operations/sideload.md.
+// A bundleRelease artifact has exactly one destination in this repository: Google Play.
+// Shipping that artifact without Firebase succeeds at install time but removes B16's
+// load-bearing background wake path, so the Play boundary must fail closed.
+//
+// The boolean below is the SAME configuration-time decision that applies the plugin above.
+// Checking the file only at task execution would allow a file created after plugin resolution
+// to satisfy the guard even though com.google.gms.google-services was never applied.
+val requireProductionFirebaseConfig = tasks.register("requireProductionFirebaseConfig") {
+    description = "Refuses a Play bundle without Swarm's production Firebase configuration."
+    doLast {
+        validatedProductionFirebaseConfig()
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" }
     .configureEach { dependsOn(requireReleaseSigning) }
+
+val productionFirebaseAAB =
+    layout.buildDirectory.file("outputs/bundle/release/app-release.aab")
+val productionFirebaseProvenance =
+    layout.buildDirectory.file(
+        "outputs/bundle/release/app-release.aab.swarm-firebase-provenance.json",
+    )
+
+val writeProductionFirebaseProvenance = tasks.register("writeProductionFirebaseProvenance") {
+    description = "Writes production Firebase facts bound to the exact signed Play bundle."
+    dependsOn("signReleaseBundle")
+    dependsOn(requireReleaseSigning)
+    dependsOn(requireProductionFirebaseConfig)
+
+    // cmd/swarm-publish refuses an AAB without this sidecar. The SHA-256 binds
+    // the public Firebase identities to the exact signed bundle, so an operator
+    // cannot accidentally pair a fresh marker with an older Firebase-less AAB.
+    // The AAB is an explicit input of this dedicated task: when AGP rebuilds the
+    // signed bundle, Gradle invalidates the old sidecar and recomputes its hash.
+    inputs.file(productionFirebaseAAB)
+    outputs.file(productionFirebaseProvenance)
+    doLast {
+        val firebaseConfig = validatedProductionFirebaseConfig()
+        val bundleFile = productionFirebaseAAB.get().asFile
+        check(bundleFile.isFile) {
+            "signReleaseBundle completed without ${bundleFile.path}; refusing to write " +
+                "Firebase provenance for a bundle that does not exist."
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        bundleFile.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+        }
+        val aabSHA256 = digest.digest().joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+
+        val provenanceFile = productionFirebaseProvenance.get().asFile
+        provenanceFile.parentFile.mkdirs()
+        provenanceFile.writeText(
+            """
+            {
+              "schema": 1,
+              "project_id": "${firebaseConfig.projectID}",
+              "package_name": "${firebaseConfig.packageName}",
+              "mobilesdk_app_id": "${firebaseConfig.mobileSDKAppID}",
+              "aab_sha256": "$aabSHA256"
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    dependsOn(requireReleaseSigning)
+    dependsOn(requireProductionFirebaseConfig)
+    dependsOn(writeProductionFirebaseProvenance)
+}
 
 // ---------------------------------------------------------------------------
 // PB-TOOL-2: the app consumes the gomobile AAR that android/build-aar.sh produces. The AAR

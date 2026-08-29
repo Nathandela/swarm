@@ -223,7 +223,7 @@ determination. If the Console's export questionnaire asks for a classification b
 standard encryption for authentication/confidentiality," **stop and ask Nathan** rather than
 answering a legal question from this script.
 
-## 13. Build and upload the AAB
+## 13. Build and publish the AAB through the guarded CLI
 
 Confirm the artifact from `docs/operations/release-signing.md` exists and is signed before this
 step:
@@ -240,8 +240,26 @@ android/app/build/outputs/bundle/release/app-release.aab
    documents this as unrecoverable, so confirm this is the intended, final artifact (the correct
    `targetSdk`/`compileSdk` per the preflight checklist below, signed with the intended keystore)
    before this upload, not after.
-3. Upload `app-release.aab`, add release notes (not pre-drafted anywhere in the repo — ask Nathan
-   for release notes text, or use a short factual line such as "Initial closed-testing build").
+3. **Do not use the Console's AAB upload control.** It cannot validate Swarm's adjacent Firebase
+   provenance sidecar and therefore permits a stale or Firebase-less bundle. Leave the browser and
+   use the repository publisher; it verifies the sidecar against the exact open bundle descriptor
+   before it reads the Play credential or makes a Google request:
+
+   ```bash
+   go run ./cmd/swarm-publish \
+     --aab android/app/build/outputs/bundle/release/app-release.aab \
+     --key /absolute/path/to/play-service-account.json \
+     --package dev.swarm.phone \
+     --track alpha \
+     --dry-run
+   ```
+
+   The dry run uploads into an uncommitted edit and proves the credential and bundle, but does not
+   publish. After Nathan explicitly approves the outward-facing submission, rerun the identical
+   command without `--dry-run`. That command sets the `alpha` release to `completed` and commits it;
+   there is no separate Console upload or rollout click. Supply the approved release notes through
+   Play Console after the release exists if the track requires them; do not substitute a manual AAB
+   upload.
 
 Source: §8 step 4, §2 (build/signing).
 
@@ -257,15 +275,15 @@ Source: §8 step 4, §2 (build/signing).
 
 Source: §8, steps 2–3.
 
-## 15. Roll out the release
+## 15. Confirm the CLI rollout
 
-**Same screen, "Review release" / "Start rollout to closed testing" button.**
-
-**STOP — HAND BACK TO NATHAN.** This is the actual outward-facing submission: it sends the release
-for Google's review and, once approved, makes the app installable by every address on the tester
-list. This is the point of no return `agents-tracker-2qm`'s own acceptance criteria names
-explicitly ("nothing submitted past a point of no return without Nathan's explicit OK"). Stop here
-regardless of how mechanical everything before it was.
+The non-dry-run `swarm-publish` command in step 13 is the actual outward-facing submission: it
+sends the completed release for Google's review and, once approved, makes the app installable by
+every address on the tester list. It is the point of no return `agents-tracker-2qm` names
+explicitly ("nothing submitted past a point of no return without Nathan's explicit OK"), so obtain
+that approval before removing `--dry-run`. After the command reports a committed version code,
+return to the closed-testing screen only to confirm that exact version appears on `alpha`; do not
+upload or roll it out a second time in the Console.
 
 Source: §8 step 4; `agents-tracker-2qm` description.
 
@@ -277,9 +295,10 @@ Source: §8 step 4; `agents-tracker-2qm` description.
   *production* promotion, not closed testing itself — it does not block anything in this script,
   but recruit testers above the stated minimum from the start per §8's own advice, since the count
   is of testers *continuously* opted in.
-- **Firebase / push setup** (§0 blocker #2) is independent of the Console submission mechanics
-  above — the app installs and the listing is reviewable either way; only background wake is
-  affected. Not a step in this script.
+- **Physical Firebase / push validation** is separate from the Console form mechanics, but the
+  production Firebase configuration is not optional for a Play artifact. `bundleRelease` refuses
+  a missing or non-production `google-services.json`; the resulting closed-track build is then
+  where real token registration, FCM delivery and Doze behaviour must be validated.
 - Anything past the initial rollout (responding to a review rejection, promoting to production,
   handling the graduation-rule testers) is out of scope here.
 
@@ -287,15 +306,24 @@ Source: §8 step 4; `agents-tracker-2qm` description.
 
 ## Preflight checklist — confirm ALL of these before opening the Console
 
-1. **Signed AAB exists and verifies.** `android/app/build/outputs/bundle/release/app-release.aab`
-   is present and `jarsigner -verify -verbose -certs` reports `jar verified.`
+1. **A freshly built signed AAB and its adjacent provenance sidecar exist and verify.**
+   `android/app/build/outputs/bundle/release/app-release.aab` is the output of this release's
+   successful `bundleRelease` invocation, not a stale bundle, and
+   `jarsigner -verify -verbose -certs` reports `jar verified.`
    (`docs/operations/release-signing.md`).
-2. **Privacy policy is live**, not just drafted — fetch the URL and confirm it resolves before
+2. **The guarded publisher is the upload path.** The planned command is `swarm-publish` with the
+   exact AAB path above, package `dev.swarm.phone`, track `alpha`, and an operator-owned Play service
+   account path. No step uses Play Console's unguarded AAB upload control.
+3. **The production Firebase preflight passed.** The same `bundleRelease` invocation ran
+   `requireProductionFirebaseConfig` against the gitignored config for project `swarm-8404f`,
+   package `dev.swarm.phone` and Firebase app
+   `1:733314021126:android:ff6e016cffe98782535087`.
+4. **Privacy policy is live**, not just drafted — fetch the URL and confirm it resolves before
    entering it in step 11. As of this writing it does not yet (`agents-tracker-pwc` open).
-3. **Phone screenshots are captured from real hardware**, not an emulator — the app cannot start
+5. **Phone screenshots are captured from real hardware**, not an emulator — the app cannot start
    on emulated Keystore (§3), so a screenshot that exists at all is proof it came from a real
    device. As of this writing none exist (`agents-tracker-p12` open).
-4. **`targetSdk` is correct for the actual upload date.** Today (this document's writing date,
+6. **`targetSdk` is correct for the actual upload date.** Today (this document's writing date,
    2026-08-02) the pinned value of 35 is still accepted for a new app. **That changes on August
    31, 2026** — Play requires 36 for new apps and updates from that date, and closed-testing
    tracks are not exempt (`docs/ops/play-closed-testing-application.md` §0, verified against
@@ -303,11 +331,11 @@ Source: §8 step 4; `agents-tracker-2qm` description.
    `agents-tracker-xfw`). **If the AAB in step 13 is built on or after August 31, 2026, confirm
    `agents-tracker-xfw` has landed before uploading it** — an AAB built at 35 past that date will
    be rejected at upload regardless of everything else in this script being correct.
-5. **The developer account exists and identity verification has actually completed**, not merely
+7. **The developer account exists and identity verification has actually completed**, not merely
    been submitted. Step 1 requires this and it can take several days — confirm the account can
    publish (Console will say so) before assuming step 2 can start today.
 
-If any of these five is not true, stop before opening Play Console at all — every step above that
+If any of these seven is not true, stop before opening Play Console at all — every step above that
 depends on them is marked `BLOCKED` for exactly this reason.
 
 **A green checklist means the prerequisites exist — it does not mean the rest of this script can

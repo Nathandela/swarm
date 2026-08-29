@@ -51,7 +51,7 @@ Ordered by how long they take.
 | # | Blocker | Where | Effort |
 |---|---|---|---|
 | 1 | ~~No launcher icon.~~ **DONE** — the adaptive launcher now uses the same generated Atmospheric Swarm trajectories as the Play listing, over the app's Slate background token. The transparent source, mask-safe inset, and adaptive/monochrome wiring are gated; the separate 512x512 store icon and 1024x500 feature graphic are in `docs/ops/play-assets/`. | — | done |
-| 2 | **No Firebase project.** `google-services.json` is absent and the `google-services` plugin is deliberately not applied. `PushTokens.requestInitialToken` catches the resulting `IllegalStateException` and logs it. The app runs fine — but **background wake never fires**, which is the feature the phone exists for. | `android/app/build.gradle.kts` | 1–2 h |
+| 2 | ~~No Firebase project/config.~~ **BUILD PROVISIONING DONE** — project `swarm-8404f` and Android app `dev.swarm.phone` exist; the local gitignored `google-services.json` applies the Google Services plugin, and `bundleRelease` refuses an absent, development or wrong-app config. **Physical delivery remains unvalidated:** a successful token registration and wake on the Play-signed handset are still required. | `android/app/build.gradle.kts`, physical-handset gate | device run |
 | 3 | **Release signing material is operator-supplied and absent.** `requireReleaseSigning` fails the build by design if unset — good, but you must create the keystore. | env / `~/.gradle/gradle.properties` | 20 min |
 | 4 | **No hosted privacy policy.** Play requires a public URL before the listing can be submitted. Draft in §9 below, published page at `docs/ops/privacy-policy/index.html`. **Gated on a merge to `main`:** GitHub Pages is configured to deploy from `main`/`docs`, and the whole ops track exists only on `design-system-substrate` — `git log main -- docs/ops/privacy-policy` returns nothing — so the URL 404s until that branch merges. | external hosting + a merge | 30 min |
 | 5 | **Two Phase B requirements are genuinely NOT MET** (`PB-PAIR-4`, `PB-NET-4`), one is unsatisfiable without physical hardware (`PB-E2E-2`), and one requirement's entire subject has left the product: `PB-SEC-2` (the per-use biometric gate) is **VOID**, not merely unmet — ADR-007 B133 (2026-07-31) deleted all phone-side user authentication, so there is nothing left for the requirement to grade against. `PB-INPUT-4`, previously listed here as NOT MET, no longer is: ADR-007 B92 (2026-07-30) adjudicated it — the retry clause presupposed a queueing mechanism ADR-007 D7 forbids for live input, so the clause was withdrawn, and production's actual behaviour (never resend) satisfies what remains (`docs/specifications/remote-phaseB-requirements.md:502`). `PB-PAIR-4` (a half-paired state is reachable) remains open. `PB-NET-4` (the reconnect/resilience row) also remains open, but not for the reason this bullet used to give: its queue self-contradiction was resolved by the same kind of amendment in ADR-007 B90 (2026-07-30) — the current reason it is NOT MET is unfenced evidence in the resilience half (nothing ties the reconnect delay to the stated backoff, nothing names re-auth after reconnect, and the connection-state-surfaced clause is covered only by an unrelated test's side effect — ADR-007 B113/B114). A related NEW requirement, `PB-NET-8` (added 2026-07-31, ADR-007 B120), covers the gateway's OWN reconnect — nothing required it before, and it was found completely absent. **`PB-PAIR-4` is worse than first recorded: a half-pair is reachable in BOTH
@@ -241,7 +241,12 @@ export SWARM_RELEASE_KEY_PASSWORD='...'
 ./build-aar.sh             # rebuild the gomobile AAR first
 ./gradlew :app:bundleRelease
 # → app/build/outputs/bundle/release/app-release.aab
+# → app/build/outputs/bundle/release/app-release.aab.swarm-firebase-provenance.json
 ```
+
+Publish only with `cmd/swarm-publish`, first with `--dry-run` and then, after explicit approval,
+without it. The Play Console's manual AAB upload control does not validate the adjacent provenance
+sidecar and is not an allowed release path; see `docs/operations/release-signing.md` §7.
 
 **Enrol in Play App Signing** (mandatory for AAB). Google holds the app signing key; your
 `swarm-upload.jks` is only the *upload* key. If you lose the upload key you can request a
@@ -311,20 +316,17 @@ client and it is not a remote desktop -- it is a window onto processes you alrea
 
 *(Trim the last paragraph if you would rather not set that expectation in a closed test.)*
 
-> **This listing promised push until 2026-08-02 and the build cannot deliver it.** The bullet
-> *"Get a notification the moment a session needs you."* was removed, and the opening paragraph's
-> "swarm sends that question to your phone" became "shows you that question on your phone", because
-> neither is true of what ships. No Firebase project exists and the `com.google.gms.google-services`
-> plugin is deliberately not applied, so `FirebaseApp` never initialises and
-> `FirebaseMessagingService` is never invoked (`android/app/build.gradle.kts:285-303`). An APK built
-> from this module installs, runs, registers no token and receives no wake. The privacy policy in §9
-> hedges this correctly — "when push is available" — and this listing did not; a store listing is a
-> claim made to Google and to every tester.
+> **This listing promised push until 2026-08-02, before the build was provisioned for it.** The
+> bullet *"Get a notification the moment a session needs you."* was removed, and the opening
+> paragraph's "swarm sends that question to your phone" became "shows you that question on your
+> phone". Production Firebase build provisioning now exists and Play bundles fail closed without
+> it, but that proves only configuration: real token registration, FCM delivery and Doze behaviour
+> still need a Play-signed handset run. A store listing is a claim made to Google and every tester,
+> so configuration alone is not evidence for restoring the promise.
 >
-> **Restore both when, and only when, blocker 2 is closed** — create the Firebase project, add
-> `google-services.json`, apply the plugin, and confirm a wake actually arrives on a handset
+> **Restore both when, and only when, a wake actually arrives on the Play-signed handset**
 > (§10 item 2). Background wake is "the feature the phone exists for" per §0, so this is a listing
-> that should get its bullet back rather than one that never had a right to it.
+> that should get its bullet back once the physical claim is true.
 
 **Graphic assets — all mandatory assets are present in the repo**
 
@@ -515,7 +517,8 @@ get it confirmed. The technical facts above are accurate and are what a lawyer w
 2. **Testers**: create an email list, or use a Google Group. Testers must opt in via the
    share link before they can install.
 3. **Countries**: pick explicitly; a closed track with no country selected reaches nobody.
-4. **Upload the AAB**, add release notes, roll out.
+4. **Publish the AAB with the guarded `swarm-publish` CLI**, add release notes, and confirm the
+   committed version in Console. Never use the Console's manual AAB upload control.
 5. Testers install via the opt-in URL. Propagation takes up to a few hours on the first
    release.
 
@@ -563,11 +566,11 @@ during that pass:
   `android/app/src/main/kotlin/`. The published page does not claim biometric protection of
   keys or sensitive actions; only this draft below still does.
 - **Push token — timing corrected.** `PushTokens.requestInitialToken` is called
-  unconditionally from `SwarmApplication.onCreate` (not gated on a notifications toggle), and
-  currently always throws `IllegalStateException` because no Firebase project is configured
-  (`android/app/build.gradle.kts:293`, `PushTokens.kt:52-70`) — no token is issued by the
-  shipped build today. The published page phrases token collection as conditional on push
-  being available, true whether or not Firebase gets configured before testers install.
+  unconditionally from `SwarmApplication.onCreate` (not gated on a notifications toggle).
+  Config-free development builds still handle Firebase's unavailable state, while a Play bundle
+  now requires the production Firebase config. The published page phrases token collection as
+  conditional on push being available because build provisioning is not proof that Google issued
+  a token on the installed Play-signed app.
 - **Relay retention — quantified.** The relay purges undelivered mailbox items after a fixed
   7-day cap (`internal/remote/relay/config.go:106`, `server.go:1803` `SweepRetention`), not
   merely "as long as needed" — the published page states the figure.
@@ -677,8 +680,10 @@ then making publicly.
 **Before you open the Console** (~half a day)
 
 1. Draw the launcher icon; wire `android:icon`; generate the 512×512 store icon.
-2. Create the Firebase project, drop in `google-services.json`, apply the plugin. Without
-   this, closed testing cannot exercise push — which is most of what closed testing is for.
+2. Confirm the gitignored production `google-services.json` is present, run
+   `:app:requireProductionFirebaseConfig`, and then prove token registration plus one real wake on
+   the Play-signed handset. Project/app creation and Gradle wiring are done; provider delivery is
+   the remaining claim.
 3. Create the upload keystore; verify `./gradlew :app:bundleRelease` produces a signed AAB.
 4. **Merge this branch to `main`**, then host the privacy policy. The merge is not bookkeeping:
    Pages serves from `main`/`docs` and `docs/ops/privacy-policy/` does not exist there, so the
@@ -691,7 +696,8 @@ then making publicly.
 **In the Console** (~2 hours)
 
 6. Create the app. Complete §4, §5, §6 from the answers above.
-7. Set up Play App Signing; upload the AAB to the closed track.
+7. Set up Play App Signing; publish the AAB to the closed track with the guarded
+   `swarm-publish` CLI, never the Console's manual upload control.
 8. Add testers — above the minimum, per §8.
 
 **Then**

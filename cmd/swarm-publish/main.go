@@ -55,6 +55,11 @@ func run(ctx context.Context, args []string) error {
 	if !validTrack(*track) {
 		return fmt.Errorf("swarm-publish: unknown track %q; want one of %s", *track, strings.Join(tracks, ", "))
 	}
+	bundle, err := openVerifiedProductionFirebaseBundle(*aab, *pkg)
+	if err != nil {
+		return fmt.Errorf("swarm-publish: %w", err)
+	}
+	defer func() { _ = bundle.Close() }()
 
 	// Read and validate the credential before touching the network. os.ReadFile and
 	// LoadServiceAccount both report the PATH and the SHAPE of the problem, never the
@@ -73,7 +78,7 @@ func run(ctx context.Context, args []string) error {
 		Account: acct,
 		Package: *pkg,
 		Track:   *track,
-		AAB:     *aab,
+		Bundle:  bundle,
 		DryRun:  *dryRun,
 	})
 	if err != nil {
