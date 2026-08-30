@@ -59,9 +59,10 @@ func TurnInterruptContentHash(req *TurnInterruptReq) []byte {
 }
 
 // InteractionHistoryReq is the interaction_history body (Mirror M3.1, ADR-014): the paged,
-// per-session read of older transcript items. BeforeItem names the item_id the page must end
-// strictly before; Limit bounds the page. The reply rides the EXISTING Control.Journal
-// carrier plus Control.HistoryFloor.
+// per-session read of transcript items. BeforeItem names the item_id the page must end
+// strictly before; empty asks for the newest retained page so an anchorless client can begin.
+// Limit bounds the page. The reply rides the EXISTING Control.Journal carrier plus
+// Control.HistoryFloor.
 type InteractionHistoryReq struct {
 	Session    string `json:"session"`
 	BeforeItem string `json:"before_item"`

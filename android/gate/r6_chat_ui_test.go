@@ -266,21 +266,27 @@ func TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface(t *testing.T) {
 	// function does the latching is deliberately not fenced -- the composer latches in the press
 	// and the reads latch in two different places -- so the fact under test is that the id
 	// survives to a claim at all.
-	for _, want := range []struct{ latch, verb, row string }{
-		{"composerOp", "app.composerSend(", "M2.4 -- a composer_send is fire-and-forget"},
-		{"interruptOp", "app.interrupt(", "M2.4 -- a Stop's refusal never reaches the reader"},
-		{"historyOp", "app.loadEarlierInteractions(", "M3.1 -- a history page never folds"},
-		{"detailOp", "app.loadInteractionDetail(", "M3.3 -- a clipped card never expands"},
+	for _, want := range []struct{ latch, claim, verb, row string }{
+		{"composerOp = ", "launchOutcome(composerOp)", "app.composerSend(",
+			"M2.4 -- a composer_send is fire-and-forget"},
+		{"interruptOp = ", "launchOutcome(interruptOp)", "app.interrupt(",
+			"M2.4 -- a Stop's refusal never reaches the reader"},
+		// History is a ledger rather than a scalar: cold-open and reader presses may both seal
+		// before either outcome arrives, so one `historyOp` would overwrite an unclaimed reply.
+		{"historyReads[issued.operationID]", "launchOutcome(operationID)",
+			"app.loadEarlierInteractions(", "M3.1 -- a history page never folds"},
+		{"detailOp = ", "launchOutcome(detailOp)", "app.loadInteractionDetail(",
+			"M3.3 -- a clipped card never expands"},
 	} {
 		if !strings.Contains(body, want.verb) {
 			t.Errorf("no production Kotlin calls %s at all (%s)", want.verb, want.row)
 			continue
 		}
-		if !strings.Contains(body, want.latch+" = ") {
+		if !strings.Contains(body, want.latch) {
 			t.Errorf("%s is never latched, so the operation id the machine keys its answer by is "+
 				"gone before the answer exists (%s)", want.latch, want.row)
 		}
-		if !strings.Contains(body, "launchOutcome("+want.latch+")") {
+		if !strings.Contains(body, want.claim) {
 			t.Errorf("no draw claims %s through bridge.launchOutcome, so %s. Every other "+
 				"machine-answering control on this surface claims its own operation by id "+
 				"(PB-SYNC-2); there is no generic drain that would catch this one", want.latch, want.row)

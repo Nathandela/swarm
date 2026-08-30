@@ -89,6 +89,8 @@ import dev.swarm.phone.ui.screens.DeepLinkAnchor
 import dev.swarm.phone.ui.screens.DeepLinkLanding
 import dev.swarm.phone.ui.screens.RevokeNotice
 import dev.swarm.phone.ui.screens.SessionDetailOpen
+import dev.swarm.phone.ui.screens.SessionHistoryIntent
+import dev.swarm.phone.ui.screens.SessionHistoryRead
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.TerminalFallbackBinding
 import dev.swarm.phone.ui.screens.TerminalFallbackModel
@@ -583,8 +585,11 @@ class PhoneSurface(
      */
     private val loadEarlier = pressable(earlierChip(activity, SLOT_LABEL)) {
         val target = session
-        val before = detailDrawn?.loadEarlierBeforeItem.orEmpty()
-        if (before.isEmpty()) {
+        val before = SessionHistoryRead.beforeItem(
+            SessionHistoryIntent.EARLIER,
+            detailDrawn?.loadEarlierBeforeItem.orEmpty(),
+        )
+        if (before == null) {
             null
         } else {
             backfilledAt[target] = SystemClock.elapsedRealtime()
@@ -748,7 +753,7 @@ class PhoneSurface(
     }
 
     /**
-     * PB-SYNC-1's repair, and `App.Resync`'s FIRST CALLER (agents-tracker-upbo).
+     * PB-SYNC-1's bounded conversation repair.
      *
      * WHY IT IS HERE AND NOT ON THE LINK SECTION, which is where upbo sited it: that section drew
      * four verdicts on the Machines destination -- both deleted by agents-tracker-nx44.3 -- and the
@@ -757,22 +762,30 @@ class PhoneSurface(
      * table with its own remedy ("wait a moment before trying again"), so a rate-bounded press
      * lands there like every other refusal rather than needing a rule of its own.
      *
-     * AND IT IS WHAT MAKES `StreamBadge.RESYNCING` REACHABLE. `App.Resync` marks `resyncAsked`
-     * before it seals anything, `App.ResyncPending` reads it back, and until this control existed
-     * nothing in production set it -- so the third badge value was one no user could produce. The
-     * two readers of it now are `SyncStatus`'s detail sheet and the settings CONNECTION section,
-     * both of which count a repair in flight as a gap that has not closed yet.
+     * It asks for this session's newest retained page through `interaction_history`. That reply
+     * is count- and byte-bounded before it is sealed, unlike a journal resync that may aggregate
+     * the machine's entire retained event history into one mailbox frame. The transport-level
+     * sync sheet still owns `FacadeBridge.repairTranscript`; a conversation Reload does not.
      */
-    private val resyncControl = actionButton(SLOT_LABEL, CtaKind.MORE) {
-        Press(
+    private fun conversationReloadPlan(): Press? {
+        val target = session
+        if (target.isEmpty()) return null
+        val before = SessionHistoryRead.beforeItem(
+            SessionHistoryIntent.NEWEST,
+            detailDrawn?.loadEarlierBeforeItem.orEmpty(),
+        )!!
+        return Press(
             SendPlane.COMMAND,
-            // THROUGH THE ADAPTER AND NOT `app.resync("journal")`. The four channel names cross as
-            // bare strings and are spelled once, in `FacadeBridge.REPAIR_CHANNELS`; a name typed
-            // at a call site is a second alphabet that `android/gate/pbapp8_repairchannels_test.go`
-            // refuses outright. `dispatchPress` already builds a bridge around the App this way.
-            verb = { app -> FacadeBridge(app).repairTranscript() },
+            verb = { app -> app.loadEarlierInteractions(target, before, HISTORY_PAGE) },
+            settle = { answer -> rememberHistoryRead(answer, target, aloud = true) },
         )
     }
+
+    private val resyncControl = actionButton(
+        SLOT_LABEL,
+        CtaKind.MORE,
+        plan = ::conversationReloadPlan,
+    )
 
     /**
      * PB-INPUT-1's acknowledgement (agents-tracker-hxv).
@@ -1430,20 +1443,17 @@ class PhoneSurface(
 
     private var interruptOp: String = ""
 
-    private var historyOp: String = ""
-
-    /** The session [historyOp] was issued for: a page's answer must never report on another. */
-    private var historyFor: String = ""
+    /** One sealed history read waiting for its machine-authored outcome. */
+    private data class PendingHistoryRead(val target: String, val speaks: Boolean)
 
     /**
-     * Whether [historyOp]'s refusal is said OUT LOUD.
+     * Every history read this surface has issued and not yet claimed, by operation id.
      *
-     * The same read is issued by two things: the reader's own "Load earlier" press, whose
-     * refusal has to reach the finger that asked, and M3.2's cold-open backfill, whose refusal
-     * is deliberately silent because nobody pressed anything (see [backfillOnOpen]). One latch
-     * serves both, so the difference travels with it.
+     * A cold-open and a reader's Reload can seal before either reply arrives, and two sessions
+     * can do the same while the reader moves between them. One scalar latch lets the later seal
+     * overwrite the earlier id, leaving that reply forever unclaimed in `App.PendingOpCount`.
      */
-    private var historySpeaks: Boolean = false
+    private val historyReads = linkedMapOf<String, PendingHistoryRead>()
 
     private var detailOp: String = ""
 
@@ -2733,18 +2743,27 @@ class PhoneSurface(
      * offer for a machine that has stopped answering this device: `swarm remote pair` is refused
      * while a registration stands (PB-STATE-10), so the destination is Settings, whose leading
      * section clears it -- the same reasoning, and the same word, the retired banner's control
-     * carried. Everything else is a hole in the transport's read position, which [resyncControl]'s
-     * verb rewinds for all four channels at once.
+     * carried. Everything else is a hole in the transport's read position, which the
+     * transport-level `FacadeBridge.repairTranscript` below rewinds for all four channels at
+     * once. [resyncControl] is intentionally narrower: one bounded conversation page.
      *
-     * IT PRESSES THE EXISTING CONTROL RATHER THAN REPEATING ITS VERB. `resyncControl` carries the
-     * press plumbing PB-SEC-12 clause 1 requires -- the touch filter, the dispatch, the routed
-     * refusal onto the outcome line -- and a second call site typing `app.resync(...)` would have
-     * none of it.
+     * This is deliberately the transport-level verb, separate from [resyncControl]'s bounded
+     * conversation read. It uses the same press plumbing and routed refusal line, but it does not
+     * reuse the conversation control's operation: one reports on link state and the other loads
+     * one session.
      */
-    private fun repairSync() {
+    private fun repairSync(control: View) {
         when (syncDrawn?.detail?.repair) {
             SyncStatus.PAIR_AGAIN -> selectDestination(Destination.SETTINGS)
-            SyncStatus.REPAIR -> resyncControl.performClick()
+            // This is the LINK sheet, not a conversation Reload. It keeps the stream repair
+            // that makes ResyncPending reachable; the conversation control above is deliberately
+            // session-scoped so it cannot build an oversized full-journal reseed.
+            SyncStatus.REPAIR -> press(control) {
+                Press(
+                    SendPlane.COMMAND,
+                    verb = { app -> FacadeBridge(app).repairTranscript() },
+                )
+            }
             else -> Unit
         }
     }
@@ -3081,24 +3100,13 @@ class PhoneSurface(
             return
         }
         backfilledAt[session] = now
-        // AND HERE M3.2 STOPS, HONESTLY AND ON PURPOSE. `SessionDetailOpen.plan` answers true for
-        // a session this phone holds NO items for, and that is exactly the session the facade
-        // cannot page: `App.LoadEarlierInteractions` REQUIRES a non-empty `before_item` (ADR-014
-        // pages strictly BEFORE a named item, by id and never by cursor, IS-ENV-2), and there is
-        // no anchorless "newest page" read on this boundary. A phone holding nothing has no id to
-        // name, so there is nothing to ask.
-        //
-        // WHAT A USER THEREFORE CANNOT DO: open a session this phone has never held an item for
-        // and see its history. What they get is the transcript's own empty state, which says the
-        // conversation has not reached this phone rather than that the agent said nothing, and
-        // PB-SYNC-1's Repair control beside it. This is disclosed in docs/verification/r6-chat.md
-        // rather than papered over, and it is one facade verb away from being closed.
-        //
-        // The throttle instant is still recorded above, deliberately: the moment an anchorless
-        // read exists, this call site is correct without any other change, and until then a
-        // re-open must not re-run the decision at the rate a user flips between screens.
-        val before = detailDrawn?.loadEarlierBeforeItem.orEmpty()
-        if (before.isEmpty()) return
+        // Empty before_item is the protocol's explicit newest-page sentinel. A cold-opened
+        // session has no local item id by definition, so this is the one bounded read it can
+        // issue; the answer is claimed below and becomes the first stable paging anchor.
+        val before = SessionHistoryRead.beforeItem(
+            SessionHistoryIntent.NEWEST,
+            detailDrawn?.loadEarlierBeforeItem.orEmpty(),
+        )!!
         val app = (runtime.phone() as? PhoneStartup.Ready)?.app ?: return
         // `enqueue` AND NOT `press`, which is agents-tracker-xla6's own split: `press` disables
         // the control it is handed for as long as the work is crossing, and nobody tapped
@@ -3112,7 +3120,14 @@ class PhoneSurface(
             // and a cold open that never claimed its own read showed the same empty screen it
             // was fired to fill -- but SILENTLY: `aloud = false` keeps this path's refusal
             // unsaid, which is the decision in this function's KDoc and not a new one.
-            settle = { answer -> rememberHistoryRead(answer, session, aloud = false) },
+            settle = { answer ->
+                answer.onSuccess { issued ->
+                    rememberHistoryRead(issued, session, aloud = false)
+                    // The reply may already have arrived before this main-thread settle. Ask for
+                    // it now; otherwise a quiet session has no later event that guarantees a draw.
+                    render()
+                }
+            },
         )
     }
 
@@ -3398,6 +3413,7 @@ class PhoneSurface(
                 // R4's answer rides the patch path too: a decision rebuilt without it loses its
                 // buttons the moment the agent writes one more line.
                 onDecision = ::answerDecision,
+                onRepair = ::reloadConversation,
             )
         ) {
             detailDrawn = panel
@@ -3454,9 +3470,13 @@ class PhoneSurface(
                 // in the order the wire sent them, and IS-APR-4 keeps the verdict machine-side.
                 // The screen draws them; only this surface may reach `App.Approve` from one.
                 onDecision = ::answerDecision,
+                onRepair = ::reloadConversation,
             ),
         )
     }
+
+    /** Route both stale-notice and in-transcript gap Reload through one bounded session read. */
+    private fun reloadConversation(control: View) = press(control, ::conversationReloadPlan)
 
     /**
      * The conversation's fixed header, rebuilt only when what it says has changed.
@@ -4690,22 +4710,20 @@ class PhoneSurface(
      * which is why [renderVerdicts] runs BEFORE the content is drawn: a page claimed after it
      * would reach the screen one journal event late.
      *
-     * A REFUSED READ IS SAID OUT LOUD ONLY WHERE SOMEBODY PRESSED SOMETHING ([historySpeaks]).
-     * The detail read is always a press, so it always speaks.
+     * A REFUSED READ IS SAID OUT LOUD ONLY WHERE SOMEBODY PRESSED SOMETHING
+     * ([PendingHistoryRead.speaks]). The detail read is always a press, so it always speaks.
      */
     private fun renderReadVerdicts(bridge: FacadeBridge) {
-        if (historyOp.isNotEmpty()) {
+        for ((operationID, pending) in historyReads.toMap()) {
             val outcome = try {
-                bridge.launchOutcome(historyOp)
+                bridge.launchOutcome(operationID)
             } catch (unreadable: Exception) {
                 null
             }
-            if (outcome != null && outcome.operationId == historyOp && outcome.code.isNotBlank()) {
-                val speaks = historySpeaks
-                val target = historyFor
-                historyOp = ""
-                historyFor = ""
-                historySpeaks = false
+            if (outcome != null && outcome.operationId == operationID && outcome.code.isNotBlank()) {
+                val speaks = pending.speaks
+                val target = pending.target
+                historyReads.remove(operationID)
                 when {
                     outcome.code != READ_HISTORY_OK -> {
                         // THE MACHINE'S OWN WORDS, in the detail cell (round 3, finding F4). This
@@ -4842,9 +4860,7 @@ class PhoneSurface(
     /** Latch the history read this surface issued, and whether its refusal speaks. */
     private fun rememberHistoryRead(answer: Any?, target: String, aloud: Boolean) {
         val issued = answer as? Op ?: return
-        historyOp = issued.operationID
-        historyFor = target
-        historySpeaks = aloud
+        historyReads[issued.operationID] = PendingHistoryRead(target, aloud)
     }
 
 

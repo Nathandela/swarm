@@ -4,6 +4,7 @@ import android.content.Context
 import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.R
@@ -63,6 +64,7 @@ class TranscriptViewTest {
         fileChange: FileChangeChip? = null,
         route: TranscriptRoute = TranscriptRoute.None,
         secondary: String = "",
+        bubble: Boolean = false,
     ) = TranscriptBlock(
         itemId = itemId,
         kind = kind,
@@ -75,6 +77,7 @@ class TranscriptViewTest {
         fileChange = fileChange,
         route = route,
         secondary = secondary,
+        bubble = bubble,
     )
 
     private fun panel(blocks: List<TranscriptBlock> = listOf(block())) =
@@ -83,7 +86,7 @@ class TranscriptViewTest {
     private fun view(
         panel: TranscriptPanel = panel(),
         onApproval: ((String) -> Unit)? = null,
-        onRepair: (() -> Unit)? = null,
+        onRepair: ((View) -> Unit)? = null,
         onOutput: ((String) -> Unit)? = null,
         onDiff: ((String) -> Unit)? = null,
     ): View = transcriptView(
@@ -192,6 +195,59 @@ class TranscriptViewTest {
             prose.kitFind(TranscriptTag.WELL),
         )
     }
+
+    /**
+     * Geometry complement to the semantic wrapping tests. Prose and the reader's bubble remain
+     * inside a narrow reading column; a machine literal may be wider only when its own horizontal
+     * viewport clips it and makes the rest reachable by scrolling.
+     */
+    @Test
+    fun `long conversation text stays in the narrow column and only the mono well overflows`() {
+        val unbroken = "long_segment_".repeat(80)
+        val root = view(
+            panel(
+                listOf(
+                    block(itemId = "prose", line = "A long answer $unbroken"),
+                    block(itemId = "reader", kind = "user_message", line = unbroken, bubble = true),
+                    block(
+                        itemId = "tool",
+                        kind = "tool_run",
+                        line = "Ran a command",
+                        secondary = unbroken,
+                        well = "$ $unbroken",
+                    ),
+                ),
+            ),
+        )
+        val width = 320
+        root.measure(exactly(width), unspecified())
+        root.layout(0, 0, root.measuredWidth, root.measuredHeight)
+
+        for (tag in listOf(TranscriptTag.BLOCK, TranscriptTag.BUBBLE)) {
+            root.allTagged(tag).forEach { child ->
+                assertTrue("$tag starts outside the reading column", child.left >= 0)
+                assertTrue(
+                    "$tag ends at ${child.right}, outside the $width px reading column",
+                    child.right <= width,
+                )
+            }
+        }
+        val well = root.kitRequire(TranscriptTag.WELL)
+        val horizontal = well.parent as HorizontalScrollView
+        assertTrue("the mono viewport starts outside the reading column", horizontal.left >= 0)
+        assertTrue(
+            "the mono viewport ends outside the reading column",
+            horizontal.right <= width,
+        )
+        assertTrue(
+            "the mono literal was wrapped or clipped to the viewport instead of remaining scrollable",
+            well.measuredWidth > horizontal.measuredWidth,
+        )
+    }
+
+    private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)
+
+    private fun unspecified() = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
 
     @Test
     fun `the approval block is the one a tap can answer, and it names what it answers`() {

@@ -105,7 +105,7 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
 | `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5): the phone's structured message under the wire name `composer_send`, carrying `session` / `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text or a different turn (ADR-009 (8)) |
 | `turn_interrupt`   | `*TurnInterruptReq` | Wave R6 `turn_interrupt` body, added by the review fix-pack (finding B7): the semantic Stop's subject under the wire name `turn_interrupt`, carrying `session` / `expected_turn`, bound into the device signature via `TurnInterruptContentHash` so a gateway cannot re-point a valid Stop at a different turn. `expected_turn` is REQUIRED and non-empty — the op was BODYLESS when it landed, and a Stop with no turn coordinate typed the cancel sequence into whatever turn was current on arrival, including one the owner had just started at the terminal |
-| `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; the reply rides the existing `journal` carrier, strictly older than `before_item`, ascending by cursor |
+| `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; non-empty `before_item` means strictly older than that item, empty means the newest retained page; the reply rides the existing `journal` carrier, ascending by cursor |
 | `interaction_detail` | `*InteractionDetailReq` | Wave R6 `interaction_detail` body (Mirror M3.3, IS-CAP-2): the unsigned detail read under the wire name `interaction_detail`, carrying `session` / `item_id`; the reply is exactly one `journal` record whose `item` is the FULL pre-truncation body, or the sealed `unavailable` refusal outside retention (IS-CAP-3) |
 | `history_floor`    | bool                | Wave R6 `interaction_history` reply: nothing older than the returned page is retained, so the phone renders a retention floor instead of offering "load earlier" forever (Mirror M3.1) |
 | `terminal_control_begin` | `*TerminalControlBeginReq` | Wave R8 `terminal_control_begin` body (ADR-017 T6): the SIGNED request that mints one non-transferable control generation over a `terminal_fallback` session, under the wire name `terminal_control_begin`, carrying `session` / `session_instance` / `profile` / `expires_at`, bound into the device signature via `TerminalControlBeginContentHash` so a gateway cannot re-point a valid begin at another session, another incarnation or another profile. The session instance is REQUIRED: a generation that binds no incarnation authorises raw bytes into the PTY that replaced the one the user was reading |
@@ -914,14 +914,18 @@ same plane.
 
 `interaction_history` (`Control.interaction_history`: `session`, `before_item`,
 `limit`) answers on the existing `journal` carrier — every record the named session's,
-strictly older than `before_item`, ascending by cursor, at most `limit` — plus
+strictly older than a non-empty `before_item` (or the newest retained page when it is empty),
+ascending by cursor, normally at most `limit` and always within the conservative 512 KiB serialized-record
+budget — plus
 `history_floor` when nothing older is retained; an unknown `before_item` or a
 non-positive `limit` is refused `invalid_field`. The page also carries every
 `structured_gap` boundary inside its range, beside the `interaction` records: a page that
 omitted them would span a proven tear contiguously, which is ADR-017's silently-bridged gap.
-`limit` bounds RECORDS but the page begins on an ITEM BOUNDARY — the window is the largest
-suffix of whole items that fits, and one item too large to fit ships alone and over `limit`
-rather than being cut. (Amended by the fix-pack, finding B5: the trim was by raw record over
+`limit` bounds RECORDS but the page is closed over every ITEM IDENTITY it contains — the window
+is the largest whole-identity suffix that fits both bounds. When interleaving makes no such
+suffix fit the count (A(head), B, A(delta)), the minimal closed suffix may exceed `limit`; the
+byte budget remains hard. One whole item above the byte budget is refused
+`unavailable` rather than cut or sealed into an oversized relay frame. (Amended by the fix-pack, finding B5: the trim was by raw record over
 a channel the phone pages by item id, so a multi-record `agent_message` could arrive as a
 headless tail that the phone rendered as a whole message and that no later page could ever
 return.) The boundary rule is ONE-SIDED, and review round 2 recorded that rather than leaving

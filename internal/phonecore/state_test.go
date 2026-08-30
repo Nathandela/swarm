@@ -133,10 +133,10 @@ func TestState_EveryResumeCriticalFieldSurvivesARestart(t *testing.T) {
 	// own test so there is no assertion in this slice that a state-less implementation
 	// could satisfy.
 	//
-	// UNEXPORTED fields are custody's own bookkeeping, not coordinates: nothing outside this
-	// package can set or read one, so no caller can lose one across a restart and a durable
-	// coordinate can never be one. They are skipped here and asserted NOT to survive at the
-	// bottom of this test, so the exemption is a stated property rather than a blind spot.
+	// UNEXPORTED fields are either custody bookkeeping, or trust-bound authorities callers
+	// must not be able to manufacture through Save/Mutate. They are skipped by this generic
+	// fixture: bookkeeping is asserted not to survive below, while the authenticated profile's
+	// populated restart path is driven through Reconcile in TestLastProfileAndComposerSurviveProcessDeath.
 	fv := reflect.ValueOf(want)
 	for i := 0; i < fv.NumField(); i++ {
 		if !fv.Type().Field(i).IsExported() {
@@ -527,6 +527,14 @@ var stateV16Fixture = func() string {
 		`"relay_incarnation":"0123456789abcdef0123456789abcdef","discard_recovery_generation":3,"discard_recovery_completed":2,"discard_recovery_token":"fedcba9876543210fedcba9876543210"`, 1)
 }()
 
+// stateV17Fixture adds the authenticated RemoteProfile checkpoint. This fullState fixture has
+// never successfully reconciled, so the current writer records the explicit null state; the
+// process-death regression in r2_adr016_lastprofile_test.go pins the populated-object path.
+var stateV17Fixture = func() string {
+	fixture := strings.Replace(stateV16Fixture, `"schema_version":16`, `"schema_version":17`, 1)
+	return strings.Replace(fixture, `"reconciled_epoch":7`, `"reconciled_epoch":7,"last_profile":null`, 1)
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -541,6 +549,7 @@ var stateFixtures = map[int]string{
 	14: stateV14Fixture,
 	15: stateV15Fixture,
 	16: stateV16Fixture,
+	17: stateV17Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

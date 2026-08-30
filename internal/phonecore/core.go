@@ -108,14 +108,6 @@ type Core struct {
 	st     State
 	grants *crypto.GrantReceiver
 
-	// lastProfile is the RemoteProfileV1 carried by the most recently SUCCESSFUL Reconcile
-	// call (ADR-016 W4.1: "a relay-supplied or unauthenticated hint is ignored"). It is set
-	// ONLY inside Reconcile, next to the machine/epoch match that record already passed, so
-	// LastProfile can never hand a caller a profile that check refused -- unlike reading
-	// router.reconcileRecord() again, whose own field comment says only "a record has
-	// ARRIVED", independent of whether Reconcile ever accepted it.
-	lastProfile schema.RemoteProfileV1
-
 	// rebindMu serialises ONE rebind's read of the durable state with its application to the
 	// derived components. mu cannot do that job: it is released between the two, and every
 	// component rebind feeds takes its own lock, so holding mu across them would put mu above
@@ -178,7 +170,7 @@ func Resume(cfg Config) (*Core, error) {
 		ops:    NewOpQueue(0),
 		leases: NewLeaseState(),
 		skew:   NewSkewMonitor(time.Now),
-		st:     store.Load().clone(),
+		st:     loadCoreState(store),
 	}
 	// The control-generation gate shares the input coalescer's ledger through the App that
 	// owns both; here it is constructed WITHOUT one, because a severance must still drop a
@@ -321,7 +313,7 @@ func (c *Core) Mutate(fn func(*State)) error {
 func (c *Core) PurgeKeys() error {
 	c.mu.Lock()
 	err := c.store.PurgeKeys()
-	c.st = c.store.Load().clone()
+	c.st = loadCoreState(c.store)
 	c.mu.Unlock()
 	c.rebind()
 	return err
@@ -338,7 +330,7 @@ func (c *Core) PurgeKeys() error {
 func (c *Core) UnsealContent() error {
 	c.mu.Lock()
 	err := c.store.UnsealContent()
-	c.st = c.store.Load().clone()
+	c.st = loadCoreState(c.store)
 	c.mu.Unlock()
 	if err != nil {
 		return err
@@ -360,7 +352,7 @@ func (c *Core) RewindRelayCursor() error {
 	if err := c.store.RewindRelayCursor(); err != nil {
 		return err
 	}
-	c.st = c.store.Load().clone()
+	c.st = loadCoreState(c.store)
 	return nil
 }
 
@@ -375,7 +367,7 @@ func (c *Core) SetRelayIncarnation(incarnation string) error {
 	if err := c.store.SetRelayIncarnation(incarnation); err != nil {
 		return err
 	}
-	c.st = c.store.Load().clone()
+	c.st = loadCoreState(c.store)
 	return nil
 }
 
@@ -444,11 +436,31 @@ func (c *Core) persist(st State) error {
 }
 
 func (c *Core) persistLocked(st State) error {
+	// The profile is authenticated for the State identity that held it when Reconcile
+	// succeeded. A whole-state adoption that changes either half of that identity cannot
+	// carry the authority across with it. This runs above Store so the rule also holds for
+	// injected stores used by callers and tests, not only fileStore.
+	if st.Machine != c.st.Machine || st.EpochID != c.st.EpochID || st.Disowned {
+		st.lastProfile = nil
+	}
 	if err := c.store.Save(st.clone()); err != nil {
 		return err
 	}
-	c.st = c.store.Load().clone()
+	c.st = loadCoreState(c.store)
 	return nil
+}
+
+// loadCoreState is the Core-side trust fence on every Store adoption. Store.PurgeKeys must
+// record Disowned and clear all exported key/content coordinates, but a Store implemented in
+// another package cannot name State.lastProfile: it can only retain the opaque value Core
+// previously passed to Save. Clearing it here therefore is not a convenience for fileStore;
+// it is what makes the Store interface capable of satisfying disown at all.
+func loadCoreState(store Store) State {
+	st := store.Load().clone()
+	if st.Disowned {
+		st.lastProfile = nil
+	}
+	return st
 }
 
 // testHookRebindRead, when non-nil, is invoked inside rebind once the durable state has been
@@ -764,12 +776,16 @@ func (c *Core) Reconcile() error {
 			delete(st.Stale, b)
 		}
 	}
+	st.lastProfile = cloneRemoteProfilePtr(&rec.Profile)
+	// lastProfile is part of the SAME durable transaction as the rollback authorities above:
+	// Android may kill the process immediately after this Save, and a restored capability
+	// record must never be evaluated against a zero profile merely because no second
+	// reconcile happened to arrive after launch.
 	if err := c.persistLocked(st); err != nil {
 		c.mu.Unlock()
 		return err
 	}
 	c.grants = crypto.NewGrantReceiverAt(st.GrantEpoch, st.GrantSeq)
-	c.lastProfile = rec.Profile
 	c.mu.Unlock()
 
 	c.seq.SeedFrom(rec.InboundHighWater)
@@ -778,16 +794,20 @@ func (c *Core) Reconcile() error {
 }
 
 // LastProfile returns the RemoteProfileV1 the most recently SUCCESSFUL Reconcile call
-// adopted (ADR-016 W4.1). It takes no parameters and reads only what Reconcile itself just
-// stored, so there is no way to call it with an unauthenticated or relay-sourced profile --
-// the migration ladder (App.applyRelayTLSPolicy) has nothing else to pass. Before any
-// reconcile has ever succeeded, or when the machine has published no relay policy at all,
-// this is the zero value, which applyRelayTLSPolicy already treats as "no advertisement":
-// the same no-op an old machine's profile-less reconcile produces.
+// adopted (ADR-016 W4.1). It takes no parameters and reads only what Reconcile itself stored,
+// either in this process or in the durable State this process resumed, so there is no way to
+// call it with an unauthenticated or relay-sourced profile -- the migration ladder
+// (App.applyRelayTLSPolicy) has nothing else to pass. Before any reconcile has ever succeeded,
+// or when the machine has published no relay policy at all, this is the zero value, which
+// applyRelayTLSPolicy already treats as "no advertisement": the same no-op an old machine's
+// profile-less reconcile produces.
 func (c *Core) LastProfile() schema.RemoteProfileV1 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lastProfile
+	if c.st.lastProfile == nil {
+		return schema.RemoteProfileV1{}
+	}
+	return cloneRemoteProfile(*c.st.lastProfile)
 }
 
 // commitReceive is the WHOLE receive transaction (PB-STATE-7), in ONE durable Save: the

@@ -136,6 +136,31 @@ func TestR6R2_AHistoryPageBecomesTheTranscriptWhenItsOutcomeIsClaimed(t *testing
 	}
 }
 
+// TestR6R2_AnEmptyAnchorRequestsTheNewestRetainedPage pins the bounded repair used by a
+// cold-opened conversation and its Reload control. The empty anchor is intentional wire
+// vocabulary: it means "the latest retained page", not an invalid/missing item id. Without
+// this admission both UI paths either show an empty transcript forever or fall back to a
+// whole-journal resync whose multi-megabyte reseed cannot fit one relay frame.
+func TestR6R2_AnEmptyAnchorRequestsTheNewestRetainedPage(t *testing.T) {
+	h := newHarness(t)
+	r2Ready(t, h, 500)
+
+	op, err := h.App.LoadEarlierInteractions(testSession, "", 50)
+	if err != nil {
+		t.Fatalf("LoadEarlierInteractions newest page: %v", err)
+	}
+	cmd := h.AwaitCommand(schema.ActionInteractionHistory)
+	if cmd.OperationID != op.OperationID {
+		t.Fatalf("newest-page read reached the machine under operation id %q, want %q", cmd.OperationID, op.OperationID)
+	}
+	if cmd.History == nil {
+		t.Fatal("newest-page read dropped its interaction_history body")
+	}
+	if cmd.History.Session != testSession || cmd.History.BeforeItem != "" || cmd.History.Limit != 50 {
+		t.Fatalf("newest-page query = %+v, want session %q, empty before_item, limit 50", cmd.History, testSession)
+	}
+}
+
 // TestR6R2_TheDetailReplyReplacesTheClippedBodyOnTheRealFacade is the reviewer's probe,
 // frozen at the facade: the reply exactly as `handleInteractionDetail` builds it (no cursor),
 // against a card exactly as a user taps one (completed, truncated).
@@ -224,5 +249,60 @@ func TestR6R2_APageIsHeldEvenWhenTheSessionIsAtItsRetentionBound(t *testing.T) {
 	if capped, err := h.App.HistoryAtCapacity(testSession); err != nil || capped {
 		t.Errorf("HistoryAtCapacity = %v (err %v) after ONE small page; the phone must not "+
 			"tell the reader it is full while it is holding three older items", capped, err)
+	}
+}
+
+// The machine's floor describes the oldest page the phone actually folded. If ApplyPage
+// refuses a reply whole at the handset's backfill bound, copying history_floor=true anyway
+// tells the screen it reached the beginning even though the refused page remains missing.
+func TestR6R2_ARefusedPageDoesNotAdvanceTheFoldedHistoryFloor(t *testing.T) {
+	h := newHarness(t)
+	r2Ready(t, h, 1000)
+
+	op, err := h.App.LoadEarlierInteractions(testSession, "anchor", 200)
+	if err != nil {
+		t.Fatalf("LoadEarlierInteractions fill: %v", err)
+	}
+	h.AwaitCommand(schema.ActionInteractionHistory)
+	page := make([]schema.JournalRecord, 0, 200)
+	for i := 0; i < 200; i++ {
+		page = append(page, r2Item(testSession, uint64(100+i), "back-"+strconv.Itoa(i), "older", "completed", false))
+	}
+	h.Reply(schema.Control{
+		Op: schema.ActionInteractionHistory, EndpointID: h.Machine, SessionID: testSession,
+		OperationID: op.OperationID, Journal: page,
+	})
+	eventually(t, "the fill page outcome was not claimed", func() bool {
+		if _, err := h.App.Outcome(op.OperationID); err != nil {
+			return false
+		}
+		return len(r2Transcript(t, h)) == 201
+	})
+
+	op, err = h.App.LoadEarlierInteractions(testSession, "back-0", 1)
+	if err != nil {
+		t.Fatalf("LoadEarlierInteractions over bound: %v", err)
+	}
+	h.AwaitCommand(schema.ActionInteractionHistory)
+	h.Reply(schema.Control{
+		Op: schema.ActionInteractionHistory, EndpointID: h.Machine, SessionID: testSession,
+		OperationID: op.OperationID,
+		Journal: []schema.JournalRecord{
+			r2Item(testSession, 1, "too-old", "not held", "completed", false),
+		},
+		HistoryFloor: true,
+	})
+	eventually(t, "the refused page outcome was not claimed", func() bool {
+		if _, err := h.App.Outcome(op.OperationID); err != nil {
+			return false
+		}
+		capped, err := h.App.HistoryAtCapacity(testSession)
+		return err == nil && capped
+	})
+	if capped, err := h.App.HistoryAtCapacity(testSession); err != nil || !capped {
+		t.Fatalf("HistoryAtCapacity = %v (err %v), want true after the page was refused whole", capped, err)
+	}
+	if floor, err := h.App.HistoryFloor(testSession); err != nil || floor {
+		t.Fatalf("HistoryFloor = %v (err %v) after refusing the floor page; the oldest folded item is not the machine floor", floor, err)
 	}
 }

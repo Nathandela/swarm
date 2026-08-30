@@ -245,7 +245,7 @@ fun transcriptView(
     onApproval: ((String) -> Unit)? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
-    onRepair: (() -> Unit)? = null,
+    onRepair: ((View) -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
@@ -311,7 +311,7 @@ internal fun transcriptBlockViews(
     onApproval: ((String) -> Unit)? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
-    onRepair: (() -> Unit)? = null,
+    onRepair: ((View) -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     onDecision: ((View, String, ApprovalDecision) -> Unit)? = null,
@@ -332,7 +332,7 @@ internal fun transcriptBlockViews(
                 // two routes to one live-only act are two pending states competing over which is
                 // in flight. No repair wired, no control -- the tear is still drawn, because the
                 // discontinuity is a fact whether or not this build can mend it.
-                onRepair?.let { repair -> setOnClickListener { repair() } }
+                onRepair?.let { repair -> setOnClickListener { control -> repair(control) } }
             }
             // THE READER'S OWN WORDS, ON THE READER'S OWN SIDE. A bubble rather than a row, and
             // its own tag rather than a flag on [TranscriptTag.BLOCK] -- the reasoning APPROVAL

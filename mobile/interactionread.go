@@ -39,13 +39,16 @@ import (
 // for ten thousand records gets a frame it cannot receive rather than a page.
 const maxHistoryPage = 200
 
-// LoadEarlierInteractions asks the machine for the page of transcript records immediately
-// BEFORE beforeItem (Mirror M3.1, ADR-014): strictly older, ascending, at most limit records,
-// rounded down to an item boundary so a page never begins in the middle of a message.
+// LoadEarlierInteractions asks the machine for one bounded page of transcript records
+// (Mirror M3.1, ADR-014): ascending, at most limit records, rounded down to an item boundary
+// so a page never begins in the middle of a message. With a non-empty beforeItem the page is
+// strictly older than that item. An empty beforeItem asks for the newest retained page, which
+// is the anchorless form used by cold-open and conversation Reload.
 //
 // beforeItem is an ITEM ID and never a cursor or a position (IS-ENV-2): a daemon restart's
 // reconciliation legitimately re-delivers the same items at new cursors, so a cursor-paged
-// read would silently skip or repeat after one. The answer is claimed with Outcome, which is
+// read would silently skip or repeat after one. Empty is the explicit newest-page sentinel,
+// not a cursor substitute. The answer is claimed with Outcome, which is
 // also where its records are folded into the transcript, and where HistoryFloor -- "nothing
 // older than this is retained" -- becomes readable via HistoryFloor.
 //
@@ -53,9 +56,9 @@ const maxHistoryPage = 200
 // read is a page delivered against a transcript the user has since left.
 func (a *App) LoadEarlierInteractions(session, beforeItem string, limit int) (op *Op, err error) {
 	defer barrier(&err)
-	if session == "" || beforeItem == "" {
+	if session == "" {
 		return nil, classed(ErrClassInvalidRequest, errors.New(
-			"swarmmobile: LoadEarlierInteractions needs a session id and the item id to page before"))
+			"swarmmobile: LoadEarlierInteractions needs a session id"))
 	}
 	if limit <= 0 || limit > maxHistoryPage {
 		return nil, classed(ErrClassInvalidRequest, errors.New(
@@ -185,7 +188,13 @@ func (a *App) adoptInteractionRead(ctrl schema.Control) {
 		if a.historyCapped == nil {
 			a.historyCapped = map[string]bool{}
 		}
-		a.historyFloor[ctrl.SessionID] = ctrl.HistoryFloor
+		// The machine's floor describes THIS page. If the handset refused the page whole,
+		// its oldest folded item did not move and inheriting the reply's true floor would
+		// claim a beginning the transcript does not contain. Preserve the last held page's
+		// floor and report the separate handset-capacity fact below.
+		if held {
+			a.historyFloor[ctrl.SessionID] = ctrl.HistoryFloor
+		}
 		a.historyCapped[ctrl.SessionID] = !held
 		a.mu.Unlock()
 	}

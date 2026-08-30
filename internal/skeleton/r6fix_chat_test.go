@@ -32,7 +32,9 @@ package skeleton
 // an owner-typed "yes" was stamped source=phone with the phone's operation_id.
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -40,6 +42,9 @@ import (
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/remote/crypto"
+	"github.com/Nathandela/swarm/internal/remote/relay"
+	"github.com/Nathandela/swarm/internal/remotegw"
 )
 
 // r6FixOpenTurn captures one user_message and returns the session's resulting CURRENT turn,
@@ -352,6 +357,28 @@ func TestR6Fix_APageNeverBeginsInTheMiddleOfAnItem(t *testing.T) {
 	}
 }
 
+// A streamed item need not occupy one contiguous run. A user message or tool event can land
+// while an agent_message is still growing, after which another delta for the older item
+// follows. Starting at the intervening item's boundary would still put the older item's tail
+// in the page without its head; "page begins at a boundary" is insufficient unless the whole
+// suffix is closed over every item identity it contains.
+func TestR6Fix_APageNeverContainsATailWhoseHeadPrecedesItsStart(t *testing.T) {
+	const sess = "s1"
+	older := []protocol.JournalRecord{
+		r6FixHistoryRecord(sess, 1, "01JA", "agent_message", "head "),
+		r6FixHistoryRecord(sess, 2, "01JB", "user_message", "interleaved"),
+		r6FixHistoryRecord(sess, 3, "01JA", "agent_message", "tail"),
+	}
+	start, fits := historyPageStartBounded(older, 2, maxHistoryRecordsJSONBytes)
+	if !fits {
+		t.Fatal("the two small whole items were refused as unavailable")
+	}
+	if start != 0 {
+		t.Fatalf("page starts at record %d and contains 01JA's tail without its head; want 0 so "+
+			"every item identity in the suffix is whole", start)
+	}
+}
+
 // TestR6Fix_AnItemLargerThanTheLimitShipsWholeRatherThanLivelocking pins the escape hatch.
 func TestR6Fix_AnItemLargerThanTheLimitShipsWholeRatherThanLivelocking(t *testing.T) {
 	const sess = "s1"
@@ -426,5 +453,101 @@ func TestR6Fix_TheHistoryPageCarriesTheStructuredGap(t *testing.T) {
 		t.Fatalf("the history page (%d records) carries NO structured_gap. The daemon PROVED a "+
 			"capability tear between these two messages and the page presents them as contiguous "+
 			"-- ADR-017's silently-bridged gap, on the paging channel.", len(recs))
+	}
+}
+
+// TestR6Fix_AnchorlessHistoryReturnsTheNewestRetainedPage is the daemon half of the
+// conversation repair protocol. An empty before_item is not an unknown id: it names the
+// boundary immediately after the retained transcript, so a handset with no local anchor can
+// cold-open a conversation and Reload can remain session-scoped and frame-bounded.
+func TestR6Fix_AnchorlessHistoryReturnsTheNewestRetainedPage(t *testing.T) {
+	sk := assemble(t)
+	const local = "s-history-newest"
+	for _, text := range []string{"one", "two", "three", "four"} {
+		sk.captureInteractions(local, newCaptureAdapter(adapter.Interaction{
+			Kind: adapter.KindUserMessage, Text: text, Source: adapter.SourceOwner,
+		}), adapter.HookPayload{Event: "UserPromptSubmit"})
+	}
+	items := awaitItems(t, sk, local, 4)
+	session := protocol.NamespacedID(sk.api.endpointID, local)
+
+	recs, floor, code, err := sk.api.InteractionHistory(session, "", 2)
+	if err != nil {
+		t.Fatalf("anchorless interaction_history: code %q err %v", code, err)
+	}
+	if floor {
+		t.Fatal("two newest records reported the retention floor while two older records remain")
+	}
+	if len(recs) != 2 {
+		t.Fatalf("anchorless latest page has %d records, want 2", len(recs))
+	}
+	for i, rec := range recs {
+		var got map[string]any
+		if err := json.Unmarshal(rec.Item, &got); err != nil {
+			t.Fatalf("unmarshal page record %d: %v", i, err)
+		}
+		want, _ := items[i+2]["item_id"].(string)
+		if got["item_id"] != want {
+			t.Errorf("page item %d = %q, want newest retained item %q", i, got["item_id"], want)
+		}
+	}
+}
+
+// TestR6Fix_AnchorlessMaximalRecordsFitASealedRelayAppend is the byte-bound half of the
+// newest-page protocol. Fifty records can each be near daemon.MaxItemBytes; count-bounded
+// alone that is roughly 800 KiB of plaintext, and the relay append base64s the encrypted
+// envelope into a 1 MiB frame. The page must shrink at an item boundary before sealing.
+func TestR6Fix_AnchorlessMaximalRecordsFitASealedRelayAppend(t *testing.T) {
+	const records = 50
+	all := make([]protocol.JournalRecord, 0, records)
+	for i := 0; i < records; i++ {
+		id := fmt.Sprintf("01JMAX%04d", i/2)
+		// Leave only modest object overhead below the ratified 16 KiB item cap. Every
+		// item has two agent-message increments, so only even indexes are legal page
+		// boundaries and a byte trim at an arbitrary record would corrupt its text.
+		item, err := json.Marshal(map[string]any{
+			"v": 1, "item_id": id, "kind": "agent_message", "status": "in_progress",
+			"text": strings.Repeat("x", (16<<10)-256),
+		})
+		if err != nil {
+			t.Fatalf("marshal item %d: %v", i, err)
+		}
+		if len(item) > 16<<10 {
+			t.Fatalf("test item %d is %d bytes, over daemon.MaxItemBytes", i, len(item))
+		}
+		all = append(all, protocol.JournalRecord{
+			Cursor: uint64(i + 1), SessionID: "ep/s-max", Type: "interaction", Item: item,
+		})
+	}
+
+	start, fits := historyPageStartBounded(all, records, maxHistoryRecordsJSONBytes)
+	if !fits {
+		t.Fatal("fifty distinct bounded items yielded no bounded suffix")
+	}
+	page := all[start:]
+	if len(page) == 0 || len(page) >= records {
+		t.Fatalf("byte-bounded page has %d records, want a non-empty strict subset of %d", len(page), records)
+	}
+	if start%2 != 0 {
+		t.Fatalf("byte-bounded page begins at record %d, in the middle of a two-record item", start)
+	}
+
+	key := crypto.ContentKey{}
+	env, err := remotegw.SealControlReply(key, 1, 1, protocol.Control{
+		Op: protocol.OpInteractionHistory, EndpointID: "ep", SessionID: "ep/s-max",
+		OperationID: "op-max-history", Journal: page,
+	})
+	if err != nil {
+		t.Fatalf("seal bounded page: %v", err)
+	}
+	appendFrame, err := json.Marshal(map[string]any{
+		"target": strings.Repeat("f", 64), "envelope": env,
+	})
+	if err != nil {
+		t.Fatalf("marshal relay append: %v", err)
+	}
+	if len(appendFrame) > relay.MaxFrame-1 {
+		t.Fatalf("bounded history becomes a %d-byte relay append, over MaxFrame payload %d (envelope base64=%d)",
+			len(appendFrame), relay.MaxFrame-1, base64.StdEncoding.EncodedLen(len(env)))
 	}
 }

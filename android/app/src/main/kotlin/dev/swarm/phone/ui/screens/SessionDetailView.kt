@@ -332,6 +332,8 @@ fun sessionDetailView(
     loadEarlier: View? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
+    /** ADR-017's in-place gap repair; null keeps the proven tear visible but inert. */
+    onRepair: ((View) -> Unit)? = null,
     /**
      * Owner rulings R8 and R9's destinations, called with the `item_id` whose route the affordance
      * opens: a tool body past the in-place bound, and a file's diff.
@@ -446,6 +448,7 @@ fun sessionDetailView(
     column.addView(
         transcriptView(
             context, panel.transcript, onApproval, onToolTap, onDetail,
+            onRepair = onRepair,
             onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
         ).apply { tag = DetailTag.TRANSCRIPT },
     )
@@ -642,6 +645,7 @@ fun sessionDetailRedraw(
     onApproval: ((String) -> Unit)? = null,
     onToolTap: ((String) -> Unit)? = null,
     onDetail: ((View, String) -> Unit)? = null,
+    onRepair: ((View) -> Unit)? = null,
     /**
      * **THE SAME HANDLERS THE COMPOSITION WAS GIVEN, AND `transcriptBlockViewCount` SAYS WHY.** Two
      * of the transcript's offers are drawn only when there is somewhere to send them, so a patch
@@ -697,6 +701,7 @@ fun sessionDetailRedraw(
         slot.removeAllViews()
         val rebuilt = transcriptView(
             slot.context, next.transcript, onApproval, onToolTap, onDetail,
+            onRepair = onRepair,
             onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
         )
         (rebuilt.parent as? ViewGroup)?.removeView(rebuilt)
@@ -705,6 +710,7 @@ fun sessionDetailRedraw(
     }
     patchConversation(
         list, drawn.transcript.blocks, next.transcript.blocks, onApproval, onToolTap, onDetail,
+        onRepair = onRepair,
         onOutput = onOutput,
         onDiff = onDiff,
         onDecision = onDecision,
@@ -741,6 +747,7 @@ private fun patchConversation(
     onApproval: ((String) -> Unit)?,
     onToolTap: ((String) -> Unit)?,
     onDetail: ((View, String) -> Unit)?,
+    onRepair: ((View) -> Unit)? = null,
     onOutput: ((String) -> Unit)? = null,
     onDiff: ((String) -> Unit)? = null,
     // Carried for the same reason as the two above: a block rebuilt here must be the block the
@@ -766,12 +773,12 @@ private fun patchConversation(
                 if (mutation.index >= current.size) continue
                 val at = childOffsetOf(current, mutation.index, onDetail, onOutput)
                 removeRun(list, at, transcriptBlockViewCount(current[mutation.index], onDetail, onOutput))
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onRepair, onOutput, onDiff, onDecision)
                 current[mutation.index] = mutation.block
             }
             is BlockMutation.Insert -> {
                 val at = childOffsetOf(current, minOf(mutation.index, current.size), onDetail, onOutput)
-                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onOutput, onDiff, onDecision)
+                insertRun(list, at, mutation.block, onApproval, onToolTap, onDetail, onRepair, onOutput, onDiff, onDecision)
                 current.add(minOf(mutation.index, current.size), mutation.block)
             }
         }
@@ -806,12 +813,14 @@ private fun insertRun(
     onApproval: ((String) -> Unit)?,
     onToolTap: ((String) -> Unit)?,
     onDetail: ((View, String) -> Unit)?,
+    onRepair: ((View) -> Unit)?,
     onOutput: ((String) -> Unit)?,
     onDiff: ((String) -> Unit)?,
     onDecision: ((View, String, ApprovalDecision) -> Unit)?,
 ) {
     transcriptBlockViews(
         list.context, block, onApproval, onToolTap, onDetail,
+        onRepair = onRepair,
         onOutput = onOutput, onDiff = onDiff, onDecision = onDecision,
     ).forEachIndexed { offset, view -> list.addView(view, at + offset) }
 }

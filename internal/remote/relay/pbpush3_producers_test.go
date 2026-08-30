@@ -157,7 +157,7 @@ func pbpush3ScanProducers(t *testing.T, root string) (map[string][]pbpush3Site, 
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".claude", "node_modules", "vendor":
+			case ".git", ".claude", ".codex", ".gradle", "build", "dist", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
 			return nil
@@ -387,7 +387,7 @@ func pbpush3TestFuncNames(t *testing.T, root string) map[string]bool {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".claude", "node_modules", "vendor":
+			case ".git", ".claude", ".codex", ".gradle", "build", "dist", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
 			return nil

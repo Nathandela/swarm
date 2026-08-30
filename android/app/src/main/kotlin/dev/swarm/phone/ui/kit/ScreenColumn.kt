@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import dev.swarm.phone.R
 
 /**
@@ -37,6 +38,23 @@ fun screenColumn(context: Context): LinearLayout = LinearLayout(context).apply {
     val vertical = Kit.dimenPx(context, R.dimen.swarm_space_10)
     val horizontal = Kit.dimenPx(context, R.dimen.swarm_space_24)
     setPaddingRelative(horizontal, vertical, horizontal, vertical)
+}
+
+/**
+ * The signed conversation drawing's 10 dp reading step below the fixed header.
+ *
+ * This belongs to the viewport rather than the first transcript child: a stale notice, a gap
+ * divider and an ordinary message can each be first, and each must begin at the same place. It
+ * also means the step scrolls away with the conversation instead of becoming permanent blank
+ * chrome under the header.
+ */
+fun ScrollView.conversationViewportAir(): ScrollView = apply {
+    setPaddingRelative(
+        paddingStart,
+        Kit.dimenPx(context, R.dimen.swarm_space_10),
+        paddingEnd,
+        paddingBottom,
+    )
 }
 
 /** Pairing rhythm applied to the long-lived body slot without screen-local dimensions. */

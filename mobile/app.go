@@ -1495,17 +1495,18 @@ func (a *App) RefreshRoster() (err error) {
 	if err = a.resyncBudget(phonecore.StreamJournal, reservedAt); err != nil {
 		return err
 	}
-	// ONLY the explicit user refresh may take the destructive recovery. An ordinary healthy
-	// refresh remains the roster-only read it has always been. InboundAgeRefused means the
-	// authenticated head is outside the bounded-age window and therefore cannot be acked;
-	// when that backlog fills the mailbox, no replacement roster can be appended until the
-	// owner explicitly releases it.
-	recoveryToken := core.DiscardRecoveryToken()
-	if core.Router().InboundAgeRefused() || recoveryToken != "" {
-		if recoveryToken, err = a.requestMailboxDiscard(); err != nil {
-			a.refundResyncBudget(phonecore.StreamJournal, reservedAt)
-			return stampErrorClass(err)
-		}
+	// ONLY the explicit user refresh may take the destructive recovery. Hand EVERY press to
+	// the single mailbox reader for one immediate page diagnosis before deciding: checking
+	// InboundAgeRefused here raced the page already in flight on that goroutine. The facade
+	// could observe false, append an ordinary replacement, and only then have the drain prove
+	// that the authenticated head was stale -- leaving the replacement behind the backlog it
+	// was meant to bypass. requestMailboxDiscard remains non-destructive on a healthy page;
+	// the drain deletes only after that page itself proves stale age (or a durable recovery
+	// token says a prior explicit deletion still needs its replacement command).
+	recoveryToken, err := a.requestMailboxDiscard()
+	if err != nil {
+		a.refundResyncBudget(phonecore.StreamJournal, reservedAt)
+		return stampErrorClass(err)
 	}
 	_, err = a.unsignedRosterRefresh(core.Router().Sessions().Cursor(), recoveryToken != "", recoveryToken)
 	if err != nil {

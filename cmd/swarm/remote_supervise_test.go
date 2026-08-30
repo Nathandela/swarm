@@ -443,11 +443,11 @@ func TestDaemonNeverSpawnsTheGateway(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			// .claude holds the sibling git worktrees this repo is developed in
-			// (.claude/worktrees/*), which are FULL checkouts and are visible from the main
+			// .claude and .codex hold the sibling git worktrees this repo is developed in
+			// (.claude/worktrees/* and .codex/worktrees/*), which are FULL checkouts visible from the main
 			// one. Walking them would record their cmd/swarm as another importer and fail
 			// this test for a package that is this same package, in another working copy.
-			if name := d.Name(); name == ".git" || name == ".claude" || name == "dist" || name == "docs" {
+			if name := d.Name(); name == ".git" || name == ".claude" || name == ".codex" || name == ".gradle" || name == "build" || name == "dist" || name == "docs" {
 				return filepath.SkipDir
 			}
 			return nil

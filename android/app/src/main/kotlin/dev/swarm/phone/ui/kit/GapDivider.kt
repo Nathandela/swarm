@@ -1,10 +1,13 @@
 package dev.swarm.phone.ui.kit
 
 import android.content.Context
+import android.text.Layout
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
+import android.widget.TextView
 import dev.swarm.phone.R
+import kotlin.math.ceil
 
 /**
  * derived: docs/design/substrate-components.md #29 Gap divider
@@ -45,32 +48,68 @@ import dev.swarm.phone.R
  * composes it. What this component does own is 48 dp of its own height, and that height IS the
  * air at a tear.
  */
-fun gapDivider(context: Context, label: CharSequence): LinearLayout = KitStack(
-    context,
-    LinearLayout.HORIZONTAL,
-    Kit.dimenPx(context, R.dimen.swarm_space_8),
-).apply {
-    gravity = Gravity.CENTER_VERTICAL
-    // PB-DS-12's floor on the LINE, because the line is the control: the repair is a word inside
-    // the label and row 22 states the general case -- "an inline span cannot carry a 48 dp
-    // target". A minimum and not a size, `syncStrip`'s terms: the rule and the word are drawn
-    // exactly as the drawing draws them, and what grows is the air a finger may land in.
-    minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
-    layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
+fun gapDivider(context: Context, label: CharSequence): LinearLayout {
+    val gap = Kit.dimenPx(context, R.dimen.swarm_space_8)
+    val word = Kit.textView(context).apply {
+        Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
+        setTextColor(Kit.colour(context, R.color.swarm_state_error))
+        text = label
+        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { marginStart = gap }
+    }
+    return GapDividerLayout(
+        context = context,
+        word = word,
+        gapPx = gap,
+        ruleFloorPx = Kit.dpPx(context, KitMetrics.HAIRLINE_DP),
+    ).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        // PB-DS-12's floor on the LINE, because the line is the control: the repair is a word
+        // inside the label and row 22 states the general case -- "an inline span cannot carry a
+        // 48 dp target". A minimum and not a size, `syncStrip`'s terms: the rule and the word are
+        // drawn exactly as the drawing draws them, and what grows is the air a finger may land in.
+        minimumHeight = Kit.dpPx(context, KitMetrics.MIN_TARGET_DP)
+        layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
 
-    addView(gapRule(context))
-    addView(
-        Kit.textView(context).apply {
-            Kit.appearance(this, R.style.TextAppearance_Swarm_Body_Secondary)
-            setTextColor(Kit.colour(context, R.color.swarm_state_error))
-            text = label
-            // WRAP between two weighted rules, so the words keep their own width and the rules
-            // divide whatever is left. A weighted label would let a long repair phrase eat the
-            // rules until the divider stopped reading as one.
-            layoutParams = LinearLayout.LayoutParams(WRAP, WRAP)
-        },
-    )
-    addView(gapRule(context))
+        addView(gapRule(context))
+        addView(word)
+        addView(
+            gapRule(context).apply {
+                (layoutParams as LinearLayout.LayoutParams).marginStart = gap
+            },
+        )
+    }
+}
+
+/**
+ * Caps the word before `LinearLayout` distributes the remainder to its weighted rules.
+ *
+ * `WRAP_CONTENT` alone is not containment: the label is measured before the weighted children,
+ * so an unbroken path or identifier can take the whole parent width and leave the trailing rule
+ * outside it. Reserving one hairline for each rule plus the two declared gaps leaves ordinary
+ * labels unchanged and gives long labels a real width at which Android can wrap them.
+ */
+private class GapDividerLayout(
+    context: Context,
+    private val word: TextView,
+    private val gapPx: Int,
+    private val ruleFloorPx: Int,
+) : LinearLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val mode = View.MeasureSpec.getMode(widthMeasureSpec)
+        val params = word.layoutParams as LinearLayout.LayoutParams
+        params.width = WRAP
+        word.layoutParams = params
+        if (mode != View.MeasureSpec.UNSPECIFIED) {
+            val available = View.MeasureSpec.getSize(widthMeasureSpec) -
+                paddingLeft - paddingRight - (gapPx * 2) - (ruleFloorPx * 2)
+            val natural = ceil(Layout.getDesiredWidth(word.text, word.paint)).toInt() +
+                word.compoundPaddingLeft + word.compoundPaddingRight
+            params.width = natural.coerceAtMost(available.coerceAtLeast(0))
+            word.layoutParams = params
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
 }
 
 /**

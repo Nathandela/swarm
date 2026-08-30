@@ -9,6 +9,7 @@ import android.view.ViewConfiguration
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import dev.swarm.phone.ui.kit.TabItem
+import dev.swarm.phone.ui.kit.conversationViewportAir
 import dev.swarm.phone.ui.kit.grainOverlay
 import dev.swarm.phone.ui.kit.tabBar
 
@@ -201,6 +202,7 @@ fun conversationScaffoldView(
         // what makes it the only thing that scrolls.
         layoutParams = LinearLayout.LayoutParams(MATCH, 0, 1f)
         addView(content)
+        conversationViewportAir()
     }
     scroll.anchorConversation(content, scrollY)
     // The grain rides the SCROLLED CHILD, for ADR-009 D4.3's amended reason: one overlay per

@@ -690,7 +690,9 @@ func benignInterruptError(err error) bool {
 
 // interactionHistory serves ADR-014's paged read (Mirror M3.1): the window of this
 // session's journalled interaction records immediately preceding before_item -- ascending
-// by cursor, bounded by limit -- plus the honest floor ("nothing older is retained").
+// by cursor, bounded by limit -- plus the honest floor ("nothing older is retained"). An
+// empty before_item places the boundary after the retained transcript and therefore returns
+// the newest page; this is how a phone holding no item obtains its first stable anchor.
 func (d *Daemon) interactionHistory(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error) {
 	local, err := d.resolveChatSession("", session)
 	if err != nil {
@@ -723,26 +725,40 @@ func (d *Daemon) interactionHistory(session, beforeItem string, limit int) ([]pr
 			recs = append(recs, rec)
 		}
 	}
-	boundary, found := uint64(0), false
-	for _, rec := range recs {
-		if historyItemID(rec) == beforeItem && beforeItem != "" {
-			// The FIRST record of the item: folds append later records under the same id,
-			// and "strictly older than before_item" means older than the item began.
-			boundary, found = rec.Cursor, true
-			break
-		}
-	}
-	if !found {
-		return nil, false, protocol.CodeInvalidField, fmt.Errorf(
-			"interaction history: before_item %q is not an item of session %q", beforeItem, session)
-	}
 	var older []protocol.JournalRecord
-	for _, rec := range recs {
-		if rec.Cursor < boundary {
-			older = append(older, rec)
+	if beforeItem == "" {
+		// The sentinel is a boundary after the newest retained record. Copy the slice so
+		// the paging code below has exactly the same ownership in both modes.
+		older = append(older, recs...)
+	} else {
+		boundary, found := uint64(0), false
+		for _, rec := range recs {
+			if historyItemID(rec) == beforeItem {
+				// The FIRST record of the item: folds append later records under the same id,
+				// and "strictly older than before_item" means older than the item began.
+				boundary, found = rec.Cursor, true
+				break
+			}
+		}
+		if !found {
+			return nil, false, protocol.CodeInvalidField, fmt.Errorf(
+				"interaction history: before_item %q is not an item of session %q", beforeItem, session)
+		}
+		for _, rec := range recs {
+			if rec.Cursor < boundary {
+				older = append(older, rec)
+			}
 		}
 	}
-	start := historyPageStart(older, limit)
+	start, fits := historyPageStartBounded(older, limit, maxHistoryRecordsJSONBytes)
+	if !fits {
+		// Never cut an interaction item: agent_message records are increments and a tail
+		// presented without its head is corrupted prose, not a partial success. One item
+		// larger than the reply budget is therefore an explicit refusal rather than an
+		// oversized relay append or an empty page the phone retries forever.
+		return nil, false, protocol.CodeUnavailable, fmt.Errorf(
+			"interaction history: newest whole item before %q exceeds the bounded reply", beforeItem)
+	}
 	return older[start:], start == 0, "", nil
 }
 
@@ -778,30 +794,18 @@ func historyItemID(rec protocol.JournalRecord) string {
 // unreachable: the next page asks for what is older than that item's FIRST RECORD, which is
 // below the records just delivered, so nothing ever returns them.
 //
-// The rule is therefore: take the largest suffix of WHOLE items whose record count fits
-// limit. `limit` keeps bounding records (it is a frame-size bound, and items have no uniform
-// size), it simply now rounds DOWN to an item boundary instead of cutting through one.
+// The rule is therefore: take the largest suffix closed over WHOLE item identities whose
+// record count fits limit. `limit` normally bounds records (items have no uniform size), but
+// item closure wins when no such suffix fits: a streamed A may surround B as A(head), B,
+// A(delta), making all three records the smallest suffix that contains no headless tail.
 //
-// THE ONE ITEM THAT DOES NOT FIT still ships, alone and over limit. Refusing it would return
-// an empty page with floor=false -- "there is more, and you may not have it" -- and the phone
-// would ask forever for a page it can never receive. An over-limit page is a bounded, honest
-// answer; a livelock is not.
+// THE MINIMAL WHOLE-IDENTITY CLOSURE THAT DOES NOT FIT still ships over limit. Usually that is
+// one multi-record item; an interleaving can make it several items. Refusing it would return an
+// empty page with floor=false -- "there is more, and you may not have it" -- and the phone
+// would ask forever for a page it can never receive. The independent byte ceiling remains
+// hard, so this escape is bounded; a headless tail or livelock is not an acceptable substitute.
 func historyPageStart(older []protocol.JournalRecord, limit int) int {
-	// Boundaries: the index of each item's FIRST record within older, plus each gap (which
-	// is atomic and therefore always its own boundary).
-	var bounds []int
-	seen := map[string]bool{}
-	for i, rec := range older {
-		id := historyItemID(rec)
-		if id == "" {
-			bounds = append(bounds, i)
-			continue
-		}
-		if !seen[id] {
-			seen[id] = true
-			bounds = append(bounds, i)
-		}
-	}
+	bounds := historyItemBoundaries(older)
 	if len(bounds) == 0 {
 		return 0
 	}
@@ -810,8 +814,82 @@ func historyPageStart(older []protocol.JournalRecord, limit int) int {
 			return b
 		}
 	}
-	// Not even the newest item fits: ship it whole anyway. See the doc.
+	// Not even the newest whole-identity closure fits: ship it anyway. See the doc.
 	return bounds[len(bounds)-1]
+}
+
+// maxHistoryRecordsJSONBytes bounds the serialized Journal slice before the protocol reply
+// is sealed and appended to the relay. The relay's 1 MiB append frame base64-encodes the
+// encrypted envelope, so a page near 768 KiB of plaintext is already too close to the hard
+// ceiling once Control/reply framing, the 78-byte envelope overhead and JSON are included.
+// 512 KiB leaves more than 250 KiB of plaintext headroom; the worst-case sealing test pins
+// the complete replyFrame -> encrypted envelope -> base64 relay-append composition.
+const maxHistoryRecordsJSONBytes = 512 << 10
+
+// historyPageStartBounded applies the record-count boundary first, then advances across
+// whole-item boundaries until the serialized Journal slice fits byteBudget. It never returns
+// a partial item. fits=false means even the newest whole item is too large and the caller must
+// refuse explicitly rather than emit an oversized frame or an empty-with-more page.
+func historyPageStartBounded(older []protocol.JournalRecord, limit, byteBudget int) (start int, fits bool) {
+	start = historyPageStart(older, limit)
+	bounds := historyItemBoundaries(older)
+	for {
+		raw, err := json.Marshal(older[start:])
+		if err == nil && len(raw) <= byteBudget {
+			return start, true
+		}
+		next := len(older)
+		for _, boundary := range bounds {
+			if boundary > start {
+				next = boundary
+				break
+			}
+		}
+		if next == len(older) {
+			return len(older), false
+		}
+		start = next
+	}
+}
+
+// historyItemBoundaries returns every index at which the WHOLE suffix may begin without
+// cutting an interaction item. Checking only the record at the candidate is insufficient:
+// streamed item A may be interleaved A(head), B, A(delta), in which case B is its own first
+// record but the suffix beginning there still contains A's tail without A's head. A structured
+// gap carries no item_id and is atomic, but is a valid start only when every later item is whole.
+func historyItemBoundaries(older []protocol.JournalRecord) []int {
+	first := make(map[string]int)
+	for i, rec := range older {
+		id := historyItemID(rec)
+		if _, ok := first[id]; id != "" && !ok {
+			first[id] = i
+		}
+	}
+	// Scan from the new edge, retaining the earliest first-record required by any item in
+	// the suffix. A candidate is closed over item identity exactly when that requirement
+	// does not precede it. bounds are reversed into ascending order for the paging callers.
+	required := len(older)
+	var reverse []int
+	for i := len(older) - 1; i >= 0; i-- {
+		id := historyItemID(older[i])
+		if id == "" {
+			if required >= i {
+				reverse = append(reverse, i)
+			}
+			continue
+		}
+		if first[id] < required {
+			required = first[id]
+		}
+		if required == i {
+			reverse = append(reverse, i)
+		}
+	}
+	bounds := make([]int, len(reverse))
+	for i := range reverse {
+		bounds[len(reverse)-1-i] = reverse[i]
+	}
+	return bounds
 }
 
 // interactionDetail serves IS-CAP-2's detail read (Mirror M3.3): the full pre-truncation

@@ -1,13 +1,16 @@
 package dev.swarm.phone.ui.screens
 
 import android.content.Context
+import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
+import dev.swarm.phone.R
 import dev.swarm.phone.bottomInsetPx
+import dev.swarm.phone.ui.kit.Kit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -184,6 +187,76 @@ class ConversationScaffoldViewTest {
             viewport.bottom <= composer.top,
         )
         assertEquals("the composer is not pinned to the window's bottom edge", 800, composer.bottom)
+    }
+
+    /**
+     * Physical-phone regression, 2026-08-29. The fixed header ended at y=427 and the stale
+     * notice began at y=427: the first glyph touched the header's hairline because the scrolling
+     * region spent no top air at all. The signed conversation drawing gives that region 10 dp.
+     */
+    @Test
+    fun `the conversation viewport keeps the design top step between the header and its content`() {
+        val content = label("Some messages are missing.")
+        val root = scaffold(content = content)
+        root.measure(exactly(400), exactly(800))
+        root.layout(0, 0, 400, 800)
+
+        val viewport = root.find(ScaffoldTag.CONTENT) as ScrollView
+        val expected = Kit.dimenPx(context, R.dimen.swarm_space_10)
+        assertEquals(
+            "the conversation starts at the header hairline, reproducing the phone's y=427 / " +
+                "y=427 collision instead of the drawing's 10 dp reading step",
+            expected,
+            viewport.paddingTop,
+        )
+        assertEquals(
+            "the viewport records top air but lays its child above it, so the first sentence " +
+                "still touches the fixed header",
+            expected,
+            content.top,
+        )
+    }
+
+    /** A property-only clip test can stay green while the drawing path ignores the viewport. */
+    @Test
+    fun `a deeply scrolled transcript cannot paint through the fixed header or composer`() {
+        val header = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 80)
+        }
+        val composer = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 72)
+        }
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            repeat(60) {
+                addView(
+                    View(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            40,
+                        )
+                    },
+                )
+            }
+        }
+        val root = scaffold(header = header, content = content, composer = composer)
+        content.foreground = null
+        root.measure(exactly(400), exactly(800))
+        root.layout(0, 0, 400, 800)
+
+        val viewport = root.find(ScaffoldTag.CONTENT) as ScrollView
+        viewport.scrollTo(0, content.measuredHeight)
+        assertTrue("the fixture never reached a deep scroll", viewport.scrollY > 0)
+        assertTrue("the header overlaps the conversation viewport", header.bottom <= viewport.top)
+        assertTrue("the conversation viewport overlaps the composer", viewport.bottom <= composer.top)
+
+        val visible = Rect()
+        assertTrue("the deep-scrolled transcript has no visible region", content.getLocalVisibleRect(visible))
+        assertTrue("the deep scroll still reports the transcript's top as visible", visible.top > 0)
+        assertTrue(
+            "the child reports ${visible.height()} px visible through a ${viewport.height} px viewport",
+            visible.height() <= viewport.height,
+        )
     }
 
     private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)

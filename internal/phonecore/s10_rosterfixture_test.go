@@ -62,7 +62,7 @@ func TestS10_NoTestFixtureStampsANonzeroRosterCursor(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "vendor", ".claude":
+			case ".git", ".claude", ".codex", ".gradle", "build", "dist", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
 			return nil

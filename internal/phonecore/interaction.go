@@ -266,10 +266,10 @@ func (s *ItemStore) Apply(rec schema.JournalRecord) (applied bool) {
 // it -- but it MUST say so rather than go on offering a control that does nothing, which is
 // the livelock this whole region exists to end.
 //
-// The headroom is counted in RECORDS and not in items, which is conservative on purpose: a
-// page's records fold into at most that many items, so counting them can only refuse a page
-// that would have fit, never admit one that would not. Erring toward refusing a page beats
-// erring toward a bound that does not hold.
+// Headroom is measured on a shadow fold of the whole page, exactly as this store would retain
+// it. Counting raw records falsely refuses a streamed item whose many deltas become one item;
+// counting only new ids misses in-place folds such as plan replacement. The shadow keeps the
+// item bound exact without mutating the live transcript before the all-or-nothing decision.
 func (s *ItemStore) ApplyPage(recs []schema.JournalRecord) (held bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,8 +278,14 @@ func (s *ItemStore) ApplyPage(recs []schema.JournalRecord) (held bool) {
 		// simply had nothing older. The floor is what says so, not this.
 		return true
 	}
+	shadow := &ItemStore{items: append([]Item(nil), s.items...)}
+	sessions := map[string]struct{}{}
 	for _, rec := range recs {
-		if s.backfillHeldLocked(rec.SessionID)+len(recs) > MaxBackfillPerSession {
+		sessions[rec.SessionID] = struct{}{}
+		shadow.applyLocked(rec, true)
+	}
+	for session := range sessions {
+		if shadow.backfillHeldLocked(session) > MaxBackfillPerSession {
 			return false
 		}
 	}
@@ -437,9 +443,9 @@ func (s *ItemStore) applyLocked(rec schema.JournalRecord, backfill bool) bool {
 		next.Cursor = prev.Cursor // the item keeps its FIRST record's position
 		next.Resolved = prev.Resolved
 		// AN ITEM DOES NOT CHANGE REGION UNDER A LATER RECORD. A live delta folding into a
-		// backfilled item would otherwise move it into the live window, where the trim can
-		// evict it -- the same page-eaten-by-the-trim defect, one record later.
-		next.Backfilled = prev.Backfilled || backfill
+		// backfilled item stays protected from the live trim; conversely an anchorless page
+		// delta for a live item must not move it into the reader-only region.
+		next.Backfilled = prev.Backfilled
 		s.items[i] = next
 	} else {
 		if w.Kind == KindPlanUpdate && !s.acceptPlanLocked(rec.SessionID, w.Revision) {
@@ -485,10 +491,7 @@ func (s *ItemStore) applyStructuredGapLocked(rec schema.JournalRecord, backfill 
 	if len(rec.Item) > 0 {
 		_ = json.Unmarshal(rec.Item, &g)
 	}
-	id := "structured_gap:" + strconv.FormatUint(rec.Cursor, 10)
-	if !g.TS.IsZero() {
-		id = "structured_gap:" + g.TS.UTC().Format(time.RFC3339Nano)
-	}
+	id := structuredGapID(rec)
 	if i := s.indexOf(rec.SessionID, id); i >= 0 {
 		// Already folded: a re-delivery of a boundary, not a second boundary.
 		return false
@@ -512,6 +515,18 @@ func (s *ItemStore) applyStructuredGapLocked(rec schema.JournalRecord, backfill 
 	s.insertLocked(it)
 	s.trimLocked(rec.SessionID)
 	return true
+}
+
+// structuredGapID derives the one stable identity applyStructuredGapLocked uses.
+func structuredGapID(rec schema.JournalRecord) string {
+	var g wireGap
+	if len(rec.Item) > 0 {
+		_ = json.Unmarshal(rec.Item, &g)
+	}
+	if !g.TS.IsZero() {
+		return "structured_gap:" + g.TS.UTC().Format(time.RFC3339Nano)
+	}
+	return "structured_gap:" + strconv.FormatUint(rec.Cursor, 10)
 }
 
 // acceptPlanLocked applies IS-PLAN-1: a plan_update is LATEST-STATE per session, so the

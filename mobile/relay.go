@@ -167,11 +167,21 @@ func (a *App) flushAcks(ctx context.Context, cl *relay.Client, generation uint64
 	return nil
 }
 
-// requestMailboxDiscard hands an explicitly user-authorized destructive recovery to the
-// single mailbox reader and waits for its bounded result. Executing on the drain is the
-// concurrency boundary: a direct facade-side control call could race the wait page currently
-// being accepted, then let that old page restore cursor/ack state across the discard.
+// requestMailboxDiscard hands an explicit roster refresh to the single mailbox reader and
+// waits for its bounded diagnosis/recovery result. Executing on the drain is the concurrency
+// boundary: a facade-side InboundAgeRefused check can race the wait page currently being
+// accepted and publish the replacement behind the stale backlog. A healthy diagnosis returns
+// an empty token and deletes nothing; only authenticated stale age (or a durable pending token)
+// crosses into the destructive, incarnation-fenced self-mailbox discard.
 func (a *App) requestMailboxDiscard() (string, error) {
+	// RefreshRoster is an idempotent command, so it inherits the command plane's brief
+	// post-Start wait. Start publishes sess before run publishes client; failing immediately
+	// in that ordinary window regresses the roster-only refresh that existed before guarded
+	// stale-head diagnosis. This only waits for the connection -- the facade still performs
+	// no mailbox read, and the request below is still claimed by the drain's single reader.
+	if _, err := a.awaitConn(); err != nil {
+		return "", err
+	}
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -213,10 +223,10 @@ func (a *App) requestMailboxDiscard() (string, error) {
 }
 
 // performMailboxDiscard executes at the top of a drain iteration, when that goroutine owns no
-// in-flight read. resetAcks is AckBatcher.Reset on the wait path and nil on the synchronous
-// poll path. Reset is a barrier for an already-started old ack and retires every pending cursor
-// before the destructive transaction is issued.
-func (a *App) performMailboxDiscard(cl *relay.Client, resetAcks func()) bool {
+// in-flight read. acks is the wait path's AckBatcher and nil on the synchronous poll path.
+// Reset is both the wait-ack generation barrier before a synchronous healthy-diagnosis ack,
+// and the retirement barrier before a destructive transaction is issued.
+func (a *App) performMailboxDiscard(cl *relay.Client, acks *transport.AckBatcher) bool {
 	a.mu.Lock()
 	req := a.mailboxDiscard
 	if req == nil || req.claimed {
@@ -238,12 +248,59 @@ func (a *App) performMailboxDiscard(cl *relay.Client, resetAcks func()) bool {
 		finish("", classed(ErrClassOffline, err))
 		return true
 	}
-	// The stale verdict may have cleared while RefreshRoster was waking this single reader.
-	// In that case the healthy frames already repaired the transport; compacting them would
-	// no longer be the narrowly authorized recovery. Complete the request without deletion
-	// so the caller can still send its ordinary roster refresh.
+	// The stale verdict may not exist YET: RefreshRoster can cross a page already in flight
+	// before MailboxRouter opens its authenticated head. Diagnose one immediate page here,
+	// while the single reader owns the connection, so one press cannot publish its replacement
+	// behind an existing stale backlog. Stop at the first unique, unacked stale-age refusal:
+	// later items must not advance the durable cursor past it.
 	pendingToken := a.core.DiscardRecoveryToken()
-	if !a.core.Router().InboundAgeRefused() && pendingToken == "" {
+	staleAge := a.core.Router().InboundAgeRefused()
+	ackGeneration := cl.MailboxGeneration()
+	if !staleAge && pendingToken == "" {
+		cursor := a.core.State().RelayCursor
+		items, err := cl.MailboxRead(req.ctx, cursor)
+		if errors.Is(err, relay.ErrMailboxCursorResetRequired) {
+			if err = a.rewindRelayCursor(); err == nil {
+				ackGeneration = cl.MailboxGeneration()
+				items, err = cl.MailboxRead(req.ctx, 0)
+			}
+		}
+		if err != nil {
+			finish("", err)
+			return true
+		}
+		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
+			finish("", err)
+			return true
+		}
+		for _, it := range items {
+			receipt, err := a.accept(req.ctx, it.Envelope, it.Cursor)
+			// ErrStaleAge has two meanings. An old replay whose authenticated sequence is
+			// already covered durably is ACKED and is ordinary compaction, not permission
+			// to erase the fresh tail. Only the unique, unacked refusal is the blocker this
+			// explicit gesture authorizes us to discard. Stop at that blocker so a later
+			// frame cannot move the durable relay cursor past the evidence before recovery.
+			if errors.Is(err, crypto.ErrStaleAge) && !receipt.Acked {
+				staleAge = true
+				break
+			}
+		}
+	}
+	// Healthy frames may have repaired the transport while RefreshRoster woke the reader.
+	// Compacting them would no longer be the narrowly authorized recovery. Before the caller
+	// publishes its ordinary roster refresh, synchronously ack the safe diagnostic high-water:
+	// otherwise a mailbox at its depth cap refuses the daemon's replacement. This explicit,
+	// user-visible refresh deliberately pays at most one fsync/relay op; ordinary drains retain
+	// the off-delivery-path, metered AckBatcher latency and quota behavior. Reset first on the
+	// wait path so no old async ack overlaps this generation-fenced flush.
+	if !staleAge && pendingToken == "" {
+		if acks != nil {
+			acks.Reset()
+		}
+		if err := a.flushAcks(req.ctx, cl, ackGeneration); err != nil {
+			finish("", err)
+			return true
+		}
 		finish("", nil)
 		return true
 	}
@@ -259,8 +316,8 @@ func (a *App) performMailboxDiscard(cl *relay.Client, resetAcks func()) bool {
 		finish("", err)
 		return true
 	}
-	if resetAcks != nil {
-		resetAcks()
+	if acks != nil {
+		acks.Reset()
 	}
 	target, _ := a.destination()
 	if target == "" {
@@ -1214,7 +1271,7 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 	go func() { defer close(ackDone); acks.Run(actx) }()
 	defer func() { stopAcks(); <-ackDone }() // joined, so no ack outlives the drain that owns it
 	for ctx.Err() == nil {
-		if a.performMailboxDiscard(cl, acks.Reset) {
+		if a.performMailboxDiscard(cl, acks) {
 			continue
 		}
 		if pacer.Pace(ctx) != nil {
@@ -1428,14 +1485,15 @@ func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 // per-bucket mark and the per-channel clear both live in the core now, inside the same
 // durable transaction that moves the watermark (PB-SYNC-3), and StreamState reads them from
 // there.
-func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) {
+func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) (phonecore.Receipt, error) {
 	key := a.core.State().Keys.ContentKey
-	if _, err := a.core.Router().AcceptCommit(raw, cursor); err != nil {
-		return
+	receipt, err := a.core.Router().AcceptCommit(raw, cursor)
+	if err != nil {
+		return receipt, err
 	}
 	v, ok := viewFrame(key, raw)
 	if !ok {
-		return
+		return receipt, nil
 	}
 	switch v.Kind {
 	case "terminal_snapshot":
@@ -1453,6 +1511,7 @@ func (a *App) accept(ctx context.Context, raw []byte, cursor uint64) {
 	case "":
 		a.onJournal(v.Record)
 	}
+	return receipt, nil
 }
 
 // adoptReconcile folds the machine's rollback authorities into every durable coordinate

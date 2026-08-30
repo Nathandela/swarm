@@ -51,6 +51,10 @@ var pbnet6ReadCalls = map[string]bool{
 // pbnet6PermittedReaders is the enumeration: the functions in `mobile` allowed to consume the
 // inbound mailbox, and why each is the only one.
 var pbnet6PermittedReaders = map[string]string{
+	"(*App).performMailboxDiscard": "the explicit RefreshRoster diagnosis runs synchronously at the top " +
+		"of drainWait or drainPoll, after that same goroutine has ended its in-flight read. The facade " +
+		"only installs a request and cancels the parked wait; it never calls this reader directly, so " +
+		"the diagnostic is a temporary mode of THE existing reader rather than a concurrent drain.",
 	"(*App).drainWait": "THE reader's live-tail mode (Wave R9): the bounded MailboxWait loop " +
 		"App.drain selects against every relay whose hello advertised the \"wait\" capability. " +
 		"Same goroutine, same single call site in App.run, same durable State.RelayCursor advanced " +

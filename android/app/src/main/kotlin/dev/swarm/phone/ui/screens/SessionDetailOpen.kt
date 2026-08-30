@@ -26,6 +26,23 @@ object SessionDetailOpen {
         itemCount == 0 && nowMs - lastBackfillAtMs >= BACKFILL_THROTTLE_MS
 }
 
+/** Which bounded history page a conversation action asks the machine for. */
+enum class SessionHistoryIntent { EARLIER, NEWEST }
+
+/**
+ * The `before_item` vocabulary shared by cold-open, Reload and Load earlier.
+ *
+ * Empty is an intentional wire sentinel for [SessionHistoryIntent.NEWEST], not the absence of a
+ * plan. [SessionHistoryIntent.EARLIER] still requires a stable item id; a structured gap is not
+ * an item and therefore yields null through its empty `oldestItemId`.
+ */
+object SessionHistoryRead {
+    fun beforeItem(intent: SessionHistoryIntent, oldestItemId: String): String? = when (intent) {
+        SessionHistoryIntent.NEWEST -> ""
+        SessionHistoryIntent.EARLIER -> oldestItemId.ifEmpty { null }
+    }
+}
+
 /**
  * Where a deep-link landed. [NotRetained] is a NAMED state the screen renders ("no longer in
  * the retained history"), never a silent landing at the top: a tap that lands on the wrong

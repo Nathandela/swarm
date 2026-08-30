@@ -212,6 +212,78 @@ func TestR6R2_APageThatCannotBeHeldWholeIsRefusedWhole(t *testing.T) {
 	}
 }
 
+// A page made entirely of records for identities already held consumes no new backfill
+// capacity. It may be a relay replay or an anchorless Reload; at the bound it is still held,
+// exactly as ApplyPage's contract says, rather than turning a duplicate into "phone full".
+func TestR6R2_ARepeatedPageAtTheBackfillBoundIsStillHeld(t *testing.T) {
+	s := NewItemStore()
+	const sess = "m1/s1"
+	page := make([]schema.JournalRecord, 0, MaxBackfillPerSession)
+	for i := 0; i < MaxBackfillPerSession; i++ {
+		page = append(page, r2item(sess, uint64(i+1), "back-"+strconv.Itoa(i),
+			KindAgentMessage, "older", StatusCompleted, false))
+	}
+	if !s.ApplyPage(page) {
+		t.Fatal("initial page did not fill the backfill region")
+	}
+	if !s.ApplyPage(page) {
+		t.Fatal("an all-duplicate page was refused at the bound even though it needs no new capacity")
+	}
+}
+
+// The daemon deliberately lets one indivisible streamed item exceed the requested record
+// count so paging cannot cut its head from its tail. The handset's bound is ITEMS, so treating
+// those records as 201 capacity slots falsely refuses the one item and recreates the livelock
+// the daemon's whole-item escape exists to prevent.
+func TestR6R2_AMultiRecordItemConsumesOneBackfillSlot(t *testing.T) {
+	s := NewItemStore()
+	const sess, id = "m1/s1", "01JSTREAMED"
+	page := make([]schema.JournalRecord, 0, MaxBackfillPerSession+1)
+	for i := 0; i <= MaxBackfillPerSession; i++ {
+		status := StatusInProgress
+		if i == MaxBackfillPerSession {
+			status = StatusCompleted
+		}
+		page = append(page, r2item(sess, uint64(i+1), id, KindAgentMessage, "x", status, false))
+	}
+	if !s.ApplyPage(page) {
+		t.Fatal("one streamed item was refused because its records were counted as separate items")
+	}
+	items := s.Session(sess)
+	if len(items) != 1 {
+		t.Fatalf("folded streamed page = %d items, want one", len(items))
+	}
+	if len(items[0].Text) != len(page) {
+		t.Fatalf("folded streamed text length = %d, want %d increments", len(items[0].Text), len(page))
+	}
+}
+
+// A page can carry a later delta for an item that reached the phone on the live stream first.
+// Folding that delta must update the item without moving it into the reader-only retention
+// region; otherwise repeated Reloads progressively exempt the live tail from its own bound.
+func TestR6R2_APageDeltaDoesNotMoveALiveItemIntoBackfill(t *testing.T) {
+	s := NewItemStore()
+	const sess, id = "m1/s1", "01JLIVE"
+	if !s.Apply(r2item(sess, 10, id, KindAgentMessage, "head ", StatusInProgress, false)) {
+		t.Fatal("live head did not land")
+	}
+	if !s.ApplyPage([]schema.JournalRecord{
+		r2item(sess, 11, id, KindAgentMessage, "tail", StatusCompleted, false),
+	}) {
+		t.Fatal("page delta was refused")
+	}
+	got, ok := s.Resolve(sess, id)
+	if !ok {
+		t.Fatal("updated live item vanished")
+	}
+	if got.Text != "head tail" {
+		t.Fatalf("folded text = %q, want %q", got.Text, "head tail")
+	}
+	if got.Backfilled {
+		t.Fatal("a page delta moved an existing live item into the backfill retention region")
+	}
+}
+
 // TestR6R2_ADurableOutcomeIsAVerdictAndNotAPayload. Core.RecordOutcome stored the WHOLE
 // schema.Control -- journal records and all -- into persisted state, and nothing prunes
 // OpOutcomes (this package's own recorded residual: "never pruned, so every launch re-offers

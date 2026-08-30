@@ -72,6 +72,23 @@ func TestS11R_InputNeverWaitsForAConnection(t *testing.T) {
 	})
 }
 
+// TestRefreshRosterDiagnosisWaitsForStartsConnection keeps pull-to-refresh compatible with
+// the command plane's established startup rule. Start publishes its session before the relay
+// client exists; a refresh issued in that ordinary window must wait briefly for the connection
+// Start is bringing up, then hand its diagnosis request to the drain's single mailbox reader.
+// It must not fail immediately merely because the new guarded stale-head diagnosis now precedes
+// the roster command.
+func TestRefreshRosterDiagnosisWaitsForStartsConnection(t *testing.T) {
+	src := loadFacade(t)
+	body := s11FuncSource(t, src, "App", "requestMailboxDiscard")
+	label := s11FuncLabel("App", "requestMailboxDiscard")
+	s11RequireCalls(t, label, body, map[string]string{
+		"a.awaitConn()": "RefreshRoster is an idempotent command and must preserve the command " +
+			"plane's brief Start-to-connection wait before installing its drain-owned diagnosis; " +
+			"failing on a.client == nil makes an immediate post-Start pull report offline.",
+	})
+}
+
 // TestS11R_TheSkewRefusalCannotBlockItsOwnRemedy is PB-TIME-1's latch, pinned structurally.
 //
 // THE DEFECT. sealSignedCommand consulted SkewMonitor.Check and returned on error, while

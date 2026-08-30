@@ -178,6 +178,29 @@ func TestR6History_AnUnsignedReadReachesTheSeamAndNeverTheDeviceAuthenticator(t 
 	}
 }
 
+// TestR6History_AnEmptyAnchorReachesTheHistorian pins the newest-page sentinel at the
+// protocol choke point. The body is present; only before_item is empty, which deliberately
+// means "start after the newest retained item" to the historian.
+func TestR6History_AnEmptyAnchorReachesTheHistorian(t *testing.T) {
+	b := newR6HistoryBackend()
+	sock := serveRemoteAPI(t, b)
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapRemoteGateway, CapJournal})
+	sid := rep.EndpointID + "/sess1"
+
+	rc.writeControl(Control{Op: OpInteractionHistory, EndpointID: rep.EndpointID, SessionID: sid,
+		History: &InteractionHistoryReq{Session: sid, BeforeItem: "", Limit: 50}})
+	if got := rc.readControl(); got.Op == OpError {
+		t.Fatalf("anchorless interaction_history refused: code %q %q", got.ErrorCode, got.Error)
+	}
+	b.mu.Lock()
+	q := append([]r6HistoryQuery(nil), b.histQ...)
+	b.mu.Unlock()
+	if len(q) != 1 || q[0].session != sid || q[0].beforeItem != "" || q[0].limit != 50 {
+		t.Fatalf("anchorless seam query = %+v, want one query for (%s, empty, 50)", q, sid)
+	}
+}
+
 // TestR6History_ASeamRefusalSurfacesItsCodeVerbatim: an unknown before_item is the
 // daemon's call and its code crosses back untouched.
 func TestR6History_ASeamRefusalSurfacesItsCodeVerbatim(t *testing.T) {

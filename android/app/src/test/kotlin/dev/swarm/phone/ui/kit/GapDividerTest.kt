@@ -2,12 +2,14 @@ package dev.swarm.phone.ui.kit
 
 import android.content.Context
 import android.graphics.drawable.ColorDrawable
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.theme.SwarmTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -127,4 +129,39 @@ class GapDividerTest {
             params.width == LinearLayout.LayoutParams.MATCH_PARENT,
         )
     }
+
+    /**
+     * The ordinary copy is short, but the component contract says prose wraps. `WRAP_CONTENT`
+     * between two weighted rules is not enough: LinearLayout can let the label consume the full
+     * measure spec before it accounts for the trailing rule and both gaps.
+     */
+    @Test
+    fun `a long tear wraps inside a narrow conversation instead of escaping it`() {
+        val divider = gapDivider(
+            context,
+            "Messages from this machine are missing and reloading them needs the whole " +
+                "actionable sentence to remain readable",
+        )
+        val label = word(divider)
+        val width = 280
+        divider.measure(exactly(width), unspecified())
+        divider.layout(0, 0, divider.measuredWidth, divider.measuredHeight)
+
+        assertEquals("the divider itself grew wider than its conversation", width, divider.measuredWidth)
+        for (child in (0 until divider.childCount).map(divider::getChildAt)) {
+            assertTrue("a divider child starts before the conversation", child.left >= 0)
+            assertTrue(
+                "a divider child ends at ${child.right}, outside the $width px conversation",
+                child.right <= width,
+            )
+        }
+        assertTrue("the long sentence was clamped to one line", label.maxLines > 1)
+        assertNull("the long sentence was ellipsised instead of left readable", label.ellipsize)
+        assertTrue("the leading rule disappeared at narrow width", rules(divider).first().width > 0)
+        assertTrue("the trailing rule disappeared at narrow width", rules(divider).last().width > 0)
+    }
+
+    private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)
+
+    private fun unspecified() = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
 }

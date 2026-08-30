@@ -329,9 +329,16 @@ class ConversationScrollTest {
         return found as ScrollView
     }
 
-    /** The offset at which the last message is on screen: what "the newest message" means in px. */
+    /**
+     * The offset at which the last message is on screen: what "the newest message" means in px.
+     *
+     * Use the child's laid-out bottom rather than its height. The conversation viewport owns a
+     * top reading inset, so its child starts below y=0 and that inset is part of the scrollable
+     * extent. Subtracting only `child.height - viewport.height` is therefore one inset short of
+     * the real ScrollView clamp and mistakes the correctly anchored position for overscroll.
+     */
     private fun bottomOf(scroll: ScrollView): Int =
-        maxOf(0, (scroll.getChildAt(0)?.height ?: 0) - scroll.height)
+        maxOf(0, (scroll.getChildAt(0)?.bottom ?: 0) + scroll.paddingBottom - scroll.height)
 
     private fun View.find(tag: String): View? {
         if (this.tag == tag) return this

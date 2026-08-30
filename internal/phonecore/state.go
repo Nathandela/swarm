@@ -169,7 +169,15 @@ import (
 // v16 adds the crash-safe discard-recovery generation, completion and opaque token. A build
 // one version back drops the only proof that a destructive mailbox transaction still owes an
 // authoritative fast-forward roster after process death.
-const StateSchemaVersion = 16
+//
+// v17 adds last_profile, the exact machine-authored RemoteProfileV1 accepted by the most recent
+// successful Reconcile. Cached session capability records already survive Android process death;
+// without their matching profile they all fail closed to the status card after every SIGKILL,
+// until another reconcile frame happens to arrive. The profile is private inside State so no
+// caller can manufacture this authenticated authority through Save or Mutate. The version bump
+// makes downgrade fail closed instead of silently dropping the predicate that decides whether a
+// restored session may expose chat or terminal control.
+const StateSchemaVersion = 17
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -359,6 +367,15 @@ type State struct {
 	// authority is legitimately zero.
 	ReconciledEpoch uint32
 
+	// lastProfile is the exact RemoteProfileV1 carried by the most recent reconcile record
+	// Core.Reconcile authenticated and accepted for this State's Machine/EpochID. It is private
+	// deliberately: exposing it would let any caller of Save or Mutate manufacture the authority
+	// LastProfile promises can come only from Reconcile. Store persistence is still required,
+	// because Android routinely kills the process while the session capability cache survives.
+	// A pointer distinguishes "never reconciled" from an authenticated legacy zero profile even
+	// though LastProfile intentionally returns the zero value for both.
+	lastProfile *schema.RemoteProfileV1
+
 	// LastHeardAt is the newest AAD-COVERED IssuedAt this phone has ACCEPTED from the
 	// machine, in unix milliseconds; zero means it has never heard from it (PB-APP-11).
 	//
@@ -441,7 +458,23 @@ func (s State) clone() State {
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
 	s.Stale = maps.Clone(s.Stale)
 	s.StaleStreams = maps.Clone(s.StaleStreams)
+	s.lastProfile = cloneRemoteProfilePtr(s.lastProfile)
 	return s
+}
+
+func cloneRemoteProfile(profile schema.RemoteProfileV1) schema.RemoteProfileV1 {
+	profile.AcceptedActions = slices.Clone(profile.AcceptedActions)
+	profile.AcceptedBodyVersions = maps.Clone(profile.AcceptedBodyVersions)
+	profile.RelaySPKIPin = slices.Clone(profile.RelaySPKIPin)
+	return profile
+}
+
+func cloneRemoteProfilePtr(profile *schema.RemoteProfileV1) *schema.RemoteProfileV1 {
+	if profile == nil {
+		return nil
+	}
+	cloned := cloneRemoteProfile(*profile)
+	return &cloned
 }
 
 // Store is the phone's durable custody of State. Load cannot fail: the blob is validated
@@ -568,6 +601,10 @@ type stateFile struct {
 
 	PushPreference  PushPreference `json:"push_preference,omitzero"`
 	ReconciledEpoch uint32         `json:"reconciled_epoch,omitempty"`
+	// LastProfile has no omitempty: null is the explicit "no successful reconcile" state,
+	// while an object is the exact authority Reconcile adopted. Keeping the tag present makes
+	// StateSchemaVersion's pinned durable-field-set check mechanical.
+	LastProfile *schema.RemoteProfileV1 `json:"last_profile"`
 
 	// WakeKey and ContentKey are SEALED blobs from v3 on, each under its own tier KEK
 	// (PB-KEY-9): one file cannot be opened two ways, and a content key the push path can
@@ -845,6 +882,13 @@ func (s *fileStore) saveLocked(st State) error {
 	if st.purgeGen < s.purgeGen {
 		st = disown(st)
 	}
+	// The durable profile is authenticated for exactly the identity that held it when
+	// Reconcile succeeded. Direct Store users do not pass through Core.persistLocked, so the
+	// custody boundary repeats the fence rather than letting a whole-state machine/epoch
+	// replacement launder the previous identity's capability authority.
+	if st.Machine != s.st.Machine || st.EpochID != s.st.EpochID || st.Disowned {
+		st.lastProfile = nil
+	}
 	if st.relayGen < s.st.relayGen {
 		st.RelayCursor = s.st.RelayCursor
 		st.RelayIncarnation = s.st.RelayIncarnation
@@ -1046,6 +1090,7 @@ func dropAllKeyMaterial(st State) State {
 func disown(st State) State {
 	st = dropAllKeyMaterial(st)
 	st.Disowned = true
+	st.lastProfile = nil
 	return st
 }
 
@@ -1412,6 +1457,7 @@ func (s *fileStore) load() error {
 		EpochID:                   f.EpochID,
 		PushPreference:            f.PushPreference,
 		ReconciledEpoch:           f.ReconciledEpoch,
+		lastProfile:               cloneRemoteProfilePtr(f.LastProfile),
 		GrantEpoch:                f.GrantEpoch,
 		GrantSeq:                  f.GrantSeq,
 		RelayCursor:               f.RelayCursor,
@@ -1488,6 +1534,9 @@ func (s *fileStore) load() error {
 		for _, name := range f.StaleStreams {
 			st.StaleStreams[name] = true
 		}
+	}
+	if st.Disowned {
+		st.lastProfile = nil
 	}
 	s.st = st
 	return nil
@@ -1667,6 +1716,7 @@ func persistState(path string, st State, seals stateSeals) error {
 		EpochID:                   st.EpochID,
 		PushPreference:            st.PushPreference,
 		ReconciledEpoch:           st.ReconciledEpoch,
+		LastProfile:               cloneRemoteProfilePtr(st.lastProfile),
 		WakeKey:                   seals.wakeKey,
 		ContentKey:                seals.contentKey,
 		WakeState:                 seals.wakeState,

@@ -2,7 +2,8 @@
 
 **Status**: Accepted (Wave R6, Mirror M3.1/M3.3; bead agents-tracker-hggx.7), **amended by the
 R6 review fix-pack (A1-A5, 2026-08-19), by review round 2 (A6-A9, 2026-08-20) and by review
-round 3 (A10, 2026-08-20)** — see the three "Amended by" sections below. Two of this ADR's original sentences described code that
+round 3 (A10, 2026-08-20), and by the bounded anchorless repair amendment (A11,
+2026-08-30)** — see the "Amended by" sections below. Two of this ADR's original sentences described code that
 did not exist, one ratified a defect, two rules it should have written were missing, four gaps
 only became visible once the phone half was wired and then exercised, and one rule it states
 correctly turned out to be held by no test on the path that serves it (A10); the amendments are
@@ -10,7 +11,7 @@ stated in place rather than by rewriting the sentences away.
 **Date**: 2026-08-19
 **Program**: [docs/specifications/mirror-program.md](../specifications/mirror-program.md) rows M3.1–M3.3; [docs/specifications/remote-control-product-playbook.md](../specifications/remote-control-product-playbook.md) "Wave R6".
 **Companions**: [ADR-009-structured-chat-interaction.md](ADR-009-structured-chat-interaction.md) (the phone is a transcript), [docs/specifications/interaction-schema.md](../specifications/interaction-schema.md) (IS-CAP-2/-3, IS-ENV-2), [ADR-007-remote-access.md](ADR-007-remote-access.md) (the signed-op plane these reads deliberately stay OFF).
-**Ratifies**: the op shapes frozen failing-first in `internal/protocol/r6_historydetail_test.go` and `internal/skeleton/r6_historydetail_test.go` (docs/verification/r6-red/chat-red.txt). ~~This ADR ratifies those shapes verbatim; nothing is amended.~~ — **struck by review round 2**: the sentence was written about the WIRE SHAPES, which are indeed unchanged, but it sat directly above a status line announcing amendments and read as a claim about the whole document. What is unamended is the two ops' shapes; what has been amended ~~nine~~ **ten** times is this ADR's reasoning about them. (**Corrected in place 2026-08-20**: the count was written when A9 was the last amendment and was not raised when round 3 added A10, which the status line four lines above already records.)
+**Ratifies**: the op shapes frozen failing-first in `internal/protocol/r6_historydetail_test.go` and `internal/skeleton/r6_historydetail_test.go` (docs/verification/r6-red/chat-red.txt). ~~This ADR ratifies those shapes verbatim; nothing is amended.~~ — **struck by review round 2**: the sentence was written about the WIRE SHAPES, which are indeed unchanged, but it sat directly above a status line announcing amendments and read as a claim about the whole document. What is unamended is the two ops' shapes; what has been amended ~~nine~~ ~~**ten**~~ **eleven** times is this ADR's reasoning about them. A10 corrected the earlier stale count; A11 adds the anchorless and byte-bound semantics without changing the body fields.
 
 ## Context
 
@@ -35,20 +36,32 @@ Sealing under the epoch content key is already proof the asker is the paired dev
 gating (capability, kill switch) lives ~~behind the seams, not in the handler~~ **in the handler**
 — see amendments A1 and A2.
 
-### 2. Paging is by ITEM IDENTITY, strictly older, ascending, with an honest floor
+### 2. Paging is by ITEM IDENTITY (or the empty newest-page sentinel), ascending, with an honest floor
 
-`before_item` names an `item_id` — never a cursor, never a position (IS-ENV-2: identity is the
+Non-empty `before_item` names an `item_id` — never a cursor, never a position (IS-ENV-2: identity is the
 item_id; a daemon restart's reconciliation legitimately re-delivers the same items at new
 cursors). The reply is the window immediately preceding that item's FIRST record: every record
-the named session's, every one strictly older than the boundary, ascending by cursor, at most
-`limit` — **and beginning on an ITEM BOUNDARY, never inside one (amendment A3, fenced on the
+the named session's, every one strictly older than the boundary, ascending by cursor, normally
+at most `limit` — **and closed over every ITEM IDENTITY it contains, never carrying a delta tail
+whose head precedes the page (amendment A3, fenced on the
 SERVED path only by amendment A10)**. The reply
 rides the EXISTING `Control.journal` carrier — history is journal records, and
 a second carrier would be a second folding path for the same bytes — plus one additive flag,
 `history_floor`: true when nothing older than the returned page is retained, so the phone renders
 a retention floor instead of offering "load earlier" forever. Refusals are coded: an unknown
 `before_item` and a non-positive `limit` are `invalid_field` (a caller bug surfaced, not
-defaulted).
+defaulted). Empty `before_item` is the explicit anchorless spelling: its boundary is immediately
+after the retained transcript, so the same operation returns the newest retained page. It is not
+an unknown id and does not weaken item-identity paging once the first page supplies an anchor.
+
+The limit is a record-count ceiling with one indivisibility exception: when no suffix within it
+is closed over item identity, the minimal closed suffix ships over the count rather than a
+headless tail (usually one multi-record item; for A(head), B, A(delta), the whole interleaving).
+It is not a sufficient frame bound. The serialized `journal` slice is also capped at 512 KiB
+and trimmed from the old edge only at whole-item boundaries. This leaves
+headroom for `Control`, command-reply JSON, AEAD overhead, and the relay append's base64 expansion
+under its 1 MiB `MaxFrame`. If one whole item cannot fit, the daemon refuses `unavailable`; it
+never returns a headless delta tail and never attempts an oversized relay append.
 
 The daemon serves the page from its own journal (`JournalReadFrom(0)`, filtered to the session's
 `interaction` records **and its `structured_gap` boundaries — amendment A4**). That is a scan, not an index — adequate at the journal's retention bound,
@@ -185,6 +198,11 @@ three defects above got in. It is one facade verb wide, it belongs with the M3.2
 the cold open, and the call site (`PhoneSurface.kt:2300-2318`) is already written so that the
 moment the read exists, nothing else changes.
 
+**Superseded by A11 (2026-08-30):** empty `before_item` is now the additive newest-page sentinel;
+the body shape did not change. Cold-open and conversation Reload both claim that bounded reply.
+This page does not prove the global journal stream contiguous, so it does not clear that stale
+verdict; transport repair remains a separate operation.
+
 ## Amended by review round 2 (2026-08-20)
 
 The fix-pack's own reviewer re-read this ADR against the wired code and drove the two reads end
@@ -289,10 +307,31 @@ Section 1 was re-read against the code in the same pass and needs no further ame
 are gateway-routed (`internal/remotegw/command_loop.go`), both handlers honour the negotiated
 `journal` capability and the remote kill switch (A1/A2), and neither adds an `actionClass` entry.
 
+### A11 — anchorless newest-page repair, byte-bounded through the relay envelope (2026-08-30)
+
+The empty-anchor gap in A5 is closed without a new operation or cursor vocabulary: an empty
+`before_item` means the boundary after the newest retained record. `Load earlier` still sends a
+non-empty stable item id; cold-open and conversation Reload deliberately send empty and claim the
+reply into the session transcript. Reload no longer invokes global `journal_resync`, which could
+aggregate a multi-megabyte retained journal into one command-reply mailbox frame. Claiming one
+session page does not prove every session contiguous, so global journal staleness stays visible.
+
+The original `limit=50` was not itself safe: fifty 16 KiB item payloads are about 800 KiB before
+the command reply is encrypted and base64-encoded by the relay append. The daemon now also caps
+the serialized record slice at 512 KiB, trimming only on whole-item boundaries. The worst-case
+test seals the real command reply and marshals the real base64 relay-append shape under
+`relay.MaxFrame`; a single indivisible item above the budget is refused rather than split.
+
+Whole means every identity in the suffix, not merely the identity at its first record. A live
+stream may interleave A(head), B, A(delta); starting at B still carries A's headless tail. The
+old edge therefore closes the suffix over every repeated identity, exceeding the record-count
+request only when that closure is indivisible. The independent 512 KiB ceiling stays hard.
+
 ## What this amends
 
-PB-SYNC-3's reseed remains the *repair* channel, unchanged; this ADR adds the *paging* read
-beside it. Nothing in the reseed's semantics moves.
+PB-SYNC-3's reseed remains the transport repair channel, unchanged; this ADR adds the bounded,
+session-scoped conversation read beside it. Conversation Reload uses the latter to recover the
+latest retained page; it does not optimistically clear the global journal stale verdict.
 
 ## Deferred, disclosed
 
@@ -305,9 +344,8 @@ beside it. Nothing in the reseed's semantics moves.
   affordance** — the "load earlier" control and the full-output expander — rides the M3 view
   slice~~ — superseded again by amendment A5: the affordance landed in the same round. Nothing
   of M3.1/M3.3 is deferred.
-- **An ANCHORLESS "newest page" read** (amendment A5): paging is always relative to a named
-  `item_id`, so a phone holding nothing for a session cannot ask for anything, and M3.2's
-  cold open falls back to the empty state plus Repair. Open, named, one facade verb wide.
+- ~~**An ANCHORLESS "newest page" read** (amendment A5)~~: closed by A11. Empty
+  `before_item` requests the newest retained page; cold-open and conversation Reload use it.
 - **A paged read is not persisted.** The records a page delivers fold into the phone's live
   `ItemStore` and are NOT written into the durable transcript snapshot, so they are gone after a
   process death and a screen that wants them asks again. Deliberate: persisting them would let

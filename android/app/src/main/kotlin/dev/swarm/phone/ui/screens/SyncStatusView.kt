@@ -110,7 +110,7 @@ fun syncStatusView(
     status: SyncStatus,
     open: Boolean = false,
     onOpen: () -> Unit = {},
-    onRepair: () -> Unit = {},
+    onRepair: (View) -> Unit = {},
 ): View = LinearLayout(context).apply {
     orientation = LinearLayout.VERTICAL
     layoutParams = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -151,7 +151,7 @@ fun syncStatusView(
                 addView(
                     ctaButton(context, status.detail.repair, CtaKind.MORE).apply {
                         tag = SyncTag.REPAIR
-                        setOnClickListener { onRepair() }
+                        setOnClickListener { control -> onRepair(control) }
                         announceAsButton(this)
                     },
                 )

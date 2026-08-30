@@ -201,7 +201,9 @@ func (cc *clientConn) handleTurnInterrupt(c Control) {
 
 // handleInteractionHistory serves the UNSIGNED interaction_history read (M3.1, ADR-014,
 // IS-CAP-2's terminal_watch precedent: the device authenticator is never consulted). The
-// reply rides the existing Journal carrier, ascending by cursor, plus HistoryFloor.
+// reply rides the existing Journal carrier, ascending by cursor, plus HistoryFloor. An empty
+// BeforeItem is a present body asking the historian for the newest retained page; it is not a
+// shape error at this layer.
 func (cc *clientConn) handleInteractionHistory(c Control) {
 	if !cc.requireJournalPlaneRead() {
 		return
