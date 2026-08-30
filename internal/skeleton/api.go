@@ -81,10 +81,11 @@ type coreAPI struct {
 	// history serves ADR-014's paged read (M3.1) and detail IS-CAP-2's full-body read
 	// (M3.3). Each is nil in a bare test literal; the coreAPI methods below then refuse
 	// loudly rather than pretending (ApproveInteraction's rule).
-	composer  func(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
-	interrupt func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
-	history   func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
-	detail    func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
+	composer              func(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
+	composerTransactional func(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error)
+	interrupt             func(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error)
+	history               func(session, beforeItem string, limit int) ([]protocol.JournalRecord, bool, protocol.ErrorCode, error)
+	detail                func(session, itemID string) (json.RawMessage, protocol.ErrorCode, error)
 
 	// pairing carries the machine-side pairing identity + enrollment material and the
 	// rendezvous seam BeginPairing hosts a real pairing on (slice A3.3-d). It is nil
@@ -520,6 +521,18 @@ func (a *coreAPI) ComposerSend(machine, operationID string, req protocol.Compose
 	return a.composer(machine, operationID, req)
 }
 
+// ComposerSendTransactional is the remote-tier durable variant. It keeps the operation in
+// prepared while the request waits in the per-session FIFO and while chat.go validates the
+// current incarnation/capability/sink, then invokes begin at the final provider-I/O boundary.
+func (a *coreAPI) ComposerSendTransactional(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
+	if a.composerTransactional == nil {
+		return "", errors.New("skeleton: this daemon has no composer seam wired; nothing was typed")
+	}
+	return a.composerTransactional(machine, operationID, req, begin)
+}
+
+var _ protocol.TransactionalComposerSender = (*coreAPI)(nil)
+
 // InterruptTurn makes coreAPI a protocol.TurnInterrupter (Wave R6): the semantic Stop.
 func (a *coreAPI) InterruptTurn(machine, operationID string, req protocol.TurnInterruptReq) (protocol.ErrorCode, error) {
 	if a.interrupt == nil {
@@ -604,6 +617,11 @@ func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
 // a take_control operation_id cannot be replayed to open a second lease. It delegates to
 // the daemon's ClaimOperation wrapper (Prepare + existed).
 func (a *coreAPI) ClaimOperation(operationID, action, session string) (bool, error) {
+	if action == protocol.ActionComposerSend {
+		if _, local, ok := protocol.ParseID(session); ok {
+			session = local
+		}
+	}
 	return a.core.ClaimOperation(operationID, action, session)
 }
 
@@ -626,6 +644,23 @@ func (a *coreAPI) CommitIdempotentOp(operationID string, ok bool) error {
 // coreAPI ALSO satisfies protocol.IdempotentExecutor so the assembled remote-tier Server
 // makes remote kill/delete replay-safe (slice DHI-3).
 var _ protocol.IdempotentExecutor = (*coreAPI)(nil)
+
+// ComposerOperationExecutor keeps message delivery at-most-once across process death while
+// retaining exact coded outcomes. The session is already local at this seam; the wire handler
+// strips its endpoint exactly once before calling it.
+func (a *coreAPI) ClaimComposerOperation(operationID, action, localSession, sessionInstance, requestHash string) (string, []byte, error) {
+	return a.core.ClaimComposerOperation(operationID, action, localSession, sessionInstance, requestHash)
+}
+
+func (a *coreAPI) BeginComposerOperation(operationID string) error {
+	return a.core.BeginComposerOperation(operationID)
+}
+
+func (a *coreAPI) CommitComposerOperation(operationID string, outcome []byte, success bool) error {
+	return a.core.CommitComposerOperation(operationID, outcome, success)
+}
+
+var _ protocol.ComposerOperationExecutor = (*coreAPI)(nil)
 
 // coreAPI ALSO satisfies protocol.JournalBackend so the assembled remote-tier
 // Server can serve journal_read / journal_subscribe (DHI-1). The daemon and
@@ -665,7 +700,15 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		TS:         r.TS,
 		StateSince: r.StateSince,
 	}
-	if caps != nil {
+	if r.Type == journal.TypeCapabilityTransition {
+		// A transition is an ordered fact about the state AT THIS CURSOR. Decode only
+		// its own validated payload: consulting the current roster here would rewrite
+		// a historical false transition as true after recovery (or the reverse).
+		var rec protocol.SessionCapabilities
+		if json.Unmarshal(r.Payload, &rec) == nil && rec.Validate() == nil {
+			out.Capabilities = &rec
+		}
+	} else if caps != nil {
 		if rec, ok := caps(r.SessionID); ok {
 			out.Capabilities = &rec
 		}

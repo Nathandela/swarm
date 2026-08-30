@@ -436,6 +436,7 @@ func terminalStatus(s string) bool {
 // ids are meaningless once the CLI they name is gone, and a reused local session id would
 // otherwise inherit a stranger's item.
 func (d *Daemon) forgetInteractions(sessionID string) {
+	d.composerLanes.Delete(sessionID)
 	d.itemMu.Lock()
 	defer d.itemMu.Unlock()
 	delete(d.turnIDs, sessionID)

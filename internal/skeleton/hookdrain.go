@@ -10,12 +10,12 @@ package skeleton
 // event bypasses entirely) then makes a safe no-op, never a duplicate journal item.
 //
 // On a reported gap it applies every record BELOW the boundary exactly as above and
-// never a record at or past it (never silently bridging the hole, ADR-017), then
-// emits a structured_gap boundary (internal/daemon) and degrades the session's
-// stored capability record (ADR-017 T2 rule 2) one-way -- durably, at most once per
-// PROVEN boundary rather than once per daemon incarnation -- and returns without
-// ever advancing the cursor past the boundary or retrying on its own: a caller
-// decides what, if anything, comes next.
+// never a record at or past it (never silently bridging the hole, ADR-017). It then
+// durably emits the structured_gap boundary (internal/daemon), degrades the session's
+// stored capability record (ADR-017 T2 rule 2), and resets the fold cursor to 0 -- the
+// spool contract's explicit "adopt the retained sequence space" coordinate. A later
+// drain may fold the retained and future side only after that visible boundary. If the
+// same boundary survives the reset, the tail really is unreadable and polling stops.
 //
 // WHY IT LIVES HERE: exactly interaction.go's own reason (its header comment). skeleton
 // is the one package that already imports internal/daemon, internal/adapter,
@@ -24,6 +24,8 @@ package skeleton
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,8 +43,9 @@ import (
 	"github.com/Nathandela/swarm/internal/shim"
 )
 
-// ErrHookDrainGap is returned by DrainOnce when the shim's spool reports an
-// unrecoverable gap.
+// ErrHookDrainGap is returned by DrainOnce whenever the shim's spool reports a gap.
+// recoveringGap distinguishes the first, durably reset observation (the caller should
+// retry from 0) from the same boundary surviving that reset (the unreadable-tail case).
 var ErrHookDrainGap = errors.New("skeleton: hook drain observed a spool gap")
 
 // hookDrainTimeout bounds one drain round trip against a session's hook socket.
@@ -368,6 +371,12 @@ type HookDrainer struct {
 	// the final drain stopHookDrain performs at session end can never be mid-apply at
 	// the same time over the same cursor file.
 	drainMu sync.Mutex
+	// gapRecoveryPending is true only after a drain has durably journalled a gap
+	// and reset the cursor to adopt the retained side. Guarded by drainMu. It lets
+	// the production loop distinguish a recoverable first observation from the
+	// same torn tail observed again after reset, without changing ErrHookDrainGap's
+	// long-standing exact identity for callers and tests.
+	gapRecoveryPending bool
 
 	mu        sync.Mutex
 	token     string // "" = no drain-auth token configured (see SetToken)
@@ -406,6 +415,12 @@ func (hd *HookDrainer) SetSpoolPath(path string) {
 // yet).
 func (hd *HookDrainer) cursor() uint64 {
 	return readHookCursor(hd.cursorPath)
+}
+
+func (hd *HookDrainer) recoveringGap() bool {
+	hd.drainMu.Lock()
+	defer hd.drainMu.Unlock()
+	return hd.gapRecoveryPending
 }
 
 // DrainOnce performs one dial+drain+apply+persist cycle: it requests every record
@@ -450,7 +465,7 @@ func (hd *HookDrainer) drainOnceLocked() (applied, skipped int, err error) {
 		return 0, 0, fmt.Errorf("skeleton: decode hook drain response: %w", err)
 	}
 
-	return hd.applyLocked(resp)
+	return hd.applyLocked(resp, cursor)
 }
 
 // drainFromSpoolFile is DrainOnce's socket-independent twin (R6 review fix-pack round 2,
@@ -487,7 +502,14 @@ func (hd *HookDrainer) drainFromSpoolFileLocked() (applied, skipped int, err err
 	if rerr != nil {
 		return 0, 0, fmt.Errorf("skeleton: read hook spool file: %w", rerr)
 	}
-	return hd.applyLocked(shim.HookDrainResponse{Records: recs, Gap: hasGap, GapBoundary: gapAt})
+	spoolIncarnation, adoptedLegacy, ierr := shim.ReadHookSpoolIncarnation(spoolPath)
+	if ierr != nil {
+		return 0, 0, fmt.Errorf("skeleton: read hook spool incarnation: %w", ierr)
+	}
+	return hd.applyLocked(shim.HookDrainResponse{
+		Records: recs, Gap: hasGap, GapBoundary: gapAt,
+		SpoolIncarnation: spoolIncarnation, SpoolAdoptedLegacy: adoptedLegacy,
+	}, cursor)
 }
 
 // errNoHookSpoolPath is drainFromSpoolFile's refusal when no spool file was configured.
@@ -502,27 +524,46 @@ var errNoHookSpoolPath = errors.New("skeleton: no hook spool path configured for
 //
 // Errors are the ordinary case here, not a fault: a dead socket and an absent spool file
 // are both what "this session had no structured channel, or it is already fully drained"
-// looks like. Only the gap is worth surfacing, and DrainOnce already emitted and degraded
-// on it.
+// looks like. A first gap is different: DrainOnce has made its boundary and reset
+// durable, so the disk pass below gets one chance to fold the retained side. Only the
+// same boundary surviving that reset is terminal.
 func (hd *HookDrainer) FinalDrain() {
 	hd.drainMu.Lock()
 	defer hd.drainMu.Unlock()
-	if _, _, err := hd.drainOnceLocked(); errors.Is(err, ErrHookDrainGap) {
-		return // proven, unrecoverable, already emitted and degraded: the disk holds no more
+	if _, _, err := hd.drainOnceLocked(); errors.Is(err, ErrHookDrainGap) && !hd.gapRecoveryPending {
+		return // the same gap survived a reset: no retained side can be recovered
 	}
-	if applied, _, err := hd.drainFromSpoolFileLocked(); err != nil {
-		if !errors.Is(err, errNoHookSpoolPath) && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrHookDrainGap) {
+
+	// At most two disk passes. Usually the first is the ordinary final read. When
+	// the socket was already gone and that read is the first observer of a missing
+	// retained range, it only journals the boundary and resets to 0; the second pass
+	// is the required later read that adopts the far side. There is no production
+	// loop left after OnSessionEnd to do it for us.
+	totalApplied := 0
+	for attempt := 0; attempt < 2; attempt++ {
+		applied, _, err := hd.drainFromSpoolFileLocked()
+		totalApplied += applied
+		switch {
+		case err == nil:
+			if totalApplied > 0 {
+				log.Printf("skeleton: final hook drain for session %s recovered %d record(s) from its spool file", hd.sessionID, totalApplied)
+			}
+			return
+		case errors.Is(err, ErrHookDrainGap) && hd.gapRecoveryPending:
+			continue
+		case errors.Is(err, ErrHookDrainGap), errors.Is(err, errNoHookSpoolPath), errors.Is(err, os.ErrNotExist):
+			return
+		default:
 			log.Printf("skeleton: final hook drain for session %s: %v", hd.sessionID, err)
+			return
 		}
-	} else if applied > 0 {
-		log.Printf("skeleton: final hook drain for session %s recovered %d record(s) from its spool file", hd.sessionID, applied)
 	}
 }
 
 // applyLocked is the one apply loop both drain paths share, so the socket path and the
 // disk path can never diverge in what they apply, what they refuse, or what they
 // persist. Caller holds drainMu.
-func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse) (applied, skipped int, err error) {
+func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse, requestCursor uint64) (applied, skipped int, err error) {
 	for _, rec := range resp.Records {
 		// ADR-017 "never silently bridged": a record at or past a reported boundary is
 		// on the FAR side of unrecoverable content. Applying one would splice the
@@ -560,10 +601,8 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse) (applied, skippe
 		// that happened to append the record. Wrapping the two together is what let a
 		// restarted daemon rediscover the identical still-present gap, skip the whole
 		// block as already-reported, and leave the session advertising structured
-		// chat. degradeCapability is idempotent and one-way, so calling it on every
-		// gap costs nothing and can never re-upgrade anything.
-		hd.degradeCapability()
-
+		// chat. degradeCapability is idempotent for the exact boundary, so calling it
+		// on every observation costs nothing and can never authorize anything.
 		// The emit-dedupe, and ONLY the emit-dedupe. gapCursorPath persists exactly
 		// which boundary was already appended, sibling of the fold cursor, so a
 		// restart recognizes it: ADR-017 / playbook 6.1 name "an exact structured_gap
@@ -577,36 +616,144 @@ func (hd *HookDrainer) applyLocked(resp shim.HookDrainResponse) (applied, skippe
 		// the life of the drainer. The persisted check is correct and sufficient
 		// alone, so the latch is gone.
 		gapPath := hookGapCursorPath(hd.cursorPath)
-		if readHookCursor(gapPath) != resp.GapBoundary {
-			reason := fmt.Sprintf("hook spool gap at seq %d", resp.GapBoundary)
-			if gerr := hd.d.Core().EmitStructuredGap(hd.sessionID, reason); gerr != nil {
-				log.Printf("skeleton: EmitStructuredGap for session %s: %v", hd.sessionID, gerr)
-			}
-			if perr := persistHookCursor(gapPath, resp.GapBoundary); perr != nil {
-				log.Printf("skeleton: persist hook drain gap boundary for session %s: %v", hd.sessionID, perr)
+		spoolIncarnation := resp.SpoolIncarnation
+		adoptedLegacy := resp.SpoolAdoptedLegacy
+		if spoolIncarnation == "" {
+			// Backward-compatible response from an older live shim.
+			spoolIncarnation = shim.LegacyHookSpoolIncarnation
+			adoptedLegacy = true
+		}
+		checkpoint := readHookGapCheckpoint(gapPath)
+		alreadyReported := checkpoint.Boundary == resp.GapBoundary &&
+			(checkpoint.SpoolIncarnation == spoolIncarnation ||
+				(checkpoint.SpoolIncarnation == shim.LegacyHookSpoolIncarnation && adoptedLegacy))
+
+		// The session instance is persisted independently and before a capability
+		// record may be authored (a side-process backend can still be dialling).
+		// Derive the durable dedupe key from that authoritative sidecar/cache first;
+		// falling back to an older capability-only test/state shape preserves wire
+		// compatibility without making key stability depend on capability timing.
+		instance, ok := hd.d.sessionInstance(hd.sessionID)
+		if !ok {
+			if caps, capsOK := hd.d.sessionCapabilities(hd.sessionID); capsOK {
+				instance = caps.SessionInstance
 			}
 		}
+		gapKey := hookGapDedupeKey(hd.sessionID, instance, spoolIncarnation, resp.GapBoundary)
+		hd.degradeCapability(gapKey)
+		if !alreadyReported {
+			reason := fmt.Sprintf("hook spool gap at seq %d", resp.GapBoundary)
+			if gerr := hd.d.Core().EmitStructuredGapOnce(hd.sessionID, instance, reason, gapKey); gerr != nil {
+				// The cursor stays on the known side. Advancing without the durable
+				// boundary would silently splice chronology on the next drain.
+				return applied, skipped, fmt.Errorf("skeleton: emit structured gap for session %s: %w", hd.sessionID, gerr)
+			}
+			if perr := persistHookGapCheckpoint(gapPath, hookGapCheckpoint{
+				SpoolIncarnation: spoolIncarnation, Boundary: resp.GapBoundary,
+			}); perr != nil {
+				return applied, skipped, fmt.Errorf("skeleton: persist hook drain gap boundary for session %s: %w", hd.sessionID, perr)
+			}
+		} else if checkpoint.SpoolIncarnation == shim.LegacyHookSpoolIncarnation &&
+			spoolIncarnation != shim.LegacyHookSpoolIncarnation {
+			// One-time upgrade of a decimal pre-identity checkpoint belonging to an
+			// existing legacy spool. A fresh spool is never marked adoptedLegacy.
+			if perr := persistHookGapCheckpoint(gapPath, hookGapCheckpoint{
+				SpoolIncarnation: spoolIncarnation, Boundary: resp.GapBoundary,
+			}); perr != nil {
+				return applied, skipped, fmt.Errorf("skeleton: migrate hook drain gap boundary for session %s: %w", hd.sessionID, perr)
+			}
+		}
+		// A reset reader that sees the SAME boundary has reached a genuinely
+		// unreadable tail (or a reset sequence space with nothing clean to adopt).
+		// Resetting again would spin forever over the same bytes. The first
+		// observation, including one resumed after a crash between reporting and
+		// reset, instead writes 0 durably: ReadFrom(0) is the spool contract's
+		// explicit spelling of "adopt the currently retained sequence space".
+		if alreadyReported && requestCursor == 0 {
+			hd.gapRecoveryPending = false
+			return applied, skipped, ErrHookDrainGap
+		}
+		if perr := persistHookCursor(hd.cursorPath, 0); perr != nil {
+			return applied, skipped, fmt.Errorf("skeleton: reset hook drain cursor after gap: %w", perr)
+		}
+		hd.gapRecoveryPending = true
 		return applied, skipped, ErrHookDrainGap
+	}
+	hd.gapRecoveryPending = false
+	if current, ok := hd.d.sessionCapabilities(hd.sessionID); ok &&
+		hd.d.sessionDegraded(hd.sessionID) && !current.StructuredChat {
+		// Only a CLEAN drain proves future ingestion is flowing again. This is based
+		// on the durable marker, not the process-local pending flag: a crash after the
+		// cursor reset must recover on the next daemon's first clean drain too. Pair
+		// that fact with a fresh, non-writing shim hello/submit-capability proof.
+		hd.d.proveCurrentShimMessageSink(hd.sessionID)
 	}
 	return applied, skipped, nil
 }
 
-// degradeCapability applies ADR-017 T2 rule 2's one-way degrade to the session, DURABLY
+// degradeCapability applies ADR-017 T2 rule 2's durable withdrawal to the session
 // (capability.go): the fact of the proven gap is recorded whether or not a capability
-// record has been authored yet, and any record that exists -- now or later -- carries
-// structured_chat=false, terminal_fallback=true from it. No record is ever invented
-// here; records are authored at launch.
+// record has been authored yet, and any record that exists carries the fail-closed
+// {structured_chat:false, terminal_fallback:false, terminal_control:false} shape until
+// this exact current sink is freshly proved. No record is ever invented here; records
+// are authored at launch.
 //
 // Idempotent by construction, which is what lets DrainOnce call it on EVERY proven gap
 // rather than only on the incarnation that appends the journal record.
-func (hd *HookDrainer) degradeCapability() {
-	hd.d.markSessionDegraded(hd.sessionID)
+func (hd *HookDrainer) degradeCapability(generation string) {
+	hd.d.markSessionDegradedFor(hd.sessionID, generation)
 }
 
 // hookGapCursorPath is the sidecar recording the exact gap boundary already
 // reported for a session's fold cursor, sibling of it -- both files, and the
 // mechanism they name, private to this one HookDrainer/session.
 func hookGapCursorPath(cursorPath string) string { return cursorPath + ".gap" }
+
+type hookGapCheckpoint struct {
+	SpoolIncarnation string `json:"spool_incarnation"`
+	Boundary         uint64 `json:"boundary"`
+}
+
+// readHookGapCheckpoint accepts the pre-incarnation decimal sidecar as the
+// explicit legacy namespace. New writes are identity-qualified JSON.
+func readHookGapCheckpoint(path string) hookGapCheckpoint {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return hookGapCheckpoint{}
+	}
+	var checkpoint hookGapCheckpoint
+	if json.Unmarshal(data, &checkpoint) == nil &&
+		checkpoint.SpoolIncarnation != "" && checkpoint.Boundary != 0 {
+		return checkpoint
+	}
+	boundary, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || boundary == 0 {
+		return hookGapCheckpoint{}
+	}
+	return hookGapCheckpoint{
+		SpoolIncarnation: shim.LegacyHookSpoolIncarnation,
+		Boundary:         boundary,
+	}
+}
+
+func persistHookGapCheckpoint(path string, checkpoint hookGapCheckpoint) error {
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		return err
+	}
+	return persistHookBytes(path, data)
+}
+
+func hookGapDedupeKey(sessionID, sessionInstance, spoolIncarnation string, boundary uint64) string {
+	identity, _ := json.Marshal(struct {
+		SessionID        string `json:"session_id"`
+		SessionInstance  string `json:"session_instance,omitempty"`
+		SpoolIncarnation string `json:"spool_incarnation"`
+		Boundary         uint64 `json:"boundary"`
+	}{sessionID, sessionInstance, spoolIncarnation, boundary})
+	sum := sha256.Sum256(identity)
+	return "hook-spool-gap/v1/" + hex.EncodeToString(sum[:])
+}
 
 // readHookCursor reads the persisted fold cursor at path, or 0 if it does not exist
 // yet (nothing drained so far) or is unreadable.

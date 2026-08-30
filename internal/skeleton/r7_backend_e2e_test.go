@@ -39,20 +39,25 @@ import (
 // the words arrive as an app-server RPC, not as keystrokes.
 func TestR7E2E_APhoneComposerSendReachesTheCodexBackendAsTurnStartThroughTheRealGateway(t *testing.T) {
 	rig := newR7E2ERig(t)
+	instance, ok := rig.sk.sessionInstance(rig.local)
+	if !ok || instance == "" {
+		t.Fatal("session has no incarnation for composer binding")
+	}
 
 	cmd, err := phonecore.SignComposerSend(rig.ks, phonecore.ComposerSendInput{
-		Machine:      rig.sk.api.endpointID,
-		Session:      rig.namespaced,
-		OperationID:  "devA:01JE2ESEND000000000000",
-		ExpiresAt:    time.Now().Add(time.Minute),
-		ExpectedTurn: "",
-		Text:         "ship it",
+		Machine:         rig.sk.api.endpointID,
+		Session:         rig.namespaced,
+		SessionInstance: instance,
+		OperationID:     "devA:01JE2ESEND000000000000",
+		ExpiresAt:       time.Now().Add(time.Minute),
+		ExpectedTurn:    "",
+		Text:            "ship it",
 	})
 	if err != nil {
 		t.Fatalf("phone sign composer_send: %v", err)
 	}
 	env, err := phonecore.SealComposerSendEnvelope(rig.key, 1, 100, cmd, &schema.ComposerSendReq{
-		Session: rig.namespaced, ExpectedTurn: "", Text: "ship it",
+		Session: rig.namespaced, SessionInstance: instance, ExpectedTurn: "", Text: "ship it",
 	})
 	if err != nil {
 		t.Fatalf("phone seal composer_send: %v", err)

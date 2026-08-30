@@ -8,10 +8,10 @@ package skeleton
 // and NEVER the session's structured_chat capability, so a session degraded by a proven
 // structured_gap accepted a phone send, had the text typed into its PTY, and replied OK.
 // Probed: registered {StructuredChat:true, Interrupt:true}, markSessionDegraded, record now
-// {StructuredChat:false, TerminalFallback:true}; ComposerSend returned code="" err=nil and
-// the fake CLI got the text on stdin. ADR-017 T2 rule 2 and Mirror M5.5 say a fallback
-// session has NO structured composer because it has no message sink -- the user's message
-// goes in and the transcript can never show it. turn_interrupt already refused this shape
+// {StructuredChat:false, TerminalFallback:false, TerminalControl:false}; ComposerSend
+// returned code="" err=nil and the fake CLI got the text on stdin. ADR-017 T2 rule 2 and
+// Mirror M5.5 say an unproved session has NO structured composer -- the user's message goes
+// in and the transcript can never show it. turn_interrupt already refused this shape
 // correctly; the composer is now symmetric with it.
 //
 // B4(a) (BLOCKER, ADR-017 gap honesty). interactionHistory kept only rec.Type ==
@@ -81,7 +81,7 @@ func TestR6Fix_ADegradedSessionRefusesTheComposerAndTypesNothing(t *testing.T) {
 	// ...and then proves a gap. ADR-017 T2 rule 2: structured_chat is disabled for this
 	// session instance, one-way, durably.
 	r.sk.markSessionDegraded(r.local)
-	if c, ok := r.sk.sessionCapabilities(r.local); !ok || c.StructuredChat || !c.TerminalFallback {
+	if c, ok := r.sk.sessionCapabilities(r.local); !ok || c.StructuredChat || c.TerminalFallback || c.TerminalControl {
 		t.Fatalf("CONTROL BROKEN: after markSessionDegraded the record is %+v (ok=%v); this test "+
 			"cannot measure the composer's behaviour on a degraded session if the session is not "+
 			"degraded", c, ok)
@@ -90,7 +90,7 @@ func TestR6Fix_ADegradedSessionRefusesTheComposerAndTypesNothing(t *testing.T) {
 	code, err := r.sk.api.ComposerSend(r.sk.api.endpointID, "devA:01JDEGRADED",
 		protocol.ComposerSendReq{Session: r.session, ExpectedTurn: turn, Text: "please continue"})
 	if err == nil {
-		t.Fatalf("composer_send on a TERMINAL-FALLBACK session was ACCEPTED (code %q): the user's "+
+		t.Fatalf("composer_send on a HISTORY-TORN session was ACCEPTED (code %q): the user's "+
 			"message is typed into a PTY whose transcript can never show it -- ADR-017's "+
 			"silently-bridged gap, which is the one move the ADR forbids", code)
 	}

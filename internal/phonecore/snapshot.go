@@ -330,6 +330,12 @@ func (c *SnapshotCache) Len() int {
 // drop the sealed envelopes, so every frame is authenticated + seq-guarded ONCE before
 // its plaintext is demuxed -- journal and snapshot frames share one seq space.
 type MailboxRouter struct {
+	// acceptMu serialises the receiver's in-memory replay-guard advance with the durable
+	// commit that either adopts or rolls it back. MailboxReceiver.Accept necessarily moves
+	// first; without this outer transaction lock, restoring from durable state after a Save
+	// failure could race another accepted frame and erase its live high-water.
+	acceptMu sync.Mutex
+
 	key       crypto.ContentKey
 	recv      *crypto.MailboxReceiver
 	sessions  *SessionCache
@@ -583,6 +589,8 @@ func (r *MailboxRouter) Accept(raw []byte) (gap bool, err error) {
 // boundary without waiting ten minutes. Production reads through Accept and AcceptCommit,
 // which pass time.Now().
 func (r *MailboxRouter) AcceptAt(raw []byte, now time.Time) (gap bool, err error) {
+	r.acceptMu.Lock()
+	defer r.acceptMu.Unlock()
 	_, res, f, err := r.open(raw, now)
 	if err != nil {
 		gap := false
@@ -614,13 +622,24 @@ type inboundFrame struct {
 	reseed   schema.JournalReseed
 }
 
+// errDiscardableFrame tags an item whose bytes cannot become useful on retry: malformed
+// wire data, failed authentication, wrong direction, malformed authenticated plaintext, or
+// an unknown kind. The original error remains wrapped for errors.Is. This tag is authored at
+// each proof site instead of treating every open error as discardable at AcceptCommit; a new
+// failure mode therefore defaults to ReceiptRetained until it is reviewed explicitly.
+var errDiscardableFrame = errors.New("phonecore: discardable mailbox frame")
+
+func discardableFrameError(err error) error {
+	return fmt.Errorf("%w: %w", errDiscardableFrame, err)
+}
+
 // open parses, authenticates and seq-guards one envelope EXACTLY ONCE, then decodes its
 // plaintext. res is non-nil once the frame authenticated, so a caller can report the TRUE
 // gap even when the decode then fails.
 func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.MailboxResult, inboundFrame, error) {
 	env, err := crypto.ParseEnvelope(raw)
 	if err != nil {
-		return Bucket{}, nil, inboundFrame{}, err
+		return Bucket{}, nil, inboundFrame{}, discardableFrameError(err)
 	}
 	b := Bucket{Sender: env.Header.SenderKeyID, Epoch: env.Header.EpochID}
 	key, recv, _, _, _ := r.bound()
@@ -656,7 +675,7 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 	// costs.
 	plain, err := crypto.OpenMailbox(key, env)
 	if err != nil {
-		return b, nil, inboundFrame{}, err
+		return b, nil, inboundFrame{}, discardableFrameError(err)
 	}
 	if now.Sub(time.UnixMilli(env.Header.IssuedAt)) > InboundMaxAge {
 		return b, nil, inboundFrame{}, crypto.ErrStaleAge
@@ -675,7 +694,7 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(plain, &dir); err == nil && dir.Kind == kindPhoneToMachine {
-		return b, nil, inboundFrame{}, ErrWrongDirection
+		return b, nil, inboundFrame{}, discardableFrameError(ErrWrongDirection)
 	}
 	res, err := recv.Accept(key, env)
 	if err != nil {
@@ -686,14 +705,14 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(res.Plaintext, &disc); err != nil {
-		return b, res, inboundFrame{}, err
+		return b, res, inboundFrame{}, discardableFrameError(err)
 	}
 	f := inboundFrame{kind: disc.Kind, bucket: b, seq: env.Header.Seq, issuedAt: env.Header.IssuedAt}
 	switch disc.Kind {
 	case kindTerminalSnapshot:
 		var sf snapshotFrame
 		if err := json.Unmarshal(res.Plaintext, &sf); err != nil {
-			return b, res, inboundFrame{}, err
+			return b, res, inboundFrame{}, discardableFrameError(err)
 		}
 		f.snapshot = Snapshot{
 			Session: sf.Session, Lines: sf.Lines, Cols: sf.Cols, Rows: sf.Rows,
@@ -703,7 +722,7 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 	case kindCommandReply:
 		var rf replyFrame
 		if err := json.Unmarshal(res.Plaintext, &rf); err != nil {
-			return b, res, inboundFrame{}, err
+			return b, res, inboundFrame{}, discardableFrameError(err)
 		}
 		f.reply = rf.Control
 	case kindReconcile:
@@ -712,7 +731,7 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		// than half-applying a partial authority.
 		var cf reconcileFrame
 		if err := json.Unmarshal(res.Plaintext, &cf); err != nil {
-			return b, res, inboundFrame{}, err
+			return b, res, inboundFrame{}, discardableFrameError(err)
 		}
 		f.recon = cf.ReconcileRecord
 	case kindJournalReseed:
@@ -721,7 +740,7 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		// cache is worse than no repair, because it clears the flag that says so.
 		var rf reseedFrame
 		if err := json.Unmarshal(res.Plaintext, &rf); err != nil {
-			return b, res, inboundFrame{}, err
+			return b, res, inboundFrame{}, discardableFrameError(err)
 		}
 		f.reseed = rf.JournalReseed
 	case kindEpochGrant:
@@ -735,12 +754,12 @@ func (r *MailboxRouter) open(raw []byte, now time.Time) (Bucket, *crypto.Mailbox
 		// schema.JournalRecord has no kind field), decoded byte-identically to
 		// JournalReceiver.Accept (journal.go).
 		if err := json.Unmarshal(res.Plaintext, &f.record); err != nil {
-			return b, res, inboundFrame{}, err
+			return b, res, inboundFrame{}, discardableFrameError(err)
 		}
 	default:
 		// An unrecognised kind is NOT a journal record: swallowing it into the session
 		// cache is exactly the C8 regression. Fail closed rather than mis-apply it.
-		return b, res, inboundFrame{}, fmt.Errorf("phonecore: unrecognised mailbox frame kind %q", disc.Kind)
+		return b, res, inboundFrame{}, discardableFrameError(fmt.Errorf("phonecore: unrecognised mailbox frame kind %q", disc.Kind))
 	}
 	return b, res, f, nil
 }
@@ -823,15 +842,39 @@ func (r *MailboxRouter) apply(f inboundFrame) {
 			sessions.AdvanceCursor(f.record.Cursor)
 			return
 		}
+		if f.record.Type == RecordTypeStructuredGap {
+			// A gap is a transcript boundary only. Runtime capabilities use the dedicated,
+			// same-instance/delta-fenced capability_transition channel; reading capability
+			// fields here would make the gap an unfenced second authority channel.
+			r.Items().Apply(f.record)
+			sessions.AdvanceCursor(f.record.Cursor)
+			return
+		}
 		sessions.Apply(f.record)
 	}
 }
 
-// Receipt reports what became of one committed frame: whether its seq revealed a GAP, and
-// whether the relay was acked for it.
+// ReceiptDisposition tells a mailbox drain whether an item that returned an error may be
+// skipped while sweeping the rest of the relay page. The distinction cannot be reconstructed
+// from error types at the transport seam: parse/auth/decode refusals are discardable hostile
+// input, while stale-age/custody refusals and a failed durable commit retain recoverable
+// evidence whose later cursors must not advance past it.
+type ReceiptDisposition uint8
+
+const (
+	// ReceiptRetained is deliberately zero: a new error return that does not make an
+	// affirmative skip decision must stop the page rather than silently advance past it.
+	ReceiptRetained ReceiptDisposition = iota
+	ReceiptDiscardable
+)
+
+// Receipt reports what became of one committed frame: whether its seq revealed a GAP,
+// whether the relay was acked for it, and -- when an error is returned -- whether the item
+// must remain ahead of all later cursors.
 type Receipt struct {
-	Gap   bool
-	Acked bool
+	Gap         bool
+	Acked       bool
+	Disposition ReceiptDisposition
 }
 
 // AcceptCommit is Accept plus the durable transaction PB-STATE-7 requires, in the order the
@@ -866,6 +909,9 @@ func (r *MailboxRouter) AcceptCommit(raw []byte, cursor uint64) (Receipt, error)
 // RECOVERY from a phone clock that was wrong -- are testable without waiting ten minutes or
 // moving the host's clock. Production reads through AcceptCommit, which passes time.Now().
 func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time) (Receipt, error) {
+	r.acceptMu.Lock()
+	defer r.acceptMu.Unlock()
+
 	// PB-KEY-10, and it must come BEFORE ParseEnvelope. The machine's bootstrap grant is a
 	// TAGGED PLAINTEXT frame, not a ContentKey-sealed envelope -- deliberately, because it is
 	// what DELIVERS the ContentKey -- so the envelope parser refuses it, commits nothing and
@@ -888,7 +934,7 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 			// relay's copy is redundant and the ack destroys nothing. It is the idempotent
 			// half of the retry: without it the phone re-reads the same item on every drain
 			// for the whole retention window and the mailbox never compacts (PB-SYNC-6).
-			return Receipt{Acked: r.ack(cursor) == nil}, err
+			return Receipt{Acked: r.ack(cursor) == nil, Disposition: ReceiptDiscardable}, err
 		}
 		if errors.Is(err, crypto.ErrStaleAge) {
 			// open authenticated the envelope before returning ErrStaleAge. If durable
@@ -898,7 +944,7 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 			// an old full page instead of stalling behind the age backstop.
 			if r.core != nil {
 				if env, parseErr := crypto.ParseEnvelope(raw); parseErr == nil && r.core.State().Receive[b] >= env.Header.Seq {
-					return Receipt{Acked: r.ack(cursor) == nil}, err
+					return Receipt{Acked: r.ack(cursor) == nil, Disposition: ReceiptDiscardable}, err
 				}
 			}
 			// PAST PB-TIME-2's BOUND, AND THEREFORE NEVER ACKED. This branch used to share
@@ -922,13 +968,17 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 			// is loud (InboundAgeRefused stops the phone reading "online"); a deletion is
 			// neither. Nothing is persisted here: a fail-closed refusal commits no content.
 			r.markAgeRefused(true)
-			return Receipt{}, err
+			return Receipt{Disposition: ReceiptRetained}, err
 		}
 		gap := false
 		if res != nil {
 			gap = res.Gap
 		}
-		return Receipt{Gap: gap}, err
+		disposition := ReceiptRetained
+		if errors.Is(err, errDiscardableFrame) {
+			disposition = ReceiptDiscardable
+		}
+		return Receipt{Gap: gap, Disposition: disposition}, err
 	}
 	// A frame the phone TOOK is proof the inbound plane works, so the refusal condition
 	// clears with it. It is cleared here rather than latched until something explicitly
@@ -944,7 +994,12 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 	// that stream first. See commitReceive.
 	contiguous, streams, err := r.core.commitReceive(b, f, cursor, now)
 	if err != nil {
-		return Receipt{Gap: res.Gap}, err
+		// MailboxReceiver.Accept advanced its in-memory guard before the durable transaction
+		// failed. Restore every bucket from the unchanged durable state so this same process
+		// can retry the retained frame; otherwise the retry is mislabeled ErrStaleSeq and
+		// acked even though its content never committed.
+		r.restoreReceiveGuards(r.core.State())
+		return Receipt{Gap: res.Gap, Disposition: ReceiptRetained}, err
 	}
 	gap := res.Gap || !contiguous
 	if !contiguous {
@@ -957,9 +1012,19 @@ func (r *MailboxRouter) AcceptCommitAt(raw []byte, cursor uint64, now time.Time)
 	r.adoptStaleStreams(streams)
 	r.apply(f)
 	if err := r.ack(cursor); err != nil {
-		return Receipt{Gap: gap}, err
+		return Receipt{Gap: gap, Disposition: ReceiptDiscardable}, err
 	}
 	return Receipt{Gap: gap, Acked: true}, nil
+}
+
+func (r *MailboxRouter) restoreReceiveGuards(st State) {
+	recv := crypto.NewMailboxReceiver()
+	for b, seq := range st.Receive {
+		recv.SeedHighWater(b.Sender, b.Epoch, seq)
+	}
+	r.mu.Lock()
+	r.recv = recv
+	r.mu.Unlock()
 }
 
 // acceptBootstrap consumes the machine's tagged plaintext epoch-grant frame: verify it
@@ -997,10 +1062,10 @@ func (r *MailboxRouter) acceptBootstrap(g *crypto.EpochGrant, cursor uint64) (Re
 	}
 	opened, err := r.core.installGrant(g, cursor)
 	if err != nil && (opened || isCustodyRefusal(err)) {
-		return Receipt{}, err
+		return Receipt{Disposition: ReceiptRetained}, err
 	}
 	acked := r.ack(cursor) == nil
-	return Receipt{Acked: acked}, err
+	return Receipt{Acked: acked, Disposition: ReceiptDiscardable}, err
 }
 
 // isCustodyRefusal reports whether err is one of the two PB-KEY-2 tier verdicts, which say

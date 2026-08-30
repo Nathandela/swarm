@@ -25,10 +25,63 @@ package protocol
 // and a gate is not.
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"sync"
 
 	"github.com/Nathandela/swarm/internal/protocol/schema"
 )
+
+// ErrComposerOutcomeUnknown means delivery crossed the at-most-once boundary but the
+// provider/shim reply cannot prove whether the message landed. The handler leaves the durable
+// operation executing and never blindly redelivers it.
+var ErrComposerOutcomeUnknown = errors.New("composer delivery outcome unknown")
+
+const (
+	composerPhasePrepared       = "prepared"
+	composerPhaseExecuting      = "executing"
+	composerPhaseCompleted      = "completed"
+	composerPhaseFailed         = "failed"
+	composerPhaseOutcomeUnknown = "outcome_unknown"
+)
+
+type composerCachedOutcome struct {
+	OK      bool      `json:"ok"`
+	Code    ErrorCode `json:"code,omitempty"`
+	Message string    `json:"message,omitempty"`
+}
+
+type composerOperationLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockComposerOperation serializes live attempts with the same operation id until the
+// first attempt has durably committed its exact terminal outcome. Entries are reference
+// counted and deleted after the last waiter, so arbitrary client ids cannot grow the Server
+// for its lifetime. Crash/restart recovery is still exclusively the durable phase record.
+func (s *Server) lockComposerOperation(operationID string) func() {
+	s.composerOpMu.Lock()
+	entry := s.composerOpLocks[operationID]
+	if entry == nil {
+		entry = &composerOperationLock{}
+		s.composerOpLocks[operationID] = entry
+	}
+	entry.refs++
+	s.composerOpMu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		s.composerOpMu.Lock()
+		entry.refs--
+		if entry.refs == 0 && s.composerOpLocks[operationID] == entry {
+			delete(s.composerOpLocks, operationID)
+		}
+		s.composerOpMu.Unlock()
+	}
+}
 
 // The chat wire types and refusal codes, aliased from the daemon-free schema package for
 // PB-BIND-0's reason (see types.go).
@@ -45,6 +98,7 @@ const (
 	CodeStructuredUnsupported = schema.CodeStructuredUnsupported
 	CodeInputBusy             = schema.CodeInputBusy
 	CodeUnavailable           = schema.CodeUnavailable
+	CodeOutcomeUnknown        = schema.CodeOutcomeUnknown
 )
 
 // maxSendInputText is send_input's own text ceiling, restated under its historical spelling:
@@ -53,8 +107,8 @@ const (
 const maxSendInputText = MaxSendInputText
 
 // ComposerSender is the optional DaemonAPI seam handleComposerSend dispatches to, mirroring
-// InteractionApprover: the daemon-side application of one composer_send (the expected_turn
-// precondition, the PTY write with submit framing, and the injection-time attribution),
+// InteractionApprover: the daemon-side ordered application of one composer_send (advisory
+// rendered-turn context, current-provider dispatch, submit framing and attribution),
 // returning a D10 ErrorCode beside the error so refusals surface verbatim.
 type ComposerSender interface {
 	ComposerSend(machine, operationID string, req ComposerSendReq) (ErrorCode, error)
@@ -133,12 +187,147 @@ func (cc *clientConn) handleComposerSend(c Control) {
 		// one the signature covered.
 		cc.replyErrorCode("composer_send: text exceeds the input-path bound", CodeInvalidField)
 		return
+	case body.SessionInstance == "":
+		cc.replyErrorCode("composer_send: missing session_instance; refresh the session and upgrade the phone before retrying", CodeInvalidField)
+		return
 	}
 	cs, ok := cc.srv.d.(ComposerSender)
 	if !ok {
 		// handleApprove's rule: OK here is a sent message the agent never received.
 		cc.replyErrorCode("composer_send: not supported by this daemon; nothing was typed", CodeNotImplemented)
 		return
+	}
+	local, ok := cc.resolveSession(c)
+	if !ok {
+		return
+	}
+	if cc.srv.remoteTier {
+		unlock := cc.srv.lockComposerOperation(c.OperationID)
+		defer unlock()
+	}
+
+	// Production uses a composer-specific durable lifecycle: prepared is before provider
+	// I/O and safe to resume; Begin fsyncs executing immediately before the seam; terminal
+	// records cache the exact code/message. An executing replay is outcome_unknown, never a
+	// blind second delivery.
+	if cc.srv.remoteTier {
+		if exec, durable := cc.srv.d.(ComposerOperationExecutor); durable {
+			requestHash := composerRequestHash(body)
+			phase, raw, err := exec.ClaimComposerOperation(c.OperationID, ActionComposerSend,
+				local, body.SessionInstance, requestHash)
+			if err != nil {
+				cc.replyError("composer_send: claim operation: " + err.Error())
+				return
+			}
+			switch phase {
+			case composerPhaseCompleted, composerPhaseFailed:
+				cc.replyComposerCached(c.SessionID, raw)
+				return
+			case composerPhaseExecuting, composerPhaseOutcomeUnknown:
+				cc.replyErrorCode("composer_send: prior attempt outcome unknown; message was not replayed", schema.CodeOutcomeUnknown)
+				return
+			case composerPhasePrepared:
+			default:
+				cc.replyError("composer_send: unknown durable operation phase " + phase)
+				return
+			}
+
+			var code ErrorCode
+			var sendErr error
+			if transactional, ok := cc.srv.d.(TransactionalComposerSender); ok {
+				code, sendErr = transactional.ComposerSendTransactional(
+					cc.endpointID, c.OperationID, *body,
+					func() error { return exec.BeginComposerOperation(c.OperationID) },
+				)
+			} else {
+				// Compatibility only: older durable test doubles cannot expose the daemon's
+				// FIFO/provider boundary, so retain their eager Begin. The assembled coreAPI
+				// implements TransactionalComposerSender and never takes this branch.
+				if err := exec.BeginComposerOperation(c.OperationID); err != nil {
+					cc.replyErrorCode("composer_send: operation could not enter its durable execution phase; outcome unknown", schema.CodeOutcomeUnknown)
+					return
+				}
+				code, sendErr = cs.ComposerSend(cc.endpointID, c.OperationID, *body)
+			}
+			if errors.Is(sendErr, ErrComposerOutcomeUnknown) {
+				cc.replyErrorCode("composer_send: "+sendErr.Error(), schema.CodeOutcomeUnknown)
+				return
+			}
+			outcome := composerCachedOutcome{OK: sendErr == nil, Code: code}
+			if sendErr != nil {
+				outcome.Message = sendErr.Error()
+			}
+			raw, err = json.Marshal(outcome)
+			if err != nil {
+				cc.replyErrorCode("composer_send: encode terminal outcome: "+err.Error(), schema.CodeOutcomeUnknown)
+				return
+			}
+			if err := exec.CommitComposerOperation(c.OperationID, raw, sendErr == nil); err != nil {
+				cc.replyErrorCode("composer_send: durable terminal commit failed; outcome unknown: "+err.Error(), schema.CodeOutcomeUnknown)
+				return
+			}
+			cc.replyComposerOutcome(c.SessionID, outcome)
+			return
+		}
+
+		// Compatibility for an older daemon/test double. Production coreAPI implements the
+		// lifecycle above. This branch retains exact outcomes for this server lifetime and
+		// checks terminal-commit errors, without claiming process-crash durability.
+		if claimer, guarded := cc.srv.d.(OperationClaimer); guarded {
+			existed, err := claimer.ClaimOperation(c.OperationID, ActionComposerSend, c.SessionID)
+			if err != nil {
+				cc.replyError("composer_send: claim operation: " + err.Error())
+				return
+			}
+			exec, cachesOutcome := cc.srv.d.(IdempotentExecutor)
+			if existed {
+				cc.srv.composerFallbackMu.Lock()
+				cached, found := cc.srv.composerFallback[c.OperationID]
+				cc.srv.composerFallbackMu.Unlock()
+				if found {
+					cc.replyComposerOutcome(c.SessionID, cached)
+					return
+				}
+				if !cachesOutcome {
+					cc.replyError("composer_send: operation already claimed; message was not replayed")
+					return
+				}
+				terminal, priorOK, err := exec.ClaimIdempotentOp(c.OperationID, ActionComposerSend, c.SessionID)
+				if err != nil {
+					cc.replyError("composer_send: read prior outcome: " + err.Error())
+					return
+				}
+				switch {
+				case terminal && priorOK:
+					cc.replyOK(c.SessionID)
+				case terminal:
+					cc.replyError("composer_send: prior attempt failed")
+				default:
+					cc.replyError("composer_send: prior attempt outcome unknown; message was not replayed")
+				}
+				return
+			}
+			code, sendErr := cs.ComposerSend(cc.endpointID, c.OperationID, *body)
+			if errors.Is(sendErr, ErrComposerOutcomeUnknown) {
+				cc.replyErrorCode("composer_send: "+sendErr.Error(), schema.CodeOutcomeUnknown)
+				return
+			}
+			if cachesOutcome {
+				if err := exec.CommitIdempotentOp(c.OperationID, sendErr == nil); err != nil {
+					cc.replyErrorCode("composer_send: durable terminal commit failed; outcome unknown: "+err.Error(), schema.CodeOutcomeUnknown)
+					return
+				}
+			}
+			cached := composerCachedOutcome{OK: sendErr == nil, Code: code}
+			if sendErr != nil {
+				cached.Message = sendErr.Error()
+			}
+			cc.srv.composerFallbackMu.Lock()
+			cc.srv.composerFallback[c.OperationID] = cached
+			cc.srv.composerFallbackMu.Unlock()
+			cc.replyComposerOutcome(c.SessionID, cached)
+			return
+		}
 	}
 	if code, err := cs.ComposerSend(cc.endpointID, c.OperationID, *body); err != nil {
 		cc.replyErrorCode("composer_send: "+err.Error(), code)
@@ -147,12 +336,33 @@ func (cc *clientConn) handleComposerSend(c Control) {
 	cc.replyOK(c.SessionID)
 }
 
+func composerRequestHash(body *ComposerSendReq) string {
+	return hex.EncodeToString(schema.ComposerSendContentHash(body))
+}
+
+func (cc *clientConn) replyComposerCached(session string, raw []byte) {
+	var outcome composerCachedOutcome
+	if len(raw) == 0 || json.Unmarshal(raw, &outcome) != nil {
+		cc.replyErrorCode("composer_send: cached outcome is unreadable; message was not replayed", schema.CodeOutcomeUnknown)
+		return
+	}
+	cc.replyComposerOutcome(session, outcome)
+}
+
+func (cc *clientConn) replyComposerOutcome(session string, outcome composerCachedOutcome) {
+	if outcome.OK {
+		cc.replyOK(session)
+		return
+	}
+	cc.replyErrorCode("composer_send: "+outcome.Message, outcome.Code)
+}
+
 // handleTurnInterrupt serves the signed turn_interrupt op (Mirror M2.4: "Stop becomes a
 // signed interrupt op"). Authz runs FIRST with the body bound via TurnInterruptContentHash
 // -- recomputed from the forwarded body, so a gateway that re-points expected_turn breaks
 // the signature -- then the body-version gate, then the structural checks, then the seam.
-// Structurally it is composer_send's twin, and that is the point of fix-pack B7: the two ops
-// answer the same race and must answer it the same way.
+// Unlike advisory composer text, Stop is destructive and remains strictly bound to the turn
+// the phone rendered; a moved turn is refused before the interrupter seam.
 func (cc *clientConn) handleTurnInterrupt(c Control) {
 	body := c.TurnInterrupt
 	if !cc.requireRemoteAuthz(c, ActionTurnInterrupt, c.SessionID, schema.TurnInterruptContentHash(body)) {

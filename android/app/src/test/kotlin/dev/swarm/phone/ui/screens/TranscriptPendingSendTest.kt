@@ -1,8 +1,13 @@
 package dev.swarm.phone.ui.screens
 
+import android.content.Context
+import android.widget.TextView
+import androidx.test.core.app.ApplicationProvider
 import dev.swarm.phone.ui.InteractionItem
+import dev.swarm.phone.theme.SwarmTheme
 import dev.swarm.phone.ui.kit.BubbleState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,6 +44,9 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class TranscriptPendingSendTest {
 
+    private val context: Context
+        get() = SwarmTheme.applyTo(ApplicationProvider.getApplicationContext())
+
     private fun agent(id: String, text: String) = InteractionItem(
         sessionId = "m/s1", itemId = id, cursor = 1, kind = "agent_message",
         text = text, body = """{"text":"$text"}""",
@@ -53,7 +61,7 @@ class TranscriptPendingSendTest {
     fun `a sent message is on screen before the agent has echoed it`() {
         val panel = TranscriptScreen.of(
             listOf(agent("a1", "Running the suite.")),
-            pendingSend = PendingSend(operationId = "op-1", text = "also check the relay pin"),
+            pendingSends = listOf(PendingSend(operationId = "op-1", text = "also check the relay pin")),
         )
 
         val last = panel.blocks.last()
@@ -80,7 +88,7 @@ class TranscriptPendingSendTest {
                 agent("a1", "Running the suite."),
                 echoed("u1", "also check the relay pin", operationId = "op-1"),
             ),
-            pendingSend = PendingSend(operationId = "op-1", text = "also check the relay pin"),
+            pendingSends = listOf(PendingSend(operationId = "op-1", text = "also check the relay pin")),
         )
 
         assertEquals(
@@ -109,7 +117,7 @@ class TranscriptPendingSendTest {
     fun `an identical earlier message does not settle a later send`() {
         val panel = TranscriptScreen.of(
             listOf(echoed("u1", "ping", operationId = "op-1")),
-            pendingSend = PendingSend(operationId = "op-2", text = "ping"),
+            pendingSends = listOf(PendingSend(operationId = "op-2", text = "ping")),
         )
 
         assertEquals(
@@ -125,7 +133,7 @@ class TranscriptPendingSendTest {
     fun `a refused send keeps the words on screen`() {
         val panel = TranscriptScreen.of(
             emptyList(),
-            pendingSend = PendingSend(operationId = "op-1", text = "rm the stale db", refused = true),
+            pendingSends = listOf(PendingSend(operationId = "op-1", text = "rm the stale db", refused = true)),
         )
 
         assertEquals(
@@ -135,6 +143,87 @@ class TranscriptPendingSendTest {
             panel.blocks.last().line,
         )
         assertEquals(BubbleState.REFUSED, panel.blocks.last().sendState)
+    }
+
+    @Test
+    fun `a refused send keeps its exact refusal copy and machine detail on its own block`() {
+        val panel = TranscriptScreen.of(
+            emptyList(),
+            pendingSends = listOf(
+                PendingSend(
+                    operationId = "op-1",
+                    text = "please continue",
+                    refused = true,
+                    notice = "Not sent. Finish typing on your computer first.",
+                    detail = "input region is not empty",
+                ),
+                PendingSend(operationId = "op-2", text = "newer message"),
+            ),
+        )
+
+        val refused = panel.blocks.first()
+        assertEquals("Not sent. Finish typing on your computer first.", refused.sendNotice)
+        assertEquals("input region is not empty", refused.sendNoticeDetail)
+        assertEquals("", panel.blocks.last().sendNotice)
+        assertEquals("", panel.blocks.last().sendNoticeDetail)
+        assertFalse("the newer pending send inherited the older refusal", panel.blocks.last().sendState == BubbleState.REFUSED)
+
+        val refusedViews = transcriptBlockViews(context, refused)
+        assertEquals(3, refusedViews.size)
+        assertEquals("Not sent. Finish typing on your computer first.", (refusedViews[1] as TextView).text.toString())
+        assertEquals("input region is not empty", (refusedViews[2] as TextView).text.toString())
+    }
+
+    @Test
+    fun `two locally sealed sends stay visible in their original order`() {
+        val panel = TranscriptScreen.of(
+            listOf(agent("a1", "Running the suite.")),
+            pendingSends = listOf(
+                PendingSend(operationId = "op-1", text = "first follow-up"),
+                PendingSend(operationId = "op-2", text = "second follow-up"),
+            ),
+        )
+
+        assertEquals(
+            listOf("first follow-up", "second follow-up"),
+            panel.blocks.takeLast(2).map { it.line },
+        )
+        assertTrue(panel.blocks.takeLast(2).all { it.sendState == BubbleState.PENDING })
+    }
+
+    @Test
+    fun `each echo replaces only its own pending send`() {
+        val panel = TranscriptScreen.of(
+            listOf(echoed("u1", "first follow-up", operationId = "op-1")),
+            pendingSends = listOf(
+                PendingSend(operationId = "op-1", text = "first follow-up"),
+                PendingSend(operationId = "op-2", text = "second follow-up"),
+            ),
+        )
+
+        assertEquals(1, panel.blocks.count { it.line == "first follow-up" })
+        assertEquals(1, panel.blocks.count { it.line == "second follow-up" })
+        assertEquals(BubbleState.SETTLED, panel.blocks.first().sendState)
+        assertEquals(BubbleState.PENDING, panel.blocks.last().sendState)
+    }
+
+    @Test
+    fun `only a user-message echo settles a provisional send`() {
+        val sameOperationTool = InteractionItem(
+            sessionId = "m/s1",
+            itemId = "t1",
+            cursor = 2,
+            kind = "tool_run",
+            text = "working",
+            operationId = "op-1",
+        )
+        val panel = TranscriptScreen.of(
+            listOf(sameOperationTool),
+            pendingSends = listOf(PendingSend(operationId = "op-1", text = "please continue")),
+        )
+
+        assertEquals("please continue", panel.blocks.last().line)
+        assertEquals(BubbleState.PENDING, panel.blocks.last().sendState)
     }
 
     @Test

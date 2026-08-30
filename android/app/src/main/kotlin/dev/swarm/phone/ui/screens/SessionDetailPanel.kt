@@ -184,12 +184,9 @@ data class SessionDetailPanel(
     /** What the acknowledgement reads as. */
     val acknowledgeLabel: String,
     /**
-     * Whether the structured composer exists at all, and whether it can send right now
-     * (Mirror M2.4, `ComposerModel.availabilityFor`).
-     *
-     * ABSENT IS STRUCTURAL AND NOT A DISABLED CONTROL (ADR-017 T2 rule 2): `structured_chat=false`
-     * means there is no message sink, so the composer is GONE rather than greyed -- a greyed
-     * control promises a verb that will come back, and this degrade is one-way.
+     * Whether the permanent composer shell can send right now, and the reason when it cannot
+     * (Mirror M2.4, `ComposerModel.availabilityFor`). The shell itself is retained for every open
+     * session; capability and connectivity change its enabled state and inline copy.
      */
     val composerAvailability: dev.swarm.phone.ui.kit.ComposerAvailability,
     /** M2.5's status-driven placeholder: "Message" idle, "Add feedback..." while working. */
@@ -200,12 +197,11 @@ data class SessionDetailPanel(
     val composerNotice: String,
     /** The machine's own words under [composerNotice], verbatim, or "" when it sent none (W2.3). */
     val composerNoticeDetail: String,
-    /** Whether what the user typed survives that refusal. It always does; see the notice model. */
+    /** Whether the refused operation retains its submitted text for retry. It always does. */
     val composerRetainsDraft: Boolean,
-    /** What the screen says where the composer WOULD be, for a session that has none. */
     /**
-     * What a SHUT composer says, or null when it is not shut: the sentence in the field and
-     * the line under it that says what is still possible.
+     * What a disabled composer shell says, or null when it is sendable: the sentence in the field
+     * and the line under it that says what is still possible.
      *
      * IT REPLACES A SINGLE SENTENCE THAT COVERED FOUR STATES. The old copy accused this
      * session's record of BREAKING, while the condition it was drawn under also covered "no
@@ -215,9 +211,9 @@ data class SessionDetailPanel(
      */
     val composerShut: ComposerShut?,
     /**
-     * The turn both `App.ComposerSend` and `App.Interrupt` are drawn against (review finding B7):
-     * the transcript's latest, read off the panel the screen is showing, so the precondition the
-     * daemon checks is the one the reader could see.
+     * The open turn both `App.ComposerSend` and `App.Interrupt` are drawn against. It is advisory
+     * signed context for queued composer delivery and remains the strict destructive target for
+     * Stop (review finding B7).
      */
     val expectedTurn: String,
     /** ADR-014: whether "load earlier" is offered, and the item id it pages before. */
@@ -247,26 +243,14 @@ data class SessionDetailPanel(
      */
     val pendingDecisionId: String get() = transcript.pendingDecisionId
 
-    /**
-     * Whether this session gets the composer BAR at all, as opposed to the sentence that says why
-     * it has none.
-     *
-     * **IT IS ONE PREDICATE BECAUSE IT NOW HAS TWO READERS, AND THEY MUST NOT DRIFT.** The bar is
-     * the scaffold's pinned region and the sentence is a line inside the scrolling column
-     * (`conversationScaffoldView`), so the surface decides whether to pin one and the screen
-     * decides whether to draw the other -- two files, one fact. Written out twice, the day the
-     * rule gains a state is the day a session draws both a bar and the sentence saying it has
-     * none, which is the class of contradiction this whole wave exists against (the plan's defect
-     * 2: two conditions sharing no term, rendering together).
-     *
-     * OFFLINE KEEPS THE BAR, which is `ComposerModel`'s decision quoted rather than re-taken: the
-     * sink exists and the link is coming back, so the draft is still worth typing and a control
-     * that vanished would teach the reader the feature was gone. The states that lose it are the
-     * ones with NO MESSAGE SINK -- a torn record, a provider reporting no structured chat, an
-     * ended session -- where a bar would promise a verb the session structurally lacks (ADR-017).
-     */
+    /** Every session keeps the same pinned composer-shaped shell; capability changes its state. */
     val composerIsBar: Boolean
-        get() = composerShut == null || composerAvailability == ComposerAvailability.OFFLINE
+        get() = true
+
+    /** Whether the retained shell may issue composer_send right now. */
+    val composerCanSend: Boolean
+        get() = composerAvailability == ComposerAvailability.AVAILABLE ||
+            composerAvailability == ComposerAvailability.TORN
 
     /**
      * Whether the agent is inside a turn: the ONE source of "working" for this screen (phone refit
@@ -287,8 +271,10 @@ data class SessionDetailPanel(
  *
  * IT IS A VALUE AND NOT A READ ON A SURFACE, for [CommandVerdict]'s reason exactly: the phone
  * core is a gomobile AAR the unit-test JVM does not load, so a decision taken inside a settle
- * cannot be reached by any test at all -- which is how a composer came to clear the user's
- * draft on local sealing with an exhaustive suite standing over it.
+ * cannot be reached by any test at all -- which is how the old composer both declared SENT and
+ * cleared unconditionally on local sealing with an exhaustive suite standing over it. The current
+ * surface seals the operation into its ledger and clears only an unchanged live field so another
+ * send can be typed; the later machine verdict changes only that operation's bubble.
  */
 data class ComposerVerdict(
     /** Whether the machine has said anything about THIS send. */
@@ -300,7 +286,10 @@ data class ComposerVerdict(
      * daemon code with its own sentence and no routing row, that code (W2.2). "" if accepted.
      */
     val refusal: String,
-    /** Whether what the user typed is now spent. True on acceptance ONLY -- see the builder. */
+    /**
+     * Legacy verdict marker for acceptance. It no longer instructs the surface to clear the live
+     * field; exact-match clearing happens when the local command is sealed.
+     */
     val clearsDraft: Boolean,
     /** The refusal's copy, or "" where there is nothing to report. */
     val notice: String,
@@ -885,9 +874,11 @@ object SessionDetailScreen {
      * `PENDING` label the press already set is the honest screen. Saying anything else here is
      * the defect above, one layer over.
      *
-     * **Acceptance is the ONLY thing that empties the field.** That is what
-     * [ComposerVerdict.clearsDraft] is, and it is a property of the ANSWER rather than a line at
-     * a call site, because the call site is exactly where it was got wrong.
+     * **Machine acceptance never empties the live field.** Local sealing records the operation and
+     * clears only when the field still equals that operation's captured text, freeing it for the
+     * next queued send without erasing edits made while the command crossed the lane.
+     * [ComposerVerdict.clearsDraft] remains a compatibility verdict marker; rendering does not use
+     * it to mutate the field.
      *
      * **The refusal is routed, never string-matched.** `stale_turn` earns [SendState.STALE_TURN]
      * and `ComposerModel`'s gentle copy because `ErrorRouter.routeMachineCode` says it is that
@@ -960,8 +951,8 @@ object SessionDetailScreen {
      * @param capabilities the MACHINE's own capability record for this session (ADR-017 T2 rule 3).
      *  It is a parameter for [lease]'s reason and for one more: the phone renders from the record
      *  and INFERS NOTHING, so the only correct default is [SessionCapabilityFacts.ABSENT] -- which
-     *  offers no composer, because a session whose capability the machine did not state is not a
-     *  session this screen may guess about.
+     *  retains the normal shell but disables sending, because a capability the machine did not
+     *  state is not one this screen may guess about.
      */
     fun of(
         detail: SessionDetail,
@@ -1139,12 +1130,11 @@ data class SessionCapabilityFacts(
 ) {
     companion object {
         /**
-         * NO RECORD, which is the honest status card and not "assume the best" (amendment T2-a).
+         * NO RECORD, which disables the normal composer shell rather than assuming support.
          *
          * It is the state of every session launched before this ruling shipped, and of every
-         * session whose machine is older than the field. Offering a composer there is offering a
-         * send that can only be refused; offering a terminal there is opening a peek onto every
-         * one of them.
+         * session whose machine is older than the field. The transcript remains readable, while
+         * the field and action stay disabled until the machine supplies authoritative capability.
          */
         val ABSENT = SessionCapabilityFacts(structuredChat = false)
     }

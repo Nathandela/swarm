@@ -103,14 +103,14 @@ the snapshot (as chunks), then the live `TDataOut` stream, with no interleaving.
 | `subject_operation_id` | string          | Wave R5 `operation_status`: the operation being ASKED ABOUT — distinct from the query's own `operation_id` exactly as `interaction_id` is (ADR-007 D7) |
 | `operation_outcome` | `*OperationOutcomeView` | Wave R5 `operation_status` reply: `applied` (authoritative, with the session id), `outcome_unknown` (honest undecidability), or `unknown_operation` (no record; never invented) |
 | `device_capability` | string              | Wave R5 `launch_presets` reply (round-2): the SIGNING device's own registry-pinned tier (`full`/`read_only`/`read_approve`) — the phone's only honest wire source for its tier-denied launch state; empty when the backend has no capability seam (absent fact, never invented) |
-| `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5): the phone's structured message under the wire name `composer_send`, carrying `session` / `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text or a different turn (ADR-009 (8)) |
+| `composer_send`    | `*ComposerSendReq`  | Wave R6 `composer_send` body (Mirror M2.4, IS-LIFE-5), amended for ordered sends: the phone's structured message under the wire name `composer_send`, carrying `session` / required `session_instance` / advisory `expected_turn` / `text`, bound into the device signature via `ComposerSendContentHash` so a gateway cannot re-point a valid signature at different text, context, or a replacement session incarnation (ADR-009 (8)) |
 | `turn_interrupt`   | `*TurnInterruptReq` | Wave R6 `turn_interrupt` body, added by the review fix-pack (finding B7): the semantic Stop's subject under the wire name `turn_interrupt`, carrying `session` / `expected_turn`, bound into the device signature via `TurnInterruptContentHash` so a gateway cannot re-point a valid Stop at a different turn. `expected_turn` is REQUIRED and non-empty — the op was BODYLESS when it landed, and a Stop with no turn coordinate typed the cancel sequence into whatever turn was current on arrival, including one the owner had just started at the terminal |
 | `interaction_history` | `*InteractionHistoryReq` | Wave R6 `interaction_history` body (Mirror M3.1, ADR-014): the unsigned paged read under the wire name `interaction_history`, carrying `session` / `before_item` / `limit`; non-empty `before_item` means strictly older than that item, empty means the newest retained page; the reply rides the existing `journal` carrier, ascending by cursor |
 | `interaction_detail` | `*InteractionDetailReq` | Wave R6 `interaction_detail` body (Mirror M3.3, IS-CAP-2): the unsigned detail read under the wire name `interaction_detail`, carrying `session` / `item_id`; the reply is exactly one `journal` record whose `item` is the FULL pre-truncation body, or the sealed `unavailable` refusal outside retention (IS-CAP-3) |
 | `history_floor`    | bool                | Wave R6 `interaction_history` reply: nothing older than the returned page is retained, so the phone renders a retention floor instead of offering "load earlier" forever (Mirror M3.1) |
-| `terminal_control_begin` | `*TerminalControlBeginReq` | Wave R8 `terminal_control_begin` body (ADR-017 T6): the SIGNED request that mints one non-transferable control generation over a `terminal_fallback` session, under the wire name `terminal_control_begin`, carrying `session` / `session_instance` / `profile` / `expires_at`, bound into the device signature via `TerminalControlBeginContentHash` so a gateway cannot re-point a valid begin at another session, another incarnation or another profile. The session instance is REQUIRED: a generation that binds no incarnation authorises raw bytes into the PTY that replaced the one the user was reading |
+| `terminal_control_begin` | `*TerminalControlBeginReq` | Wave R8 `terminal_control_begin` compatibility body (ADR-017 T6; no production Android caller): the SIGNED request that mints one non-transferable control generation over a `terminal_fallback` session, under the wire name `terminal_control_begin`, carrying `session` / `session_instance` / `profile` / `expires_at`, bound into the device signature via `TerminalControlBeginContentHash` so a gateway cannot re-point a valid begin at another session, another incarnation or another profile. The session instance is REQUIRED: a generation that binds no incarnation authorises raw bytes into the PTY that replaced the one the user was reading |
 | `terminal_input`   | `*TerminalInputReq` | Wave R8 `terminal_input` body (ADR-017 T6): ONE unsigned raw-input frame under the wire name `terminal_input`, carrying `session` / `session_instance` / `control_generation` / `bytes`. It rides the E2EE frame's authenticated sender and sequence plus the CONFIRMED generation rather than its own signature — the sole exception to full-body signatures, held to exactly two body types with `terminal_control_keepalive`. Every frame re-evaluates the kill switch, device registration, the session capability record and generation liveness (T6-e); a refused frame is DROPPED and never buffered (T6-f) |
-| `terminal_view`    | `*TerminalViewV1`   | Wave R8 (ADR-017 T4/T4-a/T8-a): the VERSIONED terminal snapshot, carried under the wire name `terminal_view` on the SAME `terminal_snapshot` op as the legacy `terminal` body. Both ride one frame: a gateway that predates it ignores the key and reads `terminal` exactly as before, and one that understands it prefers this body. It was added by the closing round of Wave R8, which found the versioned fields being MINTED by the render loop and DISCARDED before the wire — so a phone watching a session replaced under the same id read the new incarnation as a seamless continuation of the old screen |
+| `terminal_view`    | `*TerminalViewV1`   | Wave R8 (ADR-017 T4/T4-a/T8-a): the VERSIONED compatibility snapshot, carried under the wire name `terminal_view` on the SAME `terminal_snapshot` op as the legacy `terminal` body. Both ride one frame: a gateway that predates it ignores the key and reads `terminal` exactly as before, and one that understands it prefers this body. Its incarnation fields prevent a compatibility consumer from reading a replaced session under the same id as a seamless continuation; production Android never subscribes to or renders this body |
 | `control_generation` | string            | Wave R8 (ADR-017 T6): the minted control generation. It rides the `terminal_control_begin` REPLY and every `terminal_control_keepalive`. It is NOT a control lease — a generation and a lease have different lifetimes, different ceremonies and different authority, and the input path never reaches the lease plane (OPEN-C4) |
 
 The rows below `error` are the **remote-tier additive fields** (R-PROT.2/.3/.7,
@@ -131,30 +131,36 @@ is described in its op section below rather than as a second wire table.
 `JournalRecord` is one wire-facing journal event, carried in `Control.journal`
 (`journal_read` / `journal_event`) and in `Control.roster` (the snapshot half of a
 `journal_read`, R-JRN.4). It mirrors the daemon journal's record fields the phone
-needs; the daemon-internal payload is not carried, with the single exception of
-`item`.
+needs; the daemon-internal payload is not carried wholesale. There are **two explicit payload projections**:
+`interaction` / `structured_gap` payload becomes `item`, while a validated
+`capability_transition payload` becomes `capabilities`. No other daemon payload crosses this wire type.
 
 | Field        | Go type           | Meaning                                                                 |
 | ------------ | ----------------- | ----------------------------------------------------------------------- |
 | `cursor`     | uint64            | the record's monotonic journal cursor; ordering is this and nothing else. Deliberately unset (`0`) on a roster record, which is a set member and not a point in the stream (PB-SYNC-8) |
 | `session_id` | string            | namespaced session id the record is about; absent on a session-neutral record (`presence`) |
-| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` |
+| `type`       | string            | `group_transition` \| `launched` \| `exited` \| `lost` \| `deleted` \| `presence` \| `roster` \| `interaction` \| `structured_gap` \| `capability_transition` |
 | `group`      | `status.Group`    | the server-derived display group; carried on `group_transition` and on a roster record, absent elsewhere |
 | `agent`      | string            | the session's agent identity (`claude`, `codex`, …). Its ABSENCE IS MEANINGFUL: a record with no agent carries none, and `""` is never an agent by that name |
-| `item`       | `json.RawMessage` | the interaction item object, carried ONLY when `type` is `interaction` — one unit of the phone's chat transcript (ADR-009, `interaction-schema.md` §1/§2, IS-LAYER-1). Opaque on the wire: the gateway forwards it and parses no item (§10), and the item's own `kind` discriminator stays inside it (IS-LAYER-2) |
+| `item`       | `json.RawMessage` | the transcript payload, carried when `type` is `interaction` or `structured_gap`. The latter is the durable visible history-tear marker. Opaque on the wire: the gateway forwards it and parses no item (§10). |
+| `capabilities` | `SessionCapabilities` | the full validated record on roster rows and `capability_transition`. A transition is the exact state at its cursor, decoded from that event's payload rather than from the current roster. |
 | `ts`         | `time.Time`       | the daemon's own stamp of when the record was appended (`journal.Record.TS`); omitted when zero (`omitzero`). A roster record is never appended and carries none. The phone shows it as a time and never manufactures one from `cursor` (phone-refit-playbook W7.4) |
 | `state_since` | `time.Time`      | the machine's stamp of when the session entered its CURRENT state (`persist.Meta.EffectiveGroupEnteredAt()`, never `LastActivity`, which moves only at launch and exit) — carried on roster records and the four journalworthy transitions; omitted when zero. It is the SESSION's stamp, not this record's (W7.1) |
 
 Every field but `cursor`, `session_id` and `type` is `omitempty`, so a record type
 that predates one of them serializes byte-identically to what earlier builds wrote.
 
-`structured_gap` is the daemon-authored capability-degrade event of ADR-017 T2 rule 2
-(`internal/journal.TypeStructuredGap`, `internal/daemon.StructuredGapEvent{TS, Reason}`).
-Its wire carriage on `JournalRecord` is not yet defined: emission is presently a stub
-(`Daemon.EmitStructuredGap` returns `ErrStructuredGapUnimplemented`) pending the
-spool-boundary detection that would trigger it, so no `structured_gap` record reaches the
-wire yet. The type value is reserved here so a future emitting slice adds no new entry to
-this vocabulary, only a carriage field.
+`structured_gap` is the durable, transcript-visible history boundary of ADR-017 T2 rule 2
+(`internal/journal.TypeStructuredGap`, `internal/daemon.StructuredGapEvent`). Its body crosses
+as `item`, so retained and future items can continue behind an explicit missing range.
+
+`capability_transition` is a separate ordinary cursor-ordered event. Its payload is one
+complete, validated `SessionCapabilities` record. The machine publishes a false transition
+when a live sink/history failure withdraws chat and a true transition only after the exact
+current instance's sink is freshly re-proven. Both shapes keep `terminal_fallback` and
+`terminal_control` false. The phone consumes but ignores malformed, unknown-instance,
+replaced-instance, or launch-fact-changing transitions; a transition never establishes a row
+or session-instance authority by itself.
 
 This table's header column reads **`Field`**, not `JSON key`, and that is
 deliberate rather than a style slip: GG-7's bidirectional drift check
@@ -289,6 +295,11 @@ COMPLETE revision, which is what the gateway's coalescer already does and what T
 wire contract. A watch grants NO INPUT AUTHORITY; nothing in this body carries or implies
 one.
 
+> ANDROID SURFACE AMENDMENT (ADR-017, 2026-08-30): this remains a supported machine/wire
+> compatibility body, but no production Android route subscribes to it or renders it. Android opens
+> every session in the normal transcript and pinned composer shell; unavailable states are expressed
+> inline there.
+
 **Why both `view_epoch` and `revision` (amendment T4-a).** The daemon's render loop is PER
 INVOCATION and the gateway's watcher re-runs it after every transport hiccup with a fresh
 emulator. A bare revision restarted at 1 while the phone holds revision N makes the phone's
@@ -320,10 +331,11 @@ does not version its views", never a fabricated epoch.
 ## The `SessionCapabilities` record
 
 `SessionCapabilities` is the daemon-authored, per-session-instance capability record of
-ADR-017 T2 / playbook §6.2, carried nested under `SessionView.capabilities` (documented
-above). It is authored once at session launch and is immutable for the life of the
-instance; the only mutation path afterward is the degrade-only `SetStructuredChat`, which
-also cannot be observed on the wire as anything but a fresh `SessionView` row.
+ADR-017 T2 / playbook §6.2, carried on roster rows and on the ordered
+`capability_transition` event. Provider/adapter facts and terminal authority are immutable
+for the life of the instance. `structured_chat` may move true→false on an explicit gap/sink
+failure and false→true only after the exact current message sink is freshly re-proven; both
+changes are observable without reconnecting.
 
 This table's header reads **`Field`**, not `JSON key`, for the reason `JournalRecord`'s
 does (see that section): `SessionCapabilities` is not one of the four types GG-7's
@@ -337,7 +349,7 @@ is a procedural obligation carried by that type's Go doc comments.
 | `provider_version`    | string  | the DETECTED version of the installed CLI, never a configured/assumed one |
 | `adapter_revision`    | string  | the revision of the Swarm adapter that produced the record            |
 | `structured_chat`     | bool    | true only when every T3 complete-chat row passes against `provider_version` |
-| `terminal_fallback`   | bool    | whether the sanitized `TerminalViewV1` surface may be offered at all  |
+| `terminal_fallback`   | bool    | whether the machine/wire terminal view is supported for compatibility consumers; it never selects an Android surface |
 | `interrupt`           | bool    | whether a semantic interrupt reaches the session's current turn       |
 
 ## The `ReconcileRecord` message
@@ -806,22 +818,37 @@ The complete-chat vocabulary (Mirror M2.4 / M3.1 / M3.3, ADR-009 (5)/(8), ADR-01
 interaction-schema.md IS-LIFE-5 and IS-CAP-2/-3).
 
 **`composer_send`** is the phone's structured message into one session. The body
-(`Control.composer_send`: `session`, `expected_turn`, `text`) is bound into the device
-signature via `ComposerSendContentHash(session, expected_turn, text)`, recomputed
-daemon-side from the forwarded body, so a gateway cannot alter the text or re-point
-`expected_turn` under a valid signature. After the shared authz + `body_version` gates,
+(`Control.composer_send`: `session`, `session_instance`, `expected_turn`, `text`) is bound
+into the device signature via `ComposerSendContentHash`, recomputed daemon-side from the
+forwarded body, so a gateway cannot alter the text, render context, or incarnation under a
+valid signature. For rolling authentication compatibility an absent instance retains the old
+three-field hash, but the structural gate then refuses that body upgrade-required; it is never
+delivered unbound. After the shared authz + `body_version` gates,
 structural refusals fire `invalid_field` in order: missing body; a body `session` that is
 not the signed `session_id` (the approve collision rule); empty `text`; text past the
 `send_input` path's own 4096-byte bound (refused, never truncated — a clipped send submits
-a different message than the one the signature covered). The daemon then checks
-`expected_turn` against the session's CURRENT turn (IS-ENV-1's own state): a send rendered
-against a turn that has moved on — a newer `user_message` opened a new turn, or the turn
-closed on a terminal `agent_message` — is refused **`stale_turn`** and types NOTHING; an
-idle session is matched by the EMPTY `expected_turn`. An accepted send is written into the
-session's PTY through the daemon's own input path with the r3p submit-boundary framing
+a different message than the one the signature covered); missing `session_instance`.
+`expected_turn` is advisory for
+composer delivery. The daemon enqueues accepted messages in a per-session FIFO and selects
+the session's CURRENT incarnation, capability, sink, and provider state for each head. A
+replaced incarnation refuses `stale_instance` before provider I/O. A live native turn is steered; an idle
+backend starts a turn. The native turn id returned by `turn/start` is reserved until the
+event pump folds `turn/started`, so immediate follow-ups steer rather than create a competing
+turn. A typed provider refusal that says the selected turn already completed is re-resolved
+once with the same `clientUserMessageId`. Stop remains a strict turn-scoped barrier and may
+invalidate older queued sends; it never races a retry into a post-Stop turn. Each operation id
+has a durable `prepared -> executing -> completed/failed` lifecycle: waiting/preflight remains
+replayable `prepared`, `executing` begins immediately before sink I/O, exact terminal codes are
+cached, and an unverifiable executing replay returns `outcome_unknown` rather than duplicating
+the message. For a keystroke composer, the accepted send is
+written into the session's PTY through the daemon's own input path with the r3p framing
 (the CR that runs the message never shares a write with it), and the daemon remembers the
 injection so the NEXT captured `UserPromptSubmit` echoing that text journals with
 `source: "phone"` and the op's `operation_id`.
+
+`operation_id` is the delivery idempotency key. A committed replay returns its cached result
+without delivering twice. A crash-shaped prepared/executing replay is refused as outcome
+unknown rather than blindly redelivered. This differs deliberately from idempotent kill/delete.
 
 > ATTRIBUTION IS BOUNDED, NOT INFALLIBLE (amended by the Wave R6 review fix-pack, finding
 > B9). This paragraph used to end "an owner-typed prompt keeps `owner` and does not consume
@@ -837,26 +864,19 @@ injection so the NEXT captured `UserPromptSubmit` echoing that text journals wit
 > injection it watched WITHIN that window; what it cannot promise is that two identical
 > prompts inside one window are told apart.
 
-**`composer_send` is refused on a degraded session.** A session degraded by a proven
-`structured_gap` (ADR-017 T2 rule 2), or holding a capability record that says
-`structured_chat` is false, has NO structured composer, because it has no message sink — the
-user's words would go into the PTY and the transcript could never show them, which is the gap
-silently bridged. The refusal is **`structured_unsupported`**, `turn_interrupt`'s
-`interrupt_unsupported` for the composer: the caller is fine, the capability is absent, and
-nothing is typed.
+**`composer_send` is refused while the current session instance has no freshly proven
+structured sink.** A proven `structured_gap` remains permanently visible in history and
+immediately publishes `{structured_chat:false, terminal_fallback:false,
+terminal_control:false}`. Future events continue ingesting. A later clean hook drain plus a
+fresh current-shim hello advertising atomic submit, or an initialized current backend,
+may publish an ordered recovery `{true,false,false}` for that exact instance. Only then is
+the composer accepted again; the history marker is not erased. Until then the refusal is
+**`structured_unsupported`** and nothing is typed.
 
-> SHARPENED, SAME REVIEW ROUND. This paragraph opened "A session whose `structured_chat`
-> capability is absent, **or** has been degraded…", which reads as a promise the handler does
-> not keep: a session with **no capability record at all** is NOT refused. That is deliberate
-> and disclosed rather than an oversight — `registerSessionCapabilities` /
-> `deriveSessionCapabilities` have no production caller yet (`internal/skeleton/capability.go`
-> and `chat.go`'s gate both say so in as many words), so today NO live session has a record,
-> and refusing on absence would refuse every composer send on the wire: feature-off dressed as
-> fail-closed, hiding the very defect the gate exists to catch. The two facts the gate keys on
-> are the two that are production-reachable: the durable degrade marker, and a record that
-> exists and says false. When the capability-publication slice lands, the absent-record arm
-> becomes reachable and should tighten to a refusal; docs/verification/r6-chat.md carries that
-> as a named residual.
+> Compatibility note. A capability record that exists and says false is refused; a durable
+> gap marker with no record is also refused. Absence with no marker retains the narrow local
+> startup-window compatibility behavior. Remote routing remains fail-closed on an absent or
+> invalid record.
 
 **`composer_send` can still be merged with the owner's draft, and is not yet fixed.** The
 injection writes the text and the CR through the session tap with no check that the
@@ -883,8 +903,9 @@ never a silent OK).
 > AMENDED BY THE WAVE R6 REVIEW FIX-PACK (finding B7). This op was specified here as
 > carrying "NO body — the signed tuple's `session_id` is its whole subject, so no new crypto
 > appears anywhere on its path", and the bodylessness was sold as a virtue. It was a defect.
-> `composer_send` carries `expected_turn` for a stated reason — a tap lands later than it was
-> rendered — and Stop is tapped under exactly that race; probed, a Stop rendered against turn
+> At the time this fix landed, `composer_send` carried a strict `expected_turn` because a tap lands
+> later than it was rendered. Composer delivery now treats that field as advisory signed context,
+> while Stop is still tapped under exactly that race; probed, a Stop rendered against turn
 > A returned `ok` and typed the cancel sequence into turn B, which in playbook §8.1 is the
 > turn the OWNER just started from the terminal. The Claude adapter's own note records that
 > the cancel key at an IDLE prompt clears the composer, so a late Stop wipes the terminal
@@ -945,6 +966,11 @@ Terminal peek (A7 renderer slice B), mirroring the
 `journal_subscribe`/`journal_event` streaming pair. Unlike `take_control`, the peek
 is **read-only** and works BEFORE any control session exists (no lease, no signed
 op).
+
+> ANDROID SURFACE AMENDMENT (ADR-017, 2026-08-30): the messages and handlers in this section remain
+> for rolling wire compatibility and non-Android consumers. No production Android screen issues a
+> terminal subscribe/watch, renders a terminal snapshot, or enters terminal control. It retains the
+> normal transcript/composer shell for every session and renders unavailability inline.
 
 > AMENDED BY ADR-017 (2026-08-15): the new capability-routed fallback is gated by the ADR-017 T2
 > per-session capability record — a `terminal_fallback` session may open `TerminalViewV1`'s

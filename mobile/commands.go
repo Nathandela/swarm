@@ -373,17 +373,16 @@ func (a *App) Interrupt(session, expectedTurn string) (op *Op, err error) {
 
 // ComposerSend is Mirror M2.4's structured composer: one message into a session's agent,
 // as the signed composer_send op. expectedTurn is the turn the SCREEN rendered the draft
-// against ("" for an idle session); the daemon refuses `stale_turn` when the conversation
-// has moved on, and the composer shows that gently with the draft retained
-// (ErrClassStaleTurn's taxonomy row). The signed tuple's content slot binds
-// (session, expected_turn, text) via schema.ComposerSendContentHash -- derived in
+// against ("" for an idle session). It remains signed context, but the daemon treats it as
+// advisory and dispatches accepted messages through a per-session FIFO against current
+// provider state. The signed tuple's content slot binds
+// (session, session_instance, expected_turn, text) via schema.ComposerSendContentHash -- derived in
 // phonecore.SignComposerSend, never here (the take_control-token rule: a re-derivation is a
 // silent signature failure with no compile error).
 //
-// LIVE-ONLY, NEVER QUEUED (B43, ADR-009 (6)): a message replayed out of a queue lands in a
-// turn nobody rendered it against, which is the very race expected_turn exists to kill. An
-// offline send refuses with the offline class and stores NOTHING; the composer shows it
-// refused rather than silently swallowed.
+// ONLINE-ONLY: accepted online messages are ordered by the daemon's semantic queue. There is
+// still no offline outbox: an offline send refuses with the offline class and stores NOTHING,
+// so reconnect cannot unexpectedly deliver old words into a later conversation.
 func (a *App) ComposerSend(session, expectedTurn, text string) (op *Op, err error) {
 	defer barrier(&err)
 	if session == "" || text == "" {
@@ -1042,17 +1041,25 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 			GateToken:   body.gate,
 		})
 	case body.composer != nil:
+		cs, ok := core.Router().Sessions().Get(session)
+		if !ok || cs.Capabilities == nil || cs.Capabilities.SessionInstance == "" {
+			return nil, classed(ErrClassInvalidRequest, errors.New(
+				"swarmmobile: ComposerSend needs a current session incarnation; refresh the machine and upgrade if it remains unavailable"))
+		}
+		body.composer.SessionInstance = cs.Capabilities.SessionInstance
 		// ComposerSend signs a DIFFERENT tuple too: the content slot is
-		// schema.ComposerSendContentHash over the exact (session, expected_turn, text)
+		// schema.ComposerSendContentHash over the exact
+		// (session, session_instance, expected_turn, text)
 		// body the envelope carries. phonecore owns the derivation, for SignApprove's
 		// stated reason.
 		cmd, err = phonecore.SignComposerSend(core.KeyStore(), phonecore.ComposerSendInput{
-			Machine:      core.State().Machine,
-			Session:      session,
-			OperationID:  id,
-			ExpiresAt:    expiresAt,
-			ExpectedTurn: body.composer.ExpectedTurn,
-			Text:         body.composer.Text,
+			Machine:         core.State().Machine,
+			Session:         session,
+			SessionInstance: body.composer.SessionInstance,
+			OperationID:     id,
+			ExpiresAt:       expiresAt,
+			ExpectedTurn:    body.composer.ExpectedTurn,
+			Text:            body.composer.Text,
 		})
 	case body.interrupt != nil:
 		// Wave R6 fix-pack B7: turn_interrupt signs the composer's shape -- the content

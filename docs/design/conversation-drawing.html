@@ -690,17 +690,17 @@
         <div class="state">
           <span class="lb">not connected</span>
           <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Not connected.</span><span class="cb off">↑</span></div><p class="why">Messages are never held — nothing is sent when the link returns.</p></div>
-          <p class="nt">Today an offline session draws a composer identical to a live one. The state that would say otherwise is computed and read by nothing.</p>
+          <p class="nt">The permanent shell stays in place, but the link state disables its field and action. Messages are never queued for a later reconnect.</p>
         </div>
         <div class="state">
-          <span class="lb">record torn</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Chat is paused here.</span><span class="cb off">↑</span></div><p class="why">Still typeable at your machine. <u>Repair</u></p></div>
-          <p class="nt">One of four distinct reasons, each with its own sentence. Today all four share a single sentence that accuses the record of breaking.</p>
+          <span class="lb">record torn · current sink proven</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar"><span class="ph">Message</span><span class="cb">↑</span></div><p class="why">Missing messages · <u>Reload</u></p></div>
+          <p class="nt">The positioned history warning stays visible, but it does not shut or relabel a composer after the exact current message sink is proven.</p>
         </div>
         <div class="state">
-          <span class="lb">no chat surface · ended</span>
-          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Chat is off for this session.</span><span class="cb off">↑</span></div><p class="why">You can watch it here, and type at your machine.</p></div>
-          <p class="nt">And an ended session says <em>“This session has ended”</em> with no composer at all. Four reasons, four sentences, none of them offering a step that cannot produce typing.</p>
+          <span class="lb">no chat surface</span>
+          <div class="comp" style="border:1px solid var(--hair);border-radius:8px"><div class="cbar" style="opacity:.55"><span class="ph">Chat is off for this session.</span><span class="cb off">↑</span></div><p class="why">Reply on your computer.</p></div>
+          <p class="nt">An ended session keeps this same disabled shell, says <em>“This session has ended”</em>, and adds no second line. TORN is a history warning, not a fourth shut reason.</p>
         </div>
       </div>
     </div>
@@ -749,9 +749,9 @@
           <tr><td class="k">composer.idle</td><td><b>Message</b></td><td>shipped, kept</td></tr>
           <tr><td class="k">composer.working</td><td><b>Add a note while it works</b></td><td>phone refit W5.4</td></tr>
           <tr><td class="k">composer.offline</td><td><b>Not connected.</b> / <b>Reconnect to send.</b></td><td>link down</td></tr>
-          <tr><td class="k">composer.torn</td><td><b>Chat is paused here.</b> / <b>You can still type on your computer.</b></td><td>a proven structured gap</td></tr>
+          <tr><td class="k">composer.torn</td><td><b>Message</b></td><td>a proven structured gap remains visible, while the exact current message sink has been re-proven</td></tr>
           <tr><td class="k">composer.nochat</td><td><b>Chat is off for this session.</b> / <b>Reply on your computer.</b></td><td>the capability record says no structured chat</td></tr>
-          <tr><td class="k">composer.ended</td><td><b>This session has ended</b></td><td>no composer is drawn</td></tr>
+          <tr><td class="k">composer.ended</td><td><b>This session has ended</b></td><td>the session ended; the permanent shell is disabled and draws no second line</td></tr>
           <tr><td class="k">empty</td><td><b>No messages yet.</b></td><td>it says what this phone holds, never what the computer did (phone refit W5.4)</td></tr>
           <tr><td class="k">menu.a11y</td><td><b>Session menu</b></td><td>the overflow control is a bare glyph (U+22EE) and announces nothing without it. Signed here rather than authored in code, because copy is the screen's and an invented string is an unrecorded one</td></tr>
           <tr><td class="k">kill.confirm</td><td><b>End this session? This can't be undone.</b></td><td>phone refit W5.4; it states the consequence, and only that</td></tr>

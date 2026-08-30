@@ -76,8 +76,14 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 	if instance == "" {
 		return fmt.Errorf("skeleton: refusing to record an empty session instance for %q", sessionID)
 	}
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
+	if prior, _, ok := d.sessionInstanceLocked(sessionID); ok && prior != instance {
+		delete(d.capStore.liveProof, sessionID)
+		_ = os.Remove(d.sessionStatePathLocked(sessionID, sessionSinkProofFile))
+	}
 	if d.capStore.instances == nil {
 		d.capStore.instances = map[string]string{}
 	}
@@ -214,7 +220,15 @@ func writeSessionStateFile(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dirHandle.Close() }()
+	return dirHandle.Sync()
 }
 
 // authorSessionCapabilities is THE ONE authoring entry point (ADR-017 T2-a / D-NIL):

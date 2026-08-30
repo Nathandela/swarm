@@ -665,6 +665,17 @@ func (c *Core) installGrant(g *crypto.EpochGrant, cursor uint64) (opened bool, e
 	// this is the only thing that recovers it.
 	delete(st.StaleStreams, StreamGrant)
 	err = c.persistLocked(st)
+	if err != nil {
+		// GrantReceiver.Accept advanced before persistence. Put the live replay guard back
+		// on the unchanged durable watermark while c.mu still serialises grant acceptance;
+		// otherwise the retained bootstrap's same-process retry becomes ErrGrantReplay and
+		// is acked despite the epoch keys never reaching disk.
+		if c.st.GrantEpoch != 0 || c.st.GrantSeq != 0 {
+			c.grants = crypto.NewGrantReceiverAt(c.st.GrantEpoch, c.st.GrantSeq)
+		} else {
+			c.grants = crypto.NewGrantReceiver()
+		}
+	}
 	c.mu.Unlock()
 	if err != nil {
 		return true, err
@@ -922,9 +933,11 @@ func (c *Core) foldContent(st *State, f inboundFrame) {
 		// channel IS-LIFE-3 re-delivers an unresolved approval_request on.
 		st.Items = itemsWith(c.router.Items(), f.reseed.Events...)
 	case "":
-		// An interaction record shapes the TRANSCRIPT alone (IS-LAYER-1, IS-SS-1); everything
-		// else keeps the roster path unchanged.
-		if f.record.Type == RecordTypeInteraction {
+		// Interaction records and structured_gap boundaries shape the TRANSCRIPT alone
+		// (IS-LAYER-1, IS-SS-1). Runtime capability changes have their own narrowly-fenced
+		// capability_transition record; accepting capabilities from a gap would create an
+		// unfenced second authority channel.
+		if f.record.Type == RecordTypeInteraction || f.record.Type == RecordTypeStructuredGap {
 			st.Items = itemsWith(c.router.Items(), f.record)
 			return
 		}

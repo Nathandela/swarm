@@ -148,6 +148,41 @@ func TestIdempotency_OutcomeSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestIdempotency_ComposerBindingAndExecutingPhaseSurviveRestart(t *testing.T) {
+	dir := sdir(t)
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	const op = "devA:01JCOMPOSERBOUND"
+	rec, existed, err := s.PrepareBound(op, "composer_send", "sess1", "instance-a", "hash-a")
+	if err != nil || existed {
+		t.Fatalf("PrepareBound: existed=%v err=%v", existed, err)
+	}
+	if rec.SessionInstance != "instance-a" || rec.RequestHash != "hash-a" || rec.Phase != PhasePrepared {
+		t.Fatalf("prepared record = %+v, want instance-a/prepared", rec)
+	}
+	if err := s.Begin(op); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if err := s.Begin(op); err == nil {
+		t.Fatal("a second Begin crossed the at-most-once boundary twice")
+	}
+
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	rec, ok := s2.Get(op)
+	if !ok || rec.SessionInstance != "instance-a" || rec.RequestHash != "hash-a" || rec.Phase != PhaseExecuting {
+		t.Fatalf("restarted composer record = ok %v %+v, want instance-a/executing", ok, rec)
+	}
+	other, existed, err := s2.PrepareBound(op, "composer_send", "sess1", "instance-b", "hash-b")
+	if err != nil || !existed || other.SessionInstance != "instance-a" {
+		t.Fatalf("replacement replay = existed %v instance %q err %v, want existing instance-a binding", existed, other.SessionInstance, err)
+	}
+}
+
 // TestIdempotency_CrashBetweenExecuteAndCommitNoDoubleExecute is the A3 CRITICAL
 // property: the two-phase record is fsync'd BEFORE the side effect, so a crash
 // AFTER the side effect but BEFORE the completion commit leaves an `executing`

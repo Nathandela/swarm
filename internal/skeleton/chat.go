@@ -4,11 +4,11 @@ package skeleton
 // of the four ops internal/protocol/remote_chat.go serves.
 //
 //   - composerSend (Mirror M2.4, IS-LIFE-5, playbook §8.1 step 3): refuse a session whose
-//     structured chat has degraded (ADR-017 T2 rule 2, fix-pack B3), verify expected_turn
-//     against the daemon's OWN turn state (turnIDLocked's, IS-ENV-1), write the text plus
-//     submit framing into the session's PTY through the shared tap, and remember the
-//     injection -- for a BOUNDED window (fix-pack B9) -- so the echoed UserPromptSubmit
-//     journals source "phone" with the op's id.
+//     structured chat has degraded (ADR-017 T2 rule 2, fix-pack B3), serialize messages per
+//     session, select the CURRENT provider turn for each queue head, deliver through the
+//     proven backend/keystroke sink, and remember the injection for a BOUNDED window so the
+//     echoed UserPromptSubmit journals source "phone" with the op's id. expected_turn remains
+//     signed render context; unlike Stop it is advisory for conversational messages.
 //   - interruptTurn (Mirror M2.4): verify expected_turn exactly as the composer does
 //     (fix-pack B7 -- the op was turn-blind and typed the cancel sequence into whichever
 //     turn was current on arrival), then type the adapter-declared cancel sequence, or
@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -118,10 +119,9 @@ func (d *Daemon) resolveChatSession(machine, session string) (string, error) {
 }
 
 // testHookComposerCheckedNotYetDelivered, when set, is invoked inside composerSend after
-// expected_turn has been verified and itemMu released, and before anything is delivered. That
-// gap is the whole subject of the re-check below, and nothing observable from outside the
-// package can be parked in it: the seam exists so the interleaving is DRIVEN rather than
-// raced. Always unset in production (mirroring internal/shim's testHookAfterPTYResize).
+// the request enters its per-session lane and immediately before current turn selection.
+// It exists so tests can drive a turn transition at that boundary without timing races.
+// Always unset in production (mirroring internal/shim's testHookAfterPTYResize).
 //
 // IT IS AN ATOMIC AND NOT A BARE VAR because the two accesses genuinely race. Tests install
 // and clear it from the test goroutine while composerSend reads it on whichever goroutine is
@@ -131,87 +131,255 @@ func (d *Daemon) resolveChatSession(machine, session string) (string, error) {
 // concurrency teaches the next reader to skim -race output.
 var testHookComposerCheckedNotYetDelivered atomic.Pointer[func(local string)]
 
-// composerSend applies one accepted composer_send (Mirror M2.4). The precondition and the
-// injection record are taken under ONE itemMu hold, so the turn the send was checked
-// against and the correlation the echo will consume cannot be split by a concurrent
-// capture.
+// testHookInterruptValidatedNotYetBarrier is a deterministic concurrency seam for the
+// strict Stop precondition. Production leaves it nil. Tests may pause after expected_turn
+// has been validated while lane.mu and itemMu are still held, proving no composer retry can
+// slip between that validation and barrier publication.
+var testHookInterruptValidatedNotYetBarrier atomic.Pointer[func(local string)]
+
+// testHookComposerBegunNotYetSubmitted pauses the shim-backed path after the durable Begin
+// callback and immediately before Submit. It drives the otherwise instruction-sized Stop race:
+// production leaves it nil.
+var testHookComposerBegunNotYetSubmitted atomic.Pointer[func(local string)]
+
+// testHookComposerBackendBegunNotYetCalled drives the backend counterpart of the shim race:
+// after durable Begin but before the JSON-RPC request crosses the connection write boundary.
+var testHookComposerBackendBegunNotYetCalled atomic.Pointer[func(local string)]
+
+// composerLane is the daemon's per-session semantic send coordinator. Relay delivery is
+// ordered for one phone, but the daemon is the first layer that knows which native provider
+// turn is current. The reservation bridges the normal app-server race in which turn/start has
+// returned its turn id but turn/started has not reached the event pump yet.
+type composerLane struct {
+	mu                  sync.Mutex
+	ready               *sync.Cond
+	nextTicket          uint64
+	servingTicket       uint64
+	barrier             uint64
+	stopsInFlight       uint64
+	reservedNativeTurn  string
+	closedAtReservation string
+	// supersededTurn is the daemon turn a typed provider steer refusal proved has ended.
+	// It is published at the retry turn/start write boundary, before that call's reply can
+	// reveal the replacement's native id. Until the event pump folds current state, a Stop
+	// rendered against supersededTurn is stale; reservedNativeTurn, once known, routes later
+	// queued messages to the replacement.
+	supersededTurn    string
+	uncertain         bool
+	uncertainTurn     string
+	uncertainClosed   string
+	uncertainProgress uint64
+	progress          atomic.Uint64
+}
+
+// withComposerInteractionState is the one nesting boundary for state shared by the
+// per-session composer lane and the folded interaction model. Stop and composer retry both
+// need supersededTurn, while current/native/closed turn coordinates live under itemMu. Taking
+// the locks here keeps the declared lane.mu -> itemMu order explicit and gives every
+// supersededTurn access one synchronization domain. The callback must stay memory-only: no
+// provider, shim, journal or filesystem I/O belongs under either lock.
+func (d *Daemon) withComposerInteractionState(lane *composerLane, fn func()) {
+	lane.mu.Lock()
+	d.itemMu.Lock()
+	fn()
+	d.itemMu.Unlock()
+	lane.mu.Unlock()
+}
+
+func (d *Daemon) composerLaneFor(local string) *composerLane {
+	candidate := &composerLane{}
+	candidate.ready = sync.NewCond(&candidate.mu)
+	lane, _ := d.composerLanes.LoadOrStore(local, candidate)
+	return lane.(*composerLane)
+}
+
+// enter assigns an explicit FIFO ticket and returns when that ticket is at the head. The
+// bookkeeping lock is released during provider I/O so later arrivals can take their place in
+// the queue; only the serving ticket executes. A plain mutex is not sufficient as a product
+// guarantee because Go does not promise waiter acquisition order.
+func (l *composerLane) enter() uint64 {
+	l.mu.Lock()
+	ticket := l.nextTicket
+	l.nextTicket++
+	admittedBarrier := l.barrier
+	for ticket != l.servingTicket || l.stopsInFlight != 0 {
+		l.ready.Wait()
+	}
+	l.mu.Unlock()
+	return admittedBarrier
+}
+
+func (l *composerLane) endStop() {
+	l.mu.Lock()
+	if l.stopsInFlight > 0 {
+		l.stopsInFlight--
+	}
+	l.ready.Broadcast()
+	l.mu.Unlock()
+}
+
+func (l *composerLane) barrierChanged(admitted uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.barrier != admitted
+}
+
+func (l *composerLane) leave() {
+	l.mu.Lock()
+	l.servingTicket++
+	l.ready.Broadcast()
+	l.mu.Unlock()
+}
+
+// composerSend applies one accepted composer_send (Mirror M2.4). expected_turn is signed
+// render context, not a destructive-target precondition: messages are serialized per session
+// and each queue head is dispatched against the daemon's current provider turn. Stop retains
+// its strict expected_turn precondition in interruptTurn.
 func (d *Daemon) composerSend(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error) {
+	return d.composerSendTransactional(machine, operationID, req, nil)
+}
+
+func (d *Daemon) composerSendTransactional(machine, operationID string, req protocol.ComposerSendReq, begin func() error) (protocol.ErrorCode, error) {
 	local, err := d.resolveChatSession(machine, req.Session)
 	if err != nil {
 		return protocol.CodeInvalidField, errIsLife5("composer send: %v", err)
+	}
+	lane := d.composerLaneFor(local)
+	admittedBarrier := lane.enter()
+	defer lane.leave()
+	if lane.barrierChanged(admittedBarrier) {
+		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
 	}
 	if _, ok := d.core.Get(local); !ok {
 		return protocol.CodeInvalidField, errIsLife5(
 			"composer send names session %q, which is not one this daemon runs; OK here would be a sent message no agent received", req.Session)
 	}
+	if req.SessionInstance != "" {
+		currentInstance, ok := d.sessionInstance(local)
+		if !ok || currentInstance != req.SessionInstance {
+			return protocol.CodeStaleInstance, errIsLife5(
+				"composer send names session incarnation %q, but %q is current; refresh before sending", req.SessionInstance, currentInstance)
+		}
+	}
 	if code, err := d.requireStructuredComposer(local, req.Session); err != nil {
 		return code, err
 	}
-
-	// THE SINK IS RESOLVED BEFORE ANYTHING IS WRITTEN, AND BEFORE itemMu (Wave R7, ADR-013
-	// §R7.5). Until R7 this function called injectComposerText -- text plus a CR into the PTY
-	// -- for EVERY PROVIDER, with no seam and no provider check anywhere on the path, so a
-	// phone send to a Codex session typed into the Codex TUI. That is what playbook §8.2
-	// forbids in as many words, and R7 closes it STRUCTURALLY rather than by naming a
-	// provider here.
-	//
-	// It sits OUTSIDE the hold because resolveAdapter takes itemMu itself and a Go mutex is
-	// not reentrant. Nothing is lost by that: the resolution reads the session's adapter and
-	// its backend registration, neither of which itemMu guards, while the two facts that MUST
-	// not be split -- the turn the send was checked against and the correlation its echo will
-	// consume -- are both inside the hold below.
+	// Resolve the sink only after this request reaches the queue head. A backend may be
+	// replaced or disappear while earlier messages are in provider I/O.
 	sink, code, serr := d.resolveMessageSink(local, req.Session)
 	if serr != nil {
 		return code, serr
 	}
 
-	d.itemMu.Lock()
-	d.initInteractionsLocked()
-	current := d.turnIDs[local]
-	// The CLI's OWN id for that same turn, read under the SAME hold: a steer names it as a
-	// precondition, and reading it in a second hold would let a turn close in between and
-	// send the daemon's answer against a turn the CLI has already replaced.
-	native := d.nativeTurns[local]
-	if req.ExpectedTurn != current {
-		// The render-vs-tap race (IS-LIFE-5): a newer user_message opened a new turn, or
-		// the turn closed on a terminal agent_message. Refused, never misapplied -- and it
-		// is a precondition, not a lockout: the same send against the CURRENT turn goes in.
-		d.itemMu.Unlock()
-		return protocol.CodeStaleTurn, errIsLife5(
-			"expected_turn %q is not the session's current turn; the conversation moved on -- re-read it and send again", req.ExpectedTurn)
-	}
-	if d.pendingSends == nil {
-		d.pendingSends = map[string][]pendingSend{}
-	}
-	pending := pendingSend{text: req.Text, operationID: operationID, at: d.chatNow()}
-	if sink.backend != nil {
-		// The echo key is minted HERE, sent with the message, and read straight back off the
-		// item's `clientId`. Minting it under the same itemMu hold as the precondition means
-		// the turn the send was checked against and the correlation its echo will consume
-		// cannot be split by a concurrent capture.
-		pending.clientRef = newComposerClientRef()
-	}
-	q := append(d.pendingSends[local], pending)
-	if len(q) > maxPendingSends {
-		q = q[len(q)-maxPendingSends:]
-	}
-	d.pendingSends[local] = q
-	d.itemMu.Unlock()
-
+	// This test seam now drives a turn transition immediately before the coordinator
+	// selects current state. It proves a queued message follows the live conversation
+	// instead of being rejected because the phone rendered an older turn.
 	if hook := testHookComposerCheckedNotYetDelivered.Load(); hook != nil {
 		(*hook)(local)
 	}
-	if err := d.deliverComposerText(local, sink, current, native, req.Text, pending.clientRef); err != nil {
+
+	var current, native, closed string
+	var active bool
+	var pending pendingSend
+	var priorUncertain bool
+	d.withComposerInteractionState(lane, func() {
+		d.initInteractionsLocked()
+		current = d.turnIDs[local]
+		// The CLI's OWN id for that same turn, read under the SAME hold: a steer names it as a
+		// precondition, and reading it in a second hold would let a turn close in between and
+		// send the daemon's answer against a turn the CLI has already replaced.
+		native = d.nativeTurns[local]
+		closed = d.closedTurns[local]
+		progress := lane.progress.Load()
+		if lane.uncertain {
+			if current == lane.uncertainTurn && closed == lane.uncertainClosed && progress == lane.uncertainProgress {
+				priorUncertain = true
+				return
+			}
+			lane.uncertain = false
+		}
+		active = current != ""
+		if active && lane.reservedNativeTurn != "" && lane.supersededTurn == current {
+			// The provider already rejected a steer for current and accepted a retry start,
+			// but its completion/start events have not reached the fold yet. The returned
+			// native id is the actual active destination for the next FIFO head.
+			native = lane.reservedNativeTurn
+		} else if active {
+			// The event pump has authoritative state now; any start reservation has served its
+			// purpose and must not survive a later close/reopen.
+			lane.reservedNativeTurn = ""
+			lane.closedAtReservation = ""
+			lane.supersededTurn = ""
+		} else if lane.reservedNativeTurn != "" && (lane.supersededTurn != "" || lane.closedAtReservation == closed) {
+			// turn/start returned before turn/started was folded. Use the returned native id
+			// so a second queued message steers rather than starts a competing turn.
+			active = true
+			native = lane.reservedNativeTurn
+		} else {
+			// A terminal event advanced the close marker, so an older reservation is dead.
+			lane.reservedNativeTurn = ""
+			lane.closedAtReservation = ""
+			lane.supersededTurn = ""
+		}
+		if d.pendingSends == nil {
+			d.pendingSends = map[string][]pendingSend{}
+		}
+		pending = pendingSend{text: req.Text, operationID: operationID, at: d.chatNow()}
+		if sink.backend != nil {
+			// The echo key is minted HERE, sent with the message, and read straight back off the
+			// item's `clientId`. Minting it under the same itemMu hold as the precondition means
+			// the turn the send was checked against and the correlation its echo will consume
+			// cannot be split by a concurrent capture.
+			pending.clientRef = newComposerClientRef()
+		}
+		q := append(d.pendingSends[local], pending)
+		if len(q) > maxPendingSends {
+			q = q[len(q)-maxPendingSends:]
+		}
+		d.pendingSends[local] = q
+	})
+	if priorUncertain {
+		return protocol.CodeOutcomeUnknown, fmt.Errorf("%w: a prior message has no provider outcome yet; no later message was allowed to overtake it", protocol.ErrComposerOutcomeUnknown)
+	}
+	if lane.barrierChanged(admittedBarrier) {
+		d.dropPendingSend(local, operationID)
+		return protocol.CodeStaleTurn, errIsLife5("composer send was superseded by Stop before delivery; nothing was sent")
+	}
+	startedNative, err := d.deliverComposerText(local, lane, admittedBarrier, sink, active, native, req.Text, pending.clientRef, begin)
+	if err != nil {
 		// The message never reached the agent, so the correlation recorded above will never
 		// match an echo; withdraw it rather than letting a later identical owner prompt
 		// inherit a phone attribution.
+		if errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
+			stillPending := false
+			d.withComposerInteractionState(lane, func() {
+				for _, candidate := range d.pendingSends[local] {
+					if candidate.operationID == operationID {
+						stillPending = true
+						break
+					}
+				}
+				if !stillPending {
+					return
+				}
+				lane.uncertain = true
+				lane.uncertainTurn = d.turnIDs[local]
+				lane.uncertainClosed = d.closedTurns[local]
+				lane.uncertainProgress = lane.progress.Load()
+			})
+			if !stillPending {
+				// The provider's matching echo is stronger evidence than a lost RPC reply:
+				// this exact operation was folded and consumed its pending correlation.
+				// Treat it as delivered and do not poison later FIFO heads with an
+				// uncertainty snapshot taken after the proof already advanced.
+				d.notePhoneActivity(local)
+				return "", nil
+			}
+			return protocol.CodeOutcomeUnknown, err
+		}
 		d.dropPendingSend(local, operationID)
-		if errors.Is(err, errTurnMoved) {
-			// THE SAME REFUSAL THE PRECONDITION GIVES, because it is the same fact arriving
-			// a moment later. The phone draws it as bubble.stale and offers the words back.
-			return protocol.CodeStaleTurn, errIsLife5(
-				"expected_turn %q stopped being session %q's current turn before the message was "+
-					"delivered; the conversation moved on -- re-read it and send again", req.ExpectedTurn, req.Session)
+		if errors.Is(err, errComposerStopped) {
+			return protocol.CodeStaleTurn, errIsLife5("composer send was superseded by Stop; nothing was sent")
 		}
 		if errors.Is(err, protocol.ErrInputBusy) {
 			// ITS OWN CODE, because it has its own remedy: nothing is wrong with the
@@ -220,7 +388,18 @@ func (d *Daemon) composerSend(machine, operationID string, req protocol.Composer
 			return protocol.CodeInputBusy, errIsLife5(
 				"session %q had input on its line, so this message was not written; nothing was typed", req.Session)
 		}
-		return "", errIsLife5("composer send into session %q: %v", req.Session, err)
+		return "", errIsLife5("composer send into session %q: %w", req.Session, err)
+	}
+	if startedNative != "" {
+		// Only retain the returned id while no folded event has opened or closed a turn
+		// since selection. If the event pump won the race, its state is authoritative.
+		d.withComposerInteractionState(lane, func() {
+			if d.turnIDs[local] == "" && d.closedTurns[local] == closed {
+				lane.reservedNativeTurn = startedNative
+				lane.closedAtReservation = closed
+				lane.supersededTurn = ""
+			}
+		})
 	}
 	// DELIVERED, so somebody is driving this session from a phone (ADR-010 Amendment 3 C3).
 	// Recorded only on the success path: a message the machine turned away is not somebody
@@ -274,113 +453,225 @@ func (d *Daemon) resolveMessageSink(local, session string) (messageSink, protoco
 	return messageSink{keystrok: kc}, "", nil
 }
 
-// errTurnMoved is the late half of the expected_turn precondition: the turn the send was
-// checked against stopped being current before anything was delivered. It is a sentinel
-// rather than a code because it never leaves this package -- composerSend turns it into the
-// wire's stale_turn, which is the same answer the early check gives for the same fact.
-var errTurnMoved = errors.New("the turn moved between the precondition and the delivery")
+// deliverComposerText writes one queue head through the resolved sink. The caller has selected
+// current state while holding itemMu and owns the session lane for the entire provider call.
+// Backend idle uses turn/start; active uses turn/steer with the CLI's native id. A typed
+// no-active-turn response means the provider completed the selected turn before the event pump
+// folded it, so this retries once against freshly resolved state using the same client id.
+// Keystroke delivery retains the shim's atomic whole-submit/input-busy protection.
+var errComposerStopped = errors.New("composer send superseded by Stop")
 
-// turnMovedSince reports whether the session's current turn is no longer the one a send was
-// verified against. Empty matches empty: an idle session is a turn state like any other, and
-// a turn OPENING under an idle-time check is exactly the case that would otherwise dispatch
-// turn/start into a running turn.
-func (d *Daemon) turnMovedSince(local, expectedTurn string) bool {
-	d.itemMu.Lock()
-	defer d.itemMu.Unlock()
-	return d.turnIDs[local] != expectedTurn
-}
-
-// deliverComposerText writes one message through the resolved sink.
-//
-// ON THE BACKEND BRANCH: turn/start when the daemon's turn is EMPTY, turn/steer when it is not.
-// The steer carries the CLI'S OWN optimistic-concurrency guard, `expectedTurnId`, which the
-// generated binding documents as "Required active turn id precondition. The request fails when
-// it does not match the currently active turn." R1 note 4 says to PROPAGATE it rather than
-// invent a Swarm-side one. Dispatching turn/start mid-turn instead would QUEUE A SECOND TURN,
-// so the owner's question and the phone's would arrive as two separate conversations.
-//
-// IT RE-READS THE TURN FIRST (Slice 0, agents-tracker-bzfe). composerSend verifies
-// expected_turn under itemMu and must release the lock before delivering -- neither sink can
-// be driven with a daemon-wide mutex held -- so the verified fact is already a moment old when
-// it is acted on. A turn opens on a user_message and closes on a terminal agent_message
-// (IS-ENV-1), both asynchronous to this path, so the owner asking a question at the terminal
-// or the agent simply finishing moves it. Re-reading here answers IS-LIFE-5's rule --
-// "refused, never misapplied" -- with the code the precondition already uses.
-//
-// WHAT THE RE-READ CLOSES, MEASURED IN INSTRUCTIONS AND NOT IN ROUND TRIPS. A turn only moves
-// under itemMu. The only interval in which one can move unobserved is therefore the interval
-// composerSend spends OUTSIDE that lock before this function retakes it: its Unlock, a hook
-// load, a nil test, a call. Short in instructions and not bounded in time -- a goroutine can
-// be descheduled anywhere inside it -- which is exactly why the tests DRIVE that interleaving
-// through testHookComposerCheckedNotYetDelivered rather than wait for it. Cheap to close and
-// worth closing: a send resumed after the turn it was written against has closed is
-// "misapplied" whatever the odds were.
-//
-// WHAT IT DOES NOT CLOSE IS THE LARGER HALF, and an earlier version of this comment had the
-// two the wrong way round. It named the tap subscribe and the shimwire round trip on one arm,
-// and the whole JSON-RPC round trip to another process on the other, as the windows the check
-// shuts. Every one of those is BELOW this line: they are the delivery, they run after the
-// re-read, and they stay open. A turn that moves while the bytes are crossing the PTY is not
-// reachable from here, and it is not reachable from anywhere else either -- undoing a partial
-// write is not a thing a PTY offers. The honest summary is narrow: the last look at the turn
-// moves from before composerSend's bookkeeping to immediately before the write, and the write
-// itself remains uncovered.
-func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTurn, nativeTurn, text, clientRef string) error {
-	if d.turnMovedSince(local, expectedTurn) {
-		return errTurnMoved
+func (d *Daemon) deliverComposerText(local string, lane *composerLane, admittedBarrier uint64, sink messageSink, active bool, nativeTurn, text, clientRef string, begin func() error) (string, error) {
+	if lane.barrierChanged(admittedBarrier) {
+		return "", errComposerStopped
 	}
 	if sink.backend == nil {
-		return d.injectComposerText(local, sink.keystrok.ComposerKeys(text))
+		return "", d.injectComposerTextTransactional(
+			local, sink.keystrok.ComposerKeys(text), lane, admittedBarrier, begin)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), backendCallTimeout)
 	defer cancel()
 	input := []map[string]any{{"type": "text", "text": text}}
-	if expectedTurn != "" && nativeTurn == "" {
+	if active && nativeTurn == "" {
 		// REFUSED, HAVING SENT NOTHING. A steer must name the CLI's own turn, and this
 		// daemon holds none for the turn it just checked -- so there is no id to send.
 		// Sending the daemon's ULID instead is exactly review BLOCKING 1: the server's
 		// precondition rejects every one of them, and the phone is told a send succeeded.
-		return errIsLife5(
+		return "", errIsLife5(
 			"session %q has an open turn the CLI never named, so no steer can name it either; "+
 				"nothing was sent", local)
 	}
-	if expectedTurn == "" {
-		return sink.backend.conn.Call(ctx, "turn/start", map[string]any{
+	if !active {
+		var result struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		if err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
+			sink.backend.conn, "turn/start", map[string]any{
+				"threadId":            sink.backend.threadID,
+				"clientUserMessageId": clientRef,
+				// `input` is an ARRAY of UserInput. Passing an object yields
+				// {"code":-32600,"message":"Invalid request: invalid type: map, expected a
+				// sequence"} (RECORDED: errors-observed.json).
+				"input": input,
+			}, &result, begin); err != nil {
+			return "", classifyComposerBackendError(err)
+		}
+		if result.Turn.ID == "" {
+			return "", fmt.Errorf("%w: session %q turn/start returned no native turn id; a queued follow-up cannot be steered safely", protocol.ErrComposerOutcomeUnknown, local)
+		}
+		return result.Turn.ID, nil
+	}
+	err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
+		sink.backend.conn, "turn/steer", map[string]any{
 			"threadId":            sink.backend.threadID,
 			"clientUserMessageId": clientRef,
-			// `input` is an ARRAY of UserInput. Passing an object yields
-			// {"code":-32600,"message":"Invalid request: invalid type: map, expected a
-			// sequence"} (RECORDED: errors-observed.json).
-			"input": input,
-		}, nil)
+			// THE CLI'S OWN TURN ID, never the daemon's. `expectedTurnId` is the app-server's
+			// optimistic-concurrency precondition against ITS turn table, and the daemon's
+			// `turn_id` is a ULID it minted for the phone's benefit (interaction.go's
+			// newTurnID). The two are different namespaces, and R7 round 1 sent the wrong one.
+			"expectedTurnId": nativeTurn,
+			"input":          input,
+		}, nil, begin)
+	if err == nil {
+		return "", nil
 	}
-	return sink.backend.conn.Call(ctx, "turn/steer", map[string]any{
-		"threadId":            sink.backend.threadID,
-		"clientUserMessageId": clientRef,
-		// THE CLI'S OWN TURN ID, never the daemon's. `expectedTurnId` is the app-server's
-		// optimistic-concurrency precondition against ITS turn table, and the daemon's
-		// `turn_id` is a ULID it minted for the phone's benefit (interaction.go's
-		// newTurnID). The two are different namespaces, and R7 round 1 sent the wrong one.
-		"expectedTurnId": nativeTurn,
-		"input":          input,
-	}, nil)
+	if !noActiveTurnToSteer(err) {
+		return "", classifyComposerBackendError(err)
+	}
+	// The native turn completed after this queue head selected it. Re-resolve against
+	// current daemon state and retry once with the SAME client id: if a newer turn has
+	// already been folded, steer it; otherwise the provider's typed answer is the freshest
+	// authority and this message starts the next turn. The refused steer performed no send.
+	// Select retry state under lane.mu, then use the same narrow write boundary as the initial
+	// call. Stop either publishes first (and the boundary sends nothing), follows a replacement
+	// start write and sees supersededTurn, or follows a steer write against the freshly folded
+	// current turn. None of those requires waiting up to 30 seconds for the provider reply.
+	barrierChanged := false
+	var current, latestNative, closed string
+	d.withComposerInteractionState(lane, func() {
+		if lane.barrier != admittedBarrier {
+			barrierChanged = true
+			return
+		}
+		current = d.turnIDs[local]
+		latestNative = d.nativeTurns[local]
+		closed = d.closedTurns[local]
+	})
+	if barrierChanged {
+		return "", errComposerStopped
+	}
+	if current != "" && latestNative != "" && latestNative != nativeTurn {
+		err := callComposerBackendAtWriteBoundary(ctx, local, lane, admittedBarrier,
+			sink.backend.conn, "turn/steer", map[string]any{
+				"threadId": sink.backend.threadID, "clientUserMessageId": clientRef,
+				"expectedTurnId": latestNative, "input": input,
+			}, nil, nil)
+		return "", classifyComposerBackendError(err)
+	}
+	var result struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if err := callComposerBackendAtWriteBoundaryPrepared(ctx, local, lane, admittedBarrier,
+		sink.backend.conn, "turn/start", map[string]any{
+			"threadId": sink.backend.threadID, "clientUserMessageId": clientRef, "input": input,
+		}, &result, nil, func() {
+			// The typed no-active-turn steer already proved this daemon turn is dead. Publish
+			// that fact atomically with the replacement request write so Stop can refuse the
+			// obsolete target without waiting for the reply that carries the new native id.
+			if current != "" {
+				lane.supersededTurn = current
+			}
+		}); err != nil {
+		return "", classifyComposerBackendError(err)
+	}
+	if result.Turn.ID == "" {
+		return "", fmt.Errorf("%w: session %q retry turn/start returned no native turn id", protocol.ErrComposerOutcomeUnknown, local)
+	}
+	d.withComposerInteractionState(lane, func() {
+		lane.reservedNativeTurn = result.Turn.ID
+		lane.closedAtReservation = closed
+		lane.supersededTurn = current
+	})
+	return "", nil
+}
+
+type backendWriteBoundary interface {
+	CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error
+}
+
+func callComposerBackendAtWriteBoundary(ctx context.Context, local string, lane *composerLane, admittedBarrier uint64, conn backendConn, method string, params, out any, begin func() error) error {
+	return callComposerBackendAtWriteBoundaryPrepared(ctx, local, lane, admittedBarrier,
+		conn, method, params, out, begin, nil)
+}
+
+func callComposerBackendAtWriteBoundaryPrepared(ctx context.Context, local string, lane *composerLane, admittedBarrier uint64, conn backendConn, method string, params, out any, begin func() error, prepare func()) error {
+	beforeWrite := func() error {
+		lane.mu.Lock()
+		if lane.barrier != admittedBarrier {
+			lane.mu.Unlock()
+			return errComposerStopped
+		}
+		if err := beginComposerDelivery(begin); err != nil {
+			lane.mu.Unlock()
+			return err
+		}
+		if prepare != nil {
+			prepare()
+		}
+		if begin != nil {
+			if hook := testHookComposerBackendBegunNotYetCalled.Load(); hook != nil {
+				(*hook)(local)
+			}
+		}
+		return nil // lane remains locked through the request write
+	}
+	if bounded, ok := conn.(backendWriteBoundary); ok {
+		return bounded.CallAtWriteBoundary(ctx, method, params, out, beforeWrite, func() {
+			lane.mu.Unlock()
+		})
+	}
+	// Compatibility for small/older backend implementations without a write-boundary seam.
+	// Production *appserver.Client always takes the atomic branch above. Keep Stop responsive
+	// here rather than holding the lane for an opaque implementation's whole reply wait.
+	if err := beforeWrite(); err != nil {
+		return err
+	}
+	lane.mu.Unlock()
+	return conn.Call(ctx, method, params, out)
+}
+
+func beginComposerDelivery(begin func() error) error {
+	if begin == nil {
+		return nil
+	}
+	if err := begin(); err != nil {
+		return fmt.Errorf("%w: durable composer execution boundary: %v", protocol.ErrComposerOutcomeUnknown, err)
+	}
+	return nil
+}
+
+func classifyComposerBackendError(err error) error {
+	if err == nil {
+		return nil
+	}
+	// Errors raised by our own write-boundary callbacks already carry exact semantics:
+	// Stop won before the request write (definite non-delivery), or durable Begin failed
+	// after the operation crossed into an indeterminate execution phase. Reclassifying
+	// either as an opaque transport failure would turn stale_turn into outcome_unknown or
+	// erase the durable sentinel respectively.
+	if errors.Is(err, errComposerStopped) || errors.Is(err, protocol.ErrComposerOutcomeUnknown) {
+		return err
+	}
+	var rpcErr *appserver.RPCError
+	if errors.As(err, &rpcErr) {
+		return err // typed provider refusal proves the request was rejected
+	}
+	return fmt.Errorf("%w: %v", protocol.ErrComposerOutcomeUnknown, err)
+}
+
+func noActiveTurnToSteer(err error) bool {
+	var rpcErr *appserver.RPCError
+	return errors.As(err, &rpcErr) && rpcErr.Code == -32600 &&
+		strings.Contains(rpcErr.Message, "no active turn to steer")
 }
 
 // requireStructuredComposer is ADR-017 T2 rule 2 / Mirror M5.5 applied to the composer
 // (Wave R6 review finding B3): a session whose structured_chat capability is absent or has
-// been DEGRADED by a proven structured_gap has NO STRUCTURED COMPOSER, because it has no
-// message sink -- the transcript that would show the user's message is the very thing the
-// gap ended.
+// been DEGRADED by a proven structured_gap has NO STRUCTURED COMPOSER until the exact
+// current instance freshly proves its message sink. The durable gap marker remains visible
+// forever; only current/future delivery authority can recover.
 //
 // PROBED, BEFORE THIS EXISTED: a session registered {StructuredChat:true, Interrupt:true},
 // then markSessionDegraded'd to {StructuredChat:false, TerminalFallback:true}, accepted a
 // composer_send, replied OK with no code, and the fake CLI received the text on stdin. The
 // user's words went into the agent and the transcript could never show them: the gap
 // silently bridged, which is the one move ADR-017 forbids. The only enforcement anywhere was
-// ComposerModel.availabilityFor in Kotlin -- a client-side gate on a server-side fact, which
-// is no gate at all wherever it is called from. (When this was written it was also called
-// from nowhere; SessionDetailPanel calls it today. The argument never rested on that, and
-// the sentence is corrected rather than left to be discovered.)
+// ComposerModel.availabilityFor in Kotlin -- a client-side check that cannot enforce a
+// server-side fact. SessionDetailPanel calls it today; the server gate is still required.
 //
 // turn_interrupt has answered this shape correctly since it landed (interrupt_unsupported,
 // having typed nothing). This makes the composer symmetric with it.
@@ -392,22 +683,25 @@ func (d *Daemon) deliverComposerText(local string, sink messageSink, expectedTur
 // reason that survived the wiring: authoring is deliberately SILENT while a provider whose
 // structured plane is a side process has not dialled yet (backendPlaneDecided), because a
 // record authored in that window would pin a perfectly good chat session at
-// structured_chat=false FOREVER -- T2 rule 2 makes that degrade one-way. Refusing on absence
+// structured_chat=false until an exact live backend proof exists. Refusing on absence
 // would therefore refuse the composer for every session in its startup window, which reads to
 // a user exactly like the defect this gate exists to fix.
 //
-// So the gate keys on the two POSITIVE facts: the durable degrade marker, and a record that
-// exists and says structured_chat is false. The phone's own router is where absence IS a
-// refusal (ADR-017 T2-a: no record is the honest status card and no composer), and it can be,
-// because by the time a roster reaches a phone the authoring window has closed.
+// So the gate keys on the proof-aware record when one exists: false refuses, while true may
+// coexist with the durable history marker only after an ordered exact-instance recovery.
+// A marker with no record also refuses. Absence without a marker retains the startup-window
+// compatibility compromise; the phone's router remains fail-closed on absence.
 func (d *Daemon) requireStructuredComposer(local, session string) (protocol.ErrorCode, error) {
+	if c, ok := d.sessionCapabilities(local); ok {
+		if !c.StructuredChat {
+			return protocol.CodeStructuredUnsupported, errIsLife5(
+				"session %q has no currently proven structured chat sink; nothing was typed", session)
+		}
+		return "", nil
+	}
 	if d.sessionDegraded(local) {
 		return protocol.CodeStructuredUnsupported, errIsLife5(
-			"session %q proved a structured gap and is in terminal fallback; a message sent now could never appear in its transcript, so nothing was typed", session)
-	}
-	if c, ok := d.sessionCapabilities(local); ok && !c.StructuredChat {
-		return protocol.CodeStructuredUnsupported, errIsLife5(
-			"session %q has no structured chat capability; nothing was typed", session)
+			"session %q proved a structured gap before a capability record existed; nothing was typed", session)
 	}
 	return "", nil
 }
@@ -455,7 +749,7 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // property of THIS keystroke branch: resolveMessageSink's backend arm never touches the
 // PTY, and the only ComposerKeys implementor in the tree is Claude, so the class has a
 // known exit the day Claude gains a structured sink.
-func (d *Daemon) injectComposerText(local string, keys []byte) error {
+func (d *Daemon) injectComposerTextTransactional(local string, keys []byte, lane *composerLane, admittedBarrier uint64, begin func() error) error {
 	if d.api == nil {
 		return errors.New("this daemon has no session tap wired")
 	}
@@ -464,6 +758,21 @@ func (d *Daemon) injectComposerText(local string, keys []byte) error {
 		return fmt.Errorf("tap session %q: %w", local, err)
 	}
 	defer func() { _ = sub.Close() }()
+	// Tap acquisition may dial and block, but it cannot deliver message bytes. Serialize the
+	// final Stop check, durable Begin and whole shim Submit under lane.mu so their order is
+	// indivisible: either Stop publishes first and this sends nothing, or Submit starts/finishes
+	// before Stop can report success. Stop uses the same lane.mu -> itemMu lock order.
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.barrier != admittedBarrier {
+		return errComposerStopped
+	}
+	if err := beginComposerDelivery(begin); err != nil {
+		return err
+	}
+	if hook := testHookComposerBegunNotYetSubmitted.Load(); hook != nil {
+		(*hook)(local)
+	}
 
 	// THE TRANSACTION, WHERE THE SHIM PROVES ONE (Slice 0). Text and CR cross the PTY's
 	// single serialized writer under one hold of its lock, refusing rather than writing
@@ -471,17 +780,20 @@ func (d *Daemon) injectComposerText(local string, keys []byte) error {
 	// Wave R6 closes here for every shim that advertises it.
 	serr := sub.Submit(string(keys))
 	if !errors.Is(serr, protocol.ErrSubmitUnsupported) {
+		if serr != nil && !errors.Is(serr, protocol.ErrInputBusy) {
+			return fmt.Errorf("%w: %v", protocol.ErrComposerOutcomeUnknown, serr)
+		}
 		return serr
 	}
 	// AN OLD SHIM, MID-UPGRADE, and the only path left is the one that can merge. It is
 	// reached exactly when the running shim predates the transaction, which a daemon
 	// restart resolves.
 	if err := sub.Input(keys); err != nil {
-		return fmt.Errorf("writing the message into session %q: %w", local, err)
+		return fmt.Errorf("%w: writing the message into session %q: %v", protocol.ErrComposerOutcomeUnknown, local, err)
 	}
 	time.Sleep(submitframe.Gap)
 	if err := sub.Input([]byte{'\r'}); err != nil {
-		return fmt.Errorf("text delivered, submit not sent into session %q: %w", local, err)
+		return fmt.Errorf("%w: text delivered, submit not sent into session %q: %v", protocol.ErrComposerOutcomeUnknown, local, err)
 	}
 	return nil
 }
@@ -547,6 +859,7 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fiel
 			fields["source"] = adapter.SourcePhone
 			fields["operation_id"] = p.operationID
 			live = append(live[:i:i], live[i+1:]...)
+			d.noteComposerProgress(sessionID)
 			return
 		}
 		return
@@ -561,7 +874,14 @@ func (d *Daemon) stampComposerEchoLocked(sessionID, text, clientRef string, fiel
 		fields["source"] = adapter.SourcePhone
 		fields["operation_id"] = p.operationID
 		live = append(live[:i:i], live[i+1:]...)
+		d.noteComposerProgress(sessionID)
 		return
+	}
+}
+
+func (d *Daemon) noteComposerProgress(sessionID string) {
+	if lane, ok := d.composerLanes.Load(sessionID); ok {
+		lane.(*composerLane).progress.Add(1)
 	}
 }
 
@@ -593,16 +913,38 @@ func (d *Daemon) interruptTurn(machine, operationID string, req protocol.TurnInt
 		return protocol.CodeInvalidField, fmt.Errorf(
 			"turn interrupt: missing expected_turn; an interrupt names the turn it stops or it is not an interrupt")
 	}
-	d.itemMu.Lock()
-	d.initInteractionsLocked()
-	current := d.turnIDs[local]
-	native := d.nativeTurns[local]
-	d.itemMu.Unlock()
-	if req.ExpectedTurn != current {
+	// Validate the named turn and publish the Stop barrier as one transaction with
+	// composer retry. Lock order is lane.mu -> itemMu everywhere these domains nest.
+	// A stale Stop does not increment the barrier and therefore does not discard valid
+	// queued messages.
+	lane := d.composerLaneFor(local)
+	var current, native string
+	var stale bool
+	d.withComposerInteractionState(lane, func() {
+		d.initInteractionsLocked()
+		current = d.turnIDs[local]
+		native = d.nativeTurns[local]
+		if hook := testHookInterruptValidatedNotYetBarrier.Load(); hook != nil {
+			(*hook)(local)
+		}
+		stale = req.ExpectedTurn != current ||
+			(lane.supersededTurn != "" && lane.supersededTurn == current)
+		if !stale {
+			lane.barrier++
+			lane.stopsInFlight++
+		}
+	})
+	if stale {
 		return protocol.CodeStaleTurn, fmt.Errorf(
 			"turn interrupt: expected_turn %q is not session %q's current turn; the turn it was rendered against is over, and interrupting whatever replaced it -- including a turn the owner just started at the terminal -- is what this refusal exists to prevent",
 			req.ExpectedTurn, session)
 	}
+	// Stop is a priority barrier on the composer lane, not a FIFO message behind provider
+	// I/O it is meant to stop. It invalidates every message admitted before this point and
+	// prevents later queue heads from dispatching until the interrupt resolves. An in-flight
+	// steer may finish, but if Stop made its native-turn precondition fail it is forbidden
+	// from retrying as a fresh turn.
+	defer lane.endStop()
 	// THE BACKEND BRANCH FIRST (Wave R7, M4.4), for the same reason the composer's is first:
 	// a session with a live app-server has a NATIVE interrupt, and falling through to a
 	// keystroke on the day the backend died is the one thing playbook §8.2 forbids.

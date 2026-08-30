@@ -9,7 +9,6 @@ import dev.swarm.phone.ui.screens.MachineRowModel
 import dev.swarm.phone.ui.screens.PresetRowModel
 import dev.swarm.phone.ui.screens.SessionCapabilityFacts
 import dev.swarm.phone.ui.screens.TerminalFallbackBinding
-import dev.swarm.phone.ui.screens.TerminalFallbackModel
 import dev.swarm.phone.ui.screens.TerminalGrid
 import swarmmobile.App
 import swarmmobile.Session
@@ -85,23 +84,6 @@ class FacadeBridge(private val app: App) {
         // closes that drill-down on the authoritative absence instead.
         val s = app.session(sessionId)
         return SessionCapabilityFacts(structuredChat = s.structuredChat)
-    }
-
-    /**
-     * The routed destination and the honest header's facts, for the one screen ADR-017 T1 routes
-     * a `terminal_fallback` session to. Null for every other session, because
-     * [TerminalFallbackModel.from] answers null unless the MACHINE chose that destination.
-     */
-    fun terminalFallback(sessionId: String): TerminalFallbackModel? {
-        val session = try {
-            app.session(sessionId)
-        } catch (refused: Exception) {
-            // A row may disappear between the roster draw and this main-thread redraw. It no
-            // longer has a destination to render; every other class remains a real failure.
-            if (!isAwaitingFirstFrame(classOf(refused))) throw refused
-            return null
-        }
-        return TerminalFallbackModel.from(session)
     }
 
     /**

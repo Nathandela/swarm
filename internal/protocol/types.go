@@ -283,6 +283,15 @@ type MessageSubmitter interface {
 	Submit(text string) error
 }
 
+// MessageSubmitCapability is the non-writing proof half of MessageSubmitter. It
+// reports the capability negotiated in the current shim hello; it never submits
+// bytes. A recovery path must require this in addition to the adapter's keystroke
+// composer seam, rather than testing MessageSubmitter alone (shimStream implements
+// Submit even for an old peer and then returns ErrSubmitUnsupported).
+type MessageSubmitCapability interface {
+	SupportsMessageSubmit() bool
+}
+
 // ControlInputWriter is the OPTIONAL half of a SessionStream that can deliver DAEMON-AUTHORED
 // keys -- a turn interrupt, a dialog answer -- on a frame that carries their provenance, so the
 // shim writes them without counting them against the next Submit (phone refit W2.1,
@@ -319,6 +328,26 @@ type OperationClaimer interface {
 type IdempotentExecutor interface {
 	ClaimIdempotentOp(operationID, action, session string) (existed, priorOK bool, err error)
 	CommitIdempotentOp(operationID string, ok bool) error
+}
+
+// ComposerOperationExecutor is the durable at-most-once lifecycle for composer_send.
+// A prepared record is safe to begin/recover because no provider I/O has started. Once
+// executing, a lost reply is outcome_unknown and MUST NOT be blindly redelivered. Terminal
+// outcome is opaque JSON owned by the protocol handler so exact refusal codes replay.
+type ComposerOperationExecutor interface {
+	ClaimComposerOperation(operationID, action, localSession, sessionInstance, requestHash string) (phase string, outcome []byte, err error)
+	BeginComposerOperation(operationID string) error
+	CommitComposerOperation(operationID string, outcome []byte, success bool) error
+}
+
+// TransactionalComposerSender lets the production daemon cross the durable executing
+// boundary at the last safe point: after the request reaches its per-session FIFO head and
+// after it revalidates the session incarnation/capability/sink, but immediately before any
+// provider or PTY I/O. The ordinary ComposerSender seam remains for older daemons and small
+// protocol test doubles; a remote-tier implementation that also exposes the durable
+// ComposerOperationExecutor should implement this interface as well.
+type TransactionalComposerSender interface {
+	ComposerSendTransactional(machine, operationID string, req ComposerSendReq, begin func() error) (ErrorCode, error)
 }
 
 // DaemonAPI is the subset of a daemon the Server wraps. It is an interface so

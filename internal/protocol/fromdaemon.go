@@ -236,6 +236,8 @@ func (st *shimStream) Submit(text string) error {
 	}
 }
 
+func (st *shimStream) SupportsMessageSubmit() bool { return st.caps.SubmitTransaction }
+
 // shimSubmitTimeout bounds one submit. The shim holds the PTY writer for
 // submitframe.Gap and answers immediately after, so anything approaching this bound is a
 // wedged shim rather than a slow one.

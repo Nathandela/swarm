@@ -241,6 +241,11 @@ type Daemon struct {
 	// stranger's group. A leaf lock like tombMu; reaps happen only on session death, so
 	// daemon-wide is the simple shape and contention is irrelevant.
 	reapMu sync.Mutex
+
+	// gapEmitMu makes the journal scan + append in EmitStructuredGapOnce one
+	// transaction among gap reporters. Journal.Append is durable; this lock only
+	// closes the in-process check/append race between two drainers.
+	gapEmitMu sync.Mutex
 }
 
 // Open acquires the singleton (flock-before-bind), rebuilds the registry from the

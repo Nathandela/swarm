@@ -28,8 +28,8 @@ The product is local-compute and self-host-first:
 - Identity is accountless. A phone and machine trust each other through QR pairing, SAS confirmation,
   and device keys; there is no Swarm user account in the first release.
 - Claude Code and Codex receive complete structured-chat experiences first. A provider without a
-  complete structured interaction adapter receives an honest status and terminal-fallback surface,
-  not fabricated chat.
+  complete structured interaction adapter still opens in Android's normal transcript/composer shell;
+  the composer is disabled with an honest inline reason, never replaced by fabricated chat or a grid.
 - One phone can pair with several computers in the first complete product. Several phones paired to
   one computer remain a later multi-device program.
 
@@ -71,8 +71,8 @@ future behavior in this playbook. Every new claim needs new evidence against a r
 | RC-D1 | Only sessions launched through Swarm are remotely controllable in v1. | Swarm owns the PTY and lifecycle from process creation. Attaching arbitrary pre-existing CLI processes is out of scope. |
 | RC-D2 | The relay is self-hosted per developer or organization. | The normal setup target is an always-on public host with WSS on port 443, usually a small VPS. Running only on a sleeping laptop is a development mode, not the promised cross-network product. |
 | RC-D3 | There are no Swarm accounts in v1. | Pairings are device-local. Reinstalling the phone app or losing the phone requires revocation and re-pairing. No cloud backup or cross-phone restoration is implied. |
-| RC-D4 | Claude Code and Codex are the first full structured-chat providers. | OpenCode and AGY remain launchable, but use the fallback surface until their provider adapter satisfies the complete-chat capability contract. |
-| RC-D5 | Terminal fallback exists only for providers without complete structured chat. | A structured provider never exposes a terminal or visible lease in its normal phone experience. The fallback is sanitized, read-only by default, and raw control is an explicit temporary action. |
+| RC-D4 | Claude Code and Codex are the first full structured-chat providers. | OpenCode and AGY remain launchable and open in the same Android conversation shell, with sending disabled until their provider adapter satisfies the complete-chat capability contract. |
+| RC-D5 | Android has one session surface; terminal fallback remains wire compatibility only. | Every Android session retains the transcript and pinned composer shell. Capability/connectivity may disable sending with inline copy, but no production Android route exposes a terminal grid, watch, control, or visible lease. |
 | RC-D6 | Swarm operates a minimal push gateway for the Play Store app. | The gateway maps opaque push addresses to FCM tokens and forwards authenticated fixed-shape content-free wakes. It receives no session traffic, relay credential, category, repository datum, or agent credential. |
 | RC-D7 | End-to-end encryption remains mandatory for session traffic. | A relay compromise may disclose metadata, delay, reorder, duplicate, or drop traffic, but must not reveal or forge session content. |
 | RC-D8 | Multi-machine is in the first complete product; multi-phone is later. | Android state becomes a collection of independent machine pairings. The machine's current single-device enrollment limit remains until ADR-011 is implemented as one coherent program. |
@@ -92,7 +92,7 @@ is left intact and labelled historical; a normative or operational document is a
 |---|---|
 | Play Store Android is the first client; iOS/APNs language is no longer the active target | `ADR-007-remote-access.md`, `system-spec.md`, `implementation-goals.md`, `remote-phaseB-requirements.md`, `operator-runbook.md`, `physical-handset-gate.md`, release/CI docs |
 | Push moves from relay-owned sender credentials to the Swarm gateway | `ADR-007-remote-access.md`, relay and VPS runbooks, metadata disclosure, example relay config, Android build/runtime requirements, physical-handset gate |
-| Incomplete providers receive terminal fallback | `ADR-009-structured-chat-interaction.md`, `ADR-013-mirror-capture-architecture.md`, `mirror-program.md`, Android verb/screen coverage tables and their enforcing tests |
+| Every Android session retains the conversation shell | `ADR-017-terminal-fallback-capability.md` 2026-08-30 amendment, interaction schema, Android verb/screen coverage tables and their enforcing tests |
 | Web PKI becomes the default TLS policy | `ADR-007-remote-access.md`, pairing payload/state migrations, phone dial policy, relay/VPS runbooks, pin conformance tests |
 | Multi-machine remains distinct from multi-phone | `ADR-011-multi-device-epochs.md`, mobile state and screen-coverage contracts, Android navigation requirements, physical-handset gate |
 | Phone launch is a supported RCE-class action | `ADR-007-remote-access.md`, protocol and launch policy, mobile/Android coverage tables, activity-log and physical authorization tests |
@@ -100,24 +100,21 @@ is left intact and labelled historical; a normative or operational document is a
 The exact repository file list is captured in the R1 change after an `rg` sweep; the table is a
 minimum, not permission to leave another current source contradictory.
 
-### 3.1 Capability-driven terminal fallback
+### 3.1 One Android conversation surface
 
-ADR-009 currently says there is no terminal grid anywhere in the app and that the phone never authors
-raw keystrokes. Amend it narrowly:
+The 2026-08-30 ADR-017 amendment supersedes its earlier Android terminal-fallback routing without
+deleting the machine/wire types:
 
-- `structured_chat` sessions keep ADR-009 exactly: transcript, tool cards, approvals, composer, no
-  terminal surface, and no visible take-control ceremony.
-- `terminal_fallback` sessions may render the machine-sanitized terminal snapshot already produced at
-  the trusted boundary. Raw PTY bytes, ANSI control sequences, OSC payloads, and an on-phone VT parser
-  remain forbidden.
-- The fallback opens read-only. The user must explicitly enter temporary control; backgrounding,
-  leaving the screen, transport loss, expiry, kill switch, or revocation ends it.
-- No content may be promoted from the terminal fallback into structured chat. The adapter must earn
-  structured mode by satisfying the capability contract in section 7.
-
-Amend ADR-013 and the Mirror program to replace "status card only" with "honest status plus terminal
-fallback" for incomplete providers, while retaining the rule that terminal scraping never produces
-structured interaction items.
+- Every session opens the normal transcript and pinned composer-shaped shell on Android.
+- `AVAILABLE` is sendable. `NO_CHAT`, `OFFLINE`, and `ENDED` keep the shell but disable input and its
+  action, with a precise inline reason. A transcript/history tear stays visible in the transcript and
+  does not select another screen.
+- No production Android route issues a terminal watch, renders `TerminalViewV1`, enters terminal
+  control, or shows a session status card in place of the conversation.
+- Terminal snapshot/control bodies remain versioned compatibility vocabulary for rolling peers and
+  non-Android consumers. Their authorization and sanitization rules remain fail-closed.
+- Terminal content never becomes an interaction item. A provider still earns sendable structured
+  chat only through the complete-chat contract in section 7.
 
 ### 3.2 Split self-hosted relay from Play Store push
 
@@ -251,15 +248,15 @@ Every phone-authored message has one of these visible states:
 |---|---|---|
 | `draft` | Local text only. | `pending` or deletion |
 | `pending` | The app is online and is acquiring/using the provider's message primitive. | `sent`, `refused`, `uncertain`, or `outcome_unknown` |
-| `sent` | The daemon accepted the operation against the expected turn and attributed the injected/native message. | Terminal item acknowledgement may fold into the same item. |
-| `refused` | The daemon definitively rejected it, for example stale turn, revoked device, offline target, or unsupported action. | User edits or retries as a new operation. |
+| `sent` | The daemon accepted the operation from its per-session FIFO and attributed the injected/native message. | Terminal item acknowledgement may fold into the same item. |
+| `refused` | The daemon definitively rejected it, for example stale session instance, revoked device, offline target, or unsupported action. | User edits or retries as a new operation. |
 | `uncertain` | Connectivity disappeared after send began and no authoritative outcome has arrived yet. | Operation-status reconciliation changes it to `sent`, `refused`, or `outcome_unknown`. |
 | `outcome_unknown` | A crash crossed an irreversible provider side-effect boundary and Swarm cannot prove whether the provider accepted the text. | Never auto-retry. The user inspects the transcript and deliberately creates a new operation if needed. |
 
-An uncertain, unknown, or offline draft is never automatically replayed. Live input must not become
-an unseen queue merely to make the UI look successful. There is one active turn per session instance:
-the first accepted idle-start wins; a mid-turn send is accepted only when the provider advertises
-native steering, and otherwise receives a stable refusal instead of waiting invisibly.
+An uncertain, unknown, or offline draft is never automatically replayed. The live daemon may hold
+multiple accepted sends in an explicit per-session FIFO, but Android never creates an offline outbox.
+Each FIFO head is applied against current provider state: start when idle, steer when active and
+supported, otherwise return a stable refusal instead of waiting invisibly.
 
 ### 4.6 Approvals and interruption
 
@@ -270,27 +267,22 @@ native steering, and otherwise receives a stable refusal instead of waiting invi
   supported native channel replaces it.
 - Codex approvals use the app-server RPC; no Codex approval is typed into the PTY.
 - Stop is a signed semantic interrupt when the provider capability record says `interrupt=true`.
-  Fallback shows the same button only under that capability; otherwise it hides/refuses it with
+  The normal shell enables it only under that capability; otherwise it disables/refuses it with
   "This provider version has no safe remote interrupt." It never guesses a control key.
 
-### 4.7 Terminal-fallback session
+### 4.7 Chat-unavailable session on Android
 
-Fallback is capability-driven, not user-selected for a structured provider:
+Unavailability changes the composer state, not the screen kind:
 
-- The header states why structured chat is unavailable, including provider and detected version.
-- The terminal body is the machine-sanitized snapshot and incremental safe rendering, never raw ANSI.
-- The initial mode is read-only. It remains useful for monitoring without any lease.
-- **Control terminal** is explicit, visually persistent, and capped by the existing signed 15-minute
-  horizon. The daemon may grant less; there is no silent renewal.
-- Only the active fallback screen may send raw input. The app does not buffer or replay it.
-- The computer TUI and phone may both remain attached, but the app warns that simultaneous typing can
-  interleave.
-- Leaving the screen or backgrounding stops local input immediately and sends a best-effort signed
-  end. The daemon ends on receipt; an abrupt connectivity/process loss ends at the missing-keepalive
-  deadline, no later than 30 seconds. Expiry, revocation, kill switch, or session replacement severs
-  it synchronously at the daemon. Capabilities are immutable for a session instance; an adapter
-  upgrade takes effect only on a newly launched/resumed instance, so no live surface silently changes
-  mode.
+- The retained transcript remains readable in the normal session detail.
+- The pinned composer-shaped shell remains visible and states why it cannot send. Its field and action
+  are disabled for `NO_CHAT`, `OFFLINE`, and `ENDED`; `AVAILABLE` remains sendable.
+- No transcript contents are interpreted as capability. A history-gap card reports incomplete
+  history where it occurred and does not, by itself, disable a still-live message sink.
+- There is no terminal grid, terminal watch, terminal control, status-card replacement, or hidden
+  composer route in production Android.
+- Terminal protocol fields remain compatibility vocabulary only; they grant Android no route or input
+  authority.
 
 ### 4.8 Connectivity, sleep, and notifications
 
@@ -374,10 +366,17 @@ or read a conversation.
 - Daemon unavailability neither fails a provider hook nor loses an accepted item. An unrecoverable
   spool/cursor gap emits an exact `structured_gap` boundary, disables `structured_chat` for that
   session instance, and forbids a fabricated completion.
+- The gap is unrecoverable history, not permission to abandon the surviving channel. Only after the
+  boundary is durable may the daemon reset to the spool's explicit fresh-reader coordinate and fold
+  the retained and future side on a later drain. It never folds that side in the boundary-producing
+  drain, clears the degraded-completeness fact, or invents the missing range. The normal Android
+  conversation shell stays visible. Sending is disabled until the machine freshly proves the exact
+  current instance's live message sink; successful proof restores only structured composer authority
+  through an ordered capability transition, while the gap marker remains visible.
 - The spool is owner-only, bounded, crash-atomic, and compacted only after the daemon durably folds an
   acknowledged sequence. Disk-full or corrupt-spool behavior must let the agent continue locally,
-  record the earliest provable gap, and show the surviving transcript read-only before offering an
-  explicitly degraded fallback when supported.
+  record the earliest provable gap, and keep the surviving transcript in the normal conversation
+  shell with sending disabled until a current sink proof succeeds.
 
 ### 6.2 Provider adapter
 
@@ -385,18 +384,20 @@ Extend the adapter seam with explicit, independently testable capabilities:
 
 ```text
 InteractionSource  -> normalized item stream and history cursor
-MessageSink        -> start/steer a turn with expected-turn enforcement
+MessageSink        -> per-session FIFO; start/steer against current provider state
 ApprovalSink       -> answer a provider approval or report unsupported
 LifecycleSink      -> interrupt and provider-native status
-TerminalFallback   -> sanitized observer plus optional live-only input
+TerminalFallback   -> sanitized machine/wire compatibility observer and input capability
 ```
 
-An adapter publishes an authoritative capability record at session launch. Capabilities are stamped
-with provider name, detected version, adapter revision, and any runtime probe result, and are
-immutable for that session instance. The phone renders from that record; it never infers support
-from whether a transcript happens to be empty. A runtime integrity failure may only degrade the
-record through an explicit daemon-authored capability event such as `structured_gap`; it cannot
-upgrade a fallback session in place.
+An adapter publishes an authoritative capability record at session launch. Provider name, detected
+version, adapter revision, runtime probe result, and terminal authority are immutable for that
+session instance. The phone renders from the record and infers nothing from transcript contents. A
+runtime integrity failure publishes `structured_chat=false` through an explicit daemon-authored
+capability transition. Only a fresh proof of the exact current instance's message sink, bound to the
+latest gap generation, may publish it true again. This recovery cannot promote an intrinsically
+fallback provider, change launch facts, grant terminal fallback/control, erase the gap, or cross a
+session replacement.
 
 ### 6.3 Protocol
 
@@ -417,11 +418,12 @@ Add or finalize these semantic operations:
 - `composer_send(machine, session_instance, operation_id, profile, expected_turn,
   expected_input_revision?, text, expires_at)`
 - `operation_status(machine, operation_id)`
-- `turn_interrupt(machine, session_instance, operation_id, expected_turn?, expires_at)`
+- `turn_interrupt(machine, session_instance, operation_id, expected_turn, expires_at)`
 - `interaction_history(machine, session_instance, before_item, limit)`
 - `interaction_detail(machine, session_instance, item_id)`
 - `session_capabilities(machine, session_instance)` as daemon-authored state
-- `terminal_watch` / `terminal_unwatch` only when `terminal_fallback=true`
+- `terminal_watch` / `terminal_unwatch` only when `terminal_fallback=true` (wire compatibility;
+  production Android never calls them)
 - `terminal_control_begin(machine, session_instance, operation_id, profile, expires_at)`,
   `terminal_input(machine, session_instance, control_generation, bytes)`, and
   `terminal_control_keepalive(machine, session_instance, control_generation)` /
@@ -435,7 +437,9 @@ session history. Fault-injection tests stop the process before/after prepare, pr
 capture correlation, and sealed reply.
 
 `composer_send` validates machine/session instance, device authorization, expiry, selected remote
-profile, expected turn, provider capability, and provider-specific input preconditions. For Claude,
+profile, provider capability, and provider-specific input preconditions. Its signed `expected_turn`
+is advisory render context; the FIFO head resolves current provider state rather than rejecting
+ordinary turn movement as stale. For Claude,
 `expected_input_revision` is mandatory. The shim first acquires the one transaction lock shared by
 every owner/remote input writer; while holding it, it snapshots and checks the characterized input
 region is empty and the revision still matches, then writes the entire text-plus-submit framing
@@ -450,12 +454,12 @@ reservation to make a replay return the same session/outcome. `operation_status`
 retry. Unknown actions, profiles, body versions, session instances, or capabilities receive sealed
 stable refusals.
 
-Terminal observation uses a versioned `TerminalViewV1`: full coalesced snapshots with monotonically
-increasing revision, session instance, rows/columns, UTF-8 text, and a reset/resync marker. Prefer
+Compatibility terminal observation uses a versioned `TerminalViewV1`: full coalesced snapshots with
+monotonically increasing revision, session instance, rows/columns, UTF-8 text, and a reset/resync marker. Prefer
 full coalesced snapshots over an invented patch language in v1. Size/line/rate bounds are declared in
 the profile; a slow observer drops superseded snapshots and receives the newest complete revision.
 The trusted machine renderer strips control sequences and supplies replacement glyphs for invalid
-Unicode. Watch grants no input authority.
+Unicode. Watch grants no input authority, and production Android never opens one.
 
 `terminal_control_begin` is a signed semantic operation bound to the selected remote profile, paired
 device signing key, and fallback session instance. It mints one non-transferable generation bound to
@@ -586,12 +590,12 @@ provider version:
 | Assistant messages | Final prose is captured without terminal scraping. Streaming deltas are optional, but their availability is declared honestly. |
 | Tool lifecycle | Start and terminal outcome are represented; missing full output is marked truncated/degraded, never invented. |
 | Turn lifecycle | Idle, active, waiting, completed, interrupted, and failed states are provider-authored or adapter-proven. |
-| Composer | Idle start and, where supported, mid-turn steer have explicit outcomes and expected-turn enforcement. Unsupported steering is refused with legible UX. |
+| Composer | Accepted sends are serialized per session and start/steer against current provider state with explicit outcomes. Unsupported steering is refused with legible UX. |
 | Interrupt | A semantic interruption reaches the current turn and is observed. |
 | Approvals | Pending requests re-deliver after reconnect; resolutions dismiss on every surface; first answer wins. |
 | History | Cold-open reconstructs the retained conversation in order and exposes an honest retention floor. |
-| Version skew | Unknown provider versions fail to the terminal fallback or a status-only refusal, not optimistic structured mode. |
-| Survival | Daemon restart preserves every structured event accepted by the shim/backend. A proven gap is marked at its exact boundary and degrades the session; it is never silently bridged. |
+| Version skew | Unknown provider versions disable sending with an honest inline reason, not optimistic structured mode or an Android terminal route. |
+| Survival | Daemon restart preserves every structured event accepted by the shim/backend. A proven gap is marked at its exact boundary and degrades the session; retained/future capture resumes only behind that boundary, so the missing range is never silently bridged. |
 
 Claude may satisfy complete chat without token-live assistant deltas; tool/status activity must make
 work visible and final prose arrives at `Stop`. Codex is expected to add true deltas through
@@ -607,7 +611,8 @@ Build on the shipped hook capture and approval path:
    delivery states, and working indicators from Mirror M2.
 2. Move hook ingestion to the shim-owned durable spool and prove daemon-outage survival before
    claiming complete chat.
-3. Add `composer_send`: verify `expected_turn`, an empty characterized input region, and
+3. Add `composer_send`: retain `expected_turn` as signed advisory context, resolve current provider
+   state at the per-session FIFO head, verify an empty characterized input region and
    `expected_input_revision`; take the shim-wide input transaction; write text plus submit framing;
    and correlate the exact subsequent `UserPromptSubmit` item back to the phone operation.
 4. Implement history paging and bounded detail from Mirror M3. Transcript JSONL remains enrichment;
@@ -646,8 +651,10 @@ For the first complete product:
 
 - Keep real launch, interrupt/kill, and honest heuristic status where already supported. Remote
   resume of an exited session remains out of scope across providers.
-- Advertise `structured_chat=false`, `terminal_fallback=true` until the complete-chat table passes.
-- Show provider/version and missing-capability explanation on the phone.
+- Advertise `structured_chat=false` until the complete-chat table passes; the compatibility
+  `terminal_fallback` field does not select an Android screen.
+- Show provider/version and the missing-capability explanation inline in the normal conversation
+  shell, with its composer disabled.
 - Continue the bounded OpenCode SSE/HTTP and AGY hook/ACP probes after Claude and Codex gates are
   green. Partial structured sources may improve status cards internally but do not unlock chat.
 
@@ -828,14 +835,15 @@ Deliverables:
 Exit evidence: terminal TUI and phone drive the same Codex thread concurrently; token deltas and tool
 states arrive within the budgets below; answering an approval on either surface resolves the other.
 
-### Wave R8 — incomplete-provider terminal fallback
+### Wave R8 — terminal compatibility (historical Android route retired)
 
-**Purpose:** make OpenCode, AGY, and future providers useful without presenting terminal scraping as
-chat.
+**Purpose at the time:** make OpenCode, AGY, and future providers useful without presenting terminal
+scraping as chat. The 2026-08-30 ADR-017 amendment retires this wave's Android screen route while
+retaining its machine/wire compatibility and sanitizer work.
 
 Deliverables:
 
-**Amendment (2026-08-21, per section 16; ADR-017 amendment C0 of 2026-08-20).** R8 delivered
+**Historical amendment (2026-08-21, per section 16; ADR-017 amendment C0 of 2026-08-20).** R8 delivered
 its READ half only: capability routing, `TerminalViewV1`, sanitized watch-only rendering,
 staleness/lapse honesty, kill-switch and revocation severance. The CONTROL half of the
 deliverable list below (explicit temporary control, generation-bound input, conditional safe
@@ -852,8 +860,9 @@ bead stays open on it.
   generations, relay replay/wrong signer, session replacement, disconnect/background, kill switch,
   and revocation tests.
 
-Exit evidence: OpenCode and AGY can be launched and safely monitored/controlled from the fallback;
-Claude and Codex expose no route to it when their structured capabilities are healthy.
+Current exit evidence: OpenCode and AGY open the normal Android transcript/composer shell with an
+inline unavailable reason and disabled send action; no Android session exposes a terminal grid,
+watch, or control route. The terminal payloads remain covered as non-Android wire compatibility.
 
 ### Wave R9 — closed beta and release
 
@@ -953,11 +962,12 @@ old `[UNRUN]` rows cannot be cited as evidence.
   metadata matches the disclosure and replay contract exactly.
 - Cross-machine state confusion fails closed under duplicate ids, replayed frames, corrupted cursors,
   and restored backups.
-- Terminal fallback admits no unsanitized control sequence and sends no bytes without a live confirmed
-  control generation.
-- Provider version skew falls back or refuses; it never guesses an approval key or RPC shape.
+- Terminal compatibility payloads admit no unsanitized control sequence and send no bytes without a
+  live confirmed control generation; production Android neither subscribes nor sends them.
+- Provider version skew disables sending or refuses; it never selects an Android terminal or guesses
+  an approval key or RPC shape.
 - Structured capture survives daemon outage; a proven gap visibly degrades instead of fabricating a
-  complete conversation.
+  complete conversation, while retained and future events remain foldable behind that boundary.
 - Revocation stops commands immediately, rotates the epoch where required, asks an honest relay to
   delete old ciphertext without depending on it, and durably revokes the push address/capabilities.
 

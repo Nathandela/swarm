@@ -182,9 +182,16 @@ type Daemon struct {
 	// bodies (one 64 MiB store, oldest-first eviction). A session's entries are cleared by
 	// endSession.
 	pendingSends map[string][]pendingSend
-	details      map[string]map[string][]byte
-	detailOrder  []detailKey
-	detailBytes  int
+	// composerLanes serializes semantic message dispatch per session. The relay/gateway
+	// preserves one handset's append order, but the daemon is the first layer that also owns
+	// the provider's current native turn; keeping the coordinator here prevents two immediate
+	// idle sends from both selecting turn/start before turn/started reaches the event pump.
+	// sync.Map avoids a daemon-wide mutex on unrelated sessions. Entries are retired with the
+	// rest of a session's interaction state in forgetInteractions.
+	composerLanes sync.Map // map[string]*composerLane
+	details       map[string]map[string][]byte
+	detailOrder   []detailKey
+	detailBytes   int
 
 	// phoneActivity is when each session last received a remote message: the fact that
 	// replaces the take_control lease as C3's "somebody is driving this" signal, and the
@@ -396,6 +403,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// Wave R6 (chat.go): the complete-chat seams, handed across on the approve pattern.
 	// Left nil, each coreAPI method refuses rather than pretending.
 	d.api.composer = d.composerSend
+	d.api.composerTransactional = d.composerSendTransactional
 	d.api.interrupt = d.interruptTurn
 	d.api.history = d.interactionHistory
 	d.api.detail = d.interactionDetail

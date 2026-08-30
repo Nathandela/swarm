@@ -161,6 +161,24 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 		return true
 	}
 	cs, ok := c.sessions[rec.SessionID]
+	if rec.Type == RecordTypeCapabilityTransition {
+		// A transition cannot establish which incarnation a row represents: its claimed
+		// instance is the value being authorized, not independent proof. Require an existing,
+		// valid record for this row and an exact incarnation match. This also prevents a
+		// delayed recovery from inventing a row after the old instance was deleted.
+		if !ok || cs.Capabilities == nil || cs.Capabilities.Validate() != nil ||
+			rec.Capabilities == nil ||
+			rec.Capabilities.SessionInstance != cs.Capabilities.SessionInstance {
+			return true
+		}
+		// This transition channel belongs only to a structured-chat session whose history
+		// became torn. It may toggle StructuredChat and nothing else. In particular, a gap
+		// never grants the terminal route or keyboard: Android keeps the normal chat shell
+		// visible and disables it inline until proof recovers.
+		if rec.Capabilities.Validate() == nil && !sameChatCapabilityPlane(cs.Capabilities, rec.Capabilities) {
+			return true
+		}
+	}
 	if !ok {
 		cs = CachedSession{SessionID: rec.SessionID}
 	}
@@ -177,7 +195,12 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	if !rec.StateSince.IsZero() {
 		cs.StateSince = rec.StateSince // verbatim from the wire, same rule again
 	}
-	if rec.Capabilities != nil {
+	if rec.Capabilities != nil && rec.Type != RecordTypeStructuredGap {
+		// A capability_transition is authority for exactly one session incarnation. The
+		// journal cursor orders delivery, but a replaced session can reuse the same local id;
+		// a delayed transition from that prior process must therefore be consumed without
+		// changing the capability record of the process now displayed. Full roster records
+		// remain authoritative replacements and may establish a new instance.
 		// Verbatim, same rule as Group/Agent/Name, and VALIDATED at this decode seam --
 		// the third of amendment T2-b's three (author, gateway decode, phone decode). An
 		// inconsistent record is REJECTED rather than resolved: resolving it means
@@ -193,6 +216,16 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 	}
 	c.sessions[rec.SessionID] = cs
 	return true
+}
+
+func sameChatCapabilityPlane(current, next *schema.SessionCapabilities) bool {
+	return !current.TerminalFallback && !current.TerminalControl &&
+		!next.TerminalFallback && !next.TerminalControl &&
+		current.Provider == next.Provider &&
+		current.ProviderVersion == next.ProviderVersion &&
+		current.AdapterRevision == next.AdapterRevision &&
+		current.SessionInstance == next.SessionInstance &&
+		current.Interrupt == next.Interrupt
 }
 
 // reseed REPLACES the whole cached set and the cursor from an atomic roster+events snapshot

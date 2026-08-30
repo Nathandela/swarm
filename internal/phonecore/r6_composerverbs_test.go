@@ -34,12 +34,13 @@ func TestR6ComposerVerb_SignComposerSendBindsTheBodyIntoTheTuple(t *testing.T) {
 	exp := time.Unix(1_700_000_100, 0)
 
 	cmd, err := SignComposerSend(ks, ComposerSendInput{
-		Machine:      "machine1",
-		Session:      "machine1/sess1",
-		OperationID:  "op-comp-1",
-		ExpiresAt:    exp,
-		ExpectedTurn: "01JTURN",
-		Text:         "run the tests",
+		Machine:         "machine1",
+		Session:         "machine1/sess1",
+		SessionInstance: "instance-1",
+		OperationID:     "op-comp-1",
+		ExpiresAt:       exp,
+		ExpectedTurn:    "01JTURN",
+		Text:            "run the tests",
 	})
 	if err != nil {
 		t.Fatalf("SignComposerSend: %v", err)
@@ -51,7 +52,7 @@ func TestR6ComposerVerb_SignComposerSendBindsTheBodyIntoTheTuple(t *testing.T) {
 		t.Errorf("tuple coordinates = %+v, want the input's verbatim", cmd)
 	}
 	want := schema.ComposerSendContentHash(&schema.ComposerSendReq{
-		Session: "machine1/sess1", ExpectedTurn: "01JTURN", Text: "run the tests",
+		Session: "machine1/sess1", SessionInstance: "instance-1", ExpectedTurn: "01JTURN", Text: "run the tests",
 	})
 	if !bytes.Equal(cmd.ContentHash, want) {
 		t.Errorf("ContentHash = %x, want ComposerSendContentHash over the same body %x: the "+
@@ -74,10 +75,10 @@ func TestR6ComposerVerb_SealComposerSendEnvelopeCarriesTheBodyBesideTheTuple(t *
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	body := schema.ComposerSendReq{Session: "machine1/sess1", ExpectedTurn: "01JTURN", Text: "run the tests"}
+	body := schema.ComposerSendReq{Session: "machine1/sess1", SessionInstance: "instance-1", ExpectedTurn: "01JTURN", Text: "run the tests"}
 	cmd, err := SignComposerSend(ks, ComposerSendInput{
 		Machine: "machine1", Session: body.Session, OperationID: "op-comp-2",
-		ExpiresAt: time.Now().Add(time.Minute), ExpectedTurn: body.ExpectedTurn, Text: body.Text,
+		SessionInstance: body.SessionInstance, ExpiresAt: time.Now().Add(time.Minute), ExpectedTurn: body.ExpectedTurn, Text: body.Text,
 	})
 	if err != nil {
 		t.Fatalf("SignComposerSend: %v", err)

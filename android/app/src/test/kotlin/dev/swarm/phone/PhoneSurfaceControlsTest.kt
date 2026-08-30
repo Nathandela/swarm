@@ -1,5 +1,6 @@
 package dev.swarm.phone
 
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -20,6 +21,7 @@ import dev.swarm.phone.ui.screens.SessionCapabilityFacts
 import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.TranscriptScreen
+import dev.swarm.phone.ui.screens.TranscriptTag
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -27,6 +29,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowDialog
 
 /**
@@ -294,6 +297,109 @@ class PhoneSurfaceControlsTest {
         }
     }
 
+    @Test
+    fun `every unavailable chat state keeps the inline composer shell but disables both controls`() {
+        withSurface { _, surface ->
+            data class Case(
+                val name: String,
+                val panel: SessionDetailPanel,
+                val placeholder: String,
+                val detail: String,
+            )
+
+            val gap = item("g1", "structured_gap", turn = "", status = "completed")
+            val cases = listOf(
+                Case(
+                    "offline",
+                    panelWith(closedTurn, online = false),
+                    "Not connected.",
+                    "Reconnect to send.",
+                ),
+                Case(
+                    "chat off",
+                    panelWith(closedTurn, structuredChat = false),
+                    "Chat is off for this session.",
+                    "Reply on your computer.",
+                ),
+                Case(
+                    "ended",
+                    panelWith(closedTurn, ended = true),
+                    "This session has ended",
+                    "",
+                ),
+            )
+
+            for (case in cases) {
+                surface.drawDetail(case.panel)
+                assertFalse("${case.name} leaves the composer field enabled", surface.composerField().isEnabled)
+                assertFalse("${case.name} leaves the composer action enabled", surface.composerAction().isEnabled)
+                assertEquals(case.placeholder, surface.composerField().hint?.toString())
+                assertTrue(
+                    "${case.name} has no inline composer explanation",
+                    surface.composerRegion().flatten()
+                        .filterIsInstance<TextView>()
+                        .any { it.text.toString() == case.detail },
+                )
+            }
+
+            surface.drawDetail(panelWith(closedTurn + gap, structuredChat = true))
+            assertTrue("a retained-history gap disabled the live composer field", surface.composerField().isEnabled)
+            assertTrue("a retained-history gap disabled the live composer action", surface.composerAction().isEnabled)
+
+            surface.drawDetail(panelWith(closedTurn))
+            assertTrue("AVAILABLE did not re-enable the composer field", surface.composerField().isEnabled)
+            assertTrue("AVAILABLE did not re-enable the composer action", surface.composerAction().isEnabled)
+        }
+    }
+
+    @Test
+    fun `a live capability redraw recovers the composer in place and keeps the visible gap`() {
+        withSurface { _, surface ->
+            val gap = item("g-live", "structured_gap", turn = "", status = "completed")
+            val disabled = panelWith(closedTurn + gap, structuredChat = false)
+            val recovered = panelWith(closedTurn + gap, structuredChat = true)
+
+            surface.drawDetail(disabled)
+            val sameField = surface.composerField()
+            try {
+                assertFalse(sameField.isEnabled)
+                assertTrue(
+                    "the history gap was not visible before capability recovery",
+                    surface.drawnDetailContent().flatten().any { it.tag == TranscriptTag.GAP },
+                )
+
+                // A stale-instance transition or a terminal-grant-shaped transition is rejected
+                // in phonecore, so the screen receives the same disabled capability facts on its
+                // event-driven redraw. The ordinary composer shell and gap must remain unchanged.
+                PhoneEvents.observe { surface.drawDetail(disabled) }
+                PhoneEvents.onEvent(null)
+                shadowOf(Looper.getMainLooper()).idle()
+                assertFalse("a rejected capability transition enabled the composer", sameField.isEnabled)
+                assertTrue(surface.drawnDetailContent().flatten().any { it.tag == TranscriptTag.GAP })
+
+                // Once the same-instance chat-plane recovery is accepted, the exact same event path
+                // re-reads the panel and enables the existing composer without dropping the tear.
+                PhoneEvents.observe { surface.drawDetail(recovered) }
+                PhoneEvents.onEvent(null)
+                shadowOf(Looper.getMainLooper()).idle()
+                assertTrue("accepted recovery did not enable the composer in place", sameField.isEnabled)
+                assertTrue("recovery rebuilt or erased the visible history gap", surface.drawnDetailContent().flatten().any {
+                    it.tag == TranscriptTag.GAP
+                })
+
+                // Capability recovery never outruns lifecycle state.
+                PhoneEvents.observe {
+                    surface.drawDetail(panelWith(closedTurn + gap, structuredChat = true, online = false))
+                }
+                PhoneEvents.onEvent(null)
+                shadowOf(Looper.getMainLooper()).idle()
+                assertFalse("recovered capability overrode OFFLINE", sameField.isEnabled)
+            } finally {
+                PhoneEvents.stopObserving()
+            }
+        }
+    }
+
     /**
      * W3.3: no confirmation before Stop. The press goes straight to the plan; `confirmThenPress`
      * opens its dialog only for a control that passes an `ask`, and the square passes none.
@@ -462,14 +568,20 @@ class PhoneSurfaceControlsTest {
         item("a1", "agent_message", turn = "turn-a", status = "completed"),
     )
 
-    private fun panelWith(items: List<InteractionItem>, of: String = session): SessionDetailPanel = SessionDetailScreen.of(
+    private fun panelWith(
+        items: List<InteractionItem>,
+        of: String = session,
+        online: Boolean = true,
+        structuredChat: Boolean = true,
+        ended: Boolean = false,
+    ): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
-            sessionId = of, online = true, journalStale = false,
+            sessionId = of, online = online, journalStale = false, ended = ended,
             title = "claude-swarm", group = "working", machineLabel = "mbp",
         ),
         TranscriptScreen.of(items),
-        SessionLease(sessionId = of, online = true),
-        capabilities = SessionCapabilityFacts(structuredChat = true),
+        SessionLease(sessionId = of, online = online),
+        capabilities = SessionCapabilityFacts(structuredChat = structuredChat),
     )
 
     private fun PhoneSurface.composerAction(): ImageView = composerBar().getChildAt(1) as ImageView

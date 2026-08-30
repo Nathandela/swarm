@@ -55,7 +55,15 @@ import (
 func main() {
 	if os.Getenv("F1_ROLE") == "child" {
 		signal.Ignore(syscall.SIGTERM)
+		if ms, _ := strconv.Atoi(os.Getenv("F1_CHILD_READY_MS")); ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 		fmt.Printf("CHILD_PID\t%d\n", os.Getpid())
+		if fd, _ := strconv.Atoi(os.Getenv("F1_READY_FD")); fd > 0 {
+			ready := os.NewFile(uintptr(fd), "f1-ready")
+			_, _ = ready.Write([]byte{1})
+			_ = ready.Close()
+		}
 		if os.Getenv("F1_CHILD_NOPTY") == "1" {
 			// Release every PTY fd, then park: the child ignores TERM but does
 			// NOT hold the PTY, so the leader's reap yields PTY EOF at once and
@@ -71,14 +79,31 @@ func main() {
 		return
 	}
 	exe, _ := os.Executable()
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		os.Exit(2)
+	}
 	child := exec.Command(exe)
-	child.Env = append(os.Environ(), "F1_ROLE=child")
+	child.Env = append(os.Environ(), "F1_ROLE=child", "F1_READY_FD=3")
+	child.ExtraFiles = []*os.File{readyW}
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
 	// No SysProcAttr: the child inherits the leader's process group, so a
 	// group signal reaches it too (S5 containment).
-	_ = child.Start()
+	if err := child.Start(); err != nil {
+		_ = readyR.Close()
+		_ = readyW.Close()
+		os.Exit(2)
+	}
+	_ = readyW.Close()
+	_ = readyR.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var ready [1]byte
+	if _, err := io.ReadFull(readyR, ready[:]); err != nil {
+		_ = readyR.Close()
+		os.Exit(2)
+	}
+	_ = readyR.Close()
 	fmt.Printf("PARENT_PID\t%d\n", os.Getpid())
 	if os.Getenv("F1_LEADER") == "exit" {
 		ms, _ := strconv.Atoi(os.Getenv("F1_EXIT_MS"))
@@ -226,6 +251,39 @@ func TestF1_NaturalExitWithLingeringChildStillFinalizes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.SessionDir, SnapshotFile)); err != nil {
 		t.Errorf("final snapshot missing: %v", err)
+	}
+}
+
+// The F1 helper must not start the natural-exit countdown until its stubborn child has
+// actually entered main and published its PID. exec.Cmd.Start proves only that the kernel
+// created the process; under a saturated race suite the leader can otherwise exit and the
+// shim can finish its bounded EOF wait/KILL before the child is ever scheduled, making the
+// containment test fail on missing setup evidence rather than on production behavior.
+func TestF1_FixtureWaitsForChildReadinessBeforeNaturalExit(t *testing.T) {
+	const childDelay = 2 * time.Second
+	cfg := f1Config(t, 200*time.Millisecond,
+		"F1_LEADER=exit", "F1_EXIT_MS=10", "F1_CHILD_READY_MS=2000")
+	started := time.Now()
+	ch := runShimAsync(cfg)
+
+	c := dialShim(t, cfg.SocketPath)
+	c.startReader()
+	c.hello(shimwire.Version)
+	c.attach()
+	childPID := f1WaitPID(t, c, "CHILD_PID", 5*time.Second)
+	observedAfter := time.Since(started)
+
+	r := waitRun(t, ch, 5*time.Second)
+	if r.err != nil || r.exit != 0 {
+		t.Errorf("Run = {exit:%d err:%v}, want natural exit 0", r.exit, r.err)
+	}
+	if !processGone(childPID, time.Second) {
+		t.Errorf("fixture child %d survived finalization", childPID)
+	}
+	if observedAfter < childDelay*3/4 {
+		t.Errorf("CHILD_PID observed after only %s, want the injected %s readiness delay to elapse; "+
+			"the fixture ignored child readiness and this test cannot distinguish setup starvation "+
+			"from a production containment failure", observedAfter, childDelay)
 	}
 }
 

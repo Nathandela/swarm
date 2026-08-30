@@ -42,12 +42,12 @@ class ComposerShutReasonTest {
     }
 
     @Test
-    fun theFourReasonsAreDistinctStatesWithDistinctSentences() {
+    fun historyGapsAreDistinctFromTheThreeReasonsAComposerIsShut() {
         val offline = ComposerModel.availabilityFor(
             online = false, structuredChat = true, recordTorn = false, ended = false,
         )
         val torn = ComposerModel.availabilityFor(
-            online = true, structuredChat = false, recordTorn = true, ended = false,
+            online = true, structuredChat = true, recordTorn = true, ended = false,
         )
         val noChat = ComposerModel.availabilityFor(
             online = true, structuredChat = false, recordTorn = false, ended = false,
@@ -61,29 +61,34 @@ class ComposerShutReasonTest {
         assertEquals(ComposerAvailability.NO_CHAT, noChat)
         assertEquals(ComposerAvailability.ENDED, ended)
 
-        val copies = listOf(offline, torn, noChat, ended).map {
+        assertNull(
+            "a retained-history gap shut a composer whose capability record still reports a " +
+                "live message sink",
+            ComposerModel.shutCopyFor(torn),
+        )
+        val copies = listOf(offline, noChat, ended).map {
             val c = ComposerModel.shutCopyFor(it)
             assertNotNull("every shut composer says why", c)
             c!!.placeholder
         }
         assertEquals(
-            "four reasons, four sentences: one sentence over all of them is the accusation the " +
-                "owner photographed",
+            "three shut reasons, three sentences: one sentence over all of them is the " +
+                "accusation the owner photographed",
             copies.size,
             copies.toSet().size,
         )
     }
 
     @Test
-    fun onlyATornRecordAccusesTheRecord() {
+    fun aGapNeverTurnsIntoComposerShutCopy() {
         val torn = ComposerModel.shutCopyFor(
-            ComposerModel.availabilityFor(online = true, structuredChat = false, recordTorn = true, ended = false),
-        )!!
+            ComposerModel.availabilityFor(online = true, structuredChat = true, recordTorn = true, ended = false),
+        )
         val noChat = ComposerModel.shutCopyFor(
             ComposerModel.availabilityFor(online = true, structuredChat = false, recordTorn = false, ended = false),
         )!!
 
-        assertEquals("a torn record says the chat is paused here (phone refit W5.4)", "Chat is paused here.", torn.placeholder)
+        assertNull("the transcript gap card already says what history is missing", torn)
         for (word in listOf("broke", "gap", "record")) {
             assertTrue(
                 "a session that simply reports no chat surface must not be told its record " +
@@ -94,12 +99,11 @@ class ComposerShutReasonTest {
     }
 
     @Test
-    fun aPermanentReasonOutranksATransientOne() {
-        // Offline AND torn at once. Saying "not connected" would imply the composer returns
-        // when the link does, and it never will: the degrade is one-way for the life of the
-        // session instance. The permanent fact is the honest one to report.
+    fun capabilityAndLifecycleReasonsOutrankHistoryCompleteness() {
+        // No chat AND a history gap: the capability record, not the gap, answers whether input
+        // exists. The gap remains visible in the transcript.
         assertEquals(
-            ComposerAvailability.TORN,
+            ComposerAvailability.NO_CHAT,
             ComposerModel.availabilityFor(online = false, structuredChat = false, recordTorn = true, ended = false),
         )
         // An ended session outranks everything: there is nothing to type into, whatever the
@@ -114,7 +118,6 @@ class ComposerShutReasonTest {
     fun noReasonOffersAStepThatCannotProduceTyping() {
         for (a in listOf(
             ComposerAvailability.OFFLINE,
-            ComposerAvailability.TORN,
             ComposerAvailability.NO_CHAT,
             ComposerAvailability.ENDED,
         )) {

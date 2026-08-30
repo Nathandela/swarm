@@ -104,8 +104,10 @@ var opencodeSegments = []replaySegment{
 // adapter.Fixture round-trips — field name Pty_capture matches the JSON key
 // "pty_capture" via encoding/json's case-insensitive fallback, so no struct tag,
 // and therefore no backtick, is needed inside this outer raw string), then writes
-// it to stdout in the segment schedule baked in below. It drains stdin (no
-// interactive input is scripted for R-G1) and exits promptly on SIGTERM.
+// it to stdout in the segment schedule baked in below. Before reading or emitting the
+// fixture it waits for a build-time-baked start-gate file, so launch/list latency cannot
+// consume the held states before the collector exists. It drains stdin (no interactive
+// input is scripted for R-G1) and exits promptly on SIGTERM.
 //
 // DEVIATION from the plan's suggested "pass the fixture path via env var": a
 // custom env var does not reach the exec'd agent process. internal/persist/env.go's
@@ -136,6 +138,8 @@ type segment struct {
 var segments = []segment{
 %[2]s}
 
+const startGate = %[3]q
+
 func main() {
 	go io.Copy(io.Discard, os.Stdin)
 
@@ -145,6 +149,15 @@ func main() {
 		<-sig
 		os.Exit(0)
 	}()
+
+	for {
+		if _, err := os.Stat(startGate); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			os.Exit(1)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	data, err := os.ReadFile(%[1]q)
 	if err != nil {
@@ -177,20 +190,22 @@ func main() {
 
 // replaySource renders replaySourceTemplate for one fixture: its absolute path
 // (the built binary's cwd is the session's launch cwd, not this package, so a
-// relative path would not resolve at run time) and its segment schedule.
-func replaySource(fixtureAbsPath string, segs []replaySegment) string {
+// relative path would not resolve at run time), its segment schedule, and the shared start
+// gate that makes observation begin from a defined schedule boundary.
+func replaySource(fixtureAbsPath string, segs []replaySegment, startGate string) string {
 	var b strings.Builder
 	for _, s := range segs {
 		fmt.Fprintf(&b, "\t{%d, %d},\n", s.End, int64(s.Hold))
 	}
-	return fmt.Sprintf(replaySourceTemplate, fixtureAbsPath, b.String())
+	return fmt.Sprintf(replaySourceTemplate, fixtureAbsPath, b.String(), startGate)
 }
 
 // buildReplayBinaries compiles the two replay programs, named exactly "agy" and
 // "opencode" (so PATH resolution in composeLaunchSpec's resolveArgv0 finds them
 // under those bare names, exactly as the real CLIs would be found), into one temp
-// directory returned for the caller to prepend to the launch env's PATH.
-func buildReplayBinaries(t *testing.T) string {
+// directory returned for the caller to prepend to the launch env's PATH. It also returns the
+// absent start-gate path baked into both programs; creating that file releases them together.
+func buildReplayBinaries(t *testing.T) (binDir, startGate string) {
 	t.Helper()
 	agyAbs, err := filepath.Abs(agyFixturePath)
 	if err != nil {
@@ -201,10 +216,11 @@ func buildReplayBinaries(t *testing.T) string {
 		t.Fatalf("resolve opencode fixture path: %v", err)
 	}
 
-	binDir := t.TempDir()
+	binDir = t.TempDir()
+	startGate = filepath.Join(t.TempDir(), "start")
 	build := func(name, fixtureAbs string, segs []replaySegment) {
 		srcPath := filepath.Join(t.TempDir(), name+".go")
-		if err := os.WriteFile(srcPath, []byte(replaySource(fixtureAbs, segs)), 0o644); err != nil {
+		if err := os.WriteFile(srcPath, []byte(replaySource(fixtureAbs, segs, startGate)), 0o644); err != nil {
 			t.Fatalf("write %s replay source: %v", name, err)
 		}
 		out := filepath.Join(binDir, name)
@@ -216,7 +232,7 @@ func buildReplayBinaries(t *testing.T) string {
 	}
 	build("agy", agyAbs, agySegments)
 	build("opencode", opencodeAbs, opencodeSegments)
-	return binDir
+	return binDir, startGate
 }
 
 // statusSample is one polled observation of a session's status, timestamped
@@ -348,7 +364,7 @@ func isIdle(s status.Status) bool   { return s.Turn == status.TurnIdle }
 //     C1's transcript-tail capture, independent of any live attach).
 func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 	buildBinaries(t)
-	replayBinDir := buildReplayBinaries(t)
+	replayBinDir, startGate := buildReplayBinaries(t)
 	env := newDaemonEnv(t)
 	startDaemon(t, env)
 	c := dial(t, env.sock)
@@ -376,6 +392,13 @@ func TestE2E_ReplayProductionPath_AgyOpencode(t *testing.T) {
 	waitSessionsListed(t, c, agyID, opencodeID)
 
 	start := time.Now()
+	// Both replay processes were launched before the collector could exist. Release their
+	// shared build-time-baked gate only after both sessions are visible, so "first observed
+	// active" is anchored to the replay schedule rather than to how long the second Launch
+	// happened to take under the race detector.
+	if err := os.WriteFile(startGate, []byte("start\n"), 0o600); err != nil {
+		t.Fatalf("release replay start gate: %v", err)
+	}
 	const overallBound = 40 * time.Second
 	samples := collectStatusSamples(t, c, []string{agyID, opencodeID}, start, overallBound)
 

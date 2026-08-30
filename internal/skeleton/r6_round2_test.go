@@ -343,14 +343,14 @@ func TestSessionCapabilities_NeverReadsPastTheDurableDegradedMarker(t *testing.T
 	if caps.StructuredChat {
 		t.Fatalf("StructuredChat = true for a session carrying the durable structured-degraded marker -- ADR-017 T2 rule 2 inverted on the READ path: the marker is the proof, and nothing may read past it")
 	}
-	if !caps.TerminalFallback {
-		t.Fatalf("TerminalFallback = false for a degraded session, want true")
+	if caps.TerminalFallback || caps.TerminalControl {
+		t.Fatalf("history marker granted terminal authority: %+v", caps)
 	}
 	// The same must hold on the SECOND call, which is served from the in-memory cache
 	// the first one populated.
 	caps2, _ := sk.sessionCapabilities(sessionID)
-	if caps2.StructuredChat || !caps2.TerminalFallback {
-		t.Fatalf("cached read: StructuredChat=%v TerminalFallback=%v, want false/true", caps2.StructuredChat, caps2.TerminalFallback)
+	if caps2.StructuredChat || caps2.TerminalFallback || caps2.TerminalControl {
+		t.Fatalf("cached history-marker read carried authority: %+v", caps2)
 	}
 }
 

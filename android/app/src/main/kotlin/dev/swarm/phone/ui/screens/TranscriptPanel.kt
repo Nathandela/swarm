@@ -179,6 +179,10 @@ data class PendingSend(
     val operationId: String,
     val text: String,
     val refused: Boolean = false,
+    /** The exact product copy resolved for this operation's refusal. */
+    val notice: String = "",
+    /** The machine-authored diagnostic belonging to [notice]. */
+    val detail: String = "",
 )
 
 data class TranscriptBlock(
@@ -408,6 +412,10 @@ data class TranscriptBlock(
      * on the keystroke path the CLI acknowledges nothing at all.
      */
     val sendState: BubbleState? = null,
+    /** A refused local send's own product copy, drawn immediately under its bubble. */
+    val sendNotice: String = "",
+    /** The machine-authored detail belonging to [sendNotice]. */
+    val sendNoticeDetail: String = "",
     /**
      * Whether the reader typed a MACHINE WORD -- a `/command` -- which the bubble draws in the
      * machine's own face.
@@ -749,7 +757,7 @@ object TranscriptScreen {
          * reader's own bubble at the tail until an item carrying the same operation id arrives,
          * at which point the wire's item REPLACES it rather than joining it.
          */
-        pendingSend: PendingSend? = null,
+        pendingSends: List<PendingSend> = emptyList(),
     ): TranscriptPanel {
         // THE WIRE'S ORDER, KEPT. See the file KDoc: a conversation is read in the order it was
         // said, and `App.ReadTranscript` already walks the fold by ascending cursor.
@@ -770,11 +778,12 @@ object TranscriptScreen {
         // because the first send drew no response is precisely the situation this whole slice
         // exists to prevent, and it would settle the second against the first's echo and vanish
         // it again.
-        val settled = pendingSend != null && items.any { it.operationId == pendingSend.operationId }
-        val withPending = if (pendingSend == null || settled) {
-            blocks
-        } else {
-            blocks + TranscriptBlock(
+        val settledOperations = items
+            .filter { it.kind == USER_MESSAGE }
+            .mapTo(mutableSetOf()) { it.operationId }
+        val withPending = blocks + pendingSends
+            .filterNot { it.operationId in settledOperations }
+            .map { pendingSend -> TranscriptBlock(
                 // NOT AN ITEM ID, and it must not look like one: nothing on the wire has this
                 // block, so an id that could collide with a real `item_id` would let a patch
                 // rebind the record's own item onto a local draft.
@@ -783,9 +792,10 @@ object TranscriptScreen {
                 line = pendingSend.text,
                 bubble = true,
                 sendState = if (pendingSend.refused) BubbleState.REFUSED else BubbleState.PENDING,
+                sendNotice = pendingSend.notice,
+                sendNoticeDetail = pendingSend.detail,
                 command = pendingSend.text.startsWith(COMMAND_PREFIX),
-            )
-        }
+            ) }
         return TranscriptPanel(
             blocks = withPending,
             emptyCopy = EMPTY,
@@ -794,8 +804,9 @@ object TranscriptScreen {
             latestTurnId = openTurnOf(items),
             oldestItemId = pageableAnchorOf(items),
             offersLoadEarlier = pageableAnchorOf(items).isNotEmpty() && !atFloor && !atCapacity,
-            // ADR-017's degrade is ONE-WAY, so ANY tear this phone still holds means the session
-            // has no structured composer -- not merely the latest one.
+            // A gap is retained-history completeness, not an inference about the live sink.
+            // ComposerModel combines this warning with the capability record without disabling
+            // a sink that record still reports available.
             structureTorn = items.any { it.kind == STRUCTURED_GAP },
             // THE QUESTION THAT HAS BEEN WAITING LONGEST, read off what the blocks decided rather
             // than off the items: `approval` is already "an approval_request that is NOT resolved",

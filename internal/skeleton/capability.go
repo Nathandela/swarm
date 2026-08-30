@@ -37,10 +37,12 @@ package skeleton
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
@@ -53,10 +55,9 @@ import (
 //
 // registerSessionCapabilities MERGES rather than overwrites: SetStructuredChat's
 // degrade-only rule (protocol/schema/capability.go) is applied to any EXISTING record
-// under sessionID before the incoming one is stored, so a later re-registration --
-// exactly what a daemon restart's reconcile performs for every reconnected session --
-// can never resurrect a session a prior incarnation degraded (ADR-017 T2 rule 2's
-// "one-way", carried across the daemon's own restart).
+// under sessionID before the incoming one is stored, so ordinary re-registration cannot
+// resurrect chat. The sole recovery path is commitStructuredSinkProof, which binds an
+// exact current sink to the latest durable gap and publishes the ordered transition.
 //
 // THE RECORD IS DURABLE, NOT MERELY IN MEMORY (R6 review fix-pack round 1, BLOCKER 1).
 // The store WAS a plain map, so every degrade died with the process that authored it: a
@@ -74,9 +75,13 @@ import (
 // structured_chat, which is the very bug this fixes, merely deferred. The side-file has
 // the session's own lifetime by construction.
 type sessionCapabilityStore struct {
-	mu   sync.Mutex
-	dir  string // durable home (the daemon's state dir); "" = memory only
-	byID map[string]protocol.SessionCapabilities
+	mu sync.Mutex
+	// transitionMu serializes state commit plus its ordered journal publication.
+	// Without it, a proof could commit, a newer gap could publish false, and the
+	// older proof could then append true after it while lookup correctly read false.
+	transitionMu sync.Mutex
+	dir          string // durable home (the daemon's state dir); "" = memory only
+	byID         map[string]protocol.SessionCapabilities
 	// instances caches each session's per-incarnation identifier (instance.go). It is
 	// backed by the same 0700 session dir as the record, so a daemon restart ADOPTS an
 	// instance rather than minting one (ADR-017 T8-a).
@@ -90,6 +95,20 @@ type sessionCapabilityStore struct {
 	incarnations map[string]int
 	// versions caches the detected CLI version per agent type for this daemon's life.
 	versions map[string]string
+	// liveProof is deliberately process-local. A durable proof records that a history
+	// tear was legitimately migrated, but it cannot prove that this daemon
+	// has reconnected the sink after a restart. Sessions carrying a history marker are
+	// therefore chat-capable only while this map also names the current instance and
+	// marker generation.
+	liveProof map[string]structuredSinkProof
+	// publish overrides the final journal append in deterministic tests. Production
+	// leaves it nil and publishes through daemon.EmitCapabilityTransition.
+	publish func(sessionID string, payload []byte) error
+	// retrying is the desired unpublished transition per session. retryMu makes its
+	// worker single-flight: repeated observations of one gap update one slot rather
+	// than accumulating identical append goroutines.
+	retryMu  sync.Mutex
+	retrying map[string]protocol.SessionCapabilities
 }
 
 // sessionCapabilityFile is the per-session capability record's on-disk name, sibling of
@@ -112,36 +131,86 @@ const sessionCapabilityFile = "capabilities.json"
 // degrade them, never fabricate one, so the degrade is stored as what it is.
 const sessionDegradedFile = "structured-degraded"
 
+// sessionSinkProofFile is the durable commit record for a proof-authorized recovery.
+// It is written only after capabilities.json contains the recovered record. Reads also
+// require a matching process-local proof, so this file is necessary but never sufficient.
+const sessionSinkProofFile = "structured-sink-proof.json"
+
+type historyTornMarker struct {
+	Version         int    `json:"version"`
+	SessionInstance string `json:"session_instance"`
+	Generation      string `json:"generation"`
+}
+
+type structuredSinkProof struct {
+	Version         int    `json:"version"`
+	SessionInstance string `json:"session_instance"`
+	GapGeneration   string `json:"gap_generation"`
+	Kind            string `json:"kind"`
+}
+
+const (
+	structuredSinkProofVersion = 1
+	sinkProofBackend           = "initialized_backend"
+	sinkProofShimSubmit        = "shim_submit_transaction"
+)
+
+var errStructuredSinkProof = errors.New("skeleton: structured sink proof refused")
+
 // registerSessionCapabilities stores c for sessionID, merging against any existing
-// record (in memory, else on disk) via SetStructuredChat's one-way degrade rule.
+// record (in memory, else on disk) via the public degrade-only helper. It never performs
+// the private exact-sink recovery.
 func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.SessionCapabilities) {
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
+	recovered := false
 	if existing, ok := d.lookupCapabilitiesLocked(sessionID); ok {
-		// SetStructuredChat refuses an upgrade (false->true) and leaves existing
-		// unchanged; it honors a degrade (true->false), forcing TerminalFallback true.
-		// Either way, existing now holds the merged structured_chat/terminal_fallback
-		// pair, which is what actually governs the session -- an already-degraded
-		// session's incoming record is stored with that pair overridden back in, so
-		// its OTHER fields (provider_version, adapter_revision, ...) can still refresh.
-		_ = existing.SetStructuredChat(c.StructuredChat)
-		c.StructuredChat = existing.StructuredChat
-		c.TerminalFallback = existing.TerminalFallback
-		// D-DEGRADE-ORIGIN FENCE 2 (ADR-017 T6-b). terminal_control is one of the
-		// "other fields" the merge above deliberately lets refresh, and a daemon
-		// restart's reconcile re-registers every reconnected session -- which is
-		// precisely what that merge exists for. Left alone, an unchanged reconcile
-		// silently RE-GRANTS control over a session that proved a structured gap.
-		// So control is one-way in the withdrawing direction, exactly like
-		// structured_chat: a re-registration may drop it and may never restore it.
-		c.TerminalControl = c.TerminalControl && existing.TerminalControl
+		// A changed instance is a replacement, not a re-registration. Authority
+		// withdrawn from the old PTY must not be merged into the new one, and a live
+		// proof for the old PTY must not authorize its replacement.
+		if existing.SessionInstance != "" && c.SessionInstance != "" &&
+			existing.SessionInstance != c.SessionInstance {
+			delete(d.capStore.liveProof, sessionID)
+			_ = os.Remove(d.sessionStatePathLocked(sessionID, sessionSinkProofFile))
+		} else {
+			recovered = d.sessionDegradedLocked(sessionID) && existing.StructuredChat
+			if recovered {
+				// A generic reconcile/attach refresh is not a sink-loss event. Preserve
+				// the exact proof-authorized chat routing while still accepting updated
+				// descriptive metadata and independent Interrupt capability.
+				c.StructuredChat = true
+				c.TerminalFallback = false
+				c.TerminalControl = false
+			} else {
+				// SetStructuredChat refuses an upgrade (false->true) and leaves existing
+				// unchanged; it honors a degrade (true->false), forcing TerminalFallback true.
+				// Either way, existing now holds the merged structured_chat/terminal_fallback
+				// pair, which is what actually governs the session -- an already-degraded
+				// session's incoming record is stored with that pair overridden back in, so
+				// its OTHER fields (provider_version, adapter_revision, ...) can still refresh.
+				_ = existing.SetStructuredChat(c.StructuredChat)
+				c.StructuredChat = existing.StructuredChat
+				c.TerminalFallback = existing.TerminalFallback
+				// D-DEGRADE-ORIGIN FENCE 2 (ADR-017 T6-b). terminal_control is one of the
+				// "other fields" the merge above deliberately lets refresh, and a daemon
+				// restart's reconcile re-registers every reconnected session -- which is
+				// precisely what that merge exists for. Left alone, an unchanged reconcile
+				// silently RE-GRANTS control over a session that proved a structured gap.
+				// So control is one-way in the withdrawing direction, exactly like
+				// structured_chat: a re-registration may drop it and may never restore it.
+				c.TerminalControl = c.TerminalControl && existing.TerminalControl
+			}
+		}
 	}
 	if d.sessionDegradedLocked(sessionID) {
 		// A gap was proven for this session instance -- possibly by an incarnation
 		// that is gone, possibly before any record existed to degrade. Either way the
 		// answer to "may this session claim structured chat" is already no, and this
 		// incoming record does not get to reopen it (ADR-017 T2 rule 2).
-		_ = c.SetStructuredChat(false)
+		c.StructuredChat = recovered
+		c.TerminalFallback = false
 		// And a degrade grants a SCREEN, never a keyboard (T6-b): the fallback this
 		// session just acquired was DERIVED, not authored at launch, and its live TUI
 		// has an uncharacterized input region.
@@ -168,6 +237,13 @@ func (d *Daemon) sessionCapabilities(sessionID string) (protocol.SessionCapabili
 	return d.lookupCapabilitiesLocked(sessionID)
 }
 
+func (d *Daemon) hasRawSessionCapabilities(sessionID string) bool {
+	d.capStore.mu.Lock()
+	defer d.capStore.mu.Unlock()
+	_, ok := d.rawCapabilitiesLocked(sessionID)
+	return ok
+}
+
 // lookupCapabilitiesLocked resolves sessionID's record, then applies the durable
 // structured-degraded marker to whatever it found. Caller holds capStore.mu.
 //
@@ -187,7 +263,7 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 	if !ok {
 		return protocol.SessionCapabilities{}, false
 	}
-	if c.StructuredChat && d.sessionDegradedLocked(sessionID) {
+	if d.sessionDegradedLocked(sessionID) {
 		// THE DEGRADE IS NOT APPLIED TO AN ALREADY-INCONSISTENT RECORD (ADR-017 T2-b, closing
 		// review finding 9).
 		//
@@ -220,7 +296,27 @@ func (d *Daemon) lookupCapabilitiesLocked(sessionID string) (protocol.SessionCap
 				"of Validate; the structured degrade is not applied to it", sessionID)
 			return protocol.SessionCapabilities{}, false
 		}
-		_ = c.SetStructuredChat(false) // forces TerminalFallback true (protocol/schema)
+		marker, _ := d.historyTornMarkerLocked(sessionID)
+		durable, durableOK := d.durableSinkProofLocked(sessionID)
+		live, liveOK := d.capStore.liveProof[sessionID]
+		current, _, currentOK := d.sessionInstanceLocked(sessionID)
+		proofOK := c.StructuredChat && currentOK && current == c.SessionInstance &&
+			durableOK && liveOK && sinkProofMatches(durable, marker, current) &&
+			sinkProofMatches(live, marker, current) && durable.Kind == live.Kind
+		if proofOK {
+			// Recovered chat is the only authority this proof grants. In particular,
+			// a legacy fallback bit is never carried through the migration.
+			c.TerminalFallback = false
+			c.TerminalControl = false
+			return c, true
+		}
+		// Marker + no complete current proof is a status/chat-shell state, never an
+		// implicit terminal route. This also covers every crash prefix: cap=true
+		// persisted before the proof commit, corrupt/stale sidecars, and restarts
+		// before this process has freshly proved the sink.
+		c.StructuredChat = false
+		c.TerminalFallback = false
+		c.TerminalControl = false
 	}
 	return c, true
 }
@@ -279,6 +375,46 @@ func (d *Daemon) sessionDegradedLocked(sessionID string) bool {
 	return err == nil
 }
 
+func (d *Daemon) historyTornMarkerLocked(sessionID string) (historyTornMarker, bool) {
+	path := d.sessionStatePathLocked(sessionID, sessionDegradedFile)
+	if path == "" {
+		return historyTornMarker{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return historyTornMarker{}, false
+	}
+	var marker historyTornMarker
+	if json.Unmarshal(data, &marker) == nil && marker.Generation != "" {
+		return marker, true
+	}
+	// Every pre-recovery marker was an empty/prose presence file. It is one stable
+	// legacy generation and intentionally binds no instance until a fresh proof does.
+	return historyTornMarker{Version: 0, Generation: "legacy"}, true
+}
+
+func (d *Daemon) durableSinkProofLocked(sessionID string) (structuredSinkProof, bool) {
+	path := d.sessionStatePathLocked(sessionID, sessionSinkProofFile)
+	if path == "" {
+		return structuredSinkProof{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return structuredSinkProof{}, false
+	}
+	var proof structuredSinkProof
+	if json.Unmarshal(data, &proof) != nil || proof.Version != structuredSinkProofVersion ||
+		proof.SessionInstance == "" || proof.GapGeneration == "" || proof.Kind == "" {
+		return structuredSinkProof{}, false
+	}
+	return proof, true
+}
+
+func sinkProofMatches(proof structuredSinkProof, marker historyTornMarker, current string) bool {
+	return proof.Version == structuredSinkProofVersion && proof.SessionInstance == current &&
+		marker.Generation != "" && proof.GapGeneration == marker.Generation
+}
+
 // sessionDegraded reports whether a structured gap has been PROVEN for sessionID, reading
 // the durable marker directly rather than through the capability record.
 //
@@ -307,16 +443,51 @@ func (d *Daemon) sessionDegraded(sessionID string) bool {
 }
 
 // markSessionDegraded durably records that sessionID proved a structured gap, then
-// degrades its stored record if one exists. One-way and idempotent: calling it on an
-// already-degraded session changes nothing.
+// disables its stored chat authority if one exists. The history marker is one-way and
+// permanent; current/future sending may recover only through commitStructuredSinkProof.
 func (d *Daemon) markSessionDegraded(sessionID string) {
+	d.markSessionDegradedFor(sessionID, "legacy")
+}
+
+// markSessionDegradedFor records one exact gap/sink-loss generation. Repeating the
+// same proven boundary is idempotent; a different generation invalidates the prior
+// proof before any cap-false write or observable read.
+func (d *Daemon) markSessionDegradedFor(sessionID, generation string) {
+	if generation == "" {
+		generation = "legacy"
+	}
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
 	d.capStore.mu.Lock()
-	defer d.capStore.mu.Unlock()
+	var publish *protocol.SessionCapabilities
+	defer func() {
+		d.capStore.mu.Unlock()
+		if publish != nil {
+			if err := d.publishCapabilityTransition(sessionID, *publish); err != nil {
+				d.scheduleCapabilityTransitionRetry(sessionID, *publish)
+			}
+		}
+	}()
 	if path := d.sessionStatePathLocked(sessionID, sessionDegradedFile); path != "" {
+		instance, _, _ := d.sessionInstanceLocked(sessionID)
+		marker := historyTornMarker{Version: 1, SessionInstance: instance, Generation: generation}
+		prior, priorOK := d.historyTornMarkerLocked(sessionID)
+		sameBoundary := priorOK && prior.Generation == marker.Generation &&
+			(prior.SessionInstance == "" || prior.SessionInstance == marker.SessionInstance)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			log.Printf("skeleton: mark session %s structurally degraded: %v", sessionID, err)
-		} else if err := writeDegradedMarker(path); err != nil {
-			log.Printf("skeleton: mark session %s structurally degraded: %v", sessionID, err)
+		} else {
+			// Invalidate the authority commit first. If the process dies here, lookup
+			// sees marker/no proof and refuses both chat and terminal. This also runs
+			// when the exact old boundary is observed after a clean recovery: replaying
+			// a marker is idempotent, but losing future ingestion again is not.
+			delete(d.capStore.liveProof, sessionID)
+			_ = os.Remove(d.sessionStatePathLocked(sessionID, sessionSinkProofFile))
+			if !sameBoundary {
+				if err := writeJSONStateFile(path, marker); err != nil {
+					log.Printf("skeleton: mark session %s structurally degraded: %v", sessionID, err)
+				}
+			}
 		}
 	}
 	// The RAW record on purpose: lookupCapabilitiesLocked now applies the marker written
@@ -326,32 +497,30 @@ func (d *Daemon) markSessionDegraded(sessionID string) {
 	if !ok {
 		return // no record authored yet: the marker above is the whole degrade
 	}
-	if !c.StructuredChat {
-		return // already degraded; nothing to write
+	if !c.StructuredChat && !c.TerminalFallback && !c.TerminalControl {
+		if d.capabilityTransitionRetryPending(sessionID, c) {
+			return // one exact false publication is already single-flight
+		}
+		publish = &c // a prior append may have failed; replay is ordered and idempotent
+		return       // already fail-closed; nothing to write or republish
 	}
-	_ = c.SetStructuredChat(false)
+	c.StructuredChat = false
+	c.TerminalFallback = false
+	c.TerminalControl = false
 	d.capStore.byID[sessionID] = c
 	if err := d.persistSessionCapabilitiesLocked(sessionID, c); err != nil {
 		log.Printf("skeleton: persist degraded capability record for session %s: %v", sessionID, err)
+		return
 	}
+	publish = &c
 }
 
-// writeDegradedMarker creates the marker file (0600) and fsyncs its directory, so the
-// degrade survives the power loss as well as the process exit. Re-marking is a no-op.
-func writeDegradedMarker(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
+func writeJSONStateFile(path string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dir.Close() }()
-	return dir.Sync()
+	return writeSessionStateFile(path, data)
 }
 
 // persistSessionCapabilitiesLocked writes sessionID's record atomically at 0600
@@ -386,7 +555,171 @@ func (d *Daemon) persistSessionCapabilitiesLocked(sessionID string, c protocol.S
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dirHandle.Close() }()
+	return dirHandle.Sync()
+}
+
+func (d *Daemon) publishCapabilityTransition(sessionID string, c protocol.SessionCapabilities) error {
+	if c.Validate() != nil || d.core == nil {
+		return errStructuredSinkProof
+	}
+	payload, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if d.capStore.publish != nil {
+		return d.capStore.publish(sessionID, payload)
+	}
+	return d.core.EmitCapabilityTransition(sessionID, payload)
+}
+
+func (d *Daemon) scheduleCapabilityTransitionRetry(sessionID string, expected protocol.SessionCapabilities) {
+	d.capStore.retryMu.Lock()
+	if d.capStore.retrying == nil {
+		d.capStore.retrying = map[string]protocol.SessionCapabilities{}
+	}
+	_, running := d.capStore.retrying[sessionID]
+	d.capStore.retrying[sessionID] = expected
+	d.capStore.retryMu.Unlock()
+	if !running {
+		go d.retryCapabilityTransition(sessionID)
+	}
+}
+
+func (d *Daemon) capabilityTransitionRetryPending(sessionID string, expected protocol.SessionCapabilities) bool {
+	d.capStore.retryMu.Lock()
+	defer d.capStore.retryMu.Unlock()
+	pending, ok := d.capStore.retrying[sessionID]
+	return ok && pending == expected
+}
+
+func (d *Daemon) retryCapabilityTransition(sessionID string) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	// A retry is a retry, not a second foreground append racing the caller that
+	// just scheduled it. Back off before the first attempt as well as later ones.
+	select {
+	case <-d.closing:
+		return
+	case <-ticker.C:
+	}
+	for {
+		d.capStore.retryMu.Lock()
+		expected, pending := d.capStore.retrying[sessionID]
+		d.capStore.retryMu.Unlock()
+		if !pending {
+			return
+		}
+		d.capStore.transitionMu.Lock()
+		current, ok := d.sessionCapabilities(sessionID)
+		if !ok || current != expected {
+			d.capStore.transitionMu.Unlock()
+			d.capStore.retryMu.Lock()
+			if latest, exists := d.capStore.retrying[sessionID]; exists && latest == expected {
+				delete(d.capStore.retrying, sessionID)
+			}
+			d.capStore.retryMu.Unlock()
+			continue // a newer transition may have replaced this retry
+		}
+		err := d.publishCapabilityTransition(sessionID, expected)
+		d.capStore.transitionMu.Unlock()
+		if err == nil {
+			d.capStore.retryMu.Lock()
+			if latest, exists := d.capStore.retrying[sessionID]; exists && latest == expected {
+				delete(d.capStore.retrying, sessionID)
+			}
+			more := len(d.capStore.retrying) > 0
+			d.capStore.retryMu.Unlock()
+			if !more {
+				return
+			}
+			continue
+		}
+		select {
+		case <-d.closing:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// commitStructuredSinkProof is the only false->true mutation. Its caller has
+// already established a live machine-local sink through one of the two proof seams;
+// this function binds that proof to the current instance and latest history boundary,
+// then commits the recovered record without granting either terminal bit.
+func (d *Daemon) commitStructuredSinkProof(sessionID, expectedInstance, kind string) error {
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
+	d.capStore.mu.Lock()
+	current, _, currentOK := d.sessionInstanceLocked(sessionID)
+	marker, markerOK := d.historyTornMarkerLocked(sessionID)
+	raw, recordOK := d.rawCapabilitiesLocked(sessionID)
+	if !currentOK || current == "" || current != expectedInstance || !markerOK ||
+		!recordOK || raw.SessionInstance != current || raw.Validate() != nil {
+		d.capStore.mu.Unlock()
+		return errStructuredSinkProof
+	}
+	// Multiple clean-drain/backend observers may prove the same sink concurrently.
+	// transitionMu serializes them; after the first commits, every later observer is
+	// an idempotent no-op rather than another true transition and disk rewrite.
+	if durable, durableOK := d.durableSinkProofLocked(sessionID); durableOK {
+		if live, liveOK := d.capStore.liveProof[sessionID]; liveOK && raw.StructuredChat &&
+			sinkProofMatches(durable, marker, current) &&
+			sinkProofMatches(live, marker, current) && durable.Kind == live.Kind {
+			d.capStore.mu.Unlock()
+			return nil
+		}
+	}
+	proof := structuredSinkProof{
+		Version: structuredSinkProofVersion, SessionInstance: current,
+		GapGeneration: marker.Generation, Kind: kind,
+	}
+	recovered := raw
+	recovered.StructuredChat = true
+	recovered.TerminalFallback = false
+	recovered.TerminalControl = false
+	if recovered.Validate() != nil {
+		d.capStore.mu.Unlock()
+		return errStructuredSinkProof
+	}
+	// Crash order: cap first, proof sidecar last. Lookup requires both plus the
+	// process-local proof, so every prefix remains disabled.
+	if err := d.persistSessionCapabilitiesLocked(sessionID, recovered); err != nil {
+		d.capStore.mu.Unlock()
+		return err
+	}
+	proofPath := d.sessionStatePathLocked(sessionID, sessionSinkProofFile)
+	if proofPath == "" {
+		d.capStore.mu.Unlock()
+		return errStructuredSinkProof
+	}
+	if err := writeJSONStateFile(proofPath, proof); err != nil {
+		d.capStore.mu.Unlock()
+		return err
+	}
+	d.capStore.byID[sessionID] = recovered
+	d.capStore.mu.Unlock()
+
+	if err := d.publishCapabilityTransition(sessionID, recovered); err != nil {
+		// Do not leave daemon-enabled / phone-stale authority. The durable commit is
+		// retained for a retry, but no process-local proof becomes authoritative until
+		// its ordered transition is durably appended.
+		return err
+	}
+	d.capStore.mu.Lock()
+	if d.capStore.liveProof == nil {
+		d.capStore.liveProof = map[string]structuredSinkProof{}
+	}
+	d.capStore.liveProof[sessionID] = proof
+	d.capStore.mu.Unlock()
+	return nil
 }
 
 // deriveSessionCapabilities builds the capability record for a newly launched session
@@ -436,9 +769,9 @@ func deriveSessionCapabilities(provider string, a adapter.Adapter, providerVersi
 	// WAVE R8 (ADR-017 T6-b): terminal_control is authored TRUE AT LAUNCH for a provider
 	// whose fallback is its DESIGNED surface, and never derived on the phone from
 	// terminal_fallback. The two look the same here and diverge on exactly the sessions
-	// the ruling is about: a Claude session degraded by a proven structured gap ends up
-	// with terminal_fallback=true and terminal_control=false, because SetStructuredChat
-	// grants the screen and never touches the keyboard.
+	// the ruling is about historically: a history/sink failure now authors the stricter
+	// {structured_chat:false, terminal_fallback:false, terminal_control:false} shape and
+	// never grants a terminal screen or keyboard.
 	return protocol.SessionCapabilities{
 		Provider:         provider,
 		ProviderVersion:  providerVersion,

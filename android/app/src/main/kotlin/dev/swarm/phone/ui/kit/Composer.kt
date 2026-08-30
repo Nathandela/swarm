@@ -66,8 +66,9 @@ import dev.swarm.phone.R
 /**
  * Whether the composer can send right now, and WHY NOT when it cannot.
  *
- * FOUR REASONS AND FOUR STATES, because they have four different remedies and only one of
- * them is anything the reader can act on. What shipped before this had a single ABSENT
+ * The history-gap state is not a shut reason: it says retained chronology is incomplete while
+ * the capability record can still prove that the live message sink exists. What shipped before
+ * this had a single ABSENT
  * state drawn on `!structuredChat`, whose sentence accused the session's record of BREAKING
  * -- while the same condition also covered "no record was ever authored", "the record is
  * inconsistent" and "this machine predates R8". Three of those four are not a break.
@@ -80,10 +81,9 @@ enum class ComposerAvailability { AVAILABLE, OFFLINE, TORN, NO_CHAT, ENDED }
  * What a shut composer says: the sentence in the field itself, and the line under it that
  * says what is still possible.
  *
- * THE SECOND HALF IS NOT DECORATION. A control that simply goes quiet reads as a bug, and
- * three of the four reasons have a real remedy nearby -- the machine still has the session,
- * and the owner can type at it. What the copy must never do is imply the phone will get the
- * composer back where it will not.
+ * THE SECOND HALF IS NOT DECORATION. A control that simply goes quiet reads as a bug. Offline and
+ * no-chat have distinct next steps; ended deliberately has no second line, and TORN is a transcript
+ * warning rather than a shut state. The copy must never imply sending will return where it will not.
  */
 data class ComposerShut(val placeholder: String, val detail: String)
 
@@ -95,7 +95,10 @@ data class ComposerShut(val placeholder: String, val detail: String)
  */
 enum class SendState { PENDING, SENT, REFUSED, STALE_TURN }
 
-/** One refusal notice: the copy the composer shows, and whether the draft survives it. */
+/**
+ * One refusal notice: the copy the composer shows, and whether that operation retains its submitted
+ * text for retry. The live field may already have been released at local seal for the next send.
+ */
 data class ComposerNotice(val copy: String, val retainsDraft: Boolean)
 
 /** One accepted paste: the draft it becomes, and whether it submits (it never does). */
@@ -104,21 +107,18 @@ data class ComposerPaste(val draft: String, val submits: Boolean)
 object ComposerModel {
 
     /**
-     * The availability gate (M2.4, R3's ruling): the lease is out of the UX entirely, and a
-     * session with no message sink has no composer rather than a greyed one promising a verb
-     * it structurally lacks (ADR-017).
+     * The availability gate (M2.4, R3's ruling): the lease is out of the UX entirely. Every
+     * conversation retains the same composer-shaped shell; this value decides whether the field
+     * and action are live and which inline reason a disabled shell shows.
      *
-     * THE ORDER IS THE DESIGN. A PERMANENT reason outranks a TRANSIENT one, and the reason is
-     * honesty rather than precedence for its own sake: a session that is both offline and
-     * torn would, under the other order, be told "not connected" -- which implies the composer
-     * comes back when the link does. It never will; the structured degrade is one-way for the
-     * life of the session instance. So the permanent fact is the one reported.
+     * THE ORDER IS THE DESIGN. Ended and an authoritative no-chat capability outrank a transient
+     * disconnect because reconnecting cannot restore them. Offline outranks TORN because a history
+     * warning does not shut a live sink; when both are present, connectivity is the actual blocker.
      *
-     * [ended] outranks everything because there is nothing to type into whatever else is
-     * true. [recordTorn] and [structuredChat] are then read together: a session with no
-     * structured chat is TORN when this phone holds the daemon's own `structured_gap`
-     * element, and NO_CHAT when it does not -- the difference between a record that broke and
-     * a machine that never claimed one.
+     * [ended] outranks everything because there is nothing to type into whatever else is true.
+     * The capability record then answers whether a live message sink exists. A
+     * [recordTorn] gap comes after that gate: it is a history warning, not an inference that the
+     * sink disappeared, and therefore remains sendable when the record still says chat exists.
      */
     fun availabilityFor(
         online: Boolean,
@@ -127,9 +127,9 @@ object ComposerModel {
         ended: Boolean = false,
     ): ComposerAvailability = when {
         ended -> ComposerAvailability.ENDED
-        recordTorn -> ComposerAvailability.TORN
         !structuredChat -> ComposerAvailability.NO_CHAT
         !online -> ComposerAvailability.OFFLINE
+        recordTorn -> ComposerAvailability.TORN
         else -> ComposerAvailability.AVAILABLE
     }
 
@@ -148,10 +148,9 @@ object ComposerModel {
             // without saying so invites the reader to believe their words are waiting.
             detail = "Reconnect to send.",
         )
-        ComposerAvailability.TORN -> ComposerShut(
-            placeholder = "Chat is paused here.",
-            detail = "You can still type on your computer.",
-        )
+        // TORN names incomplete retained history. The transcript's structured-gap card explains
+        // that chronology; it does not shut or relabel a composer whose sink remains available.
+        ComposerAvailability.TORN -> null
         ComposerAvailability.NO_CHAT -> ComposerShut(
             // NOT "broke", NOT "gap", NOT "record": this machine never claimed a chat
             // surface for this session, which is not a failure of anything.
@@ -160,14 +159,11 @@ object ComposerModel {
         )
         ComposerAvailability.ENDED -> ComposerShut(
             placeholder = "This session has ended",
-            // NO SECOND SENTENCE, and [ComposerShut]'s own KDoc has always said why: "three
-            // of the four reasons have a real remedy nearby". This is the fourth. Offline,
-            // torn and no-chat all end in "and you can still type at your machine"; an ended
-            // session has nothing on the other side to type AT, so a second line here can
-            // only restate the first in more words. The owner-signed drawing tables
-            // `composer.ended` as the placeholder alone and draws NO COMPOSER for this state
-            // at all -- "Its conversation is kept; there is nothing to type into." was on
-            // screen and on no copy sheet.
+            // NO SECOND SENTENCE. Offline and no-chat carry their own nearby remedies, while
+            // TORN is no longer a shut reason at all: its transcript marker owns the history
+            // warning and a proven sink keeps the normal composer live. An ended session has
+            // nothing on the other side to type into, so the permanent shell keeps this
+            // placeholder and disables its field/action.
             detail = "",
         )
     }
@@ -229,9 +225,9 @@ object ComposerModel {
     /**
      * The notice for one refusal code (the wire's own vocabulary: Outcome.Code / the
      * taxonomy's rendered states). stale_turn gets its OWN gentle copy -- it never claims
-     * the text was sent, and the draft is RETAINED for a re-send against the refreshed turn.
-     * Every other refusal keeps the draft too (a refusal that eats the user's words punishes
-     * them for the machine's answer), with the generic copy.
+     * the text was sent, and the operation retains its submitted text for a deliberate retry.
+     * Every other refusal retains that text too (a refusal must not erase the only retry source),
+     * even though local sealing may already have freed the live field for a newer message.
      *
      * **THE KEY IS THE `ErrorState` ENUM NAME AND NOT A MESSAGE**, which is what makes this the
      * ONE place a refusal acquires its sentence: the chain is `composerVerdictFor` ->

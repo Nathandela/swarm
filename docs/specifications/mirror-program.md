@@ -4,6 +4,15 @@ Program plan of record. Owner-approved direction 2026-08-13 ("that's exactly the
 Tracker: epic `agents-tracker-dwwv`, waves `dwwv.1` through `dwwv.6`.
 Look-and-feel reference: the Mirror artifact (synchronized terminal/phone replay), published 2026-08-13.
 
+> **CURRENT ANDROID AMENDMENT (2026-08-30) — one conversation shell.** The 2026-08-14
+> ADR-017 amendments below are retained as design history and machine/wire compatibility, but
+> their terminal-fallback and status-card destinations are superseded for production Android.
+> Opening every session now renders the normal transcript and pinned composer shell. Capability,
+> connectivity and lifecycle state change that shell's inline reason and whether it may send; they
+> do not select a replacement screen. Terminal view/control fields and verbs remain supported for
+> rolling and non-Android consumers, never as an Android route. A history gap remains visible in
+> the transcript, and exact current-sink proof may re-enable sending without erasing that marker.
+
 Grounding: three-agent investigation of 2026-08-13 -- (a) OSS landscape survey (Happy/Happier,
 Omnara, coder/agentapi post-mortem, opencode, the ACP ecosystem), (b) per-CLI event-source matrix
 against current vendor docs, (c) line-cited audit of this repo at `cd648a7`. Claims below about
@@ -25,7 +34,7 @@ Non-goals, ruled by the owner 2026-08-13:
 - No terminal rendering anywhere in the app (ADR-009 obsidian ruling stands). CLIs without a
   structured event source keep the status card. No pseudo-chat sliced from the VT grid.
 
-  > **AMENDED BY ADR-017 (2026-08-14):** sentence one is re-scoped to `structured_chat` sessions; sentence two gains the capability-routed sanitized terminal fallback; sentence three stands verbatim.
+  > **HISTORICAL AMENDMENT BY ADR-017 (2026-08-14), SUPERSEDED ON ANDROID 2026-08-30:** sentence one was re-scoped to `structured_chat` sessions and sentence two gained the capability-routed sanitized terminal fallback. Production Android now applies the no-terminal-rendering rule to every session and keeps the transcript/composer shell visible; sentence three still stands verbatim for every consumer.
 
 - No multi-tenant relay. The transport stays the existing sealed outbound-only design.
 
@@ -62,7 +71,7 @@ scrape the terminal for structure. Mirror keeps the two planes separate:
 | AGY | probe for the Gemini-line hook set (per-chunk `AfterModel`) or an ACP surface; wire if present | unknown until probed |
 | anything else | none | status card (ruled) |
 
-> **THE "anything else" ROW ABOVE IS AMENDED BY ADR-017 (2026-08-14):** its fidelity column becomes "honest status card **plus** capability-routed sanitized terminal fallback"; no pseudo-chat sliced from the grid, ever.
+> **HISTORICAL ADR-017 AMENDMENT (2026-08-14), SUPERSEDED ON ANDROID 2026-08-30:** its fidelity column became "honest status card **plus** capability-routed sanitized terminal fallback". Production Android now keeps the normal conversation shell for this row and explains unavailable chat inline. Compatibility consumers may still use the old destinations; no pseudo-chat is ever sliced from the grid.
 
 **Inbound (phone -> machine)** is always a signed device op the daemon applies locally: composer
 text and approval keys are injected into the PTY the daemon already owns (Claude), or delivered as
@@ -191,12 +200,12 @@ Release: machine v0.11.0. Exit: the demo moment on a Codex session, prose stream
 | M5.4 | Phone-presence in the TUI: throttled foreground ping, "phone is watching" in attach chrome | completes the co-presence story both ways |
 | M5.5 | Status-card polish for non-chat sessions; composer hidden there | honest, not empty |
 
-> **M5.2 AND M5.5 ARE AMENDED BY ADR-017 (2026-08-14):** M5.2's "else the status card stands" becomes "else AGY advertises `structured_chat=false`, `terminal_fallback=true`" (its "no pseudo-chat, ruled" note is untouched); M5.5's "composer hidden there" becomes structural — a fallback session has no structured composer, because it has no message sink.
+> **HISTORICAL ADR-017 AMENDMENT (2026-08-14), SUPERSEDED ON ANDROID 2026-08-30:** M5.2 made AGY advertise `structured_chat=false`, `terminal_fallback=true`, and M5.5 hid the composer on that destination. The capability record remains valid compatibility data, but production Android keeps the composer-shaped shell pinned and disables it with the precise inline reason when no message sink is proven. The "no pseudo-chat, ruled" note is untouched.
 
 Release: machine v0.12.0, app 0.7.0. Exit: every session in the inbox opens into a live chat or an
 honest status card -- nothing in between.
 
-> **THE M5 EXIT ABOVE IS AMENDED BY ADR-017 (2026-08-14):** it gains a third destination — a live chat, a capability-routed terminal fallback, or an honest status card, nothing in between.
+> **HISTORICAL ADR-017 AMENDMENT (2026-08-14), SUPERSEDED ON ANDROID 2026-08-30:** the three-destination Android exit is retired. The current Android exit is one conversation shell for every inbox session, with send availability and its explanation changing inline. The three destination values remain compatibility protocol data and may still serve non-Android consumers.
 
 ## 5. Release train
 
@@ -207,7 +216,7 @@ honest status card -- nothing in between.
 | M2 | v0.10.x | 0.5.x | a Claude session feels like the demo |
 | M3 | v0.10.x | 0.6.0 | history + detail |
 | M4 | v0.11.0 | 0.6.x | Codex streams |
-| M5 | v0.12.0 | 0.7.0 | everything or an honest card |
+| M5 | v0.12.0 | 0.7.0 | historical: everything or an honest card; Android now uses one conversation shell |
 
 ## 6. Risks and their gates
 

@@ -7,9 +7,10 @@ import (
 
 // SessionCapabilities is the daemon-authored, per-session-instance capability record of
 // ADR-017 T2 / playbook §6.2: which phone surface a session gets, and which individually
-// testable seams it supports. It is authored once at session launch and is immutable for
-// the life of the instance (T2 rule 1); the only mutation path afterward is SetStructuredChat,
-// and only in the degrading direction (T2 rule 2).
+// testable seams it supports. Launch facts and terminal authority are immutable for the
+// life of the instance. StructuredChat may degrade on an explicit gap/sink failure and may
+// recover only through the machine's exact-current-sink proof path; SetStructuredChat below
+// remains the public degrade-only helper and cannot perform that recovery.
 type SessionCapabilities struct {
 	Provider         string `json:"provider"`          // adapter identity: claude, codex, opencode, agy, ...
 	ProviderVersion  string `json:"provider_version"`  // the DETECTED version of the installed CLI
@@ -83,15 +84,16 @@ func (c *SessionCapabilities) AllowsTerminalControl() bool {
 }
 
 // ErrCapabilityUpgrade is returned by SetStructuredChat when asked to flip a degraded
-// record (structured_chat=false) back to true. ADR-017 T2 rule 2: "A runtime integrity
-// failure may only degrade the record ... it cannot upgrade a fallback session in place."
+// record (structured_chat=false) back to true. Recovery is deliberately unavailable through
+// this general mutation helper: only the machine-local, instance- and gap-bound sink proof
+// path may publish it.
 var ErrCapabilityUpgrade = errors.New("schema: capability record cannot upgrade structured_chat once degraded")
 
-// SetStructuredChat is the one mutation path a capability record has after launch. It
-// allows a healthy record to degrade (true -> false), which also forces TerminalFallback
-// true so the session gains the sanitized surface it lost structured chat for. It is
-// idempotent in either steady state and refuses an upgrade attempt (false -> true),
-// leaving the record unchanged.
+// SetStructuredChat is the public degrade-only mutation helper. It allows a healthy record
+// to degrade (true -> false), historically forcing TerminalFallback true for compatibility
+// consumers. Android never routes to that terminal surface, and the history-gap producer now
+// authors the stricter {false,false,false} shape directly. This helper is idempotent in either
+// steady state and refuses an upgrade attempt (false -> true), leaving the record unchanged.
 //
 // IT NEVER TOUCHES TerminalControl, and that omission is a RULING rather than an
 // oversight (ADR-017 T6-b / D-DEGRADE-ORIGIN fence 1). The symmetrical-looking next edit

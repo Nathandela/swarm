@@ -142,10 +142,11 @@ func (d *Daemon) connectSessionBackend(id string) {
 // Serve has assigned d.core, so connectSessionBackend returned at its nil guard and the
 // backend was never rejoined. Nothing then called noteBackendUnavailable or noteBackendLost
 // either -- so after any `swarm daemon restart` a live Codex session's transcript stopped
-// mid-conversation with NO boundary record, while the phone (which derives its composer from
-// `structuredChat = !transcript.structureTorn`) still rendered a composer and every send was
-// refused AFTER the tap. That is precisely the silent bridge ADR-017 forbids and the harm
-// noteBackendUnavailable's own comment says it exists to prevent.
+// mid-conversation with NO boundary record. At that time the phone derived composer state from
+// `structuredChat = !transcript.structureTorn`, so it still rendered the composer as usable and
+// every send was refused AFTER the tap. Current Android instead keeps the shell permanently and
+// takes send authority from the machine-authored capability state. The missing boundary was still
+// precisely the silent bridge ADR-017 forbids and the harm noteBackendUnavailable prevents.
 func (d *Daemon) connectBackendsForRunning() {
 	if d.core == nil {
 		return
@@ -184,6 +185,7 @@ func (d *Daemon) connectBackendsForRunning() {
 // in r7r4_join_test.go, which drives THIS function against a real WebSocket app-server -- the
 // absence of exactly that is why round 3 shipped two blockers in these twenty lines.
 func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
+	expectedInstance, _ := d.sessionInstance(id)
 	conn, err := d.dialSessionBackend(id, ch)
 	if err != nil {
 		log.Printf("skeleton: session %s backend unavailable: %v", id, err)
@@ -230,7 +232,11 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 	// Round 3 registered below the resume, and the resume cannot succeed until a turn starts,
 	// and no turn can start because resolveMessageSink finds no backend: a closed loop that
 	// made the wave's exit criterion structurally unreachable on the ORDINARY fresh launch.
-	d.registerBackend(id, threadID, conn)
+	if !d.registerBackendForInstance(id, expectedInstance, threadID, conn) {
+		_ = conn.Close()
+		d.noteBackendUnavailable(id)
+		return
+	}
 	go d.watchSessionBackend(id, conn)
 	if subscribed {
 		d.markBackendSubscribed(id)
@@ -252,18 +258,20 @@ func (d *Daemon) joinSessionBackend(id string, ch daemon.BackendChannel) {
 // gate used for exactly this purpose: finding the TUI's thread from a second client.
 //
 // A SUCCESSFUL REJOIN EMITS NOTHING AND DEGRADES NOTHING (noteBackendRejoined), because
-// markSessionDegraded is one-way and durable: a rule that degraded on every restart would
-// permanently remove the composer from every live Codex session on the first
-// `swarm daemon restart`, the operation ADR-001 exists to make ordinary.
+// reconnection alone proves neither a missed interval nor a gap boundary. A real later
+// boundary may disable chat and a freshly proved exact sink may recover it, but an ordinary
+// daemon restart must not invent the boundary in the first place.
 func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 	if _, ok := d.sessionBackendFor(id); ok {
 		return // already joined by the launch path; a rejoin would open a second connection
 	}
+	expectedInstance, _ := d.sessionInstance(id)
 	conn, err := d.dialSessionBackend(id, ch)
 	if err != nil {
 		// The shim outlived this daemon but its backend did not, or its socket is gone. The
-		// structured plane is over for this session and history must say so: without this the
-		// transcript simply stops and the phone keeps offering a composer.
+		// current structured plane is unavailable and history must say so: without this the
+		// transcript simply stops while the phone keeps offering an unproved composer. A later
+		// exact-instance backend proof may recover future sends; it cannot erase the marker.
 		log.Printf("skeleton: session %s backend could not be rejoined: %v", id, err)
 		d.noteBackendUnavailable(id)
 		return
@@ -283,7 +291,11 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 		return
 	}
 	d.adoptBackendThread(id, threadID)
-	d.noteBackendRejoined(id, threadID, conn)
+	if !d.registerBackendForInstance(id, expectedInstance, threadID, conn) {
+		_ = conn.Close()
+		d.noteBackendUnavailable(id)
+		return
+	}
 	go d.watchSessionBackend(id, conn)
 	// A REJOIN NEVER GAPS ON PRIOR HISTORY, AND THAT SILENTLY BRIDGES THE DOWNTIME WINDOW.
 	// Stated honestly (pre-commit correction, 2026-08-20), because the earlier wording here --
@@ -296,12 +308,11 @@ func (d *Daemon) rejoinSessionBackend(id string, ch daemon.BackendChannel) {
 	//	  and this daemon resumes AFTER them -- a client receives a thread's items only from the
 	//	  point it resumes. Those turns are absent from the journal and this path says nothing.
 	//
-	// SO WHY IS IT STILL SILENT? Because gapping here costs more than it buys today: the phone
-	// derives its composer from `structuredChat = !transcript.structureTorn` and so reads ANY
-	// structured_gap as "no message sink", which would remove the composer for the WHOLE session
-	// on every `swarm daemon restart` -- the operation ADR-001 exists to make ordinary. The
-	// conflation is the defect, it is filed as its own bead, and it is not fixable here.
-	// Meanwhile markSessionDegraded is one-way and durable, so this arm must not fire it either.
+	// SO WHY IS IT STILL SILENT? Capability transitions now separate the permanent visible
+	// history marker from current sink authority, but this rejoin still has no evidence that
+	// the downtime contained a turn and no exact boundary to publish. Emitting a gap on every
+	// ordinary daemon restart would manufacture missing history. This arm therefore stays
+	// silent for evidence, not because recovery is impossible.
 	//
 	// WHAT WOULD CLOSE IT: backfilling the missed interval with `thread/read {includeTurns:true}`
 	// and gapping only what the backfill could not recover. That is ADR-013's Q4, and it is open

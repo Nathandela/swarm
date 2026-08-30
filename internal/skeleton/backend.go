@@ -101,8 +101,9 @@ type backendConn interface {
 // r1-codex-gate.md:112-115). Round 3 conflated them, so the ability to SEND depended on having
 // read history: the phone could not start the very turn that would create the rollout.
 type sessionBackend struct {
-	threadID string
-	conn     backendConn
+	threadID        string
+	conn            backendConn
+	sessionInstance string
 	// subscribed is set once thread/resume has succeeded on this connection. It is read for
 	// evidence and by the retry loop; NO OPERATION IS GATED ON IT, which is the whole point.
 	subscribed bool
@@ -173,8 +174,23 @@ type deltaBatch struct {
 // registerBackend records a session's live app-server connection. threadID is the thread the
 // daemon joined, and it is what every subsequent turn/* request names.
 func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
+	instance, _ := d.sessionInstance(local)
+	_ = d.registerBackendForInstance(local, instance, threadID, conn)
+}
+
+// registerBackendForInstance is the backend sink's proof boundary. Production captures
+// expectedInstance before dialing/initializing and arrives here only once this exact
+// connection can serve turn/start. A replaced session refuses the old connection before
+// it can publish either a sink or a capability upgrade.
+func (d *Daemon) registerBackendForInstance(local, expectedInstance, threadID string, conn backendConn) bool {
+	if local == "" || conn == nil || expectedInstance == "" {
+		return false
+	}
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		return false
+	}
+	entry := &sessionBackend{threadID: threadID, conn: conn, sessionInstance: expectedInstance}
 	d.backend.mu.Lock()
-	defer d.backend.mu.Unlock()
 	if d.backend.live == nil {
 		d.backend.live = map[string]*sessionBackend{}
 		d.backend.requests = map[string]map[string]json.RawMessage{}
@@ -183,7 +199,15 @@ func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
 	if d.backend.adopted == nil {
 		d.backend.adopted = map[string]string{}
 	}
-	d.backend.live[local] = &sessionBackend{threadID: threadID, conn: conn}
+	d.backend.live[local] = entry
+	d.backend.mu.Unlock()
+	rollback := func() {
+		d.backend.mu.Lock()
+		if d.backend.live[local] == entry {
+			delete(d.backend.live, local)
+		}
+		d.backend.mu.Unlock()
+	}
 	// A rejoined backend already has its thread id. Bring a durable Swarm label
 	// across immediately; a fresh backend with no id is handled by adoptBackendThread.
 	go d.syncExistingSessionNameToProvider(local)
@@ -198,12 +222,74 @@ func (d *Daemon) registerBackend(local, threadID string, conn backendConn) {
 	// Off the caller's goroutine: registerBackend holds d.backend.mu and the authoring
 	// path takes the capability store's lock and writes the session dir; holding a backend
 	// lock across a disk write would put the pump behind the filesystem.
-	go d.authorCapabilitiesOnBackendJoin(local)
+	d.authorCapabilitiesOnBackendJoin(local)
+
+	// Re-check after registration/authoring: either replacement wins and this exact
+	// entry is removed, or the proof commits for the instance it was captured from.
+	if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+		rollback()
+		return false
+	}
+	if d.core == nil {
+		rollback()
+		return false
+	}
+	m, ok := d.core.Get(local)
+	if !ok {
+		rollback()
+		return false
+	}
+	ad, _ := d.resolveAdapter(m.AgentType)
+	if !deriveSessionCapabilities(m.AgentType, ad, d.providerVersion(m.AgentType), adapterRevision, true).StructuredChat {
+		rollback()
+		return false // a sink-shaped object cannot launder a baseline fallback provider
+	}
+	if !d.sessionDegraded(local) {
+		return true // ordinary healthy registration; no recovery transition needed
+	}
+	if err := d.commitStructuredSinkProof(local, expectedInstance, sinkProofBackend); err != nil {
+		// The initialized sink itself remains valid. A transient journal failure must
+		// leave chat disabled, but it must not tear down the only source that can retry
+		// the exact proof. The retry exits on replacement or sink loss.
+		go d.retryBackendSinkProof(local, expectedInstance, entry)
+		return true
+	}
+	return true
+}
+
+func (d *Daemon) retryBackendSinkProof(local, expectedInstance string, entry *sessionBackend) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-d.closing:
+			return
+		case <-ticker.C:
+		}
+		d.backend.mu.Lock()
+		currentEntry := d.backend.live[local]
+		d.backend.mu.Unlock()
+		if currentEntry != entry {
+			return
+		}
+		if current, ok := d.sessionInstance(local); !ok || current != expectedInstance {
+			return
+		}
+		if d.commitStructuredSinkProof(local, expectedInstance, sinkProofBackend) == nil {
+			return
+		}
+	}
 }
 
 // authorCapabilitiesOnBackendJoin authors local's record with the structured plane PROVEN
 // LIVE. It is the true half of the pair below.
 func (d *Daemon) authorCapabilitiesOnBackendJoin(local string) {
+	// Recovery migrates the existing record; it does not re-author it. Besides
+	// preserving metadata, this prevents a concurrent proof observer from forcing
+	// raw StructuredChat=false between another observer's publish and activation.
+	if d.sessionDegraded(local) && d.hasRawSessionCapabilities(local) {
+		return
+	}
 	d.authorCapabilitiesForBackend(local, true)
 }
 
@@ -323,9 +409,17 @@ func (d *Daemon) backendSubscribed(local string) bool {
 // sessionBackendFor returns a session's live backend, if it has one.
 func (d *Daemon) sessionBackendFor(local string) (*sessionBackend, bool) {
 	d.backend.mu.Lock()
-	defer d.backend.mu.Unlock()
 	b, ok := d.backend.live[local]
-	return b, ok
+	d.backend.mu.Unlock()
+	if !ok || b == nil {
+		return nil, false
+	}
+	if b.sessionInstance != "" {
+		if current, currentOK := d.sessionInstance(local); !currentOK || current != b.sessionInstance {
+			return nil, false
+		}
+	}
+	return b, true
 }
 
 // noteServerRequest records the JSON-RPC id an incoming server-request carried, keyed by the
@@ -735,13 +829,13 @@ const (
 // without this the session still SHOWS a composer, the owner types, and the refusal arrives
 // after the tap. ADR-017 T2 wants that surfaced before it.
 func (d *Daemon) noteBackendUnavailable(local string) {
+	d.markSessionDegradedFor(local, backendGapGeneration(gapBackendUnavailable))
 	d.emitBackendGap(local, gapBackendUnavailable)
-	d.markSessionDegraded(local)
 	// ADR-017 T2-a: the marker alone leaves this session with NO capability record, and
 	// by T2-a no record is the honest status card -- which is the wrong destination for a
 	// session that has a live TUI worth watching. markSessionDegraded degrades "the
 	// record, if one exists"; this authors the one it degrades, with the backend plane
-	// proven absent, so the session lands on the read-only terminal fallback instead.
+	// proven absent, so the session lands on the chat shell with no terminal route.
 	d.degradeCapabilitiesOnBackendLoss(local)
 }
 
@@ -766,8 +860,16 @@ func (d *Daemon) noteBackendLost(local, reason string) {
 	if reason == "" {
 		reason = gapBackendLost
 	}
-	d.emitBackendGap(local, gapBackendLost+": "+reason)
-	d.markSessionDegraded(local)
+	gapReason := gapBackendLost + ": " + reason
+	d.markSessionDegradedFor(local, backendGapGeneration(gapReason))
+	d.emitBackendGap(local, gapReason)
+}
+
+// backendGapGeneration names one actual sink-loss occurrence, not its display
+// reason. Two connections can fail with the same text and are still two boundaries;
+// reusing the text would let a proof for the first survive the second.
+func backendGapGeneration(reason string) string {
+	return "backend-gap/v1/" + mintSessionInstance() + "/" + reason
 }
 
 // emitBackendGap appends one honest structured_gap boundary for the session.

@@ -159,11 +159,10 @@ const (
 	// keystroke is refused. The screen's remedy is to offer take-control, never to retry.
 	ErrClassNoLease = "swarm/no-lease"
 
-	// ErrClassStaleTurn is the daemon's stale_turn refusal of a composer send (Wave R6,
-	// IS-LIFE-5): the conversation moved on between the phone rendering the turn and the
-	// tap landing. An ORDINARY race, not a bug report -- the remedy is specific and mild
-	// (re-read the transcript and send again, the draft retained), which is why it is its
-	// own class rather than ErrClassUnknown or ErrClassInternal.
+	// ErrClassStaleTurn is the daemon's stale_turn refusal (Wave R6, IS-LIFE-5). Stop
+	// remains strictly bound to the rendered turn; an older queued composer send may also
+	// be invalidated by a successful Stop barrier. Ordinary concurrency, not a bug report:
+	// refresh, with any unsent draft retained.
 	ErrClassStaleTurn = "swarm/stale-turn"
 
 	// ErrClassInputBusy is the shim's input_busy refusal of a composer send (Slice 0,

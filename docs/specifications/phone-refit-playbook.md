@@ -633,7 +633,7 @@ Conversation:
 | Something failed in a way the app does not recognise. Try again, and report it if it keeps happening. | Something went wrong. Try again. | ErrorRouting.kt:255 |
 | This agent reports no chat surface / You can watch it here, and type at your machine. | Chat is off for this session. / Reply on {machine}. | Composer.kt:154 |
 | Not connected to your machine / Messages are never held — nothing is sent when the link returns. | Not connected. / Reconnect to send. | Composer.kt:142 |
-| This session's record has a gap / Still typeable at your machine. | Chat is paused here. / You can still type on {machine}. | Composer.kt:148 |
+| This session's record has a gap / Still typeable at your machine. | **Superseded 2026-08-30:** keep the normal `Message` composer when the exact current sink is re-proven; the transcript's `Missing messages / Reload` marker carries the retained-history warning. | Composer.kt:143-153; TranscriptPanel.kt gap row |
 | Message / Add feedback... | Message / Add a note while it works | Composer.kt:275 |
 | Your machine did not send more of this conversation. | Couldn't load more. | SessionDetailPanel.kt:414 |
 | This session's structured record broke, so it can no longer be typed into from the phone. It is still running on your machine, where you can still type at it. | Chat is off for this session. Reply on {machine}. | SessionDetailPanel.kt:318 |

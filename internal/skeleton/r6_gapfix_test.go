@@ -155,11 +155,10 @@ func TestHookDrainer_RedeliveredUnmappedEventNeverDuplicatesTheJournalItem(t *te
 }
 
 // ---------------------------------------------------------------------------
-// BLOCKER 2 (ADR-017 "never silently bridged", "does not backfill"): a record
-// returned ABOVE a reported gap boundary must never be applied, and the cursor must
-// never advance past the boundary -- otherwise the post-gap stream is silently
-// spliced onto whatever the reader last saw, and the hole becomes permanently
-// unobservable on every later poll (the cursor having already jumped past it).
+// BLOCKER 2 (ADR-017 "never silently bridged"): a record returned ABOVE a
+// reported gap boundary must never be applied in the boundary-producing drain.
+// The explicit gap is journalled first; only then may the durable cursor reset so
+// a later drain can adopt the retained side without hiding the hole.
 // ---------------------------------------------------------------------------
 
 func TestHookDrainer_OnAHoleAboveTheCursor_NeverAppliesPastTheBoundary(t *testing.T) {
@@ -217,8 +216,8 @@ func TestHookDrainer_OnAHoleAboveTheCursor_NeverAppliesPastTheBoundary(t *testin
 	if applied != 0 {
 		t.Fatalf("DrainOnce applied %d record(s) from ABOVE a reported gap boundary, want 0 -- ADR-017 forbids silently bridging the hole", applied)
 	}
-	if hd.cursor() != 1 {
-		t.Fatalf("Cursor() = %d after a gap, want 1 (unchanged) -- the cursor must never advance past an unrecoverable boundary", hd.cursor())
+	if hd.cursor() != 0 {
+		t.Fatalf("Cursor() = %d after a gap, want 0 -- only a durable reset after the explicit boundary may adopt the retained side", hd.cursor())
 	}
 	if n := countJournalInteractions(t, sk, sessionID); n != 0 {
 		t.Fatalf("journal holds %d interaction item(s) for %s from past a reported gap, want 0", n, sessionID)
@@ -305,8 +304,8 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after the first incarnation's degrade", sessionID)
 	}
-	if caps1.StructuredChat || !caps1.TerminalFallback {
-		t.Fatalf("after incarnation 1's proven gap: StructuredChat=%v TerminalFallback=%v, want false/true", caps1.StructuredChat, caps1.TerminalFallback)
+	if caps1.StructuredChat || caps1.TerminalFallback || caps1.TerminalControl {
+		t.Fatalf("after incarnation 1's proven gap: %+v, want chat/fallback/control all false", caps1)
 	}
 	if err := sk1.Close(); err != nil {
 		t.Fatalf("close first incarnation: %v", err)
@@ -334,8 +333,8 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 	if caps2.StructuredChat {
 		t.Fatalf("StructuredChat = true on a FRESH daemon incarnation whose session carries a still-proven, still-present spool gap -- ADR-017 T2 rule 2 ('it cannot upgrade a fallback session in place'), inverted: the degrade must be DURABLE, not die with the process that authored it")
 	}
-	if !caps2.TerminalFallback {
-		t.Fatalf("TerminalFallback = false on the second incarnation, want true -- a structured_chat degrade forces the fallback surface on")
+	if caps2.TerminalFallback || caps2.TerminalControl {
+		t.Fatalf("second incarnation's history gap granted terminal authority: %+v", caps2)
 	}
 
 	hd2 := NewHookDrainer(sk2, sessionID, h2.cfg.HookSocketPath, cursorPath)
@@ -350,8 +349,8 @@ func TestHookDrainer_SameGapAcrossADaemonRestart_ReportsOnceAndStaysDegraded(t *
 	if !ok {
 		t.Fatalf("SessionCapabilities(%s) not found after the second incarnation's drain", sessionID)
 	}
-	if caps3.StructuredChat || !caps3.TerminalFallback {
-		t.Fatalf("after incarnation 2 re-drained the SAME proven gap: StructuredChat=%v TerminalFallback=%v, want false/true -- the emit-dedupe may gate only the journal APPEND, never the degrade", caps3.StructuredChat, caps3.TerminalFallback)
+	if caps3.StructuredChat || caps3.TerminalFallback || caps3.TerminalControl {
+		t.Fatalf("after incarnation 2 re-drained the SAME proven gap: %+v, want chat/fallback/control all false -- emit dedupe gates only the journal append", caps3)
 	}
 }
 

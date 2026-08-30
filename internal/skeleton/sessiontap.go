@@ -45,6 +45,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/vt"
 )
@@ -123,6 +124,62 @@ func (d *Daemon) authorAttachedSessionCapabilities(id string) {
 	if _, err := d.authorSessionCapabilities(id, inst, m.AgentType, ad, version, adapterRevision, live); err != nil {
 		log.Printf("skeleton: author capability record for attached session %s: %v", id, err)
 	}
+}
+
+// proveCurrentShimMessageSink performs the strongest side-effect-free proof available
+// for a keystroke composer: a fresh hello to the exact current shim advertising the
+// atomic submit transaction, combined with the adapter's explicit ComposerKeys seam.
+// DialSession completes hello but sends no attach/input frame, so the probe cannot type.
+func (d *Daemon) proveCurrentShimMessageSink(id string) bool {
+	if d.core == nil {
+		return false
+	}
+	m, ok := d.core.Get(id)
+	if !ok {
+		return false
+	}
+	expectedInstance, ok := d.sessionInstance(id)
+	if !ok || expectedInstance == "" {
+		return false
+	}
+	expectedShim := m.ShimPID
+	ad, ok := d.resolveAdapter(m.AgentType)
+	if !ok {
+		return false
+	}
+	if _, ok := adapter.AsKeystrokeComposer(ad); !ok {
+		return false
+	}
+	if !deriveSessionCapabilities(m.AgentType, ad, d.providerVersion(m.AgentType), adapterRevision, false).StructuredChat {
+		return false
+	}
+	conn, caps, err := d.core.DialSession(id)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	if !caps.SubmitTransaction {
+		return false
+	}
+	// The hello may block. Re-read both replacement coordinates after it before
+	// authoring or proving anything.
+	currentMeta, ok := d.core.Get(id)
+	if !ok || currentMeta.ShimPID != expectedShim {
+		return false
+	}
+	if current, ok := d.sessionInstance(id); !ok || current != expectedInstance {
+		return false
+	}
+	if !d.hasRawSessionCapabilities(id) {
+		if _, err := d.authorSessionCapabilities(id, expectedInstance, m.AgentType, ad,
+			d.providerVersion(m.AgentType), adapterRevision, false); err != nil {
+			return false
+		}
+	}
+	if !d.sessionDegraded(id) {
+		return true
+	}
+	return d.commitStructuredSinkProof(id, expectedInstance, sinkProofShimSubmit) == nil
 }
 
 func (m *tapManager) noteParserFault(id string, err error) {
@@ -389,6 +446,11 @@ func (s *tapSub) Submit(text string) error {
 		return protocol.ErrSubmitUnsupported
 	}
 	return sm.Submit(text)
+}
+
+func (s *tapSub) SupportsMessageSubmit() bool {
+	capable, ok := s.t.up.(protocol.MessageSubmitCapability)
+	return ok && capable.SupportsMessageSubmit()
 }
 
 // ControlKeys forwards DAEMON-AUTHORED keys -- a turn interrupt, a dialog answer -- on the frame

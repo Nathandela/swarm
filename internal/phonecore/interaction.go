@@ -36,6 +36,12 @@ const RecordTypeInteraction = "interaction"
 // closure).
 const RecordTypeStructuredGap = "structured_gap"
 
+// RecordTypeCapabilityTransition is the ordinary, cursor-ordered journal record that
+// publishes the daemon's complete current capability record after a durable runtime
+// degradation or recovery. It carries no transcript item: SessionCache consumes it and a
+// journal event wakes the phone surface to re-read the session in place.
+const RecordTypeCapabilityTransition = "capability_transition"
+
 // ItemSchemaVersion is the item schema version this build understands -- the item's own `v`
 // (§2), distinct from journal.SchemaVersion, from protocol.Version and from
 // StateSchemaVersion. A higher one is DEGRADED, never dropped (IS-COMPAT-4).

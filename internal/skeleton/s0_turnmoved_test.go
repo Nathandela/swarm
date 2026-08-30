@@ -28,14 +28,10 @@ package skeleton
 // agent simply finishing, moves it. Both are asynchronous to this path and neither is rare on
 // a surface whose whole purpose is a conversation two people are having at once.
 //
-// WHAT SHOULD HAPPEN, AND WHY IT IS THE SAME ANSWER THE PRECONDITION ALREADY GIVES.
-// IS-LIFE-5: "a tap that lands after the turn moved on is REFUSED, NEVER MISAPPLIED." The
-// harm is semantic, not mechanical -- a phone message is written against a conversation the
-// reader had in front of them, and "yes" delivered into the turn that REPLACED the one it
-// answered is a message nobody meant. The refusal is protocol.CodeStaleTurn, which the phone
-// already draws as bubble.stale: "Not sent -- the conversation moved on. Read the latest turn
-// and send again." It is a precondition, not a lockout: the same words sent against the
-// current turn go in.
+// THE MIGRATED CONTRACT. Ordinary messages are queued dialog work, not destructive taps.
+// expected_turn remains signed render context, while the daemon selects current state when
+// each queue head runs. Opening means steer/current composer; closing means start/idle
+// composer. Stop remains the strict turn-scoped operation.
 //
 // THE SEAM. testHookComposerCheckedNotYetDelivered parks the test INSIDE the gap. Racing it
 // with sleeps would be dishonest in both directions -- a sleep long enough to be reliable
@@ -51,7 +47,6 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/adapter"
-	"github.com/Nathandela/swarm/internal/protocol"
 )
 
 // armSeam and disarmSeam are the only two writes any test makes to the package's delivery-gap
@@ -61,8 +56,8 @@ import (
 func armSeam(fn func(string)) { testHookComposerCheckedNotYetDelivered.Store(&fn) }
 func disarmSeam()             { testHookComposerCheckedNotYetDelivered.Store(nil) }
 
-// inTheDeliveryGap installs a one-shot seam that runs `move` after composerSend has verified
-// expected_turn and before it has delivered anything, then removes it.
+// inTheDeliveryGap installs a one-shot seam that runs `move` after composerSend enters its
+// lane and immediately before it selects current state, then removes it.
 func inTheDeliveryGap(t *testing.T, move func()) {
 	t.Helper()
 	fired := false
@@ -152,10 +147,7 @@ func r6CloseTurn(t *testing.T, sk *Daemon, local string) {
 // The keystroke sink (Claude): the message is typed into the CLI's own composer
 // ---------------------------------------------------------------------------
 
-// TestSlice0_KeystrokeSink_ATurnOpeningInTheDeliveryGapRefusesStaleAndTypesNothing is the
-// TURN START half. The phone read an idle session and sent against no turn; the owner asked
-// their own question at the terminal while the send was on its way to the PTY.
-func TestSlice0_KeystrokeSink_ATurnOpeningInTheDeliveryGapRefusesStaleAndTypesNothing(t *testing.T) {
+func TestSlice0_KeystrokeSink_ATurnOpeningBeforeSelectionStillSubmitsWhole(t *testing.T) {
 	r := newKeystrokeRig(t)
 
 	inTheDeliveryGap(t, func() {
@@ -164,20 +156,18 @@ func TestSlice0_KeystrokeSink_ATurnOpeningInTheDeliveryGapRefusesStaleAndTypesNo
 	})
 
 	code, err := r.send(t, "", "reply to whatever is open", "devA:01JS0GAPKEYSTART000000")
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("a send whose turn OPENED between the check and the write = code %q err %v, want %q.\n"+
-			"The phone wrote its message against an idle conversation and the conversation stopped "+
-			"being idle before the bytes left. IS-LIFE-5 refuses; it never misapplies. The phone "+
-			"draws that refusal as bubble.stale and offers the words back for a resend.",
-			code, err, protocol.CodeStaleTurn)
+	if err != nil || code != "" {
+		t.Fatalf("queued keystroke message refused after a turn opened: code %q err %v", code, err)
 	}
-	r.assertPTYUntouched(t)
+	if lines := awaitSubmittedLines(r.att, 1, 20*time.Second); len(lines) != 1 || lines[0] != "reply to whatever is open" {
+		t.Fatalf("session submitted %q, want the queued message whole", lines)
+	}
 }
 
 // TestSlice0_KeystrokeSink_ATurnClosingInTheDeliveryGapRefusesStaleAndTypesNothing is the
 // TURN CLOSURE half: the agent finished answering while the phone's reply to that same
 // answer was in flight.
-func TestSlice0_KeystrokeSink_ATurnClosingInTheDeliveryGapRefusesStaleAndTypesNothing(t *testing.T) {
+func TestSlice0_KeystrokeSink_ATurnClosingBeforeSelectionStillSubmitsWhole(t *testing.T) {
 	r := newKeystrokeRig(t)
 	already := len(interactionItems(t, r.sk, r.local))
 	turnA := r6OpenTurn(t, r.sk, r.local, "the only question", already)
@@ -185,13 +175,12 @@ func TestSlice0_KeystrokeSink_ATurnClosingInTheDeliveryGapRefusesStaleAndTypesNo
 	inTheDeliveryGap(t, func() { r6CloseTurn(t, r.sk, r.local) })
 
 	code, err := r.send(t, turnA, "and one more thing", "devA:01JS0GAPKEYSCLOSE00000")
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("a send whose turn CLOSED between the check and the write = code %q err %v, want %q.\n"+
-			"The turn the reader was answering ended before the answer arrived. Typing it anyway "+
-			"starts a NEW turn with a message written as a continuation of the old one.",
-			code, err, protocol.CodeStaleTurn)
+	if err != nil || code != "" {
+		t.Fatalf("queued keystroke follow-up refused after turn close: code %q err %v", code, err)
 	}
-	r.assertPTYUntouched(t)
+	if lines := awaitSubmittedLines(r.att, 1, 20*time.Second); len(lines) != 1 || lines[0] != "and one more thing" {
+		t.Fatalf("session submitted %q, want the queued follow-up whole", lines)
+	}
 }
 
 // TestSlice0_KeystrokeSink_AStillCurrentTurnIsDeliveredThroughTheSameGap is the control that
@@ -226,19 +215,20 @@ func TestSlice0_KeystrokeSink_AStillCurrentTurnIsDeliveredThroughTheSameGap(t *t
 // its own words: an idle-time check dispatches turn/start, and "dispatching turn/start
 // mid-turn instead would QUEUE A SECOND TURN, so the owner's question and the phone's would
 // arrive as two separate conversations".
-func TestSlice0_BackendSink_ATurnOpeningInTheDeliveryGapRefusesStaleAndSendsNothing(t *testing.T) {
+func TestSlice0_BackendSink_ATurnOpeningBeforeSelectionSteersCurrentTurn(t *testing.T) {
 	r := newR7ComposerRig(t, true)
 
 	inTheDeliveryGap(t, func() { r7OpenNativeTurn(t, r) })
 
 	code, err := r.send(t, "", "reply to whatever is open", "devA:01JS0GAPBACKSTART00000")
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("a send whose turn OPENED between the check and the RPC = code %q err %v, want %q.\n"+
-			"The dispatch was chosen from a fact that had already expired: turn/start against a "+
-			"thread whose turn is now running queues a SECOND turn, and the owner's question and "+
-			"the phone's become two conversations.", code, err, protocol.CodeStaleTurn)
+	if err != nil || code != "" {
+		t.Fatalf("queued backend message refused after turn open: code %q err %v", code, err)
 	}
 	assertNoBackendCall(t, r.backend, "turn/start")
+	params := r7CallParams(t, r.backend, "turn/steer")
+	if got, _ := params["expectedTurnId"].(string); got != r7NativeTurnID {
+		t.Fatalf("steer names native turn %q, want current %q", got, r7NativeTurnID)
+	}
 	r.assertPTYUntouched(t)
 }
 
@@ -246,7 +236,7 @@ func TestSlice0_BackendSink_ATurnOpeningInTheDeliveryGapRefusesStaleAndSendsNoth
 // CLOSURE half. A steer names the CLI's own expectedTurnId, so this one is rejected by the
 // app-server's own precondition when it arrives -- but "rejected by the far end" reaches the
 // phone as an unclassified failure, not as the refusal that tells the reader what to do next.
-func TestSlice0_BackendSink_ATurnClosingInTheDeliveryGapRefusesStaleAndSendsNothing(t *testing.T) {
+func TestSlice0_BackendSink_ATurnClosingBeforeSelectionStartsTheNextTurn(t *testing.T) {
 	r := newR7ComposerRig(t, true)
 	daemonTurn := r7OpenNativeTurn(t, r)
 
@@ -261,13 +251,11 @@ func TestSlice0_BackendSink_ATurnClosingInTheDeliveryGapRefusesStaleAndSendsNoth
 	})
 
 	code, err := r.send(t, daemonTurn, "and one more thing", "devA:01JS0GAPBACKCLOSE00000")
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("a send whose turn CLOSED between the check and the RPC = code %q err %v, want %q.\n"+
-			"An error the far end returns is not a remedy the reader can act on; stale_turn is, and "+
-			"the daemon already knew the turn was over before it sent anything.",
-			code, err, protocol.CodeStaleTurn)
+	if err != nil || code != "" {
+		t.Fatalf("queued backend follow-up refused after turn close: code %q err %v", code, err)
 	}
 	assertNoBackendCall(t, r.backend, "turn/steer")
+	_ = r7CallParams(t, r.backend, "turn/start")
 	r.assertPTYUntouched(t)
 }
 

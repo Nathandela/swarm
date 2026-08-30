@@ -96,6 +96,7 @@ class SessionDetailComposerTest {
         sendState: SendState? = null,
         refusal: String = "",
         structuredChat: Boolean = true,
+        ended: Boolean = false,
     ): SessionDetailPanel = SessionDetailScreen.of(
         SessionDetail(
             sessionId = session,
@@ -104,6 +105,7 @@ class SessionDetailComposerTest {
             title = "api refactor",
             composerState = sendState,
             composerRefusal = refusal,
+            ended = ended,
         ),
         TranscriptScreen.of(items),
         SessionLease(sessionId = session, online = online),
@@ -180,27 +182,58 @@ class SessionDetailComposerTest {
     }
 
     @Test
-    fun `a torn session has no composer at all and says why`() {
-        val p = panel(items = listOf(agent("before"), gap()), structuredChat = false)
+    fun `a history gap keeps the live composer sendable and leaves the warning in the transcript`() {
+        val p = panel(items = listOf(agent("before"), gap()), structuredChat = true)
         assertEquals(
-            "ADR-017 T2 rule 2: structured_chat=false means there is NO message sink, so a " +
-                "composer over one is a message that goes in and can never be shown",
-            // MOVED: this fixture holds a `gap()` element, so the state it lands in is the
-            // one that names what actually happened -- the record tore -- rather than the
-            // catch-all that also covered "no record was ever authored".
+            "a durable-history gap is a warning about retained chronology, not proof that the " +
+                "session lost its live message sink",
             ComposerAvailability.TORN,
             p.composerAvailability,
         )
         val root = view(p)
         assertTrue(
-            "the composer bar is still offered over a session whose structured record tore, so " +
-                "the surface pins a control promising a verb the session structurally lacks",
-            !p.composerIsBar,
+            "the composer shell disappeared because retained history has a gap",
+            p.composerIsBar,
         )
-        assertNotNull(
-            "the composer vanished with no explanation, which reads as a bug rather than as a " +
-                "capability the machine lost",
+        assertTrue(
+            "a live message sink was disabled because its retained history has a gap",
+            p.composerCanSend,
+        )
+        assertNull(
+            "the inline shut explanation was duplicated inside the scrolling transcript",
             root.kitFind(DetailTag.COMPOSER_ABSENT),
+        )
+        assertNull(
+            "the history warning was repeated as composer-shut copy even though the gap card " +
+                "already explains the missing chronology",
+            p.composerShut,
+        )
+    }
+
+    @Test
+    fun `a session with chat off keeps the disabled composer shell and normal transcript`() {
+        val p = panel(items = listOf(agent("retained history")), structuredChat = false)
+        assertEquals(ComposerAvailability.NO_CHAT, p.composerAvailability)
+        assertTrue("chat-off replaced the normal composer shell", p.composerIsBar)
+        assertFalse("chat-off still authorizes composer_send", p.composerCanSend)
+        assertEquals("Chat is off for this session.", p.composerShut?.placeholder)
+        assertNull(
+            "chat-off drew a replacement sentence in the transcript instead of an inline " +
+                "notice in the pinned shell",
+            view(p).kitFind(DetailTag.COMPOSER_ABSENT),
+        )
+    }
+
+    @Test
+    fun `an ended session keeps readable history and a disabled composer shell`() {
+        val p = panel(items = listOf(settledAgent("final answer")), ended = true)
+        assertEquals(ComposerAvailability.ENDED, p.composerAvailability)
+        assertTrue("ended history lost the normal composer shell", p.composerIsBar)
+        assertFalse("an ended session still authorizes composer_send", p.composerCanSend)
+        assertEquals("This session has ended", p.composerShut?.placeholder)
+        assertNull(
+            "ended drew its notice inside the scrolling history instead of the pinned shell",
+            view(p).kitFind(DetailTag.COMPOSER_ABSENT),
         )
     }
 

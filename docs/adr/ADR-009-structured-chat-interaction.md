@@ -106,9 +106,10 @@ The 2026-07-24 Decision 1 keystroke transport — sealed mailbox envelopes under
 `ContentKey`, gateway-side seq gate, riding the lease rather than per-keystroke signatures — is
 unchanged. What changes is what the phone *authors* on it. It no longer authors raw keystrokes:
 there is no keyboard left to type them, prompt-card decisions are signed `ActionApprove` ops per (4),
-and a **composer send** is a distinct remote-tier op carrying `(session, expected_turn, text)` per
-(8) — lease-authorized and live-only like the keystrokes it replaces, but shaped so the daemon can
-read the precondition it must enforce. Structured items are the durable, replayable surface; input
+and a **composer send** is a distinct remote-tier op carrying
+`(session, session_instance, expected_turn, text)` per (8) — live-only like the keystrokes it
+replaces, but shaped so the daemon can bind a delayed send to the exact session incarnation and
+retain the rendered turn as advisory diagnostics. Structured items are the durable surface; input
 verbs remain live-only. Decision G (concurrent owner + phone
 control, and the A4/TUI remote-lease indicator follow-up) is untouched.
 
@@ -176,14 +177,23 @@ authorization.
 Three mechanics are adopted from the Codex source audit and are now required: pending approval
 requests are **re-delivered to a reconnecting client**; an `approval_resolved` event fires even when
 a request is **cancelled or superseded**, so stale cards dismiss on every surface; and
-composer/steering input carries an **`expected_turn` precondition**, which kills the race between
-what the phone rendered and what the user tapped. The daemon is the enforcer, and it holds no
-`ContentKey` and reads an already-ordered raw byte stream — so `expected_turn` cannot ride raw
-`TDataIn`, and the composer send is the control op of (5) instead. This **narrows** the 2026-07-24
+Stop carries a strict **`expected_turn` precondition**, while composer delivery carries a required
+**`session_instance` fence** and uses daemon FIFO order/current provider state. The daemon is the
+enforcer, and it holds no `ContentKey` and reads an already-ordered raw byte stream — so these
+coordinates cannot ride raw `TDataIn`, and the composer send is the control op of (5) instead.
+This **narrows** the 2026-07-24
 Decision 1 GG-7 clause ("the input channel adds NO new GG-7-covered `Control` fields",
 `ADR-007-remote-access.md:462-465`): the composer-send op and its `expected_turn` field take a
 `protocol.md` field-table row in the commit that adds them. The narrowing is confined to this one
 op; keystroke framing, resize and `take_control` keep the clause as written.
+
+> **Amendment — ordered conversational sends.** `expected_turn` remains signed render context
+> for compatibility and diagnostics, but is no longer a stale-turn precondition for
+> `composer_send`. Messages are accepted into a daemon-owned per-session FIFO and each head is
+> applied to current provider state. `session_instance` is required, signed, and revalidated at
+> the FIFO head so a delayed message cannot land in a replacement process under the same id. The
+> strict turn precondition remains on `turn_interrupt`, whose destructive target must still be the
+> exact rendered turn. This separates dialog ordering from destructive-target concurrency.
 
 **9. The relay is untouched.** Self-host only, untrusted, ciphertext-only. Nothing here makes it
 smarter; ack and replay semantics stay endpoint-to-endpoint, and the B133 trust boundary — wire

@@ -273,17 +273,10 @@ func (a *App) performMailboxDiscard(cl *relay.Client, acks *transport.AckBatcher
 			finish("", err)
 			return true
 		}
-		for _, it := range items {
-			receipt, err := a.accept(req.ctx, it.Envelope, it.Cursor)
-			// ErrStaleAge has two meanings. An old replay whose authenticated sequence is
-			// already covered durably is ACKED and is ordinary compaction, not permission
-			// to erase the fresh tail. Only the unique, unacked refusal is the blocker this
-			// explicit gesture authorizes us to discard. Stop at that blocker so a later
-			// frame cannot move the durable relay cursor past the evidence before recovery.
-			if errors.Is(err, crypto.ErrStaleAge) && !receipt.Acked {
-				staleAge = true
-				break
-			}
+		staleAge, err = diagnoseMailboxPage(req.ctx, items, a.accept)
+		if err != nil {
+			finish("", err)
+			return true
 		}
 	}
 	// Healthy frames may have repaired the transport while RefreshRoster woke the reader.
@@ -1322,9 +1315,7 @@ func (a *App) drainWait(ctx context.Context, cl *relay.Client) {
 			return
 		}
 		a.waitSupport.Store(waitSupported)
-		for _, it := range items {
-			a.accept(ctx, it.Envelope, it.Cursor)
-		}
+		a.acceptMailboxPage(ctx, items)
 		// Hand the page's committed high-water to the batcher and re-park immediately.
 		// Recording is lock-order-safe (a.mu is not held) and does no I/O; the batcher's
 		// own tick meters the flush. The silent-relay bound does not regress: the next
@@ -1451,9 +1442,7 @@ func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 		if err := a.adoptRelayIncarnation(cl.MailboxIncarnation()); err != nil {
 			return
 		}
-		for _, it := range items {
-			a.accept(ctx, it.Envelope, it.Cursor)
-		}
+		a.acceptMailboxPage(ctx, items)
 		if err := a.flushAcks(ctx, cl, ackGeneration); errors.Is(err, relay.ErrMailboxCursorResetRequired) {
 			// A manual recovery crossed this already-returned poll page. Its coalesced
 			// cursor belongs to the retired mailbox generation and must not leak into
@@ -1472,6 +1461,49 @@ func (a *App) drainPoll(ctx context.Context, cl *relay.Client) {
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+type mailboxAccept func(context.Context, []byte, uint64) (phonecore.Receipt, error)
+
+func blocksMailboxPage(receipt phonecore.Receipt, err error) bool {
+	return err != nil && !receipt.Acked && receipt.Disposition == phonecore.ReceiptRetained
+}
+
+// acceptMailboxPage sweeps one relay page until the core says an errored item must be
+// retained. Discardable parse/auth/decode failures deliberately do not stop the sweep: an
+// untrusted relay could otherwise pin every valid frame behind one malformed head for the
+// retention window (PB-SYNC-6). A retained stale-age/custody refusal or failed durable
+// commit is the opposite case: accepting a later cursor would make an eventual coalesced ack
+// compact the only recoverable copy of the refused item.
+func acceptMailboxPage(ctx context.Context, items []relay.Item, accept mailboxAccept) {
+	for _, it := range items {
+		receipt, err := accept(ctx, it.Envelope, it.Cursor)
+		if blocksMailboxPage(receipt, err) {
+			break
+		}
+	}
+}
+
+// diagnoseMailboxPage applies the same page fence while distinguishing the one retained
+// condition the explicit roster-refresh gesture is authorized to discard. Every other
+// retained error is surfaced to the caller; treating it as a healthy diagnosis would let
+// the later refresh/ack compact recoverable content the core deliberately kept.
+func diagnoseMailboxPage(ctx context.Context, items []relay.Item, accept mailboxAccept) (staleAge bool, err error) {
+	for _, it := range items {
+		receipt, acceptErr := accept(ctx, it.Envelope, it.Cursor)
+		if !blocksMailboxPage(receipt, acceptErr) {
+			continue
+		}
+		if errors.Is(acceptErr, crypto.ErrStaleAge) {
+			return true, nil
+		}
+		return false, acceptErr
+	}
+	return false, nil
+}
+
+func (a *App) acceptMailboxPage(ctx context.Context, items []relay.Item) {
+	acceptMailboxPage(ctx, items, a.accept)
 }
 
 // accept runs the core's durable receive transaction for one envelope, then -- only for a

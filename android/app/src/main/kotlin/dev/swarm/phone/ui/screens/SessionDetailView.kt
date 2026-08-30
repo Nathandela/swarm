@@ -210,20 +210,9 @@ object DetailTag {
     const val OUTCOME = "detail.outcome"
 
     /**
-     * What the screen says INSTEAD of the composer, for a session whose structured record tore
-     * (ADR-017 T2 rule 2, Mirror M2.4).
-     *
-     * IT IS ITS OWN TAG AND NOT A STATE ON THE BAR, which is exactly the point: the bar is
-     * absent, not disabled, so there is no composer to carry a state. A test that could only ask
-     * "is the composer disabled" would pass over the case where it is still there.
-     *
-     * AND IT IS WHY THE SENTENCE STAYED IN THIS COLUMN WHILE THE BAR LEFT IT. The bar is pinned
-     * outside the scroll because it is a control the thumb must always reach; the sentence is not
-     * a control at all -- it is the conversation's last line, saying why there is nothing to type
-     * with -- and pinning it would reserve permanent height at the bottom of the screen to repeat
-     * a fact the reader has already read. [SessionDetailPanel.composerIsBar] is the ONE predicate
-     * that decides which of the two a session gets, read by this column and by the surface that
-     * pins the other.
+     * Legacy tag for the pre-2026-08-30 absent-composer composition. The current panel always keeps
+     * the pinned shell and puts its shut reason in that region, so production rendering does not add
+     * this row. The tag stays while the defensive compatibility branch below still exists.
      */
     const val COMPOSER_ABSENT = "detail.composer.absent"
 
@@ -507,16 +496,11 @@ fun sessionDetailView(
     // rule quoted about a component that is no longer here is how a file comes to explain a
     // position nobody chose.
     //
-    // **AND THEY ARE NOT FOLLOWING THE BAR OUT, BECAUSE THE DRAWING DOES NOT PUT THEM THERE**
-    // (plan H.7, and `docs/design/conversation-drawing.html` is authoritative for where a tabled
-    // string is drawn). All three of these sentences are sited on the MESSAGE and not on the
-    // chrome: `bubble.pending`, `bubble.refused` and `bubble.stale` are the line drawn directly
-    // beneath the sender's own bubble, inside the list, beside the bubble they are about. Pinning
-    // them under the composer would put tabled copy somewhere the sheet draws nothing, and the
-    // slice that settles a bubble against its own echo (plan H.4) would then have to take it back
-    // -- or, worse, would leave one send reported in two places at once, which is the plan's
-    // defect 2 exactly. They stay at the foot of the column until that slice moves them onto the
-    // bubble, which is a move this file does not own the transcript to make.
+    // A SEALED OPERATION'S REFUSAL NO LONGER REACHES THIS REGION. ComposerSendLedger attaches its
+    // exact copy and diagnostic to that operation's pending transcript bubble, so two sends can
+    // settle out of order without one global notice describing the other. What remains here is
+    // the latest pending state label and a facade-local refusal that never acquired an operation
+    // id or bubble; neither has another transcript element it could honestly attach to.
     //
     // It is the ERROR variant only for a refusal; a pending or delivered send is this screen
     // reporting its own state, and painting that `--p-err` would report a refusal nobody made
@@ -554,23 +538,10 @@ fun sessionDetailView(
     // A COMPOSER THAT CANNOT SEND SAYS WHY, IN THE WORDS OF ITS OWN REASON: one sentence per
     // state rather than one accusation over four (ComposerModel.shutCopyFor).
     //
-    // ABSENT AND DISABLED ARE DIFFERENT ANSWERS, and which one a state gets turns on whether
-    // the session HAS A MESSAGE SINK AT ALL. A torn record, a machine that reports no chat
-    // surface and an ended session have none, and never will for this instance -- so a
-    // composer over one is a message that goes in and can never be shown, and the honest
-    // shape is the sentence where the composer would have been.
-    //
-    // OFFLINE IS NOT ONE OF THOSE. The sink exists and the link is coming back, so the draft
-    // is still worth typing and a control that vanished would teach the reader the feature
-    // was gone. It keeps the bar and carries its reason inside it -- which is more than it
-    // did before, where an offline session drew a composer visually identical to a live one
-    // and the availability state that would have said otherwise was read by nothing.
-    //
-    // ONE PREDICATE, TWO FILES: [SessionDetailPanel.composerIsBar] decides which of the two a
-    // session gets, and the surface reads the SAME property to decide whether to pin a bar. The
-    // condition used to be spelled out here, in this file only, because there was only one place
-    // it could be spent -- and now that the bar is pinned outside this column and the sentence is
-    // inside it, a second copy would be how a session comes to draw both.
+    // CURRENT COMPOSITION NEVER ENTERS THIS BRANCH: [SessionDetailPanel.composerIsBar] is true for
+    // every open session, and the pinned shell carries the exact shut reason. Keep the branch
+    // defensive until the legacy tag/source-gate surface is retired; it must not be read as an
+    // alternate product route.
     val shut = panel.composerShut
     if (!panel.composerIsBar && shut != null) {
         column.addView(

@@ -278,6 +278,20 @@ func (c *Client) finish(reason error) {
 // Call sends a request and blocks until its reply arrives, the context ends, or the
 // connection closes. out, when non-nil, receives the result member.
 func (c *Client) Call(ctx context.Context, method string, params, out any) error {
+	return c.callAtWriteBoundary(ctx, method, params, out, nil, nil)
+}
+
+// CallAtWriteBoundary is Call with an atomicity seam around the request write. beforeWrite
+// runs after params are encoded and the reply waiter is installed, immediately before bytes
+// are written. When it succeeds, afterWrite runs immediately after the write attempt (success
+// or failure) and before waiting for the reply. The composer queue uses this narrow boundary
+// to order durable Begin + request write against Stop without holding its lane lock for the
+// potentially 30-second reply wait.
+func (c *Client) CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error {
+	return c.callAtWriteBoundary(ctx, method, params, out, beforeWrite, afterWrite)
+}
+
+func (c *Client) callAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error {
 	body, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("appserver: marshal %s params: %w", method, err)
@@ -294,13 +308,25 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 	c.waiters[key] = ch
 	c.mu.Unlock()
 
-	if err := c.write(ctx, wireFrame{
+	if beforeWrite != nil {
+		if err := beforeWrite(); err != nil {
+			c.mu.Lock()
+			delete(c.waiters, key)
+			c.mu.Unlock()
+			return err
+		}
+	}
+	writeErr := c.write(ctx, wireFrame{
 		JSONRPC: "2.0", ID: json.RawMessage(key), Method: method, Params: body,
-	}); err != nil {
+	})
+	if afterWrite != nil {
+		afterWrite()
+	}
+	if writeErr != nil {
 		c.mu.Lock()
 		delete(c.waiters, key)
 		c.mu.Unlock()
-		return err
+		return writeErr
 	}
 
 	select {

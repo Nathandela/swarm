@@ -94,6 +94,9 @@ var _ ComposerSender = (*r6ComposerBackend)(nil)
 
 // r6ComposerFrame builds one authorized-shaped composer_send frame around body.
 func r6ComposerFrame(rep Control, opID string, body *ComposerSendReq) Control {
+	if body != nil && body.SessionInstance == "" {
+		body.SessionInstance = "test-session-instance"
+	}
 	exp := time.Now().Add(time.Minute)
 	c := Control{
 		Op: OpComposerSend, EndpointID: rep.EndpointID,
@@ -114,13 +117,13 @@ func r6ComposerFrame(rep Control, opID string, body *ComposerSendReq) Control {
 // signature that verifies over different bytes than the daemon reads.
 func TestR6ComposerSend_WireShapeRoundTripsUnderItsOwnKeys(t *testing.T) {
 	c := Control{Op: OpComposerSend, ComposerSend: &ComposerSendReq{
-		Session: "ep/sess1", ExpectedTurn: "01JTURN", Text: "ship it",
+		Session: "ep/sess1", SessionInstance: "instance-1", ExpectedTurn: "01JTURN", Text: "ship it",
 	}}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"composer_send"`, `"session":"ep/sess1"`, `"expected_turn":"01JTURN"`, `"text":"ship it"`} {
+	for _, key := range []string{`"composer_send"`, `"session":"ep/sess1"`, `"session_instance":"instance-1"`, `"expected_turn":"01JTURN"`, `"text":"ship it"`} {
 		if !strings.Contains(string(raw), key) {
 			t.Errorf("serialized composer_send Control %s lacks %s", raw, key)
 		}
@@ -136,6 +139,27 @@ func TestR6ComposerSend_WireShapeRoundTripsUnderItsOwnKeys(t *testing.T) {
 	// pre-R6 shape (schema.Control's own rule: every field omitempty).
 	if raw, err := json.Marshal(Control{Op: OpKill}); err != nil || strings.Contains(string(raw), "composer_send") {
 		t.Errorf("a composer-less Control leaks the new key: %s (err %v)", raw, err)
+	}
+}
+
+func TestR6ComposerSend_MissingSessionInstanceIsUpgradeRefusalBeforeDelivery(t *testing.T) {
+	b := newR6ComposerBackend()
+	sock := serveRemoteAPI(t, b)
+	rc := rawDial(t, sock)
+	rep := rc.hello(Version, []string{CapRemoteGateway})
+	body := &ComposerSendReq{Session: rep.EndpointID + "/sess1", Text: "must be incarnation-bound"}
+	frame := r6ComposerFrame(rep, "devA:01JMISSINGINSTANCE00000", body)
+	// r6ComposerFrame defaults modern tests to a valid instance. Clear it after framing to
+	// model an authenticated legacy three-field phone body; the handler must authenticate
+	// compatibly, then refuse upgrade-required rather than deliver it unbound.
+	body.SessionInstance = ""
+	rc.writeControl(frame)
+	got := rc.readControl()
+	if got.Op != OpError || got.ErrorCode != CodeInvalidField || !strings.Contains(got.Error, "session_instance") {
+		t.Fatalf("missing session_instance = %+v, want invalid_field upgrade refusal", got)
+	}
+	if sends := b.sendCalls(); len(sends) != 0 {
+		t.Fatalf("missing session_instance reached ComposerSend %d times", len(sends))
 	}
 }
 

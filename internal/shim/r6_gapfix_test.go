@@ -68,6 +68,150 @@ func TestHookSpool_CompactNeverErasesAProvenGap(t *testing.T) {
 	_ = before
 }
 
+func TestHookSpool_IncarnationIsStableAcrossReopenAndChangesOnRecreate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), HookSpoolFile)
+	s1, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("OpenHookSpool (first): %v", err)
+	}
+	first := s1.IncarnationID()
+	if first == "" {
+		t.Fatal("fresh spool has an empty incarnation id")
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("close first spool: %v", err)
+	}
+
+	s2, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("OpenHookSpool (reopen): %v", err)
+	}
+	if got := s2.IncarnationID(); got != first {
+		t.Fatalf("reopen changed spool incarnation from %q to %q", first, got)
+	}
+	if err := s2.Close(); err != nil {
+		t.Fatalf("close reopened spool: %v", err)
+	}
+
+	if err := writeHookFloor(path, 99); err != nil {
+		t.Fatalf("seed stale prior-incarnation floor: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove spool to create a fresh sequence space: %v", err)
+	}
+	s3, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("OpenHookSpool (recreated): %v", err)
+	}
+	defer func() { _ = s3.Close() }()
+	if got := s3.IncarnationID(); got == "" || got == first {
+		t.Fatalf("recreated spool incarnation = %q, want non-empty and different from %q", got, first)
+	}
+	if seq, err := s3.Append([]byte(`{"n":1}`)); err != nil || seq != 1 {
+		t.Fatalf("first Append in recreated sequence space = (%d, %v), want (1, nil)", seq, err)
+	}
+}
+
+func TestHookSpool_CrashAfterCreateBeforeGenerationCommitDoesNotReuseStaleSidecars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), HookSpoolFile)
+	old, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("open old spool: %v", err)
+	}
+	oldID := old.IncarnationID()
+	if _, err := old.Append([]byte(`{"old":1}`)); err != nil {
+		t.Fatalf("append old record: %v", err)
+	}
+	if err := old.Compact(1); err != nil {
+		t.Fatalf("compact old generation: %v", err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatalf("close old spool: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove old spool while retaining its sidecars: %v", err)
+	}
+
+	// Model process death in the former vulnerable window: O_CREATE has made the
+	// new empty spool visible, but the old floor and incarnation are still beside
+	// it. A restart must see the already-committed NEW generation, never interpret
+	// this empty file as the compacted tail of the old one.
+	crashed := false
+	testHookAfterHookSpoolCreate = func() { panic("simulated crash after spool create") }
+	func() {
+		defer func() {
+			if recover() != nil {
+				crashed = true
+			}
+		}()
+		_, _ = OpenHookSpool(path, 0)
+	}()
+	testHookAfterHookSpoolCreate = nil
+	if !crashed {
+		t.Fatal("creation crash seam did not fire")
+	}
+
+	restarted, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("reopen after simulated creation crash: %v", err)
+	}
+	defer func() { _ = restarted.Close() }()
+	if got := restarted.IncarnationID(); got == "" || got == oldID {
+		t.Fatalf("restart reused stale spool incarnation %q; want a new non-empty identity", got)
+	}
+	if restarted.AdoptedLegacySequence() {
+		t.Fatal("fresh crash-recovered generation was misclassified as adopted legacy")
+	}
+	if seq, err := restarted.Append([]byte(`{"new":1}`)); err != nil || seq != 1 {
+		t.Fatalf("first append after crash recovery = (%d, %v), want (1, nil)", seq, err)
+	}
+}
+
+func TestHookSpool_PreIdentityExistingFileAdoptsLegacyAndDiskOnlyLegacyIsExplicit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HookSpoolFile)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("seed pre-identity spool: %v", err)
+	}
+	s, err := OpenHookSpool(path, 0)
+	if err != nil {
+		t.Fatalf("open pre-identity spool: %v", err)
+	}
+	if !s.AdoptedLegacySequence() {
+		t.Fatal("existing pre-identity spool was not marked as an adopted legacy sequence space")
+	}
+	id := s.IncarnationID()
+	if err := s.Close(); err != nil {
+		t.Fatalf("close adopted spool: %v", err)
+	}
+	gotID, adopted, err := ReadHookSpoolIncarnation(path)
+	if err != nil {
+		t.Fatalf("read adopted identity: %v", err)
+	}
+	if gotID != id || !adopted {
+		t.Fatalf("adopted identity = (%q, %v), want (%q, true)", gotID, adopted, id)
+	}
+	info, err := os.Stat(hookSpoolIdentityPath(path))
+	if err != nil {
+		t.Fatalf("stat identity sidecar: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("identity sidecar mode = %04o, want 0600", info.Mode().Perm())
+	}
+
+	diskOnly := filepath.Join(dir, "old-hooks.spool")
+	if err := os.WriteFile(diskOnly, nil, 0o600); err != nil {
+		t.Fatalf("seed disk-only legacy spool: %v", err)
+	}
+	legacyID, legacy, err := ReadHookSpoolIncarnation(diskOnly)
+	if err != nil {
+		t.Fatalf("read disk-only legacy identity: %v", err)
+	}
+	if legacyID != LegacyHookSpoolIncarnation || !legacy {
+		t.Fatalf("disk-only identity = (%q, %v), want (%q, true)", legacyID, legacy, LegacyHookSpoolIncarnation)
+	}
+}
+
 // BLOCKER 2: an Append after a torn record must never fabricate a merged record body
 // by writing past the tear. It must refuse outright.
 func TestHookSpool_AppendAfterATearRefusesRatherThanFabricates(t *testing.T) {

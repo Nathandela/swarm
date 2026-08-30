@@ -39,7 +39,6 @@ import (
 
 	"github.com/Nathandela/swarm/internal/appserver"
 	"github.com/Nathandela/swarm/internal/daemon"
-	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/shim"
 )
 
@@ -304,7 +303,17 @@ func TestR7R3_TheRecordedRolloutRaceIsRETRIEDWithoutClaimingAnythingWasMissed(t 
 	// life of the session -- so it exits at once here, with no session registered, rather than
 	// spinning. Its behavioural fence over a real app-server is
 	// TestR7R4_AUserWhoThinksLongerThanTheJoinDeadlineIsNEVERPermanentlyDegraded.
-	sk.registerBackend("r7r3-rollout", "01a00339-a80e-72a0-966f-116427b6b9ce", conn)
+	// This unit test has no core session/instance; install only the retry loop's
+	// bookkeeping fixture directly. Production registration now requires an exact
+	// current instance because it is also a structured-sink proof boundary.
+	sk.backend.mu.Lock()
+	if sk.backend.live == nil {
+		sk.backend.live = map[string]*sessionBackend{}
+	}
+	sk.backend.live["r7r3-rollout"] = &sessionBackend{
+		threadID: "01a00339-a80e-72a0-966f-116427b6b9ce", conn: conn,
+	}
+	sk.backend.mu.Unlock()
 	sk.subscribeSessionThread("r7r3-rollout", conn, "01a00339-a80e-72a0-966f-116427b6b9ce")
 
 	if !sk.backendSubscribed("r7r3-rollout") {
@@ -365,9 +374,9 @@ func TestR7R3_EndingASessionCLOSESItsBackendConnection(t *testing.T) {
 // userMessage fired before this daemon existed, so:
 //
 //   - the phone rendered an IDLE session (no open turn, no `turn_id` on any item);
-//   - a composer send therefore carried `expected_turn: ""`, matched, and took the `turn/start`
-//     branch -- which deliverComposerText's own comment says "would QUEUE A SECOND TURN, so the
-//     owner's question and the phone's would arrive as two separate conversations";
+//   - a composer send therefore carried `expected_turn: ""`; the daemon must ignore that stale
+//     render context for message routing and steer the adopted current native turn, never start
+//     a competing one;
 //   - and Stop was impossible, because interruptTurn refuses an empty expected_turn.
 //
 // The in-code comment claimed the opposite in as many words ("it is what keeps the native id
@@ -393,12 +402,11 @@ func TestR7R3_ADaemonThatJoinsMIDTURNHoldsTheRunningTurnRatherThanReadingAsIdle(
 			"expected_turn")
 	}
 
-	// The send the phone would make against an idle-looking session is now REFUSED as stale,
-	// which is the whole point: a refusal the owner can retry, instead of a second conversation.
+	// The send the phone would make against an idle-looking render is accepted and routed by
+	// current daemon state. expected_turn is advisory for messages; no second turn is started.
 	code, err := r.send(t, "", "and what about 41?", "op-r3-second-turn")
-	if err == nil || code != protocol.CodeStaleTurn {
-		t.Errorf("a send naming NO turn was accepted (code %q, err %v) against a session with a "+
-			"running turn; that is the second-turn defect arriving by another door", code, err)
+	if err != nil || code != "" {
+		t.Fatalf("an advisory send from an idle-looking render was refused: code %q err %v", code, err)
 	}
 	for _, c := range r.backend.recorded() {
 		if c.Method == "turn/start" {
@@ -406,8 +414,8 @@ func TestR7R3_ADaemonThatJoinsMIDTURNHoldsTheRunningTurnRatherThanReadingAsIdle(
 		}
 	}
 
-	// ...and the send that names the adopted turn steers it, carrying the CLI'S OWN id -- so
-	// the native id really did survive a turn whose opening frame this daemon never saw.
+	// A send that names the adopted turn also steers it, carrying the CLI'S OWN id -- so both
+	// advisory render contexts converge on the same authoritative current state.
 	if code, err := r.send(t, turn, "and what about 41?", "op-r3-steer"); err != nil {
 		t.Fatalf("a send naming the adopted turn was refused: %v (code %q)", err, code)
 	}

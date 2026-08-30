@@ -5,9 +5,9 @@ package gate
 //
 // THE DEFECT. renderComposerVerdict wrote composerRefusal (drawn under the composer as
 // DetailTag.COMPOSER_NOTICE) AND called say(PressFeedback.ofRefusal(...)), which wrote the outcome
-// line and a toast carrying the same sentence: one refused send, said three times. The composer
-// notice is the single surface now, and the machine's own words -- which only the toast's mono
-// suffix used to carry -- ride beside it as composerRefusalDetail.
+// line and a toast carrying the same sentence: one refused send, said three times. The operation's
+// own refused bubble is the single surface now, and the machine's own words -- which only the
+// toast's mono suffix used to carry -- ride directly beneath that bubble through the send ledger.
 //
 // WHY A GREP OVER ONE FUNCTION: TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface's reason.
 // The Kotlin unit-test JVM never sees PhoneSurface, so what that function CALLS can only be pinned
@@ -26,10 +26,18 @@ func TestW23_ARefusedSendIsSaidOnceAndNeverToasted(t *testing.T) {
 			"and a toast on top of the composer notice, so one refused send says its sentence three "+
 			"times (phone refit W2.3). Body:\n%s", composer)
 	}
-	if !strings.Contains(composer, "composerRefusalDetail = verdict.detail") {
-		t.Errorf("renderComposerVerdict never keeps verdict.detail as composerRefusalDetail, so once "+
-			"the toast is gone the machine's own words reach nobody (W2.3's detail cell; the F4 class "+
-			"TestR6R3_TheTwoM3ReadsSayWhatTheMachineSaid fences). Body:\n%s", composer)
+	if !strings.Contains(composer, "composerSends.settle(operationId, verdict)") {
+		t.Errorf("renderComposerVerdict never settles the operation's own ledger entry, so the "+
+			"refusal and machine detail reach no bubble. Body:\n%s", composer)
+	}
+	ledger := kotlinCodeOnly(r8AllProductionKotlin(t)["dev/swarm/phone/ui/screens/ComposerSendLedger.kt"])
+	if !strings.Contains(ledger, "detail = verdict.detail") {
+		t.Errorf("ComposerSendLedger discards verdict.detail, so once the toast is gone the " +
+			"machine's own words reach nobody (W2.3's detail cell)")
+	}
+	if !strings.Contains(ledger, "notice = verdict.notice") {
+		t.Errorf("ComposerSendLedger discards verdict.notice, so the refused bubble has a red border " +
+			"but no exact refusal copy")
 	}
 	// THE CONTROL: a refused Stop is not a composer refusal and keeps its toast
 	// (SessionDetailVerdictTest, `a refused interrupt says the turn was not stopped ...`).

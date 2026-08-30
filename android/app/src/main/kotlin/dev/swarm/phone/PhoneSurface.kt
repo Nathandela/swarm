@@ -62,7 +62,7 @@ import dev.swarm.phone.ui.kit.notice
 import dev.swarm.phone.ui.kit.overflowControl
 import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.textField
-import dev.swarm.phone.ui.screens.PendingSend
+import dev.swarm.phone.ui.screens.ComposerSendLedger
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
 import dev.swarm.phone.ui.screens.ApprovalSheetPanel
@@ -503,11 +503,7 @@ class PhoneSurface(
             // The last send's report goes the moment a new one is planned: a notice about a
             // refusal the user has already answered by typing again is a report of the wrong
             // press.
-            composerSendFor = target
-            composerSentText = line
-            composerRefusal = ""
-            composerRefusalDetail = ""
-            composerSendState = SendState.PENDING
+            localComposerRefusal = null
             Press(
                 // COMMAND, and the plane change IS the verb change: `composer_send` is a SIGNED
                 // operation that resolves, so it rides the lane that polls `awaitConn` for a
@@ -520,19 +516,25 @@ class PhoneSurface(
                 // [rememberComposerSend] for the refusals that arrive later, which is every
                 // refusal the daemon authors.
                 refused = { routed ->
-                    composerSendState = SendState.REFUSED
-                    composerRefusal = routed.state.name
+                    localComposerRefusal = LocalComposerRefusal(
+                        sessionId = target,
+                        state = SendState.REFUSED,
+                        refusal = routed.state.name,
+                    )
                 },
-                // THE SETTLE LATCHES THE OPERATION AND CHANGES NOTHING ELSE (review round 2).
+                // THE SETTLE LATCHES THE OPERATION AND RELEASES ONLY ITS UNCHANGED DRAFT.
+                // [rememberComposerSend] records the operation first, then exact-match clears the
+                // live field so the next queued message can be typed; edits made while this command
+                // crossed the lane survive. It does not declare the operation SENT.
                 //
-                // IT USED TO SET `SendState.SENT` AND RUN `typed.text.clear()` HERE, under a
+                // HISTORICALLY IT SET `SendState.SENT` AND RAN an unconditional clear HERE, under a
                 // comment reading "THE FIELD IS EMPTIED ONLY ON THE MACHINE'S ACCEPTANCE" --
                 // which was false. `VerbDispatch.press` settles on the FACADE CALL returning, and
                 // `App.ComposerSend` returns its `Op` the instant the envelope is appended to the
                 // mailbox. So the composer reported a send as delivered on LOCAL SEALING, and a
                 // send the daemon went on to refuse was shown as sent with the user's words
                 // already erased.
-                settle = { answer -> rememberComposerSend(answer) },
+                settle = { answer -> rememberComposerSend(answer, target, line) },
             )
         }
     }
@@ -695,9 +697,8 @@ class PhoneSurface(
      *
      * IT IS A `notice` AND NOT A SLOT THAT COMES AND GOES, because an empty one draws no height at
      * all -- `notice` spends no padding -- so the region's permanent children never change and
-     * the composer is never re-parented. The three shut states that lose the bar say the same two
-     * sentences INSIDE the scroll instead, where the composer would have been
-     * (`DetailTag.COMPOSER_ABSENT`); this is the fourth, which keeps its bar.
+     * the composer is never re-parented. Every shut state keeps this same shell; the placeholder
+     * and this detail line change in place.
      */
     private val composerShutDetail: TextView = noticeLine()
 
@@ -1151,10 +1152,10 @@ class PhoneSurface(
         /** Whether the conversation composition is the one on screen. */
         val conversation: Boolean,
         /**
-         * Whether that conversation gets a pinned composer at all
-         * ([SessionDetailPanel.composerIsBar]). A session that loses its message sink -- a torn
-         * record, an ended agent -- loses the bar rather than being handed a disabled one, and
-         * that is a change of COMPOSITION, so it belongs in the key rather than in a redraw.
+         * Whether that conversation gets the pinned composer shell
+         * ([SessionDetailPanel.composerIsBar]). Current session panels always answer true; the key
+         * remains structural so a non-conversation or future explicit composition can still omit
+         * the region without a half-rebuild.
          */
         val composer: Boolean,
         /**
@@ -1381,41 +1382,18 @@ class PhoneSurface(
      */
     private var stopNotSentFor: String = ""
 
-    /**
-     * The session the last composer send was issued for, and what became of it (Mirror M2.4,
-     * ADR-009 (6): "pending -> sent -> refused ... a send that cannot get through is shown
-     * refused, not silently swallowed").
-     *
-     * THEY ARE A PRESS AND NOT A SESSION FACT, on [stopNotSentFor]'s argument exactly: the state
-     * belongs to a send this surface issued, so it is remembered beside the session it was issued
-     * for and a send against one session never reports on another. Cleared when a new send is
-     * planned and when the drill-down closes.
-     */
-    private var composerSendFor: String = ""
+    /** Every locally sealed composer command, kept in sealing order until outcome and echo settle. */
+    private val composerSends = ComposerSendLedger()
 
-    /**
-     * The words that were actually sent, captured at the press (owner ruling R6).
-     *
-     * IT IS NOT THE COMPOSER'S TEXT. The draft is spent on the daemon's acceptance and the reader
-     * is free to start typing the next line immediately; reading the field to draw the pending
-     * bubble would show them their NEXT message attributed to the one already in flight.
-     */
-    private var composerSentText: String = ""
+    /** A refusal before an operation was sealed; its draft remains in the field for retry. */
+    private data class LocalComposerRefusal(
+        val sessionId: String,
+        val state: SendState,
+        val refusal: String,
+        val detail: String = "",
+    )
 
-    private var composerSendState: SendState? = null
-
-    /**
-     * PB-APP-9's routed ERROR STATE for that send, as the token `ComposerModel.noticeFor` speaks.
-     *
-     * IT IS THE STATE AND NOT THE MESSAGE. `stale_turn` is ORDINARY -- the conversation moved on
-     * between the render and the tap -- and its remedy is mild, so it has copy of its own; every
-     * other refusal shares the generic wording. Routing on the token rather than on the sentence
-     * is what keeps that decision in one table (`ErrorRouter`) instead of in a string match here.
-     */
-    private var composerRefusal: String = ""
-
-    /** The machine's own words for that refusal, for the notice's detail cell (W2.3). */
-    private var composerRefusalDetail: String = ""
+    private var localComposerRefusal: LocalComposerRefusal? = null
 
     /**
      * The four Wave R6 operations this surface has issued and not yet claimed an answer for
@@ -1440,8 +1418,6 @@ class PhoneSurface(
      * asked for. [renderVerdicts] runs on every draw of every destination, so all four resolve
      * wherever the user has gone.
      */
-    private var composerOp: String = ""
-
     private var interruptOp: String = ""
 
     /** One sealed history read waiting for its machine-authored outcome. */
@@ -1844,12 +1820,6 @@ class PhoneSurface(
         inboxRefresh.refused()
         pairing.release()
 
-        // ADR-017 T4-b: the watch goes with the screen. Leaving the app is leaving the screen,
-        // and a watch held across it is the machine rendering, sealing and appending full screens
-        // for a phone that is not looking. The facade's own severance verb below withdraws the
-        // INPUT authority; this withdraws the READ.
-        reconcileTerminalWatch(bridge = null, session = null)
-
         // THE THIRD THING THAT CAN OUTLIVE THIS SCREEN, and the cheapest to forget: row 1's toast
         // is a view plus a queued `Handler` callback, and `PairingSurface.release` clears its own
         // poller for exactly this reason. A message shown as the user leaves is one they did not
@@ -2196,7 +2166,7 @@ class PhoneSurface(
         // THE MODEL'S, NOT THIS SURFACE'S. `keyboardEnabled` is the link, and a surface that
         // decided the keyboard from its own flag would be a second copy of a policy the model
         // already states -- which is how the lease clause survived here unread for a wave.
-        setKeyboardEnabled(lease.keyboardEnabled)
+        setKeyboardEnabled(lease.keyboardEnabled && detailDrawn?.composerCanSend == true)
     }
 
     /**
@@ -2572,10 +2542,9 @@ class PhoneSurface(
                     context = activity,
                     header = headerHost,
                     content = contentHost,
-                    // NULL IS A STATE AND NOT AN ABSENCE. A session with no message sink draws no
-                    // bar at all rather than a disabled one (ADR-017), and the sentence saying why
-                    // is drawn by the column inside the scroll, where the reader is looking. The
-                    // predicate is the panel's own, so the two cannot disagree.
+                    // Every conversation currently supplies this permanent shell. The defensive
+                    // nullable scaffold slot belongs to composition, not capability: unavailable,
+                    // offline and ended sessions keep the bar and change its enabled state/copy.
                     composer = composerRegion.takeIf { next.composer },
                     // KEPT, AND IT IS ONE DECISION PER PART RATHER THAN ONE DECISION (plan B.2).
                     // The bar goes because a conversation is a place you go INTO; the strip stays
@@ -2822,51 +2791,8 @@ class PhoneSurface(
      * @param inbox null for the same reason.
      */
     private fun drawContent(bridge: FacadeBridge?, inbox: InboxScreen?) {
-        // ADR-017 T1: THREE DESTINATIONS, AND THE MACHINE PICKS -- asked BEFORE anything about
-        // the chat screen is decided. A session the daemon routed to `terminal_fallback` gets the
-        // sanitized terminal and never the chat screen, and -- the direction that matters -- a
-        // healthy structured session can never reach the fallback from here, because
-        // [FacadeBridge.terminalFallback] answers null for every destination but that one. It is
-        // not a branch a user can take: neither screen offers the other, which is T2 rule 4's "no
-        // route" made a property of this function rather than of a conditional somewhere else.
-        val fallback = if (destination == Destination.INBOX) {
-            detail?.let { open ->
-                if (bridge == null) {
-                    null
-                } else try {
-                    bridge.terminalFallback(open)
-                } catch (unreadable: Exception) {
-                    // Destination lookup is a render-time facade read. If it cannot be classified
-                    // as the ordinary roster-removal race, choose neither privileged destination,
-                    // close the stale drill-down, and leave the routed answer on the inbox.
-                    outcome.text = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty()).message
-                    detail = null
-                    null
-                }
-            }
-        } else {
-            null
-        }
-        // ADR-017 T4-b's OTHER HALF, and it is reconciled HERE because here is the one place that
-        // knows what is on the glass. A watch is a lease with a horizon: it must be renewed while
-        // the screen is up and CLOSED when the screen goes away. Before this, `watch()` was called
-        // from inside the fallback drawer on every redraw -- one sealed unsigned append per state
-        // change -- and `unwatch()`/`renew()` had no call site in the app at all, so the machine
-        // kept rendering, sealing and appending full screens for a screen the user had left.
-        reconcileTerminalWatch(bridge, if (fallback == null) null else detail)
         when (destination) {
             Destination.INBOX -> {
-                if (fallback != null) {
-                    if (!drawTerminalFallback(bridge!!, detail!!, fallback)) {
-                        // The session/routing disappeared after `fallback` was read but before
-                        // the grid. Close the stale drill in THIS draw and release any watch that
-                        // the same race managed to establish; no future event is required.
-                        detail = null
-                        reconcileTerminalWatch(bridge, session = null)
-                        drawInbox(inbox)
-                    }
-                    return
-                }
                 val panel = try {
                     detailPanel(bridge)
                 } catch (unreadable: Exception) {
@@ -3014,6 +2940,14 @@ class PhoneSurface(
         // updated in place keeps its FIRST record's cursor (IS-LAYER-3), so paging past the tail
         // would miss exactly the updates the event fired for.
         val chat = bridge.transcript(open, JOURNAL_FROM_THE_START, WHOLE_JOURNAL)
+        composerSends.observeEchoes(
+            open,
+            chat.items.filter { it.kind == "user_message" }.mapNotNullTo(mutableSetOf()) { item ->
+                item.operationId.takeIf { it.isNotEmpty() }
+            },
+        )
+        val latestSend = composerSends.latestFor(open)
+        val localRefusal = localComposerRefusal?.takeIf { it.sessionId == open }
         // M3.2's COLD OPEN, decided by the model and thrown once. `SessionDetailOpen.plan` says a
         // session this phone holds NO items for backfills on open -- a week-old session must show
         // its history rather than an empty well and a Repair button -- and that a re-open inside
@@ -3052,9 +2986,11 @@ class PhoneSurface(
                 stopNotSent = stopNotSentFor == open,
                 // ADR-009 (6)'s per-send state, and PB-APP-9's routed class for it -- both read
                 // back per session, so a send against one never reports on another.
-                composerState = composerSendState.takeIf { composerSendFor == open },
-                composerRefusal = if (composerSendFor == open) composerRefusal else "",
-                composerRefusalDetail = if (composerSendFor == open) composerRefusalDetail else "",
+                composerState = localRefusal?.state ?: latestSend?.state,
+                // Sealed sends carry their refusal beside their own bubble. This global slot is
+                // only for a facade-local refusal that never acquired an operation/bubble.
+                composerRefusal = localRefusal?.refusal.orEmpty(),
+                composerRefusalDetail = localRefusal?.detail.orEmpty(),
             ),
             TranscriptScreen.of(
                 chat.items,
@@ -3079,15 +3015,15 @@ class PhoneSurface(
                 answering = answeringItemId.takeIf { it.isNotEmpty() }?.let(::setOf).orEmpty(),
                 // OWNER RULING R6: the message this phone has sent and not yet seen come back.
                 //
-                // WITHOUT IT THE MESSAGE IS NOWHERE. The draft is spent on the daemon's acceptance
-                // and the transcript will not carry the line until the agent echoes it, so between
-                // those two moments the reader has pressed send and has nothing on screen -- and
-                // if the echo never lands, what they typed is gone with no evidence it existed.
+                // WITHOUT IT THE MESSAGE IS NOWHERE. Local sealing exact-match clears the live
+                // field so another message can be typed, while the transcript will not carry this
+                // line until the agent echoes it. The operation-owned bubble spans that interval
+                // and preserves the submitted text if the echo never lands.
                 //
                 // SCOPED TO THE SESSION IT WAS SENT TO, like the two composer fields above: a
                 // pending bubble is a fact about ONE conversation and must not follow the reader
                 // into another one.
-                pendingSend = pendingSendFor(open),
+                pendingSends = composerSends.pendingFor(open),
             ),
             // PB-INPUT-2 REACHES THE USER HERE NOW, and that is the peek's deletion landing rather
             // than a new fact: the sentence and the Take control button were that screen's, and this
@@ -3534,6 +3470,14 @@ class PhoneSurface(
         )
     }
 
+    /**
+     * The conversation column currently drawn by [drawDetail]. The direct JVM detail seam is not
+     * attached to [root]'s scaffold, so its composer and content have separate roots; exposing the
+     * owned content host keeps screen tests on the real production tree instead of reflecting a
+     * private field or accidentally inspecting only the pinned composer.
+     */
+    internal fun drawnDetailContent(): View = contentHost
+
     /** Route both stale-notice and in-transcript gap Reload through one bounded session read. */
     private fun reloadConversation(control: View) = press(control, ::conversationReloadPlan)
 
@@ -3589,9 +3533,8 @@ class PhoneSurface(
      * **THE FIELD'S HINT IS THE SHUT SENTENCE WHERE THERE IS ONE.** `composerPlaceholder` answers
      * "Message" or "Add feedback..." -- the two states of a composer that CAN send -- and for a
      * bar that is on screen and cannot, the honest words are the ones `ComposerModel` already
-     * computed for that exact state. Offline is the only such bar (the other three shut states
-     * lose the bar entirely and say so inside the scroll), and before this the reader saw a
-     * composer visually identical to a live one.
+     * computed for that exact state. All unavailable states keep this bar and update it in place;
+     * before this, offline looked identical to live while other states replaced the composer.
      *
      * IT IS CALLED ON BOTH DRAW PATHS for the header's reason: what it spends is derived from the
      * transcript, which is the one thing the patch lets through, so a region left un-drawn on the
@@ -3602,6 +3545,10 @@ class PhoneSurface(
      * index 0 and one removal at the end.
      */
     private fun drawComposerRegion(panel: SessionDetailPanel) {
+        // The shell is permanent; availability changes what it can do, not whether it exists.
+        // This call also makes direct detail draws (the JVM seam) obey the same capability gate
+        // before renderReady applies its transport clause.
+        setKeyboardEnabled(panel.composerCanSend)
         // "Stopped" was said over one turn of one session; it comes off when the drawn
         // conversation is another one, or that turn is no longer the open one -- closed, or
         // another opened -- and not before, because this runs in the very dispatch that sealed
@@ -4257,11 +4204,7 @@ class PhoneSurface(
         // cards the reader collapsed are a fact about the screen they were reading rather than
         // about the session. Carried across a departure they would greet the user on their return
         // with a refusal from before they left, over a conversation they had rearranged.
-        composerSendFor = ""
-        composerSentText = ""
-        composerSendState = null
-        composerRefusal = ""
-        composerRefusalDetail = ""
+        localComposerRefusal = null
         // AND THE ANSWER IN FLIGHT IS FORGOTTEN WITH THE SCREEN, on the same argument: a lock is a
         // fact about a press made on THIS visit, and one carried across a departure would greet
         // the reader on their return with a decision frozen behind an answer they can no longer
@@ -4450,34 +4393,6 @@ class PhoneSurface(
      * fact about the QUESTION and survives every redraw of the button. Set before the press for
      * [interruptPlan]'s reason exactly: read on the looper that owns the screen, never from a lane.
      */
-    /**
-     * Owner ruling R6's bubble, or null when this phone is holding nothing for [session].
-     *
-     * IT IS BUILT FROM WHAT WAS ACTUALLY SENT, never from the field: [composerSendFor] records the
-     * session the send was addressed to and [composerSentText] the words that went, both captured
-     * at the press. Reading the composer here instead would draw whatever the reader has since
-     * started typing, attributed to a message they already sent.
-     *
-     * THE OPERATION ID IS THE JOIN. [composerOp] is the id the send was issued under, and the
-     * daemon stamps the echo with it (`stampComposerEchoLocked`), so the transcript can tell this
-     * copy from the record's own item without comparing words -- which would collapse two
-     * identical sends into one.
-     *
-     * A REFUSED SEND STILL DRAWS. The words stay with the reason beside them, because nothing is
-     * silently swallowed and nothing is queued: a message that cannot go is refused visibly and
-     * kept where they can send it again.
-     */
-    private fun pendingSendFor(session: String): PendingSend? {
-        if (composerSendFor != session || composerOp.isEmpty()) return null
-        return when (composerSendState) {
-            SendState.PENDING, SendState.SENT ->
-                PendingSend(composerOp, composerSentText)
-            SendState.REFUSED, SendState.STALE_TURN ->
-                PendingSend(composerOp, composerSentText, refused = true)
-            null -> null
-        }
-    }
-
     private fun answerDecision(pressed: View, itemId: String, decision: ApprovalDecision) {
         val target = session
         answeringItemId = itemId
@@ -4712,33 +4627,27 @@ class PhoneSurface(
      *
      * THE DECISION IS [SessionDetailScreen.composerVerdictFor]'S AND NOT THIS FUNCTION'S, which
      * is this surface's standing split -- a model decides, a surface acts -- and it matters more
-     * here than anywhere: what a settle does to a draft cannot be unit-tested on this side of
-     * the AAR, and a composer that cleared the field on local sealing is what that blindness
-     * produced last round.
+     * here than anywhere: machine outcome settles only that operation's bubble. The live field was
+     * already released at local seal, and only when it still matched the captured text, so neither
+     * an out-of-order answer nor a refusal can erase a newer draft.
      *
      * THE CLAIM IS ONE-SHOT because `App.Outcome` answers from a durable map: a latched
      * operation re-claimed per draw would re-toast at whatever rate the user's agents produce
      * journal events (`renderPresetFlow`'s own recorded defect).
      */
     private fun renderComposerVerdict(bridge: FacadeBridge) {
-        if (composerOp.isEmpty()) return
-        val verdict = try {
-            SessionDetailScreen.composerVerdictFor(bridge.launchOutcome(composerOp), composerOp)
-        } catch (unreadable: Exception) {
-            // Unresolved is the honest state, and the next draw asks again.
-            return
+        for (operationId in composerSends.unansweredOperations()) {
+            val verdict = try {
+                SessionDetailScreen.composerVerdictFor(
+                    bridge.launchOutcome(operationId),
+                    operationId,
+                )
+            } catch (unreadable: Exception) {
+                // One unreadable operation must not prevent later sends from being claimed.
+                continue
+            }
+            composerSends.settle(operationId, verdict)
         }
-        if (!verdict.answered) return
-        composerOp = ""
-        composerSendState = verdict.state
-        composerRefusal = verdict.refusal
-        // THE MACHINE'S WORDS RIDE WITH THE REFUSAL (W2.3). The composer notice is a refusal's
-        // single surface: the say() that stood here wrote the outcome line and a toast carrying
-        // the same sentence, so one refused send said it three times. A refused Stop is not a
-        // composer refusal and keeps its say() (renderInterruptVerdict).
-        composerRefusalDetail = verdict.detail
-        // THE DRAFT IS SPENT ONLY HERE, and only on the answer that says it was delivered.
-        if (verdict.clearsDraft) typed.text.clear()
     }
 
     /** The Stop's own answer, claimed the way [renderKillVerdict] claims the kill's. */
@@ -4856,9 +4765,12 @@ class PhoneSurface(
     }
 
     /** Latch the composer_send this surface issued. See [rememberLease] for the `Any?`. */
-    private fun rememberComposerSend(answer: Any?) {
+    private fun rememberComposerSend(answer: Any?, target: String, sentText: String) {
         val issued = answer as? Op ?: return
-        composerOp = issued.operationID
+        composerSends.sealed(issued.operationID, target, sentText)
+        // Local sealing frees the composer for the next message. Preserve words edited while the
+        // command crossed the lane; only the exact draft captured by this press is spent here.
+        if (typed.text.toString() == sentText) typed.text.clear()
     }
 
     /**

@@ -263,6 +263,19 @@ type Server struct {
 	// must carry an operation_id (amendment D.0-A1/A4).
 	remoteTier bool
 
+	// composerFallback caches exact outcomes only for legacy/test backends that expose the
+	// old bool idempotency seam but not ComposerOperationExecutor. Production coreAPI uses
+	// the durable executor; this compatibility cache prevents coded replies degrading during
+	// one server lifetime without pretending it survives a process crash.
+	composerFallbackMu sync.Mutex
+	composerFallback   map[string]composerCachedOutcome
+
+	// composerOpLocks singleflights live requests sharing one operation_id across the
+	// whole claim -> send -> terminal-commit transaction. Durable phases handle process
+	// death; this bounded in-memory layer closes the live prepared/preflight/commit race.
+	composerOpMu    sync.Mutex
+	composerOpLocks map[string]*composerOperationLock
+
 	// severGen is a monotonic counter bumped on every severControl (re-audit finding A).
 	// take_control captures it BEFORE authorizing and re-checks it AFTER publishing
 	// cc.control under ctlMu; if a concurrent sever advanced it, the just-established lease
@@ -384,12 +397,14 @@ func NewServer(d DaemonAPI, endpointID string) *Server {
 // or the per-connection feed (NewServer/ServeConn) is layered on by the caller.
 func newServer(d DaemonAPI) *Server {
 	s := &Server{
-		d:      d,
-		conns:  make(map[*clientConn]struct{}),
-		leases: make(map[string]*sessionLease),
-		subs:   make(map[*clientConn]struct{}),
-		jsubs:  make(map[*clientConn]struct{}),
-		stop:   make(chan struct{}),
+		d:                d,
+		conns:            make(map[*clientConn]struct{}),
+		leases:           make(map[string]*sessionLease),
+		subs:             make(map[*clientConn]struct{}),
+		jsubs:            make(map[*clientConn]struct{}),
+		composerFallback: make(map[string]composerCachedOutcome),
+		composerOpLocks:  make(map[string]*composerOperationLock),
+		stop:             make(chan struct{}),
 	}
 	s.wg.Add(1)
 	go s.fanoutLoop()

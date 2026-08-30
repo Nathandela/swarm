@@ -65,6 +65,13 @@ const (
 	// completion. Its body is daemon.StructuredGapEvent, riding this record family exactly
 	// as InteractionItem rides TypeInteraction -- no new mailbox frame kind.
 	TypeStructuredGap RecordType = "structured_gap"
+	// TypeCapabilityTransition is an additive, cursor-ordered publication of the
+	// daemon's complete capability record after a durable runtime transition. It is
+	// separate from TypeRoster: roster records are snapshot-only, while a phone that
+	// is already subscribed must observe a degrade or a proven recovery without a
+	// reconnect. The payload is protocol.SessionCapabilities; journal deliberately
+	// owns only the string discriminator to avoid an import cycle.
+	TypeCapabilityTransition RecordType = "capability_transition"
 )
 
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by

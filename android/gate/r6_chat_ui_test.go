@@ -267,7 +267,7 @@ func TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface(t *testing.T) {
 	// and the reads latch in two different places -- so the fact under test is that the id
 	// survives to a claim at all.
 	for _, want := range []struct{ latch, claim, verb, row string }{
-		{"composerOp = ", "launchOutcome(composerOp)", "app.composerSend(",
+		{"composerSends.sealed(", "launchOutcome(operationId)", "app.composerSend(",
 			"M2.4 -- a composer_send is fire-and-forget"},
 		{"interruptOp = ", "launchOutcome(interruptOp)", "app.interrupt(",
 			"M2.4 -- a Stop's refusal never reaches the reader"},
@@ -312,8 +312,10 @@ func TestR6R2_EveryChatVerbsMachineAnswerIsClaimedOnTheSurface(t *testing.T) {
 	for _, want := range []struct{ fn, symbol, row string }{
 		{"renderComposerVerdict", "composerVerdictFor(",
 			"the composer decides on the MACHINE's answer"},
-		{"renderComposerVerdict", "clearsDraft",
-			"the field is emptied by the verdict rather than by the local seal"},
+		{"renderComposerVerdict", "composerSends.settle(",
+			"each composer outcome settles its own ledger entry"},
+		{"rememberComposerSend", "typed.text",
+			"the locally sealed draft is freed for the next message"},
 		{"renderInterruptVerdict", "interruptNoticeFor(",
 			"a refused Stop says the turn was not stopped"},
 		// BOTH HALVES OF ADR-014 A8's capacity fact, which are two different sentences to the

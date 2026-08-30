@@ -394,17 +394,25 @@ func TestPBTOOL3_DebugAPKBuildsAndIsSigned(t *testing.T) {
 }
 
 // TestPBTOOL3_ReleaseBuildRefusesWithNoOperatorKeystore is the negative control
-// for the signing requirement: with no operator material in the environment, the
-// release build must FAIL. If it succeeds it has produced an unsigned release
-// APK, which is the quiet form of the defect.
+// for the signing requirement: with operator material masked at both environment
+// and Gradle-property precedence, the release build must FAIL through the named
+// signing guard. If it succeeds it has produced an unsigned release APK, which is
+// the quiet form of the defect.
 func TestPBTOOL3_ReleaseBuildRefusesWithNoOperatorKeystore(t *testing.T) {
 	out, err := runInPinnedShell(t, 30*time.Minute,
 		"unset SWARM_RELEASE_KEYSTORE SWARM_RELEASE_KEYSTORE_PASSWORD "+
 			"SWARM_RELEASE_KEY_ALIAS SWARM_RELEASE_KEY_PASSWORD; "+
-			"cd android && ./gradlew --no-daemon :app:assembleRelease")
+			"cd android && ./gradlew --no-daemon "+
+			"-PSWARM_RELEASE_KEYSTORE= -PSWARM_RELEASE_KEYSTORE_PASSWORD= "+
+			"-PSWARM_RELEASE_KEY_ALIAS= -PSWARM_RELEASE_KEY_PASSWORD= "+
+			":app:assembleRelease")
 	if err == nil {
 		t.Fatalf("PB-TOOL-3: the release build SUCCEEDED with no operator keystore. It has "+
 			"produced an unsigned or debug-signed release artifact:\n%s", out)
+	}
+	if !strings.Contains(out, "PB-TOOL-3: a release build needs operator-supplied signing material.") {
+		t.Fatalf("PB-TOOL-3: the release build failed, but not through the signing guard; "+
+			"the negative control is not proving the intended boundary:\n%s", out)
 	}
 }
 

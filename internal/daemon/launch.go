@@ -253,6 +253,35 @@ func (d *Daemon) CommitIdempotentOp(op string, ok bool) error {
 	return d.idem.Fail(op, nil)
 }
 
+// ClaimComposerOperation is the durable at-most-once claim used by structured messages.
+// Unlike kill/delete, an executing composer operation is never safe to redrive: the provider
+// may have accepted the message before its reply or our terminal commit was lost.
+func (d *Daemon) ClaimComposerOperation(op, action, session, instance, requestHash string) (phase string, outcome []byte, err error) {
+	rec, existed, err := d.idem.PrepareBound(op, action, session, instance, requestHash)
+	if err != nil {
+		return "", nil, err
+	}
+	if existed && (rec.Action != action || rec.SessionID != session ||
+		rec.SessionInstance != instance || rec.RequestHash != requestHash) {
+		return "", nil, fmt.Errorf("daemon: operation_id %q is already bound to a different request (action %q session %q instance %q)",
+			op, rec.Action, rec.SessionID, rec.SessionInstance)
+	}
+	return string(rec.Phase), append([]byte(nil), rec.Outcome...), nil
+}
+
+// BeginComposerOperation durably crosses the at-most-once boundary immediately before
+// provider/shim I/O. Begin accepts only prepared, so concurrent replays cannot both execute.
+func (d *Daemon) BeginComposerOperation(op string) error { return d.idem.Begin(op) }
+
+// CommitComposerOperation stores the exact protocol outcome for replay. success chooses the
+// terminal phase; outcome carries the coded result without importing the wire package here.
+func (d *Daemon) CommitComposerOperation(op string, outcome []byte, success bool) error {
+	if success {
+		return d.idem.Complete(op, outcome)
+	}
+	return d.idem.Fail(op, outcome)
+}
+
 // launch is the two-phase, crash-safe launch (E5.4/S11): reserve a running meta,
 // spawn the shim with a deterministic socket and filtered env, then confirm it is
 // serving. The probe (if any) fires at each boundary and its error aborts WITHOUT

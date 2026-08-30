@@ -28,15 +28,53 @@ import (
 
 // StructuredGapEvent is the structured_gap record's payload.
 type StructuredGapEvent struct {
-	TS     time.Time `json:"ts"`
-	Reason string    `json:"reason"`
+	TS              time.Time `json:"ts"`
+	Reason          string    `json:"reason"`
+	SessionInstance string    `json:"session_instance,omitempty"`
+	DedupeKey       string    `json:"dedupe_key,omitempty"`
 }
 
 // EmitStructuredGap durably appends a structured_gap journal record for sessionID.
 // Every call appends its own record -- emission is never coalesced or deduplicated,
 // because each call names a distinct proven boundary.
 func (d *Daemon) EmitStructuredGap(sessionID, reason string) error {
-	payload, err := json.Marshal(StructuredGapEvent{TS: time.Now(), Reason: reason})
+	return d.appendStructuredGap(StructuredGapEvent{TS: time.Now(), Reason: reason}, sessionID)
+}
+
+// EmitStructuredGapOnce appends one durable boundary for dedupeKey. The key is
+// authored by the proven-gap caller from the session instance, spool incarnation,
+// and numeric boundary. A daemon crash after the journal fsync but before the
+// caller's checkpoint therefore replays to this record instead of appending a
+// duplicate. An empty key deliberately retains EmitStructuredGap's append-every-call
+// behavior for callers that do not have a stable source identity.
+func (d *Daemon) EmitStructuredGapOnce(sessionID, sessionInstance, reason, dedupeKey string) error {
+	if dedupeKey == "" {
+		return d.EmitStructuredGap(sessionID, reason)
+	}
+	d.gapEmitMu.Lock()
+	defer d.gapEmitMu.Unlock()
+
+	res, err := d.journal.ReadFrom(0)
+	if err != nil {
+		return fmt.Errorf("daemon: read structured_gap dedupe journal: %w", err)
+	}
+	for _, rec := range res.Events {
+		if rec.Type != journal.TypeStructuredGap || rec.SessionID != sessionID {
+			continue
+		}
+		var prior StructuredGapEvent
+		if json.Unmarshal(rec.Payload, &prior) == nil && prior.DedupeKey == dedupeKey {
+			return nil
+		}
+	}
+	return d.appendStructuredGap(StructuredGapEvent{
+		TS: time.Now(), Reason: reason,
+		SessionInstance: sessionInstance, DedupeKey: dedupeKey,
+	}, sessionID)
+}
+
+func (d *Daemon) appendStructuredGap(event StructuredGapEvent, sessionID string) error {
+	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("daemon: marshal structured_gap event: %w", err)
 	}
@@ -44,6 +82,21 @@ func (d *Daemon) EmitStructuredGap(sessionID, reason string) error {
 		SessionID: sessionID,
 		Type:      journal.TypeStructuredGap,
 		Payload:   payload,
+	})
+	return err
+}
+
+// EmitCapabilityTransition durably publishes one complete, already-validated
+// session-capability record. The skeleton owns the schema and the state transition;
+// daemon owns only ordered journal append durability.
+func (d *Daemon) EmitCapabilityTransition(sessionID string, payload []byte) error {
+	if sessionID == "" || len(payload) == 0 {
+		return fmt.Errorf("daemon: capability transition requires session and payload")
+	}
+	_, err := d.journal.Append(journal.Record{
+		SessionID: sessionID,
+		Type:      journal.TypeCapabilityTransition,
+		Payload:   append([]byte(nil), payload...),
 	})
 	return err
 }

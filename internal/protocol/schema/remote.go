@@ -47,8 +47,8 @@ const (
 func (c ErrorCode) Transient() bool { return c == CodeRateLimit }
 
 // JournalRecord is one wire-facing journal event (R-PROT.3). It mirrors the
-// daemon journal's record fields the phone needs; the daemon-internal payload is
-// not carried on the wire, with the single exception of Item below.
+// daemon journal's record fields the phone needs. Interaction and structured-gap
+// payloads cross as Item; a capability-transition payload crosses as Capabilities.
 type JournalRecord struct {
 	Cursor    uint64       `json:"cursor"`
 	SessionID string       `json:"session_id"`
@@ -60,10 +60,11 @@ type JournalRecord struct {
 	// event may not. An absent agent means the record does not carry one -- readers must
 	// not read the empty string as an agent named "".
 	Agent string `json:"agent,omitempty"`
-	// Item is the interaction item object -- one unit of the phone's chat transcript
-	// (ADR-009, docs/specifications/interaction-schema.md §1 and §2). It is populated ONLY
-	// when Type is "interaction", where the daemon record's payload IS the item
-	// (IS-LAYER-1); every other type's payload stays daemon-internal, and
+	// Item is one unit of the phone's chat transcript (ADR-009,
+	// docs/specifications/interaction-schema.md §1 and §2). It is populated when Type is
+	// "interaction" or "structured_gap", where the daemon payload IS transcript content;
+	// every other type's payload stays daemon-internal, except the separately validated
+	// capability-transition record below. In all cases,
 	// internal/skeleton/api.go's toWireJournalRecord is the sole producer of this field.
 	//
 	// It is carried raw. The gateway seals and forwards items and parses none of them
@@ -89,9 +90,9 @@ type JournalRecord struct {
 	// what it renders today (mobile/namefacade_test.go pins that compatibility).
 	Name string `json:"name,omitempty"`
 	// Capabilities is the session's daemon-authored capability record (ADR-017 T2),
-	// carried on ROSTER records so the phone can choose which of the three destinations a
-	// session gets -- chat, the capability-routed sanitized terminal fallback, or the
-	// honest status card -- by READING it rather than by inferring anything.
+	// carried on ROSTER records and on the cursor-ordered "capability_transition" event.
+	// A transition carries its own historical value; it is never reconstructed from a
+	// current roster lookup. The phone reads this record rather than inferring support.
 	//
 	// It is a POINTER with omitempty because absence is wire-distinguishable ON PURPOSE
 	// (T2-a): "no record" and terminal_fallback=false take ONE code path, and a reader

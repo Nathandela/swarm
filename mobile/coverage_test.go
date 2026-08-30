@@ -2,10 +2,10 @@ package swarmmobile_test
 
 // FAILING-FIRST (TDD RED, GG-5) guard for PB-BIND-3: the facade covers every capability
 // the v1 screens need, and the mapping is a checked-in traceability table rather than a
-// claim. "Any screen element with no method is a coverage failure" is the requirement's
-// own wording, so the table is enforced in BOTH directions -- a required element with no
-// method fails, and an exported entry point in no row fails too (an untraced surface is
-// API the app can call that no screen asked for).
+// claim. The reverse direction also keeps retained compatibility exports visible even when
+// production Android has no caller. A required element with no method fails, and an exported
+// entry point in no row fails too; screen_coverage.tsv's note says whether a row is a current
+// screen element or compatibility surface.
 
 import (
 	"os"
@@ -38,25 +38,22 @@ var requiredScreenElements = []string{
 	"journal.subscribe",
 	// snapshot peek
 	"snapshot.peek",
-	// terminal_watch / terminal_unwatch -- first-class verbs the live tail depends on
+	// terminal_watch / terminal_unwatch -- retained compatibility verbs. Since 2026-08-30
+	// production Android issues neither, but the reverse export ledger must still trace them.
 	"terminal_watch",
 	"terminal_unwatch",
-	// WAVE R8 (ADR-017): the capability-routed terminal fallback. Three elements rather
-	// than one, because the ADR binds three INDEPENDENT authorities and collapsing them
-	// into a single row would let one arrive without the others: a watch that grants no
-	// input authority, an explicit and revocable control ceremony bound to the session
-	// INSTANCE, and a live-only raw-input plane that never buffers a byte.
-	// The routed destination itself: R8's central claim is that the MACHINE chooses the
-	// surface and the phone reads that choice, so the element is the choice.
+	// WAVE R8 (ADR-017) compatibility exports. Their machine/wire distinctions remain:
+	// destination metadata, a watch that grants no input authority, an explicit control
+	// ceremony bound to the session instance, and live-only raw input. The 2026-08-30 Android
+	// amendment removed their navigation/call sites, not the bound API needed by rolling and
+	// non-Android consumers, so the reverse ledger intentionally keeps these names.
 	"session.destination",
 	"terminal_view.watch",
 	"terminal_control.enter",
 	"terminal_control.input",
-	// ADR-017 amendment T8-b: backgrounding is a severance trigger IN ITS OWN RIGHT, so
-	// the app needs a verb for it. It is enumerated here rather than left to the TSV so
-	// deleting the row cannot delete the requirement -- and the requirement is what stops
-	// the phone core's two Background methods going back to having no production caller,
-	// which is the state that made T8-b unreachable in the shipped app.
+	// ADR-017 amendment T8-b: backgrounding remains a withdrawal trigger in its own right.
+	// Android reaches this lifecycle verb even though it offers no terminal surface; withdrawing
+	// compatibility authority is safe cleanup and does not create a route to acquire it.
 	"lifecycle.background",
 	// take_control acquire/release, input + resize
 	"take_control.acquire",

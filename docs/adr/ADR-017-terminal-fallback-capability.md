@@ -5,6 +5,20 @@
 
 **Source of the direction**: [docs/specifications/remote-control-product-playbook.md](../specifications/remote-control-product-playbook.md) — RC-D4 and RC-D5 (lines 74-75), §3.1 (lines 103-120), §4.5 (lines 248-262), §4.7 (lines 276-293), §6.2 (lines 384-399), §6.3 (lines 401-472), §7 (lines 578-598), and the Wave R8 exit (lines 812-827). The playbook is the plan; this ADR is the rule.
 
+> **SUPERSEDED ON ANDROID, 2026-08-30 — one conversation surface for every session.**
+> The terminal-surface portions of T1/T2/T4/T6 and their later amendments remain the historical
+> design and the machine/wire compatibility contract, but they no longer authorize a production Android terminal-fallback or
+> status-card route. Opening any session on Android always enters the normal transcript and pinned
+> composer-shaped shell. When chat is unavailable, the shell stays in place and shows the precise
+> inline reason: `NO_CHAT`, `OFFLINE`, and `ENDED` disable input and its action; `AVAILABLE` is
+> sendable. A history tear remains a transcript warning and does not by itself select another screen
+> or prove that a live message sink disappeared. `TerminalViewV1`, terminal watch/control verbs, and
+> capability fields remain specified for rolling wire compatibility and non-Android consumers, but
+> no production Android route issues a terminal watch, renders the grid, or enters terminal control.
+> This amendment changes only Android routing/rendering. It does not infer capability from transcript
+> contents, authorize a composer the machine has refused, promote terminal text into interaction
+> items, or weaken any authorization, sanitization, session-instance, or Stop rule below.
+
 **Amends, narrowly and by quotation**:
 
 - **ADR-009-structured-chat-interaction.md decision 1, line 53** — "**No terminal emulation and no raw grid anywhere in the app.**" That sentence is **re-scoped, not repealed**: it becomes the rule for `structured_chat` sessions, which keep ADR-009 exactly as written. See ruling T1.
@@ -43,7 +57,7 @@ Every session instance has exactly one phone surface, selected by its capability
 
 **What the fallback is still not.** Raw PTY bytes never reach the phone. ANSI, OSC and any other control sequence never reach the phone. No VT parser crosses the gomobile boundary and none is written for Android. ADR-009 decision 2 (`ADR-009:61-71`) survives **except the single clause re-scoped in T4** — "no snapshot frames are appended to a phone" (`ADR-009:68-69`) — including its statement that `internal/daemon/terminalrender.go` "remains the security choke point"; this ADR adds a third machine-side consumer of that renderer alongside decision 2's two, and changes nothing about what the renderer emits or where it runs. The A7 property changes its ground — it was structural-by-absence for a phone with no grid, and returns to being structural-by-sanitization for a fallback screen, which is exactly what it was before ADR-009 and is what `vt.SnapText` is written to guarantee (`internal/vt/render.go:134-143`: "no terminal control sequence can escape, and no Unicode bidi/zero-width rune can visually spoof what is displayed"). Stating that honestly is the point: the property is not weakened, but its *proof obligation moves back onto the sanitizer*, and Wave R8's adversarial ANSI/OSC/Unicode fixtures (`playbook:822`) are that obligation, not a nice-to-have.
 
-### T2. The per-session capability record is the router, and it is immutable for the session instance
+### T2. The per-session capability record is the router, with fenced live-chat transitions
 
 An adapter publishes one authoritative capability record at session launch (`playbook:394-399`). It carries, at minimum:
 
@@ -59,12 +73,22 @@ An adapter publishes one authoritative capability record at session launch (`pla
 
 Four rules bind:
 
-1. **Immutability per session instance.** The record is fixed for the life of the instance. "Capabilities are immutable for a session instance; an adapter upgrade takes effect only on a newly launched/resumed instance, so no live surface silently changes mode" (`playbook:291-293`). A user watching a screen never has that screen change kind underneath them.
-2. **Degrade only, daemon-authored, and never in place upward.** "A runtime integrity failure may only degrade the record through an explicit daemon-authored capability event such as `structured_gap`; it cannot upgrade a fallback session in place" (`playbook:397-399`). `structured_gap` is the shim/daemon spool boundary of `playbook:375-376`: an unrecoverable gap "emits an exact `structured_gap` boundary, disables `structured_chat` for that session instance, and forbids a fabricated completion."
+1. **Launch facts are immutable per session instance.** Provider identity/version, adapter revision, interrupt support, and terminal authority are fixed for the life of the instance. An adapter upgrade still takes effect only on a newly launched/resumed instance. The only runtime-changing field is `structured_chat`, under rule 2 below; Android keeps the same conversation surface while that field changes.
+2. **A visible history tear withdraws chat until the exact live sink is re-proven.** `structured_gap` is the shim/daemon spool boundary of `playbook:375-376`: an unrecoverable gap emits an exact boundary, temporarily publishes `{structured_chat:false, terminal_fallback:false, terminal_control:false}`, and forbids a fabricated completion. Unrecoverable describes the missing history, not the surviving channel. After the boundary is durable, a later clean drain may adopt the retained sequence space and continue folding retained/future events behind the marker. A fresh machine-local proof of the exact current session instance's message sink may then publish `{true,false,false}` through a cursor-ordered `capability_transition`; the marker remains permanently visible and the missing range is never invented.
 3. **The phone renders from the record and infers nothing.** "The phone renders from that record; it never infers support from whether a transcript happens to be empty" (`playbook:396-397`). An empty transcript is an empty transcript.
 4. **No route to the fallback from a healthy structured session.** Wave R8's exit is explicit: "Claude and Codex expose no route to it when their structured capabilities are healthy" (`playbook:826-827`). There is no power-user escape hatch, no long-press, no debug toggle in a release build. RC-D5 is a routing rule, not a default the user may override.
 
 `session_capabilities(machine, session_instance)` is daemon-authored state (`playbook:423`), not a phone-side heuristic and not an adapter call the phone can make.
+
+> **2026-08-30 recovery fence.** The recovery in rule 2 is not an adapter upgrade and cannot
+> promote a provider that was authored without structured chat. The proof binds the current
+> session instance, the latest gap generation, and a freshly initialized backend or shim submit
+> transaction in the current daemon process. Session replacement or any newer gap invalidates it
+> before capability publication. The phone accepts the complete validated transition only for an
+> already-known row with the same instance and unchanged launch facts; a transition can toggle only
+> `structured_chat` and can never grant a terminal route or terminal control. This narrowly
+> supersedes older "never in place upward" wording for recovery of an originally structured
+> session; it does not restore a complete-history claim or change the Android screen kind.
 
 ### T3. The complete-chat capability contract is the bar for `structured_chat=true`
 
@@ -81,7 +105,7 @@ A provider may advertise `structured_chat=true` only when **all** of these pass 
 | Approvals | Pending requests re-deliver after reconnect; resolutions dismiss on every surface; first answer wins. |
 | History | Cold-open reconstructs the retained conversation in order and exposes an honest retention floor. |
 | Version skew | Unknown provider versions fail to the terminal fallback or a status-only refusal, not optimistic structured mode. |
-| Survival | Daemon restart preserves every structured event accepted by the shim/backend. A proven gap is marked at its exact boundary and degrades the session; it is never silently bridged. |
+| Survival | Daemon restart preserves every structured event accepted by the shim/backend. A proven gap is marked at its exact boundary and degrades the session; retained/future capture resumes only behind that boundary, so the missing range is never silently bridged. |
 
 Two clarifications that are decisions, not commentary. **Claude may satisfy complete chat without token-live assistant deltas** (`playbook:596-597`), which is ADR-013's "honest limit, stated once and not worked around" (`ADR-013:57-61`) surviving intact rather than being quietly repaired. And the *Version skew* row is where fallback earns its existence: it converts an unknown Claude or Codex build from an optimistic guess into a routed, labelled, read-only terminal — which is strictly more useful than ADR-013's status card and strictly less dangerous than guessing a dialog key (`ADR-013:120-136`).
 
@@ -180,6 +204,13 @@ The same vocabulary governs `session_launch` — "Launch uses the same `pending`
 >
 > **(b) is DISCHARGED.** IS-LIFE-5's `expected_turn` is enforced daemon-side against the daemon's own turn state, and a send rendered against a turn that has moved on is refused `stale_turn` having typed nothing. The R6 review fix-pack extended the same rule to `turn_interrupt` (finding B7), which had no turn coordinate at all and typed the cancel sequence into whichever turn was current on arrival — so "one active turn per session instance" now governs BOTH ops that can act on a turn, which is what the rule was for.
 >
+> **Later amendment — message FIFO, strict Stop.** The R6 sentence above records the behavior
+> that shipped then. `composer_send.expected_turn` is now advisory signed context: the daemon
+> serializes accepted messages per session and dispatches each against current provider state.
+> `turn_interrupt.expected_turn` remains required and strict. The one-active-turn obligation is
+> preserved by reserving the native id returned by `turn/start` so an immediate second message
+> steers that turn rather than starting another.
+>
 > **(c) is DISCHARGED on the wire and PARTLY on the phone.** The refusal vocabulary is coded per verb (`stale_turn`, `interrupt_unsupported`, `structured_unsupported`, `unavailable`), and the ops resolve — visible success and visible refusal — rather than being fire-and-forget. `outcome_unknown` and `uncertain` ride the existing `operation_status` reconciliation.
 >
 > **(a) is NOT DISCHARGED, and the composer ships with the gap open.** `expected_input_revision` is absent, and so is the enforcement it names: the shim-wide input transaction of `playbook:437-445`. `internal/skeleton`'s `injectComposerText` writes text-plus-CR through the session tap with NO check that the terminal's input region is empty and NO lock shared with the owner's own keystrokes. **The user-visible consequence, stated plainly: if the owner has a half-typed line in the CLI's composer when a phone send lands, the phone's text is APPENDED to it and the CR submits the concatenation — a message nobody wrote.** That is the same harm the adjacent "refused, never truncated" rule protects against for the other half of one message.
@@ -214,7 +245,7 @@ This is the ruling that keeps the two amendments above narrow, and it has no exc
 - **No content may be promoted from the terminal fallback into structured chat** (`playbook:115-116`). Not a scraped user message, not a parsed tool result, not a heuristic status, not "just the last line" of a completion.
 - **Terminal scraping never produces interaction items.** ADR-013's rule stands verbatim (`playbook:119-120`; `ADR-013:41-45`), on the evidence that produced it (S-A PARTIAL, `tool_input` never recovered — `ADR-013:20-22`), and the playbook lists "Terminal-derived pseudo-chat" as an explicit non-goal of the first complete product (`playbook:1025`).
 - **An adapter earns `structured_chat` by satisfying T3, and by no other route.** Partial structured sources "may improve status cards internally but do not unlock chat" (`playbook:652`).
-- **A session degraded by `structured_gap` keeps its already-accepted items read-only at the exact boundary and does not backfill from the grid** (`playbook:376-380`).
+- **A session degraded by `structured_gap` keeps its already-accepted items read-only at the exact boundary and does not backfill from the grid** (`playbook:376-380`). The durable hook stream may continue folding retained and future events behind that explicit boundary; this neither backfills the missing range nor restores a claim of complete history.
 
 ## What does NOT change
 

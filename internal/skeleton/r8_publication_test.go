@@ -269,8 +269,8 @@ func TestR8Publication_ReRegistrationAfterADegradeCannotReGrantControl(t *testin
 	if !ok {
 		t.Fatalf("no record after degrade")
 	}
-	if degraded.StructuredChat || !degraded.TerminalFallback {
-		t.Fatalf("a degrade must produce {structured:false, fallback:true}; got %+v", degraded)
+	if degraded.StructuredChat || degraded.TerminalFallback || degraded.TerminalControl {
+		t.Fatalf("a history-gap degrade must produce {structured:false, fallback:false, control:false}; got %+v", degraded)
 	}
 	if degraded.TerminalControl {
 		t.Errorf("ADR-017 T6-b: the degrade granted CONTROL. A degraded Claude session still has a live " +

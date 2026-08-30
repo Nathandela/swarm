@@ -132,11 +132,10 @@ func TestR8R4Capability_AValidDegradedRecordStillReadsBack(t *testing.T) {
 	if got.StructuredChat {
 		t.Errorf("ADR-017 T2 rule 2: the proven degrade marker did not remove structured chat")
 	}
-	if !got.AllowsTerminalWatch() {
-		t.Errorf("a session degraded by a PROVEN structured gap must gain the sanitized fallback "+
-			"surface it lost chat for.\ngot: %+v", got)
+	if got.TerminalFallback || got.AllowsTerminalWatch() {
+		t.Errorf("a proven history gap must not manufacture a terminal fallback route.\ngot: %+v", got)
 	}
 	if got.AllowsTerminalControl() {
-		t.Errorf("ADR-017 T6-b: a session degraded INTO the fallback may watch and may NOT control")
+		t.Errorf("ADR-017 T6-b: a history-gap degrade may neither watch nor control the terminal")
 	}
 }

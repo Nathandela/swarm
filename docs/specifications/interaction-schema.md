@@ -20,6 +20,11 @@ transcript of items and nothing else.
 
 > AMENDED BY ADR-017 (2026-08-15): the no-grid rule is re-scoped to `structured_chat` sessions, not repealed. For a `structured_chat` session there is no terminal emulation and no raw grid on the phone (ADR-009), unamended. A `terminal_fallback` session (ADR-017 T1-T4 — incomplete providers, plus a version-skewed Claude or Codex build per T3's *Version skew* row; never a healthy `structured_chat` session, T2 rule 4) may render the machine-sanitized `TerminalViewV1` snapshot instead — never raw PTY bytes, never a VT parser on the phone — and never promotes anything it shows into this transcript (ADR-017 T10).
 
+> SUPERSEDED ON ANDROID BY ADR-017 (2026-08-30): every open session renders this interaction
+> transcript and its pinned composer-shaped shell. Capability and connectivity may disable the
+> composer with an inline reason; they never replace the Android conversation with a terminal grid
+> or status card. `TerminalViewV1` remains a machine/wire compatibility type, not an Android surface.
+
 Items are produced on the machine, adjacent to the sanitization choke point
 in `internal/daemon/terminalrender.go`; raw PTY bytes never reach the phone.
 
@@ -51,19 +56,19 @@ collision cost typing for the life of an epoch). Nothing here goes near either f
   repair channel: a gap in the shared seq bucket stales `journal`, and only a contiguous
   roster+events reseed clears it (PB-SYNC-1/-2/-3). No new repair channel is created.
 
-Wire carriage requires one additive field on `schema.JournalRecord`: `item`, populated only when
-`type == "interaction"`, because that wire type today carries no payload. §8 requires two more —
-the approve body on `schema.RemoteCommand` (IS-LIFE-4) and ADR-009's composer-send op with its
-`expected_turn` field (IS-LIFE-5).
+Wire carriage requires one additive field on `schema.JournalRecord`: `item`, populated when type is
+**interaction or structured_gap**. The latter is the visible history boundary, not an interaction
+item; `capability_transition uses the separate capabilities field`, decoded from that event's own
+validated payload. §8 requires two more fields — the approve body on `schema.RemoteCommand`
+(IS-LIFE-4) and ADR-009's composer-send op with its `expected_turn` field (IS-LIFE-5).
 
-**Only the third is machine-checked.** GG-7's drift check reflects `Control`, `SessionView`,
-`LaunchReq` and `TerminalSnapshot` only (`internal/protocol/protocolmd_test.go`), and
-`protocol.md` documents `JournalRecord` and `RemoteCommand` at the field level in
-`internal/protocol` rather than as wire tables — so no build can fail on a missing `item` or
-approve row. The composer-send op *is* covered, because it is a `Control` op and field, and it is
-the one new `protocol.md` row ADR-009 books. For the other two the obligation is **procedural**,
-carried by the Go field's doc comment; it is written here so nobody mistakes it for a fence that
-fires.
+**The schema-reflection fence covers only the composer field.** GG-7's drift check reflects
+`Control`, `SessionView`, `LaunchReq` and `TerminalSnapshot` only
+(`internal/protocol/protocolmd_test.go`); `JournalRecord` and `RemoteCommand` are documented at
+field level instead of in those reflected wire tables. The always-chat contract gate now pins the
+two JournalRecord payload projections in this file and `protocol.md`, while the Go conversion tests
+prove their values. The approve row remains procedural and carried by the Go field's doc comment.
+The composer-send op is directly covered because it is a `Control` op and field.
 
 ---
 
@@ -313,6 +318,10 @@ peek used to spend.
 > stream spends from the same combined budget the peek used to spend, under the same coalescing
 > sink (ADR-017 "What does NOT change," append budget), so on that session the transcript no
 > longer has the whole budget to itself.
+>
+> SUPERSEDED ON ANDROID BY ADR-017 (2026-08-30): no production Android surface issues the terminal
+> watch, so its conversation transcript again owns the Android-side append budget. The terminal
+> body and its coalescing rule remain available only as wire compatibility for other consumers.
 
 - **IS-DELTA-1** (Ubiquitous) An `agent_message` record's `text` SHALL be the increment appended
   since the previous record of that `item_id`. A consumer reconstructs by concatenation in
@@ -398,15 +407,19 @@ phone, decides what the tool *did*.
   unforgeable by the relay, alterable only by the gateway, which is the documented D4/D5 owner-uid
   residual (ADR-007) and not a new one.
 - **IS-LIFE-5** (Ubiquitous) A phone-authored message SHALL travel as ADR-009's **composer-send**
-  op — a remote-tier control op carrying `(session, expected_turn, text)` — not as raw `TDataIn`.
-  `expected_turn` names the `turn_id` the composer was rendered against, and the daemon SHALL
-  refuse a send whose value differs from the session's current turn, with a code from D10's error
-  taxonomy. The carrier is not incidental: `TDataIn` is fire-and-forget with no reply
+  op — a remote-tier control op carrying `(session, session_instance, expected_turn, text)` — not as
+  raw `TDataIn`.
+  `expected_turn` names the `turn_id` the composer was rendered against and remains signed context,
+  but it is advisory for message delivery. The daemon SHALL enqueue accepted sends in a per-session
+  FIFO and dispatch each head against its current provider state: steer the current native turn, or
+  start one when idle. A second send accepted before `turn/started` is folded SHALL steer the native
+  turn id returned by the first `turn/start`, never issue a competing start. The carrier is not
+  incidental: `TDataIn` is fire-and-forget with no reply
   (`internal/remotegw/lease.go`), an unroutable input frame is dropped silently
   (`command_loop.go`), and the daemon holds no `ContentKey` and reads an already-ordered byte
-  stream — so neither the precondition nor its refusal can ride the keystroke plane (ADR-009 (5),
-  (8)). This closes the render-vs-tap race: a tap that lands after the turn moved on is refused,
-  never misapplied.
+  stream — so ordered application and its visible outcome cannot ride the keystroke plane
+  (ADR-009 (5), (8)). `turn_interrupt` is different: its non-empty `expected_turn` remains a strict
+  destructive-target precondition, and a moved turn is refused `stale_turn` having interrupted nothing.
 - **IS-LIFE-6** (Ubiquitous) WHERE an approval is hook-unsafe (spike-SC's Bash-with-file-path
   carve-out) the request SHALL use `mode: prompt_card`. The decision SHALL still travel as the
   signed `ActionApprove` of IS-LIFE-4; only its **application** differs — after the daemon validates

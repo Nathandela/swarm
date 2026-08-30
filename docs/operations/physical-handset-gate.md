@@ -66,10 +66,11 @@ Waves are `playbook:654-842`.
 | I | Multi-machine | `PH-MM-1..9` | **R4** | R2 is a precondition: three pairings need two real relays |
 | J | Remote launch | `PH-LAUNCH-1..7` | **R5** | |
 | K | Structured chat and approvals | `PH-CHAT-1..7` | **R6** (Claude) and **R7** (Codex); `PH-CHAT-3,4,5` need both | |
-| L | Terminal fallback | `PH-FALL-1..7` | **R8** | |
+| L | Retired Android terminal fallback | none — `PH-FALL-1..7` retired 2026-08-30 | — | Machine/wire compatibility remains covered outside the handset UI gate; production Android has one conversation shell. |
 
-**The gate is discharged only when every section has run** (§N). Sections may be executed as their
-waves land; a partial run is a partial record, never a partial discharge.
+**The gate is discharged only when every active section A–K has run** (§N). Section L is retained
+as an explicit retirement record, not as seven hidden release obligations. Sections may be executed
+as their waves land; a partial run is a partial record, never a partial discharge.
 
 ---
 
@@ -657,49 +658,28 @@ phone never authored an approving keystroke on either path.
 Record that `uncertain` resolved through `operation_status` and that `outcome_unknown` was **never**
 auto-retried.
 
-**`[UNRUN]` PH-CHAT-7. No route to the fallback while healthy.** With Claude's and Codex's capabilities
-healthy, record that the app exposed **no** route to the terminal fallback for those sessions — no menu,
-no gesture, no developer setting (ADR-017 T1, whose surface selection "is the daemon's, never the
-user's", and `playbook:826-827`). This is the second half of R8's exit and belongs on hardware.
+**`[UNRUN]` PH-CHAT-7. One shell across every availability state.** On one healthy, one offline, one
+ended and one no-chat session, record that opening the inbox row always produced the same normal
+transcript and pinned composer shell. Record that `AVAILABLE` sent, while `OFFLINE`, `ENDED` and
+`NO_CHAT` kept the field and action visible but disabled with the correct inline reason. Create a
+visible history gap, then freshly re-prove the exact current sink: sending becomes available again
+without removing the gap marker. At no point may a destination value, menu, gesture or developer
+setting route Android to terminal view/control or a replacement status-card screen.
 
 ---
 
-## L. Terminal fallback — `PH-FALL`
+## L. Retired Android terminal fallback — `PH-FALL`
 
-Blocking: **R8**.
+**PH-FALL-1..7 RETIRED ON ANDROID (2026-08-30).** These rows used to require a production terminal
+renderer, watcher and control/input ceremony on a handset. Running them now would require restoring
+the product route this release removes, so they are not `UNRUN`, not `not observable`, and not part of
+the handset discharge count. Their machine/wire compatibility contract remains: versioned terminal
+view fields, verbs, sanitization, authorization, horizons, session-instance binding and live-only
+input continue to have Go protocol/core coverage for rolling and non-Android consumers.
 
-**`[UNRUN]` PH-FALL-1. OpenCode read-only fallback.** Launch OpenCode through Swarm and open it on the
-phone. Record: the header stated why structured chat is unavailable, naming provider, **detected**
-version and the missing capability; the body was sanitized text with no ANSI or OSC reaching the phone;
-and it was useful for monitoring **with no lease taken**.
-
-**`[UNRUN]` PH-FALL-2. AGY read-only fallback.** The same for AGY. Record the advertised capability
-record (`structured_chat=false`, `terminal_fallback=true`).
-
-**`[UNRUN]` PH-FALL-3. Taking control is explicit and visually persistent.** Enter control and record
-that, for the **whole life** of the generation, the screen continuously displayed that control is live,
-its remaining horizon, and a release control **in the same view** — no drawer, no menu, no second
-navigation step (ADR-017 T6). A sheet that grants control and disappears fails this row.
-
-**`[UNRUN]` PH-FALL-4. Control release on background.** With a control generation live, background the
-app. Record: local input stopped **immediately**; a best-effort signed `terminal_control_end` was sent;
-and the **daemon** ended the generation on receipt — observed machine-side, not inferred from the phone
-UI. Then foreground again and record that control was **not** silently resumed.
-
-**`[UNRUN]` PH-FALL-5. Control release on disconnect.** With a control generation live and the fallback
-screen foregrounded, enable airplane mode. Record that the daemon severed the generation at the
-missing-keepalive deadline, **no later than 30 seconds** (ADR-017 T8), and that on reconnect **no byte
-typed during the outage was delivered** — input is live-only and is never buffered or replayed
-(`playbook:863` budgets replayed raw input to zero).
-
-**`[UNRUN]` PH-FALL-6. Horizon expiry, no silent renewal.** Hold a generation open with continuous
-keepalives past the signed horizon. Record that it expired at the daemon clock, that no keepalive
-extended it, and that the phone required an explicit new authorization rather than renewing silently.
-
-**`[UNRUN]` PH-FALL-7. Synchronous severance.** Trigger the kill switch, then (separately) a device
-revocation, then (separately) a session replacement, each with a control generation live. Record that
-each severed **synchronously at the daemon** and that the phone's screen reflected it rather than
-continuing to accept keystrokes into a dead generation.
+The Android hardware obligation moved into `PH-CHAT-7`: every capability and lifecycle state keeps
+one conversation shell, unavailable states explain themselves inline, and no handset path issues a
+terminal watch, renders a grid, enters terminal control or sends raw terminal input.
 
 ---
 
@@ -781,7 +761,7 @@ not.**
 | State directory namespace | | | | |
 | Push address / wake key / submit cap / machine-revoke cap | | | | |
 
-### Provider capability records (`PH-CHAT`, `PH-FALL`)
+### Provider capability records (`PH-CHAT`; retired `PH-FALL` fields may still be recorded as wire evidence)
 
 | Session | Provider | Detected version | `structured_chat` | `terminal_fallback` | interrupt / steer / approvals / history |
 |---|---|---|---|---|---|
@@ -789,15 +769,16 @@ not.**
 
 ### Row ledger — one row per test id above
 
-**The single row below is a template, not an entry.** It is expanded at execution time into **95
-rows**, one per test id in §A–§L in document order (`PH-DEV-1..9`, `PH-PAIR-1..9`, `PH-LIFE-1..7`,
-`PH-PUSH-1..17`, `PH-LOCK-1..5`, `PH-NET-1..6`, `PH-RESIL-1..4`, `PH-KEY-1..8`, `PH-MM-1..9`,
-`PH-LAUNCH-1..7`, `PH-CHAT-1..7`, `PH-FALL-1..7`). §O.3's "no blanks" rule is checked against the
-expanded ledger, and the elided range below is not itself an entry.
+**The single row below is a template, not an entry.** It is expanded at execution time into **88
+rows**, one per active test id in §A–§K in document order (`PH-DEV-1..9`, `PH-PAIR-1..9`,
+`PH-LIFE-1..7`, `PH-PUSH-1..17`, `PH-LOCK-1..5`, `PH-NET-1..6`, `PH-RESIL-1..4`, `PH-KEY-1..8`,
+`PH-MM-1..9`, `PH-LAUNCH-1..7`, `PH-CHAT-1..7`). §O.3's "no blanks" rule is checked against the
+expanded active ledger; the retired §L identifiers are not blank rows, and the elided range below
+is not itself an entry.
 
 | Test id | Device A: what the device reported | Device B: what the device reported | Verdict (`pass` / `finding` / `not run` / `not executable — R<n>` / `not observable`) |
 |---|---|---|---|
-| `PH-DEV-1` … `PH-FALL-7` (expand to one row per id) | | | |
+| `PH-DEV-1` … `PH-CHAT-7` (expand to one row per active id) | | | |
 
 ---
 
@@ -832,9 +813,10 @@ discovery or for a gate failure.
 8. **Android trust roots are not Go's.** `/system/etc/security/cacerts` is stale or empty on modern
    handsets, which is why ADR-016 W2 delegates the trust decision to Kotlin while Go keeps the name
    check. `PH-PAIR-7` is the only place that mechanism meets a real certificate chain on a real device.
-9. **Fifteen minutes is the fallback control horizon and it is the wall that holds when nothing else
-   fires** (ADR-017 T7). `PH-FALL-5` and `PH-FALL-6` test the two halves — fast severance when the
-   daemon is reachable, and the horizon when it is not.
+9. **Android owns no terminal-control horizon.** The fifteen-minute value and synchronous-severance
+   rules remain machine/wire compatibility obligations for non-Android consumers, verified in Go;
+   retired `PH-FALL-5/6` must not be resurrected as handset release rows. `PH-CHAT-7` instead proves
+   that Android never acquires this authority and keeps one conversation shell.
 10. **`am force-stop` is now inside this gate** (`PH-LIFE-6`), where the legacy document explicitly
     excluded it. The matrix requires it to prove a **negative** — no promised wake until manual reopen —
     which is a different obligation from the one an emulator could discharge.
@@ -849,7 +831,7 @@ The gate is discharged when **all** of the following are true:
    against the Play-signed closed-track build.
 2. Every row has been run on **both** API levels, except rows marked `[ONE-DEVICE]`, which record which
    device was used.
-3. §M's tables are complete with no blanks, the row ledger among them expanded to its 95 rows.
+3. §M's tables are complete with no blanks, the row ledger among them expanded to its 88 active rows.
    `not run`, `not executable — R<n>` and `not observable on release build` are entries; blanks are
    not.
 4. The result is committed under `docs/verification/` with the operator named, the dates recorded, and

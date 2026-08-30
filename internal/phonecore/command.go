@@ -128,20 +128,21 @@ func SignApprove(ks crypto.KeyStore, in ApproveInput) (schema.DeviceCommandAuth,
 }
 
 // ComposerSendInput is the identity of a composer_send op the phone authors (Wave R6,
-// Mirror M2.4, IS-LIFE-5). ExpectedTurn and Text are the body's own halves beside the
-// session: all three are bound into the signature via ComposerSendContentHash.
+// Mirror M2.4, IS-LIFE-5). SessionInstance, ExpectedTurn and Text are the body's own fields
+// beside the session, all bound into the signature via ComposerSendContentHash.
 type ComposerSendInput struct {
-	Machine      string    // target machine endpoint id
-	Session      string    // namespaced session id the send targets
-	OperationID  string    // durable client-generated idempotency key
-	ExpiresAt    time.Time // command validity horizon
-	ExpectedTurn string    // the turn the phone rendered the send against ("" = idle)
-	Text         string    // the message
+	Machine         string    // target machine endpoint id
+	Session         string    // namespaced session id the send targets
+	SessionInstance string    // exact incarnation rendered by the phone
+	OperationID     string    // durable client-generated idempotency key
+	ExpiresAt       time.Time // command validity horizon
+	ExpectedTurn    string    // the turn the phone rendered the send against ("" = idle)
+	Text            string    // the message
 }
 
 // SignComposerSend authors and signs a composer_send command, mirroring SignApprove: the
 // signed tuple's content slot is schema.ComposerSendContentHash over the SAME
-// (session, expected_turn, text) body SealComposerSendEnvelope carries, so a gateway that
+// (session, session_instance, expected_turn, text) body SealComposerSendEnvelope carries, so a gateway that
 // alters the text or re-points expected_turn breaks the signature rather than reaching the
 // daemon as a well-formed send of something else. Re-deriving the hash at a call site is
 // the same forbidden duplication mobile/commands.go records for the take_control token.
@@ -153,7 +154,8 @@ func SignComposerSend(ks crypto.KeyStore, in ComposerSendInput) (schema.DeviceCo
 		OperationID: in.OperationID,
 		ExpiresAt:   in.ExpiresAt,
 		ContentHash: schema.ComposerSendContentHash(&schema.ComposerSendReq{
-			Session: in.Session, ExpectedTurn: in.ExpectedTurn, Text: in.Text,
+			Session: in.Session, SessionInstance: in.SessionInstance,
+			ExpectedTurn: in.ExpectedTurn, Text: in.Text,
 		}),
 	})
 }

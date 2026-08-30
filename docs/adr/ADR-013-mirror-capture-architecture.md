@@ -6,6 +6,15 @@
 **Companions**: [ADR-009-structured-chat-interaction.md](ADR-009-structured-chat-interaction.md) (the phone surface is a transcript, the grid is retired), [ADR-010-adapter-structured-capture.md](ADR-010-adapter-structured-capture.md) (the optional `InteractionSource` seam this feeds), [ADR-007-remote-access.md](ADR-007-remote-access.md) (D4/D7 signed-op and binding-tuple rules), [docs/specifications/interaction-schema.md](../specifications/interaction-schema.md) (the normative item fields).
 **Evidence**: [mirror-m0.md](../verification/mirror-m0.md), [mirror-m1.md](../verification/mirror-m1.md), [channels-spike.md](../research/channels-spike.md).
 
+> **SUPERSEDED ON ANDROID, 2026-08-30 — one conversation surface.** The 2026-08-14
+> terminal-fallback amendment at the end of this ADR remains historical design and **wire compatibility**,
+> not current Android navigation. Every production Android session opens in the
+> normal transcript and pinned composer shell. Missing chat capability, offline state and ended
+> sessions disable sending and explain why inline; they do not replace the shell with a terminal
+> or status-card screen. Terminal view/control fields and verbs remain supported for rolling and
+> non-Android consumers. No terminal text becomes an interaction item, no unavailable composer is
+> inferred usable, and a durable history-gap marker is never removed by later sink recovery.
+
 This ADR is written **after** the facts it records, on purpose. M0 settled the program's riskiest
 assumption empirically, M1 shipped the approval path and M1.6 measured the successor technology
 against a real session. Every claim below is either an owner ruling, a named test, or a quoted
@@ -311,7 +320,7 @@ from parallel lines minting independently, and this one was reserved by mirror-p
 it was written. `docs/specifications/mirror-program.md` M3.1 has likewise reserved **014** for paged
 interaction history. The next free number is tracked in docs/adr/README.md (019 as of 2026-08-14, the Wave R1 records having spent 015-018).
 
-## Amendment 2026-08-14 — honest status plus terminal fallback (ADR-017)
+## Historical amendment 2026-08-14 — honest status plus terminal fallback (ADR-017; superseded on Android 2026-08-30)
 
 **Status**: Accepted (owner sign-off 2026-08-15; drafted 2026-08-14 from the owner-approved playbook).
 **Source**: `docs/adr/ADR-017-terminal-fallback-capability.md`, which quotes each amended sentence of
@@ -320,6 +329,12 @@ this ADR verbatim (`ADR-017:12-13`); the direction is RC-D5
 "replace 'status card only' with 'honest status plus terminal fallback' for incomplete providers,
 while retaining the rule that terminal scraping never produces structured interaction items"
 (`:118-120`).
+
+**Current Android disposition (2026-08-30).** The following paragraphs continue to specify the
+compatibility capability/wire behavior and to explain why terminal text is never structured chat.
+Their three-destination Android UI is retired: production Android always uses the conversation
+shell and expresses availability inline. Nothing in this disposition removes the legacy wire
+fields or relaxes their sanitizer, authorization, horizon or session-instance fences.
 
 **Decision 1's "anything else" row.** "| anything else | none | **status card, by owner ruling.** No
 pseudo-chat sliced from the grid, ever |" (`:53`): the third column becomes **"honest status card plus
@@ -942,11 +957,11 @@ characterization data and must be re-recorded, not chosen: settle it offline wit
 **Daemon restart / upgrade.** Shims and their app-servers survive it (ADR-001). On reconcile the
 daemon proves the backend live by pid (§R7.2c) before it dials, then `initialize`/`initialized`, and
 rejoins the thread it recorded at launch. **A successful rejoin is not a proven gap** and MUST NOT
-degrade the session: `markSessionDegraded` (`internal/skeleton/capability.go:250`) is one-way and
-durable, so a rule that degraded on every daemon restart would permanently remove the composer from
-every live Codex session on the first `swarm daemon restart` — the operation ADR-001 exists to make
-ordinary. A gap is emitted only when the rejoin fails, or when the interval demonstrably cannot be
-backfilled.
+degrade the session: `markSessionDegraded` writes a one-way durable history boundary and withdraws
+chat until the exact current sink is freshly re-proven. A rule that invented that boundary on every
+daemon restart would permanently scar every live Codex transcript and unnecessarily withdraw its
+composer on the first `swarm daemon restart` — the operation ADR-001 exists to make ordinary. A gap
+is emitted only when the rejoin fails, or when the interval demonstrably cannot be backfilled.
 
 **What backfills it is not fully recorded, and this is the largest open mechanical question in R7.**
 `turn/completed` carried the turn's `items` in one recorded sample (`frame-samples.json`,
@@ -1009,12 +1024,13 @@ backend is dead or was never connected still SHOWS a composer, the owner types, 
 arrives *after* the tap. ADR-017 T2 wants that surfaced before it.
 
 **Decision: yes, a dead-or-never-connected backend on a Codex session emits a `structured_gap`, and
-the three cases are distinguished so the one-way degrade is never fired on a recoverable one.**
+the three cases are distinguished so a permanent history boundary is never invented for a
+recoverable one.**
 
 1. **Never connected.** The backend was declared in the launch config and its socket never became
-   servable, or the daemon could not dial it at launch-confirm. This session will never have a
-   structured plane: emit `structured_gap` with reason `backend_unavailable` at launch, and degrade
-   durably. The composer is correctly off before the first tap.
+   servable, or the daemon could not dial it at launch-confirm. This session has no proved structured
+   plane: emit `structured_gap` with reason `backend_unavailable` at launch and withdraw chat
+   durably. The composer is off before the first tap unless the exact current sink is later proved.
 2. ~~**Transient (daemon restart, rejoin succeeds).** No gap, no degrade — §R7.6's rule, which exists
    precisely so `swarm daemon restart` does not permanently disarm every Codex composer.~~
    **Amended in place, 2026-08-20 (pre-commit correction).** The decision is UNCHANGED — no gap, no
@@ -1025,16 +1041,15 @@ the three cases are distinguished so the one-way degrade is never fired on a rec
    rollout and are absent from the journal, because a client receives a thread's items only from
    the point it resumes. **A successful rejoin therefore SILENTLY BRIDGES every turn that ran while
    the daemon was down**, which is the one thing ADR-017 says a transcript may not do.
-   *Why the behaviour still stands:* the phone derives its composer from
-   `structuredChat = !transcript.structureTorn` and reads ANY `structured_gap` as "no message sink",
-   so gapping honestly here would remove the composer for the WHOLE session on every
-   `swarm daemon restart` — the operation ADR-001 exists to make ordinary — and would trade a
-   history tear for a capability loss. The conflation is the real defect and is filed as its own
-   bead. *What would close it:* backfill the missed interval with `thread/read {includeTurns:true}`
-   and gap only what the backfill cannot recover — **ADR-013 Q4**, open because the `itemsView` that
-   call returns in practice is unrecorded and a `summary` view is lossy for a long turn.
-   Implementation: `internal/skeleton/backendconnect.go`'s `rejoinSessionBackend`, whose comment now
-   says all of this.
+   **Amended again 2026-08-30.** The phone no longer derives send authority from
+   `!transcript.structureTorn`: the durable marker and current sink authority are separate, and an
+   exact current-instance proof may recover future sending without erasing the marker. The no-gap
+   behavior still stands for a narrower evidence reason: a successful rejoin alone cannot establish
+   that any turn occurred during downtime and therefore cannot name an exact missing boundary.
+   *What would close the remaining history risk:* backfill the interval with
+   `thread/read {includeTurns:true}` and gap only what the backfill cannot recover — **ADR-013 Q4**,
+   open because the `itemsView` returned in practice is unrecorded and a `summary` view is lossy for
+   a long turn. Implementation: `internal/skeleton/backendconnect.go`'s `rejoinSessionBackend`.
 3. **Died mid-session.** §R7.6 ends the session; a `structured_gap` covers the tail so history is
    honest about what was not captured.
 

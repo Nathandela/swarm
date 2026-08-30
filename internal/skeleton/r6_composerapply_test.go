@@ -1,7 +1,7 @@
 package skeleton
 
 // FAILING-FIRST (TDD RED, GG-5) for Wave R6's daemon-side composer_send application --
-// Mirror M2.4, IS-LIFE-5, ADR-009 (5)/(8), playbook §8.1 step 3 ("verify expected_turn
+// Mirror M2.4, IS-LIFE-5, ADR-009 (5)/(8), playbook §8.1 step 3 ("carry expected_turn
 // ... write text plus submit framing; and correlate the exact subsequent UserPromptSubmit
 // item back to the phone operation"). Bead: agents-tracker-hggx.7. Undefined symbols ->
 // compile-fail RED is expected and valid (spool-red.txt precedent in this same package).
@@ -11,11 +11,10 @@ package skeleton
 //
 //	func (a *coreAPI) ComposerSend(machine, operationID string, req protocol.ComposerSendReq) (protocol.ErrorCode, error)
 //
-//   - PRECONDITION (IS-LIFE-5): expected_turn must equal the session's CURRENT turn --
-//     the very turnIDs state turnIDLocked maintains under IS-ENV-1. A send rendered
-//     against a turn that has moved on (a new user_message opened a newer turn, or the
-//     turn closed on a terminal agent_message) is refused protocol.CodeStaleTurn and
-//     types NOTHING. Idle (no open turn) matches the empty expected_turn.
+//   - ORDERING: expected_turn is signed render context, not a destructive-target
+//     precondition. Accepted messages enter the session FIFO and are delivered against
+//     the daemon/provider's current state, so a newer or closed rendered turn does not
+//     make ordinary conversation text stale. Stop remains strictly turn-scoped.
 //   - APPLICATION: an accepted send writes the text into the session's PTY through the
 //     daemon's own input path with submit framing (the r3p submit-boundary discipline:
 //     the CR that runs the message never shares a write with it), observable here as the
@@ -97,10 +96,10 @@ func TestR6ComposerApply_AnIdleSessionAcceptsTheEmptyExpectedTurnAndTypesTheText
 	}
 }
 
-// TestR6ComposerApply_ATurnAdvancingBetweenRenderAndTapRefusesStaleTurnAndTypesNothing
-// is M2.4's named race test: the phone rendered turn A, the owner asked a new question at
-// the terminal (turn B), then the tap landed. IS-LIFE-5: refused, never misapplied.
-func TestR6ComposerApply_ATurnAdvancingBetweenRenderAndTapRefusesStaleTurnAndTypesNothing(t *testing.T) {
+// TestR6ComposerApply_ATurnAdvancingBetweenRenderAndTapQueuesTheMessageInDialogOrder
+// pins the conversational contract: the phone rendered turn A, the owner opened turn B,
+// and the phone's message still joins the current dialog rather than becoming stale.
+func TestR6ComposerApply_ATurnAdvancingBetweenRenderAndTapQueuesTheMessageInDialogOrder(t *testing.T) {
 	r := newInjectRig(t, composerGrid, claudeApproval("req-composer-race"))
 	machine := r.sk.api.endpointID
 	already := len(interactionItems(t, r.sk, r.local))
@@ -114,30 +113,27 @@ func TestR6ComposerApply_ATurnAdvancingBetweenRenderAndTapRefusesStaleTurnAndTyp
 	code, err := r.sk.api.ComposerSend(machine, "devA:01JRACE", protocol.ComposerSendReq{
 		Session: r.session, ExpectedTurn: turnA, Text: "reply to the first question",
 	})
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("send against the superseded turn = code %q err %v, want stale_turn: the tap "+
-			"landed after the turn moved on and must be refused, never misapplied (IS-LIFE-5)", code, err)
+	if err != nil || code != "" {
+		t.Fatalf("send carrying superseded render context refused: code %q err %v", code, err)
 	}
-	r.assertNothingWasTyped(t)
 
-	// The refusal is a precondition, not a lockout: the same send against the CURRENT
-	// turn goes through.
+	// A send carrying the current rendered id follows it in the same FIFO.
 	code, err = r.sk.api.ComposerSend(machine, "devA:01JRACE2", protocol.ComposerSendReq{
 		Session: r.session, ExpectedTurn: turnB, Text: "reply to the second question",
 	})
 	if err != nil || code != "" {
 		t.Fatalf("send against the current turn refused: code %q err %v", code, err)
 	}
-	ok, drained := awaitFrames(r.att, "got:", 20*time.Second)
-	if !ok || !strings.Contains(drained, "reply to the second question") {
-		t.Errorf("the current-turn send never reached the session's stdin (ok=%v drained %q)", ok, drained)
+	lines := awaitSubmittedLines(r.att, 2, 20*time.Second)
+	if len(lines) < 2 || lines[0] != "reply to the first question" || lines[1] != "reply to the second question" {
+		t.Fatalf("queued messages reached the session as %q, want dialog order [first second]", lines)
 	}
 }
 
-// TestR6ComposerApply_AClosedTurnRefusesItsOldIdAndAcceptsIdle covers the other ending
-// IS-ENV-1 defines: the turn closed on a terminal agent_message, so the old id is stale
-// AND the session is idle again -- the empty expected_turn is the one that matches.
-func TestR6ComposerApply_AClosedTurnRefusesItsOldIdAndAcceptsIdle(t *testing.T) {
+// TestR6ComposerApply_AClosedRenderedTurnStillQueuesAConversationFollowup covers the other
+// transition IS-ENV-1 defines: the turn closed before the tap, so the queued message starts
+// the next conversational turn instead of asking the user to resend the same words.
+func TestR6ComposerApply_AClosedRenderedTurnStillQueuesAConversationFollowup(t *testing.T) {
 	r := newInjectRig(t, composerGrid, claudeApproval("req-composer-closed"))
 	machine := r.sk.api.endpointID
 	already := len(interactionItems(t, r.sk, r.local))
@@ -150,16 +146,19 @@ func TestR6ComposerApply_AClosedTurnRefusesItsOldIdAndAcceptsIdle(t *testing.T) 
 	code, err := r.sk.api.ComposerSend(machine, "devA:01JCLOSED", protocol.ComposerSendReq{
 		Session: r.session, ExpectedTurn: turnA, Text: "follow-up against a finished turn",
 	})
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("send against the closed turn = code %q err %v, want stale_turn", code, err)
+	if err != nil || code != "" {
+		t.Fatalf("follow-up carrying a closed rendered turn refused: code %q err %v", code, err)
 	}
-	r.assertNothingWasTyped(t)
 
 	code, err = r.sk.api.ComposerSend(machine, "devA:01JAFTER", protocol.ComposerSendReq{
 		Session: r.session, ExpectedTurn: "", Text: "fresh follow-up",
 	})
 	if err != nil || code != "" {
 		t.Fatalf("idle send after the turn closed refused: code %q err %v", code, err)
+	}
+	lines := awaitSubmittedLines(r.att, 2, 20*time.Second)
+	if len(lines) < 2 || lines[0] != "follow-up against a finished turn" || lines[1] != "fresh follow-up" {
+		t.Fatalf("post-close messages reached the session as %q, want both in FIFO order", lines)
 	}
 }
 

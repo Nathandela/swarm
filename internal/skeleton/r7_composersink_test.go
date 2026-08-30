@@ -167,6 +167,45 @@ func TestR7ComposerSink_AnIdleBackendSessionDispatchesTurnStartAndTypesNOTHING(t
 	r.assertPTYUntouched(t)
 }
 
+// TestR7ComposerSink_TwoImmediateIdleSendsStartOnceThenSteerInOrder is the queue boundary:
+// the app-server answers turn/start before its turn/started notification necessarily reaches
+// the daemon. A second message accepted in that interval must use the native turn id returned by
+// the first call and steer that turn; issuing a second turn/start makes the result timing-dependent
+// and can create a competing conversation.
+func TestR7ComposerSink_TwoImmediateIdleSendsStartOnceThenSteerInOrder(t *testing.T) {
+	r := newR7ComposerRig(t, true)
+
+	if code, err := r.send(t, "", "first", "devA:01JFIFOFIRST000000000000"); err != nil || code != "" {
+		t.Fatalf("first idle send refused: code %q err %v", code, err)
+	}
+	if code, err := r.send(t, "", "second", "devA:01JFIFOSECOND00000000000"); err != nil || code != "" {
+		t.Fatalf("second immediate send refused: code %q err %v", code, err)
+	}
+
+	calls := r.backend.recorded()
+	if len(calls) != 2 {
+		t.Fatalf("backend calls = %d, want 2", len(calls))
+	}
+	if calls[0].Method != "turn/start" || calls[1].Method != "turn/steer" {
+		t.Fatalf("immediate sends dispatched %q then %q, want turn/start then turn/steer", calls[0].Method, calls[1].Method)
+	}
+	var steer struct {
+		ExpectedTurnID string `json:"expectedTurnId"`
+		Input          []struct {
+			Text string `json:"text"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(calls[1].Params, &steer); err != nil {
+		t.Fatalf("decode second call: %v", err)
+	}
+	if steer.ExpectedTurnID != r7NativeTurnID {
+		t.Errorf("second send steered native turn %q, want turn/start's returned %q", steer.ExpectedTurnID, r7NativeTurnID)
+	}
+	if len(steer.Input) != 1 || steer.Input[0].Text != "second" {
+		t.Errorf("second steer input = %+v, want the second message intact", steer.Input)
+	}
+}
+
 // TestR7ComposerSink_AMidTurnSendDispatchesTurnSteerCarryingTheNATIVEExpectedTurnId is the
 // mid-turn arm, and the guard is the CLI's own: turn/steer's expectedTurnId is documented in
 // the generated binding as "Required active turn id precondition. The request fails when it
@@ -211,32 +250,24 @@ func TestR7ComposerSink_AMidTurnSendDispatchesTurnSteerCarryingTheNATIVEExpected
 	r.assertPTYUntouched(t)
 }
 
-// TestR7ComposerSink_TheR6ExpectedTurnPreconditionSTILLApplies. R7 dispatches behind the ONE op
-// R6 built, which means R6's IS-LIFE-5 precondition is checked BEFORE anything is dispatched --
-// the same race test, on the new sink: refused, never misapplied, and no RPC sent.
-func TestR7ComposerSink_TheR6ExpectedTurnPreconditionSTILLApplies(t *testing.T) {
+// TestR7ComposerSink_RenderedTurnIsAdvisoryForSend pins the queue migration. expected_turn stays
+// signed so old/new peers share one wire shape, but a composer message is ordered work rather than
+// a delayed tap on a destructive target. The daemon dispatches it against its current native turn;
+// Stop keeps the strict precondition in the interrupt tests below.
+func TestR7ComposerSink_RenderedTurnIsAdvisoryForSend(t *testing.T) {
 	r := newR7ComposerRig(t, true)
-	already := len(interactionItems(t, r.sk, r.local))
+	r7OpenNativeTurn(t, r)
 
-	r.adapter.items = []adapter.Interaction{{
-		Kind: adapter.KindUserMessage, Text: "first question", Source: adapter.SourceOwner, Ref: "um-a",
-	}}
-	turnA := r6OpenTurn(t, r.sk, r.local, "first question", already)
-	r.adapter.items = []adapter.Interaction{{
-		Kind: adapter.KindUserMessage, Text: "second question", Source: adapter.SourceOwner, Ref: "um-b",
-	}}
-	turnB := r6OpenTurn(t, r.sk, r.local, "second question", already+1)
-	if turnA == turnB {
-		t.Fatalf("two user_messages share one turn id %q", turnA)
+	code, err := r.send(t, "a-rendered-turn-that-is-no-longer-current", "use the latest context", "devA:01JADVISORY0000000000000")
+	if err != nil || code != "" {
+		t.Fatalf("send carrying stale rendered context was refused: code %q err %v", code, err)
 	}
-
-	code, _ := r.send(t, turnA, "reply to the first", "devA:01JSTALE000000000000000")
-	if code != protocol.CodeStaleTurn {
-		t.Fatalf("send against the superseded turn = %q, want stale_turn", code)
+	if got := methodsOf(r.backend); len(got) != 1 || got[0] != "turn/steer" {
+		t.Fatalf("advisory send dispatched %v, want one turn/steer against current state", got)
 	}
-	if len(r.backend.calls) != 0 {
-		t.Errorf("a REFUSED send still made RPCs %v; the precondition exists so a stale tap does "+
-			"NOTHING, and an RPC is as much a side effect as a keystroke", methodsOf(r.backend))
+	params := r7CallParams(t, r.backend, "turn/steer")
+	if got, _ := params["expectedTurnId"].(string); got != r7NativeTurnID {
+		t.Errorf("turn/steer expectedTurnId = %q, want current native turn %q", got, r7NativeTurnID)
 	}
 	r.assertPTYUntouched(t)
 }

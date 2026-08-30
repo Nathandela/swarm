@@ -61,7 +61,9 @@ package shim
 // retained window (something folded past what it last observed) -- both report an
 // honest gap rather than silently returning nothing or skipping over the hole.
 import (
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,6 +73,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // HookSpoolFile is the spool's side-file name, sibling of SnapshotFile/ExitFile/
@@ -85,6 +88,27 @@ const hookRecordHeaderLen = 8 + 4
 
 // hookFloorSuffix names the fold-cursor sidecar, sibling of the spool file itself.
 const hookFloorSuffix = ".floor"
+
+// hookIncarnationSuffix names the sequence-space identity sidecar. The spool's
+// numeric sequence starts at one again when the file is deleted and recreated, so
+// a boundary is identified by this value plus its sequence, never by the sequence
+// alone.
+const hookIncarnationSuffix = ".incarnation"
+
+// hookOpenLockSuffix names the persistent advisory-lock inode that serializes
+// sequence-space discovery and creation. It is deliberately never unlinked:
+// replacing a lock path while another opener waits on its old inode would split
+// the critical section.
+const hookOpenLockSuffix = ".open.lock"
+
+// LegacyHookSpoolIncarnation is the explicit namespace for a disk-only spool that
+// predates the incarnation sidecar and has not been opened by this build.
+const LegacyHookSpoolIncarnation = "legacy"
+
+type hookSpoolIdentity struct {
+	ID            string `json:"id"`
+	AdoptedLegacy bool   `json:"adopted_legacy,omitempty"`
+}
 
 // HookRecord is one durably-spooled hook event.
 type HookRecord struct {
@@ -113,6 +137,11 @@ var ErrHookSpoolTorn = errors.New("shim: hook spool has a proven tear and perman
 // window playbook 6.1 names. Nil in production.
 var testHookAfterSpoolFsync func()
 
+// testHookAfterHookSpoolCreate, when non-nil, runs after a missing spool path
+// has been created but before OpenHookSpool continues initialization. Tests use
+// a panic here to model process death at the creation durability boundary.
+var testHookAfterHookSpoolCreate func()
+
 // hookSpoolSync is the fsync Append commits a record with, behind a seam so the CALL
 // itself is assertable (R6 review fix-pack round 1, MEDIUM 5). It was previously an
 // inline s.f.Sync(): deleting that line left every durability test in this package
@@ -139,6 +168,11 @@ type HookSpool struct {
 	// gapAt is 0 while no tear is proven; else the earliest provable torn sequence,
 	// latched for this instance's lifetime once set.
 	gapAt uint64
+	// incarnation is stable for this file's sequence space, including across
+	// compaction/reopen. adoptedLegacy says it was minted for a pre-existing
+	// pre-identity spool, so a decimal legacy gap checkpoint can be migrated once.
+	incarnation   string
+	adoptedLegacy bool
 }
 
 // OpenHookSpool opens (or creates, at 0600) the spool file at path -- and its parent
@@ -156,14 +190,76 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("shim: hook spool dir: %w", err)
 	}
-	_, statErr := os.Stat(path)
-	created := os.IsNotExist(statErr)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	openLock, err := acquireHookSpoolOpenLock(path)
 	if err != nil {
-		return nil, fmt.Errorf("shim: open hook spool: %w", err)
+		return nil, err
 	}
+	defer releaseHookSpoolOpenLock(openLock)
+
+	// Open without O_CREATE first. The old stat-then-O_CREATE sequence had two
+	// correctness holes: process death after creation made restart misclassify the
+	// new empty file as the old generation, and a concurrent creator could change
+	// the answer between Stat and OpenFile. Under the per-path flock there is one
+	// decision. A missing path commits the new floor/identity first, then publishes
+	// the empty spool with O_EXCL.
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	created := false
+	var identity hookSpoolIdentity
+	if errors.Is(err, os.ErrNotExist) {
+		fresh, ferr := mintHookSpoolIncarnation()
+		if ferr != nil {
+			return nil, fmt.Errorf("shim: mint hook spool incarnation: %w", ferr)
+		}
+		identity = hookSpoolIdentity{ID: fresh}
+		if rerr := os.Remove(hookFloorPath(path)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			return nil, fmt.Errorf("shim: reset hook spool floor for new incarnation: %w", rerr)
+		}
+		// The identity writer's directory fsync commits both the floor removal and
+		// the new identity before the spool path can become visible.
+		if ierr := writeHookSpoolIdentity(path, identity); ierr != nil {
+			return nil, fmt.Errorf("shim: persist hook spool incarnation: %w", ierr)
+		}
+		f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			// Every cooperating opener holds openLock. A path appearing here was
+			// created by an older/uncoordinated writer. Refuse rather than bind our
+			// newly committed identity to bytes we did not create.
+			return nil, errors.New("shim: hook spool appeared while its generation was being initialized")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("shim: create hook spool: %w", err)
+		}
+		created = true
+		if testHookAfterHookSpoolCreate != nil {
+			testHookAfterHookSpoolCreate()
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("shim: open hook spool: %w", err)
+	} else {
+		identity, err = readHookSpoolIdentity(path)
+		if errors.Is(err, os.ErrNotExist) {
+			fresh, ferr := mintHookSpoolIncarnation()
+			if ferr != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("shim: mint hook spool incarnation: %w", ferr)
+			}
+			identity = hookSpoolIdentity{ID: fresh, AdoptedLegacy: true}
+			if ierr := writeHookSpoolIdentity(path, identity); ierr != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("shim: persist hook spool incarnation: %w", ierr)
+			}
+		} else if err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("shim: read hook spool incarnation: %w", err)
+		}
+	}
+	keepOpen := false
+	defer func() {
+		if !keepOpen {
+			_ = f.Close()
+		}
+	}()
 	if err := f.Chmod(0o600); err != nil { // re-tighten regardless of umask or a pre-existing mode
-		_ = f.Close()
 		return nil, fmt.Errorf("shim: chmod hook spool: %w", err)
 	}
 	if created {
@@ -176,14 +272,15 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 		// Failing here is correct rather than best-effort: an un-committed spool file
 		// cannot honour the ack contract, and Run degrades cleanly to no hook socket.
 		if err := fsyncDir(dir); err != nil {
-			_ = f.Close()
 			return nil, fmt.Errorf("shim: fsync hook spool dir after create: %w", err)
 		}
 	}
-	s := &HookSpool{path: path, f: f, maxBytes: maxBytes, lastSeq: readHookFloor(path)}
+	s := &HookSpool{
+		path: path, f: f, maxBytes: maxBytes, lastSeq: readHookFloor(path),
+		incarnation: identity.ID, adoptedLegacy: identity.AdoptedLegacy,
+	}
 	recs, cleanEnd, tornSeq, torn, err := s.parseLocked()
 	if err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	if n := len(recs); n > 0 && recs[n-1].Seq > s.lastSeq {
@@ -196,7 +293,30 @@ func OpenHookSpool(path string, maxBytes int) (*HookSpool, error) {
 		}
 		s.gapAt = tornSeq
 	}
+	keepOpen = true
 	return s, nil
+}
+
+// IncarnationID is this spool's stable sequence-space identity.
+func (s *HookSpool) IncarnationID() string { return s.incarnation }
+
+// AdoptedLegacySequence reports that this identity was minted for a pre-existing
+// spool, allowing a decimal pre-identity gap checkpoint to migrate without a
+// duplicate boundary.
+func (s *HookSpool) AdoptedLegacySequence() bool { return s.adoptedLegacy }
+
+// ReadHookSpoolIncarnation reads a spool's identity without opening or mutating it.
+// An absent sidecar is the explicit legacy namespace, used by final drain over a
+// disk-only spool written by an older shim.
+func ReadHookSpoolIncarnation(path string) (id string, adoptedLegacy bool, err error) {
+	identity, err := readHookSpoolIdentity(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return LegacyHookSpoolIncarnation, true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return identity.ID, identity.AdoptedLegacy, nil
 }
 
 // ReadHookSpoolFile is ReadFrom against a spool FILE, with no live HookSpool and no
@@ -616,6 +736,70 @@ func writeHookFloor(spoolPath string, seq uint64) error {
 	dir := filepath.Dir(spoolPath)
 	name := filepath.Base(hookFloorPath(spoolPath))
 	if err := writeFileAtomic(dir, name, []byte(strconv.FormatUint(seq, 10))); err != nil {
+		return err
+	}
+	return fsyncDir(dir)
+}
+
+func hookSpoolIdentityPath(spoolPath string) string { return spoolPath + hookIncarnationSuffix }
+
+func hookSpoolOpenLockPath(spoolPath string) string { return spoolPath + hookOpenLockSuffix }
+
+func acquireHookSpoolOpenLock(spoolPath string) (*os.File, error) {
+	path := hookSpoolOpenLockPath(spoolPath)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("shim: open hook spool generation lock: %w", err)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("shim: chmod hook spool generation lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("shim: lock hook spool generation: %w", err)
+	}
+	return f, nil
+}
+
+func releaseHookSpoolOpenLock(f *os.File) {
+	if f == nil {
+		return
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
+}
+
+func mintHookSpoolIncarnation() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func readHookSpoolIdentity(spoolPath string) (hookSpoolIdentity, error) {
+	data, err := os.ReadFile(hookSpoolIdentityPath(spoolPath))
+	if err != nil {
+		return hookSpoolIdentity{}, err
+	}
+	var identity hookSpoolIdentity
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return hookSpoolIdentity{}, err
+	}
+	if strings.TrimSpace(identity.ID) == "" {
+		return hookSpoolIdentity{}, errors.New("shim: empty hook spool incarnation")
+	}
+	return identity, nil
+}
+
+func writeHookSpoolIdentity(spoolPath string, identity hookSpoolIdentity) error {
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(spoolPath)
+	if err := writeFileAtomic(dir, filepath.Base(hookSpoolIdentityPath(spoolPath)), data); err != nil {
 		return err
 	}
 	return fsyncDir(dir)

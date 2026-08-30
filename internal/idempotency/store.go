@@ -43,9 +43,16 @@ const logFile = "idempotency.log"
 
 // Record is one operation's durable idempotency state.
 type Record struct {
-	OperationID string          `json:"operation_id"`
-	Action      string          `json:"action"`
-	SessionID   string          `json:"session_id"`
+	OperationID string `json:"operation_id"`
+	Action      string `json:"action"`
+	SessionID   string `json:"session_id"`
+	// SessionInstance optionally fences a mutating operation to one incarnation of a
+	// reusable session id. Empty preserves records written before incarnation binding.
+	SessionInstance string `json:"session_instance,omitempty"`
+	// RequestHash binds an idempotency key to the exact signed request body. Without it,
+	// reusing one key for different text could replay the first request's cached success
+	// for words that were never delivered.
+	RequestHash string          `json:"request_hash,omitempty"`
 	Phase       Phase           `json:"phase"`
 	Outcome     json.RawMessage `json:"outcome,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
@@ -126,6 +133,13 @@ func (s *Store) replay() error {
 // for operationID already exists it is returned with existed=true (the replay
 // path): the caller MUST execute nothing and return the cached outcome.
 func (s *Store) Prepare(operationID, action, sessionID string) (Record, bool, error) {
+	return s.PrepareBound(operationID, action, sessionID, "", "")
+}
+
+// PrepareBound is Prepare with optional session-incarnation and exact-request fences. The
+// bindings are part of the durable claim, so a delayed message cannot be applied to a
+// replacement process and a colliding id cannot inherit another body's terminal outcome.
+func (s *Store) PrepareBound(operationID, action, sessionID, sessionInstance, requestHash string) (Record, bool, error) {
 	if operationID == "" {
 		return Record{}, false, errors.New("idempotency: empty operation_id")
 	}
@@ -139,12 +153,14 @@ func (s *Store) Prepare(operationID, action, sessionID string) (Record, bool, er
 	}
 	now := s.clock()
 	rec := Record{
-		OperationID: operationID,
-		Action:      action,
-		SessionID:   sessionID,
-		Phase:       PhasePrepared,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		OperationID:     operationID,
+		Action:          action,
+		SessionID:       sessionID,
+		SessionInstance: sessionInstance,
+		RequestHash:     requestHash,
+		Phase:           PhasePrepared,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := s.appendLocked(rec); err != nil {
 		return Record{}, false, err
@@ -156,7 +172,22 @@ func (s *Store) Prepare(operationID, action, sessionID string) (Record, bool, er
 // Begin transitions prepared -> executing (fsync), immediately before the side
 // effect.
 func (s *Store) Begin(operationID string) error {
-	return s.transition(operationID, PhaseExecuting, nil, false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.records[operationID]
+	if !ok {
+		return fmt.Errorf("idempotency: unknown operation_id %q", operationID)
+	}
+	if rec.Phase != PhasePrepared {
+		return fmt.Errorf("idempotency: operation_id %q is %s, not prepared", operationID, rec.Phase)
+	}
+	rec.Phase = PhaseExecuting
+	rec.UpdatedAt = s.clock()
+	if err := s.appendLocked(rec); err != nil {
+		return err
+	}
+	s.records[operationID] = rec
+	return nil
 }
 
 // Complete transitions -> completed (fsync), after the side effect commits.

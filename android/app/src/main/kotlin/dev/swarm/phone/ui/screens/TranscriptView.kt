@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.kit.BubbleState
 import dev.swarm.phone.ui.kit.CtaKind
+import dev.swarm.phone.ui.kit.NoticeKind
 import dev.swarm.phone.ui.kit.activityRow
 import dev.swarm.phone.ui.kit.approvalSheet
 import dev.swarm.phone.ui.kit.ctaButton
@@ -18,6 +19,7 @@ import dev.swarm.phone.ui.kit.markdownBody
 import dev.swarm.phone.ui.kit.messageBubble
 import dev.swarm.phone.ui.kit.monoWell
 import dev.swarm.phone.ui.kit.notice
+import dev.swarm.phone.ui.kit.noticeDetail
 import dev.swarm.phone.ui.kit.scrolledHorizontally
 import dev.swarm.phone.ui.kit.sessionList
 
@@ -154,6 +156,12 @@ object TranscriptTag {
      * test find either and assert the other's behaviour.
      */
     const val BUBBLE = "transcript.bubble"
+
+    /** The product copy explaining one refused local send, attached to that send's bubble. */
+    const val SEND_NOTICE = "transcript.send.notice"
+
+    /** The machine-authored diagnostic belonging to [SEND_NOTICE]. */
+    const val SEND_NOTICE_DETAIL = "transcript.send.notice.detail"
 
     /**
      * One file the agent changed, as R9's chip (`fileChangeRow`).
@@ -372,6 +380,18 @@ internal fun transcriptBlockViews(
             else -> rowFor(context, block, onToolTap)
         },
     )
+    if (block.sendNotice.isNotEmpty()) {
+        views.add(
+            notice(context, block.sendNotice, NoticeKind.ERROR)
+                .apply { tag = TranscriptTag.SEND_NOTICE },
+        )
+        if (block.sendNoticeDetail.isNotEmpty()) {
+            views.add(
+                noticeDetail(context, block.sendNoticeDetail)
+                    .apply { tag = TranscriptTag.SEND_NOTICE_DETAIL },
+            )
+        }
+    }
     if (block.well.isNotEmpty()) {
         // `.scrolledHorizontally()` (agents-tracker-ksvb.7): a tool's stdout is exactly the
         // column-aligned text `setHorizontallyScrolling` refuses to wrap, and a line past this
@@ -437,6 +457,8 @@ internal fun transcriptBlockViewCount(
     onOutput: ((String) -> Unit)? = null,
 ): Int =
     1 +
+        (if (block.sendNotice.isNotEmpty()) 1 else 0) +
+        (if (block.sendNotice.isNotEmpty() && block.sendNoticeDetail.isNotEmpty()) 1 else 0) +
         (if (block.well.isNotEmpty()) 1 else 0) +
         (if (block.route is TranscriptRoute.Output && onOutput != null) 1 else 0) +
         (if (block.offersDetail && onDetail != null) 1 else 0)

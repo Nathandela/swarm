@@ -517,8 +517,8 @@ func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *tes
 	if caps.StructuredChat {
 		t.Errorf("StructuredChat still true after a proven gap — T2 rule 2's degrade never fired")
 	}
-	if !caps.TerminalFallback {
-		t.Errorf("TerminalFallback still false after a structured_chat degrade — ADR-017 T2 rule 2: a degrade forces the fallback surface on")
+	if caps.TerminalFallback || caps.TerminalControl {
+		t.Errorf("a history-gap degrade granted terminal authority: %+v", caps)
 	}
 
 	// One-way: a later re-registration (what a reconcile would do) must never resurrect it.
@@ -555,7 +555,7 @@ func TestHookDrainer_OnAGap_EmitsStructuredGapAndDegradesCapabilityOneWay(t *tes
 	if caps3.StructuredChat {
 		t.Fatalf("StructuredChat = true after a daemon RESTART re-registered the launch-time record — the degrade must be durable, not die with the incarnation that authored it (ADR-017 T2 rule 2)")
 	}
-	if !caps3.TerminalFallback {
-		t.Fatalf("TerminalFallback = false after a daemon restart of a degraded session, want true")
+	if caps3.TerminalFallback || caps3.TerminalControl {
+		t.Fatalf("daemon restart granted terminal authority to a history-torn session: %+v", caps3)
 	}
 }

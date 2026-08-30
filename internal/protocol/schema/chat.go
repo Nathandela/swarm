@@ -11,13 +11,14 @@ import "crypto/sha256"
 
 // ComposerSendReq is the composer_send body (IS-LIFE-5): one structured message from the
 // phone into a session's agent CLI. ExpectedTurn is the turn the phone RENDERED the send
-// against -- the daemon refuses stale_turn when it no longer names the session's current
-// turn, so a tap that lands after the conversation moved on is refused, never misapplied.
-// An idle session (no open turn) is matched by the empty ExpectedTurn.
+// against. It remains signed render context for wire compatibility and diagnostics, but is
+// advisory for message delivery: the daemon orders accepted messages per session and applies
+// each queue head to current provider state. TurnInterruptReq remains strictly turn-scoped.
 type ComposerSendReq struct {
-	Session      string `json:"session"`
-	ExpectedTurn string `json:"expected_turn,omitempty"`
-	Text         string `json:"text"`
+	Session         string `json:"session"`
+	SessionInstance string `json:"session_instance,omitempty"`
+	ExpectedTurn    string `json:"expected_turn,omitempty"`
+	Text            string `json:"text"`
 }
 
 // TurnInterruptReq is the turn_interrupt body (Mirror M2.4).
@@ -79,9 +80,9 @@ type InteractionDetailReq struct {
 
 // Stable refusal codes of the complete chat (Wave R6), joining the existing taxonomy.
 const (
-	// CodeStaleTurn refuses a composer_send whose expected_turn no longer names the
-	// session's current turn (IS-LIFE-5). Its OWN code, distinct from stale_approval:
-	// different subject, different remedy (re-read the transcript, not re-list cards).
+	// CodeStaleTurn refuses a turn_interrupt whose expected_turn no longer names the
+	// session's current turn. It remains in the shared vocabulary for older peers that
+	// enforced the former composer precondition.
 	CodeStaleTurn ErrorCode = "stale_turn"
 	// CodeInterruptUnsupported is the honest ADR-017-shaped refusal for a turn_interrupt
 	// against a session whose adapter proves no semantic interrupt seam: the caller is
@@ -119,9 +120,9 @@ const (
 
 // ComposerSendContentHash is the 32-byte content hash bound into a composer_send command's
 // signature, mirroring SessionLaunchContentHash exactly: it binds the signed tuple to the
-// session, the expected turn and the text, so a compromised gateway cannot re-point a
-// validly-signed send at different text or a different turn. A nil body hashes as the zero
-// body: structurally refused later, never a panic at the choke point.
+// session, rendered-turn context and text, so a compromised gateway cannot re-point a
+// validly-signed send or falsify its context. A nil body hashes as the zero body:
+// structurally refused later, never a panic at the choke point.
 //
 // Signer (phonecore.SignComposerSend) and verifier (protocol handleComposerSend) both call
 // THIS function; re-deriving the length-prefixed encoding elsewhere is forbidden for
@@ -132,6 +133,13 @@ func ComposerSendContentHash(req *ComposerSendReq) []byte {
 	}
 	h := sha256.New()
 	writeHashField(h, []byte(req.Session))
+	// Conditional for rolling compatibility: an old phone signed the original three
+	// fields and sends no instance. That signature still authenticates, after which the
+	// daemon returns the explicit upgrade-required structural refusal. New bodies bind
+	// the incarnation and cannot be re-pointed at a replacement session.
+	if req.SessionInstance != "" {
+		writeHashField(h, []byte(req.SessionInstance))
+	}
 	writeHashField(h, []byte(req.ExpectedTurn))
 	writeHashField(h, []byte(req.Text))
 	return h.Sum(nil)

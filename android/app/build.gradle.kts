@@ -145,7 +145,9 @@ fun pinnedApiLevel(key: String): Int = pinned(key).toInt()
 // forbidden name immediately followed by a quote, which a full name inside a string literal
 // trips whether or not it is a secret.
 fun operatorSetting(name: String): String? =
-    findProperty(name) as String? ?: System.getenv(name)
+    (findProperty(name) as String? ?: System.getenv(name))
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
 
 fun releaseSigningSetting(suffix: String): String? = operatorSetting("SWARM_RELEASE_$suffix")
 
@@ -463,7 +465,7 @@ android {
         // on, so a build from a branch behind main emits a LOWER code than one already
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
-        versionCode = 25
+        versionCode = 26
         versionName = "0.13.11"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and

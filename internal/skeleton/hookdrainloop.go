@@ -8,9 +8,9 @@ package skeleton
 // fallback; and no HookDrainer was constructed outside a test, so EmitStructuredGap
 // could not fire even in principle. Playbook §6.1's obligations -- "the daemon drains
 // the spool idempotently", "daemon unavailability neither fails a provider hook nor
-// loses an accepted item", "an unrecoverable spool/cursor gap emits an exact
-// structured_gap boundary" -- are properties of a RUNNING system, so this file is the
-// part that makes them true of one. The launch half lives in internal/daemon
+// loses an accepted item", "a spool/cursor gap emits an exact structured_gap boundary
+// before retained/future events resume" -- are properties of a RUNNING system, so this
+// file is the part that makes them true of one. The launch half lives in internal/daemon
 // (spawnShim mints the socket path and the DRAIN token, injectHookEnv points the
 // agent at it, SessionHookChannel recovers all of it after a restart).
 //
@@ -147,7 +147,7 @@ func (d *Daemon) stopHookDrains() {
 }
 
 // runHookDrain polls one session's spool until the session ends, the daemon closes, or
-// the channel proves an unrecoverable gap.
+// a gap remains unreadable even after the explicit-boundary recovery reset.
 func (d *Daemon) runHookDrain(sessionID string, hd *HookDrainer, stop chan struct{}) {
 	defer d.drains.wg.Done()
 
@@ -167,12 +167,17 @@ func (d *Daemon) runHookDrain(sessionID string, hd *HookDrainer, stop chan struc
 		switch {
 		case err == nil:
 			everDrained = true
+		case errors.Is(err, ErrHookDrainGap) && hd.recoveringGap():
+			// The boundary is durable and the cursor now spells "adopt the
+			// retained sequence space". Stay alive: the next tick folds the
+			// retained side, and every later tick keeps capturing future events.
+			// No record beyond the hole was applied in the boundary-producing
+			// drain, so journal chronology remains explicit.
+			continue
 		case errors.Is(err, ErrHookDrainGap):
-			// Proven, unrecoverable, already emitted once per boundary and already
-			// degraded one-way (hookdrain.go). The cursor is pinned at the boundary
-			// forever, so every further poll would rediscover the identical hole and
-			// learn nothing. Stop: the session keeps running, its terminal fallback is
-			// on, and nothing here fabricates a completion (playbook §6.1).
+			// The SAME boundary survived a read from the reset coordinate. There
+			// is no retained far side to adopt (the torn-tail shape), so every
+			// further poll would rediscover identical bytes and learn nothing.
 			return
 		case everDrained && !loggedFailure:
 			// A channel that WORKED and then stopped working is worth exactly one line

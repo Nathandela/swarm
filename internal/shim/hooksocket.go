@@ -79,6 +79,13 @@ type HookDrainResponse struct {
 	Records     []HookRecord `json:"records"`
 	Gap         bool         `json:"gap,omitempty"`
 	GapBoundary uint64       `json:"gap_boundary,omitempty"`
+	// SpoolIncarnation qualifies every numeric sequence in this response. Empty is
+	// the backward-compatible response from an older shim.
+	SpoolIncarnation string `json:"spool_incarnation,omitempty"`
+	// SpoolAdoptedLegacy lets a new shim migrate a decimal gap checkpoint written
+	// before incarnation identities existed, without treating a freshly recreated
+	// spool with the same numeric boundary as the old sequence space.
+	SpoolAdoptedLegacy bool `json:"spool_adopted_legacy,omitempty"`
 }
 
 // hookServer serves cfg.HookSocketPath: a second listener, independent of server's
@@ -219,7 +226,11 @@ func (h *hookServer) serveDrain(conn net.Conn) {
 	if err != nil {
 		return
 	}
-	resp, err := json.Marshal(HookDrainResponse{Records: recs, Gap: hasGap, GapBoundary: gapAt})
+	resp, err := json.Marshal(HookDrainResponse{
+		Records: recs, Gap: hasGap, GapBoundary: gapAt,
+		SpoolIncarnation:   h.spool.IncarnationID(),
+		SpoolAdoptedLegacy: h.spool.AdoptedLegacySequence(),
+	})
 	if err != nil {
 		return
 	}
