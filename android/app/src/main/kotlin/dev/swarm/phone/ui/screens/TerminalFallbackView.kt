@@ -49,6 +49,9 @@ object TerminalFallbackTag {
     /** The staleness indicator, derived from the snapshot's own age. */
     const val STALENESS = "terminal.fallback.staleness"
 
+    /** Phone-authored state while no terminal frame can be drawn. */
+    const val SNAPSHOT_STATE = "terminal.fallback.snapshot_state"
+
     /** The interleaving warning. */
     const val INTERLEAVING = "terminal.fallback.interleaving"
 
@@ -78,6 +81,9 @@ object TerminalFallbackTag {
  *  terminal, and the same snapshot on a dead stream is an unknown one.
  * @param controlRemaining milliseconds left on a live control generation, or null when there is
  *  none. Null draws the read-only sentence instead of the banner, so "read only" is STATED.
+ * @param snapshotNotice phone-authored loading or routed-failure copy. It is drawn as chrome and
+ *  never joined to [rows], which remain exclusively machine-authored terminal text.
+ * @param snapshotUnavailable whether [snapshotNotice] is a refusal rather than a loading state.
  * @param onRelease the in-view release. Null draws no control affordance at all.
  */
 fun terminalFallbackView(
@@ -87,6 +93,8 @@ fun terminalFallbackView(
     gridRows: Int,
     snapshotAge: Long,
     streamStale: Boolean = false,
+    snapshotNotice: String = "",
+    snapshotUnavailable: Boolean = false,
     controlRemaining: Long? = null,
     onBack: (() -> Unit)? = null,
     onRelease: (() -> Unit)? = null,
@@ -121,6 +129,19 @@ fun terminalFallbackView(
         column.addView(
             notice(context, staleness, NoticeKind.ERROR).apply {
                 tag = TerminalFallbackTag.STALENESS
+                screenAir()
+            },
+        )
+    }
+
+    if (snapshotNotice.isNotEmpty()) {
+        column.addView(
+            notice(
+                context,
+                snapshotNotice,
+                if (snapshotUnavailable) NoticeKind.ERROR else NoticeKind.INFO,
+            ).apply {
+                tag = TerminalFallbackTag.SNAPSHOT_STATE
                 screenAir()
             },
         )

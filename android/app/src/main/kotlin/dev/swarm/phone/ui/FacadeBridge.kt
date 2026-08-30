@@ -15,6 +15,25 @@ import swarmmobile.App
 import swarmmobile.Session
 
 /**
+ * Route a facade exception at a RENDER boundary without making a second JNI failure fatal.
+ *
+ * The Go classifier remains authoritative when it can answer. If the App closed between the
+ * original read and classification, the original exception is already stamped at the gomobile
+ * boundary; the pure router can still preserve that class and its remedy without touching JNI.
+ */
+internal fun routeFacadeErrorSafely(
+    message: String,
+    classify: (String) -> String,
+): RoutedError {
+    val classified = try {
+        classify(message)
+    } catch (unreadable: Exception) {
+        return ErrorRouter.route(message)
+    }
+    return ErrorRouter.route(classified)
+}
+
+/**
  * Phase B slice S16 -- where the pure screen models meet the bound facade.
  *
  * WHY THIS FILE EXISTS AT ALL. The screen models in this package are pure Kotlin so their
@@ -60,6 +79,10 @@ class FacadeBridge(private val app: App) {
      * status card. Nothing about that is re-decided at this seam.
      */
     fun sessionCapabilities(sessionId: String): SessionCapabilityFacts {
+        // NOT_FOUND deliberately propagates. Unlike the optional title/group reads, capability
+        // is a routing fact: inventing `structuredChat = false` for a deleted session keeps a
+        // stale drill-down alive as a false "Chat is off" screen. drawContent's detail boundary
+        // closes that drill-down on the authoritative absence instead.
         val s = app.session(sessionId)
         return SessionCapabilityFacts(structuredChat = s.structuredChat)
     }
@@ -69,8 +92,17 @@ class FacadeBridge(private val app: App) {
      * a `terminal_fallback` session to. Null for every other session, because
      * [TerminalFallbackModel.from] answers null unless the MACHINE chose that destination.
      */
-    fun terminalFallback(sessionId: String): TerminalFallbackModel? =
-        TerminalFallbackModel.from(app.session(sessionId))
+    fun terminalFallback(sessionId: String): TerminalFallbackModel? {
+        val session = try {
+            app.session(sessionId)
+        } catch (refused: Exception) {
+            // A row may disappear between the roster draw and this main-thread redraw. It no
+            // longer has a destination to render; every other class remains a real failure.
+            if (!isAwaitingFirstFrame(classOf(refused))) throw refused
+            return null
+        }
+        return TerminalFallbackModel.from(session)
+    }
 
     /**
      * The fallback screen's own binding to the facade, FOR A SESSION THE MACHINE ROUTED THERE
@@ -96,7 +128,7 @@ class FacadeBridge(private val app: App) {
      * capability read and the peek now live together in the one allowlisted file.
      */
     fun terminalRows(sessionId: String): TerminalGrid =
-        terminalFallbackBinding(sessionId)?.grid() ?: TerminalGrid.EMPTY
+        terminalFallbackBinding(sessionId)?.grid() ?: TerminalGrid.ROUTE_GONE
 
     /**
      * PB-APP-2's screen, with its PB-APP-8 verdict READ OFF THE HANDLE THAT CARRIED IT.
@@ -638,6 +670,10 @@ class FacadeBridge(private val app: App) {
      * by the Go side, so a screen with a live App never has to be the one that gets it right.
      */
     fun routeFacadeError(message: String): RoutedError = ErrorRouter.route(app.errorClass(message))
+
+    /** The non-throwing form for code already handling a render-time exception. */
+    fun routeFacadeErrorSafely(message: String): RoutedError =
+        routeFacadeErrorSafely(message) { original -> app.errorClass(original) }
 
     /**
      * Wave R5's preset launch snapshot (round 2; launch.presets): the machine-published rows AND

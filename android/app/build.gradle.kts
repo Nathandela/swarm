@@ -463,7 +463,7 @@ android {
         // on, so a build from a branch behind main emits a LOWER code than one already
         // published and Play refuses it for a reason that has nothing to do with the change.
         // A number a person types is a number a person can reconcile with the Console.
-        versionCode = 24
+        versionCode = 25
         versionName = "0.13.11"
 
         // PB-E2E-2. Without this the module has no instrumented test task at all and

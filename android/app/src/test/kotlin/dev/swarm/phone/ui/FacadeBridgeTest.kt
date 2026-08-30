@@ -2,6 +2,7 @@ package dev.swarm.phone.ui
 
 import java.lang.reflect.Modifier
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,6 +97,32 @@ class FacadeBridgeTest {
                 "that could not even be named is the last one to render as a quiet terminal",
             FacadeBridge.isAwaitingFirstFrame(""),
         )
+    }
+
+    @Test
+    fun `a render boundary keeps the original stamped class when live classification fails`() {
+        val routed = routeFacadeErrorSafely(
+            message = "${SwarmErrorTokens.OFFLINE}: swarmmobile: no relay connection",
+            classify = { throw IllegalStateException("${SwarmErrorTokens.APP_CLOSED}: core closed") },
+        )
+
+        assertEquals(
+            "the secondary App.ErrorClass refusal must not replace or escape the original stamped " +
+                "failure that the screen was already trying to render",
+            ErrorState.OFFLINE,
+            routed.state,
+        )
+        assertEquals(Remedy.WAIT_FOR_CONNECTION, routed.remedy)
+    }
+
+    @Test
+    fun `a successful live classification remains authoritative`() {
+        val routed = routeFacadeErrorSafely(
+            message = "platform wrapper without a token",
+            classify = { SwarmErrorTokens.REVOKED },
+        )
+
+        assertEquals(ErrorState.REVOKED, routed.state)
     }
 
     // `the answer carries no grid, and claims nothing about one` is DELETED rather than amended.

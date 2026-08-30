@@ -1,8 +1,18 @@
 package dev.swarm.phone.ui.screens
 
 import dev.swarm.phone.TerminalWatchHandle
+import dev.swarm.phone.ui.SwarmErrorTokens
 import swarmmobile.App
+import swarmmobile.Session
 import swarmmobile.Snapshot
+
+/** Whether [TerminalGrid] contains a machine-authored frame or a phone-authored read state. */
+enum class TerminalSnapshotState {
+    AVAILABLE,
+    AWAITING_SNAPSHOT,
+    UNAVAILABLE,
+    ROUTE_GONE,
+}
 
 /**
  * One fallback session's machine-sanitized grid as the screen takes it.
@@ -25,6 +35,15 @@ data class TerminalGrid(
      * rendered as the terminal is idle" that T4-b forbids.
      */
     val streamStale: Boolean,
+    /**
+     * The provenance of this value. Empty rows with zero geometry mean REAPED only for an
+     * [TerminalSnapshotState.AVAILABLE] machine-authored frame. During a cold-open the phone has
+     * no frame at all; that is [TerminalSnapshotState.AWAITING_SNAPSHOT] and must neither crash
+     * the renderer nor masquerade as the machine's explicit reap blank.
+     */
+    val snapshotState: TerminalSnapshotState = TerminalSnapshotState.AVAILABLE,
+    /** Phone-authored copy for a non-frame state. Never placed inside the terminal well. */
+    val snapshotNotice: String = "",
 ) {
     /**
      * Whether this grid is the MACHINE SAYING IT STOPPED RENDERING THIS SESSION.
@@ -43,16 +62,79 @@ data class TerminalGrid(
      * re-open the peek on every redraw while the first frame was in flight.
      */
     val machineStoppedRendering: Boolean
-        get() = gridRows <= 0 && rows.isEmpty()
+        get() = snapshotState == TerminalSnapshotState.AVAILABLE &&
+            gridRows <= 0 && rows.isEmpty()
+
+    /** Whether this value still has a fallback destination to render into. */
+    val renderableFallback: Boolean
+        get() = snapshotState != TerminalSnapshotState.ROUTE_GONE
 
     companion object {
+        const val AWAITING_SNAPSHOT_NOTICE = "Waiting for terminal output."
+
         /**
          * The grid for a session that was never routed to the fallback: no rows, no geometry,
          * and NOT asserted fresh. A caller that has no binding has nothing to show, and showing
          * nothing must not be spelled the same way as showing a screen the machine just rendered.
          */
         val EMPTY = TerminalGrid(rows = emptyList(), gridRows = 0, ageMs = 0L, streamStale = false)
+
+        /** The normal cold-open interval after the watch exists and before its first frame lands. */
+        val AWAITING_SNAPSHOT = TerminalGrid(
+            rows = emptyList(),
+            gridRows = 0,
+            ageMs = 0L,
+            streamStale = false,
+            snapshotState = TerminalSnapshotState.AWAITING_SNAPSHOT,
+            snapshotNotice = AWAITING_SNAPSHOT_NOTICE,
+        )
+
+        /** A classified facade refusal rendered at the screen boundary, outside the terminal. */
+        fun unavailable(message: String) = TerminalGrid(
+            rows = emptyList(),
+            gridRows = 0,
+            ageMs = 0L,
+            streamStale = false,
+            snapshotState = TerminalSnapshotState.UNAVAILABLE,
+            snapshotNotice = message,
+        )
+
+        /** The session or its fallback routing disappeared after the screen chose this drawer. */
+        val ROUTE_GONE = TerminalGrid(
+            rows = emptyList(),
+            gridRows = 0,
+            ageMs = 0L,
+            streamStale = false,
+            snapshotState = TerminalSnapshotState.ROUTE_GONE,
+        )
     }
+}
+
+/**
+ * Read one snapshot with the ONLY quiet refusal this path owns.
+ *
+ * The `try` is deliberately around [peek] alone. A not-found from the earlier capability/session
+ * lookup means the roster entry disappeared, and a not-found from [render] is a mapping defect;
+ * neither is the ordinary first-frame window. Every other facade class is rethrown for the
+ * screen's routed error boundary.
+ */
+internal fun <T> terminalGridFromSnapshot(
+    classify: (Exception) -> String,
+    peek: () -> T,
+    render: (T) -> TerminalGrid,
+): TerminalGrid {
+    val snapshot = try {
+        peek()
+    } catch (refused: Exception) {
+        val errorClass = try {
+            classify(refused)
+        } catch (unreadable: Exception) {
+            ""
+        }
+        if (errorClass != SwarmErrorTokens.NOT_FOUND) throw refused
+        return TerminalGrid.AWAITING_SNAPSHOT
+    }
+    return render(snapshot)
 }
 
 /**
@@ -320,10 +402,26 @@ class TerminalFallbackBinding private constructor(
          * unreachable without a capability read on THIS side too.
          */
         fun forRoutedSession(app: App, sessionId: String): TerminalFallbackBinding? {
-            if (TerminalFallbackModel.from(app.session(sessionId)) == null) {
+            val session = sessionOrNull(app, sessionId) ?: return null
+            if (TerminalFallbackModel.from(session) == null) {
                 return null
             }
             return TerminalFallbackBinding(app, sessionId)
+        }
+
+        /** A roster removal between tap and redraw is an ordinary race, and only that class is. */
+        private fun sessionOrNull(app: App, sessionId: String): Session? = try {
+            app.session(sessionId)
+        } catch (refused: Exception) {
+            if (classOf(app, refused) != SwarmErrorTokens.NOT_FOUND) throw refused
+            null
+        }
+
+        /** Preserve the original refusal if the core cannot classify it. */
+        private fun classOf(app: App, refused: Exception): String = try {
+            app.errorClass(refused.message.orEmpty())
+        } catch (unreadable: Exception) {
+            ""
         }
 
         /**
@@ -428,16 +526,22 @@ class TerminalFallbackBinding private constructor(
      * the content.
      */
     fun grid(): TerminalGrid {
-        if (TerminalFallbackModel.from(app.session(sessionId)) == null) {
-            return TerminalGrid.EMPTY
+        val session = sessionOrNull(app, sessionId) ?: return TerminalGrid.ROUTE_GONE
+        if (TerminalFallbackModel.from(session) == null) {
+            return TerminalGrid.ROUTE_GONE
         }
-        val snap: Snapshot = app.peek(sessionId)
-        val rows = if (snap.text.isEmpty()) emptyList() else snap.text.split("\n")
-        return TerminalGrid(
-            rows = rows,
-            gridRows = snap.rows.toInt(),
-            ageMs = ageOf(snap.renderedAtMillis, System.currentTimeMillis()),
-            streamStale = snap.stale,
+        return terminalGridFromSnapshot(
+            classify = { refused -> classOf(app, refused) },
+            peek = { app.peek(sessionId) },
+            render = { snap: Snapshot ->
+                val rows = if (snap.text.isEmpty()) emptyList() else snap.text.split("\n")
+                TerminalGrid(
+                    rows = rows,
+                    gridRows = snap.rows.toInt(),
+                    ageMs = ageOf(snap.renderedAtMillis, System.currentTimeMillis()),
+                    streamStale = snap.stale,
+                )
+            },
         )
     }
 

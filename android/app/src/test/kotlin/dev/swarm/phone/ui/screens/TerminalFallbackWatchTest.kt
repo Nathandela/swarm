@@ -1,6 +1,9 @@
 package dev.swarm.phone.ui.screens
 
+import dev.swarm.phone.ui.SwarmErrorTokens
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,6 +97,93 @@ class TerminalFallbackWatchTest {
                 "routes to the fallback. Holding a watch open for it is a machine rendering for a " +
                 "screen that cannot show it.",
             TerminalFallbackBinding.watchLapsed(TerminalGrid.EMPTY),
+        )
+    }
+
+    @Test
+    fun `a fallback route removed before its snapshot is a navigation signal and not a reap blank`() {
+        assertFalse(
+            "a session removed between destination routing and grid read must close the stale " +
+                "drill-down immediately; presenting it as a renderable empty grid can strand a " +
+                "blank fallback until an event that may never arrive",
+            TerminalGrid.ROUTE_GONE.renderableFallback,
+        )
+        assertFalse(
+            "route removal is not the machine's explicit terminal-watch reap frame",
+            TerminalFallbackBinding.watchLapsed(TerminalGrid.ROUTE_GONE),
+        )
+    }
+
+    @Test
+    fun `a terminal snapshot that has not arrived renders unavailable without lapsing the watch`() {
+        val grid = terminalGridFromSnapshot(
+            classify = { SwarmErrorTokens.NOT_FOUND },
+            peek = { throw IllegalStateException("swarm/not-found: swarmmobile: no terminal snapshot") },
+            render = { live(ageMs = 5_000L) },
+        )
+
+        assertEquals(
+            "the render path must turn App.peek's ordinary arrival-window refusal into an inert " +
+                "on-screen state rather than letting a gomobile exception escape on the main thread",
+            TerminalGrid.AWAITING_SNAPSHOT,
+            grid,
+        )
+        assertFalse(
+            "an unavailable snapshot is not the machine's explicit reap blank; treating it as one " +
+                "would tear down and re-open the watch on every redraw while the first frame is in flight",
+            TerminalFallbackBinding.watchLapsed(grid),
+        )
+    }
+
+    @Test
+    fun `the guarded terminal read preserves an available snapshot`() {
+        val expected = live(ageMs = 5_000L)
+
+        assertEquals(
+            expected,
+            terminalGridFromSnapshot(
+                classify = { SwarmErrorTokens.NOT_FOUND },
+                peek = { "snapshot" },
+                render = { expected },
+            ),
+        )
+    }
+
+    @Test
+    fun `only not-found is an awaiting snapshot and every other refusal propagates`() {
+        for (errorClass in listOf(
+            SwarmErrorTokens.OFFLINE,
+            SwarmErrorTokens.REVOKED,
+            SwarmErrorTokens.REPAIR_REQUIRED,
+            SwarmErrorTokens.UNKNOWN,
+        )) {
+            val refusal = IllegalStateException("$errorClass: terminal snapshot failed")
+            val thrown = assertThrows(IllegalStateException::class.java) {
+                terminalGridFromSnapshot(
+                    classify = { errorClass },
+                    peek = { throw refusal },
+                    render = { live(ageMs = 5_000L) },
+                )
+            }
+            assertTrue("the original refusal must reach the routed UI boundary", thrown === refusal)
+        }
+    }
+
+    @Test
+    fun `a mapping failure after peek is never mistaken for a missing snapshot`() {
+        val mappingFailure = IllegalStateException("${SwarmErrorTokens.NOT_FOUND}: mapping defect")
+        val thrown = assertThrows(IllegalStateException::class.java) {
+            terminalGridFromSnapshot(
+                classify = { SwarmErrorTokens.NOT_FOUND },
+                peek = { "snapshot" },
+                render = { throw mappingFailure },
+            )
+        }
+
+        assertTrue(
+            "the NOT_FOUND catch must be lexical around App.peek only; a later defect that happens " +
+                "to carry the same token must not be swallowed as an ordinary cold-open race",
+            thrown === mappingFailure,
         )
     }
 }

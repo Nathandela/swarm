@@ -26,7 +26,7 @@ import dev.swarm.phone.runtime.SocketDisposition
 import dev.swarm.phone.ui.ApprovalDecision
 import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.CommandVerdict
-import dev.swarm.phone.ui.ErrorRouter
+import dev.swarm.phone.ui.ErrorState
 import dev.swarm.phone.ui.RoutedError
 import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
@@ -95,6 +95,7 @@ import dev.swarm.phone.ui.screens.SessionDetailPanel
 import dev.swarm.phone.ui.screens.TerminalFallbackBinding
 import dev.swarm.phone.ui.screens.TerminalFallbackModel
 import dev.swarm.phone.ui.screens.TerminalGrid
+import dev.swarm.phone.ui.screens.TerminalSnapshotState
 import dev.swarm.phone.ui.screens.terminalFallbackView
 import dev.swarm.phone.ui.screens.SessionDetailScreen
 import dev.swarm.phone.ui.screens.SheetTag
@@ -2829,7 +2830,20 @@ class PhoneSurface(
         // not a branch a user can take: neither screen offers the other, which is T2 rule 4's "no
         // route" made a property of this function rather than of a conditional somewhere else.
         val fallback = if (destination == Destination.INBOX) {
-            detail?.let { open -> bridge?.terminalFallback(open) }
+            detail?.let { open ->
+                if (bridge == null) {
+                    null
+                } else try {
+                    bridge.terminalFallback(open)
+                } catch (unreadable: Exception) {
+                    // Destination lookup is a render-time facade read. If it cannot be classified
+                    // as the ordinary roster-removal race, choose neither privileged destination,
+                    // close the stale drill-down, and leave the routed answer on the inbox.
+                    outcome.text = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty()).message
+                    detail = null
+                    null
+                }
+            }
         } else {
             null
         }
@@ -2843,10 +2857,31 @@ class PhoneSurface(
         when (destination) {
             Destination.INBOX -> {
                 if (fallback != null) {
-                    drawTerminalFallback(bridge!!, detail!!, fallback)
+                    if (!drawTerminalFallback(bridge!!, detail!!, fallback)) {
+                        // The session/routing disappeared after `fallback` was read but before
+                        // the grid. Close the stale drill in THIS draw and release any watch that
+                        // the same race managed to establish; no future event is required.
+                        detail = null
+                        reconcileTerminalWatch(bridge, session = null)
+                        drawInbox(inbox)
+                    }
                     return
                 }
-                when (val open = detailPanel(bridge)) {
+                val panel = try {
+                    detailPanel(bridge)
+                } catch (unreadable: Exception) {
+                    val routed = bridge?.routeFacadeErrorSafely(unreadable.message.orEmpty())
+                    if (routed?.state == ErrorState.NOT_FOUND) {
+                        // The roster entry disappeared between the row tap and this draw. The
+                        // stale drill-down has no subject, so return to the current inbox.
+                        detail = null
+                    } else if (routed != null) {
+                        // Every other facade class remains visible with its taxonomy remedy.
+                        outcome.text = routed.message
+                    }
+                    null
+                }
+                when (val open = panel) {
                     null -> {
                         drawInbox(inbox)
                         return
@@ -3190,14 +3225,28 @@ class PhoneSurface(
      * body draws T6-b's read-only sentence; entering control is R8b's own slice and is disclosed
      * as such rather than half-wired.
      */
-    private fun drawTerminalFallback(bridge: FacadeBridge, session: String, model: TerminalFallbackModel) {
-        val grid = bridge.terminalRows(session)
+    private fun drawTerminalFallback(
+        bridge: FacadeBridge,
+        session: String,
+        model: TerminalFallbackModel,
+    ): Boolean {
+        val grid = try {
+            bridge.terminalRows(session)
+        } catch (unreadable: Exception) {
+            // Only Peek/NOT_FOUND is the ordinary first-frame window, and the binding already
+            // turns that into AWAITING_SNAPSHOT. Every other class reaches this visible routed
+            // boundary instead of escaping PhoneEvents' main-looper redraw and crashing the app.
+            val routed = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty())
+            outcome.text = routed.message
+            TerminalGrid.unavailable(routed.message)
+        }
+        if (!grid.renderableFallback) return false
         // THE REDRAW GUARD, for [drawDetail]'s reason one screen over. [drawContent] re-enters on
         // every state change -- every journal event, every gated action, every resume -- and this
         // drawer had none, so a working session rebuilt the whole view hierarchy at output rate
         // and threw the grid back to the top under whoever was reading it.
         val drawn = FallbackDraw(session, model, grid)
-        if (drawn == fallbackDrawn && contentShows == Destination.INBOX) return
+        if (drawn == fallbackDrawn && contentShows == Destination.INBOX) return true
         fallbackDrawn = drawn
         detailDrawn = null
         hostContent(
@@ -3208,9 +3257,12 @@ class PhoneSurface(
                 gridRows = grid.gridRows,
                 snapshotAge = grid.ageMs,
                 streamStale = grid.streamStale,
+                snapshotNotice = grid.snapshotNotice,
+                snapshotUnavailable = grid.snapshotState == TerminalSnapshotState.UNAVAILABLE,
                 onBack = { closeSessionDetail() },
             ),
         )
+        return true
     }
 
     /** What [drawTerminalFallback] last put on the glass, for its redraw guard. */
@@ -3299,7 +3351,14 @@ class PhoneSurface(
         // around: the binding's constructor is private and its one factory reads the machine's
         // routing decision, so a session the machine did not send here yields no handle to watch
         // with (closing review, finding 2).
-        val binding = bridge.terminalFallbackBinding(session) ?: return
+        val binding = try {
+            bridge.terminalFallbackBinding(session)
+        } catch (unreadable: Exception) {
+            // A NOT_FOUND roster race already becomes null in the binding factory. Everything
+            // else is a routed refusal, and no render-time JNI read may escape the main looper.
+            outcome.text = bridge.routeFacadeErrorSafely(unreadable.message.orEmpty()).message
+            return
+        } ?: return
         // THE HOLD IS EAGER: state is written at enqueue time, so the redraw that follows renews
         // instead of re-watching -- one append, not one per redraw. A watch the machine refuses
         // clears the hold on the settle, and the tick below then finds nothing held and stops.

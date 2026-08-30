@@ -50,6 +50,8 @@ class TerminalFallbackViewTest {
         rows: List<String> = listOf("$ go test ./...", "ok  swarm/vt  1.4s"),
         snapshotAge: Long = 0L,
         streamStale: Boolean = false,
+        snapshotNotice: String = "",
+        snapshotUnavailable: Boolean = false,
         controlRemaining: Long? = null,
         onRelease: (() -> Unit)? = null,
     ): View = terminalFallbackView(
@@ -59,6 +61,8 @@ class TerminalFallbackViewTest {
         gridRows = 24,
         snapshotAge = snapshotAge,
         streamStale = streamStale,
+        snapshotNotice = snapshotNotice,
+        snapshotUnavailable = snapshotUnavailable,
         controlRemaining = controlRemaining,
         onBack = {},
         onRelease = onRelease,
@@ -96,6 +100,37 @@ class TerminalFallbackViewTest {
             well.textDirection,
         )
         assertEquals(View.LAYOUT_DIRECTION_LTR, well.layoutDirection)
+    }
+
+    @Test
+    fun `an awaiting snapshot is visible as phone chrome and never terminal output`() {
+        val root = view(
+            rows = emptyList(),
+            snapshotNotice = TerminalGrid.AWAITING_SNAPSHOT.snapshotNotice,
+        )
+
+        assertEquals(
+            TerminalGrid.AWAITING_SNAPSHOT_NOTICE,
+            textOf(root, TerminalFallbackTag.SNAPSHOT_STATE),
+        )
+        assertEquals(
+            "phone-authored loading copy must never enter the machine-authored terminal well",
+            "",
+            textOf(root, TerminalFallbackTag.GRID),
+        )
+    }
+
+    @Test
+    fun `a routed snapshot refusal is visible outside the terminal well`() {
+        val routed = "No link to your computer right now."
+        val root = view(
+            rows = emptyList(),
+            snapshotNotice = routed,
+            snapshotUnavailable = true,
+        )
+
+        assertEquals(routed, textOf(root, TerminalFallbackTag.SNAPSHOT_STATE))
+        assertEquals("", textOf(root, TerminalFallbackTag.GRID))
     }
 
     // ---- playbook:280: the honest header ----------------------------------------
