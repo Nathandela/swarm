@@ -52,6 +52,11 @@ class ComposerSendLedgerTest {
             "the later logical message could dispatch past an earlier unresolved retry",
             ledger.retryReady("op-b1"),
         )
+        ledger.retryDispatched("op-a1")
+        assertTrue(
+            "the later retry stayed blocked after the earlier retry entered the serial command lane",
+            ledger.retryReady("op-b1"),
+        )
         ledger.retrySealed("op-a1", "op-a2")
         ledger.settle(
             "op-a2",
@@ -69,6 +74,19 @@ class ComposerSendLedgerTest {
 
         assertEquals(listOf("first", "second"), ledger.pendingFor("m/one").map { it.text })
         assertEquals(listOf("op-b2"), ledger.unansweredOperations())
+    }
+
+    @Test
+    fun `an older send with a lost outcome does not freeze a later proven retry`() {
+        val ledger = ComposerSendLedger()
+        ledger.sealed("op-a", "m/one", "turn-a", "outcome was lost during recovery")
+        ledger.sealed("op-b", "m/one", "turn-a", "machine answered input busy")
+
+        assertEquals("machine answered input busy", ledger.beginRetry("op-b")?.text)
+        assertTrue(
+            "an older operation with no retryable verdict permanently blocked the later safe retry",
+            ledger.retryReady("op-b"),
+        )
     }
 
     @Test

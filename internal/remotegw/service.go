@@ -213,6 +213,10 @@ func NewService(cfg ServiceConfig) *Service {
 	if replySeq == nil {
 		replySeq, _ = OpenSeqSource("") // in-memory, cannot error
 	}
+	// One authority-publication fence spans BOTH producers of the command-reply
+	// high-water contract. Separate sink/bridge locks cannot prevent a reconcile from
+	// overtaking the reply sequence it publishes.
+	replyPublication := &replyPublicationFence{}
 	sink := NewRelaySink(RelayConfig{
 		Appender:       cfg.Relay,
 		Target:         cfg.PhoneTarget,
@@ -235,6 +239,7 @@ func NewService(cfg ServiceConfig) *Service {
 			epoch:    cfg.EpochID,
 			grantSeq: cfg.GrantSeq,
 		},
+		replyPublication: replyPublication,
 	})
 	// PB-PUSH-0: the push trigger sits BETWEEN the coalescer and the sealing sink, so the
 	// journal it watches is the one the gateway actually delivers. Outside the coalescer it
@@ -331,17 +336,18 @@ func NewService(cfg ServiceConfig) *Service {
 	// into the predicate the production stream is gated on.
 	gw.bindWatchLiveness(watchers.WatchLive)
 	bridge := NewCommandBridge(CommandBridgeConfig{
-		Mailbox:     cfg.Relay,
-		Forwarder:   forwarder,
-		Leases:      leases,
-		Watchers:    watchers,
-		Key:         cfg.Key,
-		EpochID:     cfg.EpochID,
-		ReplyTarget: cfg.PhoneTarget,
-		ReplySeq:    replySeq,
-		Inbound:     inbound,
-		Prefs:       cfg.PushPrefs,
-		Resync:      gw,
+		Mailbox:          cfg.Relay,
+		Forwarder:        forwarder,
+		Leases:           leases,
+		Watchers:         watchers,
+		Key:              cfg.Key,
+		EpochID:          cfg.EpochID,
+		ReplyTarget:      cfg.PhoneTarget,
+		ReplySeq:         replySeq,
+		Inbound:          inbound,
+		Prefs:            cfg.PushPrefs,
+		Resync:           gw,
+		replyPublication: replyPublication,
 	})
 	return &Service{
 		cfg: cfg, gw: gw, sink: sink, notifier: notifier, bridge: bridge, leases: leases, watchers: watchers,

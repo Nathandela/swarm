@@ -149,6 +149,9 @@ type CommandBridgeConfig struct {
 	// command remains in relay custody (nil => exponential production backoff). It is a
 	// seam for deterministic Run tests; production callers leave it nil.
 	RetainedRetryWait func(context.Context, int) error
+	// replyPublication is shared with the production RelaySink. It orders the complete
+	// reply publication against any reconcile that publishes ReplySeq.Issued().
+	replyPublication *replyPublicationFence
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -169,10 +172,11 @@ type CommandBridgeConfig struct {
 // retained beyond it. The daemon's own two-phase idempotency (D6) covers only the one bounded
 // re-delivery a crash between a daemon forward and its persist can produce (see handle).
 type CommandBridge struct {
-	cfg      CommandBridgeConfig
-	recv     *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
-	replySeq SeqSource               // OUTBOUND reply seq (durable across restart, C2b)
-	inbound  InboundState            // INBOUND checkpoint custody (durable across restart, PB-GW-1)
+	cfg              CommandBridgeConfig
+	recv             *crypto.MailboxReceiver // per-(sender,epoch) seq guard against relay replay/reorder
+	replySeq         SeqSource               // OUTBOUND reply seq (durable across restart, C2b)
+	inbound          InboundState            // INBOUND checkpoint custody (durable across restart, PB-GW-1)
+	replyPublication *replyPublicationFence
 
 	// replyMu serialises the whole seq-allocate -> seal -> append of the OUTBOUND reply
 	// bucket. It is separate from mu because sealReply's failure path calls setErr, which
@@ -221,6 +225,10 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 	if inbound == nil {
 		inbound, _ = OpenInboundState("", "") // in-memory, cannot error
 	}
+	replyPublication := cfg.replyPublication
+	if replyPublication == nil {
+		replyPublication = &replyPublicationFence{}
+	}
 	b := &CommandBridge{
 		cfg:              cfg,
 		recv:             crypto.NewMailboxReceiver(),
@@ -228,6 +236,7 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 		inbound:          inbound,
 		highest:          map[InboundStream]uint64{},
 		deliveredRetries: map[[32]byte]struct{}{},
+		replyPublication: replyPublication,
 	}
 	ck := inbound.Load()
 	for st, seq := range ck.Highest {

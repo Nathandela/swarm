@@ -92,6 +92,11 @@ func (b *CommandBridge) sealReply(ctx context.Context, reply protocol.Control) e
 }
 
 func (b *CommandBridge) sealReplyForOperation(ctx context.Context, operationID string, reply protocol.Control) error {
+	// The publication fence is outside replyMu in the global lock order. Reconcile takes
+	// this same fence before it reads ReplySeq.Issued and holds it until its own append, so
+	// it can never publish this reply's seq before the reply reaches relay custody.
+	b.replyPublication.mu.Lock()
+	defer b.replyPublication.mu.Unlock()
 	b.replyMu.Lock()
 	defer b.replyMu.Unlock()
 	fingerprint, err := replyFingerprint(reply)
@@ -104,8 +109,13 @@ func (b *CommandBridge) sealReplyForOperation(ctx context.Context, operationID s
 	// phone's receiver stale-drops it; re-sealing would not be harmless because it spends
 	// a new seq and can leave the earlier one as a permanent gap.
 	if pending := b.pendingReply; pending != nil {
-		if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
-			return fmt.Errorf("append pending reply: %w", err)
+		// Reconcile may already have redriven these exact bytes while holding the shared
+		// publication fence. Only append when the shared coordinator still owns them.
+		if b.replyPublication.pending == pending {
+			if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
+				return fmt.Errorf("append pending reply: %w", err)
+			}
+			b.replyPublication.pending = nil
 		}
 		b.pendingReply = nil
 		if pending.fingerprint == fingerprint {
@@ -134,10 +144,12 @@ func (b *CommandBridge) sealReplyForOperation(ctx context.Context, operationID s
 		operationID: operationID,
 		envelope:    append([]byte(nil), env...),
 	}
+	b.replyPublication.pending = b.pendingReply
 	if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, env); err != nil {
 		return fmt.Errorf("append reply: %w", err)
 	}
 	b.pendingReply = nil
+	b.replyPublication.pending = nil
 	return nil
 }
 
@@ -149,14 +161,19 @@ func (b *CommandBridge) redrivePendingReply(ctx context.Context, operationID str
 	if operationID == "" {
 		return false, nil
 	}
+	b.replyPublication.mu.Lock()
+	defer b.replyPublication.mu.Unlock()
 	b.replyMu.Lock()
 	defer b.replyMu.Unlock()
 	pending := b.pendingReply
 	if pending == nil || pending.operationID != operationID {
 		return false, nil
 	}
-	if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
-		return true, fmt.Errorf("append pending reply: %w", err)
+	if b.replyPublication.pending == pending {
+		if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
+			return true, fmt.Errorf("append pending reply: %w", err)
+		}
+		b.replyPublication.pending = nil
 	}
 	b.pendingReply = nil
 	return true, nil

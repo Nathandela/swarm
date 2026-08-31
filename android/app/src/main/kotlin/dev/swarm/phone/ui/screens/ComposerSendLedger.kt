@@ -69,16 +69,23 @@ class ComposerSendLedger {
     }
 
     /**
-     * Whether a scheduled retry may enter the facade FIFO now. Checking at timer execution, rather
-     * than when the outcome is first observed, lets a later message wake after an earlier echo
-     * without requiring another journal event; unrelated conversations never block one another.
+     * Whether a scheduled retry may enter the facade FIFO now. Only an earlier retry that has not
+     * entered that serial lane is an ordering barrier. An earlier operation with no answer may
+     * have lost its reply during explicit mailbox recovery; treating that unknown outcome as a
+     * barrier freezes every later, safely retryable input_busy send forever. Once the earlier retry
+     * is dispatched, the command lane itself preserves A-before-B without waiting for A's next
+     * machine outcome or transcript echo.
      */
     fun retryReady(operationId: String): Boolean {
         val current = sends[operationId] ?: return false
         if (!current.retrying) return false
         for ((id, earlier) in sends) {
             if (id == operationId) return true
-            if (earlier.sessionId == current.sessionId && !earlier.answered && !earlier.echoed) {
+            if (
+                earlier.sessionId == current.sessionId &&
+                earlier.retrying &&
+                !earlier.retryDispatched
+            ) {
                 return false
             }
         }

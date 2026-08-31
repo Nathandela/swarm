@@ -54,6 +54,10 @@ type RelayConfig struct {
 	Authorities    ReconcileSource          // rollback authorities for the reconcile record (nil => bootstrap disabled)
 	Outbox         Outbox                   // durable outbound journal custody, PB-GW-8 (nil => in-memory)
 	Profile        protocol.RemoteProfileV1 // sealed onto every reconcile record verbatim (ADR-017 T5)
+	// replyPublication is shared with the production CommandBridge. It serialises the
+	// complete reply append against the complete ReplyCeiling reconcile append; see
+	// reply_publication.go. Tests and standalone sinks default to a private fence.
+	replyPublication *replyPublicationFence
 }
 
 // defaultAppendTimeout bounds a single MailboxAppend. seal holds s.mu across the append to keep
@@ -71,10 +75,11 @@ const defaultAppendTimeout = 5 * time.Second
 // surfaced via Err() unless they are the owning Service's expected lifecycle cancellation;
 // the durable-cursor / relay-ack backpressure (R-GW.5) is a later refinement.
 type RelaySink struct {
-	cfg    RelayConfig
-	now    func() time.Time
-	seq    SeqSource
-	outbox Outbox
+	cfg              RelayConfig
+	now              func() time.Time
+	seq              SeqSource
+	outbox           Outbox
+	replyPublication *replyPublicationFence
 
 	mu      sync.Mutex
 	lastErr error
@@ -164,7 +169,14 @@ func NewRelaySink(cfg RelayConfig) *RelaySink {
 	if outbox == nil {
 		outbox, _ = OpenOutbox("") // in-memory, cannot error
 	}
-	return &RelaySink{cfg: cfg, now: now, seq: seq, outbox: outbox, resumed: outbox.Cursor()}
+	replyPublication := cfg.replyPublication
+	if replyPublication == nil {
+		replyPublication = &replyPublicationFence{}
+	}
+	return &RelaySink{
+		cfg: cfg, now: now, seq: seq, outbox: outbox, resumed: outbox.Cursor(),
+		replyPublication: replyPublication,
+	}
 }
 
 // Snapshot seals and forwards one authoritative roster-only reseed at the PRIOR delivered
@@ -372,6 +384,27 @@ var errNoAuthorities = errors.New("remotegw: reconcile requires an authority sou
 // error (also via Err()). The phone then stays unreconciled and refuses mutating ops --
 // recoverably, until a later record lands.
 func (s *RelaySink) Reconcile() error {
+	// This gate covers BOTH the authority read and this record's relay append. If a reply
+	// allocated N while we were outside it, that reply reaches custody before a ceiling of
+	// N. If we enter first, we publish the old ceiling before a later reply can allocate.
+	// A delivery-unknown reply is redriven HERE before the authority read. The reply may
+	// have come from an unsolicited lease-sever watcher, in which case no retained command
+	// exists to drive CommandBridge's retry. Reconciliation is therefore both the ordering
+	// fence and the generic recovery path, not a journal-wide wait on future command input.
+	s.replyPublication.mu.Lock()
+	defer s.replyPublication.mu.Unlock()
+	if pending := s.replyPublication.pending; pending != nil {
+		s.mu.Lock()
+		err := s.appendLocked(pending.envelope)
+		if err != nil {
+			s.setAppendErrLocked(err)
+		}
+		s.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("redrive pending command reply: %w", err)
+		}
+		s.replyPublication.pending = nil
+	}
 	rec, err := s.authorities()
 	if err != nil {
 		s.setErr(err)
