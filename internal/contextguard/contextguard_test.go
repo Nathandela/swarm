@@ -290,7 +290,7 @@ func TestRecoveryMappingAndNoSideEffectRequireFresh(t *testing.T) {
 			t.Errorf("recovery %s = %+v, want armed/fresh", phase, m)
 		}
 	}
-	for _, phase := range []State{StateProviderCompacting, StateLatched} {
+	for _, phase := range []State{StateLatched} {
 		m := newTestMachine(t, true, 80)
 		m.State = phase
 		m, _ = reduce(t, m, Event{Kind: EventRecovery, At: testNow})
@@ -299,6 +299,12 @@ func TestRecoveryMappingAndNoSideEffectRequireFresh(t *testing.T) {
 		}
 	}
 	m := newTestMachine(t, true, 80)
+	m.State = StateProviderCompacting
+	m, _ = reduce(t, m, Event{Kind: EventRecovery, At: testNow})
+	if m.State != StateEventLossHold {
+		t.Fatalf("recovery provider_compacting=%s, want event_loss_hold", m.State)
+	}
+	m = newTestMachine(t, true, 80)
 	m, _ = reduce(t, m, Event{Kind: EventRecovery, At: testNow, Corrupt: true})
 	if m.State != StateBlockedCorrupt {
 		t.Fatalf("corrupt recovery = %s, want blocked_corrupt", m.State)
@@ -311,6 +317,29 @@ func TestRecoveryMappingAndNoSideEffectRequireFresh(t *testing.T) {
 	m, _ = reduce(t, m, edge(m, EventDispatchNoSideEffect, testNow.Add(3*time.Nanosecond)))
 	if m.State != StateArmed || m.LastObservation != nil {
 		t.Fatalf("proven-no-effect did not require fresh observation: %+v", m)
+	}
+}
+
+func TestStandaloneProviderCompletionIsConclusive(t *testing.T) {
+	for _, phase := range []State{StateArmed, StatePendingIdle, StatePrepared, StateAwaitingConfirmation} {
+		m := newTestMachine(t, true, 80)
+		m.State = phase
+		m.TriggerThreshold = 80
+		m.LastSourceSequence = 7
+		at := testNow.Add(time.Duration(len(phase)) * time.Nanosecond)
+		m, d := reduce(t, m, edge(m, EventProviderCompactionCompleted, at))
+		if m.State != StateLatched || !m.FreshAfter.Equal(at) || !d.Persist {
+			t.Errorf("standalone completion from %s = state=%s fresh=%s decision=%+v", phase, m.State, m.FreshAfter, d)
+		}
+	}
+	for _, phase := range []State{StateOutcomeUnknownHold, StateEventLossHold, StateBlockedCorrupt} {
+		m := newTestMachine(t, true, 80)
+		m.State = phase
+		m.LastSourceSequence = 7
+		before := m
+		if got, d := Reduce(m, edge(m, EventProviderCompactionCompleted, testNow.Add(time.Nanosecond))); d.Rejected != RejectInvalidTransition || got != before {
+			t.Errorf("completion escaped %s: machine=%+v rejection=%s", phase, got, d.Rejected)
+		}
 	}
 }
 

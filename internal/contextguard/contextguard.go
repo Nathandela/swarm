@@ -278,7 +278,14 @@ func Reduce(machine Machine, event Event) (next Machine, decision Decision) {
 		}
 		return reduceProviderStarted(machine)
 	case EventProviderCompactionCompleted:
-		if machine.State != StateProviderCompacting || event.At.IsZero() {
+		if event.At.IsZero() {
+			return machine, rejected(RejectInvalidEvent)
+		}
+		switch machine.State {
+		case StateArmed, StatePendingIdle, StatePrepared, StateAwaitingConfirmation, StateProviderCompacting:
+			// A current, ordered completion is conclusive evidence that a provider
+			// compaction occurred, even when Swarm attached after its start.
+		default:
 			return machine, rejected(RejectInvalidTransition)
 		}
 		machine.State = StateLatched
@@ -439,6 +446,10 @@ func recover(machine Machine, corrupt bool) (Machine, Decision) {
 		machine.TriggerThreshold = 0
 	case StateExecuting, StateAwaitingConfirmation:
 		machine.State = StateOutcomeUnknownHold
+	case StateProviderCompacting:
+		// We may have detached between the provider start and completion. The
+		// completion cannot safely be inferred or retried after recovery.
+		machine.State = StateEventLossHold
 	}
 	return machine, durable()
 }
