@@ -244,6 +244,7 @@ type (
 	ContextGuardAutoCompact    = schema.ContextGuardAutoCompact
 	ContextGuardSettings       = schema.ContextGuardSettings
 	ContextGuardSettingsSetReq = schema.ContextGuardSettingsSetReq
+	ContextGuardView           = schema.ContextGuardView
 )
 
 // The wire schema now has two spellings (protocol.X and schema.X) and Go gives them no
@@ -291,6 +292,13 @@ var (
 type ContextGuardSettingsBackend interface {
 	ContextGuardSettings() (ContextGuardSettings, error)
 	SetContextGuardSettings(expectedRevision uint64, autoCompact ContextGuardAutoCompact) (ContextGuardSettings, error)
+}
+
+// ContextGuardViewBackend is an OPTIONAL, read-only roster seam. Implementations
+// return only the sanitized/coalesced view; provider payloads and raw errors stay
+// below the protocol boundary.
+type ContextGuardViewBackend interface {
+	ContextGuardView(sessionID string) (ContextGuardView, bool)
 }
 
 // SessionStream is the daemon's single pipe to one session's shim: a snapshot, a

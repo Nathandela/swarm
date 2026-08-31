@@ -126,6 +126,7 @@ type coreAPI struct {
 	// contextGuardSettings is the narrow owner-settings backend. It remains nil in
 	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
 	contextGuardSettings *contextGuardSettingsStore
+	contextGuards        *contextGuardManager
 	// ksMu guards the read-time diff-write of the durable kill-switch state:
 	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
 	// last enabled value written to remote-state.json this process (nil => never written),
@@ -626,10 +627,23 @@ func (a *coreAPI) SetContextGuardSettings(expectedRevision uint64, autoCompact p
 	if a.contextGuardSettings == nil {
 		return protocol.ContextGuardSettings{}, protocol.ErrContextGuardSettingsUnavailable
 	}
-	return a.contextGuardSettings.SetContextGuardSettings(expectedRevision, autoCompact)
+	settings, err := a.contextGuardSettings.SetContextGuardSettings(expectedRevision, autoCompact)
+	if err == nil && a.contextGuards != nil {
+		a.contextGuards.updateSettings(settings)
+	}
+	return settings, err
 }
 
 var _ protocol.ContextGuardSettingsBackend = (*coreAPI)(nil)
+
+func (a *coreAPI) ContextGuardView(sessionID string) (protocol.ContextGuardView, bool) {
+	if a.contextGuards == nil {
+		return protocol.ContextGuardView{}, false
+	}
+	return a.contextGuards.view(sessionID)
+}
+
+var _ protocol.ContextGuardViewBackend = (*coreAPI)(nil)
 
 // ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a
 // remote op's operation_id single-use through the daemon's durable idempotency store so
@@ -1542,6 +1556,8 @@ type rosterSnap struct {
 	// it, an open board would show the degraded session healthy until some
 	// unrelated change happened to follow (R1 audit: codex finding 2).
 	backendPlanError string
+	contextGuard     protocol.ContextGuardView
+	hasContextGuard  bool
 }
 
 // watch samples the roster and emits a meta whenever a session's status, display
@@ -1559,7 +1575,8 @@ func (a *coreAPI) watch() {
 		present := map[string]struct{}{}
 		for _, m := range a.core.List() {
 			present[m.ID] = struct{}{}
-			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError}
+			guard, hasGuard := a.ContextGuardView(m.ID)
+			cur := rosterSnap{status: m.Status, name: m.Name, tag: m.Tag, controlled: a.isControlled(m.ID), supervisionPending: a.isSupervisionPending(m.ID), backendPlanError: m.BackendPlanError, contextGuard: guard, hasContextGuard: hasGuard}
 			if prev, ok := seen[m.ID]; ok && prev == cur {
 				continue
 			}

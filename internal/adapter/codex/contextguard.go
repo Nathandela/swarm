@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -115,8 +116,8 @@ func parseContextGuardLifecycle(params map[string]any, expectedThreadID string, 
 }
 
 func validTokenUsageBreakdown(object map[string]any) bool {
-	if !(hasOnly(object, "cachedInputTokens", "inputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens") ||
-		hasOnly(object, "cachedInputTokens", "inputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens", "cacheWriteInputTokens")) {
+	if !hasOnly(object, "cachedInputTokens", "inputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens") &&
+		!hasOnly(object, "cachedInputTokens", "inputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens", "cacheWriteInputTokens") {
 		return false
 	}
 	for _, key := range []string{"cachedInputTokens", "inputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"} {
@@ -195,7 +196,7 @@ func uintValue(value any) (uint64, bool) {
 		}
 	}
 	v, err := strconv.ParseUint(string(n), 10, 64)
-	return v, err == nil
+	return v, err == nil && v <= math.MaxInt64
 }
 
 // strictJSONObject decodes one object with bounded nesting and rejects duplicate

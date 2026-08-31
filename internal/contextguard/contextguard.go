@@ -24,8 +24,8 @@ type Config struct {
 	Revision  uint64
 }
 
-// DefaultConfig is the disabled-by-default product setting.
-func DefaultConfig() Config { return Config{Threshold: DefaultThreshold} }
+// defaultConfig is the disabled-by-default product setting.
+func defaultConfig() Config { return Config{Threshold: DefaultThreshold} }
 
 // Validate refuses thresholds outside the product contract.
 func (c Config) Validate() error {
@@ -407,9 +407,10 @@ func reduceBackendEpoch(machine Machine, event Event) (Machine, Decision) {
 	machine.LastSourceSequence = 0
 	machine.LastObservation = nil
 	machine.FreshAfter = time.Time{}
-	if machine.State == StateExecuting || machine.State == StateAwaitingConfirmation {
+	switch machine.State {
+	case StateExecuting, StateAwaitingConfirmation:
 		machine.State = StateOutcomeUnknownHold
-	} else if machine.State == StatePendingIdle || machine.State == StatePrepared {
+	case StatePendingIdle, StatePrepared:
 		machine.State = stateForMachine(machine)
 		machine.TriggerThreshold = 0
 	}

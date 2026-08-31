@@ -124,11 +124,11 @@ func (m rootModel) updateOptions(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch k.Code {
 	case tea.KeyEnter:
-		m.general.setLayout(o.grouping, o.ordering)
 		if o.contextGuard.err != "" {
 			return m, nil
 		}
 		if !o.contextGuard.dirty() {
+			m.general.setLayout(o.grouping, o.ordering)
 			return m, m.enterGeneral()
 		}
 		return m.beginContextGuardSave()
@@ -247,6 +247,7 @@ func (m rootModel) applyContextGuardSettingsSaved(msg contextGuardSettingsSavedM
 	o.savedCompact = msg.settings.AutoCompact
 	o.threshold.set(strconv.Itoa(msg.settings.AutoCompact.ThresholdPercent))
 	o.err = ""
+	m.general.setLayout(m.options.grouping, m.options.ordering)
 	return m, m.enterGeneral()
 }
 

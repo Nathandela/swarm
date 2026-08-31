@@ -310,6 +310,21 @@ type SessionView struct {
 	// structured_chat=false. The phone renders from this record and infers nothing from
 	// whether a transcript happens to be empty (T2 rule 3).
 	Capabilities *SessionCapabilities `json:"capabilities,omitempty"`
+	// ContextGuard is live, sanitized daemon state for a provider whose context
+	// occupancy can be observed exactly. It is absent for unsupported harnesses,
+	// older daemons, and every remote-tier roster. No provider payload or raw error
+	// is allowed onto this wire surface.
+	ContextGuard *ContextGuardView `json:"context_guard,omitempty"`
+}
+
+// ContextGuardView is the bounded roster projection of one guard. UsagePercent
+// is display-only; policy decisions continue to use exact token arithmetic.
+type ContextGuardView struct {
+	UsagePercent int    `json:"usage_percent"`
+	Support      string `json:"support"`
+	Phase        string `json:"phase"`
+	LastResult   string `json:"last_result,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
 }
 
 // DeviceView is one paired-device row (R-DEV.1), carried on the device_list

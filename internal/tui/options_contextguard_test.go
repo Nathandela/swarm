@@ -149,6 +149,8 @@ func TestOptionsContextGuard_StaleGenerationsConflictAndUnavailable(t *testing.T
 
 	c.setErr = protocol.ErrContextGuardSettingsStaleRevision
 	rm = m.(rootModel)
+	originalGrouping := rm.general.grouping
+	rm.options.grouping = groupByRepo
 	rm.options.focus = optionsFocusAutoCompact
 	rm.options.contextGuard.autoCompact.Enabled = true
 	m2, cmd := rm.Update(keyEnter)
@@ -159,6 +161,9 @@ func TestOptionsContextGuard_StaleGenerationsConflictAndUnavailable(t *testing.T
 	rm = m3.(rootModel)
 	if rm.screen != screenOptions || !strings.Contains(stripANSI(rm.View().Content), "changed elsewhere") {
 		t.Fatalf("CAS conflict did not remain visible in options:\n%s", stripANSI(rm.View().Content))
+	}
+	if rm.general.grouping != originalGrouping {
+		t.Fatalf("CAS conflict partially applied grouping=%v, want %v", rm.general.grouping, originalGrouping)
 	}
 
 	oldClient := newFakeClient()
@@ -231,11 +236,16 @@ func TestOptionsContextGuard_GuardsEnterAndDirectionalNavigation(t *testing.T) {
 	m = loadedContextGuardOptions(t, newContextGuardOptionsClient())
 	rm = m.(rootModel)
 	rm.options.focus = optionsFocusThreshold
+	originalGrouping := rm.general.grouping
+	rm.options.grouping = groupByRepo
 	rm.options.contextGuard.threshold.set("39")
 	failed, _ := rm.Update(keyEnter)
 	kept, next := failed.Update(keyEnter)
 	if next != nil || kept.(rootModel).screen != screenOptions || !strings.Contains(stripANSI(kept.(rootModel).View().Content), "40–95") {
 		t.Fatal("Enter on local validation error did not keep options and error visible")
+	}
+	if got := kept.(rootModel).general.grouping; got != originalGrouping {
+		t.Fatalf("local validation error partially applied grouping=%v, want %v", got, originalGrouping)
 	}
 }
 

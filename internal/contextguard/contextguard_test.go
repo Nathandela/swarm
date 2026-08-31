@@ -53,7 +53,7 @@ func TestConfigValidationBoundariesAndDefault(t *testing.T) {
 			t.Errorf("threshold %d: err=%v, wantErr=%v", tc.threshold, err, tc.wantErr)
 		}
 	}
-	if got := DefaultConfig().Threshold; got != 80 {
+	if got := defaultConfig().Threshold; got != 80 {
 		t.Fatalf("default threshold=%d, want 80", got)
 	}
 }

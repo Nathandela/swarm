@@ -543,7 +543,7 @@ func (s *Server) distribute(m persist.Meta) {
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled, pending, sentAt)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: s.stampView(s.endpointID, m, group, controlled, pending, sentAt)})
 	}
 
 	s.subMu.Lock()
@@ -551,7 +551,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: s.stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -3154,8 +3154,21 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
+	return cc.srv.stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
 		cc.srv.remoteActivityAt(m.ID))
+}
+
+func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool, remoteActivityAt time.Time) *SessionView {
+	view := stampView(endpointID, m, group, remoteControlled, supervisionPending, remoteActivityAt)
+	if s.remoteTier {
+		return view
+	}
+	if source, ok := s.d.(ContextGuardViewBackend); ok {
+		if guard, present := source.ContextGuardView(m.ID); present {
+			view.ContextGuard = &guard
+		}
+	}
+	return view
 }
 
 // stampView builds one general-view row (V-4) for the given endpoint id. It is
