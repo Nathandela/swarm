@@ -17,6 +17,17 @@
 
 ## Per-epic definitions of done
 
+### Incremental feature — ContextGuard (ADR-023)
+
+Goal: add an owner-configured context-pressure guard without overriding harness policy or risking duplicate/non-interfering compaction.
+
+- **CG.1 Settings**: disabled/80 default; inclusive 40–95 validation; daemon-global versioned `0600` store; durable-before-publish CAS; corrupt/future documents unavailable and never silently overwritten.
+- **CG.2 Protocol/TUI**: owner-tier negotiated get/set operations; old clients/daemons remain compatible; the `o` menu loads and saves asynchronously, applies layout + guard settings transactionally, and discloses the rollout support level.
+- **CG.3 Evidence**: provider parsers are optional pure adapter extensions; exact observations carry full session/feed/thread/settings/time provenance; malformed, duplicate-key, oversized, overflow, stale, and cumulative-only samples fail closed.
+- **CG.4 Lifecycle**: one bounded worker per supported session; callbacks only copy/wake; lifecycle edges survive registration; low-frequency instance-bound sidecar is atomic and contains no telemetry; uncertain recovery never blind-retries.
+- **CG.5 Rollout**: Codex 0.150.x observation is version-bound to the running app-server initialize response. Production dispatch stays unreachable until both ADR-023 concurrency gates have recorded adversarial evidence. Other harnesses remain unavailable rather than using terminal-text fallbacks.
+- **CG.6 Gates**: reducer/parser/settings/protocol/TUI/runtime fault tests, focused races, repository build/test/vet/lint checks, checked-in characterization evidence, and independent implementation review are recorded in `docs/verification/context-guard.md`; any repository-wide failure outside the feature diff remains an explicit integration blocker rather than being silently waived.
+
 ### Epic 0 — Agentic codebase foundation
 Goal: the repo itself is the contract for every later build session.
 - E0.1 `AGENTS.md` finalized as a map: entry points, doc links, build/test commands, beads workflow, verification exit criteria.
