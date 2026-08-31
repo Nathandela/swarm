@@ -63,13 +63,15 @@ const (
 	// from the daemon's side: the daemon holds no lock the owner's own keystrokes
 	// respect, and two phone sends racing each other produce text_A, text_B, CR, CR --
 	// one submitted concatenation and one empty submit. Only the shim owns the writer,
-	// so only the shim can make "nobody has written since the last submit, write the
-	// text, wait the frame gap, write the return" one indivisible act.
+	// so only the shim can make "the owner input line is provably clean, write the text,
+	// wait the frame gap, write the return" one indivisible act.
 	//
-	// IT CLAIMS NOTHING ABOUT THE CLI'S INPUT REGION. The precondition is a fact about
-	// the PTY, not about what the agent has drawn on it: bytes written since the last
-	// submit. That is deliberately weaker than ADR-017:175's expected_input_revision and
-	// is the reason this can ship without characterizing anybody's composer.
+	// IT NEVER INFERS FROM THE DRAWN GRID. The shim conservatively tracks only input-line
+	// operations whose effect is characterized in the PTY stream: character insertion/deletion,
+	// complete horizontal/home/end navigation, line kill and submit. Provider-owned word/Meta
+	// bindings, history/completion and lone/incomplete escape sequences are unknown and busy.
+	// That is deliberately weaker than ADR-017:175's expected_input_revision and preserves
+	// refusal whenever emptiness is unproven.
 	TypeSubmit = "submit"
 	// TypeSubmitResult is the shim's answer to exactly one TypeSubmit: Refused carries
 	// the reason and is empty on success. A submit is answered on the same connection,
@@ -78,16 +80,16 @@ const (
 	// TypeControlInput is a daemon->shim frame carrying keys the DAEMON authored -- a turn
 	// interrupt, a dialog answer -- rather than bytes somebody typed (phone refit W2.1,
 	// agents-tracker-d45a.2). Provenance is a property of who sent the frame: the shim writes
-	// these bytes to the PTY exactly as it writes TDataIn, but does not count them against the
-	// next TypeSubmit. The shim never judges what a byte does to the input line (an owner's
-	// Escape at the terminal is the identical byte); it only records which door it came through.
+	// these bytes to the PTY exactly as it writes TDataIn, but does not mutate the owner-input
+	// tracker used by the next TypeSubmit. The distinction is provenance, not key value: an
+	// owner's identical Escape still travels through TDataIn and is tracked there.
 	TypeControlInput = "control_input"
 )
 
-// RefusedInputBusy is the one STABLE reason token a TypeSubmitResult carries: somebody
-// has written to this PTY since the last submit, so the message was not written. It is a
-// token rather than a sentence because the daemon maps it onto the wire's own refusal
-// code, and a sentence would make that a string comparison against prose.
+// RefusedInputBusy is the one STABLE reason token a TypeSubmitResult carries: the shim
+// cannot prove the owner's logical input line is empty, so the message was not written.
+// It is a token rather than a sentence because the daemon maps it onto the wire's own
+// refusal code, and a sentence would make that a string comparison against prose.
 const RefusedInputBusy = "input_busy"
 
 // Signal vocabulary for a Control{Type: TypeSignal}.
@@ -131,8 +133,9 @@ type Control struct {
 	// the shim is replaced -- which is a disclosed degrade, not a silent one.
 	SubmitTransaction bool `json:"submit_transaction,omitempty"` // hello (shim reply)
 	// ControlInput is an OPTIONAL hello capability advertised by the SHIM: it honours
-	// TypeControlInput as a non-counting write. An old shim never sets it, so a new daemon
-	// sends its control keys as ordinary input (G-D) -- today's behaviour, disclosed.
+	// TypeControlInput as a write that bypasses owner-input tracking. An old shim never sets
+	// it, so a new daemon sends its control keys as ordinary input (G-D) -- today's behaviour,
+	// disclosed.
 	ControlInput bool `json:"control_input,omitempty"` // hello (shim reply)
 	// Keys rides a TypeControlInput: the daemon-authored bytes, written verbatim. They are
 	// the adapters' recorded control sequences (ESC, a digit), which JSON carries exactly.

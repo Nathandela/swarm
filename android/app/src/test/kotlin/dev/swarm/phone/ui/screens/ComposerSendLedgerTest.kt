@@ -9,6 +9,103 @@ import org.junit.Test
 class ComposerSendLedgerTest {
 
     @Test
+    fun `input busy retry keeps one logical bubble and replaces only its operation id`() {
+        val ledger = ComposerSendLedger()
+        ledger.sealed("op-1", "m/one", "turn-a", "first")
+
+        val retry = ledger.beginRetry("op-1")
+
+        assertEquals("m/one", retry?.sessionId)
+        assertEquals("turn-a", retry?.expectedTurn)
+        assertEquals("first", retry?.text)
+        assertEquals(
+            "the transient answer removed the logical message while its retry was queued",
+            listOf("first"),
+            ledger.pendingFor("m/one").map { it.text },
+        )
+        assertTrue(
+            "the answered operation stayed claimable and could enqueue the same retry on every redraw",
+            ledger.unansweredOperations().isEmpty(),
+        )
+
+        ledger.retrySealed("op-1", "op-2")
+
+        val pending = ledger.pendingFor("m/one")
+        assertEquals("the retry duplicated the logical bubble", 1, pending.size)
+        assertEquals("op-2", pending.single().operationId)
+        assertEquals("first", pending.single().text)
+        assertEquals(listOf("op-2"), ledger.unansweredOperations())
+    }
+
+    @Test
+    fun `multiple transient sends retain their original fifo order across fresh operation ids`() {
+        val ledger = ComposerSendLedger()
+        ledger.sealed("op-a1", "m/one", "turn-a", "first")
+        ledger.sealed("op-b1", "m/one", "turn-a", "second")
+
+        assertEquals("first", ledger.beginRetry("op-a1")?.text)
+        assertEquals(
+            "second",
+            ledger.beginRetry("op-b1")?.text,
+        )
+        assertFalse(
+            "the later logical message could dispatch past an earlier unresolved retry",
+            ledger.retryReady("op-b1"),
+        )
+        ledger.retrySealed("op-a1", "op-a2")
+        ledger.settle(
+            "op-a2",
+            ComposerVerdict(
+                answered = true,
+                state = SendState.SENT,
+                refusal = "",
+                clearsDraft = true,
+                notice = "",
+                detail = "",
+            ),
+        )
+        assertTrue("the later retry never became ready after the earlier message settled", ledger.retryReady("op-b1"))
+        ledger.retrySealed("op-b1", "op-b2")
+
+        assertEquals(listOf("first", "second"), ledger.pendingFor("m/one").map { it.text })
+        assertEquals(listOf("op-b2"), ledger.unansweredOperations())
+    }
+
+    @Test
+    fun `a retry in one conversation never blocks a different conversation`() {
+        val ledger = ComposerSendLedger()
+        ledger.sealed("op-a", "m/one", "turn-a", "first session")
+        ledger.sealed("op-b", "m/two", "turn-b", "second session")
+
+        assertEquals("first session", ledger.beginRetry("op-a")?.text)
+        assertEquals(
+            "a busy draft in one conversation blocked an independent conversation",
+            "second session",
+            ledger.beginRetry("op-b")?.text,
+        )
+        assertTrue(ledger.retryReady("op-b"))
+    }
+
+    @Test
+    fun `release rearms only a scheduled retry and keeps its one logical bubble`() {
+        val ledger = ComposerSendLedger()
+        ledger.sealed("op-1", "m/one", "turn-a", "first")
+        assertEquals(1, ledger.beginRetry("op-1")?.retryAttempt)
+
+        ledger.rearmScheduledRetries()
+
+        assertEquals(listOf("op-1"), ledger.unansweredOperations())
+        assertEquals(listOf("first"), ledger.pendingFor("m/one").map { it.text })
+        assertEquals(2, ledger.beginRetry("op-1")?.retryAttempt)
+        ledger.retryDispatched("op-1")
+        ledger.rearmScheduledRetries()
+        assertTrue(
+            "release rearmed an attempt already admitted to the facade and could duplicate it",
+            ledger.unansweredOperations().isEmpty(),
+        )
+    }
+
+    @Test
     fun `two sends in one conversation remain independently claimable and ordered`() {
         val ledger = ComposerSendLedger()
         ledger.sealed("op-1", "m/one", "first")

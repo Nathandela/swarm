@@ -37,13 +37,16 @@ run so the tests could fail on what the code *does*, not on what it lacks.
 
 ### GREEN
 
-- `internal/shim/server.go` — `ptyWriter` counts input bytes written since the last line-running
-  byte (`WriteInput`, `countLocked`). Emulator replies do not count: the shim answering the
-  agent's own queries is not somebody typing.
-- `internal/shim/server.go` — `submitMessage` checks the count is zero, writes the text, waits
-  `submitframe.Gap`, writes the CR, all under one `mu` hold, or returns `errInputBusy` having
-  written nothing. A partial write (text in, CR failed) counts the text as dirty rather than
-  pretending the line is clean.
+- `internal/shim/inputline.go`, `server.go` — `ptyWriter` conservatively tracks the owner's
+  logical line from characterized character insertion/deletion, complete horizontal/home/end
+  navigation, line kill and submit operations. A known draft deleted back to empty becomes clean;
+  provider-owned word/Meta keys, history/completion, an in-progress paste, or a lone/incomplete
+  escape sequence remains busy. Emulator replies and provenance-carrying daemon control keys do
+  not mutate this tracker.
+- `internal/shim/server.go` — `submitMessage` requires the tracked line to be provably clean,
+  writes the text, waits `submitframe.Gap`, writes the CR, all under one `mu` hold, or returns
+  `errInputBusy` having written nothing. A partial transaction (text in, CR failed) records the
+  text as dirty rather than pretending the line is clean.
 - `internal/shimwire/shimwire.go` — `TypeSubmit` / `TypeSubmitResult`, the stable
   `RefusedInputBusy` token, and the `SubmitTransaction` hello capability.
 - `internal/protocol/fromdaemon.go` — `shimStream.Submit`, one transaction in flight per stream,
@@ -72,16 +75,16 @@ ok  	github.com/Nathandela/swarm/internal/skeleton	4.746s
 
 ### What this deliberately does not claim
 
-It never characterizes the CLI's input region. ADR-017's amendment obligation asked for
-`expected_input_revision`, whose enforcement would require exactly that — and the reasoning for
-why that is unreachable still stands. What changed is the question: the shim can say whether
-**anybody has written to this PTY since the last submit**, which is a fact about the PTY rather
-than a claim about what the agent has drawn on it. The revision never crosses the wire; only the
-predicate does. The ADR-017 amendment block records the substitution rather than letting a
-different mechanism quietly satisfy a named obligation.
+It never derives the CLI's input region from the rendered grid and does not claim a provider-wide
+`expected_input_revision`. What changed is the question: under the PTY's only serialized writer,
+the shim can conservatively determine whether the owner's logical line is **provably clean** from
+operations whose effects are characterized. Provider-dependent word/Meta bindings, history,
+completion and lone/incomplete escape sequences are unknown and therefore busy. The revision
+never crosses the wire; only this conservative predicate does. The ADR-017 amendment records the
+substitution rather than letting a different mechanism quietly satisfy a named obligation.
 
-It errs safe: a draft typed and deleted back to empty still refuses. False refusal was chosen over
-prompt corruption.
+It errs safe: a known draft deleted back to empty becomes clean; a real draft or uncharacterized
+editor state refuses. False refusal under uncertainty is chosen over prompt corruption.
 
 ### Residual, disclosed
 
@@ -90,26 +93,16 @@ two unlocked writes — reachable only between a daemon upgrade and the shim res
 it. The merge is otherwise exclusively a property of the keystroke branch: the backend arm never
 touches the PTY, and the only `ComposerKeys` implementor in the tree is Claude.
 
-### Owed before this is called complete
+### Closing gates now present
 
-The committee's list for this slice, not yet written:
-
-- A real Claude PTY test (not the fake agent) parking an owner draft between the check and the
-  write.
-- Concurrent owner Enter, phone send, and two distinct phone sends in one test.
-- Turn closure or start between `expected_turn` validation and delivery, for both sinks.
-
-**And plan row 0.6, which this list omitted and which is not a test.** The refusal this entire slice
-exists to produce **could not be said on the phone.** `input_busy` lives in exactly one place in the
-tree, `internal/protocol/schema/chat.go`, and was absent from `MachineRefusalCodes.toToken`
-(`ui/ErrorRouting.kt`) — so it fell through to `ErrorState.UNKNOWN` and the reader was shown the
-generic "Your message was refused and not delivered." rather than the drawing's tabled sentence,
-"Not sent — the terminal's input line was not empty."
-
-This omission is recorded rather than quietly fixed because of what it looked like: three tests
-listed as owed reads as *complete but for its tests*, when a user-visible half of the slice was
-missing. ADR-017 `:202` asserted the phone rendering in the present tense at the same time; that
-sentence is repaired in the same pass.
+- `s0_realclipty_test.go` covers a real Claude PTY retaining a genuine owner draft and, in the
+  opt-in billable arm, accepting after the owner deletes a known draft.
+- `s0_concurrentwriters_test.go` covers concurrent owner Enter, phone send and distinct phone
+  sends without splitting or concatenation.
+- `s0_turnmoved_test.go` covers turn closure/start between `expected_turn` validation and delivery
+  for both sinks.
+- Plan row 0.6 is mapped through `MachineRefusalCodes.toToken`: `input_busy` retains the draft and
+  surfaces the phone remedy rather than falling through to `ErrorState.UNKNOWN`.
 
 ---
 

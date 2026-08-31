@@ -101,6 +101,31 @@ class SessionDetailVerdictTest {
         }
     }
 
+    @Test
+    fun `only an explicit terminal input busy answer is retryable`() {
+        val busy = SessionDetailScreen.composerVerdictFor(
+            outcome(dev.swarm.phone.ui.MachineRefusalCodes.INPUT_BUSY),
+            op,
+        )
+        assertTrue("input_busy wrote no bytes, so the logical message was not queued again", busy.retryable)
+
+        for (code in listOf("outcome_unknown", "rate_limit", "some_future_code")) {
+            val verdict = SessionDetailScreen.composerVerdictFor(outcome(code), op)
+            assertFalse(
+                "$code was retried even though the phone cannot prove the first operation wrote no bytes",
+                verdict.retryable,
+            )
+        }
+
+        assertFalse(
+            "an unanswered operation was retried before the machine authored a terminal outcome",
+            SessionDetailScreen.composerVerdictFor(
+                OperationOutcome(operationId = "", code = "", message = ""),
+                op,
+            ).retryable,
+        )
+    }
+
     /**
      * W2.2's caller (phone-refit-playbook §3): an unmapped code with a sentence is still
      * REFUSED, keeps the draft, and its notice is the code's own sentence rather than the generic

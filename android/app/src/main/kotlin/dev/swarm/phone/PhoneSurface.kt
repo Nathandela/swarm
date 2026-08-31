@@ -63,6 +63,7 @@ import dev.swarm.phone.ui.kit.overflowControl
 import dev.swarm.phone.ui.kit.screenAir
 import dev.swarm.phone.ui.kit.textField
 import dev.swarm.phone.ui.screens.ComposerSendLedger
+import dev.swarm.phone.ui.screens.ComposerSendRecord
 import dev.swarm.phone.ui.screens.ActivityPanel
 import dev.swarm.phone.ui.screens.ActivityPanelScreen
 import dev.swarm.phone.ui.screens.ApprovalSheetPanel
@@ -207,6 +208,10 @@ class PhoneSurface(
      * presses synchronous. The default is the shipping one.
      */
     private val dispatch: VerbDispatch = VerbDispatch.background(),
+    /** Delayed input_busy retries, injectable so lifecycle cancellation is clock-driven in tests. */
+    private val composerRetry: ComposerRetryScheduler = ComposerRetryScheduler.main(),
+    /** Operation-owned composer state, injectable only to drive release/resume deterministically. */
+    private val composerSends: ComposerSendLedger = ComposerSendLedger(),
 ) {
 
     /**
@@ -509,6 +514,7 @@ class PhoneSurface(
                 // operation that resolves, so it rides the lane that polls `awaitConn` for a
                 // connection, exactly like every other signed verb on this surface.
                 SendPlane.COMMAND,
+                delivery = PressDelivery.FIFO,
                 verb = { app -> app.composerSend(target, turn, line) },
                 // THE FACADE'S OWN refusals, and ONLY those: a phone with no link, an
                 // unreconciled handset, an empty line. They are the ones that resolve without
@@ -534,7 +540,7 @@ class PhoneSurface(
                 // mailbox. So the composer reported a send as delivered on LOCAL SEALING, and a
                 // send the daemon went on to refuse was shown as sent with the user's words
                 // already erased.
-                settle = { answer -> rememberComposerSend(answer, target, line) },
+                settle = { answer -> rememberComposerSend(answer, target, turn, line) },
             )
         }
     }
@@ -1382,9 +1388,6 @@ class PhoneSurface(
      */
     private var stopNotSentFor: String = ""
 
-    /** Every locally sealed composer command, kept in sealing order until outcome and echo settle. */
-    private val composerSends = ComposerSendLedger()
-
     /** A refusal before an operation was sealed; its draft remains in the field for retry. */
     private data class LocalComposerRefusal(
         val sessionId: String,
@@ -1818,6 +1821,11 @@ class PhoneSurface(
     fun release() {
         cancelInboxRefreshTimeout()
         inboxRefresh.refused()
+        // Delayed input_busy callbacks capture this surface's App, ledger, render and dispatch.
+        // Invalidate them before detaching anything so an old Activity can do none of those after
+        // release or after a replacement surface has started its own generation.
+        composerRetry.cancel()
+        composerSends.rearmScheduledRetries()
         pairing.release()
 
         // THE THIRD THING THAT CAN OUTLIVE THIS SCREEN, and the cheapest to forget: row 1's toast
@@ -2084,7 +2092,7 @@ class PhoneSurface(
         // BEFORE ANYTHING IS DRAWN, because the session detail composes whatever is on the outcome
         // line and a verdict claimed after it would reach the screen one journal event late
         // (agents-tracker-qlf9).
-        renderVerdicts(bridge)
+        renderVerdicts(bridge, startup.app)
         // PB-APP-11 is ranked ABOVE the transport in [SyncStatus], and it has to be: the
         // transport's opinion is that the socket is up, and a relay that answers every poll with
         // an empty page while withholding the machine's frames leaves it reading "Connected to
@@ -4612,12 +4620,12 @@ class PhoneSurface(
      * SAID ONCE PER OPERATION. The outcome stays in the core's durable map, so an unlatched claim
      * would re-toast on every journal record for as long as the app is open.
      */
-    private fun renderVerdicts(bridge: FacadeBridge) {
+    private fun renderVerdicts(bridge: FacadeBridge, app: App) {
         renderKillVerdict(bridge)
         renderApprovalVerdict(bridge)
         // Wave R6's four, on the same program and for the same reason (review round 2): every
         // one of them has an ANSWER, and none of them was claimed.
-        renderComposerVerdict(bridge)
+        renderComposerVerdict(bridge, app)
         renderInterruptVerdict(bridge)
         renderReadVerdicts(bridge)
     }
@@ -4635,7 +4643,7 @@ class PhoneSurface(
      * operation re-claimed per draw would re-toast at whatever rate the user's agents produce
      * journal events (`renderPresetFlow`'s own recorded defect).
      */
-    private fun renderComposerVerdict(bridge: FacadeBridge) {
+    private fun renderComposerVerdict(bridge: FacadeBridge, app: App) {
         for (operationId in composerSends.unansweredOperations()) {
             val verdict = try {
                 SessionDetailScreen.composerVerdictFor(
@@ -4646,8 +4654,63 @@ class PhoneSurface(
                 // One unreadable operation must not prevent later sends from being claimed.
                 continue
             }
-            composerSends.settle(operationId, verdict)
+            if (verdict.retryable) {
+                composerSends.beginRetry(operationId)?.let { retry ->
+                    composerRetry.schedule(
+                        attempt = retry.retryAttempt,
+                        submit = {
+                            composerSends.retryReady(operationId) &&
+                                retryComposerSend(app, operationId, retry)
+                        },
+                        rejected = {
+                            composerSends.retryRejected(operationId)
+                            render()
+                        },
+                    )
+                }
+            } else {
+                composerSends.settle(operationId, verdict)
+            }
         }
+    }
+
+    /**
+     * Re-issue one logical message after input_busy proved that its previous operation wrote no
+     * bytes. This uses the same unfenced serial command lane as user-authored sends: retries stay
+     * FIFO behind drafts already captured, while the logical bubble remains visible exactly once.
+     */
+    private fun retryComposerSend(
+        app: App,
+        previousOperationId: String,
+        retry: ComposerSendRecord,
+    ): Boolean {
+        val accepted = dispatch.enqueueCompleting(
+            SendPlane.COMMAND,
+            work = { app.composerSend(retry.sessionId, retry.expectedTurn, retry.text) },
+            complete = { answer ->
+                answer.fold(
+                    onSuccess = { result ->
+                        if (result.operationID.isEmpty()) {
+                            composerSends.retryRejected(previousOperationId)
+                        } else {
+                            composerSends.retrySealed(previousOperationId, result.operationID)
+                        }
+                    },
+                    onFailure = { failure ->
+                        val routed = FacadeBridge(app).routeFacadeErrorSafely(failure.message.orEmpty())
+                        composerSends.retryFailed(
+                            previousOperationId,
+                            routed.state.name,
+                            routed.message,
+                            failure.message.orEmpty(),
+                        )
+                    },
+                )
+            },
+            settle = { render() },
+        )
+        if (accepted) composerSends.retryDispatched(previousOperationId)
+        return accepted
     }
 
     /** The Stop's own answer, claimed the way [renderKillVerdict] claims the kill's. */
@@ -4765,9 +4828,14 @@ class PhoneSurface(
     }
 
     /** Latch the composer_send this surface issued. See [rememberLease] for the `Any?`. */
-    private fun rememberComposerSend(answer: Any?, target: String, sentText: String) {
+    private fun rememberComposerSend(
+        answer: Any?,
+        target: String,
+        expectedTurn: String,
+        sentText: String,
+    ) {
         val issued = answer as? Op ?: return
-        composerSends.sealed(issued.operationID, target, sentText)
+        composerSends.sealed(issued.operationID, target, expectedTurn, sentText)
         // Local sealing frees the composer for the next message. Preserve words edited while the
         // command crossed the lane; only the exact draft captured by this press is spent here.
         if (typed.text.toString() == sentText) typed.text.clear()
@@ -5175,6 +5243,8 @@ class PhoneSurface(
      *  declared per press and not per control because the full-width Stop used to be on both:
      *  `mobile/commands.go`'s command path polls `awaitConn` for a connection and its live path
      *  deliberately does not (ADR-007 D7), and the two must not share a lane.
+     * @param delivery single-flight for ordinary controls; FIFO for composer messages, whose
+     *  independently captured drafts must never disable or drop the next Send.
      * @param verb the facade call, and NOTHING else. It runs on a lane. It must not touch a View.
      * @param settle what the answer changes on screen, back on the looper. It runs only if the
      *  verb returned; a refusal goes to the outcome line and the toast instead.
@@ -5187,6 +5257,7 @@ class PhoneSurface(
      */
     private class Press(
         val plane: SendPlane,
+        val delivery: PressDelivery = PressDelivery.SINGLE_FLIGHT,
         val verb: (App) -> Any?,
         val settle: (Any?) -> Unit = {},
         val confirmation: String? = null,
@@ -5204,6 +5275,9 @@ class PhoneSurface(
          */
         val refused: (RoutedError) -> Unit = {},
     )
+
+    /** Whether a press is a fenced control action or an ordered message in the command FIFO. */
+    private enum class PressDelivery { SINGLE_FLIGHT, FIFO }
 
     /**
      * Press [control], having planned what that means on the thread that owns the screen.
@@ -5249,10 +5323,11 @@ class PhoneSurface(
      * THE OUTCOME LINE IS CLEARED FIRST. It holds the LAST command's answer, and a control that
      * is now responsive would otherwise leave that answer sitting under a press in flight, where
      * it reads as this press's. Empty is still what an unconfirmed success shows: there is no
-     * in-flight state in any of the 25 rows of docs/design/substrate-components.md, so what
-     * separates "still crossing" from "done" is that [VerbDispatch] holds the control disabled
-     * until the answer lands (derivation row 24's pair, which the kit already paints off the
-     * view's own drawable state) -- and that is DELIBERATELY UNCHANGED here.
+     * in-flight state in any of the 25 rows of docs/design/substrate-components.md. Ordinary
+     * control actions therefore let [VerbDispatch] hold the control disabled until the answer
+     * lands (derivation row 24's pair). Composer messages are the deliberate exception: their
+     * operation-owned bubbles report pending work, and the editor plus Send stay available so the
+     * serial command lane can capture the next independent draft.
      *
      * WHAT IS NEW IS WHERE THE ANSWER LANDS. The outcome line is a child of
      * [unrecomposedControls], which is hosted at the bottom of the Inbox tab -- so a refusal
@@ -5269,33 +5344,41 @@ class PhoneSurface(
      */
     private fun dispatchPress(control: View, app: App, planned: Press) {
         outcome.text = ""
-        dispatch.press(
-            control,
-            planned.plane,
-            work = { planned.verb(app) },
-            settle = { answer ->
-                answer.fold(
-                    onSuccess = {
-                        say(PressFeedback.ofSuccess(planned.confirmation))
-                        planned.settle(it)
-                    },
-                    // Everything the facade refuses arrives as an exception whose message carries
-                    // the error class as a prefix, so it routes through the same table as every
-                    // other failure rather than being shown raw.
-                    onFailure = {
-                        val routed = FacadeBridge(app).routeFacadeError(it.message.orEmpty())
-                        val refusal = PressFeedback.ofRefusal(routed)
-                        // R1: this used to latch `swarm/no-lease` so the next draw could offer
-                        // take control in place of a Stop that would earn the same refusal.
-                        // There is no such control now, and the ops this app sends need no
-                        // lease -- so the refusal is reported and nothing is latched.
-                        say(refusal)
-                        planned.refused(routed)
-                    },
-                )
-                render()
-            },
-        )
+        val settle: (Result<Any?>) -> Unit = { answer ->
+            answer.fold(
+                onSuccess = {
+                    say(PressFeedback.ofSuccess(planned.confirmation))
+                    planned.settle(it)
+                },
+                // Everything the facade refuses arrives as an exception whose message carries
+                // the error class as a prefix, so it routes through the same table as every
+                // other failure rather than being shown raw.
+                onFailure = {
+                    val routed = FacadeBridge(app).routeFacadeError(it.message.orEmpty())
+                    val refusal = PressFeedback.ofRefusal(routed)
+                    // R1: this used to latch `swarm/no-lease` so the next draw could offer
+                    // take control in place of a Stop that would earn the same refusal.
+                    // There is no such control now, and the ops this app sends need no
+                    // lease -- so the refusal is reported and nothing is latched.
+                    say(refusal)
+                    planned.refused(routed)
+                },
+            )
+            render()
+        }
+        when (planned.delivery) {
+            PressDelivery.SINGLE_FLIGHT -> dispatch.press(
+                control,
+                planned.plane,
+                work = { planned.verb(app) },
+                settle = settle,
+            )
+            PressDelivery.FIFO -> dispatch.enqueue(
+                planned.plane,
+                work = { planned.verb(app) },
+                settle = settle,
+            )
+        }
     }
 
     /** Ask for one authoritative all-agent roster replacement. */

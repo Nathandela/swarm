@@ -730,18 +730,19 @@ func (d *Daemon) requireStructuredComposer(local, session string) (protocol.Erro
 // forbids one layer down. That reasoning was right, and it is why the answer is a different
 // question.
 //
-// THE QUESTION THAT IS ANSWERABLE. The shim owns the PTY's only serialized writer, so it
-// can say absolutely whether ANYBODY HAS WRITTEN SINCE THE LAST SUBMIT -- a fact about the
-// PTY, not about what the agent has drawn on it. shimwire.TypeSubmit carries one message;
-// the shim checks that count, writes the text, waits submitframe.Gap and writes the CR
-// under ONE hold of the writer's lock, or refuses having written nothing. It never claims
-// to know what is on the input line, and it errs safe: typed-then-deleted-back-to-empty
-// still refuses. protocol.ErrInputBusy becomes the wire's CodeInputBusy, so a refusal is a
-// state the phone can draw and retry from rather than a message silently joined to
-// somebody else's. One class of write is written but NOT counted (phone refit W2.1):
-// shimwire.TypeControlInput frames, the daemon's own interrupt and dialog-answer keys, which
-// travel with their provenance so a phone Stop or approval never poisons the next send; the
-// residual is an approval key landing on an already-closed dialog, one uncounted character.
+// THE QUESTION THAT IS ANSWERABLE. The shim owns the PTY's only serialized writer, so under
+// that lock it can ask whether the owner's logical input line is PROVABLY CLEAN from the
+// input stream it serialized, without reading the agent's grid. It tracks only operations
+// with characterized effects: character insertion/deletion, complete horizontal/home/end
+// navigation, line kill and submit. Provider-dependent word/Meta keys and lone/incomplete
+// escape sequences remain unknown and busy. shimwire.TypeSubmit checks that predicate,
+// writes the text, waits submitframe.Gap and writes the CR under ONE hold of the writer's
+// lock, or refuses having written nothing. A known draft deleted back to empty becomes
+// clean; uncertainty stays safe. protocol.ErrInputBusy becomes the wire's CodeInputBusy,
+// so the phone can retain and retry rather than silently join somebody else's input.
+// shimwire.TypeControlInput frames bypass owner-input tracking by provenance: the daemon's
+// own interrupt and dialog-answer keys do not poison the next send; the residual is an
+// approval key landing on an already-closed dialog, one untracked character.
 //
 // WHAT REMAINS. A shim that predates the transaction answers ErrSubmitUnsupported and this
 // falls through to the two unlocked writes below -- reachable only mid-upgrade, and

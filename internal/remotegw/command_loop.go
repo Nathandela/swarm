@@ -145,6 +145,10 @@ type CommandBridgeConfig struct {
 	// field exists so a test can reach the timed-out path without sitting out the real
 	// budget, which is how the outbound half is already tested.
 	WaitTimeout time.Duration
+	// RetainedRetryWait is the cancellable no-progress backoff after an authenticated
+	// command remains in relay custody (nil => exponential production backoff). It is a
+	// seam for deterministic Run tests; production callers leave it nil.
+	RetainedRetryWait func(context.Context, int) error
 }
 
 // CommandBridge is the command-IN + reply half of the gateway (R-GW.3/.7): it polls
@@ -174,6 +178,12 @@ type CommandBridge struct {
 	// bucket. It is separate from mu because sealReply's failure path calls setErr, which
 	// takes mu. See sealReply for why the three steps cannot be split.
 	replyMu sync.Mutex
+	// pendingReply is the exact sealed envelope whose append outcome is unknown. It stays
+	// under replyMu and is replayed byte-for-byte before any later reply can allocate a seq.
+	// deliveredRetries remembers a pending reply redriven by a concurrent reply producer,
+	// so the retained inbound command can consume on retry without sealing it a second time.
+	pendingReply     *pendingCommandReply
+	deliveredRetries map[[32]byte]struct{}
 
 	mu          sync.Mutex
 	cursor      uint64
@@ -212,11 +222,12 @@ func NewCommandBridge(cfg CommandBridgeConfig) *CommandBridge {
 		inbound, _ = OpenInboundState("", "") // in-memory, cannot error
 	}
 	b := &CommandBridge{
-		cfg:      cfg,
-		recv:     crypto.NewMailboxReceiver(),
-		replySeq: replySeq,
-		inbound:  inbound,
-		highest:  map[InboundStream]uint64{},
+		cfg:              cfg,
+		recv:             crypto.NewMailboxReceiver(),
+		replySeq:         replySeq,
+		inbound:          inbound,
+		highest:          map[InboundStream]uint64{},
+		deliveredRetries: map[[32]byte]struct{}{},
 	}
 	ck := inbound.Load()
 	for st, seq := range ck.Highest {
@@ -280,10 +291,11 @@ func (b *CommandBridge) Cursor() uint64 {
 // public setter would be a second way to move a coordinate that must have exactly one.
 
 // PollOnce reads every mailbox item past the current cursor, processes each (open ->
-// forward -> seal reply), and returns how many were forwarded successfully. Per-item
-// failures (a malformed/wrong-key envelope, a forward error, a reply-seal error) are joined
-// into the returned error but do not stop the batch. The cursor advances past the items that
-// were HANDLED, never past one that failed to open (processBatch).
+// forward -> seal reply), and returns how many were forwarded successfully. Discardable
+// malformed/wrong-key failures are joined and skipped so hostile junk cannot pin the page.
+// An authenticated command whose daemon/reply transaction is incomplete instead stops the
+// page: a later cursor must never strand its retained operation. The cursor advances only
+// past items that were fully HANDLED (processBatch).
 func (b *CommandBridge) PollOnce(ctx context.Context) (int, error) {
 	items, err := b.readMailboxPage(ctx)
 	if err != nil {
@@ -407,6 +419,15 @@ func (b *CommandBridge) processBatch(ctx context.Context, items []relay.Item) (i
 	before := b.Cursor()
 	for _, it := range items {
 		if err := b.handle(ctx, it); err != nil {
+			var retained retainedCommandError
+			if errors.As(err, &retained) {
+				// This envelope authenticated and may already have produced a durable daemon
+				// outcome, but its terminal reply is not in known relay custody. Nothing after
+				// it may advance the durable cursor: doing so would permanently strand that
+				// outcome and the phone's operation would remain pending forever.
+				errs = append(errs, fmt.Errorf("cursor %d: %w", it.Cursor, err))
+				break
+			}
 			if b.cursorRecoveryActive() {
 				// An explicit relay-cursor rewind deliberately re-serves envelopes whose
 				// authenticated seq is already durable. Authenticate one with a fresh
@@ -629,6 +650,7 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 	defer func() { stopAcks(); <-acksDone }()
 
 	pacer := transport.NewDrainPacer()
+	retainedAttempts := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -697,9 +719,53 @@ func (b *CommandBridge) Run(ctx context.Context) error {
 		if maxCursor > 0 {
 			acks.RecordGeneration(maxCursor, ackGeneration)
 		}
-		if err := errors.Join(errs...); err != nil {
-			b.setErr(err)
+		batchErr := errors.Join(errs...)
+		if batchErr != nil {
+			b.setErr(batchErr)
 		}
+		var retained retainedCommandError
+		if errors.As(batchErr, &retained) {
+			retainedAttempts++
+			// This page made no progress through the retained command. MailboxWait will
+			// therefore return the same item immediately; without an explicit backoff it
+			// spends DrainPacer's initially-full minute bucket in a burst and hammers both
+			// the daemon idempotency path and the already-failing reply append. The wait is
+			// outside replyMu, so lease-sever notices remain free to redrive the pending
+			// exact envelope while this command sleeps.
+			if err := b.waitRetainedRetry(ctx, retainedAttempts); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			continue
+		}
+		retainedAttempts = 0
+	}
+}
+
+func (b *CommandBridge) waitRetainedRetry(ctx context.Context, attempt int) error {
+	if b.cfg.RetainedRetryWait != nil {
+		return b.cfg.RetainedRetryWait(ctx, attempt)
+	}
+	exponent := attempt - 1
+	if exponent < 0 {
+		exponent = 0
+	}
+	if exponent > 5 {
+		exponent = 5
+	}
+	delay := time.Second << exponent
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -794,6 +860,13 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 		}
 		return b.routeInput(frame)
 	}
+	if redriven, err := b.redrivePendingReply(ctx, frame.Command.OperationID); redriven {
+		if err != nil {
+			b.restoreReceiverFromCheckpoint()
+			return retainedCommandError{err: err}
+		}
+		return b.consume(frame, it.Cursor)
+	}
 	if err := b.routeCommand(ctx, frame.Command); err != nil {
 		// A SEALED REFUSAL IS FINAL, SO THE ITEM IS STILL CONSUMED (agents-tracker-2pnu F3).
 		// Every other failure here is a fact about the world -- the daemon was down, the relay
@@ -805,7 +878,13 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 		// restart. Consumed, the reason still rides out in the poll error below.
 		var refused refusedCommand
 		if !errors.As(err, &refused) {
-			return err
+			// OpenMailboxFrame already advanced recv's in-memory high-water. Because the
+			// command was deliberately not consumed, restore that guard from durable custody
+			// before returning; otherwise the very retry promised here is rejected stale in
+			// this gateway generation. processBatch recognises the wrapper and stops the page,
+			// so no later command can commit a cursor beyond this retained item.
+			b.restoreReceiverFromCheckpoint()
+			return retainedCommandError{err: err}
 		}
 		if consumeErr := b.consume(frame, it.Cursor); consumeErr != nil {
 			return errors.Join(err, consumeErr)
@@ -813,6 +892,36 @@ func (b *CommandBridge) handle(ctx context.Context, it relay.Item) error {
 		return err
 	}
 	return b.consume(frame, it.Cursor)
+}
+
+// retainedCommandError marks an authenticated non-input command whose external work is not
+// fully acknowledged. The command remains in relay custody and must form a page barrier until
+// its daemon action and terminal reply converge; malformed unauthenticated frames deliberately
+// do not carry this marker and retain the historical skip-past-poison behaviour.
+type retainedCommandError struct{ err error }
+
+func (r retainedCommandError) Error() string { return r.err.Error() }
+
+func (r retainedCommandError) Unwrap() error { return r.err }
+
+// restoreReceiverFromCheckpoint rolls the one-phase MailboxReceiver back to the last state
+// durable consume() actually committed. OpenMailboxFrame authenticates before mutating this
+// receiver, but routeCommand has external failure points after that mutation; reconstructing it
+// is the local rollback that makes a retained envelope retryable in the same process.
+func (b *CommandBridge) restoreReceiverFromCheckpoint() {
+	ck := b.inbound.Load()
+	recv := crypto.NewMailboxReceiver()
+	highest := make(map[InboundStream]uint64, len(ck.Highest))
+	for st, seq := range ck.Highest {
+		recv.SeedHighWater(st.Sender, st.Epoch, seq)
+		highest[st] = seq
+	}
+	b.mu.Lock()
+	b.recv = recv
+	b.cursor = ck.Cursor
+	b.incarnation = ck.Incarnation
+	b.highest = highest
+	b.mu.Unlock()
 }
 
 // refusedCommand marks a refusal this build can never take back: the reply IS sealed and the
@@ -971,7 +1080,7 @@ func (b *CommandBridge) forward(ctx context.Context, rc protocol.RemoteCommand) 
 	}
 	// Through the ONE serialised producer (lease_confirm.go): a second inline
 	// allocate -> append here would reintroduce the out-of-order hazard for this class.
-	return b.sealReply(ctx, reply)
+	return b.sealReplyForOperation(ctx, rc.OperationID, reply)
 }
 
 // forwardCtx races Forwarder.ForwardCommand against ctx, so a command in flight when the

@@ -162,21 +162,19 @@ Bead: `agents-tracker-d45a.2`. Worktree `refit-w2`. Three review rounds (PTY byt
 `internal/adapter/claude/interaction.go`, `ui/ErrorRouting.kt`, `PhoneSurface.kt` (one function), tests.
 
 ### W2.1 Daemon-authored control keys carry their provenance
-- **Symptom.** Phone Stop (ESC) and Allow/Deny ("1"/"3") travel as `wire.TDataIn`
+- **Pre-fix symptom.** Phone Stop (ESC) and Allow/Deny ("1"/"3") travelled as `wire.TDataIn`
   (`chat.go:662`, `inject.go:120` → `sessiontap.go:366-371` → `fromdaemon.go:391-395`), so
-  `ptyWriter.WriteInput` (`internal/shim/server.go:836-861`) counts them as typing and every later
-  `composer_send` is refused `input_busy` until someone presses Enter at the machine.
-- **Current** (`server.go:278-282`, `:877-881`):
+  the former byte counter treated them as owner typing and every later `composer_send` was refused
+  `input_busy` until someone pressed Enter at the machine.
+- **Current guard** (provenance plus the conservative logical-line tracker):
 ```go
-case wire.TDataIn:
-    if !helloed { continue }
-    _, _ = s.ptyIn.WriteInput(payload)
-...
 func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
     p.mu.Lock(); defer p.mu.Unlock()
-    if p.sinceSubmit != 0 { return errInputBusy }
+    if p.inputLine.dirty() { return errInputBusy }
+    // write text, frame gap, and CR under this same hold
+}
 ```
-- **Target.** Provenance on the frame, mirroring the `SubmitTransaction` capability exactly:
+- **Implemented provenance.** The frame mirrors the `SubmitTransaction` capability exactly:
 ```go
 // internal/shimwire/shimwire.go
 TypeControlInput = "control_input" // daemon-authored keys: interrupt, dialog answer
@@ -184,7 +182,7 @@ ControlInput bool   `json:"control_input,omitempty"` // hello reply capability
 Keys         string `json:"keys,omitempty"`          // control_input payload
 // internal/shim/server.go, beside TypeSubmit; hello reply gains ControlInput: true
 case shimwire.TypeControlInput:
-    _, _ = s.ptyIn.Write([]byte(ctrl.Keys)) // the non-counting write
+    _, _ = s.ptyIn.Write([]byte(ctrl.Keys)) // bypasses owner-input tracking
 // internal/protocol/types.go
 type ControlInputWriter interface { ControlInput(keys []byte) error }
 // internal/skeleton/sessiontap.go; chat.go:662 and inject.go:120 call ControlKeys instead of Input
@@ -194,12 +192,12 @@ func (s *tapSub) ControlKeys(p []byte) error {
     return s.t.up.Input(p) // old shim: today's behaviour, disclosed degrade
 }
 ```
-  Why not "the shim resets the counter on a known control byte": `server.go:817-822` and
-  `chat.go:437-448` forbid the shim judging what a byte does to the input line, and an owner's Escape
-  at the terminal is the identical byte. Provenance is a property of who sent the frame. The counter
-  does **not** reset at turn end (an inference from the drawn screen; a half-typed draft outlives the
-  turn). Residual risk, stated: an approval key that lands on an empty dialog dirties one character
-  uncounted; bounded, rare, and preferable to a permanently poisoned session.
+  Why not "the shim clears the owner line on a known control byte": an owner's identical Escape
+  travels through `TDataIn`, while a daemon-authored interrupt travels through `TypeControlInput`.
+  Provenance decides which stream affects owner-input tracking; the shim does not infer a dialog
+  from the drawn screen. The tracker does **not** reset at turn end because a half-typed draft can
+  outlive the turn. Residual risk, stated: an approval key that lands when no dialog is active can
+  insert an untracked character; bounded, rare, and preferable to a permanently poisoned session.
 - **Tests first.** `internal/shim/controlinput_test.go`:
   `TestSubmitMessage_AfterInterruptKeys_IsAccepted`, `TestSubmitMessage_AfterApprovalKeys_IsAccepted`,
   `TestSubmitMessage_AfterTypedText_IsRefused` (negative control), `TestControlInput_ReachesThePTYByteExact`.

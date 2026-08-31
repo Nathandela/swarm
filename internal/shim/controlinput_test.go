@@ -11,7 +11,7 @@ package shim
 // comment; internal/skeleton/chat.go, THE QUESTION THAT IS ANSWERABLE): an owner's Escape at
 // the terminal is the identical byte. What differs is WHO SENT THE FRAME, so provenance rides
 // the frame: shimwire.TypeControlInput carries daemon-authored keys and the shim writes them
-// through the non-counting path. A typed draft still refuses byte-for-byte.
+// through the owner-tracker-bypassing path. A typed draft still refuses byte-for-byte.
 
 import (
 	"bytes"
@@ -181,4 +181,188 @@ func TestSubmitMessage_AfterTypedText_IsRefused(t *testing.T) {
 		t.Fatalf("submit over an owner's draft answered %q, want %q", refused, shimwire.RefusedInputBusy)
 	}
 	r.ptyBytes("half a thought")
+}
+
+// TestSubmitMessage_AfterOwnerDeletesTheWholeDraft_IsAccepted is the physical-handset
+// regression behind v0.13.11's permanently "sending" bubbles. The old tracker counted bytes
+// written since Enter; it did not track what the editor did with them. Typing and then deleting
+// a draft therefore left the old dirty-byte count non-zero even though the logical line was empty,
+// and every later phone message was refused input_busy until the owner pressed Enter.
+func TestSubmitMessage_AfterOwnerDeletesTheWholeDraft_IsAccepted(t *testing.T) {
+	t.Run("ASCII", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("draft")
+		r.typed("\x7f\x7f\x7f\x7f\x7f")
+		if refused := r.submit("ship it"); refused != "" {
+			t.Fatalf("submit after owner deleted the whole draft was refused %q, want delivered", refused)
+		}
+		r.ptyBytes("draft\x7f\x7f\x7f\x7f\x7fship it\r")
+	})
+
+	t.Run("UTF-8 runes", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("é半")
+		r.typed("\x7f\x7f")
+		if refused := r.submit("ship it"); refused != "" {
+			t.Fatalf("submit after two runes and two deletes was refused %q, want delivered", refused)
+		}
+		r.ptyBytes("é半\x7f\x7fship it\r")
+	})
+}
+
+// TestSubmitMessage_TracksCursorEditingToAnEmptyLine pins the minimum editor model rather
+// than a backspace counter. The owner inserts two runes, moves left, deletes the rune under
+// the cursor, then deletes the rune before it. The line is empty although the PTY received
+// more bytes than it did in the simple type/delete case.
+func TestSubmitMessage_TracksCursorEditingToAnEmptyLine(t *testing.T) {
+	r := newControlInputRig(t)
+	r.typed("ab")
+	r.typed("\x1b[D")  // left: cursor between a and b
+	r.typed("\x1b[3~") // delete: remove b
+	r.typed("\x7f")    // backspace: remove a
+	if refused := r.submit("ship it"); refused != "" {
+		t.Fatalf("submit after cursor edit emptied the line was refused %q, want delivered", refused)
+	}
+	r.ptyBytes("ab\x1b[D\x1b[3~\x7fship it\r")
+}
+
+// TestSubmitMessage_CompleteNavigationOnAnEmptyLineDoesNotInventADraft covers complete,
+// provider-independent horizontal/home/end sequences. A lone Escape is deliberately excluded:
+// at the submit boundary it is indistinguishable from the prefix of a split terminal sequence.
+func TestSubmitMessage_CompleteNavigationOnAnEmptyLineDoesNotInventADraft(t *testing.T) {
+	r := newControlInputRig(t)
+	r.typed("\x1b[D\x1b[C\x1b[H\x1b[F")
+	if refused := r.submit("ship it"); refused != "" {
+		t.Fatalf("submit after empty-line navigation was refused %q, want delivered", refused)
+	}
+	r.ptyBytes("\x1b[D\x1b[C\x1b[H\x1b[Fship it\r")
+}
+
+// TestSubmitMessage_LineKillAndSubmitRestoreCleanliness pins the two ordinary ways a known
+// draft stops being a draft: the editor deletes it, or the owner submits it. Both transitions
+// must be understood without weakening the real-draft refusal above.
+func TestSubmitMessage_LineKillAndSubmitRestoreCleanliness(t *testing.T) {
+	t.Run("ctrl-u at end", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("throw this away\x15")
+		if refused := r.submit("ship it"); refused != "" {
+			t.Fatalf("submit after Ctrl-U cleared the draft was refused %q, want delivered", refused)
+		}
+		r.ptyBytes("throw this away\x15ship it\r")
+	})
+
+	t.Run("owner enter", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("owner line\r")
+		if refused := r.submit("ship it"); refused != "" {
+			t.Fatalf("submit after owner submitted their line was refused %q, want delivered", refused)
+		}
+		r.ptyBytes("owner line\rship it\r")
+	})
+}
+
+// TestSubmitMessage_UnknownHistoryRecallRemainsBusy is the fail-safe control. Up/down history
+// may populate Claude's composer with text the shim cannot observe. The tracker must not turn
+// "we do not know" into "empty" merely to avoid false positives.
+func TestSubmitMessage_UnknownHistoryRecallRemainsBusy(t *testing.T) {
+	r := newControlInputRig(t)
+	r.typed("\x1b[A")
+	if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+		t.Fatalf("submit after history recall answered %q, want conservative %q", refused, shimwire.RefusedInputBusy)
+	}
+	r.ptyBytes("\x1b[A")
+}
+
+// TestSubmitMessage_OwnerEnterClearsUnknownHistoryRecall proves that the conservative
+// history state is not itself a permanent latch. The tracker cannot know what Up recalled,
+// so it refuses while that editor state remains; once the owner submits the recalled line,
+// Enter is an unambiguous clean boundary and later phone input may proceed.
+func TestSubmitMessage_OwnerEnterClearsUnknownHistoryRecall(t *testing.T) {
+	r := newControlInputRig(t)
+	r.typed("\x1b[A\r")
+	if refused := r.submit("ship it"); refused != "" {
+		t.Fatalf("submit after owner ran recalled history was refused %q, want delivered", refused)
+	}
+	r.ptyBytes("\x1b[A\rship it\r")
+}
+
+// TestSubmitMessage_IncompleteTerminalSequenceRemainsBusy protects the atomic boundary at
+// frame splits. Escape can be a complete lifecycle key, but at this seam a lone ESC is also
+// indistinguishable from the prefix of a split sequence; ESC-[ is unambiguously incomplete.
+// Inserting phone text after either prefix could turn it into key parameters, not a prompt.
+func TestSubmitMessage_IncompleteTerminalSequenceRemainsBusy(t *testing.T) {
+	t.Run("lone escape", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("\x1b")
+		if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+			t.Fatalf("submit after a lone Escape answered %q, want %q", refused, shimwire.RefusedInputBusy)
+		}
+		r.ptyBytes("\x1b")
+	})
+
+	t.Run("split CSI", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("\x1b[")
+		if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+			t.Fatalf("submit inside a split CSI sequence answered %q, want %q", refused, shimwire.RefusedInputBusy)
+		}
+		r.ptyBytes("\x1b[")
+	})
+}
+
+// TestSubmitMessage_ProviderDependentWordEditingRemainsBusy protects punctuation-sensitive
+// editor semantics. The shim cannot assume Claude's word boundaries match unicode-space
+// boundaries: for "foo-bar", Alt-B may stop after the hyphen, so Ctrl-K can leave "foo-" even
+// though a whitespace-only model incorrectly deletes the whole line and declares it clean.
+func TestSubmitMessage_ProviderDependentWordEditingRemainsBusy(t *testing.T) {
+	t.Run("punctuation Alt-B then Ctrl-K", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("foo-bar\x1bb\x0b")
+		if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+			t.Fatalf("submit after provider-dependent Alt-B/Ctrl-K answered %q, want %q", refused, shimwire.RefusedInputBusy)
+		}
+		r.ptyBytes("foo-bar\x1bb\x0b")
+	})
+
+	for name, keys := range map[string]string{
+		"Ctrl-W":          "\x17",
+		"Alt-B":           "\x1bb",
+		"Alt-F":           "\x1bf",
+		"Alt-Backspace":   "\x1b\x7f",
+		"Alt-Left CSI":    "\x1b[1;3D",
+		"Ctrl-Left CSI":   "\x1b[1;5D",
+		"Ctrl-Delete CSI": "\x1b[3;5~",
+	} {
+		t.Run(name+" on empty line", func(t *testing.T) {
+			r := newControlInputRig(t)
+			r.typed(keys)
+			if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+				t.Fatalf("submit after uncharacterized %s answered %q, want %q", name, refused, shimwire.RefusedInputBusy)
+			}
+			r.ptyBytes(keys)
+		})
+	}
+}
+
+// TestSubmitMessage_BracketedPasteIsContentAndItsMarkersAreNot ensures pasted newlines do
+// not masquerade as the Enter key that runs a line. An empty completed paste leaves the line
+// empty; a paste carrying text (including LF) remains a real draft and refuses atomically.
+func TestSubmitMessage_BracketedPasteIsContentAndItsMarkersAreNot(t *testing.T) {
+	t.Run("empty paste", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("\x1b[200~\x1b[201~")
+		if refused := r.submit("ship it"); refused != "" {
+			t.Fatalf("submit after empty bracketed paste was refused %q, want delivered", refused)
+		}
+		r.ptyBytes("\x1b[200~\x1b[201~ship it\r")
+	})
+
+	t.Run("multiline content", func(t *testing.T) {
+		r := newControlInputRig(t)
+		r.typed("\x1b[200~first\nsecond\x1b[201~")
+		if refused := r.submit("ship it"); refused != shimwire.RefusedInputBusy {
+			t.Fatalf("submit over multiline pasted draft answered %q, want %q", refused, shimwire.RefusedInputBusy)
+		}
+		r.ptyBytes("\x1b[200~first\nsecond\x1b[201~")
+	})
 }

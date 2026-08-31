@@ -108,16 +108,18 @@ three messages in a row, so this cannot land after.
 |---|---|---|---|
 | 0.1 | RED: two concurrent `composer_send` calls on one session produce one concatenated submit and one empty submit | `internal/skeleton/` new test | must fail against `main` for the right reason, and the failure recorded |
 | 0.2 | RED: an owner draft parked in the PTY between the phone's check and its write survives byte-exact, and the send is refused | `internal/skeleton/` new test | the B13 case (`chat.go:337-345`), stated as a test rather than a comment |
-| 0.3 | GREEN: quiescence guard | `internal/shim/server.go:798-811` | `ptyWriter` is already **the** single serialised writer with a mutex on every write. Add a byte counter under that same lock, reset on a forwarded submit byte |
-| 0.4 | GREEN: one shim op holding the lock across the whole message | `internal/shim/` | under one `ptyWriter.mu` hold: check `sinceSubmit == 0`, write text, wait `submitframe.Gap`, write CR, reset — or refuse having written nothing. Precedent for the held gap: `supervision.go:16` |
+| 0.3 | GREEN: conservative logical-line guard | `internal/shim/server.go`, `internal/shim/inputline.go` | `ptyWriter` is already **the** single serialised writer with a mutex on every write. Track characterized character insertion/deletion, complete horizontal/home/end navigation, line kill and submit under that lock; word/Meta bindings, history/completion and lone/incomplete escape sequences remain unknown and busy |
+| 0.4 | GREEN: one shim op holding the lock across the whole message | `internal/shim/` | under one `ptyWriter.mu` hold: require the logical input line to be provably clean, write text, wait `submitframe.Gap`, write CR, reset — or refuse having written nothing. Precedent for the held gap: `supervision.go:16` |
 | 0.5 | GREEN: route the phone's send through the daemon's serialised entry point | `internal/skeleton/chat.go`, `internal/protocol/sendinput.go:115-127` | `Server.sendMessage` already takes `attachMu` then `inMu` for a whole message (`:214`, contract at `:167-195`); the phone path uses `tap.subscribe` instead |
 | 0.6 | The refusal reaches the phone as its own outcome | `internal/protocol/remote_chat.go`, `mobile/` | drawn in the drawing as `bubble.refused`, copy: *"Not sent — the terminal's input line was not empty."* |
 
-**What this deliberately does not do.** It never characterises the CLI's input region — the thing
-`chat.go:345-357` rightly refuses to guess, and the thing ADR-017:175's `expected_input_revision`
-would require. It claims only that *nobody has written to this PTY since the last submit*, a fact the
-shim owns absolutely because it is the only writer. It errs safe: typed-then-deleted-to-empty still
-refuses. Roughly 30 lines; the revision never crosses the wire, only the predicate.
+**What this deliberately does not do.** It never derives editor state from the CLI's rendered grid
+or claims to understand provider-owned history/completion — the guesses `chat.go:345-357` rightly
+refuses, and the thing ADR-017:175's `expected_input_revision` would require. It tracks only
+provider-independent input operations whose effect is characterized. A known draft deleted back to
+empty becomes clean; a real draft, provider-dependent word/Meta binding, unknown history/completion
+state, bracketed paste in progress, or lone/incomplete escape sequence stays busy. The revision
+never crosses the wire, only the conservative predicate and the existing `input_busy` refusal.
 
 **Scope note for the amendment.** The merge is exclusively a property of the keystroke sink
 (`resolveMessageSink`'s second branch, `chat.go:218-239`), and the only `ComposerKeys` implementor in

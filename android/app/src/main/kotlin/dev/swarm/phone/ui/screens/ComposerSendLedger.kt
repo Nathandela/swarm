@@ -6,6 +6,7 @@ import dev.swarm.phone.ui.kit.SendState
 data class ComposerSendRecord(
     val operationId: String,
     val sessionId: String,
+    val expectedTurn: String = "",
     val text: String,
     val state: SendState = SendState.PENDING,
     val refusal: String = "",
@@ -13,6 +14,9 @@ data class ComposerSendRecord(
     val detail: String = "",
     val answered: Boolean = false,
     val echoed: Boolean = false,
+    val retrying: Boolean = false,
+    val retryDispatched: Boolean = false,
+    val retryAttempt: Int = 0,
 )
 
 /**
@@ -27,14 +31,141 @@ class ComposerSendLedger {
     private val latestBySession = mutableMapOf<String, ComposerSendRecord>()
 
     fun sealed(operationId: String, sessionId: String, text: String) {
+        sealed(operationId, sessionId, expectedTurn = "", text = text)
+    }
+
+    fun sealed(operationId: String, sessionId: String, expectedTurn: String, text: String) {
         if (operationId.isEmpty()) return
-        val record = ComposerSendRecord(operationId = operationId, sessionId = sessionId, text = text)
+        val record = ComposerSendRecord(
+            operationId = operationId,
+            sessionId = sessionId,
+            expectedTurn = expectedTurn,
+            text = text,
+        )
         if (sends.putIfAbsent(operationId, record) == null) latestBySession[sessionId] = record
     }
 
     fun unansweredOperations(): List<String> = sends.values
-        .filterNot { it.answered }
+        .filterNot { it.answered || it.retrying }
         .map { it.operationId }
+
+    /**
+     * Claim one terminal input_busy answer for retry without removing or duplicating its bubble.
+     * Marking it before the facade call makes repeated event-driven redraws idempotent.
+     */
+    fun beginRetry(operationId: String): ComposerSendRecord? {
+        val current = sends[operationId] ?: return null
+        if (current.answered || current.echoed || current.retrying) return null
+        val retrying = current.copy(
+            retrying = true,
+            retryDispatched = false,
+            retryAttempt = current.retryAttempt + 1,
+        )
+        sends[operationId] = retrying
+        if (latestBySession[current.sessionId]?.operationId == operationId) {
+            latestBySession[current.sessionId] = retrying
+        }
+        return retrying
+    }
+
+    /**
+     * Whether a scheduled retry may enter the facade FIFO now. Checking at timer execution, rather
+     * than when the outcome is first observed, lets a later message wake after an earlier echo
+     * without requiring another journal event; unrelated conversations never block one another.
+     */
+    fun retryReady(operationId: String): Boolean {
+        val current = sends[operationId] ?: return false
+        if (!current.retrying) return false
+        for ((id, earlier) in sends) {
+            if (id == operationId) return true
+            if (earlier.sessionId == current.sessionId && !earlier.answered && !earlier.echoed) {
+                return false
+            }
+        }
+        return false
+    }
+
+    /** Mark that the delayed attempt crossed into the facade lane and must not be replayed. */
+    fun retryDispatched(operationId: String) {
+        val current = sends[operationId] ?: return
+        if (!current.retrying) return
+        val dispatched = current.copy(retryDispatched = true)
+        sends[operationId] = dispatched
+        if (latestBySession[current.sessionId]?.operationId == operationId) {
+            latestBySession[current.sessionId] = dispatched
+        }
+    }
+
+    /**
+     * Release cancelled the clock before these attempts reached the facade. Make only those
+     * durable outcomes claimable again; an already-dispatched retry may have committed.
+     */
+    fun rearmScheduledRetries() {
+        for ((operationId, current) in sends.toMap()) {
+            if (!current.retrying || current.retryDispatched) continue
+            val rearmed = current.copy(retrying = false)
+            sends[operationId] = rearmed
+            if (latestBySession[current.sessionId]?.operationId == operationId) {
+                latestBySession[current.sessionId] = rearmed
+            }
+        }
+    }
+
+    /** Queue admission failed before any facade call ran; make the durable outcome claimable again. */
+    fun retryRejected(operationId: String) {
+        val current = sends[operationId] ?: return
+        if (!current.retrying) return
+        val rearmed = current.copy(retrying = false, retryDispatched = false)
+        sends[operationId] = rearmed
+        if (latestBySession[current.sessionId]?.operationId == operationId) {
+            latestBySession[current.sessionId] = rearmed
+        }
+    }
+
+    /** Replace the spent operation id while retaining the logical bubble's original FIFO slot. */
+    fun retrySealed(previousOperationId: String, operationId: String) {
+        if (operationId.isEmpty()) return
+        val current = sends[previousOperationId] ?: return
+        if (!current.retrying) return
+        val replacement = current.copy(
+            operationId = operationId,
+            state = SendState.PENDING,
+            refusal = "",
+            notice = "",
+            detail = "",
+            answered = false,
+            echoed = false,
+            retrying = false,
+            retryDispatched = false,
+        )
+        val ordered = sends.entries.toList()
+        sends.clear()
+        for ((id, record) in ordered) {
+            if (id == previousOperationId) sends[operationId] = replacement else sends[id] = record
+        }
+        if (latestBySession[current.sessionId]?.operationId == previousOperationId) {
+            latestBySession[current.sessionId] = replacement
+        }
+    }
+
+    /** A facade-local retry refusal is terminal for this attempt and remains on its one bubble. */
+    fun retryFailed(operationId: String, refusal: String, notice: String, detail: String) {
+        val current = sends[operationId] ?: return
+        if (!current.retrying) return
+        val failed = current.copy(
+            state = SendState.REFUSED,
+            refusal = refusal,
+            notice = notice,
+            detail = detail,
+            answered = true,
+            retrying = false,
+            retryDispatched = false,
+        )
+        sends[operationId] = failed
+        if (latestBySession[current.sessionId]?.operationId == operationId) {
+            latestBySession[current.sessionId] = failed
+        }
+    }
 
     fun settle(operationId: String, verdict: ComposerVerdict) {
         if (!verdict.answered) return

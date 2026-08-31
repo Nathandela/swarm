@@ -295,6 +295,8 @@ data class ComposerVerdict(
     val notice: String,
     /** The machine's own words, verbatim, for the mono detail cell beside [notice]. */
     val detail: String,
+    /** Whether this terminal answer proves no bytes were written and permits an automatic retry. */
+    val retryable: Boolean = false,
 ) {
     companion object {
         /** Nothing issued, or nothing answered: the screen the press already drew. */
@@ -919,6 +921,9 @@ object SessionDetailScreen {
             clearsDraft = false,
             notice = if (sentenced) routed.message else notice.copy,
             detail = verdict.reason,
+            // Only input_busy is an explicit proof that the shim wrote no bytes. Retrying an
+            // unknown/lost outcome could duplicate a message that was actually delivered.
+            retryable = outcome.code == MachineRefusalCodes.INPUT_BUSY,
         )
     }
 

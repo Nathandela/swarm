@@ -1,7 +1,6 @@
 package shim
 
 import (
-	"bytes"
 	"errors"
 	"log"
 	"net"
@@ -271,9 +270,9 @@ func (s *server) serveConn(conn net.Conn) {
 				}
 				cw.writeControl(res)
 			case shimwire.TypeControlInput:
-				// Daemon-authored keys (an interrupt, a dialog answer): the non-counting
-				// write. The bytes reach the PTY exactly as typed input would; what differs
-				// is the frame they arrived on, and that is the whole of the judgement made.
+				// Daemon-authored keys (an interrupt, a dialog answer): the provenance
+				// write. The bytes reach the PTY verbatim but do not mutate the owner-input
+				// tracker; the frame they arrived on is the whole of that judgement.
 				_, _ = s.ptyIn.Write([]byte(ctrl.Keys))
 			case shimwire.TypeBackendAttach:
 				// The daemon's GO-AHEAD (ADR-013 §R7.2e): it is a connected client of the
@@ -819,17 +818,21 @@ func (p *replyPump) close() {
 // ptyWriter serializes writes to the PTY master and becomes a silent no-op once
 // the master is closed, so late emulator replies never touch a closed fd.
 //
-// IT ALSO COUNTS (Slice 0, agents-tracker-bzfe). sinceSubmit is the number of INPUT
-// bytes written since the last one that ran a line -- so "has anybody typed into this
-// session since the last submit" is answerable here, and nowhere else, because this is
-// the only writer. That fact is what submitMessage refuses on. Emulator replies do not
-// count: they are the shim answering the agent's own queries, not somebody typing.
+// IT ALSO TRACKS THE LOGICAL INPUT LINE (Slice 0, agents-tracker-bzfe). The original byte
+// count was safe for a draft that remained, but falsely latched after ordinary editing:
+// Backspace, Delete and complete cursor navigation added bytes instead of removing/moving
+// logical input. inputLineTracker models only editor operations whose effect is characterized
+// from the input stream and marks provider-dependent word/Meta operations, history/completion,
+// and lone/incomplete escape sequences unknown (busy).
+// That lets submitMessage distinguish a deleted draft from a real remaining one without
+// reading or guessing from the rendered grid. Emulator replies do not enter this path: they
+// are the shim answering the agent's own queries, not somebody typing.
 type ptyWriter struct {
 	mu     sync.Mutex
 	f      *os.File
 	closed bool
 
-	sinceSubmit int
+	inputLine inputLineTracker
 }
 
 func (p *ptyWriter) Write(b []byte) (int, error) {
@@ -845,7 +848,7 @@ func (p *ptyWriter) WriteInput(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	n, err := p.writeLocked(b)
-	p.countLocked(b)
+	p.inputLine.apply(b[:n])
 	return n, err
 }
 
@@ -854,16 +857,6 @@ func (p *ptyWriter) writeLocked(b []byte) (int, error) {
 		return len(b), nil
 	}
 	return p.f.Write(b)
-}
-
-// countLocked advances the dirty-byte count: everything after the LAST line-running
-// byte in this write. A write that ends in a return leaves the line clean.
-func (p *ptyWriter) countLocked(b []byte) {
-	if i := bytes.LastIndexAny(b, "\r\n"); i >= 0 {
-		p.sinceSubmit = len(b) - i - 1
-		return
-	}
-	p.sinceSubmit += len(b)
 }
 
 // errInputBusy is the shim's refusal: the input line is not clean, so this message
@@ -883,7 +876,7 @@ var errInputBusy = errors.New("the session's input line was not empty")
 func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.sinceSubmit != 0 {
+	if p.inputLine.dirty() {
 		return errInputBusy
 	}
 	if _, err := p.writeLocked(text); err != nil {
@@ -894,10 +887,10 @@ func (p *ptyWriter) submitMessage(text []byte, gap time.Duration) error {
 		// The text is in and the return is not. Count it as dirty, honestly: the line
 		// now holds words nobody submitted, and the next submit must refuse rather
 		// than run them together with its own.
-		p.countLocked(text)
+		p.inputLine.apply(text)
 		return err
 	}
-	p.sinceSubmit = 0
+	p.inputLine.reset()
 	return nil
 }
 

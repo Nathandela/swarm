@@ -56,9 +56,9 @@ object SwarmErrorTokens {
 
     /**
      * Slice 0 (chat-surface-plan row 0.6, `schema.CodeInputBusy`): the shim refused a composer
-     * send because somebody has written to this session's PTY since the last submit, so the text
-     * would have joined whatever is already on the input line and the carriage return would have
-     * submitted the concatenation.
+     * send because the shim could not prove the owner's logical input line was empty. A real or
+     * unknown draft might otherwise have joined the phone text, and the carriage return would
+     * have submitted the concatenation.
      *
      * IT IS A REFUSAL AND NOT A FAILURE. Nothing was written -- that is the posture
      * `composer_send` already takes for an over-long body -- and the draft is kept. It is also
@@ -66,11 +66,12 @@ object SwarmErrorTokens {
      * the whole of Slice 0 exists to prevent, and this is what prevention sounds like from the
      * outside.
      *
-     * IT CLAIMS NOTHING ABOUT THE CLI'S INPUT REGION. ADR-017:175's `expected_input_revision`
-     * would require characterising one and `skeleton/chat.go` rightly refuses to guess; this is
-     * the strictly weaker fact the shim owns absolutely, holding the PTY's only serialised
-     * writer. Conservative in the safe direction: a draft typed and deleted back to empty still
-     * refuses.
+     * IT NEVER INFERS FROM THE CLI'S DRAWN GRID. ADR-017:175's `expected_input_revision` would
+     * require provider-specific characterisation and `skeleton/chat.go` rightly refuses to guess.
+     * Holding the PTY's only serialised writer, the shim tracks only characterized character
+     * insertion/deletion, complete horizontal/home/end navigation, line kill and submit. A known
+     * draft deleted back to empty becomes clean; provider-dependent word/Meta keys,
+     * history/completion and lone/incomplete input remain conservatively busy.
      */
     const val INPUT_BUSY: String = "swarm/input-busy"
     const val RATE_LIMITED: String = "swarm/rate-limited"

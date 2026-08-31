@@ -151,6 +151,44 @@ class VerbDispatch(
         key: Any? = null,
         work: () -> T,
         settle: (Result<T>) -> Unit,
+    ): Boolean = enqueueOnMain(
+        plane = plane,
+        key = key,
+        work = work,
+        complete = {},
+        settle = settle,
+    )
+
+    /**
+     * Run [work] like [enqueue], but reconcile operation-owned model state even after detach.
+     *
+     * This is deliberately narrower than changing [enqueue]'s lifecycle contract. A facade call
+     * accepted while a surface is attached can finish after that surface is released; dropping
+     * its operation-id handoff would strand the durable logical operation forever. [complete]
+     * therefore always runs on [main]. It must update model state only and must not touch a View,
+     * render, toast, or otherwise address the released surface. [settle] remains attachment-gated
+     * and is the only callback for UI effects.
+     */
+    fun <T> enqueueCompleting(
+        plane: SendPlane,
+        key: Any? = null,
+        work: () -> T,
+        complete: (Result<T>) -> Unit,
+        settle: (Result<T>) -> Unit,
+    ): Boolean = enqueueOnMain(
+        plane = plane,
+        key = key,
+        work = work,
+        complete = complete,
+        settle = settle,
+    )
+
+    private fun <T> enqueueOnMain(
+        plane: SendPlane,
+        key: Any?,
+        work: () -> T,
+        complete: (Result<T>) -> Unit,
+        settle: (Result<T>) -> Unit,
     ): Boolean {
         if (key != null && !crossingKeys.add(key)) return false
         laneFor(plane).execute {
@@ -161,6 +199,7 @@ class VerbDispatch(
                 // for the life of this dispatch, with nothing to distinguish it from a dead
                 // button.
                 if (key != null) crossingKeys.remove(key)
+                complete(answer)
                 if (attached) settle(answer)
             }
         }

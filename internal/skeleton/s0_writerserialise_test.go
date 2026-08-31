@@ -21,14 +21,17 @@ package skeleton
 // person fires three short messages in a row, and the composer is about to stop being greyed.
 //
 // THE FIX THESE TESTS DESCRIBE is deliberately weaker than ADR-017:175's
-// expected_input_revision, and that is the point. It never characterises the CLI's input
-// region -- the guess chat.go:345-357 rightly refuses to make. The shim owns the PTY's single
-// serialised writer (internal/shim/server.go, ptyWriter, a mutex taken on every write), so it
-// can count bytes written since the last forwarded submit and answer one question absolutely:
-// HAS ANYBODY WRITTEN TO THIS PTY SINCE THE LAST SUBMIT. Text and CR then go out under one
-// hold of that same lock, or the send is refused having written nothing.
+// expected_input_revision, and that is the point. It never guesses from the CLI's rendered
+// grid. The shim owns the PTY's single serialised writer (internal/shim/server.go, ptyWriter,
+// a mutex taken on every write), so it conservatively tracks the logical input line from
+// characterized character insertion/deletion, complete horizontal/home/end navigation, line
+// kill and submit. Provider-owned word/Meta bindings, history/completion and lone/incomplete
+// escape sequences remain unknown and therefore busy.
+// Text and CR then go out under one hold of that same lock, or the send is refused having
+// written nothing.
 //
-// It errs safe by construction: typed-then-deleted-back-to-empty still refuses.
+// It errs safe by construction: a real or unknown draft refuses, while a known draft deleted
+// back to empty no longer leaves input_busy latched forever.
 
 import (
 	"strings"

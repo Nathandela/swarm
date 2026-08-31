@@ -20,9 +20,9 @@ package skeleton
 // against internal/fakeagent, which reads lines and echoes them. A real Claude is a full-screen
 // TUI: it emits terminal QUERIES at startup (device attributes, cursor position, capability
 // strings) and the shim's emulator ANSWERS them, writing bytes back into the very PTY whose
-// input the quiescence guard counts. If those replies were counted as somebody typing,
-// sinceSubmit would never be zero again and EVERY phone message to EVERY real Claude session
-// would be refused input_busy forever -- a total failure of the feature that no fake can
+// input the quiescence guard tracks. If those replies were treated as somebody typing,
+// the logical line would never be clean again and EVERY phone message to EVERY real Claude
+// session would be refused input_busy forever -- a total failure of the feature that no fake can
 // reveal, because no fake asks the questions. That is what the first subtest exists for, and
 // it is why the two arms live in one file: the refusal is only trustworthy if the acceptance
 // is real.
@@ -258,6 +258,58 @@ func TestSlice0RealCLI_ARealClaudePTYIsNotFalselyBusy(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the send answered OK but %q never appeared on the session's screen.\n"+
 				"Screen:\n%s", prompt, strings.Join(r.screen(t), "\n"))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// TestSlice0RealCLI_ADeletedOwnerDraftDoesNotLatchInputBusy is the real-editor counterpart
+// of internal/shim's deterministic key-stream tests. It is BILLABLE only because proving the
+// line became eligible requires one harmless phone prompt to cross. The owner types a draft,
+// deletes every rune using the real Claude editor, and only then sends from the phone surface.
+// The pre-v0.13.12 byte counter refused this forever: deletes added to the dirty count instead
+// of removing logical input.
+func TestSlice0RealCLI_ADeletedOwnerDraftDoesNotLatchInputBusy(t *testing.T) {
+	realCLIOptIn(t)
+	det := realClaude(t)
+	r := launchRealClaude(t, det)
+
+	const draft = "throw this away"
+	if err := r.att.Input([]byte(draft)); err != nil {
+		t.Fatalf("owner types a draft: %v", err)
+	}
+	deadline := time.Now().Add(120 * time.Second)
+	for !strings.Contains(strings.Join(r.screen(t), "\n"), draft) {
+		if time.Now().After(deadline) {
+			t.Skipf("the real Claude editor never displayed the draft %q; precondition not reached. Screen:\n%s",
+				draft, strings.Join(r.screen(t), "\n"))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err := r.att.Input([]byte(strings.Repeat("\x7f", len([]rune(draft))))); err != nil {
+		t.Fatalf("owner deletes the draft: %v", err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for strings.Contains(strings.Join(r.screen(t), "\n"), draft) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the real Claude editor still displays deleted draft %q. Screen:\n%s",
+				draft, strings.Join(r.screen(t), "\n"))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	prompt := "reply with the single word ok"
+	code, err := r.send(prompt, "devA:01JS0REALCLIDELETED0000")
+	if code != "" || err != nil {
+		t.Fatalf("phone send after the owner deleted the whole real-Claude draft = code %q err %v, want delivered", code, err)
+	}
+	deadline = time.Now().Add(60 * time.Second)
+	for {
+		if strings.Contains(strings.Join(r.screen(t), "\n"), prompt) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("send answered OK but %q never appeared. Screen:\n%s", prompt, strings.Join(r.screen(t), "\n"))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

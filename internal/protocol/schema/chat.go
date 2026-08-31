@@ -101,20 +101,19 @@ const (
 	// transcript can never show them -- the gap silently bridged, which is the one thing
 	// ADR-017 forbids. The caller is fine; the capability is absent.
 	CodeStructuredUnsupported ErrorCode = "structured_unsupported"
-	// CodeInputBusy refuses a composer_send whose message could not be written as one
-	// message: somebody has written to this session's PTY since the last submit, so the
-	// text would join whatever is already on the input line and the carriage return would
-	// submit the concatenation -- the B13 merge (skeleton/chat.go:337-345), and the
-	// two-sends-interleave defect (agents-tracker-bzfe) which is the same hazard with the
-	// phone on both sides of it.
+	// CodeInputBusy refuses a composer_send whose message could not safely be written as
+	// one message: the shim cannot prove the owner's logical input line is empty, so the
+	// text might join a real or unknown draft and the carriage return would submit the
+	// concatenation -- the B13 merge (skeleton/chat.go:337-345), and the two-sends-interleave
+	// defect (agents-tracker-bzfe) which is the same hazard with the phone on both sides.
 	//
-	// IT CLAIMS NOTHING ABOUT THE CLI'S INPUT REGION, deliberately. ADR-017:175's
-	// expected_input_revision would require characterising it, which chat.go:345-357
-	// rightly refuses to guess at. This is the strictly weaker fact the shim owns
-	// absolutely, because the shim holds the PTY's only serialised writer: bytes have been
-	// written since the last submit. It is conservative in the safe direction -- a draft
-	// typed and deleted back to empty still refuses -- and a refusal writes NOTHING, which
-	// is the posture composer_send already takes for an over-long body.
+	// IT NEVER INFERS FROM THE CLI'S DRAWN GRID. ADR-017:175's expected_input_revision
+	// would require provider-specific characterisation, which chat.go rightly refuses to
+	// guess at. Holding the PTY's only serialised writer, the shim tracks only operations
+	// with characterized effects: character insertion/deletion, complete horizontal/home/end
+	// navigation, line kill and submit. Provider-dependent word/Meta keys and lone/incomplete
+	// escape sequences remain unknown and busy. A known draft deleted back to empty becomes
+	// clean; a refusal still writes NOTHING, matching the over-long-body posture.
 	CodeInputBusy ErrorCode = "input_busy"
 )
 

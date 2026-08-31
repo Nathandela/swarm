@@ -12,6 +12,8 @@ package remotegw
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -21,6 +23,12 @@ import (
 // errLeaseSevered is the refusal reason for a lease that was granted and then died before
 // its generation could be read back.
 var errLeaseSevered = errors.New("lease ended before it could be confirmed")
+
+type pendingCommandReply struct {
+	fingerprint [32]byte
+	operationID string
+	envelope    []byte
+}
 
 // confirmLease seals the outcome of one take_control back to the phone, tagged with the
 // command's operation_id so it is attributable, and returns the error the bridge should
@@ -80,8 +88,39 @@ func (b *CommandBridge) confirmLease(ctx context.Context, rc protocol.RemoteComm
 // exists to prevent typing into a void. Replies are the gateway's outbound path and not hot,
 // so serialising them is cheap.
 func (b *CommandBridge) sealReply(ctx context.Context, reply protocol.Control) error {
+	return b.sealReplyForOperation(ctx, reply.OperationID, reply)
+}
+
+func (b *CommandBridge) sealReplyForOperation(ctx context.Context, operationID string, reply protocol.Control) error {
 	b.replyMu.Lock()
 	defer b.replyMu.Unlock()
+	fingerprint, err := replyFingerprint(reply)
+	if err != nil {
+		return err
+	}
+	// A prior MailboxAppend error is delivery-unknown: relay.Client reports the same
+	// error when the store committed but the response was lost. Re-append the exact
+	// sealed bytes before allocating any later seq. A duplicate is harmless because the
+	// phone's receiver stale-drops it; re-sealing would not be harmless because it spends
+	// a new seq and can leave the earlier one as a permanent gap.
+	if pending := b.pendingReply; pending != nil {
+		if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
+			return fmt.Errorf("append pending reply: %w", err)
+		}
+		b.pendingReply = nil
+		if pending.fingerprint == fingerprint {
+			return nil
+		}
+		// A concurrent reply producer (notably a lease-sever watcher) may have redriven
+		// the command's pending outcome. Remember that fact until the retained command is
+		// re-opened, so its idempotent daemon replay consumes without emitting a duplicate
+		// at a fresh seq.
+		b.deliveredRetries[pending.fingerprint] = struct{}{}
+	}
+	if _, delivered := b.deliveredRetries[fingerprint]; delivered {
+		delete(b.deliveredRetries, fingerprint)
+		return nil
+	}
 	seq, err := b.replySeq.Next()
 	if err != nil {
 		return fmt.Errorf("reply seq: %w", err)
@@ -90,8 +129,43 @@ func (b *CommandBridge) sealReply(ctx context.Context, reply protocol.Control) e
 	if err != nil {
 		return fmt.Errorf("seal reply: %w", err)
 	}
+	b.pendingReply = &pendingCommandReply{
+		fingerprint: fingerprint,
+		operationID: operationID,
+		envelope:    append([]byte(nil), env...),
+	}
 	if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, env); err != nil {
 		return fmt.Errorf("append reply: %w", err)
 	}
+	b.pendingReply = nil
 	return nil
+}
+
+// redrivePendingReply completes an already-authored outcome for the retained command without
+// forwarding that command to the daemon again. The reply envelope is the exact one whose first
+// append was delivery-unknown. A pending reply for another producer is left to sealReply's
+// globally ordered drain; only an exact operation id can bypass command dispatch here.
+func (b *CommandBridge) redrivePendingReply(ctx context.Context, operationID string) (bool, error) {
+	if operationID == "" {
+		return false, nil
+	}
+	b.replyMu.Lock()
+	defer b.replyMu.Unlock()
+	pending := b.pendingReply
+	if pending == nil || pending.operationID != operationID {
+		return false, nil
+	}
+	if _, err := b.cfg.Mailbox.MailboxAppend(ctx, b.cfg.ReplyTarget, pending.envelope); err != nil {
+		return true, fmt.Errorf("append pending reply: %w", err)
+	}
+	b.pendingReply = nil
+	return true, nil
+}
+
+func replyFingerprint(reply protocol.Control) ([32]byte, error) {
+	plain, err := json.Marshal(reply)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("fingerprint reply: %w", err)
+	}
+	return sha256.Sum256(plain), nil
 }

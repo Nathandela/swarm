@@ -242,6 +242,39 @@ class VerbDispatchTest {
         )
     }
 
+    @Test
+    fun composer_style_unkeyed_sends_capture_two_drafts_fifo_without_disabling_the_controls() {
+        val lane = Held()
+        val main = Held()
+        val dispatch = VerbDispatch(lane, lane, main)
+        val editor = control()
+        val send = control()
+        val calls = mutableListOf<String>()
+        val settled = mutableListOf<String>()
+
+        fun submit(capturedDraft: String) {
+            dispatch.enqueue(
+                SendPlane.COMMAND,
+                work = { calls += capturedDraft; "op-${calls.size}" },
+                settle = { settled += "$capturedDraft:${it.getOrThrow()}" },
+            )
+        }
+
+        submit("first")
+        submit("second")
+
+        assertTrue("a pending composer operation disabled the editor", editor.isEnabled)
+        assertTrue("a pending composer operation disabled Send", send.isEnabled)
+        assertEquals("facade work escaped the command lane", emptyList<String>(), calls)
+
+        lane.runAll()
+        assertEquals(listOf("first", "second"), calls)
+        assertEquals("settles ran off the main executor", emptyList<String>(), settled)
+
+        main.runAll()
+        assertEquals(listOf("first:op-1", "second:op-2"), settled)
+    }
+
     /** The refusal must not report a phantom answer either. */
     @Test
     fun a_refused_second_press_settles_nothing() {
@@ -333,6 +366,33 @@ class VerbDispatchTest {
             0,
             settles.get(),
         )
+    }
+
+    @Test
+    fun an_admitted_retry_completes_model_state_but_not_ui_after_detach() {
+        val lane = Held()
+        val main = Held()
+        val dispatch = VerbDispatch(lane, lane, main)
+        val completions = AtomicInteger()
+        val settles = AtomicInteger()
+
+        dispatch.enqueueCompleting(
+            SendPlane.COMMAND,
+            work = { "op-2" },
+            complete = { completions.incrementAndGet() },
+            settle = { settles.incrementAndGet() },
+        )
+        dispatch.detach()
+        lane.runAll()
+        assertEquals("completion ran on the command lane instead of main", 0, completions.get())
+
+        main.runAll()
+
+        assertEquals("detachment dropped operation ownership reconciliation", 1, completions.get())
+        assertEquals("detached retry rendered into a released surface", 0, settles.get())
+        dispatch.attach()
+        main.runAll()
+        assertEquals("reattach replayed the old UI settle", 0, settles.get())
     }
 
     /**
