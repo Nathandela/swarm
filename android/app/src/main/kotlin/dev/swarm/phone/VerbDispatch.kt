@@ -151,13 +151,18 @@ class VerbDispatch(
         key: Any? = null,
         work: () -> T,
         settle: (Result<T>) -> Unit,
-    ): Boolean = enqueueOnMain(
-        plane = plane,
-        key = key,
-        work = work,
-        complete = {},
-        settle = settle,
-    )
+    ): Boolean {
+        // Keep the key forwarding in this public member's body. Besides making the opt-in fence
+        // reviewable at its API seam, this prevents a future delegate edit from accepting a key
+        // and silently laundering it to null before the shared admission path.
+        return enqueueOnMain(
+            plane = plane,
+            key = key,
+            work = work,
+            complete = {},
+            settle = settle,
+        )
+    }
 
     /**
      * Run [work] like [enqueue], but reconcile operation-owned model state even after detach.

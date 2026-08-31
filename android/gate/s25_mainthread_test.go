@@ -359,7 +359,7 @@ func s25WholeToken(code string, at int, opener string) bool {
 	return !strings.HasSuffix(before, "class") && !strings.HasSuffix(before, "fun")
 }
 
-// s25PressOpeners are the three shapes a DISPATCHED facade call takes in this module.
+// s25PressOpeners are the four shapes a DISPATCHED facade call takes in this module.
 //
 // `Press(` is `PhoneSurface`'s own declaration type -- a plane, a verb and a settle, planned on
 // the looper and handed to [VerbDispatch] by `dispatchPress`. `press(` is that dispatcher call
@@ -377,9 +377,15 @@ func s25WholeToken(code string, at int, opener string) bool {
 // verb reaching `awaitConn` ON THE MAIN THREAD, and an enqueued verb does not; reading it as a
 // stray call reported a correctly dispatched read as a defect, which is the direction that
 // drives the next author to route the call badly to make the gate quiet.
-var s25PressOpeners = []string{"Press(", "press(", "enqueue("}
+//
+// `enqueueCompleting(` is the same off-main lane admission with an additional model-completion
+// callback that survives surface detach. Its `work` remains inside the dispatched call, while
+// only its UI settle is attachment-gated; treating it as inline reverses the fact this gate asks.
+var s25PressOpeners = []string{"Press(", "press(", "enqueue(", "enqueueCompleting("}
 
-// s25PressBodies is every dispatched press in one source, in either shape, in source order.
+// s25PressBodies is every complete dispatch call in source order. The plane scan needs the full
+// call because SendPlane and the invoked verb are separate arguments. Main-thread custody is a
+// narrower question; [s25DispatchedWorkBodies] extracts only what actually runs on the lane.
 func s25PressBodies(code string) []s25Span {
 	var out []s25Span
 	for _, opener := range s25PressOpeners {
@@ -387,6 +393,74 @@ func s25PressBodies(code string) []s25Span {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].start < out[b].start })
 	return out
+}
+
+// s25DispatchedWorkBodies is the source that actually executes off-main.
+//
+// Press/press keep their established whole-call treatment: they are the two older planning and
+// forwarding shapes this gate already derives together. enqueue/enqueueCompleting are different:
+// only `work` is run by laneFor(...). Their `complete` and `settle` callbacks are posted to main,
+// so treating the entire argument list as dispatched would hide the ANR this gate exists to find.
+func s25DispatchedWorkBodies(code string) []s25Span {
+	var out []s25Span
+	for _, opener := range []string{"Press(", "press("} {
+		out = append(out, s25Bodies(code, opener, '(', ')')...)
+	}
+	for _, opener := range []string{"enqueue(", "enqueueCompleting("} {
+		calls := s25Bodies(code, opener, '(', ')')
+		out = append(out, s25NamedLambdaBodies(code, calls, "work")...)
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].start < out[b].start })
+	return out
+}
+
+// s25NamedLambdaBodies extracts a named braced lambda from each call. A positional or expression
+// lambda is deliberately not guessed at: failing to recognize dispatched work reports it as
+// main-thread work, which is the safe direction for this ANR fence.
+func s25NamedLambdaBodies(code string, calls []s25Span, name string) []s25Span {
+	var out []s25Span
+	for _, call := range calls {
+		for at := call.start; at < call.end; {
+			rel := strings.Index(code[at:call.end], name)
+			if rel < 0 {
+				break
+			}
+			i := at + rel
+			at = i + len(name)
+			if (i > call.start && s25IdentifierByte(code[i-1])) ||
+				(at < call.end && s25IdentifierByte(code[at])) {
+				continue
+			}
+
+			j := at
+			for j < call.end && unicode.IsSpace(rune(code[j])) {
+				j++
+			}
+			if j >= call.end || code[j] != '=' {
+				continue
+			}
+			j++
+			for j < call.end && unicode.IsSpace(rune(code[j])) {
+				j++
+			}
+			if j >= call.end || code[j] != '{' {
+				continue
+			}
+
+			bodies := s25Bodies(code[j:call.end], "{", '{', '}')
+			if len(bodies) == 0 {
+				continue
+			}
+			out = append(out, s25Span{start: j + bodies[0].start, end: j + bodies[0].end})
+			break
+		}
+	}
+	return out
+}
+
+func s25IdentifierByte(b byte) bool {
+	r := rune(b)
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 // s25CallsIn reports which of `verbs` are called on some receiver inside the span.
@@ -773,7 +847,7 @@ func TestS25_EveryWaitingVerbIsDispatchedOrLedgered(t *testing.T) {
 // s25StrayWaitingCalls finds waiting verbs called outside any Press, keyed by the function they
 // sit in, so the ledger can name the ones that are known and filed.
 func s25StrayWaitingCalls(code string, waiting map[string]bool) map[string][]string {
-	dispatched := s25PressBodies(code)
+	dispatched := s25DispatchedWorkBodies(code)
 	stray := map[string][]string{}
 	for _, call := range s25CallSitesOf(code, waiting) {
 		covered := false
@@ -817,12 +891,52 @@ func TestS25_StrayCallScanDiscriminates(t *testing.T) {
 	if bad := s25StrayWaitingCalls(dispatchedDirectly, map[string]bool{"setPushPreference": true}); len(bad) != 0 {
 		t.Errorf("the stray scan reports a verb handed straight to VerbDispatch: %v", bad)
 	}
+	dispatchedWithCompletion := `private fun retry() {
+        dispatch.enqueueCompleting(
+            SendPlane.COMMAND,
+            work = { app.kill(target) },
+            complete = {},
+            settle = {},
+        )
+    }`
+	if bad := s25StrayWaitingCalls(dispatchedWithCompletion, waiting); len(bad) != 0 {
+		t.Errorf("the stray scan reports work handed to enqueueCompleting's off-main lane: %v", bad)
+	}
+	waitingInCompletion := `private fun retry() {
+        dispatch.enqueueCompleting(
+            SendPlane.COMMAND,
+            work = { Unit },
+            complete = { app.kill(target) },
+            settle = {},
+        )
+    }`
+	if bad := s25StrayWaitingCalls(waitingInCompletion, waiting); len(bad) == 0 {
+		t.Error("the stray scan passed a waiting verb in enqueueCompleting's main-thread complete callback")
+	}
+	waitingInSettle := `private fun retry() {
+        dispatch.enqueueCompleting(
+            SendPlane.COMMAND,
+            work = { Unit },
+            complete = {},
+            settle = { app.kill(target) },
+        )
+    }`
+	if bad := s25StrayWaitingCalls(waitingInSettle, waiting); len(bad) == 0 {
+		t.Error("the stray scan passed a waiting verb in enqueueCompleting's main-thread settle callback")
+	}
 	onTheLooper := `private fun onToggled(toggle: PushToggle, value: Boolean) {
         val op = app.setPushPreference(pref)
     }`
 	if bad := s25StrayWaitingCalls(onTheLooper, map[string]bool{"setPushPreference": true}); len(bad) == 0 {
 		t.Error("the stray scan passed a signed command called straight from a switch's own " +
 			"handler, which is agents-tracker-h39k exactly")
+	}
+	completionWithoutDispatch := `private fun retry() {
+        val op = app.kill(target)
+        complete(Result.success(op))
+    }`
+	if bad := s25StrayWaitingCalls(completionWithoutDispatch, waiting); len(bad) == 0 {
+		t.Error("the stray scan passed retry work after its enqueueCompleting admission was removed")
 	}
 }
 

@@ -197,11 +197,33 @@ func TestR4D3R3_ASecondAddWhileOneIsRunningIsRefusedOutLoud(t *testing.T) {
 		t.Fatalf("agents-tracker-0ox9 round 3: VerbDispatch declares no `fun <T> enqueue(`; this " +
 			"fence's subject moved and the fence must move with it")
 	}
-	if !strings.Contains(enqueue, "key") {
-		t.Errorf("agents-tracker-0ox9 round 3: VerbDispatch.enqueue takes no key, so there is no "+
+	if !r4d3r3EnqueueForwardsKey(dispatch) {
+		t.Errorf("agents-tracker-0ox9 round 3: VerbDispatch.enqueue does not forward its opt-in key, so there is no "+
 			"single-flight fence for work with no control to key on. The fence must be OPT-IN: "+
 			"unkeyed work stays undroppable for the push-token reconciliation "+
 			"(agents-tracker-b6iu): %q", strings.TrimSpace(enqueue))
+	}
+}
+
+// r4d3r3EnqueueForwardsKey checks the implementation body, not the declaration parameter: merely
+// accepting a key and then delegating null is the exact silent regression this fence owns.
+func r4d3r3EnqueueForwardsKey(dispatch string) bool {
+	return strings.Contains(r4d3BlockAfter(dispatch, "fun <T> enqueue("), "key = key")
+}
+
+func TestR4D3R3_TheEnqueueKeyFenceCheckDiscriminates(t *testing.T) {
+	withFence := `fun <T> enqueue(key: Any?): Boolean {
+        return enqueueOnMain(key = key)
+    }`
+	if !r4d3r3EnqueueForwardsKey(withFence) {
+		t.Fatal("the key-fence reader rejected enqueue forwarding its caller's opt-in key")
+	}
+
+	withoutFence := `fun <T> enqueue(key: Any?): Boolean {
+        return enqueueOnMain(key = null)
+    }`
+	if r4d3r3EnqueueForwardsKey(withoutFence) {
+		t.Fatal("the key-fence reader passed enqueue after its single-flight key was discarded")
 	}
 }
 
