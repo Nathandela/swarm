@@ -300,6 +300,52 @@ func (c *Client) SetRemoteControl(enabled bool) error {
 	return nil
 }
 
+// ContextGuardSettings reads the daemon-global context-guard policy. It requires the
+// negotiated context-guard-settings capability; an unavailable durable document is
+// returned as ErrContextGuardSettingsUnavailable rather than a fabricated default.
+func (c *Client) ContextGuardSettings() (ContextGuardSettings, error) {
+	resp, err := c.request(Control{Op: OpContextGuardGet, EndpointID: c.endpointID})
+	if err != nil {
+		return ContextGuardSettings{}, err
+	}
+	if resp.Op == OpError {
+		return ContextGuardSettings{}, contextGuardSettingsReplyError(resp)
+	}
+	if resp.Op != OpContextGuardGet || resp.ContextGuardSettings == nil {
+		return ContextGuardSettings{}, errors.New("protocol: context guard settings reply carried no settings")
+	}
+	return *resp.ContextGuardSettings, nil
+}
+
+// SetContextGuardSettings compare-and-swaps daemon-global context-guard policy. An
+// identical update at the current revision is idempotent; a stale revision returns the
+// stable ErrContextGuardSettingsStaleRevision sentinel for callers to re-read.
+func (c *Client) SetContextGuardSettings(expectedRevision uint64, autoCompact ContextGuardAutoCompact) (ContextGuardSettings, error) {
+	body := ContextGuardSettingsSetReq{ExpectedRevision: expectedRevision, AutoCompact: autoCompact}
+	resp, err := c.request(Control{Op: OpContextGuardSet, EndpointID: c.endpointID, ContextGuardSet: &body})
+	if err != nil {
+		return ContextGuardSettings{}, err
+	}
+	if resp.Op == OpError {
+		return ContextGuardSettings{}, contextGuardSettingsReplyError(resp)
+	}
+	if resp.Op != OpContextGuardSet || resp.ContextGuardSettings == nil {
+		return ContextGuardSettings{}, errors.New("protocol: context guard settings reply carried no settings")
+	}
+	return *resp.ContextGuardSettings, nil
+}
+
+func contextGuardSettingsReplyError(resp Control) error {
+	switch resp.ErrorCode {
+	case CodeStaleRevision:
+		return ErrContextGuardSettingsStaleRevision
+	case CodeUnavailable:
+		return ErrContextGuardSettingsUnavailable
+	default:
+		return errors.New(resp.Error)
+	}
+}
+
 func (c *Client) simpleOp(op, id string) error {
 	resp, err := c.request(Control{Op: op, EndpointID: c.endpointID, SessionID: id})
 	if err != nil {

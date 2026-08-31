@@ -210,6 +210,10 @@ type Daemon struct {
 	// playbook §6.2; capability.go).
 	capStore sessionCapabilityStore
 
+	// contextGuardSettings is daemon-global durable configuration for the owner-only
+	// protocol seam. This slice deliberately wires no worker or provider action.
+	contextGuardSettings *contextGuardSettingsStore
+
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by
 	// Close. nil in a test Daemon literal, so every use is nil-guarded like d.eng/d.api.
@@ -267,6 +271,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	// ADR-017 T2 rule 2 degrade outlives the incarnation that authored it
 	// (capability.go). Set before anything can register a record.
 	d.capStore.dir = cfg.StateDir
+	d.contextGuardSettings = openContextGuardSettingsStore(cfg.StateDir)
 
 	// Build the status engine BEFORE opening the core: daemon.Open runs reconcile
 	// synchronously and, for every reconnected running session, fires OnSessionStart
@@ -308,6 +313,7 @@ func Serve(cfg Config) (*Daemon, error) {
 	}
 	d.core = core
 	d.api = newCoreAPI(core, cfg.FakeAgentBin, epID)
+	d.api.contextGuardSettings = d.contextGuardSettings
 	d.api.syncName = func(local, name string) {
 		go d.syncSessionNameToProvider(local, name)
 	}

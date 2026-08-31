@@ -123,6 +123,9 @@ type coreAPI struct {
 	// stateDir is the daemon's persistent home; the durable remote-control kill-switch
 	// state file (remote-state.json) is mirrored here (R-KS.1). Set at assembly.
 	stateDir string
+	// contextGuardSettings is the narrow owner-settings backend. It remains nil in
+	// bare coreAPI tests, where the optional protocol seam honestly answers unavailable.
+	contextGuardSettings *contextGuardSettingsStore
 	// ksMu guards the read-time diff-write of the durable kill-switch state:
 	// RemoteControlEnabled runs on every remote op and concurrently. ksPersisted is the
 	// last enabled value written to remote-state.json this process (nil => never written),
@@ -611,6 +614,22 @@ func (a *coreAPI) SetTag(id, tag string) error {
 	return err
 }
 func (a *coreAPI) Events() <-chan persist.Meta { return a.events }
+
+func (a *coreAPI) ContextGuardSettings() (protocol.ContextGuardSettings, error) {
+	if a.contextGuardSettings == nil {
+		return protocol.ContextGuardSettings{}, protocol.ErrContextGuardSettingsUnavailable
+	}
+	return a.contextGuardSettings.ContextGuardSettings()
+}
+
+func (a *coreAPI) SetContextGuardSettings(expectedRevision uint64, autoCompact protocol.ContextGuardAutoCompact) (protocol.ContextGuardSettings, error) {
+	if a.contextGuardSettings == nil {
+		return protocol.ContextGuardSettings{}, protocol.ErrContextGuardSettingsUnavailable
+	}
+	return a.contextGuardSettings.SetContextGuardSettings(expectedRevision, autoCompact)
+}
+
+var _ protocol.ContextGuardSettingsBackend = (*coreAPI)(nil)
 
 // ClaimOperation makes coreAPI a protocol.OperationClaimer (slice A5-c): it claims a
 // remote op's operation_id single-use through the daemon's durable idempotency store so

@@ -39,6 +39,10 @@ const (
 	// capability gate failed) and CodeInvalidField (a structural or body-version failure);
 	// "recognised, not yet served" is a different fact from either.
 	CodeNotImplemented ErrorCode = "op_not_implemented"
+	// CodeStaleRevision is the stable CAS refusal for daemon-global settings. A
+	// caller must re-read the current document rather than overwrite another owner
+	// update with a stale revision.
+	CodeStaleRevision ErrorCode = "stale_revision"
 )
 
 // Transient reports whether a refusal is worth retrying: only rate_limit is
