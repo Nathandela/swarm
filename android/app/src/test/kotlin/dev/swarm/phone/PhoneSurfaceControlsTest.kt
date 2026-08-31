@@ -16,6 +16,7 @@ import dev.swarm.phone.ui.SessionLease
 import dev.swarm.phone.ui.kit.ComposerActionGlyph
 import dev.swarm.phone.ui.kit.CtaSurface
 import dev.swarm.phone.ui.kit.TopRule
+import dev.swarm.phone.ui.screens.conversationScaffoldView
 import dev.swarm.phone.ui.screens.PairingPanelScreen
 import dev.swarm.phone.ui.screens.SessionCapabilityFacts
 import dev.swarm.phone.ui.screens.SessionDetailPanel
@@ -353,6 +354,71 @@ class PhoneSurfaceControlsTest {
     }
 
     @Test
+    fun `only a visible composer tail reserves the named bottom air`() {
+        withSurface { activity, surface ->
+            val region = surface.composerRegion()
+            val expected = activity.resources.getDimensionPixelSize(R.dimen.swarm_space_8)
+
+            surface.drawDetail(panelWith(closedTurn, structuredChat = false))
+            assertEquals(
+                "the no-chat helper ends on the system-navigation edge with no breathing room",
+                expected,
+                region.paddingBottom,
+            )
+
+            surface.drawDetail(panelWith(openTurn))
+            surface.drawStopped(session)
+            assertEquals(
+                "the dynamically appended Stopped notice inherited the same clipped bottom edge",
+                expected,
+                region.paddingBottom,
+            )
+
+            surface.drawDetail(panelWith(closedTurn))
+            assertEquals("an available empty composer grew an unrequested bottom gutter", 0, region.paddingBottom)
+
+            surface.drawDetail(panelWith(closedTurn, ended = true))
+            assertEquals("an ended composer with no helper grew an empty bottom gutter", 0, region.paddingBottom)
+        }
+    }
+
+    @Test
+    fun `the no-chat helper clears both navigation and IME floors by the composer step`() {
+        withSurface { activity, surface ->
+            surface.drawDetail(panelWith(closedTurn, structuredChat = false))
+            val region = surface.composerRegion()
+            val helper = region.flatten()
+                .filterIsInstance<TextView>()
+                .single { it.text.toString() == "Reply on your computer." }
+            val air = activity.resources.getDimensionPixelSize(R.dimen.swarm_space_8)
+
+            for ((name, bars, ime) in listOf(Triple("navigation", 135, 0), Triple("IME", 135, 900))) {
+                (region.parent as? ViewGroup)?.removeView(region)
+                val scaffold = conversationScaffoldView(
+                    context = activity,
+                    header = View(activity),
+                    content = View(activity),
+                    composer = region,
+                )
+                // PhoneActivity has already removed this floor from the root's usable height.
+                // Measure the production conversation scaffold in that exact remaining frame;
+                // doing inset arithmetic a second time here would test a double-inset layout the
+                // app deliberately does not build.
+                val usableHeight = 2340 - bottomInsetPx(barsBottomPx = bars, imeBottomPx = ime)
+                scaffold.measure(exactly(1080), exactly(usableHeight))
+                scaffold.layout(0, 0, 1080, usableHeight)
+
+                assertEquals(
+                    "$name inset leaves the helper flush with the usable bottom instead of " +
+                        "the composer's named 8dp tail air",
+                    air,
+                    region.height - helper.bottom,
+                )
+            }
+        }
+    }
+
+    @Test
     fun `a live capability redraw recovers the composer in place and keeps the visible gap`() {
         withSurface { _, surface ->
             val gap = item("g-live", "structured_gap", turn = "", status = "completed")
@@ -611,4 +677,6 @@ class PhoneSurfaceControlsTest {
         is ViewGroup -> listOf(this) + (0 until childCount).flatMap { getChildAt(it).flatten() }
         else -> listOf(this)
     }
+
+    private fun exactly(px: Int) = View.MeasureSpec.makeMeasureSpec(px, View.MeasureSpec.EXACTLY)
 }

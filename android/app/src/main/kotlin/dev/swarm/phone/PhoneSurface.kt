@@ -42,6 +42,7 @@ import dev.swarm.phone.ui.SyncStatus
 import dev.swarm.phone.ui.StopAction
 import dev.swarm.phone.ui.TriageInbox
 import dev.swarm.phone.ui.kit.ComposerActionGlyph
+import dev.swarm.phone.ui.kit.ComposerLayout
 import dev.swarm.phone.ui.kit.CtaKind
 import dev.swarm.phone.ui.kit.Haptics
 import dev.swarm.phone.ui.kit.Motion
@@ -758,6 +759,24 @@ class PhoneSurface(
         addView(composer)
         addView(composerShutDetail)
         composerShutDetail.screenAir()
+    }
+
+    /**
+     * Keep a visible line after the composer off the exact edge of the usable window.
+     *
+     * [PhoneActivity.insetTheSystemBars] already removes the navigation bar or IME from the root,
+     * so this is intentionally NOT another inset and never participates in that arithmetic. The
+     * screen supplies only whether a tail is visible; [ComposerLayout] owns the named spacing and
+     * padding. An empty shut detail therefore costs no height for AVAILABLE/ENDED, while the
+     * no-chat or offline detail and the dynamically appended [stoppedNotice] receive the floor.
+     */
+    private fun updateComposerTailAir() {
+        val bar = composerRegion.indexOfChild(composer)
+        val hasVisibleTail = ((bar + 1) until composerRegion.childCount).any { index ->
+            val child = composerRegion.getChildAt(index)
+            child.visibility == View.VISIBLE && (child !is TextView || child.text.isNotEmpty())
+        }
+        ComposerLayout.tailAir(composerRegion, hasVisibleTail)
     }
 
     /**
@@ -3584,6 +3603,7 @@ class PhoneSurface(
         } else if (!wanted && shown) {
             composerRegion.removeView(decisionPillControl)
         }
+        updateComposerTailAir()
         // The square follows the panel it was just drawn against (W3.2): `detailDrawn` is set
         // before this runs on both draw paths.
         drawComposerAction()
@@ -4894,6 +4914,7 @@ class PhoneSurface(
         stoppedOverTurn = drawn.transcript.latestTurnId
         stoppedNotice.text = SessionDetail.INTERRUPT_SENT
         if (stoppedNotice.parent == null) composerRegion.addView(stoppedNotice)
+        updateComposerTailAir()
     }
 
     /** Latch the history read this surface issued, and whether its refusal speaks. */

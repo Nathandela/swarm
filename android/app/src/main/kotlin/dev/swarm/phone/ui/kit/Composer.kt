@@ -320,6 +320,22 @@ fun composerBar(context: Context, field: View, send: View): LinearLayout = KitSt
 }
 
 /**
+ * The composer region's tail treatment, kept in the kit so a screen supplies state and never
+ * chooses padding or a dimension.
+ *
+ * Row 9 already defines `space_8` as the composer's vertical rhythm. A notice trailing the bar
+ * continues that rhythm above the usable-window edge; an empty tail adds nothing. This is not a
+ * system inset: PhoneActivity owns navigation/IME avoidance one layer outside the composition.
+ */
+internal object ComposerLayout {
+    fun tailAir(region: LinearLayout, visible: Boolean) {
+        val wanted = if (visible) Kit.dimenPx(region.context, R.dimen.swarm_space_8) else 0
+        if (region.paddingBottom == wanted) return
+        region.setPadding(region.paddingLeft, region.paddingTop, region.paddingRight, wanted)
+    }
+}
+
+/**
  * The composer's ONE control, and the whole of phone refit W3 (docs/specifications/phone-refit-playbook.md
  * §4, owner ruling; row 9 records it as `action-box 40`): the square that sends what is in the
  * field, or stops the agent while it works and the field is empty.
