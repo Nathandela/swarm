@@ -37,6 +37,7 @@ func isStorageAdmissionError(err error) bool {
 // the same writable snapshot, so the global count cannot race a distributed writer.
 type storeMutation struct {
 	durableDelta     int64
+	growthBytes      int64
 	cleanupItems     uint64
 	cleanupMailboxes uint64
 }
@@ -144,8 +145,16 @@ func (s *store) update(growth bool, fn func(*bolt.Tx) (storeMutation, error)) er
 			if max := a.limits.MaxDurableObjects; max > 0 && a.durableObjects+m.durableDelta > max {
 				return s.refuseLocked(admissionDurableObjects)
 			}
-			if max := a.limits.MaxDBBytes; max > 0 && tx.Size() > max {
-				return s.refuseLocked(admissionDBBytes)
+			if max := a.limits.MaxDBBytes; max > 0 {
+				// bbolt spills dirty nodes only after this managed callback returns, so
+				// tx.Size alone cannot see a pending large value. Pair its page high-water
+				// with the exact positive logical growth reported by the mutation. This is
+				// conservative when free pages are reusable, but never permits a one-write
+				// overshoot and still rolls the whole transaction back here.
+				info, statErr := os.Stat(a.dbPath)
+				if statErr != nil || tx.Size() > max || info.Size()+m.growthBytes > max {
+					return s.refuseLocked(admissionDBBytes)
+				}
 			}
 		}
 		mutation = m

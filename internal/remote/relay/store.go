@@ -199,6 +199,7 @@ func (s *store) appendItem(rid, source string, env []byte, atMillis int64) (uint
 			next = binary.BigEndian.Uint64(v)
 		} else {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(rid) + 8)
 		}
 		cursor = next
 		if err := seqB.Put([]byte(rid), u64(next+1)); err != nil {
@@ -207,6 +208,7 @@ func (s *store) appendItem(rid, source string, env []byte, atMillis int64) (uint
 		items := tx.Bucket(bucketItems)
 		if items.Bucket([]byte(rid)) == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(rid))
 		}
 		mb, err := items.CreateBucketIfNotExists([]byte(rid))
 		if err != nil {
@@ -219,6 +221,7 @@ func (s *store) appendItem(rid, source string, env []byte, atMillis int64) (uint
 		copy(rec[recordHead:], env)
 		if mb.Get(u64(cursor)) == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(8 + len(rec))
 		}
 		if err := mb.Put(u64(cursor), rec); err != nil {
 			return storeMutation{}, err
@@ -677,13 +680,18 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 			retired := retiredKey(pairer, device, string(live))
 			if rb2.Get(retired) == nil {
 				mutation.durableDelta++
+				mutation.growthBytes += int64(len(retired) + 1)
 			}
 			if err := rb2.Put(retired, []byte{1}); err != nil {
 				return storeMutation{}, err
 			}
 		}
-		if cb.Get(key) == nil {
+		oldConsent := cb.Get(key)
+		if oldConsent == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(key) + len(ceremonyID))
+		} else if extra := len(ceremonyID) - len(oldConsent); extra > 0 {
+			mutation.growthBytes += int64(extra)
 		}
 		if err := cb.Put(key, []byte(ceremonyID)); err != nil {
 			return storeMutation{}, err
@@ -693,6 +701,7 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 		forward := pairKey(pairer, device)
 		if pb.Get(forward) == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(forward) + 1)
 		}
 		if err := pb.Put(forward, []byte{1}); err != nil {
 			return storeMutation{}, err
@@ -700,6 +709,7 @@ func (s *store) authorizePair(pairer, device, ceremonyID string) error {
 		reverse := pairKey(device, pairer)
 		if pb.Get(reverse) == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(reverse) + 1)
 		}
 		if err := pb.Put(reverse, []byte{1}); err != nil {
 			return storeMutation{}, err
@@ -827,8 +837,12 @@ func (s *store) putToken(rid, token string) error {
 	return s.update(true, func(tx *bolt.Tx) (storeMutation, error) {
 		b := tx.Bucket(bucketTokens)
 		mutation := storeMutation{}
-		if b.Get([]byte(rid)) == nil {
+		old := b.Get([]byte(rid))
+		if old == nil {
 			mutation.durableDelta++
+			mutation.growthBytes += int64(len(rid) + len(token))
+		} else if extra := len(token) - len(old); extra > 0 {
+			mutation.growthBytes += int64(extra)
 		}
 		if err := b.Put([]byte(rid), []byte(token)); err != nil {
 			return storeMutation{}, err

@@ -6,6 +6,8 @@ package relay
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +68,57 @@ func TestPublicAdmission_GlobalDurableObjectCapIsAtomic(t *testing.T) {
 	}
 }
 
+func TestPublicAdmission_ReopenRecountsExistingObjectsBeforeAdmittingGrowth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	clk := newFakeClock()
+	cfg := DefaultConfig()
+	cfg.DBPath = path
+	cfg.Quotas.MaxDurableObjects = 4
+
+	first, err := New(cfg, WithClock(clk))
+	if err != nil {
+		t.Fatalf("first New: %v", err)
+	}
+	if err := first.st.authorizePair("pairer-a", "device-a", "ceremony-a"); err != nil {
+		t.Fatalf("first authorizePair: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+
+	reopened, err := New(cfg, WithClock(clk))
+	if err != nil {
+		t.Fatalf("reopened New: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := reopened.st.storageSnapshot().DurableObjects; got != 3 {
+		t.Fatalf("reopened durable object count = %d, want 3", got)
+	}
+	err = reopened.st.authorizePair("pairer-b", "device-b", "ceremony-b")
+	requireAdmissionReason(t, err, admissionDurableObjects)
+	if reopened.st.isPaired("pairer-b", "device-b") {
+		t.Fatal("reopened store admitted a pair past its reconstructed global cap")
+	}
+}
+
+func TestPublicAdmission_AppendAndTokenShareTheGlobalObjectCount(t *testing.T) {
+	srv, _ := newAdmissionRelay(t, func(c *Config) { c.Quotas.MaxDurableObjects = 4 })
+	if _, err := srv.st.appendItem("target", "source", []byte("one"), 1); err != nil {
+		t.Fatalf("appendItem: %v", err)
+	}
+	if err := srv.st.putToken("target", "opaque-token"); err != nil {
+		t.Fatalf("putToken: %v", err)
+	}
+	if got := srv.st.storageSnapshot().DurableObjects; got != 4 {
+		t.Fatalf("objects after mailbox (seq+bucket+item) and token = %d, want 4", got)
+	}
+	_, err := srv.st.appendItem("target", "source", []byte("two"), 2)
+	requireAdmissionReason(t, err, admissionDurableObjects)
+	if got := srv.st.mailboxDepth("target"); got != 1 {
+		t.Fatalf("mailbox depth after refused append = %d, want 1", got)
+	}
+}
+
 func TestPublicAdmission_GlobalGrowthWriteWindowBoundsDistributedSources(t *testing.T) {
 	srv, clk := newAdmissionRelay(t, func(c *Config) {
 		c.Quotas.DurableGrowthWritesPerMin = 1
@@ -96,6 +149,28 @@ func TestPublicAdmission_RefusesGrowthWhenDBOrFreeDiskFenceIsHit(t *testing.T) {
 		err := srv.st.authorizePair("pairer", "device", "ceremony")
 		requireAdmissionReason(t, err, admissionFreeDisk)
 	})
+}
+
+func TestPublicAdmission_PostMutationDBSizeFenceRollsBackWholeTransaction(t *testing.T) {
+	srv, _ := newAdmissionRelay(t, nil)
+	info, err := os.Stat(srv.cfg.DBPath)
+	if err != nil {
+		t.Fatalf("stat db: %v", err)
+	}
+	// Preflight passes by one byte. The transaction's exact logical-growth report
+	// observes the large pending record before bbolt spills dirty pages and must roll
+	// back seq, bucket and item together.
+	srv.st.admission.mu.Lock()
+	srv.st.admission.limits.MaxDBBytes = info.Size() + 1
+	srv.st.admission.mu.Unlock()
+	_, err = srv.st.appendItem("target", "source", make([]byte, 512<<10), 1)
+	requireAdmissionReason(t, err, admissionDBBytes)
+	if got := srv.st.storageSnapshot().DurableObjects; got != 0 {
+		t.Fatalf("post-mutation DB refusal left %d durable objects, want 0", got)
+	}
+	if got := srv.st.mailboxDepth("target"); got != 0 {
+		t.Fatalf("post-mutation DB refusal left mailbox depth %d, want 0", got)
+	}
 }
 
 func TestPublicCleanup_RemovesEmptyMailboxBucketsButPreservesCursorHighWater(t *testing.T) {
