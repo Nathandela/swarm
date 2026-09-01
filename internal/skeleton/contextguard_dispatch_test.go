@@ -146,8 +146,8 @@ func newDispatchRig(t *testing.T) *dispatchRig {
 		// live-gated version -- the rig proves the worker choreography against
 		// the exact request shape production sends.
 		if continuer, ok := adapter.AsContextGuardContinuer(codex.New()); ok {
-			s.continuation = func(threadID, messageID, text string) (string, map[string]any, bool) {
-				return continuer.ContextGuardContinuation("0.151.0", threadID, messageID, text)
+			s.continuation = func(threadID, text string) (string, map[string]any, bool) {
+				return continuer.ContextGuardContinuation("0.151.0", threadID, text)
 			}
 		}
 		s.attended = func() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.attendedNow }
@@ -714,19 +714,25 @@ func (r *dispatchRig) requireNoPlainCallsFor(t *testing.T, d time.Duration) {
 	}
 }
 
-// TestContextGuardContinuationRidesTheProviderQueue (ADR-023 amendment 2):
-// once the guard's own compaction is observed running, the continuation is
-// enqueued through the provider's native queue -- exactly once per cycle, with
-// the daemon-authored prompt -- and a second cycle earns a second enqueue.
-func TestContextGuardContinuationRidesTheProviderQueue(t *testing.T) {
+// TestContextGuardContinuationStartsTheResumptionTurn (ADR-023 amendment 2):
+// the continuation is an ordinary turn/start, sent ONLY once the guard's own
+// compaction has verifiably completed -- never while it runs (that would
+// cancel it) -- exactly once per cycle, with the daemon-authored prompt; a
+// second cycle earns a second continuation.
+func TestContextGuardContinuationStartsTheResumptionTurn(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
 	r.waitCalls(t, 1)
 	r.ingestLifecycle(t, 2, "item/started")
 	r.waitPhase(t, contextguard.StateProviderCompacting)
+	// While the compaction runs, NOTHING may be sent: a turn/start here would
+	// cancel it, and a queued message could not be revoked from a human.
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
 	plain := r.waitPlainCalls(t, 1)
-	if plain[0].method != "thread/queue/add" {
-		t.Fatalf("continuation method = %q; want thread/queue/add", plain[0].method)
+	if plain[0].method != "turn/start" {
+		t.Fatalf("continuation method = %q; want turn/start", plain[0].method)
 	}
 	if plain[0].params["threadId"] != contextGuardTestThread {
 		t.Fatalf("continuation thread = %v; want the session's thread", plain[0].params["threadId"])
@@ -735,12 +741,7 @@ func TestContextGuardContinuationRidesTheProviderQueue(t *testing.T) {
 	if len(input) != 1 || input[0]["text"] != contextGuardContinuationPrompt {
 		t.Fatalf("continuation input = %+v; want the daemon-authored prompt", plain[0].params["input"])
 	}
-	if id, _ := plain[0].params["clientUserMessageId"].(string); !strings.HasPrefix(id, "swarm-cg-continuation-") {
-		t.Fatalf("continuation message id = %q; want the swarm provenance prefix", plain[0].params["clientUserMessageId"])
-	}
-	// Completion latches; the consumed cycle never enqueues again.
-	r.ingestLifecycle(t, 3, "item/completed")
-	r.waitPhase(t, contextguard.StateLatched)
+	// The consumed cycle never sends again.
 	time.Sleep(100 * time.Millisecond)
 	if calls := r.conn.plainSnapshot(); len(calls) != 1 {
 		t.Fatalf("continuations after latch = %d; want 1", len(calls))
@@ -751,7 +752,47 @@ func TestContextGuardContinuationRidesTheProviderQueue(t *testing.T) {
 	r.ingestUsage(t, 5, 90, 100)
 	r.waitCalls(t, 2)
 	r.ingestLifecycle(t, 6, "item/started")
+	r.ingestLifecycle(t, 7, "item/completed")
 	r.waitPlainCalls(t, 2)
+}
+
+// TestContextGuardContinuationWaitsOutFoldLagThenSends: at latch the folded
+// status may still trail the compaction turn's end. Latched is stable and
+// status edges wake the worker, so the armed attempt waits for quiet instead
+// of forfeiting -- and fires on the settling edge.
+func TestContextGuardContinuationWaitsOutFoldLagThenSends(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.setQuiet(false) // the fold has not settled to idle yet
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	r.setQuiet(true)
+	r.nudge() // the status edge
+	r.waitPlainCalls(t, 1)
+}
+
+// TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead: a Stop
+// admitted while the continuation waited for the lane changed the world; the
+// send forfeits at the head, one-shot, no retry.
+func TestContextGuardContinuationForfeitsOnStopBarrierAtTheLaneHead(t *testing.T) {
+	r := newDispatchRig(t)
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.lane.enter() // a composer holds the lane through the latch
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	time.Sleep(100 * time.Millisecond) // the worker is parked in the lane wait
+	r.lane.mu.Lock()
+	r.lane.barrier++
+	r.lane.mu.Unlock()
+	r.lane.leave()
+	r.requireNoPlainCallsFor(t, 200*time.Millisecond)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond) // consumed, never retried
 }
 
 // TestContextGuardContinuationAtLatchWhenCompletionArrivesFirst: a compaction
@@ -780,39 +821,40 @@ func TestContextGuardNeverContinuesACompactionItDidNotDispatch(t *testing.T) {
 }
 
 // TestContextGuardContinuationSkipsAttendedSessions: someone took the
-// controls during the compaction; they continue the task themselves, and the
-// forfeited continuation is never enqueued later.
+// controls during the compaction; they continue the task themselves. The
+// forfeit is consumed -- their later departure earns no surprise turn.
 func TestContextGuardContinuationSkipsAttendedSessions(t *testing.T) {
 	r := newDispatchRig(t)
 	r.ingestUsage(t, 1, 85, 100)
 	r.waitCalls(t, 1)
 	r.setAttended(true)
 	r.ingestLifecycle(t, 2, "item/started")
-	r.waitPhase(t, contextguard.StateProviderCompacting)
-	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
-	r.setAttended(false)
 	r.ingestLifecycle(t, 3, "item/completed")
 	r.waitPhase(t, contextguard.StateLatched)
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
+	r.setAttended(false)
+	r.nudge()
 	r.requireNoPlainCallsFor(t, 150*time.Millisecond) // consumed, not deferred
 }
 
-// TestContextGuardContinuationFailureIsForfeitNotRetry: an enqueue error
-// leaves the lifecycle untouched and is never retried -- ambiguity would risk
-// a duplicated surprise turn.
+// TestContextGuardContinuationFailureIsForfeitNotRetry: a send error leaves
+// the lifecycle untouched and is never retried -- ambiguity would risk a
+// duplicated surprise turn.
 func TestContextGuardContinuationFailureIsForfeitNotRetry(t *testing.T) {
 	r := newDispatchRig(t)
 	r.conn.mu.Lock()
-	r.conn.plainErr = errors.New("queue refused")
+	r.conn.plainErr = errors.New("turn refused")
 	r.conn.mu.Unlock()
 	r.ingestUsage(t, 1, 85, 100)
 	r.waitCalls(t, 1)
 	r.ingestLifecycle(t, 2, "item/started")
-	r.waitPlainCalls(t, 1) // attempted once
 	r.ingestLifecycle(t, 3, "item/completed")
 	r.waitPhase(t, contextguard.StateLatched) // lifecycle unharmed
+	r.waitPlainCalls(t, 1)                    // attempted once
+	r.nudge()
 	time.Sleep(100 * time.Millisecond)
 	if calls := r.conn.plainSnapshot(); len(calls) != 1 {
-		t.Fatalf("enqueue attempts = %d; want exactly 1 (forfeit, never retry)", len(calls))
+		t.Fatalf("send attempts = %d; want exactly 1 (forfeit, never retry)", len(calls))
 	}
 }
 
@@ -876,4 +918,23 @@ func TestContextGuardUnwiredRegistrationsStayObserveOnly(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// TestContextGuardContinuationForfeitsWhenTheWindowPasses: a continuation
+// that could not go out shortly after the compaction (persistent activity,
+// fold never settling) is stale context maintenance, not a message to
+// deliver later.
+func TestContextGuardContinuationForfeitsWhenTheWindowPasses(t *testing.T) {
+	r := newDispatchRig(t)
+	r.session(t).continuationFreshness = 50 * time.Millisecond
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.setQuiet(false) // the fold never settles inside the window
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	time.Sleep(120 * time.Millisecond)
+	r.setQuiet(true)
+	r.nudge()
+	r.requireNoPlainCallsFor(t, 150*time.Millisecond)
 }

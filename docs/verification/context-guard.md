@@ -177,17 +177,25 @@ approval, which already blocks dispatch at the queue head).
 
 ## Continuation (ADR-023 amendment 2)
 
-Implemented against the live-verified provider semantics in
-`docs/design/context-guard-continuation.md`: the guard's own compact arms a
-one-shot continuation at the write boundary; the worker enqueues codex's
-native `thread/queue/add` on reaching `provider_compacting` (or `latched`,
-where the idle thread starts it directly); attended sessions are skipped;
-failure or ambiguity forfeits rather than retries; native/manual compactions
-never continue. Pinned by
-`TestContextGuardContinuationRidesTheProviderQueue` (shape, prompt,
-once-per-cycle, second cycle), `...AtLatchWhenCompletionArrivesFirst`,
-`...NeverContinuesACompactionItDidNotDispatch`,
-`...SkipsAttendedSessions`, `...FailureIsForfeitNotRetry`,
-`...ForfeitsOnHold` (skeleton) and
-`TestContextGuardContinuationShapeAndFence` (codex adapter, exact-version
-fence + degenerate identity).
+Two mechanisms were live-verified on codex 0.151.0
+(`docs/design/context-guard-continuation.md`); the adversarial review then
+REJECTED the provider-queue design (a queued message is unrevokable while the
+compaction runs -- a human attaching or stopping mid-compaction still gets
+the turn, and a Stop drains the queue faster than any revoke). The shipped
+mechanism sends an ordinary `turn/start` at `latched` only: the guard's own
+compact arms a one-shot in-memory continuation at the write boundary; the
+worker forfeits to an attendant human, waits out folded-status lag, then
+sends from the composer lane's head with the dispatch's own revalidation
+(unattended, quiet, Stop barrier, uncertainty, backend identity, worker not
+stopping); failure, ambiguity, every hold transition, and any crash forfeit
+-- never a retry, and never for a compaction the daemon did not write.
+Pinned by `TestContextGuardContinuationStartsTheResumptionTurn` (no send
+while the compaction runs; turn/start + prompt at latch; once per cycle;
+second cycle), `...AtLatchWhenCompletionArrivesFirst`,
+`...WaitsOutFoldLagThenSends`, `...ForfeitsOnStopBarrierAtTheLaneHead`,
+`...NeverContinuesACompactionItDidNotDispatch`, `...SkipsAttendedSessions`,
+`...FailureIsForfeitNotRetry`, `...ForfeitsOnHold` (skeleton), the
+stalled-reply latch assertion in
+`TestContextGuardStalledReplyStillLatchesOnQueuedCompletion`, and
+`TestContextGuardContinuationShapeAndFence` (codex adapter: turn/start
+shape, exact-version fence, degenerate identity).

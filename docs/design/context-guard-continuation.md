@@ -47,36 +47,46 @@ All on a throwaway swarm codex session running a deliberately interruptible
    provenance, not an idempotency key: at-most-once for the continuation is
    the daemon's to own, exactly like the compact dispatch itself.
 
-## Proposed design (ADR-023 amendment 2 candidate)
+## Why the provider queue was rejected (adversarial review, 2026-09-01)
 
-One new step in the automatic-dispatch lifecycle, owned by the same worker:
+The obvious design — enqueue via `thread/queue/add` while the compaction runs
+and let the provider auto-start it — has an unrevokable window: once queued,
+the message WILL become a turn when the compaction ends, and nothing the
+daemon does can reliably prevent that. A human attaching or pressing Stop
+during the ~20-second compaction still receives the surprise turn (a Stop
+even cancels the compaction, going idle and draining the queue faster than
+any revoke could land). Experiment 2's elegance is exactly the hazard.
 
-1. **When to enqueue.** On the guard's own transition into
-   `provider_compacting` (the compaction turn is provably active, so the queue
-   defers — experiment 2's safe window), the worker enqueues the continuation
-   via `thread/queue/add` on the backend conn. Fallback: if the worker first
-   observes `latched` (compaction already finished), enqueue then — at idle it
-   starts immediately, which is equally correct. Never enqueue before the
-   compact's own write (experiment 1).
-2. **At-most-once.** A `continuation` marker rides the existing per-session
-   sidecar next to the lifecycle state, recorded through the same
-   write-boundary callback before the `queue/add` bytes leave. Ambiguity
-   after the write is a skip, never a resend: a lost continuation costs one
-   stalled task (the owner can nudge); a duplicated one costs a surprise turn.
-3. **Attended check.** Skip the enqueue if anyone is at the controls by
-   continuation time — the human continues the task themselves; a queued
-   surprise turn is worse than none.
+## Implemented design (ADR-023 amendment 2)
+
+The continuation is an ordinary `turn/start`, sent only when the outcome is
+verifiable and every gate can be re-checked at the last instant:
+
+1. **Arm.** The guard's own compact arms a one-shot, in-memory continuation
+   at the write boundary. A compaction the daemon did not write never arms.
+2. **Send at `latched` only.** While the cycle is in flight the attempt
+   waits (a turn mid-compaction would cancel it — gate evidence). At latched
+   the worker forfeits to an attendant human, waits out folded-status lag
+   (latched is stable; status edges wake the worker) inside a two-minute
+   freshness window -- beyond it the moment has passed and the attempt is
+   forfeited -- then sends from the
+   composer lane's head with the dispatch's own revalidation: unattended,
+   quiet, Stop barrier unchanged, no uncertain composer outcome, backend
+   identity current, worker not stopping. Any failed check forfeits.
+3. **At-most-once, in memory.** The armed flag is consumed by the single
+   attempt; failure or ambiguity forfeits (a stalled task the owner can
+   nudge beats a duplicated surprise turn); every hold transition disarms
+   immediately; a crash forfeits structurally — recovery maps the cycle to a
+   hold, which can never re-observe the arming edge — so a durable marker
+   would add nothing.
 4. **The prompt.** Fixed daemon-authored text, proven in the experiments:
    "This session's context was automatically compacted by swarm to keep the
    task focused. Continue the task exactly where you left off. If the task
    was already complete and you were waiting for review, say so briefly and
-   do not start new work." The last clause protects ready-for-review sessions
-   that crossed the threshold after finishing.
-5. **Product contract.** A third ContextGuard setting,
-   `continue_after_compact`, additive to the CAS settings document; default
-   ON whenever automatic dispatch is enabled (the owner's stated intent is
-   that compaction must not strand the flow), owner-toggleable. Observe-only
-   and unsupported guards never enqueue anything.
+   do not start new work."
+5. **Product contract.** Integral to automatic dispatch in v1 — no separate
+   setting; observe-only and unsupported guards never send anything. A
+   `continue_after_compact` toggle remains a documented future option.
 6. **Out of scope for v1, documented options:** launch-time
    `-c compact_prompt=...` for owners who want every compaction (manual and
    automatic) framed as mid-task maintenance; PostCompact managed hooks;
@@ -84,12 +94,14 @@ One new step in the automatic-dispatch lifecycle, owned by the same worker:
 
 ## Safety notes
 
-- The continuation is a normal message, not a destructive action; the
-  dangerous orderings are all in WHEN it is enqueued, and the safe window is
-  provider-enforced once the compaction turn is running.
-- The effect-window gate (`compactionInFlight`) already refuses daemon-typed
-  input during the compaction; the continuation enqueue is the one exception
-  and rides the provider's own queue precisely so it cannot interrupt.
+- The continuation is a normal message, not a destructive action; every
+  dangerous ordering is in WHEN it is sent, and the send happens only at
+  latched behind the same lane and revalidation as the dispatch itself.
+- Accepted residual: a manual/native compaction racing the daemon's own
+  write can merge into one latch and receive the continuation — but the
+  manual compactor is attached or phone-active and forfeits via the
+  unattended rule in every reachable case; a foreign API client on the same
+  socket is outside the product's threat model, as with the dispatch itself.
 - Version fence unchanged: continuation ships only where automatic dispatch
-  ships (exact live-gated allowlist). `thread/queue/*` behavior above is part
-  of what a new version's live-gate rerun must re-verify.
+  ships (exact live-gated allowlist), and this document's provider findings
+  are part of what a new version's live-gate rerun must re-verify.

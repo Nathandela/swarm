@@ -75,18 +75,20 @@ func AsContextGuardSource(a Adapter) (ContextGuardSource, bool) {
 }
 
 // ContextGuardContinuer is a second optional extension (ADR-023 amendment 2):
-// a provider whose NATIVE message queue defers behind a running compaction can
-// resume the interrupted task by enqueueing one message while the compaction
-// runs. The adapter only shapes the request; the daemon worker owns when (and
-// whether) to enqueue, at-most-once per compaction cycle, and never for a
-// compaction the daemon did not itself dispatch.
+// after a compaction the guard itself dispatched has verifiably completed, the
+// daemon resumes the interrupted task by starting one ordinary turn. The
+// adapter only shapes that request; the daemon worker owns when (and whether)
+// to send it -- at the composer lane's head, fully revalidated, at-most-once
+// per compaction cycle, and never for a compaction the daemon did not itself
+// dispatch. The provider's native queue was investigated and rejected for
+// this: a queued message is unrevokable while the compaction runs, so a human
+// arriving in that window would still receive a surprise turn
+// (docs/design/context-guard-continuation.md).
 type ContextGuardContinuer interface {
-	// ContextGuardContinuation returns the request that enqueues text as the
-	// post-compaction continuation for thread. Pure, total, no I/O, and
-	// version-fenced exactly like the automatic action: ok=false means the
-	// version's queue-versus-compaction semantics are not live-verified and
-	// nothing may be enqueued.
-	ContextGuardContinuation(version, threadID, messageID, text string) (method string, params map[string]any, ok bool)
+	// ContextGuardContinuation returns the request that starts text as the
+	// continuation turn on thread. Pure, total, no I/O, and version-fenced
+	// exactly like the automatic action: ok=false means nothing may be sent.
+	ContextGuardContinuation(version, threadID, text string) (method string, params map[string]any, ok bool)
 }
 
 // AsContextGuardContinuer discovers the optional extension without widening Adapter.
