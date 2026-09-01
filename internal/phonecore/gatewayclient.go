@@ -31,6 +31,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/pushreg"
 )
 
 // InstallationSigner signs installation-control requests with the installation private
@@ -183,31 +185,11 @@ type registerAttestation struct {
 	Token string `json:"token"`
 }
 
-// registrationRequestHash is PG-AUTH-11's carve-out, computed the way the gateway
-// recomputes it (pushgw's requestHash): the ACTUAL registration body with
-// attestation.token blanked, re-read as a map (so key ordering matches the gateway's
-// map-canonicalization), encoded with HTML escaping off, trailing newline trimmed,
-// SHA-256 of the result. It deliberately derives from the same registerBody value
-// Register marshals onto the wire -- never a hand-maintained duplicate of the field set
-// -- so a field added to registerBody flows into both the wire body and the hash, and
-// the two derivations cannot drift into a runtime 403 only the real gateway would catch.
+// registrationRequestHash is PG-AUTH-11's exact RFC 8785 carve-out. The phone and
+// gateway call the same schema canonicalizer; the gateway still independently derives
+// its input from the body it decoded.
 func registrationRequestHash(body registerBody) ([32]byte, error) {
-	body.Attestation.Token = ""
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("phonecore: canonicalize registration body: %w", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return [32]byte{}, fmt.Errorf("phonecore: canonicalize registration body: %w", err)
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(m); err != nil {
-		return [32]byte{}, fmt.Errorf("phonecore: canonicalize registration body: %w", err)
-	}
-	return sha256.Sum256(bytes.TrimRight(buf.Bytes(), "\n")), nil
+	return pushreg.RequestHash(body.InstallationPublicKey, body.FCMToken)
 }
 
 // preparedRegister is one registration attempt's durable identity: the Idempotency-Key
