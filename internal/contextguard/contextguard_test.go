@@ -538,3 +538,32 @@ func TestSharedSourceSequenceRejectsCrossKindReordering(t *testing.T) {
 func percentageOf(v uint64, pct uint64) uint64 {
 	return v/100*pct + (v%100*pct)/100
 }
+
+func TestOutcomeUnknownExitsProviderCompacting(t *testing.T) {
+	// ADR-023 amendment 1 fix round: a compaction observed to start whose
+	// completion never arrives (interrupted, or a provider patch changed the
+	// lifecycle shape) must become an honest hold on the runtime's deadline
+	// instead of wedging in awaiting/provider_compacting forever.
+	m := newTestMachine(t, true, 80)
+	m, _ = reduce(t, m, observe(m, 80, 100, 1, testNow))
+	m, _ = reduce(t, m, edge(m, EventSessionIdle, testNow.Add(time.Nanosecond)))
+	m, _ = reduce(t, m, edge(m, EventDispatchStarted, testNow.Add(2*time.Nanosecond)))
+	m, _ = reduce(t, m, edge(m, EventActionWritten, testNow.Add(3*time.Nanosecond)))
+	m, _ = reduce(t, m, edge(m, EventProviderCompactionStarted, testNow.Add(4*time.Nanosecond)))
+	if m.State != StateProviderCompacting {
+		t.Fatalf("state=%s, want provider_compacting", m.State)
+	}
+	m, _ = reduce(t, m, edge(m, EventActionOutcomeUnknown, testNow.Add(5*time.Nanosecond)))
+	if m.State != StateOutcomeUnknownHold {
+		t.Fatalf("deadline exit state=%s, want outcome_unknown_hold", m.State)
+	}
+	// Never from anywhere else: the timer cannot invent an action.
+	for _, phase := range []State{StateArmed, StatePendingIdle, StatePrepared, StateLatched, StateDisabled} {
+		m := newTestMachine(t, true, 80)
+		m.State = phase
+		next, decision := Reduce(m, Event{Kind: EventActionOutcomeUnknown, At: testNow, Key: m.Key})
+		if decision.Rejected == RejectNone || next.State != phase {
+			t.Errorf("outcome_unknown from %s accepted (state=%s); must be rejected", phase, next.State)
+		}
+	}
+}

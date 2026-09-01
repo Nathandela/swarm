@@ -211,7 +211,40 @@ func (s *Server) sessionRunning(local string) bool {
 // a session's input stream can close inside it; when it does the text is on the screen and
 // only the submit is missing. That is recoverable — peek, then send --key enter — but only
 // if the caller is told, so it is reported distinctly from a message that wrote nothing.
+// SetInputGateFunc registers an assembly-owned refusal that runs before any typed
+// message's first byte. Production wires ContextGuard's effect-window gate
+// (ADR-023 amendment 1): a session whose automatic compaction is in flight
+// refuses daemon-originated typed input -- `swarm send` and supervisor
+// notifications alike -- until the compaction confirms, holds, or latches.
+// Attached-PTY keystrokes do not pass through here by design: an attended
+// session is never auto-compacted in the first place. nil clears the gate.
+func (s *Server) SetInputGateFunc(fn func(local string) error) {
+	if fn == nil {
+		s.inputGateFn.Store(nil)
+		return
+	}
+	f := inputGateFunc(fn)
+	s.inputGateFn.Store(&f)
+}
+
+func (s *Server) inputGate(local string) error {
+	if p := s.inputGateFn.Load(); p != nil {
+		return (*p)(local)
+	}
+	return nil
+}
+
 func (s *Server) sendMessage(local string, frames [][]byte) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("server closed")
+	}
+	s.mu.Unlock()
+	// Every refusal precedes the first byte; the gate is no exception.
+	if err := s.inputGate(local); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

@@ -493,8 +493,25 @@ func Serve(cfg Config) (*Daemon, error) {
 	// fired for the reconnected sessions during daemon.Open above, when d.sup was still
 	// nil, and the durable record is what a re-arm would have kept anyway. A record dir
 	// that cannot be opened aborts assembly like every other component's store.
+	// The supervisor's unsafe-source predicate widens beyond leases: a session
+	// whose ContextGuard compaction is in flight must not be typed into either
+	// (ADR-023 amendment 1 -- the supervisor's SendInput bypasses the composer
+	// lane, so it takes the same effect-window gate composerSend does). The
+	// notification simply stays pending and retries after the compaction.
+	unsafeSource := func(local string) bool {
+		return d.anyControlled(local) || d.contextGuardCompactionInFlight(local)
+	}
+	// The same gate at the typed-input choke point itself: `swarm send` and any
+	// other sendMessage caller refuse before the first byte while a compaction
+	// is in flight (the supervisor's unsafeSource above avoids even attempting).
+	d.srv.SetInputGateFunc(func(local string) error {
+		if d.contextGuardCompactionInFlight(local) {
+			return fmt.Errorf("session %q is compacting its context; nothing was typed -- retry shortly", local)
+		}
+		return nil
+	})
 	sup, err := newSupervisor(epID, filepath.Join(cfg.StateDir, "supervision"), supervisionRetry,
-		d.core.Get, d.anyControlled, d.srv.SendInput)
+		d.core.Get, unsafeSource, d.srv.SendInput)
 	if err != nil {
 		return nil, err // defer'd cleanup tears down d.api + core
 	}

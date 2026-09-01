@@ -94,16 +94,23 @@ func TestContextGuardParserFailsClosed(t *testing.T) {
 }
 
 func TestContextGuardActionIsAutomaticAtCharacterizedVersions(t *testing.T) {
-	// ADR-023 amendment 1: the 0.150.x and 0.151.x families are characterized
-	// (schema-identical accepted methods; 0.151.0 live-exercised 2026-09-01) and
-	// authorize automatic dispatch AS A CAPABILITY CLAIM -- every concurrency
-	// guarantee belongs to the daemon's dispatch lane, because the live gates
-	// proved the provider itself serializes nothing.
+	// ADR-023 amendment 1: automatic dispatch is a capability claim granted
+	// ONLY to the exact versions live-gated against a real provider (0.151.0,
+	// 2026-09-01). Compaction is destructive and non-idempotent, so even a
+	// patch release of the gated minor is not trusted sight-unseen: everything
+	// else in the characterized families -- 0.150.x entirely, and 0.151.x
+	// patches never gated -- stays observe-only.
 	s := contextGuardSource(t)
-	for _, version := range []string{"0.150.7", "0.151.0", "0.151.3"} {
+	for _, version := range []string{"0.151.0"} {
 		a, ok := s.ContextGuardAction(version)
 		if !ok || a.Method != "thread/compact/start" || a.ThreadIDParameter != "threadId" || !a.AutomaticDispatch || a.Support != adapter.ContextGuardAutomatic {
 			t.Fatalf("%s action=%+v ok=%v; want the automatic native descriptor", version, a, ok)
+		}
+	}
+	for _, version := range []string{"0.150.0", "0.150.7", "0.151.3"} {
+		a, ok := s.ContextGuardAction(version)
+		if !ok || a.Method != "thread/compact/start" || a.AutomaticDispatch || a.Support != adapter.ContextGuardObserveOnly {
+			t.Fatalf("%s action=%+v ok=%v; want the observe-only descriptor (compact behavior never live-gated)", version, a, ok)
 		}
 	}
 	// An uncharacterized version yields NO action: the guard downgrades to

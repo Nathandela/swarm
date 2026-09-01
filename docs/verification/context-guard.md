@@ -103,3 +103,74 @@ lane enforces the serialization for everything the daemon originates, ATTENDED
 sessions are never auto-compacted (the attach-typing race is the one the lane cannot
 order), and the millisecond attach-plus-submit residue is accepted. These results
 remain the recorded evidence the gates demanded.
+
+## 2026-09-01 adversarial audit round (dispatch milestone)
+
+Two independent adversarial reviews of the dispatch implementation (a
+cross-model reviewer and a same-model auditor briefed to break the reducer
+contract and the lane story) converged on one structural finding: the composer
+lane orders WRITES, but a compaction's EFFECT outlives its write by seconds,
+and nothing gated daemon-originated input during that window — a queued phone
+send could land seconds into a live compaction (uncharacterized turn-vs-compact
+territory), and the supervisor's `SendInput` never used the lane at all. The
+fix round that followed, all verified in code before implementation:
+
+- **Effect-window gate**: `composer_send` returns the retryable `input_busy`
+  and the supervisor defers while the guard is in
+  executing/awaiting_confirmation/provider_compacting.
+- **Confirmation deadline**: awaiting/provider_compacting without lifecycle
+  completion becomes `outcome_unknown_hold` after 5 minutes (reducer gained the
+  provider_compacting exit) — no silent wedge, and the composer gate is
+  bounded by it.
+- **Evidence veto**: the dispatch re-checks the guard's own queue at the lane
+  head and again inside the write-boundary callback; a compaction item, a
+  settings change, or a trailing usage frame that arrived during the lane wait
+  refuses the write with provably no bytes. A queued disable also refuses via
+  a settings-revision comparison at the boundary.
+- **Fence narrowed**: automatic dispatch only for 0.151.x (the live-gated
+  family); 0.150.x is schema-characterized only and stays observe-only.
+- **Lifecycle hygiene**: the dispatch context dies with the worker (close never
+  waits out a provider reply), the reconcile window no longer permanently
+  deafens a feed, an overflow loss no longer discards a queued settings edge,
+  the pending bound is sized for a parked worker (256), and the observe-only
+  view code `action_unverified` is not stamped on automatic guards.
+
+Each item is pinned by a test in `internal/skeleton/contextguard_dispatch_test.go`
+(evidence veto, queued disable, revision mismatch at the boundary, deadline
+hold, in-flight gate lifecycle, restore-from-executing sidecar, stop-while-
+queued ticket handback, prompt close during reply wait, loss-retains-config,
+reconcile-window feed survival) or `internal/contextguard` (the
+provider_compacting exit and its rejection everywhere else).
+
+The cross-model reviewer's round (received after the first fix round) added and
+the second fix round closed:
+
+- **Typed-input choke point gated**: the effect-window gate moved into
+  `sendMessage` itself via `Server.SetInputGateFunc`, covering `swarm send` and
+  supervisor notifications in one place, refusing before the first byte
+  (pinned at the protocol layer).
+- **Write-boundary atomicity**: the appserver client now runs `beforeWrite`
+  and the request write under one write lock — no approval response or
+  notification on the same connection can interpose between the durable
+  executing record and the compact bytes; a closed connection is detected
+  before `beforeWrite`, making it a clean retryable refusal.
+- **Stop-barrier and identity revalidation**: the dispatch captures its lane
+  ticket's admitted barrier (a Stop admitted while queued vetoes), re-checks
+  `s.stop` after winning the ticket (the select tie), and re-proves the
+  registration's backend identity (`isCurrent`) at the queue head and inside
+  the write boundary.
+- **Stalled reply cannot discard a conclusive completion**: the reply-failure
+  path drains queued lifecycle evidence first; only a machine still waiting on
+  the write's outcome holds (a queued completion latches).
+- **Exact-version allowlist**: automatic dispatch requires the exact live-gated
+  version (today 0.151.0); every other characterized version is observe-only.
+  Extending the allowlist requires schema regeneration AND a live-gate rerun.
+- **Normative docs reconciled**: system-spec C-5, invariant S13, and CG.5 now
+  record the negative gates and the daemon-side enforcement instead of the
+  stale observe-only constraint.
+
+Accepted residuals, recorded rather than closed: attached-PTY typing (attended
+sessions never dispatch; a human acting inside the notification-latency window
+is the owner-accepted race), Stop during a compaction (human intent; bounded by
+the confirmation deadline), and approval resolution (requires a pending
+approval, which already blocks dispatch at the queue head).

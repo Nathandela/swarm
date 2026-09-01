@@ -10,7 +10,10 @@ package skeleton
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/adapter/codex"
 	"github.com/Nathandela/swarm/internal/contextguard"
+	"github.com/Nathandela/swarm/internal/protocol"
 )
 
 // fakeDispatchConn honors the CallAtWriteBoundary contract exactly: a
@@ -45,7 +49,7 @@ type fakeDispatchCall struct {
 
 var errFakeConnClosed = errors.New("fake conn closed")
 
-func (f *fakeDispatchConn) CallAtWriteBoundary(_ context.Context, method string, params, _ any, beforeWrite func() error, afterWrite func()) error {
+func (f *fakeDispatchConn) CallAtWriteBoundary(ctx context.Context, method string, params, _ any, beforeWrite func() error, afterWrite func()) error {
 	f.mu.Lock()
 	n := len(f.calls)
 	behavior := f.script[n]
@@ -68,7 +72,12 @@ func (f *fakeDispatchConn) CallAtWriteBoundary(_ context.Context, method string,
 		afterWrite()
 	}
 	if behavior.replyGate != nil {
-		<-behavior.replyGate
+		// The real client's reply wait ends when the context ends.
+		select {
+		case <-behavior.replyGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return behavior.replyErr
 }
@@ -344,6 +353,333 @@ func TestContextGuardReleasesTheLaneAtTheWriteBoundary(t *testing.T) {
 	case <-freed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the composer lane is still held during the provider reply wait")
+	}
+}
+
+// session returns the rig's live session for direct seam access (same package).
+func (r *dispatchRig) session(t *testing.T) *contextGuardSession {
+	t.Helper()
+	r.manager.mu.Lock()
+	s := r.manager.sessions["session"]
+	r.manager.mu.Unlock()
+	if s == nil {
+		t.Fatal("session not registered")
+	}
+	return s
+}
+
+// TestContextGuardVetoesEvidenceQueuedDuringTheLaneWait is the double-compact
+// gate: a provider compaction (native, or a manual /compact by a briefly
+// attached human) whose item/started arrives while the dispatch waits in the
+// lane MUST veto the dispatch -- the promotion was decided before the evidence
+// existed. The guard then simply observes the provider's own compaction.
+func TestContextGuardVetoesEvidenceQueuedDuringTheLaneWait(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.enter() // a composer send holds the lane
+	r.ingestUsage(t, 1, 85, 100)
+	r.requireNoCallsFor(t, 100*time.Millisecond) // queued behind the lane
+	r.ingestLifecycle(t, 2, "item/started")      // a compaction starts meanwhile
+	r.lane.leave()
+	r.waitPhase(t, contextguard.StateProviderCompacting)
+	r.requireNoCallsFor(t, 150*time.Millisecond)
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	if calls := r.conn.snapshot(); len(calls) != 0 {
+		t.Fatalf("the daemon dispatched into a provider compaction: %d calls", len(calls))
+	}
+}
+
+// TestContextGuardQueuedDisableOutrunsTheDispatch: the owner turns the guard
+// off while the dispatch waits in the lane. The disable must win.
+func TestContextGuardQueuedDisableOutrunsTheDispatch(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.enter()
+	r.ingestUsage(t, 1, 85, 100)
+	r.requireNoCallsFor(t, 100*time.Millisecond)
+	r.manager.updateSettings(protocol.ContextGuardSettings{
+		Revision: 2, AutoCompact: protocol.ContextGuardAutoCompact{Enabled: false, ThresholdPercent: 80},
+	})
+	r.lane.leave()
+	r.waitPhase(t, contextguard.StateDisabled)
+	r.requireNoCallsFor(t, 150*time.Millisecond)
+}
+
+// TestContextGuardRevisionMismatchRefusesAtTheWriteBoundary is the last line of
+// defense for M1's race: a settings revision the worker has not reduced yet
+// refuses the write with provably no bytes, then retries on a later edge.
+func TestContextGuardRevisionMismatchRefusesAtTheWriteBoundary(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.enter()
+	r.ingestUsage(t, 1, 85, 100)
+	r.requireNoCallsFor(t, 100*time.Millisecond)
+	// Simulate the sliver where the revision is published but the config frame
+	// is not yet visible: no queued evidence, only the atomic.
+	r.session(t).settingsRevision.Store(999)
+	r.lane.leave()
+	calls := r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StatePendingIdle)
+	if calls[0].wrote {
+		t.Fatal("bytes crossed the boundary under a stale settings revision")
+	}
+}
+
+// TestContextGuardConfirmationDeadlineBecomesAnHonestHold: the reply proved
+// nothing and the provider's lifecycle completion never arrives (interrupted
+// compaction, or a patch changed the item shape). Without the deadline the
+// machine wedges in awaiting_confirmation forever -- and with the composer gate
+// in place, would refuse the user's sends forever with it.
+func TestContextGuardConfirmationDeadlineBecomesAnHonestHold(t *testing.T) {
+	r := newDispatchRig(t)
+	r.session(t).confirmTimeout = 50 * time.Millisecond // before any dispatch work
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
+	r.waitPhase(t, contextguard.StateOutcomeUnknownHold)
+	if r.manager.compactionInFlight("session") {
+		t.Fatal("a held guard still gates the composer")
+	}
+	// The hold is permanent: fresh pressure never resends.
+	r.ingestUsage(t, 2, 95, 100)
+	time.Sleep(100 * time.Millisecond)
+	if calls := r.conn.snapshot(); len(calls) != 1 {
+		t.Fatalf("provider calls after deadline hold = %d; want 1", len(calls))
+	}
+}
+
+// TestContextGuardCompactionInFlightGate pins the effect-window predicate that
+// composerSend and the supervisor consult: true from the durable executing
+// record until confirmed/held/latched, false everywhere else.
+func TestContextGuardCompactionInFlightGate(t *testing.T) {
+	r := newDispatchRig(t)
+	if r.manager.compactionInFlight("session") {
+		t.Fatal("armed guard reports a compaction in flight")
+	}
+	gate := make(chan struct{})
+	r.conn.script[0] = fakeDispatchBehavior{replyGate: gate}
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
+	if !r.manager.compactionInFlight("session") {
+		t.Fatal("awaiting_confirmation must gate the composer: the compaction is running")
+	}
+	close(gate)
+	r.ingestLifecycle(t, 2, "item/started")
+	r.waitPhase(t, contextguard.StateProviderCompacting)
+	if !r.manager.compactionInFlight("session") {
+		t.Fatal("provider_compacting must gate the composer")
+	}
+	r.ingestLifecycle(t, 3, "item/completed")
+	r.waitPhase(t, contextguard.StateLatched)
+	if r.manager.compactionInFlight("session") {
+		t.Fatal("latched guard still gates the composer")
+	}
+	if r.manager.compactionInFlight("unknown-session") {
+		t.Fatal("an unregistered session reports a compaction in flight")
+	}
+}
+
+// TestContextGuardRestoreFromExecutingSidecarHolds closes the crash window at
+// the skeleton level: a daemon that died between the durable executing record
+// and the outcome restores to outcome_unknown_hold and never resends (D5).
+func TestContextGuardRestoreFromExecutingSidecarHolds(t *testing.T) {
+	for _, state := range []contextguard.State{contextguard.StateExecuting, contextguard.StateAwaitingConfirmation} {
+		manager, _ := contextGuardTestManager(t, true, 80)
+		doc, err := json.Marshal(contextGuardStateDocument{
+			SchemaVersion: contextGuardStateSchemaVersion, SessionInstance: "instance",
+			SettingsRevision: 1, State: state, TriggerThreshold: 80,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(manager.stateDir, "session")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, contextGuardStateFile), doc, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		source, _ := adapter.AsContextGuardSource(codex.New())
+		action, _ := source.ContextGuardAction("0.151.0")
+		conn := &fakeDispatchConn{script: map[int]fakeDispatchBehavior{}}
+		lane := &composerLane{}
+		lane.ready = sync.NewCond(&lane.mu)
+		wire := func(s *contextGuardSession) {
+			s.conn = conn
+			s.lane = func() *composerLane { return lane }
+			s.quiet = func() bool { return true }
+		}
+		if !manager.registerCurrentWired("session", contextGuardTestKey("instance", "epoch"), source, action, nil, wire) {
+			t.Fatalf("registration failed for restored state %q", state)
+		}
+		view, ok := manager.view("session")
+		if !ok || view.Phase != string(contextguard.StateOutcomeUnknownHold) {
+			t.Fatalf("restored %q phase = %q; want outcome_unknown_hold", state, view.Phase)
+		}
+		manager.ingest("session", contextGuardTestKey("instance", "epoch"), 1, contextGuardUsageMethod, contextGuardUsageFrame(95, 95, 100), time.Now())
+		time.Sleep(100 * time.Millisecond)
+		if calls := conn.snapshot(); len(calls) != 0 {
+			t.Fatalf("restored %q resent the compaction: %d calls", state, len(calls))
+		}
+		manager.close()
+	}
+}
+
+// TestContextGuardStopWhileQueuedHandsTheTicketBack: a session closed while its
+// dispatch waits in the lane returns promptly, and the eventual ticket is
+// handed straight back -- no stuck lane, no leaked slot.
+func TestContextGuardStopWhileQueuedHandsTheTicketBack(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.enter()
+	r.ingestUsage(t, 1, 85, 100)
+	r.requireNoCallsFor(t, 100*time.Millisecond) // worker parked in the lane wait
+	closed := make(chan struct{})
+	go func() {
+		r.manager.stopSession("session")
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stopSession waited behind a busy composer lane")
+	}
+	r.lane.leave()
+	// The orphaned ticket must pass through; a fresh entrant then proceeds.
+	reentered := make(chan struct{})
+	go func() {
+		r.lane.enter()
+		r.lane.leave()
+		close(reentered)
+	}()
+	select {
+	case <-reentered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stopped worker's lane ticket was never handed back")
+	}
+	if calls := r.conn.snapshot(); len(calls) != 0 {
+		t.Fatalf("a stopped session dispatched anyway: %d calls", len(calls))
+	}
+}
+
+// TestContextGuardCloseDuringReplyWaitReturnsPromptly: an alive-but-unresponsive
+// provider must not hold close() -- and everything serialized behind it -- for
+// the full dispatch timeout. The canceled call after the write is an unknown
+// outcome, exactly what crash recovery would conclude.
+func TestContextGuardCloseDuringReplyWaitReturnsPromptly(t *testing.T) {
+	r := newDispatchRig(t)
+	gate := make(chan struct{})
+	defer close(gate)
+	r.conn.script[0] = fakeDispatchBehavior{replyGate: gate}
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation) // parked in the reply wait
+	closed := make(chan struct{})
+	go func() {
+		r.manager.stopSession("session")
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("close waited for the provider reply; the dispatch context must die with the worker")
+	}
+}
+
+// TestContextGuardLossRetainsTheQueuedSettingsEdge: D4 says settings edges may
+// not disappear. An overflow loss discards evidence (that is what the hold
+// records) but the queued config still advances the machine's revision.
+func TestContextGuardLossRetainsTheQueuedSettingsEdge(t *testing.T) {
+	r := newDispatchRig(t)
+	s := r.session(t)
+	// Queue a config edge, then a loss, without letting the worker drain between:
+	// both are visible in one drain, the loss first.
+	s.queueMu.Lock()
+	s.nextQueueOrder++
+	cfg := contextguard.Config{Enabled: false, Threshold: 70, Revision: 2}
+	s.latestConfig = &contextGuardPending{order: s.nextQueueOrder, at: time.Now(), config: &cfg}
+	s.settingsRevision.Store(2)
+	s.lost = true
+	s.lossSequence = 9
+	s.lossAt = time.Now()
+	s.queueMu.Unlock()
+	s.signal()
+	r.waitPhase(t, contextguard.StateEventLossHold)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.stateMu.Lock()
+		revision := s.machine.Config.Revision
+		s.stateMu.Unlock()
+		if revision == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("machine revision = %d after loss; the settings edge disappeared (D4)", revision)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestContextGuardStopBarrierVetoesAtTheQueueHead: a Stop admitted while the
+// dispatch waited in the lane changed the world the promotion was decided in;
+// the stale ticket degrades to pending_idle and a later edge retries.
+func TestContextGuardStopBarrierVetoesAtTheQueueHead(t *testing.T) {
+	r := newDispatchRig(t)
+	r.lane.enter()
+	r.ingestUsage(t, 1, 85, 100)
+	r.requireNoCallsFor(t, 100*time.Millisecond) // queued; its admitted barrier is captured
+	r.lane.mu.Lock()
+	r.lane.barrier++ // interruptTurn's Stop discipline, emulated directly
+	r.lane.mu.Unlock()
+	r.lane.leave()
+	r.waitPhase(t, contextguard.StatePendingIdle)
+	r.requireNoCallsFor(t, 150*time.Millisecond)
+	// A later quiet edge retries against the post-Stop world.
+	r.nudge()
+	r.waitCalls(t, 1)
+}
+
+// TestContextGuardStalledReplyStillLatchesOnQueuedCompletion (audit finding):
+// the reply fails after a stall while the compaction's own lifecycle events
+// already sit in the queue. The definitive completion must latch -- draining
+// runs before the hold decision -- never be discarded into a false unknown.
+func TestContextGuardStalledReplyStillLatchesOnQueuedCompletion(t *testing.T) {
+	r := newDispatchRig(t)
+	gate := make(chan struct{})
+	r.conn.script[0] = fakeDispatchBehavior{replyGate: gate, replyErr: errors.New("timeout waiting for reply")}
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitCalls(t, 1)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation)
+	// The compaction runs and completes while the reply is stalled; the worker
+	// is parked in the reply wait, so both frames queue.
+	r.ingestLifecycle(t, 2, "item/started")
+	r.ingestLifecycle(t, 3, "item/completed")
+	close(gate) // now the reply comes back as an error
+	r.waitPhase(t, contextguard.StateLatched)
+	// Latched, not held: below the re-arm gap the guard re-arms normally.
+	r.ingestUsage(t, 4, 60, 100)
+	r.waitPhase(t, contextguard.StateArmed)
+}
+
+// TestContextGuardReconcileWindowKeepsTheFeedAlive: a backend that registers
+// before the engine is published (the reconcile window) must NOT deafen its
+// feed -- discard is one-way, and startContextGuardsForRunning re-registers the
+// same feed once the core exists. Frames captured in between stay buffered.
+func TestContextGuardReconcileWindowKeepsTheFeedAlive(t *testing.T) {
+	manager, _ := contextGuardTestManager(t, true, 80)
+	d := &Daemon{contextGuards: manager}
+	feed := &backendFeed{epoch: "epoch"}
+	backend := &sessionBackend{threadID: contextGuardTestThread, sessionInstance: "instance", feed: feed}
+	d.registerContextGuardBackend("session", backend) // d.core == nil: the window
+	feed.guardMu.Lock()
+	discarded := feed.guardDiscarded
+	feed.guardMu.Unlock()
+	if discarded {
+		t.Fatal("the reconcile window permanently deafened the guard feed")
+	}
+	d.captureContextGuardFrame("session", "instance", feed, contextGuardUsageMethod, contextGuardUsageFrame(85, 85, 100), time.Now())
+	feed.guardMu.Lock()
+	buffered := feed.guardLatestUsage != nil
+	feed.guardMu.Unlock()
+	if !buffered {
+		t.Fatal("window frames were dropped instead of buffered")
 	}
 }
 

@@ -267,7 +267,11 @@ func Reduce(machine Machine, event Event) (next Machine, decision Decision) {
 		machine.State = StateAwaitingConfirmation
 		return machine, durable()
 	case EventActionOutcomeUnknown:
-		if machine.State != StateExecuting && machine.State != StateAwaitingConfirmation {
+		// provider_compacting is included: a compaction observed to start whose
+		// completion never arrives (interrupted, or the provider changed its
+		// lifecycle shape) has a genuinely unknown outcome. Without this exit the
+		// machine would wedge in awaiting/compacting forever, silently.
+		if machine.State != StateExecuting && machine.State != StateAwaitingConfirmation && machine.State != StateProviderCompacting {
 			return machine, rejected(RejectInvalidTransition)
 		}
 		machine.State = StateOutcomeUnknownHold

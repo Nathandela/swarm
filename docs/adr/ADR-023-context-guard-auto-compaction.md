@@ -145,34 +145,76 @@ app-server client on a real session's socket; evidence in
 
 The provider serializes nothing, and waiting for it to start would park the
 feature indefinitely. The owner decision (2026-09-01) is to ship automatic
-dispatch under the daemon's OWN enforcement, which D5/D6 already specified:
+dispatch under the daemon's OWN enforcement, which D5/D6 already specified.
+The daemon's serialization has two layers, because a compaction has two
+windows: the WRITE (one request) and the EFFECT (the seconds the provider
+spends compacting after the reply):
 
-1. **The composer lane is the serialization.** A dispatch enters the session's
-   per-session semantic lane, FIFO with every daemon-driven send, Stop and
-   approval, and revalidates at the queue head (quiet status, no unresolved
-   composer outcome). Nothing the daemon originates can race it.
-2. **Attended sessions are never auto-compacted.** The one input the lane cannot
-   order is a human typing in the attached PTY — exactly the race the gate
-   evidence prices at one destroyed turn. Dispatch therefore requires the
-   session to be UNATTENDED (no controller lease) as well as quiet: whoever
-   holds the controls can `/compact` themselves; the guard exists for the
-   unattended fleet. The residual window is a turn STARTING in the milliseconds
-   between the queue-head revalidation and the provider write, which requires an
-   attach plus a submitted prompt inside that window — accepted by the owner as
-   negligible.
-3. **The write boundary is durable.** The `executing` record is persisted inside
-   the provider client's write-boundary callback: a refused or unpersistable
-   transition aborts with provably no bytes; once bytes may have left, every
-   failure — timeout, transport loss, even a typed provider error — is an
-   unknown outcome and a durable hold, never a resend (D5 unchanged).
-4. **`AutomaticDispatch` in the adapter is a capability claim only**, version-
-   fenced to the characterized 0.150.x/0.151.x families (0.151's regenerated
-   schema is shape-identical for every accepted method, and 0.151.0 is the
-   live-gated version of record). An uncharacterized version downgrades the
-   guard to unsupported. `Support` gains the value `automatic`.
+1. **The composer lane orders the write.** A dispatch enters the session's
+   per-session semantic lane, FIFO with every daemon-driven composer send and
+   Stop, and revalidates at the queue head: quiet status, no unresolved
+   composer outcome, and — because veto evidence can arrive DURING the lane
+   wait — nothing pending in the guard's own queue (a compaction item from a
+   native or manual compact, a settings change, a trailing usage frame). The
+   same evidence-and-revision check runs once more inside the write-boundary
+   callback, where a refusal provably precedes any bytes.
+2. **The effect window is gated, not laned.** From the durable `executing`
+   record until the compaction is confirmed, held, or latched, the session
+   refuses daemon-originated input: a `composer_send` returns the retryable
+   `input_busy` (nothing written; the same words a moment later land), the
+   typed-input choke point itself (`sendMessage`, serving `swarm send` and
+   supervisor notifications alike) refuses before the first byte, and the
+   supervisor additionally treats the session as unsafe and retries later. The
+   lane ticket itself is released at the write boundary — holding it through
+   the reply would stall every phone send behind a wedged provider. The
+   supervisor's `SendInput` never used the lane at all, which is why the gate,
+   not the lane, is the serialization of record for effects. The write
+   boundary itself is atomic against every other frame on the connection: the
+   provider client runs `beforeWrite` and the write under one write lock, so
+   no approval response or notification can interpose between the durable
+   executing record and the compact bytes it covers.
+3. **The effect window is bounded.** The reply to `thread/compact/start`
+   proves nothing; confirmation comes from the provider's own compaction
+   lifecycle events. If they never arrive (the compaction was interrupted, or
+   a provider patch changed the item shape), a confirmation deadline converts
+   the wait into `outcome_unknown_hold` — an honest hold, never a resend, and
+   the composer gate releases with it. A wedge cannot outlive the deadline.
+4. **Attended sessions are never auto-compacted.** The one input the daemon
+   cannot order is a human typing in the attached PTY — exactly the race the
+   gate evidence prices at one destroyed turn. Dispatch requires the session
+   to be UNATTENDED (no controller lease, no recent phone activity) as well as
+   quiet: whoever holds the controls can `/compact` themselves; the guard
+   exists for the unattended fleet. The residual races are (a) an attach plus
+   a submitted prompt inside the milliseconds between the write-boundary check
+   and the provider processing the write, and (b) a manual compact whose
+   lifecycle notification has not yet crossed the socket when the write goes
+   out — both accepted by the owner as negligible after the evidence veto
+   above, which closes every window in which the daemon has the evidence.
+5. **The write boundary is durable.** The `executing` record is persisted
+   inside the provider client's write-boundary callback: a refused or
+   unpersistable transition aborts with provably no bytes; once bytes may have
+   left, every failure — timeout, transport loss, even a typed provider
+   error — is an unknown outcome and a durable hold, never a resend (D5
+   unchanged).
+6. **`AutomaticDispatch` in the adapter is a capability claim only**, and it is
+   granted solely to the EXACT versions live-gated against a real provider —
+   an explicit allowlist, today `0.151.0` (2026-09-01). Compaction is
+   destructive and non-idempotent, so even a patch release is not trusted
+   sight-unseen: extending the allowlist requires regenerating and comparing
+   that version's schema AND re-running the live gates. Every other version in
+   a characterized family (0.150.x entirely, non-allowlisted 0.151.x patches)
+   stays observe-only; an uncharacterized version downgrades the guard to
+   unsupported. `Support` gains the value `automatic`; the observe-only view
+   code `action_unverified` is NOT stamped on an automatic guard, whose phase
+   and last result are the story.
 
 The product contract (D1) is unchanged: daemon-global, owner-only, **opt-in and
 disabled by default**, threshold 40–95, latch and re-arm as specified.
+
+Known limitation, accepted for this milestone: a hold (`outcome_unknown_hold`,
+`event_loss_hold`) or corrupt state is cleared only by a genuinely new session
+instance. There is no owner-facing acknowledge-and-rearm operation yet; one
+transient unknown outcome retires the guard for that session instance.
 
 ## Alternatives Considered
 

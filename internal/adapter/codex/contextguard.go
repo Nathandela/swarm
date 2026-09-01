@@ -141,22 +141,45 @@ func validTokenUsageBreakdown(object map[string]any) bool {
 }
 
 // ContextGuardAction describes the native action for the characterized
-// 0.150.x and 0.151.x families (schema-identical for every accepted method;
-// 0.151.0 additionally live-exercised on 2026-09-01). AutomaticDispatch is
-// authorized for them -- as a capability claim only: ADR-023 amendment 1
-// records that the provider itself serializes nothing, so the daemon's
-// dispatch lane owns every concurrency guarantee. An uncharacterized version
-// (0.152 and beyond, until someone regenerates and compares its schema)
-// yields no action at all, which downgrades the whole guard to unsupported
-// rather than dispatching against unknown semantics.
+// 0.150.x and 0.151.x families (schema-identical for every accepted method).
+// AutomaticDispatch is a capability claim only -- ADR-023 amendment 1 records
+// that the provider itself serializes nothing, so the daemon's dispatch lane
+// and effect-window gate own every concurrency guarantee -- and it is granted
+// ONLY to the exact versions live-gated against a real provider (the
+// allowlist below). Everything else in the characterized families stays
+// observe-only: schema shape identity proves message shapes, not that
+// thread/compact/start behaves identically. An uncharacterized version (0.152
+// and beyond, until someone regenerates and compares its schema) yields no
+// action at all, which downgrades the whole guard to unsupported rather than
+// dispatching against unknown semantics.
 func (codexAdapter) ContextGuardAction(version string) (adapter.ContextGuardAction, bool) {
 	if !characterizedContextGuardVersion(version) {
 		return adapter.ContextGuardAction{}, false
 	}
-	return adapter.ContextGuardAction{
+	action := adapter.ContextGuardAction{
 		Method: "thread/compact/start", ThreadIDParameter: "threadId",
-		AutomaticDispatch: true, Support: adapter.ContextGuardAutomatic,
-	}, true
+		Support: adapter.ContextGuardObserveOnly,
+	}
+	if liveGatedContextGuardVersion(version) {
+		action.AutomaticDispatch = true
+		action.Support = adapter.ContextGuardAutomatic
+	}
+	return action, true
+}
+
+// liveGatedContextGuardVersions is the EXACT allowlist of versions whose
+// thread/compact/start behavior was exercised against a live provider, not
+// merely schema-compared. Compaction is destructive and non-idempotent, so a
+// patch release is not trusted sight-unseen: extending this list requires
+// regenerating and comparing the version's schema AND re-running the live
+// gates recorded in docs/verification/context-guard.md. A version outside the
+// list but inside a characterized family downgrades to observe-only.
+var liveGatedContextGuardVersions = map[string]bool{
+	"0.151.0": true, // 2026-09-01 live gates (both negative; daemon-side enforcement)
+}
+
+func liveGatedContextGuardVersion(version string) bool {
+	return liveGatedContextGuardVersions[version]
 }
 
 func characterizedContextGuardVersion(version string) bool {

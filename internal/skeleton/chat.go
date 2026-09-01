@@ -260,6 +260,16 @@ func (d *Daemon) composerSendTransactional(machine, operationID string, req prot
 	if lane.barrierChanged(admittedBarrier) {
 		return protocol.CodeStaleTurn, errIsLife5("composer send was queued before Stop completed; nothing was sent")
 	}
+	// The composer lane orders WRITES; a ContextGuard compaction has an EFFECT
+	// window that outlives its write (ADR-023 amendment 1), and the 2026-09-01
+	// gates prove a stimulus written into that window destroys the compaction,
+	// the message, or both. Same remedy as an unclean input line: nothing is
+	// wrong with the caller or the message, and the same words a moment later
+	// will land.
+	if d.contextGuardCompactionInFlight(local) {
+		return protocol.CodeInputBusy, errIsLife5(
+			"session %q is compacting its context, so this message was not written; nothing was sent", req.Session)
+	}
 	if _, ok := d.core.Get(local); !ok {
 		return protocol.CodeInvalidField, errIsLife5(
 			"composer send names session %q, which is not one this daemon runs; OK here would be a sent message no agent received", req.Session)

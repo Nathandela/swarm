@@ -325,6 +325,12 @@ type Server struct {
 	// derived from the other.
 	remoteActivityFn atomic.Pointer[activityFunc]
 
+	// inputGateFn, when set, can refuse a typed message (send_input, supervisor
+	// notification) before its first byte -- production wires ContextGuard's
+	// effect-window gate (ADR-023 amendment 1). Same atomic-pointer shape as the
+	// seams above.
+	inputGateFn atomic.Pointer[inputGateFunc]
+
 	mu     sync.Mutex
 	conns  map[*clientConn]struct{}
 	leases map[string]*sessionLease // keyed by local session id
@@ -682,6 +688,8 @@ func (s *Server) remoteControlled(local string) bool {
 // zero time when none is in the daemon's window. Named so the setter can hand it to an
 // atomic.Pointer.
 type activityFunc func(local string) time.Time
+
+type inputGateFunc func(local string) error
 
 // SetRemoteActivityFunc registers the source of SessionView.RemoteActivityAt. Production
 // wires the assembly's own horizon-bounded read (skeleton.serve), so an owner's roster can

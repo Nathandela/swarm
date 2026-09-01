@@ -40,13 +40,24 @@ import (
 const (
 	contextGuardStateFile          = "context-guard-state.json"
 	contextGuardStateSchemaVersion = 1
-	contextGuardPendingLimit       = 64
-	contextGuardFrameLimit         = 64 << 10
-	contextGuardUsageMethod        = "thread/tokenUsage/updated"
+	// contextGuardPendingLimit was sized for a worker that never blocked beyond
+	// parse+fsync. The dispatch worker can be parked for a lane wait plus the
+	// full reply timeout while a busy turn's item lifecycle flows in, so the
+	// bound is sized for that window: overflowing it is an event_loss_hold.
+	contextGuardPendingLimit = 256
+	contextGuardFrameLimit   = 64 << 10
+	contextGuardUsageMethod  = "thread/tokenUsage/updated"
 	// contextGuardDispatchTimeout bounds the provider call. The live 0.151.0
 	// compact reply arrived in 1ms; a reply that needs longer than this is an
 	// unknown outcome, never a retry (compaction is non-idempotent).
 	contextGuardDispatchTimeout = 30 * time.Second
+	// contextGuardConfirmTimeout bounds awaiting_confirmation/provider_compacting.
+	// The reply to thread/compact/start proves nothing about the compaction
+	// itself; if the provider's lifecycle completion never arrives (the
+	// compaction was interrupted, or a provider patch changed the item shape),
+	// the outcome is genuinely unknown and the machine holds rather than wedging
+	// silently -- and rather than gating composer sends forever.
+	contextGuardConfirmTimeout = 5 * time.Minute
 )
 
 // contextGuardDispatchConn is the narrow provider surface a dispatch needs: the
@@ -101,6 +112,14 @@ type contextGuardSession struct {
 	lane      func() *composerLane
 	quiet     func() bool
 	uncertain func() bool
+	// current re-checks the full backend identity (live conn, matching session
+	// instance) that registration proved; nil means always current. It runs
+	// again at the queue head and inside the write boundary, so a dispatch
+	// prepared against a backend that was replaced while it waited never writes.
+	current func() bool
+	// confirmTimeout overrides contextGuardConfirmTimeout in tests; zero means
+	// the production value.
+	confirmTimeout time.Duration
 
 	queueMu          sync.Mutex
 	stateMu          sync.Mutex
@@ -166,10 +185,19 @@ func contextGuardConfig(settings protocol.ContextGuardSettings) contextguard.Con
 }
 
 func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBackend) {
-	if d.contextGuards == nil || d.core == nil || backend == nil || backend.feed == nil {
+	if d.contextGuards == nil || backend == nil || backend.feed == nil {
 		if backend != nil && backend.feed != nil {
 			d.discardContextGuardFeed(backend.feed)
 		}
+		return
+	}
+	if d.core == nil {
+		// The reconcile window: this backend connected before the engine was
+		// published, and startContextGuardsForRunning re-registers it once the
+		// core exists. Discarding here would deafen that later registration
+		// permanently (the feed's discard is one-way), leaving a guard that
+		// advertises support but never hears telemetry. The feed keeps
+		// buffering: bounded, and activation flushes or records the loss.
 		return
 	}
 	isCurrent := func() bool {
@@ -225,6 +253,7 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 		s.lane = func() *composerLane { return d.composerLaneFor(local) }
 		s.quiet = func() bool { return d.contextGuardQuiet(local) }
 		s.uncertain = func() bool { return d.composerLaneFor(local).uncertainNow() }
+		s.current = isCurrent
 	}
 	if !d.contextGuards.registerCurrentWired(local, key, source, action, isCurrent, wire) || !isCurrent() {
 		d.contextGuards.unregister(local, key)
@@ -251,6 +280,28 @@ func (d *Daemon) contextGuardQuiet(local string) bool {
 		return false
 	}
 	return !d.anyControlled(local)
+}
+
+// contextGuardCompactionInFlight reports whether local's guard has a compaction
+// between its durable executing record and its confirmed/held/latched outcome.
+// The composer lane orders WRITES; this predicate covers the EFFECT window: a
+// compaction runs for seconds after its bytes leave, and any daemon-originated
+// stimulus written into that window destroys the compaction, the stimulus, or
+// both (2026-09-01 gate evidence). composerSend refuses (retryable) and the
+// supervisor defers while it is true. It is bounded by the confirmation
+// deadline, so a lost completion degrades to a hold, never a wedged send path.
+func (d *Daemon) contextGuardCompactionInFlight(local string) bool {
+	if d.contextGuards == nil {
+		return false
+	}
+	return d.contextGuards.compactionInFlight(local)
+}
+
+func (m *contextGuardManager) compactionInFlight(local string) bool {
+	m.mu.Lock()
+	s := m.sessions[local]
+	m.mu.Unlock()
+	return s != nil && s.compactionInFlight()
 }
 
 func (d *Daemon) unregisterContextGuardBackend(local string, backend *sessionBackend) {
@@ -599,6 +650,13 @@ func (s *contextGuardSession) signal() {
 
 func (s *contextGuardSession) run() {
 	defer close(s.done)
+	var deadline *time.Timer
+	var deadlineC <-chan time.Time
+	defer func() {
+		if deadline != nil {
+			deadline.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-s.stop:
@@ -609,20 +667,106 @@ func (s *contextGuardSession) run() {
 			// crossed the threshold while the session was already quiet, or a
 			// status edge (quietPending) may have arrived with nothing queued.
 			s.maybePromote()
+		case <-deadlineC:
+			deadline, deadlineC = nil, nil
+			// Evidence already queued outranks the timer: a completion that
+			// arrived but was not yet drained must latch, not hold.
+			s.drain()
+			s.confirmDeadlineExpired()
+		}
+		// The confirmation deadline is armed exactly while the machine waits on
+		// provider lifecycle evidence for a written action, and disarmed the
+		// moment that evidence (or any other exit) arrives.
+		if s.awaitingOutcome() {
+			if deadline == nil {
+				timeout := s.confirmTimeout
+				if timeout <= 0 {
+					timeout = contextGuardConfirmTimeout
+				}
+				deadline = time.NewTimer(timeout)
+				deadlineC = deadline.C
+			}
+		} else if deadline != nil {
+			deadline.Stop()
+			deadline, deadlineC = nil, nil
 		}
 	}
+}
+
+// pendingEvidence reports whether anything sits undrained in the session's own
+// queue. At the dispatch queue head and write boundary, any queued frame is a
+// veto: a lifecycle item on a supposedly quiet session means something is
+// running, a config frame may be the disable that outran the dispatch, and a
+// trailing usage frame means the fold is behind. The next wake re-drains and a
+// later quiet edge retries.
+func (s *contextGuardSession) pendingEvidence() bool {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	return s.lost || len(s.lifecycle) > 0 || s.latestConfig != nil || s.latestUsage != nil
+}
+
+func (s *contextGuardSession) configRevision() uint64 {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.machine.Config.Revision
+}
+
+// awaitingOutcome reports whether the machine currently waits on provider
+// lifecycle evidence for an action whose bytes are on the wire.
+func (s *contextGuardSession) awaitingOutcome() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.machine.State == contextguard.StateAwaitingConfirmation ||
+		s.machine.State == contextguard.StateProviderCompacting
+}
+
+// compactionInFlight is the composer/supervisor gate: true from the durable
+// executing record until the compaction is confirmed, held, or latched. While
+// it is true, nothing the daemon originates may write into the thread -- the
+// 2026-09-01 gates prove a mid-compaction stimulus destroys the compaction, the
+// stimulus, or both.
+func (s *contextGuardSession) compactionInFlight() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	switch s.machine.State {
+	case contextguard.StateExecuting, contextguard.StateAwaitingConfirmation, contextguard.StateProviderCompacting:
+		return true
+	default:
+		return false
+	}
+}
+
+// confirmDeadlineExpired converts a silent wedge into an honest hold: the
+// action was written, its confirmation never arrived within the deadline, so
+// the outcome is unknown (D5: never resent). Re-checked under the current
+// state -- evidence that arrived while the timer fired wins.
+func (s *contextGuardSession) confirmDeadlineExpired() {
+	if !s.awaitingOutcome() {
+		return
+	}
+	s.apply(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
+	log.Printf("skeleton: context guard compaction for session %s unconfirmed after %s; holding", s.id, contextGuardConfirmTimeout)
 }
 
 func (s *contextGuardSession) drain() {
 	s.queueMu.Lock()
 	if s.lost {
 		loss := contextGuardPending{sequence: s.lossSequence, at: s.lossAt}
+		config := s.latestConfig
 		s.lost = false
 		s.latestUsage = nil
 		s.latestConfig = nil
 		s.lifecycle = nil
 		s.queueMu.Unlock()
 		s.apply(contextguard.Event{Kind: contextguard.EventEventLoss, At: loss.at, Key: s.key, SourceSequence: loss.sequence}, nil)
+		// D4: settings edges may not disappear. Usage samples and lifecycle
+		// evidence are gone with the loss (that is what the hold records), but a
+		// queued config change still advances the machine's revision so
+		// post-hold observations are judged against the settings the owner
+		// actually chose.
+		if config != nil && config.config != nil {
+			s.apply(contextguard.Event{Kind: contextguard.EventConfigChanged, At: config.at, Config: *config.config}, nil)
+		}
 		return
 	}
 	pending := append([]contextGuardPending(nil), s.lifecycle...)
@@ -767,13 +911,22 @@ func (s *contextGuardSession) dispatchCompaction() {
 	// The lane entry is made interruptible (a session close must not wait behind
 	// a busy composer queue): a worker told to stop while queued hands its
 	// eventual ticket straight back.
-	entered := make(chan struct{})
+	entered := make(chan uint64, 1)
 	go func() {
-		lane.enter()
-		close(entered)
+		entered <- lane.enter()
 	}()
+	var admittedBarrier uint64
 	select {
-	case <-entered:
+	case admittedBarrier = <-entered:
+		// Both may be ready at once and select chooses randomly: a stopping
+		// worker must never proceed to the write, so stop is re-checked after
+		// winning the ticket.
+		select {
+		case <-s.stop:
+			lane.leave()
+			return
+		default:
+		}
 	case <-s.stop:
 		go func() {
 			<-entered
@@ -781,9 +934,13 @@ func (s *contextGuardSession) dispatchCompaction() {
 		}()
 		return
 	}
-	// The lane is held across the WRITE BOUNDARY only, exactly like a composer
-	// send: holding it through the reply wait would stall every phone send
-	// behind a wedged provider for the full dispatch timeout.
+	// The lane is held across the WRITE BOUNDARY only: holding it through the
+	// reply wait would stall every phone send behind a wedged provider for the
+	// full dispatch timeout. The compaction's EFFECT window -- write until
+	// confirmed, held, or latched -- is covered by compactionInFlight instead:
+	// composerSend refuses (retryable) and the supervisor defers while it is
+	// true, so releasing the ticket here admits no daemon-originated stimulus
+	// into the running compaction.
 	left := false
 	leaveLane := func() {
 		if !left {
@@ -792,17 +949,44 @@ func (s *contextGuardSession) dispatchCompaction() {
 		}
 	}
 	defer leaveLane()
-	if !s.quiet() || (s.uncertain != nil && s.uncertain()) {
+	// Queue-head revalidation. The quiet/uncertain predicates read the folded
+	// core status; pendingEvidence reads the guard's OWN queue -- veto evidence
+	// (a compaction item, a settings change, even a trailing usage frame) that
+	// arrived during the lane wait must win over a promotion decided before it.
+	// barrierChanged means a Stop was admitted while this dispatch was queued
+	// (the world the promotion was decided in is gone), and current re-proves
+	// the backend identity registration established.
+	if lane.barrierChanged(admittedBarrier) || !s.quiet() ||
+		(s.uncertain != nil && s.uncertain()) || (s.current != nil && !s.current()) || s.pendingEvidence() {
 		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), contextGuardDispatchTimeout)
 	defer cancel()
+	// A stopping session must not sit out the reply wait: the context dies with
+	// the worker, and a cancellation after the write is an unknown outcome --
+	// exactly what crash recovery would have concluded.
+	go func() {
+		select {
+		case <-s.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	wrote := false
 	var res json.RawMessage
 	err := s.conn.CallAtWriteBoundary(ctx, s.action.Method,
 		map[string]any{s.action.ThreadIDParameter: s.key.ProviderThreadID}, &res,
 		func() error {
+			// Last look before bytes (running under the connection's write lock,
+			// so nothing can interpose after it): a settings revision the worker
+			// has not yet reduced (the enqueued disable that outran the
+			// dispatch), evidence that arrived since the queue head, or a
+			// backend replaced under the prepared dispatch refuses the write
+			// entirely -- provably no bytes follow (the appserver contract).
+			if s.settingsRevision.Load() != s.configRevision() || s.pendingEvidence() || (s.current != nil && !s.current()) {
+				return errContextGuardDispatchRefused
+			}
 			state, _, applied := s.applyReturning(contextguard.Event{Kind: contextguard.EventDispatchStarted, At: time.Now(), Key: s.key}, nil)
 			if !applied || state.State != contextguard.StateExecuting {
 				return errContextGuardDispatchRefused
@@ -828,9 +1012,20 @@ func (s *contextGuardSession) dispatchCompaction() {
 		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
 	default:
 		// Bytes may have left: timeout, transport loss, or even a typed provider
-		// error after the write. Unknown outcome, durable hold, never a resend.
-		s.applyReturning(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
-		log.Printf("skeleton: context guard dispatch outcome unknown for session %s: %v", s.id, err)
+		// error after the write. Drain FIRST -- the compaction's own lifecycle
+		// events may already sit in the queue while the reply stalled, and a
+		// definitive completion must latch, never be discarded into a false
+		// unknown. Only a machine still waiting on the write's outcome holds.
+		s.drain()
+		s.stateMu.Lock()
+		waiting := s.machine.State == contextguard.StateExecuting || s.machine.State == contextguard.StateAwaitingConfirmation
+		s.stateMu.Unlock()
+		if waiting {
+			s.applyReturning(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
+			log.Printf("skeleton: context guard dispatch outcome unknown for session %s: %v", s.id, err)
+		}
+		// provider_compacting: the confirmation deadline arbitrates; latched:
+		// the outcome is known and nothing is owed.
 	}
 }
 
@@ -900,7 +1095,15 @@ func (s *contextGuardSession) refreshView(notification *adapter.ContextGuardNoti
 	}
 	s.view.Support = string(s.action.Support)
 	s.view.Phase = string(s.machine.State)
-	s.view.ErrorCode = "action_unverified"
+	// action_unverified is the observe-only protocol's standing code: it means
+	// "no dispatch will occur". Stamping it on a guard that DOES dispatch would
+	// invert its meaning for every consumer, so an automatic guard carries no
+	// standing error code -- its phase and last result are the story.
+	if s.action.AutomaticDispatch {
+		s.view.ErrorCode = ""
+	} else {
+		s.view.ErrorCode = "action_unverified"
+	}
 	if notification != nil && notification.Kind == adapter.ContextGuardCompactionCompleted {
 		s.view.LastResult = "compacted"
 	} else if s.machine.State == contextguard.StateLatched && s.view.LastResult == "" {
