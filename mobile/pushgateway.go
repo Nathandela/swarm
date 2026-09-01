@@ -44,6 +44,8 @@ const (
 	pushPairingCleanupTimeout = 10 * time.Second
 )
 
+var pushPairingCleanupBackoffs = []time.Duration{0, 250 * time.Millisecond, time.Second, 4 * time.Second}
+
 var (
 	// errNoPushGateway is a build with no gateway endpoint configured. It is an ERROR and
 	// not a silent success for the reason PB-PUSH-5 gives: a phone that reports a healthy
@@ -155,7 +157,78 @@ func (a *App) EnsurePushRegistration(token string) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pushRegisterTimeout)
 	defer cancel()
 	_, rerr := core.EnsurePushRegistration(ctx, client, a.currentPushToken)
+	if rerr == nil {
+		a.schedulePendingPairingPushRevokes()
+	}
 	return rerr
+}
+
+// schedulePendingPairingPushRevokes starts one bounded cleanup worker when startup or a
+// foreground token callback discovers durable failed-pairing obligations. It never waits
+// under App.mu, pushProviderMu, or Core.mu. A permanently unavailable gateway leaves the
+// marker intact after bounded backoff; the next foreground/configure trigger safely retries.
+func (a *App) schedulePendingPairingPushRevokes() {
+	if a == nil || a.core == nil || a.core.PushInstallationID() == "" || len(a.core.PendingPushBindingRevocations()) == 0 {
+		return
+	}
+	a.mu.Lock()
+	if a.closed || a.pushCleanupRunning || a.pushGatewayURL == "" || a.pushAttestor == nil || a.pushSigner == nil {
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.pushCleanupRunning = true
+	a.pushCleanupCancel = cancel
+	a.pushCleanupWG.Add(1)
+	url := a.pushGatewayURL
+	a.mu.Unlock()
+
+	go a.runPendingPairingPushRevokes(ctx, url)
+}
+
+func (a *App) runPendingPairingPushRevokes(ctx context.Context, url string) {
+	defer a.pushCleanupWG.Done()
+	defer func() {
+		a.mu.Lock()
+		a.pushCleanupRunning = false
+		a.pushCleanupCancel = nil
+		a.mu.Unlock()
+	}()
+	client, err := a.pushGatewayClient(url)
+	if err != nil {
+		return
+	}
+	for _, backoff := range pushPairingCleanupBackoffs {
+		if backoff > 0 {
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
+		if a.drainPendingPairingPushRevokes(ctx, client) == nil {
+			return
+		}
+	}
+}
+
+func (a *App) drainPendingPairingPushRevokes(parent context.Context, client *phonecore.GatewayClient) error {
+	for _, pending := range a.core.PendingPushBindingRevocations() {
+		ctx, cancel := context.WithTimeout(parent, pushPairingCleanupTimeout)
+		err := client.RevokeAddress(ctx, pending)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if err := a.core.CompleteStagedPushRevoke(pending); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // currentPushToken is the core's TokenSource: the newest token any caller has handed this

@@ -162,6 +162,60 @@ func TestPreparePairingPushBinding_FailedRollbackStaysDurableAndIsDrainedBeforeN
 	nextRollback()
 }
 
+func TestPendingPairingPushRevoke_RestartDrainsWithoutAnotherPairing(t *testing.T) {
+	gateway := &pairingPushGateway{failRevoke: true}
+	stateDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(gateway.serveHTTP))
+	defer server.Close()
+	signer := newPlatformTestSigner(t)
+	app, err := NewApp(&Config{StateDir: stateDir, PushGatewayURL: server.URL}, platformPushCustody{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.EnsurePushRegistration("fcm-token"); err != nil {
+		t.Fatal(err)
+	}
+	_, rollback, err := app.preparePairingPushBinding(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollback()
+	if got := app.core.PendingPushBindingRevocations(); len(got) != 1 {
+		t.Fatalf("failed rollback left %d durable obligations, want 1", len(got))
+	}
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	gateway.mu.Lock()
+	gateway.failRevoke = false
+	gateway.mu.Unlock()
+	restarted, err := NewApp(&Config{StateDir: stateDir, PushGatewayURL: server.URL}, platformPushCustody{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if err := restarted.ConfigurePushRegistration(&testPushAttestor{}, signer); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(restarted.core.PendingPushBindingRevocations()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := restarted.core.PendingPushBindingRevocations(); len(got) != 0 {
+		t.Fatalf("startup did not drain the durable revoke without a new pairing: %x", got)
+	}
+	gateway.mu.Lock()
+	allocated := gateway.allocated
+	gateway.mu.Unlock()
+	if allocated != 1 {
+		t.Fatalf("startup cleanup allocated another address: %d", allocated)
+	}
+}
+
 func TestPreparePairingPushBinding_ForegroundOnlyWithoutProductionProviders(t *testing.T) {
 	gateway := &pairingPushGateway{}
 	server := httptest.NewServer(http.HandlerFunc(gateway.serveHTTP))

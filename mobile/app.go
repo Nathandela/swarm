@@ -100,6 +100,11 @@ type App struct {
 	// pushProviderMu serializes the one-time reverse-bound provider installation with
 	// construction of the first GatewayClient.
 	pushProviderMu sync.Mutex
+	// pushCleanupWG owns the bounded startup/foreground revoker. running/cancel are guarded
+	// by mu; the worker never holds mu or pushProviderMu across gateway I/O.
+	pushCleanupWG      sync.WaitGroup
+	pushCleanupRunning bool
+	pushCleanupCancel  context.CancelFunc
 	// stateDir is the phone's private state directory. The core owns phone-state.json and
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).
@@ -684,7 +689,11 @@ func (a *App) Close() (err error) {
 	}
 	machines := a.machines
 	a.machines = nil
+	pushCleanupCancel := a.pushCleanupCancel
 	a.mu.Unlock()
+	if pushCleanupCancel != nil {
+		pushCleanupCancel()
+	}
 
 	// The machines manager owns per-pairing clients and the aggregate-stream relay;
 	// closing it here is what lets drainAggregate terminate (machines.go).
@@ -720,6 +729,7 @@ func (a *App) Close() (err error) {
 		<-s.done
 	}
 	a.pairingWG.Wait()
+	a.pushCleanupWG.Wait()
 	a.suspendInput("the app closed")
 	a.events.close()
 	return nil

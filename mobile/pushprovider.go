@@ -33,7 +33,12 @@ func (a *App) ConfigurePushRegistration(attestor PushAttestor, signer PushInstal
 	}
 
 	a.pushProviderMu.Lock()
-	defer a.pushProviderMu.Unlock()
+	defer func() {
+		a.pushProviderMu.Unlock()
+		if err == nil {
+			a.schedulePendingPairingPushRevokes()
+		}
+	}()
 	a.mu.Lock()
 	already := a.pushAttestor != nil || a.pushSigner != nil || a.pushClient != nil
 	a.mu.Unlock()
