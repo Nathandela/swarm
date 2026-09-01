@@ -58,12 +58,13 @@ type PlayIntegrityAccountDetails struct {
 	AppLicensingVerdict string `json:"appLicensingVerdict"`
 }
 
-// PlayIntegrityConfig is the complete, fail-closed verifier policy. There are no defaults:
-// omitting a package, project, certificate allowlist or freshness bound is a construction
-// error rather than a weakened production verifier.
+// PlayIntegrityConfig is the complete, fail-closed decoded-verdict policy. There are no
+// defaults: omitting a package, certificate allowlist or freshness bound is a construction
+// error rather than a weakened production verifier. Cloud project identity is deliberately
+// absent because Google does not echo it in tokenPayloadExternal; Android token preparation,
+// the decoder's ADC construction and release provenance enforce that deployment coordinate.
 type PlayIntegrityConfig struct {
 	PackageName              string
-	CloudProjectNumber       int64
 	AllowedCertificateSHA256 []string
 	MaxVerdictAge            time.Duration
 	MaxFutureSkew            time.Duration
@@ -83,9 +84,6 @@ type PlayIntegrityVerifier struct {
 func NewPlayIntegrityVerifier(cfg PlayIntegrityConfig) (*PlayIntegrityVerifier, error) {
 	if strings.TrimSpace(cfg.PackageName) == "" {
 		return nil, errors.New("pushgw: Play Integrity package name is required")
-	}
-	if cfg.CloudProjectNumber <= 0 {
-		return nil, errors.New("pushgw: Play Integrity cloud project number is required")
 	}
 	if cfg.Decode == nil {
 		return nil, errors.New("pushgw: Play Integrity decode client is required")
