@@ -22,7 +22,7 @@ import (
 const devicesFile = "devices.json"
 
 // registrySchemaVersion stamps the on-disk envelope for forward migration.
-const registrySchemaVersion = 1
+const registrySchemaVersion = 2
 
 // DeviceIDFor derives the canonical device id from the device's Ed25519
 // command-signing public key: the hex SHA-256 of the key. It is deterministic and
@@ -129,12 +129,19 @@ func Open(dir string) (*Registry, error) {
 	// schema could change a record's meaning (e.g. add a revoked flag or narrow a
 	// capability), and silently ignoring the unknown fields would grant authority the
 	// writer did not intend. An unstamped (0) file was never legitimately written.
-	if env.SchemaVersion != registrySchemaVersion {
+	if env.SchemaVersion != 1 && env.SchemaVersion != registrySchemaVersion {
 		return nil, fmt.Errorf("device: registry %s schema version %d unsupported (want %d)", r.path, env.SchemaVersion, registrySchemaVersion)
 	}
+	migrateV1 := env.SchemaVersion == 1
 	// A pre-existing file may have a loosened mode; reharden it to 0600.
 	_ = os.Chmod(r.path, 0o600)
 	for _, rec := range env.Devices {
+		// Schema v1 predates Push. Even if a newer/hostile writer spliced a JSON field
+		// under the old stamp, v1 carries no semantics authorizing it: migrate only the
+		// identity record and deliberately invent no push authority.
+		if migrateV1 {
+			rec.Push = nil
+		}
 		// A persisted record with an invalid key or capability is rejected loudly
 		// rather than admitted -- the registry is the R-POL.9 authorization
 		// authority, so a malformed identity must never load (fail-closed).
@@ -142,6 +149,11 @@ func Open(dir string) (*Registry, error) {
 			return nil, fmt.Errorf("device: invalid persisted record %q: %w", rec.DeviceID, err)
 		}
 		r.byID[rec.DeviceID] = cloneRecord(rec)
+	}
+	if migrateV1 {
+		if _, err := r.persistLocked(); err != nil {
+			return nil, fmt.Errorf("device: migrate registry %s from schema v1: %w", r.path, err)
+		}
 	}
 	return r, nil
 }

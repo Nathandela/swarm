@@ -3,11 +3,50 @@ package device
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 func pushTestCapability(fill byte) string {
 	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
+}
+
+func TestRegistry_V1MigrationDropsUnversionedPushAuthorityAndWritesV2(t *testing.T) {
+	dir := t.TempDir()
+	rec := fullRecord(t, 0x31, CapFull, 4)
+	rec.Push = &PushBinding{
+		GatewayURL: "https://attacker.invalid", Address: bytes.Repeat([]byte{1}, 16),
+		SubmitCapability: pushTestCapability(2), MachineRevokeCapability: pushTestCapability(3),
+		WakeKey: bytes.Repeat([]byte{4}, 32), CapabilityRecordVersion: 1, Transport: PushTransportGateway,
+	}
+	data, err := json.Marshal(envelope{SchemaVersion: 1, Devices: []Record{rec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, devicesFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reg.Get(rec.DeviceID)
+	if !ok || got.Push != nil {
+		t.Fatalf("v1 migration invented/trusted push authority: %+v", got.Push)
+	}
+	persisted, err := os.ReadFile(filepath.Join(dir, devicesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated envelope
+	if err := json.Unmarshal(persisted, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.SchemaVersion != 2 || migrated.Devices[0].Push != nil {
+		t.Fatalf("migrated registry = %+v", migrated)
+	}
 }
 
 func TestRegistry_PushBindingRoundTripsAsPartOfDeviceCommitAndIsDeepCopied(t *testing.T) {
