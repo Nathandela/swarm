@@ -8,9 +8,8 @@ package swarmmobile_test
 //   - the app lifecycle must actually CALL registration (Kotlin's two token entry points),
 //     which needs a bound verb and a real gateway URL on Config -- the same config surface
 //     the relay URL crosses on;
-//   - Play Integrity attestation stays PARKED (owner console setup), so the honest
-//     production behaviour is a NAMED, LOUD refusal that enrolls nothing -- never a fake
-//     verdict token, and never a silent success.
+//   - a platform that installs no Play Integrity/Keystore providers takes a NAMED, LOUD
+//     refusal that enrolls nothing -- never a fake verdict token, and never a silent success.
 //
 // These tests pin the two ends of that: an unconfigured build says so and does nothing, and
 // a configured build refuses with the parked reason and writes no durable identity.
@@ -63,8 +62,8 @@ func TestR3AR4_EnsurePushRegistration_SaysSoWhenNoGatewayIsConfigured(t *testing
 }
 
 // TestR3AR4_EnsurePushRegistration_RefusesLoudlyWhileAttestationIsParked: with a gateway URL
-// configured, the verb runs for real and stops at the ONE external this repository cannot
-// provide -- the Play Integrity verdict, whose setup is owner-console work (parked). The
+// configured but no platform providers installed, the verb runs for real and stops at the
+// explicit fail-closed Play Integrity fallback. The
 // refusal must NAME that, and it must leave no half-enrolled durable identity (PG-AUTH-13's
 // own rule for a refused attestation).
 func TestR3AR4_EnsurePushRegistration_RefusesLoudlyWhileAttestationIsParked(t *testing.T) {

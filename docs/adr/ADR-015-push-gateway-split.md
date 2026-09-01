@@ -72,6 +72,19 @@ Firebase project `swarm-8404f` exists; the Android app `dev.swarm.phone` was reg
 > credential controls. The custody/arbitrary-wake argument for the split is dormant under that
 > identity, not void, and it revives the moment a second operator exists.
 
+> **IMPLEMENTATION UPDATE (2026-09-02, production-registration foundation, bead
+> agents-tracker-gtjg):** The fail-closed placeholder described above has been replaced at the
+> registration boundary: the Android client obtains Play Integrity Standard verdicts for the
+> exact RFC 8785/JCS registration-request hash, signs with a non-exportable Android Keystore
+> P-256 key, and the gateway validates the expected package, request hash, active Play App
+> Signing certificate, `PLAY_RECOGNIZED`, `LICENSED`, and verdict freshness. Release provenance
+> binds the exact AAB to Cloud project `733314021126`, the production gateway URL, and the active
+> Play App Signing certificate published by Play Console (not the upload certificate). An
+> unavailable provider still degrades to foreground-only and never fabricates authority. This
+> update does **not** close the amendment's exception or claim an end-to-end wake: P12/PG-MIG-2
+> pairing conveyance remains deferred to bead agents-tracker-yxpm and the exception still sunsets
+> only after its real-handset PB-E2E-5 proof.
+
 **P2. `internal/remote/push` relocates verbatim; only its import direction inverts.** The OAuth exchange, the narrow scope, the retry/`UNREGISTERED` classification and the data-only high-priority body are the reviewed work of the push slice and are re-hosted, not re-derived. One structural consequence must be planned rather than discovered: the package is currently defined *against* the relay — `var _ relay.PushSink = (*FCM)(nil)` (`fcm.go:17-18`) and `Push(ctx, token string, p relay.PushPayload)` (`fcm.go:102`) — with the `PushSink`/`PushPayload` types owned by `internal/remote/relay/push.go:69-146`. The gateway becomes the owner of that seam; the relay's copy is deleted rather than left as a type nobody implements. B10's rename rationale ("the seam is renamed transport-neutral (`PushSink`/`PushPayload`) rather than keeping the APNs name for an FCM backend", `ADR-007:942-944`) applies again, in the other direction: the new home must not be named for FCM either.
 
 **P3. Play-Store Android is the first client. iOS/APNs is not the active target.** This amends the 2026-07-23 amendment item 1 (`ADR-007:286-296`) and the surviving half of D12 (`:94`). "Not the active target" is the precise claim: no APNs vocabulary remains in a normative or operational document, no Apple-account dependency gates any wave, and the D12 Xcode/device gate is dormant rather than deleted. The gomobile-bind-safe phone-core surface that the 2026-07-23 amendment justified by the two-binding argument is **kept** on its own merits — it is the seam Android binds through today — and this ADR does not license anyone to "simplify" the core by putting an unbindable type on the boundary now that only one binding exists.

@@ -93,8 +93,13 @@ type App struct {
 	// EnsurePushRegistration, and pushClient is the gateway client built over the durable
 	// installation key. Both are guarded by mu; see pushgateway.go for why the token is
 	// stored at arrival and read at act time.
-	pushToken  string
-	pushClient *phonecore.GatewayClient
+	pushToken    string
+	pushClient   *phonecore.GatewayClient
+	pushAttestor PushAttestor
+	pushSigner   PushInstallationSigner
+	// pushProviderMu serializes the one-time reverse-bound provider installation with
+	// construction of the first GatewayClient.
+	pushProviderMu sync.Mutex
 	// stateDir is the phone's private state directory. The core owns phone-state.json and
 	// device.key inside it; the facade keeps PB-PAIR-4's pairing-attempt record beside them
 	// (see mobile/pairing.go persist for why that one is not a State field).

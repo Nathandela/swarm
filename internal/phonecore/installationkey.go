@@ -4,11 +4,10 @@ package phonecore
 // the push gateway is signed with, and the one thing that makes an installation id mean this
 // phone rather than whoever presents it.
 //
-// WHERE IT LIVES, AND THE DEVIATION THAT IS. push-gateway-api.md PG-AUTH-2 asks for an
-// ANDROID KEYSTORE key -- hardware-resident, non-exportable, so the private scalar never
-// exists as bytes in this process. That needs a new reverse-bound platform interface (a
-// Kotlin ECDSA signer, DER -> IEEE P1363 conversion, low-s normalisation on the Java side)
-// and is PARKED with the rest of the owner-gated push work.
+// Android production does NOT use the implementation in this file. It installs the
+// reverse-bound PushInstallationSigner implemented by AndroidInstallationSigner, whose P-256
+// private key is non-exportable in Android Keystore. PreparePlatformInstallationSigner removes
+// any unregistered scalar left by a pre-production build before that provider is installed.
 //
 // What ships instead is the custody the REST of this phone's key material already has
 // (mobile/keycustody.go): the scalar is generated here, and it is written only into
@@ -19,12 +18,9 @@ package phonecore
 // registration and rotation must work with no user present, which is the whole reason that
 // tier is not authentication-gated.
 //
-// The gap is real and it is bounded: an attacker with code execution inside this app's
-// process can sign installation-control requests, which lets them rotate the FCM token or
-// revoke addresses for THIS installation. It buys them nothing about wake CONTENT (a wake is
-// a constant over an empty plaintext, sealed under a per-pairing key) and nothing about
-// session content (content tier, separate KEK). Closing it is the parked Keystore-signer
-// bead.
+// This Go signer remains for non-Android callers and protocol tests. A mobile build with no
+// platform provider does not call it merely to reach an attestation refusal: the parked mobile
+// path owns no private scalar at all.
 
 import (
 	"crypto/ecdsa"
@@ -41,6 +37,30 @@ import (
 // so it is safe to hand to a GatewayClient used from several goroutines.
 type installationSigner struct {
 	key *ecdsa.PrivateKey
+}
+
+// PreparePlatformInstallationSigner removes the pre-production exportable installation
+// scalar before Android installs its non-exportable Keystore signer. It refuses once any
+// registration authority or outcome-unknown request exists: replacing that signer would
+// orphan an installation the old key alone can authenticate.
+func (c *Core) PreparePlatformInstallationSigner() error {
+	c.regMu.Lock()
+	defer c.regMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.push.data.InstallationID != "" || c.push.data.PendingRegister != nil {
+		return errors.New("phonecore: cannot replace the signer of an existing or pending installation")
+	}
+	if len(c.push.data.InstallationKey) == 0 {
+		return nil
+	}
+	legacy := c.push.data.InstallationKey
+	c.push.data.InstallationKey = nil
+	if err := c.push.persist(); err != nil {
+		c.push.data.InstallationKey = legacy
+		return fmt.Errorf("phonecore: remove legacy installation key: %w", err)
+	}
+	return nil
 }
 
 // InstallationSigner returns this phone's installation signer, MINTING AND PERSISTING the

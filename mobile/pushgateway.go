@@ -10,16 +10,13 @@ package swarmmobile
 // already reach (PushTokens.register: SwarmApplication's initial getToken, and
 // SwarmMessagingService.onNewToken's rotation).
 //
-// WHAT IS DELIBERATELY NOT HERE, so nobody reads the gap as an oversight:
+// Android installs Play Integrity and its Keystore P-256 signer through
+// ConfigurePushRegistration immediately after NewApp. A platform/build that does not install
+// both retains the named fail-closed path below: it enrolls nothing and remains foreground-only.
+// No fake verdict or exportable fallback authority is minted.
 //
-//   - PLAY INTEGRITY. The gateway refuses an unattested registration (PG-AUTH-11/13) and the
-//     verdict provider is owner-console setup this repository cannot do. The attestor below
-//     therefore REFUSES BY NAME rather than inventing a token: a fabricated verdict is
-//     simulated data in production code, and it would turn a refusal an operator can act on
-//     into a 403 nobody can explain. A build with no attestation provider is honestly
-//     foreground-only, which is the same graceful-and-loud shape PB-PUSH-5 already requires
-//     of an absent Firebase project.
-//   - THE PAIRING CONVEYANCE. Allocating an address and putting the binding in msg4 is gated
+// WHAT IS DELIBERATELY NOT HERE: THE PAIRING CONVEYANCE. Allocating an address and putting
+// the binding in msg4 is gated
 //     on a machine-side capability signal that does not exist yet (see
 //     pairing.DeviceParams.PushBinding's MIXED-VERSION OBLIGATION); wiring it without that
 //     signal breaks every mixed-version pair.
@@ -49,8 +46,8 @@ var (
 		"swarmmobile: no push gateway is configured for this build; the phone works without "+
 			"push and will not receive background wakes"))
 
-	// errPushAttestationParked is the ONE external this slice cannot supply. See the file
-	// comment: a named refusal, never a fabricated verdict token.
+	// errPushAttestationParked is the explicit fallback when a platform installed no real
+	// providers. It is a named refusal, never a fabricated verdict token.
 	errPushAttestationParked = classed(ErrClassOffline, errors.New(
 		"swarmmobile: no app attestation provider is configured for this build, and the push "+
 			"gateway refuses an unattested registration (PG-AUTH-11/13); the phone works "+
@@ -145,7 +142,7 @@ func (a *App) EnsurePushRegistration(token string) (err error) {
 		return errNoPushGateway
 	}
 
-	client, cerr := a.pushGatewayClient(core, url)
+	client, cerr := a.pushGatewayClient(url)
 	if cerr != nil {
 		return cerr
 	}
@@ -174,7 +171,9 @@ func (a *App) currentPushToken() (string, error) {
 // cached because the client carries the clock offset PG-AUTH-3's server_time taught it: a
 // fresh client per call would re-learn a handset's clock skew on every registration, one
 // wasted round trip at a time.
-func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.GatewayClient, error) {
+func (a *App) pushGatewayClient(url string) (*phonecore.GatewayClient, error) {
+	a.pushProviderMu.Lock()
+	defer a.pushProviderMu.Unlock()
 	a.mu.Lock()
 	if a.pushClient != nil {
 		defer a.mu.Unlock()
@@ -182,14 +181,24 @@ func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.Ga
 	}
 	a.mu.Unlock()
 
-	// Built with a.mu RELEASED: minting the installation key seals and rewrites the push
-	// container, which takes the core's own lock and reaches Keystore through the wake-tier
-	// sealer.
-	signer, err := core.InstallationSigner()
-	if err != nil {
-		return nil, err
+	// Built with a.mu RELEASED: the legacy fallback can seal and rewrite the push
+	// container. Production installs both reverse-bound providers before this path runs.
+	a.mu.Lock()
+	platformAttestor, platformSigner := a.pushAttestor, a.pushSigner
+	a.mu.Unlock()
+	var signer phonecore.InstallationSigner
+	attest := parkedAttestor
+	if platformAttestor != nil && platformSigner != nil {
+		signer = platformSigner
+		attest = func(requestHash [32]byte) (string, error) {
+			return platformAttestor.Attest(append([]byte(nil), requestHash[:]...))
+		}
+	} else {
+		// No production authorities means no registration can pass attestation. Do not mint
+		// an exportable Go private key merely to reach that named refusal.
+		signer = parkedInstallationSigner{}
 	}
-	client := phonecore.NewGatewayClient(url, signer, parkedAttestor, nil)
+	client := phonecore.NewGatewayClient(url, signer, attest, nil)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -199,8 +208,14 @@ func (a *App) pushGatewayClient(core *phonecore.Core, url string) (*phonecore.Ga
 	return a.pushClient, nil
 }
 
-// parkedAttestor is the Play Integrity seam with no provider behind it (see the file
-// comment). It refuses; it does not invent.
+// parkedAttestor is the fail-closed no-provider path. It refuses; it does not invent.
 func parkedAttestor(_ [32]byte) (string, error) {
 	return "", errPushAttestationParked
+}
+
+type parkedInstallationSigner struct{}
+
+func (parkedInstallationSigner) PublicKey() []byte { return nil }
+func (parkedInstallationSigner) Sign([]byte) ([]byte, error) {
+	return nil, errPushAttestationParked
 }
