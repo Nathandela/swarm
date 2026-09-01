@@ -704,10 +704,16 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 	if r.Type == journal.TypeCapabilityTransition || r.Type == journal.TypeSessionState {
 		// A transition is an ordered fact about the state AT THIS CURSOR. Decode only
 		// its own validated payload: consulting the current roster here would rewrite
-		// a historical false transition as true after recovery (or the reverse).
+		// a historical false transition as true after recovery (or the reverse). A
+		// non-empty invalid session_state payload crosses as an explicitly invalid
+		// sentinel so the phone revokes prior authority. Nil remains meaningful for
+		// metadata-only session_state records from older/current rename producers: it
+		// means this record carries no capability change.
 		var rec protocol.SessionCapabilities
 		if json.Unmarshal(r.Payload, &rec) == nil && rec.Validate() == nil {
 			out.Capabilities = &rec
+		} else if r.Type == journal.TypeSessionState && len(r.Payload) > 0 {
+			out.Capabilities = &protocol.SessionCapabilities{}
 		}
 	} else if caps != nil {
 		if rec, ok := caps(r.SessionID); ok {
