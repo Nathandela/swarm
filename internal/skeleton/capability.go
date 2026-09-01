@@ -76,6 +76,10 @@ import (
 // the session's own lifetime by construction.
 type sessionCapabilityStore struct {
 	mu sync.Mutex
+	// authorMu makes the read-before-register test in the initial state publisher
+	// single-flight. Without it two launch/attach seams could both observe absence
+	// and append duplicate instance-establishing records.
+	authorMu sync.Mutex
 	// transitionMu serializes state commit plus its ordered journal publication.
 	// Without it, a proof could commit, a newer gap could publish false, and the
 	// older proof could then append true after it while lookup correctly read false.

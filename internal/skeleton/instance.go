@@ -29,6 +29,7 @@ package skeleton
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -244,13 +245,35 @@ func writeSessionStateFile(path string, data []byte) error {
 // behind, because a partially-authored record is exactly the inconsistent state T2-b
 // makes unrepresentable.
 func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string, a adapter.Adapter, providerVersion, adapterRevision string, liveBackend bool) (protocol.SessionCapabilities, error) {
+	d.capStore.authorMu.Lock()
+	defer d.capStore.authorMu.Unlock()
+	prior, hadPrior := d.sessionCapabilities(sessionID)
 	rec := deriveSessionCapabilities(provider, a, providerVersion, adapterRevision, liveBackend)
 	rec.SessionInstance = instance
 	if err := rec.Validate(); err != nil {
 		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: refusing to author a capability record for session %q: %w", sessionID, err)
 	}
 	d.registerSessionCapabilities(sessionID, rec)
+	// Publish only the first authoritative record for an incarnation. Runtime
+	// structured-chat toggles continue to use capability_transition's narrower
+	// same-instance contract; a generic re-registration must never become a second
+	// authority channel that can grant terminal routing after a gap.
+	d.capStore.transitionMu.Lock()
 	stored, ok := d.sessionCapabilities(sessionID)
+	if ok && (!hadPrior || prior.SessionInstance != stored.SessionInstance) && d.core != nil {
+		if _, present := d.core.Get(sessionID); present {
+			payload, err := json.Marshal(stored)
+			if err != nil {
+				d.capStore.transitionMu.Unlock()
+				return protocol.SessionCapabilities{}, err
+			}
+			if err := d.core.RecordSessionState(sessionID, payload); err != nil {
+				d.capStore.transitionMu.Unlock()
+				return protocol.SessionCapabilities{}, err
+			}
+		}
+	}
+	d.capStore.transitionMu.Unlock()
 	if !ok {
 		return rec, nil
 	}

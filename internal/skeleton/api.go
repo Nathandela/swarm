@@ -700,7 +700,7 @@ func toWireJournalRecordWith(r journal.Record, caps func(string) (protocol.Sessi
 		TS:         r.TS,
 		StateSince: r.StateSince,
 	}
-	if r.Type == journal.TypeCapabilityTransition {
+	if r.Type == journal.TypeCapabilityTransition || r.Type == journal.TypeSessionState {
 		// A transition is an ordered fact about the state AT THIS CURSOR. Decode only
 		// its own validated payload: consulting the current roster here would rewrite
 		// a historical false transition as true after recovery (or the reverse).

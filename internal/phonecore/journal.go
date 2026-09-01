@@ -183,17 +183,24 @@ func (c *SessionCache) applyLocked(rec schema.JournalRecord) (applied bool) {
 		cs = CachedSession{SessionID: rec.SessionID}
 	}
 	cs.Present = true
-	if rec.Group != "" {
-		cs.Group = rec.Group // verbatim from the wire (R-PHC.3)
-	}
-	if rec.Agent != "" {
-		cs.Agent = rec.Agent // verbatim from the wire, same rule as Group
-	}
-	if rec.Name != "" {
-		cs.Name = rec.Name // verbatim from the wire, same rule as Group and Agent
-	}
-	if !rec.StateSince.IsZero() {
-		cs.StateSince = rec.StateSince // verbatim from the wire, same rule again
+	if rec.Type == RecordTypeSessionState {
+		cs.Group = rec.Group
+		cs.Agent = rec.Agent
+		cs.Name = rec.Name
+		cs.StateSince = rec.StateSince
+	} else {
+		if rec.Group != "" {
+			cs.Group = rec.Group // verbatim from the wire (R-PHC.3)
+		}
+		if rec.Agent != "" {
+			cs.Agent = rec.Agent // verbatim from the wire, same rule as Group
+		}
+		if rec.Name != "" {
+			cs.Name = rec.Name // verbatim from the wire, same rule as Group and Agent
+		}
+		if !rec.StateSince.IsZero() {
+			cs.StateSince = rec.StateSince // verbatim from the wire, same rule again
+		}
 	}
 	if rec.Capabilities != nil && rec.Type != RecordTypeStructuredGap {
 		// A capability_transition is authority for exactly one session incarnation. The

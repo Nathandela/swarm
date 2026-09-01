@@ -72,6 +72,12 @@ const (
 	// reconnect. The payload is protocol.SessionCapabilities; journal deliberately
 	// owns only the string discriminator to avoid an import cycle.
 	TypeCapabilityTransition RecordType = "capability_transition"
+	// TypeSessionState is an additive authoritative state delta for one live
+	// session. Unlike TypeRoster it is durable/cursor ordered, and unlike
+	// TypeCapabilityTransition it may establish a new exact session instance. Its
+	// payload, when present, is the complete validated SessionCapabilities value at
+	// this cursor.
+	TypeSessionState RecordType = "session_state"
 )
 
 // Record is one versioned journal entry. Cursor is a monotonic uint64 assigned by

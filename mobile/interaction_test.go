@@ -189,3 +189,20 @@ func TestTranscript_AnItemRaisesItsOwnEventAndLeavesTheRosterAlone(t *testing.T)
 			"folded, and putting it in both makes one of the two wrong", entries)
 	}
 }
+
+func TestSessionState_DoesNotReplaceHumanNeedWithTransportType(t *testing.T) {
+	a := transcriptApp(t)
+	a.needs["m1/s1"] = "needs_input"
+	a.onJournal(schema.JournalRecord{
+		Cursor: 11, SessionID: "m1/s1", Type: phonecore.RecordTypeSessionState,
+		Capabilities: &schema.SessionCapabilities{
+			Provider: "claude", SessionInstance: "instance-1", StructuredChat: true,
+		},
+	})
+	a.mu.Lock()
+	got := a.needs["m1/s1"]
+	a.mu.Unlock()
+	if got != "needs_input" {
+		t.Fatalf("Need = %q, want prior human state; session_state is carriage, not copy", got)
+	}
+}

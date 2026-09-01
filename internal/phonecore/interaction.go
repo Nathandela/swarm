@@ -42,6 +42,11 @@ const RecordTypeStructuredGap = "structured_gap"
 // journal event wakes the phone surface to re-read the session in place.
 const RecordTypeCapabilityTransition = "capability_transition"
 
+// RecordTypeSessionState is a durable authoritative live-session delta. It may
+// establish a replacement instance (unlike capability_transition), and its
+// display fields replace the prior row including intentional empty values.
+const RecordTypeSessionState = "session_state"
+
 // ItemSchemaVersion is the item schema version this build understands -- the item's own `v`
 // (§2), distinct from journal.SchemaVersion, from protocol.Version and from
 // StateSchemaVersion. A higher one is DEGRADED, never dropped (IS-COMPAT-4).

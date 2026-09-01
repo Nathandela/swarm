@@ -90,6 +90,32 @@ func (d *Daemon) JournalSubscribe() (<-chan journal.Record, func()) {
 	return d.journal.Subscribe()
 }
 
+// RecordSessionState appends one authoritative, complete state delta for an
+// existing session. It shares writeMu with lifecycle writes and Delete, then
+// re-reads the current meta inside that fence, so a capability author racing a
+// replacement or tombstone cannot resurrect or describe the wrong row.
+func (d *Daemon) RecordSessionState(sessionID string, payload json.RawMessage) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.isDeleted(sessionID) {
+		return nil
+	}
+	d.mu.Lock()
+	s, ok := d.sessions[sessionID]
+	var m persist.Meta
+	if ok && s.persisted {
+		m = s.meta
+	} else {
+		ok = false
+	}
+	d.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	_, err := d.journal.Append(completeSessionRecord(m, journal.TypeSessionState, payload))
+	return err
+}
+
 // RecordGatewayPresence appends a `presence` record when the remote gateway
 // connects or disconnects (R-JRN.7) — a daemon-side liveness proxy. It carries no
 // session id; the online flag rides in the opaque payload.
@@ -111,14 +137,23 @@ func (d *Daemon) RecordGatewayPresence(online bool) error {
 func journalRecordFor(prev persist.Meta, prevExists bool, next persist.Meta) (journal.Record, bool) {
 	switch {
 	case next.Status.Process == status.ProcessExited && (!prevExists || prev.Status.Process != status.ProcessExited):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeExited, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeExited, nil), true
 	case next.Status.Process == status.ProcessLost && (!prevExists || prev.Status.Process != status.ProcessLost):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLost, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeLost, nil), true
 	case !prevExists && next.Status.Process == status.ProcessRunning:
-		return journal.Record{SessionID: next.ID, Type: journal.TypeLaunched, Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeLaunched, nil), true
 	case prevExists && status.Derive(prev.Status) != status.Derive(next.Status):
-		return journal.Record{SessionID: next.ID, Type: journal.TypeGroupTransition, Group: status.Derive(next.Status), Agent: next.AgentType, Name: next.Name, StateSince: next.EffectiveGroupEnteredAt()}, true
+		return completeSessionRecord(next, journal.TypeGroupTransition, nil), true
+	case prevExists && (prev.AgentType != next.AgentType || prev.Name != next.Name):
+		return completeSessionRecord(next, journal.TypeSessionState, nil), true
 	default:
 		return journal.Record{}, false
+	}
+}
+
+func completeSessionRecord(m persist.Meta, typ journal.RecordType, payload json.RawMessage) journal.Record {
+	return journal.Record{
+		SessionID: m.ID, Type: typ, Group: status.Derive(m.Status), Agent: m.AgentType,
+		Name: m.Name, StateSince: m.EffectiveGroupEnteredAt(), Payload: payload,
 	}
 }
