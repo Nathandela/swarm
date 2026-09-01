@@ -177,7 +177,7 @@ class PhoneActivity : AppCompatActivity() {
      */
     override fun onResume() {
         super.onResume()
-        surface.render()
+        surface.resume()
     }
 
     /**

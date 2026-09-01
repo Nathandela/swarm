@@ -28,6 +28,7 @@ import dev.swarm.phone.ui.CapabilityNotice
 import dev.swarm.phone.ui.CommandVerdict
 import dev.swarm.phone.ui.ErrorState
 import dev.swarm.phone.ui.RoutedError
+import dev.swarm.phone.ui.RosterAntiEntropy
 import dev.swarm.phone.ui.ControlLease
 import dev.swarm.phone.ui.FacadeBridge
 import dev.swarm.phone.ui.InboxRefreshState
@@ -1075,6 +1076,7 @@ class PhoneSurface(
      */
     private var inboxDrawn: InboxScreen? = null
     private val inboxRefresh = InboxRefreshState()
+    private val rosterAntiEntropy = RosterAntiEntropy(ROSTER_SYNC_TIMEOUT_MILLIS)
     private val inboxCache = InboxScreenCache()
     private val inboxRefreshHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val inboxRefreshTimeout = Runnable(::expireInboxRefresh)
@@ -1825,6 +1827,12 @@ class PhoneSurface(
         }
     }
 
+    /** Arm one non-destructive authoritative roster check for this foreground generation. */
+    fun resume() {
+        rosterAntiEntropy.foreground()
+        render()
+    }
+
     /**
      * Release what the surface holds while the screen is not in front of anyone: the camera, and
      * the relay socket.
@@ -1838,6 +1846,7 @@ class PhoneSurface(
      * started, so a pause before anything was built does not reach Keystore on the way out.
      */
     fun release() {
+        rosterAntiEntropy.release()
         cancelInboxRefreshTimeout()
         inboxRefresh.refused()
         // Delayed input_busy callbacks capture this surface's App, ledger, render and dispatch.
@@ -2108,6 +2117,8 @@ class PhoneSurface(
             if (outcome.text == TriageInboxScreen.REFRESH_TIMEOUT) outcome.text = ""
         }
         rosterRevision = nextRosterRevision
+        val transport = bridge.connectionState()
+        driveRosterAntiEntropy(startup.app, transport, rosterRevision)
         // BEFORE ANYTHING IS DRAWN, because the session detail composes whatever is on the outcome
         // line and a verdict claimed after it would reach the screen one journal event late
         // (agents-tracker-qlf9).
@@ -2131,7 +2142,7 @@ class PhoneSurface(
         // the silence; [statusHost] and [syncHost] own the two places.
         drawSync(
             SyncStatus.of(
-                connection = bridge.connectionBanner(),
+                transport = transport,
                 // THE MACHINE'S OWN STAMP, AND NO FORMATTER. `MachineFreshness.notice` used to
                 // render a bare clock time through the user's locale; agents-tracker-2pnu F5
                 // retired that, and it spends the same elapsed-duration model this draw does,
@@ -2144,6 +2155,8 @@ class PhoneSurface(
                 streams = bridge.streamViews(),
                 // PB-SYNC-7's hold, shown before anyone presses anything (agents-tracker-pxz8).
                 reconciled = reconciledOf(startup),
+                paired = true,
+                rosterRevision = rosterRevision,
             ),
         )
         // AND THE STARTUP LINE IS CLEARED, because the other branch writes it. A core that
@@ -5438,6 +5451,33 @@ class PhoneSurface(
         }
     }
 
+    /**
+     * Spend a foreground/network trigger on the passive facade seam. The coordinator owns
+     * request-to-authoritative-revision single-flight; VerbDispatch owns only the short facade
+     * call. Refusal and timeout return to idle and wait for a later lifecycle/network edge, so an
+     * unavailable relay cannot turn redraws into an automatic retry storm.
+     */
+    private fun driveRosterAntiEntropy(app: App, transport: ConnectionState, revision: Long) {
+        if (!rosterAntiEntropy.observe(
+                online = transport == ConnectionState.ONLINE,
+                rosterRevision = revision,
+                nowMillis = SystemClock.elapsedRealtime(),
+            )
+        ) {
+            return
+        }
+        val accepted = dispatch.enqueue(
+            plane = SendPlane.COMMAND,
+            key = ROSTER_SYNC_KEY,
+            work = { FacadeBridge(app).syncRoster() },
+            settle = { answer ->
+                answer.onFailure { rosterAntiEntropy.refused() }
+                render()
+            },
+        )
+        if (!accepted) rosterAntiEntropy.refused()
+    }
+
     /** Bound one roster request to this foreground screen; completion remains revision-driven. */
     private fun scheduleInboxRefreshTimeout() {
         inboxRefreshHandler.removeCallbacks(inboxRefreshTimeout)
@@ -5577,6 +5617,8 @@ class PhoneSurface(
         const val WHOLE_JOURNAL = 0L
         const val INBOX_REFRESH_KEY = "inbox.refresh"
         const val INBOX_REFRESH_TIMEOUT_MILLIS = 20_000L
+        const val ROSTER_SYNC_KEY = "roster.anti_entropy"
+        const val ROSTER_SYNC_TIMEOUT_MILLIS = 20_000L
 
         /**
          * ADR-014's page size for one "load earlier" (Mirror M3.1).

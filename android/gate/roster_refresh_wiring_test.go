@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,55 @@ func TestWiring_InboxRefreshRequestsOnlyAnAuthoritativeRoster(t *testing.T) {
 	if !s17NamesVerb(bridge, "RefreshRoster") {
 		t.Errorf("FacadeBridge.refreshRoster does not call App.RefreshRoster, so the Android "+
 			"gesture terminates in a hollow adapter.\nreachable from refreshRoster:\n%s", s17Indent(bridge))
+	}
+}
+
+// Foreground/network convergence may ask for current authority, but a lifecycle callback does
+// not authorize deletion. This pins the two intentionally different roster-only paths end to end:
+// automatic SyncRoster is non-destructive; the visible Inbox Reload retains the guarded recovery.
+func TestWiring_AutomaticRosterSyncCannotEnterMailboxDiscardRecovery(t *testing.T) {
+	activityPath := filepath.Join(androidRoot(t), "app/src/main/kotlin/dev/swarm/phone/PhoneActivity.kt")
+	resume := reachableInFile(t, activityPath, "onResume", 2)
+	if !strings.Contains(resume, "surface.resume(") {
+		t.Fatalf("PhoneActivity.onResume does not arm PhoneSurface's foreground anti-entropy seam")
+	}
+
+	surfacePath := phoneSurfacePath(t)
+	surfaceResume := reachableInFile(t, surfacePath, "resume", 2)
+	for _, want := range []string{"rosterAntiEntropy.foreground", "render()"} {
+		if !strings.Contains(surfaceResume, want) {
+			t.Errorf("PhoneSurface.resume does not contain %q", want)
+		}
+	}
+	drive := reachableInFile(t, surfacePath, "driveRosterAntiEntropy", 2)
+	for _, want := range []string{"rosterAntiEntropy.observe", "ConnectionState.ONLINE", ".syncRoster("} {
+		if !strings.Contains(drive, want) {
+			t.Errorf("automatic roster convergence does not contain %q\n%s", want, s17Indent(drive))
+		}
+	}
+	for _, forbidden := range []string{".refreshRoster(", ".repairTranscript("} {
+		if strings.Contains(drive, forbidden) {
+			t.Errorf("automatic roster convergence reaches %s; only visible Reload may repair/discard", forbidden)
+		}
+	}
+
+	bridge := reachableInFile(t, facadeBridgePath(t), "syncRoster", 1)
+	if !s17NamesVerb(bridge, "SyncRoster") {
+		t.Errorf("FacadeBridge.syncRoster does not terminate in App.SyncRoster\n%s", s17Indent(bridge))
+	}
+	mobileApp := string(readFileOrFail(t, filepath.Join(repoRoot(t), "mobile/app.go"), "passive roster facade"))
+	marker := "func (a *App) SyncRoster()"
+	start := strings.Index(mobileApp, marker)
+	if start < 0 {
+		t.Fatal("mobile.App.SyncRoster is absent")
+	}
+	open := start + strings.Index(mobileApp[start:], "{")
+	passive, ok := braceBody(mobileApp, open)
+	if !ok {
+		t.Fatal("mobile.App.SyncRoster body is unreadable")
+	}
+	if strings.Contains(passive, "requestMailboxDiscard") {
+		t.Error("automatic App.SyncRoster enters requestMailboxDiscard; lifecycle did not authorize deletion")
 	}
 }
 

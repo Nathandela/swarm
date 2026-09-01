@@ -503,8 +503,12 @@ class FacadeBridge(private val app: App) {
         ""
     }
 
-    fun connectionBanner(): ConnectionBanner =
-        ConnectionBanner.of(ConnectionState.of(app.connectionState()))
+    fun connectionState(): ConnectionState = ConnectionState.of(app.connectionState())
+
+    fun connectionBanner(): ConnectionBanner = ConnectionBanner.of(connectionState())
+
+    /** Automatic foreground/network anti-entropy; never authorizes mailbox deletion. */
+    fun syncRoster() = app.syncRoster()
 
     /**
      * PB-APP-11, and it is a SEPARATE question from [connectionBanner] on purpose.
