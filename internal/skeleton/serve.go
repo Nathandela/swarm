@@ -677,6 +677,12 @@ func (d *Daemon) emitStatus(id string, s status.Status) {
 	if d.sup != nil {
 		d.sup.signal(id)
 	}
+	// Same discipline for the context guard's promotion check (ADR-023 amendment
+	// 1): a status edge only NUDGES the guard's worker, which re-reads the
+	// current meta on its own goroutine.
+	if d.contextGuards != nil {
+		d.contextGuards.noteStatus(id)
+	}
 }
 
 // anyControlled reports whether somebody is driving local: the supervisor never types into

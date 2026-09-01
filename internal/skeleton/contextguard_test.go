@@ -28,8 +28,8 @@ func contextGuardTestSource(t *testing.T) (adapter.ContextGuardSource, adapter.C
 		t.Fatal("Codex ContextGuard source unavailable")
 	}
 	action, ok := source.ContextGuardAction("0.150.1")
-	if !ok || action.AutomaticDispatch {
-		t.Fatalf("characterized action = %#v, %v; want observe-only", action, ok)
+	if !ok || !action.AutomaticDispatch {
+		t.Fatalf("characterized action = %#v, %v; want the automatic descriptor (ADR-023 amendment 1)", action, ok)
 	}
 	return source, action
 }
@@ -104,7 +104,7 @@ func TestContextGuardManagerExactTelemetryIsObserveOnlyAndNeverPersisted(t *test
 	view := awaitContextGuardView(t, manager, "session", func(v protocol.ContextGuardView) bool {
 		return v.UsagePercent == 80 && v.Phase == string(contextguard.StatePendingIdle)
 	})
-	if view.Support != string(adapter.ContextGuardObserveOnly) || view.ErrorCode != "action_unverified" {
+	if view.Support != string(adapter.ContextGuardAutomatic) || view.ErrorCode != "action_unverified" {
 		t.Fatalf("crossing view = %#v; automatic action must remain explicitly unverified", view)
 	}
 	if _, err := os.Stat(filepath.Join(manager.stateDir, "session", contextGuardStateFile)); !errors.Is(err, os.ErrNotExist) {
@@ -573,7 +573,7 @@ func TestContextGuardStateWriteFailureFailsClosedWithSanitizedView(t *testing.T)
 	view := awaitContextGuardView(t, manager, "session", func(v protocol.ContextGuardView) bool {
 		return v.Phase == string(contextguard.StateBlockedCorrupt)
 	})
-	if view.Support != string(adapter.ContextGuardObserveOnly) || view.ErrorCode != "state_write_failed" || strings.Contains(view.ErrorCode, "secret") {
+	if view.Support != string(adapter.ContextGuardAutomatic) || view.ErrorCode != "state_write_failed" || strings.Contains(view.ErrorCode, "secret") {
 		t.Fatalf("write failure view = %#v; want stable sanitized failure", view)
 	}
 

@@ -218,6 +218,16 @@ func (l *composerLane) endStop() {
 	l.mu.Unlock()
 }
 
+// uncertainNow reports whether the lane holds an unresolved composer outcome.
+// The context guard's dispatch revalidation reads it at its queue head
+// (ADR-023 D6): an automatic compaction never rides over an operation whose
+// effect on the provider is still undecided.
+func (l *composerLane) uncertainNow() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.uncertain
+}
+
 func (l *composerLane) barrierChanged(admitted uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

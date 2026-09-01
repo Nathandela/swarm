@@ -93,14 +93,25 @@ func TestContextGuardParserFailsClosed(t *testing.T) {
 	}
 }
 
-func TestContextGuardActionIsObserveOnlyAtCharacterizedVersion(t *testing.T) {
+func TestContextGuardActionIsAutomaticAtCharacterizedVersions(t *testing.T) {
+	// ADR-023 amendment 1: the 0.150.x and 0.151.x families are characterized
+	// (schema-identical accepted methods; 0.151.0 live-exercised 2026-09-01) and
+	// authorize automatic dispatch AS A CAPABILITY CLAIM -- every concurrency
+	// guarantee belongs to the daemon's dispatch lane, because the live gates
+	// proved the provider itself serializes nothing.
 	s := contextGuardSource(t)
-	a, ok := s.ContextGuardAction("0.150.7")
-	if !ok || a.Method != "thread/compact/start" || a.ThreadIDParameter != "threadId" || a.AutomaticDispatch || a.Support != adapter.ContextGuardObserveOnly {
-		t.Fatalf("0.150 action=%+v ok=%v; native descriptor must remain observe-only", a, ok)
+	for _, version := range []string{"0.150.7", "0.151.0", "0.151.3"} {
+		a, ok := s.ContextGuardAction(version)
+		if !ok || a.Method != "thread/compact/start" || a.ThreadIDParameter != "threadId" || !a.AutomaticDispatch || a.Support != adapter.ContextGuardAutomatic {
+			t.Fatalf("%s action=%+v ok=%v; want the automatic native descriptor", version, a, ok)
+		}
 	}
-	if _, ok := s.ContextGuardAction("0.151.0"); ok {
-		t.Fatal("uncharacterized Codex version exposed a ContextGuard action")
+	// An uncharacterized version yields NO action: the guard downgrades to
+	// unsupported rather than dispatching against unknown semantics.
+	for _, version := range []string{"0.149.9", "0.152.0", "1.150.0", "0.150.x"} {
+		if _, ok := s.ContextGuardAction(version); ok {
+			t.Fatalf("uncharacterized Codex version %s exposed a ContextGuard action", version)
+		}
 	}
 }
 

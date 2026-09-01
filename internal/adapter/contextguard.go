@@ -39,10 +39,20 @@ type ContextGuardSupport string
 
 const (
 	ContextGuardObserveOnly ContextGuardSupport = "observe_only"
+	// ContextGuardAutomatic authorizes the daemon's automatic dispatch of the
+	// native action, UNDER THE DAEMON'S OWN SERIALIZATION. The 2026-09-01 live
+	// gates (ADR-023 amendment 1) proved the provider itself serializes
+	// nothing -- a compact sent mid-turn cancels the turn, and two concurrent
+	// compacts interrupt each other -- so this value asserts only that the
+	// action's method and telemetry are characterized for the version; every
+	// concurrency guarantee is the dispatch lane's to enforce.
+	ContextGuardAutomatic ContextGuardSupport = "automatic"
 )
 
-// ContextGuardAction is a pure native-action template. AutomaticDispatch stays
-// false until the daemon establishes its independent concurrency gates.
+// ContextGuardAction is a pure native-action template. AutomaticDispatch is the
+// adapter's version-fenced assertion that the daemon MAY dispatch the method
+// automatically; the daemon still gates every dispatch behind its enforced
+// serialization, quiet revalidation, and the unattended rule (ADR-023 D5/D6).
 type ContextGuardAction struct {
 	Method            string
 	ThreadIDParameter string

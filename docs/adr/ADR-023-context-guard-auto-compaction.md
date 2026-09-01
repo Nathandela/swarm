@@ -132,6 +132,48 @@ raw provider errors never cross this surface or enter logs.
   more machinery than terminal-command injection.
 - Unsupported harnesses receive no best-effort fallback.
 
+## Amendment 1 (2026-09-01): the gates were run, both failed, and dispatch ships on the daemon's own serialization
+
+D7's two Codex gates were put to a live provider (`codex-cli 0.151.0`, a second
+app-server client on a real session's socket; evidence in
+`docs/verification/context-guard.md`):
+
+- a `thread/compact/start` sent mid-turn is accepted instantly and **cancels the
+  running turn**;
+- two concurrent compacts are both accepted, and the **second interrupts the
+  first mid-compaction**.
+
+The provider serializes nothing, and waiting for it to start would park the
+feature indefinitely. The owner decision (2026-09-01) is to ship automatic
+dispatch under the daemon's OWN enforcement, which D5/D6 already specified:
+
+1. **The composer lane is the serialization.** A dispatch enters the session's
+   per-session semantic lane, FIFO with every daemon-driven send, Stop and
+   approval, and revalidates at the queue head (quiet status, no unresolved
+   composer outcome). Nothing the daemon originates can race it.
+2. **Attended sessions are never auto-compacted.** The one input the lane cannot
+   order is a human typing in the attached PTY — exactly the race the gate
+   evidence prices at one destroyed turn. Dispatch therefore requires the
+   session to be UNATTENDED (no controller lease) as well as quiet: whoever
+   holds the controls can `/compact` themselves; the guard exists for the
+   unattended fleet. The residual window is a turn STARTING in the milliseconds
+   between the queue-head revalidation and the provider write, which requires an
+   attach plus a submitted prompt inside that window — accepted by the owner as
+   negligible.
+3. **The write boundary is durable.** The `executing` record is persisted inside
+   the provider client's write-boundary callback: a refused or unpersistable
+   transition aborts with provably no bytes; once bytes may have left, every
+   failure — timeout, transport loss, even a typed provider error — is an
+   unknown outcome and a durable hold, never a resend (D5 unchanged).
+4. **`AutomaticDispatch` in the adapter is a capability claim only**, version-
+   fenced to the characterized 0.150.x/0.151.x families (0.151's regenerated
+   schema is shape-identical for every accepted method, and 0.151.0 is the
+   live-gated version of record). An uncharacterized version downgrades the
+   guard to unsupported. `Support` gains the value `automatic`.
+
+The product contract (D1) is unchanged: daemon-global, owner-only, **opt-in and
+disabled by default**, threshold 40–95, latch and re-arm as specified.
+
 ## Alternatives Considered
 
 - **Type `/compact` into every PTY.** Rejected: provider commands differ and input can be dirty,

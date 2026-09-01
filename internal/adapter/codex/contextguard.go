@@ -2,11 +2,18 @@ package codex
 
 // ContextGuard evidence is deliberately parsed separately from the interaction
 // shaper. The fixtures in testdata/contextguard-*.json are sanitized frames
-// shaped from `codex-cli 0.150.1`'s generated experimental JSON schema, not a
-// live runtime capture; they prove field placement, not permission to dispatch.
-// Both concurrent-turn-vs-compact and
-// manual/native-compact-vs-Swarm serialization remain unproven, so the action
-// descriptor below is permanently observe-only in this revision.
+// shaped from `codex-cli 0.150.1`'s generated experimental JSON schema; the
+// 0.151.0 schema (regenerated 2026-09-01) carries identical shapes for every
+// method this parser accepts, and the 2026-09-01 live gate experiments
+// exercised `thread/compact/start` against a real 0.151.0 app-server.
+//
+// Those gates came back NEGATIVE on the provider side (ADR-023 amendment 1):
+// codex serializes nothing around compaction -- a compact sent mid-turn
+// CANCELS the turn, and two concurrent compacts interrupt each other. The
+// action descriptor therefore authorizes automatic dispatch only as a
+// version-fenced capability claim; every concurrency guarantee is enforced by
+// the daemon's dispatch lane (quiet revalidation inside the per-session
+// composer lane, and never while a human holds the controls).
 
 import (
 	"bytes"
@@ -133,22 +140,28 @@ func validTokenUsageBreakdown(object map[string]any) bool {
 	return true
 }
 
-// ContextGuardAction describes the native action only for the characterized
-// 0.150.x family. It NEVER authorizes automatic dispatch: the two concurrency
-// gates named in ADR-023 D7 are still unproven.
+// ContextGuardAction describes the native action for the characterized
+// 0.150.x and 0.151.x families (schema-identical for every accepted method;
+// 0.151.0 additionally live-exercised on 2026-09-01). AutomaticDispatch is
+// authorized for them -- as a capability claim only: ADR-023 amendment 1
+// records that the provider itself serializes nothing, so the daemon's
+// dispatch lane owns every concurrency guarantee. An uncharacterized version
+// (0.152 and beyond, until someone regenerates and compares its schema)
+// yields no action at all, which downgrades the whole guard to unsupported
+// rather than dispatching against unknown semantics.
 func (codexAdapter) ContextGuardAction(version string) (adapter.ContextGuardAction, bool) {
 	if !characterizedContextGuardVersion(version) {
 		return adapter.ContextGuardAction{}, false
 	}
 	return adapter.ContextGuardAction{
 		Method: "thread/compact/start", ThreadIDParameter: "threadId",
-		AutomaticDispatch: false, Support: adapter.ContextGuardObserveOnly,
+		AutomaticDispatch: true, Support: adapter.ContextGuardAutomatic,
 	}, true
 }
 
 func characterizedContextGuardVersion(version string) bool {
 	p := strings.Split(version, ".")
-	if len(p) != 3 || p[0] != "0" || p[1] != "150" || p[2] == "" {
+	if len(p) != 3 || p[0] != "0" || (p[1] != "150" && p[1] != "151") || p[2] == "" {
 		return false
 	}
 	for _, c := range p[2] {

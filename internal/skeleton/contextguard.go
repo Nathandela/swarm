@@ -2,12 +2,23 @@ package skeleton
 
 // The ContextGuard runtime is the daemon-owned bridge between a pure provider
 // parser and the pure policy reducer. Backend callbacks only enqueue/coalesce
-// evidence and wake one per-session worker; the worker alone performs policy and
-// durability work. Automatic provider dispatch is deliberately absent until the
-// two concurrency gates in ADR-023 are proven.
+// evidence and wake one per-session worker; the worker alone performs policy,
+// durability, and -- since ADR-023 amendment 1 -- dispatch work.
+//
+// THE 2026-09-01 GATES CAME BACK NEGATIVE: a live codex 0.151.0 accepts
+// thread/compact/start instantly under every condition -- mid-turn it CANCELS
+// the running turn, and two concurrent compacts interrupt each other. The
+// provider serializes nothing, so the daemon serializes everything: a dispatch
+// happens only from the session's composer lane (FIFO with every daemon-driven
+// send and Stop), only after quiet revalidation at the queue head, and only
+// while nobody holds the session's controls -- attached typing is the one input
+// the lane cannot order, so attended sessions are never auto-compacted. The
+// executing record crosses the provider write boundary durably; once bytes may
+// have left, every failure is a hold, never a resend.
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,6 +34,7 @@ import (
 	"github.com/Nathandela/swarm/internal/adapter"
 	"github.com/Nathandela/swarm/internal/contextguard"
 	"github.com/Nathandela/swarm/internal/protocol"
+	"github.com/Nathandela/swarm/internal/status"
 )
 
 const (
@@ -31,7 +43,26 @@ const (
 	contextGuardPendingLimit       = 64
 	contextGuardFrameLimit         = 64 << 10
 	contextGuardUsageMethod        = "thread/tokenUsage/updated"
+	// contextGuardDispatchTimeout bounds the provider call. The live 0.151.0
+	// compact reply arrived in 1ms; a reply that needs longer than this is an
+	// unknown outcome, never a retry (compaction is non-idempotent).
+	contextGuardDispatchTimeout = 30 * time.Second
 )
+
+// contextGuardDispatchConn is the narrow provider surface a dispatch needs: the
+// write-boundary call whose beforeWrite error PROVABLY precedes any bytes (the
+// appserver client's documented contract). backendConn deliberately stays the
+// minimal Call interface; production's *appserver.Client satisfies this one by
+// assertion, and a backend whose conn cannot make the write boundary explicit
+// simply never dispatches.
+type contextGuardDispatchConn interface {
+	CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error
+}
+
+// errContextGuardDispatchRefused aborts the provider call from beforeWrite when
+// the reducer refuses the executing transition (or its durability failed): the
+// contract above guarantees no bytes follow.
+var errContextGuardDispatchRefused = errors.New("contextguard: dispatch refused at the write boundary")
 
 type contextGuardManager struct {
 	d        *Daemon
@@ -55,6 +86,24 @@ type contextGuardSession struct {
 	key     contextguard.Key
 	source  adapter.ContextGuardSource
 	action  adapter.ContextGuardAction
+
+	// The dispatch seams (ADR-023 D5/D6; amendment 1). All nil-safe: a session
+	// registered without them -- every pre-dispatch caller and every test rig
+	// that never wires a backend -- is exactly the old observe-only runtime.
+	// conn crosses the provider write boundary; lane yields the session's
+	// composer lane so an automatic compaction is FIFO-ordered against every
+	// daemon-driven send and Stop; quiet answers the D6 revalidation (running,
+	// turn idle, interaction none, and NOBODY at the controls -- the one input
+	// the lane cannot serialize is a human typing in the attached PTY, so an
+	// attended session is never auto-compacted); uncertain reports the lane's
+	// own unresolved-composer-outcome flag.
+	conn      contextGuardDispatchConn
+	lane      func() *composerLane
+	quiet     func() bool
+	uncertain func() bool
+	// quietPending coalesces status-edge nudges from the assembly: the worker
+	// re-examines promotion on its next wake rather than parsing status here.
+	quietPending atomic.Bool
 
 	queueMu          sync.Mutex
 	stateMu          sync.Mutex
@@ -166,12 +215,45 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 		SessionID: local, SessionInstance: backend.sessionInstance,
 		BackendEpoch: backend.feed.epoch, ProviderThreadID: backend.threadID,
 	}
-	if !d.contextGuards.registerCurrent(local, key, source, action, isCurrent) || !isCurrent() {
+	// The dispatch seams (ADR-023 amendment 1) are wired ONLY here, where the
+	// live backend conn exists -- every other registration path stays
+	// observe-only by construction. A conn that cannot make its write boundary
+	// explicit never dispatches.
+	dispatchConn, _ := backend.conn.(contextGuardDispatchConn)
+	wire := func(s *contextGuardSession) {
+		if dispatchConn == nil || !action.AutomaticDispatch {
+			return
+		}
+		s.conn = dispatchConn
+		s.lane = func() *composerLane { return d.composerLaneFor(local) }
+		s.quiet = func() bool { return d.contextGuardQuiet(local) }
+		s.uncertain = func() bool { return d.composerLaneFor(local).uncertainNow() }
+	}
+	if !d.contextGuards.registerCurrentWired(local, key, source, action, isCurrent, wire) || !isCurrent() {
 		d.contextGuards.unregister(local, key)
 		d.discardContextGuardFeed(backend.feed)
 		return
 	}
 	d.activateContextGuardFeed(local, key, backend.feed)
+}
+
+// contextGuardQuiet answers ADR-023 D6's revalidation for one session: process
+// running, turn idle, no interaction -- and UNATTENDED. The composer lane
+// serializes every daemon-driven action against the dispatch, but a human
+// typing in the attached PTY is the one input it cannot order (the 2026-09-01
+// gates prove that race costs the human's turn), so an attended session is
+// never auto-compacted: whoever holds the controls can /compact themselves.
+// The guard exists for the unattended fleet.
+func (d *Daemon) contextGuardQuiet(local string) bool {
+	if d.core == nil {
+		return false
+	}
+	m, ok := d.core.Get(local)
+	if !ok || m.Status.Process != status.ProcessRunning ||
+		m.Status.Turn != status.TurnIdle || m.Status.Interaction != status.InteractionNone {
+		return false
+	}
+	return !d.anyControlled(local)
 }
 
 func (d *Daemon) unregisterContextGuardBackend(local string, backend *sessionBackend) {
@@ -289,10 +371,17 @@ func (d *Daemon) stopContextGuard(id string) {
 }
 
 func (m *contextGuardManager) register(id string, key contextguard.Key, source adapter.ContextGuardSource, action adapter.ContextGuardAction) bool {
-	return m.registerCurrent(id, key, source, action, nil)
+	return m.registerCurrentWired(id, key, source, action, nil, nil)
 }
 
 func (m *contextGuardManager) registerCurrent(id string, key contextguard.Key, source adapter.ContextGuardSource, action adapter.ContextGuardAction, current func() bool) bool {
+	return m.registerCurrentWired(id, key, source, action, current, nil)
+}
+
+// registerCurrentWired is registerCurrent with the dispatch seams installed
+// BEFORE the worker goroutine starts (installing after would race the worker's
+// first promotion check). wire nil is every observe-only registration.
+func (m *contextGuardManager) registerCurrentWired(id string, key contextguard.Key, source adapter.ContextGuardSource, action adapter.ContextGuardAction, current func() bool, wire func(*contextGuardSession)) bool {
 	m.replaceMu.Lock()
 	defer m.replaceMu.Unlock()
 	if current != nil && !current() {
@@ -333,6 +422,9 @@ func (m *contextGuardManager) registerCurrent(id string, key contextguard.Key, s
 	}
 	s.settingsRevision.Store(machine.Config.Revision)
 	s.persistFn = s.persist
+	if wire != nil {
+		wire(s)
+	}
 	if settingsErr != nil {
 		s.persistBlocked = true
 		s.view = protocol.ContextGuardView{Support: string(action.Support), Phase: string(contextguard.StateBlockedCorrupt), ErrorCode: "settings_unavailable"}
@@ -516,6 +608,10 @@ func (s *contextGuardSession) run() {
 			return
 		case <-s.wake:
 			s.drain()
+			// Promotion runs after every drain: a fresh usage sample may have
+			// crossed the threshold while the session was already quiet, or a
+			// status edge (quietPending) may have arrived with nothing queued.
+			s.maybePromote()
 		}
 	}
 }
@@ -577,31 +673,143 @@ func (s *contextGuardSession) applyPending(p contextGuardPending) {
 }
 
 func (s *contextGuardSession) apply(event contextguard.Event, notification *adapter.ContextGuardNotification) {
+	s.applyReturning(event, notification)
+}
+
+// applyReturning is apply with the reducer's verdict surfaced, for the dispatch
+// path: the write-boundary callback must know whether the executing transition
+// really committed, and the promotion path must see RequestDispatch. applied is
+// false for a rejection or a durability failure; state is the machine AFTER the
+// call either way.
+func (s *contextGuardSession) applyReturning(event contextguard.Event, notification *adapter.ContextGuardNotification) (state contextguard.Machine, decision contextguard.Decision, applied bool) {
 	s.stateMu.Lock()
 	if s.persistBlocked {
+		state = s.machine
 		s.stateMu.Unlock()
-		return
+		return state, contextguard.Decision{}, false
 	}
 	next, decision := contextguard.Reduce(s.machine, event)
 	if decision.Rejected != contextguard.RejectNone {
+		state = s.machine
 		s.stateMu.Unlock()
-		return
+		return state, decision, false
 	}
 	if decision.Persist {
 		if err := s.persistFn(next); err != nil {
 			s.blockStateWrite()
+			state = s.machine
 			s.stateMu.Unlock()
 			log.Printf("skeleton: context guard state persistence failed for session %s", s.id)
 			s.manager.changed()
-			return
+			return state, decision, false
 		}
 	}
 	s.machine = next
 	s.refreshView(notification)
+	state = s.machine
 	s.stateMu.Unlock()
 	s.manager.changed()
-	// decision.RequestDispatch is intentionally ignored. ContextGuardAction for the
-	// characterized provider is observe-only until ADR-023's gates are proven.
+	return state, decision, true
+}
+
+// noteStatus is the assembly's status-edge nudge (the supervisor's signal
+// precedent): the WORKER re-examines promotion on its own goroutine; nothing is
+// parsed or decided on the emitter's path.
+func (m *contextGuardManager) noteStatus(id string) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	m.mu.Unlock()
+	if s == nil {
+		return
+	}
+	s.quietPending.Store(true)
+	s.signal()
+}
+
+// maybePromote is the ONE producer of EventSessionIdle, and so of the reducer's
+// RequestDispatch (ADR-023 amendment 1). It runs on the worker goroutine after
+// every drain: a session sitting in pending_idle is promoted the moment the
+// assembly reports it quiet AND the promotion's own revalidation still holds. A
+// stale observation is a rejection, not an error -- the next usage sample
+// retries. Sessions without the dispatch seams (observe-only registrations,
+// every pre-dispatch test) never promote.
+func (s *contextGuardSession) maybePromote() {
+	if s.conn == nil || s.lane == nil || s.quiet == nil || !s.action.AutomaticDispatch {
+		return
+	}
+	s.quietPending.Store(false)
+	s.stateMu.Lock()
+	pending := !s.persistBlocked && s.machine.State == contextguard.StatePendingIdle
+	s.stateMu.Unlock()
+	if !pending || !s.quiet() {
+		return
+	}
+	_, decision, applied := s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionIdle, At: time.Now(), Key: s.key}, nil)
+	if applied && decision.RequestDispatch {
+		s.dispatchCompaction()
+	}
+}
+
+// dispatchCompaction performs one automatic compaction under the daemon's OWN
+// serialization -- the provider has none (the 2026-09-01 gates: a compact sent
+// mid-turn cancels the turn; two concurrent compacts interrupt each other).
+//
+//   - It joins the session's composer lane, so it is FIFO-ordered against every
+//     daemon-driven send, Stop, and approval the daemon can originate.
+//   - At the queue head it REVALIDATES quiet (busy -> Prepared degrades to
+//     pending_idle and a later idle edge retries) and the lane's own unresolved-
+//     outcome flag.
+//   - The reducer's executing transition is made durable INSIDE the provider
+//     client's write boundary: a refused or unpersistable transition aborts the
+//     call with provably no bytes written.
+//   - Once bytes may have left, every failure is an unknown outcome and a hold;
+//     compaction is non-idempotent and is never blindly repeated (D5).
+func (s *contextGuardSession) dispatchCompaction() {
+	lane := s.lane()
+	if lane == nil {
+		return
+	}
+	lane.enter()
+	defer lane.leave()
+	if !s.quiet() || (s.uncertain != nil && s.uncertain()) {
+		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), contextGuardDispatchTimeout)
+	defer cancel()
+	wrote := false
+	var res json.RawMessage
+	err := s.conn.CallAtWriteBoundary(ctx, s.action.Method,
+		map[string]any{s.action.ThreadIDParameter: s.key.ProviderThreadID}, &res,
+		func() error {
+			state, _, applied := s.applyReturning(contextguard.Event{Kind: contextguard.EventDispatchStarted, At: time.Now(), Key: s.key}, nil)
+			if !applied || state.State != contextguard.StateExecuting {
+				return errContextGuardDispatchRefused
+			}
+			return nil
+		},
+		func() {
+			wrote = true
+			s.applyReturning(contextguard.Event{Kind: contextguard.EventActionWritten, At: time.Now(), Key: s.key}, nil)
+		},
+	)
+	switch {
+	case err == nil:
+		// awaiting_confirmation: the provider's own compaction lifecycle events
+		// arrive through the feed and drive provider_compacting -> latched.
+		log.Printf("skeleton: context guard dispatched %s for session %s", s.action.Method, s.id)
+	case !wrote:
+		// Provably no bytes: the boundary refused (reducer/persistence) or the
+		// connection was already closed. Prepared degrades to pending_idle so a
+		// later quiet edge retries; a refusal that moved the machine elsewhere
+		// leaves it exactly where the reducer put it.
+		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
+	default:
+		// Bytes may have left: timeout, transport loss, or even a typed provider
+		// error after the write. Unknown outcome, durable hold, never a resend.
+		s.applyReturning(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
+		log.Printf("skeleton: context guard dispatch outcome unknown for session %s: %v", s.id, err)
+	}
 }
 
 func (m *contextGuardManager) updateSettings(settings protocol.ContextGuardSettings) {

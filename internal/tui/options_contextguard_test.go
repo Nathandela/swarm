@@ -82,7 +82,7 @@ func TestOptionsContextGuard_LoadToggleAndSave(t *testing.T) {
 		t.Fatalf("loaded settings = %#v; want revision 4 and not loading", rm.options.contextGuard)
 	}
 	view := stripANSI(rm.View().Content)
-	for _, want := range []string{"auto compact", "threshold", "Codex telemetry only", "automatic action pending safety verification"} {
+	for _, want := range []string{"auto compact", "threshold", "Codex only", "compacts when quiet and unattended"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("options view missing %q:\n%s", want, view)
 		}

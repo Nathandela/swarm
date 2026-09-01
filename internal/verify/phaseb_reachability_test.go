@@ -205,8 +205,8 @@ var b94Allowed = map[string]string{
 	"github.com/Nathandela/swarm/internal/remote/grant.ParseBootstrap": "superseded by internal/remote/grantwire.ParseBootstrap, which phonecore/snapshot.go:743 calls. This one is reached only by phonesim.",
 
 	// ---- accessors and helpers with no shipped caller ---------------------------------------
-	"github.com/Nathandela/swarm/internal/adapter.Conformance":        "the adapter conformance harness: a test contract by construction.",
-	"github.com/Nathandela/swarm/internal/adapter.CheckConformance":   "as Conformance.",
+	"github.com/Nathandela/swarm/internal/adapter.Conformance":      "the adapter conformance harness: a test contract by construction.",
+	"github.com/Nathandela/swarm/internal/adapter.CheckConformance": "as Conformance.",
 	// a1-integration.md said this row "should be deleted the day a corpus exists". A corpus now
 	// exists -- internal/adapter/claude/testdata/interaction, replayed by
 	// TestGoldenCorpus_PassesCheckInteractionFixture -- and DELETING THE ROW WAS MEASURED TO FAIL

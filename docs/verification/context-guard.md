@@ -4,7 +4,7 @@
 
 **Decision:** [ADR-023](../adr/ADR-023-context-guard-auto-compaction.md)
 
-**Status:** settings, exact Codex observation, lifecycle safety, TUI, and sanitized owner observability implemented; automatic provider dispatch intentionally gated off.
+**Status:** settings, exact Codex observation, lifecycle safety, TUI, sanitized owner observability, AND the automatic dispatch lane (ADR-023 amendment 1) implemented. Dispatch is enforced by the daemon: composer-lane serialization, queue-head quiet revalidation, the unattended rule, and the durable executing record at the provider write boundary. Opt-in and disabled by default, unchanged.
 
 ## Shipped contract
 
@@ -13,7 +13,7 @@
 - Codex occupancy is only `tokenUsage.last.totalTokens / modelContextWindow`; cumulative `tokenUsage.total` is forbidden as the numerator.
 - Every sample is fenced by session id, session instance, backend epoch, provider thread, settings revision, source sequence, and capture time. Callbacks only bound/copy/queue and never parse, fsync, or call the provider.
 - Owner rosters receive only integer percentage, support, phase, stable last result, and stable error code. Remote rosters and unsupported harnesses receive no field.
-- The reducer contains the future at-most-once write lifecycle, but production ignores `RequestDispatch` and Codex advertises `AutomaticDispatch=false` / `observe_only`.
+- The reducer's at-most-once write lifecycle is DRIVEN in production since ADR-023 amendment 1: `RequestDispatch` promotes through the composer lane, and Codex advertises `AutomaticDispatch=true` / `automatic` for the characterized 0.150.x/0.151.x families as a capability claim (the daemon owns every concurrency guarantee -- see the live gate results below).
 
 ## Provider characterization
 
@@ -98,5 +98,8 @@ Consequence: D7's caution is not conservatism but fact. Any automatic dispatch m
 rely ENTIRELY on Swarm-side enforced serialization (D5/D6), and even a perfect lane
 retains a check-to-write residue in which a just-started turn — or a just-started
 manual `/compact` — is destroyed, precisely in the near-full-context sessions where
-the guard fires. Production dispatch stays disabled; these results are the recorded
-evidence the gates demanded, and they came back negative.
+the guard fires. ADR-023 amendment 1 records the owner decision that followed: the
+lane enforces the serialization for everything the daemon originates, ATTENDED
+sessions are never auto-compacted (the attach-typing race is the one the lane cannot
+order), and the millisecond attach-plus-submit residue is accepted. These results
+remain the recorded evidence the gates demanded.
