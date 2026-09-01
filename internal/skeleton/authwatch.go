@@ -310,9 +310,11 @@ func (w *authWatcher) tickAgent(agent string) {
 		// The account changed. Freeze the stale set NOW -- every running session
 		// of this agent not launched under the new identity, EMPTY STAMPS
 		// INCLUDED (a pre-ADR-024 launch predates the change by construction).
+		// The block is dirty regardless (the baseline moved), so addPending's
+		// report is not consulted here.
 		for _, m := range w.list() {
 			if m.AgentType == agent && m.Status.Process == status.ProcessRunning && m.AuthIdentity != id {
-				dirty = w.addPending(agent, m.ID) || dirty
+				w.addPending(agent, m.ID)
 			}
 		}
 		w.state.Identities[agent] = id
