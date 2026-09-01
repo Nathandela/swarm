@@ -614,7 +614,7 @@ func TestS17_ProductionKotlinAsksFirebaseForATokenAtLeastOnce(t *testing.T) {
 	var withGetToken []string
 	for _, f := range kotlinFiles(t, kotlinMainRoot(t)) {
 		src := s17StripComments(readFileOrFail(t, f, "PB-PUSH-9"))
-		if !strings.Contains(src, "getToken") && !strings.Contains(src, ".token") {
+		if !s17AsksFirebaseMessagingToken(src) {
 			continue
 		}
 		withGetToken = append(withGetToken, mustRel(t, f))
@@ -630,6 +630,23 @@ func TestS17_ProductionKotlinAsksFirebaseForATokenAtLeastOnce(t *testing.T) {
 			"rotation' for a reason: onNewToken fires only on rotation, so an app that implements " +
 			"only the callback never registers on a fresh install -- and a fresh install is a " +
 			"phone that has just been paired and is about to be backgrounded.")
+	}
+}
+
+var s17FirebaseMessagingToken = regexp.MustCompile(
+	`FirebaseMessaging\s*\.\s*getInstance\s*\(\s*\)\s*\.\s*token\b`,
+)
+
+func s17AsksFirebaseMessagingToken(src string) bool {
+	return s17FirebaseMessagingToken.MatchString(src)
+}
+
+func TestS17_InitialTokenFenceDistinguishesPlayIntegrityTokens(t *testing.T) {
+	if !s17AsksFirebaseMessagingToken(`FirebaseMessaging.getInstance().token.addOnSuccessListener {}`) {
+		t.Fatal("initial-token fence missed the FirebaseMessaging token request it owns")
+	}
+	if s17AsksFirebaseMessagingToken(`provider.request(request).token()`) {
+		t.Fatal("Play Integrity Standard token acquisition was misclassified as an FCM token request")
 	}
 }
 

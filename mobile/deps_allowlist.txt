@@ -29,6 +29,11 @@ github.com/Nathandela/swarm/internal/phonecore
 github.com/Nathandela/swarm/internal/protocol/schema
 github.com/Nathandela/swarm/internal/status
 
+# --- registration request canonicalization
+# Stdlib-only, schema-specific RFC 8785/JCS encoding inherited from phonecore. Sharing
+# it with pushgw prevents a second Android-side spelling of the attested request hash.
+github.com/Nathandela/swarm/internal/pushreg
+
 # --- the shared submit-boundary framing rule (ADR-010 Amendment 1 A2)
 # Arrives with internal/phonecore, whose coalescer it was extracted from, so the
 # daemon-side send_input writer applies ONE copy of the r3p rule. Stdlib-only leaf: two

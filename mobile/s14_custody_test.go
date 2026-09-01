@@ -24,7 +24,7 @@ import (
 // RESULT travels Java -> Go (inbound, and that is B8's single permitted crossing) while a
 // PARAMETER travels Go -> Java (outbound, and key material must never take it).
 //
-// So: no exported interface method on this facade may TAKE []byte. The shape that violates it
+// So: no exported interface method on this facade may TAKE an unaudited []byte. The shape that violates it
 // is not hypothetical -- `Seal(plaintext []byte) ([]byte, error)` is the obvious way to express
 // a KEK seam, it is exactly what phonecore.Sealer looks like on the Go side, and reverse-binding
 // it would hand the Java layer the three content-tier private scalars in the clear on every
@@ -34,17 +34,13 @@ import (
 // PB-BIND-4's own guard cannot cover this: entryPoints() is funcs and methods only, so an
 // ifacemethod is invisible to it. That gap is the reason this test exists.
 //
-// RelayTrust IS A NAMED, DELIBERATE EXEMPTION (ADR-016 W2), not a loosening of B8. B8 bans
-// KEY MATERIAL crossing outbound; RelayTrust.VerifyRelayChain's []byte parameter is a
-// PEM-encoded server certificate chain, which "is public by construction" the instant the
-// TLS handshake presents it -- a network observer already saw every byte in the clear.
-// "The direction rule is different from KeyCustody's and the difference is the point"
-// (ADR-016 W2). The exemption is scoped to this ONE interface by name, so any future
-// reverse-bound interface still trips this fence until it is reviewed and named here too.
+// Three methods carry named, non-secret inputs and are audited exactly rather than exempted
+// by interface: RelayTrust.VerifyRelayChain carries a public certificate chain;
+// PushAttestor.Attest carries the fixed registration-request hash; and
+// PushInstallationSigner.Sign carries the canonical public request tuple. The allowlist is
+// scoped to exact method + semantic parameter-name pairs, so another method, or even one of
+// these methods renamed to accept key/seed/KEK material, trips the fence.
 func TestS14_TheCustodySeamIsInboundOnly(t *testing.T) {
-	// relayTrustOutboundChainException is ADR-016 W2's one named carve-out from B8's
-	// inbound-only rule -- see the doc comment above.
-	const relayTrustOutboundChainException = "RelayTrust"
 	src := loadFacade(t)
 
 	found := map[string]string{}
@@ -74,16 +70,23 @@ func TestS14_TheCustodySeamIsInboundOnly(t *testing.T) {
 						}
 						name := ts.Name.Name + "." + mn.Name
 						found[name] = ts.Name.Name
-						if ft.Params == nil || ts.Name.Name == relayTrustOutboundChainException {
+						if ft.Params == nil {
 							continue
 						}
 						for _, p := range ft.Params.List {
-							if isByteSlice(p.Type) {
+							if !isByteSlice(p.Type) {
+								continue
+							}
+							parameter := ""
+							if len(p.Names) == 1 {
+								parameter = p.Names[0].Name
+							}
+							if !auditedReverseByteParameter(name, parameter) {
 								t.Errorf("ADR-007 B8: the reverse-bound %s TAKES []byte. On a "+
 									"reverse-bound interface a parameter travels Go -> Java, so this "+
-									"is an OUTBOUND key crossing -- the direction B8 forbids and B17 "+
-									"declined to widen. The KEK comes IN; key material never goes OUT",
-									name)
+									"is an unaudited outbound channel (%q) that could carry key material. "+
+									"The KEK comes IN; private key material never goes OUT",
+									name, parameter)
 							}
 						}
 					}
@@ -110,6 +113,29 @@ func TestS14_TheCustodySeamIsInboundOnly(t *testing.T) {
 		t.Errorf("ADR-007 B8: KeyCustody carries %d methods (%v), want exactly two -- one per "+
 			"PB-KEY-2 tier. B8 lets the matrix NARROW the crossing and never widen it, so a third "+
 			"verb here is a second crossing", len(custody), custody)
+	}
+}
+
+var auditedReverseByteParameters = map[string]string{
+	"RelayTrust.VerifyRelayChain": "pemChain",
+	"PushAttestor.Attest":         "requestHash",
+	"PushInstallationSigner.Sign": "canonical",
+}
+
+func auditedReverseByteParameter(method, parameter string) bool {
+	return auditedReverseByteParameters[method] == parameter
+}
+
+func TestS14_AuditedOutboundBytesCannotBecomeKeyMaterial(t *testing.T) {
+	for _, tc := range []struct{ method, parameter string }{
+		{"PushAttestor.Attest", "privateKey"},
+		{"PushInstallationSigner.Sign", "seed"},
+		{"RelayTrust.VerifyRelayChain", "kek"},
+		{"UnreviewedSigner.Sign", "canonical"},
+	} {
+		if auditedReverseByteParameter(tc.method, tc.parameter) {
+			t.Errorf("reverse-bound %s(%s []byte) bypassed the key-material fence", tc.method, tc.parameter)
+		}
 	}
 }
 

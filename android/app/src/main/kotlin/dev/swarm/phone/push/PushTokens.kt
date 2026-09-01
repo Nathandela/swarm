@@ -7,7 +7,6 @@ import dev.swarm.phone.PhoneStartup
 import dev.swarm.phone.SwarmApplication
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import swarmmobile.App
 
 /**
@@ -40,10 +39,8 @@ object PushTokens {
     private val registration = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "swarm-push-registration").apply { isDaemon = true }
     }
-    private val applicationContext = AtomicReference<Context>()
     private val retry = PushRegistrationRetry(
         schedule = { delay, work -> registration.schedule(work, delay, TimeUnit.MILLISECONDS) },
-        attempt = { token -> registerNow(applicationContext.get(), token) },
     )
 
     /**
@@ -120,12 +117,15 @@ object PushTokens {
      * followed by another onNewToken.
      */
     fun register(context: Context, token: String) {
-        applicationContext.set(context.applicationContext)
-        retry.submit(token)
+        val appContext = context.applicationContext
+        // Keep the production call edge inside this statically reachable method. The
+        // scheduled callback invokes registerNow directly; it is not hidden in a constructor
+        // callback that source reachability and reviewers cannot connect to onNewToken.
+        retry.submit(token) { latest -> registerNow(appContext, latest) }
     }
 
-    private fun registerNow(context: Context?, token: String): Boolean {
-        if (context == null || token.isBlank()) return false
+    private fun registerNow(context: Context, token: String): Boolean {
+        if (token.isBlank()) return false
         val app = phoneOf(context) ?: return false
         try {
             app.registerPushToken(token)

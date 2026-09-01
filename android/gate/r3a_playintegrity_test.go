@@ -56,6 +56,27 @@ func TestR3A_AndroidKeystoreSignerHasNoPrivateExportSurface(t *testing.T) {
 	}
 }
 
+func TestR3A_PushAuthorityConstructionFailureCannotContainTokenOrPrivateMaterial(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "android", "app", "src", "main", "kotlin", "dev", "swarm", "phone", "PhoneRuntime.kt")
+	runtime := readPlayFile(t, path)
+	body := d0b8FunctionBody(t, runtime, "installPushRegistration", path)
+	for _, forbidden := range []string{
+		".attest(", ".sign(", ".ensurePushRegistration(", ".registerPushToken(",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("construction-only failure scope reaches secret-bearing operation %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"PlayIntegrityAttestor(context)", "AndroidInstallationSigner()", "configurePushRegistration(",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("construction-only failure scope no longer contains %q", want)
+		}
+	}
+}
+
 func readPlayFile(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(path)

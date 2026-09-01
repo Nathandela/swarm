@@ -164,6 +164,9 @@ const pushTokensNote = "PB-PUSH-5's graceful-and-loud degradation, both arms: st
 var pushTokensPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
 	"phone", "push", "PushTokens.kt")
 
+var phoneRuntimeLogPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
+	"phone", "PhoneRuntime.kt")
+
 var qrScannerPath = filepath.Join("android", "app", "src", "main", "kotlin", "dev", "swarm",
 	"phone", "scan", "QrScanner.kt")
 
@@ -176,6 +179,18 @@ var qrScannerPath = filepath.Join("android", "app", "src", "main", "kotlin", "de
 // on the decode path, three lines from a Log.i, which is why the note on that line says what it
 // does NOT print as carefully as what it does.
 var logSinkNotes = []logSinkNote{
+	{
+		File: phoneRuntimeLogPath,
+		Call: `Log.w( TAG, "Play Integrity or Android Keystore push authority unavailable; " + ` +
+			`"the phone remains foreground-only", failure, )`,
+		Note: "Static foreground-only degradation plus a construction-time Throwable. The try " +
+			"block only constructs the Play Integrity manager/preparation task and Android " +
+			"Keystore signer, then installs their reverse interfaces; it does not request a " +
+			"verdict token, sign a request, or register an FCM token. Therefore no attestation " +
+			"token or private key bytes exist on this path. Keystore private material remains " +
+			"non-exportable and is never read by Kotlin; the exception can describe only provider, " +
+			"Keystore, public-key, or local-state construction failure.",
+	},
 	{
 		File: pushTokensPath,
 		Call: `Log.w(TAG, "push token fetch failed; this launch registered no token and the " + ` +
