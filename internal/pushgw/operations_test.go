@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type opsSender struct{}
@@ -82,6 +83,60 @@ func TestAdminReadinessDoesNotFlapOnTransientProviderOutcome(t *testing.T) {
 	}
 }
 
+func TestAdminReadinessFailsAfterRetentionFailure(t *testing.T) {
+	srv := newOpsServer(t, DeploymentReadiness{
+		ProductionSender:   true,
+		ProductionAttestor: true,
+		RequiredConfig:     true,
+		RetentionFreshFor:  time.Hour,
+	}, nil)
+	srv.SetServing(true)
+	srv.SetRetentionWorkerRunning(true)
+	if err := srv.RunRetention(context.Background()); err != nil {
+		t.Fatalf("initial RunRetention: %v", err)
+	}
+	if err := srv.store.db.Close(); err != nil {
+		t.Fatalf("close store to induce sweep failure: %v", err)
+	}
+	if err := srv.RunRetention(context.Background()); err == nil {
+		t.Fatal("RunRetention unexpectedly succeeded against closed store")
+	}
+	w := adminRequest(t, srv, "/readyz")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "retention") {
+		t.Fatalf("readyz after failed retention = %d body=%q, want 503 naming retention", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminReadinessFailsWhenRetentionSuccessBecomesStale(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	srv, err := NewServer(Config{
+		DBPath: filepath.Join(t.TempDir(), "pushgw.db"),
+		Sender: opsSender{},
+		Attest: opsAttestor{},
+		Now:    func() time.Time { return now },
+		Readiness: DeploymentReadiness{
+			ProductionSender:   true,
+			ProductionAttestor: true,
+			RequiredConfig:     true,
+			RetentionFreshFor:  2 * time.Minute,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	srv.SetServing(true)
+	srv.SetRetentionWorkerRunning(true)
+	if err := srv.RunRetention(context.Background()); err != nil {
+		t.Fatalf("RunRetention: %v", err)
+	}
+	now = now.Add(2*time.Minute + time.Second)
+	w := adminRequest(t, srv, "/readyz")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "stale") {
+		t.Fatalf("readyz with stale retention = %d body=%q, want 503 naming stale retention", w.Code, w.Body.String())
+	}
+}
+
 func TestAdminReadinessChecksThePersistedAEADKey(t *testing.T) {
 	srv := newOpsServer(t, DeploymentReadiness{
 		ProductionSender:   true,
@@ -135,6 +190,8 @@ func TestMetricsAndLogsUseRouteTemplatesNeverCallerIdentifiers(t *testing.T) {
 	if !strings.Contains(logs.String(), "operation=address_revoke") {
 		t.Fatalf("request log lacks fixed operation template: %q", logs.String())
 	}
+	unknown := httptest.NewRecorder()
+	srv.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/v99/private", nil))
 
 	metrics := adminRequest(t, srv, "/metrics")
 	if metrics.Code != http.StatusOK {
@@ -145,6 +202,9 @@ func TestMetricsAndLogsUseRouteTemplatesNeverCallerIdentifiers(t *testing.T) {
 	}
 	if !strings.Contains(metrics.Body.String(), `pushgw_requests_total{operation="address_revoke",status="401"} 1`) {
 		t.Fatalf("metrics missing aggregate request outcome: %q", metrics.Body.String())
+	}
+	if !strings.Contains(metrics.Body.String(), `pushgw_requests_total{operation="unknown_version",status="404"} 1`) {
+		t.Fatalf("metrics did not record the actual unknown-version response: %q", metrics.Body.String())
 	}
 	for _, name := range []string{"pushgw_database_bytes", "pushgw_installations", "pushgw_addresses", "pushgw_tombstones"} {
 		if !strings.Contains(metrics.Body.String(), name) {

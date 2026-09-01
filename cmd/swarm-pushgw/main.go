@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -207,6 +208,7 @@ func runServe(ctx context.Context, args []string) error {
 			ProductionSender:   *fcmCredentials != "",
 			ProductionAttestor: false, // Play Integrity builder sets this in its integration wave.
 			RequiredConfig:     false, // Package/project/certificate constants are not wired yet.
+			RetentionFreshFor:  2 * *retentionInterval,
 		},
 		Quotas: pushgw.QuotaConfig{
 			WakesPerAddress:            pushgw.RateLimit{Max: *wakesPerAddr, Window: *wakesPerAddrWindow},
@@ -223,14 +225,13 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = srv.Close() }()
 
-	stopRetention := make(chan struct{})
-	defer close(stopRetention)
 	// Establish one successful retention pass before any listener can become ready;
 	// the worker owns its own running signal after this point.
 	if err := srv.RunRetention(ctx); err != nil {
 		return fmt.Errorf("swarm-pushgw: initial retention sweep: %w", err)
 	}
-	go runRetentionLoop(ctx, srv, *retentionInterval, stopRetention, logger)
+	stopRetention := startRetentionWorker(ctx, srv, *retentionInterval, logger)
+	defer stopRetention()
 
 	var adminLn net.Listener
 	var adminSrv *http.Server
@@ -271,6 +272,10 @@ func runServe(ctx context.Context, args []string) error {
 
 	select {
 	case <-ctx.Done():
+		// Readiness drops before connection draining begins, and the retention
+		// worker is joined before the deferred store close can run.
+		srv.SetServing(false)
+		stopRetention()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		var errs []error
@@ -284,6 +289,8 @@ func runServe(ctx context.Context, args []string) error {
 		}
 		return errors.Join(errs...)
 	case err := <-errCh:
+		srv.SetServing(false)
+		stopRetention()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
@@ -294,6 +301,22 @@ func runServe(ctx context.Context, args []string) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// startRetentionWorker returns an idempotent synchronous stop function. The worker owns
+// its running signal, and every caller that stops it joins it before the store can close.
+func startRetentionWorker(ctx context.Context, srv *pushgw.Server, interval time.Duration, logger *slog.Logger) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		defer close(done)
+		runRetentionLoop(ctx, srv, interval, stop, logger)
+	}()
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
 	}
 }
 
@@ -327,7 +350,9 @@ func runRetentionLoop(ctx context.Context, srv *pushgw.Server, interval time.Dur
 			return
 		case <-t.C:
 			if err := srv.RunRetention(ctx); err != nil {
-				logger.Error("pushgw retention sweep failed", "error", err)
+				if logger != nil {
+					logger.Error("pushgw retention sweep failed", "error", err)
+				}
 			}
 		}
 	}

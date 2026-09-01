@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 )
 
 // AdminHandler exposes process health, production readiness, and aggregate metrics. The
@@ -39,6 +40,16 @@ func (s *Server) handleAdminReady(w http.ResponseWriter, _ *http.Request) {
 	}
 	if !s.retentionWorker.Load() {
 		reasons = append(reasons, "retention worker not running")
+	}
+	if s.retentionFailed.Load() {
+		reasons = append(reasons, "last retention sweep failed")
+	}
+	if freshFor := s.ready.RetentionFreshFor; freshFor > 0 {
+		if !s.retentionOK.Load() {
+			reasons = append(reasons, "retention has not completed successfully")
+		} else if last := time.Unix(s.lastRetentionOK.Load(), 0); s.now().After(last.Add(freshFor)) {
+			reasons = append(reasons, "last successful retention sweep is stale")
+		}
 	}
 	if !s.ready.ProductionSender {
 		reasons = append(reasons, "production sender not configured")

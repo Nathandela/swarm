@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,26 @@ func TestRun_InsecureHTTP_BootsAndShutsDownCleanly(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestRetentionWorkerStopJoinsAndDropsReadinessSignal(t *testing.T) {
+	srv, err := pushgw.NewServer(pushgw.Config{
+		DBPath: dbPath(t),
+		Sender: devSender{},
+		Attest: notImplementedAttestor{},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stop := startRetentionWorker(context.Background(), srv, time.Hour, nil)
+	stop()
+	srv.SetServing(true)
+	w := httptest.NewRecorder()
+	srv.AdminHandler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if !strings.Contains(w.Body.String(), "retention worker not running") {
+		t.Fatalf("joined retention worker still reports running: %q", w.Body.String())
 	}
 }
 

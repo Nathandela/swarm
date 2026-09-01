@@ -80,6 +80,11 @@ type store struct {
 }
 
 func openStore(dbPath, keyPath string) (*store, error) {
+	if _, err := os.Stat(restoreMarkerPath(dbPath)); err == nil {
+		return nil, fmt.Errorf("pushgw: interrupted restore for %s; rerun the restore command before opening the gateway", dbPath)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("pushgw: inspect restore marker: %w", err)
+	}
 	db, err := bolt.Open(dbPath, 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("pushgw: open %s: %w", dbPath, err)

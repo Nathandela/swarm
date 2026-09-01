@@ -54,6 +54,11 @@ type DeploymentReadiness struct {
 	ProductionSender   bool
 	ProductionAttestor bool
 	RequiredConfig     bool
+	// RetentionFreshFor is the maximum age of the last successful local sweep.
+	// Zero disables the age gate for embedded/test servers; the production command
+	// always sets it from its worker interval. Provider reachability is deliberately
+	// absent: a transient Google failure must not flap local readiness.
+	RetentionFreshFor time.Duration
 }
 
 // Server is the gateway's HTTP handler. It is safe for concurrent use.
@@ -80,6 +85,8 @@ type Server struct {
 	serving         atomic.Bool
 	retentionWorker atomic.Bool
 	lastRetentionOK atomic.Int64
+	retentionOK     atomic.Bool
+	retentionFailed atomic.Bool
 	requestMetrics  requestMetrics
 }
 
@@ -165,9 +172,12 @@ func (s *Server) RunRetention(_ context.Context) error {
 	s.regIdem.sweep(now)
 	s.wakeIdem.sweep(now)
 	if err := s.store.runRetention(now.UnixMilli()); err != nil {
+		s.retentionFailed.Store(true)
 		return err
 	}
 	s.lastRetentionOK.Store(now.Unix())
+	s.retentionOK.Store(true)
+	s.retentionFailed.Store(false)
 	return nil
 }
 
@@ -185,6 +195,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status = s.handleHealth(w, r)
 	case !strings.HasPrefix(path, "/v1/"):
 		s.writeErr(w, errVersionUnsupported)
+		status = errVersionUnsupported.status
 	case r.Method == http.MethodPost && path == "/v1/installations":
 		status = s.handleRegister(w, r)
 	case r.Method == http.MethodPost && path == "/v1/wakes":
