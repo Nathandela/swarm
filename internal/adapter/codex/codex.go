@@ -145,12 +145,16 @@ func (codexAdapter) SignalSources() []adapter.SignalSource {
 	return sources
 }
 
-// Resume composes `codex resume <id>`; an empty id resumes nothing.
+// Resume composes `codex resume <id>`; an empty id resumes nothing. Option
+// flags ride along exactly as on a fresh launch (the claude adapter precedent):
+// without them a resumed session silently dropped the source's --sandbox mode
+// (codex restores the model from the thread itself, but not the sandbox).
 func (codexAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	return []string{binary, "resume", spec.ConversationID}, nil
+	argv := []string{binary, "resume", spec.ConversationID}
+	return append(argv, optionFlags(spec.Options)...), nil
 }
 
 // ExtractConversationID recovers the conversation id (Codex's app-server threadId)

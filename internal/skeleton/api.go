@@ -855,6 +855,14 @@ func (a *coreAPI) Launch(spec daemon.LaunchSpec) (persist.Meta, error) {
 			return persist.Meta{}, err
 		}
 	}
+	// ADR-024: stamp the account identity of the credentials this agent will load,
+	// resolved at the same moment as the argv and the env above -- this is the one
+	// point every launch entry passes through, so every session carries the stamp
+	// the auth watcher later compares. "" (no probe, no readable credentials)
+	// gates conservatively: such a session is never auto-recycled.
+	if spec.AuthIdentity == "" {
+		spec.AuthIdentity = CurrentAuthIdentity(spec.AgentType)
+	}
 	resolved, err := composeLaunchSpec(spec, a.endpointID, a.fakeAgentBin, a.core.Get, lookPathIn)
 	if err != nil {
 		return persist.Meta{}, err
@@ -1008,6 +1016,15 @@ func composeLaunchSpec(spec daemon.LaunchSpec, endpointID, fakeAgentBin string, 
 		if err != nil {
 			return daemon.LaunchSpec{}, err
 		}
+		// The source's persisted launch options ride along beneath the request's
+		// own (request keys win), so a resumed session keeps its --model and
+		// --sandbox flags: the TUI's resume request carries ONLY resume_from, and
+		// without this merge the composed argv silently dropped them (observed
+		// live 2026-09-01: a resumed codex fell from its Workspace sandbox to the
+		// thread default). Reserved orchestration keys never chain -- a source
+		// that was itself resumed persisted its own resume_from, and inheriting
+		// it would point the new session at the wrong generation.
+		spec.Options = mergeResumeOptions(spec.Options, srcMeta.LaunchOptions)
 		ad, ok := registry.New(spec.AgentType)
 		if !ok {
 			return daemon.LaunchSpec{}, fmt.Errorf("resume: agent %q has no adapter that can resume", spec.AgentType)
@@ -1354,6 +1371,26 @@ func resolveSourceSession(kind, src, endpointID string, getSource func(local str
 // namespaced id of THIS endpoint, name a session that exists, that has ENDED (not
 // running), and whose agent type matches the requested one. It returns the source
 // local id and meta, or a clear error naming the reason the resume was rejected.
+// mergeResumeOptions folds a resume source's persisted launch options beneath
+// the request's own (request keys win) into a FRESH map -- the caller's map is
+// never mutated. Reserved orchestration keys are never inherited: chaining a
+// source's own resume_from/handoff_from would re-orchestrate a past generation,
+// and "script" is the dev-only fake-agent input.
+func mergeResumeOptions(req, src map[string]string) map[string]string {
+	merged := make(map[string]string, len(src)+len(req))
+	for k, v := range src {
+		switch k {
+		case protocol.OptionResumeFrom, protocol.OptionHandoffFrom, protocol.OptionResumeConversationID, "script":
+			continue
+		}
+		merged[k] = v
+	}
+	for k, v := range req {
+		merged[k] = v
+	}
+	return merged
+}
+
 func validateResumeSource(src, agentType, endpointID string, getSource func(local string) (persist.Meta, bool)) (string, persist.Meta, error) {
 	local, m, err := resolveSourceSession("resume", src, endpointID, getSource)
 	if err != nil {
