@@ -149,11 +149,18 @@ func (codexAdapter) SignalSources() []adapter.SignalSource {
 // flags ride along exactly as on a fresh launch (the claude adapter precedent):
 // without them a resumed session silently dropped the source's --sandbox mode
 // (codex restores the model from the thread itself, but not the sandbox).
+//
+// The update-available startup dialog is suppressed (-c, the documented
+// config-override flag; the key is codex's own ConfigToml
+// check_for_update_on_startup): a resume CONTINUES a conversation -- for the
+// ADR-024 auto-recycle it must come back ready, not parked on a nag waiting
+// for a keypress. An older codex that does not know the key ignores an unknown
+// non-strict override, so the worst case is the dialog it always showed.
 func (codexAdapter) Resume(spec adapter.ResumeSpec) ([]string, error) {
 	if spec.ConversationID == "" {
 		return nil, nil
 	}
-	argv := []string{binary, "resume", spec.ConversationID}
+	argv := []string{binary, "resume", spec.ConversationID, "-c", "check_for_update_on_startup=false"}
 	return append(argv, optionFlags(spec.Options)...), nil
 }
 

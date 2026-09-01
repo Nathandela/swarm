@@ -38,7 +38,8 @@ func TestResumeCarriesTheSourceLaunchOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume rejected: %v", err)
 	}
-	for _, want := range []string{"resume", src.ConversationID, "--model", "gpt-5.6-sol", "--sandbox", "workspace-write"} {
+	for _, want := range []string{"resume", src.ConversationID, "--model", "gpt-5.6-sol", "--sandbox", "workspace-write",
+		"check_for_update_on_startup=false" /* a recycled session comes back ready, never parked on the update nag */} {
 		if !argvContains(got.Argv, want) {
 			t.Errorf("resume argv %v is missing %q (the source's launch option)", got.Argv, want)
 		}
