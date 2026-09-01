@@ -570,6 +570,7 @@ func (p *Pairing) join(base context.Context) {
 		p.finish(nil, err, ctx)
 		return
 	}
+	var stagedPushAddress *phonecore.PushAddress
 	params := pairing.DeviceParams{
 		Static:           static,
 		Secret:           payload.PairingSecret,
@@ -615,6 +616,16 @@ func (p *Pairing) join(base context.Context) {
 		VerifyMachine: func(m pairing.MachinePayload) error {
 			return checkRelayPin(effectiveRelayPin(m), conn.PeerSPKI())
 		},
+		RequestPushBinding: payload.Flags&pairing.QRFlagPushBinding != 0,
+		PreparePushBinding: func(ctx context.Context) (*pairing.PushBinding, func(), error) {
+			binding, revoke, err := app.preparePairingPushBinding(ctx)
+			if binding != nil {
+				var addr phonecore.PushAddress
+				copy(addr[:], binding.PushAddress)
+				stagedPushAddress = &addr
+			}
+			return binding, revoke, err
+		},
 		// PB-PAIR-4's DURABLE COMMIT, and the whole meaning of the acknowledgement this phone
 		// is about to send. It runs on the machine's authenticated acceptance and BEFORE that
 		// frame leaves, because the machine enrols on the frame: a phone that acknowledged
@@ -632,6 +643,11 @@ func (p *Pairing) join(base context.Context) {
 		Commit: func(out *pairing.DeviceOutcome) error {
 			if app.differentMachine(out) {
 				return errDifferentMachine
+			}
+			if stagedPushAddress != nil {
+				if err := app.core.CommitStagedPushBinding(*stagedPushAddress); err != nil {
+					return err
+				}
 			}
 			return app.pin(out)
 		},

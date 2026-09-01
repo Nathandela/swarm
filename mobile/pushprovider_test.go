@@ -38,6 +38,15 @@ type testPlatformInstallationSigner struct {
 	signs  int
 }
 
+func newPlatformTestSigner(t *testing.T) *testPlatformInstallationSigner {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testPlatformInstallationSigner{public: elliptic.Marshal(elliptic.P256(), key.X, key.Y)}
+}
+
 func (s *testPlatformInstallationSigner) PublicKey() []byte { return append([]byte(nil), s.public...) }
 func (s *testPlatformInstallationSigner) Sign([]byte) ([]byte, error) {
 	s.signs++

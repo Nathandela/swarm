@@ -15,11 +15,11 @@ package swarmmobile
 // both retains the named fail-closed path below: it enrolls nothing and remains foreground-only.
 // No fake verdict or exportable fallback authority is minted.
 //
-// WHAT IS DELIBERATELY NOT HERE: THE PAIRING CONVEYANCE. Allocating an address and putting
-// the binding in msg4 is gated
-//     on a machine-side capability signal that does not exist yet (see
-//     pairing.DeviceParams.PushBinding's MIXED-VERSION OBLIGATION); wiring it without that
-//     signal breaks every mixed-version pair.
+// PAIRING CONVEYANCE IS HERE TOO. preparePairingPushBinding runs only after the QR msg1/msg2
+// negotiation authenticated machine support, allocates and stages immediately before msg4,
+// and returns the exact rollback arm pairing.RunDevice invokes on every non-accept outcome.
+// A legacy QR, short code, old machine, unregistered phone, or build without the two platform
+// authorities stays on the byte-compatible foreground path and allocates nothing.
 //
 // The gateway URL crosses on Config, exactly like the relay URL: the phone core has no
 // durable field for either, and the Android side supplies both at construction.
@@ -28,15 +28,21 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
+	"github.com/Nathandela/swarm/internal/protocol/schema"
+	"github.com/Nathandela/swarm/internal/remote/pairing"
 )
 
 // pushRegisterTimeout bounds one registration round trip. Both callers are background
 // callbacks with no user present, so the bound exists to stop a dead radio pinning an
 // Android thread, not to make anybody wait less.
-const pushRegisterTimeout = 30 * time.Second
+const (
+	pushRegisterTimeout       = 30 * time.Second
+	pushPairingCleanupTimeout = 10 * time.Second
+)
 
 var (
 	// errNoPushGateway is a build with no gateway endpoint configured. It is an ERROR and
@@ -165,6 +171,87 @@ func (a *App) currentPushToken() (string, error) {
 			errors.New("swarmmobile: no push token has been reported to this App"))
 	}
 	return a.pushToken, nil
+}
+
+// preparePairingPushBinding is the phone half of the negotiated msg4 extension. It is
+// deliberately called lazily by pairing.RunDevice immediately before msg4: allocating
+// before the SAS gate would release a live public address for every abandoned scan.
+//
+// A configured URL is not enough. Both Android production authorities and an accepted
+// installation must already exist, otherwise this phone is honestly foreground-only and
+// returns a nil binding without touching the gateway. Every allocation is paired with a
+// sealed compensation marker before it can leave the process.
+func (a *App) preparePairingPushBinding(ctx context.Context) (*pairing.PushBinding, func(), error) {
+	core, err := a.ready()
+	if err != nil {
+		return nil, nil, err
+	}
+	a.mu.Lock()
+	url := a.pushGatewayURL
+	productionProviders := a.pushAttestor != nil && a.pushSigner != nil
+	a.mu.Unlock()
+	if url == "" || !productionProviders || core.PushInstallationID() == "" {
+		return nil, nil, nil
+	}
+	client, err := a.pushGatewayClient(url)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// A killed earlier ceremony may have left an allocation whose key was already
+	// erased locally. Clear those obligations before minting another address so repeated
+	// failures cannot accumulate live public objects.
+	for _, pending := range core.PendingPushBindingRevocations() {
+		if err := client.RevokeAddress(ctx, pending); err != nil {
+			return nil, nil, err
+		}
+		if err := core.CompleteStagedPushRevoke(pending); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	alloc, err := client.AllocateAddress(ctx, core.PushInstallationID())
+	if err != nil {
+		return nil, nil, err
+	}
+	wakeKey, err := phonecore.NewPairingWakeKey()
+	if err != nil {
+		revokePairingAllocation(client, alloc.Address)
+		return nil, nil, err
+	}
+	if err := core.StagePushBinding(alloc.Address, wakeKey); err != nil {
+		revokePairingAllocation(client, alloc.Address)
+		return nil, nil, err
+	}
+
+	binding := &pairing.PushBinding{
+		WakeKey:                 append([]byte(nil), wakeKey[:]...),
+		PushAddress:             append([]byte(nil), alloc.Address[:]...),
+		SubmitCapability:        alloc.SubmitCapability,
+		MachineRevokeCapability: alloc.MachineRevokeCapability,
+		CapabilityRecordVersion: schema.CurrentCapabilityRecordVersion,
+	}
+	var once sync.Once
+	rollback := func() {
+		once.Do(func() {
+			// Erase first and durably retain the revoke obligation. The network leg is
+			// detached from the pairing context because that context is normally already
+			// cancelled on exactly the paths that call this rollback.
+			_ = core.AbandonStagedPushBinding(alloc.Address)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
+			defer cancel()
+			if err := client.RevokeAddress(cleanupCtx, alloc.Address); err == nil {
+				_ = core.CompleteStagedPushRevoke(alloc.Address)
+			}
+		})
+	}
+	return binding, rollback, nil
+}
+
+func revokePairingAllocation(client *phonecore.GatewayClient, addr phonecore.PushAddress) {
+	ctx, cancel := context.WithTimeout(context.Background(), pushPairingCleanupTimeout)
+	defer cancel()
+	_ = client.RevokeAddress(ctx, addr)
 }
 
 // pushGatewayClient returns the one client this App uses, building it on first need. It is
