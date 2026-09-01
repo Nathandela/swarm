@@ -161,3 +161,29 @@ func TestPRContainerGatesCannotPublish(t *testing.T) {
 		}
 	}
 }
+
+func TestDigestManifestIsAttachedToTheDurableGitHubRelease(t *testing.T) {
+	wf := parseWorkflow(t, "../../.github/workflows/release.yml")
+	publish, ok := wf.Jobs["publish"]
+	if !ok {
+		t.Fatal("release workflow has no publish job")
+	}
+
+	download, goreleaser, upload := -1, -1, -1
+	for i, s := range publish.Steps {
+		switch {
+		case strings.HasPrefix(s.Uses, "actions/download-artifact") && input(s, "name") == "container-images-${{ github.ref_name }}":
+			download = i
+		case strings.Contains(s.Run, "goreleaser release"):
+			goreleaser = i
+		case strings.Contains(s.Run, "gh release upload") && strings.Contains(s.Run, "container-images.json"):
+			upload = i
+		}
+	}
+	if download < 0 || goreleaser < 0 || upload < 0 {
+		t.Fatalf("durable manifest wiring: download=%d goreleaser=%d release-upload=%d", download, goreleaser, upload)
+	}
+	if !(download < goreleaser && goreleaser < upload) {
+		t.Fatalf("manifest ordering must be download -> create release -> attach manifest; got %d -> %d -> %d", download, goreleaser, upload)
+	}
+}
