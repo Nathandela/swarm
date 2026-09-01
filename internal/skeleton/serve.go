@@ -215,6 +215,11 @@ type Daemon struct {
 	// Close. nil in a test Daemon literal, so every use is nil-guarded like d.eng/d.api.
 	sup *supervisor
 
+	// authw is the ADR-024 auth watcher (authwatch.go): it notices a provider
+	// re-login and recycles the sessions whose processes still hold the previous
+	// account's tokens. nil in a test Daemon literal; every use is nil-guarded.
+	authw *authWatcher
+
 	// drains holds the per-session hook-spool drain loops (hookdrainloop.go): the
 	// production caller of HookDrainer, started from registerSession and stopped by
 	// endSession/Close.
@@ -340,6 +345,9 @@ func Serve(cfg Config) (*Daemon, error) {
 		if !assembled {
 			if d.sup != nil {
 				d.sup.close() // its delivery goroutine, once started, must not outlive a failed assembly
+			}
+			if d.authw != nil {
+				d.authw.close() // same rule: no recycle may outlive a failed assembly
 			}
 			d.api.close()
 			_ = core.Close()
@@ -487,6 +495,14 @@ func Serve(cfg Config) (*Daemon, error) {
 	// fan out no event.
 	d.srv.SetSupervisionPendingFunc(d.sup.pending)
 	d.api.SetSupervisionPendingFunc(d.sup.pending)
+
+	// ADR-024: the auth watcher, over the same core surface the TUI's manual
+	// Ctrl+X + r gesture drives (Kill / resume-Launch / Delete through coreAPI,
+	// which resolves env and argv for every launch uniformly). Its first tick
+	// baselines the current credentials identity, or resumes the sweep a prior
+	// incarnation persisted.
+	d.authw = newAuthWatcher(cfg.StateDir, epID, AuthProbedAgents(), CurrentAuthIdentity,
+		d.api.List, d.core.Get, d.api.Kill, d.api.Launch, d.api.Delete)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
@@ -1046,6 +1062,9 @@ func (d *Daemon) Close() error {
 		d.drainPendingInteractions() // flush anything the append floor is still holding (below)
 		if d.sup != nil {
 			d.sup.close() // no supervision send may start once the Server below is closing
+		}
+		if d.authw != nil {
+			d.authw.close() // no recycle kill/launch may start once the core is closing
 		}
 		_ = d.core.Close() // stops accepting new connections; releases the lock
 		_ = d.srv.Close()  // disconnects clients; drains the per-connection loops
