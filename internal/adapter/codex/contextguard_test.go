@@ -128,3 +128,37 @@ func FuzzContextGuardNotificationTotal(f *testing.F) {
 		_, _ = contextGuardSource(t).ParseContextGuardNotification(raw, thread)
 	})
 }
+
+func TestContextGuardContinuationShapeAndFence(t *testing.T) {
+	// ADR-023 amendment 2: the continuation is an ORDINARY turn/start sent
+	// only after the guard's own compaction verifiably completed (the native
+	// queue was live-tested and rejected: unrevokable while the compaction
+	// runs), fenced to the exact live-gated versions.
+	s := contextGuardSource(t)
+	continuer, ok := adapter.AsContextGuardContinuer(s.(adapter.Adapter))
+	if !ok {
+		t.Fatal("codex does not expose the ContextGuard continuer")
+	}
+	method, params, ok := continuer.ContextGuardContinuation("0.151.0", "thread-1", "continue the task")
+	if !ok || method != "turn/start" {
+		t.Fatalf("continuation = %q, %v; want turn/start", method, ok)
+	}
+	if params["threadId"] != "thread-1" {
+		t.Fatalf("continuation params = %+v; want the thread identity", params)
+	}
+	input, _ := params["input"].([]map[string]any)
+	if len(input) != 1 || input[0]["type"] != "text" || input[0]["text"] != "continue the task" {
+		t.Fatalf("continuation input = %+v; want one text item carrying the prompt", params["input"])
+	}
+	// Fence: only live-gated versions; and degenerate identity never sends.
+	for _, version := range []string{"0.150.7", "0.151.3", "0.152.0"} {
+		if _, _, ok := continuer.ContextGuardContinuation(version, "thread-1", "x"); ok {
+			t.Fatalf("version %s exposed a continuation without live-gate evidence", version)
+		}
+	}
+	for _, blank := range [][2]string{{"", "x"}, {"thread", ""}} {
+		if _, _, ok := continuer.ContextGuardContinuation("0.151.0", blank[0], blank[1]); ok {
+			t.Fatalf("degenerate continuation identity %v accepted", blank)
+		}
+	}
+}

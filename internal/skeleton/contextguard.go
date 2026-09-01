@@ -58,7 +58,24 @@ const (
 	// the outcome is genuinely unknown and the machine holds rather than wedging
 	// silently -- and rather than gating composer sends forever.
 	contextGuardConfirmTimeout = 5 * time.Minute
+	// contextGuardContinuationTimeout bounds the continuation's turn/start.
+	// It is an ordinary request (live-measured well under a second); a
+	// provider that cannot take it promptly loses the continuation, never
+	// blocks the worker.
+	contextGuardContinuationTimeout = 10 * time.Second
+	// contextGuardContinuationFreshness bounds the latched wait: a
+	// continuation that could not be sent within this window of observing the
+	// completed compaction is forfeited -- stale context maintenance is not a
+	// message to deliver hours later.
+	contextGuardContinuationFreshness = 2 * time.Minute
 )
+
+// contextGuardContinuationPrompt is the daemon-authored message queued behind
+// the guard's own compaction (ADR-023 amendment 2). The compaction presents
+// itself as mid-task context maintenance and the flow resumes; the final
+// clause protects a session that crossed the threshold after finishing its
+// task and was merely waiting for review.
+const contextGuardContinuationPrompt = "This session's context was automatically compacted by swarm to keep the task focused. Continue the task exactly where you left off. If the task was already complete and you were waiting for review, say so briefly and do not start new work."
 
 // contextGuardDispatchConn is the narrow provider surface a dispatch needs: the
 // write-boundary call whose beforeWrite error PROVABLY precedes any bytes (the
@@ -68,6 +85,11 @@ const (
 // simply never dispatches.
 type contextGuardDispatchConn interface {
 	CallAtWriteBoundary(ctx context.Context, method string, params, out any, beforeWrite func() error, afterWrite func()) error
+	// Call is the plain request path, used for the continuation's turn/start
+	// (ADR-023 amendment 2): an ordinary message sent only at latched from the
+	// lane's revalidated head, so it needs no write-boundary ceremony -- a
+	// duplicate is impossible (one-shot armed flag) and a failure forfeits.
+	Call(ctx context.Context, method string, params, out any) error
 }
 
 // errContextGuardDispatchRefused aborts the provider call from beforeWrite when
@@ -120,6 +142,27 @@ type contextGuardSession struct {
 	// confirmTimeout overrides contextGuardConfirmTimeout in tests; zero means
 	// the production value.
 	confirmTimeout time.Duration
+	// continuation shapes the post-compaction enqueue (nil = no continuation:
+	// observe-only guards, non-continuer adapters, unfenced versions).
+	// attended answers "is anyone at the controls right now" -- an attended
+	// session gets no queued surprise turn; the human continues themselves.
+	continuation func(threadID, text string) (method string, params map[string]any, ok bool)
+	attended     func() bool
+	// continuationArmed is worker-goroutine-owned: set when THIS guard's own
+	// compact crossed the write boundary, consumed by the single send attempt
+	// for that cycle. A native or manual compaction never arms it, so the
+	// guard never continues work it did not interrupt. Ambiguity disarms: a
+	// hold or any exit from the compaction cycle without provider evidence
+	// forfeits the continuation rather than risking a duplicate or misplaced
+	// turn. continuationLatchSeen bounds the latched wait: a continuation
+	// that could not be sent shortly after the compaction completed (fold
+	// lag, an intervening turn) is stale context maintenance, not a message
+	// to deliver hours later.
+	continuationArmed     bool
+	continuationLatchSeen time.Time
+	// continuationFreshness overrides contextGuardContinuationFreshness in
+	// tests; zero means the production value.
+	continuationFreshness time.Duration
 
 	queueMu          sync.Mutex
 	stateMu          sync.Mutex
@@ -254,6 +297,15 @@ func (d *Daemon) registerContextGuardBackend(local string, backend *sessionBacke
 		s.quiet = func() bool { return d.contextGuardQuiet(local) }
 		s.uncertain = func() bool { return d.composerLaneFor(local).uncertainNow() }
 		s.current = isCurrent
+		// The continuation seams (ADR-023 amendment 2) ride the same wiring:
+		// only a live automatic backend ever continues, and only when the
+		// adapter's version-fenced continuer exists for this version.
+		if continuer, ok := adapter.AsContextGuardContinuer(ad); ok {
+			s.continuation = func(threadID, text string) (string, map[string]any, bool) {
+				return continuer.ContextGuardContinuation(version, threadID, text)
+			}
+			s.attended = func() bool { return d.anyControlled(local) }
+		}
 	}
 	if !d.contextGuards.registerCurrentWired(local, key, source, action, isCurrent, wire) || !isCurrent() {
 		d.contextGuards.unregister(local, key)
@@ -659,6 +711,10 @@ func (s *contextGuardSession) run() {
 			return
 		case <-s.wake:
 			s.drain()
+			// The continuation check precedes promotion: a compaction observed
+			// to start (or already latched) enqueues the task's resumption
+			// before any new pressure decision is made.
+			s.maybeContinue()
 			// Promotion runs after every drain: a fresh usage sample may have
 			// crossed the threshold while the session was already quiet, or a
 			// status edge (quietPending) may have arrived with nothing queued.
@@ -668,6 +724,7 @@ func (s *contextGuardSession) run() {
 			// Evidence already queued outranks the timer: a completion that
 			// arrived but was not yet drained must latch, not hold.
 			s.drain()
+			s.maybeContinue()
 			s.confirmDeadlineExpired()
 		}
 		// The confirmation deadline is armed exactly while the machine waits on
@@ -732,6 +789,121 @@ func (s *contextGuardSession) compactionInFlight() bool {
 	}
 }
 
+// maybeContinue advances the one-shot continuation for a compaction THIS
+// guard dispatched (ADR-023 amendment 2). It runs on the worker goroutine
+// after every drain. The continuation is an ordinary turn/start and may be
+// sent ONLY once the compaction has verifiably completed (latched): sent any
+// earlier it would cancel the running compaction (the 2026-09-01 gate
+// evidence), and the provider's native queue was investigated and REJECTED
+// because a queued message cannot be revoked while the compaction runs -- a
+// human arriving in that window would still receive a surprise turn. While
+// the cycle is in flight the attempt waits; at latched it forfeits to an
+// attendant human, waits out folded-status lag (latched is stable and status
+// edges wake this worker), or fires exactly once; any other state is a
+// forfeit -- a stalled task the owner can nudge beats a misplaced turn.
+func (s *contextGuardSession) maybeContinue() {
+	if !s.continuationArmed || s.continuation == nil || s.conn == nil {
+		return
+	}
+	select {
+	case <-s.stop:
+		s.continuationArmed = false
+		return
+	default:
+	}
+	s.stateMu.Lock()
+	state := s.machine.State
+	s.stateMu.Unlock()
+	switch state {
+	case contextguard.StateExecuting, contextguard.StateAwaitingConfirmation, contextguard.StateProviderCompacting:
+		return // the compaction has not verifiably completed; keep waiting
+	case contextguard.StateLatched:
+		if s.continuationLatchSeen.IsZero() {
+			s.continuationLatchSeen = time.Now()
+		}
+		if s.attended != nil && s.attended() {
+			s.continuationArmed = false
+			log.Printf("skeleton: context guard continuation for session %s forfeited: someone is at the controls", s.id)
+			return
+		}
+		freshness := s.continuationFreshness
+		if freshness <= 0 {
+			freshness = contextGuardContinuationFreshness
+		}
+		if time.Since(s.continuationLatchSeen) > freshness {
+			// The moment passed: a continuation that could not go out shortly
+			// after the compaction is stale, not a message for later.
+			s.continuationArmed = false
+			log.Printf("skeleton: context guard continuation for session %s forfeited: the post-compaction window passed", s.id)
+			return
+		}
+		if s.quiet != nil && !s.quiet() {
+			return // fold lag or fresh activity; latched keeps the attempt armed
+		}
+		s.continuationArmed = false
+		s.sendContinuation()
+	default:
+		s.continuationArmed = false // ambiguity or cycle exit: forfeit, never guess
+	}
+}
+
+// sendContinuation starts the resumption turn from the composer lane's head,
+// with the dispatch's own last-instant revalidation discipline: a Stop
+// admitted since queueing, an attach, an unresolved composer outcome, or a
+// replaced backend forfeits. One shot -- whatever happens here, there is no
+// retry.
+func (s *contextGuardSession) sendContinuation() {
+	lane := s.lane()
+	if lane == nil {
+		return
+	}
+	entered := make(chan uint64, 1)
+	go func() { entered <- lane.enter() }()
+	var admittedBarrier uint64
+	select {
+	case admittedBarrier = <-entered:
+		select {
+		case <-s.stop:
+			lane.leave()
+			return
+		default:
+		}
+	case <-s.stop:
+		go func() {
+			<-entered
+			lane.leave()
+		}()
+		return
+	}
+	defer lane.leave()
+	// quiet() already folds in the unattended rule; barrier, uncertainty, and
+	// backend identity mirror the dispatch's queue-head revalidation.
+	if lane.barrierChanged(admittedBarrier) || (s.quiet != nil && !s.quiet()) ||
+		(s.uncertain != nil && s.uncertain()) || (s.current != nil && !s.current()) {
+		log.Printf("skeleton: context guard continuation for session %s forfeited at the lane head", s.id)
+		return
+	}
+	method, params, ok := s.continuation(s.key.ProviderThreadID, contextGuardContinuationPrompt)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), contextGuardContinuationTimeout)
+	defer cancel()
+	go func() {
+		select {
+		case <-s.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	var res json.RawMessage
+	if err := s.conn.Call(ctx, method, params, &res); err != nil {
+		log.Printf("skeleton: context guard continuation for session %s not sent: %v (the task may need a manual nudge)", s.id, err)
+		return
+	}
+	log.Printf("skeleton: context guard sent the task continuation for session %s", s.id)
+}
+
 // confirmDeadlineExpired converts a silent wedge into an honest hold: the
 // action was written, its confirmation never arrived within the deadline, so
 // the outcome is unknown (D5: never resent). Re-checked under the current
@@ -741,6 +913,7 @@ func (s *contextGuardSession) confirmDeadlineExpired() {
 		return
 	}
 	s.apply(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
+	s.continuationArmed = false // the hold takes the continuation with it, immediately
 	log.Printf("skeleton: context guard compaction for session %s unconfirmed after %s; holding", s.id, contextGuardConfirmTimeout)
 }
 
@@ -992,6 +1165,11 @@ func (s *contextGuardSession) dispatchCompaction() {
 		func() {
 			wrote = true
 			s.applyReturning(contextguard.Event{Kind: contextguard.EventActionWritten, At: time.Now(), Key: s.key}, nil)
+			// Arm the continuation: only a compact THIS guard wrote resumes the
+			// task afterwards (afterWrite runs on the worker goroutine, which
+			// also consumes the flag). A native or manual compaction never arms.
+			s.continuationArmed = true
+			s.continuationLatchSeen = time.Time{}
 			leaveLane() // bytes are on the wire; the reply wait happens outside the lane
 		},
 	)
@@ -1013,11 +1191,16 @@ func (s *contextGuardSession) dispatchCompaction() {
 		// definitive completion must latch, never be discarded into a false
 		// unknown. Only a machine still waiting on the write's outcome holds.
 		s.drain()
+		// The internal drain above may be the LAST activity this cycle sees (a
+		// stalled reply whose completion was already queued): the continuation
+		// check cannot wait for a wake that may never come.
+		s.maybeContinue()
 		s.stateMu.Lock()
 		waiting := s.machine.State == contextguard.StateExecuting || s.machine.State == contextguard.StateAwaitingConfirmation
 		s.stateMu.Unlock()
 		if waiting {
 			s.applyReturning(contextguard.Event{Kind: contextguard.EventActionOutcomeUnknown, At: time.Now(), Key: s.key}, nil)
+			s.continuationArmed = false // the hold takes the continuation with it, immediately
 			log.Printf("skeleton: context guard dispatch outcome unknown for session %s: %v", s.id, err)
 		}
 		// provider_compacting: the confirmation deadline arbitrates; latched:

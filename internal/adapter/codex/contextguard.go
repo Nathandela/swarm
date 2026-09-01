@@ -178,6 +178,27 @@ var liveGatedContextGuardVersions = map[string]bool{
 	"0.151.0": true, // 2026-09-01 live gates (both negative; daemon-side enforcement)
 }
 
+// ContextGuardContinuation shapes the post-compaction continuation (ADR-023
+// amendment 2) as an ordinary turn/start -- the same request every composer
+// send makes, carrying the daemon-authored resumption text. It is sent ONLY
+// after the guard's own compaction has verifiably completed (latched), from
+// the composer lane's head, fully revalidated; sending it any earlier would
+// cancel the running compaction (the 2026-09-01 gate evidence). The native
+// thread/queue/add alternative was live-verified and REJECTED: a queued
+// submission defers behind the compaction but cannot be revoked while it
+// runs, so a human arriving mid-compaction would still receive the turn
+// (docs/design/context-guard-continuation.md). Fenced to the exact
+// live-gated versions like the action itself.
+func (codexAdapter) ContextGuardContinuation(version, threadID, text string) (string, map[string]any, bool) {
+	if !liveGatedContextGuardVersion(version) || threadID == "" || text == "" {
+		return "", nil, false
+	}
+	return "turn/start", map[string]any{
+		"threadId": threadID,
+		"input":    []map[string]any{{"type": "text", "text": text}},
+	}, true
+}
+
 func liveGatedContextGuardVersion(version string) bool {
 	return liveGatedContextGuardVersions[version]
 }

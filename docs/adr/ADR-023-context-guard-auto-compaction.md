@@ -216,6 +216,49 @@ Known limitation, accepted for this milestone: a hold (`outcome_unknown_hold`,
 instance. There is no owner-facing acknowledge-and-rearm operation yet; one
 transient unknown outcome retires the guard for that session instance.
 
+## Amendment 2 (2026-09-01): the compaction continues the task
+
+An automatic compaction on an unattended working session must not strand the
+flow: the owner's intent is context maintenance mid-task, not a stop. Two
+mechanisms were live-verified (`docs/design/context-guard-continuation.md`).
+Codex's native `thread/queue/add` defers behind a running compaction and
+auto-starts afterwards — but a queued message is UNREVOKABLE while the
+compaction runs, so a human attaching or stopping in that ~20-second window
+would still receive the turn; the adversarial review rejected it. The shipped
+mechanism is daemon-side:
+
+1. **Arms a continuation only for its own compact**, at the write boundary. A
+   compaction the daemon did not write never earns one.
+2. **Sends an ordinary `turn/start` at `latched` only** — never while the
+   compaction runs (a turn mid-compaction cancels it; gate evidence). The
+   attempt is bounded by a two-minute freshness window from observing the
+   completed compaction (stale maintenance is not a message for later) and
+   rides the composer lane with the dispatch's own last-instant
+   revalidation: unattended, quiet, Stop barrier unchanged, no uncertain
+   composer outcome, backend identity current, worker not stopping. Any
+   failed check forfeits.
+3. **One shot, ever, per cycle.** The armed flag is consumed by the single
+   attempt; a send failure or ambiguity forfeits (a stalled task the owner
+   can nudge beats a duplicated surprise turn); every hold transition disarms
+   immediately; and a crash forfeits structurally — recovery holds, and a
+   held cycle can never re-observe the arming edge, so at-most-once needs no
+   durable marker.
+4. **The prompt is daemon-authored and fixed**: it names the compaction as
+   automatic mid-task maintenance, instructs the agent to continue exactly
+   where it left off, and tells an already-finished session to say so briefly
+   rather than start new work.
+
+Accepted residual: a manual/native compaction racing the daemon's own write
+can merge into one latch and receive the continuation — the manual compactor
+is attached or phone-active and therefore forfeits via the unattended rule in
+every reachable case; a foreign API client on the same socket is outside the
+product's threat model, as with the dispatch itself.
+
+The continuation is integral to automatic dispatch in this version — no
+separate setting — and rides the same exact-version allowlist. `compact_prompt`
+(codex's own summarizer-prompt config) stays user-owned per C-4; owners who
+want every compaction framed can set it at launch themselves.
+
 ## Alternatives Considered
 
 - **Type `/compact` into every PTY.** Rejected: provider commands differ and input can be dirty,
