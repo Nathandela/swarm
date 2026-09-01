@@ -177,7 +177,12 @@ import (
 // caller can manufacture this authenticated authority through Save or Mutate. The version bump
 // makes downgrade fail closed instead of silently dropping the predicate that decides whether a
 // restored session may expose chat or terminal control.
-const StateSchemaVersion = 17
+//
+// v18 adds pending_publications, the crash-safe exact-envelope journal for composer sends and
+// interaction reads. It lives inside content_kept, so a v17 build would silently drop it on its
+// next Save and lose operations whose relay delivery is unknown. That is a user-visible lost send,
+// so downgrade must fail closed rather than decode the rest of the blob.
+const StateSchemaVersion = 18
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -318,12 +323,13 @@ type State struct {
 	DiscardRecoveryToken      string
 	// RosterRevision advances whenever a contiguous authoritative journal reseed commits.
 	// Unlike a row count or cursor it proves that even an empty roster at cursor zero arrived.
-	RosterRevision uint64
-	Sessions       []CachedSession           // journal-derived session model
-	Snapshots      []Snapshot                // server-rendered terminal grids, latest per session
-	PendingOps     []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
-	OpOutcomes     map[string]schema.Control // durable operation outcomes, keyed by operation id
-	Stale          map[Bucket]bool           // buckets whose content may not be trusted until reconciled
+	RosterRevision      uint64
+	Sessions            []CachedSession           // journal-derived session model
+	Snapshots           []Snapshot                // server-rendered terminal grids, latest per session
+	PendingOps          []QueuedOp                // offline mutating ops awaiting replay (R-PHC.4)
+	PendingPublications []PendingPublication      // crash-safe exact-envelope publications awaiting settlement
+	OpOutcomes          map[string]schema.Control // durable operation outcomes, keyed by operation id
+	Stale               map[Bucket]bool           // buckets whose content may not be trusted until reconciled
 	// StaleStreams are the REPAIR CHANNELS whose content may not be trusted (PB-SYNC-1).
 	// It is a second set rather than a view over Stale because marking and clearing happen
 	// at different granularities and one bit cannot carry both: a gap in the SHARED bucket
@@ -455,6 +461,7 @@ func (s State) clone() State {
 	s.Snapshots = slices.Clone(s.Snapshots)
 	s.Items = slices.Clone(s.Items)
 	s.PendingOps = slices.Clone(s.PendingOps)
+	s.PendingPublications = clonePendingPublications(s.PendingPublications)
 	s.OpOutcomes = maps.Clone(s.OpOutcomes)
 	s.Stale = maps.Clone(s.Stale)
 	s.StaleStreams = maps.Clone(s.StaleStreams)
@@ -671,12 +678,14 @@ type wakeContainer struct {
 
 // keptContainer is the plaintext of stateFile.ContentKept: content-tier state a writer that
 // cannot OPEN the tier must carry verbatim. The replay-guard coordinates are not decrypted content -- they are the
-// record of how far the streams have got -- and PendingOps is user content that no
-// machine-sealed frame produced, so PB-KEY-7's purge leaves all three.
+// record of how far the streams have got -- and PendingOps/PendingPublications are user
+// content that no machine-sealed frame produced, so they belong to the kept half rather than
+// the decrypted machine-cache half.
 type keptContainer struct {
-	SendSeq    []sendSeqRecord `json:"send_seq,omitempty"`
-	Receive    []receiveRecord `json:"receive,omitempty"`
-	PendingOps []QueuedOp      `json:"pending_ops,omitempty"`
+	SendSeq             []sendSeqRecord      `json:"send_seq,omitempty"`
+	Receive             []receiveRecord      `json:"receive,omitempty"`
+	PendingOps          []QueuedOp           `json:"pending_ops,omitempty"`
+	PendingPublications []PendingPublication `json:"pending_publications,omitempty"`
 }
 
 // purgeableContainer is the plaintext of stateFile.ContentPurgeable: the decrypted caches
@@ -867,6 +876,9 @@ func (s *fileStore) Save(st State) error {
 // it so changing s.st and persisting the change are one critical section rather than an
 // unlock/relock window in which an old snapshot can restore the retired generation.
 func (s *fileStore) saveLocked(st State) error {
+	if err := validatePendingPublications(st.PendingPublications); err != nil {
+		return fmt.Errorf("pending publications: %w", err)
+	}
 	// A snapshot taken BEFORE a purge belongs to a writer that has not noticed it, and round
 	// 2's "a real key always wins" makes its stale keys win over the purge. Re-apply what the
 	// purge destroyed instead: the rest of the snapshot still lands, because refusing the
@@ -953,9 +965,9 @@ func (s *fileStore) saveLocked(st State) error {
 // write the previous blob back and the caller's coordinate would simply vanish, which is the
 // class of defect PB-STATE-9 was written to close one level down. See ErrContentTierLocked.
 func (s *fileStore) refuseUnreadableContentWrite(st State) error {
-	if !s.kept.opened && (len(st.SendSeq) > 0 || len(st.Receive) > 0 || len(st.PendingOps) > 0) {
-		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s) and %d pending op(s) "+
-			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps))
+	if !s.kept.opened && (len(st.SendSeq) > 0 || len(st.Receive) > 0 || len(st.PendingOps) > 0 || len(st.PendingPublications) > 0) {
+		return fmt.Errorf("%w: %d send-seq ceiling(s), %d receive high-water(s), %d pending op(s) and %d pending publication(s) "+
+			"cannot be recorded", ErrContentTierLocked, len(st.SendSeq), len(st.Receive), len(st.PendingOps), len(st.PendingPublications))
 	}
 	if !s.purgeable.opened && (len(st.Sessions) > 0 || len(st.Snapshots) > 0 || len(st.OpOutcomes) > 0 || len(st.Items) > 0) {
 		return fmt.Errorf("%w: %d session(s), %d snapshot(s), %d outcome(s) and %d transcript item(s) cannot be recorded",
@@ -1000,7 +1012,7 @@ func wakeContainerOf(st State) wakeContainer {
 }
 
 func keptContainerOf(st State) keptContainer {
-	c := keptContainer{PendingOps: st.PendingOps}
+	c := keptContainer{PendingOps: st.PendingOps, PendingPublications: st.PendingPublications}
 	for epoch, ceiling := range st.SendSeq {
 		c.SendSeq = append(c.SendSeq, sendSeqRecord{Epoch: epoch, Ceiling: ceiling})
 	}
@@ -1050,7 +1062,7 @@ func purgeableContainerOf(st State) purgeableContainer {
 func dropContentMaterial(st State) State {
 	st.Keys.ContentKey = crypto.ContentKey{}
 	st.Sessions, st.Snapshots, st.OpOutcomes, st.Items = nil, nil, nil, nil
-	st.SendSeq, st.Receive, st.PendingOps = nil, nil, nil
+	st.SendSeq, st.Receive, st.PendingOps, st.PendingPublications = nil, nil, nil, nil
 	return st
 }
 
@@ -1280,12 +1292,18 @@ func (s *fileStore) adoptKeptContainer(st *State, plain []byte) error {
 	if err := json.Unmarshal(plain, &c); err != nil {
 		return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, s.path, err)
 	}
+	if err := validatePendingPublications(c.PendingPublications); err != nil {
+		return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, s.path, err)
+	}
 	applySendSeq(st, c.SendSeq)
 	if err := applyReceive(st, c.Receive); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrCorruptState, s.path, err)
 	}
 	if len(st.PendingOps) == 0 {
 		st.PendingOps = c.PendingOps
+	}
+	if len(st.PendingPublications) == 0 {
+		st.PendingPublications = clonePendingPublications(c.PendingPublications)
 	}
 	s.kept.opened = true
 	return nil
@@ -1650,6 +1668,10 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 			return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 		}
 		st.PendingOps = c.PendingOps
+		if err := validatePendingPublications(c.PendingPublications); err != nil {
+			return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, path, err)
+		}
+		st.PendingPublications = clonePendingPublications(c.PendingPublications)
 	}
 
 	tier, plain, err = s.openContentContainer(f.ContentPurgeable, path, "decrypted caches")

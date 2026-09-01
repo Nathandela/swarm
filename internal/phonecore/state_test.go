@@ -55,6 +55,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/protocol"
 	"github.com/Nathandela/swarm/internal/remote/crypto"
@@ -107,11 +108,24 @@ func fullState() State {
 		Sessions:                  []CachedSession{{SessionID: "m1/s1", Group: status.Group("running"), Present: true}},
 		Snapshots:                 []Snapshot{{Session: "m1/s1", Lines: []string{"$ ls"}, Cols: 80, Rows: 24}},
 		PendingOps:                []QueuedOp{{Op: "kill", SessionID: "m1/s1", Cmd: protocol.DeviceCommandAuth{OperationID: "op-pending"}}},
-		OpOutcomes:                map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
-		Stale:                     map[Bucket]bool{replyBucket(7): true},
-		StaleStreams:              map[string]bool{StreamJournal: true},
-		LastHeardAt:               1753900000000,
-		Disowned:                  true,
+		PendingPublications: []PendingPublication{{
+			LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
+			SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+			Machine: "m1", EpochID: 7, Target: "rid-m1", Phase: PublicationSealed,
+			Sequence: 41, Envelope: []byte("exact-envelope"), CreatedAt: time.Unix(1_700_000_000, 0),
+			Command: protocol.DeviceCommandAuth{
+				Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
+				OperationID: "op-publication", ExpiresAt: time.Unix(1_700_000_060, 0),
+			},
+			Composer: &protocol.ComposerSendReq{
+				Session: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
+			},
+		}},
+		OpOutcomes:   map[string]protocol.Control{"op-done": {Op: protocol.OpOK, OperationID: "op-done"}},
+		Stale:        map[Bucket]bool{replyBucket(7): true},
+		StaleStreams: map[string]bool{StreamJournal: true},
+		LastHeardAt:  1753900000000,
+		Disowned:     true,
 		Items: []Item{{
 			SessionID: "m1/s1", ItemID: "itm-1", Cursor: 9, LastCursor: 11, Kind: KindAgentMessage,
 			Status: StatusCompleted, TurnID: "turn-1", TSUnixMs: 1753900000000, Text: "on it",
@@ -535,6 +549,27 @@ var stateV17Fixture = func() string {
 	return strings.Replace(fixture, `"reconciled_epoch":7`, `"reconciled_epoch":7,"last_profile":null`, 1)
 }()
 
+// stateV18ContentKept is the pinned content_kept ciphertext produced for fullState() under
+// stateV4FixtureKEK. v18 adds pending_publications inside this container; pinning the new
+// ciphertext is what prevents a future reader from silently dropping the exact-envelope
+// journal while still decoding every unchanged top-level field.
+const stateV18ContentKept = `I89HMfDPCoeDfPrb/t7rm+b8U0ALVdeZ0qwygq4bDIqfNqwIx7fMAuFS8tN/sfUvvLZK9CBAOBNjGuGeTfmOnb/h36/ZVYaPl5NxG+wv1C4/PO721NTi4621UWbIqrhBobi6JkJ1cgKmQr/oNPbe4LN4dSdc7iT+zRPnMCesOkd4LSGk0sqch7TaYHoEN23i9vBNUlJHmBbbBCj4N9cjKRW+AgxTURsy7hT/9pic82VALyqKRjD/t42PKXYsB7hhLoKyAQh6hVkyL4+UR0347qvlUa8FnQI94ITRttP6Nr5z2JP54Bi7NqCMvCWCcDxcF/RdlI+DZLFtoHjOU9gTGIqlEyijLDnCzDEi2Acdz4rgYGgZDcn+Fz2asUgq2Uup/X3GdAAPlm8eECrATk6a7IHQNxBhjx0nDKwL/G7JfoWIkh1AmKC2LOgdqlANQDndK4I4iT9+mjeOGxvX031Os6MA3OATTh45mnIgIi39G3NsAS9zLDy6apbssewxEgHENYzNMR6V6RF9rZ2btWgHx9Gyzp1uGhdVOyYaxHgoMSAEDHQpP00eDkTm+Jgdj3YCjrOxt7EVmZGPj/YBgvgceuCla3yjzIL2wkIpDXuYDmY8gyWADlqb2wYHekbbDSC8DNdK9+YLNAOqrrvppKDOKEYLsvpBlkzwQ7bnimVPfDr6NjncPbJj/DukyJ9O6rDGlLao69GGDaF3MDT7gOK05GVuGwHIYv5HlsyjswdipJqB7jTtMiMpbFZLHo2zJtFTvE2Aia5SfL38ZkLxzlheVA+k2AHjoOq411FEcAUlwXBO3lUp9zfYuSLO/GJuHw1YOH6PVjGneZEHAUAkT+f6h8h38/Szu3xwMYfNqcSWi0lHfvn/pybvxPVDoqHFviaQs/JFIYg3z5dqnagylF/H7sYlPXQz9+WdvjBZeKWZH7VgB7w6q66lOUWUzRkQ6ftt83lAPCoumr2s0sXy9HzroWw2bjkZ1lr86xvu8vl3FTrIoa9aiJKHRmz0X4Qt03n5c/PjWFpeNQHXZGuV/M3RiBSn1rCOkgwitUs8ncztK6ohZrbsuV4ePpEn0dlA80Ar3pkt4dxxNlxXqLSI8Og90Lwat6QiOFhhodqzLFz0HZVq/waXA2isnmYCEq0r79OIo+UPhN8TIlwCykkUrN/nEldW/FnC/B0b1tnlbb6N8vFQFWL1Gf1O7K3BKpx+4l7k5PtVEj6kFnjB+kOiKRABYzZoFv8Nk8ATN1p/gs+7GYMizuWHjZvClqXKRkH66rXQ4pwoIQhiSyU5Sifa+n0p8luG7mCPTYg2h0TztavFhlj6G/0zBbAvqi0Ge5D4rZUqrz6cm811Xs4tx1N1Y23pduUmQjp8kFz/hMqY+MFD21vae0tvi/pCYOxXlLwx`
+
+var stateV18Fixture = func() string {
+	fixture := strings.Replace(stateV17Fixture, `"schema_version":17`, `"schema_version":18`, 1)
+	const field = `"content_kept":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV17Fixture has no content_kept field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV17Fixture content_kept field is unterminated")
+	}
+	return fixture[:start] + stateV18ContentKept + fixture[start+end:]
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -550,6 +585,7 @@ var stateFixtures = map[int]string{
 	15: stateV15Fixture,
 	16: stateV16Fixture,
 	17: stateV17Fixture,
+	18: stateV18Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the
