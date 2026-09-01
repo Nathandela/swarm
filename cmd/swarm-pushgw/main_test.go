@@ -18,6 +18,8 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +80,63 @@ func TestRun_BadTrustedProxyCIDR_ReturnsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("run accepted a malformed -trusted-proxies CIDR")
+	}
+}
+
+func TestRun_NonLoopbackAdminListen_ReturnsError(t *testing.T) {
+	err := run(context.Background(), []string{
+		"-db", dbPath(t), "-insecure-http", "-admin-listen", "0.0.0.0:8451",
+	})
+	if err == nil {
+		t.Fatal("run accepted a non-loopback admin listener")
+	}
+}
+
+func TestHTTPServer_BoundsUnauthenticatedConnections(t *testing.T) {
+	srv := newHTTPServer("127.0.0.1:0", http.NotFoundHandler())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("HTTP timeouts are not all bounded: readHeader=%s read=%s write=%s idle=%s",
+			srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
+	if srv.MaxHeaderBytes <= 0 || srv.MaxHeaderBytes > 32<<10 {
+		t.Fatalf("MaxHeaderBytes = %d, want 1..32768", srv.MaxHeaderBytes)
+	}
+}
+
+func TestBackupRestoreSubcommandsRoundTripDBAndKey(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := run(ctx, []string{"-db", source, "-listen", "127.0.0.1:0", "-insecure-http"}); err != nil {
+		t.Fatalf("initialize source: %v", err)
+	}
+	archive := filepath.Join(dir, "backup.tar")
+	if err := run(context.Background(), []string{"backup", "-db", source, archive}); err != nil {
+		t.Fatalf("backup subcommand: %v", err)
+	}
+	target := filepath.Join(dir, "target.db")
+	if err := run(context.Background(), []string{"restore", "-db", target, archive}); err != nil {
+		t.Fatalf("restore subcommand: %v", err)
+	}
+	for _, path := range []string{target, target + ".key"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat restored %s: %v", path, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("restored %s is empty", path)
+		}
+	}
+}
+
+func TestHealthcheckSubcommandRequiresReadyStatus(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+	if err := run(context.Background(), []string{"healthcheck", "-url", ts.URL}); err == nil {
+		t.Fatal("healthcheck accepted 503")
 	}
 }
 

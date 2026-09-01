@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -39,6 +41,19 @@ type Config struct {
 	// real client to X-Forwarded-For (see cmd/swarm-pushgw's -trusted-proxies flag and its
 	// TLS-mode doc comment for the recorded deployment assumption this pairs with).
 	TrustedProxies []string
+	// Readiness records static construction facts for the private admin surface.
+	// It is intentionally separate from Sender/Attest interface presence: dev and
+	// fail-closed implementations satisfy those interfaces but are not production
+	// dependencies. No live Google probe participates in readiness.
+	Readiness DeploymentReadiness
+}
+
+// DeploymentReadiness is set by the executable only after each production dependency
+// has been successfully constructed and all deployment-specific constants validated.
+type DeploymentReadiness struct {
+	ProductionSender   bool
+	ProductionAttestor bool
+	RequiredConfig     bool
 }
 
 // Server is the gateway's HTTP handler. It is safe for concurrent use.
@@ -49,6 +64,7 @@ type Server struct {
 	now    func() time.Time
 	quotas QuotaConfig
 	logger *slog.Logger
+	ready  DeploymentReadiness
 
 	limiter        *limiter
 	nonces         *nonceCache
@@ -61,6 +77,29 @@ type Server struct {
 	// wake has actually been attempted. An atomic.Value rather than a mutex: recorded once
 	// per wake, read once per health check, no ordering beyond "most recent write wins".
 	providerOutcome atomic.Value // string
+	serving         atomic.Bool
+	retentionWorker atomic.Bool
+	lastRetentionOK atomic.Int64
+	requestMetrics  requestMetrics
+}
+
+type requestMetricKey struct {
+	operation string
+	status    int
+}
+
+type requestMetrics struct {
+	mu     sync.Mutex
+	counts map[requestMetricKey]uint64
+}
+
+func (m *requestMetrics) record(operation string, status int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts == nil {
+		m.counts = make(map[requestMetricKey]uint64)
+	}
+	m.counts[requestMetricKey{operation: operation, status: status}]++
 }
 
 // NewServer builds a gateway over cfg, opening (or creating) the bbolt file at
@@ -103,6 +142,7 @@ func NewServer(cfg Config) (*Server, error) {
 		now:            now,
 		quotas:         quotas,
 		logger:         logger,
+		ready:          cfg.Readiness,
 		limiter:        newLimiter(),
 		nonces:         newNonceCache(),
 		wakeIdem:       newWakeIdemCache(),
@@ -124,7 +164,11 @@ func (s *Server) RunRetention(_ context.Context) error {
 	s.limiter.sweep(now)
 	s.regIdem.sweep(now)
 	s.wakeIdem.sweep(now)
-	return s.store.runRetention(now.UnixMilli())
+	if err := s.store.runRetention(now.UnixMilli()); err != nil {
+		return err
+	}
+	s.lastRetentionOK.Store(now.Unix())
+	return nil
 }
 
 // ServeHTTP dispatches every request. PG-TR-2's version check runs before any operation
@@ -134,6 +178,7 @@ func (s *Server) RunRetention(_ context.Context) error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	status := http.StatusNotFound
+	operation := routeOperation(r.Method, path)
 
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/health":
@@ -168,11 +213,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status = errMalformedRequest.status
 	}
 
-	// A safe, secret-free line: method, path (installation ids and push addresses are
-	// opaque routing handles, not secrets -- section 7.1) and the outcome status. Never a
-	// header, a body, or anything section 8.2 forbids (PG-TEST-9).
-	s.logger.Info("pushgw request", "method", r.Method, "path", path, "status", status)
+	// Operation is a closed route template, never the raw path: installation ids and
+	// push addresses remain absent from logs and metric labels even though they are opaque.
+	s.requestMetrics.record(operation, status)
+	s.logger.Info("pushgw request", "method", r.Method, "operation", operation, "status", status)
 }
+
+func routeOperation(method, path string) string {
+	switch {
+	case method == http.MethodGet && path == "/v1/health":
+		return "public_health"
+	case path == "/v1/installations":
+		return "installation_register"
+	case path == "/v1/wakes":
+		return "wake_submit"
+	case strings.HasPrefix(path, "/v1/installations/") && strings.HasSuffix(path, "/token"):
+		return "token_rotate"
+	case strings.HasPrefix(path, "/v1/installations/") && strings.HasSuffix(path, "/addresses"):
+		return "address_allocate"
+	case strings.HasPrefix(path, "/v1/addresses/"):
+		return "address_revoke"
+	case strings.HasPrefix(path, "/v1/"):
+		return "known_version_unknown_route"
+	default:
+		return "unknown_version"
+	}
+}
+
+// SetServing and SetRetentionWorkerRunning are lifecycle signals owned by the executable.
+// They do not perform probes and therefore cannot flap on transient Google failures.
+func (s *Server) SetServing(v bool)                { s.serving.Store(v) }
+func (s *Server) SetRetentionWorkerRunning(v bool) { s.retentionWorker.Store(v) }
+
+func statusLabel(status int) string { return strconv.Itoa(status) }
 
 // healthResponse is GET /v1/health's body (PG-TR-6). Provider is the FCM leg's
 // provider-reachability signal ("service and provider-reachability state"): omitted until a

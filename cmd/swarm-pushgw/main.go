@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,11 +43,97 @@ const defaultRetentionInterval = time.Hour
 // shutdownTimeout bounds how long a graceful shutdown waits for in-flight requests.
 const shutdownTimeout = 10 * time.Second
 
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 15 * time.Second
+	writeTimeout      = 30 * time.Second
+	idleTimeout       = 60 * time.Second
+	maxHeaderBytes    = 32 << 10
+)
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
 func run(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "backup":
+			return runBackup(args[1:])
+		case "restore":
+			return runRestore(args[1:])
+		case "healthcheck":
+			return runHealthcheck(ctx, args[1:])
+		}
+	}
+	return runServe(ctx, args)
+}
+
+func runBackup(args []string) error {
+	fs := flag.NewFlagSet("swarm-pushgw backup", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dbPath := fs.String("db", "", "path to the stopped gateway database")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dbPath == "" || fs.NArg() != 1 {
+		return errors.New("usage: swarm-pushgw backup -db <pushgw.db> <archive.tar>")
+	}
+	return pushgw.Backup(*dbPath, fs.Arg(0))
+}
+
+func runRestore(args []string) error {
+	fs := flag.NewFlagSet("swarm-pushgw restore", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dbPath := fs.String("db", "", "path for the restored gateway database")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dbPath == "" || fs.NArg() != 1 {
+		return errors.New("usage: swarm-pushgw restore -db <pushgw.db> <archive.tar>")
+	}
+	return pushgw.Restore(*dbPath, fs.Arg(0))
+}
+
+func runHealthcheck(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("swarm-pushgw healthcheck", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	url := fs.String("url", "", "loopback readiness URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *url == "" || fs.NArg() != 0 {
+		return errors.New("usage: swarm-pushgw healthcheck -url http://127.0.0.1:<port>/readyz")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, *url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("swarm-pushgw healthcheck: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("swarm-pushgw healthcheck: readiness returned %d, want 200", resp.StatusCode)
+	}
+	return nil
+}
+
+func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("swarm-pushgw", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	listen := fs.String("listen", ":8443", "address to serve the gateway on")
+	adminListen := fs.String("admin-listen", "", "separate loopback-only address for /healthz, /readyz, and /metrics (empty disables)")
 	dbPath := fs.String("db", "", "path to the gateway's bbolt file (required)")
 	fcmCredentials := fs.String("fcm-credentials", "", "path to the FCM v1 service-account JSON (unset: dev mode -- wakes are refused upstream_unavailable rather than delivered)")
 	retentionInterval := fs.Duration("retention-interval", defaultRetentionInterval, "how often the retention sweep (spec section 8.1) runs")
@@ -76,6 +163,18 @@ func run(ctx context.Context, args []string) error {
 	if *dbPath == "" {
 		return errors.New("swarm-pushgw: -db is required")
 	}
+	if *retentionInterval <= 0 {
+		return errors.New("swarm-pushgw: -retention-interval must be positive")
+	}
+	if *adminListen != "" {
+		loopback, err := isLoopbackHostPort(*adminListen)
+		if err != nil {
+			return fmt.Errorf("swarm-pushgw: -admin-listen: %w", err)
+		}
+		if !loopback {
+			return errors.New("swarm-pushgw: -admin-listen must be loopback-only")
+		}
+	}
 	if (*tlsCert == "") != (*tlsKey == "") {
 		return errors.New("swarm-pushgw: -tls-cert and -tls-key must both be set")
 	}
@@ -104,6 +203,11 @@ func run(ctx context.Context, args []string) error {
 		Attest:         notImplementedAttestor{},
 		Logger:         logger,
 		TrustedProxies: trustedProxyCIDRs,
+		Readiness: pushgw.DeploymentReadiness{
+			ProductionSender:   *fcmCredentials != "",
+			ProductionAttestor: false, // Play Integrity builder sets this in its integration wave.
+			RequiredConfig:     false, // Package/project/certificate constants are not wired yet.
+		},
 		Quotas: pushgw.QuotaConfig{
 			WakesPerAddress:            pushgw.RateLimit{Max: *wakesPerAddr, Window: *wakesPerAddrWindow},
 			WakesPerSourceIP:           pushgw.RateLimit{Max: *wakesPerSrc, Window: *wakesPerSrcWindow},
@@ -121,23 +225,71 @@ func run(ctx context.Context, args []string) error {
 
 	stopRetention := make(chan struct{})
 	defer close(stopRetention)
+	// Establish one successful retention pass before any listener can become ready;
+	// the worker owns its own running signal after this point.
+	if err := srv.RunRetention(ctx); err != nil {
+		return fmt.Errorf("swarm-pushgw: initial retention sweep: %w", err)
+	}
 	go runRetentionLoop(ctx, srv, *retentionInterval, stopRetention, logger)
 
-	httpSrv := &http.Server{Addr: *listen, Handler: srv}
-	errCh := make(chan error, 1)
+	var adminLn net.Listener
+	var adminSrv *http.Server
+	if *adminListen != "" {
+		adminLn, err = net.Listen("tcp", *adminListen)
+		if err != nil {
+			return fmt.Errorf("swarm-pushgw: admin listener: %w", err)
+		}
+		defer func() { _ = adminLn.Close() }()
+		adminSrv = newHTTPServer(*adminListen, srv.AdminHandler())
+	}
+
+	publicLn, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("swarm-pushgw: public listener: %w", err)
+	}
+	defer func() { _ = publicLn.Close() }()
+
+	httpSrv := newHTTPServer(*listen, srv)
+	errCh := make(chan error, 2)
 	if tlsConfigured {
 		httpSrv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-		go func() { errCh <- httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey) }()
+		cert, certErr := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if certErr != nil {
+			return fmt.Errorf("swarm-pushgw: load TLS keypair: %w", certErr)
+		}
+		httpSrv.TLSConfig.Certificates = []tls.Certificate{cert}
+		publicLn = tls.NewListener(publicLn, httpSrv.TLSConfig)
 	} else {
-		go func() { errCh <- httpSrv.ListenAndServe() }()
+		httpSrv.TLSConfig = nil
+	}
+	srv.SetServing(true)
+	defer srv.SetServing(false)
+	go func() { errCh <- httpSrv.Serve(publicLn) }()
+	if adminSrv != nil {
+		go func() { errCh <- adminSrv.Serve(adminLn) }()
 	}
 
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
+		var errs []error
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, err)
+		}
+		if adminSrv != nil {
+			if err := adminSrv.Shutdown(shutdownCtx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
 	case err := <-errCh:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+		if adminSrv != nil {
+			_ = adminSrv.Shutdown(shutdownCtx)
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -145,9 +297,26 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
+func isLoopbackHostPort(addr string) (bool, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false, err
+	}
+	if host == "localhost" {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false, fmt.Errorf("host %q is not an IP address or localhost", host)
+	}
+	return ip.IsLoopback(), nil
+}
+
 // runRetentionLoop drives Server.RunRetention on a real-clock ticker (the fake-clock seam
 // is Config.Now, exercised by the test suite; production always uses the wall clock).
 func runRetentionLoop(ctx context.Context, srv *pushgw.Server, interval time.Duration, stop <-chan struct{}, logger *slog.Logger) {
+	srv.SetRetentionWorkerRunning(true)
+	defer srv.SetRetentionWorkerRunning(false)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
