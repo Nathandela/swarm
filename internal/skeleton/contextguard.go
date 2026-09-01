@@ -422,10 +422,6 @@ func (m *contextGuardManager) register(id string, key contextguard.Key, source a
 	return m.registerCurrentWired(id, key, source, action, nil, nil)
 }
 
-func (m *contextGuardManager) registerCurrent(id string, key contextguard.Key, source adapter.ContextGuardSource, action adapter.ContextGuardAction, current func() bool) bool {
-	return m.registerCurrentWired(id, key, source, action, current, nil)
-}
-
 // registerCurrentWired is registerCurrent with the dispatch seams installed
 // BEFORE the worker goroutine starts (installing after would race the worker's
 // first promotion check). wire nil is every observe-only registration.
