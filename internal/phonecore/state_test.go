@@ -111,7 +111,7 @@ func fullState() State {
 		PendingPublications: []PendingPublication{{
 			LogicalID: "logical-pending", OperationID: "op-publication", Kind: PublicationComposer,
 			SessionID: "m1/s1", SessionInstance: "instance-1", ExpectedTurn: "turn-1", Text: "ship it",
-			Machine: "m1", EpochID: 7, Target: "rid-m1", Phase: PublicationSealed,
+			Machine: "m1", EpochID: 7, Target: "rid-m1", AuthorityPub: bytes.Repeat([]byte{0xC3}, ed25519.PublicKeySize), Phase: PublicationSealed,
 			Sequence: 41, Envelope: []byte("exact-envelope"), CreatedAt: time.Unix(1_700_000_000, 0),
 			Command: protocol.DeviceCommandAuth{
 				Action: protocol.ActionComposerSend, Machine: "m1", Session: "m1/s1",
@@ -570,6 +570,26 @@ var stateV18Fixture = func() string {
 	return fixture[:start] + stateV18ContentKept + fixture[start+end:]
 }()
 
+// stateV19 adds the exact machine relay-auth public key beside each pending publication.
+// The pinned ciphertext proves the authority binding survives custody; v18 remains below to
+// exercise the migration which attaches its already-authenticated top-level machine key.
+const stateV19ContentKept = `F0a4R8SXL56JXgD3N3BFRmnIRLlrvseK15Eb8NZXgkfxI4CFI1l4IQd9Yoyg7BRcQEPX811/RQH1YzuxyFjrUY+ZaIqOFM5KFwcoM+V+9DdjjRcB3EUNFAjeLlVoZG96ERReDlKlwMCVKyCxqfy2+LsDE9JJFoIuftV6F2cxKgISa6Htee40wHagTP9lUzUT3ULt0WqWcr0NJUCk29kpBVS/ssL+ZN6cQs2bVVuvTgzRuRQpirFgDsRq1tmDPX74m1u1iRWb0wwo9G0Jw5GSNHmdnNzLhLBsXAIFFh+lq2CRYI37MhJ9y5/H0pbF9wi17x7/v7NXXZ51mjpb4qPQEId+3Pws3wY74huGX5jSgYiPtfBaZusylrcQ0JzGW9SNuDhDT8mcDjvVw6IVmVUJ/fqUIMNczg2NhVMQdEGcGFE3i/sQgXnFYF+PEqDe/UGF1tUbtNkWuB3bcWV8ymlnmoW9qhfbuKR+x0T5fYLAZbicg8jrXd2VfTkaRsitRq1N2Jd8tJXwNX3fQpnSI4xsBnfRGgJHIs4hCyKtqY8130V0NekoLPXto6gVA0qrVLGJCAaWnzBkbCHxry8+ZqtMYDfotIw2u+HVjRS5Smn2pCr3SU3PP4IkYpW+FbumF5RG1l+rw51mLgBov+dwprzf+X8aDWReOlAExcXLIpLcezlITXq1c0srDDah5E2I1iEAEm2L6m7rRCnYut9jQAs49aW8u2FRN629FhafS1w0R6dmI2m3Dwypvicz2KOZf3KEj/tJ+HpScOYlqf8N808juvD+Xu+rQQQKzGl5aEOJNrBakMCjxnVgAM6eVTLDWmLbxS72NL7IlTMf8+Inpn9cTg1SWqv041H+Yywrk9nPpBt2xTdAhE1pyS5uvhqnp8skpt2Y40vFNSWS66LiCyKr33QqUfEYoWRbosPu1GZTCokbHJkqBef/5+NUB2srwlxBCr/aavurXFrcYA+exBF2qSzlYumMUIkluhkqGh8N4j286k/QarBUC5VlCTCDw+lt5emrEaHRyIKTHKvpHhAe/TOEmWqF1GQQGj0dYk5QcGaMBbd+hTjpUOoMPaeShIYu3gsEvEwGu0nUzpoCykj5A3Og3HLX8mJT11UYG3QtbYXO1rOAttlsKTvDkqbbugvOUqJyR8MNeTczWRVfNC3V5RpRz/uV73UXGQC28VJNaoZDbekdhzivE+vTrdE0aKJ25OuBLsT44ToALrr61irZGuRCT5s9ye9LIy1NZ9vkBWwxdXTu7EDll/vslAk9eAiFTFohVFaCBoyI2ljc7Z1eNrF30+tNdkjOY5PsXLSzmdR5QZeqN/B9jgI0K8GphCSs1hf2bl9eB2/7oRDHQQckQtYbVmwbxaezggDhxdUyGSAOWYUCbHD8fCYJuWGxSvM78zaIA4TcV5fpivkYlC2kKJ9D3s7xQqMimvuuEVDOra+9WiVXstK3xkQF8qdZK3/Xy4x0Ixn1meoJ65F6`
+
+var stateV19Fixture = func() string {
+	fixture := strings.Replace(stateV18Fixture, `"schema_version":18`, `"schema_version":19`, 1)
+	const field = `"content_kept":"`
+	start := strings.Index(fixture, field)
+	if start < 0 {
+		panic("stateV18Fixture has no content_kept field")
+	}
+	start += len(field)
+	end := strings.IndexByte(fixture[start:], '"')
+	if end < 0 {
+		panic("stateV18Fixture content_kept field is unterminated")
+	}
+	return fixture[:start] + stateV19ContentKept + fixture[start+end:]
+}()
+
 var stateFixtures = map[int]string{
 	1:  stateV1Fixture,
 	4:  stateV4Fixture,
@@ -586,6 +606,7 @@ var stateFixtures = map[int]string{
 	16: stateV16Fixture,
 	17: stateV17Fixture,
 	18: stateV18Fixture,
+	19: stateV19Fixture,
 }
 
 // TestStateStore_PinnedV4FixtureStillLoads is the current version's migration guard, and the

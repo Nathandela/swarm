@@ -160,6 +160,10 @@ type App struct {
 	// It is deliberately NOT a.mu -- a.mu guards the app's lifecycle and is taken on paths
 	// that must not queue behind a relay append.
 	bucketMu sync.Mutex
+	// publicationWake nudges the one connection-scoped exact-envelope redrive loop after a
+	// foreground publication entered durable custody but its immediate relay append failed.
+	// Capacity one coalesces nudges: the durable FIFO is the source of truth, not this signal.
+	publicationWake chan struct{}
 
 	// pairingWG counts the in-flight pairing handshakes started by startPairingJoin. It is
 	// NOT guarded by a.mu -- Close waits on it with the lock released, because a handshake
@@ -276,18 +280,19 @@ func NewApp(cfg *Config, custody KeyCustody) (app *App, err error) {
 				"rest is sealed under the Android Keystore, and there is no cleartext fallback"))
 	}
 	a := &App{
-		relayURL:       cfg.RelayURL,
-		pushGatewayURL: cfg.PushGatewayURL,
-		stateDir:       cfg.StateDir,
-		events:         newDispatcher(),
-		coalesce:       phonecore.NewInputCoalescer(time.Now),
-		presence:       newPresenceCache(time.Now),
-		connState:      "offline",
-		subscribed:     true,
-		needs:          map[string]string{},
-		inflight:       map[string]bool{},
-		resyncAt:       map[string][]time.Time{},
-		resyncAsked:    map[string]bool{},
+		relayURL:        cfg.RelayURL,
+		pushGatewayURL:  cfg.PushGatewayURL,
+		stateDir:        cfg.StateDir,
+		events:          newDispatcher(),
+		coalesce:        phonecore.NewInputCoalescer(time.Now),
+		presence:        newPresenceCache(time.Now),
+		connState:       "offline",
+		subscribed:      true,
+		needs:           map[string]string{},
+		inflight:        map[string]bool{},
+		resyncAt:        map[string][]time.Time{},
+		resyncAsked:     map[string]bool{},
+		publicationWake: make(chan struct{}, 1),
 	}
 	// PB-KEY-9, delivered. Both tiers are sealed under a key the Android Keystore
 	// unwraps and this process never stores: the sealers hold the FETCHER, so every
@@ -956,7 +961,11 @@ func (a *App) UnlockContent() (err error) {
 	if err != nil {
 		return err
 	}
-	return core.UnsealContent()
+	if err := core.UnsealContent(); err != nil {
+		return err
+	}
+	a.wakePublicationPump()
+	return nil
 }
 
 // ---- read models ---------------------------------------------------------------

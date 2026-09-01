@@ -174,7 +174,7 @@ func s15State() State {
 			LogicalID: s15PublicationID + "-logical", OperationID: s15PublicationID,
 			Kind: PublicationComposer, SessionID: s15SessionID, SessionInstance: "s15-instance",
 			Text: s15PublicationText, Machine: s15Machine, EpochID: s15EpochID,
-			Target: s15RoutingID, Phase: PublicationSealed, Sequence: 71,
+			Target: s15RoutingID, AuthorityPub: s15MachineRelayPub(), Phase: PublicationSealed, Sequence: 71,
 			Envelope: []byte(s15PublicationEnvelope), CreatedAt: time.Unix(1_700_000_000, 0),
 			Command: schema.DeviceCommandAuth{
 				Action: schema.ActionComposerSend, Machine: s15Machine, Session: s15SessionID,

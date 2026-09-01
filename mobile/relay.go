@@ -711,6 +711,10 @@ func (a *App) run(ctx context.Context) {
 		// cache MachinePresence exposes and never asks the relay itself.
 		pctx, endPoll := context.WithCancel(ctx)
 		go a.pollPresence(pctx, cl)
+		go a.runPublicationPump(pctx, func() (sendCtx, error) {
+			return a.resolveSend(func() (*relay.Client, error) { return cl, nil })
+		})
+		a.wakePublicationPump()
 		a.drain(ctx, cl)
 		endPoll()
 		// The link is gone, so the phone can no longer ask what it last answered. Holding the

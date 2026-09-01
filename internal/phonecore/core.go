@@ -9,6 +9,7 @@ package phonecore
 // here may depend on a graceful exit: every durable write happens on the path that needs it.
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -440,8 +441,18 @@ func (c *Core) persistLocked(st State) error {
 	// succeeded. A whole-state adoption that changes either half of that identity cannot
 	// carry the authority across with it. This runs above Store so the rule also holds for
 	// injected stores used by callers and tests, not only fileStore.
-	if st.Machine != c.st.Machine || st.EpochID != c.st.EpochID || st.Disowned {
+	identityChanged := st.Machine != c.st.Machine || st.EpochID != c.st.EpochID ||
+		!bytes.Equal(st.MachineRelayAuthPub, c.st.MachineRelayAuthPub)
+	if identityChanged || st.Disowned {
 		st.lastProfile = nil
+	}
+	if identityChanged {
+		// Exact envelopes are authority-bound to the previous machine mailbox and epoch.
+		// Carrying them into a replacement registration can deliver old conversation text to
+		// a different authority. Preserve the user's record but retire every binding that does
+		// not already belong to the new exact identity; terminal records are never published.
+		st.PendingPublications = publicationsForIdentity(st.PendingPublications,
+			st.Machine, st.EpochID, st.MachineRelayAuthPub)
 	}
 	if err := c.store.Save(st.clone()); err != nil {
 		return err

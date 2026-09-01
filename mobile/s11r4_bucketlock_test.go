@@ -18,14 +18,43 @@ package swarmmobile_test
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"testing"
 )
+
+func TestS11R4_LockedAppendHelperExceptionRequiresAHeldBucketLock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "held", body: `a.bucketMu.Lock(); defer a.bucketMu.Unlock(); a.flushPendingPublicationsLocked()`, want: true},
+		{name: "missing", body: `a.flushPendingPublicationsLocked()`, want: false},
+		{name: "released", body: `a.bucketMu.Lock(); a.bucketMu.Unlock(); a.flushPendingPublicationsLocked()`, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "fixture.go", "package p; func f() {"+tc.body+"}", 0)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			fd := f.Decls[0].(*ast.FuncDecl)
+			calls, got := s11r4LockedHelperCallIsProtected(fd.Body, s11r4LockedAppendHelper)
+			if calls != 1 || got != tc.want {
+				t.Fatalf("calls=%d protected=%v, want calls=1 protected=%v", calls, got, tc.want)
+			}
+		})
+	}
+}
 
 // s11r4 names the three identifiers the rule is written in terms of.
 const (
 	s11r4BucketLock = "bucketMu"
 	s11r4Append     = "MailboxAppend"
+	// The durable publication pump is intentionally factored as a Locked helper because
+	// its callers must keep the same critical section after draining while a direct producer
+	// draws its next sequence. The exception below is exact-name and verifies every call.
+	s11r4LockedAppendHelper = "flushPendingPublicationsLocked"
 )
 
 // s11r4SeqDraws is every allocator that hands out a seq for this bucket. Both kinds are here
@@ -79,6 +108,77 @@ func s11r4LockPos(body *ast.BlockStmt) token.Pos {
 	return found
 }
 
+// s11r4LockedHelperCallIsProtected checks the exact lexical contract of the one factored
+// append helper: a bucket lock precedes the call and no explicit unlock intervenes. A defer
+// Unlock is after the call lexically and therefore remains accepted. This is deliberately not
+// a generic "name ends in Locked" exemption; a new append helper must earn its own review.
+func s11r4LockedHelperCallIsProtected(body *ast.BlockStmt, helper string) (calls int, protected bool) {
+	protected = true
+	var lockAt, unlockAt []token.Pos
+	var callAt []token.Pos
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, deferred := n.(*ast.DeferStmt); deferred {
+			return false // a deferred Unlock runs after the helper, irrespective of lexical position
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel.Name == helper {
+			callAt = append(callAt, call.Lparen)
+		}
+		if mu, ok := sel.X.(*ast.SelectorExpr); ok && mu.Sel.Name == s11r4BucketLock {
+			switch sel.Sel.Name {
+			case "Lock":
+				lockAt = append(lockAt, call.Lparen)
+			case "Unlock":
+				unlockAt = append(unlockAt, call.Lparen)
+			}
+		}
+		return true
+	})
+	for _, at := range callAt {
+		guard := token.NoPos
+		for _, pos := range lockAt {
+			if pos < at && pos > guard {
+				guard = pos
+			}
+		}
+		if guard == token.NoPos {
+			protected = false
+			continue
+		}
+		for _, pos := range unlockAt {
+			if pos > guard && pos < at {
+				protected = false
+			}
+		}
+	}
+	return len(callAt), protected
+}
+
+func s11r4EveryLockedHelperCallerIsProtected(src *facadeSource, helper string) bool {
+	calls := 0
+	for _, f := range src.Files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Name.Name == helper {
+				continue
+			}
+			n, protected := s11r4LockedHelperCallIsProtected(fd.Body, helper)
+			calls += n
+			if !protected {
+				return false
+			}
+		}
+	}
+	return calls > 0
+}
+
 // TestS11R4_EveryBucketAppendAllocatesItsSeqUnderTheBucketLock is the rule, applied to every
 // append site the facade has.
 //
@@ -105,6 +205,10 @@ func TestS11R4_EveryBucketAppendAllocatesItsSeqUnderTheBucketLock(t *testing.T) 
 
 			lockPos := s11r4LockPos(fd.Body)
 			if lockPos == token.NoPos {
+				if fd.Name.Name == s11r4LockedAppendHelper &&
+					s11r4EveryLockedHelperCallerIsProtected(src, s11r4LockedAppendHelper) {
+					continue
+				}
 				t.Errorf("%s appends to the phone -> machine bucket without taking a.%s.\n"+
 					"Commands and input frames draw from ONE Sequencer per epoch, so every append site "+
 					"is a producer on one stream. An unserialised one lets a LATER seq reach the relay "+

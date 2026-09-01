@@ -29,6 +29,7 @@ func testComposerPublication(id string) PendingPublication {
 		Machine:         "m1",
 		EpochID:         7,
 		Target:          "rid-m1",
+		AuthorityPub:    bytes.Repeat([]byte{0x44}, 32),
 		Command: schema.DeviceCommandAuth{
 			Action:      schema.ActionComposerSend,
 			Machine:     "m1",
@@ -55,6 +56,7 @@ func publicationCore(t *testing.T) *Core {
 	}
 	st := c.State()
 	st.Machine = "m1"
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x44}, 32)
 	st.EpochID = 7
 	st.RoutingID = "rid-m1"
 	st.Keys = s15EpochKeys()
@@ -140,6 +142,42 @@ func TestPendingPublications_ExactPrepareAndSealAreIdempotentButConflictFails(t 
 	}
 }
 
+func TestPendingPublications_LogicalIDAndRoutingAuthorityAreUniqueFences(t *testing.T) {
+	c := publicationCore(t)
+	first := testComposerPublication("op-first")
+	if err := c.PreparePublication(first); err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+
+	duplicateIntent := testComposerPublication("op-second")
+	duplicateIntent.LogicalID = first.LogicalID
+	if err := c.PreparePublication(duplicateIntent); !errors.Is(err, ErrPublicationConflict) {
+		t.Fatalf("same logical id under another operation = %v, want ErrPublicationConflict", err)
+	}
+
+	wrongAuthority := testComposerPublication("op-wrong-authority")
+	wrongAuthority.AuthorityPub = bytes.Repeat([]byte{0x55}, 32)
+	if err := c.PreparePublication(wrongAuthority); !errors.Is(err, ErrPublicationState) {
+		t.Fatalf("wrong routing authority = %v, want ErrPublicationState", err)
+	}
+}
+
+func TestPendingPublications_RegistrationIdentityChangePurgesRatherThanRetargets(t *testing.T) {
+	c := publicationCore(t)
+	if err := c.PreparePublication(testComposerPublication("op-old-authority")); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	st := c.State()
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x66}, 32)
+	if err := c.Save(st); err != nil {
+		t.Fatalf("replace routing authority: %v", err)
+	}
+	got := c.PendingPublications()
+	if len(got) != 1 || got[0].Phase != PublicationTerminal || got[0].TerminalCode != PublicationAuthorityChanged {
+		t.Fatalf("replacement did not quarantine the old publication: %+v", got)
+	}
+}
+
 func TestPendingPublications_AdmissionIsMonotonicAndIdempotent(t *testing.T) {
 	c := publicationCore(t)
 	p := testComposerPublication("op-admitted")
@@ -174,6 +212,7 @@ func TestPendingPublications_SurviveRestartAndRevokePurgesThem(t *testing.T) {
 	}
 	st := c.State()
 	st.Machine, st.EpochID, st.RoutingID, st.Keys = "m1", 7, "rid-m1", s15EpochKeys()
+	st.MachineRelayAuthPub = bytes.Repeat([]byte{0x44}, 32)
 	if err := c.Save(st); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

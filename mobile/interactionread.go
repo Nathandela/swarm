@@ -28,6 +28,7 @@ package swarmmobile
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Nathandela/swarm/internal/phonecore"
 	"github.com/Nathandela/swarm/internal/protocol/schema"
@@ -118,26 +119,30 @@ func (a *App) unsignedRead(action, session string, body readBody) (*Op, error) {
 	auth := schema.DeviceCommandAuth{
 		Action: action, Machine: core.State().Machine, Session: session, OperationID: id,
 	}
+	var kind phonecore.PublicationKind
+	switch {
+	case body.history != nil && body.detail == nil:
+		kind = phonecore.PublicationHistory
+	case body.detail != nil && body.history == nil:
+		kind = phonecore.PublicationDetail
+	default:
+		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: unsigned read needs exactly one body"))
+	}
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
-	seq, err := core.Seq().NextCommand()
-	if err != nil {
+	st := core.State()
+	pending := phonecore.PendingPublication{
+		LogicalID: id, OperationID: id, Kind: kind, SessionID: session,
+		Machine: st.Machine, EpochID: st.EpochID, Target: sc.target,
+		AuthorityPub: st.MachineRelayAuthPub, Command: auth,
+		History: body.history, Detail: body.detail,
+		Phase: phonecore.PublicationPrepared, CreatedAt: time.Now(),
+	}
+	if err := core.PreparePublication(pending); err != nil {
 		return nil, err
 	}
-	var env []byte
-	switch {
-	case body.history != nil:
-		env, err = phonecore.SealInteractionHistoryEnvelope(sc.key, sc.epoch, seq, auth, body.history)
-	case body.detail != nil:
-		env, err = phonecore.SealInteractionDetailEnvelope(sc.key, sc.epoch, seq, auth, body.detail)
-	default:
-		return nil, classed(ErrClassInvalidRequest, errors.New("swarmmobile: unsigned read with no body"))
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err := sc.cl.MailboxAppend(context.Background(), sc.target, env); err != nil {
-		return nil, err
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		a.wakePublicationPump()
 	}
 	op := &Op{OperationID: id, Action: action, SessionID: session}
 	a.issue(op)

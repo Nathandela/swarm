@@ -40,7 +40,12 @@ const (
 	// PublicationAdmitted means MailboxAppend returned success. The command may now await its
 	// authenticated outcome without holding later publications behind it.
 	PublicationAdmitted PublicationPhase = "admitted"
+	// PublicationTerminal is retained as an honest local outcome but is never published.
+	// Authority replacement uses it instead of silently re-targeting or deleting text.
+	PublicationTerminal PublicationPhase = "terminal"
 )
+
+const PublicationAuthorityChanged = "authority_changed"
 
 // PendingPublication is one crash-safe phone->machine publication. It is deliberately not a
 // QueuedOp: that legacy scaffold is a signed-once offline command with a destructive Drain and
@@ -60,6 +65,7 @@ type PendingPublication struct {
 	Machine         string                        `json:"machine"`
 	EpochID         uint32                        `json:"epoch_id"`
 	Target          string                        `json:"target"`
+	AuthorityPub    []byte                        `json:"authority_pub"`
 	Command         schema.DeviceCommandAuth      `json:"command"`
 	Composer        *schema.ComposerSendReq       `json:"composer,omitempty"`
 	History         *schema.InteractionHistoryReq `json:"history,omitempty"`
@@ -67,11 +73,13 @@ type PendingPublication struct {
 	Phase           PublicationPhase              `json:"phase"`
 	Sequence        uint64                        `json:"sequence,omitempty"`
 	Envelope        []byte                        `json:"envelope,omitempty"`
+	TerminalCode    string                        `json:"terminal_code,omitempty"`
 	CreatedAt       time.Time                     `json:"created_at"`
 }
 
 func (p PendingPublication) clone() PendingPublication {
 	p.Envelope = slices.Clone(p.Envelope)
+	p.AuthorityPub = slices.Clone(p.AuthorityPub)
 	p.Command.ContentHash = slices.Clone(p.Command.ContentHash)
 	if p.Composer != nil {
 		body := *p.Composer
@@ -98,7 +106,7 @@ func clonePendingPublications(in []PendingPublication) []PendingPublication {
 
 func validatePendingPublication(p PendingPublication) error {
 	if p.LogicalID == "" || p.OperationID == "" || p.SessionID == "" || p.Machine == "" ||
-		p.EpochID == 0 || p.Target == "" || p.Command.OperationID != p.OperationID ||
+		p.EpochID == 0 || p.Target == "" || len(p.AuthorityPub) == 0 || p.Command.OperationID != p.OperationID ||
 		p.Command.Machine != p.Machine || p.Command.Session != p.SessionID || p.CreatedAt.IsZero() {
 		return ErrPublicationState
 	}
@@ -138,11 +146,15 @@ func validatePendingPublication(p PendingPublication) error {
 	}
 	switch p.Phase {
 	case PublicationPrepared:
-		if p.Sequence != 0 || len(p.Envelope) != 0 {
+		if p.Sequence != 0 || len(p.Envelope) != 0 || p.TerminalCode != "" {
 			return ErrPublicationState
 		}
 	case PublicationSealed, PublicationAdmitted:
-		if p.Sequence == 0 || len(p.Envelope) == 0 {
+		if p.Sequence == 0 || len(p.Envelope) == 0 || p.TerminalCode != "" {
+			return ErrPublicationState
+		}
+	case PublicationTerminal:
+		if p.TerminalCode == "" {
 			return ErrPublicationState
 		}
 	default:
@@ -155,17 +167,56 @@ func validatePendingPublications(publications []PendingPublication) error {
 	if len(publications) > MaxPendingPublications {
 		return ErrPublicationQueueFull
 	}
-	seen := make(map[string]struct{}, len(publications))
+	seenOperations := make(map[string]struct{}, len(publications))
+	seenLogical := make(map[string]struct{}, len(publications))
 	for _, p := range publications {
 		if err := validatePendingPublication(p); err != nil {
 			return fmt.Errorf("%w: operation %q: %v", ErrPublicationState, p.OperationID, err)
 		}
-		if _, ok := seen[p.OperationID]; ok {
+		if _, ok := seenOperations[p.OperationID]; ok {
 			return fmt.Errorf("%w: duplicate operation %q", ErrPublicationConflict, p.OperationID)
 		}
-		seen[p.OperationID] = struct{}{}
+		if _, ok := seenLogical[p.LogicalID]; ok {
+			return fmt.Errorf("%w: duplicate logical id %q", ErrPublicationConflict, p.LogicalID)
+		}
+		seenOperations[p.OperationID] = struct{}{}
+		seenLogical[p.LogicalID] = struct{}{}
 	}
 	return nil
+}
+
+func validatePendingPublicationAuthority(publications []PendingPublication, authorityPub []byte) error {
+	if err := validatePendingPublications(publications); err != nil {
+		return err
+	}
+	for _, p := range publications {
+		if p.Phase != PublicationTerminal && !bytes.Equal(p.AuthorityPub, authorityPub) {
+			return fmt.Errorf("%w: operation %q belongs to another routing authority", ErrPublicationState, p.OperationID)
+		}
+	}
+	return nil
+}
+
+func migratePendingPublicationAuthority(publications []PendingPublication, authorityPub []byte) []PendingPublication {
+	out := clonePendingPublications(publications)
+	for i := range out {
+		if len(out[i].AuthorityPub) == 0 {
+			out[i].AuthorityPub = slices.Clone(authorityPub)
+		}
+	}
+	return out
+}
+
+func publicationsForIdentity(publications []PendingPublication, machine string, epoch uint32, authorityPub []byte) []PendingPublication {
+	out := clonePendingPublications(publications)
+	for i := range out {
+		p := &out[i]
+		if p.Machine != machine || p.EpochID != epoch || !bytes.Equal(p.AuthorityPub, authorityPub) {
+			p.Phase = PublicationTerminal
+			p.TerminalCode = PublicationAuthorityChanged
+		}
+	}
+	return out
 }
 
 // PreparePublication durably appends one unsequenced publication. Exact repetition is
@@ -179,10 +230,14 @@ func (c *Core) PreparePublication(p PendingPublication) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if p.Machine != c.st.Machine || p.EpochID != c.st.EpochID || p.Target != c.st.RoutingID || c.st.Disowned {
+	if p.Machine != c.st.Machine || p.EpochID != c.st.EpochID ||
+		!bytes.Equal(p.AuthorityPub, c.st.MachineRelayAuthPub) || c.st.Disowned {
 		return ErrPublicationState
 	}
 	for _, current := range c.st.PendingPublications {
+		if current.LogicalID == p.LogicalID && current.OperationID != p.OperationID {
+			return ErrPublicationConflict
+		}
 		if current.OperationID != p.OperationID {
 			continue
 		}

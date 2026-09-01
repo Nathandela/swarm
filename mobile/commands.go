@@ -556,6 +556,9 @@ func (a *App) TerminalInput(session string, text string) (err error) {
 func (a *App) sendTerminalInput(sc sendCtx, core *phonecore.Core, session, instance, generation string, data []byte) error {
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		return a.refuseInput(session, data, err)
+	}
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return a.refuseInput(session, data, err)
@@ -586,6 +589,9 @@ func (a *App) unsignedTerminalFrame(op, session, generation string, _ []byte) (*
 	}
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		return nil, err
+	}
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return nil, err
@@ -771,6 +777,9 @@ func (a *App) sendInputFrame(sc sendCtx, core *phonecore.Core, f phonecore.Input
 	}
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		return err
+	}
 	seq, err := core.Seq().NextInput()
 	if err != nil {
 		return err
@@ -917,7 +926,7 @@ func (a *App) resolveSend(conn func() (*relay.Client, error)) (sendCtx, error) {
 
 // sendCtx is everything one phone -> machine append needs, resolved together.
 type sendCtx struct {
-	cl     *relay.Client
+	cl     mailboxAppender
 	target string
 	key    crypto.ContentKey
 	epoch  uint32
@@ -1121,6 +1130,41 @@ func (a *App) sealSignedCommand(action, session string, contentHash []byte, body
 	// seconds for a connection.
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
+	if body.composer != nil {
+		st := core.State()
+		pending := phonecore.PendingPublication{
+			LogicalID:       id,
+			OperationID:     id,
+			Kind:            phonecore.PublicationComposer,
+			SessionID:       session,
+			SessionInstance: body.composer.SessionInstance,
+			ExpectedTurn:    body.composer.ExpectedTurn,
+			Text:            body.composer.Text,
+			Machine:         st.Machine,
+			EpochID:         st.EpochID,
+			Target:          sc.target,
+			AuthorityPub:    st.MachineRelayAuthPub,
+			Command:         cmd,
+			Composer:        body.composer,
+			Phase:           phonecore.PublicationPrepared,
+			CreatedAt:       time.Now(),
+		}
+		if err := core.PreparePublication(pending); err != nil {
+			return nil, err
+		}
+		// Once PreparePublication commits, this press is accepted locally and owns an
+		// operation id. An append failure is delivery-unknown, not a refusal: the exact
+		// envelope remains in the durable FIFO and the connection pump redrives it.
+		if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+			a.wakePublicationPump()
+		}
+		return &Op{Action: action, SessionID: session, OperationID: id}, nil
+	}
+	// Non-durable producers may not allocate above an older sealed publication. If its
+	// append still fails, this command refuses without consuming another sequence.
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		return nil, err
+	}
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return nil, err
@@ -1234,6 +1278,9 @@ func (a *App) unsignedCommandAt(action, session string, resyncCursor uint64, ros
 	// too. A terminal_watch lost to an inversion leaves a peek that never opens.
 	a.bucketMu.Lock()
 	defer a.bucketMu.Unlock()
+	if err := a.flushPendingPublicationsLocked(context.Background(), sc); err != nil {
+		return nil, err
+	}
 	seq, err := core.Seq().NextCommand()
 	if err != nil {
 		return nil, err

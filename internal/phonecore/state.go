@@ -182,7 +182,12 @@ import (
 // interaction reads. It lives inside content_kept, so a v17 build would silently drop it on its
 // next Save and lose operations whose relay delivery is unknown. That is a user-visible lost send,
 // so downgrade must fail closed rather than decode the rest of the blob.
-const StateSchemaVersion = 18
+//
+// v19 binds each pending publication to the exact machine relay-auth public key from which its
+// Target was derived. The v18 migration retains the operation and attaches the durable current
+// public key; the mobile publisher independently recomputes Target from that key before sending,
+// so a malformed legacy target remains inert rather than being guessed or re-targeted.
+const StateSchemaVersion = 19
 
 // StateFileName is the blob's name inside the phone's state directory.
 const StateFileName = "phone-state.json"
@@ -727,6 +732,11 @@ type fileStore struct {
 	path    string
 	machine string
 	st      State
+	// legacyPendingAuthority records that a carried v18 kept container predates the exact
+	// routing-authority binding. If custody opens it later, migration attaches this store's
+	// already-authenticated MachineRelayAuthPub before validation; mobile still recomputes
+	// and checks the opaque Target before any append.
+	legacyPendingAuthority bool
 
 	// wake and content are PB-KEY-2's tier KEKs. The two epoch keys are sealed under
 	// SEPARATE ones because a single file cannot be gated two ways.
@@ -876,7 +886,7 @@ func (s *fileStore) Save(st State) error {
 // it so changing s.st and persisting the change are one critical section rather than an
 // unlock/relock window in which an old snapshot can restore the retired generation.
 func (s *fileStore) saveLocked(st State) error {
-	if err := validatePendingPublications(st.PendingPublications); err != nil {
+	if err := validatePendingPublicationAuthority(st.PendingPublications, st.MachineRelayAuthPub); err != nil {
 		return fmt.Errorf("pending publications: %w", err)
 	}
 	// A snapshot taken BEFORE a purge belongs to a writer that has not noticed it, and round
@@ -957,6 +967,7 @@ func (s *fileStore) saveLocked(st State) error {
 		s.wakeState, s.kept, s.purgeable = wakeState, kept, purgeable
 	}
 	s.st = merged
+	s.legacyPendingAuthority = false
 	return nil
 }
 
@@ -1292,7 +1303,10 @@ func (s *fileStore) adoptKeptContainer(st *State, plain []byte) error {
 	if err := json.Unmarshal(plain, &c); err != nil {
 		return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, s.path, err)
 	}
-	if err := validatePendingPublications(c.PendingPublications); err != nil {
+	if s.legacyPendingAuthority {
+		c.PendingPublications = migratePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub)
+	}
+	if err := validatePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub); err != nil {
 		return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, s.path, err)
 	}
 	applySendSeq(st, c.SendSeq)
@@ -1431,6 +1445,7 @@ func (s *fileStore) load() error {
 	if f.SchemaVersion < 1 {
 		return fmt.Errorf("%w: %s: unversioned blob", ErrCorruptState, path)
 	}
+	s.legacyPendingAuthority = f.SchemaVersion < 19
 	if machineID != "" && f.Machine != machineID {
 		// Another machine's blob: discarded wholesale, and the state OpenStore constructed
 		// stands -- same reasoning as the first-run return above. The re-pair that follows must
@@ -1663,12 +1678,15 @@ func (s *fileStore) loadContentState(st *State, f stateFile, path string) error 
 		if err := json.Unmarshal(plain, &c); err != nil {
 			return fmt.Errorf("%w: %s: content state container: %v", ErrCorruptState, path, err)
 		}
+		if f.SchemaVersion < 19 {
+			c.PendingPublications = migratePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub)
+		}
 		applySendSeq(st, c.SendSeq)
 		if err := applyReceive(st, c.Receive); err != nil {
 			return fmt.Errorf("%w: %s: %v", ErrCorruptState, path, err)
 		}
 		st.PendingOps = c.PendingOps
-		if err := validatePendingPublications(c.PendingPublications); err != nil {
+		if err := validatePendingPublicationAuthority(c.PendingPublications, st.MachineRelayAuthPub); err != nil {
 			return fmt.Errorf("%w: %s: pending publications: %v", ErrCorruptState, path, err)
 		}
 		st.PendingPublications = clonePendingPublications(c.PendingPublications)
