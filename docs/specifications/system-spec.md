@@ -128,6 +128,14 @@ Derived view groups:
 - **T-6** (Ubiquitous) BEFORE an adapter is built, a **characterization harness** SHALL record the CLI's real behavior (PTY fixtures per state, hook/event payloads, version) into the fixture corpus; the adapter's capability-matrix entry (signals, resume, options) is the harness's output and the adapter's acceptance baseline.
 - **T-7** (Ubiquitous) v1.0 shipped Claude Code and Codex adapters. v1.1 shipped agy (Antigravity CLI, Google's Gemini CLI successor — Gemini CLI itself stops serving non-Enterprise requests 2026-06-18) and OpenCode adapters. The next adapter expansion ships Hermes Agent's classic CLI on macOS arm64 and Linux (amd64/arm64), characterized from Hermes 0.20.6; Intel macOS is unsupported. vibe (Mistral) was evaluated and dropped by decision (2026-07-18); see docs/design/cli-trio-adapters.md appendix for the rationale.
 
+### ContextGuard (C) (ADR-023)
+
+- **C-1** (Optional) WHERE the owner enables ContextGuard, the daemon SHALL remember one global integer threshold from 40 through 95 inclusive (default 80; disabled by default) and evaluate exact active-context occupancy at `used >= threshold`.
+- **C-2** (Ubiquitous) Every observation and lifecycle edge SHALL be bound to the current session instance, backend feed, provider thread, settings revision, source sequence, and capture time. Missing, malformed, stale, cumulative-only, uncharacterized, or unsupported evidence SHALL cause zero automatic provider actions.
+- **C-3** (Unwanted) IF a compaction outcome is ambiguous across a write, connection loss, event loss, or daemon restart, THEN the guard SHALL enter a durable no-retry hold; a replacement session instance starts a fresh cycle, while a daemon restart of the same instance preserves the safety latch.
+- **C-4** (Ubiquitous) ContextGuard SHALL NOT change provider launch flags, native auto-compaction settings, status-line settings, or harness configuration files. Settings and sanitized live state are owner-tier only; callbacks SHALL perform no parsing, persistence, or provider I/O.
+- **C-5** (Temporary rollout constraint) Codex telemetry and native compaction lifecycle are observed only for a running app-server version characterized from its initialize response. Automatic dispatch SHALL remain disabled until independent concurrent-turn and concurrent-manual-compaction gates prove non-interference and at-most-once behavior. Claude, OpenCode, AGY, and Hermes remain unavailable until independently characterized.
+
 ### Persistence (R) (ADR-003)
 
 - **R-1** (Ubiquitous) State SHALL live under `$XDG_STATE_HOME/swarm` (fallback `~/.local/state/swarm`), 0700: `sessions/<id>/meta.json` (source of truth, atomic temp+rename writes, `schema_version`) + transcript files (0600, capped, rotated); `roster.json` is a rebuildable index only.

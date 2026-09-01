@@ -76,6 +76,15 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 	if instance == "" {
 		return fmt.Errorf("skeleton: refusing to record an empty session instance for %q", sessionID)
 	}
+	// Serialize the full publication with guard registration. Feeds continue into
+	// their bounded pre-registration buffer while this lock is held; an old worker
+	// is joined before its sidecar is removed, and no old-instance registration can
+	// slip into the remove/publish gap.
+	if d.contextGuards != nil {
+		d.contextGuards.replaceMu.Lock()
+		defer d.contextGuards.replaceMu.Unlock()
+		d.contextGuards.stopSessionExceptInstanceLocked(sessionID, instance)
+	}
 	d.capStore.transitionMu.Lock()
 	defer d.capStore.transitionMu.Unlock()
 	d.capStore.mu.Lock()
@@ -83,6 +92,9 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 	if prior, _, ok := d.sessionInstanceLocked(sessionID); ok && prior != instance {
 		delete(d.capStore.liveProof, sessionID)
 		_ = os.Remove(d.sessionStatePathLocked(sessionID, sessionSinkProofFile))
+		// A replacement is a fresh ContextGuard cycle. Its session id is reused but
+		// the prior incarnation's latch/uncertain action must not constrain it.
+		_ = os.Remove(d.sessionStatePathLocked(sessionID, contextGuardStateFile))
 	}
 	if d.capStore.instances == nil {
 		d.capStore.instances = map[string]string{}

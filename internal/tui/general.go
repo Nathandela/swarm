@@ -505,8 +505,11 @@ func (m rootModel) updateGeneral(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case k.Text == "o":
 		// Open the options window seeded with the live layout (owner decision
 		// 2026-08-27: one form with arrow navigation, not one key per setting).
-		m.options = optionsModel{grouping: m.general.grouping, ordering: m.general.ordering}
+		m.optionsGeneration++
+		var cmd tea.Cmd
+		m.options, cmd = newOptionsModel(m.general.grouping, m.general.ordering, m.client, m.optionsGeneration)
 		m.screen = screenOptions
+		return m, cmd
 	case k.Text == "h":
 		// Open the handoff form against the selected source. ADR-010 Amendment 4 E2:
 		// this opens on ANY row -- ended, lost, busy and permission-blocked included.

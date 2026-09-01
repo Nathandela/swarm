@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -241,6 +242,7 @@ var serverCaps = []string{
 	CapAttach, CapSubscribe,
 	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
 	CapExternalResume, CapHandsOffHandoff,
+	CapContextGuardSettings,
 }
 
 // Server is the client-facing protocol endpoint: it accepts client connections on
@@ -541,7 +543,7 @@ func (s *Server) distribute(m persist.Meta) {
 
 	var shared []byte
 	if s.endpointID != "" {
-		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: stampView(s.endpointID, m, group, controlled, pending, sentAt)})
+		shared, _ = EncodeControl(Control{Op: OpEvent, EndpointID: s.endpointID, Session: s.stampView(s.endpointID, m, group, controlled, pending, sentAt)})
 	}
 
 	s.subMu.Lock()
@@ -549,7 +551,7 @@ func (s *Server) distribute(m persist.Meta) {
 	for sc := range s.subs {
 		body := shared
 		if body == nil {
-			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
+			body, _ = EncodeControl(Control{Op: OpEvent, EndpointID: sc.endpointID, Session: s.stampView(sc.endpointID, m, group, controlled, pending, sentAt)})
 			if body == nil {
 				continue // Control marshaling cannot fail in practice; skip defensively
 			}
@@ -1243,6 +1245,10 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleDeviceRegrant(c)
 	case OpRemoteSetControl:
 		cc.handleRemoteSetControl(c)
+	case OpContextGuardGet:
+		cc.handleContextGuardGet()
+	case OpContextGuardSet:
+		cc.handleContextGuardSet(c)
 	case OpTakeControl:
 		cc.handleTakeControl(c)
 	case OpTakeControlEnd:
@@ -1313,6 +1319,12 @@ func (cc *clientConn) handleHello(c Control) {
 		return
 	}
 	cc.caps = intersectCaps(c.Capabilities, serverCaps)
+	// Context-guard settings are strictly owner-tier. Do not advertise the owner
+	// capability to a remote peer: a remote request is still refused before capability
+	// or body checks, but its hello must not suggest the operation exists for it.
+	if cc.srv.remoteTier {
+		cc.caps = withoutCap(cc.caps, CapContextGuardSettings)
+	}
 	cc.helloed = true
 	_ = cc.writeControl(Control{
 		Op:              OpHello,
@@ -2046,6 +2058,67 @@ func (cc *clientConn) handleRemoteSetControl(c Control) {
 		return
 	}
 	cc.replyOK("")
+}
+
+// handleContextGuardGet returns the daemon-global context-guard settings. It is
+// owner-tier-only: settings control an owner guardrail, so a remote peer is rejected
+// before negotiation or backend discovery.
+func (cc *clientConn) handleContextGuardGet() {
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("context guard settings are owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapContextGuardSettings) {
+		cc.replyErrorCode("context guard settings capability was not negotiated", CodeCapabilityRefused)
+		return
+	}
+	backend, ok := cc.srv.d.(ContextGuardSettingsBackend)
+	if !ok {
+		cc.replyErrorCode("context guard settings are unavailable on this daemon", CodeUnavailable)
+		return
+	}
+	settings, err := backend.ContextGuardSettings()
+	if err != nil {
+		cc.replyErrorCode("context guard settings are unavailable", CodeUnavailable)
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpContextGuardGet, EndpointID: cc.endpointID, ContextGuardSettings: &settings})
+}
+
+// handleContextGuardSet applies one settings compare-and-swap. Gate order is a
+// security contract: remote refusal, negotiated capability, request body, backend.
+func (cc *clientConn) handleContextGuardSet(c Control) {
+	if cc.srv.remoteTier {
+		cc.replyErrorCode("context guard settings are owner-tier only", CodeNotAuthorized)
+		return
+	}
+	if !cc.hasCap(CapContextGuardSettings) {
+		cc.replyErrorCode("context guard settings capability was not negotiated", CodeCapabilityRefused)
+		return
+	}
+	if c.ContextGuardSet == nil {
+		cc.replyErrorCode("context_guard_set requires context_guard_set", CodeInvalidField)
+		return
+	}
+	if err := ValidateContextGuardAutoCompact(c.ContextGuardSet.AutoCompact); err != nil {
+		cc.replyErrorCode("context_guard_set: "+err.Error(), CodeInvalidField)
+		return
+	}
+	backend, ok := cc.srv.d.(ContextGuardSettingsBackend)
+	if !ok {
+		cc.replyErrorCode("context guard settings are unavailable on this daemon", CodeUnavailable)
+		return
+	}
+	settings, err := backend.SetContextGuardSettings(c.ContextGuardSet.ExpectedRevision, c.ContextGuardSet.AutoCompact)
+	if err != nil {
+		if errors.Is(err, ErrContextGuardSettingsStaleRevision) {
+			cc.replyErrorCode("context guard settings revision is stale", CodeStaleRevision)
+			return
+		}
+		cc.replyErrorCode("context guard settings are unavailable", CodeUnavailable)
+		return
+	}
+	_ = cc.writeControl(Control{Op: OpContextGuardSet, EndpointID: cc.endpointID, ContextGuardSettings: &settings})
 }
 
 func (cc *clientConn) handleAttach(c Control) {
@@ -3081,8 +3154,21 @@ func (cc *clientConn) resolveSession(c Control) (string, bool) {
 }
 
 func (cc *clientConn) stampView(m persist.Meta, group status.Group) *SessionView {
-	return stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
+	return cc.srv.stampView(cc.endpointID, m, group, cc.srv.remoteControlled(m.ID), cc.srv.supervisionPending(m.ID),
 		cc.srv.remoteActivityAt(m.ID))
+}
+
+func (s *Server) stampView(endpointID string, m persist.Meta, group status.Group, remoteControlled, supervisionPending bool, remoteActivityAt time.Time) *SessionView {
+	view := stampView(endpointID, m, group, remoteControlled, supervisionPending, remoteActivityAt)
+	if s.remoteTier {
+		return view
+	}
+	if source, ok := s.d.(ContextGuardViewBackend); ok {
+		if guard, present := source.ContextGuardView(m.ID); present {
+			view.ContextGuard = &guard
+		}
+	}
+	return view
 }
 
 // stampView builds one general-view row (V-4) for the given endpoint id. It is
@@ -3341,6 +3427,16 @@ func intersectCaps(offered, supported []string) []string {
 	for _, c := range supported {
 		if want[c] {
 			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func withoutCap(caps []string, denied string) []string {
+	out := caps[:0]
+	for _, cap := range caps {
+		if cap != denied {
+			out = append(out, cap)
 		}
 	}
 	return out

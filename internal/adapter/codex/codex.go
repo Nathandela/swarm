@@ -304,6 +304,12 @@ func gridText(snap *vt.Snap) string {
 // (tolerating a leading "v"). It is pure and total.
 func firstDottedNumeric(output string) (string, bool) {
 	for _, field := range strings.Fields(output) {
+		// initialize.userAgent binds the running app-server version as
+		// "<client-name>/<codex-version> (...)"; the ordinary `codex --version`
+		// banner carries the same version as a standalone field.
+		if slash := strings.LastIndexByte(field, '/'); slash >= 0 {
+			field = field[slash+1:]
+		}
 		v := strings.TrimPrefix(field, "v")
 		parts := strings.Split(v, ".")
 		if len(parts) < 2 {
