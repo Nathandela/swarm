@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,16 +46,23 @@ const maxResponseBytes = 1 << 20
 
 // FCMConfig configures an FCM sender.
 type FCMConfig struct {
-	Account    *ServiceAccount // parsed credential; required
-	BaseURL    string          // messaging endpoint (nil/"" => DefaultFCMBaseURL)
-	Now        func() time.Time
-	RetryDelay time.Duration // spacing between retries; <= 0 means none (see DefaultRetryDelay)
-	HTTPClient *http.Client
+	Account *ServiceAccount // parsed credential; required
+	// ProjectID + AuthorizedHTTPClient are the ADC/workload-identity alternative
+	// to Account. The client must already attach a bearer with the Firebase
+	// Messaging scope. Exactly one authorization mode may be configured.
+	ProjectID            string
+	AuthorizedHTTPClient *http.Client
+	BaseURL              string // messaging endpoint (nil/"" => DefaultFCMBaseURL)
+	Now                  func() time.Time
+	RetryDelay           time.Duration // spacing between retries; <= 0 means none (see DefaultRetryDelay)
+	HTTPClient           *http.Client
 }
 
 // FCM sends wakes through Firebase Cloud Messaging v1.
 type FCM struct {
 	acct       *ServiceAccount
+	projectID  string
+	authorized bool
 	baseURL    string
 	now        func() time.Time
 	retryDelay time.Duration
@@ -68,10 +76,20 @@ type FCM struct {
 // the failure to the first wake (PB-PUSH-5). LoadServiceAccount does the parsing; this
 // catches the assembly mistake — a nil or half-built account reaching the constructor.
 func NewFCM(cfg FCMConfig) (*FCM, error) {
-	if cfg.Account == nil || cfg.Account.key == nil {
+	if cfg.Account != nil && (cfg.AuthorizedHTTPClient != nil || cfg.ProjectID != "") {
+		return nil, fmt.Errorf("%w: account and authorized-client configuration are mutually exclusive", errServiceAccount)
+	}
+	if cfg.AuthorizedHTTPClient != nil {
+		if strings.TrimSpace(cfg.ProjectID) == "" {
+			return nil, fmt.Errorf("%w: project id is required with an authorized HTTP client", errServiceAccount)
+		}
+		if cfg.HTTPClient != nil {
+			return nil, fmt.Errorf("%w: HTTPClient and AuthorizedHTTPClient are mutually exclusive", errServiceAccount)
+		}
+	} else if cfg.Account == nil || cfg.Account.key == nil {
 		return nil, fmt.Errorf("%w: no parsed credential (load one with LoadServiceAccount)", errServiceAccount)
 	}
-	if cfg.Account.ProjectID == "" || cfg.Account.ClientEmail == "" || cfg.Account.TokenURI == "" {
+	if cfg.Account != nil && (cfg.Account.ProjectID == "" || cfg.Account.ClientEmail == "" || cfg.Account.TokenURI == "") {
 		return nil, fmt.Errorf("%w: incomplete credential", errServiceAccount)
 	}
 	base := cfg.BaseURL
@@ -86,11 +104,21 @@ func NewFCM(cfg FCMConfig) (*FCM, error) {
 	if delay < 0 {
 		delay = 0
 	}
-	client := cfg.HTTPClient
+	client := cfg.AuthorizedHTTPClient
+	if client == nil {
+		client = cfg.HTTPClient
+	}
 	if client == nil {
 		client = &http.Client{Timeout: defaultRequestTimeout}
 	}
-	return &FCM{acct: cfg.Account, baseURL: base, now: now, retryDelay: delay, http: client}, nil
+	projectID := cfg.ProjectID
+	if cfg.Account != nil {
+		projectID = cfg.Account.ProjectID
+	}
+	return &FCM{
+		acct: cfg.Account, projectID: projectID, authorized: cfg.AuthorizedHTTPClient != nil,
+		baseURL: base, now: now, retryDelay: delay, http: client,
+	}, nil
 }
 
 // Push delivers one wake to token.
@@ -159,17 +187,23 @@ func (f *FCM) marshalMessage(token string, p relay.PushPayload) ([]byte, error) 
 
 // send performs one attempt and reports whether the failure is worth retrying.
 func (f *FCM) send(ctx context.Context, body []byte) (retryable bool, err error) {
-	tok, err := f.accessTokenFor(ctx)
-	if err != nil {
-		// A refused/unreachable token endpoint is as transient as a refused send.
-		return true, err
+	var tok string
+	if !f.authorized {
+		var err error
+		tok, err = f.accessTokenFor(ctx)
+		if err != nil {
+			// A refused/unreachable token endpoint is as transient as a refused send.
+			return true, err
+		}
 	}
-	url := fmt.Sprintf("%s/v1/projects/%s/messages:send", f.baseURL, f.acct.ProjectID)
+	url := fmt.Sprintf("%s/v1/projects/%s/messages:send", f.baseURL, f.projectID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
+	if !f.authorized {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := f.http.Do(req)
 	if err != nil {

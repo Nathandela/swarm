@@ -18,6 +18,7 @@ require (
 	github.com/rivo/uniseg v0.4.7
 	go.etcd.io/bbolt v1.3.11
 	golang.org/x/crypto v0.52.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/tools v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -25,6 +26,7 @@ require (
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/aymanbagabas/go-udiff v0.4.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
 	github.com/charmbracelet/x/exp/golden v0.0.0-20251109135125-8916d276318f // indirect

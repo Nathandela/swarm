@@ -58,12 +58,13 @@ type PlayIntegrityAccountDetails struct {
 	AppLicensingVerdict string `json:"appLicensingVerdict"`
 }
 
-// PlayIntegrityConfig is the complete, fail-closed verifier policy. There are no defaults:
-// omitting a package, project, certificate allowlist or freshness bound is a construction
-// error rather than a weakened production verifier.
+// PlayIntegrityConfig is the complete, fail-closed decoded-verdict policy. There are no
+// defaults: omitting a package, certificate allowlist or freshness bound is a construction
+// error rather than a weakened production verifier. Cloud project identity is deliberately
+// absent because Google does not echo it in tokenPayloadExternal; Android token preparation,
+// the decoder's ADC construction and release provenance enforce that deployment coordinate.
 type PlayIntegrityConfig struct {
 	PackageName              string
-	CloudProjectNumber       int64
 	AllowedCertificateSHA256 []string
 	MaxVerdictAge            time.Duration
 	MaxFutureSkew            time.Duration
@@ -72,21 +73,17 @@ type PlayIntegrityConfig struct {
 }
 
 type PlayIntegrityVerifier struct {
-	packageName        string
-	cloudProjectNumber int64
-	certificates       [][32]byte
-	maxAge             time.Duration
-	maxFutureSkew      time.Duration
-	now                func() time.Time
-	decode             PlayIntegrityDecodeClient
+	packageName   string
+	certificates  [][32]byte
+	maxAge        time.Duration
+	maxFutureSkew time.Duration
+	now           func() time.Time
+	decode        PlayIntegrityDecodeClient
 }
 
 func NewPlayIntegrityVerifier(cfg PlayIntegrityConfig) (*PlayIntegrityVerifier, error) {
 	if strings.TrimSpace(cfg.PackageName) == "" {
 		return nil, errors.New("pushgw: Play Integrity package name is required")
-	}
-	if cfg.CloudProjectNumber <= 0 {
-		return nil, errors.New("pushgw: Play Integrity cloud project number is required")
 	}
 	if cfg.Decode == nil {
 		return nil, errors.New("pushgw: Play Integrity decode client is required")
@@ -111,13 +108,12 @@ func NewPlayIntegrityVerifier(cfg PlayIntegrityConfig) (*PlayIntegrityVerifier, 
 		certs = append(certs, cert)
 	}
 	return &PlayIntegrityVerifier{
-		packageName:        cfg.PackageName,
-		cloudProjectNumber: cfg.CloudProjectNumber,
-		certificates:       certs,
-		maxAge:             cfg.MaxVerdictAge,
-		maxFutureSkew:      cfg.MaxFutureSkew,
-		now:                cfg.Now,
-		decode:             cfg.Decode,
+		packageName:   cfg.PackageName,
+		certificates:  certs,
+		maxAge:        cfg.MaxVerdictAge,
+		maxFutureSkew: cfg.MaxFutureSkew,
+		now:           cfg.Now,
+		decode:        cfg.Decode,
 	}, nil
 }
 
@@ -233,6 +229,9 @@ func (c *GooglePlayIntegrityDecodeClient) Decode(ctx context.Context, packageNam
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(&envelope); err != nil {
 		return PlayIntegrityPayload{}, fmt.Errorf("%w: malformed decode response: %v", errPlayIntegrityVerdict, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return PlayIntegrityPayload{}, fmt.Errorf("%w: trailing decode response data", errPlayIntegrityVerdict)
 	}
 	return envelope.TokenPayloadExternal, nil
 }

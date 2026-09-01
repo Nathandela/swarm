@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,19 @@ func TestGooglePlayIntegrityDecodeClient_ClassifiesAvailability(t *testing.T) {
 	}
 }
 
+func TestGooglePlayIntegrityDecodeClient_RejectsTrailingDocument(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"tokenPayloadExternal":{}} {"smuggled":true}`)
+	}))
+	defer server.Close()
+	client, _ := NewGooglePlayIntegrityDecodeClient(server.Client())
+	client.baseURL = server.URL
+	if _, err := client.Decode(context.Background(), ProductionAndroidPackage, "token"); err == nil || errors.Is(err, ErrAttestationUnavailable) {
+		t.Fatalf("trailing-document error = %v, want definitive invalid", err)
+	}
+}
+
 func (f *fakePlayIntegrityDecoder) Decode(_ context.Context, packageName, token string) (PlayIntegrityPayload, error) {
 	f.packageName, f.token = packageName, token
 	return f.payload, f.err
@@ -106,7 +120,6 @@ func newValidPlayIntegrityVerifier(t *testing.T) (*PlayIntegrityVerifier, *fakeP
 	decoder := &fakePlayIntegrityDecoder{payload: validPlayIntegrityPayload(now, base64.RawURLEncoding.EncodeToString(hash[:]), cert)}
 	verifier, err := NewPlayIntegrityVerifier(PlayIntegrityConfig{
 		PackageName:              ProductionAndroidPackage,
-		CloudProjectNumber:       ProductionCloudProjectNumber,
 		AllowedCertificateSHA256: []string{cert},
 		MaxVerdictAge:            2 * time.Minute,
 		MaxFutureSkew:            30 * time.Second,
@@ -117,6 +130,13 @@ func newValidPlayIntegrityVerifier(t *testing.T) (*PlayIntegrityVerifier, *fakeP
 		t.Fatal(err)
 	}
 	return verifier, decoder, now, hash, cert
+}
+
+func TestPlayIntegrityVerifier_DoesNotClaimUndecodedProjectAuthority(t *testing.T) {
+	t.Parallel()
+	if _, found := reflect.TypeOf(PlayIntegrityConfig{}).FieldByName("CloudProjectNumber"); found {
+		t.Fatal("decoded-verdict verifier misleadingly claims to enforce a Cloud project number")
+	}
 }
 
 func TestPlayIntegrityVerifier_StrictLicensedPlayBuild(t *testing.T) {
@@ -185,7 +205,6 @@ func TestPlayIntegrityVerifier_ConfigurationFailsClosed(t *testing.T) {
 	t.Parallel()
 	base := PlayIntegrityConfig{
 		PackageName:              ProductionAndroidPackage,
-		CloudProjectNumber:       ProductionCloudProjectNumber,
 		AllowedCertificateSHA256: []string{base64.RawURLEncoding.EncodeToString(make([]byte, 32))},
 		MaxVerdictAge:            time.Minute,
 		MaxFutureSkew:            30 * time.Second,
@@ -198,7 +217,6 @@ func TestPlayIntegrityVerifier_ConfigurationFailsClosed(t *testing.T) {
 	}{
 		{"missing decoder", func(c *PlayIntegrityConfig) { c.Decode = nil }},
 		{"wrong package", func(c *PlayIntegrityConfig) { c.PackageName = "" }},
-		{"missing project", func(c *PlayIntegrityConfig) { c.CloudProjectNumber = 0 }},
 		{"missing certs", func(c *PlayIntegrityConfig) { c.AllowedCertificateSHA256 = nil }},
 		{"malformed cert", func(c *PlayIntegrityConfig) { c.AllowedCertificateSHA256 = []string{"abcd"} }},
 		{"missing age", func(c *PlayIntegrityConfig) { c.MaxVerdictAge = 0 }},

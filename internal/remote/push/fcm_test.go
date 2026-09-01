@@ -626,6 +626,44 @@ func TestPBPUSH2_SenderSatisfiesTheRelaySeam(t *testing.T) {
 	var _ relay.PushSink = (*FCM)(nil)
 }
 
+func TestPBPUSH2_AuthorizedClientModeUsesExplicitProject(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer provider.Close()
+	sender, err := NewFCM(FCMConfig{
+		ProjectID:            "swarm-8404f",
+		AuthorizedHTTPClient: provider.Client(),
+		BaseURL:              provider.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewFCM authorized mode: %v", err)
+	}
+	if err := sender.Push(context.Background(), "token", testPayload()); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if gotPath != "/v1/projects/swarm-8404f/messages:send" {
+		t.Fatalf("FCM path = %q, want explicit production project", gotPath)
+	}
+}
+
+func TestPBPUSH5_AuthorizedClientModeFailsClosedAtConstruction(t *testing.T) {
+	t.Parallel()
+	for name, cfg := range map[string]FCMConfig{
+		"missing project": {AuthorizedHTTPClient: http.DefaultClient},
+		"missing client":  {ProjectID: "swarm-8404f"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewFCM(cfg); err == nil {
+				t.Fatal("NewFCM accepted incomplete authorized-client configuration")
+			}
+		})
+	}
+}
+
 // decodeJWTClaims decodes the claim set of an unverified JWT. The assertion is signed
 // with a key generated in this test and verified by nobody: this reads what the sender
 // ASKED FOR, which is the property under test.

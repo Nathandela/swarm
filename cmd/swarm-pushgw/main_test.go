@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Nathandela/swarm/internal/pushgw"
+	"golang.org/x/oauth2"
 )
 
 func dbPath(t *testing.T) string {
@@ -104,12 +105,83 @@ func TestHTTPServer_BoundsUnauthenticatedConnections(t *testing.T) {
 	}
 }
 
+type staticRuntimeTokenSource struct{}
+
+func (staticRuntimeTokenSource) Token() (*oauth2.Token, error) {
+	return &oauth2.Token{AccessToken: "test", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour)}, nil
+}
+
+func TestProductionDependenciesUseOneExactProjectCredentialForFCMAndIntegrity(t *testing.T) {
+	var gotPath string
+	var gotScopes []string
+	loader := runtimeCredentialLoader(func(_ context.Context, path string, scopes []string) (runtimeGoogleCredentials, error) {
+		gotPath = path
+		gotScopes = append([]string(nil), scopes...)
+		return runtimeGoogleCredentials{ProjectID: productionGCPProjectID, TokenSource: staticRuntimeTokenSource{}}, nil
+	})
+	deps, err := buildProductionDependencies(context.Background(), productionDependencyConfig{
+		CredentialPath:        "/runtime/swarm-8404f.json",
+		ProjectID:             productionGCPProjectID,
+		ProjectNumber:         pushgw.ProductionCloudProjectNumber,
+		PackageName:           pushgw.ProductionAndroidPackage,
+		SigningCertificateSHA: productionPlaySigningCertificateSHA256,
+	}, loader)
+	if err != nil {
+		t.Fatalf("buildProductionDependencies: %v", err)
+	}
+	if gotPath != "/runtime/swarm-8404f.json" {
+		t.Fatalf("credential path = %q", gotPath)
+	}
+	for _, want := range []string{fcmMessagingScope, playIntegrityScope} {
+		found := false
+		for _, got := range gotScopes {
+			found = found || got == want
+		}
+		if !found {
+			t.Errorf("shared runtime credential scopes %v missing %q", gotScopes, want)
+		}
+	}
+	if deps.sender == nil || deps.attestor == nil || !deps.readiness.ProductionSender ||
+		!deps.readiness.ProductionAttestor || !deps.readiness.RequiredConfig {
+		t.Fatalf("production dependencies not ready: %+v", deps.readiness)
+	}
+}
+
+func TestProductionDependenciesRejectWrongRuntimeOrDeclaredAuthority(t *testing.T) {
+	good := productionDependencyConfig{
+		ProjectID:             productionGCPProjectID,
+		ProjectNumber:         pushgw.ProductionCloudProjectNumber,
+		PackageName:           pushgw.ProductionAndroidPackage,
+		SigningCertificateSHA: productionPlaySigningCertificateSHA256,
+	}
+	loader := runtimeCredentialLoader(func(context.Context, string, []string) (runtimeGoogleCredentials, error) {
+		return runtimeGoogleCredentials{ProjectID: "wrong-project", TokenSource: staticRuntimeTokenSource{}}, nil
+	})
+	if _, err := buildProductionDependencies(context.Background(), good, loader); err == nil {
+		t.Fatal("accepted a runtime credential from the wrong GCP project")
+	}
+	for name, mutate := range map[string]func(*productionDependencyConfig){
+		"project id":     func(c *productionDependencyConfig) { c.ProjectID = "soml-ia-493903" },
+		"project number": func(c *productionDependencyConfig) { c.ProjectNumber++ },
+		"package":        func(c *productionDependencyConfig) { c.PackageName = "example.invalid" },
+		"certificate":    func(c *productionDependencyConfig) { c.SigningCertificateSHA = "upload-certificate" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := good
+			mutate(&cfg)
+			if _, err := buildProductionDependencies(context.Background(), cfg, loader); err == nil {
+				t.Fatal("accepted wrong production authority")
+			}
+		})
+	}
+}
+
 func TestBackupRestoreSubcommandsRoundTripDBAndKey(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.db")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := run(ctx, []string{"-db", source, "-listen", "127.0.0.1:0", "-insecure-http"}); err != nil {
+	if err := run(ctx, []string{"-db", source, "-listen", "127.0.0.1:0", "-insecure-http", "-dev"}); err != nil {
 		t.Fatalf("initialize source: %v", err)
 	}
 	archive := filepath.Join(dir, "backup.tar")
@@ -141,13 +213,13 @@ func TestHealthcheckSubcommandRequiresReadyStatus(t *testing.T) {
 	}
 }
 
-func TestRun_UnreadableFCMCredentials_ReturnsError(t *testing.T) {
+func TestRun_UnreadableGoogleRuntimeCredentials_ReturnsError(t *testing.T) {
 	err := run(context.Background(), []string{
 		"-db", dbPath(t), "-insecure-http",
-		"-fcm-credentials", filepath.Join(t.TempDir(), "does-not-exist.json"),
+		"-google-credentials", filepath.Join(t.TempDir(), "does-not-exist.json"),
 	})
 	if err == nil {
-		t.Fatal("run accepted an unreadable -fcm-credentials path")
+		t.Fatal("run accepted an unreadable -google-credentials path")
 	}
 }
 
@@ -164,6 +236,7 @@ func TestRun_InsecureHTTP_BootsAndShutsDownCleanly(t *testing.T) {
 		"-db", dbPath(t),
 		"-listen", "127.0.0.1:0",
 		"-insecure-http",
+		"-dev",
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -279,6 +352,7 @@ func TestRun_TLSMode_PinsMinimumVersionAtTLS13(t *testing.T) {
 			"-listen", addr,
 			"-tls-cert", certPath,
 			"-tls-key", keyPath,
+			"-dev",
 		})
 	}()
 
@@ -314,7 +388,7 @@ func TestNotImplementedAttestor_AlwaysFailsClosed(t *testing.T) {
 	}
 }
 
-// TestDevSender_AlwaysReturnsUpstreamUnavailable is the unset -fcm-credentials dev-mode
+// TestDevSender_AlwaysReturnsUpstreamUnavailable is the explicit -dev mode
 // contract: a wake attempted with no provider wired gets an honest, retryable refusal
 // rather than a fake accept.
 func TestDevSender_AlwaysReturnsUpstreamUnavailable(t *testing.T) {
