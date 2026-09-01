@@ -326,6 +326,13 @@ func (n *PushNotifier) Reseed(rs protocol.JournalReseed) error {
 	return errNoReseedSink
 }
 
+func (n *PushNotifier) FullResync(rs protocol.JournalReseed) error {
+	if sink, ok := n.inner.(FullResyncSink); ok {
+		return sink.FullResync(rs)
+	}
+	return errNoReseedSink
+}
+
 // DeliveredCursor forwards the inner sink's durable PB-GW-8 resume point.
 func (n *PushNotifier) DeliveredCursor() uint64 {
 	if cs, ok := n.inner.(CursorSource); ok {

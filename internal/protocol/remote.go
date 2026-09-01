@@ -164,6 +164,13 @@ type JournalBackend interface {
 	JournalSubscribe() (<-chan JournalRecord, func()) // single source; the Server fans out (S9)
 }
 
+// JournalSubscribeFromBackend is the additive atomic resume surface. It is
+// separate from JournalBackend so a new server remains source-compatible with an
+// older daemon adapter and can negotiate/fall back explicitly.
+type JournalSubscribeFromBackend interface {
+	JournalSubscribeFrom(from uint64) (JournalResume, <-chan JournalRecord, func(), error)
+}
+
 // DeviceAuthenticator is the optional interface a remote-tier DaemonAPI implements to
 // authorize remote mutating ops (R-POL.9): AuthorizeCommand returns nil ONLY when the
 // device signature verifies over the canonical tuple AND the device's capability

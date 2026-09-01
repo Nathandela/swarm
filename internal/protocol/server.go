@@ -239,7 +239,7 @@ const maxCommandValidity = 1 * time.Hour
 // and a JournalBackend, and a remote mutating op is gated by the remote tier.
 var serverCaps = []string{
 	CapAttach, CapSubscribe,
-	CapRemoteGateway, CapJournal, CapActivity, CapPolicy, CapPairing,
+	CapRemoteGateway, CapJournal, CapJournalSubscribeFrom, CapActivity, CapPolicy, CapPairing,
 	CapExternalResume, CapHandsOffHandoff,
 }
 
@@ -332,7 +332,8 @@ type Server struct {
 	subs  map[*clientConn]struct{}
 
 	jsubMu sync.Mutex
-	jsubs  map[*clientConn]struct{} // journal subscribers (fanned out separately)
+	jsubs  map[*clientConn]struct{} // legacy journal subscribers (global fan-out)
+	jdsubs map[*clientConn]struct{} // direct atomic journal subscribers
 
 	journalCancel func() // stops the JournalBackend subscription on Close (if any)
 
@@ -402,6 +403,7 @@ func newServer(d DaemonAPI) *Server {
 		leases:           make(map[string]*sessionLease),
 		subs:             make(map[*clientConn]struct{}),
 		jsubs:            make(map[*clientConn]struct{}),
+		jdsubs:           make(map[*clientConn]struct{}),
 		composerFallback: make(map[string]composerCachedOutcome),
 		composerOpLocks:  make(map[string]*composerOperationLock),
 		stop:             make(chan struct{}),
@@ -580,6 +582,7 @@ func (s *Server) journalFanoutLoop(source <-chan JournalRecord) {
 			return
 		case rec, ok := <-source:
 			if !ok {
+				s.severLegacyJournalSubscribers()
 				return
 			}
 			s.distributeJournal(rec)
@@ -635,6 +638,7 @@ func (s *Server) removeConn(cc *clientConn) {
 	s.subMu.Unlock()
 	s.jsubMu.Lock()
 	delete(s.jsubs, cc)
+	delete(s.jdsubs, cc)
 	s.jsubMu.Unlock()
 }
 
@@ -1109,8 +1113,10 @@ type clientConn struct {
 	// goroutine, not the writer, so the fan-out and writer run at balanced speeds and
 	// a draining subscriber's writer keeps its queue below the cap (only a wedged one
 	// overflows).
-	jSubOnce sync.Once
-	jEventQ  chan []byte
+	jSubOnce      sync.Once
+	jEventQ       chan []byte
+	jDirectMu     sync.Mutex
+	jDirectCancel func()
 
 	// controller state (this conn as the controller of attSession)
 	attMu      sync.Mutex
@@ -1229,6 +1235,8 @@ func (cc *clientConn) handleControl(c Control) {
 		cc.handleJournalRead(c)
 	case OpJournalSubscribe:
 		cc.handleJournalSubscribe()
+	case OpJournalSubscribeFrom:
+		cc.handleJournalSubscribeFrom(c)
 	case OpTerminalSubscribe:
 		cc.handleTerminalSubscribe(c)
 	case OpSendInput:
@@ -1994,6 +2002,21 @@ func (s *Server) SeverAllRemoteControl() {
 // is idempotent, and the connection's cleanup unregisters it from jsubs).
 func (s *Server) severJournalSubscribers() {
 	s.jsubMu.Lock()
+	subs := make([]*clientConn, 0, len(s.jsubs)+len(s.jdsubs))
+	for sc := range s.jsubs {
+		subs = append(subs, sc)
+	}
+	for sc := range s.jdsubs {
+		subs = append(subs, sc)
+	}
+	s.jsubMu.Unlock()
+	for _, sc := range subs {
+		sc.close()
+	}
+}
+
+func (s *Server) severLegacyJournalSubscribers() {
+	s.jsubMu.Lock()
 	subs := make([]*clientConn, 0, len(s.jsubs))
 	for sc := range s.jsubs {
 		subs = append(subs, sc)
@@ -2478,6 +2501,102 @@ func (cc *clientConn) handleJournalSubscribe() {
 		cc.srv.jsubMu.Unlock()
 	})
 	cc.replyOK("")
+}
+
+// handleJournalSubscribeFrom returns one atomic roster+backlog snapshot, then
+// starts the exact live source registered at that boundary. Snapshot pages are
+// written before the direct source is drained, so the wire order is deterministic;
+// the journal's bounded source closes on overflow and this connection closes with
+// it, forcing cursor-based replay instead of a silent gap.
+func (cc *clientConn) handleJournalSubscribeFrom(c Control) {
+	if !cc.hasCap(CapJournal) || !cc.hasCap(CapJournalSubscribeFrom) {
+		cc.replyError("atomic journal subscription capability not negotiated")
+		return
+	}
+	jb, ok := cc.srv.d.(JournalSubscribeFromBackend)
+	if !ok {
+		cc.replyError("atomic journal subscription not supported by this daemon")
+		return
+	}
+	if !cc.allowUnsignedJournalPlaneRead() {
+		return
+	}
+	res, source, cancel, err := jb.JournalSubscribeFrom(c.Cursor)
+	if err != nil {
+		cc.replyError("journal_subscribe_from: " + err.Error())
+		return
+	}
+	reply := Control{
+		Op: OpJournalSubscribeFrom, EndpointID: cc.endpointID, Cursor: res.Cursor,
+		Journal: res.Events, Roster: res.Roster, FullResync: res.FullResync,
+	}
+	max := c.JournalMaxBytes
+	if max <= 0 {
+		max = wire.MaxFrame - 1
+	}
+	pages, err := journalReadPages(reply, max)
+	if err != nil {
+		cancel()
+		cc.replyError("journal_subscribe_from: " + err.Error())
+		return
+	}
+	started := false
+	cc.jSubOnce.Do(func() {
+		started = true
+		if uc, ok := cc.conn.(interface{ SetWriteBuffer(int) error }); ok {
+			_ = uc.SetWriteBuffer(journalSndBuf)
+		}
+		cc.jEventQ = make(chan []byte, eventQueueCap)
+		cc.jDirectMu.Lock()
+		cc.jDirectCancel = cancel
+		cc.jDirectMu.Unlock()
+		cc.srv.jsubMu.Lock()
+		cc.srv.jdsubs[cc] = struct{}{}
+		cc.srv.jsubMu.Unlock()
+		cc.srv.wg.Add(1)
+		go cc.journalWriter()
+	})
+	if !started {
+		cancel()
+		cc.replyError("journal subscription already active on this connection")
+		return
+	}
+	for _, page := range pages {
+		if err := cc.writeControl(page); err != nil {
+			cancel()
+			cc.close()
+			return
+		}
+	}
+	cc.srv.wg.Add(1)
+	go cc.journalDirectLoop(source, cancel)
+}
+
+func (cc *clientConn) journalDirectLoop(source <-chan JournalRecord, cancel func()) {
+	defer cc.srv.wg.Done()
+	defer cancel()
+	for {
+		select {
+		case <-cc.done:
+			return
+		case rec, ok := <-source:
+			if !ok {
+				cc.close()
+				return
+			}
+			body, err := EncodeControl(Control{Op: OpJournalEvent, EndpointID: cc.endpointID, Cursor: rec.Cursor, Journal: []JournalRecord{rec}})
+			if err != nil {
+				cc.close()
+				return
+			}
+			select {
+			case cc.jEventQ <- body:
+			default:
+				cc.close()
+				return
+			}
+		}
+	}
 }
 
 // allowUnsignedJournalPlaneRead is the kill-switch half of the gate EVERY unsigned read of
@@ -3051,6 +3170,12 @@ func (cc *clientConn) eventWriter() {
 }
 
 func (cc *clientConn) cleanup() {
+	cc.jDirectMu.Lock()
+	if cc.jDirectCancel != nil {
+		cc.jDirectCancel()
+		cc.jDirectCancel = nil
+	}
+	cc.jDirectMu.Unlock()
 	cc.attMu.Lock()
 	local := cc.attSession
 	cc.attMu.Unlock()

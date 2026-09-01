@@ -79,6 +79,12 @@ type ReseedSink interface {
 	Reseed(rs protocol.JournalReseed) error
 }
 
+// FullResyncSink publishes reconcile authority and one final-boundary
+// roster+events replacement as a single recovery operation.
+type FullResyncSink interface {
+	FullResync(rs protocol.JournalReseed) error
+}
+
 // RecoverySnapshotSink is the explicit mailbox-discard recovery publisher. It preserves
 // Snapshot's reconcile-then-reseed ordering while echoing the phone's durable recovery token
 // on the bounded roster frame. Keeping it separate leaves ordinary reconnect snapshots and
@@ -136,7 +142,7 @@ func (g *Gateway) Resync(ctx context.Context, from uint64, rosterOnly, discarded
 	if !ok {
 		return errNoReseedSink
 	}
-	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal, protocol.CapJournalSubscribeFrom)
 	if err != nil {
 		return err
 	}
@@ -310,7 +316,7 @@ func (g *Gateway) setCursor(c uint64) {
 // held to the single control write below (never a relay round-trip), and a reconnect
 // re-reads from the last cursor to recover any gap.
 func (g *Gateway) RunJournal(ctx context.Context) error {
-	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal)
+	dc, err := dialDaemon(g.socketPath, protocol.CapRemoteGateway, protocol.CapJournal, protocol.CapJournalSubscribeFrom)
 	if err != nil {
 		return err
 	}
@@ -334,11 +340,16 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 
 		// Snapshot: the atomic roster + events after our cursor (R-JRN.4).
 		from := g.Cursor()
-		res, err := dc.readJournal(from)
+		var res protocol.Control
+		if dc.hasCap(protocol.CapJournalSubscribeFrom) {
+			res, err = dc.subscribeJournalFrom(from)
+		} else {
+			res, err = dc.readJournal(from)
+		}
 		if err != nil {
 			return err
 		}
-		// Subscribe BEFORE the snapshot is forwarded, not after: everything between the
+		// On legacy daemons, subscribe BEFORE the snapshot is forwarded: everything between the
 		// journal_read reply and this write is a window in which a live event reaches neither
 		// the read nor the stream, and forwarding the snapshot means relay round-trips (the
 		// roster records, and the reconcile record the sink leads each run with) that widen that
@@ -346,12 +357,37 @@ func (g *Gateway) RunJournal(ctx context.Context) error {
 		// session launched moments after the gateway started. Events that arrive during the
 		// forwarding below are buffered on the daemon conn and read by the loop; deliver dedups
 		// them against the roster read by cursor, exactly as it already did for the overlap.
-		if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
-			return err
+		if !dc.hasCap(protocol.CapJournalSubscribeFrom) {
+			if err := dc.writeControl(protocol.Control{Op: protocol.OpJournalSubscribe, EndpointID: dc.endpointID}); err != nil {
+				return err
+			}
+		}
+		roster := namespaceRoster(dc.endpointID, res.Roster)
+		events := namespaceRoster(dc.endpointID, res.Journal)
+		if res.FullResync {
+			rs := protocol.JournalReseed{Roster: roster, Events: events, Cursor: res.Cursor}
+			if sink, ok := g.sink.(FullResyncSink); ok {
+				if err := sink.FullResync(rs); err != nil {
+					return err
+				}
+			} else if sink, ok := g.sink.(ReseedSink); ok {
+				// Compatibility fallback for sinks predating FullResync: establish
+				// reconcile/roster authority, then replace at the final boundary.
+				if err := g.sink.Snapshot(roster, from); err != nil {
+					return err
+				}
+				if err := sink.Reseed(rs); err != nil {
+					return err
+				}
+			} else {
+				return errNoReseedSink
+			}
+			g.setCursor(res.Cursor)
+			return nil
 		}
 		// Snapshot carries the boundary before this read's incremental events. Advancing it
 		// to res.Cursor here would make deliver stale-drop the backlog forwarded below.
-		if err := g.sink.Snapshot(namespaceRoster(dc.endpointID, res.Roster), from); err != nil {
+		if err := g.sink.Snapshot(roster, from); err != nil {
 			return err
 		}
 		for _, rec := range res.Journal {
@@ -704,6 +740,7 @@ func (g *Gateway) deliverLocked(rec protocol.JournalRecord) error {
 type daemonConn struct {
 	conn       net.Conn
 	endpointID string
+	caps       []string
 }
 
 func dialDaemon(socketPath string, caps ...string) (*daemonConn, error) {
@@ -726,7 +763,17 @@ func dialDaemon(socketPath string, caps ...string) (*daemonConn, error) {
 		return nil, fmt.Errorf("gateway: hello reply op %q, want %q", rep.Op, protocol.OpHello)
 	}
 	d.endpointID = rep.EndpointID
+	d.caps = append([]string(nil), rep.Capabilities...)
 	return d, nil
+}
+
+func (d *daemonConn) hasCap(want string) bool {
+	for _, c := range d.caps {
+		if c == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *daemonConn) writeControl(c protocol.Control) error {
@@ -776,8 +823,16 @@ func (d *daemonConn) awaitOp(op string, within time.Duration) (protocol.Control,
 // readJournal consumes every bounded page produced from one atomic daemon read before
 // exposing any part to the sink. A failed or malformed page sequence is discarded whole.
 func (d *daemonConn) readJournal(from uint64) (protocol.Control, error) {
+	return d.readJournalOp(protocol.OpJournalRead, from)
+}
+
+func (d *daemonConn) subscribeJournalFrom(from uint64) (protocol.Control, error) {
+	return d.readJournalOp(protocol.OpJournalSubscribeFrom, from)
+}
+
+func (d *daemonConn) readJournalOp(op string, from uint64) (protocol.Control, error) {
 	if err := d.writeControl(protocol.Control{
-		Op: protocol.OpJournalRead, EndpointID: d.endpointID, Cursor: from,
+		Op: op, EndpointID: d.endpointID, Cursor: from,
 		JournalMaxBytes: wire.MaxFrame - 1,
 	}); err != nil {
 		return protocol.Control{}, err
@@ -785,7 +840,7 @@ func (d *daemonConn) readJournal(from uint64) (protocol.Control, error) {
 	var out protocol.Control
 	last := from
 	for first := true; ; first = false {
-		page, err := d.awaitOp(protocol.OpJournalRead, 10*time.Second)
+		page, err := d.awaitOp(op, 10*time.Second)
 		if err != nil {
 			return protocol.Control{}, err
 		}

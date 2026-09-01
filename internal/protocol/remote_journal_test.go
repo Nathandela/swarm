@@ -39,14 +39,15 @@ import (
 // expected JournalBackend, so the Server exposes journal ops over it.
 type journalStub struct {
 	*stubDaemon
-	mu     sync.Mutex
-	reads  int
-	resume JournalResume
-	source chan JournalRecord
+	mu           sync.Mutex
+	reads        int
+	resume       JournalResume
+	source       chan JournalRecord
+	atomicSource chan JournalRecord
 }
 
 func newJournalStub() *journalStub {
-	return &journalStub{stubDaemon: newStubDaemon(), source: make(chan JournalRecord, 4096)}
+	return &journalStub{stubDaemon: newStubDaemon(), source: make(chan JournalRecord, 4096), atomicSource: make(chan JournalRecord, 4096)}
 }
 
 func (j *journalStub) JournalReadFrom(from uint64) (JournalResume, error) {
@@ -70,6 +71,11 @@ func (j *journalStub) readCount() int {
 
 func (j *journalStub) JournalSubscribe() (<-chan JournalRecord, func()) {
 	return j.source, func() {}
+}
+
+func (j *journalStub) JournalSubscribeFrom(from uint64) (JournalResume, <-chan JournalRecord, func(), error) {
+	res, err := j.JournalReadFrom(from)
+	return res, j.atomicSource, func() {}, err
 }
 
 func (j *journalStub) seed(recs ...JournalRecord) {

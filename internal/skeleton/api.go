@@ -667,6 +667,7 @@ var _ protocol.ComposerOperationExecutor = (*coreAPI)(nil)
 // internal/journal stay free of a protocol import; the wire-type conversion lives
 // here, where both packages are already in scope.
 var _ protocol.JournalBackend = (*coreAPI)(nil)
+var _ protocol.JournalSubscribeFromBackend = (*coreAPI)(nil)
 
 // toWireJournalRecord converts a daemon-internal journal.Record to the wire-facing
 // protocol.JournalRecord (only the fields the phone needs; the opaque payload and
@@ -759,6 +760,7 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 	out := make(chan protocol.JournalRecord, eventsBuffer)
 	done := make(chan struct{})
 	go func() {
+		defer close(out)
 		for {
 			select {
 			case <-done:
@@ -783,6 +785,52 @@ func (a *coreAPI) JournalSubscribe() (<-chan protocol.JournalRecord, func()) {
 		})
 	}
 	return out, cancel
+}
+
+// JournalSubscribeFrom forwards the daemon's atomic resume primitive and converts
+// both halves without consulting mutable current state for ordered payloads.
+func (a *coreAPI) JournalSubscribeFrom(from uint64) (protocol.JournalResume, <-chan protocol.JournalRecord, func(), error) {
+	res, src, cancelSrc, err := a.core.JournalSubscribeFrom(from)
+	if err != nil {
+		closed := make(chan protocol.JournalRecord)
+		close(closed)
+		return protocol.JournalResume{}, closed, cancelSrc, err
+	}
+	outResume := protocol.JournalResume{Cursor: res.Cursor, FullResync: res.FullResync}
+	for _, r := range res.Roster {
+		outResume.Roster = append(outResume.Roster, toWireJournalRecordWith(r, a.sessionCaps))
+	}
+	for _, r := range res.Events {
+		outResume.Events = append(outResume.Events, toWireJournalRecord(r))
+	}
+	out := make(chan protocol.JournalRecord, eventsBuffer)
+	done := make(chan struct{})
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-done:
+				return
+			case rec, ok := <-src:
+				if !ok {
+					return
+				}
+				select {
+				case out <- toWireJournalRecord(rec):
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			close(done)
+			cancelSrc()
+		})
+	}
+	return outResume, out, cancel, nil
 }
 
 // Launch resolves a client launch/resume request into a concrete daemon spec
