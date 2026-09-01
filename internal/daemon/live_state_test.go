@@ -40,10 +40,15 @@ func TestLiveState_LifecycleRecordsCarryCompleteDerivedGroup(t *testing.T) {
 func TestLiveState_RecordSessionStatePublishesCurrentCompleteRow(t *testing.T) {
 	d := openDaemon(t, daemonConfig(t))
 	m := namedMeta("s1", "claude", "renamed", status.ProcessRunning, status.InteractionPermission)
+	m.ShimPID = 41
 	d.putMem(m)
 	payload := json.RawMessage(`{"provider":"claude","session_instance":"i","structured_chat":true}`)
-	if err := d.RecordSessionState(m.ID, payload); err != nil {
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, func() (json.RawMessage, error) { return payload, nil })
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !matched {
+		t.Fatal("current incarnation was refused")
 	}
 	res, err := d.JournalReadFrom(0)
 	if err != nil {
@@ -64,11 +69,37 @@ func TestLiveState_RecordSessionStateCannotResurrectTombstone(t *testing.T) {
 	d.putMem(m)
 	d.tombstoneID(m.ID)
 	before := d.journal.Cursor()
-	if err := d.RecordSessionState(m.ID, json.RawMessage(`{}`)); err != nil {
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, m.ShimPID, func() (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
+	if err != nil {
 		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("tombstoned incarnation matched")
 	}
 	if after := d.journal.Cursor(); after != before {
 		t.Fatalf("tombstoned state advanced journal %d -> %d", before, after)
+	}
+}
+
+func TestLiveState_StaleIncarnationNeverAuthorsOrPublishes(t *testing.T) {
+	d := openDaemon(t, daemonConfig(t))
+	m := metaWith("s1", "claude", status.ProcessRunning, status.InteractionNone)
+	m.ShimPID = 202
+	d.putMem(m)
+	called := false
+	before := d.journal.Cursor()
+	matched, err := d.RecordSessionStateForIncarnation(m.ID, 101, func() (json.RawMessage, error) {
+		called = true
+		return json.RawMessage(`{"stale":true}`), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched || called {
+		t.Fatalf("stale incarnation matched=%v author-called=%v", matched, called)
+	}
+	if after := d.journal.Cursor(); after != before {
+		t.Fatalf("stale incarnation advanced journal %d -> %d", before, after)
 	}
 }
 

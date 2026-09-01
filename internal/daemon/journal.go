@@ -90,30 +90,38 @@ func (d *Daemon) JournalSubscribe() (<-chan journal.Record, func()) {
 	return d.journal.Subscribe()
 }
 
-// RecordSessionState appends one authoritative, complete state delta for an
-// existing session. It shares writeMu with lifecycle writes and Delete, then
-// re-reads the current meta inside that fence, so a capability author racing a
-// replacement or tombstone cannot resurrect or describe the wrong row.
-func (d *Daemon) RecordSessionState(sessionID string, payload json.RawMessage) error {
+// RecordSessionStateForIncarnation appends one authoritative, complete state
+// delta for the exact current shim incarnation. author runs only after the
+// writeMu-fenced meta recheck succeeds; capability persistence therefore cannot
+// overwrite a replacement's side-file before discovering that the row changed.
+// A nil payload means the author had nothing new to publish.
+func (d *Daemon) RecordSessionStateForIncarnation(sessionID string, expectedShimPID int, author func() (json.RawMessage, error)) (bool, error) {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 	if d.isDeleted(sessionID) {
-		return nil
+		return false, nil
 	}
 	d.mu.Lock()
 	s, ok := d.sessions[sessionID]
 	var m persist.Meta
-	if ok && s.persisted {
+	if ok && s.persisted && s.meta.ShimPID == expectedShimPID {
 		m = s.meta
 	} else {
 		ok = false
 	}
 	d.mu.Unlock()
 	if !ok {
-		return nil
+		return false, nil
 	}
-	_, err := d.journal.Append(completeSessionRecord(m, journal.TypeSessionState, payload))
-	return err
+	payload, err := author()
+	if err != nil {
+		return true, err
+	}
+	if payload == nil {
+		return true, nil
+	}
+	_, err = d.journal.Append(completeSessionRecord(m, journal.TypeSessionState, payload))
+	return true, err
 }
 
 // RecordGatewayPresence appends a `presence` record when the remote gateway

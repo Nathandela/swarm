@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -209,6 +210,10 @@ type Daemon struct {
 	// capStore is the daemon-authored per-session capability record store (ADR-017 T2 /
 	// playbook §6.2; capability.go).
 	capStore sessionCapabilityStore
+	// sessionStatePublisher is the exact-incarnation daemon transaction used by
+	// capability authoring. nil selects core.RecordSessionStateForIncarnation;
+	// tests inject append failures without corrupting the durable journal.
+	sessionStatePublisher func(string, int, func() (json.RawMessage, error)) (bool, error)
 
 	// sup is the passive handoff supervisor (ADR-010 Amendment 3 C2; supervision.go):
 	// armed from registerSession, signalled from emitStatus and endSession, closed by

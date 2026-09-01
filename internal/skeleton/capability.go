@@ -105,6 +105,10 @@ type sessionCapabilityStore struct {
 	// therefore chat-capable only while this map also names the current instance and
 	// marker generation.
 	liveProof map[string]structuredSinkProof
+	// publishedInstances is process-local publication success, not capability
+	// authority. Absence (including after restart or append failure) means the exact
+	// instance's initial session_state must be retried.
+	publishedInstances map[string]string
 	// publish overrides the final journal append in deterministic tests. Production
 	// leaves it nil and publishes through daemon.EmitCapabilityTransition.
 	publish func(sessionID string, payload []byte) error
@@ -167,6 +171,12 @@ var errStructuredSinkProof = errors.New("skeleton: structured sink proof refused
 func (d *Daemon) registerSessionCapabilities(sessionID string, c protocol.SessionCapabilities) {
 	d.capStore.transitionMu.Lock()
 	defer d.capStore.transitionMu.Unlock()
+	d.registerSessionCapabilitiesTransitionLocked(sessionID, c)
+}
+
+// registerSessionCapabilitiesTransitionLocked is the store half for a caller
+// already serializing capability state with its ordered journal publication.
+func (d *Daemon) registerSessionCapabilitiesTransitionLocked(sessionID string, c protocol.SessionCapabilities) {
 	d.capStore.mu.Lock()
 	defer d.capStore.mu.Unlock()
 	recovered := false

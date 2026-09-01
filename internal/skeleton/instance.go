@@ -77,6 +77,8 @@ func (d *Daemon) recordSessionInstance(sessionID, instance string, incarnation i
 	if instance == "" {
 		return fmt.Errorf("skeleton: refusing to record an empty session instance for %q", sessionID)
 	}
+	d.capStore.authorMu.Lock()
+	defer d.capStore.authorMu.Unlock()
 	d.capStore.transitionMu.Lock()
 	defer d.capStore.transitionMu.Unlock()
 	d.capStore.mu.Lock()
@@ -247,35 +249,68 @@ func writeSessionStateFile(path string, data []byte) error {
 func (d *Daemon) authorSessionCapabilities(sessionID, instance, provider string, a adapter.Adapter, providerVersion, adapterRevision string, liveBackend bool) (protocol.SessionCapabilities, error) {
 	d.capStore.authorMu.Lock()
 	defer d.capStore.authorMu.Unlock()
-	prior, hadPrior := d.sessionCapabilities(sessionID)
 	rec := deriveSessionCapabilities(provider, a, providerVersion, adapterRevision, liveBackend)
 	rec.SessionInstance = instance
 	if err := rec.Validate(); err != nil {
 		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: refusing to author a capability record for session %q: %w", sessionID, err)
 	}
-	d.registerSessionCapabilities(sessionID, rec)
-	// Publish only the first authoritative record for an incarnation. Runtime
-	// structured-chat toggles continue to use capability_transition's narrower
-	// same-instance contract; a generic re-registration must never become a second
-	// authority channel that can grant terminal routing after a gap.
-	d.capStore.transitionMu.Lock()
-	stored, ok := d.sessionCapabilities(sessionID)
-	if ok && (!hadPrior || prior.SessionInstance != stored.SessionInstance) && d.core != nil {
-		if _, present := d.core.Get(sessionID); present {
-			payload, err := json.Marshal(stored)
-			if err != nil {
-				d.capStore.transitionMu.Unlock()
-				return protocol.SessionCapabilities{}, err
+	d.capStore.mu.Lock()
+	currentInstance, currentIncarnation, hasCurrent := d.sessionInstanceLocked(sessionID)
+	d.capStore.mu.Unlock()
+	if hasCurrent && currentInstance != instance {
+		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: stale capability author for session %q instance %q (current %q)", sessionID, instance, currentInstance)
+	}
+
+	publisher := d.sessionStatePublisher
+	expectedIncarnation := currentIncarnation
+	if d.core != nil {
+		if m, present := d.core.Get(sessionID); present {
+			if !hasCurrent || (currentIncarnation != 0 && currentIncarnation != m.ShimPID) {
+				return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: stale capability author for session %q shim %d (current %d)", sessionID, currentIncarnation, m.ShimPID)
 			}
-			if err := d.core.RecordSessionState(sessionID, payload); err != nil {
-				d.capStore.transitionMu.Unlock()
-				return protocol.SessionCapabilities{}, err
+			expectedIncarnation = m.ShimPID
+			if publisher == nil {
+				publisher = d.core.RecordSessionStateForIncarnation
 			}
 		}
 	}
-	d.capStore.transitionMu.Unlock()
-	if !ok {
-		return rec, nil
+	if publisher == nil {
+		d.registerSessionCapabilities(sessionID, rec)
+		stored, ok := d.sessionCapabilities(sessionID)
+		if !ok {
+			return rec, nil
+		}
+		return stored, nil
+	}
+
+	d.capStore.transitionMu.Lock()
+	defer d.capStore.transitionMu.Unlock()
+	var stored protocol.SessionCapabilities
+	var publishAttempted bool
+	matched, err := publisher(sessionID, expectedIncarnation, func() (json.RawMessage, error) {
+		d.registerSessionCapabilitiesTransitionLocked(sessionID, rec)
+		var ok bool
+		stored, ok = d.sessionCapabilities(sessionID)
+		if !ok {
+			stored = rec
+		}
+		if d.capStore.publishedInstances != nil && d.capStore.publishedInstances[sessionID] == stored.SessionInstance {
+			return nil, nil
+		}
+		publishAttempted = true
+		return json.Marshal(stored)
+	})
+	if err != nil {
+		return protocol.SessionCapabilities{}, err
+	}
+	if !matched {
+		return protocol.SessionCapabilities{}, fmt.Errorf("skeleton: session %q incarnation %d was replaced before capability publication", sessionID, expectedIncarnation)
+	}
+	if publishAttempted {
+		if d.capStore.publishedInstances == nil {
+			d.capStore.publishedInstances = map[string]string{}
+		}
+		d.capStore.publishedInstances[sessionID] = stored.SessionInstance
 	}
 	return stored, nil
 }
