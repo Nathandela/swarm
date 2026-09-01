@@ -90,6 +90,22 @@ func (d *Daemon) JournalSubscribe() (<-chan journal.Record, func()) {
 	return d.journal.Subscribe()
 }
 
+// JournalSubscribeFrom atomically captures roster+backlog at one cursor and
+// registers the feed whose first possible record is after that cursor. writeMu
+// freezes session-affecting metadata while the journal registers first and the
+// roster is built; session-neutral appends may proceed, but are already covered
+// by the registered feed.
+func (d *Daemon) JournalSubscribeFrom(from uint64) (journal.Resume, <-chan journal.Record, func(), error) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	res, live, cancel, err := d.journal.SubscribeFrom(from)
+	if err != nil {
+		return journal.Resume{}, live, cancel, err
+	}
+	res.Roster = d.rosterSnapshotLocked()
+	return res, live, cancel, nil
+}
+
 // RecordSessionStateForIncarnation appends one authoritative, complete state
 // delta for the exact current shim incarnation. author runs only after the
 // writeMu-fenced meta recheck succeeds; capability persistence therefore cannot
