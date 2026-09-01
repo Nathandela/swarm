@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/Nathandela/swarm/internal/pushreg"
 )
 
 // idempotencyKeyPattern is section 3.6's normative shape: 16 CSPRNG bytes, base64url
@@ -72,6 +74,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		s.writeErr(w, errMalformedRequest)
 		return errMalformedRequest.status
 	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		s.writeErr(w, errMalformedRequest)
+		return errMalformedRequest.status
+	}
 	if req.InstallationPublicKey == "" || req.FCMToken == "" ||
 		req.Attestation.Kind != "play_integrity" || req.Attestation.Token == "" {
 		s.writeErr(w, errMalformedRequest)
@@ -128,7 +134,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 		return spec.status
 	}
 
-	wantHash, err := requestHash(body)
+	wantHash, err := pushreg.RequestHash(req.InstallationPublicKey, req.FCMToken)
 	if err != nil {
 		s.writeErr(w, errInternal)
 		return errInternal.status
@@ -176,51 +182,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) int {
 	s.regIdem.put(cacheKey, regIdemEntry{installationID: installationID, refreshBefore: refreshBefore}, now)
 
 	return s.writeJSON(w, http.StatusCreated, registerResponse{InstallationID: installationID, RefreshBefore: refreshBefore})
-}
-
-// requestHash implements PG-AUTH-11's formula: SHA-256 of the RFC 8785 (JCS)
-// canonicalization of the registration body with attestation.token replaced by "".
-//
-// This is a BEST-EFFORT canonicalizer, not a general RFC 8785 implementation: it relies on
-// encoding/json's map-key ordering (bytewise ASCII, which agrees with JCS's UTF-16
-// code-unit order for the ASCII field names section 3.1 declares) and disables
-// HTML-escaping so no value is silently rewritten. It is deliberately identical to the
-// test suite's own jcsRequestHash (helpers_test.go) so both sides are pinned to the same
-// digest for a given body.
-//
-// RECORDED DEVIATION, escalated rather than silently carried: Go's encoding/json still
-// escapes U+2028 and U+2029 inside string values unconditionally, even with SetEscapeHTML
-// disabled -- RFC 8785 does not. A real Play Integrity client computing a true JCS
-// requestHash over an installation_public_key or fcm_token that happens to contain either
-// code point would mint a verdict token this gateway rejects as attestation_invalid: the
-// exact "verifier that fails on a client library change" PG-AUTH-11 pins JCS to prevent.
-// This is invisible to the test suite by construction, because the suite's own
-// jcsRequestHash is deliberately the same best-effort function, so both sides agree. Two
-// closing moves exist -- vendor a real RFC 8785 canonicalizer before the Play Integrity
-// client is wired, or record an ASCII-only restriction on these field values as a permanent
-// deviation -- and this comment does not pick one; see the return value for the escalation.
-//
-// Returns an error rather than a zero [32]byte on failure: the caller compares the result
-// against an AttestationVerifier's returned RequestHash for equality (PG-AUTH-11), and an
-// all-zero sentinel silently returned here would fail OPEN if a verifier implementation
-// ever produced a zero-valued VerdictBinding.RequestHash of its own -- exactly the shape
-// this table compares against, not a coincidence worth risking.
-func requestHash(body []byte) ([32]byte, error) {
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
-		return [32]byte{}, fmt.Errorf("pushgw: canonicalize request body: %w", err)
-	}
-	if att, ok := m["attestation"].(map[string]any); ok {
-		att["token"] = ""
-		m["attestation"] = att
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(m); err != nil {
-		return [32]byte{}, fmt.Errorf("pushgw: canonicalize request body: %w", err)
-	}
-	return sha256.Sum256(bytes.TrimRight(buf.Bytes(), "\n")), nil
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) int {
