@@ -101,9 +101,6 @@ type contextGuardSession struct {
 	lane      func() *composerLane
 	quiet     func() bool
 	uncertain func() bool
-	// quietPending coalesces status-edge nudges from the assembly: the worker
-	// re-examines promotion on its next wake rather than parsing status here.
-	quietPending atomic.Bool
 
 	queueMu          sync.Mutex
 	stateMu          sync.Mutex
@@ -714,7 +711,7 @@ func (s *contextGuardSession) applyReturning(event contextguard.Event, notificat
 
 // noteStatus is the assembly's status-edge nudge (the supervisor's signal
 // precedent): the WORKER re-examines promotion on its own goroutine; nothing is
-// parsed or decided on the emitter's path.
+// parsed or decided on the emitter's path. The wake channel coalesces bursts.
 func (m *contextGuardManager) noteStatus(id string) {
 	m.mu.Lock()
 	s := m.sessions[id]
@@ -722,7 +719,6 @@ func (m *contextGuardManager) noteStatus(id string) {
 	if s == nil {
 		return
 	}
-	s.quietPending.Store(true)
 	s.signal()
 }
 
@@ -737,7 +733,6 @@ func (s *contextGuardSession) maybePromote() {
 	if s.conn == nil || s.lane == nil || s.quiet == nil || !s.action.AutomaticDispatch {
 		return
 	}
-	s.quietPending.Store(false)
 	s.stateMu.Lock()
 	pending := !s.persistBlocked && s.machine.State == contextguard.StatePendingIdle
 	s.stateMu.Unlock()
@@ -769,8 +764,34 @@ func (s *contextGuardSession) dispatchCompaction() {
 	if lane == nil {
 		return
 	}
-	lane.enter()
-	defer lane.leave()
+	// The lane entry is made interruptible (a session close must not wait behind
+	// a busy composer queue): a worker told to stop while queued hands its
+	// eventual ticket straight back.
+	entered := make(chan struct{})
+	go func() {
+		lane.enter()
+		close(entered)
+	}()
+	select {
+	case <-entered:
+	case <-s.stop:
+		go func() {
+			<-entered
+			lane.leave()
+		}()
+		return
+	}
+	// The lane is held across the WRITE BOUNDARY only, exactly like a composer
+	// send: holding it through the reply wait would stall every phone send
+	// behind a wedged provider for the full dispatch timeout.
+	left := false
+	leaveLane := func() {
+		if !left {
+			left = true
+			lane.leave()
+		}
+	}
+	defer leaveLane()
 	if !s.quiet() || (s.uncertain != nil && s.uncertain()) {
 		s.applyReturning(contextguard.Event{Kind: contextguard.EventSessionBusy, At: time.Now(), Key: s.key}, nil)
 		return
@@ -791,6 +812,7 @@ func (s *contextGuardSession) dispatchCompaction() {
 		func() {
 			wrote = true
 			s.applyReturning(contextguard.Event{Kind: contextguard.EventActionWritten, At: time.Now(), Key: s.key}, nil)
+			leaveLane() // bytes are on the wire; the reply wait happens outside the lane
 		},
 	)
 	switch {

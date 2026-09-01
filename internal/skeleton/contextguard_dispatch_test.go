@@ -32,8 +32,9 @@ type fakeDispatchConn struct {
 }
 
 type fakeDispatchBehavior struct {
-	refuseBeforeCallbacks bool  // the closed-conn shape: error before beforeWrite runs
-	replyErr              error // returned AFTER the write (afterWrite has run)
+	refuseBeforeCallbacks bool          // the closed-conn shape: error before beforeWrite runs
+	replyErr              error         // returned AFTER the write (afterWrite has run)
+	replyGate             chan struct{} // when set, the reply blocks until the gate closes
 }
 
 type fakeDispatchCall struct {
@@ -65,6 +66,9 @@ func (f *fakeDispatchConn) CallAtWriteBoundary(_ context.Context, method string,
 	f.mu.Unlock()
 	if afterWrite != nil {
 		afterWrite()
+	}
+	if behavior.replyGate != nil {
+		<-behavior.replyGate
 	}
 	return behavior.replyErr
 }
@@ -317,6 +321,29 @@ func TestContextGuardHoldsForeverOnceBytesMayHaveLeft(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if calls := r.conn.snapshot(); len(calls) != 1 {
 		t.Fatalf("provider calls after unknown outcome = %d; want 1 (hold, never resend)", len(calls))
+	}
+}
+
+// TestContextGuardReleasesTheLaneAtTheWriteBoundary pins the composer-send
+// discipline: the lane is held across the write only. A provider that stalls
+// its reply must not stall the user's sends for the dispatch timeout.
+func TestContextGuardReleasesTheLaneAtTheWriteBoundary(t *testing.T) {
+	r := newDispatchRig(t)
+	gate := make(chan struct{})
+	defer close(gate)
+	r.conn.script[0] = fakeDispatchBehavior{replyGate: gate}
+	r.ingestUsage(t, 1, 85, 100)
+	r.waitPhase(t, contextguard.StateAwaitingConfirmation) // written; reply still gated
+	freed := make(chan struct{})
+	go func() {
+		r.lane.enter()
+		r.lane.leave()
+		close(freed)
+	}()
+	select {
+	case <-freed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the composer lane is still held during the provider reply wait")
 	}
 }
 
